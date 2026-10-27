@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Military look: black base, signal yellow for accents and warnings, green for "OK", square corners, yellow corner
+ * Military look: black base, signal red accents, yellow for warnings, green for "OK", square corners, red corner
  * brackets on panels, condensed DIN-style lettering (Bahnschrift, part of Windows 10/11) and monospace readouts.
  */
 final class Theme {
@@ -36,13 +36,13 @@ final class Theme {
     static final Color LINE = new Color(0x2e2e2a);
     static final Color TEXT = new Color(0xe6e6e0);
     static final Color MUTED = new Color(0x8c8c7e);
-    static final Color ACCENT = new Color(0xfcd405);
+    static final Color ACCENT = new Color(0xe31b23); // signal red
     static final Color OK = new Color(0x009639);
     static final Color WARN = new Color(0xfcd405);
-    static final Color BAD = new Color(0xe0301e);
+    static final Color BAD = new Color(0xff5a4e);  // lighter than the accent, so errors stand out
     /** For HTML text. */
     static final String MUTED_HEX = "#8c8c7e";
-    static final String BAD_HEX = "#e0301e";
+    static final String BAD_HEX = "#ff5a4e";
 
     private static final List<String> FONTS = Arrays.asList(
             GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames());
@@ -60,11 +60,11 @@ final class Theme {
 
     static void install() {
         FlatLaf.setGlobalExtraDefaults(Map.of(
-                "@accentColor", "#fcd405",
+                "@accentColor", "#e31b23",
                 "@background", "#000000",
                 "@foreground", "#e6e6e0",
-                "@selectionBackground", "#fcd405",
-                "@selectionForeground", "#000000"));
+                "@selectionBackground", "#e31b23",
+                "@selectionForeground", "#ffffff"));
         FlatDarkLaf.setup();
         for (String key : new String[]{"Button.arc", "Component.arc", "TextComponent.arc", "CheckBox.arc", "ProgressBar.arc"}) {
             UIManager.put(key, 0);
@@ -115,7 +115,7 @@ final class Theme {
         JButton button = new JButton(text.toUpperCase());
         button.setFont(headingFont(14.5f));
         button.setBackground(ACCENT);
-        button.setForeground(BG);
+        button.setForeground(Color.WHITE);
         button.setFocusPainted(false);
         button.setBorder(BorderFactory.createEmptyBorder(9, 22, 9, 22));
         return button;
@@ -147,7 +147,7 @@ final class Theme {
         return new Color(c.getRed(), c.getGreen(), c.getBlue(), alpha);
     }
 
-    /** Thin frame with yellow L-shaped corner brackets, like a targeting reticle. */
+    /** Thin frame with red L-shaped corner brackets, like a targeting reticle. */
     static final class BracketBorder extends AbstractBorder {
         private static final int ARM = 12;
 

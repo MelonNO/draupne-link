@@ -77,7 +77,7 @@ class CheckRow extends JPanel {
                 case OK -> Theme.OK;
                 case WARN -> Theme.WARN;
                 case BAD -> Theme.BAD;
-                case INFO -> Theme.ACCENT;
+                case INFO -> Theme.WARN;
                 case PENDING -> Theme.LINE;
             };
             int s = Math.min(getWidth(), getHeight()) - 2;

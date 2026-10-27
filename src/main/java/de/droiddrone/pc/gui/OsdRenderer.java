@@ -25,7 +25,8 @@ final class OsdRenderer {
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch) {}
 
-    private static final Color YELLOW = Theme.ACCENT;
+    private static final Color ACCENT = Theme.ACCENT; // symbols and labels
+    private static final Color YELLOW = Theme.WARN;  // warnings only
     private static final Color GREEN = Theme.OK;
     private static final Color RED = Theme.BAD;
     private static final Color WHITE = new Color(0xf2f2ea);
@@ -73,7 +74,7 @@ final class OsdRenderer {
         p.lineTo(cx + 0.5 * s, cy + 0.5 * s);
         p.lineTo(cx + s, cy);
         p.lineTo(cx + 2.2 * s, cy);
-        stroke(p, YELLOW, 2.6f);
+        stroke(p, ACCENT, 2.6f);
     }
 
     /**
@@ -139,7 +140,7 @@ final class OsdRenderer {
                     case 270 -> "W";
                     default -> Integer.toString(norm / 10);
                 };
-                centered(label, tx, top + 52 * unit, norm % 90 == 0 ? YELLOW : WHITE);
+                centered(label, tx, top + 52 * unit, norm % 90 == 0 ? ACCENT : WHITE);
             }
         }
         if (gps != null && gps.distanceHomeM() > 1) {
@@ -153,10 +154,10 @@ final class OsdRenderer {
         float bw = fm.stringWidth(hdg) + 14 * unit;
         g.setColor(OUTLINE);
         g.fillRect(Math.round(cx - bw / 2), Math.round(top - 4 * unit), Math.round(bw), Math.round(24 * unit));
-        g.setColor(YELLOW);
+        g.setColor(ACCENT);
         g.setStroke(new BasicStroke(1.5f));
         g.drawRect(Math.round(cx - bw / 2), Math.round(top - 4 * unit), Math.round(bw), Math.round(24 * unit));
-        centered(hdg, cx, top + 14 * unit, YELLOW);
+        centered(hdg, cx, top + 14 * unit, ACCENT);
     }
 
     // ------------------------------------------------------------------ corners
@@ -352,12 +353,12 @@ final class OsdRenderer {
 
     private void label(String text, float x, float y) {
         g.setFont(Theme.headingFont(14 * unit));
-        text(text, x, y, YELLOW);
+        text(text, x, y, ACCENT);
     }
 
     private void labelRight(String text, float right, float y) {
         g.setFont(Theme.headingFont(14 * unit));
-        rightText(text, right, y, YELLOW);
+        rightText(text, right, y, ACCENT);
     }
 
     /** Text with a black outline. */
