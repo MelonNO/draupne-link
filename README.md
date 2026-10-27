@@ -11,9 +11,9 @@ Your radio plugs into the PC; an Android phone on the drone carries the sticks, 
 ## Get started in 3 steps
 
 1. **Download** `DroidDrone-PC-Setup-<version>.exe` from the [latest release](../../releases/latest).
-2. **Run it.** It installs for your user only, with no admin rights needed, and puts DroidDrone PC on the desktop and in the Start menu.
+2. **Run it** and click through the installer (Next → Install → Finish). It installs for your user only, with no admin rights needed, and puts **DroidDrone PC** on the desktop and in the Start menu.
    Windows may say *"Windows protected your PC"*, because the installer isn't code-signed. Click **More info → Run anyway**.
-3. **Follow the setup wizard.** It opens on first start and takes about 20 minutes.
+3. **Start DroidDrone PC** from the desktop and **follow the setup wizard**. It opens on first start and takes about 20 minutes.
 
 Prefer no installer? Download `DroidDrone-PC-<version>-windows.zip`, unzip it anywhere and run `DroidDrone PC.exe`.
 

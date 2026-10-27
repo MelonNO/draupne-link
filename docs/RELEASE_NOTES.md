@@ -1,6 +1,8 @@
 ## Install
 
-**`DroidDrone-PC-Setup-*.exe`** is the installer. It installs for your user, needs no admin rights, and creates Start menu and desktop shortcuts. Run it, then follow the setup wizard that opens on first start.
+**`DroidDrone-PC-Setup-*.exe`** is the installer. It installs for your user, needs no admin rights, and creates Start menu and desktop shortcuts. Run it, click through it (Next → Install → Finish), then start **DroidDrone PC** from the desktop and follow the setup wizard that opens on first start.
+
+New in 0.5.1: the installer now shows its setup screens. In 0.5.0 it installed silently and seemed to just disappear.
 Windows may say *"Windows protected your PC"* because the installer isn't code-signed. Click **More info → Run anyway**.
 
 **`DroidDrone-PC-*-windows.zip`** is the portable version: unzip it and run `DroidDrone PC.exe`.

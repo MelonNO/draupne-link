@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'de.droiddrone.pc'
-version = '0.5.0'
+version = '0.5.1'
 
 repositories {
     mavenCentral()
@@ -130,6 +130,7 @@ tasks.register('packageInstaller', Exec) {
             '--description', 'Fly a Betaflight drone over 4G from Windows',
             '--icon', iconFile,
             '--win-per-user-install',
+            '--win-dir-chooser', // shows a normal setup wizard; without any dialog option the installer runs invisibly
             '--win-shortcut',
             '--win-menu',
             '--win-menu-group', 'DroidDrone PC',
