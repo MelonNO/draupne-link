@@ -1,0 +1,146 @@
+plugins {
+    id 'application'
+}
+
+group = 'de.droiddrone.pc'
+version = '0.5.0'
+
+repositories {
+    mavenCentral()
+}
+
+def lwjglVersion = '3.3.6'
+
+dependencies {
+    implementation platform("org.lwjgl:lwjgl-bom:$lwjglVersion")
+    implementation 'org.lwjgl:lwjgl'
+    implementation 'org.lwjgl:lwjgl-glfw'
+    runtimeOnly 'org.lwjgl:lwjgl::natives-windows'
+    runtimeOnly 'org.lwjgl:lwjgl-glfw::natives-windows'
+    implementation 'com.formdev:flatlaf:3.5.4'
+    implementation 'com.google.zxing:core:3.5.3'   // QR codes in the phone guide
+    implementation 'com.google.code.gson:gson:2.11.0' // parses `tailscale status --json`
+    implementation 'com.fazecast:jSerialComm:2.11.0' // talks to Betaflight over USB in the setup wizard
+    implementation 'org.bytedeco:ffmpeg:7.1-1.5.11'  // video decoding
+    runtimeOnly 'org.bytedeco:ffmpeg:7.1-1.5.11:windows-x86_64'
+    runtimeOnly 'org.bytedeco:javacpp:1.5.11:windows-x86_64'
+
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// Compile upstream's platform-neutral protocol code straight from the pinned submodule,
+// so our wire format is the phone app's wire format. The four excluded Common files need Android;
+// Server/src is upstream's relay, which we can host in-process (RelayHost).
+sourceSets {
+    main {
+        java {
+            srcDir 'upstream/Common/src/main/java'
+            srcDir 'upstream/Server/src'
+            exclude '**/server/Main.java'
+            exclude '**/common/MediaCodecBuffer.java'
+            exclude '**/common/MediaCommon.java'
+            exclude '**/common/TelephonyService.java'
+            exclude '**/common/Logcat.java'
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+
+application {
+    mainClass = 'de.droiddrone.pc.Main'
+}
+
+run {
+    standardInput = System.in
+    workingDir = rootProject.projectDir
+}
+
+test {
+    useJUnitPlatform()
+    // upstream's relay (RelayHost) writes config.cfg into the working directory
+    workingDir = layout.buildDirectory.dir('test-work').get().asFile
+    doFirst { workingDir.mkdirs() }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Release packaging (Windows):
+//   gradlew packageApp        -> build/app-image/DroidDrone PC/DroidDrone PC.exe  (app + its own Java runtime)
+//   gradlew releaseZip        -> build/release/DroidDrone-PC-<version>-windows.zip  (portable, unzip and run)
+//   gradlew packageInstaller  -> build/release/DroidDrone-PC-Setup-<version>.exe  (needs WiX 3 on PATH; CI has it)
+
+def jpackageTool = file("${System.getProperty('java.home')}/bin/jpackage.exe")
+def iconFile = layout.buildDirectory.file('icon/droiddrone-pc.ico').get().asFile
+def appImageDir = layout.buildDirectory.dir('app-image').get().asFile
+def releaseDir = layout.buildDirectory.dir('release').get().asFile
+
+tasks.register('appIcon', JavaExec) {
+    group = 'distribution'
+    description = 'Draws the app icon into a .ico for the exe and installer'
+    dependsOn classes
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'de.droiddrone.pc.Main'
+    args 'write-icon', iconFile
+    systemProperty 'java.awt.headless', 'true'
+    outputs.file iconFile
+}
+
+tasks.register('packageApp', Exec) {
+    group = 'distribution'
+    description = 'Builds a self-contained Windows app image with jpackage'
+    dependsOn installDist, appIcon
+    doFirst { delete appImageDir }
+    commandLine jpackageTool, '--type', 'app-image',
+            '--name', 'DroidDrone PC',
+            '--app-version', version,
+            '--vendor', 'droiddrone-pc',
+            '--icon', iconFile,
+            '--input', layout.buildDirectory.dir('install/droiddrone-pc/lib').get().asFile,
+            '--main-jar', "droiddrone-pc-${version}.jar",
+            '--main-class', 'de.droiddrone.pc.Main',
+            '--java-options', '-Dfile.encoding=UTF-8',
+            '--dest', appImageDir
+}
+
+tasks.register('releaseZip', Zip) {
+    group = 'distribution'
+    description = 'Portable zip of the app image'
+    dependsOn packageApp
+    from(appImageDir)
+    archiveFileName = "DroidDrone-PC-${version}-windows.zip"
+    destinationDirectory = releaseDir
+}
+
+tasks.register('packageInstaller', Exec) {
+    group = 'distribution'
+    description = 'Windows installer (per user, no admin rights, Start menu + desktop shortcut)'
+    dependsOn packageApp
+    def staging = layout.buildDirectory.dir('installer').get().asFile
+    doFirst { delete staging }
+    commandLine jpackageTool, '--type', 'exe',
+            '--app-image', new File(appImageDir, 'DroidDrone PC'),
+            '--name', 'DroidDrone PC',
+            '--app-version', version,
+            '--vendor', 'droiddrone-pc',
+            '--description', 'Fly a Betaflight drone over 4G from Windows',
+            '--icon', iconFile,
+            '--win-per-user-install',
+            '--win-shortcut',
+            '--win-menu',
+            '--win-menu-group', 'DroidDrone PC',
+            // keep this UUID forever: it lets a newer installer replace an older install
+            '--win-upgrade-uuid', '5d2f1d3e-6a0b-4c9e-9f53-2b7c1a8e4d61',
+            '--dest', staging
+    doLast {
+        copy {
+            from(staging) { include '*.exe' }
+            into releaseDir
+            rename { "DroidDrone-PC-Setup-${version}.exe" }
+        }
+    }
+}

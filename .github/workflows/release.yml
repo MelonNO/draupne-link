@@ -1,0 +1,44 @@
+name: Release
+
+# Push a tag like v0.5.0 to build the installer and the portable zip and publish them as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: WiX Toolset 3 (needed by jpackage for the installer)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --version 3.14.1 -y --no-progress
+            Add-Content $env:GITHUB_PATH "C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          }
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path build.gradle -Pattern "^version = '(.+)'").Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match version $version in build.gradle" }
+      - name: Test, build installer and zip
+        run: .\gradlew.bat --no-daemon test releaseZip packageInstaller
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DroidDrone PC ${{ github.ref_name }}
+          body_path: docs/RELEASE_NOTES.md
+          files: |
+            build/release/DroidDrone-PC-Setup-*.exe
+            build/release/DroidDrone-PC-*-windows.zip

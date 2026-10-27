@@ -1,0 +1,126 @@
+package de.droiddrone.pc.setup;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.net.InetAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class SetupTest {
+    @TempDir
+    Path dir;
+
+    @Test
+    void parsesSignedOutStatus() {
+        String json = """
+                {"Version":"1.104.2","BackendState":"NeedsLogin","AuthURL":"https://login.tailscale.com/a/abc",
+                 "TailscaleIPs":null,"Self":{"HostName":"DESKTOP-1","OS":"windows","TailscaleIPs":null,"Online":false},
+                 "Peer":null}""";
+        Tailscale.Status s = Tailscale.parseStatus(json);
+        assertTrue(s.installed());
+        assertFalse(s.signedIn());
+        assertEquals("https://login.tailscale.com/a/abc", s.authUrl());
+        assertTrue(s.peers().isEmpty());
+    }
+
+    @Test
+    void parsesPeersAndDirectness() {
+        String json = """
+                Warning: something first
+                {"BackendState":"Running","AuthURL":"",
+                 "Self":{"HostName":"DESKTOP-1","OS":"windows","TailscaleIPs":["100.64.0.10","fd7a:115c::1"]},
+                 "Peer":{
+                   "nodekey:a":{"HostName":"pixel-7","OS":"android","Online":true,"TailscaleIPs":["100.88.0.5","fd7a::5"],"CurAddr":"","Relay":"fra"},
+                   "nodekey:b":{"HostName":"laptop","OS":"windows","Online":false,"TailscaleIPs":["100.88.0.6"],"CurAddr":"192.0.2.1:41641","Relay":"fra"}}}""";
+        Tailscale.Status s = Tailscale.parseStatus(json);
+        assertTrue(s.signedIn());
+        assertEquals("100.64.0.10", s.selfIp());
+        assertEquals(1, s.androidPeers().size());
+        Tailscale.Peer phone = s.androidPeers().get(0);
+        assertEquals("100.88.0.5", phone.ip());
+        assertTrue(phone.online());
+        assertFalse(phone.isDirect());
+    }
+
+    @Test
+    void pingPrefersDirectPongs() {
+        Tailscale.PingResult relayed = Tailscale.parsePing("""
+                pong from pixel-7 (100.88.0.5) via DERP(fra) in 88ms
+                pong from pixel-7 (100.88.0.5) via DERP(fra) in 71ms
+                direct connection not established""");
+        assertTrue(relayed.reached());
+        assertFalse(relayed.direct());
+        assertEquals(71, relayed.bestMs());
+
+        // the shape of real output: relayed first, then direct with jitter
+        Tailscale.PingResult direct = Tailscale.parsePing("""
+                pong from test-phone (100.64.0.20) via DERP(fra) in 30ms
+                pong from test-phone (100.64.0.20) via 198.51.100.23:41641 in 213ms
+                pong from test-phone (100.64.0.20) via 198.51.100.23:41641 in 68ms
+                pong from test-phone (100.64.0.20) via 198.51.100.23:41641 in 58ms
+                pong from test-phone (100.64.0.20) via 198.51.100.23:41641 in 110ms
+                pong from test-phone (100.64.0.20) via DERP(fra) in 150ms""");
+        assertTrue(direct.direct());
+        assertEquals(58, direct.bestMs(), "only direct pongs count once there are any");
+        assertEquals(110, direct.medianMs());
+        assertEquals("198.51.100.23:41641", direct.via());
+
+        assertFalse(Tailscale.parsePing("timeout waiting for ping reply").reached());
+    }
+
+    @Test
+    void apkShareOnlyAnswersLocalNetworksAndTailscale() throws Exception {
+        assertTrue(ApkShare.isAllowed(InetAddress.getByName("192.168.1.20")));
+        assertTrue(ApkShare.isAllowed(InetAddress.getByName("10.0.0.5")));
+        assertTrue(ApkShare.isAllowed(InetAddress.getByName("100.88.0.5")));
+        assertTrue(ApkShare.isAllowed(InetAddress.getByName("127.0.0.1")));
+        assertFalse(ApkShare.isAllowed(InetAddress.getByName("100.200.0.5")), "outside 100.64.0.0/10");
+        assertFalse(ApkShare.isAllowed(InetAddress.getByName("8.8.8.8")));
+    }
+
+    @Test
+    void apkShareServesTheFileAndCountsDownloads() throws Exception {
+        Path apk = dir.resolve(ApkShare.APK_NAME);
+        Files.write(apk, new byte[]{1, 2, 3, 4, 5});
+        try (ApkShare share = new ApkShare()) {
+            share.start(apk);
+            HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+            String base = "http://127.0.0.1:" + ApkShare.PORT + "/";
+            HttpResponse<String> page = client.send(HttpRequest.newBuilder(URI.create(base)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, page.statusCode());
+            assertTrue(page.body().contains(ApkShare.APK_NAME));
+            HttpResponse<byte[]> file = client.send(HttpRequest.newBuilder(URI.create(base + ApkShare.APK_NAME)).build(),
+                    HttpResponse.BodyHandlers.ofByteArray());
+            assertArrayEquals(new byte[]{1, 2, 3, 4, 5}, file.body());
+            assertEquals("application/vnd.android.package-archive", file.headers().firstValue("Content-Type").orElse(""));
+            assertEquals(404, client.send(HttpRequest.newBuilder(URI.create(base + "../secret")).build(),
+                    HttpResponse.BodyHandlers.discarding()).statusCode());
+            long deadline = System.currentTimeMillis() + 2000;
+            while (share.getCompletedDownloads() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(20);
+            assertEquals(1, share.getCompletedDownloads());
+        }
+    }
+
+    @Test
+    void sha256MatchesKnownValue() throws Exception {
+        Path f = dir.resolve("abc.txt");
+        Files.writeString(f, "abc");
+        assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", ApkShare.sha256(f));
+    }
+
+    @Test
+    void powershellEncodedCommandsRoundTrip() {
+        Shell.Result r = Shell.powershell(Duration.ofSeconds(30), "Write-Output ('it''s ' + (2+3))");
+        assertTrue(r.ok(), r.output());
+        assertEquals("it's 5", r.output().trim());
+        assertEquals("'it''s'", Shell.psQuote("it's"));
+    }
+}
