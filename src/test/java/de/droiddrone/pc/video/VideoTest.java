@@ -100,6 +100,62 @@ class VideoTest {
         assertEquals(List.of(false, false), changes);
     }
 
+    @Test
+    void risingPingLowersTheBitrateBeforeFramesAreLost() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        long t = 0;
+        for (int i = 0; i < 180; i++, t += 17) b.onFrame(i % 30 == 0, t, 60, 70 + i % 20); // ~3 s at 70-90 ms
+        b.onFrame(false, t += 17, 60, 70 + BitrateControl.QUEUE_DELAY_MS + 30); // one slow ping: 4G jitter
+        for (int i = 0; i < 10; i++, t += 17) b.onFrame(false, t, 60, 80);
+        assertTrue(changes.isEmpty(), "a single slow ping is ignored");
+        long until = t + BitrateControl.QUEUE_HOLD_MS + 100;
+        for (; t < until; t += 17) b.onFrame(false, t, 60, 180); // the uplink queues: ping stays ~110 ms higher
+        assertEquals(List.of(false), changes, "lowered while still under upstream's 300 ms limit");
+    }
+
+    // ------------------------------------------------------------------ LatencyMeter
+
+    /** A grey "camera picture" of the screen with the code painted at (x, y), modules of the given size. */
+    private static int[] frameWithCode(com.google.zxing.common.BitMatrix code, int w, int h, int x, int y, int scale) {
+        int[] px = new int[w * h];
+        java.util.Arrays.fill(px, 0x404040);
+        int size = (code.getWidth() + 8) * scale;
+        for (int yy = 0; yy < size; yy++) {
+            for (int xx = 0; xx < size; xx++) {
+                int mx = xx / scale - 4, my = yy / scale - 4;
+                boolean dark = mx >= 0 && my >= 0 && mx < code.getWidth() && my < code.getHeight() && code.get(mx, my);
+                px[(y + yy) * w + x + xx] = dark ? 0x101010 : 0xf0f0f0;
+            }
+        }
+        return px;
+    }
+
+    @Test
+    void latencyMeterReadsTheTimeCodeBack() {
+        try (LatencyMeter m = new LatencyMeter()) {
+            long painted = System.nanoTime(); // the code's own time is a little later (encoding it takes a moment)
+            var code = m.codeNow();
+            int[] frame = frameWithCode(code, 640, 360, 100, 40, 9);
+            double ms = m.read(frame, 640, 360, painted + 120_000_000L);
+            assertTrue(ms > 100 && ms <= 120.1, "expected just under 120 ms, got " + ms);
+            assertTrue(Double.isNaN(m.read(new int[640 * 360], 640, 360, painted)), "no code in the picture");
+        }
+    }
+
+    @Test
+    void latencyMeterWorksOnLargeFramesInTheBackground() throws Exception {
+        try (LatencyMeter m = new LatencyMeter()) {
+            long painted = System.nanoTime();
+            var code = m.codeNow();
+            int[] frame = frameWithCode(code, 1600, 900, 300, 100, 22); // copied at half size
+            m.offer(frame, 1600, 900, painted + 80_000_000L);
+            for (int i = 0; i < 200 && m.result().count() == 0; i++) Thread.sleep(10);
+            assertEquals(1, m.result().count());
+            assertTrue(m.result().medianMs() > 60 && m.result().medianMs() <= 80.1, m.toString());
+        }
+    }
+
     // ------------------------------------------------------------------ VideoDecoder (real FFmpeg)
 
     @Test

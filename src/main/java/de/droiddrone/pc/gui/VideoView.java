@@ -1,5 +1,7 @@
 package de.droiddrone.pc.gui;
 
+import com.google.zxing.common.BitMatrix;
+import de.droiddrone.pc.video.LatencyMeter;
 import de.droiddrone.pc.video.VideoPipeline;
 
 import javax.swing.JComponent;
@@ -34,6 +36,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     /** When the newest picture was handed over, and the smoothed wait until Swing painted it (shown in the stats). */
     private volatile long presentedNs;
     private volatile double displayMs;
+    private volatile LatencyMeter meter;
     private Supplier<OsdRenderer.Data> osdData = () -> null;
 
     VideoView() {
@@ -115,6 +118,17 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             back = t;
         }
         presentedNs = System.nanoTime();
+        LatencyMeter m = meter;
+        if (m != null) {
+            BufferedImage shown;
+            synchronized (lock) {
+                shown = front;
+            }
+            if (shown != null) {
+                m.offer(((DataBufferInt) shown.getRaster().getDataBuffer()).getData(), shown.getWidth(), shown.getHeight(),
+                        presentedNs + (long) (displayMs * 1e6));
+            }
+        }
         repaint();
     }
 
@@ -125,6 +139,12 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         Graphics2D g = (Graphics2D) graphics;
         int w = getWidth();
         int h = getHeight();
+        LatencyMeter m = meter;
+        if (m != null) {
+            paintLatencyTest(g, w, h, m);
+            notePainted();
+            return;
+        }
         BufferedImage img;
         synchronized (lock) {
             img = front;
@@ -168,12 +188,81 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         } else {
             paintStats(g);
         }
+        notePainted();
+    }
+
+    /** Picture and OSD drawn: the rest is Windows putting it on the screen. */
+    private void notePainted() {
         long presented = presentedNs;
-        if (presented != 0) { // picture and OSD drawn: the rest is Windows putting it on the screen
+        if (presented != 0) {
             presentedNs = 0;
             double ms = (System.nanoTime() - presented) / 1e6;
             displayMs = displayMs == 0 ? ms : displayMs * 0.9 + ms * 0.1;
         }
+    }
+
+    /** Starts (meter) or stops (null) the latency test screen. */
+    void setLatencyMeter(LatencyMeter meter) {
+        this.meter = meter;
+        repaint();
+    }
+
+    /**
+     * Latency test: a big QR code with the paint time on the left, the readings next to it, and the live video as a
+     * small thumbnail for aiming the camera (small, so its own copy of the code is too small to be read).
+     */
+    private void paintLatencyTest(Graphics2D g, int w, int h, LatencyMeter m) {
+        g.setColor(Color.BLACK);
+        g.fillRect(0, 0, w, h);
+        synchronized (lock) {
+            if (front != null) {
+                int tw = Math.max(80, w / 6);
+                int th = tw * front.getHeight() / front.getWidth();
+                g.drawImage(front, w - tw - 12, h - th - 12, tw, th, null);
+            }
+        }
+        BitMatrix code = m.codeNow(); // as late as possible: the time in it is "now"
+        int modules = code.getWidth() + 8; // 4-module white border
+        int scale = Math.max(1, Math.min(w * 11 / 20, h - 32) / modules);
+        int size = modules * scale;
+        int x0 = 16;
+        int y0 = (h - size) / 2;
+        g.setColor(Color.WHITE);
+        g.fillRect(x0, y0, size, size);
+        g.setColor(Color.BLACK);
+        for (int y = 0; y < code.getHeight(); y++) {
+            for (int x = 0; x < code.getWidth(); x++) {
+                if (code.get(x, y)) g.fillRect(x0 + (4 + x) * scale, y0 + (4 + y) * scale, scale, scale);
+            }
+        }
+        Theme.smooth(g);
+        int tx = x0 + size + 28;
+        int ty = Math.max(40, y0 + 30);
+        g.setFont(Theme.headingFont(20f));
+        g.setColor(Theme.ACCENT);
+        g.drawString("// LATENCY TEST", tx, ty);
+        g.setFont(Theme.font(Font.PLAIN, 14f));
+        g.setColor(Theme.TEXT);
+        ty += 34;
+        for (String line : new String[]{"Point the drone's camera at this code,", "close enough that it fills most of the picture.",
+                "Hold still for a few seconds.", "", "F3 or Esc: stop    F11: full screen"}) {
+            g.drawString(line, tx, ty);
+            ty += 21;
+        }
+        LatencyMeter.Result r = m.result();
+        ty += 24;
+        g.setFont(Theme.headingFont(13f));
+        g.setColor(Theme.MUTED);
+        g.drawString("CAMERA TO SCREEN", tx, ty);
+        ty += 44;
+        g.setFont(Theme.monoFont(Font.BOLD, 40f));
+        g.setColor(r.count() == 0 ? Theme.MUTED : Theme.OK);
+        g.drawString(r.count() == 0 ? "-- ms" : String.format(Locale.ROOT, "%.0f ms", r.medianMs()), tx, ty);
+        ty += 26;
+        g.setFont(Theme.font(Font.PLAIN, 13f));
+        g.setColor(Theme.MUTED);
+        g.drawString(r.count() == 0 ? "No code seen in the video yet"
+                : String.format(Locale.ROOT, "median of %d readings, min %.0f, max %.0f", r.count(), r.minMs(), r.maxMs()), tx, ty);
     }
 
     /** O key / settings: show or hide the HUD. */

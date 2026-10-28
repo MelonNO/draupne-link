@@ -17,6 +17,10 @@
 ## Milestone 1c: Low-latency RC path (built)
 - [x] Read, map and send in one tick at 250 Hz (was a separate 25 Hz thread)
 - [x] Hold the 1 ms Windows timer and opt out of power throttling, so the rate holds in the background
+- [x] Lower the video bitrate when the ping rises above its baseline (uplink queueing), not only above 300 ms
+- [x] Glass-to-glass latency test (F3) and exclusive full screen (F11)
+- [ ] Set `serial_update_rate_hz = 2000` from the setup wizard's Betaflight step
+- [ ] Forked Flight app: low-latency encoder settings, intra refresh instead of key frames, RC handled on arrival
 - [x] `Pacer`: accurate loop timing despite Windows' 15.6 ms timer tick
 - [x] Announce 250 Hz to the Flight app so it doesn't drop bunched frames over 4G
 

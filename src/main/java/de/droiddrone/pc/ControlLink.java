@@ -171,7 +171,7 @@ public class ControlLink {
         while (running) {
             try {
                 if (isConnected()) udpSender.sendPing(true);
-                Thread.sleep(500);
+                Thread.sleep(250); // the bitrate control watches the ping for queueing on the uplink
             } catch (InterruptedException e) {
                 return;
             }

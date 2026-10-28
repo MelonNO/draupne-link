@@ -4,6 +4,11 @@
 
 New in 0.5.2:
 - **Lower stick latency.** Sticks are now sent 250 times a second instead of 100, and Windows can no longer slow the app down when its window is in the background. Measured on a test PC: gaps between stick updates went from 10 ms (up to 16.5 ms) to 4 ms (up to 6 ms). Existing settings are updated automatically.
+- **Latency test (F3):** point the drone's camera at the code on the screen to measure the real camera-to-screen delay.
+- **True full screen (F11)** for the video, which can save up to one screen refresh.
+- **Video bitrate** drops as soon as the ping climbs above its usual level, before frames are lost.
+- **OSD** updates 20 times a second instead of 10.
+- **Important:** run `set serial_update_rate_hz = 2000` then `save` in the Betaflight CLI. Otherwise Betaflight can't keep up with the stick updates (see the README).
 - Red accent colour.
 
 Windows may say *"Windows protected your PC"* because the installer isn't code-signed. Click **More info → Run anyway**.

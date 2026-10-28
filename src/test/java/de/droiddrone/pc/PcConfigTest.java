@@ -51,10 +51,11 @@ class PcConfigTest {
     @Test
     void upgradeMovesOldRcRateDefaultOnce() throws Exception {
         Path file = dir.resolve(PcConfig.FILE_NAME);
-        Files.writeString(file, "# mine\nrcRate=100\nip=100.64.0.20\n");
+        Files.writeString(file, "# mine\nrcRate=100\ntelemetryRate=10\nip=100.64.0.20\n");
         PcConfig config = PcConfig.load(file);
         assertTrue(config.upgrade(file));
         assertEquals(250, config.getRcRate());
+        assertEquals(20, config.getTelemetryRate());
         assertEquals(250, PcConfig.load(file).getRcRate(), "written to the file");
         assertTrue(Files.readString(file).startsWith("# mine"), "comments kept");
 
@@ -63,6 +64,17 @@ class PcConfigTest {
         assertFalse(again.upgrade(file));
         assertEquals(100, again.getRcRate());
         assertEquals(250, PcConfig.defaults().getRcRate(), "new default");
+    }
+
+    @Test
+    void upgradeFromVersion2OnlyTouchesTelemetry() throws Exception {
+        Path file = dir.resolve(PcConfig.FILE_NAME);
+        Files.writeString(file, "rcRate=100\ntelemetryRate=10\nsettingsVersion=2\n");
+        PcConfig config = PcConfig.load(file);
+        assertTrue(config.upgrade(file));
+        assertEquals(100, config.getRcRate(), "chosen after version 2: kept");
+        assertEquals(20, config.getTelemetryRate());
+        assertFalse(PcConfig.load(file).upgrade(file), "once only");
     }
 
     @Test

@@ -147,16 +147,27 @@ public class PcConfig {
     public int getPort() { return getInt("port"); }
     public String getKey() { return getString("key"); }
     public String getJoystickFilter() { return getString("joystick"); }
+    static final int SETTINGS_VERSION = 3;
+
     /**
-     * Moves a settings file written by an older version to the current defaults, once (it then records
-     * settingsVersion). Version 2: rcRate 100 (the old default) becomes 250, which cuts the stick delay.
+     * Moves a settings file written by an older version to the current defaults, once per version (it then records
+     * settingsVersion), so a value changed deliberately afterwards is left alone. Only old defaults are replaced.
+     * Version 2: rcRate 100 -> 250 (less stick delay). Version 3: telemetryRate 10 -> 20 (OSD lags half as much).
      * @return true if the file was changed
      */
     public boolean upgrade(Path file) throws IOException {
-        if (file == null || !Files.exists(file) || !getString("settingsVersion").isEmpty()) return false;
+        if (file == null || !Files.exists(file)) return false;
+        int version;
+        try {
+            version = getString("settingsVersion").isEmpty() ? 1 : Integer.parseInt(getString("settingsVersion"));
+        } catch (NumberFormatException e) {
+            version = 1;
+        }
+        if (version >= SETTINGS_VERSION) return false;
         Map<String, String> updates = new LinkedHashMap<>();
-        if ("100".equals(getString("rcRate"))) updates.put("rcRate", "250");
-        updates.put("settingsVersion", "2");
+        if (version < 2 && "100".equals(getString("rcRate"))) updates.put("rcRate", "250");
+        if (version < 3 && "10".equals(getString("telemetryRate"))) updates.put("telemetryRate", "20");
+        updates.put("settingsVersion", Integer.toString(SETTINGS_VERSION));
         save(file, updates);
         return true;
     }

@@ -67,6 +67,10 @@ public class MainWindow extends JFrame {
     private RcSession session;
     private VideoPipeline video;
     private final VideoView videoView = new VideoView();
+    /** Where videoView normally lives; it moves to fullScreen and back. */
+    private JPanel videoHolder;
+    private JFrame fullScreen;
+    private de.droiddrone.pc.video.LatencyMeter latencyMeter;
     private JComponent linkColumn;
     private JComponent controllerCard;
     private ControlLink.State lastState;
@@ -134,10 +138,17 @@ public class MainWindow extends JFrame {
 
         videoView.setOsdSource(this::osdData);
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
-        getRootPane().registerKeyboardAction(e -> {
+        // bound on the video view, not the window, so the keys also work while it is in the full-screen window
+        bindKey(java.awt.event.KeyEvent.VK_F2, () -> {
             videoView.setOsdEnabled(!videoView.isOsdEnabled());
             save(Map.of("osd", Boolean.toString(videoView.isOsdEnabled())));
-        }, javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_F2, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
+        });
+        bindKey(java.awt.event.KeyEvent.VK_F3, this::toggleLatencyTest);
+        bindKey(java.awt.event.KeyEvent.VK_F11, this::toggleFullScreen);
+        bindKey(java.awt.event.KeyEvent.VK_ESCAPE, () -> {
+            if (latencyMeter != null) toggleLatencyTest();
+            else exitFullScreen();
+        });
         new Timer(33, e -> refresh()).start();
         setMinimumSize(new Dimension(1100, 760));
         setSize(1280, 820);
@@ -238,6 +249,10 @@ public class MainWindow extends JFrame {
         return label;
     }
 
+    private void bindKey(int key, Runnable action) {
+        videoView.registerKeyboardAction(e -> action.run(), javax.swing.KeyStroke.getKeyStroke(key, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
+    }
+
     private static void addStat(JPanel panel, String name, JLabel value) {
         panel.add(Theme.label(name, Theme.headingFont(11f), Theme.MUTED));
         panel.add(value);
@@ -250,11 +265,14 @@ public class MainWindow extends JFrame {
         JPanel video = new JPanel(new BorderLayout());
         video.setBackground(Color.BLACK);
         video.add(videoView, BorderLayout.CENTER);
-        videoView.setToolTipText("Double-click: video only / back    F2: OSD on / off");
+        videoHolder = video;
+        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off    F3: latency test");
         videoView.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
-                if (e.getClickCount() == 2) toggleVideoOnly();
+                if (e.getClickCount() != 2) return;
+                if (fullScreen != null) exitFullScreen();
+                else toggleVideoOnly();
             }
         });
         column.add(video, BorderLayout.CENTER);
@@ -497,7 +515,8 @@ public class MainWindow extends JFrame {
         refreshJoystickCombo(snap);
         refreshController(snap);
         refreshLink();
-        if (connection != null) videoView.repaint(); // keeps the HUD live even when no video frames arrive
+        // keeps the HUD (and the latency test's time code) live even when no video frames arrive
+        if (connection != null || latencyMeter != null) videoView.repaint();
     }
 
     private void refreshJoystickCombo(JoystickService.Snapshot snap) {
@@ -633,6 +652,78 @@ public class MainWindow extends JFrame {
         fcValue.setText(fc == null ? "-" : fc.getFcName() + " " + fc.getFcVersionStr());
         telemetryValue.setText(Long.toString(link.getTelemetryPacketsReceived()));
         rcSentValue.setText(Long.toString(link.getRcFramesSent()));
+    }
+
+    /**
+     * F3: glass-to-glass latency test. The video area shows a time code; filmed by the drone's camera and read back
+     * from the video, it gives the delay from the scene to this screen. Stopping it logs the result.
+     */
+    private void toggleLatencyTest() {
+        if (latencyMeter == null) {
+            latencyMeter = new de.droiddrone.pc.video.LatencyMeter();
+            videoView.setLatencyMeter(latencyMeter);
+            logLine("Latency test: point the drone's camera at the code on the screen. F3 or Esc to stop.");
+        } else {
+            logLine("Latency test, camera to screen" + (fullScreen != null ? " (full screen)" : "") + ": " + latencyMeter);
+            videoView.setLatencyMeter(null);
+            latencyMeter.close();
+            latencyMeter = null;
+        }
+    }
+
+    /**
+     * F11: the video alone in exclusive full screen. Windows then puts the picture on the screen directly instead of
+     * first composing it into the desktop, which can save up to a screen refresh. Leaving the window (alt-tab, another
+     * window) drops back to normal.
+     */
+    private void toggleFullScreen() {
+        if (fullScreen != null) {
+            exitFullScreen();
+            return;
+        }
+        java.awt.GraphicsDevice device = getGraphicsConfiguration().getDevice();
+        JFrame frame = new JFrame(getTitle());
+        frame.setUndecorated(true);
+        frame.setIconImages(getIconImages());
+        frame.getContentPane().setBackground(Color.BLACK);
+        frame.add(videoView, BorderLayout.CENTER); // moves it out of this window
+        frame.addWindowListener(new java.awt.event.WindowAdapter() {
+            private boolean active;
+
+            @Override
+            public void windowActivated(java.awt.event.WindowEvent e) {
+                active = true;
+            }
+
+            @Override
+            public void windowDeactivated(java.awt.event.WindowEvent e) {
+                if (active) javax.swing.SwingUtilities.invokeLater(MainWindow.this::exitFullScreen);
+            }
+        });
+        fullScreen = frame;
+        boolean exclusive = device.isFullScreenSupported();
+        if (exclusive) {
+            device.setFullScreenWindow(frame);
+        } else {
+            frame.setBounds(device.getDefaultConfiguration().getBounds());
+            frame.setVisible(true);
+        }
+        videoHolder.revalidate();
+        videoHolder.repaint();
+        logLine("Full screen (" + (exclusive ? "exclusive" : "window") + "). F11, Esc or double-click to leave.");
+    }
+
+    private void exitFullScreen() {
+        JFrame frame = fullScreen;
+        if (frame == null) return;
+        fullScreen = null;
+        java.awt.GraphicsDevice device = frame.getGraphicsConfiguration().getDevice();
+        if (device.getFullScreenWindow() == frame) device.setFullScreenWindow(null);
+        videoHolder.add(videoView, BorderLayout.CENTER);
+        frame.dispose();
+        videoHolder.revalidate();
+        videoHolder.repaint();
+        toFront();
     }
 
     /** Double-click on the video: hide everything else for a bigger picture, and back. */
