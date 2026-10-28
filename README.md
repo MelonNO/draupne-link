@@ -30,7 +30,7 @@ Prefer no installer? Download `DroidDrone-PC-<version>-windows.zip`, unzip it an
 |---|---|---|
 | **This PC** | Installs and signs in to **Tailscale** (private network between PC and phone), adds firewall rules, switches to the High performance power plan, creates shortcuts | Choose how the PC reaches the phone |
 | **Radio** | Detects it, then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)) | Plug it in and pick *USB Joystick (HID)* on the radio |
-| **Flight controller** | Over USB: sets the receiver to **MSP**, puts **ARM on AUX1**, **calibrates the accelerometer**, and shows Betaflight's arming check live | Plug it in. Without a USB cable you get a short checklist for Betaflight Configurator instead |
+| **Flight controller** | Over USB: sets the receiver to **MSP**, puts **ARM on AUX1**, **calibrates the accelerometer**, and shows Betaflight's arming check live | Plug it in. Without a USB cable you get a short checklist for Betaflight Configurator instead. The **BETAFLIGHT** button opens a step-by-step guide through Configurator, tab by tab, including the latency setting |
 | **Phone** | Downloads the official DroidDrone Flight app, checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, tick off a few phone settings, plug the phone into the flight controller |
 | **Test** | Connects to the drone and measures the path (direct or relayed) and the round-trip time, and gives you a verdict | Put the phone on 4G |
 
@@ -61,7 +61,7 @@ Every part is built for the least delay:
 
 The 4G network itself (typically 40–100 ms round trip) is the biggest delay. A wired PC helps a little.
 
-**Betaflight setting that matters:** Betaflight handles one MSP message per serial cycle, and that cycle runs only 100 times a second by default. Stick updates plus the OSD's telemetry requests are more than that, so stick updates queue up in the flight controller. Fix it once in the Betaflight CLI (4.3 or newer):
+**Betaflight setting that matters:** Betaflight handles one MSP message per serial cycle, and that cycle runs only 100 times a second by default. Stick updates plus the OSD's telemetry requests are more than that, so stick updates queue up in the flight controller. Fix it once in the Betaflight CLI (4.3 or newer); the **BETAFLIGHT** guide in the app walks you through it:
 ```
 set serial_update_rate_hz = 2000
 save

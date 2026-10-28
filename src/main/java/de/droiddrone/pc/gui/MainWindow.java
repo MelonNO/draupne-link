@@ -84,6 +84,7 @@ public class MainWindow extends JFrame {
     private final JTextField keyField = new JTextField();
     private final JButton connectButton = Theme.primaryButton("Connect");
     private final JButton setupButton = Theme.secondaryButton("Setup");
+    private final JButton betaflightButton = Theme.secondaryButton("Betaflight");
     private final JLabel statePill = new JLabel("OFFLINE", SwingConstants.CENTER);
     private final JLabel pingValue = statValue();
     private final JLabel fcValue = statValue();
@@ -173,6 +174,9 @@ public class MainWindow extends JFrame {
         right.setOpaque(false);
         setupButton.addActionListener(e -> SetupWizard.open(this));
         right.add(setupButton);
+        betaflightButton.setToolTipText("Step-by-step guide for the Betaflight Configurator settings");
+        betaflightButton.addActionListener(e -> BetaflightGuide.open(this, this));
+        right.add(betaflightButton);
         right.add(Box.createHorizontalStrut(8));
         right.add(statePill);
         header.add(right, BorderLayout.EAST);

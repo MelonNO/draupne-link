@@ -101,6 +101,8 @@ final class FlightControllerPages {
         private final CheckRow arm = new CheckRow("Arm switch");
         private final CheckRow accel = new CheckRow("Accelerometer level");
         private final CheckRow check = new CheckRow("Arming check");
+        private final CheckRow latency = new CheckRow("Stick delay setting");
+        private final Map<String, javax.swing.JCheckBox> savedChecks = new java.util.HashMap<>();
         private JButton applyButton;
         private JButton calibrateButton;
         private boolean busy;
@@ -135,6 +137,8 @@ final class FlightControllerPages {
             WizardDialog.addRow(auto, accel);
             check.addAction("Check again", this::readStatus);
             WizardDialog.addRow(auto, check);
+            latency.addAction("Open the guide", this::openGuide);
+            WizardDialog.addRow(auto, latency);
             for (CheckRow r : new CheckRow[]{version, receiver, arm, check}) r.set(State.PENDING, "Reading...");
             accel.set(State.INFO, "Put the drone on a <b>level</b> surface, then press Calibrate. This fixes the ANGLE arming block.");
 
@@ -144,11 +148,19 @@ final class FlightControllerPages {
                     "<b>Modes</b> tab &rarr; ARM on <b>AUX 1</b>, range over the top (1700-2100) &rarr; Save"));
             WizardDialog.addRow(manual, savedCheck("fc.accel",
                     "<b>Setup</b> tab &rarr; drone level &rarr; <b>Calibrate Accelerometer</b>"));
+            WizardDialog.addRow(manual, savedCheck("fc.serialRate",
+                    "<b>CLI</b> tab &rarr; <b>set serial_update_rate_hz = 2000</b> &rarr; <b>save</b> (otherwise stick updates queue up in Betaflight)"));
             WizardDialog.addRow(manual, savedCheck("fc.disconnect",
                     "Press <b>Disconnect</b> in Configurator before unplugging - otherwise Betaflight keeps an \"MSP\" arming block until it restarts"));
 
             WizardDialog.addRow(col, auto);
             WizardDialog.addRow(col, manual);
+            JButton guide = Theme.secondaryButton("Step-by-step Betaflight guide");
+            guide.addActionListener(e -> openGuide());
+            JPanel guideRow = new JPanel(new java.awt.BorderLayout());
+            guideRow.setOpaque(false);
+            guideRow.add(guide, java.awt.BorderLayout.WEST);
+            WizardDialog.addRow(col, guideRow);
             WizardDialog.addRow(col, WizardDialog.subheading("Failsafe"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
                     "If the 4G link drops, Betaflight's failsafe takes over. For bench tests, Stage 2 <b>Drop</b> is fine. "
@@ -163,12 +175,28 @@ final class FlightControllerPages {
             box.setOpaque(false);
             box.setSelected("true".equals(main.config().getString(key)));
             box.addActionListener(e -> main.save(Map.of(key, Boolean.toString(box.isSelected()))));
+            savedChecks.put(key, box);
             return box;
+        }
+
+        /** The Betaflight guide, over this wizard; its tick boxes are the same settings as this page's checklist. */
+        private void openGuide() {
+            BetaflightGuide.open(main, wizard);
+            savedChecks.forEach((key, box) -> box.setSelected("true".equals(main.config().getString(key))));
+            showLatencyState();
+        }
+
+        private void showLatencyState() {
+            boolean done = "true".equals(main.config().getString("fc.serialRate"));
+            latency.set(done ? State.OK : State.WARN, done ? "serial_update_rate_hz = 2000 (ticked off in the guide)."
+                    : "Set <b>serial_update_rate_hz = 2000</b> in the CLI, or stick updates queue up in Betaflight. "
+                    + "The guide shows how (step <b>LATENCY</b>).");
         }
 
         @Override
         void onShow() {
             boolean usb = found.port != null;
+            showLatencyState();
             auto.setVisible(usb);
             manual.setVisible(!usb);
             if (usb && !busy) readSettings();

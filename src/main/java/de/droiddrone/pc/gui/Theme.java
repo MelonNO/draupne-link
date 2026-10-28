@@ -43,6 +43,7 @@ final class Theme {
     /** For HTML text. */
     static final String MUTED_HEX = "#8c8c7e";
     static final String BAD_HEX = "#ff5a4e";
+    static final String ACCENT_HEX = "#e31b23";
 
     private static final List<String> FONTS = Arrays.asList(
             GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames());

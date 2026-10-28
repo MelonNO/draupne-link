@@ -8,7 +8,8 @@ New in 0.5.2:
 - **True full screen (F11)** for the video, which can save up to one screen refresh.
 - **Video bitrate** drops as soon as the ping climbs above its usual level, before frames are lost.
 - **OSD** updates 20 times a second instead of 10.
-- **Important:** run `set serial_update_rate_hz = 2000` then `save` in the Betaflight CLI. Otherwise Betaflight can't keep up with the stick updates (see the README).
+- **Betaflight guide:** the new **BETAFLIGHT** button walks through Betaflight Configurator tab by tab: receiver, arm switch, the latency setting, accelerometer, failsafe.
+- **Important:** run `set serial_update_rate_hz = 2000` then `save` in the Betaflight CLI (the guide shows how). Otherwise Betaflight can't keep up with the stick updates.
 - Red accent colour.
 
 Windows may say *"Windows protected your PC"* because the installer isn't code-signed. Click **More info → Run anyway**.
