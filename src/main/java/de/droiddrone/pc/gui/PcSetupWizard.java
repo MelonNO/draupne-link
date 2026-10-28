@@ -567,8 +567,8 @@ final class PcSetupWizard {
         @Override
         void onShow() {
             int rate = main.config().getRcRate();
-            rcRate.set(rate >= 100 ? State.OK : State.WARN, "Sticks are read and sent " + rate + " times a second (adds at most "
-                    + (1000 / rate) + " ms). " + (rate >= 100 ? "" : "Set rcRate=100 or higher in the settings file."));
+            rcRate.set(rate >= 250 ? State.OK : State.WARN, "Sticks are read and sent " + rate + " times a second (adds at most "
+                    + (1000 / rate) + " ms). " + (rate >= 250 ? "" : "Set rcRate=250 in the settings file for the least delay."));
             checkPower();
             background(WindowsSetup::internetAdapter, a -> {
                 if (a == null) {

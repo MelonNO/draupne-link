@@ -31,6 +31,9 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private String idleText = "Not connected";
     private final OsdRenderer osd = new OsdRenderer();
     private volatile boolean osdEnabled = true;
+    /** When the newest picture was handed over, and the smoothed wait until Swing painted it (shown in the stats). */
+    private volatile long presentedNs;
+    private volatile double displayMs;
     private Supplier<OsdRenderer.Data> osdData = () -> null;
 
     VideoView() {
@@ -111,6 +114,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             front = back;
             back = t;
         }
+        presentedNs = System.nanoTime();
         repaint();
     }
 
@@ -164,6 +168,12 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         } else {
             paintStats(g);
         }
+        long presented = presentedNs;
+        if (presented != 0) { // picture and OSD drawn: the rest is Windows putting it on the screen
+            presentedNs = 0;
+            double ms = (System.nanoTime() - presented) / 1e6;
+            displayMs = displayMs == 0 ? ms : displayMs * 0.9 + ms * 0.1;
+        }
     }
 
     /** O key / settings: show or hide the HUD. */
@@ -183,9 +193,9 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private void paintStats(Graphics2D g) {
         VideoPipeline.Stats s = stats.get();
         if (s == null || s.width() == 0) return;
-        String line = String.format(Locale.ROOT, "%s %dx%d   %d fps (shown %d)   %.1f Mbit/s   decode %.1f ms   draw %.1f ms   damaged %d  lost %d",
+        String line = String.format(Locale.ROOT, "%s %dx%d   %d fps (shown %d)   %.1f Mbit/s   decode %.1f ms   draw %.1f ms   to screen %.1f ms   damaged %d  lost %d",
                 s.hevc() ? "H.265" : "H.264", s.width(), s.height(), s.receivedFps(), s.shownFps(), s.megabitsPerSecond(),
-                s.decodeMs(), s.convertMs(), s.damaged(), s.lost());
+                s.decodeMs(), s.convertMs(), displayMs, s.damaged(), s.lost());
         if (s.error() != null) line = "Decoder: " + s.error();
         Theme.smooth(g);
         g.setFont(Theme.font(Font.BOLD, 11.5f));

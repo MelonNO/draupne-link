@@ -29,6 +29,7 @@ public class JoystickService {
     public void run() {
         List<Joystick.Info> joysticks = List.of();
         long nextListRefresh = 0;
+        Thread.currentThread().setPriority(Thread.MAX_PRIORITY); // this thread sends the RC frames
         Pacer pacer = new Pacer(pollHz);
         while (running) {
             Joystick.poll();

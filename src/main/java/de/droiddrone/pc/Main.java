@@ -19,11 +19,11 @@ public class Main {
         String command = args.length > 0 ? args[0] : "gui";
         Path configFile = AppPaths.configFile();
         switch (command) {
-            case "gui" -> gui(PcConfig.load(configFile), configFile);
+            case "gui" -> gui(load(configFile), configFile);
             case "list" -> listJoysticks();
             case "monitor" -> monitor(PcConfig.load(configFile));
             case "connect" -> {
-                PcConfig config = PcConfig.load(configFile);
+                PcConfig config = load(configFile);
                 if (args.length > 1) config.set("ip", args[1]);
                 connect(config);
             }
@@ -38,6 +38,13 @@ public class Main {
             }
             default -> printHelp();
         }
+    }
+
+    /** Loads the settings and brings a file from an older version up to date. */
+    private static PcConfig load(Path configFile) throws java.io.IOException {
+        PcConfig config = PcConfig.load(configFile);
+        if (config.upgrade(configFile)) de.droiddrone.common.Log.log("Settings updated to the current defaults.");
+        return config;
     }
 
     private static void printHelp() {
@@ -64,6 +71,7 @@ public class Main {
     /** GLFW polling stays on this (main) thread; the window runs on the Swing thread and reads snapshots. */
     private static void gui(PcConfig config, Path configFile) {
         initJoystickOrExit();
+        WindowsTuning.apply();
         JoystickService service = new JoystickService(config.getJoystickFilter(), config.getRcRate());
         SwingUtilities.invokeLater(() -> MainWindow.open(config, configFile, service));
         service.run();
@@ -155,6 +163,8 @@ public class Main {
         startQuitListener();
 
         RcSession session = new RcSession(link, mapper, msg -> System.out.println("\n" + msg));
+        WindowsTuning.apply();
+        Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
         Pacer pacer = new Pacer(config.getRcRate());
         ControlLink.State lastState = null;
         long nextStatus = 0;

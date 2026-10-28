@@ -26,11 +26,12 @@ public class ControlLink {
     public static final int MIN_RC_RATE = 10;
     public static final int MAX_RC_RATE = 250;
     /**
-     * RC rate we announce to the Flight app. Its only use there is Msp.setRawRc's minimum gap of 1000 / rate / 2 ms:
-     * frames arriving closer together are DROPPED, and over 4G frames often arrive bunched, so the drop would discard the
-     * newest sticks. Announcing 250 Hz shrinks that window to 2 ms. How often we actually send is our own rcRate.
+     * RC rate we announce to the Flight app. Its only use there is Msp.setRawRc's minimum gap of 1000 / rate / 2 ms
+     * (integer maths): frames arriving closer together are DROPPED, and over 4G frames often arrive bunched, so the drop
+     * would discard the newest sticks. 255, the largest value the packet's unsigned byte holds, shrinks that window to
+     * 1 ms. How often we actually send is our own rcRate.
      */
-    static final int ANNOUNCED_RC_RATE = 250;
+    static final int ANNOUNCED_RC_RATE = 255;
     /** Betaflight's MSP_RX_MAP has 8 entries (roll, pitch, yaw, throttle, AUX1-4). */
     static final int RX_MAP_SIZE = 8;
 

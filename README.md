@@ -51,8 +51,9 @@ Prefer no installer? Download `DroidDrone-PC-<version>-windows.zip`, unzip it an
 ## Latency
 
 Every part is built for the least delay:
-- **Sticks:** read and sent 100 times a second in a single step, with no extra queues.
-- **Video:** each frame is decoded the moment its last packet arrives, and only the newest picture is drawn. The PC side takes about 2 ms per 720p frame.
+- **Sticks:** read and sent 250 times a second in a single step, with no extra queues.
+- **Steady timing:** the app holds Windows' 1 ms timer, opts out of power throttling and runs at above-normal priority, so the stick rate holds even when the window is in the background. Without this, Windows can stretch the gaps between stick updates to 16 ms.
+- **Video:** each frame is decoded the moment its last packet arrives, and only the newest picture is drawn. The PC side takes about 3–4 ms per 720p frame from the last packet to the screen; the stats line shows the live numbers.
 - **Connection:** Tailscale normally finds a **direct** path. The setup's link test tells you if it doesn't.
 
 The 4G network itself (typically 40–100 ms round trip) is the biggest delay. A wired PC helps a little.
@@ -84,7 +85,7 @@ DroidDrone PC replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s 
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 55 tests: protocol, video decode, telemetry, calibration, Betaflight CLI/MSP, setup helpers
+.\gradlew.bat test               # 56 tests: protocol, video decode, telemetry, calibration, Betaflight CLI/MSP, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3

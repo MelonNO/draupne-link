@@ -150,7 +150,7 @@ class ControlLinkTest {
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         ParsedConfig cfg = phone.config;
         assertNotNull(cfg);
-        assertEquals(ControlLink.ANNOUNCED_RC_RATE, cfg.rcRefreshRate, "keeps the Flight app's frame-drop window at 2 ms");
+        assertEquals(ControlLink.ANNOUNCED_RC_RATE, cfg.rcRefreshRate, "keeps the Flight app's frame-drop window at 1 ms");
         assertEquals(1280, cfg.cameraWidth);
         assertEquals(FcCommon.FC_PROTOCOL_MSP, cfg.fcProtocol);
         assertEquals(0, cfg.trailingBytes, "Config packet must be fully consumed by the Flight parser layout");

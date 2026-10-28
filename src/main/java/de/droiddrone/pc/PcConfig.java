@@ -147,6 +147,20 @@ public class PcConfig {
     public int getPort() { return getInt("port"); }
     public String getKey() { return getString("key"); }
     public String getJoystickFilter() { return getString("joystick"); }
+    /**
+     * Moves a settings file written by an older version to the current defaults, once (it then records
+     * settingsVersion). Version 2: rcRate 100 (the old default) becomes 250, which cuts the stick delay.
+     * @return true if the file was changed
+     */
+    public boolean upgrade(Path file) throws IOException {
+        if (file == null || !Files.exists(file) || !getString("settingsVersion").isEmpty()) return false;
+        Map<String, String> updates = new LinkedHashMap<>();
+        if ("100".equals(getString("rcRate"))) updates.put("rcRate", "250");
+        updates.put("settingsVersion", "2");
+        save(file, updates);
+        return true;
+    }
+
     public int getRcRate() {
         int rate = getInt("rcRate");
         if (rate < ControlLink.MIN_RC_RATE || rate > ControlLink.MAX_RC_RATE) {
