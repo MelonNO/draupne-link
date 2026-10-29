@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DroidDrone PC: the Windows app's look - black, red "//" titles, cards with corner brackets.
+     Same view ids as upstream, so MainActivity's logic is unchanged. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/llMain"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/dd_bg"
+    android:orientation="vertical"
+    android:paddingStart="16dp"
+    android:paddingTop="10dp"
+    android:paddingEnd="16dp"
+    android:paddingBottom="6dp"
+    tools:context=".MainActivity">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-condensed"
+            android:letterSpacing="0.08"
+            android:text="@string/dd_title"
+            android:textColor="@color/dd_text"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:fontFamily="sans-serif-condensed"
+            android:letterSpacing="0.08"
+            android:text="@string/dd_subtitle"
+            android:textColor="@color/dd_accent"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvPill"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@color/dd_panel_2"
+            android:fontFamily="sans-serif-condensed"
+            android:letterSpacing="0.1"
+            android:paddingStart="14dp"
+            android:paddingTop="5dp"
+            android:paddingEnd="14dp"
+            android:paddingBottom="5dp"
+            android:text="@string/dd_pill_offline"
+            android:textColor="@color/dd_muted"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="10dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+        <!-- STATUS -->
+        <LinearLayout
+            android:id="@+id/cardStatus"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginEnd="12dp"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <TextView style="@style/DD.SectionTitle" android:text="@string/dd_section_status" />
+
+            <TextView style="@style/DD.Label" android:text="@string/status_network" />
+
+            <TextView
+                android:id="@+id/tvNetworkConnectionStatus"
+                style="@style/DD.Value"
+                android:text="@string/status_disconnected" />
+
+            <TextView style="@style/DD.Label" android:text="@string/status_fc" />
+
+            <TextView
+                android:id="@+id/tvFcConnectionStatus"
+                style="@style/DD.Value"
+                android:text="@string/status_disconnected" />
+
+            <View
+                android:layout_width="0dp"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/dd_hint_props"
+                android:textColor="@color/dd_muted"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- CONNECTION -->
+        <ScrollView
+            android:id="@+id/cardConnection"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.35"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp">
+
+                <TextView style="@style/DD.SectionTitle" android:text="@string/dd_section_connection" />
+
+                <Spinner
+                    android:id="@+id/connectionMode"
+                    android:layout_width="match_parent"
+                    android:layout_height="44dp"
+                    android:background="@drawable/dd_spinner"
+                    android:popupBackground="@color/dd_panel_2" />
+
+                <TextView
+                    android:id="@+id/tvConnectionModeHint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/connection_mode_server"
+                    android:textColor="@color/dd_muted"
+                    android:textSize="12sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:id="@+id/llIp"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="2"
+                        android:orientation="vertical">
+
+                        <TextView style="@style/DD.Label" android:text="@string/dd_label_ip" />
+
+                        <EditText
+                            android:id="@+id/editText_ip"
+                            style="@style/DD.Field"
+                            android:layout_width="match_parent"
+                            android:hint="@string/ip"
+                            android:importantForAutofill="no"
+                            android:inputType="textNoSuggestions" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView style="@style/DD.Label" android:text="@string/dd_label_port" />
+
+                        <EditText
+                            android:id="@+id/editText_port"
+                            style="@style/DD.Field"
+                            android:layout_width="match_parent"
+                            android:hint="@string/port"
+                            android:importantForAutofill="no"
+                            android:inputType="number" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView style="@style/DD.Label" android:text="@string/dd_label_key" />
+
+                        <EditText
+                            android:id="@+id/editText_key"
+                            style="@style/DD.Field"
+                            android:layout_width="match_parent"
+                            android:autofillHints="password"
+                            android:hint="@string/server_key"
+                            android:inputType="textPassword" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/startStopService"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/dd_button_primary"
+                    android:fontFamily="sans-serif-condensed"
+                    android:letterSpacing="0.15"
+                    android:stateListAnimator="@null"
+                    android:text="@string/connect"
+                    android:textColor="@color/white"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <CheckBox
+                    android:id="@+id/cbConnectOnStartup"
+                    android:layout_width="wrap_content"
+                    android:layout_height="44dp"
+                    android:layout_marginTop="4dp"
+                    android:buttonTint="@color/dd_accent"
+                    android:text="@string/connect_on_startup"
+                    android:textColor="@color/dd_text" />
+            </LinearLayout>
+        </ScrollView>
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/tvVersion"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:gravity="end"
+        android:text="@string/version"
+        android:textColor="@color/dd_muted"
+        android:textSize="11sp" />
+
+</LinearLayout>

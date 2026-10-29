@@ -22,20 +22,18 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.Executors;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /**
- * Gets the DroidDrone Flight app onto the phone: downloads the official release zip from GitHub, checks its SHA-256,
- * unpacks the APK and serves it from a tiny web server that only answers the local network and Tailscale.
+ * Gets the DroidDrone Flight app onto the phone: downloads this project's build of it (upstream 2.3.0 plus more
+ * flight controllers and the PC app's look, source in flight-app/) from this project's GitHub release, checks its
+ * SHA-256, and serves it from a tiny web server that only answers the local network and Tailscale.
  */
 public class ApkShare implements AutoCloseable {
-    public static final String VERSION = "2.3.0";
-    public static final String ZIP_URL = "https://github.com/DroidDrone/DroidDrone/releases/download/v2.3.0/Flight-release_v2.3.0.zip";
-    /** SHA-256 of Flight-release_v2.3.0.zip as published on 2024-12-08. */
-    public static final String ZIP_SHA256 = "80198775a4f64bc81bd158ae66cbaba0678ba715336264f436168e3a4029f003";
-    public static final String APK_ENTRY = "Flight-release.apk";
+    public static final String VERSION = "2.3.0-pc.1";
     public static final String APK_NAME = "DroidDrone-Flight-" + VERSION + ".apk";
+    public static final String APK_URL = "https://github.com/MelonNO/droiddrone-pc/releases/download/flight-" + VERSION + "/" + APK_NAME;
+    /** SHA-256 of the APK built by flight-app/build.ps1 and attached to the flight-2.3.0-pc.1 release. */
+    public static final String APK_SHA256 = "e302603abdf0a3e47932f7bf1a37e15d15466ad1280c262abd84aebcac6e4ae8";
     public static final int PORT = 8765;
 
     private HttpServer server;
@@ -43,31 +41,24 @@ public class ApkShare implements AutoCloseable {
     /** Downloads and verifies the APK once; later calls return the cached file. */
     public static Path prepareApk(Path downloadsDir) throws IOException, InterruptedException {
         Path apk = downloadsDir.resolve(APK_NAME);
-        if (Files.isRegularFile(apk) && Files.size(apk) > 0) return apk;
-        Path zip = downloadsDir.resolve("Flight-release_v" + VERSION + ".zip.part");
+        if (Files.isRegularFile(apk) && APK_SHA256.equalsIgnoreCase(sha256(apk))) return apk;
+        Files.createDirectories(downloadsDir);
+        Path tmp = downloadsDir.resolve(APK_NAME + ".part");
         HttpClient client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(20)).build();
-        HttpResponse<Path> response = client.send(HttpRequest.newBuilder(URI.create(ZIP_URL)).timeout(Duration.ofMinutes(5)).build(),
-                HttpResponse.BodyHandlers.ofFile(zip));
-        if (response.statusCode() != 200) throw new IOException("GitHub answered HTTP " + response.statusCode());
-        String hash = sha256(zip);
-        if (!ZIP_SHA256.equalsIgnoreCase(hash)) {
-            Files.deleteIfExists(zip);
+        HttpResponse<Path> response = client.send(HttpRequest.newBuilder(URI.create(APK_URL)).timeout(Duration.ofMinutes(5)).build(),
+                HttpResponse.BodyHandlers.ofFile(tmp));
+        if (response.statusCode() != 200) {
+            Files.deleteIfExists(tmp);
+            throw new IOException("GitHub answered HTTP " + response.statusCode());
+        }
+        String hash = sha256(tmp);
+        if (!APK_SHA256.equalsIgnoreCase(hash)) {
+            Files.deleteIfExists(tmp);
             throw new IOException("Downloaded file failed its integrity check (SHA-256 " + hash + ") - not using it");
         }
-        Path tmp = downloadsDir.resolve(APK_NAME + ".part");
-        try (ZipInputStream in = new ZipInputStream(Files.newInputStream(zip))) {
-            ZipEntry entry;
-            while ((entry = in.getNextEntry()) != null) {
-                if (entry.getName().equals(APK_ENTRY)) {
-                    Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
-                    Files.move(tmp, apk, StandardCopyOption.REPLACE_EXISTING);
-                    Files.deleteIfExists(zip);
-                    return apk;
-                }
-            }
-        }
-        throw new IOException(APK_ENTRY + " not found in the release zip");
+        Files.move(tmp, apk, StandardCopyOption.REPLACE_EXISTING);
+        return apk;
     }
 
     static String sha256(Path file) throws IOException {

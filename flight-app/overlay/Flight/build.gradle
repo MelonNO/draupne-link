@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'de.droiddrone.flight'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "de.droiddrone.flight"
+        minSdk 26
+        targetSdk 34
+        // DroidDrone PC build of 2.3.0: same protocol, more flight controllers, restyled screen
+        versionCode 2030001
+        versionName "2.3.0-pc.1"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // DroidDrone PC: release key from outside the repo (see flight-app/build.ps1)
+    signingConfigs {
+        release {
+            storeFile System.getenv('DD_FLIGHT_KEYSTORE') ? file(System.getenv('DD_FLIGHT_KEYSTORE')) : null
+            storePassword System.getenv('DD_FLIGHT_KEYSTORE_PASSWORD')
+            keyAlias 'flight'
+            keyPassword System.getenv('DD_FLIGHT_KEYSTORE_PASSWORD')
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig System.getenv('DD_FLIGHT_KEYSTORE') ? signingConfigs.release : null
+            ndk {
+                debugSymbolLevel 'SYMBOL_TABLE'
+            }
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}
+
+dependencies {
+    implementation project(':Common')
+    implementation project(':libuvccamera')
+    implementation project(':mavlink')
+    implementation 'io.github.xmaihh:serialport:2.1.2'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation "androidx.preference:preference:1.2.1"
+    implementation 'com.github.mik3y:usb-serial-for-android:3.8.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.6.1'
+}

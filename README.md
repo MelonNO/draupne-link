@@ -36,7 +36,7 @@ Betaflight 4.4 is **not required**, only recommended:
 | **This PC** | The **installer** installs **Tailscale** (private network between PC and phone), adds the firewall rules and switches to the High performance power plan. The wizard opens Tailscale's sign-in page and skips every step that is already done | Sign in to Tailscale |
 | **Radio** | Detects it, then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)) | Plug it in and pick *USB Joystick (HID)* on the radio |
 | **Drone** | Over USB, with nothing to click: sets the receiver to **MSP** and the **stick delay setting**. Nothing else on the drone is touched | Plug it in. No USB cable? The page shows the same two settings for Betaflight Configurator |
-| **Phone** | Downloads the official DroidDrone Flight app, checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, set four phone settings from a short list |
+| **Phone** | Downloads [this project's DroidDrone Flight](#the-phone-app), checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, set four phone settings from a short list |
 | **Connect** | Shows what to type into the Flight app and holds the link open: it turns green the moment you tap CONNECT on the phone, then measures the path (direct or relayed) and the round-trip time and gives you a verdict | Type in the values, tap CONNECT, plug the phone into the flight controller |
 
 <p>
@@ -79,7 +79,7 @@ save
 | What you see | What it means / what to do |
 |---|---|
 | Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A cable plus an OTG adapter (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
-| The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DroidDrone Flight when … is connected**, then OK. Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
+| The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DroidDrone Flight when … is connected**, then OK. No tick box? Your flight controller's USB chip isn't in the app's list: tell us its USB ID (Windows Device Manager → the COM port → Details → Hardware Ids). Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
 | **NO FLIGHT CONTROLLER** or **FAILSAFE** comes and goes while the link is good | Usually Betaflight's `serial_update_rate_hz` is still at 100: it then can't keep up with the stick updates and drops them. Plug the flight controller into the PC and run SETUP → *Drone setup* (or set it in the CLI, see [Latency](#latency)). If it still happens, check the OTG cable |
 | OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Calibrate it in Betaflight Configurator's **Setup** tab, drone level |
 | Flight app shows the Betaflight version in **yellow** | Betaflight is older than 4.4. It still flies; update when convenient ([which version?](#which-betaflight-version)) |
@@ -95,10 +95,18 @@ Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.
 
 ```
 Radio --USB--> Windows PC  ==== 4G / Tailscale ====>  Android phone on the drone --USB OTG (MSP)--> Betaflight
-               DroidDrone PC  <== video + telemetry ==  DroidDrone Flight app (unmodified)
+               DroidDrone PC  <== video + telemetry ==  DroidDrone Flight app
 ```
 
-DroidDrone PC replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s *Control* phone app. It speaks the same protocol as the unmodified **DroidDrone Flight 2.3.0** app, and compiles upstream's own protocol code from a pinned submodule, so it can't drift from the original.
+DroidDrone PC replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s *Control* phone app. It speaks the protocol of **DroidDrone Flight 2.3.0**, and compiles upstream's own protocol code from a pinned submodule, so it can't drift from the original.
+
+### The phone app
+
+The setup installs **DroidDrone Flight 2.3.0-pc.1**: upstream's Flight 2.3.0 with two changes, source in [`flight-app/`](flight-app):
+- **More flight controllers:** Artery AT32 boards (USB ID 2E3C:5740) are in its USB list, so Android can remember the permission and the phone reconnects to the flight controller without asking.
+- **The PC app's look:** black and red, status at a glance (OFFLINE / WAITING / LINK READY).
+
+The protocol is unchanged, so the original Flight 2.3.0 also still works. This build is signed with a different key: uninstall the original before installing it.
 
 ## For developers
 

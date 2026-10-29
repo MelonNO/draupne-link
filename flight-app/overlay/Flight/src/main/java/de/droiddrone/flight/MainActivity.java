@@ -1,0 +1,365 @@
+/*
+ *  This file is part of DroidDrone.
+ *
+ *  DroidDrone is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  DroidDrone is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ *  Modified for DroidDrone PC: the Windows app's look (cards, status pill, status colours for a dark
+ *  background). The connection logic is unchanged.
+ */
+
+package de.droiddrone.flight;
+
+import android.Manifest;
+import android.app.Activity;
+import android.content.Intent;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.os.Build;
+import android.os.Bundle;
+import android.view.View;
+import android.view.Window;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.Spinner;
+import android.widget.TextView;
+
+import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+
+import static de.droiddrone.common.Logcat.log;
+
+import java.util.Timer;
+import java.util.TimerTask;
+
+import de.droiddrone.common.FcInfo;
+import de.droiddrone.common.FcCommon;
+import de.droiddrone.common.SettingsCommon;
+
+public class MainActivity extends Activity {
+    public static String versionName;
+    private MainActivity activity;
+    private Button bStartStopService;
+    private LinearLayout main;
+    Spinner connectionMode;
+    EditText etIp, etPort, etKey;
+    private TextView tvNetworkStatus, tvFcStatus, tvConnectionModeHint, tvPill;
+    private View llIp;
+    private int colorOk, colorWarn, colorBad, colorMuted;
+    CheckBox cbConnectOnStartup;
+    private Timer uiTimer;
+    private boolean isPaused = false;
+    public static Config config;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState){
+        super.onCreate(savedInstanceState);
+
+        try {
+            PackageInfo packageInfo = this.getPackageManager().getPackageInfo(this.getPackageName(), 0);
+            versionName = packageInfo.versionName;
+        }catch (PackageManager.NameNotFoundException e) {
+            e.printStackTrace();
+        }
+
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        setContentView(R.layout.activity_main);
+        activity = this;
+        main = findViewById(R.id.llMain);
+        main.setKeepScreenOn(true);
+        bStartStopService = findViewById(R.id.startStopService);
+        bStartStopService.setOnClickListener(v -> {
+            if (checkPermissions()) startStopService();
+        });
+        etIp = findViewById(R.id.editText_ip);
+        etPort = findViewById(R.id.editText_port);
+        etKey = findViewById(R.id.editText_key);
+        tvNetworkStatus = findViewById(R.id.tvNetworkConnectionStatus);
+        tvFcStatus = findViewById(R.id.tvFcConnectionStatus);
+        tvConnectionModeHint = findViewById(R.id.tvConnectionModeHint);
+        tvPill = findViewById(R.id.tvPill);
+        llIp = findViewById(R.id.llIp);
+        colorOk = getColor(R.color.dd_ok);
+        colorWarn = getColor(R.color.dd_warn);
+        colorBad = getColor(R.color.dd_bad);
+        colorMuted = getColor(R.color.dd_muted);
+        float density = getResources().getDisplayMetrics().density;
+        for (int id : new int[]{R.id.cardStatus, R.id.cardConnection}) {
+            findViewById(id).setBackground(new BracketDrawable(getColor(R.color.dd_panel), getColor(R.color.dd_line),
+                    getColor(R.color.dd_accent), density));
+        }
+        connectionMode = findViewById(R.id.connectionMode);
+        ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(this, R.array.connection_modes, android.R.layout.simple_spinner_item);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        connectionMode.setAdapter(adapter);
+        connectionMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                switch (position){
+                    case SettingsCommon.ConnectionMode.overServer:
+                        llIp.setVisibility(View.VISIBLE);
+                        tvConnectionModeHint.setText(R.string.connection_mode_server);
+                        break;
+                    case SettingsCommon.ConnectionMode.direct:
+                        llIp.setVisibility(View.GONE);
+                        tvConnectionModeHint.setText(R.string.connection_mode_vpn);
+                        break;
+                }
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) {
+
+            }
+        });
+        config = new Config(activity, SettingsCommon.versionCompatibleCode);
+        etIp.setText(config.getIp());
+        etPort.setText(String.valueOf(config.getPort()));
+        etKey.setText(config.getKey());
+        connectionMode.setSelection(config.getConnectionMode());
+        cbConnectOnStartup = findViewById(R.id.cbConnectOnStartup);
+        cbConnectOnStartup.setChecked(config.isConnectOnStartup());
+        TextView tvVersion = findViewById(R.id.tvVersion);
+        tvVersion.setText(getResources().getString(R.string.version, MainActivity.versionName));
+        if (config.isConnectOnStartup() && !DDService.isRunning){
+            new Thread(() -> {
+                try{
+                    Thread.sleep(3000);
+                    startStopService();
+                }catch (Exception ignore){
+                }
+            }).start();
+        }
+    }
+
+    private void setPill(int text, int background, int foreground){
+        tvPill.setText(text);
+        tvPill.setBackgroundColor(background);
+        tvPill.setTextColor(foreground);
+    }
+
+    private void updateUi(){
+        if (DDService.isRunning){
+            bStartStopService.setText(getResources().getString(R.string.disconnect));
+            bStartStopService.setBackgroundResource(R.drawable.dd_button_stop);
+            if (DDService.isConnected){
+                tvNetworkStatus.setText(getResources().getString(R.string.status_connected));
+                tvNetworkStatus.setTextColor(colorOk);
+                setPill(R.string.dd_pill_linked, colorOk, Color.WHITE);
+            }else{
+                setPill(R.string.dd_pill_waiting, getColor(R.color.dd_panel_2), colorWarn);
+                switch (config.getConnectionMode()){
+                    case SettingsCommon.ConnectionMode.overServer:
+                        tvNetworkStatus.setText(getResources().getString(R.string.status_connecting));
+                        break;
+                    case SettingsCommon.ConnectionMode.direct:
+                        tvNetworkStatus.setText(getResources().getString(R.string.status_awaiting_connection));
+                        break;
+                }
+                tvNetworkStatus.setTextColor(colorWarn);
+            }
+            int serialPortStatus = DDService.getSerialPortStatus();
+            switch (serialPortStatus){
+                case Serial.STATUS_NOT_INITIALIZED:
+                case Serial.STATUS_DEVICE_NOT_CONNECTED:
+                    tvFcStatus.setText(getResources().getString(R.string.status_disconnected));
+                    tvFcStatus.setTextColor(colorBad);
+                    break;
+                case Serial.STATUS_DEVICE_FOUND:
+                    tvFcStatus.setText(getResources().getString(R.string.fc_status_device_found));
+                    tvFcStatus.setTextColor(colorWarn);
+                    break;
+                case Serial.STATUS_USB_PERMISSION_REQUESTED:
+                    tvFcStatus.setText(getResources().getString(R.string.fc_status_permission_requested));
+                    tvFcStatus.setTextColor(colorWarn);
+                    break;
+                case Serial.STATUS_USB_PERMISSION_DENIED:
+                    tvFcStatus.setText(getResources().getString(R.string.fc_status_permission_denied));
+                    tvFcStatus.setTextColor(colorBad);
+                    break;
+                case Serial.STATUS_USB_PERMISSION_GRANTED:
+                    tvFcStatus.setText(getResources().getString(R.string.fc_status_permission_granted));
+                    tvFcStatus.setTextColor(colorWarn);
+                    break;
+                case Serial.STATUS_SERIAL_PORT_ERROR:
+                    tvFcStatus.setText(getResources().getString(R.string.fc_status_serial_port_error));
+                    tvFcStatus.setTextColor(colorBad);
+                    break;
+                case Serial.STATUS_SERIAL_PORT_OPENED:
+                    tvFcStatus.setTextColor(colorWarn);
+                    String status = getResources().getString(R.string.fc_status_serial_port_opened);
+                    FcInfo fcInfo = DDService.getFcInfo();
+                    if (fcInfo == null){
+                        status += getResources().getString(R.string.check_fc_version);
+                    }else{
+                        tvFcStatus.setTextColor(colorOk);
+                        status = fcInfo.getFcName() + " " + fcInfo.getFcVersionStr() + " · " + fcInfo.getPlatformTypeName();
+                        int fcApiCompatibilityLevel = DDService.getFcApiCompatibilityLevel();
+                        switch (fcApiCompatibilityLevel){
+                            case FcCommon.FC_API_COMPATIBILITY_UNKNOWN:
+                            case FcCommon.FC_API_COMPATIBILITY_ERROR:
+                                status += getResources().getString(R.string.fc_api_compatibility_error);
+                                tvFcStatus.setTextColor(colorBad);
+                                break;
+                            case FcCommon.FC_API_COMPATIBILITY_WARNING:
+                                status += getResources().getString(R.string.fc_api_compatibility_warning);
+                                tvFcStatus.setTextColor(colorWarn);
+                                break;
+                        }
+                    }
+                    tvFcStatus.setText(status);
+                    break;
+            }
+            connectionMode.setEnabled(false);
+            etIp.setEnabled(false);
+            etPort.setEnabled(false);
+            etKey.setEnabled(false);
+            cbConnectOnStartup.setEnabled(false);
+        }else{
+            bStartStopService.setText(getResources().getString(R.string.connect));
+            bStartStopService.setBackgroundResource(R.drawable.dd_button_primary);
+            setPill(R.string.dd_pill_offline, getColor(R.color.dd_panel_2), colorMuted);
+            tvNetworkStatus.setText(getResources().getString(R.string.status_disconnected));
+            tvNetworkStatus.setTextColor(colorMuted);
+            tvFcStatus.setText(getResources().getString(R.string.status_disconnected));
+            tvFcStatus.setTextColor(colorMuted);
+            connectionMode.setEnabled(true);
+            etIp.setEnabled(true);
+            etPort.setEnabled(true);
+            etKey.setEnabled(true);
+            cbConnectOnStartup.setEnabled(true);
+        }
+    }
+
+    private void startStopService(){
+        Intent intent = new Intent(getApplicationContext(), DDService.class);
+        if (DDService.isRunning){
+            stopService(intent);
+        }else{
+            if (!config.updateConfig()) return;
+            getApplicationContext().startForegroundService(intent);
+        }
+        updateUi();
+    }
+
+    private boolean checkPermissions(){
+        boolean cameraPermission = isCameraPermissionGranted();
+        boolean storagePermission = isStoragePermissionGranted();
+        boolean audioPermission = isAudioPermissionGranted();
+        boolean phoneStatePermission = isPhoneStatePermissionGranted();
+        return cameraPermission && storagePermission && audioPermission && phoneStatePermission;
+    }
+
+    private boolean isCameraPermissionGranted(){
+        if (this.checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED){
+            activity.requestPermission(Manifest.permission.CAMERA, 0);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isStoragePermissionGranted() {
+        if (Build.VERSION.SDK_INT <= 28) {
+            if (this.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED){
+                requestPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE, 1);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isAudioPermissionGranted(){
+        if (this.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED){
+            activity.requestPermission(Manifest.permission.RECORD_AUDIO, 2);
+            return false;
+        }
+        return true;
+    }
+
+    private boolean isPhoneStatePermissionGranted(){
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            if (this.checkSelfPermission(Manifest.permission.READ_BASIC_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+                activity.requestPermission(Manifest.permission.READ_BASIC_PHONE_STATE, 3);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
+    protected void onResume(){
+        super.onResume();
+        isPaused = false;
+        main.setKeepScreenOn(true);
+        updateUi();
+        uiTimer = new Timer();
+        TimerTask tt = new TimerTask() {
+            @Override
+            public void run() {
+                if (isPaused){
+                    uiTimer.cancel();
+                    return;
+                }
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        updateUi();
+                    }
+                });
+            }
+        };
+        uiTimer.schedule(tt, 10, 1000);
+    }
+
+    @Override
+    protected void onPause(){
+        super.onPause();
+        isPaused = true;
+        if (uiTimer != null) {
+            uiTimer.cancel();
+            uiTimer.purge();
+        }
+    }
+
+    @Override
+    protected void onStart(){
+        super.onStart();
+    }
+
+    @Override
+    protected void onDestroy(){
+        super.onDestroy();
+    }
+
+    void requestPermission(String permissionName, int permissionRequestCode) {
+        ActivityCompat.requestPermissions(this, new String[]{permissionName}, permissionRequestCode);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            if (requestCode >= 0 && requestCode <= 3 && checkPermissions()) startStopService();
+        } else {
+            if (requestCode == 0) log("Camera permission denied!");
+            if (requestCode == 1) log("Storage permission denied!");
+            if (requestCode == 2) log("Audio permission denied!");
+            if (requestCode == 3) log("Phone state permission denied!");
+        }
+    }
+}

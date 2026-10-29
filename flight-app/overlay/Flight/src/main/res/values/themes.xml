@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DroidDrone PC: black and red like the Windows app -->
+<resources>
+    <style name="Theme.DroidDrone" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/dd_bg</item>
+        <item name="android:colorBackground">@color/dd_bg</item>
+        <item name="android:colorPrimary">@color/dd_bg</item>
+        <item name="android:colorPrimaryDark">@color/dd_bg</item>
+        <item name="android:colorAccent">@color/dd_accent</item>
+        <item name="android:colorControlActivated">@color/dd_accent</item>
+        <item name="android:colorControlNormal">@color/dd_muted</item>
+        <item name="android:textColorPrimary">@color/dd_text</item>
+        <item name="android:textColorSecondary">@color/dd_muted</item>
+        <item name="android:textColorHint">@color/dd_muted</item>
+        <item name="android:statusBarColor">@color/dd_bg</item>
+        <item name="android:navigationBarColor">@color/dd_bg</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+    </style>
+
+    <!-- parent of the DD.* text styles below -->
+    <style name="DD" />
+
+    <!-- "// SECTION" titles, as on the PC -->
+    <style name="DD.SectionTitle">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:letterSpacing">0.12</item>
+        <item name="android:textColor">@color/dd_accent</item>
+        <item name="android:layout_marginBottom">8dp</item>
+    </style>
+
+    <!-- small grey labels: NETWORK, PORT, ... -->
+    <style name="DD.Label">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:letterSpacing">0.1</item>
+        <item name="android:textColor">@color/dd_muted</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:layout_marginBottom">2dp</item>
+    </style>
+
+    <style name="DD.Value">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:fontFamily">sans-serif-condensed</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:textColor">@color/dd_text</item>
+    </style>
+
+    <style name="DD.Field">
+        <item name="android:layout_height">44dp</item>
+        <item name="android:background">@drawable/dd_field</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">10dp</item>
+        <item name="android:textColor">@color/dd_text</item>
+        <item name="android:textColorHint">@color/dd_muted</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:imeOptions">actionDone</item>
+    </style>
+</resources>

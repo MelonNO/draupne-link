@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DroidDrone PC: the Windows app's palette -->
+<resources>
+    <color name="dd_bg">#FF000000</color>
+    <color name="dd_panel">#FF0A0A0A</color>
+    <color name="dd_panel_2">#FF161616</color>
+    <color name="dd_line">#FF2E2E2A</color>
+    <color name="dd_text">#FFE6E6E0</color>
+    <color name="dd_muted">#FF8C8C7E</color>
+    <color name="dd_accent">#FFE31B23</color>
+    <color name="dd_accent_pressed">#FFB3141B</color>
+    <color name="dd_ok">#FF00B347</color>
+    <color name="dd_warn">#FFFCD405</color>
+    <color name="dd_bad">#FFFF5A4E</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

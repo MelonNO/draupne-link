@@ -4,6 +4,7 @@
 
 New in 0.5.6:
 - **SETTINGS** button (next to SETUP): *Camera mounted upside down* turns the picture there. F4 no longer does it.
+- **Phone app: DroidDrone Flight 2.3.0-pc.1**, this project's build of Flight 2.3.0. It knows Artery AT32 flight controllers (USB 2E3C:5740), so Android can remember the USB permission and the phone reconnects without asking, and it has the PC app's black and red look. Same protocol. Uninstall the original Flight app first: this build is signed differently.
 - **POP OUT VIDEO** puts the picture with its OSD in a separate, resizable window (e.g. on a second screen). Close it or press VIDEO BACK to put it back.
 - The NO FLIGHT CONTROLLER warning now also points to SETUP → Drone setup: a flight controller left at `serial_update_rate_hz = 100` can't keep up and drops out.
 
@@ -44,7 +45,7 @@ Windows may say *"Windows protected your PC"* because the installer isn't code-s
 
 **`DroidDrone-PC-*-windows.zip`** is the portable version: unzip it and run `DroidDrone PC.exe`.
 
-The phone needs **DroidDrone Flight 2.3.0**. The setup wizard installs it for you by QR code.
+The phone needs **DroidDrone Flight 2.3.0-pc.1** (the original 2.3.0 also works). The setup wizard installs it for you by QR code.
 
 ## What's in this version
 

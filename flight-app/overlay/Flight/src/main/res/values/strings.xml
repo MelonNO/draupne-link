@@ -1,0 +1,46 @@
+<resources>
+    <string name="app_name">DroidDrone Flight</string>
+    <string name="connect">Connect</string>
+    <string name="connect_on_startup">Connect when the app starts</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="status_network">NETWORK</string>
+    <string name="status_fc">FLIGHT CONTROLLER</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connected">Connected to the PC</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_awaiting_connection">Waiting for the PC…</string>
+    <string name="fc_status_device_found">USB device found - checking permission…</string>
+    <string name="fc_status_permission_requested">Tap Allow on the USB pop-up…</string>
+    <string name="fc_status_permission_denied">USB permission denied - unplug, plug in, tap Allow.</string>
+    <string name="fc_status_permission_granted">USB permission granted - opening the port…</string>
+    <string name="fc_status_serial_port_error">USB link lost - reconnecting…</string>
+    <string name="fc_status_serial_port_opened">Connected.</string>
+    <string name="check_fc_version">&#160;Reading the version…</string>
+    <string name="detected">&#160;</string>
+    <string name="fc_api_compatibility_error">&#160;- not compatible!</string>
+    <string name="fc_api_compatibility_warning">&#160;- other minor version, mostly works.</string>
+    <string name="version">%1$s · DroidDrone PC build</string>
+    <string name="ip">Server IP</string>
+    <string name="port">Port</string>
+    <string name="server_key">Key</string>
+    <string-array name="connection_modes">
+        <item>Connect over server</item>
+        <item>Direct connection</item>
+    </string-array>
+    <string name="connection_mode_server">Both sides connect to the relay server\'s public IP.</string>
+    <string name="connection_mode_vpn">The PC connects to this phone\'s Tailscale (or Wi-Fi) address.</string>
+
+    <!-- DroidDrone PC layout -->
+    <string name="dd_title">DROIDDRONE</string>
+    <string name="dd_subtitle">FLIGHT UNIT</string>
+    <string name="dd_section_status">// STATUS</string>
+    <string name="dd_section_connection">// CONNECTION</string>
+    <string name="dd_label_mode">CONNECTION</string>
+    <string name="dd_label_ip">SERVER IP</string>
+    <string name="dd_label_port">PORT</string>
+    <string name="dd_label_key">KEY</string>
+    <string name="dd_pill_offline">OFFLINE</string>
+    <string name="dd_pill_waiting">WAITING</string>
+    <string name="dd_pill_linked">LINK READY</string>
+    <string name="dd_hint_props">Props off on the bench. Leave this app running while flying.</string>
+</resources>
