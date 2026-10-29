@@ -71,6 +71,11 @@ public class ControlLink {
     private volatile long lastPingTimestamp;
     private final AtomicLong rcFramesSent = new AtomicLong();
     private final AtomicLong telemetryPacketsReceived = new AtomicLong();
+    /** Longest pause between two RC frames sent / telemetry packets received since last taken (link log). */
+    private final AtomicLong maxRcGapNs = new AtomicLong();
+    private final AtomicLong maxTelemetryGapNs = new AtomicLong();
+    private long lastRcNs;
+    private long lastTelemetryNs;
     private final FcTelemetry telemetry = new FcTelemetry();
     private volatile VideoListener videoListener;
     private volatile boolean videoHevc = true;
@@ -259,6 +264,9 @@ public class ControlLink {
                     buffer.readByte(), buffer.readByte(), buffer.readByte(), buffer.readByte(), buffer.readByte());
             case UdpCommon.TelemetryData -> {
                 telemetryPacketsReceived.incrementAndGet();
+                long now = System.nanoTime();
+                if (lastTelemetryNs != 0) maxTelemetryGapNs.accumulateAndGet(now - lastTelemetryNs, Math::max);
+                lastTelemetryNs = now;
                 telemetry.parse(buffer, fcInfo);
             }
             case UdpCommon.VideoInitialFrame -> {
@@ -373,6 +381,9 @@ public class ControlLink {
             for (short channel : frame) packetData.daos.writeShort(channel);
             udpSender.sendPacket(packetData.getData());
             rcFramesSent.incrementAndGet();
+            long now = System.nanoTime();
+            if (lastRcNs != 0) maxRcGapNs.accumulateAndGet(now - lastRcNs, Math::max);
+            lastRcNs = now;
             return true;
         } catch (IOException e) {
             log("sendRc error: " + e);
@@ -429,6 +440,16 @@ public class ControlLink {
 
     public long getTelemetryPacketsReceived() {
         return telemetryPacketsReceived.get();
+    }
+
+    /** Longest pause between two RC frames sent since the last call, in ms (0 if fewer than two were sent). */
+    public long takeMaxRcGapMs() {
+        return maxRcGapNs.getAndSet(0) / 1_000_000;
+    }
+
+    /** Longest pause between two telemetry packets received since the last call, in ms. */
+    public long takeMaxTelemetryGapMs() {
+        return maxTelemetryGapNs.getAndSet(0) / 1_000_000;
     }
 
     /** Tells the Flight app we are leaving (it stops streaming), then closes the socket. */

@@ -91,6 +91,8 @@ save
 
 Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.
 
+**Link log:** every connection writes a timeline to `%APPDATA%\DroidDronePC\logs\link-<date>-<time>.csv`, 10 rows a second: ping, stick frames sent and the longest gap between them, telemetry packets and the longest gap, the flight controller's last data, RXLOSS / FAILSAFE as Betaflight reports them, radio present, plus every log message. It shows which part of the chain a failsafe came from. The newest 20 are kept.
+
 ## How it works
 
 ```
@@ -113,7 +115,7 @@ The protocol is unchanged, so the original Flight 2.3.0 also still works. This b
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 68 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
+.\gradlew.bat test               # 69 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3

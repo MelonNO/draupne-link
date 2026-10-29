@@ -7,6 +7,7 @@ import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.Joystick;
 import de.droiddrone.pc.JoystickService;
+import de.droiddrone.pc.LinkLog;
 import de.droiddrone.pc.LinkMode;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.RcMapper;
@@ -67,6 +68,9 @@ public class MainWindow extends JFrame {
     private boolean calibrated;
     private Connection connection;
     private RcSession session;
+    /** The connection's timeline (10 rows a second) for finding the cause of failsafes; null when not connected. */
+    private LinkLog linkLog;
+    private final Timer linkLogTimer = new Timer(100, e -> sampleLinkLog());
     private VideoPipeline video;
     private final VideoView videoView = new VideoView();
     /** Where videoView normally lives; it moves to fullScreen and back. */
@@ -508,12 +512,22 @@ public class MainWindow extends JFrame {
         session = new RcSession(connection.getLink(), mapper, msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
         service.setInputListener(session::onInput);
         lastState = null;
+        try {
+            linkLog = LinkLog.open(de.droiddrone.pc.AppPaths.dataDir().resolve("logs"));
+            linkLogTimer.start();
+            logLine("Link log: " + shortPath(linkLog.file()));
+        } catch (IOException e) {
+            linkLog = null;
+            logLine("No link log: " + e.getMessage());
+        }
         logLine("Connecting: " + mode + (mode == LinkMode.HOST_RELAY ? "" : " " + addressField.getText().trim()) + ":" + port);
         setLinkEditable(false);
     }
 
     private void disconnect() {
         service.setInputListener(null);
+        sampleLinkLog();
+        linkLogTimer.stop();
         if (connection != null) connection.close();
         connection = null;
         session = null;
@@ -522,7 +536,29 @@ public class MainWindow extends JFrame {
         videoView.setStatsSource(null);
         videoView.clear();
         logLine("Disconnected. The Flight phone stops RC to the FC, so Betaflight fails safe.");
+        if (linkLog != null) {
+            try {
+                linkLog.close();
+            } catch (IOException ignored) {
+            }
+            linkLog = null;
+        }
         setLinkEditable(true);
+    }
+
+    private void sampleLinkLog() {
+        LinkLog l = linkLog;
+        Connection c = connection;
+        if (l == null || c == null) return;
+        RcSession s = session;
+        VideoPipeline v = video;
+        try {
+            l.sample(c.getLink(), service.getSnapshot().selected() != null, s != null && s.isRcEnabled(),
+                    v == null ? 0 : v.stats().shownFps());
+        } catch (IOException e) {
+            linkLog = null;
+            logLine("Link log stopped: " + e.getMessage());
+        }
     }
 
     private void setLinkEditable(boolean editable) {
@@ -848,6 +884,13 @@ public class MainWindow extends JFrame {
 
     void logLine(String text) {
         log.append(LocalTime.now().format(TIME) + "  " + text + "\n");
+        LinkLog l = linkLog;
+        if (l != null) {
+            try {
+                l.event(text);
+            } catch (IOException ignored) {
+            }
+        }
         int excess = log.getLineCount() - 300;
         if (excess > 0) {
             try {

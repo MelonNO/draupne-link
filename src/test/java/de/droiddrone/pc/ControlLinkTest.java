@@ -167,6 +167,39 @@ class ControlLinkTest {
     }
 
     @Test
+    void linkLogRecordsTheTimeline(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        for (int i = 0; i < 25; i++) java.nio.file.Files.writeString(dir.resolve(String.format("link-20260101-0000%02d.csv", i)), "old");
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> link.getTelemetry().getStatus() != null, 5000, "FC status");
+        java.nio.file.Path file;
+        try (LinkLog log = LinkLog.open(dir)) {
+            file = log.file();
+            short[] sticks = {1500, 1500, 1500, 1000, 1000};
+            for (int i = 0; i < 5; i++) {
+                link.sendRc(sticks);
+                Thread.sleep(20);
+            }
+            log.sample(link, true, true, 0);
+            log.event("Joystick lost, test");
+        }
+        try (var files = java.nio.file.Files.list(dir)) {
+            assertEquals(LinkLog.KEEP, files.count(), "only the newest logs are kept");
+        }
+        List<String> lines = java.nio.file.Files.readAllLines(file);
+        assertEquals(LinkLog.HEADER, lines.get(0));
+        String[] row = lines.get(1).split(",", -1);
+        assertEquals("READY", row[1]);
+        assertEquals("5", row[3], "RC frames in the interval");
+        assertTrue(Integer.parseInt(row[4]) >= 15, "longest gap between them, ms");
+        assertEquals("0", row[8], "no RXLOSS");
+        assertEquals("ANGLE MSP", row[11], "the fake FC's arming blocks");
+        assertTrue(lines.get(2).endsWith(",Joystick lost, test") || lines.get(2).endsWith(",\"Joystick lost, test\""));
+    }
+
+    @Test
     void phoneThatStopsForwardingFcDataCountsAsFcLost() throws Exception {
         phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
         link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
