@@ -1,6 +1,9 @@
 ## Install
 
-**`DroidDrone-PC-Setup-*.exe`** is the installer. It installs for your user, needs no admin rights, and creates Start menu and desktop shortcuts. Run it, click through it (Next → Install → Finish), then start **DroidDrone PC** from the desktop and follow the setup wizard that opens on first start.
+**`DroidDrone-PC-Setup-*.exe`** is the installer. It installs for your user, needs no admin rights, and creates Start menu and desktop shortcuts. Run it and click through it (Next → Install → Finish). DroidDrone PC starts by itself when you press Finish; follow the setup wizard that opens on first start.
+
+New in 0.5.3:
+- The installer's last page has a **Launch DroidDrone PC** box, ticked by default, so the app starts when you press Finish.
 
 New in 0.5.2:
 - **Lower stick latency.** Sticks are now sent 250 times a second instead of 100, and Windows can no longer slow the app down when its window is in the background. Measured on a test PC: gaps between stick updates went from 10 ms (up to 16.5 ms) to 4 ms (up to 6 ms). Existing settings are updated automatically.

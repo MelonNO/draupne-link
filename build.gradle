@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'de.droiddrone.pc'
-version = '0.5.2'
+version = '0.5.3'
 
 repositories {
     mavenCentral()
@@ -136,6 +136,7 @@ tasks.register('packageInstaller', Exec) {
             '--win-menu-group', 'DroidDrone PC',
             // keep this UUID forever: it lets a newer installer replace an older install
             '--win-upgrade-uuid', '5d2f1d3e-6a0b-4c9e-9f53-2b7c1a8e4d61',
+            '--resource-dir', file('src/installer'), // main.wxs: "Launch DroidDrone PC" box on the last page
             '--dest', staging
     doLast {
         copy {
