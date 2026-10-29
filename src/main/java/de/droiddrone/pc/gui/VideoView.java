@@ -20,6 +20,8 @@ import java.util.function.Supplier;
  * Shows the decoded camera picture. The decoder scales straight to this component's letterboxed size and writes into
  * a back buffer; presenting swaps buffers and repaints, so painting is a 1:1 copy with no scaling.
  * Not double-buffered by Swing (the picture covers everything it paints), which saves one more copy per frame.
+ * The picture can be turned upside down for a camera mounted that way; the OSD is drawn on top, the right way up.
+ * Turning it happens in the same copy (measured: no slower than a plain one).
  */
 class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private final Object lock = new Object();
@@ -28,6 +30,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private volatile int videoWidth = 16;
     private volatile int videoHeight = 9;
     private volatile boolean mirror;
+    private volatile boolean upsideDown;
     private volatile int[] target = {0, 0};
     private Supplier<VideoPipeline.Stats> stats = () -> null;
     private String idleText = "Not connected";
@@ -160,11 +163,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
                     g.fillRect(0, 0, x, h);
                     g.fillRect(x + img.getWidth(), 0, w - x - img.getWidth(), h);
                 }
-                if (mirror) {
-                    g.drawImage(img, x + img.getWidth(), y, x, y + img.getHeight(), 0, 0, img.getWidth(), img.getHeight(), null);
-                } else {
-                    g.drawImage(img, x, y, null);
-                }
+                drawPicture(g, img, x, y, img.getWidth(), img.getHeight());
             }
         }
         if (img == null) {
@@ -189,6 +188,28 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             paintStats(g);
         }
         notePainted();
+    }
+
+    /** The camera picture into this rectangle: as it comes, mirrored (front camera) and/or turned 180 degrees. */
+    private void drawPicture(Graphics2D g, BufferedImage img, int x, int y, int w, int h) {
+        boolean flipX = mirror != upsideDown; // turning 180 = flipping both ways; a mirrored picture is already flipped
+        boolean flipY = upsideDown;
+        if (!flipX && !flipY && w == img.getWidth() && h == img.getHeight()) {
+            g.drawImage(img, x, y, null);
+            return;
+        }
+        g.drawImage(img, flipX ? x + w : x, flipY ? y + h : y, flipX ? x : x + w, flipY ? y : y + h,
+                0, 0, img.getWidth(), img.getHeight(), null);
+    }
+
+    /** For a camera mounted upside down. Only the picture turns; the OSD stays the right way up. */
+    void setUpsideDown(boolean upsideDown) {
+        this.upsideDown = upsideDown;
+        repaint();
+    }
+
+    boolean isUpsideDown() {
+        return upsideDown;
     }
 
     /** Picture and OSD drawn: the rest is Windows putting it on the screen. */
@@ -218,7 +239,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             if (front != null) {
                 int tw = Math.max(80, w / 6);
                 int th = tw * front.getHeight() / front.getWidth();
-                g.drawImage(front, w - tw - 12, h - th - 12, tw, th, null);
+                drawPicture(g, front, w - tw - 12, h - th - 12, tw, th);
             }
         }
         BitMatrix code = m.codeNow(); // as late as possible: the time in it is "now"

@@ -143,10 +143,16 @@ public class MainWindow extends JFrame {
 
         videoView.setOsdSource(this::osdData);
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
+        videoView.setUpsideDown("true".equalsIgnoreCase(config.getString("videoUpsideDown")));
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
         bindKey(java.awt.event.KeyEvent.VK_F2, () -> {
             videoView.setOsdEnabled(!videoView.isOsdEnabled());
             save(Map.of("osd", Boolean.toString(videoView.isOsdEnabled())));
+        });
+        bindKey(java.awt.event.KeyEvent.VK_F4, () -> { // camera mounted upside down: turn the picture, not the OSD
+            videoView.setUpsideDown(!videoView.isUpsideDown());
+            save(Map.of("videoUpsideDown", Boolean.toString(videoView.isUpsideDown())));
+            logLine(videoView.isUpsideDown() ? "Picture turned upside down (F4 turns it back)." : "Picture the right way up.");
         });
         bindKey(java.awt.event.KeyEvent.VK_F3, this::toggleLatencyTest);
         bindKey(java.awt.event.KeyEvent.VK_F11, this::toggleFullScreen);
@@ -298,7 +304,7 @@ public class MainWindow extends JFrame {
         video.setBackground(Color.BLACK);
         video.add(videoView, BorderLayout.CENTER);
         videoHolder = video;
-        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off    F3: latency test");
+        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off    F3: latency test    F4: picture upside down");
         videoView.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
