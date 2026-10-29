@@ -167,6 +167,20 @@ class ControlLinkTest {
     }
 
     @Test
+    void phoneThatStopsForwardingFcDataCountsAsFcLost() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        assertFalse(link.isFcLost(), "no verdict during the grace period");
+        // the fake phone forwards FC data once (with the box names), then goes quiet - like an unplugged OTG cable
+        waitFor(() -> link.getTelemetry().getStatus() != null, 5000, "FC data");
+        assertFalse(link.isFcLost());
+        waitFor(link::isFcLost, ControlLink.FC_GRACE_MS + ControlLink.FC_SILENCE_MS + 2000, "FC lost after the silence");
+        assertEquals(ControlLink.State.READY, link.getState(), "the link to the phone itself is still up");
+    }
+
+    @Test
     void flightControllerStatusArrivesThroughTheLink() throws Exception {
         phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
         link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);

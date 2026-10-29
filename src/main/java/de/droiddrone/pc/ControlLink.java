@@ -37,6 +37,11 @@ public class ControlLink {
 
     public enum State { CONNECTING, CONFIGURING, READY, VERSION_MISMATCH, CLOSED }
 
+    /** No FC data for this long while the link is up: the phone has lost the flight controller. */
+    static final long FC_SILENCE_MS = 1500;
+    /** Time after the link comes up for the first FC data to arrive. */
+    static final long FC_GRACE_MS = 3000;
+
     /** Receives the video stream. Called on the network receive thread: copy what you keep, return quickly. */
     public interface VideoListener {
         /** Stream (re)starts: size, codec and the codec config (Annex-B VPS/SPS/PPS). */
@@ -59,6 +64,7 @@ public class ControlLink {
     private ReceiverBuffer receiverBuffer;
     private volatile boolean running;
     private volatile boolean configReceived;
+    private volatile long readyAt;
     private volatile boolean versionMismatch;
     private volatile FcInfo fcInfo;
     private volatile int pingMs;
@@ -241,7 +247,10 @@ public class ControlLink {
                     lastPingTimestamp = System.currentTimeMillis();
                 }
             }
-            case UdpCommon.ConfigReceived -> configReceived = true;
+            case UdpCommon.ConfigReceived -> {
+                if (!configReceived) readyAt = System.currentTimeMillis();
+                configReceived = true;
+            }
             case UdpCommon.VersionMismatch -> {
                 configReceived = false;
                 versionMismatch = true;
@@ -385,6 +394,16 @@ public class ControlLink {
 
     public boolean isConnected() {
         return receiverBuffer != null && receiverBuffer.isConnected();
+    }
+
+    /**
+     * The link to the phone is up, but the phone isn't passing on anything from the flight controller (USB/OTG
+     * cable out, FC unpowered or rebooting). The sticks don't reach the drone then either.
+     */
+    public boolean isFcLost() {
+        if (getState() != State.READY) return false;
+        long now = System.currentTimeMillis();
+        return now - readyAt > FC_GRACE_MS && telemetry.msSinceFcData(now) > FC_SILENCE_MS;
     }
 
     public State getState() {

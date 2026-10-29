@@ -601,7 +601,9 @@ public class MainWindow extends JFrame {
         }
 
         FcTelemetry.Status fc = connection == null ? null : connection.getLink().getTelemetry().getStatus();
-        if (fc == null || System.currentTimeMillis() - fc.receivedAt() > 3000) {
+        if (connection != null && connection.getLink().isFcLost()) {
+            setLabel(fcStateLabel, "FC: NOT CONNECTED TO THE PHONE - CHECK THE OTG CABLE", Theme.BAD);
+        } else if (fc == null || System.currentTimeMillis() - fc.receivedAt() > 3000) {
             setLabel(fcStateLabel, connection == null ? " " : "FC: NO STATUS YET", Theme.MUTED);
         } else if (fc.armed()) {
             setLabel(fcStateLabel, "FC: ARMED" + (fc.activeModes().size() > 1 ? "  ·  " + String.join(" ", fc.activeModes()) : ""), Theme.BAD);
@@ -628,7 +630,7 @@ public class MainWindow extends JFrame {
         RcSession s = session;
         VideoPipeline v = video;
         return new OsdRenderer.Data(true, l.getState() == ControlLink.State.READY, l.getPing(), s != null && s.isRcEnabled(),
-                l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")));
+                l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")));
     }
 
     RcSession rcSession() {

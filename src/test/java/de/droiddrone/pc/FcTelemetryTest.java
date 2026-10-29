@@ -79,6 +79,30 @@ class FcTelemetryTest {
     }
 
     @Test
+    void onlyRecordsFromTheFlightControllerCountAsFcData() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        assertEquals(Long.MAX_VALUE, t.msSinceFcData(System.currentTimeMillis()), "never heard from the FC");
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream o = new DataOutputStream(bytes);
+        o.writeShort(FcCommon.DD_PHONE_BATTERY_STATE); // the phone's own record keeps coming without an FC
+        o.writeByte(80); o.writeBoolean(false);
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        assertEquals(80, t.getPhoneBatteryPercent());
+        assertEquals(Long.MAX_VALUE, t.msSinceFcData(System.currentTimeMillis()));
+        t.parse(new DataReader(betaflightPacket(0, 0), true), BETAFLIGHT);
+        assertTrue(t.msSinceFcData(System.currentTimeMillis()) < 1000);
+    }
+
+    @Test
+    void cellVoltageUsesTheFlightControllersCellCount() {
+        FcTelemetry.Battery fourS = new FcTelemetry.Battery(14.8, 4, 0, 0);
+        assertEquals(4, fourS.cellCount());
+        assertEquals(3.7, fourS.cellVolts(), 1e-9);
+        // not reported yet: estimated from the pack (a full 6S)
+        assertEquals(6, new FcTelemetry.Battery(25.2, 0, 0, 0).cellCount());
+    }
+
+    @Test
     void armedWhenArmModeIsActive() throws Exception {
         FcTelemetry t = new FcTelemetry();
         t.parse(new DataReader(boxNamesPacket("ARM;ANGLE;"), true), BETAFLIGHT);

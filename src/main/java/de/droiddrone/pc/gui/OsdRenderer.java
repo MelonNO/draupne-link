@@ -18,11 +18,12 @@ import java.util.Locale;
 /**
  * Military-style HUD drawn over the video: fixed aircraft reticle, horizon + pitch ladder, heading tape with home
  * marker, battery / link / GPS / arming blocks in the corners and big centre warnings. All text is outlined so it
- * stays readable on any picture. Everything is optional: missing telemetry simply isn't drawn.
+ * stays readable on any picture. Everything is optional: missing telemetry simply isn't drawn. When the sticks can't
+ * reach the drone (link or flight controller lost) a red frame goes round the whole picture.
  */
 final class OsdRenderer {
     /** Everything the HUD shows; built fresh for every paint. */
-    record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, FcTelemetry telemetry,
+    record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch) {}
 
     private static final Color ACCENT = Theme.ACCENT; // symbols and labels
@@ -30,6 +31,7 @@ final class OsdRenderer {
     private static final Color GREEN = Theme.OK;
     private static final Color RED = Theme.BAD;
     private static final Color WHITE = new Color(0xf2f2ea);
+    private static final Color STALE = Theme.MUTED; // values frozen since the flight controller went quiet
     private static final Color OUTLINE = new Color(0, 0, 0, 200);
     private static final long STALE_MS = 2000;
     private static final double PITCH_FOV_DEG = 60; // degrees of pitch across the picture height
@@ -52,11 +54,13 @@ final class OsdRenderer {
         if (attFresh) horizon(w, h, att, d.invertPitch());
         reticle(w, h);
         if (attFresh) headingTape(w, att, t.getGps());
-        battery(t);
+        boolean fcFresh = !d.fcLost();
+        battery(t, fcFresh);
         link(w, d, t);
         armState(h, statusFresh ? status : null, t);
-        gps(w, h, t, attFresh ? att : null);
+        gps(w, h, t, attFresh ? att : null, fcFresh);
         warnings(w, h, d, statusFresh ? status : null, t, now);
+        if (!d.linkReady() || d.fcLost()) lostFrame(w, h);
         debugLine(w, h, d.video());
         g.dispose();
     }
@@ -162,7 +166,8 @@ final class OsdRenderer {
 
     // ------------------------------------------------------------------ corners
 
-    private void battery(FcTelemetry t) {
+    /** Per-cell voltage big (what the pilot flies by, whatever the pack), the pack itself on the line below. */
+    private void battery(FcTelemetry t, boolean fresh) {
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         if (b == null || b.volts() <= 0) return;
         FcTelemetry.BatteryLimits lim = t.getBatteryLimits();
@@ -170,11 +175,15 @@ final class OsdRenderer {
         double warn = lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5;
         double min = lim != null && lim.minCell() > 0 ? lim.minCell() : 3.3;
         double max = lim != null && lim.maxCell() > 0 ? lim.maxCell() : 4.3;
-        Color c = cell <= min ? RED : cell <= warn ? YELLOW : GREEN;
+        Color c = !fresh ? STALE : cell <= min ? RED : cell <= warn ? YELLOW : GREEN;
         float x = 18 * unit, y = 40 * unit;
-        label("BATT", x, y);
+        label("BATT " + b.cellCount() + "S" + (fresh ? "" : "  NO DATA"), x, y);
         g.setFont(Theme.monoFont(Font.BOLD, 30 * unit));
-        text(String.format(Locale.ROOT, "%.2fV", b.volts()), x, y + 32 * unit, c);
+        String cellText = String.format(Locale.ROOT, "%.2fV", cell);
+        text(cellText, x, y + 32 * unit, c);
+        float suffixX = x + g.getFontMetrics().stringWidth(cellText) + 6 * unit;
+        g.setFont(Theme.headingFont(14 * unit));
+        text("/CELL", suffixX, y + 32 * unit, fresh ? WHITE : STALE);
         // charge bar from cell voltage
         float bw = 120 * unit, bh = 8 * unit, by = y + 42 * unit;
         double frac = Math.max(0, Math.min(1, (cell - min) / (max - min)));
@@ -186,7 +195,7 @@ final class OsdRenderer {
         g.setStroke(new BasicStroke(1f));
         g.drawRect(Math.round(x), Math.round(by), Math.round(bw), Math.round(bh));
         g.setFont(Theme.monoFont(Font.PLAIN, 16 * unit));
-        text(String.format(Locale.ROOT, "%.2fV/C  %dmAh  %.1fA", cell, b.mahDrawn(), b.amps()), x, by + 26 * unit, WHITE);
+        text(String.format(Locale.ROOT, "%.2fV  %dmAh  %.1fA", b.volts(), b.mahDrawn(), b.amps()), x, by + 26 * unit, fresh ? WHITE : STALE);
     }
 
     private void link(int w, Data d, FcTelemetry t) {
@@ -247,23 +256,23 @@ final class OsdRenderer {
         }
     }
 
-    private void gps(int w, int h, FcTelemetry t, FcTelemetry.Attitude att) {
+    private void gps(int w, int h, FcTelemetry t, FcTelemetry.Attitude att, boolean fresh) {
         if (t == null) return;
         float right = w - 18 * unit, y = h - 104 * unit;
         FcTelemetry.Altitude alt = t.getAltitude();
         FcTelemetry.Gps gps = t.getGps();
         g.setFont(Theme.monoFont(Font.BOLD, 18 * unit));
         if (gps != null) {
-            Color c = gps.fix() >= 2 && gps.sats() >= 6 ? GREEN : gps.fix() >= 1 ? YELLOW : RED;
+            Color c = !fresh ? STALE : gps.fix() >= 2 && gps.sats() >= 6 ? GREEN : gps.fix() >= 1 ? YELLOW : RED;
             rightText("SAT " + gps.sats() + (gps.fix() >= 2 ? " 3D" : gps.fix() == 1 ? " 2D" : " NO FIX"), right, y, c);
-            rightText(String.format(Locale.ROOT, "SPD %3.0fKM/H", gps.speedKmh()), right, y + 22 * unit, WHITE);
+            rightText(String.format(Locale.ROOT, "SPD %3.0fKM/H", gps.speedKmh()), right, y + 22 * unit, fresh ? WHITE : STALE);
         }
         if (alt != null) {
             String vario = alt.varioMetersPerSecond() > 0.3 ? " ↑" : alt.varioMetersPerSecond() < -0.3 ? " ↓" : "";
-            rightText(String.format(Locale.ROOT, "ALT %4.0fM%s", alt.meters(), vario), right, y + 44 * unit, WHITE);
+            rightText(String.format(Locale.ROOT, "ALT %4.0fM%s", alt.meters(), vario), right, y + 44 * unit, fresh ? WHITE : STALE);
         }
         if (gps != null && gps.distanceHomeM() >= 0) {
-            rightText(String.format(Locale.ROOT, "HOME %dM", gps.distanceHomeM()), right - 34 * unit, y + 70 * unit, GREEN);
+            rightText(String.format(Locale.ROOT, "HOME %dM", gps.distanceHomeM()), right - 34 * unit, y + 70 * unit, fresh ? GREEN : STALE);
             if (att != null) homeArrow(right - 12 * unit, y + 64 * unit, gps.directionHomeDeg() - att.headingDeg());
         }
     }
@@ -291,11 +300,13 @@ final class OsdRenderer {
     private void warnings(int w, int h, Data d, FcTelemetry.Status s, FcTelemetry t, long now) {
         List<String> big = new ArrayList<>();
         if (!d.linkReady()) big.add("LINK LOST");
+        if (d.fcLost()) big.add("NO FLIGHT CONTROLLER");
         if (s != null && s.blockers().stream().anyMatch(b -> b.osdName().equals("RXLOSS") || b.osdName().equals("FAILSAFE"))) big.add("FAILSAFE");
         if (d.linkReady() && !d.rcLive()) big.add("RC OFF - THROTTLE DOWN");
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
-        if (b != null && b.volts() > 0 && b.cellVolts() <= (lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5)) big.add("LOW BATTERY");
+        if (!d.fcLost() && b != null && b.volts() > 0
+                && b.cellVolts() <= (lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5)) big.add("LOW BATTERY");
         boolean blink = (now / 400) % 2 == 0;
         float y = h * 0.66f;
         g.setFont(Theme.headingFont(34 * unit));
@@ -303,11 +314,28 @@ final class OsdRenderer {
             if (blink) centered(text, w / 2f, y, text.equals("RC OFF - THROTTLE DOWN") ? YELLOW : RED);
             y += 38 * unit;
         }
+        if (d.fcLost()) { // steady, under the blinking title: what it means and where to look
+            g.setFont(Theme.headingFont(18 * unit));
+            centered("THE PHONE LOST ITS USB LINK TO THE FC - YOUR STICKS DON'T REACH THE DRONE", w / 2f, y + 4 * unit, YELLOW);
+            centered("CHECK THE OTG CABLE AND THE FC'S POWER", w / 2f, y + 28 * unit, YELLOW);
+            return;
+        }
         if (s != null && !s.armed() && !s.blockers().isEmpty()) {
             g.setFont(Theme.headingFont(18 * unit));
             String names = s.blockers().stream().map(FcTelemetry.Blocker::osdName).reduce((a, c) -> a + " " + c).orElse("");
             centered("ARMING BLOCKED: " + names, w / 2f, y + 4 * unit, YELLOW);
         }
+    }
+
+    /** Steady red border: the sticks aren't reaching the drone. Seen even in the corner of your eye. */
+    private void lostFrame(int w, int h) {
+        float t = 7 * unit;
+        g.setColor(OUTLINE);
+        g.setStroke(new BasicStroke(t + 4 * unit));
+        g.drawRect(Math.round(t / 2), Math.round(t / 2), Math.round(w - t), Math.round(h - t));
+        g.setColor(RED);
+        g.setStroke(new BasicStroke(t));
+        g.drawRect(Math.round(t / 2), Math.round(t / 2), Math.round(w - t), Math.round(h - t));
     }
 
     private void debugLine(int w, int h, VideoPipeline.Stats v) {

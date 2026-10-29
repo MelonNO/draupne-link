@@ -24,10 +24,13 @@ public class FcTelemetry {
     public record Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent, long receivedAt) {}
 
     public record Battery(double volts, int cells, int mahDrawn, double amps) {
-        /** Per-cell voltage, estimating the cell count from the pack voltage if the FC didn't report it. */
+        /** The FC's cell count; estimated from the pack voltage until the FC reports it. */
+        public int cellCount() {
+            return cells > 0 ? cells : Math.max(1, (int) Math.ceil(volts / 4.35));
+        }
+
         public double cellVolts() {
-            int n = cells > 0 ? cells : Math.max(1, (int) Math.ceil(volts / 4.35));
-            return volts / n;
+            return volts / cellCount();
         }
     }
 
@@ -105,6 +108,8 @@ public class FcTelemetry {
     private volatile BatteryLimits batteryLimits;
     private volatile int rssiPercent = -1;
     private volatile long unknownCodes;
+    /** When a record from the flight controller itself last arrived (not the phone's own DD_ records); 0 = never. */
+    private volatile long lastFcDataAt;
 
     public void parse(DataReader b, FcInfo fc) {
         try {
@@ -115,6 +120,7 @@ public class FcTelemetry {
                     unknownCodes++;
                     return;
                 }
+                if (code < FcCommon.DD_TIMERS || code == FcCommon.DD_MAVLINK_ATTITUDE) lastFcDataAt = System.currentTimeMillis();
             }
         } catch (RuntimeException e) {
             // truncated packet: keep what was parsed
@@ -318,5 +324,14 @@ public class FcTelemetry {
 
     public long getUnknownCodes() {
         return unknownCodes;
+    }
+
+    /**
+     * How long since the phone last forwarded anything from the flight controller. The Flight app reads attitude
+     * 20 times a second while it talks to the FC, so a long silence means the phone has lost its USB link to it.
+     */
+    public long msSinceFcData(long now) {
+        long last = lastFcDataAt;
+        return last == 0 ? Long.MAX_VALUE : now - last;
     }
 }
