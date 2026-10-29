@@ -86,6 +86,7 @@ public class MainWindow extends JFrame {
     private final JTextField keyField = new JTextField();
     private final JButton connectButton = Theme.primaryButton("Connect");
     private final JButton setupButton = Theme.secondaryButton("Setup");
+    private final JButton settingsButton = Theme.secondaryButton("Settings");
     private final JLabel statePill = new JLabel("OFFLINE", SwingConstants.CENTER);
     private final JLabel pingValue = statValue();
     private final JLabel fcValue = statValue();
@@ -143,16 +144,11 @@ public class MainWindow extends JFrame {
 
         videoView.setOsdSource(this::osdData);
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
-        videoView.setUpsideDown("true".equalsIgnoreCase(config.getString("videoUpsideDown")));
+        videoView.setUpsideDown("true".equalsIgnoreCase(config.getString(SettingsDialog.UPSIDE_DOWN_KEY)));
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
         bindKey(java.awt.event.KeyEvent.VK_F2, () -> {
             videoView.setOsdEnabled(!videoView.isOsdEnabled());
             save(Map.of("osd", Boolean.toString(videoView.isOsdEnabled())));
-        });
-        bindKey(java.awt.event.KeyEvent.VK_F4, () -> { // camera mounted upside down: turn the picture, not the OSD
-            videoView.setUpsideDown(!videoView.isUpsideDown());
-            save(Map.of("videoUpsideDown", Boolean.toString(videoView.isUpsideDown())));
-            logLine(videoView.isUpsideDown() ? "Picture turned upside down (F4 turns it back)." : "Picture the right way up.");
         });
         bindKey(java.awt.event.KeyEvent.VK_F3, this::toggleLatencyTest);
         bindKey(java.awt.event.KeyEvent.VK_F11, this::toggleFullScreen);
@@ -211,6 +207,9 @@ public class MainWindow extends JFrame {
             menu.show(setupButton, setupButton.getWidth() - menu.getPreferredSize().width, setupButton.getHeight() + 4);
         });
         right.add(setupButton);
+        settingsButton.setToolTipText("Camera mounted upside down, and other options");
+        settingsButton.addActionListener(e -> SettingsDialog.open(this, videoView));
+        right.add(settingsButton);
         right.add(Box.createHorizontalStrut(8));
         right.add(statePill);
         header.add(right, BorderLayout.EAST);
@@ -304,7 +303,7 @@ public class MainWindow extends JFrame {
         video.setBackground(Color.BLACK);
         video.add(videoView, BorderLayout.CENTER);
         videoHolder = video;
-        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off    F3: latency test    F4: picture upside down");
+        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off    F3: latency test");
         videoView.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
