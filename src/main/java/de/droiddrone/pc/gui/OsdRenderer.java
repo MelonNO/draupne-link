@@ -301,7 +301,11 @@ final class OsdRenderer {
         List<String> big = new ArrayList<>();
         if (!d.linkReady()) big.add("LINK LOST");
         if (d.fcLost()) big.add("NO FLIGHT CONTROLLER");
-        if (s != null && s.blockers().stream().anyMatch(b -> b.osdName().equals("RXLOSS") || b.osdName().equals("FAILSAFE"))) big.add("FAILSAFE");
+        // Betaflight's real failsafe (stage 2: drop / land / disarm). RXLOSS alone is a pause of 100 ms or more in the
+        // sticks: Betaflight holds the last sticks for 300 ms, and keeps the flag 0.5 s after they return
+        boolean failsafe = s != null && s.blockers().stream().anyMatch(b -> b.osdName().equals("FAILSAFE"));
+        boolean rcGap = !failsafe && s != null && s.armed() && s.blockers().stream().anyMatch(b -> b.osdName().equals("RXLOSS"));
+        if (failsafe) big.add("FAILSAFE");
         if (d.linkReady() && !d.rcLive()) big.add("RC OFF - THROTTLE DOWN");
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
@@ -318,6 +322,11 @@ final class OsdRenderer {
             g.setFont(Theme.headingFont(18 * unit));
             centered("THE PHONE LOST ITS USB LINK TO THE FC - YOUR STICKS DON'T REACH THE DRONE", w / 2f, y + 4 * unit, YELLOW);
             centered("CHECK THE OTG CABLE. KEEPS HAPPENING? SETUP > DRONE SETUP", w / 2f, y + 28 * unit, YELLOW);
+            return;
+        }
+        if (rcGap) {
+            g.setFont(Theme.headingFont(22 * unit));
+            centered("RC SIGNAL GAP", w / 2f, y + 4 * unit, YELLOW);
             return;
         }
         if (s != null && !s.armed() && !s.blockers().isEmpty()) {
