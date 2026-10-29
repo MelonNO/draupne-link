@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -40,7 +39,6 @@ public class ApkShare implements AutoCloseable {
     public static final int PORT = 8765;
 
     private HttpServer server;
-    private final AtomicInteger completedDownloads = new AtomicInteger();
 
     /** Downloads and verifies the APK once; later calls return the cached file. */
     public static Path prepareApk(Path downloadsDir) throws IOException, InterruptedException {
@@ -119,7 +117,6 @@ public class ApkShare implements AutoCloseable {
                 try (OutputStream out = exchange.getResponseBody()) {
                     Files.copy(apk, out);
                 }
-                completedDownloads.incrementAndGet();
             } else {
                 exchange.sendResponseHeaders(404, -1);
             }
@@ -141,10 +138,6 @@ public class ApkShare implements AutoCloseable {
 
     public boolean isRunning() {
         return server != null;
-    }
-
-    public int getCompletedDownloads() {
-        return completedDownloads.get();
     }
 
     @Override

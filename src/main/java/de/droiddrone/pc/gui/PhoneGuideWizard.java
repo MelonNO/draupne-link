@@ -31,7 +31,7 @@ import java.util.Map;
 
 /**
  * Phone setup, for the phone that flies on the drone. Where the PC can see the result it checks it live
- * (phone on Tailscale, app downloaded, link test); the rest is a short list of what to do on the phone.
+ * (phone on Tailscale, link test); the rest is a short list of what to do on the phone.
  */
 final class PhoneGuideWizard {
     private PhoneGuideWizard() {
@@ -221,7 +221,6 @@ final class PhoneGuideWizard {
         private final MainWindow main;
         private final QrView qr = new QrView(220);
         private final CheckRow file = new CheckRow("DroidDrone Flight " + ApkShare.VERSION);
-        private final CheckRow downloaded = new CheckRow("Downloaded by the phone");
         private final CheckRow firewall = new CheckRow("Firewall");
         private final DefaultComboBoxModel<String> urls = new DefaultComboBoxModel<>();
         private final JComboBox<String> urlChoice = new JComboBox<>(urls);
@@ -257,15 +256,14 @@ final class PhoneGuideWizard {
             page.add(left, BorderLayout.WEST);
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "Tap <b>Download the app</b> and open the file. If Android asks, allow installing from your browser, then <b>Install</b>.<br>"
+                    "Tap <b>Download the app</b> and open the file. If Android asks, allow installing from your browser, then <b>Install</b>. "
+                            + "Then press Next.<br>"
                             + "Link doesn't open? Pick another address under the code."));
             WizardDialog.addRow(col, file);
-            WizardDialog.addRow(col, downloaded);
             firewall.setVisible(false);
             WizardDialog.addRow(col, firewall);
             page.add(col, BorderLayout.CENTER);
             file.set(State.PENDING, "Preparing...");
-            downloaded.set(State.PENDING, "Waiting for the phone...");
             firewall.set(State.PENDING, "Checking...");
             return page;
         }
@@ -310,13 +308,6 @@ final class PhoneGuideWizard {
         private void showQr() {
             String url = (String) urlChoice.getSelectedItem();
             qr.setContent(url, url == null ? "No network address found" : "Scan with the phone");
-        }
-
-        @Override
-        void refresh() {
-            if (share == null) return;
-            int n = share.getCompletedDownloads();
-            if (n > 0) downloaded.set(State.OK, "Downloaded. Install it, then press Next.");
         }
 
         @Override

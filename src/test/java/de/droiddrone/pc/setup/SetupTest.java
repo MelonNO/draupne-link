@@ -89,7 +89,7 @@ class SetupTest {
     }
 
     @Test
-    void apkShareServesTheFileAndCountsDownloads() throws Exception {
+    void apkShareServesTheFile() throws Exception {
         Path apk = dir.resolve(ApkShare.APK_NAME);
         Files.write(apk, new byte[]{1, 2, 3, 4, 5});
         try (ApkShare share = new ApkShare()) {
@@ -105,9 +105,6 @@ class SetupTest {
             assertEquals("application/vnd.android.package-archive", file.headers().firstValue("Content-Type").orElse(""));
             assertEquals(404, client.send(HttpRequest.newBuilder(URI.create(base + "../secret")).build(),
                     HttpResponse.BodyHandlers.discarding()).statusCode());
-            long deadline = System.currentTimeMillis() + 2000;
-            while (share.getCompletedDownloads() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(20);
-            assertEquals(1, share.getCompletedDownloads());
         }
     }
 
