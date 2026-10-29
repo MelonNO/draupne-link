@@ -72,6 +72,10 @@ public class MainWindow extends JFrame {
     /** Where videoView normally lives; it moves to fullScreen and back. */
     private JPanel videoHolder;
     private JFrame fullScreen;
+    /** The video in its own window (POP OUT VIDEO), or null while it sits in this one. */
+    private JFrame popOut;
+    private final JButton popOutButton = Theme.secondaryButton("Pop out video");
+    private final JLabel poppedOutNote = Theme.label("VIDEO IS IN ITS OWN WINDOW", Theme.headingFont(16f), Theme.MUTED);
     private de.droiddrone.pc.video.LatencyMeter latencyMeter;
     private JComponent linkColumn;
     private JComponent controllerCard;
@@ -210,6 +214,9 @@ public class MainWindow extends JFrame {
         settingsButton.setToolTipText("Camera mounted upside down, and other options");
         settingsButton.addActionListener(e -> SettingsDialog.open(this, videoView));
         right.add(settingsButton);
+        popOutButton.setToolTipText("Show the video in a separate window, e.g. on a second screen");
+        popOutButton.addActionListener(e -> togglePopOut());
+        right.add(popOutButton);
         right.add(Box.createHorizontalStrut(8));
         right.add(statePill);
         header.add(right, BorderLayout.EAST);
@@ -309,6 +316,7 @@ public class MainWindow extends JFrame {
             public void mouseClicked(java.awt.event.MouseEvent e) {
                 if (e.getClickCount() != 2) return;
                 if (fullScreen != null) exitFullScreen();
+                else if (popOut != null) popOut.setExtendedState(popOut.getExtendedState() ^ JFrame.MAXIMIZED_BOTH);
                 else toggleVideoOnly();
             }
         });
@@ -540,6 +548,7 @@ public class MainWindow extends JFrame {
     }
 
     private void shutdown() {
+        if (popOut != null) popOut.dispose();
         if (connection != null) disconnect();
         service.stop(); // the main thread leaves its polling loop and exits the app
         dispose();
@@ -758,11 +767,63 @@ public class MainWindow extends JFrame {
         fullScreen = null;
         java.awt.GraphicsDevice device = frame.getGraphicsConfiguration().getDevice();
         if (device.getFullScreenWindow() == frame) device.setFullScreenWindow(null);
-        videoHolder.add(videoView, BorderLayout.CENTER);
+        java.awt.Container home = videoHome();
+        home.add(videoView, BorderLayout.CENTER);
         frame.dispose();
+        home.revalidate();
+        home.repaint();
+        java.awt.Window back = popOut != null ? popOut : this;
+        back.toFront();
+    }
+
+    /** Where the video lives when not in full screen: its own window if popped out, else this one. */
+    private java.awt.Container videoHome() {
+        return popOut != null ? popOut.getContentPane() : videoHolder;
+    }
+
+    /**
+     * POP OUT VIDEO: the picture (with its OSD) in a separate, resizable window - e.g. on a second screen - while this
+     * window keeps the link, controller and log. Closing that window, or VIDEO BACK, puts it back. Same drawing path,
+     * so no extra delay.
+     */
+    private void togglePopOut() {
+        if (popOut != null) {
+            popOut.dispose(); // the window listener puts the video back
+            return;
+        }
+        if (fullScreen != null) exitFullScreen();
+        JFrame frame = new JFrame(getTitle() + " - video");
+        frame.setIconImages(getIconImages());
+        frame.setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+        frame.getContentPane().setBackground(Color.BLACK);
+        frame.getContentPane().setLayout(new BorderLayout());
+        java.awt.Dimension size = videoView.getSize();
+        frame.getContentPane().setPreferredSize(new java.awt.Dimension(Math.max(640, size.width), Math.max(360, size.height)));
+        popOut = frame;
+        frame.add(videoView, BorderLayout.CENTER); // moves it out of this window
+        poppedOutNote.setHorizontalAlignment(javax.swing.SwingConstants.CENTER);
+        videoHolder.add(poppedOutNote, BorderLayout.CENTER);
+        frame.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                if (popOut != frame) return;
+                if (fullScreen != null) exitFullScreen();
+                popOut = null;
+                videoHolder.remove(poppedOutNote);
+                videoHolder.add(videoView, BorderLayout.CENTER);
+                videoHolder.revalidate();
+                videoHolder.repaint();
+                popOutButton.setText("POP OUT VIDEO");
+                logLine("Video back in the main window.");
+            }
+        });
+        frame.pack();
+        frame.setLocationByPlatform(true);
+        frame.setVisible(true);
         videoHolder.revalidate();
         videoHolder.repaint();
-        toFront();
+        popOutButton.setText("VIDEO BACK");
+        logLine("Video in its own window. Close it (or VIDEO BACK) to put it back.");
     }
 
     /** Double-click on the video: hide everything else for a bigger picture, and back. */

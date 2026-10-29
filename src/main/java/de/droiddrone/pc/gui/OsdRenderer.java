@@ -317,7 +317,7 @@ final class OsdRenderer {
         if (d.fcLost()) { // steady, under the blinking title: what it means and where to look
             g.setFont(Theme.headingFont(18 * unit));
             centered("THE PHONE LOST ITS USB LINK TO THE FC - YOUR STICKS DON'T REACH THE DRONE", w / 2f, y + 4 * unit, YELLOW);
-            centered("CHECK THE OTG CABLE AND THE FC'S POWER", w / 2f, y + 28 * unit, YELLOW);
+            centered("CHECK THE OTG CABLE. KEEPS HAPPENING? SETUP > DRONE SETUP", w / 2f, y + 28 * unit, YELLOW);
             return;
         }
         if (s != null && !s.armed() && !s.blockers().isEmpty()) {

@@ -51,6 +51,7 @@ Betaflight 4.4 is **not required**, only recommended:
 - Press **CONNECT**. The status turns **LINK READY** and the phone's camera appears with the **OSD**: horizon and pitch ladder, heading tape with home marker, battery (voltage per cell, big, with the cell count), 4G signal and ping, GPS, timer, flight modes and warnings.
 - RC is only sent once the throttle has been seen at the bottom (**RC OUTPUT: LIVE**).
 - A **red frame** round the picture means your sticks aren't reaching the drone: **LINK LOST** (PC to phone) or **NO FLIGHT CONTROLLER** (the phone lost its USB link to the flight controller; the battery and GPS values turn grey because they're frozen).
+- **POP OUT VIDEO** puts the picture (with the OSD) in its own window, e.g. on a second screen; close it or press **VIDEO BACK** to put it back.
 - **Double-click** the video for a full-window picture. **F11** puts the video in true full screen, which can save up to one screen refresh of delay. **F2** turns the OSD on or off. Camera mounted upside down? **SETTINGS** → *Camera mounted upside down* turns the picture; the OSD stays the right way up, and the setting is remembered.
 - **F3** runs a **latency test**: point the drone's camera at the code on the screen, and the app shows the real camera-to-screen delay.
 - **RC CHECK** shows what Betaflight actually sees: whether the sticks arrive, throttle low, the arm switch, active modes, and every reason it refuses to arm, with the fix for each.
@@ -79,6 +80,7 @@ save
 |---|---|
 | Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A cable plus an OTG adapter (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
 | The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DroidDrone Flight when … is connected**, then OK. Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
+| **NO FLIGHT CONTROLLER** or **FAILSAFE** comes and goes while the link is good | Usually Betaflight's `serial_update_rate_hz` is still at 100: it then can't keep up with the stick updates and drops them. Plug the flight controller into the PC and run SETUP → *Drone setup* (or set it in the CLI, see [Latency](#latency)). If it still happens, check the OTG cable |
 | OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Calibrate it in Betaflight Configurator's **Setup** tab, drone level |
 | Flight app shows the Betaflight version in **yellow** | Betaflight is older than 4.4. It still flies; update when convenient ([which version?](#which-betaflight-version)) |
 | Betaflight ignores the **arm switch** | DroidDrone sends your arm switch on AUX1. In Betaflight Configurator's **Modes** tab, put ARM on AUX 1. **RC CHECK** shows what Betaflight sees |
