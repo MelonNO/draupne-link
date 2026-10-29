@@ -63,4 +63,17 @@ class BetaflightTest {
         assertTrue(BetaflightPlan.plan(FEATURES_MSP_RX, "Invalid name", F7).isEmpty(),
                 "a Betaflight without the setting is left alone");
     }
+
+    @Test
+    void flightControllersOfEveryKindAreFound() {
+        // the localized name Windows gives any virtual COM port, as on this project's AT32 board
+        String generic = "Seriell USB-enhet (COM10)";
+        for (int vid : new int[]{0x0483, 0x2E3C, 0x314B, 0x28E9, 0x2E8A, 0x1209, 0x26AC, 0x2DAE, 0x3162,
+                0x1A86, 0x10C4, 0x0403, 0x067B}) {
+            assertTrue(BetaflightUsb.isFlightController(vid, generic), Integer.toHexString(vid));
+        }
+        assertTrue(BetaflightUsb.isFlightController(-1, "STM32 Virtual ComPort"), "by name when the vendor is unknown");
+        assertFalse(BetaflightUsb.isFlightController(0x046D, generic), "some other USB serial device");
+        assertFalse(BetaflightUsb.isFlightController(-1, "Communications Port (COM1)"), "the PC's own serial port");
+    }
 }

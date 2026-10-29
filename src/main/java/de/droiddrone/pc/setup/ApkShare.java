@@ -33,7 +33,7 @@ public class ApkShare implements AutoCloseable {
     public static final String APK_NAME = "DroidDrone-Flight-" + VERSION + ".apk";
     public static final String APK_URL = "https://github.com/MelonNO/droiddrone-pc/releases/download/flight-" + VERSION + "/" + APK_NAME;
     /** SHA-256 of the APK built by flight-app/build.ps1 and attached to the flight-2.3.0-pc.1 release. */
-    public static final String APK_SHA256 = "e302603abdf0a3e47932f7bf1a37e15d15466ad1280c262abd84aebcac6e4ae8";
+    public static final String APK_SHA256 = "9ad8b655b1ff40bea02caf2890d2281674cf44d6de542d4108a350afb883fcd7";
     public static final int PORT = 8765;
 
     private HttpServer server;

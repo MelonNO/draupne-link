@@ -1,15 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- DroidDrone PC: every flight controller the app can talk to. Being listed here lets Android offer
+     "Always open DroidDrone Flight", so a reconnect needs no tap. -->
 <resources>
-    <!-- FC -->
+    <!-- Any flight controller with native USB: they show up as a standard virtual COM port (USB CDC, an interface of
+         class 2), whatever the chip - STM32, AT32, APM32, GD32, RP2040 - or the firmware (Betaflight, INAV,
+         ArduPilot, PX4). Android matches the class on the device or any of its interfaces. The app's serial library
+         opens any such port. -->
+    <usb-device class="2" />
+
+    <!-- upstream's flight controller IDs, kept -->
     <usb-device vendor-id="1155" product-id="22336" />
     <usb-device vendor-id="4617" product-id="22336" />
     <usb-device vendor-id="4617" product-id="22337" />
     <usb-device vendor-id="12642" product-id="80" />
-    <!-- DroidDrone PC: Artery AT32 flight controllers (2E3C:5740, e.g. AT32F435 boards). Being listed here lets
-         Android offer "Always open DroidDrone Flight", so a reconnect needs no tap. -->
+    <!-- Artery AT32 (2E3C:5740) -->
     <usb-device vendor-id="11836" product-id="22336" />
-    <!-- USB to UART/TTL converter -->
+
+    <!-- Flight controllers with a USB-serial bridge chip: every chip the app's serial library supports -->
+    <!-- QinHeng CH340, CH341 -->
     <usb-device vendor-id="6790" product-id="29987" />
+    <usb-device vendor-id="6790" product-id="21795" />
+    <!-- Silicon Labs CP2102/CP2104, CP2105, CP2108 -->
+    <usb-device vendor-id="4292" product-id="60000" />
+    <usb-device vendor-id="4292" product-id="60016" />
+    <usb-device vendor-id="4292" product-id="60017" />
+    <!-- FTDI FT232R, FT2232H, FT4232H, FT232H, FT231X -->
+    <usb-device vendor-id="1027" product-id="24577" />
+    <usb-device vendor-id="1027" product-id="24592" />
+    <usb-device vendor-id="1027" product-id="24593" />
+    <usb-device vendor-id="1027" product-id="24596" />
+    <usb-device vendor-id="1027" product-id="24597" />
+    <!-- Prolific PL2303, PL2303GC/GB/GT/GL/GE/GS -->
+    <usb-device vendor-id="1659" product-id="8963" />
+    <usb-device vendor-id="1659" product-id="9123" />
+    <usb-device vendor-id="1659" product-id="9139" />
+    <usb-device vendor-id="1659" product-id="9155" />
+    <usb-device vendor-id="1659" product-id="9171" />
+    <usb-device vendor-id="1659" product-id="9187" />
+    <usb-device vendor-id="1659" product-id="9203" />
+
     <!-- USB UVC Camera -->
     <usb-device class="239" subclass="2" />
 </resources>

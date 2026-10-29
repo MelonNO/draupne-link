@@ -79,7 +79,7 @@ save
 | What you see | What it means / what to do |
 |---|---|
 | Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A cable plus an OTG adapter (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
-| The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DroidDrone Flight when … is connected**, then OK. No tick box? Your flight controller's USB chip isn't in the app's list: tell us its USB ID (Windows Device Manager → the COM port → Details → Hardware Ids). Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
+| The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DroidDrone Flight when … is connected**, then OK. No tick box? You have the original Flight app: install this project's build (see [The phone app](#the-phone-app)). Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
 | **NO FLIGHT CONTROLLER** or **FAILSAFE** comes and goes while the link is good | Usually Betaflight's `serial_update_rate_hz` is still at 100: it then can't keep up with the stick updates and drops them. Plug the flight controller into the PC and run SETUP → *Drone setup* (or set it in the CLI, see [Latency](#latency)). If it still happens, check the OTG cable |
 | OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Calibrate it in Betaflight Configurator's **Setup** tab, drone level |
 | Flight app shows the Betaflight version in **yellow** | Betaflight is older than 4.4. It still flies; update when convenient ([which version?](#which-betaflight-version)) |
@@ -103,7 +103,7 @@ DroidDrone PC replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s 
 ### The phone app
 
 The setup installs **DroidDrone Flight 2.3.0-pc.1**: upstream's Flight 2.3.0 with two changes, source in [`flight-app/`](flight-app):
-- **More flight controllers:** Artery AT32 boards (USB ID 2E3C:5740) are in its USB list, so Android can remember the permission and the phone reconnects to the flight controller without asking.
+- **Every flight controller:** its USB list covers any flight controller with native USB (STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip it can drive (CH340/CH341, CP210x, FTDI, PL2303). Android can then remember the USB permission, and the phone reconnects to the flight controller without asking. Upstream only lists a few IDs, so AT32 boards, for example, needed a tap after every reconnect.
 - **The PC app's look:** black and red, status at a glance (OFFLINE / WAITING / LINK READY).
 
 The protocol is unchanged, so the original Flight 2.3.0 also still works. This build is signed with a different key: uninstall the original before installing it.
@@ -113,7 +113,7 @@ The protocol is unchanged, so the original Flight 2.3.0 also still works. This b
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 67 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
+.\gradlew.bat test               # 68 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3

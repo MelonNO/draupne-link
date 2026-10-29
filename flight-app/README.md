@@ -5,7 +5,7 @@ The phone app that flies on the drone: upstream [DroidDrone](https://github.com/
 
 | File | Change |
 |---|---|
-| `Flight/src/main/res/xml/device_filter.xml` | Artery AT32 flight controllers (USB 2E3C:5740) added, so Android offers *Always open DroidDrone Flight* and reconnects without asking |
+| `Flight/src/main/res/xml/device_filter.xml` | Every flight controller: any virtual COM port (USB CDC: STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip the app's serial library supports (CH340/CH341, CP210x, FTDI, PL2303). Android then offers *Always open DroidDrone Flight* and reconnects without asking |
 | `Flight/src/main/res/layout/activity_main.xml`, `res/values/*`, `res/drawable/*`, `res/mipmap-anydpi-v26/*` | The PC app's look: black and red, cards with corner brackets, status pill, the PC app's icon |
 | `Flight/src/main/java/de/droiddrone/flight/MainActivity.java` | Colours for the dark screen and the status pill; the connection logic is unchanged |
 | `Flight/src/main/java/de/droiddrone/flight/BracketDrawable.java` | New: the card background |

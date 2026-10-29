@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /**
  * A flight controller on this PC's USB, driven through Betaflight's CLI (text commands).
@@ -22,9 +23,24 @@ public final class BetaflightUsb implements AutoCloseable {
         }
     }
 
-    private static final int STM32_VID = 0x0483;
-    private static final int ARTERY_VID = 0x2E3C;   // AT32 flight controllers
-    private static final int PIDCODES_VID = 0x1209;
+    /**
+     * USB vendors of flight controllers: the chip makers whose virtual COM port the firmware uses, the boards' own
+     * IDs, and the USB-serial bridge chips on boards without native USB.
+     */
+    private static final Set<Integer> FC_VENDORS = Set.of(
+            0x0483,  // STMicroelectronics: STM32 boards (Betaflight, INAV, ArduPilot, PX4)
+            0x2E3C,  // Artery: AT32 boards
+            0x314B,  // Geehy: APM32 boards
+            0x28E9,  // GigaDevice: GD32 boards
+            0x2E8A,  // Raspberry Pi: RP2040 / RP2350 boards
+            0x1209,  // pid.codes: ArduPilot and others
+            0x26AC,  // 3D Robotics: Pixhawk
+            0x2DAE,  // CubePilot: Cube
+            0x3162,  // Holybro
+            0x1A86,  // QinHeng CH340 / CH341 / CH9102 bridge
+            0x10C4,  // Silicon Labs CP210x bridge
+            0x0403,  // FTDI bridge
+            0x067B); // Prolific PL2303 bridge
 
     private final SerialPort port;
 
@@ -32,18 +48,21 @@ public final class BetaflightUsb implements AutoCloseable {
         this.port = port;
     }
 
-    /** Serial ports that look like a flight controller's USB (virtual COM port of STM32 / AT32 chips). */
+    /** Serial ports that look like a flight controller's USB, by vendor or by name. */
     public static List<Port> findFlightControllers() {
         List<Port> found = new ArrayList<>();
         for (SerialPort p : SerialPort.getCommPorts()) {
-            int vid = p.getVendorID();
-            String desc = (p.getPortDescription() + " " + p.getDescriptivePortName()).toLowerCase(Locale.ROOT);
-            if (vid == STM32_VID || vid == ARTERY_VID || vid == PIDCODES_VID
-                    || desc.contains("stm") || desc.contains("betaflight") || desc.contains("at32")) {
+            if (isFlightController(p.getVendorID(), p.getPortDescription() + " " + p.getDescriptivePortName())) {
                 found.add(new Port(p.getSystemPortName(), p.getDescriptivePortName()));
             }
         }
         return found;
+    }
+
+    static boolean isFlightController(int vendorId, String description) {
+        String d = description.toLowerCase(Locale.ROOT);
+        return FC_VENDORS.contains(vendorId)
+                || d.contains("stm") || d.contains("betaflight") || d.contains("at32") || d.contains("inav") || d.contains("ardupilot");
     }
 
     public static BetaflightUsb open(Port p) throws IOException {
