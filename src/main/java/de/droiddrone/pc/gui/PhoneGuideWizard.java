@@ -394,6 +394,8 @@ final class PhoneGuideWizard {
             JPanel col = WizardDialog.column();
             tableHolder.setOpaque(false);
             WizardDialog.addRow(col, tableHolder);
+            WizardDialog.addRow(col, WizardDialog.paragraph("When Android asks about the flight controller, tick "
+                    + "<b>Always open DroidDrone Flight</b>, then OK. Then it reconnects by itself, without asking, if the cable slips."));
             WizardDialog.addRow(col, link);
             WizardDialog.addRow(col, fc);
             WizardDialog.addRow(col, latency);
