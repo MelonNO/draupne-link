@@ -15,7 +15,6 @@ import de.droiddrone.pc.gui.WizardDialog.Page;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -31,8 +30,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Interactive guide for the phone that flies on the drone. Where the PC can see the result it checks it live
- * (phone on Tailscale, app downloaded, link test); elsewhere the pilot ticks steps off.
+ * Phone setup, for the phone that flies on the drone. Where the PC can see the result it checks it live
+ * (phone on Tailscale, app downloaded, link test); the rest is a short list of what to do on the phone.
  */
 final class PhoneGuideWizard {
     private PhoneGuideWizard() {
@@ -45,24 +44,12 @@ final class PhoneGuideWizard {
                 new FlightAppPage(main),
                 new PhoneSettingsPage(main),
                 new FlightAppSettingsPage(main),
-                new FlightControllerPage(main),
                 new LinkTestPage(main));
-        new WizardDialog(main, "Phone guide", pages, () -> {
+        new WizardDialog(main, "Phone setup", pages, () -> {
             main.save(Map.of("setup.phoneDone", "true"));
-            main.logLine("Phone guide finished.");
+            main.logLine("Phone setup finished.");
         }).setVisible(true);
         main.reloadSettings();
-    }
-
-    /** A checkbox whose ticked state is remembered in the settings file. */
-    private static JCheckBox savedCheck(MainWindow main, String key, String html) {
-        JCheckBox box = new JCheckBox("<html>" + html + "</html>");
-        box.setFont(Theme.font(Font.PLAIN, 14f));
-        box.setForeground(Theme.TEXT);
-        box.setOpaque(false);
-        box.setSelected("true".equals(main.config().getString(key)));
-        box.addActionListener(e -> main.save(Map.of(key, Boolean.toString(box.isSelected()))));
-        return box;
     }
 
     private static JComponent valueTable(String[][] rows) {
@@ -93,26 +80,16 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "This phone rides on the drone, talks to the flight controller over USB and to this PC over 4G.";
+            return "This phone rides on the drone: USB to the flight controller, 4G to this PC.";
         }
 
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, WizardDialog.subheading("You need"));
+            WizardDialog.addRow(col, WizardDialog.subheading("Have ready"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "&bull; An Android phone, Android 8 or newer (11+ recommended), with a 4G/5G data plan<br>"
-                            + "&bull; A USB OTG cable or adapter from the phone to the flight controller<br>"
-                            + "&bull; The phone and this PC within reach for the setup (about 10 minutes)"));
-            WizardDialog.addRow(col, WizardDialog.subheading("Steps"));
-            boolean vpn = main.config().getLinkMode() == LinkMode.PHONE;
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    (vpn ? "1. Tailscale on the phone - the PC spots it automatically<br>" : "")
-                            + "2. Install DroidDrone Flight by scanning a QR code<br>"
-                            + "3. Phone settings that keep the link alive<br>"
-                            + "4. Flight app settings<br>"
-                            + "5. Connect the flight controller<br>"
-                            + "6. Test the link and measure the latency"));
+                    "&bull; An Android phone (8 or newer) with mobile data<br>"
+                            + "&bull; A USB OTG adapter from the phone to the flight controller"));
             return col;
         }
     }
@@ -159,10 +136,8 @@ final class PhoneGuideWizard {
             page.add(left, BorderLayout.WEST);
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "1. Install <b>Tailscale</b> and open it.<br>"
-                            + "2. Sign in with <b>the same account</b> you used on this PC.<br>"
-                            + "3. Allow the VPN connection when Android asks.<br>"
-                            + "The phone appears below within a few seconds."));
+                    "Install <b>Tailscale</b>, sign in with <b>the same account</b> as on this PC, and allow the VPN. "
+                            + "The phone appears below by itself."));
             WizardDialog.addRow(col, pc);
             phoneChoice.setRenderer(new javax.swing.DefaultListCellRenderer() {
                 @Override
@@ -264,7 +239,7 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "The PC fetches the official release from GitHub, checks it, and hands it to the phone over your network.";
+            return "Scan the code with the phone's camera.";
         }
 
         @Override
@@ -282,12 +257,11 @@ final class PhoneGuideWizard {
             page.add(left, BorderLayout.WEST);
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "1. Scan the code with the phone's camera and open the link.<br>"
-                            + "2. Tap <b>Download the app</b>, then open the downloaded file.<br>"
-                            + "3. Android asks to allow installing from your browser: <b>Settings &rarr; Allow from this source</b>, go back, <b>Install</b>.<br>"
-                            + "If the link doesn't open, pick another address under the code (the phone must be on your Wi-Fi or on Tailscale)."));
+                    "Tap <b>Download the app</b> and open the file. If Android asks, allow installing from your browser, then <b>Install</b>.<br>"
+                            + "Link doesn't open? Pick another address under the code."));
             WizardDialog.addRow(col, file);
             WizardDialog.addRow(col, downloaded);
+            firewall.setVisible(false);
             WizardDialog.addRow(col, firewall);
             page.add(col, BorderLayout.CENTER);
             file.set(State.PENDING, "Preparing...");
@@ -298,10 +272,10 @@ final class PhoneGuideWizard {
 
         @Override
         void onShow() {
-            background(() -> WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE), ok -> firewall.set(
-                    Boolean.TRUE.equals(ok) ? State.OK : State.WARN, Boolean.TRUE.equals(ok)
-                            ? "The phone may download from this PC."
-                            : "No firewall rule yet - Windows may block the phone. Add it in SETUP &rarr; PC setup (Windows Firewall step)."));
+            background(() -> WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE), ok -> {
+                firewall.setVisible(!Boolean.TRUE.equals(ok)); // shown only when it's missing
+                firewall.set(State.WARN, "No firewall rule yet - Windows may block the phone. SETUP &rarr; PC setup adds it.");
+            });
             if (share != null || preparing) return;
             preparing = true;
             file.set(State.PENDING, "Downloading from GitHub and checking it (about 7 MB)...");
@@ -342,7 +316,7 @@ final class PhoneGuideWizard {
         void refresh() {
             if (share == null) return;
             int n = share.getCompletedDownloads();
-            if (n > 0) downloaded.set(State.OK, "The phone downloaded the app. Install it, then press Next.");
+            if (n > 0) downloaded.set(State.OK, "Downloaded. Install it, then press Next.");
         }
 
         @Override
@@ -366,26 +340,19 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "Android saves battery by pausing apps in the background - in the air that means a failsafe. Tick each one off.";
+            return "Android pauses apps in the background to save battery. In the air that means a failsafe. On the phone:";
         }
 
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, savedCheck(main, "guide.battery",
-                    "<b>Battery: Unrestricted</b> for DroidDrone Flight <i>and</i> Tailscale<br>"
-                            + "<span style='color:" + Theme.MUTED_HEX + "'>Settings &rarr; Apps &rarr; DroidDrone Flight &rarr; Battery &rarr; Unrestricted</span>"));
-            WizardDialog.addRow(col, savedCheck(main, "guide.data",
-                    "<b>Unrestricted mobile data</b> for both apps (or Data Saver off)<br>"
-                            + "<span style='color:" + Theme.MUTED_HEX + "'>Settings &rarr; Apps &rarr; app &rarr; Mobile data &rarr; Unrestricted data usage</span>"));
-            if (main.config().getLinkMode() == LinkMode.PHONE) {
-                WizardDialog.addRow(col, savedCheck(main, "guide.alwaysOn",
-                        "<b>Tailscale as Always-on VPN</b>, so it reconnects by itself after a network change<br>"
-                                + "<span style='color:" + Theme.MUTED_HEX + "'>Settings &rarr; Network &amp; internet &rarr; VPN &rarr; Tailscale &#9881; &rarr; Always-on VPN</span>"));
-            }
-            WizardDialog.addRow(col, savedCheck(main, "guide.wifiOff",
-                    "<b>Before flying: Wi-Fi off</b> on the phone, so it stays on 4G<br>"
-                            + "<span style='color:" + Theme.MUTED_HEX + "'>Otherwise it may take off on your home Wi-Fi and drop out as the drone flies away.</span>"));
+            String muted = "<span style='color:" + Theme.MUTED_HEX + "'>";
+            WizardDialog.addRow(col, WizardDialog.paragraph(
+                    "&bull; <b>Battery: Unrestricted</b> for DroidDrone Flight and Tailscale " + muted + "(Settings &rarr; Apps &rarr; the app &rarr; Battery)</span><br>"
+                            + "&bull; <b>Unrestricted mobile data</b> for both apps " + muted + "(Settings &rarr; Apps &rarr; the app &rarr; Mobile data)</span><br>"
+                            + (main.config().getLinkMode() == LinkMode.PHONE
+                            ? "&bull; <b>Tailscale: Always-on VPN</b> " + muted + "(Settings &rarr; Network &amp; internet &rarr; VPN &rarr; Tailscale &#9881;)</span><br>" : "")
+                            + "&bull; <b>Wi-Fi off</b> before flying, so the phone stays on 4G"));
             return col;
         }
     }
@@ -405,7 +372,7 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "Open DroidDrone Flight on the phone and enter exactly this:";
+            return "Open DroidDrone Flight on the phone and enter this:";
         }
 
         @Override
@@ -413,10 +380,7 @@ final class PhoneGuideWizard {
             JPanel col = WizardDialog.column();
             tableHolder.setOpaque(false);
             WizardDialog.addRow(col, tableHolder);
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "Then tap <b>CONNECT</b>. The app keeps running in the background; leave it open while flying. "
-                            + "Its network status shows <i>Awaiting connection</i> (direct) or <i>Connecting</i> (server) until the PC connects."));
-            WizardDialog.addRow(col, savedCheck(main, "guide.flightConnected", "The Flight app is set up and I tapped <b>Connect</b>"));
+            WizardDialog.addRow(col, WizardDialog.paragraph("Then tap <b>CONNECT</b> and leave the app running."));
             return col;
         }
 
@@ -445,55 +409,16 @@ final class PhoneGuideWizard {
         }
     }
 
-    static final class FlightControllerPage extends Page {
-        private final MainWindow main;
-
-        FlightControllerPage(MainWindow main) {
-            this.main = main;
-        }
-
-        @Override
-        String title() {
-            return "Connect the flight controller";
-        }
-
-        @Override
-        String hint() {
-            return "Props off. Plug the phone into the flight controller's USB port with the OTG cable.";
-        }
-
-        @Override
-        JComponent build() {
-            JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, savedCheck(main, "guide.msp",
-                    "Betaflight Configurator &rarr; <b>Receiver</b> tab &rarr; Receiver Mode <b>MSP RX input</b> (saved)"));
-            WizardDialog.addRow(col, savedCheck(main, "guide.fc",
-                    "The Flight app's <b>FC</b> status turns green and shows <b>Betaflight</b>"));
-            WizardDialog.addRow(col, WizardDialog.subheading("What the FC status means"));
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "<b>Disconnected</b> before you tap Connect is normal. After Connect it goes <i>Device found</i> "
-                            + "&rarr; <i>Permission requested</i> (tap <b>Allow</b> on the Android pop-up) &rarr; <i>Betaflight x.y.z</i>."));
-            WizardDialog.addRow(col, WizardDialog.subheading("Still \"Disconnected\" after tapping Connect?"));
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "&bull; Do the FC's LEDs light up from the phone alone (no battery)? If not, the phone isn't powering it: cable problem.<br>"
-                            + "&bull; Many flight controllers ignore a plain USB-C to USB-C cable. Use a <b>USB-A cable + a USB-C OTG adapter</b> on the phone.<br>"
-                            + "&bull; Make sure it's a data cable - test it on the PC with Betaflight Configurator.<br>"
-                            + "&bull; Some phones (OnePlus, Oppo, Realme, Xiaomi) have an <b>OTG</b> switch in Settings that turns itself off after a while.<br>"
-                            + "&bull; Android normally asks \"Open DroidDrone Flight when this device is connected?\" - if it never does, Android doesn't see the FC.<br>"
-                            + "&bull; Status <i>Permission denied</i>: unplug, replug, and tap Allow."));
-            return col;
-        }
-    }
-
     /** Opens a real link to the phone without sending RC, and measures it. */
     static final class LinkTestPage extends Page {
         private final MainWindow main;
         private final CheckRow path = new CheckRow("Network path");
         private final CheckRow link = new CheckRow("DroidDrone link");
         private final CheckRow fc = new CheckRow("Flight controller");
-        private final CheckRow latency = new CheckRow("Round-trip time (PC ↔ phone)");
+        private final CheckRow latency = new CheckRow("Round-trip time");
         private JButton runButton;
         private boolean running;
+        private boolean ranOnce;
 
         private record Result(Tailscale.PingResult ping, ControlLink.State state, FcInfo fc, List<Integer> rtts, String error) {}
 
@@ -508,7 +433,7 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "Put the phone on 4G (Wi-Fi off) with the Flight app connected, then run the test. No stick commands are sent.";
+            return "Plug the phone into the flight controller with the OTG adapter (props off). The test runs by itself and sends no stick commands.";
         }
 
         @Override
@@ -531,6 +456,7 @@ final class PhoneGuideWizard {
         @Override
         void onShow() {
             if (main.config().getLinkMode() != LinkMode.PHONE) path.set(State.INFO, "Only measured for Tailscale.");
+            if (!ranOnce && !running) run();
         }
 
         private void run() {
@@ -539,6 +465,7 @@ final class PhoneGuideWizard {
                 return;
             }
             running = true;
+            ranOnce = true;
             runButton.setEnabled(false);
             boolean tailscale = main.config().getLinkMode() == LinkMode.PHONE;
             if (tailscale) path.set(State.PENDING, "Pinging the phone over Tailscale...");
@@ -587,6 +514,7 @@ final class PhoneGuideWizard {
             runButton.setEnabled(true);
             runButton.setText("Run again");
             if (r == null) return;
+            if (r.ping() == null && path.getState() == State.PENDING) path.set(State.PENDING, ""); // the test stopped before pinging
             if (r.ping() != null) {
                 Tailscale.PingResult p = r.ping();
                 if (!p.reached()) {
@@ -619,7 +547,8 @@ final class PhoneGuideWizard {
                         r.fc().getFcName() + " " + r.fc().getFcVersionStr());
             } else {
                 fc.set(r.state() == ControlLink.State.READY ? State.BAD : State.PENDING, r.state() == ControlLink.State.READY
-                        ? "The phone isn't talking to the flight controller - see the previous step." : "");
+                        ? "The phone isn't talking to the flight controller. Tap Allow on the phone's USB pop-up. Many flight "
+                        + "controllers ignore USB-C to USB-C: use a USB-A cable with an OTG adapter, and check the phone's OTG setting." : "");
             }
             if (r.rtts().isEmpty()) {
                 latency.set(State.PENDING, "");

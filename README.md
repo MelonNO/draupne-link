@@ -10,7 +10,7 @@ Your radio plugs into the PC; an Android phone on the drone carries the sticks, 
 1. **Download** `DroidDrone-PC-Setup-<version>.exe` from the [latest release](../../releases/latest).
 2. **Run it** and click through the installer (Next → Install → Finish). Approve the Windows prompt once: the installer then also sets up this PC by itself (**Tailscale**, firewall rules, High performance power plan) and puts **DroidDrone PC** on the desktop and in the Start menu.
    Windows may say *"Windows protected your PC"*, because the installer isn't code-signed. Click **More info → Run anyway**.
-3. **DroidDrone PC starts by itself** when you press Finish (untick *Launch DroidDrone PC* to skip that). **Follow the setup wizard**: it opens on the very first start, skips whatever is already done, and takes about 15 minutes. Later, **SETUP** opens each part on its own: PC, phone or drone.
+3. **DroidDrone PC starts by itself** when you press Finish (untick *Launch DroidDrone PC* to skip that). **Follow the setup wizard**: it opens on the very first start, skips whatever is already done, and takes about 15 minutes. Later, **SETUP** opens it again (*First-time setup*) or each part on its own: PC, phone or drone.
 
 ## What you need
 
@@ -33,15 +33,15 @@ Betaflight 4.4 is **not required**, only recommended:
 
 | | The wizard does this for you | You do this, guided step by step |
 |---|---|---|
-| **This PC** | The **installer** installs **Tailscale** (private network between PC and phone), adds the firewall rules and switches to the High performance power plan. The wizard opens Tailscale's sign-in page and skips every step that is already done | Choose how the PC reaches the phone, sign in to Tailscale |
+| **This PC** | The **installer** installs **Tailscale** (private network between PC and phone), adds the firewall rules and switches to the High performance power plan. The wizard opens Tailscale's sign-in page and skips every step that is already done | Sign in to Tailscale |
 | **Radio** | Detects it, then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)) | Plug it in and pick *USB Joystick (HID)* on the radio |
-| **Flight controller** | Over USB, without any clicks: sets the receiver to **MSP**, puts **ARM on AUX1** and sets the **stick delay setting**. Then **calibrates the accelerometer** and shows Betaflight's arming check live | Plug it in. Without a USB cable you get a short checklist for Betaflight Configurator instead. The **BETAFLIGHT** button opens a step-by-step guide through Configurator, tab by tab, including the latency setting |
-| **Phone** | Downloads the official DroidDrone Flight app, checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, tick off a few phone settings, plug the phone into the flight controller |
-| **Test** | Connects to the drone and measures the path (direct or relayed) and the round-trip time, and gives you a verdict | Put the phone on 4G |
+| **Drone** | Over USB, with nothing to click: sets the receiver to **MSP** and the **stick delay setting**. Nothing else on the drone is touched | Plug it in. No USB cable? The page shows the same two settings for Betaflight Configurator |
+| **Phone** | Downloads the official DroidDrone Flight app, checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, set four phone settings from a short list |
+| **Test** | Connects to the drone by itself and measures the path (direct or relayed) and the round-trip time, and gives you a verdict | Plug the phone into the flight controller, phone on 4G |
 
 <p>
 <img src="docs/images/setup-welcome.png" width="49%" alt="Setup wizard: welcome">
-<img src="docs/images/setup-betaflight.png" width="49%" alt="Setup wizard: Betaflight">
+<img src="docs/images/setup-betaflight.png" width="49%" alt="Setup wizard: drone">
 </p>
 
 ## Flying
@@ -66,7 +66,7 @@ Every part is built for the least delay:
 
 The 4G network itself (typically 40–100 ms round trip) is the biggest delay. A wired PC helps a little.
 
-**Betaflight setting that matters:** Betaflight handles one MSP message per serial cycle, and that cycle runs only 100 times a second by default. Stick updates plus the OSD's telemetry requests are more than that, so stick updates queue up in the flight controller. SETUP → *Drone setup* fixes it over USB by itself (1000 on F411 boards). Without USB, set it once in the Betaflight CLI (4.2 or newer); the **BETAFLIGHT** guide walks you through it:
+**Betaflight setting that matters:** Betaflight handles one MSP message per serial cycle, and that cycle runs only 100 times a second by default. Stick updates plus the OSD's telemetry requests are more than that, so stick updates queue up in the flight controller. SETUP → *Drone setup* sets it over USB by itself (1000 on F411 boards). Without USB, type this once in Betaflight Configurator's **CLI** tab (Betaflight 4.2 or newer):
 ```
 set serial_update_rate_hz = 2000
 save
@@ -77,9 +77,10 @@ save
 | What you see | What it means / what to do |
 |---|---|
 | Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A cable plus an OTG adapter (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
-| OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Run SETUP → *Drone setup* → **Calibrate** |
+| OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Calibrate it in Betaflight Configurator's **Setup** tab, drone level |
 | Flight app shows the Betaflight version in **yellow** | Betaflight is older than 4.4. It still flies; update when convenient ([which version?](#which-betaflight-version)) |
-| OSD says **ARMING BLOCKED: MSP** | Betaflight Configurator disabled arming and was unplugged without *Disconnect*. Power-cycle the flight controller. The setup wizard's Betaflight step also clears it |
+| Betaflight ignores the **arm switch** | DroidDrone sends your arm switch on AUX1. In Betaflight Configurator's **Modes** tab, put ARM on AUX 1. **RC CHECK** shows what Betaflight sees |
+| OSD says **ARMING BLOCKED: MSP** | Betaflight Configurator disabled arming and was unplugged without *Disconnect*. Power-cycle the flight controller. SETUP → *Drone setup* also clears it |
 | **Video is black** | It's what the camera sees: is the lens covered, or is it dark? Point it at something bright. To use another lens, set `cameraId` in the settings (often `2` or `3` is the wide-angle) |
 | Link test says **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Run the test again after a minute. If it stays relayed, choose *Host the relay on this PC* in SETUP → *PC setup* |
 | Channels look wrong | **CALIBRATE**, then **RC CHECK** |
@@ -100,7 +101,7 @@ DroidDrone PC replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s 
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 64 tests: protocol, video decode, telemetry, calibration, Betaflight CLI/MSP, setup helpers
+.\gradlew.bat test               # 62 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3
@@ -111,7 +112,7 @@ Needs JDK 21. To release, set `version` in `build.gradle`, then push a tag `v<ve
 |---|---|
 | `de.droiddrone.pc` | Link (`ControlLink`), connection modes, joystick, calibration, RC mapping, telemetry (`FcTelemetry`) |
 | `de.droiddrone.pc.video` | Frame reassembly, FFmpeg decoder, bitrate control, low-latency pipeline |
-| `de.droiddrone.pc.setup` | Tailscale, firewall, power plan, shortcuts, Betaflight over USB (CLI + MSP), Flight app download/serving |
+| `de.droiddrone.pc.setup` | Tailscale, firewall, power plan, shortcuts, Betaflight over USB (CLI), Flight app download/serving |
 | `de.droiddrone.pc.gui` | Main window, OSD, setup wizard, calibration, RC check |
 
 More: [protocol notes](docs/PROTOCOL.md) and [roadmap](docs/ROADMAP.md).

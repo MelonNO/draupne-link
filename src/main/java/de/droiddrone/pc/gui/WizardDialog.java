@@ -29,7 +29,7 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
-/** Step-by-step dialog shared by the PC setup wizard and the phone guide, in the calibration wizard's style. */
+/** Step-by-step dialog shared by the setup wizards, in the calibration wizard's style. */
 class WizardDialog extends JDialog {
     /** Background work for pages (shell commands, downloads); results come back on the Swing thread. */
     private static final ExecutorService WORKERS = Executors.newCachedThreadPool(r -> {

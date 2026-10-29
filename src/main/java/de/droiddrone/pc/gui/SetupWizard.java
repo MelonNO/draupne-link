@@ -8,10 +8,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The one setup wizard: PC, radio, flight controller, phone, link test. Whatever this PC can do itself it does
- * (installs Tailscale, firewall rules, power plan, Betaflight settings, serves the phone app, finds the phone);
- * the rest is a guided checklist. Opens by itself on the very first start only; after that SETUP in the main window
- * opens each part (PC, phone, drone) on its own.
+ * The first-time setup: PC, radio, drone, phone, link test. Whatever this PC can do itself it does (Tailscale,
+ * firewall, power plan, Betaflight settings, serving the phone app, finding the phone), and finished steps are
+ * skipped, so the pilot reads and clicks as little as possible. It uses the connection method in the settings
+ * (Tailscale unless changed in PC setup). Opens by itself on the very first start; SETUP &rarr; First-time setup
+ * opens it again.
  */
 final class SetupWizard {
     static final String DONE_KEY = "setup.done";
@@ -22,22 +23,18 @@ final class SetupWizard {
     }
 
     static void open(MainWindow main) {
-        FlightControllerPages.Found fc = new FlightControllerPages.Found();
         List<Page> pages = List.of(
                 new WelcomePage(),
-                new PcSetupWizard.ConnectionPage(main).in("THIS PC"),
                 new PcSetupWizard.TailscalePage(main).in("THIS PC"),
                 new PcSetupWizard.RelayPage(main).in("THIS PC"),
                 new PcSetupWizard.FirewallPage(main).in("THIS PC"),
                 new PcSetupWizard.LatencyPage(main).in("THIS PC"),
                 new PcSetupWizard.RadioPage(main).in("RADIO"),
-                new FlightControllerPages.UsbPage(fc).in("FLIGHT CONTROLLER"),
-                new FlightControllerPages.ConfigPage(main, fc).in("FLIGHT CONTROLLER"),
+                new DroneSetup.BetaflightPage(main).in("DRONE"),
                 new PhoneGuideWizard.PhoneTailscalePage(main).in("PHONE"),
                 new PhoneGuideWizard.FlightAppPage(main).in("PHONE"),
                 new PhoneGuideWizard.PhoneSettingsPage(main).in("PHONE"),
                 new PhoneGuideWizard.FlightAppSettingsPage(main).in("PHONE"),
-                new PhoneGuideWizard.FlightControllerPage(main).in("PHONE"),
                 new PhoneGuideWizard.LinkTestPage(main).in("TEST"),
                 new PcSetupWizard.ShortcutsPage(main).in("FINISH"),
                 new DonePage().in("FINISH"));
@@ -56,26 +53,17 @@ final class SetupWizard {
 
         @Override
         String hint() {
-            return "This wizard sets up everything, one step at a time. It does what it can by itself and tells you exactly what to do for the rest.";
+            return "Everything is done for you where possible. You only do what needs your hands.";
         }
 
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, WizardDialog.subheading("You need"));
+            WizardDialog.addRow(col, WizardDialog.subheading("Have ready"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "&bull; This Windows PC, on the internet (cable or Wi-Fi)<br>"
-                            + "&bull; Your radio (RadioMaster, EdgeTX) and its USB cable<br>"
-                            + "&bull; The drone with a <b>Betaflight</b> flight controller (4.4 or newer is best), and a USB cable for it<br>"
-                            + "&bull; An Android phone (8 or newer) with mobile data, and a <b>USB OTG adapter</b> to plug it into the flight controller<br>"
-                            + "&bull; About 20 minutes"));
-            WizardDialog.addRow(col, WizardDialog.subheading("What happens"));
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "<b>1 This PC</b> - connection method and Tailscale sign-in (firewall, power plan and Tailscale itself are done for you)<br>"
-                            + "<b>2 Radio</b> - detect and calibrate your sticks and switches<br>"
-                            + "<b>3 Flight controller</b> - Betaflight set up over USB<br>"
-                            + "<b>4 Phone</b> - apps installed by QR code, settings, cable to the flight controller<br>"
-                            + "<b>5 Test</b> - a real connection to the drone, with the latency measured"));
+                    "&bull; Your radio and its USB cable<br>"
+                            + "&bull; The drone (Betaflight) and a USB cable for it<br>"
+                            + "&bull; An Android phone with mobile data, and a <b>USB OTG adapter</b>"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
                     "<b style='color:" + Theme.BAD_HEX + "'>Keep the propellers OFF</b> for the whole setup."));
             return col;
@@ -96,15 +84,10 @@ final class SetupWizard {
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, WizardDialog.subheading("Before the first flight"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "&bull; Bench test first, props off: arm, disarm, and check that pulling the radio's USB, turning off the PC's "
-                            + "Wi-Fi or closing the app all make Betaflight fail safe<br>"
-                            + "&bull; <b>RC CHECK</b> (next to CALIBRATE) shows exactly what Betaflight sees and why it might not arm<br>"
-                            + "&bull; Set up and test <b>GPS Rescue</b> before flying out of sight<br>"
-                            + "&bull; First flights close by, in line of sight, in Angle mode<br>"
-                            + "&bull; Follow your local drone rules - flying beyond visual line of sight usually needs a permit"));
-            WizardDialog.addRow(col, WizardDialog.paragraph("Run any part again any time with <b>SETUP</b> at the top of the main window: PC setup, Phone setup or Drone setup."));
+                    "&bull; Bench test first, props off: arm, disarm, and check that losing the link makes Betaflight fail safe<br>"
+                            + "&bull; Won't arm? <b>RC CHECK</b> shows why<br>"
+                            + "&bull; Set up <b>GPS Rescue</b> in Betaflight before flying out of sight"));
             return col;
         }
     }

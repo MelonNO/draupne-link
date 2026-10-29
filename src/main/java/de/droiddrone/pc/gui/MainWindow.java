@@ -86,7 +86,6 @@ public class MainWindow extends JFrame {
     private final JTextField keyField = new JTextField();
     private final JButton connectButton = Theme.primaryButton("Connect");
     private final JButton setupButton = Theme.secondaryButton("Setup");
-    private final JButton betaflightButton = Theme.secondaryButton("Betaflight");
     private final JLabel statePill = new JLabel("OFFLINE", SwingConstants.CENTER);
     private final JLabel pingValue = statValue();
     private final JLabel fcValue = statValue();
@@ -163,14 +162,15 @@ public class MainWindow extends JFrame {
 
     // ---------------------------------------------------------------- layout
 
-    /** SETUP's menu: each part of the setup on its own. */
+    /** SETUP's menu: the first-time setup, or each part of it on its own. */
     private JPopupMenu setupMenu() {
         JPopupMenu menu = new JPopupMenu();
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
+        addSetupItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, link test", () -> SetupWizard.open(this));
         addSetupItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
         addSetupItem(menu, "Phone setup", "The phone on the drone: apps, settings, link test", () -> PhoneGuideWizard.open(this));
-        addSetupItem(menu, "Drone setup", "The flight controller: Betaflight over USB", () -> FlightControllerPages.open(this));
+        addSetupItem(menu, "Drone setup", "Betaflight's receiver and stick delay, set over USB", () -> DroneSetup.open(this));
         return menu;
     }
 
@@ -199,15 +199,12 @@ public class MainWindow extends JFrame {
         setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         right.setOpaque(false);
-        setupButton.setToolTipText("PC setup, phone setup or drone setup");
+        setupButton.setToolTipText("First-time setup, or PC, phone or drone setup on its own");
         setupButton.addActionListener(e -> {
             JPopupMenu menu = setupMenu(); // right-aligned under the button, so it stays inside the window
             menu.show(setupButton, setupButton.getWidth() - menu.getPreferredSize().width, setupButton.getHeight() + 4);
         });
         right.add(setupButton);
-        betaflightButton.setToolTipText("Step-by-step guide for the Betaflight Configurator settings");
-        betaflightButton.addActionListener(e -> BetaflightGuide.open(this, this));
-        right.add(betaflightButton);
         right.add(Box.createHorizontalStrut(8));
         right.add(statePill);
         header.add(right, BorderLayout.EAST);

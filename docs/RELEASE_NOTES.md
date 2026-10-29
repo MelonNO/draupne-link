@@ -2,6 +2,14 @@
 
 **`DroidDrone-PC-Setup-*.exe`** is the installer. Run it and click through it (Next → Install → Finish), approving the Windows prompt once. It installs DroidDrone PC for all users and sets up this PC by itself: Tailscale, firewall rules and the High performance power plan. DroidDrone PC starts when you press Finish; follow the setup wizard that opens on the first start.
 
+New in 0.5.4:
+- **Simpler setup: less to read, less to click.** Pages that are done are skipped, tick boxes are gone, and the texts are short.
+- **Drone setup does just two things**, over USB with nothing to click: receiver mode **MSP** and the stick delay setting (`serial_update_rate_hz`). It no longer touches the arm switch or calibrates the accelerometer; set those in Betaflight Configurator as usual. If Betaflight Configurator holds the USB port, the page now waits and tries again by itself.
+- The separate **BETAFLIGHT guide is gone**. Without a USB cable, the drone page shows the same two settings for Configurator.
+- **SETUP → First-time setup** runs the whole setup again.
+- The first-time setup no longer asks how the PC reaches the phone (Tailscale; change it in SETUP → PC setup).
+- The link test runs by itself, and includes plugging the phone into the flight controller.
+
 New in 0.5.3:
 - **The installer sets up the PC.** Tailscale, the firewall rules and the power plan are done by the installer, with one Windows approval and nothing to click. The setup wizard is left with what needs you, and skips every step that is already done.
 - **Works on a brand-new PC.** Tailscale now comes straight from Tailscale (signed package, silent install) instead of through winget, which is missing on many PCs. This fixes *Cannot run program "winget"*.
@@ -31,7 +39,7 @@ The phone needs **DroidDrone Flight 2.3.0**. The setup wizard installs it for yo
 
 - **Control:** fly a Betaflight drone over 4G. Sticks are sent 250 times a second, and failsafe is built in.
 - **Video:** live H.265/H.264 video with a military-style OSD (horizon, heading, battery, link, GPS, warnings).
-- **Setup:** a single setup wizard covering Tailscale, firewall, radio calibration, Betaflight over USB, the phone apps by QR code, and a link test.
+- **Setup:** the installer sets up the PC; a short setup wizard does the rest: Tailscale sign-in, radio calibration, two Betaflight settings over USB, the phone apps by QR code, and a link test.
 - **RC CHECK:** shows what Betaflight sees and why it might refuse to arm.
 
 > Experimental: bench test with the props off, and set up GPS Rescue before flying out of sight.

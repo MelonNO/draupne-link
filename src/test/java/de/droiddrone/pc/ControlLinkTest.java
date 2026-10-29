@@ -138,7 +138,7 @@ class ControlLinkTest {
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         Thread.sleep(700);
-        assertEquals(0, phone.startVideoRequests.get(), "RC-only links (and the phone guide's test) don't start the camera");
+        assertEquals(0, phone.startVideoRequests.get(), "RC-only links (and the setup's link test) don't start the camera");
     }
 
     @Test

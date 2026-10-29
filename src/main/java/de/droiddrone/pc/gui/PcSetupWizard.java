@@ -30,8 +30,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Everything the Windows side needs, one step at a time, each with a live check and a one-click fix:
- * connection method, Tailscale, firewall, radio + calibration, latency settings, shortcuts.
+ * Everything the Windows side needs, one step at a time; steps that are already done are skipped:
+ * connection method, Tailscale, firewall, radio + calibration, power plan, shortcuts.
  */
 final class PcSetupWizard {
     private PcSetupWizard() {
@@ -84,7 +84,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "The phone flies on 4G, so it has no address the PC can reach directly. Pick how they find each other.";
+            return "Tailscale is right for almost everyone. Change this only if you know you need a relay.";
         }
 
         @Override
@@ -92,14 +92,11 @@ final class PcSetupWizard {
             JPanel col = WizardDialog.column();
             ButtonGroup group = new ButtonGroup();
             addOption(col, group, LinkMode.PHONE, "Tailscale VPN  (recommended)",
-                    "Phone and PC join your own private Tailscale network. No router changes, works behind any 4G carrier. "
-                            + "Lowest latency when Tailscale finds a direct path - the phone guide tests this for you.");
+                    "Works on any 4G network, no router changes.");
             addOption(col, group, LinkMode.HOST_RELAY, "Host the relay on this PC",
-                    "This PC runs DroidDrone's relay; the phone connects to your home's public IP. Same low latency as a "
-                            + "direct VPN path, but needs a port forward on your router and a real (not shared) public IPv4.");
+                    "Needs a port forward on your router and a public IPv4 address.");
             addOption(col, group, LinkMode.RELAY, "Relay server elsewhere",
-                    "Phone and PC both connect to a DroidDrone relay server on the internet (e.g. a small cloud server). "
-                            + "Adds an extra hop, so more latency - use it only if the other two can't work.");
+                    "A DroidDrone relay server on the internet. Adds latency.");
             return col;
         }
 
@@ -163,7 +160,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Tailscale gives the PC and the phone private addresses (100.x.y.z) that reach each other over any network.";
+            return "Sign in when your browser opens. Use the same account on the phone later.";
         }
 
         @Override
@@ -174,9 +171,6 @@ final class PcSetupWizard {
             WizardDialog.addRow(col, installed);
             WizardDialog.addRow(col, signedIn);
             WizardDialog.addRow(col, address);
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "Use a Google, Microsoft or GitHub account. Sign in on the phone with <b>the same account</b> later "
-                            + "(the phone guide shows how). Tailscale's free plan is enough."));
             installed.set(State.PENDING, "Checking...");
             signedIn.set(State.PENDING, "");
             address.set(State.PENDING, "");
@@ -445,7 +439,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Lets the phone reach this PC where needed. The rules are added now: approve the Windows prompt.";
+            return "Approve the Windows prompt to add the rules.";
         }
 
         @Override
@@ -459,9 +453,6 @@ final class PcSetupWizard {
             addButton.addActionListener(e -> addRules());
             buttons.add(addButton, BorderLayout.WEST);
             WizardDialog.addRow(col, buttons);
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "The download rule only answers your home network and Tailscale. The link itself needs no rule "
-                            + "with Tailscale, because the PC starts the connection."));
             linkRule.set(State.PENDING, "Checking...");
             apkRule.set(State.PENDING, "Checking...");
             return col;
@@ -528,9 +519,21 @@ final class PcSetupWizard {
         private final CheckRow radio = new CheckRow("Radio connected");
         private final CheckRow calibration = new CheckRow("Sticks and switches calibrated");
         private JButton calibrateButton;
+        /** Calibrated, with the radio plugged in, when the wizard opened: nothing to show (CALIBRATE redoes it). */
+        private boolean readyAtStart;
 
         RadioPage(MainWindow main) {
             this.main = main;
+        }
+
+        @Override
+        boolean isApplicable() {
+            return !readyAtStart;
+        }
+
+        @Override
+        void prepare() {
+            readyAtStart = main.isCalibrated() && main.service().getSnapshot().selected() != null;
         }
 
         @Override
@@ -540,7 +543,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "The TX16S works as a USB joystick: plug it into the PC and choose <b>USB Joystick (HID)</b> on the radio.";
+            return "Turn the radio on, plug it into this PC and choose <b>USB Joystick (HID)</b> on the radio.";
         }
 
         @Override
@@ -552,12 +555,6 @@ final class PcSetupWizard {
                 wizard.update();
             });
             WizardDialog.addRow(col, calibration);
-            WizardDialog.addRow(col, WizardDialog.subheading("TX16S (EdgeTX)"));
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "1. Turn the radio on and select the model you fly this drone with.<br>"
-                            + "2. Connect the USB-C port (top of the radio) to the PC.<br>"
-                            + "3. On the radio's pop-up choose <b>USB Joystick (HID)</b>.<br>"
-                            + "4. In the model's setup, keep <i>USB Joystick</i> mode on <b>Classic</b> (channels 1-8 become axes)."));
             return col;
         }
 
@@ -565,7 +562,8 @@ final class PcSetupWizard {
         void refresh() {
             JoystickService.Snapshot snap = main.service().getSnapshot();
             if (snap.selected() == null) {
-                radio.set(State.BAD, "No joystick found. Check the cable and choose USB Joystick (HID) on the radio.");
+                radio.set(State.BAD, "Not found yet. Select the model you fly, use the USB-C port on top of the radio, "
+                        + "and choose USB Joystick (HID) on its pop-up.");
             } else {
                 int axes = snap.state() == null ? 0 : snap.state().axes().length;
                 radio.set(State.OK, "<b>" + snap.selected().name() + "</b> - " + axes + " axes.");
@@ -573,8 +571,8 @@ final class PcSetupWizard {
             boolean ready = snap.selected() != null && !main.isLinkActive();
             calibrateButton.setEnabled(ready);
             calibration.set(main.isCalibrated() ? State.OK : State.WARN, main.isCalibrated()
-                    ? "Done. Press Calibrate again any time you change radio or model."
-                    : "Not yet: press Calibrate and follow the steps (about a minute).");
+                    ? "Done."
+                    : "Press Calibrate and follow the steps (about a minute).");
         }
 
         @Override
@@ -583,16 +581,13 @@ final class PcSetupWizard {
         }
     }
 
-    /** Step 5: Windows settings that add delay or jitter. */
+    /** Step 5: the High performance power plan (the installer sets it; this page shows only if that didn't work). */
     static final class LatencyPage extends Page {
         private final MainWindow main;
         private final CheckRow power = new CheckRow("Power plan");
-        private final CheckRow network = new CheckRow("Internet connection");
-        private final CheckRow rcRate = new CheckRow("Stick update rate");
         private JButton powerButton;
-        /** Power plan set (by the installer, or just now) and a wired connection: nothing to show. */
+        /** High performance already, or switched to it just now: nothing to show. */
         private volatile boolean readyAtStart;
-        private boolean autoPowerTried;
 
         LatencyPage(MainWindow main) {
             this.main = main;
@@ -606,7 +601,6 @@ final class PcSetupWizard {
         @Override
         void prepare() {
             record Prepared(boolean ready, boolean switched) {}
-            boolean fastSticks = main.config().getRcRate() >= 250;
             background(() -> {
                 WindowsSetup.PowerPlan plan = WindowsSetup.activePowerPlan();
                 boolean switched = false;
@@ -614,8 +608,7 @@ final class PcSetupWizard {
                     switched = true;
                     plan = WindowsSetup.activePowerPlan();
                 }
-                WindowsSetup.InternetAdapter a = WindowsSetup.internetAdapter();
-                return new Prepared(plan != null && plan.isHighPerformance() && a != null && !a.wifi() && fastSticks, switched);
+                return new Prepared(plan == null || plan.isHighPerformance(), switched);
             }, p -> {
                 if (p == null) return;
                 readyAtStart = p.ready();
@@ -625,12 +618,12 @@ final class PcSetupWizard {
 
         @Override
         String title() {
-            return "Tune Windows for low latency";
+            return "Power plan";
         }
 
         @Override
         String hint() {
-            return "Small things on the PC that add delay or jitter to every stick movement and video frame.";
+            return "Power saving delays packets while the CPU and Wi-Fi wake up.";
         }
 
         @Override
@@ -639,29 +632,13 @@ final class PcSetupWizard {
             powerButton = power.addPrimaryAction("Use High performance", this::useHighPerformance);
             powerButton.setVisible(false);
             WizardDialog.addRow(col, power);
-            WizardDialog.addRow(col, network);
-            WizardDialog.addRow(col, rcRate);
             power.set(State.PENDING, "Checking...");
-            network.set(State.PENDING, "Checking...");
             return col;
         }
 
         @Override
         void onShow() {
-            int rate = main.config().getRcRate();
-            rcRate.set(rate >= 250 ? State.OK : State.WARN, "Sticks are read and sent " + rate + " times a second (adds at most "
-                    + (1000 / rate) + " ms). " + (rate >= 250 ? "" : "Set rcRate=250 in the settings file for the least delay."));
             checkPower();
-            background(WindowsSetup::internetAdapter, a -> {
-                if (a == null) {
-                    network.set(State.INFO, "Could not tell which adapter is used.");
-                } else if (a.wifi()) {
-                    network.set(State.WARN, "Wi-Fi (" + a.name() + "). Works, but an <b>Ethernet cable</b> to the router "
-                            + "removes a few ms and most of the PC-side jitter. On Wi-Fi, prefer 5 GHz near the router.");
-                } else {
-                    network.set(State.OK, "Wired (" + a.name() + ") - best for latency.");
-                }
-            });
         }
 
         private void checkPower() {
@@ -669,14 +646,11 @@ final class PcSetupWizard {
                 if (plan == null) {
                     power.set(State.INFO, "Could not read the power plan.");
                 } else if (plan.isHighPerformance()) {
-                    power.set(State.OK, plan.name() + " - the CPU and network adapter stay awake.");
+                    power.set(State.OK, plan.name() + ".");
                     powerButton.setVisible(false);
-                } else if (!autoPowerTried) { // nothing to click: switch straight away
-                    autoPowerTried = true;
-                    power.set(State.PENDING, plan.name() + " - switching to High performance...");
-                    useHighPerformance();
                 } else {
-                    power.set(State.WARN, plan.name() + ". Power saving can delay packets while the CPU and Wi-Fi wake up.");
+                    power.set(State.WARN, plan.name() + ". Press the button, or set Settings &rarr; System &rarr; Power &rarr; "
+                            + "Power mode to <b>Best performance</b>.");
                     powerButton.setVisible(true);
                 }
             });
@@ -687,8 +661,7 @@ final class PcSetupWizard {
             background(WindowsSetup::useHighPerformance, r -> {
                 powerButton.setEnabled(true);
                 if (r == null || !r.ok()) {
-                    main.logLine("Could not switch power plan: " + (r == null ? "" : lastLine(r.output()))
-                            + " - set Settings > System > Power > Power mode to 'Best performance' instead.");
+                    main.logLine("Could not switch power plan: " + (r == null ? "" : lastLine(r.output())));
                 } else {
                     main.logLine("Power plan set to High performance.");
                 }
@@ -799,17 +772,15 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Next: set up the phone that flies on the drone. The phone guide walks you through it and tests the link.";
+            return "Next: the phone that flies on the drone.";
         }
 
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "You can run this setup again any time with <b>SETUP</b> &rarr; <b>PC setup</b> at the top of the main window."));
             JPanel buttons = new JPanel(new BorderLayout());
             buttons.setOpaque(false);
-            JButton guide = Theme.primaryButton("Continue with the phone guide");
+            JButton guide = Theme.primaryButton("Continue with phone setup");
             guide.addActionListener(e -> {
                 openPhoneGuide[0] = true;
                 finished(main);
