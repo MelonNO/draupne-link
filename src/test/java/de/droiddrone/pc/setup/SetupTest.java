@@ -11,8 +11,10 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class SetupTest {
     @TempDir
@@ -122,5 +124,34 @@ class SetupTest {
         assertTrue(r.ok(), r.output());
         assertEquals("it's 5", r.output().trim());
         assertEquals("'it''s'", Shell.psQuote("it's"));
+    }
+    @Test
+    void windowsToolsRunByFullPath() {
+        assumeTrue(System.getProperty("os.name", "").startsWith("Windows"));
+        assertTrue(Shell.withFullPath(List.of("netsh", "advfirewall")).get(0).toLowerCase().endsWith("\\system32\\netsh.exe"));
+        assertTrue(Shell.withFullPath(List.of("powershell.exe")).get(0).toLowerCase().endsWith("\\windowspowershell\\v1.0\\powershell.exe"));
+        assertEquals(List.of("C:\\x\\tool.exe", "a"), Shell.withFullPath(List.of("C:\\x\\tool.exe", "a")), "a full path is kept");
+        assertEquals(List.of("no-such-tool"), Shell.withFullPath(List.of("no-such-tool")), "unknown names are left to the PATH");
+        assertEquals("advfirewall", Shell.withFullPath(List.of("netsh", "advfirewall")).get(1));
+    }
+
+    @Test
+    void tailscaleComesStraightFromTailscale() {
+        String url = Tailscale.msiUrl();
+        assertTrue(url.startsWith("https://pkgs.tailscale.com/stable/tailscale-setup-latest-"), url);
+        assertTrue(url.endsWith("-amd64.msi") || url.endsWith("-arm64.msi"), url);
+    }
+
+    @Test
+    void wizardWaitsWhileTheInstallerInstallsTailscale() throws Exception {
+        Path log = dir.resolve("setup.log");
+        assertFalse(PcPrep.tailscaleInstallPending(log), "no log: nothing pending");
+        Files.writeString(log, "2026-10-29T12:00:00  Firewall rules: done\n2026-10-29T12:00:01  Tailscale: install scheduled\n");
+        assertTrue(PcPrep.tailscaleInstallPending(log));
+        Files.writeString(log, "2026-10-29T12:01:30  Tailscale install: done\n", java.nio.file.StandardOpenOption.APPEND);
+        assertFalse(PcPrep.tailscaleInstallPending(log), "finished");
+        Files.writeString(log, "2026-10-29T12:00:01  Tailscale: install scheduled\n");
+        Files.setLastModifiedTime(log, java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(Duration.ofHours(2))));
+        assertFalse(PcPrep.tailscaleInstallPending(log), "an old, never-finished task is not waited for");
     }
 }

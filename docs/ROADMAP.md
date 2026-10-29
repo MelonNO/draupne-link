@@ -19,7 +19,7 @@
 - [x] Hold the 1 ms Windows timer and opt out of power throttling, so the rate holds in the background
 - [x] Lower the video bitrate when the ping rises above its baseline (uplink queueing), not only above 300 ms
 - [x] Glass-to-glass latency test (F3) and exclusive full screen (F11)
-- [ ] Set `serial_update_rate_hz = 2000` from the setup wizard's Betaflight step
+- [x] Set `serial_update_rate_hz` from the setup wizard's Betaflight step (2000, or 1000 on F411)
 - [ ] Forked Flight app: low-latency encoder settings, intra refresh instead of key frames, RC handled on arrival
 - [x] `Pacer`: accurate loop timing despite Windows' 15.6 ms timer tick
 - [x] Announce 250 Hz to the Flight app so it doesn't drop bunched frames over 4G
@@ -46,6 +46,7 @@
 ## Milestone 4: Easy setup and release (built)
 - [x] One setup wizard: PC, radio, flight controller (Betaflight CLI and MSP over USB), phone (QR codes, APK served from the PC), link test
 - [x] Windows installer and portable zip built by GitHub Actions on version tags
+- [x] The installer sets up the PC as administrator (Tailscale, firewall, power plan); the wizard skips what is done
 - [x] Telemetry parser for every record the Flight app sends (FcTelemetry), with BOXNAMES requested: armed, active modes, arming blockers, battery, camera fps
 - [x] RC CHECK window and an FC status line on the main window
 - [x] RC frames padded to 8 channels so the Flight app always applies Betaflight's channel map

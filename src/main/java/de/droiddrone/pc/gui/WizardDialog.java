@@ -55,9 +55,19 @@ class WizardDialog extends JDialog {
 
         abstract JComponent build();
 
-        /** Skipped pages (e.g. Tailscale when another connection method was chosen). */
+        /**
+         * Skipped pages: Tailscale when another connection method was chosen, and pages whose checks found nothing
+         * left to do (see {@link #prepare()}).
+         */
         boolean isApplicable() {
             return true;
+        }
+
+        /**
+         * Called once when the wizard opens: start the page's checks, and fixes that need nobody, in the background.
+         * A page that finds everything done can then report itself not applicable and is never shown.
+         */
+        void prepare() {
         }
 
         void onShow() {
@@ -188,6 +198,7 @@ class WizardDialog extends JDialog {
         int screenHeight = owner == null ? 1000 : owner.getGraphicsConfiguration().getBounds().height;
         setSize(1020, Math.max(640, Math.min(880, screenHeight - 80)));
         setLocationRelativeTo(owner);
+        for (Page page : pages) page.prepare();
         go(+1);
         timer.start();
     }

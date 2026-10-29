@@ -5,6 +5,7 @@ import de.droiddrone.pc.JoystickService;
 import de.droiddrone.pc.LinkMode;
 import de.droiddrone.pc.setup.ApkShare;
 import de.droiddrone.pc.setup.NetInfo;
+import de.droiddrone.pc.setup.PcPrep;
 import de.droiddrone.pc.setup.Shell;
 import de.droiddrone.pc.setup.Tailscale;
 import de.droiddrone.pc.setup.WindowsSetup;
@@ -134,6 +135,12 @@ final class PcSetupWizard {
         private boolean installing;
         private boolean openLinkWhenReady;
         private long nextPoll;
+        /** Set when the wizard opened with this PC already signed in: then there is nothing to show. */
+        private volatile boolean readyAtStart;
+        private boolean autoInstallTried;
+        private boolean autoSignInTried;
+        private volatile boolean installerBusy;
+        private String installError = "";
 
         TailscalePage(MainWindow main) {
             this.main = main;
@@ -141,7 +148,12 @@ final class PcSetupWizard {
 
         @Override
         boolean isApplicable() {
-            return main.config().getLinkMode() == LinkMode.PHONE;
+            return main.config().getLinkMode() == LinkMode.PHONE && !readyAtStart;
+        }
+
+        @Override
+        void prepare() {
+            background(Tailscale::status, s -> readyAtStart = s != null && s.signedIn() && !s.selfIp().isEmpty());
         }
 
         @Override
@@ -180,7 +192,11 @@ final class PcSetupWizard {
         void refresh() {
             if (polling || installing || System.currentTimeMillis() < nextPoll) return;
             polling = true;
-            background(Tailscale::status, s -> {
+            background(() -> {
+                Tailscale.Status s = Tailscale.status();
+                installerBusy = !s.installed() && PcPrep.tailscaleInstallPending();
+                return s;
+            }, s -> {
                 polling = false;
                 nextPoll = System.currentTimeMillis() + 2500;
                 if (s != null) apply(s);
@@ -190,11 +206,23 @@ final class PcSetupWizard {
         private void apply(Tailscale.Status s) {
             status = s;
             if (!s.installed()) {
-                installed.set(State.BAD, "Not installed yet. Install uses winget; Windows will ask you to approve it.");
-                installButton.setVisible(true);
                 signedIn.set(State.PENDING, "Install Tailscale first.");
                 signInButton.setVisible(false);
                 address.set(State.PENDING, "");
+                if (installing) return;
+                if (installerBusy) {
+                    installed.set(State.PENDING, "Being installed by the DroidDrone PC installer - this takes a minute or two...");
+                    installButton.setVisible(false);
+                    return;
+                }
+                if (!autoInstallTried) { // nothing to click: start the install straight away
+                    autoInstallTried = true;
+                    install();
+                    return;
+                }
+                installed.set(State.BAD, (installError.isEmpty() ? "Not installed." : "Not installed: " + installError)
+                        + " Press Install to try again (Windows asks you to approve it).");
+                installButton.setVisible(true);
                 return;
             }
             installButton.setVisible(false);
@@ -208,9 +236,13 @@ final class PcSetupWizard {
             } else {
                 signInButton.setVisible(true);
                 boolean stopped = "Stopped".equals(s.backendState());
-                signedIn.set(State.WARN, stopped ? "Tailscale is switched off. Press Sign in to switch it on."
-                        : "Not signed in. Press Sign in - your browser opens Tailscale's login page.");
+                signedIn.set(State.WARN, stopped ? "Tailscale is switched off. Switching it on - sign in when your browser opens."
+                        : "Not signed in. Your browser opens Tailscale's login page - sign in there (or press Sign in).");
                 address.set(State.PENDING, "Appears after signing in.");
+                if (!autoSignInTried && s.running()) { // nothing to click: ask for the sign-in page straight away
+                    autoSignInTried = true;
+                    signIn();
+                }
                 if (openLinkWhenReady && !s.authUrl().isEmpty()) {
                     openLinkWhenReady = false;
                     openInBrowser(main, s.authUrl());
@@ -220,14 +252,18 @@ final class PcSetupWizard {
 
         private void install() {
             installing = true;
-            installButton.setEnabled(false);
-            installed.set(State.PENDING, "Installing... approve the Windows prompt if it appears (can take a minute).");
+            installButton.setVisible(false);
+            installed.set(State.PENDING, "Installing Tailscale - approve the Windows prompt. Takes a minute or two.");
             background(Tailscale::install, r -> {
                 installing = false;
                 installButton.setEnabled(true);
                 nextPoll = 0;
                 if (r == null || !r.ok()) {
-                    main.logLine("Tailscale install: " + (r == null ? "failed" : lastLine(r.output())));
+                    installError = r == null ? "the install failed." : lastLine(r.output());
+                    main.logLine("Tailscale install: " + installError);
+                } else {
+                    installError = "";
+                    main.logLine("Tailscale installed.");
                 }
             });
         }
@@ -382,10 +418,24 @@ final class PcSetupWizard {
         private JButton addButton;
         private boolean checking;
         private long nextCheck;
+        /** Both rules were there when the wizard opened (the installer adds them): nothing to show. */
+        private volatile boolean readyAtStart;
+        private boolean autoAddTried;
 
         FirewallPage(MainWindow main) {
             this.main = main;
             linkRule = new CheckRow("Relay port (UDP " + main.config().getPort() + ")");
+        }
+
+        @Override
+        boolean isApplicable() {
+            return !readyAtStart;
+        }
+
+        @Override
+        void prepare() {
+            background(() -> WindowsSetup.firewallRuleExists(WindowsSetup.LINK_RULE)
+                    && WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE), both -> readyAtStart = Boolean.TRUE.equals(both));
         }
 
         @Override
@@ -395,7 +445,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Lets the phone reach this PC where needed. One Windows approval prompt adds both rules.";
+            return "Lets the phone reach this PC where needed. The rules are added now: approve the Windows prompt.";
         }
 
         @Override
@@ -447,6 +497,10 @@ final class PcSetupWizard {
             apkRule.set(apk ? State.OK : State.WARN, apk ? "Allowed from your home network and Tailscale."
                     : "Recommended: lets the phone download the Flight app straight from this PC.");
             addButton.setVisible(!(link && apk));
+            if (!(link && apk) && !autoAddTried) { // nothing to click: add them straight away
+                autoAddTried = true;
+                addRules();
+            }
         }
 
         private void addRules() {
@@ -536,9 +590,37 @@ final class PcSetupWizard {
         private final CheckRow network = new CheckRow("Internet connection");
         private final CheckRow rcRate = new CheckRow("Stick update rate");
         private JButton powerButton;
+        /** Power plan set (by the installer, or just now) and a wired connection: nothing to show. */
+        private volatile boolean readyAtStart;
+        private boolean autoPowerTried;
 
         LatencyPage(MainWindow main) {
             this.main = main;
+        }
+
+        @Override
+        boolean isApplicable() {
+            return !readyAtStart;
+        }
+
+        @Override
+        void prepare() {
+            record Prepared(boolean ready, boolean switched) {}
+            boolean fastSticks = main.config().getRcRate() >= 250;
+            background(() -> {
+                WindowsSetup.PowerPlan plan = WindowsSetup.activePowerPlan();
+                boolean switched = false;
+                if (plan != null && !plan.isHighPerformance() && WindowsSetup.useHighPerformance().ok()) {
+                    switched = true;
+                    plan = WindowsSetup.activePowerPlan();
+                }
+                WindowsSetup.InternetAdapter a = WindowsSetup.internetAdapter();
+                return new Prepared(plan != null && plan.isHighPerformance() && a != null && !a.wifi() && fastSticks, switched);
+            }, p -> {
+                if (p == null) return;
+                readyAtStart = p.ready();
+                if (p.switched()) main.logLine("Power plan set to High performance.");
+            });
         }
 
         @Override
@@ -589,6 +671,10 @@ final class PcSetupWizard {
                 } else if (plan.isHighPerformance()) {
                     power.set(State.OK, plan.name() + " - the CPU and network adapter stay awake.");
                     powerButton.setVisible(false);
+                } else if (!autoPowerTried) { // nothing to click: switch straight away
+                    autoPowerTried = true;
+                    power.set(State.PENDING, plan.name() + " - switching to High performance...");
+                    useHighPerformance();
                 } else {
                     power.set(State.WARN, plan.name() + ". Power saving can delay packets while the CPU and Wi-Fi wake up.");
                     powerButton.setVisible(true);
@@ -619,9 +705,29 @@ final class PcSetupWizard {
         private final Path launcher = AppPaths.launcher();
         private Path desktopLnk;
         private final Path startMenuLnk = WindowsSetup.startMenuShortcut();
+        /** Both shortcuts exist (from the installer, or made just now): nothing to show. */
+        private volatile boolean readyAtStart;
 
         ShortcutsPage(MainWindow main) {
             this.main = main;
+        }
+
+        @Override
+        boolean isApplicable() {
+            return !readyAtStart;
+        }
+
+        @Override
+        void prepare() {
+            if (launcher == null) return;
+            background(() -> {
+                boolean ok = true;
+                for (Path lnk : List.of(WindowsSetup.desktopShortcut(), startMenuLnk)) {
+                    if (!WindowsSetup.exists(lnk)) WindowsSetup.createShortcut(lnk, launcher, AppPaths.dataDir());
+                    ok &= WindowsSetup.exists(lnk);
+                }
+                return ok;
+            }, ok -> readyAtStart = Boolean.TRUE.equals(ok));
         }
 
         @Override
@@ -700,7 +806,7 @@ final class PcSetupWizard {
         JComponent build() {
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "You can run this setup again any time with <b>PC SETUP</b> at the top of the main window."));
+                    "You can run this setup again any time with <b>SETUP</b> &rarr; <b>PC setup</b> at the top of the main window."));
             JPanel buttons = new JPanel(new BorderLayout());
             buttons.setOpaque(false);
             JButton guide = Theme.primaryButton("Continue with the phone guide");

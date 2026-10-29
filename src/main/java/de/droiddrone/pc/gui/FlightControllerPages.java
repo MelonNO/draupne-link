@@ -34,6 +34,16 @@ final class FlightControllerPages {
     private FlightControllerPages() {
     }
 
+    /** SETUP &rarr; Drone setup: the flight controller on this PC's USB, then Betaflight's settings. */
+    static void open(MainWindow main) {
+        Found fc = new Found();
+        new WizardDialog(main, "Drone setup", List.of(new UsbPage(fc), new ConfigPage(main, fc)), () -> {
+            main.save(Map.of("setup.droneDone", "true"));
+            main.logLine("Drone setup finished.");
+        }).setVisible(true);
+        main.reloadSettings();
+    }
+
     /** Plug the FC into this PC. */
     static final class UsbPage extends Page {
         private final Found found;
@@ -106,6 +116,7 @@ final class FlightControllerPages {
         private JButton applyButton;
         private JButton calibrateButton;
         private boolean busy;
+        private boolean autoApplied;
         private List<BetaflightPlan.Change> plan = List.of();
 
         ConfigPage(MainWindow main, Found found) {
@@ -211,28 +222,50 @@ final class FlightControllerPages {
                     String ver = BetaflightPlan.version(fc.command("version"));
                     String features = fc.command("feature");
                     String aux = fc.command("aux");
+                    String serialRate = fc.command("get serial_update_rate_hz");
                     fc.exitCli(); // Betaflight restarts (nothing changed) - which also clears a stale "MSP" arming block
-                    return new String[]{ver, features, aux, null};
+                    return new String[]{ver, features, aux, serialRate, null};
                 } catch (IOException e) {
-                    return new String[]{null, null, null, e.getMessage()};
+                    return new String[]{null, null, null, null, e.getMessage()};
                 }
             }, r -> {
                 busy = false;
-                if (r[3] != null) {
-                    version.set(State.BAD, r[3]);
+                if (r[4] != null) {
+                    version.set(State.BAD, r[4]);
                     return;
                 }
                 version.set(r[0].isEmpty() ? State.WARN : State.OK, r[0].isEmpty() ? "Version not recognised - carrying on." : r[0]);
-                plan = BetaflightPlan.plan(r[1], r[2]);
+                plan = BetaflightPlan.plan(r[1], r[2], r[3], r[0]);
+                // what needs changing is changed right away, once; Apply stays as a retry if that failed
+                boolean fixNow = !plan.isEmpty() && !autoApplied;
                 boolean msp = BetaflightPlan.isMspReceiver(r[1]);
                 boolean armSet = BetaflightPlan.hasArmSwitch(r[2]);
-                receiver.set(msp ? State.OK : State.WARN, msp ? "Set." : "Not set - press Apply.");
+                receiver.set(msp ? State.OK : State.WARN, msp ? "Set." : fixNow ? "Not set - setting it now." : "Not set - press Apply.");
                 arm.set(armSet ? State.OK : State.WARN, armSet ? "An ARM switch is configured (left as it is)."
-                        : "None yet - Apply puts ARM on AUX1 (your arm switch from the radio calibration).");
+                        : "None yet - ARM goes on AUX1 (your arm switch from the radio calibration).");
+                showSerialRate(BetaflightPlan.serialRate(r[3]), BetaflightPlan.targetSerialRate(r[0]), fixNow);
+                if (fixNow) {
+                    autoApplied = true;
+                    apply();
+                    return;
+                }
                 applyButton.setVisible(!plan.isEmpty());
                 // after Betaflight's restart, read the arming check
                 SwingUtilities.invokeLater(() -> background(() -> sleep(3000), x -> readStatus()));
             });
+        }
+
+        private void showSerialRate(int rate, int target, boolean fixing) {
+            if (rate < 0) {
+                latency.set(State.WARN, "This Betaflight has no <b>serial_update_rate_hz</b> setting (it came in 4.2): "
+                        + "update Betaflight for the lowest stick delay.");
+            } else if (rate >= target) {
+                latency.set(State.OK, "serial_update_rate_hz = " + rate + ": stick updates don't queue up.");
+                main.save(Map.of("fc.serialRate", "true"));
+            } else {
+                latency.set(State.WARN, "serial_update_rate_hz = " + rate + (fixing ? " - raising it to " + target + " now."
+                        : ": stick updates queue up in Betaflight. Apply raises it to " + target + "."));
+            }
         }
 
         private void apply() {

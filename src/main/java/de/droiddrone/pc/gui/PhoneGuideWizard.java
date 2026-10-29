@@ -203,7 +203,7 @@ final class PhoneGuideWizard {
 
         private void apply(Tailscale.Status s) {
             if (!s.signedIn()) {
-                pc.set(State.BAD, "Not signed in - finish the Tailscale step in PC SETUP first.");
+                pc.set(State.BAD, "Not signed in - finish the Tailscale step in SETUP &rarr; PC setup first.");
                 return;
             }
             pc.set(State.OK, s.selfName() + " - " + s.selfIp());
@@ -301,7 +301,7 @@ final class PhoneGuideWizard {
             background(() -> WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE), ok -> firewall.set(
                     Boolean.TRUE.equals(ok) ? State.OK : State.WARN, Boolean.TRUE.equals(ok)
                             ? "The phone may download from this PC."
-                            : "No firewall rule yet - Windows may block the phone. Add it in PC SETUP (Windows Firewall step)."));
+                            : "No firewall rule yet - Windows may block the phone. Add it in SETUP &rarr; PC setup (Windows Firewall step)."));
             if (share != null || preparing) return;
             preparing = true;
             file.set(State.PENDING, "Downloading from GitHub and checking it (about 7 MB)...");
@@ -430,12 +430,12 @@ final class PhoneGuideWizard {
                         {"Key", c.getKey()}};
                 case HOST_RELAY -> new String[][]{
                         {"Connection", "Connect over server"},
-                        {"IP", c.getString("publicIp").isEmpty() ? "your public IP (PC SETUP)" : c.getString("publicIp")},
+                        {"IP", c.getString("publicIp").isEmpty() ? "your public IP (SETUP > PC setup)" : c.getString("publicIp")},
                         {"Port", Integer.toString(c.getPort())},
                         {"Server key", c.getKey()}};
                 case RELAY -> new String[][]{
                         {"Connection", "Connect over server"},
-                        {"IP", c.getIp().isEmpty() ? "your relay server (PC SETUP)" : c.getIp()},
+                        {"IP", c.getIp().isEmpty() ? "your relay server (SETUP > PC setup)" : c.getIp()},
                         {"Port", Integer.toString(c.getPort())},
                         {"Server key", c.getKey()}};
             };

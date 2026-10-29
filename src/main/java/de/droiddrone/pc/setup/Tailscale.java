@@ -5,6 +5,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -14,9 +18,11 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Drives the Tailscale CLI: install (winget), status, sign-in, and path checks (direct vs relayed). */
+/** Drives the Tailscale CLI: install, status, sign-in, and path checks (direct vs relayed). */
 public final class Tailscale {
     public static final String PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.tailscale.ipn";
+    /** Tailscale's own Windows package, always the current version, signed by Tailscale Inc. */
+    static final String MSI_URL = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-%s.msi";
     private static final Pattern PONG = Pattern.compile("pong from .* via (\\S+) in (\\d+)ms");
     private static volatile Process loginProcess;
 
@@ -105,10 +111,75 @@ public final class Tailscale {
         return "";
     }
 
-    /** Installs Tailscale with winget; Windows asks for admin approval. Blocks for up to 10 minutes. */
+    /**
+     * Installs Tailscale without any windows: downloads Tailscale's package straight from Tailscale, checks it is
+     * signed by Tailscale, and installs it silently. Windows' admin prompt is the only thing the user sees. Needs
+     * nothing on the PC beyond Windows itself (not winget, which a new or older Windows may not have yet).
+     * Blocks for up to 15 minutes.
+     */
     public static Shell.Result install() {
-        return Shell.run(Duration.ofMinutes(10), "winget", "install", "--id", "Tailscale.Tailscale", "-e",
-                "--accept-source-agreements", "--accept-package-agreements", "--silent");
+        return downloadAndInstall(true);
+    }
+
+    /** Windows Installer's answer while another install is running (e.g. DroidDrone PC's own installer). */
+    public static final int ERROR_INSTALL_ALREADY_RUNNING = 1618;
+
+    /**
+     * @param elevate true from the app (Windows asks for approval); false when already running as administrator,
+     *                as DroidDrone PC's installer does
+     */
+    public static Shell.Result downloadAndInstall(boolean elevate) {
+        Path msi;
+        try {
+            msi = download();
+        } catch (Exception e) {
+            return new Shell.Result(-1, "Download failed: " + e.getMessage());
+        }
+        try {
+            return installMsi(msi, elevate);
+        } finally {
+            try {
+                Files.deleteIfExists(msi);
+                Files.deleteIfExists(msi.getParent());
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** Downloads Tailscale's package for this PC into a new temporary folder. */
+    public static Path download() throws Exception {
+        Path msi = Files.createTempDirectory("droiddrone-tailscale").resolve("tailscale-setup.msi");
+        HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL)
+                .connectTimeout(Duration.ofSeconds(20)).build();
+        HttpResponse<Path> response = http.send(HttpRequest.newBuilder(URI.create(msiUrl()))
+                .timeout(Duration.ofMinutes(10)).build(), HttpResponse.BodyHandlers.ofFile(msi));
+        if (response.statusCode() != 200) throw new java.io.IOException("HTTP " + response.statusCode());
+        return msi;
+    }
+
+    /**
+     * Checks the package is signed by Tailscale and installs it silently. Exit code 0 when installed (also when
+     * Windows wants a restart some time), {@link #ERROR_INSTALL_ALREADY_RUNNING} while another install runs.
+     */
+    public static Shell.Result installMsi(Path msi, boolean elevate) {
+        String script = "$f = " + Shell.psQuote(msi.toString()) + "\n"
+                + "$s = Get-AuthenticodeSignature -LiteralPath $f\n"
+                + "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'O=Tailscale Inc\\.') {\n"
+                + "  'The download is not signed by Tailscale, so it was not installed.'; exit 2 }\n"
+                + "$msiexec = Join-Path $env:SystemRoot 'System32\\msiexec.exe'\n"
+                + "try { $p = Start-Process -FilePath $msiexec -ArgumentList '/i', ('\"' + $f + '\"'), '/qn', '/norestart' "
+                + (elevate ? "-Verb RunAs " : "") + "-Wait -PassThru -ErrorAction Stop }\n"
+                + "catch { 'The Windows prompt was declined.'; exit 1223 }\n"
+                + "if ($p.ExitCode -eq 3010) { exit 0 }\n"
+                + "if ($p.ExitCode -ne 0) { 'Windows Installer error ' + $p.ExitCode }\n"
+                + "exit $p.ExitCode";
+        return Shell.powershell(Duration.ofMinutes(15), script);
+    }
+
+    /** The package for this PC's processor: Intel/AMD or ARM. */
+    static String msiUrl() {
+        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        return String.format(MSI_URL, arch.contains("aarch64") || arch.contains("arm") ? "arm64" : "amd64");
     }
 
     /**

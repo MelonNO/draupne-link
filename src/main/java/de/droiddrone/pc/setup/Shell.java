@@ -5,9 +5,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -42,7 +46,7 @@ public final class Shell {
 
     private static Result run(Duration timeout, List<String> command, boolean mergeErrors) {
         try {
-            ProcessBuilder builder = new ProcessBuilder(command);
+            ProcessBuilder builder = new ProcessBuilder(withFullPath(command));
             if (mergeErrors) {
                 builder.redirectErrorStream(true);
             } else {
@@ -59,6 +63,25 @@ public final class Shell {
         } catch (Exception e) {
             return new Result(-1, e.toString());
         }
+    }
+
+    /**
+     * Windows' own tools (netsh, powercfg, powershell, schtasks, ...) by their full path in System32, so they run
+     * even when the app was started with an unusual PATH, e.g. by an installer or a scheduled task.
+     */
+    static List<String> withFullPath(List<String> command) {
+        String name = command.get(0);
+        if (name.contains("\\") || name.contains("/")) return command;
+        String exe = name.toLowerCase(Locale.ROOT).endsWith(".exe") ? name : name + ".exe";
+        Path system32 = Path.of(System.getenv().getOrDefault("SystemRoot", "C:\\Windows"), "System32");
+        for (Path candidate : List.of(system32.resolve(exe), system32.resolve("WindowsPowerShell").resolve("v1.0").resolve(exe))) {
+            if (Files.isRegularFile(candidate)) {
+                List<String> full = new ArrayList<>(command);
+                full.set(0, candidate.toString());
+                return full;
+            }
+        }
+        return command;
     }
 
     private static String read(InputStream in) {

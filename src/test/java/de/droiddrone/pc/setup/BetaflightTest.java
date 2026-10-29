@@ -74,6 +74,25 @@ class BetaflightTest {
     }
 
     @Test
+    void stickDelaySettingIsRaisedOnce() {
+        String getDefault = "serial_update_rate_hz = 100\r\nAllowed range: 100 - 2000\r\nDefault value: 100\r\n";
+        String f7 = "Betaflight / STM32F7X2 (S7X2) 4.5.1 Oct 13 2024 / 12:00:00 (77d01ba3b) MSP API: 1.46";
+        String f411 = "Betaflight / STM32F411 (S411) 4.4.3 Nov 14 2023 / 12:00:00 (738127e7e) MSP API: 1.45";
+        assertEquals(100, BetaflightPlan.serialRate(getDefault));
+
+        List<BetaflightPlan.Change> plan = BetaflightPlan.plan(FEATURES_MSP_RX, AUX_WITH_ARM, getDefault, f7);
+        assertEquals(1, plan.size(), "only the serial rate is missing");
+        assertEquals(List.of("set serial_update_rate_hz = 2000"), plan.get(0).commands());
+        assertEquals(List.of("set serial_update_rate_hz = 1000"),
+                BetaflightPlan.plan(FEATURES_MSP_RX, AUX_WITH_ARM, getDefault, f411).get(0).commands(), "slower F411: 1000");
+
+        assertTrue(BetaflightPlan.plan(FEATURES_MSP_RX, AUX_WITH_ARM, "serial_update_rate_hz = 2000", f7).isEmpty(), "already set");
+        assertTrue(BetaflightPlan.plan(FEATURES_MSP_RX, AUX_WITH_ARM, "Invalid name", f7).isEmpty(),
+                "a Betaflight without the setting is left alone");
+        assertEquals(3, BetaflightPlan.plan(FEATURES_SERIAL_RX, AUX_EMPTY, getDefault, f7).size(), "receiver, arm, serial rate");
+    }
+
+    @Test
     void armingFlagsFromRawStatus() {
         // Betaflight MSP_STATUS: cycle, i2c, sensors, modes(4), profile, load, unused, extraModeBytes=1 [1 byte],
         // armingFlagCount, armingFlags (little-endian)

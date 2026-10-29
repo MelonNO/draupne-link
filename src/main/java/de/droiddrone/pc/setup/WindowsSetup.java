@@ -3,6 +3,7 @@ package de.droiddrone.pc.setup;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -41,7 +42,23 @@ public final class WindowsSetup {
      * network and Tailscale only (the phone downloading the Flight app from this PC).
      */
     public static Shell.Result addFirewallRules(int linkPort, int apkPort) {
-        String script = String.join("\n",
+        return Shell.powershellElevated(Duration.ofMinutes(3), firewallScript(linkPort, apkPort));
+    }
+
+    /** The same rules, for a process that already runs as administrator (DroidDrone PC's installer). */
+    public static Shell.Result addFirewallRulesAsAdmin(int linkPort, int apkPort) {
+        return Shell.powershell(Duration.ofMinutes(3), firewallScript(linkPort, apkPort));
+    }
+
+    /** Removes both rules, as administrator, when DroidDrone PC is uninstalled. */
+    public static Shell.Result removeFirewallRulesAsAdmin() {
+        return Shell.powershell(Duration.ofMinutes(1), String.join("\n",
+                "netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
+                "netsh advfirewall firewall delete rule name=" + APK_RULE + " | Out-Null"));
+    }
+
+    private static String firewallScript(int linkPort, int apkPort) {
+        return String.join("\n",
                 "netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
                 "netsh advfirewall firewall add rule name=" + LINK_RULE
                         + " dir=in action=allow protocol=UDP localport=" + linkPort + " profile=any",
@@ -49,7 +66,6 @@ public final class WindowsSetup {
                 "netsh advfirewall firewall add rule name=" + APK_RULE
                         + " dir=in action=allow protocol=TCP localport=" + apkPort
                         + " remoteip=LocalSubnet,100.64.0.0/10 profile=any");
-        return Shell.powershellElevated(Duration.ofMinutes(3), script);
     }
 
     public static PowerPlan activePowerPlan() {
@@ -83,18 +99,30 @@ public final class WindowsSetup {
         return new InternetAdapter(media.contains("802.11") || media.contains("wireless"), out.substring(bar + 1).trim());
     }
 
+    /** The installer's shortcut on the shared (all users) desktop if present, else one on this user's desktop. */
     public static Path desktopShortcut() {
-        String out = Shell.powershell(Duration.ofSeconds(10), "[Environment]::GetFolderPath('Desktop')").output().trim();
-        Path desktop = out.isEmpty() ? Path.of(System.getProperty("user.home"), "Desktop") : Path.of(out);
-        return desktop.resolve("DroidDrone PC.lnk");
+        String[] dirs = Shell.powershell(Duration.ofSeconds(10),
+                "[Environment]::GetFolderPath('CommonDesktopDirectory'); [Environment]::GetFolderPath('Desktop')")
+                .output().strip().split("\\R");
+        if (dirs.length < 2) return Path.of(System.getProperty("user.home"), "Desktop", "DroidDrone PC.lnk");
+        Path shared = Path.of(dirs[0].trim()).resolve("DroidDrone PC.lnk");
+        return Files.exists(shared) ? shared : Path.of(dirs[1].trim()).resolve("DroidDrone PC.lnk");
     }
 
-    /** The installer's Start menu entry (in a "DroidDrone PC" folder) if present, else where the wizard puts one. */
+    /**
+     * The installer's Start menu entry (in a "DroidDrone PC" folder: for all users, or for this user from installers
+     * before 0.5.3) if present, else where the wizard puts one.
+     */
     public static Path startMenuShortcut() {
         String appData = System.getenv().getOrDefault("APPDATA", System.getProperty("user.home"));
+        String programData = System.getenv().getOrDefault("ProgramData", "C:\\ProgramData");
         Path programs = Path.of(appData, "Microsoft", "Windows", "Start Menu", "Programs");
-        Path installer = programs.resolve("DroidDrone PC").resolve("DroidDrone PC.lnk");
-        return Files.exists(installer) ? installer : programs.resolve("DroidDrone PC.lnk");
+        for (Path installer : List.of(
+                Path.of(programData, "Microsoft", "Windows", "Start Menu", "Programs", "DroidDrone PC", "DroidDrone PC.lnk"),
+                programs.resolve("DroidDrone PC").resolve("DroidDrone PC.lnk"))) {
+            if (Files.exists(installer)) return installer;
+        }
+        return programs.resolve("DroidDrone PC.lnk");
     }
 
     public static boolean exists(Path path) {

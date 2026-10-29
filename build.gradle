@@ -118,7 +118,7 @@ tasks.register('releaseZip', Zip) {
 
 tasks.register('packageInstaller', Exec) {
     group = 'distribution'
-    description = 'Windows installer (per user, no admin rights, Start menu + desktop shortcut)'
+    description = 'Windows installer (all users; also does the PC setup as administrator: firewall, power plan, Tailscale)'
     dependsOn packageApp
     def staging = layout.buildDirectory.dir('installer').get().asFile
     doFirst { delete staging }
@@ -129,14 +129,15 @@ tasks.register('packageInstaller', Exec) {
             '--vendor', 'droiddrone-pc',
             '--description', 'Fly a Betaflight drone over 4G from Windows',
             '--icon', iconFile,
-            '--win-per-user-install',
+            // all users (Program Files), so the installer runs as administrator and can do the PC setup itself;
+            // one Windows approval prompt covers it all (src/installer/main.wxs)
             '--win-dir-chooser', // shows a normal setup wizard; without any dialog option the installer runs invisibly
             '--win-shortcut',
             '--win-menu',
             '--win-menu-group', 'DroidDrone PC',
             // keep this UUID forever: it lets a newer installer replace an older install
             '--win-upgrade-uuid', '5d2f1d3e-6a0b-4c9e-9f53-2b7c1a8e4d61',
-            '--resource-dir', file('src/installer'), // main.wxs: "Launch DroidDrone PC" box on the last page
+            '--resource-dir', file('src/installer'), // main.wxs: PC setup tasks, "Launch DroidDrone PC" box
             '--dest', staging
     doLast {
         copy {

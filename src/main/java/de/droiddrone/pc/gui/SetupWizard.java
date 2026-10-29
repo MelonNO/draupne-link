@@ -10,10 +10,13 @@ import java.util.Map;
 /**
  * The one setup wizard: PC, radio, flight controller, phone, link test. Whatever this PC can do itself it does
  * (installs Tailscale, firewall rules, power plan, Betaflight settings, serves the phone app, finds the phone);
- * the rest is a guided checklist. Opens by itself on first start; SETUP in the main window opens it again.
+ * the rest is a guided checklist. Opens by itself on the very first start only; after that SETUP in the main window
+ * opens each part (PC, phone, drone) on its own.
  */
 final class SetupWizard {
     static final String DONE_KEY = "setup.done";
+    /** Set on the very first start, when the wizard opens by itself; it never opens by itself again. */
+    static final String OFFERED_KEY = "setup.offered";
 
     private SetupWizard() {
     }
@@ -63,12 +66,12 @@ final class SetupWizard {
             WizardDialog.addRow(col, WizardDialog.paragraph(
                     "&bull; This Windows PC, on the internet (cable or Wi-Fi)<br>"
                             + "&bull; Your radio (RadioMaster, EdgeTX) and its USB cable<br>"
-                            + "&bull; The drone with a <b>Betaflight 4.4+</b> flight controller, and a USB cable for it<br>"
+                            + "&bull; The drone with a <b>Betaflight</b> flight controller (4.4 or newer is best), and a USB cable for it<br>"
                             + "&bull; An Android phone (8 or newer) with mobile data, and a <b>USB OTG adapter</b> to plug it into the flight controller<br>"
                             + "&bull; About 20 minutes"));
             WizardDialog.addRow(col, WizardDialog.subheading("What happens"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "<b>1 This PC</b> - connection method, Tailscale, firewall, power settings<br>"
+                    "<b>1 This PC</b> - connection method and Tailscale sign-in (firewall, power plan and Tailscale itself are done for you)<br>"
                             + "<b>2 Radio</b> - detect and calibrate your sticks and switches<br>"
                             + "<b>3 Flight controller</b> - Betaflight set up over USB<br>"
                             + "<b>4 Phone</b> - apps installed by QR code, settings, cable to the flight controller<br>"
@@ -101,7 +104,7 @@ final class SetupWizard {
                             + "&bull; Set up and test <b>GPS Rescue</b> before flying out of sight<br>"
                             + "&bull; First flights close by, in line of sight, in Angle mode<br>"
                             + "&bull; Follow your local drone rules - flying beyond visual line of sight usually needs a permit"));
-            WizardDialog.addRow(col, WizardDialog.paragraph("Run this setup again any time with <b>SETUP</b> at the top of the main window."));
+            WizardDialog.addRow(col, WizardDialog.paragraph("Run any part again any time with <b>SETUP</b> at the top of the main window: PC setup, Phone setup or Drone setup."));
             return col;
         }
     }

@@ -24,6 +24,8 @@ import javax.swing.JComponent;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JMenuItem;
+import javax.swing.JPopupMenu;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -103,10 +105,13 @@ public class MainWindow extends JFrame {
 
     public static void open(PcConfig config, Path configFile, JoystickService service) {
         Theme.install();
+        boolean firstStart = !java.nio.file.Files.exists(configFile); // nothing has saved settings yet
         MainWindow window = new MainWindow(config, configFile, service);
         window.setVisible(true);
-        if (!"true".equals(config.getString(SetupWizard.DONE_KEY))) {
-            SwingUtilities.invokeLater(() -> SetupWizard.open(window)); // first start: walk through the whole setup
+        if (firstStart) {
+            // the very first start only: walk through the whole setup; after that it opens from SETUP
+            window.save(Map.of(SetupWizard.OFFERED_KEY, "true"));
+            SwingUtilities.invokeLater(() -> SetupWizard.open(window));
         }
     }
 
@@ -158,6 +163,28 @@ public class MainWindow extends JFrame {
 
     // ---------------------------------------------------------------- layout
 
+    /** SETUP's menu: each part of the setup on its own. */
+    private JPopupMenu setupMenu() {
+        JPopupMenu menu = new JPopupMenu();
+        menu.setBackground(Theme.PANEL_2);
+        menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
+        addSetupItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
+        addSetupItem(menu, "Phone setup", "The phone on the drone: apps, settings, link test", () -> PhoneGuideWizard.open(this));
+        addSetupItem(menu, "Drone setup", "The flight controller: Betaflight over USB", () -> FlightControllerPages.open(this));
+        return menu;
+    }
+
+    private void addSetupItem(JPopupMenu menu, String title, String detail, Runnable open) {
+        JMenuItem item = new JMenuItem("<html><b>" + title.toUpperCase() + "</b><br><span style='color:" + Theme.MUTED_HEX
+                + "'>" + detail + "</span></html>");
+        item.setFont(Theme.font(Font.PLAIN, 13.5f));
+        item.setForeground(Theme.TEXT);
+        item.setBackground(Theme.PANEL_2);
+        item.setBorder(BorderFactory.createEmptyBorder(8, 14, 8, 14));
+        item.addActionListener(e -> open.run());
+        menu.add(item);
+    }
+
     private JComponent buildHeader() {
         JPanel header = new JPanel(new BorderLayout());
         header.setOpaque(false);
@@ -172,7 +199,11 @@ public class MainWindow extends JFrame {
         setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         right.setOpaque(false);
-        setupButton.addActionListener(e -> SetupWizard.open(this));
+        setupButton.setToolTipText("PC setup, phone setup or drone setup");
+        setupButton.addActionListener(e -> {
+            JPopupMenu menu = setupMenu(); // right-aligned under the button, so it stays inside the window
+            menu.show(setupButton, setupButton.getWidth() - menu.getPreferredSize().width, setupButton.getHeight() + 4);
+        });
         right.add(setupButton);
         betaflightButton.setToolTipText("Step-by-step guide for the Betaflight Configurator settings");
         betaflightButton.addActionListener(e -> BetaflightGuide.open(this, this));

@@ -3,6 +3,8 @@ package de.droiddrone.pc;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.pc.gui.MainWindow;
+import de.droiddrone.pc.setup.ApkShare;
+import de.droiddrone.pc.setup.PcPrep;
 
 import javax.swing.SwingUtilities;
 import java.io.BufferedReader;
@@ -17,6 +19,23 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         String command = args.length > 0 ? args[0] : "gui";
+        // run by the installer and its scheduled task as administrator / SYSTEM: no settings file, no window
+        switch (command) {
+            case "prepare-pc" -> {
+                PcPrep.prepare(AppPaths.launcher(), PcConfig.defaults().getPort(), ApkShare.PORT);
+                return;
+            }
+            case "install-tailscale" -> {
+                PcPrep.installTailscale();
+                return;
+            }
+            case "cleanup-pc" -> {
+                PcPrep.cleanup();
+                return;
+            }
+            default -> {
+            }
+        }
         Path configFile = AppPaths.configFile();
         switch (command) {
             case "gui" -> gui(load(configFile), configFile);
@@ -61,6 +80,25 @@ public class Main {
                 """.formatted(SettingsCommon.versionCompatibleCode));
     }
 
+    /**
+     * Running from an all-users install (0.5.3 and later) while an older per-user install is still there: remove the
+     * old one in the background, so there is one app and one set of shortcuts. Never from a per-user or dev copy.
+     */
+    private static void removeOldPerUserInstall() {
+        Path launcher = AppPaths.launcher();
+        String programFiles = System.getenv("ProgramFiles");
+        String localAppData = System.getenv("LOCALAPPDATA");
+        if (launcher == null || programFiles == null || localAppData == null || !launcher.startsWith(Path.of(programFiles))) return;
+        if (!Files.isDirectory(Path.of(localAppData, "DroidDrone PC"))) return;
+        Thread t = new Thread(() -> {
+            String removed = PcPrep.removePerUserInstall();
+            if (!removed.isEmpty()) de.droiddrone.common.Log.log("Removed the older per-user install: " + removed);
+        }, "removeOldInstall");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
+    }
+
     private static void initJoystickOrExit() {
         if (!Joystick.init()) {
             System.err.println("Could not initialise GLFW for joystick input.");
@@ -72,6 +110,7 @@ public class Main {
     private static void gui(PcConfig config, Path configFile) {
         initJoystickOrExit();
         WindowsTuning.apply();
+        removeOldPerUserInstall();
         JoystickService service = new JoystickService(config.getJoystickFilter(), config.getRcRate());
         SwingUtilities.invokeLater(() -> MainWindow.open(config, configFile, service));
         service.run();

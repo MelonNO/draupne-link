@@ -35,10 +35,11 @@ final class BetaflightGuide {
                         "Plug the flight controller's USB into this PC. No battery is needed.",
                         "Open <b>Betaflight Configurator</b>: the installed app, or <b>app.betaflight.com</b> in Chrome or Edge (button below).",
                         "Pick the flight controller's <b>COM port</b> at the top right and press <b>Connect</b>.",
-                        "Check the version at the top left: DroidDrone needs <b>Betaflight 4.4 or newer</b>.")
+                        "Check the version at the top left. <b>Betaflight 4.4 or newer</b> is best: the phone app is made for it. "
+                                + "Older versions still fly, but the phone shows a yellow warning and some OSD and arming details can be wrong.")
                         .link("Open app.betaflight.com", CONFIGURATOR_URL)
-                        .note("Prefer it done for you? SETUP &rarr; <i>Set up Betaflight</i> sets the receiver, the arm switch and the "
-                                + "accelerometer over USB by itself (close Configurator first). The latency step in this guide is still yours to do.")
+                        .note("Prefer it done for you? SETUP &rarr; <i>Drone setup</i> makes the receiver, arm switch and stick delay settings "
+                                + "over USB by itself (close Configurator first), and calibrates the accelerometer at the press of a button.")
                         .in("START"),
                 new Step(main, "Receiver: MSP", "The phone sends your sticks to Betaflight as MSP messages over USB.", "fc.receiver",
                         "Open the <b>Receiver</b> tab.",
@@ -65,7 +66,7 @@ final class BetaflightGuide {
                         .note("<b>Why:</b> Betaflight reads only <b>one</b> MSP message per serial cycle, and that cycle runs just "
                                 + "<b>100 times a second</b> by default. DroidDrone sends 250 stick updates a second, and the phone asks for OSD "
                                 + "data too, so stick updates wait in a queue in the flight controller. At 2000 the queue is gone.<br>"
-                                + "Needs Betaflight 4.3 or newer. Afterwards, type <b>status</b> in the CLI: if the CPU load jumped a lot "
+                                + "Needs Betaflight 4.2 or newer. Afterwards, type <b>status</b> in the CLI: if the CPU load jumped a lot "
                                 + "on an older F411 board, use 1000 instead of 2000.")
                         .done("serial_update_rate_hz is set to 2000")
                         .in("LATENCY"),

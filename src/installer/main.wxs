@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  jpackage's own main.wxs from JDK 21, used through jpackage's resource-dir option (see build.gradle), with one addition marked
-  "DroidDrone PC" below: a "Launch DroidDrone PC" checkbox on the installer's last page, ticked by default.
-  When moving the build to a newer JDK, start again from that JDK's main.wxs and re-add the marked block.
+  jpackage's own main.wxs from JDK 21, used through jpackage's resource-dir option (see build.gradle), with additions marked
+  "DroidDrone PC" below: a "Launch DroidDrone PC" checkbox on the installer's last page, ticked by default, and the
+  PC tasks the installer does as administrator.
+  When moving the build to a newer JDK, start again from that JDK's main.wxs and re-add the marked blocks.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
      xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
@@ -117,7 +118,18 @@
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed</Publish>
     </UI>
 
+    <!-- DroidDrone PC: the PC tasks, done by the installer as administrator so the setup wizard has nothing to do
+         for them: firewall rules, power plan, and Tailscale (installed right after this installer finishes). On
+         uninstall the firewall rules go again. Failures never stop the install; the wizard checks and fixes later.
+         Details: PcPrep.java, log in %ProgramData%\DroidDronePC\setup.log. -->
+    <CustomAction Id="PreparePc" Directory="INSTALLDIR" ExeCommand="&quot;[INSTALLDIR]$(var.JpAppName).exe&quot; prepare-pc"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+    <CustomAction Id="CleanupPc" Directory="INSTALLDIR" ExeCommand="&quot;[INSTALLDIR]$(var.JpAppName).exe&quot; cleanup-pc"
+                  Execute="deferred" Impersonate="no" Return="ignore" />
+
     <InstallExecuteSequence>
+      <Custom Action="PreparePc" Before="InstallFinalize">NOT (REMOVE~="ALL")</Custom>
+      <Custom Action="CleanupPc" Before="RemoveFiles">REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
       <Custom Action="JpSetARPINSTALLLOCATION" After="CostFinalize">Not Installed</Custom>
       <Custom Action="JpSetARPCOMMENTS" After="CostFinalize">Not Installed</Custom>
       <Custom Action="JpSetARPCONTACT" After="CostFinalize">Not Installed</Custom>
