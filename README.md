@@ -109,7 +109,7 @@ The setup installs **DroidDrone Flight 2.3.0-pc.1**: upstream's Flight 2.3.0 wit
 - **Every flight controller:** its USB list covers any flight controller with native USB (STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip it can drive (CH340/CH341, CP210x, FTDI, PL2303). Android can then remember the USB permission, and the phone reconnects to the flight controller without asking. Upstream only lists a few IDs, so AT32 boards, for example, needed a tap after every reconnect.
 - **The PC app's look:** black and red, status at a glance (OFFLINE / WAITING / LINK READY).
 
-The protocol is unchanged, so the original Flight 2.3.0 also still works. This build is signed with a different key: uninstall the original before installing it.
+The protocol is unchanged, so the original Flight 2.3.0 also still works. This build is signed with a different key: uninstall the original before installing it. Every DroidDrone PC release includes it as `DroidDrone-Flight-<version>.apk`, the exact build that version installs.
 
 ## For developers
 

@@ -50,6 +50,8 @@ Windows may say *"Windows protected your PC"* because the installer isn't code-s
 
 **`DroidDrone-PC-*-windows.zip`** is the portable version: unzip it and run `DroidDrone PC.exe`.
 
+**`DroidDrone-Flight-*.apk`** is the phone app for the drone, the exact build this version installs. The setup wizard hands it to the phone by QR code; to install it by hand instead, uninstall the original DroidDrone Flight first (this build is signed differently).
+
 The phone needs **DroidDrone Flight 2.3.0-pc.1** (the original 2.3.0 also works). The setup wizard installs it for you by QR code.
 
 ## What's in this version

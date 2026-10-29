@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.5.0 to build the installer and the portable zip and publish them as a GitHub release.
+# Push a tag like v0.5.0 to build the installer and the portable zip and publish them, with the phone app, as a GitHub release.
 on:
   push:
     tags: ['v*']
@@ -34,6 +34,22 @@ jobs:
           if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match version $version in build.gradle" }
       - name: Test, build installer and zip
         run: .\gradlew.bat --no-daemon test releaseZip packageInstaller
+      # The phone app is built and signed off CI (flight-app/build.ps1, key outside the repo) and stored in its own
+      # flight-<version> release. Every PC release carries the exact build the PC app installs: the version and
+      # SHA-256 pinned in ApkShare.java.
+      - name: Phone app (the APK this PC version installs, checked against its pinned SHA-256)
+        shell: pwsh
+        run: |
+          $src = Get-Content src/main/java/de/droiddrone/pc/setup/ApkShare.java -Raw
+          $version = [regex]::Match($src, 'String VERSION = "([^"]+)"').Groups[1].Value
+          $sha = [regex]::Match($src, 'APK_SHA256 = "([0-9a-f]+)"').Groups[1].Value
+          if (-not $version -or -not $sha) { throw 'VERSION / APK_SHA256 not found in ApkShare.java' }
+          $name = "DroidDrone-Flight-$version.apk"
+          New-Item -ItemType Directory -Force build/release | Out-Null
+          Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/flight-$version/$name" -OutFile "build/release/$name"
+          $got = (Get-FileHash "build/release/$name" -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $sha) { throw "$name has SHA-256 $got, expected $sha" }
+          Write-Host "$name OK ($sha)"
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -42,3 +58,4 @@ jobs:
           files: |
             build/release/DroidDrone-PC-Setup-*.exe
             build/release/DroidDrone-PC-*-windows.zip
+            build/release/DroidDrone-Flight-*.apk
