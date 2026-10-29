@@ -8,7 +8,7 @@ New in 0.5.4:
 - The separate **BETAFLIGHT guide is gone**. Without a USB cable, the drone page shows the same two settings for Configurator.
 - **SETUP → First-time setup** runs the whole setup again.
 - The first-time setup no longer asks how the PC reaches the phone (Tailscale; change it in SETUP → PC setup).
-- The link test runs by itself, and includes plugging the phone into the flight controller.
+- **Connect the Flight app** is one step: the values to type in, with the live link status right below. It turns green the moment you tap CONNECT on the phone, then shows the flight controller and the round-trip time. It replaces the separate link test.
 
 New in 0.5.3:
 - **The installer sets up the PC.** Tailscale, the firewall rules and the power plan are done by the installer, with one Windows approval and nothing to click. The setup wizard is left with what needs you, and skips every step that is already done.
@@ -39,7 +39,7 @@ The phone needs **DroidDrone Flight 2.3.0**. The setup wizard installs it for yo
 
 - **Control:** fly a Betaflight drone over 4G. Sticks are sent 250 times a second, and failsafe is built in.
 - **Video:** live H.265/H.264 video with a military-style OSD (horizon, heading, battery, link, GPS, warnings).
-- **Setup:** the installer sets up the PC; a short setup wizard does the rest: Tailscale sign-in, radio calibration, two Betaflight settings over USB, the phone apps by QR code, and a link test.
+- **Setup:** the installer sets up the PC; a short setup wizard does the rest: Tailscale sign-in, radio calibration, two Betaflight settings over USB, the phone apps by QR code, and a live connection check.
 - **RC CHECK:** shows what Betaflight sees and why it might refuse to arm.
 
 > Experimental: bench test with the props off, and set up GPS Rescue before flying out of sight.

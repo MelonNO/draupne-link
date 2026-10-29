@@ -167,9 +167,9 @@ public class MainWindow extends JFrame {
         JPopupMenu menu = new JPopupMenu();
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
-        addSetupItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, link test", () -> SetupWizard.open(this));
+        addSetupItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, connection", () -> SetupWizard.open(this));
         addSetupItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
-        addSetupItem(menu, "Phone setup", "The phone on the drone: apps, settings, link test", () -> PhoneGuideWizard.open(this));
+        addSetupItem(menu, "Phone setup", "The phone on the drone: apps, settings, connection", () -> PhoneGuideWizard.open(this));
         addSetupItem(menu, "Drone setup", "Betaflight's receiver and stick delay, set over USB", () -> DroneSetup.open(this));
         return menu;
     }

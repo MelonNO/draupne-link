@@ -37,7 +37,7 @@ Betaflight 4.4 is **not required**, only recommended:
 | **Radio** | Detects it, then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)) | Plug it in and pick *USB Joystick (HID)* on the radio |
 | **Drone** | Over USB, with nothing to click: sets the receiver to **MSP** and the **stick delay setting**. Nothing else on the drone is touched | Plug it in. No USB cable? The page shows the same two settings for Betaflight Configurator |
 | **Phone** | Downloads the official DroidDrone Flight app, checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, set four phone settings from a short list |
-| **Test** | Connects to the drone by itself and measures the path (direct or relayed) and the round-trip time, and gives you a verdict | Plug the phone into the flight controller, phone on 4G |
+| **Connect** | Shows what to type into the Flight app and holds the link open: it turns green the moment you tap CONNECT on the phone, then measures the path (direct or relayed) and the round-trip time and gives you a verdict | Type in the values, tap CONNECT, plug the phone into the flight controller |
 
 <p>
 <img src="docs/images/setup-welcome.png" width="49%" alt="Setup wizard: welcome">
@@ -62,7 +62,7 @@ Every part is built for the least delay:
 - **Video:** each frame is decoded the moment its last packet arrives, and only the newest picture is drawn. The PC side takes about 3–4 ms per 720p frame from the last packet to the screen; the stats line shows the live numbers.
 - **Video bitrate:** lowered as soon as the ping climbs above its usual level, before frames get lost. Mobile networks queue up a too-high bitrate, and queueing is delay.
 - **Measure it:** **F3** shows the whole camera-to-screen delay. Try it in a window and in **F11** full screen.
-- **Connection:** Tailscale normally finds a **direct** path. The setup's link test tells you if it doesn't.
+- **Connection:** Tailscale normally finds a **direct** path. The setup's *Connect the Flight app* step tells you if it doesn't.
 
 The 4G network itself (typically 40–100 ms round trip) is the biggest delay. A wired PC helps a little.
 
@@ -82,7 +82,7 @@ save
 | Betaflight ignores the **arm switch** | DroidDrone sends your arm switch on AUX1. In Betaflight Configurator's **Modes** tab, put ARM on AUX 1. **RC CHECK** shows what Betaflight sees |
 | OSD says **ARMING BLOCKED: MSP** | Betaflight Configurator disabled arming and was unplugged without *Disconnect*. Power-cycle the flight controller. SETUP → *Drone setup* also clears it |
 | **Video is black** | It's what the camera sees: is the lens covered, or is it dark? Point it at something bright. To use another lens, set `cameraId` in the settings (often `2` or `3` is the wide-angle) |
-| Link test says **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Run the test again after a minute. If it stays relayed, choose *Host the relay on this PC* in SETUP → *PC setup* |
+| Setup says the path is **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Press *Check again* after a minute. If it stays relayed, choose *Host the relay on this PC* in SETUP → *PC setup* |
 | Channels look wrong | **CALIBRATE**, then **RC CHECK** |
 
 Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.

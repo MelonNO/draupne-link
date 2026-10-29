@@ -44,7 +44,7 @@
 - [ ] Check the pitch direction on real hardware (osdInvertPitch=true flips it)
 
 ## Milestone 4: Easy setup and release (built)
-- [x] One setup wizard: PC, radio, flight controller (Betaflight CLI over USB), phone (QR codes, APK served from the PC), link test
+- [x] One setup wizard: PC, radio, flight controller (Betaflight CLI over USB), phone (QR codes, APK served from the PC), live connection check
 - [x] Windows installer and portable zip built by GitHub Actions on version tags
 - [x] The installer sets up the PC as administrator (Tailscale, firewall, power plan); the wizard skips what is done
 - [x] Telemetry parser for every record the Flight app sends (FcTelemetry), with BOXNAMES requested: armed, active modes, arming blockers, battery, camera fps

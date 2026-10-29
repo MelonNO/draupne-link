@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The first-time setup: PC, radio, drone, phone, link test. Whatever this PC can do itself it does (Tailscale,
+ * The first-time setup: PC, radio, drone, phone, connection. Whatever this PC can do itself it does (Tailscale,
  * firewall, power plan, Betaflight settings, serving the phone app, finding the phone), and finished steps are
  * skipped, so the pilot reads and clicks as little as possible. It uses the connection method in the settings
  * (Tailscale unless changed in PC setup). Opens by itself on the very first start; SETUP &rarr; First-time setup
@@ -34,8 +34,7 @@ final class SetupWizard {
                 new PhoneGuideWizard.PhoneTailscalePage(main).in("PHONE"),
                 new PhoneGuideWizard.FlightAppPage(main).in("PHONE"),
                 new PhoneGuideWizard.PhoneSettingsPage(main).in("PHONE"),
-                new PhoneGuideWizard.FlightAppSettingsPage(main).in("PHONE"),
-                new PhoneGuideWizard.LinkTestPage(main).in("TEST"),
+                new PhoneGuideWizard.ConnectPage(main).in("CONNECT"),
                 new PcSetupWizard.ShortcutsPage(main).in("FINISH"),
                 new DonePage().in("FINISH"));
         new WizardDialog(main, "DroidDrone PC setup", pages, () -> {

@@ -14,7 +14,6 @@ import de.droiddrone.pc.gui.WizardDialog.Page;
 
 import javax.swing.BorderFactory;
 import javax.swing.DefaultComboBoxModel;
-import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -28,10 +27,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Phone setup, for the phone that flies on the drone. Where the PC can see the result it checks it live
- * (phone on Tailscale, link test); the rest is a short list of what to do on the phone.
+ * (phone on Tailscale, the link to the Flight app); the rest is a short list of what to do on the phone.
  */
 final class PhoneGuideWizard {
     private PhoneGuideWizard() {
@@ -43,8 +43,7 @@ final class PhoneGuideWizard {
                 new PhoneTailscalePage(main),
                 new FlightAppPage(main),
                 new PhoneSettingsPage(main),
-                new FlightAppSettingsPage(main),
-                new LinkTestPage(main));
+                new ConnectPage(main));
         new WizardDialog(main, "Phone setup", pages, () -> {
             main.save(Map.of("setup.phoneDone", "true"));
             main.logLine("Phone setup finished.");
@@ -348,22 +347,46 @@ final class PhoneGuideWizard {
         }
     }
 
-    static final class FlightAppSettingsPage extends Page {
+    /**
+     * The Flight app's settings, with the live link to it right below: the connection is held open while this step is
+     * shown, so the pilot sees it turn green the moment CONNECT is tapped on the phone. No stick commands are sent.
+     */
+    static final class ConnectPage extends Page {
+        /** Round trips collected after the link comes up, before the verdict. */
+        private static final long MEASURE_MS = 6000;
+        /** Waiting this long without a link adds the usual reasons. */
+        private static final long HINT_AFTER_MS = 20_000;
+
+        private record Snap(ControlLink.State state, FcInfo fc, int ping) {}
+
         private final MainWindow main;
         private final JPanel tableHolder = new JPanel(new BorderLayout());
+        private final CheckRow link = new CheckRow("DroidDrone link");
+        private final CheckRow fc = new CheckRow("Flight controller");
+        private final CheckRow latency = new CheckRow("Round-trip time");
+        private final CheckRow path = new CheckRow("Network path");
+        private final List<Integer> rtts = new ArrayList<>();
+        /** The running session's stop flag; a new one per session, so an old session can't touch the page. */
+        private AtomicBoolean stop;
+        private long nextStart;
+        private long waitingSince;
+        private long readySince;
+        private boolean logged;
+        private boolean pathChecked;
 
-        FlightAppSettingsPage(MainWindow main) {
+        ConnectPage(MainWindow main) {
             this.main = main;
         }
 
         @Override
         String title() {
-            return "Flight app settings";
+            return "Connect the Flight app";
         }
 
         @Override
         String hint() {
-            return "Open DroidDrone Flight on the phone and enter this:";
+            return "On the phone, open DroidDrone Flight, enter this and tap <b>CONNECT</b>. "
+                    + "Plug the phone into the flight controller with the OTG adapter (props off).";
         }
 
         @Override
@@ -371,7 +394,11 @@ final class PhoneGuideWizard {
             JPanel col = WizardDialog.column();
             tableHolder.setOpaque(false);
             WizardDialog.addRow(col, tableHolder);
-            WizardDialog.addRow(col, WizardDialog.paragraph("Then tap <b>CONNECT</b> and leave the app running."));
+            WizardDialog.addRow(col, link);
+            WizardDialog.addRow(col, fc);
+            WizardDialog.addRow(col, latency);
+            path.addAction("Check again", this::checkPath);
+            WizardDialog.addRow(col, path);
             return col;
         }
 
@@ -397,173 +424,156 @@ final class PhoneGuideWizard {
             tableHolder.removeAll();
             tableHolder.add(valueTable(rows), BorderLayout.CENTER);
             tableHolder.revalidate();
-        }
-    }
-
-    /** Opens a real link to the phone without sending RC, and measures it. */
-    static final class LinkTestPage extends Page {
-        private final MainWindow main;
-        private final CheckRow path = new CheckRow("Network path");
-        private final CheckRow link = new CheckRow("DroidDrone link");
-        private final CheckRow fc = new CheckRow("Flight controller");
-        private final CheckRow latency = new CheckRow("Round-trip time");
-        private JButton runButton;
-        private boolean running;
-        private boolean ranOnce;
-
-        private record Result(Tailscale.PingResult ping, ControlLink.State state, FcInfo fc, List<Integer> rtts, String error) {}
-
-        LinkTestPage(MainWindow main) {
-            this.main = main;
+            path.setVisible(c.getLinkMode() == LinkMode.PHONE); // only Tailscale can tell direct from relayed
+            readySince = 0;
+            waitingSince = System.currentTimeMillis();
+            rtts.clear();
+            logged = false;
+            pathChecked = false;
+            nextStart = 0;
+            link.set(State.PENDING, "Waiting for the Flight app...");
+            for (CheckRow r : new CheckRow[]{fc, latency, path}) r.set(State.PENDING, "");
         }
 
         @Override
-        String title() {
-            return "Test the link";
+        void refresh() {
+            if (stop == null && System.currentTimeMillis() >= nextStart) start();
         }
 
-        @Override
-        String hint() {
-            return "Plug the phone into the flight controller with the OTG adapter (props off). The test runs by itself and sends no stick commands.";
-        }
-
-        @Override
-        JComponent build() {
-            JPanel col = WizardDialog.column();
-            JPanel buttons = new JPanel(new BorderLayout());
-            buttons.setOpaque(false);
-            runButton = Theme.primaryButton("Run test");
-            runButton.addActionListener(e -> run());
-            buttons.add(runButton, BorderLayout.WEST);
-            WizardDialog.addRow(col, buttons);
-            WizardDialog.addRow(col, path);
-            WizardDialog.addRow(col, link);
-            WizardDialog.addRow(col, fc);
-            WizardDialog.addRow(col, latency);
-            for (CheckRow r : new CheckRow[]{path, link, fc, latency}) r.set(State.PENDING, "Not run yet.");
-            return col;
-        }
-
-        @Override
-        void onShow() {
-            if (main.config().getLinkMode() != LinkMode.PHONE) path.set(State.INFO, "Only measured for Tailscale.");
-            if (!ranOnce && !running) run();
-        }
-
-        private void run() {
+        private void start() {
             if (main.isLinkActive()) {
-                link.set(State.WARN, "Disconnect in the main window first.");
+                link.set(State.WARN, "The main window is connected. Press DISCONNECT there and the link opens here.");
+                nextStart = System.currentTimeMillis() + 1000;
                 return;
             }
-            running = true;
-            ranOnce = true;
-            runButton.setEnabled(false);
-            boolean tailscale = main.config().getLinkMode() == LinkMode.PHONE;
-            if (tailscale) path.set(State.PENDING, "Pinging the phone over Tailscale...");
-            link.set(State.PENDING, tailscale ? "Waiting..." : "Connecting...");
-            fc.set(State.PENDING, "Waiting...");
-            latency.set(State.PENDING, "Waiting...");
             PcConfig config = main.config();
-            background(() -> test(config, tailscale), this::show);
+            if (config.getLinkMode() == LinkMode.PHONE && config.getIp().isEmpty()) {
+                link.set(State.BAD, "No phone address yet - finish the Tailscale on the phone step.");
+                nextStart = System.currentTimeMillis() + 2000;
+                return;
+            }
+            AtomicBoolean s = new AtomicBoolean();
+            stop = s;
+            background(() -> session(config, s), error -> {
+                if (stop != s) return;
+                stop = null;
+                if (error != null) {
+                    link.set(State.BAD, error);
+                    nextStart = System.currentTimeMillis() + 3000;
+                }
+            });
         }
 
-        private Result test(PcConfig config, boolean tailscale) {
-            Tailscale.PingResult ping = null;
-            if (tailscale) {
-                if (config.getIp().isEmpty()) return new Result(null, null, null, List.of(), "No phone address yet - see the Tailscale step.");
-                ping = Tailscale.ping(config.getIp());
-                SwingUtilities.invokeLater(() -> link.set(State.PENDING, "Connecting to the Flight app..."));
-            }
+        /** Holds the link open until the page is left, reporting its state four times a second. */
+        private String session(PcConfig config, AtomicBoolean s) {
             Connection connection = null;
             try {
                 connection = Connection.open(config);
                 ControlLink l = connection.getLink();
-                long end = System.currentTimeMillis() + 20_000;
-                while (System.currentTimeMillis() < end && l.getState() != ControlLink.State.READY
-                        && l.getState() != ControlLink.State.VERSION_MISMATCH) {
-                    Thread.sleep(100);
-                }
-                if (l.getState() != ControlLink.State.READY) return new Result(ping, l.getState(), null, List.of(), null);
-                SwingUtilities.invokeLater(() -> link.set(State.OK, "Connected - measuring..."));
-                List<Integer> rtts = new ArrayList<>();
-                long until = System.currentTimeMillis() + 6000;
-                while (System.currentTimeMillis() < until) {
-                    int p = l.getPing();
-                    if (p >= 0 && (rtts.isEmpty() || rtts.get(rtts.size() - 1) != p)) rtts.add(p);
+                while (!s.get()) {
+                    Snap snap = new Snap(l.getState(), l.getFcInfo(), l.getPing());
+                    SwingUtilities.invokeLater(() -> {
+                        if (stop == s) show(snap);
+                    });
                     Thread.sleep(250);
                 }
-                return new Result(ping, l.getState(), l.getFcInfo(), rtts, null);
+                return null;
             } catch (Exception e) {
-                return new Result(ping, null, null, List.of(), e.getMessage());
+                return "Could not open the link: " + e.getMessage();
             } finally {
                 if (connection != null) connection.close();
             }
         }
 
-        private void show(Result r) {
-            running = false;
-            runButton.setEnabled(true);
-            runButton.setText("Run again");
-            if (r == null) return;
-            if (r.ping() == null && path.getState() == State.PENDING) path.set(State.PENDING, ""); // the test stopped before pinging
-            if (r.ping() != null) {
-                Tailscale.PingResult p = r.ping();
-                if (!p.reached()) {
+        private void show(Snap snap) {
+            long now = System.currentTimeMillis();
+            if (snap.state() == ControlLink.State.VERSION_MISMATCH) {
+                link.set(State.BAD, "Version mismatch - the phone needs DroidDrone Flight " + ApkShare.VERSION + ".");
+                return;
+            }
+            if (snap.state() != ControlLink.State.READY) {
+                if (readySince != 0) { // it was up and dropped: start over
+                    readySince = 0;
+                    waitingSince = now;
+                    rtts.clear();
+                    logged = false;
+                    for (CheckRow r : new CheckRow[]{fc, latency}) r.set(State.PENDING, "");
+                }
+                link.set(now - waitingSince < HINT_AFTER_MS ? State.PENDING : State.WARN, now - waitingSince < HINT_AFTER_MS
+                        ? "Waiting for the Flight app - tap <b>CONNECT</b> on the phone."
+                        : "Still waiting. Check the phone shows exactly the values above, that CONNECT is tapped"
+                        + (main.config().getLinkMode() == LinkMode.PHONE ? ", and that Tailscale is on." : "."));
+                return;
+            }
+            if (readySince == 0) readySince = now;
+            link.set(State.OK, "Connected.");
+            if (snap.fc() != null) {
+                fc.set(snap.fc().getFcVariant() == FcInfo.FC_VARIANT_BETAFLIGHT ? State.OK : State.WARN,
+                        snap.fc().getFcName() + " " + snap.fc().getFcVersionStr());
+            } else if (now - readySince > 3000) {
+                fc.set(State.BAD, "The phone isn't talking to the flight controller. Tap Allow on the phone's USB pop-up. Many flight "
+                        + "controllers ignore USB-C to USB-C: use a USB-A cable with an OTG adapter, and check the phone's OTG setting.");
+            } else {
+                fc.set(State.PENDING, "Asking the flight controller...");
+            }
+            if (snap.ping() >= 0 && (rtts.isEmpty() || rtts.get(rtts.size() - 1) != snap.ping())) rtts.add(snap.ping());
+            showLatency(now - readySince >= MEASURE_MS);
+            if (!pathChecked && path.isVisible()) {
+                pathChecked = true;
+                checkPath();
+            }
+        }
+
+        private void showLatency(boolean measured) {
+            if (rtts.isEmpty()) {
+                latency.set(State.PENDING, "Measuring...");
+                return;
+            }
+            List<Integer> sorted = new ArrayList<>(rtts);
+            Collections.sort(sorted);
+            int median = sorted.get(sorted.size() / 2);
+            int worst = sorted.get(sorted.size() - 1);
+            if (!measured) {
+                latency.set(State.PENDING, "Measuring... typical " + median + " ms so far.");
+                return;
+            }
+            State s = median < 80 ? State.OK : median < 150 ? State.WARN : State.BAD;
+            String verdict = median < 80 ? "Great." : median < 150 ? "Flyable - stay gentle and close." : "Too slow to fly safely.";
+            latency.set(s, "Typical <b>" + median + " ms</b>, worst " + worst + " ms. " + verdict
+                    + " Stick commands take about half the round trip.");
+            if (!logged) {
+                logged = true;
+                main.logLine("Link test: RTT median " + median + " ms, worst " + worst + " ms.");
+            }
+        }
+
+        private void checkPath() {
+            String ip = main.config().getIp();
+            if (ip.isEmpty()) return;
+            path.set(State.PENDING, "Pinging the phone over Tailscale...");
+            background(() -> Tailscale.ping(ip), p -> {
+                if (p == null || !p.reached()) {
                     path.set(State.BAD, "The phone didn't answer over Tailscale. Is Tailscale on and connected on the phone?");
                 } else if (p.direct()) {
                     path.set(State.OK, "<b>Direct</b> (" + p.via() + "): typical " + p.medianMs() + " ms, best "
                             + p.bestMs() + " ms - the lowest-latency path.");
                 } else {
                     path.set(State.WARN, "<b>Relayed</b> through Tailscale's " + p.via() + " server: typical " + p.medianMs()
-                            + " ms. This adds latency; it often turns direct within a minute - run the test again. "
+                            + " ms. This adds latency; it often turns direct within a minute - press Check again. "
                             + "If it stays relayed, your 4G carrier blocks direct paths: consider hosting the relay on this PC.");
                 }
-            }
-            if (r.error() != null) {
-                link.set(State.BAD, r.error());
-                fc.set(State.PENDING, "");
-                latency.set(State.PENDING, "");
-                return;
-            }
-            if (r.state() == ControlLink.State.VERSION_MISMATCH) {
-                link.set(State.BAD, "Version mismatch - the phone needs DroidDrone Flight " + ApkShare.VERSION + ".");
-            } else if (r.state() != ControlLink.State.READY) {
-                link.set(State.BAD, "No answer from the Flight app within 20 s. Check it shows Connect tapped, the key ("
-                        + main.config().getKey() + ") and the connection settings.");
-            } else {
-                link.set(State.OK, "The Flight app accepted the connection.");
-            }
-            if (r.fc() != null) {
-                fc.set(r.fc().getFcVariant() == FcInfo.FC_VARIANT_BETAFLIGHT ? State.OK : State.WARN,
-                        r.fc().getFcName() + " " + r.fc().getFcVersionStr());
-            } else {
-                fc.set(r.state() == ControlLink.State.READY ? State.BAD : State.PENDING, r.state() == ControlLink.State.READY
-                        ? "The phone isn't talking to the flight controller. Tap Allow on the phone's USB pop-up. Many flight "
-                        + "controllers ignore USB-C to USB-C: use a USB-A cable with an OTG adapter, and check the phone's OTG setting." : "");
-            }
-            if (r.rtts().isEmpty()) {
-                latency.set(State.PENDING, "");
-            } else {
-                List<Integer> sorted = new ArrayList<>(r.rtts());
-                Collections.sort(sorted);
-                int median = sorted.get(sorted.size() / 2);
-                int worst = sorted.get(sorted.size() - 1);
-                State s = median < 80 ? State.OK : median < 150 ? State.WARN : State.BAD;
-                String verdict = median < 80 ? "Great." : median < 150 ? "Flyable - stay gentle and close." : "Too slow to fly safely.";
-                latency.set(s, "Typical <b>" + median + " ms</b>, worst " + worst + " ms. " + verdict
-                        + " Stick commands take about half the round trip.");
-                main.logLine("Link test: RTT median " + median + " ms, worst " + worst + " ms.");
-            }
+            });
         }
 
         @Override
-        boolean canContinue() {
-            return !running;
+        void onHide() {
+            if (stop != null) stop.set(true); // the session closes the link
+            stop = null;
         }
 
         @Override
         String status() {
-            return running ? "Testing..." : null;
+            return readySince != 0 ? "Connected to the drone's phone." : "Waiting for the Flight app.";
         }
     }
 }
