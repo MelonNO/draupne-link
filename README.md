@@ -5,9 +5,6 @@ Your radio plugs into the PC; an Android phone on the drone carries the sticks, 
 
 ![OSD over the live video](docs/images/osd.png)
 
-> **Experimental.** This is a hobby project. Bench test everything with the propellers off, set up and test GPS Rescue
-> before you fly out of sight, keep your first flights close and in line of sight, and follow your local drone rules.
-
 ## Get started in 3 steps
 
 1. **Download** `DroidDrone-PC-Setup-<version>.exe` from the [latest release](../../releases/latest).
@@ -15,14 +12,22 @@ Your radio plugs into the PC; an Android phone on the drone carries the sticks, 
    Windows may say *"Windows protected your PC"*, because the installer isn't code-signed. Click **More info → Run anyway**.
 3. **DroidDrone PC starts by itself** when you press Finish (untick *Launch DroidDrone PC* to skip that). **Follow the setup wizard**: it opens on the very first start, skips whatever is already done, and takes about 15 minutes. Later, **SETUP** opens each part on its own: PC, phone or drone.
 
-Prefer no installer? Download `DroidDrone-PC-<version>-windows.zip`, unzip it anywhere and run `DroidDrone PC.exe`.
-
 ## What you need
 
 - A Windows 10/11 PC on the internet (cable or Wi-Fi)
 - A radio that works as a USB joystick (RadioMaster or any EdgeTX radio)
-- A drone with a **Betaflight** flight controller (4.4 or newer is best), plus a USB cable for it
+- A drone with a **Betaflight** flight controller, plus a USB cable for it ([which version?](#which-betaflight-version))
 - An Android phone (8 or newer, 11+ recommended) with mobile data, and a **USB OTG adapter** to plug it into the flight controller
+
+### Which Betaflight version?
+
+Betaflight 4.4 is **not required**, only recommended:
+
+| Betaflight | Result |
+|---|---|
+| **4.4, 4.5 or newer** | Best. The phone's Flight app is made for these versions, so everything works |
+| **4.2 or 4.3** | Flies. The Flight app shows the version in **yellow** as a warning but still sends your sticks. RC CHECK may name some arming blocks wrongly |
+| **Older than 4.2** | Not recommended: it lacks the stick delay setting (`serial_update_rate_hz`, see [Latency](#latency)), so stick updates queue up in the flight controller. Update with Betaflight Configurator's *Firmware Flasher* tab |
 
 ## The setup wizard does the work
 
@@ -73,6 +78,7 @@ save
 |---|---|
 | Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A cable plus an OTG adapter (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
 | OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Run SETUP → *Drone setup* → **Calibrate** |
+| Flight app shows the Betaflight version in **yellow** | Betaflight is older than 4.4. It still flies; update when convenient ([which version?](#which-betaflight-version)) |
 | OSD says **ARMING BLOCKED: MSP** | Betaflight Configurator disabled arming and was unplugged without *Disconnect*. Power-cycle the flight controller. The setup wizard's Betaflight step also clears it |
 | **Video is black** | It's what the camera sees: is the lens covered, or is it dark? Point it at something bright. To use another lens, set `cameraId` in the settings (often `2` or `3` is the wide-angle) |
 | Link test says **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Run the test again after a minute. If it stays relayed, choose *Host the relay on this PC* in SETUP → *PC setup* |

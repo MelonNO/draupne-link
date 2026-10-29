@@ -9,7 +9,7 @@ New in 0.5.3:
 - **SETUP is a menu:** PC setup, Phone setup or Drone setup, each on its own. The full setup wizard opens by itself only on the very first start.
 - The installer's last page has a **Launch DroidDrone PC** box, ticked by default.
 - Updating from 0.5.2 or older: the old per-user copy is removed automatically the first time the new version starts. Your settings stay.
-- Betaflight **4.4 or newer is recommended, not required**. 4.2 and 4.3 also fly; the phone shows a yellow warning.
+- Betaflight **4.4 or newer is recommended, not required**. 4.2 and 4.3 also fly; the phone shows a yellow warning. The README has a version table.
 
 New in 0.5.2:
 - **Lower stick latency.** Sticks are now sent 250 times a second instead of 100, and Windows can no longer slow the app down when its window is in the background. Measured on a test PC: gaps between stick updates went from 10 ms (up to 16.5 ms) to 4 ms (up to 6 ms). Existing settings are updated automatically.
