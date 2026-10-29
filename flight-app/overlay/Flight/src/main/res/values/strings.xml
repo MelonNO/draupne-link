@@ -42,5 +42,6 @@
     <string name="dd_pill_offline">OFFLINE</string>
     <string name="dd_pill_waiting">WAITING</string>
     <string name="dd_pill_linked">LINK READY</string>
+    <string name="dd_old_app">An earlier DroidDrone Flight is still installed and can take the flight controller. Tap here to remove it.</string>
     <string name="dd_hint_props">Props off on the bench. Leave this app running while flying.</string>
 </resources>

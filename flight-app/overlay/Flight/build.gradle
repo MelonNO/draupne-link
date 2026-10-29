@@ -7,12 +7,14 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId "de.droiddrone.flight"
+        // own package name, so it installs next to any earlier DroidDrone Flight (other signature) and then
+        // removes it (MainActivity.checkOldApp)
+        applicationId "de.droiddrone.flight.pc"
         minSdk 26
         targetSdk 34
         // DroidDrone PC build of 2.3.0: same protocol, more flight controllers, restyled screen
-        versionCode 2030001
-        versionName "2.3.0-pc.1"
+        versionCode 2030002
+        versionName "2.3.0-pc.2"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }

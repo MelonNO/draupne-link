@@ -7,10 +7,10 @@ The phone app that flies on the drone: upstream [DroidDrone](https://github.com/
 |---|---|
 | `Flight/src/main/res/xml/device_filter.xml` | Every flight controller: any virtual COM port (USB CDC: STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip the app's serial library supports (CH340/CH341, CP210x, FTDI, PL2303). Android then offers *Always open DroidDrone Flight* and reconnects without asking |
 | `Flight/src/main/res/layout/activity_main.xml`, `res/values/*`, `res/drawable/*`, `res/mipmap-anydpi-v26/*` | The PC app's look: black and red, cards with corner brackets, status pill, the PC app's icon |
-| `Flight/src/main/java/de/droiddrone/flight/MainActivity.java` | Colours for the dark screen and the status pill; the connection logic is unchanged |
+| `Flight/src/main/java/de/droiddrone/flight/MainActivity.java` | Colours for the dark screen and the status pill; asks Android to remove an earlier DroidDrone Flight (`de.droiddrone.flight`) when it opens. The connection logic is unchanged |
 | `Flight/src/main/java/de/droiddrone/flight/BracketDrawable.java` | New: the card background |
-| `Flight/src/main/AndroidManifest.xml` | The theme |
-| `Flight/build.gradle` | Version `2.3.0-pc.1`, release signing from outside the repo |
+| `Flight/src/main/AndroidManifest.xml` | The theme; permission to ask for the earlier app's removal, and to see it |
+| `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.2`, release signing from outside the repo |
 | `settings.gradle` | Builds only the Flight app (not upstream's Control app) |
 
 The network protocol is untouched, so DroidDrone PC works with this build and with the original 2.3.0.

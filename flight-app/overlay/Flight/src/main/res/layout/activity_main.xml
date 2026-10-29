@@ -98,6 +98,18 @@
                 android:layout_weight="1" />
 
             <TextView
+                android:id="@+id/tvOldApp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="@string/dd_old_app"
+                android:textColor="@color/dd_bad"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/dd_hint_props"

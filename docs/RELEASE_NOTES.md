@@ -2,9 +2,12 @@
 
 **`DroidDrone-PC-Setup-*.exe`** is the installer. Run it and click through it (Next → Install → Finish), approving the Windows prompt once. It installs DroidDrone PC for all users and sets up this PC by itself: Tailscale, firewall rules and the High performance power plan. DroidDrone PC starts when you press Finish; follow the setup wizard that opens on the first start.
 
+New in 1.0.1:
+- **Phone app 2.3.0-pc.2 replaces any earlier DroidDrone Flight by itself.** It installs next to the original (or 2.3.0-pc.1) and, when it opens, asks Android to remove the earlier app: one tap on OK. No more uninstalling first. After this one-time move, set the phone's Battery and Mobile data settings for DroidDrone Flight once more (Phone setup lists them).
+
 New in 1.0.0:
 - **Version 1.0.** Everything from the 0.5 releases below: installer that sets up the PC, short setup wizard, live connection check, OSD with cell voltage and lost-link / lost-flight-controller warnings, link log, pop-out video, upside-down camera setting.
-- **The phone app is part of every release:** `DroidDrone-Flight-2.3.0-pc.1.apk`, the exact build this version installs on the phone.
+- **The phone app is part of every release:** `DroidDrone-Flight-<version>.apk`, the exact build this version installs on the phone.
 
 New in 0.5.7:
 - **Link log** for finding the cause of failsafes: each connection writes a timeline (10 rows a second) to `%APPDATA%\DroidDronePC\logs`: ping, stick frames and the longest gap between them, telemetry and its longest gap, the flight controller's last data, RXLOSS / FAILSAFE, radio present, and every log message.
@@ -54,9 +57,9 @@ Windows may say *"Windows protected your PC"* because the installer isn't code-s
 
 **`DroidDrone-PC-*-windows.zip`** is the portable version: unzip it and run `DroidDrone PC.exe`.
 
-**`DroidDrone-Flight-*.apk`** is the phone app for the drone, the exact build this version installs. The setup wizard hands it to the phone by QR code; to install it by hand instead, uninstall the original DroidDrone Flight first (this build is signed differently).
+**`DroidDrone-Flight-*.apk`** is the phone app for the drone, the exact build this version installs. The setup wizard hands it to the phone by QR code, or install it by hand. It replaces any earlier DroidDrone Flight: when it opens, tap OK to remove the old one.
 
-The phone needs **DroidDrone Flight 2.3.0-pc.1** (the original 2.3.0 also works). The setup wizard installs it for you by QR code.
+The phone needs **DroidDrone Flight 2.3.0-pc.2** (the original 2.3.0 also works). The setup wizard installs it for you by QR code.
 
 ## What's in this version
 

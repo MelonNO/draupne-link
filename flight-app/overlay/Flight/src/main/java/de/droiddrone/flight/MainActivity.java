@@ -15,7 +15,7 @@
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
  *  Modified for DroidDrone PC: the Windows app's look (cards, status pill, status colours for a dark
- *  background). The connection logic is unchanged.
+ *  background), and removing an earlier DroidDrone Flight. The connection logic is unchanged.
  */
 
 package de.droiddrone.flight;
@@ -26,6 +26,7 @@ import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
@@ -65,6 +66,10 @@ public class MainActivity extends Activity {
     private Timer uiTimer;
     private boolean isPaused = false;
     public static Config config;
+    /** The original app's package (also DroidDrone PC's builds up to 2.3.0-pc.1): removed so it can't take the FC. */
+    private static final String OLD_PACKAGE = "de.droiddrone.flight";
+    private TextView tvOldApp;
+    private boolean oldAppPrompted;
 
     @Override
     protected void onCreate(Bundle savedInstanceState){
@@ -93,6 +98,8 @@ public class MainActivity extends Activity {
         tvFcStatus = findViewById(R.id.tvFcConnectionStatus);
         tvConnectionModeHint = findViewById(R.id.tvConnectionModeHint);
         tvPill = findViewById(R.id.tvPill);
+        tvOldApp = findViewById(R.id.tvOldApp);
+        tvOldApp.setOnClickListener(v -> removeOldApp());
         llIp = findViewById(R.id.llIp);
         colorOk = getColor(R.color.dd_ok);
         colorWarn = getColor(R.color.dd_warn);
@@ -246,6 +253,33 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * An earlier DroidDrone Flight (other package name or signature) would also answer the flight controller's USB
+     * and the network: ask Android to remove it - once by itself, then from the red line on the status card.
+     */
+    private void checkOldApp(){
+        boolean installed;
+        try {
+            getPackageManager().getPackageInfo(OLD_PACKAGE, 0);
+            installed = !OLD_PACKAGE.equals(getPackageName());
+        } catch (PackageManager.NameNotFoundException e) {
+            installed = false;
+        }
+        tvOldApp.setVisibility(installed ? View.VISIBLE : View.GONE);
+        if (installed && !oldAppPrompted) {
+            oldAppPrompted = true;
+            removeOldApp();
+        }
+    }
+
+    private void removeOldApp(){
+        try {
+            startActivity(new Intent(Intent.ACTION_DELETE, Uri.parse("package:" + OLD_PACKAGE)));
+        } catch (Exception e) {
+            log("Cannot open the uninstall prompt: " + e);
+        }
+    }
+
     private void startStopService(){
         Intent intent = new Intent(getApplicationContext(), DDService.class);
         if (DDService.isRunning){
@@ -304,6 +338,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume(){
         super.onResume();
+        checkOldApp();
         isPaused = false;
         main.setKeepScreenOn(true);
         updateUi();
