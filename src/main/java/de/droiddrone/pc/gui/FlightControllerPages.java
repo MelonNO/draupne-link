@@ -115,8 +115,12 @@ final class FlightControllerPages {
         private final Map<String, javax.swing.JCheckBox> savedChecks = new java.util.HashMap<>();
         private JButton applyButton;
         private JButton calibrateButton;
+        private JButton retryButton;
         private boolean busy;
         private boolean autoApplied;
+        /** Reading the settings failed (port in use by Configurator, unplugged...): retried by itself until it works. */
+        private boolean readFailed;
+        private long nextRetry;
         private List<BetaflightPlan.Change> plan = List.of();
 
         ConfigPage(MainWindow main, Found found) {
@@ -139,6 +143,8 @@ final class FlightControllerPages {
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
+            retryButton = version.addAction("Try again", this::readSettings);
+            retryButton.setVisible(false);
             WizardDialog.addRow(auto, version);
             applyButton = receiver.addPrimaryAction("Apply", this::apply);
             applyButton.setVisible(false);
@@ -213,11 +219,23 @@ final class FlightControllerPages {
             if (usb && !busy) readSettings();
         }
 
+        @Override
+        void refresh() {
+            if (readFailed && !busy && System.currentTimeMillis() >= nextRetry) readSettings();
+        }
+
         private void readSettings() {
-            BetaflightUsb.Port port = found.port;
+            if (busy) return;
+            boolean retry = readFailed;
             busy = true;
+            retryButton.setEnabled(false);
             background(() -> {
-                try (BetaflightUsb fc = BetaflightUsb.open(port)) {
+                if (retry) {
+                    // it may have been unplugged and come back on another COM port
+                    List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
+                    if (!ports.isEmpty()) found.port = ports.get(0);
+                }
+                try (BetaflightUsb fc = BetaflightUsb.open(found.port)) {
                     fc.enterCli();
                     String ver = BetaflightPlan.version(fc.command("version"));
                     String features = fc.command("feature");
@@ -230,8 +248,15 @@ final class FlightControllerPages {
                 }
             }, r -> {
                 busy = false;
-                if (r[4] != null) {
-                    version.set(State.BAD, r[4]);
+                retryButton.setEnabled(true);
+                readFailed = r[4] != null;
+                retryButton.setVisible(readFailed);
+                if (readFailed) {
+                    nextRetry = System.currentTimeMillis() + 2000;
+                    version.set(State.BAD, r[4] + "<br>Trying again by itself every few seconds.");
+                    for (CheckRow row : new CheckRow[]{receiver, arm, check}) {
+                        row.set(State.PENDING, "Waiting until Betaflight can be read.");
+                    }
                     return;
                 }
                 version.set(r[0].isEmpty() ? State.WARN : State.OK, r[0].isEmpty() ? "Version not recognised - carrying on." : r[0]);
@@ -291,6 +316,7 @@ final class FlightControllerPages {
                 busy = false;
                 applyButton.setEnabled(true);
                 if (error != null) {
+                    applyButton.setVisible(true); // hidden while the first, automatic apply ran
                     receiver.set(State.BAD, "Could not apply: " + error);
                 } else {
                     receiver.set(State.PENDING, "Saved. Waiting for Betaflight to restart...");
@@ -355,6 +381,7 @@ final class FlightControllerPages {
         @Override
         String status() {
             if (found.port == null) return "Tick the steps off in Betaflight Configurator.";
+            if (readFailed) return "Waiting for the flight controller - close or Disconnect Betaflight Configurator.";
             return busy ? "Working..." : null;
         }
 
