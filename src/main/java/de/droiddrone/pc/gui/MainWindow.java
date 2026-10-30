@@ -12,6 +12,7 @@ import de.droiddrone.pc.LinkMode;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.RcMapper;
 import de.droiddrone.pc.RcSession;
+import de.droiddrone.pc.setup.Tailscale;
 import de.droiddrone.pc.video.VideoPipeline;
 
 import javax.swing.BorderFactory;
@@ -100,6 +101,17 @@ public class MainWindow extends JFrame {
     private final JLabel fcValue = statValue();
     private final JLabel telemetryValue = statValue();
     private final JLabel rcSentValue = statValue();
+    private final JLabel phoneValue = statValue();
+    private final WrappingText phoneWarning = new WrappingText("", Theme.font(Font.BOLD, 12.5f), Theme.BAD);
+    /** Tailscale's view of the phone, checked every few seconds; null when not using Tailscale or no address yet. */
+    private volatile Tailscale.PhoneState phoneState;
+    private final java.util.concurrent.ScheduledExecutorService phoneWatch =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "phoneWatch");
+                t.setDaemon(true);
+                t.setPriority(Thread.MIN_PRIORITY);
+                return t;
+            });
     private final JTextArea log = new JTextArea();
 
     private final JComboBox<Joystick.Info> joystickCombo = new JComboBox<>();
@@ -165,6 +177,7 @@ public class MainWindow extends JFrame {
             else exitFullScreen();
         });
         new Timer(33, e -> refresh()).start();
+        phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, java.util.concurrent.TimeUnit.SECONDS);
         setMinimumSize(new Dimension(1100, 760));
         setSize(1280, 820);
         setLocationRelativeTo(null);
@@ -266,14 +279,18 @@ public class MainWindow extends JFrame {
         });
         link.add(connectButton, c);
 
-        JPanel stats = new JPanel(new GridLayout(4, 2, 8, 6));
+        JPanel stats = new JPanel(new GridLayout(5, 2, 8, 6));
         stats.setOpaque(false);
+        addStat(stats, "PHONE ON TAILSCALE", phoneValue);
         addStat(stats, "PING", pingValue);
         addStat(stats, "FLIGHT CONTROLLER", fcValue);
         addStat(stats, "TELEMETRY PACKETS", telemetryValue);
         addStat(stats, "RC FRAMES SENT", rcSentValue);
         c.insets = new Insets(4, 0, 0, 0);
         link.add(stats, c);
+        phoneWarning.setVisible(false);
+        c.insets = new Insets(8, 0, 0, 0);
+        link.add(phoneWarning, c);
         column.add(link, BorderLayout.NORTH);
 
         JPanel logCard = Theme.card(new BorderLayout(0, 8));
@@ -584,6 +601,7 @@ public class MainWindow extends JFrame {
     }
 
     private void shutdown() {
+        phoneWatch.shutdownNow();
         if (popOut != null) popOut.dispose();
         if (connection != null) disconnect();
         service.stop(); // the main thread leaves its polling loop and exits the app
@@ -672,6 +690,73 @@ public class MainWindow extends JFrame {
         return appData != null && full.startsWith(appData) ? "%APPDATA%" + full.substring(appData.length()) : full;
     }
 
+    // ---------------------------------------------------------------- the phone on Tailscale
+
+    /** Background, every few seconds: is the phone (the address in the settings) on the Tailscale network? */
+    private void checkPhone() {
+        try {
+            String ip = config.getIp();
+            Tailscale.PhoneState state = config.getLinkMode() != LinkMode.PHONE || ip.isEmpty()
+                    ? null : Tailscale.phoneState(Tailscale.status(), ip);
+            SwingUtilities.invokeLater(() -> setPhoneState(state));
+        } catch (RuntimeException e) {
+            de.droiddrone.common.Log.log("Phone check: " + e);
+        }
+    }
+
+    private void setPhoneState(Tailscale.PhoneState state) {
+        Tailscale.PhoneState old = phoneState;
+        phoneState = state;
+        if (state == old) return;
+        if (state != null && state.isProblem() && !isLinkUp()) {
+            logLine("Warning: " + phoneProblem(state));
+        } else if (state == Tailscale.PhoneState.ONLINE && old != null && old.isProblem()) {
+            logLine("The phone is back on Tailscale.");
+        }
+    }
+
+    private boolean isLinkUp() {
+        Connection c = connection;
+        return c != null && c.getLink().getState() == ControlLink.State.READY;
+    }
+
+    /** A live link proves the phone is reachable, whatever Tailscale's (slower) online flag says. */
+    private Tailscale.PhoneState shownPhoneState() {
+        Tailscale.PhoneState s = phoneState;
+        return s != null && s.isProblem() && isLinkUp() ? Tailscale.PhoneState.ONLINE : s;
+    }
+
+    private void refreshPhone() {
+        Tailscale.PhoneState s = shownPhoneState();
+        if (s == null) {
+            setLabel(phoneValue, "-", Theme.MUTED);
+        } else {
+            setLabel(phoneValue, switch (s) {
+                case ONLINE -> "Online";
+                case OFFLINE -> "OFFLINE";
+                case NOT_FOUND -> "NOT FOUND";
+                case PC_OFF -> "PC OFF TAILSCALE";
+                case NOT_INSTALLED -> "NO TAILSCALE";
+            }, s.isProblem() ? Theme.BAD : Theme.OK);
+        }
+        boolean warn = s != null && s.isProblem();
+        if (warn) phoneWarning.setHtml(phoneProblem(s));
+        if (phoneWarning.isVisible() != warn) {
+            phoneWarning.setVisible(warn);
+            phoneWarning.getParent().revalidate();
+        }
+    }
+
+    private static String phoneProblem(Tailscale.PhoneState s) {
+        return switch (s) {
+            case OFFLINE -> "The phone is not connected to Tailscale. On the phone, open Tailscale and switch it on, and check it has mobile data.";
+            case NOT_FOUND -> "The phone address is not a device on your Tailscale network. Run SETUP > Phone setup to find the phone again.";
+            case PC_OFF -> "Tailscale on this PC is off or signed out. Open Tailscale on the PC and connect.";
+            case NOT_INSTALLED -> "Tailscale is not installed on this PC. Run SETUP > PC setup.";
+            case ONLINE -> "";
+        };
+    }
+
     /** What the HUD shows right now; null when not connected. Called on the Swing thread while painting. */
     private OsdRenderer.Data osdData() {
         Connection c = connection;
@@ -680,7 +765,21 @@ public class MainWindow extends JFrame {
         RcSession s = session;
         VideoPipeline v = video;
         return new OsdRenderer.Data(true, l.getState() == ControlLink.State.READY, l.getPing(), s != null && s.isRcEnabled(),
-                l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")));
+                l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
+                osdLinkHint());
+    }
+
+    /** Under LINK LOST on the OSD: the reason, when Tailscale knows it. */
+    private String osdLinkHint() {
+        Tailscale.PhoneState s = shownPhoneState();
+        if (s == null || !s.isProblem()) return null;
+        return switch (s) {
+            case OFFLINE -> "THE PHONE IS NOT CONNECTED TO TAILSCALE";
+            case NOT_FOUND -> "THE PHONE ADDRESS IS NOT ON YOUR TAILSCALE NETWORK";
+            case PC_OFF -> "TAILSCALE ON THIS PC IS OFF";
+            case NOT_INSTALLED -> "TAILSCALE IS NOT INSTALLED ON THIS PC";
+            case ONLINE -> null;
+        };
     }
 
     RcSession rcSession() {
@@ -699,6 +798,7 @@ public class MainWindow extends JFrame {
     }
 
     private void refreshLink() {
+        refreshPhone();
         if (connection == null) {
             videoView.setIdleText("Not connected");
             setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);

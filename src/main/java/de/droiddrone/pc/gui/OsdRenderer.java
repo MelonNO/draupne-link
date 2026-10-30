@@ -23,8 +23,9 @@ import java.util.Locale;
  */
 final class OsdRenderer {
     /** Everything the HUD shows; built fresh for every paint. */
+    /** @param linkHint why the link is down, when known (e.g. the phone is off Tailscale); null otherwise */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
-                VideoPipeline.Stats video, boolean invertPitch) {}
+                VideoPipeline.Stats video, boolean invertPitch, String linkHint) {}
 
     private static final Color ACCENT = Theme.ACCENT; // symbols and labels
     private static final Color YELLOW = Theme.WARN;  // warnings only
@@ -317,6 +318,11 @@ final class OsdRenderer {
         for (String text : big) {
             if (blink) centered(text, w / 2f, y, text.equals("RC OFF - THROTTLE DOWN") ? YELLOW : RED);
             y += 38 * unit;
+        }
+        if (!d.linkReady() && d.linkHint() != null) { // steady, under LINK LOST: why
+            g.setFont(Theme.headingFont(18 * unit));
+            centered(d.linkHint(), w / 2f, y + 4 * unit, YELLOW);
+            return;
         }
         if (d.fcLost()) { // steady, under the blinking title: what it means and where to look
             g.setFont(Theme.headingFont(18 * unit));

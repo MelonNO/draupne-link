@@ -52,6 +52,28 @@ public final class Tailscale {
         }
     }
 
+    /** Can the phone be reached over Tailscale, as far as this PC's Tailscale knows? */
+    public enum PhoneState {
+        ONLINE, OFFLINE, NOT_FOUND, PC_OFF, NOT_INSTALLED;
+
+        public boolean isProblem() {
+            return this != ONLINE;
+        }
+    }
+
+    /**
+     * The phone at phoneIp, from this PC's view of the Tailscale network: online (connected to Tailscale's servers),
+     * offline, or not a device on this network at all; or Tailscale on this PC itself is off or missing.
+     */
+    public static PhoneState phoneState(Status s, String phoneIp) {
+        if (!s.installed()) return PhoneState.NOT_INSTALLED;
+        if (!s.signedIn()) return PhoneState.PC_OFF;
+        for (Peer p : s.peers()) {
+            if (p.ip() != null && p.ip().equals(phoneIp)) return p.online() ? PhoneState.ONLINE : PhoneState.OFFLINE;
+        }
+        return PhoneState.NOT_FOUND;
+    }
+
     /** bestMs / medianMs are over the direct pongs when there are any, otherwise over the relayed ones. */
     public record PingResult(boolean reached, boolean direct, String via, int bestMs, int medianMs, String output) {}
 

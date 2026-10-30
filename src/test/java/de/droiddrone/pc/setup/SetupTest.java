@@ -50,6 +50,19 @@ class SetupTest {
         assertEquals("100.88.0.5", phone.ip());
         assertTrue(phone.online());
         assertFalse(phone.isDirect());
+
+        assertEquals(Tailscale.PhoneState.ONLINE, Tailscale.phoneState(s, "100.88.0.5"));
+        assertEquals(Tailscale.PhoneState.OFFLINE, Tailscale.phoneState(s, "100.88.0.6"), "a known device that is off Tailscale");
+        assertEquals(Tailscale.PhoneState.NOT_FOUND, Tailscale.phoneState(s, "100.88.0.99"), "no such device");
+    }
+
+    @Test
+    void phoneStateWhenThisPcIsOffTailscale() {
+        Tailscale.Status signedOut = Tailscale.parseStatus("{\"BackendState\":\"Stopped\",\"Peer\":null}");
+        assertEquals(Tailscale.PhoneState.PC_OFF, Tailscale.phoneState(signedOut, "100.88.0.5"));
+        assertEquals(Tailscale.PhoneState.NOT_INSTALLED, Tailscale.phoneState(Tailscale.Status.notInstalled(), "100.88.0.5"));
+        assertFalse(Tailscale.PhoneState.ONLINE.isProblem());
+        assertTrue(Tailscale.PhoneState.OFFLINE.isProblem());
     }
 
     @Test
