@@ -1,5 +1,5 @@
 <!-- The release page text: only the version being released. Older versions are in CHANGELOG.md. -->
-## New in 1.0.14
+## New in 1.0.15
 
 - **Warning sounds:** a short beep when LINK LOST, LINK STALL, FAILSAFE or NO FLIGHT CONTROLLER starts, again every 3 s while it lasts (SETTINGS > Warning sounds, on by default).
 - **RADIO FROZEN? and VIDEO FROZEN on the OSD:** armed with not one bit of the radio's input changing for 5 s (a hung USB radio still reports itself), and no new picture for 0.7 s while the stream runs.

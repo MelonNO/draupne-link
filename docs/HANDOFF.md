@@ -4,9 +4,9 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-10-31, 1.0.14)
+## Where things stand (2026-10-31, 1.0.15)
 
-- **Released:** DroidDrone PC **1.0.14** (Latest), bundling phone app **DroidDrone Flight 2.3.0-pc.9**. The fixes alone
+- **Released:** DroidDrone PC **1.0.15** (Latest; 1.0.14 was never released), bundling phone app **DroidDrone Flight 2.3.0-pc.9**. The fixes alone
   (no new features) are tagged `fixes-1.0.14`, a fallback that was never released.
 - **Flies:** RC, video, OSD and telemetry over 4G (phone on Tailscale) work on the real drone.
 - **Waiting on the pilot:**

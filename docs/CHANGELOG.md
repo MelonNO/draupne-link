@@ -2,7 +2,9 @@
 
 Every DroidDrone PC release, newest first. The release pages on GitHub show only that version's changes.
 
-## 1.0.14
+## 1.0.15
+
+(1.0.14 was never released: its release check failed. Its tag stays unused; 1.0.15 is the same with that check fixed.)
 
 ### Fixes from a full code review
 
