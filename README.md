@@ -139,7 +139,7 @@ cd droiddrone-pc
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3
 ```
-Needs JDK 21. To release, set `version` in `build.gradle`, then push a tag `v<version>`. GitHub Actions builds and publishes the installer and the zip, and attaches the phone app pinned in `ApkShare.java` (see [`flight-app/`](flight-app)).
+Needs JDK 21. To release, set `version` in `build.gradle`, put that version's changes in [`docs/RELEASE_NOTES.md`](docs/RELEASE_NOTES.md) (the release page shows only those) and add them to [`docs/CHANGELOG.md`](docs/CHANGELOG.md), then push a tag `v<version>`. GitHub Actions builds and publishes the installer and the zip, and attaches the phone app pinned in `ApkShare.java` (see [`flight-app/`](flight-app)).
 
 | Package | What's in it |
 |---|---|

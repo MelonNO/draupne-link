@@ -86,6 +86,10 @@ public class MainWindow extends JFrame {
     private JComponent controllerCard;
     private ControlLink.State lastState;
     private boolean updatingCombo;
+    /** The controller as a plain field when there is only one (or none); the dropdown appears with two or more. */
+    private final JLabel joystickField = Theme.label("", Theme.font(Font.BOLD, 13.5f), Theme.TEXT);
+    private final java.awt.CardLayout joystickCards = new java.awt.CardLayout();
+    private final JPanel joystickSlot = new JPanel(joystickCards);
 
     private final JComboBox<LinkMode> modeCombo = new JComboBox<>(LinkMode.values());
     private final JLabel modeHint = Theme.label("", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
@@ -164,6 +168,7 @@ public class MainWindow extends JFrame {
         root.add(buildRightColumn(), BorderLayout.CENTER);
 
         modeCombo.addActionListener(e -> updateModeUi());
+        TacticalCombo.install(modeCombo);
         reloadSettings();
         logLine("DroidDrone PC " + de.droiddrone.pc.AppInfo.version() + ". Phone app: DroidDrone Flight " + de.droiddrone.pc.setup.ApkShare.VERSION
                 + " (protocol " + SettingsCommon.versionCompatibleCode + "). Settings: " + shortPath(configFile));
@@ -428,10 +433,18 @@ public class MainWindow extends JFrame {
                 return this;
             }
         });
-        joystickCombo.setPreferredSize(new Dimension(320, 32));
-        joystickCombo.setMaximumSize(new Dimension(420, 32));
+        TacticalCombo.install(joystickCombo);
         joystickCombo.addActionListener(e -> onJoystickChosen());
-        topLeft.add(joystickCombo);
+        joystickField.setOpaque(true);
+        joystickField.setBackground(Theme.PANEL_2);
+        joystickField.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(Theme.LINE, 1),
+                BorderFactory.createEmptyBorder(0, 10, 0, 10)));
+        joystickSlot.setOpaque(false);
+        joystickSlot.add(joystickField, "field");
+        joystickSlot.add(joystickCombo, "combo");
+        joystickSlot.setPreferredSize(new Dimension(320, 32));
+        joystickSlot.setMaximumSize(new Dimension(420, 32));
+        topLeft.add(joystickSlot);
         topLeft.add(Box.createHorizontalStrut(10));
         calibrateButton.addActionListener(e -> calibrate());
         topLeft.add(calibrateButton);
@@ -689,6 +702,15 @@ public class MainWindow extends JFrame {
 
     private void refreshJoystickCombo(JoystickService.Snapshot snap) {
         List<Joystick.Info> list = snap.joysticks();
+        // nothing to choose between: a plain field with the controller's name (or that there is none)
+        boolean choice = list.size() > 1;
+        joystickCards.show(joystickSlot, choice ? "combo" : "field");
+        if (!choice) {
+            String text = list.isEmpty() ? "No controller found - plug in the TX16S (USB Joystick)" : list.get(0).name();
+            if (!text.equals(joystickField.getText())) joystickField.setText(text);
+            joystickField.setForeground(list.isEmpty() ? Theme.WARN : Theme.TEXT);
+            joystickField.setToolTipText(list.isEmpty() ? null : "The only controller found");
+        }
         DefaultComboBoxModel<Joystick.Info> model = (DefaultComboBoxModel<Joystick.Info>) joystickCombo.getModel();
         boolean same = model.getSize() == list.size();
         for (int i = 0; same && i < list.size(); i++) same = model.getElementAt(i).equals(list.get(i));

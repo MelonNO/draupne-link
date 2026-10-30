@@ -41,12 +41,22 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private volatile double displayMs;
     private volatile LatencyMeter meter;
     private Supplier<OsdRenderer.Data> osdData = () -> null;
+    /** Animates the skeleton while there is no picture; stops by itself once video comes (or the view is hidden). */
+    private final javax.swing.Timer skeletonTimer = new javax.swing.Timer(40, null);
 
     VideoView() {
         setDoubleBuffered(false);
         setOpaque(true);
         setBackground(Color.BLACK);
         setPreferredSize(new Dimension(640, 360));
+        skeletonTimer.addActionListener(e -> {
+            boolean noPicture;
+            synchronized (lock) {
+                noPicture = front == null;
+            }
+            if (noPicture && isShowing() && meter == null) repaint();
+            else skeletonTimer.stop();
+        });
         addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override
             public void componentResized(java.awt.event.ComponentEvent e) {
@@ -166,18 +176,11 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
                 drawPicture(g, img, x, y, img.getWidth(), img.getHeight());
             }
         }
-        if (img == null) {
-            g.setColor(Color.BLACK);
-            g.fillRect(0, 0, w, h);
-            Theme.smooth(g);
-            g.setFont(Theme.headingFont(18f));
-            g.setColor(Theme.LINE);
-            drawCentered(g, "VIDEO", h / 2 - 6);
-            g.setFont(Theme.font(Font.PLAIN, 13f));
-            g.setColor(Theme.MUTED);
-            drawCentered(g, idleText, h / 2 + 18);
-        }
         OsdRenderer.Data data = osdEnabled ? osdData.get() : null;
+        if (img == null) {
+            paintSkeleton(g, w, h, data != null && data.connected());
+            if (!skeletonTimer.isRunning()) skeletonTimer.start();
+        }
         if (data != null && data.connected()) {
             // the HUD sits on the picture (letterboxed area), or the 16:9 area while there is no picture yet
             int[] t = target;
@@ -210,6 +213,91 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
 
     boolean isUpsideDown() {
         return upsideDown;
+    }
+
+    /**
+     * No picture yet: a skeleton of the view, military style - faint grid, corner brackets, a pulsing reticle,
+     * placeholder blocks where the OSD sits with a shimmer passing over them, a slow scan line, and the status. With a
+     * live OSD on top, the placeholders are left out (the OSD draws its own blocks there).
+     */
+    private void paintSkeleton(Graphics2D g, int w, int h, boolean osdLive) {
+        g.setColor(Color.BLACK);
+        g.fillRect(0, 0, w, h);
+        int[] t = target;
+        int vw = t[0] > 0 ? t[0] : w, vh = t[1] > 0 ? t[1] : h;
+        int x0 = (w - vw) / 2, y0 = (h - vh) / 2;
+        long now = System.currentTimeMillis();
+        Theme.smooth(g);
+        java.awt.Graphics2D v = (java.awt.Graphics2D) g.create(x0, y0, vw, vh);
+        try {
+            float u = vh / 720f;
+            // grid
+            v.setColor(Theme.alpha(Theme.LINE, 90));
+            for (int i = 1; i < 12; i++) v.drawLine(vw * i / 12, 0, vw * i / 12, vh);
+            for (int i = 1; i < 8; i++) v.drawLine(0, vh * i / 8, vw, vh * i / 8);
+            // corner brackets
+            v.setColor(Theme.alpha(Theme.ACCENT, 150));
+            v.setStroke(new java.awt.BasicStroke(Math.max(1.5f, 2.5f * u)));
+            int a = Math.round(34 * u), m = Math.round(10 * u);
+            v.drawPolyline(new int[]{m, m, m + a}, new int[]{m + a, m, m}, 3);
+            v.drawPolyline(new int[]{vw - m - a, vw - m, vw - m}, new int[]{m, m, m + a}, 3);
+            v.drawPolyline(new int[]{m, m, m + a}, new int[]{vh - m - a, vh - m, vh - m}, 3);
+            v.drawPolyline(new int[]{vw - m - a, vw - m, vw - m}, new int[]{vh - m, vh - m, vh - m - a}, 3);
+            // placeholder blocks where the OSD goes, with a shimmer sweeping across
+            if (!osdLive) {
+                float shimmer = (now % 1600) / 1600f;
+                int[][] blocks = {
+                        {18, 28, 150, 14}, {18, 50, 110, 26}, {18, 84, 170, 12},          // battery
+                        {vwPx(vw, u, 190), 28, 80, 14}, {vwPx(vw, u, 150), 50, 132, 22}, // link
+                        {vwPx(vw, u, 230), 80, 212, 12},
+                        {18, 616, 180, 26}, {18, 652, 120, 14},                           // arm state, mode
+                        {vwPx(vw, u, 190), 604, 172, 16}, {vwPx(vw, u, 150), 630, 132, 16}, // GPS
+                        {Math.round(vw / 2f / u) - 180, 22, 360, 18}};                    // heading tape
+                for (int[] b : blocks) {
+                    int bx = Math.round(b[0] * u), by = Math.round(b[1] * u), bw = Math.round(b[2] * u), bh = Math.round(b[3] * u);
+                    v.setColor(Theme.PANEL_2);
+                    v.fillRect(bx, by, bw, bh);
+                    int sx = Math.round(-vw * 0.3f + vw * 1.6f * shimmer);
+                    v.setPaint(new java.awt.GradientPaint(sx - 120 * u, 0, Theme.alpha(Theme.LINE, 0), sx, 0, Theme.alpha(Theme.LINE, 220), true));
+                    v.fillRect(bx, by, bw, bh);
+                }
+            }
+            // reticle, slowly pulsing
+            float pulse = 0.5f + 0.5f * (float) Math.sin(now / 400.0);
+            int cx = vw / 2, cy = vh / 2, r = Math.round(26 * u);
+            v.setColor(Theme.alpha(Theme.MUTED, Math.round(90 + 110 * pulse)));
+            v.setStroke(new java.awt.BasicStroke(Math.max(1f, 1.5f * u)));
+            v.drawOval(cx - r, cy - r, 2 * r, 2 * r);
+            v.drawLine(cx - 2 * r, cy, cx - r - 4, cy);
+            v.drawLine(cx + r + 4, cy, cx + 2 * r, cy);
+            v.drawLine(cx, cy - 2 * r, cx, cy - r - 4);
+            v.drawLine(cx, cy + r + 4, cx, cy + 2 * r);
+            // scan line drifting down
+            int sy = Math.round((now % 3200) / 3200f * vh);
+            v.setPaint(new java.awt.GradientPaint(0, sy - 40 * u, Theme.alpha(Theme.ACCENT, 0), 0, sy, Theme.alpha(Theme.ACCENT, 70)));
+            v.fillRect(0, Math.round(sy - 40 * u), vw, Math.round(40 * u));
+            v.setColor(Theme.alpha(Theme.ACCENT, 140));
+            v.fillRect(0, sy, vw, Math.max(1, Math.round(u)));
+            // status
+            String dots = ".".repeat((int) (now / 400 % 4));
+            v.setFont(Theme.headingFont(Math.max(14f, 20f * u)));
+            v.setColor(Theme.MUTED);
+            centered(v, "NO VIDEO FEED" + dots, vw, cy + Math.round(3.2f * r));
+            v.setFont(Theme.font(Font.PLAIN, Math.max(12f, 14f * u)));
+            centered(v, idleText, vw, cy + Math.round(3.2f * r) + Math.round(24 * u));
+        } finally {
+            v.dispose();
+        }
+    }
+
+    /** x of a block that hangs from the right edge, in 720-high units (so it scales like the OSD). */
+    private static int vwPx(int vw, float u, int fromRight) {
+        return Math.round(vw / u) - fromRight - 18;
+    }
+
+    private static void centered(java.awt.Graphics2D g, String text, int width, int baseline) {
+        FontMetrics fm = g.getFontMetrics();
+        g.drawString(text, (width - fm.stringWidth(text)) / 2, baseline);
     }
 
     /** Picture and OSD drawn: the rest is Windows putting it on the screen. */
@@ -316,8 +404,4 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         g.drawString(line, 16, 12 + fm.getAscent());
     }
 
-    private void drawCentered(Graphics2D g, String text, int baseline) {
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(text, (getWidth() - fm.stringWidth(text)) / 2, baseline);
-    }
 }

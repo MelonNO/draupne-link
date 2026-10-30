@@ -113,7 +113,7 @@ final class Theme {
     }
 
     static JButton primaryButton(String text) {
-        JButton button = new JButton(text.toUpperCase());
+        JButton button = new TacticalButton(text.toUpperCase(), true);
         button.setFont(headingFont(14.5f));
         button.setBackground(ACCENT);
         button.setForeground(Color.WHITE);
@@ -123,7 +123,7 @@ final class Theme {
     }
 
     static JButton secondaryButton(String text) {
-        JButton button = new JButton(text.toUpperCase());
+        JButton button = new TacticalButton(text.toUpperCase(), false);
         button.setFont(headingFont(13.5f));
         button.setBackground(BG);
         button.setForeground(ACCENT);
