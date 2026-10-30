@@ -194,14 +194,17 @@ public final class Tailscale {
      * Windows wants a restart some time), {@link #ERROR_INSTALL_ALREADY_RUNNING} while another install runs.
      */
     public static Shell.Result installMsi(Path msi, boolean elevate) {
+        // held open (read-only, others may only read) from the signature check until msiexec is done: it can't be swapped
         String script = "$f = " + Shell.psQuote(msi.toString()) + "\n"
+                + "try { $lock = [IO.File]::Open($f, 'Open', 'Read', 'Read') } catch { 'The download could not be opened.'; exit 2 }\n"
                 + "$s = Get-AuthenticodeSignature -LiteralPath $f\n"
                 + "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch 'O=Tailscale Inc\\.') {\n"
-                + "  'The download is not signed by Tailscale, so it was not installed.'; exit 2 }\n"
+                + "  $lock.Close(); 'The download is not signed by Tailscale, so it was not installed.'; exit 2 }\n"
                 + "$msiexec = Join-Path $env:SystemRoot 'System32\\msiexec.exe'\n"
                 + "try { $p = Start-Process -FilePath $msiexec -ArgumentList '/i', ('\"' + $f + '\"'), '/qn', '/norestart' "
                 + (elevate ? "-Verb RunAs " : "") + "-Wait -PassThru -ErrorAction Stop }\n"
-                + "catch { 'The Windows prompt was declined.'; exit 1223 }\n"
+                + "catch { $lock.Close(); 'The Windows prompt was declined.'; exit 1223 }\n"
+                + "$lock.Close()\n"
                 + "if ($p.ExitCode -eq 3010) { exit 0 }\n"
                 + "if ($p.ExitCode -ne 0) { 'Windows Installer error ' + $p.ExitCode }\n"
                 + "exit $p.ExitCode";

@@ -169,7 +169,8 @@ final class DroneSetup {
 
         @Override
         void refresh() {
-            if (motorTestOpen || busy || done || System.currentTimeMillis() < nextTry) return;
+            // the motor test may have the port, however it was opened (Check now or SETTINGS)
+            if (motorTestOpen || MotorTestDialog.isOpen() || busy || done || System.currentTimeMillis() < nextTry) return;
             busy = true;
             boolean mayApply = applies < MAX_APPLIES;
             int cellTarget = cells;
@@ -180,15 +181,33 @@ final class DroneSetup {
         private Read work(boolean mayApply, int cellTarget) {
             List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
             if (ports.isEmpty()) return null;
-            BetaflightUsb.Port port = ports.get(0);
-            try (BetaflightUsb fc = BetaflightUsb.open(port)) {
+            // each port that looks like one, not just the first: a GPS or ESC adapter may come first. Asked over MSP
+            // first (no restart, nothing written); only Betaflight gets the CLI
+            String why = null;
+            for (BetaflightUsb.Port port : ports) {
+                try (BetaflightUsb fc = BetaflightUsb.open(port)) {
+                    String firmware = fc.firmware();
+                    if (!firmware.startsWith("BTFL")) {
+                        why = port.systemName() + " runs " + (firmware.isEmpty() ? "something else" : firmware) + ", not Betaflight - nothing was changed.";
+                        continue;
+                    }
+                    return work(fc, port, mayApply, cellTarget);
+                } catch (IOException e) {
+                    why = port.systemName() + ": " + e.getMessage();
+                }
+            }
+            return new Read(ports.get(0).systemName(), "", false, -1, 0, -1, cellTarget, false, why);
+        }
+
+        private Read work(BetaflightUsb fc, BetaflightUsb.Port port, boolean mayApply, int cellTarget) {
+            try {
                 fc.enterCli();
                 String version = BetaflightPlan.version(fc.command("version"));
                 String features = fc.command("feature");
                 String rate = fc.command("get serial_update_rate_hz");
                 String forced = fc.command("get force_battery_cell_count");
                 List<BetaflightPlan.Change> plan = BetaflightPlan.plan(features, rate, version, forced, cellTarget);
-                boolean apply = mayApply && !plan.isEmpty();
+                boolean apply = mayApply && !plan.isEmpty() && version.startsWith("Betaflight"); // never INAV & co.
                 if (apply) {
                     writing = true;
                     for (BetaflightPlan.Change c : plan) {

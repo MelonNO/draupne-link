@@ -55,6 +55,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile int receivedFps;
     private volatile double megabitsPerSecond;
     private volatile Config currentConfig;
+    /** When the last fragment came (System.currentTimeMillis); the stats go to 0 once it is old. */
+    private volatile long lastFragmentAt;
 
     // decode-thread statistics
     private volatile int shownFps;
@@ -94,15 +96,24 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         synchronized (this) {
             boolean firstConfig = currentConfig == null;
             currentConfig = config;
-            queue.clear();
-            queue.offer(config);
-            if (firstConfig) {
-                earlyFrames.forEach(queue::offer);
-            } else {
+            // a restarted stream: its first frames often come before this (fragments skip the reliable queue) -
+            // keep them from its first key frame on, or the picture waits a whole key-frame interval
+            java.util.List<Object> kept = new java.util.ArrayList<>();
+            if (!firstConfig) {
+                java.util.List<Object> queued = new java.util.ArrayList<>(queue);
+                int start = -1;
+                for (int i = 0; i < queued.size(); i++) {
+                    if (queued.get(i) instanceof FrameAssembler.Frame f && f.streamStart()) start = i;
+                }
+                if (start >= 0) kept.addAll(queued.subList(start, queued.size()));
                 synchronized (assembler) {
-                    assembler.reset(); // a restarted stream: fragments of the old one are useless
+                    assembler.startedAfresh(); // keeps the new stream's fragments, drops the old one's
                 }
             }
+            queue.clear();
+            queue.offer(config);
+            if (firstConfig) earlyFrames.forEach(queue::offer);
+            kept.forEach(queue::offer);
             earlyFrames.clear();
         }
         log("Video: " + (hevc ? "H.265" : "H.264") + " " + width + "x" + height);
@@ -111,6 +122,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     @Override
     public void onVideoFragment(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length) {
         long now = System.currentTimeMillis();
+        lastFragmentAt = now;
         windowBytes += length;
         FrameAssembler.Frame frame;
         long lost;
@@ -125,7 +137,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             bitrate.onFrame(frame.keyFrame(), now, Math.max(receivedFps, 30), ping.getAsInt());
             synchronized (this) {
                 if (currentConfig == null) {
-                    if (earlyFrames.size() < MAX_BACKLOG) earlyFrames.add(frame);
+                    if (frame.keyFrame()) earlyFrames.clear(); // only the newest key frame on can be decoded anyway
+                    if (earlyFrames.size() >= MAX_BACKLOG) earlyFrames.remove(0);
+                    earlyFrames.add(frame);
                 } else {
                     if (queue.size() >= MAX_BACKLOG) {
                         queue.clear(); // hopelessly behind: start over at the next key frame
@@ -181,18 +195,35 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 FrameAssembler.Frame frame = (FrameAssembler.Frame) item;
                 if (decoder == null || (waitingForKey && !frame.keyFrame())) continue;
                 waitingForKey = false;
-                long t0 = System.nanoTime();
-                boolean picture = decoder.decode(frame.data(), frame.data().length);
-                long t1 = System.nanoTime();
-                decodeMs = smooth(decodeMs, (t1 - t0) / 1e6);
-                if (!picture || !queue.isEmpty()) continue; // a newer frame is waiting: don't draw this one
-                int[] size = sink.targetSize();
-                if (size[0] <= 0 || size[1] <= 0) continue;
-                int[] pixels = sink.beginFrame(size[0], size[1]);
-                decoder.convert(pixels, size[0], size[1]);
-                sink.presentFrame();
-                convertMs = smooth(convertMs, (System.nanoTime() - t1) / 1e6);
-                shown++;
+                try {
+                    long t0 = System.nanoTime();
+                    boolean picture = decoder.decode(frame.data(), frame.data().length);
+                    long t1 = System.nanoTime();
+                    decodeMs = smooth(decodeMs, (t1 - t0) / 1e6);
+                    if (!picture || !queue.isEmpty()) continue; // a newer frame is waiting: don't draw this one
+                    int[] size = sink.targetSize();
+                    if (size[0] <= 0 || size[1] <= 0) continue;
+                    int[] pixels = sink.beginFrame(size[0], size[1]);
+                    decoder.convert(pixels, size[0], size[1]);
+                    sink.presentFrame();
+                    convertMs = smooth(convertMs, (System.nanoTime() - t1) / 1e6);
+                    shown++;
+                } catch (RuntimeException e) {
+                    // one bad frame must not end the video: a fresh decoder, from the next key frame
+                    error = e.toString();
+                    log("Video decode error (decoder restarted): " + e);
+                    decoder.close();
+                    decoder = null;
+                    Config c = currentConfig;
+                    if (c != null) {
+                        try {
+                            decoder = new VideoDecoder(c.hevc(), c.codecConfig());
+                        } catch (RuntimeException again) {
+                            log("Video decoder: " + again.getMessage());
+                        }
+                    }
+                    waitingForKey = true;
+                }
             }
         } catch (InterruptedException ignored) {
         } catch (RuntimeException e) {
@@ -215,8 +246,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             damaged = assembler.getDamagedFrames();
             lost = assembler.getLostFrames();
         }
-        return new Stats(c != null && c.hevc(), c == null ? 0 : c.width(), c == null ? 0 : c.height(), receivedFps,
-                shownFps, megabitsPerSecond, decodeMs, convertMs, damaged, lost, error);
+        boolean flowing = System.currentTimeMillis() - lastFragmentAt < 1500; // stopped: no old figures
+        return new Stats(c != null && c.hevc(), c == null ? 0 : c.width(), c == null ? 0 : c.height(), flowing ? receivedFps : 0,
+                flowing ? shownFps : 0, flowing ? megabitsPerSecond : 0, decodeMs, convertMs, damaged, lost, error);
     }
 
     public boolean hasStream() {

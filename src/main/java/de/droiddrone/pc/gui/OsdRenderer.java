@@ -31,9 +31,11 @@ final class OsdRenderer {
      * @param linkHint why the link is down, when known (e.g. the phone is off Tailscale); null otherwise
      * @param channels the sticks this PC sends (PcConfig.CHANNEL_NAMES order), null when none
      * @param preview  the OSD editor's sample: warnings show a sample line, nothing blinks
+     * @param linkStalled nothing from the phone for a moment while the link is up (see ControlLink.isLinkStalled)
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
-                VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview) {}
+                VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
+                boolean linkStalled) {}
 
     private static final Color ACCENT = Theme.ACCENT; // symbols and labels
     private static final Color YELLOW = Theme.WARN;  // warnings only
@@ -66,132 +68,135 @@ final class OsdRenderer {
     void paint(Graphics2D graphics, int x, int y, int w, int h, Data d, OsdLayout layout, Map<OsdElement, Rectangle2D> bounds) {
         if (w < 200 || h < 120 || d == null || !d.connected()) return;
         g = (Graphics2D) graphics.create(x, y, w, h);
-        Theme.smooth(g);
-        this.w = w;
-        this.h = h;
-        this.layout = layout == null ? OsdLayout.defaults() : layout;
-        boundsOut = bounds;
-        unit = h / 720f; // everything scales with the picture
-        long now = System.currentTimeMillis();
-        FcTelemetry t = d.telemetry();
-        FcTelemetry.Attitude att = t == null ? null : t.getAttitude();
-        boolean attFresh = att != null && now - att.receivedAt() < STALE_MS;
-        FcTelemetry.Status status = t == null ? null : t.getStatus();
-        boolean statusFresh = status != null && now - status.receivedAt() < STALE_MS * 2;
-        FcTelemetry.Status s = statusFresh ? status : null;
-        boolean fcFresh = !d.fcLost();
-        FcTelemetry.Battery battery = t == null ? null : t.getBattery();
-        FcTelemetry.Gps gps = t == null ? null : t.getGps();
-        FcTelemetry.Altitude alt = t == null ? null : t.getAltitude();
+        try {
+            Theme.smooth(g);
+            this.w = w;
+            this.h = h;
+            this.layout = layout == null ? OsdLayout.defaults() : layout;
+            boundsOut = bounds;
+            unit = h / 720f; // everything scales with the picture
+            long now = System.currentTimeMillis();
+            FcTelemetry t = d.telemetry();
+            FcTelemetry.Attitude att = t == null ? null : t.getAttitude();
+            boolean attFresh = att != null && now - att.receivedAt() < STALE_MS;
+            FcTelemetry.Status status = t == null ? null : t.getStatus();
+            boolean statusFresh = status != null && now - status.receivedAt() < STALE_MS * 2;
+            FcTelemetry.Status s = statusFresh ? status : null;
+            boolean fcFresh = !d.fcLost();
+            FcTelemetry.Battery battery = t == null ? null : t.getBattery();
+            FcTelemetry.Gps gps = t == null ? null : t.getGps();
+            FcTelemetry.Altitude alt = t == null ? null : t.getAltitude();
 
-        if (attFresh && this.layout.isOn(OsdElement.HORIZON)) horizon(att, d.invertPitch());
-        if (this.layout.isOn(OsdElement.CROSSHAIR)) crosshair(g, w / 2f, h / 2f, unit);
-        element(OsdElement.HEADING, (ex, ey, a) -> {
-            if (attFresh) headingTape(ex, ey, a, att, gps);
-        });
-        element(OsdElement.BATTERY, (ex, ey, a) -> battery(ex, ey, a, t, fcFresh));
-        element(OsdElement.PING, (ex, ey, a) -> ping(ex, ey, a, d.pingMs()));
-        element(OsdElement.NETWORK, (ex, ey, a) -> network(ex, ey, a, t == null ? null : t.getNetwork()));
-        element(OsdElement.VIDEO, (ex, ey, a) -> video(ex, ey, a, d.video()));
-        element(OsdElement.PHONE_BATTERY, (ex, ey, a) -> {
-            int phone = t == null ? -1 : t.getPhoneBatteryPercent();
-            if (phone >= 0) phoneBattery(ex, ey, a, phone, t.isPhoneCharging());
-        });
-        element(OsdElement.ARMED, (ex, ey, a) -> {
-            if (s == null) return;
-            g.setFont(Theme.headingFont(28 * unit));
-            put(s.armed() ? "ARMED" : "DISARMED", ex, ey, s.armed() ? GREEN : YELLOW, a);
-        });
-        element(OsdElement.FLIGHT_MODE, (ex, ey, a) -> {
-            // only once Betaflight's mode names are known: without them ACRO could be wrong
-            if (s != null && t.hasBoxNames()) flightMode(ex, ey, a, s);
-        });
-        element(OsdElement.FLY_TIME, (ex, ey, a) -> {
-            int fly = t == null ? -1 : t.flySeconds(now);
-            if (fly >= 0) value(String.format(Locale.ROOT, "FLY %02d:%02d", fly / 60, fly % 60), ex, ey, a, WHITE);
-        });
-        element(OsdElement.CORE_TEMP, (ex, ey, a) -> {
-            if (s == null || !s.coreTempKnown()) return;
-            int c = s.coreTempC();
-            value("CORE " + c + "°C", ex, ey, a, c >= CORE_TEMP_ALARM_C ? RED : c >= CORE_TEMP_ALARM_C - 10 ? YELLOW : WHITE);
-        });
-        element(OsdElement.GPS_SATS, (ex, ey, a) -> {
-            if (gps == null) return;
-            Color c = !fcFresh ? STALE : gps.fix() >= 2 && gps.sats() >= 6 ? GREEN : gps.fix() >= 1 ? YELLOW : RED;
-            value("SAT " + gps.sats() + (gps.fix() >= 2 ? " 3D" : gps.fix() == 1 ? " 2D" : " NO FIX"), ex, ey, a, c);
-        });
-        element(OsdElement.SPEED, (ex, ey, a) -> {
-            if (gps != null) value(String.format(Locale.ROOT, "SPD %3.0fKM/H", gps.speedKmh()), ex, ey, a, fcFresh ? WHITE : STALE);
-        });
-        element(OsdElement.ALTITUDE, (ex, ey, a) -> {
-            if (alt == null) return;
-            String vario = alt.varioMetersPerSecond() > 0.3 ? " ↑" : alt.varioMetersPerSecond() < -0.3 ? " ↓" : "";
-            value(String.format(Locale.ROOT, "ALT %4.0fM%s", alt.meters(), vario), ex, ey, a, fcFresh ? WHITE : STALE);
-        });
-        element(OsdElement.HOME, (ex, ey, a) -> {
-            if (gps != null && gps.distanceHomeM() >= 0) home(ex, ey, a, gps, attFresh ? att : null, fcFresh);
-        });
+            if (attFresh && this.layout.isOn(OsdElement.HORIZON)) horizon(att, d.invertPitch());
+            if (this.layout.isOn(OsdElement.CROSSHAIR)) crosshair(g, w / 2f, h / 2f, unit);
+            element(OsdElement.HEADING, (ex, ey, a) -> {
+                if (attFresh) headingTape(ex, ey, a, att, gps);
+            });
+            element(OsdElement.BATTERY, (ex, ey, a) -> battery(ex, ey, a, t, fcFresh));
+            element(OsdElement.PING, (ex, ey, a) -> ping(ex, ey, a, d.pingMs()));
+            element(OsdElement.NETWORK, (ex, ey, a) -> network(ex, ey, a, t == null ? null : t.getNetwork()));
+            element(OsdElement.VIDEO, (ex, ey, a) -> video(ex, ey, a, d.video()));
+            element(OsdElement.PHONE_BATTERY, (ex, ey, a) -> {
+                int phone = t == null ? -1 : t.getPhoneBatteryPercent();
+                if (phone >= 0) phoneBattery(ex, ey, a, phone, t.isPhoneCharging());
+            });
+            element(OsdElement.ARMED, (ex, ey, a) -> {
+                if (s == null) return;
+                g.setFont(Theme.headingFont(28 * unit));
+                put(s.armed() ? "ARMED" : "DISARMED", ex, ey, s.armed() ? GREEN : YELLOW, a);
+            });
+            element(OsdElement.FLIGHT_MODE, (ex, ey, a) -> {
+                // only once Betaflight's mode names are known: without them ACRO could be wrong
+                if (s != null && t.hasBoxNames()) flightMode(ex, ey, a, s);
+            });
+            element(OsdElement.FLY_TIME, (ex, ey, a) -> {
+                int fly = t == null ? -1 : t.flySeconds(now);
+                if (fly >= 0) value(String.format(Locale.ROOT, "FLY %02d:%02d", fly / 60, fly % 60), ex, ey, a, WHITE);
+            });
+            element(OsdElement.CORE_TEMP, (ex, ey, a) -> {
+                if (s == null || !s.coreTempKnown()) return;
+                int c = s.coreTempC();
+                value("CORE " + c + "°C", ex, ey, a, c >= CORE_TEMP_ALARM_C ? RED : c >= CORE_TEMP_ALARM_C - 10 ? YELLOW : WHITE);
+            });
+            element(OsdElement.GPS_SATS, (ex, ey, a) -> {
+                if (gps == null) return;
+                Color c = !fcFresh ? STALE : gps.fix() >= 2 && gps.sats() >= 6 ? GREEN : gps.fix() >= 1 ? YELLOW : RED;
+                value("SAT " + gps.sats() + (gps.fix() >= 2 ? " 3D" : gps.fix() == 1 ? " 2D" : " NO FIX"), ex, ey, a, c);
+            });
+            element(OsdElement.SPEED, (ex, ey, a) -> {
+                if (gps != null) value(String.format(Locale.ROOT, "SPD %3.0fKM/H", gps.speedKmh()), ex, ey, a, fcFresh ? WHITE : STALE);
+            });
+            element(OsdElement.ALTITUDE, (ex, ey, a) -> {
+                if (alt == null) return;
+                String vario = alt.varioMetersPerSecond() > 0.3 ? " ↑" : alt.varioMetersPerSecond() < -0.3 ? " ↓" : "";
+                value(String.format(Locale.ROOT, "ALT %4.0fM%s", alt.meters(), vario), ex, ey, a, fcFresh ? WHITE : STALE);
+            });
+            element(OsdElement.HOME, (ex, ey, a) -> {
+                if (gps != null && gps.distanceHomeM() >= 0) home(ex, ey, a, gps, attFresh ? att : null, fcFresh);
+            });
 
-        // extras
-        element(OsdElement.THROTTLE, (ex, ey, a) -> {
-            short[] ch = d.channels();
-            if (ch == null || ch.length <= PcConfig.THROTTLE_INDEX) return;
-            int pct = Math.max(0, Math.min(100, Math.round((ch[PcConfig.THROTTLE_INDEX] - 1000) / 10f)));
-            value(String.format(Locale.ROOT, "THR %3d%%", pct), ex, ey, a, WHITE);
-        });
-        element(OsdElement.CURRENT, (ex, ey, a) -> {
-            if (battery != null) value(String.format(Locale.ROOT, "CURR %.1fA", battery.amps()), ex, ey, a, fcFresh ? WHITE : STALE);
-        });
-        element(OsdElement.MAH_DRAWN, (ex, ey, a) -> {
-            if (battery != null) value("USED " + battery.mahDrawn() + "MAH", ex, ey, a, fcFresh ? WHITE : STALE);
-        });
-        element(OsdElement.PACK_VOLTAGE, (ex, ey, a) -> {
-            if (battery != null && battery.volts() > 0) value(String.format(Locale.ROOT, "PACK %.2fV", battery.volts()), ex, ey, a, fcFresh ? WHITE : STALE);
-        });
-        element(OsdElement.POWER, (ex, ey, a) -> {
-            if (battery != null && battery.volts() > 0) value(String.format(Locale.ROOT, "PWR %.0fW", battery.volts() * battery.amps()), ex, ey, a, fcFresh ? WHITE : STALE);
-        });
-        element(OsdElement.DISTANCE, (ex, ey, a) -> {
-            if (gps == null || gps.travelledM() < 0) return;
-            int m = gps.travelledM();
-            value(m < 1000 ? "DIST " + m + "M" : String.format(Locale.ROOT, "DIST %.2fKM", m / 1000.0), ex, ey, a, fcFresh ? WHITE : STALE);
-        });
-        element(OsdElement.RSSI, (ex, ey, a) -> {
-            int rssi = t == null ? -1 : t.getRssiPercent();
-            if (rssi >= 0) value("RSSI " + rssi + "%", ex, ey, a, !fcFresh ? STALE : rssi < 30 ? RED : rssi < 60 ? YELLOW : WHITE);
-        });
-        element(OsdElement.CPU_LOAD, (ex, ey, a) -> {
-            if (s != null) value("CPU " + s.cpuLoadPercent() + "%", ex, ey, a, s.cpuLoadPercent() >= 80 ? YELLOW : WHITE);
-        });
-        element(OsdElement.VARIO, (ex, ey, a) -> {
-            if (alt != null) value(String.format(Locale.ROOT, "VSPD %+.1fM/S", alt.varioMetersPerSecond()), ex, ey, a, fcFresh ? WHITE : STALE);
-        });
-        element(OsdElement.PITCH, (ex, ey, a) -> {
-            if (attFresh) value(String.format(Locale.ROOT, "PIT %+d°", Math.round(att.pitchDeg() * (d.invertPitch() ? -1 : 1))), ex, ey, a, WHITE);
-        });
-        element(OsdElement.ROLL, (ex, ey, a) -> {
-            if (attFresh) value(String.format(Locale.ROOT, "ROL %+d°", Math.round(att.rollDeg())), ex, ey, a, WHITE);
-        });
-        element(OsdElement.COORDINATES, (ex, ey, a) -> {
-            if (gps == null || gps.latDeg() == 0 && gps.lonDeg() == 0) return;
-            Color c = fcFresh ? WHITE : STALE;
-            value(String.format(Locale.ROOT, "LAT %.6f", gps.latDeg()), ex, ey, a, c);
-            value(String.format(Locale.ROOT, "LON %.6f", gps.lonDeg()), ex, ey + 22 * unit, a, c);
-        });
-        element(OsdElement.ON_TIME, (ex, ey, a) -> {
-            FcTelemetry.Timers timers = t == null ? null : t.getTimers();
-            if (timers != null) value(String.format(Locale.ROOT, "ON %02d:%02d", timers.onSeconds() / 60, timers.onSeconds() % 60), ex, ey, a, WHITE);
-        });
-        element(OsdElement.CLOCK, (ex, ey, a) ->
-                value(java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")), ex, ey, a, WHITE));
-        element(OsdElement.STICKS_LEFT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 2, PcConfig.THROTTLE_INDEX));
-        element(OsdElement.STICKS_RIGHT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 0, 1));
+            // extras
+            element(OsdElement.THROTTLE, (ex, ey, a) -> {
+                short[] ch = d.channels();
+                if (ch == null || ch.length <= PcConfig.THROTTLE_INDEX) return;
+                int pct = Math.max(0, Math.min(100, Math.round((ch[PcConfig.THROTTLE_INDEX] - 1000) / 10f)));
+                value(String.format(Locale.ROOT, "THR %3d%%", pct), ex, ey, a, WHITE);
+            });
+            element(OsdElement.CURRENT, (ex, ey, a) -> {
+                if (battery != null) value(String.format(Locale.ROOT, "CURR %.1fA", battery.amps()), ex, ey, a, fcFresh ? WHITE : STALE);
+            });
+            element(OsdElement.MAH_DRAWN, (ex, ey, a) -> {
+                if (battery != null) value("USED " + battery.mahDrawn() + "MAH", ex, ey, a, fcFresh ? WHITE : STALE);
+            });
+            element(OsdElement.PACK_VOLTAGE, (ex, ey, a) -> {
+                if (battery != null && battery.volts() > 0) value(String.format(Locale.ROOT, "PACK %.2fV", battery.volts()), ex, ey, a, fcFresh ? WHITE : STALE);
+            });
+            element(OsdElement.POWER, (ex, ey, a) -> {
+                if (battery != null && battery.volts() > 0) value(String.format(Locale.ROOT, "PWR %.0fW", battery.volts() * battery.amps()), ex, ey, a, fcFresh ? WHITE : STALE);
+            });
+            element(OsdElement.DISTANCE, (ex, ey, a) -> {
+                if (gps == null || gps.travelledM() < 0) return;
+                int m = gps.travelledM();
+                value(m < 1000 ? "DIST " + m + "M" : String.format(Locale.ROOT, "DIST %.2fKM", m / 1000.0), ex, ey, a, fcFresh ? WHITE : STALE);
+            });
+            element(OsdElement.RSSI, (ex, ey, a) -> {
+                int rssi = t == null ? -1 : t.getRssiPercent();
+                if (rssi >= 0) value("RSSI " + rssi + "%", ex, ey, a, !fcFresh ? STALE : rssi < 30 ? RED : rssi < 60 ? YELLOW : WHITE);
+            });
+            element(OsdElement.CPU_LOAD, (ex, ey, a) -> {
+                if (s != null) value("CPU " + s.cpuLoadPercent() + "%", ex, ey, a, s.cpuLoadPercent() >= 80 ? YELLOW : WHITE);
+            });
+            element(OsdElement.VARIO, (ex, ey, a) -> {
+                if (alt != null) value(String.format(Locale.ROOT, "VSPD %+.1fM/S", alt.varioMetersPerSecond()), ex, ey, a, fcFresh ? WHITE : STALE);
+            });
+            element(OsdElement.PITCH, (ex, ey, a) -> {
+                if (attFresh) value(String.format(Locale.ROOT, "PIT %+d°", Math.round(att.pitchDeg() * (d.invertPitch() ? -1 : 1))), ex, ey, a, WHITE);
+            });
+            element(OsdElement.ROLL, (ex, ey, a) -> {
+                if (attFresh) value(String.format(Locale.ROOT, "ROL %+d°", Math.round(att.rollDeg())), ex, ey, a, WHITE);
+            });
+            element(OsdElement.COORDINATES, (ex, ey, a) -> {
+                if (gps == null || gps.latDeg() == 0 && gps.lonDeg() == 0) return;
+                Color c = fcFresh ? WHITE : STALE;
+                value(String.format(Locale.ROOT, "LAT %.6f", gps.latDeg()), ex, ey, a, c);
+                value(String.format(Locale.ROOT, "LON %.6f", gps.lonDeg()), ex, ey + 22 * unit, a, c);
+            });
+            element(OsdElement.ON_TIME, (ex, ey, a) -> {
+                FcTelemetry.Timers timers = t == null ? null : t.getTimers();
+                if (timers != null) value(String.format(Locale.ROOT, "ON %02d:%02d", timers.onSeconds() / 60, timers.onSeconds() % 60), ex, ey, a, WHITE);
+            });
+            element(OsdElement.CLOCK, (ex, ey, a) ->
+                    value(java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")), ex, ey, a, WHITE));
+            element(OsdElement.STICKS_LEFT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 2, PcConfig.THROTTLE_INDEX));
+            element(OsdElement.STICKS_RIGHT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 0, 1));
 
-        element(OsdElement.WARNINGS, (ex, ey, a) -> warnings(ex, ey, a, d, s, t, now));
-        if (!d.linkReady() || d.fcLost()) lostFrame();
-        element(OsdElement.DEBUG, (ex, ey, a) -> debugLine(ex, ey, a, d.video()));
-        boundsOut = null;
-        g.dispose();
+            element(OsdElement.WARNINGS, (ex, ey, a) -> warnings(ex, ey, a, d, s, t, now));
+            if (!d.linkReady() || d.linkStalled() || d.fcLost()) lostFrame();
+            element(OsdElement.DEBUG, (ex, ey, a) -> debugLine(ex, ey, a, d.video()));
+        } finally { // also if an element throws: no Graphics left open, no bounds kept
+            boundsOut = null;
+            g.dispose();
+        }
     }
 
     /** Draws one element where the layout puts it (nothing if it is off) and notes its bounds for the editor. */
@@ -496,6 +501,7 @@ final class OsdRenderer {
     private void warnings(float x, float y, OsdLayout.Align a, Data d, FcTelemetry.Status s, FcTelemetry t, long now) {
         List<String> big = new ArrayList<>();
         if (!d.linkReady()) big.add("LINK LOST");
+        else if (d.linkStalled()) big.add("LINK STALL");
         if (d.fcLost()) big.add("NO FLIGHT CONTROLLER");
         // Betaflight's real failsafe (stage 2: drop / land / disarm). RXLOSS alone is a pause of 100 ms or more in the
         // sticks: Betaflight holds the last sticks for 300 ms, and keeps the flag 0.5 s after they return
@@ -511,6 +517,12 @@ final class OsdRenderer {
         if (t != null && t.getPhoneBatteryPercent() >= 0 && t.getPhoneBatteryPercent() <= 15 && !t.isPhoneCharging()) big.add("PHONE BATTERY LOW");
         if (d.preview() && big.isEmpty()) big.add("LOW BATTERY"); // the editor: something to see and drag
         boolean blink = d.preview() || (now / 400) % 2 == 0;
+        // the whole block stays in the picture, also when placed low: it moves up by what doesn't fit
+        float below = !big.isEmpty() ? (big.size() - 1) * 38 * unit : 0;
+        if (!d.linkReady() && d.linkHint() != null) below += 38 * unit + 4 * unit;
+        else if (d.fcLost()) below += 38 * unit + 28 * unit;
+        else if (rcGap || (s != null && !s.armed() && !s.blockers().isEmpty())) below += 38 * unit + 4 * unit;
+        y = Math.min(y, h - 14 * unit - below);
         g.setFont(Theme.headingFont(34 * unit));
         for (String text : big) {
             if (blink) put(text, x, y, text.equals("RC OFF - THROTTLE DOWN") || text.equals("PHONE BATTERY LOW") ? YELLOW : RED, a);

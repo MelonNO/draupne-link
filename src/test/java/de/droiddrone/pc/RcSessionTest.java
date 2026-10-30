@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class RcSessionTest {
     private final long[] now = {1_000_000};
+    private final boolean[] linkUp = {true};
     private final List<String> events = new ArrayList<>();
     private final RcMapper mapper = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3"});
     private final RcSession session;
@@ -17,12 +18,40 @@ class RcSessionTest {
     RcSessionTest() throws java.io.IOException {
         // never started: sendRc just returns false, which is all the gate needs
         ControlLink link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 46390, 46391);
-        session = new RcSession(link, mapper, events::add, () -> now[0]);
+        session = new RcSession(link, mapper, events::add, () -> now[0], () -> linkUp[0]);
     }
 
     /** Throttle (axis3) from -1 (1000) to 1 (2000). */
     private static Joystick.State sticks(float throttle) {
         return new Joystick.State(new float[]{0, 0, 0, throttle}, new boolean[0]);
+    }
+
+    @Test
+    void nothingIsSentBeforeTheLinkIsUpAndTheThrottleIsLowThen() {
+        linkUp[0] = false;
+        session.onInput(sticks(-1f));
+        assertFalse(session.isRcEnabled(), "link still connecting");
+        session.onInput(sticks(0.5f)); // throttle raised while waiting
+        linkUp[0] = true;
+        session.onInput(sticks(0.5f));
+        assertFalse(session.isRcEnabled(), "link up with the throttle up: nothing yet");
+        session.onInput(sticks(-1f));
+        assertTrue(session.isRcEnabled());
+    }
+
+    @Test
+    void aLinkLossNeedsTheThrottleLowAgain() {
+        session.onInput(sticks(-1f));
+        session.onInput(sticks(0.4f)); // flying
+        linkUp[0] = false;
+        session.onInput(sticks(0.4f));
+        assertFalse(session.isRcEnabled());
+        now[0] += 300;
+        linkUp[0] = true;
+        session.onInput(sticks(0.4f));
+        assertFalse(session.isRcEnabled(), "unlike a radio blip: the link was down long enough to notice");
+        session.onInput(sticks(-1f));
+        assertTrue(session.isRcEnabled());
     }
 
     @Test

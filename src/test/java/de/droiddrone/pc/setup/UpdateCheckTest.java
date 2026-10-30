@@ -57,8 +57,10 @@ class UpdateCheckTest {
     @Test
     void helperScriptQuotesPathsSafely() {
         String s = SelfUpdate.script(java.nio.file.Path.of("C:\\Temp\\it's here\\Setup.exe"), 1234,
-                java.nio.file.Path.of("C:\\Program Files\\DroidDrone PC\\DroidDrone PC.exe"));
+                java.nio.file.Path.of("C:\\Program Files\\DroidDrone PC\\DroidDrone PC.exe"), "ab12'; xyz");
         assertTrue(s.contains("Wait-Process -Id 1234"));
+        assertTrue(s.contains("if (Get-Process -Id 1234) { exit }"), "still running after 60 s: nothing installed");
+        assertTrue(s.contains("if ($h -ne 'ab12') {"), "checked again before running; only hex digits get into the script");
         assertTrue(s.contains("'C:\\Temp\\it''s here\\Setup.exe' -ArgumentList '/passive','/norestart' -Wait"), s);
         assertTrue(s.contains("$app = 'C:\\Program Files\\DroidDrone PC\\DroidDrone PC.exe'"), s);
     }

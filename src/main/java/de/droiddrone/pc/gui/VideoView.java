@@ -25,8 +25,15 @@ import java.util.function.Supplier;
  * Turning it happens in the same copy (measured: no slower than a plain one).
  */
 class VideoView extends JComponent implements VideoPipeline.FrameSink {
+    /**
+     * Three pictures, so the decoder and the screen never wait for each other: the decoder fills back, presenting
+     * swaps it with ready, painting swaps a fresh ready into front and draws front - outside the lock, and front is
+     * never written while it is shown. The lock only guards the swaps.
+     */
     private final Object lock = new Object();
     private BufferedImage front;
+    private BufferedImage ready;
+    private boolean readyFresh;
     private BufferedImage back;
     private volatile int videoWidth = 16;
     private volatile int videoHeight = 9;
@@ -57,7 +64,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         skeletonTimer.addActionListener(e -> {
             boolean noPicture;
             synchronized (lock) {
-                noPicture = front == null;
+                noPicture = front == null && ready == null;
             }
             if (noPicture && isShowing() && meter == null) repaint();
             else skeletonTimer.stop();
@@ -85,6 +92,8 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     void clear() {
         synchronized (lock) {
             front = null;
+            ready = null;
+            readyFresh = false;
             back = null;
         }
         repaint();
@@ -131,16 +140,17 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     @Override
     public void presentFrame() {
         synchronized (lock) {
-            BufferedImage t = front;
-            front = back;
+            BufferedImage t = ready;
+            ready = back;
             back = t;
+            readyFresh = true;
         }
         presentedNs = System.nanoTime();
         LatencyMeter m = meter;
         if (m != null) {
             BufferedImage shown;
             synchronized (lock) {
-                shown = front;
+                shown = ready; // just presented; only this (decode) thread writes pictures, so it stays as it is
             }
             if (shown != null) {
                 m.offer(((DataBufferInt) shown.getRaster().getDataBuffer()).getData(), shown.getWidth(), shown.getHeight(),
@@ -163,26 +173,23 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             notePainted();
             return;
         }
-        BufferedImage img;
+        BufferedImage img = takeFront();
         int[] shown = null; // where the picture went: width, height
-        synchronized (lock) {
-            img = front;
-            if (img != null) {
-                shown = fit(img.getWidth(), img.getHeight(), w, h);
-                int pw = shown[0], ph = shown[1];
-                int x = (w - pw) / 2;
-                int y = (h - ph) / 2;
-                g.setColor(Color.BLACK);
-                if (y > 0) {
-                    g.fillRect(0, 0, w, y);
-                    g.fillRect(0, y + ph, w, h - y - ph);
-                }
-                if (x > 0) {
-                    g.fillRect(0, 0, x, h);
-                    g.fillRect(x + pw, 0, w - x - pw, h);
-                }
-                drawPicture(g, img, x, y, pw, ph);
+        if (img != null) {
+            shown = fit(img.getWidth(), img.getHeight(), w, h);
+            int pw = shown[0], ph = shown[1];
+            int x = (w - pw) / 2;
+            int y = (h - ph) / 2;
+            g.setColor(Color.BLACK);
+            if (y > 0) {
+                g.fillRect(0, 0, w, y);
+                g.fillRect(0, y + ph, w, h - y - ph);
             }
+            if (x > 0) {
+                g.fillRect(0, 0, x, h);
+                g.fillRect(x + pw, 0, w - x - pw, h);
+            }
+            drawPicture(g, img, x, y, pw, ph);
         }
         OsdRenderer.Data data = osdEnabled ? osdData.get() : null;
         if (img == null) {
@@ -211,6 +218,19 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         int fw = (int) Math.round(iw * s), fh = (int) Math.round(ih * s);
         if (Math.abs(fw - iw) <= 2 && Math.abs(fh - ih) <= 2) return new int[]{iw, ih}; // its own size, give or take rounding
         return new int[]{Math.max(1, fw), Math.max(1, fh)};
+    }
+
+    /** The newest finished picture, to draw outside the lock (Swing thread). */
+    private BufferedImage takeFront() {
+        synchronized (lock) {
+            if (readyFresh) {
+                BufferedImage t = front;
+                front = ready;
+                ready = t;
+                readyFresh = false;
+            }
+            return front;
+        }
     }
 
     /** The camera picture into this rectangle: as it comes, mirrored (front camera) and/or turned 180 degrees. */
@@ -344,12 +364,11 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private void paintLatencyTest(Graphics2D g, int w, int h, LatencyMeter m) {
         g.setColor(Color.BLACK);
         g.fillRect(0, 0, w, h);
-        synchronized (lock) {
-            if (front != null) {
-                int tw = Math.max(80, w / 6);
-                int th = tw * front.getHeight() / front.getWidth();
-                drawPicture(g, front, w - tw - 12, h - th - 12, tw, th);
-            }
+        BufferedImage img = takeFront();
+        if (img != null) {
+            int tw = Math.max(80, w / 6);
+            int th = tw * img.getHeight() / img.getWidth();
+            drawPicture(g, img, w - tw - 12, h - th - 12, tw, th);
         }
         BitMatrix code = m.codeNow(); // as late as possible: the time in it is "now"
         int modules = code.getWidth() + 8; // 4-module white border

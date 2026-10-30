@@ -220,7 +220,13 @@ public final class BetaflightUsb implements AutoCloseable {
         }
         String s = out.toString(StandardCharsets.US_ASCII);
         if (s.isEmpty()) throw new IOException("No answer from the flight controller - is it running Betaflight?");
-        return s;
+        // part of an answer: never read settings from it (or decide what to write)
+        throw new IOException("The flight controller's answer was cut off - try again");
+    }
+
+    /** What firmware answers on this port over MSP ("BTFL", "INAV", ...), without entering the CLI (no restart). */
+    public String firmware() throws IOException {
+        return new String(msp(2 /* MSP_FC_VARIANT */, null), StandardCharsets.US_ASCII).trim();
     }
 
     private void write(String text) throws IOException {

@@ -83,8 +83,9 @@ public class Serial {
     private UsbSerialPort port;
     private UsbDeviceConnection connection;
     private UsbSerialDriver driver;
-    private int threadsId;
-    private int status;
+    // DroidDrone PC: volatile - read by the reader, writer and init threads
+    private volatile int threadsId;
+    private volatile int status;
     private boolean isMavlink;
     private SerialHelper serialHelper;
     private boolean restart;
@@ -94,6 +95,13 @@ public class Serial {
     private final LinkedBlockingQueue<byte[]> pendingMsp = new LinkedBlockingQueue<>(64);
     private final Object writeSignal = new Object();
     private volatile long slowUntil;
+    /**
+     * DroidDrone PC: until then, look for the flight controller every FAST_RETRY_MS, not every 2 s - right after its USB
+     * link went (a loose OTG plug): Betaflight lands or disarms after 1.5 s without sticks.
+     */
+    private volatile long fastRetryUntil;
+    private static final int FAST_RETRY_MS = 150;
+    private static final long FAST_RETRY_FOR_MS = 5000;
 
     public Serial(Context context, Config config){
         this.context = context;
@@ -112,6 +120,7 @@ public class Serial {
         msp.close();
         mavlink.close();
         threadsId++;
+        closePort(); // DroidDrone PC: the old connection, or each re-init leaked one (and its reader stayed blocked)
         Thread initThread = new Thread(initRun);
         initThread.setDaemon(false);
         initThread.setName("serialInitThread");
@@ -145,11 +154,11 @@ public class Serial {
                             }
                         }
                     }
-                    Thread.sleep(2000);
+                    Thread.sleep(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
                 } catch (Exception e) {
                     log("Serial init thread error: " + e);
                     try {
-                        Thread.sleep(2000);
+                        Thread.sleep(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
                     } catch (InterruptedException ignored) {
                     }
                 }
@@ -346,9 +355,15 @@ public class Serial {
                         }
                     }
                 } catch (Exception e) {
+                    if (id != threadsId) return; // closed on purpose
                     serialErrors++;
-                    if (serialErrors > 10) status = STATUS_SERIAL_PORT_ERROR;
                     log("Serial reader thread error: " + e);
+                    // DroidDrone PC: the device gone (unplugged), or reads keep failing: reconnect now, not after 10
+                    // errors (~1 s) plus the service's next check (up to 1 s) plus a 2 s retry
+                    if (!deviceAttached() || serialErrors > 3) {
+                        lostDevice(e.toString());
+                        return;
+                    }
                     try {
                         Thread.sleep(serialPortReadWriteTimeoutMs);
                     } catch (InterruptedException ex) {
@@ -358,6 +373,20 @@ public class Serial {
             }
         }
     };
+
+    /** DroidDrone PC: is the flight controller's USB device still there? */
+    private boolean deviceAttached() {
+        UsbSerialDriver d = driver;
+        if (d == null || config.isUseNativeSerialPort()) return true;
+        return manager.getDeviceList().containsValue(d.getDevice());
+    }
+
+    /** DroidDrone PC: its USB link went: start again at once, and look for it often for a few seconds. */
+    private void lostDevice(String why) {
+        log("Flight controller USB link lost (" + why + "): reconnecting");
+        fastRetryUntil = System.currentTimeMillis() + FAST_RETRY_FOR_MS;
+        if (msp != null && mavlink != null) initialize(msp, mavlink);
+    }
 
     public void writeDataMsp(byte[] data, boolean checkMspCompatibility){
         if (status != STATUS_SERIAL_PORT_OPENED || data == null) return;
@@ -433,11 +462,18 @@ public class Serial {
     private void write(byte[] data, int timeoutMs, boolean isRc){
         long start = System.nanoTime();
         boolean timedOut = false;
+        boolean written = false; // DroidDrone PC: only a write that went out counts as sticks delivered
         try {
             if (config.isUseNativeSerialPort()){
-                if (serialHelper != null && serialHelper.isOpen()) serialHelper.send(data);
+                if (serialHelper != null && serialHelper.isOpen()) {
+                    serialHelper.send(data);
+                    written = true;
+                }
             }else{
-                if (port != null && port.isOpen()) port.write(data, timeoutMs);
+                if (port != null && port.isOpen()) {
+                    port.write(data, timeoutMs);
+                    written = true;
+                }
             }
         } catch (SerialTimeoutException e) {
             timedOut = true;
@@ -447,7 +483,7 @@ public class Serial {
         long ms = (System.nanoTime() - start) / 1_000_000;
         PcLinkStats.write(ms, timedOut);
         if (ms > slowWriteMs) slowUntil = System.currentTimeMillis() + slowBackoffMs;
-        if (isRc && !timedOut) PcLinkStats.rcOut();
+        if (isRc && written) PcLinkStats.rcOut();
     }
 
     public void writeDataMavlink(byte[] data){
@@ -472,9 +508,16 @@ public class Serial {
         signalWriter();
         if (msp != null) msp.close();
         if (mavlink != null) mavlink.close();
+        closePort();
+        status = STATUS_NOT_INITIALIZED;
+    }
+
+    /** The port and its USB connection (or the native serial port), if open. */
+    private void closePort() {
+        signalWriter();
         try {
             if (port != null) port.close();
-        } catch (IOException e) {
+        } catch (Exception e) {
             //
         }
         try {
@@ -483,6 +526,7 @@ public class Serial {
             //
         }
         if (connection != null) connection.close();
-        status = STATUS_NOT_INITIALIZED;
+        port = null;
+        connection = null;
     }
 }

@@ -75,8 +75,9 @@ public final class LinkLog implements AutoCloseable {
                 link.takeMaxTelemetryGapMs(), fcAge == Long.MAX_VALUE ? -1 : fcAge,
                 fresh ? flag(blockers.contains("RXLOSS")) : "", fresh ? flag(blockers.contains("FAILSAFE")) : "",
                 fresh ? flag(s.armed()) : "", blockers, flag(radio), flag(rcOutput), videoFps,
-                channels == null || channels.length <= PcConfig.THROTTLE_INDEX ? "" : channels[PcConfig.THROTTLE_INDEX],
-                channels == null ? "" : java.util.Arrays.toString(channels).replace(",", "").replace("[", "").replace("]", ""),
+                // only sticks that went out: gated off (no throttle-low yet, link down) they weren't sent
+                !rcOutput || channels == null || channels.length <= PcConfig.THROTTLE_INDEX ? "" : channels[PcConfig.THROTTLE_INDEX],
+                !rcOutput || channels == null ? "" : java.util.Arrays.toString(channels).replace(",", "").replace("[", "").replace("]", ""),
                 link.takeMaxPingMs(), link.msSinceLastPong(), path == null ? "" : path,
                 p == null ? "" : p.rcInGapMs(), p == null ? "" : p.rcOutGapMs(), p == null ? "" : p.writeMaxMs(),
                 p == null ? "" : p.writeTimeouts(), p == null ? "" : p.skipped(), "");

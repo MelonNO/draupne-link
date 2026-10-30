@@ -70,6 +70,9 @@ public final class SelfUpdate {
                     progress.update(done, total);
                 }
             }
+        } catch (IOException | RuntimeException e) {
+            Files.deleteIfExists(file); // no half installer left behind
+            throw e;
         }
         if (done != total || !HexFormat.of().formatHex(sha.digest()).equals(r.installerSha256())) {
             Files.deleteIfExists(file);
@@ -78,9 +81,12 @@ public final class SelfUpdate {
         return file;
     }
 
-    /** Starts the helper. The caller must close the app right after; the helper waits for that before installing. */
-    public static void installAndRestart(Path installer, Path app) throws IOException {
-        String script = script(installer, ProcessHandle.current().pid(), app);
+    /**
+     * Starts the helper. The caller must close the app right after; the helper waits for that before installing.
+     * @param sha256 the installer's checksum, checked again right before it runs (it waits in a folder this user can write)
+     */
+    public static void installAndRestart(Path installer, Path app, String sha256) throws IOException {
+        String script = script(installer, ProcessHandle.current().pid(), app, sha256);
         String encoded = Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
         new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                 "-WindowStyle", "Hidden", "-EncodedCommand", encoded)
@@ -92,12 +98,19 @@ public final class SelfUpdate {
     /**
      * Wait for this app to exit, install quietly, start the app again (where the installer put it, if not where it
      * was), and delete the installer. If the pilot declines the Windows prompt, the old version just starts again.
+     * Nothing is installed while the app still runs (after 60 s), or if the installer changed since it was checked.
      */
-    static String script(Path installer, long pid, Path app) {
+    static String script(Path installer, long pid, Path app, String sha256) {
         return String.join("\n",
                 "$ErrorActionPreference = 'SilentlyContinue'",
                 "Wait-Process -Id " + pid + " -Timeout 60",
+                "if (Get-Process -Id " + pid + ") { exit }",
+                // held open (read-only, others may only read) from the check until it has run: it can't be swapped
+                "try { $lock = [IO.File]::Open(" + quote(installer) + ", 'Open', 'Read', 'Read') } catch { exit }",
+                "$h = (Get-FileHash -InputStream $lock -Algorithm SHA256).Hash",
+                "if ($h -ne '" + sha256.replaceAll("[^0-9a-fA-F]", "") + "') { $lock.Close(); Remove-Item -LiteralPath " + quote(installer) + " -Force; exit }",
                 "Start-Process -FilePath " + quote(installer) + " -ArgumentList '/passive','/norestart' -Wait",
+                "$lock.Close()",
                 "$app = " + quote(app),
                 "if (-not (Test-Path -LiteralPath $app)) {",
                 "  $k = Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall' | Get-ItemProperty |",

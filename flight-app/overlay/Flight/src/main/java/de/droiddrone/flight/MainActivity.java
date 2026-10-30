@@ -33,8 +33,6 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
 import android.animation.ObjectAnimator;
 import android.view.MotionEvent;
 import android.view.View;
@@ -85,7 +83,13 @@ public class MainActivity extends Activity {
     private boolean oldAppPrompted;
     /** The touch lock: the whole screen ignores touches but for its HOLD TO UNLOCK box. Null while unlocked. */
     private View touchLock;
-    private ObjectAnimator unlockHold;
+    private ObjectAnimator unlockHold; // only the fill you see
+    /**
+     * Unlocks after a real 2 s hold. A timer, not the end of the fill's animation: with Android's animations switched
+     * off (developer options, some battery savers) an animation ends at once, and a single tap would unlock.
+     */
+    private final android.os.Handler unlockTimer = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable unlockAfterHold = this::unlockTouches;
     private static final long UNLOCK_HOLD_MS = 2000;
     private static final String LOCKED_STATE = "touchLocked";
 
@@ -177,13 +181,11 @@ public class MainActivity extends Activity {
         TextView tvVersion = findViewById(R.id.tvVersion);
         tvVersion.setText(getResources().getString(R.string.version, MainActivity.versionName));
         if (config.isConnectOnStartup() && !DDService.isRunning){
-            new Thread(() -> {
-                try{
-                    Thread.sleep(3000);
-                    startStopService();
-                }catch (Exception ignore){
-                }
-            }).start();
+            // DroidDrone PC: on the UI thread (it updates the screen), and only with the permissions the service needs
+            // - without them its camera / microphone start fails on Android 14
+            new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
+                if (!isFinishing() && !DDService.isRunning && checkPermissions()) startStopService();
+            }, 3000);
         }
     }
 
@@ -431,26 +433,15 @@ public class MainActivity extends Activity {
         View fill = touchLock.findViewById(R.id.unlockFill);
         touchLock.findViewById(R.id.unlockBox).setOnTouchListener((v, e) -> {
             int action = e.getActionMasked();
+            boolean outside = e.getX() < 0 || e.getY() < 0 || e.getX() > v.getWidth() || e.getY() > v.getHeight();
             if (action == MotionEvent.ACTION_DOWN) {
+                cancelUnlockHold(fill); // a hold already running (a second finger) never unlocks on its own
                 unlockHold = ObjectAnimator.ofFloat(fill, "scaleX", 0f, 1f).setDuration(UNLOCK_HOLD_MS);
-                unlockHold.addListener(new AnimatorListenerAdapter() {
-                    private boolean cancelled;
-
-                    @Override
-                    public void onAnimationCancel(Animator animation) {
-                        cancelled = true;
-                    }
-
-                    @Override
-                    public void onAnimationEnd(Animator animation) {
-                        if (!cancelled) unlockTouches();
-                    }
-                });
                 unlockHold.start();
-            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                if (unlockHold != null) unlockHold.cancel();
-                unlockHold = null;
-                fill.setScaleX(0f);
+                unlockTimer.postDelayed(unlockAfterHold, UNLOCK_HOLD_MS);
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
+                    || action == MotionEvent.ACTION_POINTER_DOWN || (action == MotionEvent.ACTION_MOVE && outside)) {
+                cancelUnlockHold(fill); // let go, another finger, or slid off the box: start again
             }
             return true;
         });
@@ -464,7 +455,15 @@ public class MainActivity extends Activity {
         log("Screen locked.");
     }
 
+    private void cancelUnlockHold(View fill) {
+        unlockTimer.removeCallbacks(unlockAfterHold);
+        if (unlockHold != null) unlockHold.cancel();
+        unlockHold = null;
+        fill.setScaleX(0f);
+    }
+
     private void unlockTouches() {
+        unlockTimer.removeCallbacks(unlockAfterHold);
         if (touchLock == null) return;
         ((ViewGroup) touchLock.getParent()).removeView(touchLock);
         touchLock = null;
@@ -548,6 +547,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy(){
+        unlockTimer.removeCallbacks(unlockAfterHold);
         super.onDestroy();
     }
 

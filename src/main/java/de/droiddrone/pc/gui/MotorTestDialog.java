@@ -145,6 +145,11 @@ final class MotorTestDialog extends JFrame {
         open(owner, main, null);
     }
 
+    /** Open now (it may have the flight controller's USB port). */
+    static boolean isOpen() {
+        return open != null && open.isDisplayable();
+    }
+
     /** @param onClosed run once the window is closed (and so stops using the USB port), or null */
     static void open(Window owner, MainWindow main, Runnable onClosed) {
         if (open == null || !open.isDisplayable()) {
@@ -310,67 +315,82 @@ final class MotorTestDialog extends JFrame {
         MotorTest test = null;
         int[] sent = null;
         long lastSend = 0, lastPoll = 0;
-        while (running) {
-            try {
-                if (test == null) {
-                    List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
-                    if (ports.isEmpty()) {
-                        ui(() -> usb.set(State.WARN, "Not found yet. Plug it into this PC with a data USB cable."));
-                        Thread.sleep(1500);
-                        continue;
-                    }
-                    try {
-                        test = MotorTest.open(ports.get(0));
-                    } catch (IOException e) {
-                        String msg = e.getMessage();
-                        ui(() -> usb.set(State.BAD, msg + "<br>Trying again by itself."));
-                        Thread.sleep(2500);
-                        continue;
-                    }
-                    MotorTest.Info i = test.info();
-                    info = i;
-                    sent = null;
-                    ui(() -> connected(i));
-                    main.logLine("Motor test: " + i.port() + ", Betaflight " + i.version() + ", " + i.motorCount() + " motors.");
-                }
-                long now = System.currentTimeMillis();
-                int[] want = wanted;
-                if (!Arrays.equals(want, sent) || now - lastSend >= 250) {
-                    test.set(want);
-                    sent = want;
-                    lastSend = now;
-                }
-                if (now - lastPoll >= 300) {
-                    MotorTest.Live live = test.poll();
-                    lastPoll = now;
-                    if (live.armed()) {
-                        wanted = new int[0];
-                        test.set(wanted);
-                    }
-                    ui(() -> showLive(live));
-                }
-                Thread.sleep(20);
-            } catch (InterruptedException e) {
-                break;
-            } catch (IOException | RuntimeException e) {
-                if (test != null) test.close();
-                test = null;
-                info = null;
-                String msg = e.getMessage();
-                ui(() -> {
-                    stopAll();
-                    showMotors(4, false);
-                    usb.set(State.BAD, "Lost: " + msg + "<br>If a motor still spins, unplug the battery.");
-                });
-                main.logLine("Motor test: lost the flight controller (" + msg + ").");
+        try {
+            while (running) {
                 try {
-                    Thread.sleep(1500);
-                } catch (InterruptedException ie) {
+                    if (test == null) {
+                        List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
+                        if (ports.isEmpty()) {
+                            ui(() -> usb.set(State.WARN, "Not found yet. Plug it into this PC with a data USB cable."));
+                            Thread.sleep(1500);
+                            continue;
+                        }
+                        test = openFirstBetaflight(ports); // not just the first port: a GPS or ESC adapter may come before it
+                        if (test == null) {
+                            Thread.sleep(2500);
+                            continue;
+                        }
+                        MotorTest.Info i = test.info();
+                        info = i;
+                        sent = null;
+                        ui(() -> connected(i));
+                        main.logLine("Motor test: " + i.port() + ", Betaflight " + i.version() + ", " + i.motorCount() + " motors.");
+                    }
+                    long now = System.currentTimeMillis();
+                    int[] want = wanted;
+                    if (!Arrays.equals(want, sent) || now - lastSend >= 250) {
+                        test.set(want);
+                        sent = want;
+                        lastSend = now;
+                    }
+                    if (now - lastPoll >= 300) {
+                        MotorTest.Live live = test.poll();
+                        lastPoll = now;
+                        if (live.armed()) {
+                            wanted = new int[0];
+                            test.set(wanted);
+                        }
+                        ui(() -> showLive(live));
+                    }
+                    Thread.sleep(20);
+                } catch (InterruptedException e) {
                     break;
+                } catch (IOException | RuntimeException e) {
+                    if (test != null) test.close();
+                    test = null;
+                    info = null;
+                    String msg = e.getMessage();
+                    ui(() -> {
+                        stopAll();
+                        showMotors(4, false);
+                        usb.set(State.BAD, "Lost: " + msg + "<br>If a motor still spins, unplug the battery.");
+                    });
+                    main.logLine("Motor test: lost the flight controller (" + msg + ").");
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException ie) {
+                        break;
+                    }
                 }
             }
+        } finally {
+            if (test != null) test.close(); // sends STOP first, whatever ended the loop
         }
-        if (test != null) test.close(); // sends STOP first
+    }
+
+    /** The first of these ports that answers as Betaflight and passes MotorTest's checks; null (and why, shown) if none. */
+    private MotorTest openFirstBetaflight(List<BetaflightUsb.Port> ports) {
+        String why = null;
+        for (BetaflightUsb.Port port : ports) {
+            try {
+                return MotorTest.open(port);
+            } catch (IOException e) {
+                why = port.systemName() + ": " + e.getMessage();
+            }
+        }
+        String msg = why;
+        ui(() -> usb.set(State.BAD, msg + "<br>Trying again by itself."));
+        return null;
     }
 
     private void connected(MotorTest.Info i) {
@@ -474,7 +494,8 @@ final class MotorTestDialog extends JFrame {
 
                 @Override
                 public void mouseWheelMoved(java.awt.event.MouseWheelEvent e) {
-                    if (isEnabled()) set(value - e.getWheelRotation() * 10);
+                    // only in the window in front: Windows scrolls windows under the mouse even when inactive
+                    if (isEnabled() && MotorTestDialog.this.isActive()) set(value - e.getWheelRotation() * 10);
                 }
 
                 @Override
@@ -503,7 +524,7 @@ final class MotorTestDialog extends JFrame {
         }
 
         private void drag(int y) {
-            if (!isEnabled()) return;
+            if (!isEnabled() || !MotorTestDialog.this.isActive()) return;
             double f = 1 - (y - trackTop()) / (double) (trackBottom() - trackTop());
             set((int) Math.round(MotorTest.STOP + Math.max(0, Math.min(1, f)) * (MotorTest.MAX - MotorTest.STOP)));
         }

@@ -111,7 +111,17 @@ public class Main {
         initJoystickOrExit();
         WindowsTuning.apply();
         removeOldPerUserInstall();
-        JoystickService service = new JoystickService(config.getJoystickFilter(), config.getRcRate());
+        int rcRate;
+        try {
+            rcRate = config.getRcRate();
+        } catch (IllegalArgumentException e) { // no console to say so: a message, and the default
+            rcRate = ControlLink.DEFAULT_RC_RATE;
+            String why = e.getMessage();
+            SwingUtilities.invokeLater(() -> javax.swing.JOptionPane.showMessageDialog(null, "Setting " + why
+                    + "; using " + ControlLink.DEFAULT_RC_RATE + ". Fix rcRate in " + configFile + ".", "DroidDrone PC",
+                    javax.swing.JOptionPane.WARNING_MESSAGE));
+        }
+        JoystickService service = new JoystickService(config.getJoystickFilter(), rcRate);
         SwingUtilities.invokeLater(() -> MainWindow.open(config, configFile, service));
         service.run();
         Joystick.terminate();
@@ -197,8 +207,8 @@ public class Main {
         }
         ControlLink link = connection.getLink();
         Runtime.getRuntime().addShutdownHook(new Thread(connection::close));
-        System.out.printf("Joystick: %s%nMode: %s (port %d, key '%s'). Press Enter to disconnect.%n",
-                joystick.name(), connection.getMode(), config.getPort(), config.getKey());
+        System.out.printf("Joystick: %s%nMode: %s (port %d). Press Enter to disconnect.%n",
+                joystick.name(), connection.getMode(), config.getPort()); // not the key: consoles get pasted
         startQuitListener();
 
         RcSession session = new RcSession(link, mapper, msg -> System.out.println("\n" + msg));
@@ -209,7 +219,7 @@ public class Main {
         long nextStatus = 0;
         while (!quit) {
             Joystick.poll();
-            session.onInput(Joystick.read(joystick.id()));
+            session.onInput(Joystick.readSame(joystick)); // only this radio: never another device under its id
 
             ControlLink.State state = link.getState();
             if (state != lastState) {

@@ -25,6 +25,8 @@ import static de.droiddrone.common.Log.log;
 public class ControlLink {
     public static final int MIN_RC_RATE = 10;
     public static final int MAX_RC_RATE = 250;
+    /** As in the settings template. */
+    public static final int DEFAULT_RC_RATE = 250;
     /**
      * RC rate we announce to the Flight app. Its only use there is Msp.setRawRc's minimum gap of 1000 / rate / 2 ms
      * (integer maths): frames arriving closer together are DROPPED, and over 4G frames often arrive bunched, so the drop
@@ -39,6 +41,13 @@ public class ControlLink {
 
     /** No FC data for this long while the link is up: the phone has lost the flight controller. */
     static final long FC_SILENCE_MS = 1500;
+    /**
+     * Nothing at all from the phone for this long while the link is up (video, telemetry and pongs normally arrive many
+     * times a second): a stall. Betaflight has RXLOSS after 100 ms; the link only counts as lost after about 4 s.
+     */
+    static final long STALL_MS = 300;
+    /** A pong older than this: no ping shown (it would look fine while the link is stuck). */
+    static final long PING_STALE_MS = 500;
     /** Time after the link comes up for the first FC data to arrive. */
     static final long FC_GRACE_MS = 3000;
 
@@ -69,6 +78,9 @@ public class ControlLink {
     private volatile FcInfo fcInfo;
     private volatile int pingMs;
     private volatile long lastPingTimestamp;
+    /** When anything last arrived from the phone (System.currentTimeMillis); 0 = nothing yet. */
+    private volatile long lastReceivedAt;
+    private long lastRcErrorLog;
     private final AtomicLong rcFramesSent = new AtomicLong();
     private final AtomicLong telemetryPacketsReceived = new AtomicLong();
     /** Longest pause between two RC frames sent / telemetry packets received since last taken (link log). */
@@ -98,9 +110,14 @@ public class ControlLink {
 
     public void start() throws IOException {
         socket = new DatagramSocket(localPort);
-        socket.setReceiveBufferSize(UdpCommon.packetLength * 300);
-        socket.setSendBufferSize(UdpCommon.packetLength);
-        socket.setTrafficClass(0x10);
+        try {
+            socket.setReceiveBufferSize(UdpCommon.packetLength * 300);
+            socket.setSendBufferSize(UdpCommon.packetLength);
+            socket.setTrafficClass(0x10);
+        } catch (IOException | RuntimeException e) {
+            socket.close(); // or the port stays taken and the next CONNECT fails
+            throw e;
+        }
         udpSender = new UdpSender(socket);
         udpSender.connect(remoteIp, remotePort);
         receiverBuffer = new ReceiverBuffer(udpSender, false, key, key);
@@ -125,6 +142,7 @@ public class ControlLink {
             try {
                 socket.receive(packet);
                 if (!packet.getAddress().equals(remoteIp) || packet.getPort() != remotePort) continue;
+                lastReceivedAt = System.currentTimeMillis();
                 if (handleVideoFragment(packet)) continue;
                 receiverBuffer.addPacket(packet);
             } catch (Exception e) {
@@ -390,14 +408,21 @@ public class ControlLink {
             UdpPacketData packetData = new UdpPacketData(UdpCommon.RcFrame);
             packetData.daos.writeByte(frame.length);
             for (short channel : frame) packetData.daos.writeShort(channel);
-            udpSender.sendPacket(packetData.getData());
+            byte[] data = packetData.getData();
+            // straight out, once: upstream's sendPacket retries ten times and swallows the error, so a dead adapter
+            // looked like frames sent - and a frame late is a frame wrong
+            socket.send(new DatagramPacket(data, data.length, remoteIp, remotePort));
             rcFramesSent.incrementAndGet();
             long now = System.nanoTime();
             if (lastRcNs != 0) maxRcGapNs.accumulateAndGet(now - lastRcNs, Math::max);
             lastRcNs = now;
             return true;
         } catch (IOException e) {
-            log("sendRc error: " + e);
+            long now = System.currentTimeMillis();
+            if (now - lastRcErrorLog >= 1000) { // 250 a second otherwise
+                lastRcErrorLog = now;
+                log("sendRc error: " + e);
+            }
             return false;
         }
     }
@@ -423,7 +448,7 @@ public class ControlLink {
      * cable out, FC unpowered or rebooting). The sticks don't reach the drone then either.
      */
     public boolean isFcLost() {
-        if (getState() != State.READY) return false;
+        if (getState() != State.READY || isLinkStalled()) return false; // a stalled link explains the silence itself
         long now = System.currentTimeMillis();
         return now - readyAt > FC_GRACE_MS && telemetry.msSinceFcData(now) > FC_SILENCE_MS;
     }
@@ -438,7 +463,16 @@ public class ControlLink {
 
     /** @return round-trip time to the Flight phone in ms, or -1 if no recent pong */
     public int getPing() {
-        return System.currentTimeMillis() - lastPingTimestamp > 2000 ? -1 : pingMs;
+        return System.currentTimeMillis() - lastPingTimestamp > PING_STALE_MS ? -1 : pingMs;
+    }
+
+    /**
+     * The link is up but nothing has come from the phone for STALL_MS: the sticks most likely aren't getting through
+     * either. Seen within a third of a second, long before the link counts as lost.
+     */
+    public boolean isLinkStalled() {
+        long last = lastReceivedAt;
+        return getState() == State.READY && last != 0 && System.currentTimeMillis() - last > STALL_MS;
     }
 
     public FcInfo getFcInfo() {
@@ -476,7 +510,10 @@ public class ControlLink {
 
     /** Tells the Flight app we are leaving (it stops streaming), then closes the socket. */
     public void close() {
-        if (!running) return;
+        if (!running) {
+            if (socket != null) socket.close(); // start() may have stopped half way
+            return;
+        }
         try {
             if (isConnected()) udpSender.sendPacket(new UdpPacketData(UdpCommon.Disconnect).getData());
         } catch (IOException e) {

@@ -138,7 +138,10 @@ tasks.register('packageInstaller', Exec) {
             '--icon', iconFile,
             // all users (Program Files), so the installer runs as administrator and can do the PC setup itself;
             // one Windows approval prompt covers it all (src/installer/main.wxs)
-            '--win-dir-chooser', // shows a normal setup wizard; without any dialog option the installer runs invisibly
+            // a normal setup wizard (without any dialog option the installer runs invisibly) - but no folder choice:
+            // the installer runs the app as administrator from its folder, so it must be Program Files, which
+            // ordinary users can't change
+            '--win-shortcut-prompt',
             '--win-shortcut',
             '--win-menu',
             '--win-menu-group', 'DroidDrone PC',
@@ -146,7 +149,7 @@ tasks.register('packageInstaller', Exec) {
             '--win-upgrade-uuid', '5d2f1d3e-6a0b-4c9e-9f53-2b7c1a8e4d61',
             '--resource-dir', file('src/installer'), // main.wxs: PC setup tasks, "Launch DroidDrone PC" box
             '--dest', staging
-    // main.wxs takes check-running.vbs from here (jpackage builds from a copy of the resource dir)
+    // main.wxs takes check-running.js from here (jpackage builds from a copy of the resource dir)
     environment 'DDPC_INSTALLER_DIR', file('src/installer').absolutePath
     doLast {
         copy {

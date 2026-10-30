@@ -15,6 +15,12 @@ public class JoystickService {
 
     private volatile Snapshot snapshot = new Snapshot(List.of(), null, null);
     private volatile int requestedId = -1;
+    /**
+     * The radio in use, once one is: only this device is ever read again. If it disappears there is no input (RC
+     * stops) until it comes back - never another joystick or gamepad, whose axes and switches would go to the drone.
+     * Another device only by choosing it (select).
+     */
+    private volatile Joystick.Info locked;
     private final String initialFilter;
     private final int pollHz;
     private volatile Consumer<Joystick.State> inputListener;
@@ -57,22 +63,33 @@ public class JoystickService {
         }
     }
 
-    private Joystick.Info resolve(List<Joystick.Info> joysticks) {
+    Joystick.Info resolve(List<Joystick.Info> joysticks) {
+        Joystick.Info lock = locked;
+        if (lock != null) {
+            for (Joystick.Info info : joysticks) if (info.sameDevice(lock)) return info; // its id may have changed
+            return null;
+        }
         int id = requestedId;
+        Joystick.Info found = null;
         for (Joystick.Info info : joysticks) {
             if (id >= 0 ? info.id() == id : info.name() != null && info.name().toLowerCase().contains(initialFilter)) {
-                return info;
+                found = info;
+                break;
             }
         }
-        return id >= 0 || joysticks.isEmpty() ? null : joysticks.get(0);
+        if (found == null && id < 0 && !joysticks.isEmpty()) found = joysticks.get(0); // first start: whatever is there
+        if (found != null) locked = found;
+        return found;
     }
 
     public Snapshot getSnapshot() {
         return snapshot;
     }
 
+    /** The pilot chose this device: it becomes the one in use. */
     public void select(int joystickId) {
         requestedId = joystickId;
+        locked = null;
     }
 
     public void setInputListener(Consumer<Joystick.State> listener) {

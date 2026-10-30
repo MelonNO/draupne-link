@@ -224,6 +224,8 @@ final class PhoneGuideWizard {
         private final DefaultComboBoxModel<String> urls = new DefaultComboBoxModel<>();
         private final JComboBox<String> urlChoice = new JComboBox<>(urls);
         private ApkShare share;
+        /** This step is on screen: a download that finishes after it was left must not start the server. */
+        private boolean showing;
         private boolean preparing;
 
         FlightAppPage(MainWindow main) {
@@ -274,6 +276,7 @@ final class PhoneGuideWizard {
                 firewall.setVisible(!Boolean.TRUE.equals(ok)); // shown only when it's missing
                 firewall.set(State.WARN, "No firewall rule yet - Windows may block the phone. SETUP > PC setup adds it.");
             });
+            showing = true;
             if (share != null || preparing) return;
             preparing = true;
             file.set(State.PENDING, "Downloading from GitHub and checking it (about 7 MB)...");
@@ -290,6 +293,10 @@ final class PhoneGuideWizard {
             }, s -> {
                 preparing = false;
                 if (s == null) return;
+                if (!showing) { // left (or the guide closed) while it downloaded: no server left behind
+                    s.close();
+                    return;
+                }
                 share = s;
                 file.set(State.OK, "Verified (SHA-256) and ready to download.");
                 List<String> list = ApkShare.urls();
@@ -312,6 +319,7 @@ final class PhoneGuideWizard {
 
         @Override
         void onHide() {
+            showing = false;
             if (share != null) share.close(); // only serve while this step is open
             share = null;
         }

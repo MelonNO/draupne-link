@@ -35,7 +35,8 @@ public final class MotorTest implements AutoCloseable {
 
     private final BetaflightUsb fc;
     private final Info info;
-    private final Thread stopOnExit = new Thread(this::stop, "motor-test-stop");
+    /** Closes (STOP, then nothing more can be sent): a STOP alone could be overtaken by the motor thread's next send. */
+    private final Thread stopOnExit = new Thread(this::close, "motor-test-stop");
     private boolean closed;
 
     private MotorTest(BetaflightUsb fc, Info info) {

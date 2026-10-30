@@ -28,7 +28,7 @@ These notes were worked out from the upstream source. File references are relati
 
 ## RC
 - `RcFrame` = `[24][count u8][count × int16]`, with 4–18 channels at 1000–2000, sent at `rcRefreshRate` Hz (default 25).
-- The Flight app's only use of `rcRefreshRate` is a minimum gap in `Msp.setRawRc` (and `Mavlink`): frames arriving within `1000 / rate / 2` ms of the previous one are **dropped**. droiddrone-pc announces 250 (a 2 ms window) and sends at its own rate.
+- The Flight app's only use of `rcRefreshRate` is a minimum gap in `Msp.setRawRc` (and `Mavlink`): frames arriving within `1000 / rate / 2` ms of the previous one are **dropped**. droiddrone-pc announces 255, the most the byte holds (a 1 ms window), and sends at its own rate.
 - Channel order is **AETR, then AUX1…** The Flight app applies the FC's `rxmap` (`Msp.processRxMap`) before `MSP_SET_RAW_RC`.
 - The Flight RC thread only forwards frames it actually receives. If no frame arrives, nothing is sent to the FC, and Betaflight's RX-loss failsafe triggers.
 

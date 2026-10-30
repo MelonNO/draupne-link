@@ -13,7 +13,13 @@ import static org.lwjgl.glfw.GLFW.*;
  * Joystick access through GLFW (DirectInput/XInput on Windows). All calls must come from the main thread.
  */
 public final class Joystick {
-    public record Info(int id, String name) {}
+    /** guid: GLFW's device identity (vendor and product), the same after a replug; null if unknown. */
+    public record Info(int id, String name, String guid) {
+        /** The same physical kind of device as other: same GUID and name (ids are reused for other devices). */
+        public boolean sameDevice(Info other) {
+            return other != null && java.util.Objects.equals(guid, other.guid) && java.util.Objects.equals(name, other.name);
+        }
+    }
 
     public record State(float[] axes, boolean[] buttons) {}
 
@@ -37,7 +43,7 @@ public final class Joystick {
     public static List<Info> list() {
         List<Info> found = new ArrayList<>();
         for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; jid++) {
-            if (glfwJoystickPresent(jid)) found.add(new Info(jid, glfwGetJoystickName(jid)));
+            if (glfwJoystickPresent(jid)) found.add(new Info(jid, glfwGetJoystickName(jid), glfwGetJoystickGUID(jid)));
         }
         return found;
     }
@@ -52,6 +58,19 @@ public final class Joystick {
     }
 
     /** @return current axes/buttons, or null if the joystick is gone */
+    /**
+     * This physical device's state wherever it is now (GLFW reuses ids for other devices); null when it is gone -
+     * never another device's.
+     */
+    public static State readSame(Info device) {
+        int jid = device.id();
+        if (glfwJoystickPresent(jid) && device.sameDevice(new Info(jid, glfwGetJoystickName(jid), glfwGetJoystickGUID(jid)))) {
+            return read(jid);
+        }
+        for (Info info : list()) if (info.sameDevice(device)) return read(info.id());
+        return null;
+    }
+
     public static State read(int jid) {
         FloatBuffer axesBuf = glfwGetJoystickAxes(jid);
         ByteBuffer buttonsBuf = glfwGetJoystickButtons(jid);

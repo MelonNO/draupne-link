@@ -9,20 +9,32 @@ import java.util.Map;
  * Puts encoded frames back together from their UDP fragments (port of upstream Control FrameFragments and the
  * reassembly in Control Udp.processData). Latency first, like upstream: a frame is released as soon as its first and
  * last fragments are in - a missing middle fragment is not waited for (the decoder conceals it) - and older unfinished
- * frames are dropped the moment a newer one completes. Not thread-safe: call from the receive thread only.
+ * frames are dropped the moment a newer one completes. Fragments of a frame older than (or the same as) the last one
+ * released are dropped: on 4G packets can come reordered or twice, and a frame decoded out of turn smears the picture.
+ * The phone numbers a restarted stream from 1, and its first frame is a key frame: key frame 1 starts afresh.
+ * Not thread-safe: call from the receive thread only.
  */
 public class FrameAssembler {
-    /** @param damaged true if fragments were missing (zero-filled) */
-    public record Frame(byte[] data, boolean keyFrame, short number, boolean damaged) {}
+    /**
+     * @param damaged     true if fragments were missing (zero-filled)
+     * @param streamStart the first frame of a (re)started stream (key frame number 1)
+     */
+    public record Frame(byte[] data, boolean keyFrame, short number, boolean damaged, boolean streamStart) {}
 
     private static final int MAX_PENDING = 64;
     /** Frame numbers count 1..32767 and wrap; numbers within this distance behind a frame count as older. */
     private static final int ORDER_WINDOW = 1000;
+    /** Bigger than any frame the phone sends; a size from a broken packet beyond it is not allocated. */
+    static final int MAX_FRAME_BYTES = 8 << 20;
 
     private final Map<Short, Pending> pending = new HashMap<>();
     private long completedFrames;
     private long damagedFrames;
     private long lostFrames;
+    /** The newest frame released, or null; nothing at or before it is put together again. */
+    private Short lastReleased;
+    /** Key frame 1 has come since the last {@link #startedAfresh()}: a new stream is under way. */
+    private boolean streamRestarted;
 
     private static final class Pending {
         final boolean keyFrame;
@@ -71,13 +83,21 @@ public class FrameAssembler {
      * @return the finished frame, or null
      */
     public Frame put(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length) {
-        if (offset < 0 || length < 0 || (offset == 0 && frameSize <= 0)) return null;
+        if (offset < 0 || length < 0 || (offset == 0 && (frameSize <= 0 || frameSize > MAX_FRAME_BYTES))) return null;
+        if (offset > MAX_FRAME_BYTES) return null;
+        if (keyFrame && frameNum == 1 && lastReleased != null && lastReleased != 1 && !pending.containsKey(frameNum)) {
+            pending.clear(); // the phone restarted its stream: the old one's leftovers are useless
+            lastReleased = null;
+            streamRestarted = true;
+        }
+        if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
         byte[] data = new byte[length];
         System.arraycopy(buf, dataOffset, data, 0, length);
         if (offset == 0 && frameSize == length) { // whole frame in one packet
             dropOlderThan(frameNum, keyFrame);
             completedFrames++;
-            return new Frame(data, keyFrame, frameNum, false);
+            lastReleased = frameNum;
+            return new Frame(data, keyFrame, frameNum, false, keyFrame && frameNum == 1);
         }
         Pending frame = pending.get(frameNum);
         if (frame == null) {
@@ -92,7 +112,8 @@ public class FrameAssembler {
         dropOlderThan(frameNum, keyFrame);
         boolean damaged = !frame.complete();
         if (damaged) damagedFrames++; else completedFrames++;
-        return new Frame(frame.assemble(), frame.keyFrame, frameNum, damaged);
+        lastReleased = frameNum;
+        return new Frame(frame.assemble(), frame.keyFrame, frameNum, damaged, frame.keyFrame && frameNum == 1);
     }
 
     /** Older frames can no longer be shown in order; a finished P-frame leaves pending key frames alone (as upstream). */
@@ -124,6 +145,19 @@ public class FrameAssembler {
 
     public void reset() {
         pending.clear();
+        lastReleased = null;
+        streamRestarted = false;
+    }
+
+    /**
+     * A new stream configuration came: true if this assembler already saw the new stream start (its key frame 1), so
+     * what it holds belongs to it; then it carries on. Otherwise it starts afresh.
+     */
+    public boolean startedAfresh() {
+        boolean restarted = streamRestarted;
+        streamRestarted = false;
+        if (!restarted) reset();
+        return restarted;
     }
 
     public long getCompletedFrames() {

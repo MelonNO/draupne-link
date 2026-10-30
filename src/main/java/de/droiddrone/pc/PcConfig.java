@@ -72,7 +72,8 @@ public class PcConfig {
      * Applies updates in memory and writes them to file, keeping its comments and layout:
      * existing "key=" lines are replaced in place, new keys are appended. A missing file starts from the template.
      */
-    public void save(Path file, Map<String, String> updates) throws IOException {
+    /** Synchronized: saves can come from the Swing thread and from a background one (the OSD editor's). */
+    public synchronized void save(Path file, Map<String, String> updates) throws IOException {
         List<String> lines;
         if (Files.exists(file)) {
             lines = new ArrayList<>(Files.readAllLines(file, StandardCharsets.UTF_8));

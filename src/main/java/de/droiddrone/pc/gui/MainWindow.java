@@ -844,8 +844,16 @@ public class MainWindow extends JFrame {
     /** SETTINGS > OSD: shows on the live OSD at once (also in the popped-out video) and is saved. */
     void setOsdLayout(OsdLayout layout) {
         videoView.setOsdLayout(layout);
-        save(layout.toSettings());
+        Map<String, String> settings = layout.toSettings();
+        settingsWriter.execute(() -> save(settings)); // the whole file, on every switch or drag: not on the Swing thread
     }
+
+    /** Writes settings in the background, one after another (in order). */
+    private final java.util.concurrent.ExecutorService settingsWriter = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "settingsWriter");
+        t.setDaemon(true);
+        return t;
+    });
 
     private void shutdown() {
         phoneWatch.shutdownNow();
@@ -1020,7 +1028,7 @@ public class MainWindow extends JFrame {
                         return;
                     }
                     try {
-                        de.droiddrone.pc.setup.SelfUpdate.installAndRestart(installer, app);
+                        de.droiddrone.pc.setup.SelfUpdate.installAndRestart(installer, app, r.installerSha256());
                         logLine("Installing DroidDrone PC " + r.version() + ": closing now, it starts again when done.");
                         shutdown();
                     } catch (IOException ex) {
@@ -1129,7 +1137,7 @@ public class MainWindow extends JFrame {
         VideoPipeline v = video;
         return new OsdRenderer.Data(true, l.getState() == ControlLink.State.READY, l.getPing(), s != null && s.isRcEnabled(),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
-                osdLinkHint(), s == null ? null : s.getLastChannels(), false);
+                osdLinkHint(), s == null ? null : s.getLastChannels(), false, l.isLinkStalled());
     }
 
     /** Under LINK LOST on the OSD: the reason, when Tailscale knows it. */
@@ -1391,6 +1399,10 @@ public class MainWindow extends JFrame {
     }
 
     void logLine(String text) {
+        if (!SwingUtilities.isEventDispatchThread()) { // called from link, motor and settings threads too
+            SwingUtilities.invokeLater(() -> logLine(text));
+            return;
+        }
         log.append(LocalTime.now().format(TIME) + "  " + text + "\n");
         LinkLog l = linkLog;
         if (l != null) {

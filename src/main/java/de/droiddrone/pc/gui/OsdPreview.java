@@ -29,7 +29,7 @@ final class OsdPreview {
     /** The sample, refreshed so it never goes stale (and the fly time runs while the editor is open). */
     OsdRenderer.Data data() {
         telemetry.parse(new DataReader(packet, true), BETAFLIGHT);
-        return new OsdRenderer.Data(true, true, 42, true, false, telemetry, VIDEO, false, null, CHANNELS, true);
+        return new OsdRenderer.Data(true, true, 42, true, false, telemetry, VIDEO, false, null, CHANNELS, true, false);
     }
 
     private static byte[] packet() {

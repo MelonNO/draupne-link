@@ -31,6 +31,7 @@ if (-not (Test-Path (Join-Path $sdk 'ndk\26.3.11579264'))) { throw "Android SDK 
 if (-not $jdk -or -not (Test-Path (Join-Path $jdk 'bin\java.exe'))) { throw 'JDK 17 not found (set JAVA17_HOME)' }
 if (-not (Test-Path (Join-Path $upstream 'libuvccamera\build.gradle'))) {
     Invoke-Tool { git -C $upstream submodule update --init libuvccamera }
+    if ($LASTEXITCODE -ne 0) { throw 'Could not fetch upstream/libuvccamera (git submodule update failed)' }
 }
 
 # signing key: created once, kept outside the repo
@@ -46,8 +47,12 @@ if (-not $keystore) {
         [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
         $password = [Convert]::ToBase64String($bytes) -replace '[^A-Za-z0-9]', 'x'
         Set-Content -Path $passwordFile -Value $password -NoNewline -Encoding ascii
-        Invoke-Tool { & (Join-Path $jdk 'bin\keytool.exe') -genkeypair -keystore $keystore -storepass $password -keypass $password `
-            -alias flight -keyalg RSA -keysize 4096 -validity 10000 -dname 'CN=DroidDrone Flight for DroidDrone PC' } | Out-Null
+        # the password through the environment, not the command line (other programs can read command lines)
+        $env:DD_NEW_KEY_PASSWORD = $password
+        Invoke-Tool { & (Join-Path $jdk 'bin\keytool.exe') -genkeypair -keystore $keystore -storepass:env DD_NEW_KEY_PASSWORD `
+            -keypass:env DD_NEW_KEY_PASSWORD -alias flight -keyalg RSA -keysize 4096 -validity 10000 `
+            -dname 'CN=DroidDrone Flight for DroidDrone PC' } | Out-Null
+        Remove-Item Env:DD_NEW_KEY_PASSWORD
         if ($LASTEXITCODE -ne 0) { throw 'keytool failed' }
         Write-Host "New signing key: $keystore (back it up: updates must be signed with the same key)"
     }

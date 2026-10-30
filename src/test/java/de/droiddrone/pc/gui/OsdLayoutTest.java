@@ -69,6 +69,23 @@ class OsdLayoutTest {
     }
 
     @Test
+    void warningsPlacedLowStayInThePicture() {
+        OsdLayout low = OsdLayout.defaults().with(OsdElement.WARNINGS, new OsdLayout.Placement(true, 0.5, 0.97));
+        OsdRenderer.Data sample = new OsdPreview().data();
+        // the longest block: two warnings and the two lines about the lost flight controller
+        OsdRenderer.Data d = new OsdRenderer.Data(true, true, 42, false, true, sample.telemetry(), sample.video(), false, null,
+                sample.channels(), false, false);
+        BufferedImage img = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        Map<OsdElement, Rectangle2D> bounds = new EnumMap<>(OsdElement.class);
+        new OsdRenderer().paint(g, 0, 0, 1280, 720, d, low, bounds);
+        g.dispose();
+        Rectangle2D w = bounds.get(OsdElement.WARNINGS);
+        assertNotNull(w);
+        assertTrue(w.getMaxY() <= 720, "bottom of the warnings: " + w.getMaxY());
+    }
+
+    @Test
     void everyElementDrawsInsideThePictureWithTheSampleData() {
         OsdLayout all = OsdLayout.defaults();
         for (OsdElement e : OsdElement.values()) all = all.with(e, new OsdLayout.Placement(true, all.get(e).x(), all.get(e).y()));

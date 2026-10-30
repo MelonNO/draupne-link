@@ -12,10 +12,10 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           submodules: recursive
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
@@ -27,11 +27,16 @@ jobs:
             choco install wixtoolset --version 3.14.1 -y --no-progress
             Add-Content $env:GITHUB_PATH "C:\Program Files (x86)\WiX Toolset v3.14\bin"
           }
-      - name: Check the tag matches the app version
+      - name: Check the tag matches the app version, and the phone app it ships matches the phone app source
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }} # through the environment: a tag name is never pasted into the script
         run: |
           $version = (Select-String -Path build.gradle -Pattern "^version = '(.+)'").Matches[0].Groups[1].Value
-          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match version $version in build.gradle" }
+          if ("v$version" -ne $env:TAG) { throw "Tag $env:TAG does not match version $version in build.gradle" }
+          $apk = [regex]::Match((Get-Content src/main/java/de/droiddrone/pc/setup/ApkShare.java -Raw), 'String VERSION = "([^"]+)"').Groups[1].Value
+          $phone = (Select-String -Path flight-app/overlay/Flight/build.gradle -Pattern 'versionName "([^"]+)"').Matches[0].Groups[1].Value
+          if ($apk -ne $phone) { throw "ApkShare.VERSION is $apk but the phone app source is $phone: publish that phone app and pin it first" }
       - name: Test, build installer and zip
         run: .\gradlew.bat --no-daemon test releaseZip packageInstaller
       # The phone app is built and signed off CI (flight-app/build.ps1, key outside the repo) and stored in its own
@@ -51,7 +56,7 @@ jobs:
           if ($got -ne $sha) { throw "$name has SHA-256 $got, expected $sha" }
           Write-Host "$name OK ($sha)"
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: DroidDrone PC ${{ github.ref_name }}
           body_path: docs/RELEASE_NOTES.md

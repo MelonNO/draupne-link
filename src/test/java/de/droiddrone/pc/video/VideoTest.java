@@ -63,6 +63,39 @@ class VideoTest {
     }
 
     @Test
+    void lateAndDuplicateFragmentsAreDropped() {
+        FrameAssembler a = new FrameAssembler();
+        byte[] whole = new byte[300];
+        assertNotNull(a.put(false, (short) 5, 0, 50, whole, 0, 50));
+        assertNull(a.put(false, (short) 5, 0, 50, whole, 0, 50), "the same datagram twice: not decoded twice");
+        assertNull(a.put(false, (short) 4, 0, 50, whole, 0, 50), "an older frame after a newer one: not decoded");
+        // frame 6 released with its middle missing; its middle comes late: no zombie, nothing counted lost for it
+        assertNull(a.put(false, (short) 6, 0, 300, whole, 0, 100));
+        assertNotNull(a.put(false, (short) 6, 200, 0, whole, 200, 100));
+        long lost = a.getLostFrames();
+        assertNull(a.put(false, (short) 6, 100, 0, whole, 100, 100));
+        assertNotNull(a.put(false, (short) 7, 0, 50, whole, 0, 50));
+        assertEquals(lost, a.getLostFrames());
+    }
+
+    @Test
+    void aRestartedStreamStartsAgainAtKeyFrameOne() {
+        FrameAssembler a = new FrameAssembler();
+        byte[] whole = new byte[100];
+        assertNotNull(a.put(false, (short) 300, 0, 50, whole, 0, 50));
+        FrameAssembler.Frame f = a.put(true, (short) 1, 0, 50, whole, 0, 50);
+        assertNotNull(f, "frame 1 after 300: a new stream, not an old frame");
+        assertTrue(f.streamStart());
+        assertTrue(a.startedAfresh(), "the assembler already holds the new stream");
+        assertNotNull(a.put(false, (short) 2, 0, 50, whole, 0, 50));
+    }
+
+    @Test
+    void absurdFrameSizesAreNotAllocated() {
+        assertNull(new FrameAssembler().put(true, (short) 1, 0, Integer.MAX_VALUE, new byte[10], 0, 10));
+    }
+
+    @Test
     void frameNumbersWrapAround() {
         assertTrue(FrameAssembler.isOlder((short) 32766, (short) 2));
         assertFalse(FrameAssembler.isOlder((short) 2, (short) 32766));

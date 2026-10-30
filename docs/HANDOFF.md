@@ -30,6 +30,9 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
   - The phone's version record on a real phone.
   - OSD pitch direction (`osdInvertPitch`).
   - Phone app 2.3.0-pc.7's touch lock and portrait layout.
+  - The fixes tagged `fixes-1.0.14` (see CHANGELOG): the phone's fast USB reconnect (aim: sticks back within 1.5 s of
+    an OTG blip), LINK STALL, the radio lock, the installer without folder choice and its JScript check (built, never
+    run), the CI phone-app job.
   - The motor test's PROPS IN / OUT animation and the OSD editor as a maximised window (built; not looked at while a
     flight controller was on this PC's USB).
   - The motor test (SETTINGS > Motor test): MSP_SET_MOTOR over USB, written from Betaflight's MSP and only tested
@@ -113,5 +116,5 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
 | Video | `video/` (`VideoPipeline`, `VideoDecoder`, `FrameAssembler`, `BitrateControl`, `LatencyMeter`) |
 | Window, OSD, wizards | `gui/` (`MainWindow`, `VideoView`, `OsdRenderer`, `OsdLayout` / `OsdElement` / `OsdSettingsDialog` (SETTINGS > OSD), `SetupWizard`, `PcSetupWizard`, `PhoneGuideWizard`, `DroneSetup`, `Tactical*`) |
 | Setup helpers | `setup/` (`Tailscale`, `BetaflightPlan`, `BetaflightUsb`, `ApkShare`, `MotorTest`, `UpdateCheck`, `SelfUpdate`, `PcPrep`) |
-| Installer | `src/installer/main.wxs`, `check-running.vbs` |
+| Installer | `src/installer/main.wxs`, `check-running.js` |
 | Phone app | `flight-app/` (overlay on upstream Flight 2.3.0; see its README) |

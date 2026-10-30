@@ -54,7 +54,11 @@ public final class Shell {
             }
             Process process = builder.start();
             process.getOutputStream().close();
-            CompletableFuture<String> output = CompletableFuture.supplyAsync(() -> read(process.getInputStream()));
+            // its own thread: on the shared pool, a long install's output would hold up quick checks (tailscale status)
+            CompletableFuture<String> output = new CompletableFuture<>();
+            Thread reader = new Thread(() -> output.complete(read(process.getInputStream())), "shellOutput");
+            reader.setDaemon(true);
+            reader.start();
             if (!process.waitFor(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                 process.destroyForcibly();
                 return new Result(-1, output.getNow("") + "\n(timed out)");
