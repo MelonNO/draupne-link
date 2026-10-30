@@ -36,7 +36,7 @@ jobs:
           if ("v$version" -ne $env:TAG) { throw "Tag $env:TAG does not match version $version in build.gradle" }
           $apk = [regex]::Match((Get-Content src/main/java/de/droiddrone/pc/setup/ApkShare.java -Raw), 'String VERSION = "([^"]+)"').Groups[1].Value
           $phone = (Select-String -Path flight-app/overlay/Flight/build.gradle -Pattern 'versionName "([^"]+)"').Matches[0].Groups[1].Value
-          if ($apk -ne $phone) { throw "ApkShare.VERSION is $apk but the phone app source is $phone: publish that phone app and pin it first" }
+          if ($apk -ne $phone) { throw "ApkShare.VERSION is $apk but the phone app source is ${phone} - publish that phone app and pin it first" }
       - name: Test, build installer and zip
         run: .\gradlew.bat --no-daemon test releaseZip packageInstaller
       # The phone app is built and signed off CI (flight-app/build.ps1, key outside the repo) and stored in its own
