@@ -230,8 +230,26 @@ public class MainWindow extends JFrame {
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         right.setOpaque(false);
         setupButton.setToolTipText("First-time setup, or PC, phone or drone setup on its own");
+        // a click on SETUP while its menu is open closes the menu first (any click outside a menu does), and then
+        // reached the button and opened it again: a second click on SETUP must just close it
+        long[] menuClosedAt = {0};
         setupButton.addActionListener(e -> {
+            if (System.currentTimeMillis() - menuClosedAt[0] < 250) return;
             JPopupMenu menu = setupMenu(); // right-aligned under the button, so it stays inside the window
+            menu.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+                @Override
+                public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent ev) {
+                }
+
+                @Override
+                public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent ev) {
+                    menuClosedAt[0] = System.currentTimeMillis();
+                }
+
+                @Override
+                public void popupMenuCanceled(javax.swing.event.PopupMenuEvent ev) {
+                }
+            });
             menu.show(setupButton, setupButton.getWidth() - menu.getPreferredSize().width, setupButton.getHeight() + 4);
         });
         updateButton.setVisible(false);

@@ -2,6 +2,9 @@
 
 **`DroidDrone-PC-Setup-*.exe`** is the installer. Run it and click through it (Next → Install → Finish), approving the Windows prompt once. It installs DroidDrone PC for all users and sets up this PC by itself: Tailscale, firewall rules and the High performance power plan. DroidDrone PC starts when you press Finish; follow the setup wizard that opens on the first start.
 
+New in 1.0.7:
+- Clicking **SETUP** again now closes its menu (it used to open it again).
+
 New in 1.0.6:
 - **Phone app 2.3.0-pc.4: fixes the arming blocks ("ARMING BLOCKED: RXLOSS") and the micro failsafes.** The phone's measurements showed the cause: sticks reached the phone every ~12 ms, but some USB writes to the flight controller took ~100 ms. The app read from the flight controller with a 100 ms timeout, and on many phones such a read holds every write on the same USB connection until data comes or the timeout runs out. It now reads asynchronously, which never blocks a write.
 - **COPY** at the top right of the log copies the whole log to the clipboard, e.g. to send it to someone.
