@@ -4,12 +4,13 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-10-30, 1.0.13)
+## Where things stand (2026-10-31, 1.0.14)
 
-- **Released:** DroidDrone PC **1.0.13** (Latest), bundling phone app **DroidDrone Flight 2.3.0-pc.7**.
+- **Released:** DroidDrone PC **1.0.14** (Latest), bundling phone app **DroidDrone Flight 2.3.0-pc.9**. The fixes alone
+  (no new features) are tagged `fixes-1.0.14`, a fallback that was never released.
 - **Flies:** RC, video, OSD and telemetry over 4G (phone on Tailscale) work on the real drone.
 - **Waiting on the pilot:**
-  - Phone app 2.3.0-pc.7 on the phone: LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
+  - Phone app 2.3.0-pc.9 on the phone (pc.7-pc.9 never run on a phone): LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
     held, back ignored), portrait (both cards shown, header fits), Direct connection on a fresh install. Built and
     published, never run on a phone or emulator.
   - 1.0.11 on the drone: the FLY timer counts while armed, CORE temperature and the flight mode names show, and the

@@ -2,7 +2,7 @@
 
 Every DroidDrone PC release, newest first. The release pages on GitHub show only that version's changes.
 
-## Unreleased
+## 1.0.14
 
 ### Fixes from a full code review
 
