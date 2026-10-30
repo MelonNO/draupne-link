@@ -29,6 +29,15 @@ public class CalibrationWizard {
     /** How long a detected movement must be held before it is accepted. */
     public static final long HOLD_MS = 400;
     public static final int SWITCH_STEPS = 4;
+    /**
+     * The centre is taken once every axis has rested this long within STILL_TOLERANCE, as the average over that time:
+     * not the one reading at the moment Next is pressed, which caught a thumb still on the stick (a pitch centre 18 us
+     * off made the drone lean forward when landed and armed).
+     */
+    public static final long STILL_MS = 500;
+    static final float STILL_TOLERANCE = 0.01f;
+    /** A roll / pitch / yaw centre this far (in us of the channel) from the middle of its range gets a warning. */
+    public static final int OFF_CENTER_US = 10;
     /** Ranges smaller than this are not trusted as a calibration; the nominal -1..1 is saved instead. */
     private static final float MIN_CALIBRATED_RANGE = 1.0f;
 
@@ -38,6 +47,11 @@ public class CalibrationWizard {
     private final float[] min;
     private final float[] max;
     private float[] center;
+    private float[] stillRef;
+    private long stillSince;
+    private double[] stillSum;
+    private int stillCount;
+    private boolean centerReady;
     private float[] baseAxes;
     private boolean[] baseButtons;
     private final String[] specs = new String[PcConfig.CHANNEL_NAMES.length];
@@ -87,6 +101,7 @@ public class CalibrationWizard {
             max[i] = Math.max(max[i], axes[i]);
         }
         Step step = getStep();
+        if (step.kind() == StepKind.CENTER) trackStillness(axes, nowMs);
         String detected = switch (step.kind()) {
             case ASSIGN -> detectAxis(axes, center);
             case SWITCH -> detectSwitch(state);
@@ -105,6 +120,53 @@ public class CalibrationWizard {
             specs[step.channel()] = detected;
             advance();
         }
+    }
+
+    /** Centre step: how long the sticks have rested, and their average over that time. */
+    private void trackStillness(float[] axes, long nowMs) {
+        boolean moved = stillRef == null;
+        for (int i = 0; !moved && i < Math.min(axisCount, axes.length); i++) {
+            moved = Math.abs(axes[i] - stillRef[i]) > STILL_TOLERANCE;
+        }
+        if (moved) {
+            stillRef = Arrays.copyOf(axes, axisCount);
+            stillSince = nowMs;
+            stillSum = new double[axisCount];
+            stillCount = 0;
+        }
+        for (int i = 0; i < Math.min(axisCount, axes.length); i++) stillSum[i] += axes[i];
+        stillCount++;
+        centerReady = nowMs - stillSince >= STILL_MS;
+    }
+
+    private void resetStillness() {
+        stillRef = null;
+        centerReady = false;
+    }
+
+    /** Centre step: the sticks have rested long enough for Next. */
+    public boolean isCenterReady() {
+        return centerReady;
+    }
+
+    /**
+     * Roll, pitch and yaw whose captured centre is well off the middle of their range, e.g. "PITCH 17 us": sent at rest,
+     * that is a constant stick input. Self-centring gimbals rest in the middle, so this usually means the stick was
+     * touched (or a trim was off) at the centre step.
+     */
+    public List<String> offCenterSticks() {
+        List<String> off = new ArrayList<>();
+        if (center == null) return off;
+        for (int ch = 0; ch < PcConfig.THROTTLE_INDEX; ch++) {
+            String spec = specs[ch];
+            if (spec == null || !spec.replace("-", "").startsWith("axis")) continue;
+            int axis = Integer.parseInt(spec.replace("-", "").substring(4));
+            if (axis >= axisCount || max[axis] - min[axis] < MIN_CALIBRATED_RANGE) continue;
+            float mid = (min[axis] + max[axis]) / 2, half = (max[axis] - min[axis]) / 2;
+            int us = Math.round(Math.abs(center[axis] - mid) / half * 500);
+            if (us >= OFF_CENTER_US) off.add(PcConfig.CHANNEL_NAMES[ch].toUpperCase(Locale.ROOT) + " " + us + " us");
+        }
+        return off;
     }
 
     private String detectAxis(float[] axes, float[] reference) {
@@ -137,13 +199,14 @@ public class CalibrationWizard {
     private void advance() {
         index = Math.min(index + 1, steps.size() - 1);
         candidate = null;
+        resetStillness();
         if (getStep().kind() == StepKind.SWITCH) captureSwitchBaseline();
     }
 
     public boolean canNext() {
         return switch (getStep().kind()) {
             case RANGE -> getFullySweptAxisCount() >= STICK_AXES;
-            case CENTER -> last != null;
+            case CENTER -> last != null && centerReady;
             case SUMMARY -> true;
             default -> false;
         };
@@ -152,7 +215,10 @@ public class CalibrationWizard {
     /** Manual "Next" for the range and center steps (the center is captured here). */
     public void next() {
         if (!canNext() || getStep().kind() == StepKind.SUMMARY) return;
-        if (getStep().kind() == StepKind.CENTER) center = Arrays.copyOf(last.axes(), axisCount);
+        if (getStep().kind() == StepKind.CENTER) {
+            center = new float[axisCount];
+            for (int i = 0; i < axisCount; i++) center[i] = (float) (stillSum[i] / stillCount);
+        }
         advance();
     }
 
@@ -170,6 +236,7 @@ public class CalibrationWizard {
     public void back() {
         if (index == 0) return;
         index--;
+        resetStillness();
         for (int i = index; i < steps.size(); i++) {
             if (steps.get(i).channel() >= 0) specs[steps.get(i).channel()] = null;
         }

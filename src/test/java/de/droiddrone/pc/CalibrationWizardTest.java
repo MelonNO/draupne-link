@@ -3,6 +3,8 @@ package de.droiddrone.pc;
 import de.droiddrone.pc.CalibrationWizard.StepKind;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -44,9 +46,63 @@ class CalibrationWizardTest {
         assertTrue(w.canNext());
         w.next();
         assertEquals(StepKind.CENTER, w.getStep().kind());
+        w.update(rest(), now);
+        assertFalse(w.canNext(), "the sticks have to rest a moment first");
+        now += CalibrationWizard.STILL_MS;
         w.update(rest(), now++);
+        assertTrue(w.canNext());
         w.next();
         return w;
+    }
+
+    /** Like this project's TX16S: every stick reaches -1..1 and rests at 0. */
+    private CalibrationWizard radioSweptTo(float centrePitch, long restMs) {
+        CalibrationWizard w = new CalibrationWizard(8, 4);
+        w.update(state(-1f, -1f, -1f, -1f, -1f), now++);
+        w.update(state(1f, 1f, 1f, 1f, -1f), now++);
+        w.next();
+        w.update(state(0f, centrePitch, -1f, 0f, -1f), now);
+        now += restMs;
+        w.update(state(0f, centrePitch, -1f, 0f, -1f), now++);
+        return w;
+    }
+
+    private void assignSticks(CalibrationWizard w) {
+        hold(w, state(0f, 0f, 0.9f, 0f, -1f));   // throttle up
+        hold(w, state(0f, 0f, -1f, 0.9f, -1f));  // yaw right
+        hold(w, state(0f, 0.9f, -1f, 0f, -1f));  // pitch up
+        hold(w, state(0.9f, 0f, -1f, 0f, -1f));  // roll right
+    }
+
+    @Test
+    void theCentreIsTakenOnlyOnceTheSticksRestAndAveraged() {
+        CalibrationWizard w = radioSweptTo(0f, 100);
+        assertFalse(w.canNext(), "100 ms is not resting yet");
+        w.update(state(0f, 0.2f, -1f, 0f, -1f), now);  // a thumb on the stick: starts over
+        now += CalibrationWizard.STILL_MS - 50;
+        w.update(state(0f, 0.004f, -1f, 0f, -1f), now);
+        assertFalse(w.canNext());
+        w.update(state(0f, 0f, -1f, 0f, -1f), now + 1);
+        w.update(state(0f, -0.004f, -1f, 0f, -1f), now + 2);
+        now += CalibrationWizard.STILL_MS;
+        w.update(state(0f, 0f, -1f, 0f, -1f), now++);
+        assertTrue(w.canNext());
+        w.next();
+        assertEquals(0f, w.getCenter()[1], 0.003f, "the average of the resting readings, not the thumb's 0.2");
+    }
+
+    @Test
+    void aCentreOffTheMiddleIsFlagged() {
+        // this project's drone: pitch centre captured at -0.034 while the stick rests at 0 - 1518 sent at rest
+        CalibrationWizard w = radioSweptTo(-0.034f, CalibrationWizard.STILL_MS);
+        w.next();
+        assignSticks(w);
+        assertEquals(List.of("PITCH 17 us"), w.offCenterSticks());
+
+        CalibrationWizard good = radioSweptTo(0.004f, CalibrationWizard.STILL_MS);
+        good.next();
+        assignSticks(good);
+        assertTrue(good.offCenterSticks().isEmpty(), "2 us is noise");
     }
 
     @Test

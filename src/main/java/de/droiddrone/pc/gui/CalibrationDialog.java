@@ -235,7 +235,8 @@ class CalibrationDialog extends JDialog {
                 setStatus("Full range reached on " + swept + " of " + CalibrationWizard.STICK_AXES + " stick axes",
                         swept >= CalibrationWizard.STICK_AXES ? Theme.OK : Theme.MUTED);
             }
-            case CENTER -> setStatus("Hands off the sticks, throttle down, then press Next.", Theme.MUTED);
+            case CENTER -> setStatus(wizard.isCenterReady() ? "Sticks at rest - press Next."
+                    : "Hands off the sticks, throttle down - waiting for them to rest...", wizard.isCenterReady() ? Theme.OK : Theme.MUTED);
             case ASSIGN, SWITCH -> {
                 String candidate = wizard.getCandidate();
                 if (candidate == null) {
@@ -246,7 +247,16 @@ class CalibrationDialog extends JDialog {
                     setStatus("Detected " + what + (candidate.startsWith("-") ? " (inverted)" : "") + " - hold... " + pct + "%", Theme.ACCENT);
                 }
             }
-            case SUMMARY -> setStatus("Check every channel, then press Finish to save.", Theme.OK);
+            case SUMMARY -> {
+                java.util.List<String> off = wizard.offCenterSticks();
+                if (off.isEmpty()) {
+                    setStatus("Check every channel, then press Finish to save.", Theme.OK);
+                } else {
+                    // a centre off the middle is a constant stick input at rest: the drone leans when landed and armed
+                    setStatus("<html>Off centre at rest: " + String.join(", ", off) + ". Was a stick touched, or a trim off? "
+                            + "Close and calibrate again, hands off at the centre step.</html>", Theme.WARN);
+                }
+            }
         }
     }
 
