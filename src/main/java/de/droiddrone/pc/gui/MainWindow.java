@@ -307,7 +307,11 @@ public class MainWindow extends JFrame {
         column.add(link, BorderLayout.NORTH);
 
         JPanel logCard = Theme.card(new BorderLayout(0, 8));
-        logCard.add(Theme.sectionTitle("Log"), BorderLayout.NORTH);
+        JPanel logTitle = new JPanel(new BorderLayout());
+        logTitle.setOpaque(false);
+        logTitle.add(Theme.sectionTitle("Log"), BorderLayout.WEST);
+        logTitle.add(copyLogButton(), BorderLayout.EAST);
+        logCard.add(logTitle, BorderLayout.NORTH);
         log.setEditable(false);
         log.setLineWrap(true);
         log.setWrapStyleWord(true);
@@ -319,6 +323,39 @@ public class MainWindow extends JFrame {
         logCard.add(scroll, BorderLayout.CENTER);
         column.add(logCard, BorderLayout.CENTER);
         return column;
+    }
+
+    /** A small "COPY" next to the log's title: the whole log to the clipboard, e.g. to send it to someone. */
+    private JComponent copyLogButton() {
+        JButton copy = new JButton("COPY");
+        copy.setFont(Theme.headingFont(11f));
+        copy.setForeground(Theme.MUTED);
+        copy.setContentAreaFilled(false);
+        copy.setBorderPainted(false);
+        copy.setFocusPainted(false);
+        copy.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 0));
+        copy.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        copy.setToolTipText("Copy the whole log to the clipboard");
+        copy.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseEntered(java.awt.event.MouseEvent e) {
+                copy.setForeground(Theme.ACCENT);
+            }
+
+            @Override
+            public void mouseExited(java.awt.event.MouseEvent e) {
+                copy.setForeground(Theme.MUTED);
+            }
+        });
+        Timer reset = new Timer(1500, e -> copy.setText("COPY"));
+        reset.setRepeats(false);
+        copy.addActionListener(e -> {
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                    .setContents(new java.awt.datatransfer.StringSelection(log.getText()), null);
+            copy.setText("COPIED");
+            reset.restart();
+        });
+        return copy;
     }
 
     private static JLabel statValue() {

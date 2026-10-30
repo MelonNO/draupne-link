@@ -2,6 +2,9 @@
 
 **`DroidDrone-PC-Setup-*.exe`** is the installer. Run it and click through it (Next → Install → Finish), approving the Windows prompt once. It installs DroidDrone PC for all users and sets up this PC by itself: Tailscale, firewall rules and the High performance power plan. DroidDrone PC starts when you press Finish; follow the setup wizard that opens on the first start.
 
+New in 1.0.6:
+- **COPY** at the top right of the log copies the whole log to the clipboard, e.g. to send it to someone.
+
 New in 1.0.5:
 - **Both apps tell you when there's an update.** DroidDrone PC asks GitHub at start and every 6 hours; when a newer release is out, an **UPDATE** button appears at the top (it opens the release page) and the log says so. The phone app checks when it starts; if the latest release carries a newer phone app, the status card says so and a tap downloads it (Android installs it as an update). One anonymous request each, no account; nothing is downloaded or installed by itself.
 - **Phone app 2.3.0-pc.3: sticks never wait behind other requests on the USB link.** The phone talks to the flight controller over one USB connection; before, a stick packet could wait up to 0.1 s behind a slow telemetry request, which is enough for Betaflight to flag RXLOSS and block arming. Now one writer owns the connection, the newest sticks always go first (older ones are dropped, never queued), a stuck stick write gives up after 50 ms and sends the newest instead, and telemetry requests pause while the link is slow.
