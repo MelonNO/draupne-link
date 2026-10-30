@@ -24,7 +24,8 @@ public final class LinkLog implements AutoCloseable {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
     static final String HEADER = "time,link,ping_ms,rc_frames,rc_max_gap_ms,telemetry_packets,telemetry_max_gap_ms,"
             + "fc_data_age_ms,rxloss,failsafe,armed,blockers,radio,rc_output,video_fps,throttle,channels,"
-            + "ping_max_ms,pong_age_ms,path,event";
+            + "ping_max_ms,pong_age_ms,path,phone_rc_in_gap_ms,phone_rc_out_gap_ms,phone_write_max_ms,phone_write_timeouts,"
+            + "phone_skipped,event";
 
     private final Path file;
     private final BufferedWriter out;
@@ -69,13 +70,16 @@ public final class LinkLog implements AutoCloseable {
         boolean fresh = s != null && now - s.receivedAt() < 1500;
         long fcAge = t.msSinceFcData(now);
         String blockers = fresh ? String.join(" ", s.blockers().stream().map(FcTelemetry.Blocker::osdName).toList()) : "";
+        FcTelemetry.PhoneLink p = t.takePhoneLink();
         row(link.getState().name(), link.getPing(), rc - lastRcFrames, link.takeMaxRcGapMs(), telemetry - lastTelemetry,
                 link.takeMaxTelemetryGapMs(), fcAge == Long.MAX_VALUE ? -1 : fcAge,
                 fresh ? flag(blockers.contains("RXLOSS")) : "", fresh ? flag(blockers.contains("FAILSAFE")) : "",
                 fresh ? flag(s.armed()) : "", blockers, flag(radio), flag(rcOutput), videoFps,
                 channels == null || channels.length <= PcConfig.THROTTLE_INDEX ? "" : channels[PcConfig.THROTTLE_INDEX],
                 channels == null ? "" : java.util.Arrays.toString(channels).replace(",", "").replace("[", "").replace("]", ""),
-                link.takeMaxPingMs(), link.msSinceLastPong(), path == null ? "" : path, "");
+                link.takeMaxPingMs(), link.msSinceLastPong(), path == null ? "" : path,
+                p == null ? "" : p.rcInGapMs(), p == null ? "" : p.rcOutGapMs(), p == null ? "" : p.writeMaxMs(),
+                p == null ? "" : p.writeTimeouts(), p == null ? "" : p.skipped(), "");
         lastRcFrames = rc;
         lastTelemetry = telemetry;
         if (now - lastFlush >= 1000) {
@@ -86,7 +90,7 @@ public final class LinkLog implements AutoCloseable {
 
     /** A message from the app's log, in the timeline. */
     public synchronized void event(String text) throws IOException {
-        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", text);
+        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", text);
     }
 
     private void row(Object... values) throws IOException {

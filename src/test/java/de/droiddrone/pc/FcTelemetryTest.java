@@ -96,10 +96,28 @@ class FcTelemetryTest {
     @Test
     void cellVoltageUsesTheFlightControllersCellCount() {
         FcTelemetry.Battery fourS = new FcTelemetry.Battery(14.8, 4, 0, 0);
-        assertEquals(4, fourS.cellCount());
+        assertTrue(fourS.cellCountKnown());
         assertEquals(3.7, fourS.cellVolts(), 1e-9);
-        // not reported yet: estimated from the pack (a full 6S)
-        assertEquals(6, new FcTelemetry.Battery(25.2, 0, 0, 0).cellCount());
+        // not reported yet (or 0 on USB power): unknown, never guessed from a low or still-rising voltage
+        FcTelemetry.Battery unknown = new FcTelemetry.Battery(8.1, 0, 0, 0);
+        assertFalse(unknown.cellCountKnown());
+        assertTrue(Double.isNaN(unknown.cellVolts()));
+    }
+
+    @Test
+    void phoneLinkStatsAreReadAndMerged() throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream o = new java.io.DataOutputStream(bytes);
+        o.writeShort(FcTelemetry.PHONE_LINK_STATS);
+        o.writeShort(12); o.writeShort(140); o.writeShort(105); o.writeShort(1); o.writeShort(3);
+        FcTelemetry t = new FcTelemetry();
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        FcTelemetry.PhoneLink p = t.takePhoneLink();
+        assertEquals(new FcTelemetry.PhoneLink(12, 140, 105, 2, 6), p, "worst gaps, summed counts");
+        assertNull(t.takePhoneLink(), "taken");
+        assertEquals(0, t.getUnknownCodes());
+        assertEquals(Long.MAX_VALUE, t.msSinceFcData(System.currentTimeMillis()), "the phone's own record, not FC data");
     }
 
     @Test

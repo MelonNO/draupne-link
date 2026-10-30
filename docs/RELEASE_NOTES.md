@@ -2,6 +2,11 @@
 
 **`DroidDrone-PC-Setup-*.exe`** is the installer. Run it and click through it (Next → Install → Finish), approving the Windows prompt once. It installs DroidDrone PC for all users and sets up this PC by itself: Tailscale, firewall rules and the High performance power plan. DroidDrone PC starts when you press Finish; follow the setup wizard that opens on the first start.
 
+New in 1.0.5:
+- **Phone app 2.3.0-pc.3: sticks never wait behind other requests on the USB link.** The phone talks to the flight controller over one USB connection; before, a stick packet could wait up to 0.1 s behind a slow telemetry request, which is enough for Betaflight to flag RXLOSS and block arming. Now one writer owns the connection, the newest sticks always go first (older ones are dropped, never queued), a stuck stick write gives up after 50 ms and sends the newest instead, and telemetry requests pause while the link is slow.
+- **The phone reports what it sees**, every 0.1 s, into the link log: the longest gap between stick packets arriving from the PC, and between stick writes reaching the flight controller, the slowest USB write, timeouts and skipped requests. So a failsafe can be traced to the network or to the phone's USB link.
+- **OSD battery: no more guessed cell count.** The cell voltage uses Betaflight's own cell count; until Betaflight reports it (e.g. on USB power) the OSD shows the pack voltage instead of guessing 1S or 2S from a low or still-rising voltage.
+
 New in 1.0.4:
 - **The link log catches short stalls:** the PC pings the phone 20 times a second (was 4), and the log records the highest round trip and the age of the last reply every 0.1 s, so a 0.1-0.3 s stall (where Betaflight flags RXLOSS) shows up. It also records Tailscale's path to the phone (direct, or through a relay server, which adds delay and stalls), and the log notes when the path changes.
 - **See which version you have:** DroidDrone PC shows its version in the window title and in SETTINGS → About, with the phone app version it installs. The phone app shows its own version at the bottom right of its screen.
@@ -69,7 +74,7 @@ Windows may say *"Windows protected your PC"* because the installer isn't code-s
 
 **`DroidDrone-Flight-*.apk`** is the phone app for the drone, the exact build this version installs. The setup wizard hands it to the phone by QR code, or install it by hand. It replaces any earlier DroidDrone Flight: when it opens, tap OK to remove the old one.
 
-The phone needs **DroidDrone Flight 2.3.0-pc.2** (the original 2.3.0 also works). The setup wizard installs it for you by QR code.
+The phone needs **DroidDrone Flight 2.3.0-pc.3** (the original 2.3.0 also works). The setup wizard installs it for you by QR code.
 
 ## What's in this version
 

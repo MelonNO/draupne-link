@@ -23,16 +23,36 @@ public class FcTelemetry {
     /** The FC's own view: armed or not, which modes its switches turned on, and why arming is blocked. */
     public record Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent, long receivedAt) {}
 
+    /**
+     * cells is Betaflight's own count (it detects it when the battery is plugged in), 0 until it reports one - on USB
+     * power, or before its first MSP_BATTERY_STATE. No guessing from the pack voltage: a low or still-rising voltage
+     * made a 6S look like 1S or 2S.
+     */
     public record Battery(double volts, int cells, int mahDrawn, double amps) {
-        /** The FC's cell count; estimated from the pack voltage until the FC reports it. */
-        public int cellCount() {
-            return cells > 0 ? cells : Math.max(1, (int) Math.ceil(volts / 4.35));
+        public boolean cellCountKnown() {
+            return cells > 0;
         }
 
+        /** Per-cell voltage; NaN while the cell count isn't known. */
         public double cellVolts() {
-            return volts / cellCount();
+            return cells > 0 ? volts / cells : Double.NaN;
         }
     }
+
+    /**
+     * What DroidDrone PC's build of the Flight app measures on the phone (record {@link #PHONE_LINK_STATS}), the
+     * worst of every report since last taken: longest gap between stick packets arriving from the PC and between
+     * stick writes reaching the flight controller, slowest USB write, write timeouts and skipped requests.
+     */
+    public record PhoneLink(int rcInGapMs, int rcOutGapMs, int writeMaxMs, int writeTimeouts, int skipped) {
+        PhoneLink merge(PhoneLink o) {
+            return o == null ? this : new PhoneLink(Math.max(rcInGapMs, o.rcInGapMs), Math.max(rcOutGapMs, o.rcOutGapMs),
+                    Math.max(writeMaxMs, o.writeMaxMs), writeTimeouts + o.writeTimeouts, skipped + o.skipped);
+        }
+    }
+
+    /** Telemetry record of DroidDrone PC's Flight app build (2.3.0-pc.3 on); the original app never sends it. */
+    static final short PHONE_LINK_STATS = 0x40F0;
 
     /** roll/pitch in degrees (right / nose up positive as Betaflight reports), heading 0-359. */
     public record Attitude(double rollDeg, double pitchDeg, int headingDeg, long receivedAt) {}
@@ -110,6 +130,7 @@ public class FcTelemetry {
     private volatile long unknownCodes;
     /** When a record from the flight controller itself last arrived (not the phone's own DD_ records); 0 = never. */
     private volatile long lastFcDataAt;
+    private PhoneLink phoneLink;
 
     public void parse(DataReader b, FcInfo fc) {
         try {
@@ -220,6 +241,12 @@ public class FcTelemetry {
                 NetworkState ns = new NetworkState(b.readUnsignedByteAsInt(), b.readUnsignedByteAsInt());
                 network = new Network(ns.getNetworkName(), ns.getRssi());
             }
+            case PHONE_LINK_STATS -> {
+                PhoneLink p = new PhoneLink(b.readShort(), b.readShort(), b.readShort(), b.readShort(), b.readShort());
+                synchronized (this) {
+                    phoneLink = p.merge(phoneLink);
+                }
+            }
             default -> {
                 return false;
             }
@@ -291,6 +318,13 @@ public class FcTelemetry {
             String k = m.toUpperCase(java.util.Locale.ROOT).replace(" ", "");
             return !k.equals("ARM") && !k.equals(flight);
         }).toList();
+    }
+
+    /** The phone's measurements since the last call (worst of them), or null - always null with the original app. */
+    public synchronized PhoneLink takePhoneLink() {
+        PhoneLink p = phoneLink;
+        phoneLink = null;
+        return p;
     }
 
     public boolean hasBoxNames() {

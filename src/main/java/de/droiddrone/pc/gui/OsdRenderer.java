@@ -172,13 +172,21 @@ final class OsdRenderer {
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         if (b == null || b.volts() <= 0) return;
         FcTelemetry.BatteryLimits lim = t.getBatteryLimits();
+        float x = 18 * unit, y = 40 * unit;
+        if (!b.cellCountKnown()) { // no cell count from Betaflight yet: the pack voltage, no guess
+            label("BATT" + (fresh ? "" : "  NO DATA"), x, y);
+            g.setFont(Theme.monoFont(Font.BOLD, 30 * unit));
+            text(String.format(Locale.ROOT, "%.2fV", b.volts()), x, y + 32 * unit, fresh ? WHITE : STALE);
+            g.setFont(Theme.monoFont(Font.PLAIN, 16 * unit));
+            text(String.format(Locale.ROOT, "%dmAh  %.1fA", b.mahDrawn(), b.amps()), x, y + 58 * unit, fresh ? WHITE : STALE);
+            return;
+        }
         double cell = b.cellVolts();
         double warn = lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5;
         double min = lim != null && lim.minCell() > 0 ? lim.minCell() : 3.3;
         double max = lim != null && lim.maxCell() > 0 ? lim.maxCell() : 4.3;
         Color c = !fresh ? STALE : cell <= min ? RED : cell <= warn ? YELLOW : GREEN;
-        float x = 18 * unit, y = 40 * unit;
-        label("BATT " + b.cellCount() + "S" + (fresh ? "" : "  NO DATA"), x, y);
+        label("BATT " + b.cells() + "S" + (fresh ? "" : "  NO DATA"), x, y);
         g.setFont(Theme.monoFont(Font.BOLD, 30 * unit));
         String cellText = String.format(Locale.ROOT, "%.2fV", cell);
         text(cellText, x, y + 32 * unit, c);
@@ -316,7 +324,7 @@ final class OsdRenderer {
         if (d.linkReady() && !d.rcLive()) big.add("RC OFF - THROTTLE DOWN");
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
-        if (!d.fcLost() && b != null && b.volts() > 0
+        if (!d.fcLost() && b != null && b.volts() > 0 && b.cellCountKnown()
                 && b.cellVolts() <= (lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5)) big.add("LOW BATTERY");
         boolean blink = (now / 400) % 2 == 0;
         float y = h * 0.66f;
