@@ -554,7 +554,7 @@ public class MainWindow extends JFrame {
         VideoPipeline v = video;
         try {
             l.sample(c.getLink(), service.getSnapshot().selected() != null, s != null && s.isRcEnabled(),
-                    v == null ? 0 : v.stats().shownFps());
+                    v == null ? 0 : v.stats().shownFps(), s == null ? null : s.getLastChannels());
         } catch (IOException e) {
             linkLog = null;
             logLine("Link log stopped: " + e.getMessage());

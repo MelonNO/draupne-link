@@ -92,7 +92,7 @@ save
 
 Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.
 
-**Link log:** every connection writes a timeline to `%APPDATA%\DroidDronePC\logs\link-<date>-<time>.csv`, 10 rows a second: ping, stick frames sent and the longest gap between them, telemetry packets and the longest gap, the flight controller's last data, RXLOSS / FAILSAFE as Betaflight reports them, radio present, plus every log message. It shows which part of the chain a failsafe came from. The newest 20 are kept.
+**Link log:** every connection writes a timeline to `%APPDATA%\DroidDronePC\logs\link-<date>-<time>.csv`, 10 rows a second: ping, stick frames sent and the longest gap between them, telemetry packets and the longest gap, the flight controller's last data, RXLOSS / FAILSAFE as Betaflight reports them, radio present, the stick values sent (throttle and every channel), plus every log message. It shows which part of the chain a failsafe came from. The newest 20 are kept.
 
 ## How it works
 

@@ -182,7 +182,7 @@ class ControlLinkTest {
                 link.sendRc(sticks);
                 Thread.sleep(20);
             }
-            log.sample(link, true, true, 0);
+            log.sample(link, true, true, 0, sticks);
             log.event("Joystick lost, test");
         }
         try (var files = java.nio.file.Files.list(dir)) {
@@ -196,6 +196,8 @@ class ControlLinkTest {
         assertTrue(Integer.parseInt(row[4]) >= 15, "longest gap between them, ms");
         assertEquals("0", row[8], "no RXLOSS");
         assertEquals("ANGLE MSP", row[11], "the fake FC's arming blocks");
+        assertEquals("1000", row[15], "throttle as sent");
+        assertEquals("1500 1500 1500 1000 1000", row[16], "every channel as sent");
         assertTrue(lines.get(2).endsWith(",Joystick lost, test") || lines.get(2).endsWith(",\"Joystick lost, test\""));
     }
 
