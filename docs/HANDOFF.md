@@ -4,14 +4,14 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-10-30, 1.0.12)
+## Where things stand (2026-10-30, 1.0.13)
 
-- **Released:** DroidDrone PC **1.0.12** (Latest), bundling phone app **DroidDrone Flight 2.3.0-pc.6**.
+- **Released:** DroidDrone PC **1.0.13** (Latest), bundling phone app **DroidDrone Flight 2.3.0-pc.7**.
 - **Flies:** RC, video, OSD and telemetry over 4G (phone on Tailscale) work on the real drone.
 - **Waiting on the pilot:**
-  - Phone app 2.3.0-pc.6 on the phone: LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
-    held, back ignored) and portrait (cards stacked, header fits). Built and published, never run on a phone or
-    emulator.
+  - Phone app 2.3.0-pc.7 on the phone: LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
+    held, back ignored), portrait (both cards shown, header fits), Direct connection on a fresh install. Built and
+    published, never run on a phone or emulator.
   - 1.0.11 on the drone: the FLY timer counts while armed, CORE temperature and the flight mode names show, and the
     phone now sees the drone armed (its travelled distance, used by the OSD's optional "Distance flown", counts).
   - The motor test (SETTINGS > Motor test) on the real flight controller, props off.
@@ -29,7 +29,9 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
   - Writing `force_battery_cell_count` to a real board.
   - The phone's version record on a real phone.
   - OSD pitch direction (`osdInvertPitch`).
-  - Phone app 2.3.0-pc.6's touch lock and portrait layout.
+  - Phone app 2.3.0-pc.7's touch lock and portrait layout.
+  - The motor test's PROPS IN / OUT animation and the OSD editor as a maximised window (built; not looked at while a
+    flight controller was on this PC's USB).
   - The motor test (SETTINGS > Motor test): MSP_SET_MOTOR over USB, written from Betaflight's MSP and only tested
     without a flight controller. Try it props off first.
 
