@@ -1,10 +1,11 @@
 <!-- The release page text: only the version being released. Older versions are in CHANGELOG.md. -->
-## New in 1.0.7
+## New in 1.0.8
 
-- **Animated, military-style controls:** buttons get closing corner brackets and a scan line on hover and a lock-on flash on click; the dropdowns (connection, controller) reveal their options one by one behind a red scan bar.
-- **Video skeleton:** while there's no video, the video area shows a skeleton of the view - grid, corner brackets, pulsing reticle, shimmering placeholders where the OSD goes, a slow scan line - with the status.
-- **One controller, no dropdown:** with a single controller (or none) its name shows in a plain field; the dropdown appears only when there are several to choose from.
-- Clicking **SETUP** again now closes its menu (it used to open it again).
+- **FPV-style "no signal" screen:** with no video, the video area shows dim analog static with a Betaflight-style crosshair and a gently rocking horizon, and the status under it. The scan line, grid and edge placeholders are gone.
+- **Minimize the controller panel:** MINIMIZE (top right of the controller panel) hides the sticks and channel bars, and the video grows into the space. EXPAND brings them back; the choice is remembered.
+- **No controller is obvious:** the stick boxes pulse as if searching and say NO CONTROLLER, the controller field's frame and the status line blink red.
+- The **SETUP** menu's items come in one by one, like the dropdowns.
+- Buttons no longer flash a shine across on hover (the corner brackets and the click flash stay).
 
 ## Files
 

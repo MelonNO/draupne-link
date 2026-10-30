@@ -24,6 +24,7 @@ class GimbalView extends JComponent {
     private Integer xValue;
     private Integer yValue;
     private Direction arrow = Direction.NONE;
+    private boolean disconnected;
     private final Deque<Point2D.Float> trail = new ArrayDeque<>();
 
     GimbalView(String title, String xName, String yName) {
@@ -46,6 +47,14 @@ class GimbalView extends JComponent {
             trail.clear();
         }
         repaint();
+    }
+
+    /** No controller: the empty gimbal sends out a pulse, as if searching for the sticks. */
+    void setDisconnected(boolean disconnected) {
+        if (disconnected != this.disconnected) {
+            this.disconnected = disconnected;
+            repaint();
+        }
     }
 
     void setArrow(Direction direction) {
@@ -78,6 +87,8 @@ class GimbalView extends JComponent {
         g.drawOval((int) (cx - reach), (int) (cy - reach), (int) (reach * 2), (int) (reach * 2));
 
         if (arrow != Direction.NONE) paintArrow(g, cx, cy, reach);
+        boolean searching = disconnected && (xValue == null || yValue == null);
+        if (searching) paintSearching(g, cx, cy, reach);
 
         int i = 0;
         for (Point2D.Float p : trail) {
@@ -103,10 +114,27 @@ class GimbalView extends JComponent {
         g.setColor(Theme.TEXT);
         drawCentered(g, title.toUpperCase(), y0 + size + 20);
         g.setFont(Theme.font(java.awt.Font.PLAIN, 12f));
-        g.setColor(Theme.MUTED);
-        String values = xName + " " + (xValue == null ? "----" : xValue) + "     " + yName + " " + (yValue == null ? "----" : yValue);
+        g.setColor(searching ? Theme.BAD : Theme.MUTED);
+        String values = searching ? "NO CONTROLLER" : xName + " " + (xValue == null ? "----" : xValue) + "     " + yName + " " + (yValue == null ? "----" : yValue);
         drawCentered(g, values, y0 + size + 38);
         g.dispose();
+    }
+
+    private void paintSearching(Graphics2D g, float cx, float cy, float reach) {
+        long now = System.currentTimeMillis();
+        g.setStroke(new BasicStroke(2f));
+        for (int k = 0; k < 2; k++) {
+            float phase = ((now + k * 900) % 1800) / 1800f;
+            float r = 10 + (reach - 10) * phase;
+            g.setColor(Theme.alpha(Theme.ACCENT, Math.round(150 * (1 - phase))));
+            g.draw(new java.awt.geom.Ellipse2D.Float(cx - r, cy - r, 2 * r, 2 * r));
+        }
+        // where the stick should be: an empty, blinking marker
+        float blink = 0.5f + 0.5f * (float) Math.sin(now / 160.0);
+        g.setColor(Theme.alpha(Theme.BAD, Math.round(80 + 175 * blink)));
+        g.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{4f, 4f}, 0f));
+        g.drawOval(Math.round(cx - 10), Math.round(cy - 10), 20, 20);
+        // no repaint here: the main window feeds the gimbals 30 times a second, which keeps this moving
     }
 
     private void paintArrow(Graphics2D g, float cx, float cy, float reach) {

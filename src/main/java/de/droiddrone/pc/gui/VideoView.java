@@ -43,6 +43,9 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private Supplier<OsdRenderer.Data> osdData = () -> null;
     /** Animates the skeleton while there is no picture; stops by itself once video comes (or the view is hidden). */
     private final javax.swing.Timer skeletonTimer = new javax.swing.Timer(40, null);
+    /** The no-signal static: drawn small and blown up, so it is cheap. */
+    private final BufferedImage staticImage = new BufferedImage(192, 108, BufferedImage.TYPE_INT_RGB);
+    private long noiseSeed = 0x9E3779B97F4A7C15L;
 
     VideoView() {
         setDoubleBuffered(false);
@@ -178,7 +181,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         }
         OsdRenderer.Data data = osdEnabled ? osdData.get() : null;
         if (img == null) {
-            paintSkeleton(g, w, h, data != null && data.connected());
+            paintSkeleton(g, w, h);
             if (!skeletonTimer.isRunning()) skeletonTimer.start();
         }
         if (data != null && data.connected()) {
@@ -216,83 +219,82 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     }
 
     /**
-     * No picture yet: a skeleton of the view, military style - faint grid, corner brackets, a pulsing reticle,
-     * placeholder blocks where the OSD sits with a shimmer passing over them, a slow scan line, and the status. With a
-     * live OSD on top, the placeholders are left out (the OSD draws its own blocks there).
+     * No picture yet: what an analog FPV goggle shows without signal - dim, grainy static, with an FPV crosshair and an
+     * artificial horizon that rocks gently, and the status under it. Only runs while there is no picture.
      */
-    private void paintSkeleton(Graphics2D g, int w, int h, boolean osdLive) {
+    private void paintSkeleton(Graphics2D g, int w, int h) {
         g.setColor(Color.BLACK);
         g.fillRect(0, 0, w, h);
         int[] t = target;
         int vw = t[0] > 0 ? t[0] : w, vh = t[1] > 0 ? t[1] : h;
         int x0 = (w - vw) / 2, y0 = (h - vh) / 2;
         long now = System.currentTimeMillis();
+        // static: a small noise picture, blown up without smoothing so the grain stays coarse
+        int[] px = ((DataBufferInt) staticImage.getRaster().getDataBuffer()).getData();
+        int sw = staticImage.getWidth();
+        for (int i = 0; i < px.length; i++) {
+            noiseSeed ^= noiseSeed << 13;
+            noiseSeed ^= noiseSeed >>> 7;
+            noiseSeed ^= noiseSeed << 17;
+            int row = i / sw;
+            int level = (int) ((noiseSeed >>> 40) & 31) + ((row + (int) (now / 30)) % 9 == 0 ? 6 : 0);
+            px[i] = level << 16 | level << 8 | level;
+        }
+        g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION, java.awt.RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        g.drawImage(staticImage, x0, y0, vw, vh, null);
         Theme.smooth(g);
-        java.awt.Graphics2D v = (java.awt.Graphics2D) g.create(x0, y0, vw, vh);
+        Graphics2D v = (Graphics2D) g.create(x0, y0, vw, vh);
         try {
             float u = vh / 720f;
-            // grid
-            v.setColor(Theme.alpha(Theme.LINE, 90));
-            for (int i = 1; i < 12; i++) v.drawLine(vw * i / 12, 0, vw * i / 12, vh);
-            for (int i = 1; i < 8; i++) v.drawLine(0, vh * i / 8, vw, vh * i / 8);
-            // corner brackets
-            v.setColor(Theme.alpha(Theme.ACCENT, 150));
-            v.setStroke(new java.awt.BasicStroke(Math.max(1.5f, 2.5f * u)));
-            int a = Math.round(34 * u), m = Math.round(10 * u);
-            v.drawPolyline(new int[]{m, m, m + a}, new int[]{m + a, m, m}, 3);
-            v.drawPolyline(new int[]{vw - m - a, vw - m, vw - m}, new int[]{m, m, m + a}, 3);
-            v.drawPolyline(new int[]{m, m, m + a}, new int[]{vh - m - a, vh - m, vh - m}, 3);
-            v.drawPolyline(new int[]{vw - m - a, vw - m, vw - m}, new int[]{vh - m, vh - m, vh - m - a}, 3);
-            // placeholder blocks where the OSD goes, with a shimmer sweeping across
-            if (!osdLive) {
-                float shimmer = (now % 1600) / 1600f;
-                int[][] blocks = {
-                        {18, 28, 150, 14}, {18, 50, 110, 26}, {18, 84, 170, 12},          // battery
-                        {vwPx(vw, u, 190), 28, 80, 14}, {vwPx(vw, u, 150), 50, 132, 22}, // link
-                        {vwPx(vw, u, 230), 80, 212, 12},
-                        {18, 616, 180, 26}, {18, 652, 120, 14},                           // arm state, mode
-                        {vwPx(vw, u, 190), 604, 172, 16}, {vwPx(vw, u, 150), 630, 132, 16}, // GPS
-                        {Math.round(vw / 2f / u) - 180, 22, 360, 18}};                    // heading tape
-                for (int[] b : blocks) {
-                    int bx = Math.round(b[0] * u), by = Math.round(b[1] * u), bw = Math.round(b[2] * u), bh = Math.round(b[3] * u);
-                    v.setColor(Theme.PANEL_2);
-                    v.fillRect(bx, by, bw, bh);
-                    int sx = Math.round(-vw * 0.3f + vw * 1.6f * shimmer);
-                    v.setPaint(new java.awt.GradientPaint(sx - 120 * u, 0, Theme.alpha(Theme.LINE, 0), sx, 0, Theme.alpha(Theme.LINE, 220), true));
-                    v.fillRect(bx, by, bw, bh);
-                }
+            int cx = vw / 2, cy = vh / 2;
+            // artificial horizon, rocking a few degrees as if the quad were hovering
+            double roll = Math.toRadians(6 * Math.sin(now / 1300.0));
+            float pitch = (float) (14 * u * Math.sin(now / 2100.0));
+            Graphics2D hz = (Graphics2D) v.create();
+            hz.translate(cx, cy + pitch);
+            hz.rotate(roll);
+            int dash = Math.round(18 * u), gap = Math.round(14 * u), reach = Math.round(230 * u);
+            hz.setStroke(new java.awt.BasicStroke(Math.max(1.5f, 2.5f * u)));
+            for (int x = Math.round(70 * u); x < reach; x += dash + gap) {
+                outlined(hz, x, 0, Math.min(x + dash, reach), 0);
+                outlined(hz, -x, 0, -Math.min(x + dash, reach), 0);
             }
-            // reticle, slowly pulsing
-            float pulse = 0.5f + 0.5f * (float) Math.sin(now / 400.0);
-            int cx = vw / 2, cy = vh / 2, r = Math.round(26 * u);
-            v.setColor(Theme.alpha(Theme.MUTED, Math.round(90 + 110 * pulse)));
-            v.setStroke(new java.awt.BasicStroke(Math.max(1f, 1.5f * u)));
-            v.drawOval(cx - r, cy - r, 2 * r, 2 * r);
-            v.drawLine(cx - 2 * r, cy, cx - r - 4, cy);
-            v.drawLine(cx + r + 4, cy, cx + 2 * r, cy);
-            v.drawLine(cx, cy - 2 * r, cx, cy - r - 4);
-            v.drawLine(cx, cy + r + 4, cx, cy + 2 * r);
-            // scan line drifting down
-            int sy = Math.round((now % 3200) / 3200f * vh);
-            v.setPaint(new java.awt.GradientPaint(0, sy - 40 * u, Theme.alpha(Theme.ACCENT, 0), 0, sy, Theme.alpha(Theme.ACCENT, 70)));
-            v.fillRect(0, Math.round(sy - 40 * u), vw, Math.round(40 * u));
-            v.setColor(Theme.alpha(Theme.ACCENT, 140));
-            v.fillRect(0, sy, vw, Math.max(1, Math.round(u)));
+            hz.dispose();
+            // crosshair, Betaflight style: two wings with ticks pointing down and a centre dot
+            v.setStroke(new java.awt.BasicStroke(Math.max(2f, 3f * u), java.awt.BasicStroke.CAP_SQUARE, java.awt.BasicStroke.JOIN_MITER));
+            int in = Math.round(14 * u), out = Math.round(44 * u), tick = Math.round(10 * u), dot = Math.max(3, Math.round(5 * u));
+            outlined(v, cx - out, cy, cx - in, cy);
+            outlined(v, cx - in, cy, cx - in, cy + tick);
+            outlined(v, cx + in, cy, cx + out, cy);
+            outlined(v, cx + in, cy, cx + in, cy + tick);
+            v.setColor(Color.BLACK);
+            v.fillOval(cx - dot / 2 - 1, cy - dot / 2 - 1, dot + 2, dot + 2);
+            v.setColor(Theme.TEXT);
+            v.fillOval(cx - dot / 2, cy - dot / 2, dot, dot);
             // status
             String dots = ".".repeat((int) (now / 400 % 4));
+            int base = cy + Math.round(110 * u);
             v.setFont(Theme.headingFont(Math.max(14f, 20f * u)));
-            v.setColor(Theme.MUTED);
-            centered(v, "NO VIDEO FEED" + dots, vw, cy + Math.round(3.2f * r));
+            v.setColor(Theme.TEXT);
+            centered(v, "NO VIDEO FEED" + dots, vw, base);
             v.setFont(Theme.font(Font.PLAIN, Math.max(12f, 14f * u)));
-            centered(v, idleText, vw, cy + Math.round(3.2f * r) + Math.round(24 * u));
+            v.setColor(Theme.MUTED);
+            centered(v, idleText, vw, base + Math.round(24 * u));
         } finally {
             v.dispose();
         }
     }
 
-    /** x of a block that hangs from the right edge, in 720-high units (so it scales like the OSD). */
-    private static int vwPx(int vw, float u, int fromRight) {
-        return Math.round(vw / u) - fromRight - 18;
+    /** An OSD line: light, with a dark edge so it reads on any picture. */
+    private static void outlined(Graphics2D g, int x1, int y1, int x2, int y2) {
+        java.awt.Stroke s = g.getStroke();
+        float wide = ((java.awt.BasicStroke) s).getLineWidth();
+        g.setStroke(new java.awt.BasicStroke(wide + 2, java.awt.BasicStroke.CAP_SQUARE, java.awt.BasicStroke.JOIN_MITER));
+        g.setColor(Theme.alpha(Color.BLACK, 200));
+        g.drawLine(x1, y1, x2, y2);
+        g.setStroke(s);
+        g.setColor(Theme.alpha(Theme.TEXT, 220));
+        g.drawLine(x1, y1, x2, y2);
     }
 
     private static void centered(java.awt.Graphics2D g, String text, int width, int baseline) {

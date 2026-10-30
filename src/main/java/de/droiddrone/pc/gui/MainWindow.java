@@ -90,6 +90,7 @@ public class MainWindow extends JFrame {
     private final JLabel joystickField = Theme.label("", Theme.font(Font.BOLD, 13.5f), Theme.TEXT);
     private final java.awt.CardLayout joystickCards = new java.awt.CardLayout();
     private final JPanel joystickSlot = new JPanel(joystickCards);
+    private Color joystickFrame;
 
     private final JComboBox<LinkMode> modeCombo = new JComboBox<>(LinkMode.values());
     private final JLabel modeHint = Theme.label("", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
@@ -131,6 +132,10 @@ public class MainWindow extends JFrame {
     private final GimbalView leftGimbal = new GimbalView("Throttle / Yaw", "YAW", "THR");
     private final GimbalView rightGimbal = new GimbalView("Pitch / Roll", "ROLL", "PIT");
     private final ChannelBars channelBars = new ChannelBars();
+    /** The sticks and channel bars; hidden when the controller panel is minimized, so the video gets the room. */
+    private JComponent gimbalPanel;
+    private final JButton minimizeButton = textButton("MINIMIZE", "Hide the sticks and channels: more room for the video");
+    private static final String MINIMIZED_KEY = "controllerMinimized";
 
     public static void open(PcConfig config, Path configFile, JoystickService service) {
         Theme.install();
@@ -199,7 +204,7 @@ public class MainWindow extends JFrame {
 
     /** SETUP's menu: the first-time setup, or each part of it on its own. */
     private JPopupMenu setupMenu() {
-        JPopupMenu menu = new JPopupMenu();
+        JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
         addSetupItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, connection", () -> SetupWizard.open(this));
@@ -350,26 +355,7 @@ public class MainWindow extends JFrame {
 
     /** A small "COPY" next to the log's title: the whole log to the clipboard, e.g. to send it to someone. */
     private JComponent copyLogButton() {
-        JButton copy = new JButton("COPY");
-        copy.setFont(Theme.headingFont(11f));
-        copy.setForeground(Theme.MUTED);
-        copy.setContentAreaFilled(false);
-        copy.setBorderPainted(false);
-        copy.setFocusPainted(false);
-        copy.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 0));
-        copy.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
-        copy.setToolTipText("Copy the whole log to the clipboard");
-        copy.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mouseEntered(java.awt.event.MouseEvent e) {
-                copy.setForeground(Theme.ACCENT);
-            }
-
-            @Override
-            public void mouseExited(java.awt.event.MouseEvent e) {
-                copy.setForeground(Theme.MUTED);
-            }
-        });
+        JButton copy = textButton("COPY", "Copy the whole log to the clipboard");
         Timer reset = new Timer(1500, e -> copy.setText("COPY"));
         reset.setRepeats(false);
         copy.addActionListener(e -> {
@@ -454,6 +440,11 @@ public class MainWindow extends JFrame {
         rcCheckButton.addActionListener(e -> RcCheckDialog.open(this));
         topLeft.add(rcCheckButton);
         top.add(topLeft, BorderLayout.WEST);
+        minimizeButton.addActionListener(e -> {
+            setControllerMinimized(gimbalPanel.isVisible());
+            save(Map.of(MINIMIZED_KEY, Boolean.toString(!gimbalPanel.isVisible())));
+        });
+        top.add(minimizeButton, BorderLayout.EAST);
         controller.add(top, BorderLayout.NORTH);
 
         JPanel gimbals = new JPanel(new GridLayout(1, 2, 18, 0));
@@ -462,6 +453,7 @@ public class MainWindow extends JFrame {
         gimbals.add(rightGimbal);
         gimbals.setPreferredSize(new Dimension(440, 262));
         controller.add(gimbals, BorderLayout.WEST);
+        gimbalPanel = gimbals;
         JPanel bars = new JPanel(new BorderLayout(0, 10));
         bars.setOpaque(false);
         bars.add(channelBars, BorderLayout.NORTH);
@@ -473,7 +465,43 @@ public class MainWindow extends JFrame {
         bars.add(states, BorderLayout.SOUTH);
         controller.add(bars, BorderLayout.CENTER);
         column.add(controller, BorderLayout.SOUTH);
+        setControllerMinimized("true".equalsIgnoreCase(config.getString(MINIMIZED_KEY)));
         return column;
+    }
+
+    /** Minimized: only the controller's name and the status lines stay; the video grows into the space. */
+    private void setControllerMinimized(boolean minimized) {
+        gimbalPanel.setVisible(!minimized);
+        channelBars.setVisible(!minimized);
+        minimizeButton.setText(minimized ? "EXPAND" : "MINIMIZE");
+        minimizeButton.setToolTipText(minimized ? "Show the sticks and channels again" : "Hide the sticks and channels: more room for the video");
+        controllerCard.revalidate();
+        controllerCard.repaint();
+    }
+
+    /** A small, quiet text button (COPY, MINIMIZE): muted, red on hover. */
+    private static JButton textButton(String text, String tooltip) {
+        JButton button = new JButton(text);
+        button.setFont(Theme.headingFont(11f));
+        button.setForeground(Theme.MUTED);
+        button.setContentAreaFilled(false);
+        button.setBorderPainted(false);
+        button.setFocusPainted(false);
+        button.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 0));
+        button.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        button.setToolTipText(tooltip);
+        button.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseEntered(java.awt.event.MouseEvent e) {
+                button.setForeground(Theme.ACCENT);
+            }
+
+            @Override
+            public void mouseExited(java.awt.event.MouseEvent e) {
+                button.setForeground(Theme.MUTED);
+            }
+        });
+        return button;
     }
 
     // ---------------------------------------------------------------- behaviour
@@ -709,6 +737,13 @@ public class MainWindow extends JFrame {
             String text = list.isEmpty() ? "No controller found - plug in the TX16S (USB Joystick)" : list.get(0).name();
             if (!text.equals(joystickField.getText())) joystickField.setText(text);
             joystickField.setForeground(list.isEmpty() ? Theme.WARN : Theme.TEXT);
+            // no controller: the field's frame pulses red
+            Color frame = list.isEmpty() ? Theme.alpha(Theme.ACCENT, Math.round(60 + 195 * pulse())) : Theme.LINE;
+            if (!frame.equals(joystickFrame)) {
+                joystickFrame = frame;
+                joystickField.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(frame, 1),
+                        BorderFactory.createEmptyBorder(0, 10, 0, 10)));
+            }
             joystickField.setToolTipText(list.isEmpty() ? null : "The only controller found");
         }
         DefaultComboBoxModel<Joystick.Info> model = (DefaultComboBoxModel<Joystick.Info>) joystickCombo.getModel();
@@ -724,7 +759,14 @@ public class MainWindow extends JFrame {
         updatingCombo = false;
     }
 
+    /** 0..1, about twice a second: for things that blink to get attention. */
+    private static float pulse() {
+        return 0.5f + 0.5f * (float) Math.sin(System.currentTimeMillis() / 160.0);
+    }
+
     private void refreshController(JoystickService.Snapshot snap) {
+        leftGimbal.setDisconnected(snap.selected() == null);
+        rightGimbal.setDisconnected(snap.selected() == null);
         short[] channels = null;
         if (session != null) {
             channels = session.getLastChannels();
@@ -749,7 +791,7 @@ public class MainWindow extends JFrame {
         }
 
         if (snap.selected() == null) {
-            setLabel(rcStateLabel, "NO CONTROLLER", Theme.BAD);
+            setLabel(rcStateLabel, "NO CONTROLLER - PLUG IN THE RADIO (USB JOYSTICK)", Theme.alpha(Theme.BAD, Math.round(110 + 145 * pulse())));
         } else if (session == null) {
             setLabel(rcStateLabel, "RC OUTPUT: NOT CONNECTED", Theme.MUTED);
         } else if (session.isRcEnabled()) {

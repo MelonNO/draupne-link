@@ -3,6 +3,7 @@ package de.droiddrone.pc.gui;
 import javax.swing.JComboBox;
 import javax.swing.JList;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.ListCellRenderer;
 import javax.swing.Timer;
 import javax.swing.event.PopupMenuEvent;
@@ -14,7 +15,8 @@ import java.awt.Graphics;
 
 /**
  * A dropdown's options appear one after another when it opens, each uncovered by a red scan bar, like a readout
- * coming in. Call {@link #install} after setting the dropdown's renderer.
+ * coming in. Call {@link #install} after setting the dropdown's renderer. {@link #menu} makes a popup menu (SETUP's)
+ * whose items come in the same way.
  */
 final class TacticalCombo {
     private static final long STAGGER_MS = 45;
@@ -61,6 +63,60 @@ final class TacticalCombo {
         });
     }
 
+    /** An empty popup menu whose items appear one after another, like a dropdown's options. */
+    static JPopupMenu menu() {
+        long[] openedAt = {0};
+        JPopupMenu menu = new JPopupMenu() {
+            @Override
+            protected void paintChildren(Graphics g) {
+                super.paintChildren(g);
+                long since = System.currentTimeMillis() - openedAt[0];
+                for (int i = 0; i < getComponentCount(); i++) {
+                    float p = (since - i * STAGGER_MS) / (float) REVEAL_MS;
+                    if (p >= 1) continue;
+                    Component item = getComponent(i);
+                    Graphics c = g.create(item.getX(), item.getY(), item.getWidth(), item.getHeight());
+                    cover(c, item.getWidth(), item.getHeight(), Math.max(0, p), item.getBackground());
+                    c.dispose();
+                }
+            }
+        };
+        // the whole menu each tick: an item repainted on its own (hovered) would otherwise skip the cover
+        Timer timer = new Timer(15, null);
+        timer.addActionListener(e -> {
+            menu.repaint();
+            long total = STAGGER_MS * Math.max(0, menu.getComponentCount() - 1) + REVEAL_MS + 30;
+            if (System.currentTimeMillis() - openedAt[0] > total) timer.stop();
+        });
+        menu.addPopupMenuListener(new PopupMenuListener() {
+            @Override
+            public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
+                openedAt[0] = System.currentTimeMillis();
+                timer.restart();
+            }
+
+            @Override
+            public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
+                timer.stop();
+            }
+
+            @Override
+            public void popupMenuCanceled(PopupMenuEvent e) {
+            }
+        });
+        return menu;
+    }
+
+    /** Covers the part of a row not yet revealed (progress 0..1), with the scan bar at its edge. */
+    private static void cover(Graphics g, int w, int h, float progress, java.awt.Color background) {
+        float ease = 1 - (1 - progress) * (1 - progress);
+        int x = Math.round(w * ease);
+        g.setColor(background);
+        g.fillRect(x, 0, w - x, h);
+        g.setColor(Theme.ACCENT);
+        g.fillRect(Math.max(0, x - 2), 2, 3, h - 4);
+    }
+
     private static JList<?> popupList(JComboBox<?> combo) {
         Object popup = combo.getUI().getAccessibleChild(combo, 0);
         return popup instanceof ComboPopup p ? p.getList() : null;
@@ -86,13 +142,7 @@ final class TacticalCombo {
         @Override
         public void paint(Graphics g) {
             super.paint(g);
-            int w = getWidth(), h = getHeight();
-            float ease = 1 - (1 - progress) * (1 - progress);
-            int x = Math.round(w * ease);
-            g.setColor(getBackground());
-            g.fillRect(x, 0, w - x, h);
-            g.setColor(Theme.ACCENT);
-            g.fillRect(Math.max(0, x - 2), 2, 3, h - 4);
+            cover(g, getWidth(), getHeight(), progress, getBackground());
         }
     }
 }
