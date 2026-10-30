@@ -6,37 +6,37 @@ import javax.swing.JRootPane;
 import javax.swing.RootPaneContainer;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
+import java.awt.AlphaComposite;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.Window;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
 /**
- * The SETUP menu's reveal (see {@link TacticalCombo#menu()}) for whole windows and wizard pages: the area is uncovered
- * in bands, top to bottom one after another, each wiped from left to right behind the red scan bar. Drawn on the
- * window's layered pane; takes no mouse events, so nothing waits for it. Gone when done.
+ * Fades things in: a window that opens (OSD editor, motor test, calibration, RC check, setup guides) and a setup
+ * guide's page on Next or Back. Drawn on the window's layered pane over what it reveals; takes no mouse events, so
+ * nothing waits for it. Gone when done.
  */
-final class ScanReveal extends JComponent {
-    private static final long STAGGER_MS = 45; // as the SETUP menu's items
-    private static final long REVEAL_MS = 170;
-    private static final int BAND = 90;         // about one menu row per band, 3 to 8 bands
+final class WindowReveal extends JComponent {
+    private static final long FADE_MS = 220;
 
     private final JComponent target;
     private final Color background;
     private final Timer timer = new Timer(15, e -> tick());
     private long startedAt; // 0 = still covered: the window isn't on screen yet
 
-    private ScanReveal(JComponent target) {
+    private WindowReveal(JComponent target) {
         this.target = target;
         this.background = background(target);
     }
 
-    /** The window opens covered and is revealed as soon as it is on screen. */
+    /** The window opens covered and fades in as soon as it is on screen. */
     static void onOpen(RootPaneContainer window) {
-        ScanReveal reveal = new ScanReveal((JComponent) window.getContentPane());
+        WindowReveal reveal = new WindowReveal((JComponent) window.getContentPane());
         if (!reveal.attach(window.getRootPane())) return;
         ((Window) window).addWindowListener(new WindowAdapter() {
             @Override
@@ -46,10 +46,10 @@ final class ScanReveal extends JComponent {
         });
     }
 
-    /** Part of a window on screen, e.g. a wizard's next page. */
-    static void play(JComponent target) {
+    /** Part of a window on screen fades in: a setup guide's page on Next or Back. */
+    static void fadeIn(JComponent target) {
         if (!target.isShowing()) return;
-        ScanReveal reveal = new ScanReveal(target);
+        WindowReveal reveal = new WindowReveal(target);
         if (reveal.attach(SwingUtilities.getRootPane(target))) reveal.start();
     }
 
@@ -74,13 +74,13 @@ final class ScanReveal extends JComponent {
         if (!r.equals(getBounds())) setBounds(r);
     }
 
-    private int bands() {
-        return Math.max(3, Math.min(8, getHeight() / BAND));
+    private float progress() {
+        return startedAt == 0 ? 0 : Math.min(1f, (System.currentTimeMillis() - startedAt) / (float) FADE_MS);
     }
 
     private void tick() {
         follow();
-        if (System.currentTimeMillis() - startedAt > STAGGER_MS * (bands() - 1) + REVEAL_MS + 30) {
+        if (progress() >= 1) {
             timer.stop();
             Component layer = getParent();
             if (layer != null) {
@@ -93,23 +93,18 @@ final class ScanReveal extends JComponent {
         repaint();
     }
 
+    /** The background over the content, less and less of it (covered until the window is on screen). */
     @Override
-    protected void paintComponent(Graphics g) {
-        int w = getWidth(), h = getHeight(), n = bands();
-        long since = startedAt == 0 ? 0 : System.currentTimeMillis() - startedAt;
-        for (int i = 0; i < n; i++) {
-            int top = h * i / n, bottom = h * (i + 1) / n;
-            float p = startedAt == 0 ? 0 : (since - i * STAGGER_MS) / (float) REVEAL_MS;
-            if (p >= 1) continue;
-            p = Math.max(0, p);
-            float ease = 1 - (1 - p) * (1 - p);
-            int x = Math.round(w * ease);
+    protected void paintComponent(Graphics graphics) {
+        Graphics2D g = (Graphics2D) graphics.create();
+        try {
+            float p = progress();
+            float cover = 1 - (1 - (1 - p) * (1 - p) * (1 - p));
+            g.setComposite(AlphaComposite.SrcOver.derive(Math.max(0f, cover)));
             g.setColor(background);
-            g.fillRect(x, top, w - x, bottom - top);
-            if (p > 0) {
-                g.setColor(Theme.ACCENT);
-                g.fillRect(Math.max(0, x - 2), top + 2, 3, bottom - top - 4);
-            }
+            g.fillRect(0, 0, getWidth(), getHeight());
+        } finally {
+            g.dispose();
         }
     }
 

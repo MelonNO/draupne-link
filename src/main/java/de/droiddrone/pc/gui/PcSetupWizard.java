@@ -649,7 +649,7 @@ final class PcSetupWizard {
                     power.set(State.OK, plan.name() + ".");
                     powerButton.setVisible(false);
                 } else {
-                    power.set(State.WARN, plan.name() + ". Press the button, or set Settings &rarr; System &rarr; Power &rarr; "
+                    power.set(State.WARN, plan.name() + ". Press the button, or set Settings > System > Power > "
                             + "Power mode to <b>Best performance</b>.");
                     powerButton.setVisible(true);
                 }

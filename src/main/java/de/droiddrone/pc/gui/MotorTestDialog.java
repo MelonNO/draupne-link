@@ -9,7 +9,8 @@ import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
-import javax.swing.JDialog;
+import javax.swing.JFrame;
+import javax.swing.WindowConstants;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
@@ -44,7 +45,7 @@ import java.util.List;
  * The motors stop when the box is unticked, on SPACE or STOP ALL, when this window loses focus or closes, and when
  * the USB link fails; sliders go to 30 % at most.
  */
-final class MotorTestDialog extends JDialog {
+final class MotorTestDialog extends JFrame {
     private static final int SLIDER_H = 150;
     /** The pilot's choice of motor direction for the picture; props out unless they pick props in. */
     static final String PROPS_OUT_KEY = "motorTest.propsOut";
@@ -76,7 +77,11 @@ final class MotorTestDialog extends JDialog {
     private Thread worker;
 
     private MotorTestDialog(Window owner, MainWindow main) {
-        super(owner, "Motor test", ModalityType.APPLICATION_MODAL);
+        super("Motor test - DroidDrone PC"); // a window of its own: Windows' minimise, maximise and close
+        setIconImages(AppIcon.images());
+        setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+        // opened from a setup guide (Drone setup > Check now), which blocks the app's other windows: not this one
+        setModalExclusionType(java.awt.Dialog.ModalExclusionType.APPLICATION_EXCLUDE);
         this.main = main;
         propsOut = !"false".equalsIgnoreCase(main.config().getString(PROPS_OUT_KEY));
         JPanel root = new JPanel(new BorderLayout(14, 14));
@@ -127,18 +132,41 @@ final class MotorTestDialog extends JDialog {
         setMinimumSize(new Dimension(1100, 720));
         setSize(1180, 800);
         setLocationRelativeTo(owner);
-        ScanReveal.onOpen(this);
+        WindowReveal.onOpen(this);
         worker = new Thread(this::run, "motor-test");
         worker.setDaemon(true);
         worker.start();
     }
 
+    /** The one open, if any: opening it again brings that one forward. */
+    private static MotorTestDialog open;
+
     static void open(Window owner, MainWindow main) {
-        new MotorTestDialog(owner, main).setVisible(true);
+        open(owner, main, null);
+    }
+
+    /** @param onClosed run once the window is closed (and so stops using the USB port), or null */
+    static void open(Window owner, MainWindow main, Runnable onClosed) {
+        if (open == null || !open.isDisplayable()) {
+            open = new MotorTestDialog(owner, main);
+            open.setVisible(true);
+        } else {
+            if ((open.getExtendedState() & ICONIFIED) != 0) open.setExtendedState(open.getExtendedState() & ~ICONIFIED);
+            open.toFront();
+        }
+        if (onClosed != null) {
+            open.addWindowListener(new java.awt.event.WindowAdapter() {
+                @Override
+                public void windowClosed(java.awt.event.WindowEvent e) {
+                    onClosed.run();
+                }
+            });
+        }
     }
 
     @Override
     public void dispose() {
+        if (open == this) open = null;
         flip.stop();
         stopAll();
         running = false;

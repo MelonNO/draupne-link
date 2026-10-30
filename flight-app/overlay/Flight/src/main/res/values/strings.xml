@@ -44,7 +44,7 @@
     <string name="dd_pill_linked">LINK READY</string>
     <string name="dd_update">Update available: DroidDrone Flight %1$s. Tap to download it.</string>
     <string name="dd_old_app">An earlier DroidDrone Flight is still installed and can take the flight controller. Tap here to remove it.</string>
-    <string name="dd_lock_button">🔒 LOCK SCREEN</string>
+    <string name="dd_lock_button">LOCK SCREEN</string>
     <string name="dd_locked_title">SCREEN LOCKED</string>
     <string name="dd_locked_text">Touches are ignored, so nothing changes by accident in flight. The link to the PC and the flight controller keep running.</string>
     <string name="dd_unlock">HOLD 2 S

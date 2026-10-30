@@ -16,7 +16,7 @@ The phone app that flies on the drone: upstream [DroidDrone](https://github.com/
 | `Flight/src/main/java/de/droiddrone/flight/UpdateCheck.java` | New: asks GitHub for the latest DroidDrone PC release and whether the phone app in it is newer; MainActivity shows a tap-to-download line |
 | `Flight/src/main/java/de/droiddrone/flight/PcLinkStats.java` | New: the phone's measurements (record 0x40F0) for DroidDrone PC's link log; the app's version (record 0x40F1) |
 | `Flight/src/main/AndroidManifest.xml` | The theme; permission to ask for the earlier app's removal, and to see it; any orientation (`fullUser`, was landscape only) |
-| `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.7`, release signing from outside the repo |
+| `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.8`, release signing from outside the repo |
 | `settings.gradle` | Builds only the Flight app (not upstream's Control app) |
 
 The network protocol is unchanged (the phone's measurements travel as an extra telemetry packet that other PC versions skip), so DroidDrone PC works with this build and with the original 2.3.0.

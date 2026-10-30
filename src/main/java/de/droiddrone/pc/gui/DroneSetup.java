@@ -18,8 +18,8 @@ import java.util.stream.Collectors;
 /**
  * Drone setup: the Betaflight settings DroidDrone needs - receiver mode MSP, serial_update_rate_hz and the battery's
  * cell count (6S unless the pilot changes it) - set over USB with nothing else to click. Everything else on the drone
- * (arm switch, accelerometer, failsafe) stays the pilot's own. The pilot also says whether the motors and props are
- * already checked, or checks them there and then with the motor test.
+ * (arm switch, accelerometer, failsafe) stays the pilot's own. The motors and props are assumed checked; the pilot
+ * can say so, or check them there and then with the motor test.
  */
 final class DroneSetup {
     private DroneSetup() {
@@ -50,8 +50,6 @@ final class DroneSetup {
         private final CheckRow stickDelay = new CheckRow("Stick delay: serial_update_rate_hz");
         private final CheckRow battery = new CheckRow("Battery cell count: force_battery_cell_count");
         private final CheckRow motors = new CheckRow("Motors and props");
-        /** The pilot has said: already checked, or checked them with the motor test. Needed to go on. */
-        private boolean motorsChosen;
         /** The motor test has the flight controller's USB port: this page leaves it alone meanwhile. */
         private boolean motorTestOpen;
         private JSpinner cellSpinner;
@@ -78,7 +76,7 @@ final class DroneSetup {
         @Override
         String hint() {
             return "<b>Props off.</b> Check the battery's cell count, then plug the flight controller into this PC with USB. "
-                    + "The settings DroidDrone needs are made by themselves. Then say whether the motors and props are checked.";
+                    + "The settings DroidDrone needs are made by themselves.";
         }
 
         @Override
@@ -111,16 +109,15 @@ final class DroneSetup {
             receiver.set(State.PENDING, "");
             stickDelay.set(State.PENDING, "");
             battery.set(State.PENDING, "");
-            motorsChosen = "true".equalsIgnoreCase(main.config().getString(MOTORS_CHECKED_KEY));
-            motors.set(motorsChosen ? State.OK : State.PENDING, motorsChosen
+            boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(MOTORS_CHECKED_KEY));
+            motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore
                     ? "Checked before. <b>Check now</b> runs the motor test again."
-                    : "Is each motor in the right place and turning the right way, and are the props on the right way round? "
-                    + "<b>Already checked</b> if so; <b>Check now</b> opens the motor test (props off).");
+                    : "Assumed checked: each motor in the right place and turning the right way, the props on the right way "
+                    + "round. Not sure? <b>Check now</b> opens the motor test (props off).");
             return col;
         }
 
         private void motorsAlreadyChecked() {
-            motorsChosen = true;
             main.save(Map.of(MOTORS_CHECKED_KEY, "true"));
             motors.set(State.OK, "Marked as checked. The motor test is in SETTINGS any time.");
         }
@@ -131,15 +128,13 @@ final class DroneSetup {
                 return;
             }
             motorTestOpen = true; // the page's own rounds would fight the motor test for the USB port
-            try {
-                MotorTestDialog.open(javax.swing.SwingUtilities.getWindowAncestor(motors), main);
-            } finally {
+            motors.set(State.PENDING, "The motor test is open. Close it when you're done.");
+            MotorTestDialog.open(javax.swing.SwingUtilities.getWindowAncestor(motors), main, () -> {
                 motorTestOpen = false;
-                nextTry = 0;
-            }
-            motorsChosen = true;
-            main.save(Map.of(MOTORS_CHECKED_KEY, "true"));
-            motors.set(State.OK, "Checked with the motor test. <b>Check now</b> runs it again.");
+                nextTry = System.currentTimeMillis() + 1500; // the motor test lets go of the port first
+                main.save(Map.of(MOTORS_CHECKED_KEY, "true"));
+                motors.set(State.OK, "Checked with the motor test. <b>Check now</b> runs it again.");
+            });
         }
 
         private int savedCells() {
@@ -167,9 +162,9 @@ final class DroneSetup {
 
         private void showManual() {
             manual.setHtml("No USB cable? Make the same settings in Betaflight Configurator: "
-                    + "<b>Receiver</b> tab &rarr; Receiver Mode <b>MSP RX input</b> &rarr; Save. "
-                    + "<b>CLI</b> tab &rarr; <b>set serial_update_rate_hz = 2000</b> (1000 on F411 boards), "
-                    + "<b>set force_battery_cell_count = " + cells + "</b> &rarr; <b>save</b>.");
+                    + "<b>Receiver</b> tab > Receiver Mode <b>MSP RX input</b> > Save. "
+                    + "<b>CLI</b> tab > <b>set serial_update_rate_hz = 2000</b> (1000 on F411 boards), "
+                    + "<b>set force_battery_cell_count = " + cells + "</b> > <b>save</b>.");
         }
 
         @Override
@@ -267,8 +262,6 @@ final class DroneSetup {
 
         @Override
         String status() {
-            if (done && !motorsChosen) return "Betaflight is set up. Now the motors and props: already checked, or check them now.";
-            if (!motorsChosen && !found) return "Waiting for the flight controller. Then say whether the motors and props are checked.";
             if (done) return "Betaflight is set up.";
             if (!found) return "Waiting for the flight controller (or press Next and use the settings below).";
             if (failed) return "Waiting for the flight controller - close or Disconnect Betaflight Configurator.";
@@ -277,7 +270,7 @@ final class DroneSetup {
 
         @Override
         boolean canContinue() {
-            return !writing && motorsChosen;
+            return !writing;
         }
     }
 }

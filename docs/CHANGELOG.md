@@ -2,6 +2,17 @@
 
 Every DroidDrone PC release, newest first. The release pages on GitHub show only that version's changes.
 
+## Unreleased
+
+- **Phone setup, "Keep the phone connected": one box per setting,** like the checks on the other steps, with an empty ring (something to do on the phone, not a warning). New box: **OTG switched on (some phones)** - on phones with an OTG switch (e.g. OPPO, realme, OnePlus, vivo) the phone doesn't see the flight controller while it is off, and many of them switch it off again after about 10 minutes without a USB device.
+- **The motor test is a normal window:** Windows' own minimise, maximise (full screen) and close, like the OSD editor. Opening it again brings the open one forward; it also works when opened from a setup guide (Drone setup > CHECK NOW).
+- **Bigger text in the setup guides:** the hint under each title, the paragraphs and the check boxes are about two points larger.
+- **Phone settings are a checklist:** click a box in "Keep the phone connected" when it's set on the phone; it gets a green check (click again to undo) and is remembered for the next time.
+- **Arrows in setup texts show:** "Settings > Apps > ..." paths showed an empty box where the arrow should be; they use ">" now.
+- **Phone app 2.3.0-pc.8: no emoji.** The LOCK SCREEN button is plain text (still the only yellow button).
+- **Windows and setup pages fade in:** a window that opens (OSD editor, motor test, calibration, RC check, setup guides) fades in, and so does a setup guide's page on **Next** and **Back**. The banded wipe from 1.0.13 is gone; the SETUP menu keeps its own animation.
+- **Drone setup: Next without a choice about the motors.** The motors and props are assumed checked, so the Betaflight step goes on as soon as Betaflight is set up; **ALREADY CHECKED** and **CHECK NOW** (the motor test) are still there.
+
 ## 1.0.13
 
 - **Phone app 2.3.0-pc.7: the connection card shows in portrait.** In pc.6 the status card took the whole height when the phone was upright.

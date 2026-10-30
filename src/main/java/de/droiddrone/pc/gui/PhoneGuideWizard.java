@@ -177,7 +177,7 @@ final class PhoneGuideWizard {
 
         private void apply(Tailscale.Status s) {
             if (!s.signedIn()) {
-                pc.set(State.BAD, "Not signed in - finish the Tailscale step in SETUP &rarr; PC setup first.");
+                pc.set(State.BAD, "Not signed in - finish the Tailscale step in SETUP > PC setup first.");
                 return;
             }
             pc.set(State.OK, s.selfName() + " - " + s.selfIp());
@@ -272,7 +272,7 @@ final class PhoneGuideWizard {
         void onShow() {
             background(() -> WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE), ok -> {
                 firewall.setVisible(!Boolean.TRUE.equals(ok)); // shown only when it's missing
-                firewall.set(State.WARN, "No firewall rule yet - Windows may block the phone. SETUP &rarr; PC setup adds it.");
+                firewall.set(State.WARN, "No firewall rule yet - Windows may block the phone. SETUP > PC setup adds it.");
             });
             if (share != null || preparing) return;
             preparing = true;
@@ -331,20 +331,42 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "Android pauses apps in the background to save battery. In the air that means a failsafe. On the phone:";
+            return "Android pauses apps in the background to save battery. In the air that means a failsafe. "
+                    + "Set these on the phone, and click each one here when it's done:";
         }
 
+        /**
+         * One box per setting, like the checks on the other steps. This PC can't see the phone's settings, so each box
+         * says what to set and where, with a neutral light.
+         */
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            String muted = "<span style='color:" + Theme.MUTED_HEX + "'>";
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "&bull; <b>Battery: Unrestricted</b> for DroidDrone Flight and Tailscale " + muted + "(Settings &rarr; Apps &rarr; the app &rarr; Battery)</span><br>"
-                            + "&bull; <b>Unrestricted mobile data</b> for both apps " + muted + "(Settings &rarr; Apps &rarr; the app &rarr; Mobile data)</span><br>"
-                            + (main.config().getLinkMode() == LinkMode.PHONE
-                            ? "&bull; <b>Tailscale: Always-on VPN</b> " + muted + "(Settings &rarr; Network &amp; internet &rarr; VPN &rarr; Tailscale &#9881;)</span><br>" : "")
-                            + "&bull; <b>Wi-Fi off</b> before flying, so the phone stays on 4G"));
+            WizardDialog.addRow(col, setting("battery", "Battery: Unrestricted",
+                    "For DroidDrone Flight and for Tailscale, so Android doesn't pause them. "
+                            + "Settings > Apps > the app > Battery > <b>Unrestricted</b>."));
+            WizardDialog.addRow(col, setting("data", "Mobile data: unrestricted",
+                    "For both apps, also with Data Saver on. Settings > Apps > the app > Mobile data > "
+                            + "<b>Unrestricted data usage</b>."));
+            if (main.config().getLinkMode() == LinkMode.PHONE) {
+                WizardDialog.addRow(col, setting("vpn", "Tailscale: Always-on VPN",
+                        "So the phone stays reachable when Android restarts the VPN. Settings > Network &amp; internet "
+                                + "> VPN > the settings icon next to Tailscale > <b>Always-on VPN</b>."));
+            }
+            WizardDialog.addRow(col, setting("otg", "OTG switched on (some phones)",
+                    "Some phones (e.g. OPPO, realme, OnePlus, vivo) have an <b>OTG</b> switch: search Settings for OTG. While "
+                            + "it is off, the phone can't see the flight controller. Many switch it off again after about 10 "
+                            + "minutes unused, so switch it on just before plugging in. No such switch? Nothing to do."));
+            WizardDialog.addRow(col, setting("wifi", "Wi-Fi off before flying",
+                    "So the phone stays on 4G. A Wi-Fi network it walks out of would take the link with it."));
             return col;
+        }
+
+        /** A box the pilot ticks when it's set on the phone; remembered for the next time this guide is open. */
+        private CheckRow setting(String key, String title, String how) {
+            String saveKey = "setup.phoneSetting." + key;
+            return new CheckRow(title).tickable(how, "true".equalsIgnoreCase(main.config().getString(saveKey)),
+                    done -> main.save(Map.of(saveKey, Boolean.toString(done))));
         }
     }
 

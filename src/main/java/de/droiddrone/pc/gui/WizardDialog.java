@@ -114,7 +114,7 @@ class WizardDialog extends JDialog {
     private final StepProgress progress = new StepProgress();
     private final JLabel stepCounter = Theme.label("", Theme.headingFont(12f), Theme.MUTED);
     private final JLabel title = Theme.label("", Theme.headingFont(30f), Theme.TEXT);
-    private final JLabel hint = Theme.label("", Theme.font(Font.PLAIN, 15f), Theme.MUTED);
+    private final JLabel hint = Theme.label("", Theme.font(Font.PLAIN, 17f), Theme.MUTED);
     private final JLabel status = Theme.label(" ", Theme.font(Font.BOLD, 13.5f), Theme.MUTED);
     private final CardLayout cards = new CardLayout();
     private final JPanel cardPanel = new JPanel(cards);
@@ -198,7 +198,7 @@ class WizardDialog extends JDialog {
         int screenHeight = owner == null ? 1000 : owner.getGraphicsConfiguration().getBounds().height;
         setSize(1020, Math.max(640, Math.min(880, screenHeight - 80)));
         setLocationRelativeTo(owner);
-        ScanReveal.onOpen(this);
+        WindowReveal.onOpen(this);
         for (Page page : pages) page.prepare();
         go(+1);
         timer.start();
@@ -258,7 +258,7 @@ class WizardDialog extends JDialog {
         title.setText(page.title().toUpperCase());
         hint.setText("<html>" + page.hint() + "</html>");
         cards.show(cardPanel, Integer.toString(index));
-        if (direction > 0) ScanReveal.play(cardPanel); // Next: the page comes in like the SETUP menu's items
+        WindowReveal.fadeIn(cardPanel); // Next and Back: the page fades in
         page.onShow();
         tick();
     }
@@ -293,7 +293,7 @@ class WizardDialog extends JDialog {
     }
 
     static WrappingText paragraph(String html) {
-        return new WrappingText(html, Theme.font(Font.PLAIN, 14f), Theme.TEXT);
+        return new WrappingText(html, Theme.font(Font.PLAIN, 16f), Theme.TEXT);
     }
 
     static JLabel subheading(String text) {

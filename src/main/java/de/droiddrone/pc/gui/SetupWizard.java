@@ -75,7 +75,7 @@ final class SetupWizard {
             WizardDialog.addRow(col, WizardDialog.paragraph("The screen shows a time code. Point the drone's camera at it, close "
                     + "enough that it fills most of the picture, and hold still for a few seconds: the delay shows on the "
                     + "screen and in the log. Try it in a window and in <b>F11</b> full screen. Stop with <b>Esc</b>. "
-                    + "Any time later: <b>SETTINGS &rarr; Latency test</b>."));
+                    + "Any time later: <b>SETTINGS > Latency test</b>."));
             test.set(State.PENDING, "<b>Test after setup</b>: when you press Finish, DroidDrone PC connects to the drone and "
                     + "starts the test (camera on, props off).");
             return col;
@@ -83,7 +83,7 @@ final class SetupWizard {
 
         private void choose(boolean now) {
             testAfterSetup = now;
-            test.set(now ? State.OK : State.INFO, now ? "It starts when you press Finish." : "Later: SETTINGS &rarr; Latency test.");
+            test.set(now ? State.OK : State.INFO, now ? "It starts when you press Finish." : "Later: SETTINGS > Latency test.");
         }
     }
 

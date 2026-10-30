@@ -160,7 +160,7 @@ class CalibrationDialog extends JDialog {
         int screenHeight = getGraphicsConfiguration().getBounds().height;
         setSize(1000, Math.max(700, Math.min(920, screenHeight - 80)));
         setLocationRelativeTo(owner);
-        ScanReveal.onOpen(this);
+        WindowReveal.onOpen(this);
     }
 
     @Override

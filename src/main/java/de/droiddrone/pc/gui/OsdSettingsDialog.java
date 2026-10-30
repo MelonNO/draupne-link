@@ -105,7 +105,7 @@ final class OsdSettingsDialog extends JFrame {
         setSize(1300, 780);
         setLocationRelativeTo(owner); // where "restore down" puts it
         setExtendedState(MAXIMIZED_BOTH); // opens maximised: the biggest preview
-        ScanReveal.onOpen(this);
+        WindowReveal.onOpen(this);
     }
 
     static void open(Window owner, MainWindow main) {
