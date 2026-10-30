@@ -36,6 +36,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private String idleText = "Not connected";
     private final OsdRenderer osd = new OsdRenderer();
     private volatile boolean osdEnabled = true;
+    private volatile OsdLayout osdLayout = OsdLayout.defaults();
     /** When the newest picture was handed over, and the smoothed wait until Swing painted it (shown in the stats). */
     private volatile long presentedNs;
     private volatile double displayMs;
@@ -189,7 +190,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             int[] t = target;
             int ow = img != null ? img.getWidth() : t[0] > 0 ? t[0] : w;
             int oh = img != null ? img.getHeight() : t[1] > 0 ? t[1] : h;
-            osd.paint(g, (w - ow) / 2, (h - oh) / 2, ow, oh, data);
+            osd.paint(g, (w - ow) / 2, (h - oh) / 2, ow, oh, data, osdLayout);
         } else {
             paintStats(g);
         }
@@ -381,6 +382,16 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
 
     boolean isOsdEnabled() {
         return osdEnabled;
+    }
+
+    /** Which OSD elements show and where (SETTINGS > OSD). */
+    void setOsdLayout(OsdLayout layout) {
+        osdLayout = layout == null ? OsdLayout.defaults() : layout;
+        repaint();
+    }
+
+    OsdLayout getOsdLayout() {
+        return osdLayout;
     }
 
     void setOsdSource(Supplier<OsdRenderer.Data> source) {

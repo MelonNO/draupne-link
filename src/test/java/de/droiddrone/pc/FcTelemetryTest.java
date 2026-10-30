@@ -156,12 +156,91 @@ class FcTelemetryTest {
     @Test
     void flightModeIsNamedLikeBetaflightsOsd() {
         assertEquals("ACRO", FcTelemetry.flightMode(List.of("ARM")), "no self-level mode on: acro");
-        assertEquals("ACRO", FcTelemetry.flightMode(List.of("ARM", "AIR MODE")));
+        assertEquals("AIR", FcTelemetry.flightMode(List.of("ARM", "AIR MODE")), "acro with the air mode switch");
         assertEquals("ANGLE", FcTelemetry.flightMode(List.of("ARM", "ANGLE", "AIR MODE")));
-        assertEquals("HORIZON", FcTelemetry.flightMode(List.of("HORIZON")));
+        assertEquals("HORIZON", FcTelemetry.flightMode(List.of("HORIZON", "AIR MODE")));
+        assertEquals("ACRO TRAINER", FcTelemetry.flightMode(List.of("ARM", "ACRO TRAINER", "AIR MODE")));
+        assertEquals("ANGLE", FcTelemetry.flightMode(List.of("ACRO TRAINER", "ANGLE")), "acro trainer only works in acro");
+        assertEquals("HEADFREE", FcTelemetry.flightMode(List.of("ANGLE", "HEADFREE")));
+        assertEquals("ALT HOLD", FcTelemetry.flightMode(List.of("ANGLE", "ALT HOLD")), "4.5 name");
+        assertEquals("ALT HOLD", FcTelemetry.flightMode(List.of("ANGLE", "ALTHOLD")), "2025.12 name");
+        assertEquals("POS HOLD", FcTelemetry.flightMode(List.of("ALTHOLD", "POSHOLD")));
+        assertEquals("CHIRP", FcTelemetry.flightMode(List.of("CHIRP")));
+        assertEquals("PASSTHRU", FcTelemetry.flightMode(List.of("PASSTHRU")));
+        assertEquals("TURTLE", FcTelemetry.flightMode(List.of("ARM", "ANGLE", "FLIP OVER AFTER CRASH")));
         assertEquals("GPS RESCUE", FcTelemetry.flightMode(List.of("ANGLE", "GPS RESCUE")), "rescue over angle");
-        assertEquals("FAILSAFE", FcTelemetry.flightMode(List.of("ANGLE", "FAILSAFE")));
+        assertEquals("FAILSAFE", FcTelemetry.flightMode(List.of("ANGLE", "GPS RESCUE", "FAILSAFE")));
         assertEquals(List.of("AIR MODE", "BEEPER"), FcTelemetry.otherModes(List.of("ARM", "ANGLE", "AIR MODE", "BEEPER")));
+        assertEquals(List.of("BEEPER"), FcTelemetry.otherModes(List.of("ARM", "AIR MODE", "BEEPER")), "AIR is shown as the mode");
+        assertEquals(List.of("ANGLE"), FcTelemetry.otherModes(List.of("ANGLE", "ALTHOLD")));
+    }
+
+    @Test
+    void flyTimeCountsOnlyWhileArmed() {
+        FcTelemetry t = new FcTelemetry();
+        t.trackArmed(false, 1_000);
+        t.trackArmed(true, 5_000);
+        t.trackArmed(true, 6_000);
+        assertEquals(3, t.flySeconds(8_500), "running while armed");
+        t.trackArmed(false, 10_000);
+        assertEquals(5, t.flySeconds(60_000), "stops when disarmed");
+        t.trackArmed(true, 70_000);
+        assertEquals(65, t.flySeconds(130_000), "the next arm adds to it, like Betaflight's total arm time");
+    }
+
+    @Test
+    void flyTimeFollowsTheArmFlagInMspStatus() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        assertEquals(-1, t.flySeconds(System.currentTimeMillis()), "nothing known yet");
+        t.parse(new DataReader(boxNamesPacket("ARM;ANGLE;"), true), BETAFLIGHT);
+        t.parse(new DataReader(betaflightPacket(0, 0b10), true), BETAFLIGHT);
+        assertEquals(0, t.flySeconds(System.currentTimeMillis() + 60_000), "disarmed: no time, though the phone's timer is unused");
+        t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
+        assertEquals(60, t.flySeconds(System.currentTimeMillis() + 60_200), "armed");
+    }
+
+    @Test
+    void knowsWhenThePhoneHasReadTheModeIds() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        assertFalse(t.hasBoxIds());
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream o = new DataOutputStream(bytes);
+        o.writeShort(FcCommon.MSP_BOXIDS);
+        o.writeShort(3); o.writeByte(0); o.writeByte(1); o.writeByte(2);
+        o.write(betaflightPacket(0, 0)); // what follows is still read
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        assertTrue(t.hasBoxIds());
+        assertNotNull(t.getStatus());
+        t.forgetBoxIds();
+        assertFalse(t.hasBoxIds(), "asked for again after a link loss");
+    }
+
+    @Test
+    void readsGpsCoordinatesAndTheDistanceFlown() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream o = new DataOutputStream(bytes);
+        o.writeShort(FcCommon.MSP_RAW_GPS); // as the Flight app re-packs it, with its own travelled distance
+        o.writeByte(2); o.writeByte(11); o.writeInt(599_123_456); o.writeInt(-107_512_345);
+        o.writeShort(52); o.writeShort(1000); o.writeShort(0); o.writeShort(90); o.writeInt(1840);
+        o.writeShort(FcCommon.MSP_COMP_GPS);
+        o.writeShort(230); o.writeShort(140); o.writeByte(0);
+        FcTelemetry t = new FcTelemetry();
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        FcTelemetry.Gps gps = t.getGps();
+        assertEquals(59.9123456, gps.latDeg(), 1e-7);
+        assertEquals(-10.7512345, gps.lonDeg(), 1e-7);
+        assertEquals(1840, gps.travelledM());
+        assertEquals(36.0, gps.speedKmh(), 1e-9);
+        assertEquals(230, gps.distanceHomeM(), "home from the next record, the rest kept");
+        assertEquals(0, t.getUnknownCodes());
+    }
+
+    @Test
+    void readsTheCoreTemperature() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        t.parse(new DataReader(betaflightPacket(0, 0), true), BETAFLIGHT);
+        assertEquals(41, t.getStatus().coreTempC());
+        assertTrue(t.getStatus().coreTempKnown());
     }
 
     @Test

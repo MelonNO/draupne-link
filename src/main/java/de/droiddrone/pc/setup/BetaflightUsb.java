@@ -11,9 +11,9 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * A flight controller on this PC's USB, driven through Betaflight's CLI (text commands).
- * Used by the setup wizard so nobody needs Betaflight Configurator - which, when unplugged without disconnecting,
- * leaves the "MSP" arming block behind.
+ * A flight controller on this PC's USB, driven through Betaflight's CLI (text commands) or MSP (binary requests, as
+ * Betaflight Configurator talks to it). Used by the setup wizard so nobody needs Betaflight Configurator - which, when
+ * unplugged without disconnecting, leaves the "MSP" arming block behind - and by the motor test.
  */
 public final class BetaflightUsb implements AutoCloseable {
     public record Port(String systemName, String description) {
@@ -74,6 +74,98 @@ public final class BetaflightUsb implements AutoCloseable {
         }
         port.flushIOBuffers();
         return new BetaflightUsb(port);
+    }
+
+    // ------------------------------------------------------------------ MSP
+
+    /**
+     * One MSP v1 request and its answer's payload ("$M<" out, "$M>" back). Only while the CLI is not open. Answers to
+     * other requests are skipped; Betaflight's error answer ("$M!") throws.
+     */
+    public byte[] msp(int command, byte[] payload) throws IOException {
+        byte[] frame = mspFrame(command, payload);
+        write(frame);
+        MspParser parser = new MspParser();
+        byte[] buf = new byte[256];
+        long end = System.currentTimeMillis() + 1000;
+        while (System.currentTimeMillis() < end) {
+            int n = port.readBytes(buf, buf.length);
+            if (n < 0) throw new IOException("The flight controller disconnected");
+            for (int i = 0; i < n; i++) {
+                MspParser.Frame f = parser.feed(buf[i]);
+                if (f == null || f.command() != command) continue;
+                if (f.error()) throw new IOException("The flight controller refused MSP command " + command);
+                return f.payload();
+            }
+        }
+        throw new IOException("No answer from the flight controller - is it running Betaflight?");
+    }
+
+    /** "$M<", size, command, payload, checksum (XOR of size, command and payload). */
+    static byte[] mspFrame(int command, byte[] payload) {
+        int size = payload == null ? 0 : payload.length;
+        if (size > 255 || command < 0 || command > 255) throw new IllegalArgumentException("Not an MSP v1 request");
+        byte[] f = new byte[6 + size];
+        f[0] = '$';
+        f[1] = 'M';
+        f[2] = '<';
+        f[3] = (byte) size;
+        f[4] = (byte) command;
+        int checksum = size ^ command;
+        for (int i = 0; i < size; i++) {
+            f[5 + i] = payload[i];
+            checksum ^= payload[i] & 0xff;
+        }
+        f[5 + size] = (byte) checksum;
+        return f;
+    }
+
+    /** Puts MSP v1 answers back together from bytes as they arrive; drops anything with a bad checksum. */
+    static final class MspParser {
+        record Frame(int command, byte[] payload, boolean error) {}
+
+        private int state, size, command, checksum, index;
+        private boolean error;
+        private byte[] payload;
+
+        Frame feed(byte b) {
+            int v = b & 0xff;
+            switch (state) {
+                case 0 -> state = v == '$' ? 1 : 0;
+                case 1 -> state = v == 'M' ? 2 : 0;
+                case 2 -> {
+                    if (v == '>' || v == '!') {
+                        error = v == '!';
+                        state = 3;
+                    } else {
+                        state = 0;
+                    }
+                }
+                case 3 -> {
+                    size = v;
+                    checksum = v;
+                    state = 4;
+                }
+                case 4 -> {
+                    command = v;
+                    checksum ^= v;
+                    payload = new byte[size];
+                    index = 0;
+                    state = size == 0 ? 6 : 5;
+                }
+                case 5 -> {
+                    payload[index++] = b;
+                    checksum ^= v;
+                    if (index == size) state = 6;
+                }
+                case 6 -> {
+                    state = 0;
+                    if (v == checksum) return new Frame(command, payload, error);
+                }
+                default -> state = 0;
+            }
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------ CLI

@@ -40,6 +40,31 @@ final class SettingsDialog extends JDialog {
         });
         card.add(left(upsideDown));
         card.add(left(spacer()));
+        card.add(left(Theme.sectionTitle("OSD")));
+        card.add(left(Theme.label("<html><span style='color:" + Theme.MUTED_HEX + "'>Choose which elements the OSD shows and drag "
+                + "them where you want them, like Betaflight's OSD tab. F2 still turns the whole OSD on or off.</span></html>",
+                Theme.font(Font.PLAIN, 14f), Theme.TEXT)));
+        JButton osd = Theme.secondaryButton("Edit OSD");
+        osd.addActionListener(e -> OsdSettingsDialog.open(this, main));
+        JPanel osdRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 10));
+        osdRow.setOpaque(false);
+        osdRow.add(osd);
+        card.add(left(osdRow));
+        card.add(left(spacer()));
+        card.add(left(Theme.sectionTitle("Motors")));
+        boolean linked = main.isLinkActive();
+        card.add(left(Theme.label("<html><span style='color:" + Theme.MUTED_HEX + "'>" + (linked
+                ? "Disconnect from the drone first: the motor test runs over this PC's USB, with the drone on the bench."
+                : "Spin each motor, like Betaflight's motor test, to check it is in the right place and turns the right way "
+                + "- and so which way round the props go.") + "</span></html>", Theme.font(Font.PLAIN, 14f), Theme.TEXT)));
+        JButton motors = Theme.secondaryButton("Motor test");
+        motors.setEnabled(!linked);
+        motors.addActionListener(e -> MotorTestDialog.open(this, main));
+        JPanel motorRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 10));
+        motorRow.setOpaque(false);
+        motorRow.add(motors);
+        card.add(left(motorRow));
+        card.add(left(spacer()));
         card.add(left(Theme.sectionTitle("About")));
         card.add(left(aboutLine("DroidDrone PC", de.droiddrone.pc.AppInfo.version())));
         card.add(left(aboutLine("Phone app it installs", "DroidDrone Flight " + de.droiddrone.pc.setup.ApkShare.VERSION)));

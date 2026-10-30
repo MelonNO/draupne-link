@@ -4,11 +4,14 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-10-30)
+## Where things stand (2026-10-30, 1.0.11)
 
-- **Released:** DroidDrone PC **1.0.10** (Latest), bundling phone app **DroidDrone Flight 2.3.0-pc.5**.
+- **Released:** DroidDrone PC **1.0.11** (Latest), bundling phone app **DroidDrone Flight 2.3.0-pc.5** (unchanged).
 - **Flies:** RC, video, OSD and telemetry over 4G (phone on Tailscale) work on the real drone.
 - **Waiting on the pilot:**
+  - 1.0.11 on the drone: the FLY timer counts while armed, CORE temperature and the flight mode names show, and the
+    phone now sees the drone armed (its travelled distance, used by the OSD's optional "Distance flown", counts).
+  - The motor test (SETTINGS > Motor test) on the real flight controller, props off.
   - First real use of **UPDATE** (1.0.9 to 1.0.10): it should download, install with a progress bar and restart.
   - Calibrate again with hands off at the centre step. The old pitch centre was 18 us off, which made the drone lean
     forward when landed and armed.
@@ -23,6 +26,8 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
   - Writing `force_battery_cell_count` to a real board.
   - The phone's version record on a real phone.
   - OSD pitch direction (`osdInvertPitch`).
+  - The motor test (SETTINGS > Motor test): MSP_SET_MOTOR over USB, written from Betaflight's MSP and only tested
+    without a flight controller. Try it props off first.
 
 ## Rules for working on this repo
 
@@ -100,7 +105,7 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
 | Link, RC, telemetry | `ControlLink`, `Connection`, `RcSession`, `RcMapper`, `Pacer`, `FcTelemetry`, `CellCount`, `LinkLog` |
 | Controller | `Joystick`, `JoystickService`, `CalibrationWizard`, `AxisCalibration` |
 | Video | `video/` (`VideoPipeline`, `VideoDecoder`, `FrameAssembler`, `BitrateControl`, `LatencyMeter`) |
-| Window, OSD, wizards | `gui/` (`MainWindow`, `VideoView`, `OsdRenderer`, `SetupWizard`, `PcSetupWizard`, `PhoneGuideWizard`, `DroneSetup`, `Tactical*`) |
-| Setup helpers | `setup/` (`Tailscale`, `BetaflightPlan`, `BetaflightUsb`, `ApkShare`, `UpdateCheck`, `SelfUpdate`, `PcPrep`) |
+| Window, OSD, wizards | `gui/` (`MainWindow`, `VideoView`, `OsdRenderer`, `OsdLayout` / `OsdElement` / `OsdSettingsDialog` (SETTINGS > OSD), `SetupWizard`, `PcSetupWizard`, `PhoneGuideWizard`, `DroneSetup`, `Tactical*`) |
+| Setup helpers | `setup/` (`Tailscale`, `BetaflightPlan`, `BetaflightUsb`, `ApkShare`, `MotorTest`, `UpdateCheck`, `SelfUpdate`, `PcPrep`) |
 | Installer | `src/installer/main.wxs`, `check-running.vbs` |
 | Phone app | `flight-app/` (overlay on upstream Flight 2.3.0; see its README) |

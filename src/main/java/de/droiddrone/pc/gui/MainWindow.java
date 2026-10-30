@@ -185,6 +185,7 @@ public class MainWindow extends JFrame {
                 + " (protocol " + SettingsCommon.versionCompatibleCode + "). Settings: " + shortPath(configFile));
 
         videoView.setOsdSource(this::osdData);
+        videoView.setOsdLayout(OsdLayout.load(config::getString));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
         videoView.setUpsideDown("true".equalsIgnoreCase(config.getString(SettingsDialog.UPSIDE_DOWN_KEY)));
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
@@ -440,12 +441,16 @@ public class MainWindow extends JFrame {
         topLeft.add(joystickSlot);
         topLeft.add(Box.createHorizontalStrut(10));
         calibrateButton.addActionListener(e -> calibrate());
-        // locked while connected: it shows (stripes, padlock), and a click on it says why
+        // locked while connected: it shows (stripes, padlock), and a click on it says why, under it (never over the video)
         ((TacticalButton) calibrateButton).setShowLocked(true);
+        LockedNotice calibrateLocked = new LockedNotice(calibrateButton, video, "CALIBRATE IS LOCKED",
+                "You are connected to the drone. Press DISCONNECT first: the sticks must stop going to the drone while you calibrate.");
         calibrateButton.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mousePressed(java.awt.event.MouseEvent e) {
-                if (!calibrateButton.isEnabled()) logLine("CALIBRATE is locked while connected: disconnect first (RC output must stop while calibrating).");
+                if (calibrateButton.isEnabled()) return;
+                logLine("CALIBRATE is locked while connected: disconnect first (RC output must stop while calibrating).");
+                calibrateLocked.pop();
             }
         });
         topLeft.add(calibrateButton);
@@ -722,6 +727,16 @@ public class MainWindow extends JFrame {
             logLine("Could not save settings: " + e.getMessage());
             return false;
         }
+    }
+
+    OsdLayout osdLayout() {
+        return videoView.getOsdLayout();
+    }
+
+    /** SETTINGS > OSD: shows on the live OSD at once (also in the popped-out video) and is saved. */
+    void setOsdLayout(OsdLayout layout) {
+        videoView.setOsdLayout(layout);
+        save(layout.toSettings());
     }
 
     private void shutdown() {
@@ -1006,7 +1021,7 @@ public class MainWindow extends JFrame {
         VideoPipeline v = video;
         return new OsdRenderer.Data(true, l.getState() == ControlLink.State.READY, l.getPing(), s != null && s.isRcEnabled(),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
-                osdLinkHint());
+                osdLinkHint(), s == null ? null : s.getLastChannels(), false);
     }
 
     /** Under LINK LOST on the OSD: the reason, when Tailscale knows it. */

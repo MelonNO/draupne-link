@@ -1,6 +1,7 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.FcTelemetry;
+import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.video.VideoPipeline;
 
 import java.awt.BasicStroke;
@@ -11,21 +12,28 @@ import java.awt.Graphics2D;
 import java.awt.Shape;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Path2D;
+import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Military-style HUD drawn over the video: fixed aircraft reticle, horizon + pitch ladder, heading tape with home
- * marker, battery / link / GPS / arming blocks in the corners and big centre warnings. All text is outlined so it
- * stays readable on any picture. Everything is optional: missing telemetry simply isn't drawn. When the sticks can't
- * reach the drone (link or flight controller lost) a red frame goes round the whole picture.
+ * marker, battery / link / GPS / arming elements round the edges and big centre warnings. All text is outlined so it
+ * stays readable on any picture. Which elements show and where comes from the {@link OsdLayout} (SETTINGS > OSD).
+ * Everything is optional: missing telemetry simply isn't drawn. When the sticks can't reach the drone (link or flight
+ * controller lost) a red frame goes round the whole picture, whatever the layout.
  */
 final class OsdRenderer {
-    /** Everything the HUD shows; built fresh for every paint. */
-    /** @param linkHint why the link is down, when known (e.g. the phone is off Tailscale); null otherwise */
+    /**
+     * Everything the HUD shows; built fresh for every paint.
+     * @param linkHint why the link is down, when known (e.g. the phone is off Tailscale); null otherwise
+     * @param channels the sticks this PC sends (PcConfig.CHANNEL_NAMES order), null when none
+     * @param preview  the OSD editor's sample: warnings show a sample line, nothing blinks
+     */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
-                VideoPipeline.Stats video, boolean invertPitch, String linkHint) {}
+                VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview) {}
 
     private static final Color ACCENT = Theme.ACCENT; // symbols and labels
     private static final Color YELLOW = Theme.WARN;  // warnings only
@@ -36,14 +44,33 @@ final class OsdRenderer {
     private static final Color OUTLINE = new Color(0, 0, 0, 200);
     private static final long STALE_MS = 2000;
     private static final double PITCH_FOV_DEG = 60; // degrees of pitch across the picture height
+    private static final int CORE_TEMP_ALARM_C = 70; // Betaflight's default osd_core_temp_alarm
+
+    private interface Element {
+        void paint(float x, float y, OsdLayout.Align align);
+    }
 
     private Graphics2D g;
     private float unit;
+    private int w, h;
+    private OsdLayout layout;
+    /** The editor's: where each element was drawn this time. Null while flying. */
+    private Map<OsdElement, Rectangle2D> boundsOut;
+    private Rectangle2D box; // the element being drawn, while boundsOut is wanted
 
-    void paint(Graphics2D graphics, int x, int y, int w, int h, Data d) {
+    void paint(Graphics2D graphics, int x, int y, int w, int h, Data d, OsdLayout layout) {
+        paint(graphics, x, y, w, h, d, layout, null);
+    }
+
+    /** @param bounds filled with each element's bounds in picture coordinates (the OSD editor), or null */
+    void paint(Graphics2D graphics, int x, int y, int w, int h, Data d, OsdLayout layout, Map<OsdElement, Rectangle2D> bounds) {
         if (w < 200 || h < 120 || d == null || !d.connected()) return;
         g = (Graphics2D) graphics.create(x, y, w, h);
         Theme.smooth(g);
+        this.w = w;
+        this.h = h;
+        this.layout = layout == null ? OsdLayout.defaults() : layout;
+        boundsOut = bounds;
         unit = h / 720f; // everything scales with the picture
         long now = System.currentTimeMillis();
         FcTelemetry t = d.telemetry();
@@ -51,26 +78,140 @@ final class OsdRenderer {
         boolean attFresh = att != null && now - att.receivedAt() < STALE_MS;
         FcTelemetry.Status status = t == null ? null : t.getStatus();
         boolean statusFresh = status != null && now - status.receivedAt() < STALE_MS * 2;
-
-        if (attFresh) horizon(w, h, att, d.invertPitch());
-        reticle(w, h);
-        if (attFresh) headingTape(w, att, t.getGps());
+        FcTelemetry.Status s = statusFresh ? status : null;
         boolean fcFresh = !d.fcLost();
-        battery(t, fcFresh);
-        link(w, d, t);
-        armState(h, statusFresh ? status : null, t);
-        gps(w, h, t, attFresh ? att : null, fcFresh);
-        warnings(w, h, d, statusFresh ? status : null, t, now);
-        if (!d.linkReady() || d.fcLost()) lostFrame(w, h);
-        debugLine(w, h, d.video());
+        FcTelemetry.Battery battery = t == null ? null : t.getBattery();
+        FcTelemetry.Gps gps = t == null ? null : t.getGps();
+        FcTelemetry.Altitude alt = t == null ? null : t.getAltitude();
+
+        if (attFresh && this.layout.isOn(OsdElement.HORIZON)) horizon(att, d.invertPitch());
+        if (this.layout.isOn(OsdElement.CROSSHAIR)) crosshair(g, w / 2f, h / 2f, unit);
+        element(OsdElement.HEADING, (ex, ey, a) -> {
+            if (attFresh) headingTape(ex, ey, a, att, gps);
+        });
+        element(OsdElement.BATTERY, (ex, ey, a) -> battery(ex, ey, a, t, fcFresh));
+        element(OsdElement.PING, (ex, ey, a) -> ping(ex, ey, a, d.pingMs()));
+        element(OsdElement.NETWORK, (ex, ey, a) -> network(ex, ey, a, t == null ? null : t.getNetwork()));
+        element(OsdElement.VIDEO, (ex, ey, a) -> video(ex, ey, a, d.video()));
+        element(OsdElement.PHONE_BATTERY, (ex, ey, a) -> {
+            int phone = t == null ? -1 : t.getPhoneBatteryPercent();
+            if (phone >= 0) phoneBattery(ex, ey, a, phone, t.isPhoneCharging());
+        });
+        element(OsdElement.ARMED, (ex, ey, a) -> {
+            if (s == null) return;
+            g.setFont(Theme.headingFont(28 * unit));
+            put(s.armed() ? "ARMED" : "DISARMED", ex, ey, s.armed() ? GREEN : YELLOW, a);
+        });
+        element(OsdElement.FLIGHT_MODE, (ex, ey, a) -> {
+            // only once Betaflight's mode names are known: without them ACRO could be wrong
+            if (s != null && t.hasBoxNames()) flightMode(ex, ey, a, s);
+        });
+        element(OsdElement.FLY_TIME, (ex, ey, a) -> {
+            int fly = t == null ? -1 : t.flySeconds(now);
+            if (fly >= 0) value(String.format(Locale.ROOT, "FLY %02d:%02d", fly / 60, fly % 60), ex, ey, a, WHITE);
+        });
+        element(OsdElement.CORE_TEMP, (ex, ey, a) -> {
+            if (s == null || !s.coreTempKnown()) return;
+            int c = s.coreTempC();
+            value("CORE " + c + "°C", ex, ey, a, c >= CORE_TEMP_ALARM_C ? RED : c >= CORE_TEMP_ALARM_C - 10 ? YELLOW : WHITE);
+        });
+        element(OsdElement.GPS_SATS, (ex, ey, a) -> {
+            if (gps == null) return;
+            Color c = !fcFresh ? STALE : gps.fix() >= 2 && gps.sats() >= 6 ? GREEN : gps.fix() >= 1 ? YELLOW : RED;
+            value("SAT " + gps.sats() + (gps.fix() >= 2 ? " 3D" : gps.fix() == 1 ? " 2D" : " NO FIX"), ex, ey, a, c);
+        });
+        element(OsdElement.SPEED, (ex, ey, a) -> {
+            if (gps != null) value(String.format(Locale.ROOT, "SPD %3.0fKM/H", gps.speedKmh()), ex, ey, a, fcFresh ? WHITE : STALE);
+        });
+        element(OsdElement.ALTITUDE, (ex, ey, a) -> {
+            if (alt == null) return;
+            String vario = alt.varioMetersPerSecond() > 0.3 ? " ↑" : alt.varioMetersPerSecond() < -0.3 ? " ↓" : "";
+            value(String.format(Locale.ROOT, "ALT %4.0fM%s", alt.meters(), vario), ex, ey, a, fcFresh ? WHITE : STALE);
+        });
+        element(OsdElement.HOME, (ex, ey, a) -> {
+            if (gps != null && gps.distanceHomeM() >= 0) home(ex, ey, a, gps, attFresh ? att : null, fcFresh);
+        });
+
+        // extras
+        element(OsdElement.THROTTLE, (ex, ey, a) -> {
+            short[] ch = d.channels();
+            if (ch == null || ch.length <= PcConfig.THROTTLE_INDEX) return;
+            int pct = Math.max(0, Math.min(100, Math.round((ch[PcConfig.THROTTLE_INDEX] - 1000) / 10f)));
+            value(String.format(Locale.ROOT, "THR %3d%%", pct), ex, ey, a, WHITE);
+        });
+        element(OsdElement.CURRENT, (ex, ey, a) -> {
+            if (battery != null) value(String.format(Locale.ROOT, "CURR %.1fA", battery.amps()), ex, ey, a, fcFresh ? WHITE : STALE);
+        });
+        element(OsdElement.MAH_DRAWN, (ex, ey, a) -> {
+            if (battery != null) value("USED " + battery.mahDrawn() + "MAH", ex, ey, a, fcFresh ? WHITE : STALE);
+        });
+        element(OsdElement.PACK_VOLTAGE, (ex, ey, a) -> {
+            if (battery != null && battery.volts() > 0) value(String.format(Locale.ROOT, "PACK %.2fV", battery.volts()), ex, ey, a, fcFresh ? WHITE : STALE);
+        });
+        element(OsdElement.POWER, (ex, ey, a) -> {
+            if (battery != null && battery.volts() > 0) value(String.format(Locale.ROOT, "PWR %.0fW", battery.volts() * battery.amps()), ex, ey, a, fcFresh ? WHITE : STALE);
+        });
+        element(OsdElement.DISTANCE, (ex, ey, a) -> {
+            if (gps == null || gps.travelledM() < 0) return;
+            int m = gps.travelledM();
+            value(m < 1000 ? "DIST " + m + "M" : String.format(Locale.ROOT, "DIST %.2fKM", m / 1000.0), ex, ey, a, fcFresh ? WHITE : STALE);
+        });
+        element(OsdElement.RSSI, (ex, ey, a) -> {
+            int rssi = t == null ? -1 : t.getRssiPercent();
+            if (rssi >= 0) value("RSSI " + rssi + "%", ex, ey, a, !fcFresh ? STALE : rssi < 30 ? RED : rssi < 60 ? YELLOW : WHITE);
+        });
+        element(OsdElement.CPU_LOAD, (ex, ey, a) -> {
+            if (s != null) value("CPU " + s.cpuLoadPercent() + "%", ex, ey, a, s.cpuLoadPercent() >= 80 ? YELLOW : WHITE);
+        });
+        element(OsdElement.VARIO, (ex, ey, a) -> {
+            if (alt != null) value(String.format(Locale.ROOT, "VSPD %+.1fM/S", alt.varioMetersPerSecond()), ex, ey, a, fcFresh ? WHITE : STALE);
+        });
+        element(OsdElement.PITCH, (ex, ey, a) -> {
+            if (attFresh) value(String.format(Locale.ROOT, "PIT %+d°", Math.round(att.pitchDeg() * (d.invertPitch() ? -1 : 1))), ex, ey, a, WHITE);
+        });
+        element(OsdElement.ROLL, (ex, ey, a) -> {
+            if (attFresh) value(String.format(Locale.ROOT, "ROL %+d°", Math.round(att.rollDeg())), ex, ey, a, WHITE);
+        });
+        element(OsdElement.COORDINATES, (ex, ey, a) -> {
+            if (gps == null || gps.latDeg() == 0 && gps.lonDeg() == 0) return;
+            Color c = fcFresh ? WHITE : STALE;
+            value(String.format(Locale.ROOT, "LAT %.6f", gps.latDeg()), ex, ey, a, c);
+            value(String.format(Locale.ROOT, "LON %.6f", gps.lonDeg()), ex, ey + 22 * unit, a, c);
+        });
+        element(OsdElement.ON_TIME, (ex, ey, a) -> {
+            FcTelemetry.Timers timers = t == null ? null : t.getTimers();
+            if (timers != null) value(String.format(Locale.ROOT, "ON %02d:%02d", timers.onSeconds() / 60, timers.onSeconds() % 60), ex, ey, a, WHITE);
+        });
+        element(OsdElement.CLOCK, (ex, ey, a) ->
+                value(java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")), ex, ey, a, WHITE));
+        element(OsdElement.STICKS_LEFT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 2, PcConfig.THROTTLE_INDEX));
+        element(OsdElement.STICKS_RIGHT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 0, 1));
+
+        element(OsdElement.WARNINGS, (ex, ey, a) -> warnings(ex, ey, a, d, s, t, now));
+        if (!d.linkReady() || d.fcLost()) lostFrame();
+        element(OsdElement.DEBUG, (ex, ey, a) -> debugLine(ex, ey, a, d.video()));
+        boundsOut = null;
         g.dispose();
     }
 
-    // ------------------------------------------------------------------ centre
-
-    private void reticle(int w, int h) {
-        crosshair(g, w / 2f, h / 2f, unit);
+    /** Draws one element where the layout puts it (nothing if it is off) and notes its bounds for the editor. */
+    private void element(OsdElement e, Element painter) {
+        OsdLayout.Placement p = layout.get(e);
+        if (!p.on()) return;
+        box = boundsOut == null ? null : new Rectangle2D.Float(Float.NaN, Float.NaN, 0, 0);
+        painter.paint((float) (p.x() * w), (float) (p.y() * h), p.align());
+        if (box != null && !Double.isNaN(box.getX())) boundsOut.put(e, box);
+        box = null;
     }
+
+    /** Grows the current element's bounds (only while the editor asks for them). */
+    private void mark(double x, double y, double width, double height) {
+        if (box == null) return;
+        if (Double.isNaN(box.getX())) box.setRect(x, y, width, height);
+        else box.add(new Rectangle2D.Double(x, y, width, height));
+    }
+
+    // ------------------------------------------------------------------ centre
 
     /**
      * The fixed crosshair in the middle, Betaflight style: two wings with ticks pointing down and a dot. The same one
@@ -102,7 +243,7 @@ final class OsdRenderer {
      * Betaflight reports pitch positive nose-DOWN (its own OSD draws the horizon row at y - pitch, rows counting
      * down), so a positive pitch moves the horizon up. osdInvertPitch=true flips it if a setup shows otherwise.
      */
-    private void horizon(int w, int h, FcTelemetry.Attitude att, boolean invertPitch) {
+    private void horizon(FcTelemetry.Attitude att, boolean invertPitch) {
         int cx = w / 2, cy = h / 2;
         double pxPerDeg = h / PITCH_FOV_DEG;
         AffineTransform saved = g.getTransform();
@@ -139,10 +280,10 @@ final class OsdRenderer {
         g.setTransform(saved);
     }
 
-    private void headingTape(int w, FcTelemetry.Attitude att, FcTelemetry.Gps gps) {
-        int cx = w / 2;
-        float top = 16 * unit;
+    /** The tape, 90 degrees wide; y is its top. */
+    private void headingTape(float x, float top, OsdLayout.Align align, FcTelemetry.Attitude att, FcTelemetry.Gps gps) {
         float span = 360 * unit;        // pixels for the visible arc
+        float cx = startX(x, span, align) + span / 2;
         float pxPerDeg = span / 90f;    // 90 degrees visible
         int heading = att.headingDeg();
         g.setFont(Theme.headingFont(15 * unit));
@@ -178,23 +319,24 @@ final class OsdRenderer {
         g.setColor(ACCENT);
         g.setStroke(new BasicStroke(1.5f));
         g.drawRect(Math.round(cx - bw / 2), Math.round(top - 4 * unit), Math.round(bw), Math.round(24 * unit));
+        mark(cx - bw / 2, top - 4 * unit, bw, 24 * unit);
+        mark(cx - span / 2, top, span, 1); // the whole tape, also where it has no ticks
         centered(hdg, cx, top + 14 * unit, ACCENT);
     }
 
-    // ------------------------------------------------------------------ corners
+    // ------------------------------------------------------------------ edges
 
     /** Per-cell voltage big (what the pilot flies by, whatever the pack), the pack itself on the line below. */
-    private void battery(FcTelemetry t, boolean fresh) {
+    private void battery(float x, float y, OsdLayout.Align a, FcTelemetry t, boolean fresh) {
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         if (b == null || b.volts() <= 0) return;
         FcTelemetry.BatteryLimits lim = t.getBatteryLimits();
-        float x = 18 * unit, y = 40 * unit;
         if (!b.cellCountKnown()) { // no cell count from Betaflight yet: the pack voltage, no guess
-            label("BATT" + (fresh ? "" : "  NO DATA"), x, y);
+            label("BATT" + (fresh ? "" : "  NO DATA"), x, y, a);
             g.setFont(Theme.monoFont(Font.BOLD, 30 * unit));
-            text(String.format(Locale.ROOT, "%.2fV", b.volts()), x, y + 32 * unit, fresh ? WHITE : STALE);
+            put(String.format(Locale.ROOT, "%.2fV", b.volts()), x, y + 32 * unit, fresh ? WHITE : STALE, a);
             g.setFont(Theme.monoFont(Font.PLAIN, 16 * unit));
-            text(String.format(Locale.ROOT, "%dmAh  %.1fA", b.mahDrawn(), b.amps()), x, y + 58 * unit, fresh ? WHITE : STALE);
+            put(String.format(Locale.ROOT, "%dmAh  %.1fA", b.mahDrawn(), b.amps()), x, y + 58 * unit, fresh ? WHITE : STALE, a);
             return;
         }
         double cell = b.cellVolts();
@@ -203,60 +345,63 @@ final class OsdRenderer {
         double max = lim != null && lim.maxCell() > 0 ? lim.maxCell() : 4.3;
         Color c = !fresh ? STALE : cell <= min ? RED : cell <= warn ? YELLOW : GREEN;
         // Betaflight counted wrong (battery plugged in while it ran on USB): say so, its own warnings are off too
-        label("BATT " + b.cells() + "S" + (b.fcCountWrong() ? "  (BF SAYS " + b.fcCells() + "S)" : "") + (fresh ? "" : "  NO DATA"), x, y);
-        g.setFont(Theme.monoFont(Font.BOLD, 30 * unit));
+        label("BATT " + b.cells() + "S" + (b.fcCountWrong() ? "  (BF SAYS " + b.fcCells() + "S)" : "") + (fresh ? "" : "  NO DATA"), x, y, a);
         String cellText = String.format(Locale.ROOT, "%.2fV", cell);
-        text(cellText, x, y + 32 * unit, c);
-        float suffixX = x + g.getFontMetrics().stringWidth(cellText) + 6 * unit;
-        g.setFont(Theme.headingFont(14 * unit));
-        text("/CELL", suffixX, y + 32 * unit, fresh ? WHITE : STALE);
+        Font big = Theme.monoFont(Font.BOLD, 30 * unit), small = Theme.headingFont(14 * unit);
+        float cellW = g.getFontMetrics(big).stringWidth(cellText);
+        float sx = startX(x, cellW + 6 * unit + g.getFontMetrics(small).stringWidth("/CELL"), a);
+        g.setFont(big);
+        text(cellText, sx, y + 32 * unit, c);
+        g.setFont(small);
+        text("/CELL", sx + cellW + 6 * unit, y + 32 * unit, fresh ? WHITE : STALE);
         // charge bar from cell voltage
-        float bw = 120 * unit, bh = 8 * unit, by = y + 42 * unit;
+        float bw = 120 * unit, bh = 8 * unit, by = y + 42 * unit, bx = startX(x, bw, a);
         double frac = Math.max(0, Math.min(1, (cell - min) / (max - min)));
         g.setColor(OUTLINE);
-        g.fillRect(Math.round(x), Math.round(by), Math.round(bw), Math.round(bh));
+        g.fillRect(Math.round(bx), Math.round(by), Math.round(bw), Math.round(bh));
         g.setColor(c);
-        g.fillRect(Math.round(x), Math.round(by), Math.round((float) (bw * frac)), Math.round(bh));
+        g.fillRect(Math.round(bx), Math.round(by), Math.round((float) (bw * frac)), Math.round(bh));
         g.setColor(WHITE);
         g.setStroke(new BasicStroke(1f));
-        g.drawRect(Math.round(x), Math.round(by), Math.round(bw), Math.round(bh));
+        g.drawRect(Math.round(bx), Math.round(by), Math.round(bw), Math.round(bh));
+        mark(bx, by, bw, bh);
         g.setFont(Theme.monoFont(Font.PLAIN, 16 * unit));
-        text(String.format(Locale.ROOT, "%.2fV  %dmAh  %.1fA", b.volts(), b.mahDrawn(), b.amps()), x, by + 26 * unit, fresh ? WHITE : STALE);
+        put(String.format(Locale.ROOT, "%.2fV  %dmAh  %.1fA", b.volts(), b.mahDrawn(), b.amps()), x, by + 26 * unit, fresh ? WHITE : STALE, a);
     }
 
-    private void link(int w, Data d, FcTelemetry t) {
-        float right = w - 18 * unit, y = 40 * unit;
-        labelRight("LINK", right, y);
+    private void ping(float x, float y, OsdLayout.Align a, int pingMs) {
+        label("LINK", x, y, a);
         g.setFont(Theme.monoFont(Font.BOLD, 22 * unit));
-        Color pingColor = d.pingMs() < 0 ? RED : d.pingMs() > 150 ? RED : d.pingMs() > 80 ? YELLOW : GREEN;
-        rightText(d.pingMs() < 0 ? "--- MS" : d.pingMs() + " MS", right, y + 26 * unit, pingColor);
-        FcTelemetry.Network net = t == null ? null : t.getNetwork();
-        float ly = y + 52 * unit;
-        if (net != null) {
-            g.setFont(Theme.monoFont(Font.BOLD, 16 * unit));
-            String text = net.name() + " " + net.strengthPercent() + "%";
-            rightText(text, right - 40 * unit, ly, WHITE);
-            signalBars(right - 32 * unit, ly, net.strengthPercent());
-            ly += 22 * unit;
-        }
+        Color pingColor = pingMs < 0 ? RED : pingMs > 150 ? RED : pingMs > 80 ? YELLOW : GREEN;
+        put(pingMs < 0 ? "--- MS" : pingMs + " MS", x, y + 26 * unit, pingColor, a);
+    }
+
+    /** "LTE 82%" and four signal bars after it. */
+    private void network(float x, float y, OsdLayout.Align a, FcTelemetry.Network net) {
+        if (net == null) return;
+        g.setFont(Theme.monoFont(Font.BOLD, 16 * unit));
+        String text = net.name() + " " + net.strengthPercent() + "%";
+        float tw = g.getFontMetrics().stringWidth(text);
+        float sx = startX(x, tw + 34 * unit, a);
+        text(text, sx, y, WHITE);
+        signalBars(sx + tw + 8 * unit, y, net.strengthPercent());
+    }
+
+    private void video(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v) {
+        if (v == null || v.width() <= 0) return;
         g.setFont(Theme.monoFont(Font.PLAIN, 15 * unit));
-        VideoPipeline.Stats v = d.video();
-        if (v != null && v.width() > 0) {
-            rightText(String.format(Locale.ROOT, "VID %dFPS %.1fMB", v.shownFps(), v.megabitsPerSecond()), right, ly, WHITE);
-            ly += 20 * unit;
-        }
-        int phone = t == null ? -1 : t.getPhoneBatteryPercent();
-        if (phone >= 0) phoneBattery(phone, t.isPhoneCharging(), right, ly + 6 * unit);
+        put(String.format(Locale.ROOT, "VID %dFPS %.1fMB", v.shownFps(), v.megabitsPerSecond()), x, y, WHITE, a);
     }
 
     /** The phone's battery: a small battery icon with its charge, and the percentage. */
-    private void phoneBattery(int percent, boolean charging, float right, float baseline) {
+    private void phoneBattery(float x, float baseline, OsdLayout.Align a, int percent, boolean charging) {
         Color c = percent < 20 ? RED : percent < 40 ? YELLOW : GREEN;
         g.setFont(Theme.monoFont(Font.BOLD, 16 * unit));
         String text = "PHONE " + percent + "%" + (charging ? " CHG" : "");
-        rightText(text, right, baseline, c);
+        float tw = g.getFontMetrics().stringWidth(text);
         float bw = 24 * unit, bh = 12 * unit;
-        float bx = right - g.getFontMetrics().stringWidth(text) - bw - 10 * unit, by = baseline - bh;
+        float bx = startX(x, bw + 10 * unit + tw, a), by = baseline - bh;
+        text(text, bx + bw + 10 * unit, baseline, c);
         g.setColor(OUTLINE);
         g.fillRect(Math.round(bx - 1), Math.round(by - 1), Math.round(bw + 5 * unit), Math.round(bh + 2));
         g.setColor(c);
@@ -265,6 +410,7 @@ final class OsdRenderer {
         g.setStroke(new BasicStroke(Math.max(1f, 1.5f * unit)));
         g.drawRect(Math.round(bx), Math.round(by), Math.round(bw), Math.round(bh));
         g.fillRect(Math.round(bx + bw + 1), Math.round(by + bh / 3), Math.round(3 * unit), Math.round(bh / 3));
+        mark(bx - 1, by - 1, bw + 5 * unit, bh + 2);
     }
 
     private void signalBars(float x, float baseline, int percent) {
@@ -276,53 +422,34 @@ final class OsdRenderer {
             g.fillRect(Math.round(bx - 1), Math.round(baseline - bh - 1), Math.round(5 * unit + 2), Math.round(bh + 2));
             g.setColor(i < bars ? (bars <= 1 ? RED : bars == 2 ? YELLOW : GREEN) : Theme.LINE);
             g.fillRect(Math.round(bx), Math.round(baseline - bh), Math.round(5 * unit), Math.round(bh));
+            mark(bx - 1, baseline - bh - 1, 5 * unit + 2, bh + 2);
         }
     }
 
-    private void armState(int h, FcTelemetry.Status s, FcTelemetry t) {
-        float x = 18 * unit, y = h - 92 * unit;
-        if (s != null) {
-            g.setFont(Theme.headingFont(28 * unit));
-            text(s.armed() ? "ARMED" : "DISARMED", x, y, s.armed() ? GREEN : YELLOW);
-            // flight mode only once Betaflight's mode names are known: without them ACRO could be wrong
-            if (t != null && t.hasBoxNames()) {
-                String mode = FcTelemetry.flightMode(s.activeModes());
-                g.setFont(Theme.headingFont(22 * unit));
-                text(mode, x, y + 27 * unit, mode.equals("FAILSAFE") || mode.equals("GPS RESCUE") ? RED : WHITE);
-                List<String> others = FcTelemetry.otherModes(s.activeModes());
-                if (!others.isEmpty()) {
-                    float mx = x + g.getFontMetrics().stringWidth(mode) + 12 * unit;
-                    g.setFont(Theme.headingFont(15 * unit));
-                    text(String.join("  ", others), mx, y + 27 * unit, Theme.MUTED);
-                }
-            }
-        }
-        FcTelemetry.Timers timers = t == null ? null : t.getTimers();
-        if (timers != null) {
-            g.setFont(Theme.monoFont(Font.BOLD, 18 * unit));
-            text(String.format(Locale.ROOT, "FLY %02d:%02d", timers.flySeconds() / 60, timers.flySeconds() % 60), x, y + 52 * unit, WHITE);
+    /** The flight mode big, the other active switches small after it. */
+    private void flightMode(float x, float y, OsdLayout.Align a, FcTelemetry.Status s) {
+        String mode = FcTelemetry.flightMode(s.activeModes());
+        String others = String.join("  ", FcTelemetry.otherModes(s.activeModes()));
+        Font big = Theme.headingFont(22 * unit), small = Theme.headingFont(15 * unit);
+        float mw = g.getFontMetrics(big).stringWidth(mode);
+        float total = mw + (others.isEmpty() ? 0 : 12 * unit + g.getFontMetrics(small).stringWidth(others));
+        float sx = startX(x, total, a);
+        g.setFont(big);
+        text(mode, sx, y, FcTelemetry.isEmergencyMode(mode) ? RED : mode.equals("TURTLE") ? YELLOW : WHITE);
+        if (!others.isEmpty()) {
+            g.setFont(small);
+            text(others, sx + mw + 12 * unit, y, Theme.MUTED);
         }
     }
 
-    private void gps(int w, int h, FcTelemetry t, FcTelemetry.Attitude att, boolean fresh) {
-        if (t == null) return;
-        float right = w - 18 * unit, y = h - 104 * unit;
-        FcTelemetry.Altitude alt = t.getAltitude();
-        FcTelemetry.Gps gps = t.getGps();
+    /** "HOME 230M" and an arrow pointing home after it. */
+    private void home(float x, float y, OsdLayout.Align a, FcTelemetry.Gps gps, FcTelemetry.Attitude att, boolean fresh) {
         g.setFont(Theme.monoFont(Font.BOLD, 18 * unit));
-        if (gps != null) {
-            Color c = !fresh ? STALE : gps.fix() >= 2 && gps.sats() >= 6 ? GREEN : gps.fix() >= 1 ? YELLOW : RED;
-            rightText("SAT " + gps.sats() + (gps.fix() >= 2 ? " 3D" : gps.fix() == 1 ? " 2D" : " NO FIX"), right, y, c);
-            rightText(String.format(Locale.ROOT, "SPD %3.0fKM/H", gps.speedKmh()), right, y + 22 * unit, fresh ? WHITE : STALE);
-        }
-        if (alt != null) {
-            String vario = alt.varioMetersPerSecond() > 0.3 ? " ↑" : alt.varioMetersPerSecond() < -0.3 ? " ↓" : "";
-            rightText(String.format(Locale.ROOT, "ALT %4.0fM%s", alt.meters(), vario), right, y + 44 * unit, fresh ? WHITE : STALE);
-        }
-        if (gps != null && gps.distanceHomeM() >= 0) {
-            rightText(String.format(Locale.ROOT, "HOME %dM", gps.distanceHomeM()), right - 34 * unit, y + 70 * unit, fresh ? GREEN : STALE);
-            if (att != null) homeArrow(right - 12 * unit, y + 64 * unit, gps.directionHomeDeg() - att.headingDeg());
-        }
+        String text = String.format(Locale.ROOT, "HOME %dM", gps.distanceHomeM());
+        float tw = g.getFontMetrics().stringWidth(text);
+        float sx = startX(x, tw + 34 * unit, a);
+        text(text, sx, y, fresh ? GREEN : STALE);
+        if (att != null) homeArrow(sx + tw + 22 * unit, y - 6 * unit, gps.directionHomeDeg() - att.headingDeg());
     }
 
     private void homeArrow(float cx, float cy, double relativeDeg) {
@@ -341,11 +468,32 @@ final class OsdRenderer {
         g.draw(arrow);
         g.setColor(GREEN);
         g.fill(arrow);
+        mark(cx - s, cy - s, 2 * s, 2 * s);
+    }
+
+    /** A stick's position in a small box, Betaflight's stick overlay; y is the box's top. */
+    private void sticks(float x, float y, OsdLayout.Align a, short[] ch, int xChannel, int yChannel) {
+        if (ch == null || ch.length <= Math.max(xChannel, yChannel)) return;
+        float size = 64 * unit, bx = startX(x, size, a);
+        float px = bx + size * Math.max(0, Math.min(1, (ch[xChannel] - 1000) / 1000f));
+        float py = y + size * (1 - Math.max(0, Math.min(1, (ch[yChannel] - 1000) / 1000f)));
+        stroke(new Rectangle2D.Float(bx, y, size, size), WHITE, 1.2f);
+        g.setColor(Theme.alpha(WHITE, 90));
+        g.setStroke(new BasicStroke(1f));
+        g.drawLine(Math.round(bx + size / 2), Math.round(y + 4 * unit), Math.round(bx + size / 2), Math.round(y + size - 4 * unit));
+        g.drawLine(Math.round(bx + 4 * unit), Math.round(y + size / 2), Math.round(bx + size - 4 * unit), Math.round(y + size / 2));
+        float dot = 9 * unit;
+        java.awt.geom.Ellipse2D knob = new java.awt.geom.Ellipse2D.Float(px - dot / 2, py - dot / 2, dot, dot);
+        g.setColor(OUTLINE);
+        g.setStroke(new BasicStroke(3f));
+        g.draw(knob);
+        g.setColor(ACCENT);
+        g.fill(knob);
     }
 
     // ------------------------------------------------------------------ warnings
 
-    private void warnings(int w, int h, Data d, FcTelemetry.Status s, FcTelemetry t, long now) {
+    private void warnings(float x, float y, OsdLayout.Align a, Data d, FcTelemetry.Status s, FcTelemetry t, long now) {
         List<String> big = new ArrayList<>();
         if (!d.linkReady()) big.add("LINK LOST");
         if (d.fcLost()) big.add("NO FLIGHT CONTROLLER");
@@ -361,38 +509,39 @@ final class OsdRenderer {
                 && b.cellVolts() <= (lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5)) big.add("LOW BATTERY");
         // the phone is the radio: when it dies, the link goes
         if (t != null && t.getPhoneBatteryPercent() >= 0 && t.getPhoneBatteryPercent() <= 15 && !t.isPhoneCharging()) big.add("PHONE BATTERY LOW");
-        boolean blink = (now / 400) % 2 == 0;
-        float y = h * 0.66f;
+        if (d.preview() && big.isEmpty()) big.add("LOW BATTERY"); // the editor: something to see and drag
+        boolean blink = d.preview() || (now / 400) % 2 == 0;
         g.setFont(Theme.headingFont(34 * unit));
         for (String text : big) {
-            if (blink) centered(text, w / 2f, y, text.equals("RC OFF - THROTTLE DOWN") || text.equals("PHONE BATTERY LOW") ? YELLOW : RED);
+            if (blink) put(text, x, y, text.equals("RC OFF - THROTTLE DOWN") || text.equals("PHONE BATTERY LOW") ? YELLOW : RED, a);
+            else mark(x, y, 1, 1);
             y += 38 * unit;
         }
         if (!d.linkReady() && d.linkHint() != null) { // steady, under LINK LOST: why
             g.setFont(Theme.headingFont(18 * unit));
-            centered(d.linkHint(), w / 2f, y + 4 * unit, YELLOW);
+            put(d.linkHint(), x, y + 4 * unit, YELLOW, a);
             return;
         }
         if (d.fcLost()) { // steady, under the blinking title: what it means and where to look
             g.setFont(Theme.headingFont(18 * unit));
-            centered("THE PHONE LOST ITS USB LINK TO THE FC - YOUR STICKS DON'T REACH THE DRONE", w / 2f, y + 4 * unit, YELLOW);
-            centered("CHECK THE OTG CABLE. KEEPS HAPPENING? SETUP > DRONE SETUP", w / 2f, y + 28 * unit, YELLOW);
+            put("THE PHONE LOST ITS USB LINK TO THE FC - YOUR STICKS DON'T REACH THE DRONE", x, y + 4 * unit, YELLOW, a);
+            put("CHECK THE OTG CABLE. KEEPS HAPPENING? SETUP > DRONE SETUP", x, y + 28 * unit, YELLOW, a);
             return;
         }
         if (rcGap) {
             g.setFont(Theme.headingFont(22 * unit));
-            centered("RC SIGNAL GAP", w / 2f, y + 4 * unit, YELLOW);
+            put("RC SIGNAL GAP", x, y + 4 * unit, YELLOW, a);
             return;
         }
         if (s != null && !s.armed() && !s.blockers().isEmpty()) {
             g.setFont(Theme.headingFont(18 * unit));
-            String names = s.blockers().stream().map(FcTelemetry.Blocker::osdName).reduce((a, c) -> a + " " + c).orElse("");
-            centered("ARMING BLOCKED: " + names, w / 2f, y + 4 * unit, YELLOW);
+            String names = s.blockers().stream().map(FcTelemetry.Blocker::osdName).reduce((p, c) -> p + " " + c).orElse("");
+            put("ARMING BLOCKED: " + names, x, y + 4 * unit, YELLOW, a);
         }
     }
 
     /** Steady red border: the sticks aren't reaching the drone. Seen even in the corner of your eye. */
-    private void lostFrame(int w, int h) {
+    private void lostFrame() {
         float t = 7 * unit;
         g.setColor(OUTLINE);
         g.setStroke(new BasicStroke(t + 4 * unit));
@@ -402,15 +551,24 @@ final class OsdRenderer {
         g.drawRect(Math.round(t / 2), Math.round(t / 2), Math.round(w - t), Math.round(h - t));
     }
 
-    private void debugLine(int w, int h, VideoPipeline.Stats v) {
+    private void debugLine(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v) {
         if (v == null || v.width() == 0) return;
         String line = String.format(Locale.ROOT, "%s %dx%d  DEC %.1fMS  DRAW %.1fMS  DMG %d  LOST %d",
                 v.hevc() ? "H265" : "H264", v.width(), v.height(), v.decodeMs(), v.convertMs(), v.damaged(), v.lost());
         g.setFont(Theme.monoFont(Font.PLAIN, 12 * unit));
-        centered(line, w / 2f, h - 10 * unit, Theme.MUTED);
+        put(line, x, y, Theme.MUTED, a);
     }
 
     // ------------------------------------------------------------------ drawing helpers
+
+    /** Where something width wide starts, to sit left-aligned at x, centred on x or right-aligned at x. */
+    private static float startX(float x, float width, OsdLayout.Align a) {
+        return switch (a) {
+            case LEFT -> x;
+            case CENTER -> x - width / 2;
+            case RIGHT -> x - width;
+        };
+    }
 
     private static float wrap(double deg) {
         double d = ((deg + 180) % 360 + 360) % 360 - 180;
@@ -431,6 +589,7 @@ final class OsdRenderer {
         g.setColor(c);
         g.setStroke(new BasicStroke(width * Math.max(1f, unit), BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
         g.draw(s);
+        if (box != null) mark(s.getBounds2D().getX(), s.getBounds2D().getY(), s.getBounds2D().getWidth(), s.getBounds2D().getHeight());
     }
 
     private void strokeDashed(Shape s, float width) {
@@ -443,14 +602,21 @@ final class OsdRenderer {
         g.draw(s);
     }
 
-    private void label(String text, float x, float y) {
+    /** A red element label (BATT, LINK). */
+    private void label(String text, float x, float y, OsdLayout.Align a) {
         g.setFont(Theme.headingFont(14 * unit));
-        text(text, x, y, ACCENT);
+        put(text, x, y, ACCENT, a);
     }
 
-    private void labelRight(String text, float right, float y) {
-        g.setFont(Theme.headingFont(14 * unit));
-        rightText(text, right, y, ACCENT);
+    /** A one-line value in the OSD's value font. */
+    private void value(String text, float x, float y, OsdLayout.Align a, Color c) {
+        g.setFont(Theme.monoFont(Font.BOLD, 18 * unit));
+        put(text, x, y, c, a);
+    }
+
+    /** Text aligned at x. */
+    private void put(String s, float x, float y, Color c, OsdLayout.Align a) {
+        text(s, startX(x, g.getFontMetrics().stringWidth(s), a), y, c);
     }
 
     /** Text with a black outline. */
@@ -463,10 +629,10 @@ final class OsdRenderer {
         }
         g.setColor(c);
         g.drawString(s, x, y);
-    }
-
-    private void rightText(String s, float right, float y, Color c) {
-        text(s, right - g.getFontMetrics().stringWidth(s), y, c);
+        if (box != null) {
+            FontMetrics fm = g.getFontMetrics();
+            mark(x - 1.5, y - fm.getAscent() - 1.5, fm.stringWidth(s) + 3, fm.getAscent() + fm.getDescent() + 3);
+        }
     }
 
     private void centered(String s, float cx, float y, Color c) {

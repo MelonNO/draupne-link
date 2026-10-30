@@ -200,7 +200,7 @@ public class ControlLink {
         boolean wasConnected = false;
         long lastStartVideo = 0;
         long lastFcInfoRequest = 0;
-        long lastBoxNamesRequest = 0;
+        long lastModesRequest = 0;
         while (running) {
             try {
                 boolean connected = isConnected();
@@ -209,6 +209,7 @@ public class ControlLink {
                     configReceived = false;
                     videoConfigReceived = false;
                     fcInfo = null;
+                    telemetry.forgetBoxIds(); // a restarted phone app has to read them again
                 }
                 wasConnected = connected;
                 if (versionMismatch) {
@@ -228,9 +229,15 @@ public class ControlLink {
                     if (fcInfo == null && now - lastFcInfoRequest >= 1000) {
                         sendRequest(UdpCommon.FcInfo);
                         lastFcInfoRequest = now;
-                    } else if (fcInfo != null && !telemetry.hasBoxNames() && now - lastBoxNamesRequest >= 2000) {
+                    } else if (fcInfo != null && !telemetry.hasBoxNames() && now - lastModesRequest >= 2000) {
                         sendRequest(UdpCommon.BoxNames); // names of the flight modes, to read MSP_STATUS mode flags
-                        lastBoxNamesRequest = now;
+                        lastModesRequest = now;
+                    } else if (fcInfo != null && !telemetry.hasBoxIds() && now - lastModesRequest >= 2000) {
+                        // the Flight app finds ARM by the mode IDs and only reads them when asked (the original Control
+                        // app asks): without them it never sees the drone armed, so its fly time, travelled distance
+                        // and camera switch recording stay off. Once per connection, a few small MSP requests.
+                        sendRequest(UdpCommon.BoxIds);
+                        lastModesRequest = now;
                     }
                     Thread.sleep(100);
                 }

@@ -20,8 +20,16 @@ public class FcTelemetry {
     /** One reason Betaflight refuses to arm: its OSD name and what to do about it. */
     public record Blocker(String osdName, String explanation) {}
 
-    /** The FC's own view: armed or not, which modes its switches turned on, and why arming is blocked. */
-    public record Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent, long receivedAt) {}
+    /**
+     * The FC's own view: armed or not, which modes its switches turned on, why arming is blocked, and the MCU's core
+     * temperature (0 = not reported: Betaflight before 4.4 has no such field, and the Flight app sends 0 then).
+     */
+    public record Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent,
+                         int coreTempC, long receivedAt) {
+        public boolean coreTempKnown() {
+            return coreTempC != 0;
+        }
+    }
 
     /**
      * fcCells is Betaflight's own count (it detects it when the battery is plugged in), 0 until it reports one - on USB
@@ -73,8 +81,12 @@ public class FcTelemetry {
 
     public record Altitude(double meters, double varioMetersPerSecond) {}
 
-    /** fix: 0 none, 1 2D, 2 3D (as Betaflight); distanceHomeM -1 if unknown. */
-    public record Gps(int fix, int sats, double speedKmh, int altM, int distanceHomeM, int directionHomeDeg) {}
+    /**
+     * fix: 0 none, 1 2D, 2 3D (as Betaflight); distanceHomeM -1 if unknown. travelledM: what the Flight app adds up
+     * while it sees the drone armed, -1 if unknown.
+     */
+    public record Gps(int fix, int sats, double speedKmh, int altM, int distanceHomeM, int directionHomeDeg,
+                      double latDeg, double lonDeg, int travelledM) {}
 
     public record Timers(int onSeconds, int flySeconds, int lastArmSeconds) {}
 
@@ -129,6 +141,8 @@ public class FcTelemetry {
     }
 
     private volatile List<String> boxNames = List.of();
+    /** The phone has read the mode IDs from the FC (and passed them on); see ControlLink. */
+    private volatile boolean hasBoxIds;
     private volatile Status status;
     private volatile Battery battery;
     private final CellCount cellCount = new CellCount();
@@ -139,6 +153,9 @@ public class FcTelemetry {
     private volatile Altitude altitude;
     private volatile Gps gps;
     private volatile Timers timers;
+    /** Time armed, from Betaflight's own ARM flag: completed arms plus the one running (armedSince != 0). */
+    private long flownMs;
+    private long armedSince;
     private volatile Network network;
     private volatile BatteryLimits batteryLimits;
     private volatile int rssiPercent = -1;
@@ -192,7 +209,10 @@ public class FcTelemetry {
                     battery = battery(volts / 100.0, old == null ? 0 : old.fcCells(), mah, amps / 100.0);
                 }
             }
-            case FcCommon.MSP_BOXIDS -> skip(b, b.readShort());
+            case FcCommon.MSP_BOXIDS -> {
+                skip(b, b.readShort());
+                hasBoxIds = true;
+            }
             case FcCommon.MSP_BOXNAMES -> {
                 byte[] names = new byte[b.readShort()];
                 b.read(names, 0, names.length);
@@ -225,19 +245,22 @@ public class FcTelemetry {
             case FcCommon.MSP_RAW_GPS -> {
                 int fix = b.readUnsignedByteAsInt();
                 int sats = b.readUnsignedByteAsInt();
-                skip(b, 8); // lat, lon
+                double lat = b.readInt() / 1e7, lon = b.readInt() / 1e7;
                 int altM = b.readShort();
                 double kmh = b.readShort() * 0.036; // cm/s
-                skip(b, 8); // course, hdop, traveled distance
+                skip(b, 4); // course, hdop
+                int travelled = b.readInt(); // the Flight app's own count, in m
                 Gps old = gps;
-                gps = new Gps(fix, sats, kmh, altM, old == null ? -1 : old.distanceHomeM(), old == null ? 0 : old.directionHomeDeg());
+                gps = new Gps(fix, sats, kmh, altM, old == null ? -1 : old.distanceHomeM(), old == null ? 0 : old.directionHomeDeg(),
+                        lat, lon, travelled);
             }
             case FcCommon.MSP_COMP_GPS -> {
                 int dist = b.readShort();
                 int dir = b.readShort();
                 b.readByte();
                 Gps old = gps;
-                gps = old == null ? new Gps(0, 0, 0, 0, dist, dir) : new Gps(old.fix(), old.sats(), old.speedKmh(), old.altM(), dist, dir);
+                gps = old == null ? new Gps(0, 0, 0, 0, dist, dir, 0, 0, -1)
+                        : new Gps(old.fix(), old.sats(), old.speedKmh(), old.altM(), dist, dir, old.latDeg(), old.lonDeg(), old.travelledM());
             }
             case FcCommon.MSP_OSD_CANVAS -> skip(b, 2);
             case FcCommon.MSP2_INAV_STATUS -> {
@@ -297,14 +320,40 @@ public class FcTelemetry {
         b.read(modeFlags, 0, n);
         int arming = b.readInt();
         b.readByte(); // configStateFlags
-        b.readShort(); // core temperature
+        int coreTemp = b.readShort();
         List<String> names = boxNames;
         List<String> modes = new ArrayList<>();
         for (int bit = 0; bit < n * 8; bit++) {
             if ((modeFlags[bit / 8] >> (bit % 8) & 1) == 1) modes.add(bit < names.size() ? names.get(bit) : "mode " + bit);
         }
         List<Blocker> blockers = blockersFor(arming);
-        status = new Status(modes.contains("ARM"), List.copyOf(modes), List.copyOf(blockers), load, System.currentTimeMillis());
+        boolean armed = modes.contains("ARM");
+        long now = System.currentTimeMillis();
+        if (!names.isEmpty()) trackArmed(armed, now); // without the names, ARM can't be found among the bits
+        status = new Status(armed, List.copyOf(modes), List.copyOf(blockers), load, coreTemp, now);
+    }
+
+    synchronized void trackArmed(boolean armed, long now) {
+        if (armed && armedSince == 0) {
+            armedSince = now;
+        } else if (!armed && armedSince != 0) {
+            flownMs += now - armedSince;
+            armedSince = 0;
+        }
+    }
+
+    /**
+     * Seconds armed since connecting, like Betaflight's own OSD timer (total arm time), counted here from the ARM flag in
+     * MSP_STATUS. The phone's DD_TIMERS can't be used for Betaflight: the Flight app finds ARM through MSP_BOXIDS,
+     * which only the original Control app asks it for, so its fly time stays 0. Falls back to it for INAV.
+     * -1 while nothing is known.
+     */
+    public synchronized int flySeconds(long now) {
+        if (flownMs > 0 || armedSince != 0 || status != null && hasBoxNames()) {
+            return (int) ((flownMs + (armedSince != 0 ? now - armedSince : 0)) / 1000);
+        }
+        Timers t = timers;
+        return t == null ? -1 : t.flySeconds();
     }
 
     /** Betaflight / INAV OSD config as the Flight app re-packs it (variable length). */
@@ -331,26 +380,59 @@ public class FcTelemetry {
     }
 
     /**
-     * The flight mode as Betaflight's own OSD names it, from the active mode switches (box names): FAILSAFE, GPS RESCUE,
-     * POS HOLD, ALT HOLD, ANGLE, HORIZON, PASSTHRU, in that priority. ACRO is no switch of its own - it is what you fly
-     * when none of these is on.
+     * Betaflight's flight modes, highest priority first, as box names (MSP_BOXNAMES, spaces removed: 4.5 calls the hold
+     * modes "POS HOLD" / "ALT HOLD", 2025.12 "POSHOLD" / "ALTHOLD") and the name shown. The order is Betaflight's OSD
+     * flight mode element (osdElementFlymode): failsafe, rescue, the hold modes, headfree, the self-levelling modes,
+     * acro trainer, chirp, then air mode. Turtle (crash flip) comes after the emergencies: its switch takes over the
+     * motors. Fixed wing PASSTHRU last. ACRO is no switch of its own - it is what you fly when none of these is on.
+     * Air mode switched on permanently (feature AIRMODE) has no box, so it shows as ACRO.
      */
-    public static String flightMode(List<String> activeModes) {
-        java.util.Set<String> on = new java.util.HashSet<>();
-        for (String m : activeModes) on.add(m.toUpperCase(java.util.Locale.ROOT).replace(" ", ""));
-        String[][] order = {{"FAILSAFE", "FAILSAFE"}, {"GPSRESCUE", "GPS RESCUE"}, {"POSHOLD", "POS HOLD"},
-                {"ALTHOLD", "ALT HOLD"}, {"ANGLE", "ANGLE"}, {"HORIZON", "HORIZON"}, {"PASSTHRU", "PASSTHRU"}};
-        for (String[] m : order) {
-            if (on.contains(m[0])) return m[1];
-        }
-        return "ACRO";
+    static final String[][] FLIGHT_MODES = {
+            {"FAILSAFE", "FAILSAFE"},
+            {"GPSRESCUE", "GPS RESCUE"},
+            {"FLIPOVERAFTERCRASH", "TURTLE"},
+            {"POSHOLD", "POS HOLD"},
+            {"ALTHOLD", "ALT HOLD"},
+            {"HEADFREE", "HEADFREE"},
+            {"ANGLE", "ANGLE"},
+            {"HORIZON", "HORIZON"},
+            {"ACROTRAINER", "ACRO TRAINER"},
+            {"CHIRP", "CHIRP"},
+            {"PASSTHRU", "PASSTHRU"},
+            {"AIRMODE", "AIR"},
+    };
+
+    private static String key(String boxName) {
+        return boxName.toUpperCase(java.util.Locale.ROOT).replace(" ", "");
     }
 
-    /** The active modes other than ARM and the flight mode itself (AIR MODE, BEEPER, ...), as Betaflight names them. */
+    /** The FLIGHT_MODES row of the active mode that wins, or null: plain ACRO. */
+    private static String[] activeFlightMode(List<String> activeModes) {
+        java.util.Set<String> on = new java.util.HashSet<>();
+        for (String m : activeModes) on.add(key(m));
+        for (String[] m : FLIGHT_MODES) {
+            if (on.contains(m[0])) return m;
+        }
+        return null;
+    }
+
+    /** The flight mode as Betaflight's own OSD shows it, from the active mode switches (box names); see FLIGHT_MODES. */
+    public static String flightMode(List<String> activeModes) {
+        String[] m = activeFlightMode(activeModes);
+        return m == null ? "ACRO" : m[1];
+    }
+
+    /** The flight mode is an emergency: the pilot isn't flying (failsafe, GPS rescue). */
+    public static boolean isEmergencyMode(String flightMode) {
+        return flightMode.equals("FAILSAFE") || flightMode.equals("GPS RESCUE");
+    }
+
+    /** The active modes other than ARM and the flight mode itself (BEEPER, AIR MODE under ANGLE, ...), as Betaflight names them. */
     public static List<String> otherModes(List<String> activeModes) {
-        String flight = flightMode(activeModes).replace(" ", "");
-        return activeModes.stream().filter(m -> {
-            String k = m.toUpperCase(java.util.Locale.ROOT).replace(" ", "");
+        String[] m = activeFlightMode(activeModes);
+        String flight = m == null ? "" : m[0];
+        return activeModes.stream().filter(n -> {
+            String k = key(n);
             return !k.equals("ARM") && !k.equals(flight);
         }).toList();
     }
@@ -364,6 +446,14 @@ public class FcTelemetry {
 
     public boolean hasBoxNames() {
         return !boxNames.isEmpty();
+    }
+
+    public boolean hasBoxIds() {
+        return hasBoxIds;
+    }
+
+    void forgetBoxIds() {
+        hasBoxIds = false;
     }
 
     /** null until the first MSP_STATUS arrives. */
