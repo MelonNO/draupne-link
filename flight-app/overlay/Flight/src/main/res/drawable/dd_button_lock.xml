@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DroidDrone PC: LOCK SCREEN - yellow, unlike every other button, so it is found at a glance -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_pressed="true">
+        <shape>
+            <solid android:color="#55FCD405" />
+            <stroke android:width="2dp" android:color="@color/dd_warn" />
+        </shape>
+    </item>
+    <item>
+        <shape>
+            <solid android:color="#22FCD405" />
+            <stroke android:width="2dp" android:color="@color/dd_warn" />
+        </shape>
+    </item>
+</selector>

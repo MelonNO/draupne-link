@@ -46,6 +46,8 @@ import java.util.List;
  */
 final class MotorTestDialog extends JDialog {
     private static final int SLIDER_H = 150;
+    /** The pilot's choice of motor direction for the picture; props out unless they pick props in. */
+    static final String PROPS_OUT_KEY = "motorTest.propsOut";
     private final MainWindow main;
     private final Diagram diagram = new Diagram();
     private final JCheckBox understood = new JCheckBox("<html><b>I understand the risks, the propellers are removed</b> - enable motor control.</html>");
@@ -61,11 +63,13 @@ final class MotorTestDialog extends JDialog {
     private volatile int[] wanted = new int[0];
     private volatile boolean running = true;
     private volatile MotorTest.Info info;
+    private boolean propsOut;
     private Thread worker;
 
     private MotorTestDialog(Window owner, MainWindow main) {
         super(owner, "Motor test", ModalityType.APPLICATION_MODAL);
         this.main = main;
+        propsOut = !"false".equalsIgnoreCase(main.config().getString(PROPS_OUT_KEY));
         JPanel root = new JPanel(new BorderLayout(14, 14));
         root.setBackground(Theme.BG);
         root.setBorder(BorderFactory.createEmptyBorder(18, 20, 16, 20));
@@ -82,7 +86,11 @@ final class MotorTestDialog extends JDialog {
         JPanel centre = new JPanel(new BorderLayout(0, 14));
         centre.setOpaque(false);
         JPanel diagramCard = Theme.card(new BorderLayout(0, 8));
-        diagramCard.add(Theme.sectionTitle("Seen from above"), BorderLayout.NORTH);
+        JPanel diagramHead = new JPanel(new BorderLayout());
+        diagramHead.setOpaque(false);
+        diagramHead.add(Theme.sectionTitle("Seen from above"), BorderLayout.WEST);
+        diagramHead.add(new DirectionSwitch(), BorderLayout.EAST);
+        diagramCard.add(diagramHead, BorderLayout.NORTH);
         diagramCard.add(diagram, BorderLayout.CENTER);
         centre.add(diagramCard, BorderLayout.CENTER);
         centre.add(testCard(), BorderLayout.SOUTH);
@@ -146,16 +154,23 @@ final class MotorTestDialog extends JDialog {
 
         JPanel steps = Theme.card(new BorderLayout(0, 8));
         steps.add(Theme.sectionTitle("How to check"), BorderLayout.NORTH);
-        steps.add(new WrappingText("<ol style='margin-left:16px'>"
+        // scrolls when the status rows above need more room (a long warning)
+        javax.swing.JScrollPane stepsScroll = new javax.swing.JScrollPane(new WrappingText("<ol style='margin-left:16px'>"
                 + "<li><b>Props off.</b> Battery in, then the flight controller's USB into this PC.</li>"
-                + "<li>Tick the box, raise <b>one</b> motor a little.</li>"
+                + "<li>Pick <b>props in</b> or <b>props out</b> above the picture, as the drone is built. Tick the box, "
+                + "raise <b>one</b> motor a little.</li>"
                 + "<li>The motor that spins must sit where the picture shows its number and turn the way its arrow points "
                 + "(tape on the bell helps).</li>"
                 + "<li><b>Wrong motor:</b> motor wiring or Betaflight's motor order. <b>Wrong way:</b> reverse it in ESC "
                 + "Configurator / BLHeli, or swap two of its wires.</li>"
                 + "<li><b>Props on, battery out:</b> each prop's raised leading edge must go first in its arrow's direction, "
                 + "or the drone flips on take-off.</li></ol>",
-                Theme.font(Font.PLAIN, 13f), Theme.TEXT), BorderLayout.CENTER);
+                Theme.font(Font.PLAIN, 13f), Theme.TEXT));
+        stepsScroll.setBorder(BorderFactory.createEmptyBorder());
+        stepsScroll.setOpaque(false);
+        stepsScroll.getViewport().setOpaque(false);
+        stepsScroll.setHorizontalScrollBarPolicy(javax.swing.JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        steps.add(stepsScroll, BorderLayout.CENTER);
         column.add(steps, BorderLayout.CENTER);
         return column;
     }
@@ -321,13 +336,32 @@ final class MotorTestDialog extends JDialog {
 
     private void connected(MotorTest.Info i) {
         usb.set(State.OK, "<b>" + i.port() + "</b> - Betaflight " + i.version());
-        if (i.quadX()) {
-            mixer.set(State.OK, "Quad X, " + (i.reversed() ? "<b>props out</b> (motor direction reversed)" : "<b>props in</b> (normal motor direction)"));
-        } else {
+        showMixer();
+        showMotors(i.motorCount(), true);
+        diagram.repaint();
+    }
+
+    /** The layout Betaflight has, and whether its motor direction matches the one picked here. */
+    private void showMixer() {
+        MotorTest.Info i = info;
+        if (i == null) return;
+        if (!i.quadX()) {
             mixer.set(State.WARN, "Not Quad X (mixer " + i.mixer() + "): the picture doesn't apply. Compare with the mixer picture in "
                     + "Betaflight Configurator's Motors tab.");
+        } else if (i.reversed() == propsOut) {
+            mixer.set(State.OK, "Quad X, <b>" + (propsOut ? "props out" : "props in") + "</b> - Betaflight is set the same way.");
+        } else {
+            mixer.set(State.WARN, "Betaflight is set to <b>" + (i.reversed() ? "props out" : "props in") + "</b>, the picture to <b>"
+                    + (propsOut ? "props out" : "props in") + "</b>. Make them match: Betaflight Configurator, Motors tab, "
+                    + "<i>Motor direction is reversed</i> " + (propsOut ? "on" : "off") + ". Otherwise yaw turns the wrong way.");
         }
-        showMotors(i.motorCount(), true);
+    }
+
+    private void setPropsOut(boolean out) {
+        if (out == propsOut) return;
+        propsOut = out;
+        main.save(java.util.Map.of(PROPS_OUT_KEY, Boolean.toString(out)));
+        showMixer();
         diagram.repaint();
     }
 
@@ -480,6 +514,48 @@ final class MotorTestDialog extends JDialog {
         }
     }
 
+    // ------------------------------------------------------------------ props in / out
+
+    /** PROPS IN | PROPS OUT: which way the motors are meant to turn; the chosen half is lit. */
+    private final class DirectionSwitch extends JComponent {
+        private static final String[] LABELS = {"PROPS IN", "PROPS OUT"};
+
+        DirectionSwitch() {
+            setPreferredSize(new Dimension(210, 26));
+            setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+            setToolTipText("Which way the motors turn: props in (Betaflight's standard) or props out (motor direction reversed)");
+            addMouseListener(new MouseAdapter() {
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    setPropsOut(e.getX() >= getWidth() / 2);
+                    repaint();
+                }
+            });
+        }
+
+        @Override
+        protected void paintComponent(Graphics graphics) {
+            Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
+            try {
+                int w = getWidth(), h = getHeight(), half = w / 2;
+                g.setFont(Theme.headingFont(12f));
+                for (int i = 0; i < 2; i++) {
+                    boolean chosen = (i == 1) == propsOut;
+                    int x = i * half, bw = i == 0 ? half : w - half;
+                    g.setColor(chosen ? Theme.ACCENT : Theme.PANEL_2);
+                    g.fillRect(x, 0, bw, h);
+                    g.setColor(chosen ? Color.WHITE : Theme.MUTED);
+                    int tw = g.getFontMetrics().stringWidth(LABELS[i]);
+                    g.drawString(LABELS[i], x + (bw - tw) / 2, h / 2 + g.getFontMetrics().getAscent() / 2 - 2);
+                }
+                g.setColor(Theme.ACCENT);
+                g.drawRect(0, 0, w - 1, h - 1);
+            } finally {
+                g.dispose();
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ diagram
 
     /**
@@ -523,7 +599,7 @@ final class MotorTestDialog extends JDialog {
                     g.drawString(s, (w - g.getFontMetrics().stringWidth(s)) / 2, h / 2);
                     return;
                 }
-                boolean reversed = i != null && i.reversed();
+                boolean reversed = propsOut;
                 // drawn at 460 x 330, scaled to fit
                 double k = Math.min(w / (double) DW, h / (double) DH);
                 g.translate((w - DW * k) / 2, (h - DH * k) / 2);
@@ -560,7 +636,7 @@ final class MotorTestDialog extends JDialog {
                 if (i == null) {
                     g.setFont(Theme.headingFont(12f));
                     g.setColor(Theme.MUTED);
-                    String s = "PROPS IN SHOWN - WAITING FOR THE FLIGHT CONTROLLER";
+                    String s = "WAITING FOR THE FLIGHT CONTROLLER";
                     g.drawString(s, (DW - g.getFontMetrics().stringWidth(s)) / 2f, DH - 2);
                 }
             } finally {

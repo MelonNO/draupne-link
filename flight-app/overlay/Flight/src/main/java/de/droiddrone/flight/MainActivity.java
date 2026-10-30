@@ -15,8 +15,9 @@
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
  *  Modified for DroidDrone PC: the Windows app's look (cards, status pill, status colours for a dark
- *  background), removing an earlier DroidDrone Flight, and telling about a newer build. The connection logic is
- *  unchanged.
+ *  background), removing an earlier DroidDrone Flight, telling about a newer build, a touch lock for flying, and
+ *  portrait as well as landscape.
+ *  The connection logic is unchanged.
  */
 
 package de.droiddrone.flight;
@@ -24,14 +25,22 @@ package de.droiddrone.flight;
 import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ObjectAnimator;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -74,6 +83,11 @@ public class MainActivity extends Activity {
     /** Once per app start: is there a newer build on GitHub? */
     private static boolean updateChecked;
     private boolean oldAppPrompted;
+    /** The touch lock: the whole screen ignores touches but for its HOLD TO UNLOCK box. Null while unlocked. */
+    private View touchLock;
+    private ObjectAnimator unlockHold;
+    private static final long UNLOCK_HOLD_MS = 2000;
+    private static final String LOCKED_STATE = "touchLocked";
 
     @Override
     protected void onCreate(Bundle savedInstanceState){
@@ -105,6 +119,8 @@ public class MainActivity extends Activity {
         tvOldApp = findViewById(R.id.tvOldApp);
         tvOldApp.setOnClickListener(v -> removeOldApp());
         tvUpdate = findViewById(R.id.tvUpdate);
+        findViewById(R.id.lockScreen).setOnClickListener(v -> lockTouches());
+        if (savedInstanceState != null && savedInstanceState.getBoolean(LOCKED_STATE)) lockTouches();
         if (!updateChecked) {
             updateChecked = true;
             String current = versionName;
@@ -125,6 +141,7 @@ public class MainActivity extends Activity {
             findViewById(id).setBackground(new BracketDrawable(getColor(R.color.dd_panel), getColor(R.color.dd_line),
                     getColor(R.color.dd_accent), density));
         }
+        fitOrientation(getResources().getConfiguration());
         connectionMode = findViewById(R.id.connectionMode);
         ArrayAdapter<CharSequence> adapter = ArrayAdapter.createFromResource(this, R.array.connection_modes, android.R.layout.simple_spinner_item);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
@@ -382,6 +399,7 @@ public class MainActivity extends Activity {
                     @Override
                     public void run() {
                         updateUi();
+                        updateLockStatus();
                     }
                 });
             }
@@ -397,6 +415,116 @@ public class MainActivity extends Activity {
             uiTimer.cancel();
             uiTimer.purge();
         }
+    }
+
+    /**
+     * Locks the screen for flying: everything is covered and ignores touches, except a small yellow box that unlocks
+     * after being held for two seconds. The screen dims (the phone is the drone's radio: its battery matters) and
+     * the system bars hide; Android doesn't let an app block the home gesture or the notification shade.
+     */
+    private void lockTouches() {
+        if (touchLock != null) return;
+        touchLock = getLayoutInflater().inflate(R.layout.dd_touch_lock, null);
+        addContentView(touchLock, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        touchLock.setOnTouchListener((v, e) -> true); // every touch outside the box ends here
+        View fill = touchLock.findViewById(R.id.unlockFill);
+        touchLock.findViewById(R.id.unlockBox).setOnTouchListener((v, e) -> {
+            int action = e.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                unlockHold = ObjectAnimator.ofFloat(fill, "scaleX", 0f, 1f).setDuration(UNLOCK_HOLD_MS);
+                unlockHold.addListener(new AnimatorListenerAdapter() {
+                    private boolean cancelled;
+
+                    @Override
+                    public void onAnimationCancel(Animator animation) {
+                        cancelled = true;
+                    }
+
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        if (!cancelled) unlockTouches();
+                    }
+                });
+                unlockHold.start();
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                if (unlockHold != null) unlockHold.cancel();
+                unlockHold = null;
+                fill.setScaleX(0f);
+            }
+            return true;
+        });
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED); // a banking drone doesn't turn the screen
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = 0.05f;
+        getWindow().setAttributes(lp);
+        touchLock.setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        updateLockStatus();
+        log("Screen locked.");
+    }
+
+    private void unlockTouches() {
+        if (touchLock == null) return;
+        ((ViewGroup) touchLock.getParent()).removeView(touchLock);
+        touchLock = null;
+        unlockHold = null;
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        getWindow().setAttributes(lp);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
+        main.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+        log("Screen unlocked.");
+    }
+
+    /** What the locked screen still shows: the link and the flight controller, as the pill and status do. */
+    private void updateLockStatus() {
+        if (touchLock == null) return;
+        TextView status = touchLock.findViewById(R.id.tvLockStatus);
+        status.setText(tvPill.getText() + "   \u00b7   FC: " + tvFcStatus.getText());
+        status.setTextColor(tvPill.getCurrentTextColor());
+    }
+
+    /** The screen turned: the activity stays (configChanges), only the cards are laid out again. */
+    @Override
+    public void onConfigurationChanged(@NonNull Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        fitOrientation(newConfig);
+    }
+
+    /** Landscape: the two cards side by side. Portrait: stacked, the status card as tall as it needs, no subtitle. */
+    private void fitOrientation(Configuration c) {
+        boolean portrait = c.orientation == Configuration.ORIENTATION_PORTRAIT;
+        int gap = Math.round(12 * getResources().getDisplayMetrics().density);
+        LinearLayout cards = findViewById(R.id.llCards);
+        cards.setOrientation(portrait ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
+        View status = findViewById(R.id.cardStatus);
+        LinearLayout.LayoutParams sp = (LinearLayout.LayoutParams) status.getLayoutParams();
+        sp.width = portrait ? LinearLayout.LayoutParams.MATCH_PARENT : 0;
+        sp.height = portrait ? LinearLayout.LayoutParams.WRAP_CONTENT : LinearLayout.LayoutParams.MATCH_PARENT;
+        sp.weight = portrait ? 0 : 1;
+        sp.setMarginEnd(portrait ? 0 : gap);
+        sp.bottomMargin = portrait ? gap : 0;
+        status.setLayoutParams(sp);
+        View connection = findViewById(R.id.cardConnection);
+        LinearLayout.LayoutParams cp = (LinearLayout.LayoutParams) connection.getLayoutParams();
+        cp.width = portrait ? LinearLayout.LayoutParams.MATCH_PARENT : 0;
+        cp.height = portrait ? 0 : LinearLayout.LayoutParams.MATCH_PARENT;
+        cp.weight = portrait ? 1 : 1.35f;
+        connection.setLayoutParams(cp);
+        ((TextView) findViewById(R.id.tvSubtitle)).setText(portrait ? "" : getString(R.string.dd_subtitle));
+    }
+
+    /** Back does nothing while locked: it would leave the app. */
+    @Override
+    public void onBackPressed() {
+        if (touchLock != null) return;
+        super.onBackPressed();
+    }
+
+    @Override
+    protected void onSaveInstanceState(@NonNull Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putBoolean(LOCKED_STATE, touchLock != null);
     }
 
     @Override

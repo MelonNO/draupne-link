@@ -18,7 +18,8 @@ import java.util.stream.Collectors;
 /**
  * Drone setup: the Betaflight settings DroidDrone needs - receiver mode MSP, serial_update_rate_hz and the battery's
  * cell count (6S unless the pilot changes it) - set over USB with nothing else to click. Everything else on the drone
- * (arm switch, accelerometer, failsafe) stays the pilot's own.
+ * (arm switch, accelerometer, failsafe) stays the pilot's own. The pilot also says whether the motors and props are
+ * already checked, or checks them there and then with the motor test.
  */
 final class DroneSetup {
     private DroneSetup() {
@@ -41,12 +42,18 @@ final class DroneSetup {
         private record Read(String port, String version, boolean msp, int rate, int target, int cells, int cellTarget,
                             boolean applied, String error) {}
         static final String CELLS_KEY = "drone.cellCount";
+        static final String MOTORS_CHECKED_KEY = "setup.motorsChecked";
 
         private final MainWindow main;
         private final CheckRow usb = new CheckRow("Flight controller on USB");
         private final CheckRow receiver = new CheckRow("Receiver mode: MSP");
         private final CheckRow stickDelay = new CheckRow("Stick delay: serial_update_rate_hz");
         private final CheckRow battery = new CheckRow("Battery cell count: force_battery_cell_count");
+        private final CheckRow motors = new CheckRow("Motors and props");
+        /** The pilot has said: already checked, or checked them with the motor test. Needed to go on. */
+        private boolean motorsChosen;
+        /** The motor test has the flight controller's USB port: this page leaves it alone meanwhile. */
+        private boolean motorTestOpen;
         private JSpinner cellSpinner;
         /** The pilot's choice; read by the background round, so a change made meanwhile is noticed after it. */
         private volatile int cells;
@@ -71,7 +78,7 @@ final class DroneSetup {
         @Override
         String hint() {
             return "<b>Props off.</b> Check the battery's cell count, then plug the flight controller into this PC with USB. "
-                    + "The settings DroidDrone needs are made by themselves.";
+                    + "The settings DroidDrone needs are made by themselves. Then say whether the motors and props are checked.";
         }
 
         @Override
@@ -94,6 +101,9 @@ final class DroneSetup {
             WizardDialog.addRow(col, receiver);
             WizardDialog.addRow(col, stickDelay);
             WizardDialog.addRow(col, battery);
+            motors.addAction("Already checked", this::motorsAlreadyChecked);
+            motors.addPrimaryAction("Check now", this::checkMotorsNow);
+            WizardDialog.addRow(col, motors);
             manual = WizardDialog.paragraph("");
             showManual();
             WizardDialog.addRow(col, manual);
@@ -101,7 +111,35 @@ final class DroneSetup {
             receiver.set(State.PENDING, "");
             stickDelay.set(State.PENDING, "");
             battery.set(State.PENDING, "");
+            motorsChosen = "true".equalsIgnoreCase(main.config().getString(MOTORS_CHECKED_KEY));
+            motors.set(motorsChosen ? State.OK : State.PENDING, motorsChosen
+                    ? "Checked before. <b>Check now</b> runs the motor test again."
+                    : "Is each motor in the right place and turning the right way, and are the props on the right way round? "
+                    + "<b>Already checked</b> if so; <b>Check now</b> opens the motor test (props off).");
             return col;
+        }
+
+        private void motorsAlreadyChecked() {
+            motorsChosen = true;
+            main.save(Map.of(MOTORS_CHECKED_KEY, "true"));
+            motors.set(State.OK, "Marked as checked. The motor test is in SETTINGS any time.");
+        }
+
+        private void checkMotorsNow() {
+            if (main.isLinkActive()) {
+                motors.set(State.WARN, "Disconnect from the drone first: the motor test runs over this PC's USB, with the drone on the bench.");
+                return;
+            }
+            motorTestOpen = true; // the page's own rounds would fight the motor test for the USB port
+            try {
+                MotorTestDialog.open(javax.swing.SwingUtilities.getWindowAncestor(motors), main);
+            } finally {
+                motorTestOpen = false;
+                nextTry = 0;
+            }
+            motorsChosen = true;
+            main.save(Map.of(MOTORS_CHECKED_KEY, "true"));
+            motors.set(State.OK, "Checked with the motor test. <b>Check now</b> runs it again.");
         }
 
         private int savedCells() {
@@ -136,7 +174,7 @@ final class DroneSetup {
 
         @Override
         void refresh() {
-            if (busy || done || System.currentTimeMillis() < nextTry) return;
+            if (motorTestOpen || busy || done || System.currentTimeMillis() < nextTry) return;
             busy = true;
             boolean mayApply = applies < MAX_APPLIES;
             int cellTarget = cells;
@@ -229,6 +267,8 @@ final class DroneSetup {
 
         @Override
         String status() {
+            if (done && !motorsChosen) return "Betaflight is set up. Now the motors and props: already checked, or check them now.";
+            if (!motorsChosen && !found) return "Waiting for the flight controller. Then say whether the motors and props are checked.";
             if (done) return "Betaflight is set up.";
             if (!found) return "Waiting for the flight controller (or press Next and use the settings below).";
             if (failed) return "Waiting for the flight controller - close or Disconnect Betaflight Configurator.";
@@ -237,7 +277,7 @@ final class DroneSetup {
 
         @Override
         boolean canContinue() {
-            return !writing;
+            return !writing && motorsChosen;
         }
     }
 }

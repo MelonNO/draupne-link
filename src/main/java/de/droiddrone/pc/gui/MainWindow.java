@@ -84,6 +84,12 @@ public class MainWindow extends JFrame {
     private de.droiddrone.pc.video.LatencyMeter latencyMeter;
     private JComponent linkColumn;
     private JComponent controllerCard;
+    /** The controller card's height while it folds or unfolds (MINIMIZE / EXPAND); -1 = its own. */
+    private int controllerAnimHeight = -1;
+    /** What the pilot chose; the sticks stay visible while the card folds, so their visibility doesn't say. */
+    private boolean controllerMinimized;
+    private Timer controllerAnim;
+    private static final long CONTROLLER_ANIM_MS = 240;
     private ControlLink.State lastState;
     private boolean updatingCombo;
     /** The controller as a plain field when there is only one (or none); the dropdown appears with two or more. */
@@ -142,6 +148,7 @@ public class MainWindow extends JFrame {
     private JComponent gimbalPanel;
     private final JButton minimizeButton = textButton("MINIMIZE", "Hide the sticks and channels: more room for the video");
     private static final String MINIMIZED_KEY = "controllerMinimized";
+    static final String UPSIDE_DOWN_KEY = "videoUpsideDown";
 
     public static void open(PcConfig config, Path configFile, JoystickService service) {
         Theme.install();
@@ -187,7 +194,7 @@ public class MainWindow extends JFrame {
         videoView.setOsdSource(this::osdData);
         videoView.setOsdLayout(OsdLayout.load(config::getString));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
-        videoView.setUpsideDown("true".equalsIgnoreCase(config.getString(SettingsDialog.UPSIDE_DOWN_KEY)));
+        videoView.setUpsideDown("true".equalsIgnoreCase(config.getString(UPSIDE_DOWN_KEY)));
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
         bindKey(java.awt.event.KeyEvent.VK_F2, () -> {
             videoView.setOsdEnabled(!videoView.isOsdEnabled());
@@ -201,7 +208,13 @@ public class MainWindow extends JFrame {
         });
         new Timer(33, e -> refresh()).start();
         phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, java.util.concurrent.TimeUnit.SECONDS);
-        phoneWatch.scheduleWithFixedDelay(this::checkForUpdate, 8, 6 * 3600, java.util.concurrent.TimeUnit.SECONDS);
+        // at once on opening, then every 6 hours; its own thread, so a slow GitHub never holds up the phone check
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "updateCheck");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY);
+            return t;
+        }).scheduleWithFixedDelay(this::checkForUpdate, 0, 6 * 3600, java.util.concurrent.TimeUnit.SECONDS);
         setMinimumSize(new Dimension(1100, 760));
         setSize(1280, 820);
         setLocationRelativeTo(null);
@@ -214,14 +227,40 @@ public class MainWindow extends JFrame {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
-        addSetupItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, connection", () -> SetupWizard.open(this));
-        addSetupItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
-        addSetupItem(menu, "Phone setup", "The phone on the drone: apps, settings, connection", () -> PhoneGuideWizard.open(this));
-        addSetupItem(menu, "Drone setup", "Betaflight's receiver and stick delay, set over USB", () -> DroneSetup.open(this));
+        addMenuItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, connection", () -> SetupWizard.open(this));
+        addMenuItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
+        addMenuItem(menu, "Phone setup", "The phone on the drone: apps, settings, connection", () -> PhoneGuideWizard.open(this));
+        addMenuItem(menu, "Drone setup", "Betaflight's receiver and stick delay, set over USB", () -> DroneSetup.open(this));
         return menu;
     }
 
-    private void addSetupItem(JPopupMenu menu, String title, String detail, Runnable open) {
+    /** SETTINGS' menu, like SETUP's: each option with what it does; the versions at the bottom. */
+    private JPopupMenu settingsMenu() {
+        JPopupMenu menu = TacticalCombo.menu();
+        menu.setBackground(Theme.PANEL_2);
+        menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
+        addMenuItem(menu, "Camera upside down: " + (videoView.isUpsideDown() ? "on" : "off"),
+                "Turns the picture 180&deg;; the OSD stays upright. No delay", () -> {
+                    boolean on = !videoView.isUpsideDown();
+                    videoView.setUpsideDown(on);
+                    save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
+                    logLine(on ? "Picture turned upside down." : "Picture the right way up.");
+                });
+        addMenuItem(menu, "OSD layout", "Choose the OSD elements and place them, like Betaflight",
+                () -> OsdSettingsDialog.open(this, this));
+        JMenuItem motors = addMenuItem(menu, "Motor test", isLinkActive()
+                ? "Disconnect from the drone first: it runs over USB"
+                : "Spin each motor: right place, right direction?", () -> MotorTestDialog.open(this, this));
+        motors.setEnabled(!isLinkActive());
+        menu.addSeparator();
+        JLabel about = Theme.label("PC " + de.droiddrone.pc.AppInfo.version() + "   /   PHONE APP " + de.droiddrone.pc.setup.ApkShare.VERSION,
+                Theme.headingFont(11f), Theme.MUTED);
+        about.setBorder(BorderFactory.createEmptyBorder(6, 14, 8, 14));
+        menu.add(about);
+        return menu;
+    }
+
+    private JMenuItem addMenuItem(JPopupMenu menu, String title, String detail, Runnable open) {
         JMenuItem item = new JMenuItem("<html><b>" + title.toUpperCase() + "</b><br><span style='color:" + Theme.MUTED_HEX
                 + "'>" + detail + "</span></html>");
         item.setFont(Theme.font(Font.PLAIN, 13.5f));
@@ -230,6 +269,35 @@ public class MainWindow extends JFrame {
         item.setBorder(BorderFactory.createEmptyBorder(8, 14, 8, 14));
         item.addActionListener(e -> open.run());
         menu.add(item);
+        return item;
+    }
+
+    /**
+     * The button opens its menu right-aligned under it, so it stays inside the window. A click on the button while
+     * its menu is open closes the menu first (any click outside a menu does), and then reached the button and opened
+     * it again: a second click must just close it.
+     */
+    private static void dropdown(JButton button, java.util.function.Supplier<JPopupMenu> menus) {
+        long[] menuClosedAt = {0};
+        button.addActionListener(e -> {
+            if (System.currentTimeMillis() - menuClosedAt[0] < 250) return;
+            JPopupMenu menu = menus.get();
+            menu.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+                @Override
+                public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent ev) {
+                }
+
+                @Override
+                public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent ev) {
+                    menuClosedAt[0] = System.currentTimeMillis();
+                }
+
+                @Override
+                public void popupMenuCanceled(javax.swing.event.PopupMenuEvent ev) {
+                }
+            });
+            menu.show(button, button.getWidth() - menu.getPreferredSize().width, button.getHeight() + 4);
+        });
     }
 
     private JComponent buildHeader() {
@@ -247,34 +315,13 @@ public class MainWindow extends JFrame {
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         right.setOpaque(false);
         setupButton.setToolTipText("First-time setup, or PC, phone or drone setup on its own");
-        // a click on SETUP while its menu is open closes the menu first (any click outside a menu does), and then
-        // reached the button and opened it again: a second click on SETUP must just close it
-        long[] menuClosedAt = {0};
-        setupButton.addActionListener(e -> {
-            if (System.currentTimeMillis() - menuClosedAt[0] < 250) return;
-            JPopupMenu menu = setupMenu(); // right-aligned under the button, so it stays inside the window
-            menu.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
-                @Override
-                public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent ev) {
-                }
-
-                @Override
-                public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent ev) {
-                    menuClosedAt[0] = System.currentTimeMillis();
-                }
-
-                @Override
-                public void popupMenuCanceled(javax.swing.event.PopupMenuEvent ev) {
-                }
-            });
-            menu.show(setupButton, setupButton.getWidth() - menu.getPreferredSize().width, setupButton.getHeight() + 4);
-        });
+        dropdown(setupButton, this::setupMenu);
         updateButton.setVisible(false);
         updateButton.addActionListener(e -> startUpdate());
         right.add(updateButton);
         right.add(setupButton);
-        settingsButton.setToolTipText("Camera mounted upside down, and other options");
-        settingsButton.addActionListener(e -> SettingsDialog.open(this, videoView));
+        settingsButton.setToolTipText("Camera upside down, OSD layout, motor test");
+        dropdown(settingsButton, this::settingsMenu);
         right.add(settingsButton);
         popOutButton.setToolTipText("Show the video in a separate window, e.g. on a second screen");
         popOutButton.addActionListener(e -> togglePopOut());
@@ -410,7 +457,16 @@ public class MainWindow extends JFrame {
         });
         column.add(video, BorderLayout.CENTER);
 
-        JPanel controller = Theme.card(new BorderLayout(18, 12));
+        JPanel controller = new JPanel(new BorderLayout(18, 12)) {
+            @Override
+            public Dimension getPreferredSize() {
+                Dimension d = super.getPreferredSize();
+                return controllerAnimHeight < 0 ? d : new Dimension(d.width, controllerAnimHeight);
+            }
+        };
+        JPanel card = Theme.card(null); // the card look, on a panel that can fold
+        controller.setBackground(card.getBackground());
+        controller.setBorder(card.getBorder());
         controllerCard = controller;
         JPanel top = new JPanel(new BorderLayout(10, 0));
         top.setOpaque(false);
@@ -440,16 +496,28 @@ public class MainWindow extends JFrame {
         joystickSlot.setMaximumSize(new Dimension(420, 32));
         topLeft.add(joystickSlot);
         topLeft.add(Box.createHorizontalStrut(10));
-        calibrateButton.addActionListener(e -> calibrate());
-        // locked while connected: it shows (stripes, padlock), and a click on it says why, under it (never over the video)
+        // locked while connected: it shows (stripes, padlock), and a click on it says why, under it (never over the video).
+        // No controller: the same kind of notice says so
         ((TacticalButton) calibrateButton).setShowLocked(true);
         LockedNotice calibrateLocked = new LockedNotice(calibrateButton, video, "CALIBRATE IS LOCKED",
                 "You are connected to the drone. Press DISCONNECT first: the sticks must stop going to the drone while you calibrate.");
+        LockedNotice noController = new LockedNotice(calibrateButton, video, "NO CONTROLLER",
+                "Plug the radio into this PC with USB and choose 'USB Joystick (HID)' on it, then press CALIBRATE again.");
+        calibrateButton.addActionListener(e -> {
+            if (hasController()) {
+                calibrate();
+                return;
+            }
+            logLine("CALIBRATE needs the radio: plug it in with USB and choose 'USB Joystick (HID)' on it.");
+            calibrateLocked.dismiss();
+            if (!noController.pop()) calibrate(); // no room for the notice: calibrate() says it in a message box
+        });
         calibrateButton.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mousePressed(java.awt.event.MouseEvent e) {
                 if (calibrateButton.isEnabled()) return;
                 logLine("CALIBRATE is locked while connected: disconnect first (RC output must stop while calibrating).");
+                noController.dismiss();
                 calibrateLocked.pop();
             }
         });
@@ -461,8 +529,8 @@ public class MainWindow extends JFrame {
         topLeft.add(rcCheckButton);
         top.add(topLeft, BorderLayout.WEST);
         minimizeButton.addActionListener(e -> {
-            setControllerMinimized(gimbalPanel.isVisible());
-            save(Map.of(MINIMIZED_KEY, Boolean.toString(!gimbalPanel.isVisible())));
+            setControllerMinimized(!controllerMinimized, true); // also mid-fold: turns it round
+            save(Map.of(MINIMIZED_KEY, Boolean.toString(controllerMinimized)));
         });
         top.add(minimizeButton, BorderLayout.EAST);
         controller.add(top, BorderLayout.NORTH);
@@ -485,18 +553,49 @@ public class MainWindow extends JFrame {
         bars.add(states, BorderLayout.SOUTH);
         controller.add(bars, BorderLayout.CENTER);
         column.add(controller, BorderLayout.SOUTH);
-        setControllerMinimized("true".equalsIgnoreCase(config.getString(MINIMIZED_KEY)));
+        setControllerMinimized("true".equalsIgnoreCase(config.getString(MINIMIZED_KEY)), false);
         return column;
     }
 
     /** Minimized: only the controller's name and the status lines stay; the video grows into the space. */
-    private void setControllerMinimized(boolean minimized) {
+    /**
+     * @param animate fold or unfold over CONTROLLER_ANIM_MS (easing out), the video growing or shrinking with it;
+     *                the stick boxes shrink or grow with the card, the channel bars are away meanwhile. The video
+     *                is rescaled at each step, so only on the pilot's click, never by itself.
+     */
+    private void setControllerMinimized(boolean minimized, boolean animate) {
+        if (controllerAnim != null) controllerAnim.stop();
+        controllerMinimized = minimized;
+        int from = controllerCard.getHeight();
+        controllerAnimHeight = -1;
         gimbalPanel.setVisible(!minimized);
         channelBars.setVisible(!minimized);
+        int to = controllerCard.getPreferredSize().height;
         minimizeButton.setText(minimized ? "EXPAND" : "MINIMIZE");
         minimizeButton.setToolTipText(minimized ? "Show the sticks and channels again" : "Hide the sticks and channels: more room for the video");
-        controllerCard.revalidate();
-        controllerCard.repaint();
+        if (!animate || !controllerCard.isShowing() || from <= 0 || from == to) {
+            controllerCard.revalidate();
+            controllerCard.repaint();
+            return;
+        }
+        gimbalPanel.setVisible(true); // the stick boxes shrink with the card; hidden once folded
+        channelBars.setVisible(false); // squeezed, the bars would run into the status lines under them
+        controllerAnimHeight = from;
+        long start = System.currentTimeMillis();
+        controllerAnim = new Timer(15, e -> {
+            float t = Math.min(1f, (System.currentTimeMillis() - start) / (float) CONTROLLER_ANIM_MS);
+            float ease = 1 - (1 - t) * (1 - t) * (1 - t);
+            controllerAnimHeight = Math.round(from + (to - from) * ease);
+            if (t >= 1) {
+                ((Timer) e.getSource()).stop();
+                controllerAnimHeight = -1;
+                gimbalPanel.setVisible(!minimized);
+                channelBars.setVisible(!minimized);
+            }
+            controllerCard.revalidate();
+            controllerCard.repaint();
+        });
+        controllerAnim.start();
     }
 
     /** A small, quiet text button (COPY, MINIMIZE): muted, red on hover. */
@@ -589,6 +688,11 @@ public class MainWindow extends JFrame {
     }
 
     /** @return true when a new calibration was saved */
+    private boolean hasController() {
+        JoystickService.Snapshot snap = service.getSnapshot();
+        return snap.selected() != null && snap.state() != null;
+    }
+
     boolean calibrate() {
         if (connection != null) return false;
         JoystickService.Snapshot snap = service.getSnapshot();

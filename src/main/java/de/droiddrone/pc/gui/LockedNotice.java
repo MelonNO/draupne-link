@@ -62,10 +62,13 @@ final class LockedNotice extends JComponent {
         });
     }
 
-    /** Shows the notice, or starts its time again if it is already up. */
-    void pop() {
+    /**
+     * Shows the notice, or starts its time again if it is already up.
+     * @return false when it can't be shown (no room beside the video, or the button isn't on screen)
+     */
+    boolean pop() {
         JLayeredPane layer = layer();
-        if (layer == null) return;
+        if (layer == null) return false;
         boolean up = getParent() == layer && !closing && shownAt != 0;
         if (getParent() != layer) layer.add(this, JLayeredPane.POPUP_LAYER);
         // already up: its full time again, without sliding in again
@@ -73,11 +76,12 @@ final class LockedNotice extends JComponent {
         closing = false;
         if (!place()) {
             dismiss();
-            return;
+            return false;
         }
         setVisible(true);
         timer.start();
         repaint();
+        return true;
     }
 
     private void close() {
@@ -86,7 +90,8 @@ final class LockedNotice extends JComponent {
         closingAt = System.currentTimeMillis();
     }
 
-    private void dismiss() {
+    /** Gone at once, without the fold-away (another notice takes its place). */
+    void dismiss() {
         timer.stop();
         shownAt = 0;
         closing = false;

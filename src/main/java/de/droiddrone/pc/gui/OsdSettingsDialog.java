@@ -55,6 +55,10 @@ final class OsdSettingsDialog extends JDialog {
     private final JLabel infoState = Theme.label(" ", Theme.font(Font.BOLD, 12.5f), Theme.MUTED);
     private final JButton resetElement = Theme.secondaryButton("Reset element");
     private final Timer ticker = new Timer(500, e -> preview.repaint()); // the sample's timers run
+    private final JButton fullScreenButton = Theme.secondaryButton("Window");
+    /** Where the window goes when it leaves full screen; full screen = the whole screen but the taskbar. */
+    private java.awt.Rectangle windowedBounds;
+    private boolean fullScreen;
 
     private OsdSettingsDialog(Window owner, MainWindow main) {
         super(owner, "OSD", ModalityType.APPLICATION_MODAL);
@@ -67,7 +71,13 @@ final class OsdSettingsDialog extends JDialog {
 
         JPanel head = new JPanel(new BorderLayout(0, 4));
         head.setOpaque(false);
-        head.add(Theme.label("OSD", Theme.headingFont(26f), Theme.TEXT), BorderLayout.NORTH);
+        JPanel titleRow = new JPanel(new BorderLayout());
+        titleRow.setOpaque(false);
+        titleRow.add(Theme.label("OSD", Theme.headingFont(26f), Theme.TEXT), BorderLayout.WEST);
+        fullScreenButton.setToolTipText("Full screen or a window (F11)");
+        fullScreenButton.addActionListener(e -> setFullScreen(!fullScreen));
+        titleRow.add(fullScreenButton, BorderLayout.EAST);
+        head.add(titleRow, BorderLayout.NORTH);
         head.add(Theme.label("Switch elements on or off on the left. Drag them in the preview to move them. Changes show on the live OSD at once and are saved.",
                 Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.SOUTH);
         root.add(head, BorderLayout.NORTH);
@@ -92,6 +102,7 @@ final class OsdSettingsDialog extends JDialog {
         buttons.add(close);
         root.add(buttons, BorderLayout.SOUTH);
         getRootPane().registerKeyboardAction(e -> dispose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
+        getRootPane().registerKeyboardAction(e -> setFullScreen(!fullScreen), KeyStroke.getKeyStroke(KeyEvent.VK_F11, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
         getRootPane().setDefaultButton(close);
 
         select(OsdElement.BATTERY);
@@ -99,6 +110,25 @@ final class OsdSettingsDialog extends JDialog {
         setMinimumSize(new Dimension(1100, 680));
         setSize(1300, 780);
         setLocationRelativeTo(owner);
+        windowedBounds = getBounds();
+        setFullScreen(true); // opens full screen: the biggest preview
+    }
+
+    /** Full screen: the screen the owner is on, all but the taskbar. Window: the size and place it had before. */
+    private void setFullScreen(boolean on) {
+        if (on) {
+            if (!fullScreen) windowedBounds = getBounds();
+            java.awt.GraphicsConfiguration gc = getOwner() != null ? getOwner().getGraphicsConfiguration() : getGraphicsConfiguration();
+            java.awt.Rectangle screen = gc.getBounds();
+            java.awt.Insets taskbar = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(gc);
+            setBounds(screen.x + taskbar.left, screen.y + taskbar.top, screen.width - taskbar.left - taskbar.right,
+                    screen.height - taskbar.top - taskbar.bottom);
+        } else if (windowedBounds != null) {
+            setBounds(windowedBounds);
+        }
+        fullScreen = on;
+        fullScreenButton.setText(on ? "WINDOW" : "FULL SCREEN");
+        validate();
     }
 
     static void open(Window owner, MainWindow main) {

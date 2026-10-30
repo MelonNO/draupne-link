@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DroidDrone PC: the touch lock. Covers the whole screen and swallows every touch, except the HOLD TO UNLOCK box. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/touchLock"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F2000000"
+    android:clickable="true"
+    android:focusable="true"
+    android:soundEffectsEnabled="false">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center_horizontal"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-condensed"
+            android:letterSpacing="0.12"
+            android:text="@string/dd_locked_title"
+            android:textColor="@color/dd_text"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:gravity="center"
+            android:maxWidth="420dp"
+            android:text="@string/dd_locked_text"
+            android:textColor="@color/dd_muted"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/tvLockStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:fontFamily="sans-serif-condensed"
+            android:letterSpacing="0.1"
+            android:textColor="@color/dd_muted"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/unlockBox"
+        android:layout_width="170dp"
+        android:layout_height="76dp"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="18dp"
+        android:background="@drawable/dd_unlock_box"
+        android:soundEffectsEnabled="false">
+
+        <View
+            android:id="@+id/unlockFill"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_margin="3dp"
+            android:background="#88FCD405"
+            android:scaleX="0"
+            android:transformPivotX="0dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fontFamily="sans-serif-condensed"
+            android:gravity="center"
+            android:letterSpacing="0.1"
+            android:text="@string/dd_unlock"
+            android:textColor="@color/dd_warn"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+</FrameLayout>

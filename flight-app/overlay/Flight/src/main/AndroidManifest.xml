@@ -52,10 +52,10 @@
         <activity
             android:name=".MainActivity"
             android:clearTaskOnLaunch="true"
-            android:configChanges="keyboardHidden|orientation|screenSize"
+            android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="true"
             android:launchMode="singleTop"
-            android:screenOrientation="sensorLandscape">
+            android:screenOrientation="fullUser">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

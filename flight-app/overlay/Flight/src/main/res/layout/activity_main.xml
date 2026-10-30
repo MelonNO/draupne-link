@@ -31,6 +31,7 @@
             android:textStyle="bold" />
 
         <TextView
+            android:id="@+id/tvSubtitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginStart="10dp"
@@ -40,6 +41,23 @@
             android:text="@string/dd_subtitle"
             android:textColor="@color/dd_accent"
             android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/lockScreen"
+            android:layout_width="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginEnd="10dp"
+            android:background="@drawable/dd_button_lock"
+            android:fontFamily="sans-serif-condensed"
+            android:letterSpacing="0.1"
+            android:minWidth="0dp"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:stateListAnimator="@null"
+            android:text="@string/dd_lock_button"
+            android:textColor="@color/dd_warn"
+            android:textSize="14sp"
             android:textStyle="bold" />
 
         <TextView
@@ -59,7 +77,9 @@
             android:textStyle="bold" />
     </LinearLayout>
 
+    <!-- side by side in landscape; MainActivity stacks them in portrait -->
     <LinearLayout
+        android:id="@+id/llCards"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_marginTop="10dp"
