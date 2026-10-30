@@ -104,7 +104,7 @@ For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold t
 | Setup says the path is **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Press *Check again* after a minute. If it stays relayed, choose *Host the relay on this PC* in SETUP → *PC setup* |
 | Channels look wrong | **CALIBRATE**, then **RC CHECK** |
 
-**Versions and updates:** DroidDrone PC's version is in its window title and in SETTINGS → About (with the phone app version it installs); the phone app shows its version at the bottom right of its screen. Both check GitHub for a newer release (DroidDrone PC at start and every 6 hours, the phone app when it starts) and say so: an **UPDATE** button in DroidDrone PC, a tap-to-download line in the phone app. Nothing is installed by itself.
+**Versions and updates:** DroidDrone PC's version is in its window title and in SETTINGS → About (with the phone app version it installs); the phone app shows its version at the bottom right of its screen. Both check GitHub for a newer release (DroidDrone PC at start and every 6 hours, the phone app when it starts) and say so: an **UPDATE** button in DroidDrone PC, a tap-to-download line in the phone app. Pressing UPDATE downloads the new installer, checks it against GitHub's checksum, closes DroidDrone PC, installs it (one Windows permission prompt) and starts it again; it won't while connected to the drone. Nothing is installed without you pressing it.
 
 Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.
 
