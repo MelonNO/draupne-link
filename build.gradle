@@ -146,6 +146,8 @@ tasks.register('packageInstaller', Exec) {
             '--win-upgrade-uuid', '5d2f1d3e-6a0b-4c9e-9f53-2b7c1a8e4d61',
             '--resource-dir', file('src/installer'), // main.wxs: PC setup tasks, "Launch DroidDrone PC" box
             '--dest', staging
+    // main.wxs takes check-running.vbs from here (jpackage builds from a copy of the resource dir)
+    environment 'DDPC_INSTALLER_DIR', file('src/installer').absolutePath
     doLast {
         copy {
             from(staging) { include '*.exe' }
