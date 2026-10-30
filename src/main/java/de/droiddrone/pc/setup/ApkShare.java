@@ -29,11 +29,11 @@ import java.util.concurrent.Executors;
  * SHA-256, and serves it from a tiny web server that only answers the local network and Tailscale.
  */
 public class ApkShare implements AutoCloseable {
-    public static final String VERSION = "2.3.0-pc.5";
+    public static final String VERSION = "2.3.0-pc.6";
     public static final String APK_NAME = "DroidDrone-Flight-" + VERSION + ".apk";
     public static final String APK_URL = "https://github.com/MelonNO/droiddrone-pc/releases/download/flight-" + VERSION + "/" + APK_NAME;
     /** SHA-256 of the APK built by flight-app/build.ps1 and attached to the flight-2.3.0-pc.4 release. */
-    public static final String APK_SHA256 = "45577a71f26af6ccdcafde67fa057cdd6827f645ab781eeb2465ab8ff868aa0a";
+    public static final String APK_SHA256 = "6fc5ec3c2ccefa2da03b06f06247a223121e465cc13041fed8aace4dbdca454b";
     public static final int PORT = 8765;
 
     private HttpServer server;
