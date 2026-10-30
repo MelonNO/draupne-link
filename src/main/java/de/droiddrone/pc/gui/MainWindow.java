@@ -111,6 +111,11 @@ public class MainWindow extends JFrame {
     private final JLabel telemetryValue = statValue();
     private final JLabel rcSentValue = statValue();
     private final JLabel phoneValue = statValue();
+    private final JLabel phoneAppValue = statValue();
+    private final JLabel phoneBatteryValue = statValue();
+    /** The phone app is older than the one this PC brings: what to do about it. */
+    private final WrappingText phoneAppWarning = new WrappingText("", Theme.font(Font.BOLD, 12.5f), Theme.WARN);
+    private boolean phoneAppWarned;
     private final WrappingText phoneWarning = new WrappingText("", Theme.font(Font.BOLD, 12.5f), Theme.BAD);
     /** Tailscale's view of the phone, checked every few seconds; null when not using Tailscale or no address yet. */
     private volatile Tailscale.PhoneState phoneState;
@@ -318,9 +323,11 @@ public class MainWindow extends JFrame {
         });
         link.add(connectButton, c);
 
-        JPanel stats = new JPanel(new GridLayout(5, 2, 8, 6));
+        JPanel stats = new JPanel(new GridLayout(7, 2, 8, 6));
         stats.setOpaque(false);
         addStat(stats, "PHONE ON TAILSCALE", phoneValue);
+        addStat(stats, "PHONE APP", phoneAppValue);
+        addStat(stats, "PHONE BATTERY", phoneBatteryValue);
         addStat(stats, "PING", pingValue);
         addStat(stats, "FLIGHT CONTROLLER", fcValue);
         addStat(stats, "TELEMETRY PACKETS", telemetryValue);
@@ -330,6 +337,8 @@ public class MainWindow extends JFrame {
         phoneWarning.setVisible(false);
         c.insets = new Insets(8, 0, 0, 0);
         link.add(phoneWarning, c);
+        phoneAppWarning.setVisible(false);
+        link.add(phoneAppWarning, c);
         column.add(link, BorderLayout.NORTH);
 
         JPanel logCard = Theme.card(new BorderLayout(0, 8));
@@ -1037,6 +1046,7 @@ public class MainWindow extends JFrame {
             fcValue.setText("-");
             telemetryValue.setText("-");
             rcSentValue.setText("-");
+            refreshPhoneApp(null);
             return;
         }
         ControlLink link = connection.getLink();
@@ -1067,6 +1077,43 @@ public class MainWindow extends JFrame {
         fcValue.setText(fc == null ? "-" : fc.getFcName() + " " + fc.getFcVersionStr());
         telemetryValue.setText(Long.toString(link.getTelemetryPacketsReceived()));
         rcSentValue.setText(Long.toString(link.getRcFramesSent()));
+        refreshPhoneApp(state == ControlLink.State.READY ? link.getTelemetry() : null);
+    }
+
+    /** The phone app's version and the phone's battery; a warning (and one log line per connection) when the app is old. */
+    private void refreshPhoneApp(FcTelemetry t) {
+        String newest = de.droiddrone.pc.setup.ApkShare.VERSION;
+        String version = t == null ? null : t.getPhoneAppVersion();
+        boolean old = t != null && (version != null ? de.droiddrone.pc.setup.UpdateCheck.isNewer(newest, version)
+                : t.phoneAppSilent(System.currentTimeMillis()));
+        if (t == null) {
+            setLabel(phoneAppValue, "-", Theme.MUTED);
+            phoneAppWarned = false;
+        } else if (version == null) {
+            setLabel(phoneAppValue, old ? "OLD - UPDATE IT" : "-", old ? Theme.WARN : Theme.MUTED);
+        } else {
+            setLabel(phoneAppValue, old ? version + " - OLD" : version, old ? Theme.WARN : Theme.OK);
+        }
+        int battery = t == null ? -1 : t.getPhoneBatteryPercent();
+        if (battery < 0) {
+            setLabel(phoneBatteryValue, "-", Theme.MUTED);
+        } else {
+            setLabel(phoneBatteryValue, battery + "%" + (t.isPhoneCharging() ? " charging" : ""),
+                    battery < 20 ? Theme.BAD : battery < 40 ? Theme.WARN : Theme.OK);
+        }
+        if (old) {
+            phoneAppWarning.setHtml("The phone runs an old DroidDrone Flight" + (version == null ? "" : " (" + version + ")")
+                    + "; this PC brings " + newest + ". Update it: SETUP &gt; Phone setup, or tap the update line in the phone app.");
+            if (!phoneAppWarned) {
+                phoneAppWarned = true;
+                logLine("Warning: the phone runs an old DroidDrone Flight" + (version == null ? " (older than 2.3.0-pc.5)" : " " + version)
+                        + ", this PC brings " + newest + ". Update it with SETUP > Phone setup.");
+            }
+        }
+        if (phoneAppWarning.isVisible() != old) {
+            phoneAppWarning.setVisible(old);
+            phoneAppWarning.getParent().revalidate();
+        }
     }
 
     /**

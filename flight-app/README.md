@@ -11,11 +11,11 @@ The phone app that flies on the drone: upstream [DroidDrone](https://github.com/
 | `Flight/src/main/java/de/droiddrone/flight/BracketDrawable.java` | New: the card background |
 | `Flight/src/main/java/de/droiddrone/flight/Serial.java` | Reads wait asynchronously (`read(buf, 0)`, a UsbRequest) instead of a 100 ms `bulkTransfer`, which on many phones held every write up to 100 ms (RXLOSS). One writer thread owns the USB port: the newest sticks always go first (50 ms timeout, then the newest again), other MSP requests one at a time in between, skipped while the link is slow |
 | `Flight/src/main/java/de/droiddrone/flight/Msp.java` | Sticks go through `Serial.writeRcMsp` |
-| `Flight/src/main/java/de/droiddrone/flight/Udp.java` | Measures stick packets arriving; sends `PcLinkStats` every 0.1 s as its own telemetry packet |
+| `Flight/src/main/java/de/droiddrone/flight/Udp.java` | Measures stick packets arriving; sends `PcLinkStats` every 0.1 s as its own telemetry packet, and the app's version once a second |
 | `Flight/src/main/java/de/droiddrone/flight/UpdateCheck.java` | New: asks GitHub for the latest DroidDrone PC release and whether the phone app in it is newer; MainActivity shows a tap-to-download line |
-| `Flight/src/main/java/de/droiddrone/flight/PcLinkStats.java` | New: the phone's measurements (record 0x40F0) for DroidDrone PC's link log |
+| `Flight/src/main/java/de/droiddrone/flight/PcLinkStats.java` | New: the phone's measurements (record 0x40F0) for DroidDrone PC's link log; the app's version (record 0x40F1) |
 | `Flight/src/main/AndroidManifest.xml` | The theme; permission to ask for the earlier app's removal, and to see it |
-| `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.4`, release signing from outside the repo |
+| `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.5`, release signing from outside the repo |
 | `settings.gradle` | Builds only the Flight app (not upstream's Control app) |
 
 The network protocol is unchanged (the phone's measurements travel as an extra telemetry packet that other PC versions skip), so DroidDrone PC works with this build and with the original 2.3.0.

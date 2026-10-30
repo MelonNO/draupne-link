@@ -48,7 +48,7 @@ Betaflight 4.4 is **not required**, only recommended:
 
 ![Main window](docs/images/main-window.png)
 
-- Press **CONNECT**. The status turns **LINK READY** and the phone's camera appears with the **OSD**: horizon and pitch ladder, heading tape with home marker, battery (voltage per cell, big, with the cell count), 4G signal and ping, GPS, timer, flight mode (ACRO / ANGLE / HORIZON ...) and warnings.
+- Press **CONNECT**. The status turns **LINK READY** and the phone's camera appears with the **OSD**: horizon and pitch ladder, heading tape with home marker, battery (voltage per cell, big, with the cell count - corrected when Betaflight counted wrong), the phone's battery, 4G signal and ping, GPS, timer, flight mode (ACRO / ANGLE / HORIZON ...) and warnings.
 - RC is only sent once the throttle has been seen at the bottom (**RC OUTPUT: LIVE**).
 - A **red frame** round the picture means your sticks aren't reaching the drone: **LINK LOST** (PC to phone) or **NO FLIGHT CONTROLLER** (the phone lost its USB link to the flight controller; the battery and GPS values turn grey because they're frozen).
 - **POP OUT VIDEO** puts the picture (with the OSD) in its own window, e.g. on a second screen; close it or press **VIDEO BACK** to put it back.
@@ -121,10 +121,11 @@ DroidDrone PC replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s 
 
 ### The phone app
 
-The setup installs **DroidDrone Flight 2.3.0-pc.4**: upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
+The setup installs **DroidDrone Flight 2.3.0-pc.5**: upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
 - **Every flight controller:** its USB list covers any flight controller with native USB (STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip it can drive (CH340/CH341, CP210x, FTDI, PL2303). Android can then remember the USB permission, and the phone reconnects to the flight controller without asking. Upstream only lists a few IDs, so AT32 boards, for example, needed a tap after every reconnect.
 - **The PC app's look:** black and red, status at a glance (OFFLINE / WAITING / LINK READY).
 - **Sticks reach the flight controller on time:** upstream reads from the flight controller in a way that, on many phones, holds every USB write for up to 0.1 s, which makes Betaflight flag RXLOSS and block arming; this build reads asynchronously. The newest sticks also always go first, never queued behind a slow request, and the phone reports what it sees into the PC's link log.
+- **Says its version:** once a second, so DroidDrone PC can warn when the phone runs an older app than it brings.
 - **Replaces any earlier DroidDrone Flight:** it has its own package name (`de.droiddrone.flight.pc`), so it installs next to the original (or this project's 2.3.0-pc.1), and when it opens it asks Android to remove the earlier one: one tap on OK.
 
 The protocol is unchanged, so the original Flight 2.3.0 also still works. Every DroidDrone PC release includes it as `DroidDrone-Flight-<version>.apk`, the exact build that version installs.
@@ -134,7 +135,7 @@ The protocol is unchanged, so the original Flight 2.3.0 also still works. Every 
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 78 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
+.\gradlew.bat test               # 88 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3

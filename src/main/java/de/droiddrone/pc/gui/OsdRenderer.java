@@ -69,17 +69,33 @@ final class OsdRenderer {
     // ------------------------------------------------------------------ centre
 
     private void reticle(int w, int h) {
-        int cx = w / 2, cy = h / 2;
-        float s = 26 * unit;
-        Path2D p = new Path2D.Float(); // "W" aircraft symbol
-        p.moveTo(cx - 2.2 * s, cy);
-        p.lineTo(cx - s, cy);
-        p.lineTo(cx - 0.5 * s, cy + 0.5 * s);
-        p.lineTo(cx, cy);
-        p.lineTo(cx + 0.5 * s, cy + 0.5 * s);
-        p.lineTo(cx + s, cy);
-        p.lineTo(cx + 2.2 * s, cy);
-        stroke(p, ACCENT, 2.6f);
+        crosshair(g, w / 2f, h / 2f, unit);
+    }
+
+    /**
+     * The fixed crosshair in the middle, Betaflight style: two wings with ticks pointing down and a dot. The same one
+     * on the live OSD and on the no-video screen. unit = picture height / 720.
+     */
+    static void crosshair(Graphics2D g, float cx, float cy, float unit) {
+        float in = 14 * unit, out = 44 * unit, tick = 10 * unit;
+        float width = Math.max(2f, 3f * unit);
+        Path2D p = new Path2D.Float();
+        p.moveTo(cx - out, cy);
+        p.lineTo(cx - in, cy);
+        p.lineTo(cx - in, cy + tick);
+        p.moveTo(cx + out, cy);
+        p.lineTo(cx + in, cy);
+        p.lineTo(cx + in, cy + tick);
+        float dot = Math.max(3f, 5f * unit);
+        java.awt.geom.Ellipse2D centre = new java.awt.geom.Ellipse2D.Float(cx - dot / 2, cy - dot / 2, dot, dot);
+        g.setColor(OUTLINE);
+        g.setStroke(new BasicStroke(width + 2.5f, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
+        g.draw(p);
+        g.draw(centre);
+        g.setColor(WHITE);
+        g.setStroke(new BasicStroke(width, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
+        g.draw(p);
+        g.fill(centre);
     }
 
     /**
@@ -186,7 +202,8 @@ final class OsdRenderer {
         double min = lim != null && lim.minCell() > 0 ? lim.minCell() : 3.3;
         double max = lim != null && lim.maxCell() > 0 ? lim.maxCell() : 4.3;
         Color c = !fresh ? STALE : cell <= min ? RED : cell <= warn ? YELLOW : GREEN;
-        label("BATT " + b.cells() + "S" + (fresh ? "" : "  NO DATA"), x, y);
+        // Betaflight counted wrong (battery plugged in while it ran on USB): say so, its own warnings are off too
+        label("BATT " + b.cells() + "S" + (b.fcCountWrong() ? "  (BF SAYS " + b.fcCells() + "S)" : "") + (fresh ? "" : "  NO DATA"), x, y);
         g.setFont(Theme.monoFont(Font.BOLD, 30 * unit));
         String cellText = String.format(Locale.ROOT, "%.2fV", cell);
         text(cellText, x, y + 32 * unit, c);
@@ -229,9 +246,25 @@ final class OsdRenderer {
             ly += 20 * unit;
         }
         int phone = t == null ? -1 : t.getPhoneBatteryPercent();
-        if (phone >= 0) {
-            rightText("PHONE " + phone + "%" + (t.isPhoneCharging() ? " CHG" : ""), right, ly, phone < 20 ? RED : WHITE);
-        }
+        if (phone >= 0) phoneBattery(phone, t.isPhoneCharging(), right, ly + 6 * unit);
+    }
+
+    /** The phone's battery: a small battery icon with its charge, and the percentage. */
+    private void phoneBattery(int percent, boolean charging, float right, float baseline) {
+        Color c = percent < 20 ? RED : percent < 40 ? YELLOW : GREEN;
+        g.setFont(Theme.monoFont(Font.BOLD, 16 * unit));
+        String text = "PHONE " + percent + "%" + (charging ? " CHG" : "");
+        rightText(text, right, baseline, c);
+        float bw = 24 * unit, bh = 12 * unit;
+        float bx = right - g.getFontMetrics().stringWidth(text) - bw - 10 * unit, by = baseline - bh;
+        g.setColor(OUTLINE);
+        g.fillRect(Math.round(bx - 1), Math.round(by - 1), Math.round(bw + 5 * unit), Math.round(bh + 2));
+        g.setColor(c);
+        g.fillRect(Math.round(bx + 2), Math.round(by + 2), Math.round((bw - 4) * Math.max(0, Math.min(100, percent)) / 100f), Math.round(bh - 4));
+        g.setColor(WHITE);
+        g.setStroke(new BasicStroke(Math.max(1f, 1.5f * unit)));
+        g.drawRect(Math.round(bx), Math.round(by), Math.round(bw), Math.round(bh));
+        g.fillRect(Math.round(bx + bw + 1), Math.round(by + bh / 3), Math.round(3 * unit), Math.round(bh / 3));
     }
 
     private void signalBars(float x, float baseline, int percent) {
@@ -326,11 +359,13 @@ final class OsdRenderer {
         FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
         if (!d.fcLost() && b != null && b.volts() > 0 && b.cellCountKnown()
                 && b.cellVolts() <= (lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5)) big.add("LOW BATTERY");
+        // the phone is the radio: when it dies, the link goes
+        if (t != null && t.getPhoneBatteryPercent() >= 0 && t.getPhoneBatteryPercent() <= 15 && !t.isPhoneCharging()) big.add("PHONE BATTERY LOW");
         boolean blink = (now / 400) % 2 == 0;
         float y = h * 0.66f;
         g.setFont(Theme.headingFont(34 * unit));
         for (String text : big) {
-            if (blink) centered(text, w / 2f, y, text.equals("RC OFF - THROTTLE DOWN") ? YELLOW : RED);
+            if (blink) centered(text, w / 2f, y, text.equals("RC OFF - THROTTLE DOWN") || text.equals("PHONE BATTERY LOW") ? YELLOW : RED);
             y += 38 * unit;
         }
         if (!d.linkReady() && d.linkHint() != null) { // steady, under LINK LOST: why

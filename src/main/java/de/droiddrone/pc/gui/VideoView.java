@@ -181,7 +181,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         }
         OsdRenderer.Data data = osdEnabled ? osdData.get() : null;
         if (img == null) {
-            paintSkeleton(g, w, h);
+            paintSkeleton(g, w, h, data != null && data.connected());
             if (!skeletonTimer.isRunning()) skeletonTimer.start();
         }
         if (data != null && data.connected()) {
@@ -219,10 +219,12 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     }
 
     /**
-     * No picture yet: what an analog FPV goggle shows without signal - dim, grainy static, with an FPV crosshair and an
-     * artificial horizon that rocks gently, and the status under it. Only runs while there is no picture.
+     * No picture yet: what an analog FPV goggle shows without signal - dim, grainy static, with the OSD's crosshair and
+     * an artificial horizon that rocks gently, and the status under it. With the OSD live on top (connected), the OSD
+     * draws the crosshair and the real horizon, and the status moves up, clear of its warnings. Only runs while there
+     * is no picture.
      */
-    private void paintSkeleton(Graphics2D g, int w, int h) {
+    private void paintSkeleton(Graphics2D g, int w, int h, boolean osdLive) {
         g.setColor(Color.BLACK);
         g.fillRect(0, 0, w, h);
         int[] t = target;
@@ -247,33 +249,10 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         try {
             float u = vh / 720f;
             int cx = vw / 2, cy = vh / 2;
-            // artificial horizon, rocking a few degrees as if the quad were hovering
-            double roll = Math.toRadians(6 * Math.sin(now / 1300.0));
-            float pitch = (float) (14 * u * Math.sin(now / 2100.0));
-            Graphics2D hz = (Graphics2D) v.create();
-            hz.translate(cx, cy + pitch);
-            hz.rotate(roll);
-            int dash = Math.round(18 * u), gap = Math.round(14 * u), reach = Math.round(230 * u);
-            hz.setStroke(new java.awt.BasicStroke(Math.max(1.5f, 2.5f * u)));
-            for (int x = Math.round(70 * u); x < reach; x += dash + gap) {
-                outlined(hz, x, 0, Math.min(x + dash, reach), 0);
-                outlined(hz, -x, 0, -Math.min(x + dash, reach), 0);
-            }
-            hz.dispose();
-            // crosshair, Betaflight style: two wings with ticks pointing down and a centre dot
-            v.setStroke(new java.awt.BasicStroke(Math.max(2f, 3f * u), java.awt.BasicStroke.CAP_SQUARE, java.awt.BasicStroke.JOIN_MITER));
-            int in = Math.round(14 * u), out = Math.round(44 * u), tick = Math.round(10 * u), dot = Math.max(3, Math.round(5 * u));
-            outlined(v, cx - out, cy, cx - in, cy);
-            outlined(v, cx - in, cy, cx - in, cy + tick);
-            outlined(v, cx + in, cy, cx + out, cy);
-            outlined(v, cx + in, cy, cx + in, cy + tick);
-            v.setColor(Color.BLACK);
-            v.fillOval(cx - dot / 2 - 1, cy - dot / 2 - 1, dot + 2, dot + 2);
-            v.setColor(Theme.TEXT);
-            v.fillOval(cx - dot / 2, cy - dot / 2, dot, dot);
+            if (!osdLive) skeletonHorizon(v, cx, cy, u, now);
             // status
             String dots = ".".repeat((int) (now / 400 % 4));
-            int base = cy + Math.round(110 * u);
+            int base = osdLive ? cy - Math.round(150 * u) : cy + Math.round(110 * u);
             v.setFont(Theme.headingFont(Math.max(14f, 20f * u)));
             v.setColor(Theme.TEXT);
             centered(v, "NO VIDEO FEED" + dots, vw, base);
@@ -283,6 +262,24 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         } finally {
             v.dispose();
         }
+    }
+
+    /** The rocking horizon and the crosshair, while there is no OSD to draw the real ones. */
+    private static void skeletonHorizon(Graphics2D v, int cx, int cy, float u, long now) {
+        // artificial horizon, rocking a few degrees as if the quad were hovering
+        double roll = Math.toRadians(6 * Math.sin(now / 1300.0));
+        float pitch = (float) (14 * u * Math.sin(now / 2100.0));
+        Graphics2D hz = (Graphics2D) v.create();
+        hz.translate(cx, cy + pitch);
+        hz.rotate(roll);
+        int dash = Math.round(18 * u), gap = Math.round(14 * u), reach = Math.round(230 * u);
+        hz.setStroke(new java.awt.BasicStroke(Math.max(1.5f, 2.5f * u)));
+        for (int x = Math.round(70 * u); x < reach; x += dash + gap) {
+            outlined(hz, x, 0, Math.min(x + dash, reach), 0);
+            outlined(hz, -x, 0, -Math.min(x + dash, reach), 0);
+        }
+        hz.dispose();
+        OsdRenderer.crosshair(v, cx, cy, u);
     }
 
     /** An OSD line: light, with a dark edge so it reads on any picture. */

@@ -24,13 +24,23 @@ public class FcTelemetry {
     public record Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent, long receivedAt) {}
 
     /**
-     * cells is Betaflight's own count (it detects it when the battery is plugged in), 0 until it reports one - on USB
-     * power, or before its first MSP_BATTERY_STATE. No guessing from the pack voltage: a low or still-rising voltage
-     * made a 6S look like 1S or 2S.
+     * fcCells is Betaflight's own count (it detects it when the battery is plugged in), 0 until it reports one - on USB
+     * power, or before its first MSP_BATTERY_STATE. cells is the count to use: Betaflight's, unless that one is
+     * impossible for the pack voltage (see {@link CellCount}); 0 while unknown. Never a guess from a voltage that is
+     * still moving: that made a 6S look like 1S or 2S.
      */
-    public record Battery(double volts, int cells, int mahDrawn, double amps) {
+    public record Battery(double volts, int cells, int mahDrawn, double amps, int fcCells) {
+        public Battery(double volts, int cells, int mahDrawn, double amps) {
+            this(volts, cells, mahDrawn, amps, cells);
+        }
+
         public boolean cellCountKnown() {
             return cells > 0;
+        }
+
+        /** Betaflight counted wrong (and so warns at the wrong voltage); the count here is corrected. */
+        public boolean fcCountWrong() {
+            return fcCells > 0 && cells > 0 && cells != fcCells;
         }
 
         /** Per-cell voltage; NaN while the cell count isn't known. */
@@ -53,6 +63,10 @@ public class FcTelemetry {
 
     /** Telemetry record of DroidDrone PC's Flight app build (2.3.0-pc.3 on); the original app never sends it. */
     static final short PHONE_LINK_STATS = 0x40F0;
+    /** The phone app's version, once a second (DroidDrone PC's Flight app 2.3.0-pc.5 on). */
+    static final short PHONE_APP_VERSION = 0x40F1;
+    /** Telemetry this long without a version: the phone app is older than 2.3.0-pc.5 (or upstream's own). */
+    static final long PHONE_APP_SILENT_MS = 4000;
 
     /** roll/pitch in degrees (right / nose up positive as Betaflight reports), heading 0-359. */
     public record Attitude(double rollDeg, double pitchDeg, int headingDeg, long receivedAt) {}
@@ -117,6 +131,7 @@ public class FcTelemetry {
     private volatile List<String> boxNames = List.of();
     private volatile Status status;
     private volatile Battery battery;
+    private final CellCount cellCount = new CellCount();
     private volatile int cameraFps = -1;
     private volatile int phoneBatteryPercent = -1;
     private volatile boolean phoneCharging;
@@ -131,6 +146,9 @@ public class FcTelemetry {
     /** When a record from the flight controller itself last arrived (not the phone's own DD_ records); 0 = never. */
     private volatile long lastFcDataAt;
     private PhoneLink phoneLink;
+    private volatile String phoneAppVersion;
+    /** When the first record from the phone arrived; 0 = none yet. */
+    private volatile long firstRecordAt;
 
     public void parse(DataReader b, FcInfo fc) {
         try {
@@ -142,6 +160,7 @@ public class FcTelemetry {
                     return;
                 }
                 if (code < FcCommon.DD_TIMERS || code == FcCommon.DD_MAVLINK_ATTITUDE) lastFcDataAt = System.currentTimeMillis();
+                if (firstRecordAt == 0) firstRecordAt = System.currentTimeMillis();
             }
         } catch (RuntimeException e) {
             // truncated packet: keep what was parsed
@@ -170,7 +189,7 @@ public class FcTelemetry {
                 if (!inav) {
                     int volts = b.readShort();
                     Battery old = battery;
-                    battery = new Battery(volts / 100.0, old == null ? 0 : old.cells(), mah, amps / 100.0);
+                    battery = battery(volts / 100.0, old == null ? 0 : old.fcCells(), mah, amps / 100.0);
                 }
             }
             case FcCommon.MSP_BOXIDS -> skip(b, b.readShort());
@@ -193,7 +212,7 @@ public class FcTelemetry {
                 int amps = b.readShort();
                 b.readByte(); // batteryState
                 int volts = b.readShort();
-                battery = new Battery(volts / 100.0, cells, mah, amps / 100.0);
+                battery = battery(volts / 100.0, cells, mah, amps / 100.0);
             }
             case FcCommon.MSP_STATUS -> {
                 skip(b, 6); // cycleTime, i2cErrors, sensors
@@ -247,11 +266,27 @@ public class FcTelemetry {
                     phoneLink = p.merge(phoneLink);
                 }
             }
+            case PHONE_APP_VERSION -> {
+                byte[] name = new byte[b.readShort()];
+                if (b.read(name, 0, name.length) != name.length) return false;
+                phoneAppVersion = new String(name, StandardCharsets.UTF_8);
+            }
             default -> {
                 return false;
             }
         }
         return true;
+    }
+
+    /** The phone app's version as it says, or null: not said yet, or an app too old to say (see phoneAppSilent). */
+    public String getPhoneAppVersion() {
+        return phoneAppVersion;
+    }
+
+    /** The phone has sent telemetry for a while but no version: its app is older than 2.3.0-pc.5. */
+    public boolean phoneAppSilent(long nowMs) {
+        long first = firstRecordAt;
+        return phoneAppVersion == null && first != 0 && nowMs - first >= PHONE_APP_SILENT_MS;
     }
 
     private void parseBetaflightStatus(DataReader b) {
@@ -334,6 +369,12 @@ public class FcTelemetry {
     /** null until the first MSP_STATUS arrives. */
     public Status getStatus() {
         return status;
+    }
+
+    private Battery battery(double volts, int fcCells, int mah, double amps) {
+        BatteryLimits lim = batteryLimits;
+        double maxCell = lim != null && lim.maxCell() > 0 ? lim.maxCell() : 4.3;
+        return new Battery(volts, cellCount.resolve(volts, fcCells, maxCell, System.currentTimeMillis()), mah, amps, fcCells);
     }
 
     public Battery getBattery() {

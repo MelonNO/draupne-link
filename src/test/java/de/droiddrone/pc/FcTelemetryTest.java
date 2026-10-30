@@ -105,6 +105,39 @@ class FcTelemetryTest {
     }
 
     @Test
+    void readsThePhoneAppsVersionAfterItsStats() throws Exception {
+        // as the phone app sends it: stats, then once a second its version in the same packet
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream o = new java.io.DataOutputStream(bytes);
+        o.writeShort(FcTelemetry.PHONE_LINK_STATS);
+        o.writeShort(12); o.writeShort(14); o.writeShort(5); o.writeShort(0); o.writeShort(0);
+        byte[] name = "2.3.0-pc.5".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        o.writeShort(FcTelemetry.PHONE_APP_VERSION);
+        o.writeShort(name.length);
+        o.write(name);
+        FcTelemetry t = new FcTelemetry();
+        assertFalse(t.phoneAppSilent(System.currentTimeMillis() + 60_000), "nothing from the phone yet: can't tell");
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        assertEquals("2.3.0-pc.5", t.getPhoneAppVersion());
+        assertEquals(0, t.getUnknownCodes());
+        assertFalse(t.phoneAppSilent(System.currentTimeMillis() + 60_000));
+    }
+
+    @Test
+    void aPhoneAppThatNeverSaysItsVersionIsOld() throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream o = new java.io.DataOutputStream(bytes);
+        o.writeShort(FcCommon.DD_PHONE_BATTERY_STATE);
+        o.writeByte(55); o.writeBoolean(true);
+        FcTelemetry t = new FcTelemetry();
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        long now = System.currentTimeMillis();
+        assertFalse(t.phoneAppSilent(now), "give it a moment");
+        assertTrue(t.phoneAppSilent(now + FcTelemetry.PHONE_APP_SILENT_MS + 100));
+        assertNull(t.getPhoneAppVersion());
+    }
+
+    @Test
     void phoneLinkStatsAreReadAndMerged() throws Exception {
         java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
         java.io.DataOutputStream o = new java.io.DataOutputStream(bytes);

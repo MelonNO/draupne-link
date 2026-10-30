@@ -29,6 +29,15 @@ import java.io.IOException;
 final class PcLinkStats {
     /** Telemetry record code, outside upstream's ranges. */
     static final short CODE = 0x40F0;
+    /** This app's version (versionName), once a second after the stats, so DroidDrone PC can say when it is old. */
+    static final short APP_VERSION_CODE = 0x40F1;
+
+    static void writeVersionTo(DataOutputStream out, String versionName) throws IOException {
+        byte[] name = versionName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.writeShort(APP_VERSION_CODE);
+        out.writeShort(name.length);
+        out.write(name);
+    }
 
     private static long lastRcIn;
     private static long lastRcOut;

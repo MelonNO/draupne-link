@@ -14,7 +14,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DroidDrone PC: measures stick packets arriving and sends PcLinkStats
+ *  Modified for DroidDrone PC: measures stick packets arriving and sends PcLinkStats (and this app's version)
  *  to the PC every 0.1 s, as its own telemetry packet.
  */
 
@@ -189,6 +189,7 @@ public class Udp {
             final int id = udpThreadsId;
             log("Start telemetry sender thread - OK");
             long nextStats = 0;
+            int statsSent = 0;
             while (id == udpThreadsId) {
                 try {
                     sendTelemetryData();
@@ -198,6 +199,8 @@ public class Udp {
                         UdpPacketData stats = new UdpPacketData(UdpCommon.TelemetryData);
                         stats.daos.writeShort(PcLinkStats.CODE);
                         PcLinkStats.writeTo(stats.daos);
+                        String version = MainActivity.versionName;
+                        if (statsSent++ % 10 == 0 && version != null) PcLinkStats.writeVersionTo(stats.daos, version);
                         udpSender.sendPacket(stats.getData());
                     }
                     Thread.sleep(10);
