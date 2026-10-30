@@ -45,6 +45,19 @@ class BetaflightTest {
     }
 
     @Test
+    void cellCountIsForcedToThePilotsChoice() {
+        String unset = "force_battery_cell_count = 0\r\nAllowed range: 0 - 24\r\n";
+        assertEquals(0, BetaflightPlan.forcedCells(unset));
+        List<BetaflightPlan.Change> plan = BetaflightPlan.plan(FEATURES_MSP_RX, RATE_SET, F7, unset, 6);
+        assertEquals(1, plan.size());
+        assertEquals(List.of("set force_battery_cell_count = 6"), plan.get(0).commands());
+        assertTrue(BetaflightPlan.plan(FEATURES_MSP_RX, RATE_SET, F7, "force_battery_cell_count = 6", 6).isEmpty(), "already right");
+        assertEquals(List.of("set force_battery_cell_count = 4"),
+                BetaflightPlan.plan(FEATURES_MSP_RX, RATE_SET, F7, "force_battery_cell_count = 6", 4).get(0).commands(), "changed");
+        assertTrue(BetaflightPlan.plan(FEATURES_MSP_RX, RATE_SET, F7, "Invalid name", 6).isEmpty(), "a Betaflight without it");
+    }
+
+    @Test
     void versionLineIsFound() {
         String line = BetaflightPlan.version("# version\n# " + F7 + "\n# config rev: 1");
         assertEquals(F7, line);

@@ -8,7 +8,9 @@ import java.util.regex.Pattern;
 
 /**
  * Works out which Betaflight CLI commands DroidDrone needs, and nothing else: the receiver must be "MSP RX input"
- * (the phone feeds the sticks over MSP), and the serial task rate is raised so stick updates don't queue up.
+ * (the phone feeds the sticks over MSP), the serial task rate is raised so stick updates don't queue up, and the
+ * battery's cell count is fixed to the pilot's choice (Betaflight's own count goes wrong when the flight controller
+ * already runs on the phone's USB power as the battery is plugged in).
  */
 public final class BetaflightPlan {
     public record Change(String description, List<String> commands) {}
@@ -16,6 +18,9 @@ public final class BetaflightPlan {
     /** Receiver features that compete with RX_MSP (only one receiver type can be active). */
     private static final List<String> OTHER_RECEIVERS = List.of("RX_SERIAL", "RX_PPM", "RX_SPI", "RX_PARALLEL_PWM");
     private static final Pattern SERIAL_RATE = Pattern.compile("serial_update_rate_hz\\s*=\\s*(\\d+)");
+    private static final Pattern FORCED_CELLS = Pattern.compile("force_battery_cell_count\\s*=\\s*(\\d+)");
+    /** Choices offered for the cell count. */
+    public static final int MIN_CELLS = 1, MAX_CELLS = 12, DEFAULT_CELLS = 6;
     private static final Pattern VERSION = Pattern.compile("^(\\S+) / (\\S+) \\(\\S+\\) (\\d+\\.\\d+\\.\\d+)");
 
     private BetaflightPlan() {
@@ -38,6 +43,12 @@ public final class BetaflightPlan {
     /** The value from `get serial_update_rate_hz`, or -1 (not understood, or a Betaflight without the setting). */
     public static int serialRate(String getOutput) {
         Matcher m = SERIAL_RATE.matcher(getOutput);
+        return m.find() ? Integer.parseInt(m.group(1)) : -1;
+    }
+
+    /** The value from `get force_battery_cell_count` (0 = Betaflight counts by itself), or -1 if not understood. */
+    public static int forcedCells(String getOutput) {
+        Matcher m = FORCED_CELLS.matcher(getOutput);
         return m.find() ? Integer.parseInt(m.group(1)) : -1;
     }
 
@@ -66,6 +77,17 @@ public final class BetaflightPlan {
         if (rate >= 0 && rate < target) {
             changes.add(new Change("Stick delay: serial_update_rate_hz " + rate + " -> " + target,
                     List.of("set serial_update_rate_hz = " + target)));
+        }
+        return changes;
+    }
+
+    /** As above, plus the cell count from `get force_battery_cell_count` set to cells. */
+    public static List<Change> plan(String featureOutput, String serialRateOutput, String versionLine, String cellsOutput, int cells) {
+        List<Change> changes = new ArrayList<>(plan(featureOutput, serialRateOutput, versionLine));
+        int forced = forcedCells(cellsOutput);
+        if (forced >= 0 && forced != cells) {
+            changes.add(new Change("Battery: force_battery_cell_count " + forced + " -> " + cells + " (" + cells + "S)",
+                    List.of("set force_battery_cell_count = " + cells)));
         }
         return changes;
     }

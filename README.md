@@ -35,7 +35,7 @@ Betaflight 4.4 is **not required**, only recommended:
 |---|---|---|
 | **This PC** | The **installer** installs **Tailscale** (private network between PC and phone), adds the firewall rules and switches to the High performance power plan. The wizard opens Tailscale's sign-in page and skips every step that is already done | Sign in to Tailscale |
 | **Radio** | Detects it, then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)) | Plug it in and pick *USB Joystick (HID)* on the radio |
-| **Drone** | Over USB, with nothing to click: sets the receiver to **MSP** and the **stick delay setting**. Nothing else on the drone is touched | Plug it in. No USB cable? The page shows the same two settings for Betaflight Configurator |
+| **Drone** | Over USB, with nothing else to click: sets the receiver to **MSP**, the **stick delay setting** and the battery's **cell count** (`force_battery_cell_count`, 6 unless you change it). Nothing else on the drone is touched | Check the cell count, plug it in. No USB cable? The page shows the same settings for Betaflight Configurator |
 | **Phone** | Downloads [this project's DroidDrone Flight](#the-phone-app), checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, set four phone settings from a short list |
 | **Connect** | Shows what to type into the Flight app and holds the link open: it turns green the moment you tap CONNECT on the phone, then measures the path (direct or relayed) and the round-trip time and gives you a verdict | Type in the values, tap CONNECT, plug the phone into the flight controller |
 
@@ -135,7 +135,7 @@ The protocol is unchanged, so the original Flight 2.3.0 also still works. Every 
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 88 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
+.\gradlew.bat test               # 89 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3
