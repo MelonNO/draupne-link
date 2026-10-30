@@ -2,6 +2,10 @@
 
 Every DroidDrone PC release, newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.9
+
+- **UPDATE now updates:** pressing UPDATE downloads the new version, checks it against the checksum GitHub lists for it, closes DroidDrone PC, installs it (Windows asks for permission once; no setup wizard) and starts it again. Settings stay. It won't run while connected to the drone. The portable zip version still opens the release page.
+
 ## 1.0.8
 
 - **FPV-style "no signal" screen:** with no video, the video area shows dim analog static with a Betaflight-style crosshair and a gently rocking horizon, and the status under it. The scan line, grid and edge placeholders are gone.

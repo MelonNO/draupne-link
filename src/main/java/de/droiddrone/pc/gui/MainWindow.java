@@ -101,9 +101,10 @@ public class MainWindow extends JFrame {
     private final JButton connectButton = Theme.primaryButton("Connect");
     private final JButton setupButton = Theme.secondaryButton("Setup");
     private final JButton settingsButton = Theme.secondaryButton("Settings");
-    /** Shown when GitHub has a newer release; opens its page. */
+    /** Shown when GitHub has a newer release; downloads and installs it (or opens its page, see startUpdate). */
     private final JButton updateButton = Theme.primaryButton("Update");
-    private volatile String updatePage;
+    private volatile de.droiddrone.pc.setup.UpdateCheck.Release update;
+    private boolean updating;
     private final JLabel statePill = new JLabel("OFFLINE", SwingConstants.CENTER);
     private final JLabel pingValue = statValue();
     private final JLabel fcValue = statValue();
@@ -263,10 +264,7 @@ public class MainWindow extends JFrame {
             menu.show(setupButton, setupButton.getWidth() - menu.getPreferredSize().width, setupButton.getHeight() + 4);
         });
         updateButton.setVisible(false);
-        updateButton.addActionListener(e -> {
-            String page = updatePage;
-            if (page != null) PcSetupWizard.openInBrowser(this, page);
-        });
+        updateButton.addActionListener(e -> startUpdate());
         right.add(updateButton);
         right.add(setupButton);
         settingsButton.setToolTipText("Camera mounted upside down, and other options");
@@ -832,17 +830,79 @@ public class MainWindow extends JFrame {
             de.droiddrone.pc.setup.UpdateCheck.Release r = de.droiddrone.pc.setup.UpdateCheck.latest();
             if (!de.droiddrone.pc.setup.UpdateCheck.isNewer(r.version(), current)) return;
             SwingUtilities.invokeLater(() -> {
-                boolean first = updatePage == null;
-                updatePage = r.pageUrl();
+                if (updating) return;
+                boolean first = update == null;
+                update = r;
                 updateButton.setText("UPDATE " + r.version());
-                updateButton.setToolTipText("DroidDrone PC " + r.version() + " is out (you have " + current
-                        + "). Opens the release page: download the installer and run it. It also brings the newest phone app.");
+                updateButton.setToolTipText(r.canInstall() && de.droiddrone.pc.setup.SelfUpdate.installedApp() != null
+                        ? "DroidDrone PC " + r.version() + " is out (you have " + current + "). Downloads and installs it, then starts it again."
+                        : "DroidDrone PC " + r.version() + " is out (you have " + current + "). Opens the release page.");
                 updateButton.setVisible(true);
                 if (first) logLine("DroidDrone PC " + r.version() + " is available (you have " + current + "): press UPDATE at the top.");
             });
         } catch (Exception e) {
             de.droiddrone.common.Log.log("Update check: " + e.getMessage()); // offline or GitHub unreachable: try later
         }
+    }
+
+    /**
+     * UPDATE: download the new installer, check it, close, install and start again. Not while connected (it closes the
+     * app). A portable or development copy, or a release without a checked installer, gets the release page instead.
+     */
+    private void startUpdate() {
+        de.droiddrone.pc.setup.UpdateCheck.Release r = update;
+        if (r == null || updating) return;
+        Path app = de.droiddrone.pc.setup.SelfUpdate.installedApp();
+        if (!r.canInstall() || app == null) {
+            PcSetupWizard.openInBrowser(this, r.pageUrl());
+            return;
+        }
+        if (connection != null) {
+            JOptionPane.showMessageDialog(this, "Disconnect first: updating closes DroidDrone PC for a moment.",
+                    "Update", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        int answer = JOptionPane.showConfirmDialog(this, "<html>Update to DroidDrone PC " + r.version() + " now?<br><br>"
+                        + "It downloads the update, closes DroidDrone PC, installs it (Windows asks for permission once)<br>"
+                        + "and starts it again. Your settings stay.</html>",
+                "Update", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+        updating = true;
+        updateButton.setText("DOWNLOADING");
+        logLine("Downloading DroidDrone PC " + r.version() + "...");
+        Thread t = new Thread(() -> {
+            try {
+                Path installer = de.droiddrone.pc.setup.SelfUpdate.download(r, (done, total) -> SwingUtilities.invokeLater(
+                        () -> updateButton.setText("DOWNLOADING " + done * 100 / total + "%")));
+                SwingUtilities.invokeLater(() -> {
+                    if (connection != null) {
+                        updateFailed(r, "connected while it downloaded - disconnect and press UPDATE again");
+                        return;
+                    }
+                    try {
+                        de.droiddrone.pc.setup.SelfUpdate.installAndRestart(installer, app);
+                        logLine("Installing DroidDrone PC " + r.version() + ": closing now, it starts again when done.");
+                        shutdown();
+                    } catch (IOException ex) {
+                        updateFailed(r, ex.getMessage());
+                    }
+                });
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> updateFailed(r, ex.getMessage()));
+            }
+        }, "update");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void updateFailed(de.droiddrone.pc.setup.UpdateCheck.Release r, String why) {
+        updating = false;
+        updateButton.setText("UPDATE " + r.version());
+        logLine("Update failed: " + why);
+        int answer = JOptionPane.showConfirmDialog(this, "<html>The update didn't work: " + why
+                        + "<br><br>Open the release page to download it yourself?</html>",
+                "Update", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (answer == JOptionPane.YES_OPTION) PcSetupWizard.openInBrowser(this, r.pageUrl());
     }
 
     // ---------------------------------------------------------------- the phone on Tailscale
