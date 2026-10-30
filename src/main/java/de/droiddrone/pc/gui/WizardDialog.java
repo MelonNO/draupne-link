@@ -198,6 +198,7 @@ class WizardDialog extends JDialog {
         int screenHeight = owner == null ? 1000 : owner.getGraphicsConfiguration().getBounds().height;
         setSize(1020, Math.max(640, Math.min(880, screenHeight - 80)));
         setLocationRelativeTo(owner);
+        ScanReveal.onOpen(this);
         for (Page page : pages) page.prepare();
         go(+1);
         timer.start();
@@ -257,6 +258,7 @@ class WizardDialog extends JDialog {
         title.setText(page.title().toUpperCase());
         hint.setText("<html>" + page.hint() + "</html>");
         cards.show(cardPanel, Integer.toString(index));
+        if (direction > 0) ScanReveal.play(cardPanel); // Next: the page comes in like the SETUP menu's items
         page.onShow();
         tick();
     }

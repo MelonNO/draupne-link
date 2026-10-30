@@ -64,6 +64,15 @@ final class MotorTestDialog extends JDialog {
     private volatile boolean running = true;
     private volatile MotorTest.Info info;
     private boolean propsOut;
+    /** PROPS IN / OUT changed: the switch's highlight slides over and the arrows sweep round the new way. */
+    private static final long FLIP_MS = 340;
+    private long flippedAt;
+    private final DirectionSwitch directionSwitch = new DirectionSwitch();
+    private final Timer flip = new Timer(15, e -> {
+        directionSwitch.repaint();
+        diagram.repaint();
+        if (flipProgress() >= 1) ((Timer) e.getSource()).stop();
+    });
     private Thread worker;
 
     private MotorTestDialog(Window owner, MainWindow main) {
@@ -89,7 +98,7 @@ final class MotorTestDialog extends JDialog {
         JPanel diagramHead = new JPanel(new BorderLayout());
         diagramHead.setOpaque(false);
         diagramHead.add(Theme.sectionTitle("Seen from above"), BorderLayout.WEST);
-        diagramHead.add(new DirectionSwitch(), BorderLayout.EAST);
+        diagramHead.add(directionSwitch, BorderLayout.EAST);
         diagramCard.add(diagramHead, BorderLayout.NORTH);
         diagramCard.add(diagram, BorderLayout.CENTER);
         centre.add(diagramCard, BorderLayout.CENTER);
@@ -118,6 +127,7 @@ final class MotorTestDialog extends JDialog {
         setMinimumSize(new Dimension(1100, 720));
         setSize(1180, 800);
         setLocationRelativeTo(owner);
+        ScanReveal.onOpen(this);
         worker = new Thread(this::run, "motor-test");
         worker.setDaemon(true);
         worker.start();
@@ -129,6 +139,7 @@ final class MotorTestDialog extends JDialog {
 
     @Override
     public void dispose() {
+        flip.stop();
         stopAll();
         running = false;
         if (worker != null) worker.interrupt();
@@ -362,7 +373,15 @@ final class MotorTestDialog extends JDialog {
         propsOut = out;
         main.save(java.util.Map.of(PROPS_OUT_KEY, Boolean.toString(out)));
         showMixer();
-        diagram.repaint();
+        flippedAt = System.currentTimeMillis();
+        flip.restart();
+    }
+
+    /** 0..1 eased, 1 when no change is animating. */
+    private float flipProgress() {
+        if (flippedAt == 0) return 1;
+        float t = Math.min(1f, (System.currentTimeMillis() - flippedAt) / (float) FLIP_MS);
+        return 1 - (1 - t) * (1 - t) * (1 - t);
     }
 
     private void showLive(MotorTest.Live live) {
@@ -538,13 +557,18 @@ final class MotorTestDialog extends JDialog {
             Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
             try {
                 int w = getWidth(), h = getHeight(), half = w / 2;
+                float p = flipProgress();
+                float at = propsOut ? p : 1 - p; // the highlight: 0 over PROPS IN .. 1 over PROPS OUT
+                g.setColor(Theme.PANEL_2);
+                g.fillRect(0, 0, w, h);
+                int hx = Math.round(at * (w - half));
+                g.setColor(Theme.ACCENT);
+                g.fillRect(hx, 0, half, h);
                 g.setFont(Theme.headingFont(12f));
                 for (int i = 0; i < 2; i++) {
-                    boolean chosen = (i == 1) == propsOut;
                     int x = i * half, bw = i == 0 ? half : w - half;
-                    g.setColor(chosen ? Theme.ACCENT : Theme.PANEL_2);
-                    g.fillRect(x, 0, bw, h);
-                    g.setColor(chosen ? Color.WHITE : Theme.MUTED);
+                    boolean lit = Math.abs(hx - x) < half / 2;
+                    g.setColor(lit ? Color.WHITE : Theme.MUTED);
                     int tw = g.getFontMetrics().stringWidth(LABELS[i]);
                     g.drawString(LABELS[i], x + (bw - tw) / 2, h / 2 + g.getFontMetrics().getAscent() / 2 - 2);
                 }
@@ -666,7 +690,8 @@ final class MotorTestDialog extends JDialog {
                     Math.round(mx + (float) Math.cos(a) * bl), Math.round(my + (float) Math.sin(a) * bl));
             // direction arrow round the disc (screen y points down: clockwise = increasing angle)
             float r = prop + 9;
-            double start = cw ? 200 : -20, extent = cw ? -220 : 220; // Arc2D: counter-clockwise positive
+            // just switched props in / out: the arrow is drawn again from its start, sweeping round the new way
+            double start = cw ? 200 : -20, extent = (cw ? -220 : 220) * Math.max(0.04, flipProgress()); // Arc2D: counter-clockwise positive
             g.setColor(tone);
             g.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.draw(new Arc2D.Float(mx - r, my - r, 2 * r, 2 * r, (float) start, (float) extent, Arc2D.OPEN));

@@ -4,7 +4,8 @@ import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComponent;
-import javax.swing.JDialog;
+import javax.swing.JFrame;
+import javax.swing.WindowConstants;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -40,7 +41,7 @@ import java.util.Map;
  * preview in the middle where they are dragged into place, the chosen element on the right. The preview is the real
  * OSD drawn from sample flight data. Every change goes to the live OSD at once and is saved.
  */
-final class OsdSettingsDialog extends JDialog {
+final class OsdSettingsDialog extends JFrame {
     private static final int SNAP_X = 320, SNAP_Y = 180; // positions snap to 4 x 4 units of the 1280 x 720 OSD
 
     private final MainWindow main;
@@ -55,13 +56,13 @@ final class OsdSettingsDialog extends JDialog {
     private final JLabel infoState = Theme.label(" ", Theme.font(Font.BOLD, 12.5f), Theme.MUTED);
     private final JButton resetElement = Theme.secondaryButton("Reset element");
     private final Timer ticker = new Timer(500, e -> preview.repaint()); // the sample's timers run
-    private final JButton fullScreenButton = Theme.secondaryButton("Window");
-    /** Where the window goes when it leaves full screen; full screen = the whole screen but the taskbar. */
-    private java.awt.Rectangle windowedBounds;
-    private boolean fullScreen;
+    /** The one open, if any: opening it again brings that one forward. */
+    private static OsdSettingsDialog open;
 
     private OsdSettingsDialog(Window owner, MainWindow main) {
-        super(owner, "OSD", ModalityType.APPLICATION_MODAL);
+        super("OSD - DroidDrone PC"); // a window of its own: Windows' minimise, maximise and close
+        setIconImages(AppIcon.images());
+        setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         this.main = main;
         this.layout = main.osdLayout();
         JPanel root = new JPanel(new BorderLayout(14, 14));
@@ -71,13 +72,7 @@ final class OsdSettingsDialog extends JDialog {
 
         JPanel head = new JPanel(new BorderLayout(0, 4));
         head.setOpaque(false);
-        JPanel titleRow = new JPanel(new BorderLayout());
-        titleRow.setOpaque(false);
-        titleRow.add(Theme.label("OSD", Theme.headingFont(26f), Theme.TEXT), BorderLayout.WEST);
-        fullScreenButton.setToolTipText("Full screen or a window (F11)");
-        fullScreenButton.addActionListener(e -> setFullScreen(!fullScreen));
-        titleRow.add(fullScreenButton, BorderLayout.EAST);
-        head.add(titleRow, BorderLayout.NORTH);
+        head.add(Theme.label("OSD", Theme.headingFont(26f), Theme.TEXT), BorderLayout.NORTH);
         head.add(Theme.label("Switch elements on or off on the left. Drag them in the preview to move them. Changes show on the live OSD at once and are saved.",
                 Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.SOUTH);
         root.add(head, BorderLayout.NORTH);
@@ -102,42 +97,31 @@ final class OsdSettingsDialog extends JDialog {
         buttons.add(close);
         root.add(buttons, BorderLayout.SOUTH);
         getRootPane().registerKeyboardAction(e -> dispose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
-        getRootPane().registerKeyboardAction(e -> setFullScreen(!fullScreen), KeyStroke.getKeyStroke(KeyEvent.VK_F11, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
         getRootPane().setDefaultButton(close);
 
         select(OsdElement.BATTERY);
         ticker.start();
         setMinimumSize(new Dimension(1100, 680));
         setSize(1300, 780);
-        setLocationRelativeTo(owner);
-        windowedBounds = getBounds();
-        setFullScreen(true); // opens full screen: the biggest preview
-    }
-
-    /** Full screen: the screen the owner is on, all but the taskbar. Window: the size and place it had before. */
-    private void setFullScreen(boolean on) {
-        if (on) {
-            if (!fullScreen) windowedBounds = getBounds();
-            java.awt.GraphicsConfiguration gc = getOwner() != null ? getOwner().getGraphicsConfiguration() : getGraphicsConfiguration();
-            java.awt.Rectangle screen = gc.getBounds();
-            java.awt.Insets taskbar = java.awt.Toolkit.getDefaultToolkit().getScreenInsets(gc);
-            setBounds(screen.x + taskbar.left, screen.y + taskbar.top, screen.width - taskbar.left - taskbar.right,
-                    screen.height - taskbar.top - taskbar.bottom);
-        } else if (windowedBounds != null) {
-            setBounds(windowedBounds);
-        }
-        fullScreen = on;
-        fullScreenButton.setText(on ? "WINDOW" : "FULL SCREEN");
-        validate();
+        setLocationRelativeTo(owner); // where "restore down" puts it
+        setExtendedState(MAXIMIZED_BOTH); // opens maximised: the biggest preview
+        ScanReveal.onOpen(this);
     }
 
     static void open(Window owner, MainWindow main) {
-        new OsdSettingsDialog(owner, main).setVisible(true);
+        if (open != null && open.isDisplayable()) {
+            if ((open.getExtendedState() & ICONIFIED) != 0) open.setExtendedState(open.getExtendedState() & ~ICONIFIED);
+            open.toFront();
+            return;
+        }
+        open = new OsdSettingsDialog(owner, main);
+        open.setVisible(true);
     }
 
     @Override
     public void dispose() {
         ticker.stop();
+        if (open == this) open = null;
         super.dispose();
     }
 

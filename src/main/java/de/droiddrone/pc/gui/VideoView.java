@@ -11,6 +11,7 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.util.Locale;
@@ -163,21 +164,24 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             return;
         }
         BufferedImage img;
+        int[] shown = null; // where the picture went: width, height
         synchronized (lock) {
             img = front;
             if (img != null) {
-                int x = (w - img.getWidth()) / 2;
-                int y = (h - img.getHeight()) / 2;
+                shown = fit(img.getWidth(), img.getHeight(), w, h);
+                int pw = shown[0], ph = shown[1];
+                int x = (w - pw) / 2;
+                int y = (h - ph) / 2;
                 g.setColor(Color.BLACK);
                 if (y > 0) {
                     g.fillRect(0, 0, w, y);
-                    g.fillRect(0, y + img.getHeight(), w, h - y - img.getHeight());
+                    g.fillRect(0, y + ph, w, h - y - ph);
                 }
                 if (x > 0) {
                     g.fillRect(0, 0, x, h);
-                    g.fillRect(x + img.getWidth(), 0, w - x - img.getWidth(), h);
+                    g.fillRect(x + pw, 0, w - x - pw, h);
                 }
-                drawPicture(g, img, x, y, img.getWidth(), img.getHeight());
+                drawPicture(g, img, x, y, pw, ph);
             }
         }
         OsdRenderer.Data data = osdEnabled ? osdData.get() : null;
@@ -188,13 +192,25 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         if (data != null && data.connected()) {
             // the HUD sits on the picture (letterboxed area), or the 16:9 area while there is no picture yet
             int[] t = target;
-            int ow = img != null ? img.getWidth() : t[0] > 0 ? t[0] : w;
-            int oh = img != null ? img.getHeight() : t[1] > 0 ? t[1] : h;
+            int ow = shown != null ? shown[0] : t[0] > 0 ? t[0] : w;
+            int oh = shown != null ? shown[1] : t[1] > 0 ? t[1] : h;
             osd.paint(g, (w - ow) / 2, (h - oh) / 2, ow, oh, data, osdLayout);
         } else {
             paintStats(g);
         }
         notePainted();
+    }
+
+    /**
+     * The size the picture is drawn at in a w x h view. Frames are converted at the view's size, so normally that is
+     * the picture's own (a 1:1 copy, nothing to scale). A frame converted for another size - the last one when the video
+     * stopped, then the view resized (EXPAND / MINIMIZE, a resized window) - is scaled to fit, keeping its shape.
+     */
+    static int[] fit(int iw, int ih, int w, int h) {
+        double s = Math.min(w / (double) iw, h / (double) ih);
+        int fw = (int) Math.round(iw * s), fh = (int) Math.round(ih * s);
+        if (Math.abs(fw - iw) <= 2 && Math.abs(fh - ih) <= 2) return new int[]{iw, ih}; // its own size, give or take rounding
+        return new int[]{Math.max(1, fw), Math.max(1, fh)};
     }
 
     /** The camera picture into this rectangle: as it comes, mirrored (front camera) and/or turned 180 degrees. */
@@ -205,8 +221,13 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             g.drawImage(img, x, y, null);
             return;
         }
+        Object interpolation = g.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
+        if (w != img.getWidth() || h != img.getHeight()) {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        }
         g.drawImage(img, flipX ? x + w : x, flipY ? y + h : y, flipX ? x : x + w, flipY ? y : y + h,
                 0, 0, img.getWidth(), img.getHeight(), null);
+        if (interpolation != null) g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, interpolation);
     }
 
     /** For a camera mounted upside down. Only the picture turns; the OSD stays the right way up. */
@@ -354,7 +375,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         g.setColor(Theme.TEXT);
         ty += 34;
         for (String line : new String[]{"Point the drone's camera at this code,", "close enough that it fills most of the picture.",
-                "Hold still for a few seconds.", "", "F3 or Esc: stop    F11: full screen"}) {
+                "Hold still for a few seconds.", "", "Esc or SETTINGS > Latency test: stop    F11: full screen"}) {
             g.drawString(line, tx, ty);
             ty += 21;
         }

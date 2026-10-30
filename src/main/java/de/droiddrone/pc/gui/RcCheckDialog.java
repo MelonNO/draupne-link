@@ -108,6 +108,7 @@ final class RcCheckDialog extends JDialog {
         setMinimumSize(new Dimension(980, 640));
         setSize(1120, 720);
         setLocationRelativeTo(main);
+        ScanReveal.onOpen(this);
     }
 
     @Override

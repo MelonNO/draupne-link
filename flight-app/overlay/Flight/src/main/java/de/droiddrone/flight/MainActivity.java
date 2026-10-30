@@ -16,7 +16,7 @@
  *
  *  Modified for DroidDrone PC: the Windows app's look (cards, status pill, status colours for a dark
  *  background), removing an earlier DroidDrone Flight, telling about a newer build, a touch lock for flying, and
- *  portrait as well as landscape.
+ *  portrait as well as landscape, and Direct connection as the first-start connection mode.
  *  The connection logic is unchanged.
  */
 
@@ -166,6 +166,7 @@ public class MainActivity extends Activity {
 
             }
         });
+        defaultToDirect();
         config = new Config(activity, SettingsCommon.versionCompatibleCode);
         etIp.setText(config.getIp());
         etPort.setText(String.valueOf(config.getPort()));
@@ -484,6 +485,17 @@ public class MainActivity extends Activity {
         status.setTextColor(tvPill.getCurrentTextColor());
     }
 
+    /**
+     * DroidDrone PC talks to the phone directly (over Tailscale), so that is the first-start choice, not upstream's
+     * relay server. Written once, before Config reads it; a choice already saved stays.
+     */
+    private void defaultToDirect() {
+        android.content.SharedPreferences preferences = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this);
+        if (!preferences.contains("connectionMode")) {
+            preferences.edit().putInt("connectionMode", SettingsCommon.ConnectionMode.direct).apply();
+        }
+    }
+
     /** The screen turned: the activity stays (configChanges), only the cards are laid out again. */
     @Override
     public void onConfigurationChanged(@NonNull Configuration newConfig) {
@@ -505,6 +517,8 @@ public class MainActivity extends Activity {
         sp.setMarginEnd(portrait ? 0 : gap);
         sp.bottomMargin = portrait ? gap : 0;
         status.setLayoutParams(sp);
+        // stacked, the status card's spacer would take every bit of height and leave none for the connection card
+        findViewById(R.id.statusSpacer).setVisibility(portrait ? View.GONE : View.VISIBLE);
         View connection = findViewById(R.id.cardConnection);
         LinearLayout.LayoutParams cp = (LinearLayout.LayoutParams) connection.getLayoutParams();
         cp.width = portrait ? LinearLayout.LayoutParams.MATCH_PARENT : 0;

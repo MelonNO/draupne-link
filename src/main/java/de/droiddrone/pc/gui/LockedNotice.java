@@ -21,7 +21,8 @@ import java.util.List;
 
 /**
  * A small notice under a locked button saying why it is locked. It slides in, a bar along its bottom drains to show
- * how long it stays, then it fades and folds away; a click closes it at once. It never covers the video: it is placed
+ * how long it stays, then it fades and folds away; a click on it, or anywhere else, closes it sooner. It never covers
+ * the video: it is placed
  * under the button only where it stays clear of the area it must avoid (and inside the window), and is not shown, or
  * closes, when there is no such room - also when the layout changes while it is up.
  * Drawn in the window's popup layer; its timer runs only while it is up.
@@ -43,6 +44,13 @@ final class LockedNotice extends JComponent {
     private long shownAt;
     private boolean closing;
     private long closingAt;
+    /** While up: a press anywhere but on the notice or its button folds it away. */
+    private final java.awt.event.AWTEventListener clickElsewhere = event -> {
+        if (event.getID() != MouseEvent.MOUSE_PRESSED || !(event.getSource() instanceof java.awt.Component c)) return;
+        if (SwingUtilities.isDescendingFrom(c, this) || SwingUtilities.isDescendingFrom(c, LockedNotice.this.anchor)) return;
+        close();
+    };
+    private boolean listening;
 
     /**
      * @param anchor the locked button the notice points at
@@ -80,6 +88,10 @@ final class LockedNotice extends JComponent {
         }
         setVisible(true);
         timer.start();
+        if (!listening) {
+            java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(clickElsewhere, java.awt.AWTEvent.MOUSE_EVENT_MASK);
+            listening = true;
+        }
         repaint();
         return true;
     }
@@ -93,6 +105,10 @@ final class LockedNotice extends JComponent {
     /** Gone at once, without the fold-away (another notice takes its place). */
     void dismiss() {
         timer.stop();
+        if (listening) {
+            java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(clickElsewhere);
+            listening = false;
+        }
         shownAt = 0;
         closing = false;
         Component parent = getParent();

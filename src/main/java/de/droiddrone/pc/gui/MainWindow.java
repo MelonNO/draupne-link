@@ -200,10 +200,9 @@ public class MainWindow extends JFrame {
             videoView.setOsdEnabled(!videoView.isOsdEnabled());
             save(Map.of("osd", Boolean.toString(videoView.isOsdEnabled())));
         });
-        bindKey(java.awt.event.KeyEvent.VK_F3, this::toggleLatencyTest);
         bindKey(java.awt.event.KeyEvent.VK_F11, this::toggleFullScreen);
         bindKey(java.awt.event.KeyEvent.VK_ESCAPE, () -> {
-            if (latencyMeter != null) toggleLatencyTest();
+            if (latencyMeter != null) setLatencyTest(false);
             else exitFullScreen();
         });
         new Timer(33, e -> refresh()).start();
@@ -239,19 +238,24 @@ public class MainWindow extends JFrame {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
-        addMenuItem(menu, "Camera upside down: " + (videoView.isUpsideDown() ? "on" : "off"),
-                "Turns the picture 180&deg;; the OSD stays upright. No delay", () -> {
-                    boolean on = !videoView.isUpsideDown();
+        // a setting flipped where it is ...
+        menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;; the OSD stays upright. No delay",
+                videoView.isUpsideDown(), on -> {
                     videoView.setUpsideDown(on);
                     save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
                     logLine(on ? "Picture turned upside down." : "Picture the right way up.");
-                });
-        addMenuItem(menu, "OSD layout", "Choose the OSD elements and place them, like Betaflight",
-                () -> OsdSettingsDialog.open(this, this));
-        JMenuItem motors = addMenuItem(menu, "Motor test", isLinkActive()
+                }));
+        menu.add(new MenuRows.SwitchRow("Latency test", "A time code for the drone's camera: the real delay",
+                latencyMeter != null, this::setLatencyTest));
+        menu.addSeparator();
+        // ... and settings with a window of their own
+        menu.add(new MenuRows.WindowRow("OSD layout", "Choose the OSD elements and place them, like Betaflight",
+                () -> OsdSettingsDialog.open(this, this)));
+        JMenuItem motors = new MenuRows.WindowRow("Motor test", isLinkActive()
                 ? "Disconnect from the drone first: it runs over USB"
                 : "Spin each motor: right place, right direction?", () -> MotorTestDialog.open(this, this));
         motors.setEnabled(!isLinkActive());
+        menu.add(motors);
         menu.addSeparator();
         JLabel about = Theme.label("PC " + de.droiddrone.pc.AppInfo.version() + "   /   PHONE APP " + de.droiddrone.pc.setup.ApkShare.VERSION,
                 Theme.headingFont(11f), Theme.MUTED);
@@ -445,7 +449,7 @@ public class MainWindow extends JFrame {
         video.setBackground(Color.BLACK);
         video.add(videoView, BorderLayout.CENTER);
         videoHolder = video;
-        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off    F3: latency test");
+        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off");
         videoView.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
@@ -1236,20 +1240,27 @@ public class MainWindow extends JFrame {
     }
 
     /**
-     * F3: glass-to-glass latency test. The video area shows a time code; filmed by the drone's camera and read back
+     * SETTINGS > Latency test: glass-to-glass latency test. The video area shows a time code; filmed by the drone's camera and read back
      * from the video, it gives the delay from the scene to this screen. Stopping it logs the result.
      */
-    private void toggleLatencyTest() {
-        if (latencyMeter == null) {
+    private void setLatencyTest(boolean on) {
+        if (on == (latencyMeter != null)) return;
+        if (on) {
             latencyMeter = new de.droiddrone.pc.video.LatencyMeter();
             videoView.setLatencyMeter(latencyMeter);
-            logLine("Latency test: point the drone's camera at the code on the screen. F3 or Esc to stop.");
+            logLine("Latency test: point the drone's camera at the code on the screen. Esc or SETTINGS > Latency test to stop.");
         } else {
             logLine("Latency test, camera to screen" + (fullScreen != null ? " (full screen)" : "") + ": " + latencyMeter);
             videoView.setLatencyMeter(null);
             latencyMeter.close();
             latencyMeter = null;
         }
+    }
+
+    /** The setup guide's "Measure the delay", after Finish: connects (unless connected) and starts the latency test. */
+    void testLatencyNow() {
+        if (connection == null) connect();
+        if (connection != null) setLatencyTest(true);
     }
 
     /**

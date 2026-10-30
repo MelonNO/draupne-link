@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import de.droiddrone.pc.gui.CheckRow.State;
 import de.droiddrone.pc.gui.WizardDialog.Page;
 
 import javax.swing.JComponent;
@@ -23,6 +24,7 @@ final class SetupWizard {
     }
 
     static void open(MainWindow main) {
+        DelayPage delay = new DelayPage();
         List<Page> pages = List.of(
                 new WelcomePage(),
                 new PcSetupWizard.TailscalePage(main).in("THIS PC"),
@@ -35,6 +37,7 @@ final class SetupWizard {
                 new PhoneGuideWizard.FlightAppPage(main).in("PHONE"),
                 new PhoneGuideWizard.PhoneSettingsPage(main).in("PHONE"),
                 new PhoneGuideWizard.ConnectPage(main).in("CONNECT"),
+                delay.in("CONNECT"),
                 new PcSetupWizard.ShortcutsPage(main).in("FINISH"),
                 new DonePage().in("FINISH"));
         new WizardDialog(main, "DroidDrone PC setup", pages, () -> {
@@ -42,6 +45,46 @@ final class SetupWizard {
             main.logLine("Setup finished.");
         }).setVisible(true);
         main.reloadSettings();
+        if (delay.testAfterSetup) main.testLatencyNow();
+    }
+
+    /**
+     * The delay from the drone's camera to this screen: the number to fly by. The test needs DroidDrone PC's own
+     * connection with video, which the guide doesn't run, so it is offered for right after Finish.
+     */
+    private static final class DelayPage extends Page {
+        private final CheckRow test = new CheckRow("Latency test");
+        boolean testAfterSetup;
+
+        @Override
+        String title() {
+            return "Measure the delay";
+        }
+
+        @Override
+        String hint() {
+            return "How long from the drone's camera to this screen. Worth knowing before the first flight.";
+        }
+
+        @Override
+        JComponent build() {
+            JPanel col = WizardDialog.column();
+            test.addPrimaryAction("Test after setup", () -> choose(true));
+            test.addAction("Not now", () -> choose(false));
+            WizardDialog.addRow(col, test);
+            WizardDialog.addRow(col, WizardDialog.paragraph("The screen shows a time code. Point the drone's camera at it, close "
+                    + "enough that it fills most of the picture, and hold still for a few seconds: the delay shows on the "
+                    + "screen and in the log. Try it in a window and in <b>F11</b> full screen. Stop with <b>Esc</b>. "
+                    + "Any time later: <b>SETTINGS &rarr; Latency test</b>."));
+            test.set(State.PENDING, "<b>Test after setup</b>: when you press Finish, DroidDrone PC connects to the drone and "
+                    + "starts the test (camera on, props off).");
+            return col;
+        }
+
+        private void choose(boolean now) {
+            testAfterSetup = now;
+            test.set(now ? State.OK : State.INFO, now ? "It starts when you press Finish." : "Later: SETTINGS &rarr; Latency test.");
+        }
     }
 
     private static final class WelcomePage extends Page {

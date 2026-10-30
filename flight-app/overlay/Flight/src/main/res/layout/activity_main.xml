@@ -112,7 +112,9 @@
                 style="@style/DD.Value"
                 android:text="@string/status_disconnected" />
 
+            <!-- pushes the lines below to the card's bottom in landscape; gone in portrait (see MainActivity) -->
             <View
+                android:id="@+id/statusSpacer"
                 android:layout_width="0dp"
                 android:layout_height="0dp"
                 android:layout_weight="1" />

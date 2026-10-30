@@ -55,7 +55,7 @@ Betaflight 4.4 is **not required**, only recommended:
 - **Motor test:** **SETTINGS** → *Motor test*, like Betaflight's Motors tab, over USB with the drone on the bench and **props off**: spin each motor and check it's where its number says and turns the way its arrow points, then fit the props so their leading edges follow the arrows.
 - **Your own OSD:** **SETTINGS** → *OSD layout* works like Betaflight's OSD tab: switch elements on or off (throttle %, current, mAh, power, RSSI, GPS coordinates, clock, stick overlays and more are there, off by default) and drag them where you want them. It shows on the live OSD at once and is remembered.
 - **Double-click** the video for a full-window picture. **F11** puts the video in true full screen, which can save up to one screen refresh of delay. **F2** turns the OSD on or off. Camera mounted upside down? **SETTINGS** → *Camera upside down* turns the picture; the OSD stays the right way up, and the setting is remembered.
-- **F3** runs a **latency test**: point the drone's camera at the code on the screen, and the app shows the real camera-to-screen delay.
+- **SETTINGS** → *Latency test* runs a **latency test**: point the drone's camera at the code on the screen, and the app shows the real camera-to-screen delay (Esc stops it). The setup guide offers it too, right after setup.
 - **RC CHECK** shows what Betaflight actually sees: whether the sticks arrive, throttle low, the arm switch, active modes, and every reason it refuses to arm, with the fix for each.
 
 ## Latency
@@ -65,7 +65,7 @@ Every part is built for the least delay:
 - **Steady timing:** the app holds Windows' 1 ms timer, opts out of power throttling and runs at above-normal priority, so the stick rate holds even when the window is in the background. Without this, Windows can stretch the gaps between stick updates to 16 ms.
 - **Video:** each frame is decoded the moment its last packet arrives, and only the newest picture is drawn. The PC side takes about 3–4 ms per 720p frame from the last packet to the screen; the stats line shows the live numbers.
 - **Video bitrate:** lowered as soon as the ping climbs above its usual level, before frames get lost. Mobile networks queue up a too-high bitrate, and queueing is delay.
-- **Measure it:** **F3** shows the whole camera-to-screen delay. Try it in a window and in **F11** full screen.
+- **Measure it:** **SETTINGS** → *Latency test* shows the whole camera-to-screen delay. Try it in a window and in **F11** full screen.
 - **Connection:** Tailscale normally finds a **direct** path. The setup's *Connect the Flight app* step tells you if it doesn't.
 
 The 4G network itself (typically 40–100 ms round trip) is the biggest delay. A wired PC helps a little.

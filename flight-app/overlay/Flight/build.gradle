@@ -13,8 +13,8 @@ android {
         minSdk 26
         targetSdk 34
         // DroidDrone PC build of 2.3.0: same protocol, more flight controllers, restyled screen
-        versionCode 2030006
-        versionName "2.3.0-pc.6"
+        versionCode 2030007
+        versionName "2.3.0-pc.7"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
