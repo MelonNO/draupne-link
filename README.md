@@ -133,6 +133,8 @@ The protocol is unchanged, so the original Flight 2.3.0 also still works. Every 
 
 ## For developers
 
+Picking up the work (state, rules, build environment, release steps): [docs/HANDOFF.md](docs/HANDOFF.md).
+
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
