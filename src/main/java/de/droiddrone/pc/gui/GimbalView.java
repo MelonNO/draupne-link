@@ -49,7 +49,7 @@ class GimbalView extends JComponent {
         repaint();
     }
 
-    /** No controller: the empty gimbal sends out a pulse, as if searching for the sticks. */
+    /** No controller: an empty, blinking marker where the stick should be. */
     void setDisconnected(boolean disconnected) {
         if (disconnected != this.disconnected) {
             this.disconnected = disconnected;
@@ -88,7 +88,7 @@ class GimbalView extends JComponent {
 
         if (arrow != Direction.NONE) paintArrow(g, cx, cy, reach);
         boolean searching = disconnected && (xValue == null || yValue == null);
-        if (searching) paintSearching(g, cx, cy, reach);
+        if (searching) paintSearching(g, cx, cy);
 
         int i = 0;
         for (Point2D.Float p : trail) {
@@ -120,15 +120,8 @@ class GimbalView extends JComponent {
         g.dispose();
     }
 
-    private void paintSearching(Graphics2D g, float cx, float cy, float reach) {
+    private void paintSearching(Graphics2D g, float cx, float cy) {
         long now = System.currentTimeMillis();
-        g.setStroke(new BasicStroke(2f));
-        for (int k = 0; k < 2; k++) {
-            float phase = ((now + k * 900) % 1800) / 1800f;
-            float r = 10 + (reach - 10) * phase;
-            g.setColor(Theme.alpha(Theme.ACCENT, Math.round(150 * (1 - phase))));
-            g.draw(new java.awt.geom.Ellipse2D.Float(cx - r, cy - r, 2 * r, 2 * r));
-        }
         // where the stick should be: an empty, blinking marker
         float blink = 0.5f + 0.5f * (float) Math.sin(now / 160.0);
         g.setColor(Theme.alpha(Theme.BAD, Math.round(80 + 175 * blink)));

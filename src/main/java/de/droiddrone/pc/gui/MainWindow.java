@@ -431,6 +431,14 @@ public class MainWindow extends JFrame {
         topLeft.add(joystickSlot);
         topLeft.add(Box.createHorizontalStrut(10));
         calibrateButton.addActionListener(e -> calibrate());
+        // locked while connected: it shows (stripes, padlock), and a click on it says why
+        ((TacticalButton) calibrateButton).setShowLocked(true);
+        calibrateButton.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                if (!calibrateButton.isEnabled()) logLine("CALIBRATE is locked while connected: disconnect first (RC output must stop while calibrating).");
+            }
+        });
         topLeft.add(calibrateButton);
         topLeft.add(Box.createHorizontalStrut(8));
         JButton rcCheckButton = Theme.secondaryButton("RC check");
@@ -691,7 +699,7 @@ public class MainWindow extends JFrame {
         keyField.setEnabled(editable);
         joystickCombo.setEnabled(editable);
         calibrateButton.setEnabled(editable);
-        calibrateButton.setToolTipText(editable ? null : "Disconnect first - RC output must be stopped while calibrating");
+        calibrateButton.setToolTipText(editable ? null : "Locked while connected - disconnect first: RC output must stop while calibrating");
         connectButton.setText(editable ? "CONNECT" : "DISCONNECT");
         connectButton.setBackground(editable ? Theme.ACCENT : Theme.BAD);
         updateModeUi();

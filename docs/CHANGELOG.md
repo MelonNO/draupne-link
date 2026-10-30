@@ -5,6 +5,8 @@ Every DroidDrone PC release, newest first. The release pages on GitHub show only
 ## 1.0.9
 
 - **UPDATE now updates:** pressing UPDATE downloads the new version, checks it against the checksum GitHub lists for it, closes DroidDrone PC, installs it (Windows asks for permission once; no setup wizard) and starts it again. Settings stay. It won't run while connected to the drone. The portable zip version still opens the release page.
+- **CALIBRATE shows when it's locked:** while connected it's greyed with a padlock and slowly drifting hazard stripes; clicking it shakes it red and the log says why (disconnect first).
+- No controller: the stick boxes no longer send out rings; only the small blinking circle in the middle stays.
 
 ## 1.0.8
 
