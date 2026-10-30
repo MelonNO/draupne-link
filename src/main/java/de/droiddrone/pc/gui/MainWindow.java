@@ -105,6 +105,8 @@ public class MainWindow extends JFrame {
     private final WrappingText phoneWarning = new WrappingText("", Theme.font(Font.BOLD, 12.5f), Theme.BAD);
     /** Tailscale's view of the phone, checked every few seconds; null when not using Tailscale or no address yet. */
     private volatile Tailscale.PhoneState phoneState;
+    /** Tailscale's way to the phone ("direct" / "relay fra"), for the link log; "" when unknown. */
+    private volatile String phonePath = "";
     private final java.util.concurrent.ScheduledExecutorService phoneWatch =
             java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "phoneWatch");
@@ -572,7 +574,7 @@ public class MainWindow extends JFrame {
         VideoPipeline v = video;
         try {
             l.sample(c.getLink(), service.getSnapshot().selected() != null, s != null && s.isRcEnabled(),
-                    v == null ? 0 : v.stats().shownFps(), s == null ? null : s.getLastChannels());
+                    v == null ? 0 : v.stats().shownFps(), s == null ? null : s.getLastChannels(), phonePath);
         } catch (IOException e) {
             linkLog = null;
             logLine("Link log stopped: " + e.getMessage());
@@ -697,8 +699,16 @@ public class MainWindow extends JFrame {
     private void checkPhone() {
         try {
             String ip = config.getIp();
-            Tailscale.PhoneState state = config.getLinkMode() != LinkMode.PHONE || ip.isEmpty()
-                    ? null : Tailscale.phoneState(Tailscale.status(), ip);
+            boolean tailscale = config.getLinkMode() == LinkMode.PHONE && !ip.isEmpty();
+            Tailscale.Status status = tailscale ? Tailscale.status() : null;
+            Tailscale.PhoneState state = status == null ? null : Tailscale.phoneState(status, ip);
+            String path = status == null ? "" : Tailscale.phonePath(status, ip);
+            if (!path.equals(phonePath) && !path.isEmpty() && !phonePath.isEmpty()) {
+                String from = phonePath;
+                SwingUtilities.invokeLater(() -> logLine("Tailscale path to the phone: " + from + " -> " + path
+                        + (path.startsWith("relay") ? " (relayed: more delay and stalls)" : "")));
+            }
+            phonePath = path;
             SwingUtilities.invokeLater(() -> setPhoneState(state));
         } catch (RuntimeException e) {
             de.droiddrone.common.Log.log("Phone check: " + e);

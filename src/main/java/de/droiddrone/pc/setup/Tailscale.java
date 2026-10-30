@@ -74,6 +74,16 @@ public final class Tailscale {
         return PhoneState.NOT_FOUND;
     }
 
+    /** Tailscale's way to the phone at phoneIp: "direct", "relay <server>", or "" if it isn't a known device. */
+    public static String phonePath(Status s, String phoneIp) {
+        for (Peer p : s.peers()) {
+            if (p.ip() != null && p.ip().equals(phoneIp)) {
+                return p.isDirect() ? "direct" : "relay" + (p.relay() == null || p.relay().isEmpty() ? "" : " " + p.relay());
+            }
+        }
+        return "";
+    }
+
     /** bestMs / medianMs are over the direct pongs when there are any, otherwise over the relayed ones. */
     public record PingResult(boolean reached, boolean direct, String via, int bestMs, int medianMs, String output) {}
 

@@ -74,6 +74,7 @@ public class ControlLink {
     /** Longest pause between two RC frames sent / telemetry packets received since last taken (link log). */
     private final AtomicLong maxRcGapNs = new AtomicLong();
     private final AtomicLong maxTelemetryGapNs = new AtomicLong();
+    private final AtomicLong maxPingMs = new AtomicLong();
     private long lastRcNs;
     private long lastTelemetryNs;
     private final FcTelemetry telemetry = new FcTelemetry();
@@ -182,7 +183,9 @@ public class ControlLink {
         while (running) {
             try {
                 if (isConnected()) udpSender.sendPing(true);
-                Thread.sleep(250); // the bitrate control watches the ping for queueing on the uplink
+                // 20 a second: the bitrate control watches the ping for queueing on the uplink, and the link log
+                // sees stalls of 0.1 s and more (where Betaflight flags RXLOSS) as the age of the last pong
+                Thread.sleep(50);
             } catch (InterruptedException e) {
                 return;
             }
@@ -250,6 +253,7 @@ public class ControlLink {
                 if (toEndPoint) {
                     pingMs = (int) (System.currentTimeMillis() - time);
                     lastPingTimestamp = System.currentTimeMillis();
+                    maxPingMs.accumulateAndGet(pingMs, Math::max);
                 }
             }
             case UdpCommon.ConfigReceived -> {
@@ -445,6 +449,17 @@ public class ControlLink {
     /** Longest pause between two RC frames sent since the last call, in ms (0 if fewer than two were sent). */
     public long takeMaxRcGapMs() {
         return maxRcGapNs.getAndSet(0) / 1_000_000;
+    }
+
+    /** Highest round trip since the last call, in ms (0 if no pong came back). */
+    public long takeMaxPingMs() {
+        return maxPingMs.getAndSet(0);
+    }
+
+    /** How long ago the last pong came back (pings go out 20 times a second), in ms; -1 before the first. */
+    public long msSinceLastPong() {
+        long last = lastPingTimestamp;
+        return last == 0 ? -1 : System.currentTimeMillis() - last;
     }
 
     /** Longest pause between two telemetry packets received since the last call, in ms. */

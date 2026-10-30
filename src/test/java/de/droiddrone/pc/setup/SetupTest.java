@@ -54,6 +54,9 @@ class SetupTest {
         assertEquals(Tailscale.PhoneState.ONLINE, Tailscale.phoneState(s, "100.88.0.5"));
         assertEquals(Tailscale.PhoneState.OFFLINE, Tailscale.phoneState(s, "100.88.0.6"), "a known device that is off Tailscale");
         assertEquals(Tailscale.PhoneState.NOT_FOUND, Tailscale.phoneState(s, "100.88.0.99"), "no such device");
+        assertEquals("relay fra", Tailscale.phonePath(s, "100.88.0.5"), "no direct address: through the fra relay");
+        assertEquals("direct", Tailscale.phonePath(s, "100.88.0.6"));
+        assertEquals("", Tailscale.phonePath(s, "100.88.0.99"));
     }
 
     @Test

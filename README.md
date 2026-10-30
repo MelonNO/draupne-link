@@ -108,7 +108,7 @@ For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold t
 
 Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.
 
-**Link log:** every connection writes a timeline to `%APPDATA%\DroidDronePC\logs\link-<date>-<time>.csv`, 10 rows a second: ping, stick frames sent and the longest gap between them, telemetry packets and the longest gap, the flight controller's last data, RXLOSS / FAILSAFE as Betaflight reports them, radio present, the stick values sent (throttle and every channel), plus every log message. It shows which part of the chain a failsafe came from. The newest 20 are kept.
+**Link log:** every connection writes a timeline to `%APPDATA%\DroidDronePC\logs\link-<date>-<time>.csv`, 10 rows a second: ping, stick frames sent and the longest gap between them, telemetry packets and the longest gap, the flight controller's last data, RXLOSS / FAILSAFE as Betaflight reports them, radio present, the stick values sent (throttle and every channel), the highest round trip and the age of the last reply (pings go out 20 times a second, so stalls of 0.1 s show), Tailscale's path to the phone (direct or relayed), plus every log message. It shows which part of the chain a failsafe came from. The newest 20 are kept.
 
 ## How it works
 

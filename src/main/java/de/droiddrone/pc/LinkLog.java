@@ -23,7 +23,8 @@ public final class LinkLog implements AutoCloseable {
     private static final DateTimeFormatter FILE = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
     static final String HEADER = "time,link,ping_ms,rc_frames,rc_max_gap_ms,telemetry_packets,telemetry_max_gap_ms,"
-            + "fc_data_age_ms,rxloss,failsafe,armed,blockers,radio,rc_output,video_fps,throttle,channels,event";
+            + "fc_data_age_ms,rxloss,failsafe,armed,blockers,radio,rc_output,video_fps,throttle,channels,"
+            + "ping_max_ms,pong_age_ms,path,event";
 
     private final Path file;
     private final BufferedWriter out;
@@ -54,8 +55,12 @@ public final class LinkLog implements AutoCloseable {
     }
 
     /** One row: the link as it is now, and what happened since the previous row. */
-    /** @param channels the last RC frame the PC built (AETR + AUX, 1000-2000), or null without a radio */
-    public synchronized void sample(ControlLink link, boolean radio, boolean rcOutput, int videoFps, short[] channels) throws IOException {
+    /**
+     * @param channels the last RC frame the PC built (AETR + AUX, 1000-2000), or null without a radio
+     * @param path     Tailscale's way to the phone ("direct", "relay fra", ...), or "" when unknown
+     */
+    public synchronized void sample(ControlLink link, boolean radio, boolean rcOutput, int videoFps, short[] channels,
+                                    String path) throws IOException {
         long now = System.currentTimeMillis();
         long rc = link.getRcFramesSent();
         long telemetry = link.getTelemetryPacketsReceived();
@@ -69,7 +74,8 @@ public final class LinkLog implements AutoCloseable {
                 fresh ? flag(blockers.contains("RXLOSS")) : "", fresh ? flag(blockers.contains("FAILSAFE")) : "",
                 fresh ? flag(s.armed()) : "", blockers, flag(radio), flag(rcOutput), videoFps,
                 channels == null || channels.length <= PcConfig.THROTTLE_INDEX ? "" : channels[PcConfig.THROTTLE_INDEX],
-                channels == null ? "" : java.util.Arrays.toString(channels).replace(",", "").replace("[", "").replace("]", ""), "");
+                channels == null ? "" : java.util.Arrays.toString(channels).replace(",", "").replace("[", "").replace("]", ""),
+                link.takeMaxPingMs(), link.msSinceLastPong(), path == null ? "" : path, "");
         lastRcFrames = rc;
         lastTelemetry = telemetry;
         if (now - lastFlush >= 1000) {
@@ -80,7 +86,7 @@ public final class LinkLog implements AutoCloseable {
 
     /** A message from the app's log, in the timeline. */
     public synchronized void event(String text) throws IOException {
-        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", text);
+        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", text);
     }
 
     private void row(Object... values) throws IOException {
