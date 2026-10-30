@@ -47,6 +47,8 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private volatile OsdLayout osdLayout = OsdLayout.defaults();
     /** When the newest picture was handed over, and the smoothed wait until Swing painted it (shown in the stats). */
     private volatile long presentedNs;
+    /** When the newest picture was handed over (System.currentTimeMillis); 0 = none since the stream started. */
+    private volatile long presentedAt;
     private volatile double displayMs;
     private volatile LatencyMeter meter;
     private Supplier<OsdRenderer.Data> osdData = () -> null;
@@ -146,6 +148,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             readyFresh = true;
         }
         presentedNs = System.nanoTime();
+        presentedAt = System.currentTimeMillis();
         LatencyMeter m = meter;
         if (m != null) {
             BufferedImage shown;
@@ -254,6 +257,12 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     void setUpsideDown(boolean upsideDown) {
         this.upsideDown = upsideDown;
         repaint();
+    }
+
+    /** ms since the last picture came, or -1 if none has yet (VIDEO FROZEN on the OSD). */
+    long msSincePicture() {
+        long at = presentedAt;
+        return at == 0 ? -1 : System.currentTimeMillis() - at;
     }
 
     boolean isUpsideDown() {

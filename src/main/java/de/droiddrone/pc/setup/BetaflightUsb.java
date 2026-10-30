@@ -178,8 +178,13 @@ public final class BetaflightUsb implements AutoCloseable {
 
     /** Runs one CLI command and returns what it printed (without the echo and prompt). */
     public String command(String command) throws IOException {
+        return command(command, 4000);
+    }
+
+    /** With its own time limit, for long answers ("diff all"). */
+    public String command(String command, long timeoutMs) throws IOException {
         write(command + "\n");
-        String out = readUntilPrompt(4000);
+        String out = readUntilPrompt(timeoutMs);
         int firstNewline = out.indexOf('\n');
         if (firstNewline >= 0 && out.substring(0, firstNewline).contains(command)) out = out.substring(firstNewline + 1);
         return out.replaceFirst("\\R?# ?$", "").trim();

@@ -19,7 +19,7 @@ import java.nio.charset.StandardCharsets;
  */
 final class OsdPreview {
     private static final FcInfo BETAFLIGHT = new FcInfo(FcInfo.FC_VARIANT_BETAFLIGHT, 4, 5, 1, 0, 1, 46, 0);
-    private static final VideoPipeline.Stats VIDEO = new VideoPipeline.Stats(true, 1280, 720, 60, 60, 4.2, 0.9, 0.6, 0, 0, null);
+    private static final VideoPipeline.Stats VIDEO = new VideoPipeline.Stats(true, 1280, 720, 60, 60, 4.2, 0.9, 0.6, 0, 0, null, false);
     /** roll, pitch, yaw, throttle: a little right roll and forward pitch, 35 % throttle. */
     private static final short[] CHANNELS = {1580, 1430, 1500, 1350};
 
@@ -29,7 +29,7 @@ final class OsdPreview {
     /** The sample, refreshed so it never goes stale (and the fly time runs while the editor is open). */
     OsdRenderer.Data data() {
         telemetry.parse(new DataReader(packet, true), BETAFLIGHT);
-        return new OsdRenderer.Data(true, true, 42, true, false, telemetry, VIDEO, false, null, CHANNELS, true, false);
+        return new OsdRenderer.Data(true, true, 42, true, false, telemetry, VIDEO, false, null, CHANNELS, true, false, false, false, null, false);
     }
 
     private static byte[] packet() {

@@ -29,8 +29,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         void presentFrame();
     }
 
+    /** @param hardware the pictures are decoded on the GPU */
     public record Stats(boolean hevc, int width, int height, int receivedFps, int shownFps, double megabitsPerSecond,
-                        double decodeMs, double convertMs, long damaged, long lost, String error) {}
+                        double decodeMs, double convertMs, long damaged, long lost, String error, boolean hardware) {}
 
     private record Config(int width, int height, boolean hevc, boolean front, byte[] codecConfig) {}
 
@@ -55,6 +56,15 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile int receivedFps;
     private volatile double megabitsPerSecond;
     private volatile Config currentConfig;
+
+    // recording: frames go to their own thread through a queue, so the receive thread never waits for the disk
+    private record RecFrame(byte[] data, boolean keyFrame, long arrivedMs) {}
+    private static final Object REC_STOP = new Object();
+    private static final Object REC_NEW_FILE = new Object();
+    private final LinkedBlockingQueue<Object> recordQueue = new LinkedBlockingQueue<>(240);
+    private volatile java.nio.file.Path recordDir; // null = not recording
+    private volatile java.nio.file.Path recordFile;
+    private Thread recordThread;
     /** When the last fragment came (System.currentTimeMillis); the stats go to 0 once it is old. */
     private volatile long lastFragmentAt;
 
@@ -63,6 +73,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile double decodeMs;
     private volatile double convertMs;
     private volatile String error;
+    /** SETTINGS > Hardware video decoding: for decoders made from now on. */
+    private volatile boolean hardwareDecode;
+    private volatile boolean decodingOnGpu;
 
     public VideoPipeline(FrameSink sink, IntSupplier ping) {
         this.sink = sink;
@@ -116,6 +129,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             kept.forEach(queue::offer);
             earlyFrames.clear();
         }
+        if (recordDir != null) recordQueue.offer(REC_NEW_FILE); // a (re)started stream: a file of its own
         log("Video: " + (hevc ? "H.265" : "H.264") + " " + width + "x" + height);
     }
 
@@ -132,6 +146,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         }
         for (; lastLost < lost; lastLost++) bitrate.onBadFrame(false);
         if (frame != null) {
+            if (recordDir != null && !recordQueue.offer(new RecFrame(frame.data(), frame.keyFrame(), now))) {
+                log("Recording: the disk is too slow, a frame was left out");
+            }
             windowFrames++;
             if (frame.damaged()) bitrate.onBadFrame(frame.keyFrame());
             bitrate.onFrame(frame.keyFrame(), now, Math.max(receivedFps, 30), ping.getAsInt());
@@ -181,7 +198,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     if (decoder != null) decoder.close();
                     decoder = null;
                     try {
-                        decoder = new VideoDecoder(c.hevc(), c.codecConfig());
+                        decoder = new VideoDecoder(c.hevc(), c.codecConfig(), hardwareDecode);
                         error = null;
                     } catch (RuntimeException e) {
                         error = e.getMessage();
@@ -205,6 +222,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     if (size[0] <= 0 || size[1] <= 0) continue;
                     int[] pixels = sink.beginFrame(size[0], size[1]);
                     decoder.convert(pixels, size[0], size[1]);
+                    decodingOnGpu = decoder.isHardware();
                     sink.presentFrame();
                     convertMs = smooth(convertMs, (System.nanoTime() - t1) / 1e6);
                     shown++;
@@ -217,7 +235,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     Config c = currentConfig;
                     if (c != null) {
                         try {
-                            decoder = new VideoDecoder(c.hevc(), c.codecConfig());
+                            decoder = new VideoDecoder(c.hevc(), c.codecConfig(), hardwareDecode);
                         } catch (RuntimeException again) {
                             log("Video decoder: " + again.getMessage());
                         }
@@ -248,7 +266,80 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         }
         boolean flowing = System.currentTimeMillis() - lastFragmentAt < 1500; // stopped: no old figures
         return new Stats(c != null && c.hevc(), c == null ? 0 : c.width(), c == null ? 0 : c.height(), flowing ? receivedFps : 0,
-                flowing ? shownFps : 0, flowing ? megabitsPerSecond : 0, decodeMs, convertMs, damaged, lost, error);
+                flowing ? shownFps : 0, flowing ? megabitsPerSecond : 0, decodeMs, convertMs, damaged, lost, error, decodingOnGpu);
+    }
+
+    /** Decode on the GPU from the next stream (re)start or decoder restart; software stays the fallback. */
+    public void setHardwareDecode(boolean on) {
+        hardwareDecode = on;
+    }
+
+    // ------------------------------------------------------------------ recording
+
+    /** Records the stream into a new MKV file in dir from the next key frame (a new file if the stream restarts). */
+    public synchronized void startRecording(java.nio.file.Path dir) {
+        if (recordDir != null) return;
+        recordQueue.clear();
+        recordDir = dir;
+        recordThread = new Thread(this::recordLoop, "videoRecord");
+        recordThread.setDaemon(true);
+        recordThread.setPriority(Thread.MIN_PRIORITY);
+        recordThread.start();
+    }
+
+    /** Finishes the file. */
+    public synchronized void stopRecording() {
+        if (recordDir == null) return;
+        recordDir = null;
+        recordQueue.offer(REC_STOP);
+        try {
+            recordThread.join(2000);
+        } catch (InterruptedException ignored) {
+        }
+        recordThread = null;
+    }
+
+    public boolean isRecording() {
+        return recordDir != null;
+    }
+
+    /** The file being written, or null (none yet: waiting for the stream / its first key frame). */
+    public java.nio.file.Path recordingFile() {
+        return recordFile;
+    }
+
+    private void recordLoop() {
+        StreamRecorder recorder = null;
+        try {
+            while (true) {
+                Object item = recordQueue.take();
+                if (item == REC_STOP) break;
+                if (item == REC_NEW_FILE) {
+                    if (recorder != null) recorder.close();
+                    recorder = null;
+                    continue;
+                }
+                RecFrame f = (RecFrame) item;
+                Config c = currentConfig;
+                java.nio.file.Path dir = recordDir;
+                if (recorder == null) {
+                    if (c == null || dir == null || !f.keyFrame()) continue; // a file starts at a key frame
+                    String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+                    java.nio.file.Path file = dir.resolve("flight-" + stamp + ".mkv");
+                    recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig());
+                    recordFile = file;
+                    log("Recording to " + file);
+                }
+                recorder.write(f.data(), f.keyFrame(), f.arrivedMs());
+            }
+        } catch (InterruptedException ignored) {
+        } catch (java.io.IOException | RuntimeException e) {
+            log("Recording stopped: " + e.getMessage());
+            recordDir = null;
+        } finally {
+            if (recorder != null) recorder.close();
+            recordFile = null;
+        }
     }
 
     public boolean hasStream() {
@@ -257,6 +348,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     @Override
     public void close() {
+        stopRecording();
         running = false;
         queue.clear();
         queue.offer(STOP);

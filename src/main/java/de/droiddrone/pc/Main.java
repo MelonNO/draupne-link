@@ -211,7 +211,7 @@ public class Main {
                 joystick.name(), connection.getMode(), config.getPort()); // not the key: consoles get pasted
         startQuitListener();
 
-        RcSession session = new RcSession(link, mapper, msg -> System.out.println("\n" + msg));
+        RcSession session = new RcSession(link, mapper, msg -> System.out.println("\n" + msg), ArmSwitch.parse(config.getString(ArmSwitch.KEY)));
         WindowsTuning.apply();
         Thread.currentThread().setPriority(Thread.MAX_PRIORITY);
         Pacer pacer = new Pacer(config.getRcRate());

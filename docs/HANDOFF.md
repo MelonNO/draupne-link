@@ -33,6 +33,9 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
   - The fixes tagged `fixes-1.0.14` (see CHANGELOG): the phone's fast USB reconnect (aim: sticks back within 1.5 s of
     an OTG blip), LINK STALL, the radio lock, the installer without folder choice and its JScript check (built, never
     run), the CI phone-app job.
+  - New since: warning sounds, RADIO FROZEN? / VIDEO FROZEN, the arm-switch rule (Drone setup's "aux" reading on a
+    real board), Drone setup's backup and port list, recording (a real phone stream, H.265), hardware decoding (H.265
+    from the phone; measured slower than software at 720p H.264 on the development PC).
   - The motor test's PROPS IN / OUT animation and the OSD editor as a maximised window (built; not looked at while a
     flight controller was on this PC's USB).
   - The motor test (SETTINGS > Motor test): MSP_SET_MOTOR over USB, written from Betaflight's MSP and only tested

@@ -20,7 +20,9 @@ import static org.bytedeco.ffmpeg.global.swscale.*;
 /**
  * FFmpeg H.265/H.264 decoder tuned for latency: no frame threading (each frame thread holds back one frame), slice
  * threading only, LOW_DELAY so no frame is held for reordering (the phone's encoder sends no B-frames), and colour
- * conversion that scales straight to the on-screen size so drawing is a plain copy.
+ * conversion that scales straight to the on-screen size so drawing is a plain copy. Optionally on the GPU (D3D11VA,
+ * SETTINGS > Hardware video decoding): the picture is then copied back only when it is drawn; if the GPU can't
+ * decode it, FFmpeg decodes in software as usual.
  * Not thread-safe: use from one decode thread.
  */
 public final class VideoDecoder implements AutoCloseable {
@@ -38,9 +40,18 @@ public final class VideoDecoder implements AutoCloseable {
     private final PointerPointer<BytePointer> dstData = new PointerPointer<>(4);
     private final IntPointer dstStride = new IntPointer(4);
     private long errors;
+    /** The GPU device when decoding in hardware, else null. */
+    private org.bytedeco.ffmpeg.avutil.AVBufferRef hwDevice;
+    /** A hardware picture copied back to memory for the colour conversion. */
+    private final AVFrame copied = av_frame_alloc();
 
     /** @param codecConfig Annex-B parameter sets from the phone's VideoInitialFrame (may be empty) */
     public VideoDecoder(boolean hevc, byte[] codecConfig) {
+        this(hevc, codecConfig, false);
+    }
+
+    /** @param hardware decode on the GPU (D3D11VA) if this PC can; software otherwise */
+    public VideoDecoder(boolean hevc, byte[] codecConfig, boolean hardware) {
         AVCodec codec = avcodec_find_decoder(hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
         if (codec == null || codec.isNull()) throw new IllegalStateException("No " + (hevc ? "H.265" : "H.264") + " decoder");
         ctx = avcodec_alloc_context3(codec);
@@ -58,8 +69,17 @@ public final class VideoDecoder implements AutoCloseable {
             ctx.extradata(extra);
             ctx.extradata_size(codecConfig.length);
         }
+        if (hardware) {
+            // with a device attached, FFmpeg's own format choice takes the GPU format when the codec supports it
+            org.bytedeco.ffmpeg.avutil.AVBufferRef dev = new org.bytedeco.ffmpeg.avutil.AVBufferRef(null);
+            if (av_hwdevice_ctx_create(dev, AV_HWDEVICE_TYPE_D3D11VA, (String) null, null, 0) >= 0) {
+                hwDevice = dev;
+                ctx.hw_device_ctx(av_buffer_ref(dev));
+            }
+        }
         int r = avcodec_open2(ctx, codec, (AVDictionary) null);
         if (r < 0) {
+            if (hwDevice != null) av_buffer_unref(hwDevice);
             avcodec_free_context(ctx);
             throw new IllegalStateException("Could not open the decoder (" + r + ")");
         }
@@ -89,6 +109,11 @@ public final class VideoDecoder implements AutoCloseable {
         return got;
     }
 
+    /** Decoding on the GPU (the last picture came from it). */
+    public boolean isHardware() {
+        return hwDevice != null && frame.format() == AV_PIX_FMT_D3D11;
+    }
+
     public int width() {
         return frame.width();
     }
@@ -101,7 +126,13 @@ public final class VideoDecoder implements AutoCloseable {
     public void convert(int[] dst, int width, int height) {
         // FFmpeg asserts (and kills the process) on an empty frame, so never hand it one
         if (frame.width() <= 0 || frame.height() <= 0 || frame.format() < 0) throw new IllegalStateException("No picture to convert");
-        sws = sws_getCachedContext(sws, frame.width(), frame.height(), frame.format(),
+        AVFrame src = frame;
+        if (frame.format() == AV_PIX_FMT_D3D11) { // on the GPU: copy it back (NV12), only for pictures that are drawn
+            av_frame_unref(copied);
+            if (av_hwframe_transfer_data(copied, frame, 0) < 0) throw new IllegalStateException("Could not copy the picture from the GPU");
+            src = copied;
+        }
+        sws = sws_getCachedContext(sws, src.width(), src.height(), src.format(),
                 width, height, AV_PIX_FMT_BGRA, SWS_FAST_BILINEAR, null, null, (DoublePointer) null);
         if (sws == null || sws.isNull()) throw new IllegalStateException("No colour converter for pixel format " + frame.format());
         long needed = (long) width * height * 4;
@@ -112,7 +143,7 @@ public final class VideoDecoder implements AutoCloseable {
         }
         dstData.put(0, rgb);
         dstStride.put(0, width * 4);
-        sws_scale(sws, frame.data(), frame.linesize(), 0, frame.height(), dstData, dstStride);
+        sws_scale(sws, src.data(), src.linesize(), 0, src.height(), dstData, dstStride);
         // BGRA bytes read as little-endian ints are 0xAARRGGBB
         rgb.position(0).limit(needed).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(dst, 0, width * height);
     }
@@ -127,6 +158,8 @@ public final class VideoDecoder implements AutoCloseable {
         if (rgb != null) av_free(rgb);
         av_frame_free(frame);
         av_frame_free(spare);
+        av_frame_free(copied);
+        if (hwDevice != null) av_buffer_unref(hwDevice);
         av_packet_free(packet);
         avcodec_free_context(ctx);
         dstData.close();

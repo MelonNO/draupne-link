@@ -24,6 +24,16 @@ public final class AppPaths {
         return file;
     }
 
+    /** Videos\DroidDrone PC: recorded flights. */
+    public static Path videosDir() throws IOException {
+        return Files.createDirectories(Path.of(System.getProperty("user.home"), "Videos", "DroidDrone PC"));
+    }
+
+    /** Documents\DroidDrone PC\Betaflight backups: Betaflight's settings, saved before Drone setup changes them. */
+    public static Path betaflightBackupsDir() throws IOException {
+        return Files.createDirectories(Path.of(System.getProperty("user.home"), "Documents", "DroidDrone PC", "Betaflight backups"));
+    }
+
     public static Path downloadsDir() throws IOException {
         return Files.createDirectories(dataDir().resolve("downloads"));
     }

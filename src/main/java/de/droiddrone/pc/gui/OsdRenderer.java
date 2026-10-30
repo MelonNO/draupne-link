@@ -32,10 +32,14 @@ final class OsdRenderer {
      * @param channels the sticks this PC sends (PcConfig.CHANNEL_NAMES order), null when none
      * @param preview  the OSD editor's sample: warnings show a sample line, nothing blinks
      * @param linkStalled nothing from the phone for a moment while the link is up (see ControlLink.isLinkStalled)
+     * @param videoFrozen the stream had pictures but none came for a moment
+     * @param radioFrozen armed, and the radio's input hasn't changed at all for seconds (its USB may have hung)
+     * @param rcWaiting   what the sticks wait for while RC is off ("THROTTLE DOWN", "ARM SWITCH OFF"); null = throttle
+     * @param recording   the video is being recorded to a file
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
-                boolean linkStalled) {}
+                boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording) {}
 
     private static final Color ACCENT = Theme.ACCENT; // symbols and labels
     private static final Color YELLOW = Theme.WARN;  // warnings only
@@ -47,6 +51,10 @@ final class OsdRenderer {
     private static final long STALE_MS = 2000;
     private static final double PITCH_FOV_DEG = 60; // degrees of pitch across the picture height
     private static final int CORE_TEMP_ALARM_C = 70; // Betaflight's default osd_core_temp_alarm
+
+    /** Warnings that aren't (yet) a loss of control: yellow; the rest red. */
+    private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "PHONE BATTERY LOW",
+            "RADIO FROZEN?", "VIDEO FROZEN");
 
     private interface Element {
         void paint(float x, float y, OsdLayout.Align align);
@@ -190,6 +198,7 @@ final class OsdRenderer {
             element(OsdElement.STICKS_LEFT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 2, PcConfig.THROTTLE_INDEX));
             element(OsdElement.STICKS_RIGHT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 0, 1));
 
+            if (d.recording()) recordingMark(now);
             element(OsdElement.WARNINGS, (ex, ey, a) -> warnings(ex, ey, a, d, s, t, now));
             if (!d.linkReady() || d.linkStalled() || d.fcLost()) lostFrame();
             element(OsdElement.DEBUG, (ex, ey, a) -> debugLine(ex, ey, a, d.video()));
@@ -508,7 +517,9 @@ final class OsdRenderer {
         boolean failsafe = s != null && s.blockers().stream().anyMatch(b -> b.osdName().equals("FAILSAFE"));
         boolean rcGap = !failsafe && s != null && s.armed() && s.blockers().stream().anyMatch(b -> b.osdName().equals("RXLOSS"));
         if (failsafe) big.add("FAILSAFE");
-        if (d.linkReady() && !d.rcLive()) big.add("RC OFF - THROTTLE DOWN");
+        if (d.linkReady() && !d.rcLive()) big.add("RC OFF - " + (d.rcWaiting() == null ? "THROTTLE DOWN" : d.rcWaiting()));
+        if (d.radioFrozen()) big.add("RADIO FROZEN?");
+        if (d.videoFrozen() && d.linkReady()) big.add("VIDEO FROZEN");
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
         if (!d.fcLost() && b != null && b.volts() > 0 && b.cellCountKnown()
@@ -525,7 +536,7 @@ final class OsdRenderer {
         y = Math.min(y, h - 14 * unit - below);
         g.setFont(Theme.headingFont(34 * unit));
         for (String text : big) {
-            if (blink) put(text, x, y, text.equals("RC OFF - THROTTLE DOWN") || text.equals("PHONE BATTERY LOW") ? YELLOW : RED, a);
+            if (blink) put(text, x, y, YELLOW_WARNINGS.contains(text) || text.startsWith("RC OFF") ? YELLOW : RED, a);
             else mark(x, y, 1, 1);
             y += 38 * unit;
         }
@@ -552,6 +563,19 @@ final class OsdRenderer {
         }
     }
 
+    /** While the video is recorded: a red dot (blinking once a second) and REC, top right of the heading tape. */
+    private void recordingMark(long now) {
+        float x = w / 2f + 200 * unit, y = 34 * unit, r = 6 * unit;
+        if ((now / 500) % 2 == 0) {
+            g.setColor(OUTLINE);
+            g.fill(new java.awt.geom.Ellipse2D.Float(x - r - 1.5f, y - 6 * unit - r - 1.5f, 2 * r + 3, 2 * r + 3));
+            g.setColor(RED);
+            g.fill(new java.awt.geom.Ellipse2D.Float(x - r, y - 6 * unit - r, 2 * r, 2 * r));
+        }
+        g.setFont(Theme.headingFont(15 * unit));
+        text("REC", x + 2 * r, y, WHITE);
+    }
+
     /** Steady red border: the sticks aren't reaching the drone. Seen even in the corner of your eye. */
     private void lostFrame() {
         float t = 7 * unit;
@@ -565,8 +589,8 @@ final class OsdRenderer {
 
     private void debugLine(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v) {
         if (v == null || v.width() == 0) return;
-        String line = String.format(Locale.ROOT, "%s %dx%d  DEC %.1fMS  DRAW %.1fMS  DMG %d  LOST %d",
-                v.hevc() ? "H265" : "H264", v.width(), v.height(), v.decodeMs(), v.convertMs(), v.damaged(), v.lost());
+        String line = String.format(Locale.ROOT, "%s%s %dx%d  DEC %.1fMS  DRAW %.1fMS  DMG %d  LOST %d",
+                v.hevc() ? "H265" : "H264", v.hardware() ? " GPU" : "", v.width(), v.height(), v.decodeMs(), v.convertMs(), v.damaged(), v.lost());
         g.setFont(Theme.monoFont(Font.PLAIN, 12 * unit));
         put(line, x, y, Theme.MUTED, a);
     }

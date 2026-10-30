@@ -19,6 +19,15 @@ Every DroidDrone PC release, newest first. The release pages on GitHub show only
 - **Phone app 2.3.0-pc.9:** reconnects to the flight controller at once after a USB glitch (and looks for it every 150 ms for 5 s - before, 2-4 s, past Betaflight's 1.5 s landing); the touch lock can't open with one tap when Android's animations are off, nor with a second finger; sticks wait for Betaflight's channel map (never in the wrong order); failed USB writes no longer count as delivered sticks; the old USB connection is closed on reconnect; auto-connect at start checks the permissions; the service no longer crashes when Android restarts it.
 - **Builds:** CI also builds the phone app; a release checks the phone app it ships matches the phone app source; GitHub Actions pinned to exact versions; the signing-key password no longer goes on a command line.
 
+### New
+
+- **Warning sounds:** a short beep when LINK LOST, LINK STALL, FAILSAFE or NO FLIGHT CONTROLLER starts, again every 3 s while it lasts (SETTINGS > Warning sounds, on by default).
+- **RADIO FROZEN? and VIDEO FROZEN on the OSD:** armed with not one bit of the radio's input changing for 5 s (a hung USB radio still reports itself), and no new picture for 0.7 s while the stream runs.
+- **The arm switch must be off before the sticks start,** as well as the throttle down: Drone setup reads where Betaflight's ARM mode is (channel and range) and shows it; until then only the throttle rule applies. The OSD says which: RC OFF - THROTTLE DOWN / ARM SWITCH OFF.
+- **Drone setup backs up Betaflight first:** before it writes anything, Betaflight's whole "diff all" goes to Documents\DroidDrone PC\Betaflight backups (paste it into the CLI to go back); what changed is in the log. A **Port** list appears when more than one flight controller port is found.
+- **Recording:** SETTINGS > Record video records every connection's video to Videos\DroidDrone PC, as it comes from the phone (an MKV file, no re-encoding: no extra delay or CPU, and a file cut short still plays); a red REC on the OSD while it records.
+- **Hardware video decoding** (SETTINGS, off by default): decodes on the GPU (D3D11VA), software if it can't. Measured here at 720p H.264 it is slower (about 3.0 ms a frame against 1.3 ms: copying the picture back from the GPU costs more than decoding saves), so it is only worth trying with bigger pictures or a slow CPU.
+
 ### Changes
 
 - **Phone setup, "Keep the phone connected": one box per setting,** like the checks on the other steps, with an empty ring (something to do on the phone, not a warning). New box: **OTG switched on (some phones)** - on phones with an OTG switch (e.g. OPPO, realme, OnePlus, vivo) the phone doesn't see the flight controller while it is off, and many of them switch it off again after about 10 minutes without a USB device.

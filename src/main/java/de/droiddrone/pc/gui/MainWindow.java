@@ -3,6 +3,7 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.pc.Connection;
+import de.droiddrone.pc.ArmSwitch;
 import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.Joystick;
@@ -69,6 +70,13 @@ public class MainWindow extends JFrame {
     private boolean calibrated;
     private Connection connection;
     private RcSession session;
+    private final AlertSound alertSound = new AlertSound();
+    static final String RECORD_KEY = "recordVideo";
+    static final String HW_DECODE_KEY = "hardwareDecode";
+    /** SETTINGS > Hardware video decoding (off by default; software is the tested path). */
+    private boolean hardwareDecode;
+    /** SETTINGS > Record video: every connection records its video (Videos\DroidDrone PC). */
+    private boolean recordVideo;
     /** The connection's timeline (10 rows a second) for finding the cause of failsafes; null when not connected. */
     private LinkLog linkLog;
     private final Timer linkLogTimer = new Timer(100, e -> sampleLinkLog());
@@ -193,6 +201,9 @@ public class MainWindow extends JFrame {
 
         videoView.setOsdSource(this::osdData);
         videoView.setOsdLayout(OsdLayout.load(config::getString));
+        alertSound.setEnabled(!"false".equalsIgnoreCase(config.getString(AlertSound.KEY)));
+        recordVideo = "true".equalsIgnoreCase(config.getString(RECORD_KEY));
+        hardwareDecode = "true".equalsIgnoreCase(config.getString(HW_DECODE_KEY));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
         videoView.setUpsideDown("true".equalsIgnoreCase(config.getString(UPSIDE_DOWN_KEY)));
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
@@ -244,6 +255,32 @@ public class MainWindow extends JFrame {
                     videoView.setUpsideDown(on);
                     save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
                     logLine(on ? "Picture turned upside down." : "Picture the right way up.");
+                }));
+        menu.add(new MenuRows.SwitchRow("Warning sounds", "A beep when the sticks stop reaching the drone",
+                alertSound.isEnabled(), on -> {
+                    alertSound.setEnabled(on);
+                    save(Map.of(AlertSound.KEY, Boolean.toString(on)));
+                }));
+        menu.add(new MenuRows.SwitchRow("Record video", "Every flight to Videos\\DroidDrone PC, as it comes: no extra delay",
+                recordVideo, on -> {
+                    recordVideo = on;
+                    save(Map.of(RECORD_KEY, Boolean.toString(on)));
+                    VideoPipeline v = video;
+                    if (v == null) {
+                        logLine(on ? "Video will be recorded from the next connection." : "Video won't be recorded.");
+                    } else if (on) {
+                        startRecording(v);
+                    } else {
+                        v.stopRecording();
+                        logLine("Recording stopped.");
+                    }
+                }));
+        menu.add(new MenuRows.SwitchRow("Hardware video decoding", "GPU (D3D11VA), next connection. Only for big pictures: slower at 720p",
+                hardwareDecode, on -> {
+                    hardwareDecode = on;
+                    save(Map.of(HW_DECODE_KEY, Boolean.toString(on)));
+                    logLine(on ? "Hardware video decoding: from the next connection (software if the GPU can't)."
+                            : "Software video decoding from the next connection.");
                 }));
         menu.add(new MenuRows.SwitchRow("Latency test", "A time code for the drone's camera: the real delay",
                 latencyMeter != null, this::setLatencyTest));
@@ -753,7 +790,9 @@ public class MainWindow extends JFrame {
         try {
             connection = Connection.open(config, video);
             linkRef[0] = connection.getLink();
+            if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
+            if (video != null && recordVideo) startRecording(video);
             videoView.setStatsSource(video == null ? null : video::stats);
         } catch (IOException | RuntimeException e) {
             connection = null;
@@ -763,7 +802,8 @@ public class MainWindow extends JFrame {
             JOptionPane.showMessageDialog(this, e.getMessage(), "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        session = new RcSession(connection.getLink(), mapper, msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
+        session = new RcSession(connection.getLink(), mapper, msg -> SwingUtilities.invokeLater(() -> logLine(msg)),
+                ArmSwitch.parse(config.getString(ArmSwitch.KEY)));
         service.setInputListener(session::onInput);
         lastState = null;
         try {
@@ -870,6 +910,7 @@ public class MainWindow extends JFrame {
         refreshJoystickCombo(snap);
         refreshController(snap);
         refreshLink();
+        alertSound.update(stickWarning(), System.currentTimeMillis());
         // keeps the HUD (and the latency test's time code) live even when no video frames arrive
         if (connection != null || latencyMeter != null) videoView.repaint();
     }
@@ -1135,9 +1176,45 @@ public class MainWindow extends JFrame {
         ControlLink l = c.getLink();
         RcSession s = session;
         VideoPipeline v = video;
-        return new OsdRenderer.Data(true, l.getState() == ControlLink.State.READY, l.getPing(), s != null && s.isRcEnabled(),
+        boolean ready = l.getState() == ControlLink.State.READY;
+        long sincePicture = videoView.msSincePicture();
+        boolean videoFrozen = v != null && v.hasStream() && sincePicture > VIDEO_FROZEN_MS;
+        FcTelemetry.Status st = l.getTelemetry().getStatus();
+        boolean armed = st != null && st.armed() && System.currentTimeMillis() - st.receivedAt() < 2000;
+        boolean radioFrozen = armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS;
+        return new OsdRenderer.Data(true, ready, l.getPing(), s != null && s.isRcEnabled(),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
-                osdLinkHint(), s == null ? null : s.getLastChannels(), false, l.isLinkStalled());
+                osdLinkHint(), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
+                s == null ? null : s.waitingFor(), v != null && v.recordingFile() != null);
+    }
+
+    /** No new picture for this long while the stream runs: VIDEO FROZEN. */
+    private static final long VIDEO_FROZEN_MS = 700;
+    /** Armed and not a single bit of the radio's input changed for this long: RADIO FROZEN? */
+    private static final long RADIO_FROZEN_MS = 5000;
+
+    private void startRecording(VideoPipeline v) {
+        try {
+            java.nio.file.Path dir = de.droiddrone.pc.AppPaths.videosDir();
+            v.startRecording(dir);
+            logLine("Recording the video to " + dir + " (from the next key frame).");
+        } catch (IOException e) {
+            logLine("Could not record the video: " + e.getMessage());
+        }
+    }
+
+    /** The warning that stops the sticks, if one shows now: what the alert sound is about. */
+    private String stickWarning() {
+        Connection c = connection;
+        if (c == null) return null;
+        ControlLink l = c.getLink();
+        if (l.getState() != ControlLink.State.READY) return "LINK LOST";
+        if (l.isLinkStalled()) return "LINK STALL";
+        if (l.isFcLost()) return "NO FLIGHT CONTROLLER";
+        FcTelemetry.Status st = l.getTelemetry().getStatus();
+        if (st != null && System.currentTimeMillis() - st.receivedAt() < 2000
+                && st.blockers().stream().anyMatch(b -> b.osdName().equals("FAILSAFE"))) return "FAILSAFE";
+        return null;
     }
 
     /** Under LINK LOST on the OSD: the reason, when Tailscale knows it. */

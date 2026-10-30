@@ -96,6 +96,21 @@ class VideoTest {
     }
 
     @Test
+    void hardwareDecodingGivesTheSamePictureOrFallsBackToSoftware() {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 12, 6);
+        try (VideoDecoder d = new VideoDecoder(false, s.codecConfig(), true)) {
+            boolean any = false;
+            for (TestStreams.Packet p : s.packets()) any |= d.decode(p.data(), p.data().length);
+            assertTrue(any);
+            int[] px = new int[320 * 240];
+            d.convert(px, 320, 240);
+            int c = px[120 * 320 + 160] & 0xffffff;
+            assertTrue(((c >> 16) & 255) > 200 && ((c >> 8) & 255) < 60 && (c & 255) < 60, "red, on the GPU or not: " + Integer.toHexString(c));
+            System.out.println("hardware decoding on this PC: " + d.isHardware());
+        }
+    }
+
+    @Test
     void frameNumbersWrapAround() {
         assertTrue(FrameAssembler.isOlder((short) 32766, (short) 2));
         assertFalse(FrameAssembler.isOlder((short) 2, (short) 32766));
