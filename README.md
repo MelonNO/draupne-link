@@ -74,6 +74,19 @@ set serial_update_rate_hz = 2000
 save
 ```
 
+### Poor reception
+
+Nothing in the chain invents stick values: the PC sends the radio's stick positions 250 times a second, unsmoothed, and the phone app forwards only the newest packet it got (late packets after a stall collapse to the newest; nothing is ever re-sent). When packets stop, Betaflight decides:
+
+| Pause in sticks | Betaflight (defaults) |
+|---|---|
+| under 0.1 s | nothing |
+| 0.1-0.3 s | keeps your last sticks, flags RXLOSS (OSD: *RC SIGNAL GAP*) |
+| 0.3-1.5 s | sticks centred, throttle to minimum: the drone sinks until the sticks return |
+| over 1.5 s | real failsafe: drops and disarms (OSD: *FAILSAFE*) |
+
+For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold the last throttle instead of minimum during the 0.3-1.5 s stage, so a short gap doesn't make the drone sink) and **GPS Rescue** as the failsafe procedure (it flies home instead of dropping). Both change how your drone behaves when the link fails, so test them on the bench first; DroidDrone PC doesn't set them for you.
+
 ## Troubleshooting
 
 | What you see | What it means / what to do |
@@ -117,7 +130,7 @@ The protocol is unchanged, so the original Flight 2.3.0 also still works. Every 
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 69 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
+.\gradlew.bat test               # 73 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3
