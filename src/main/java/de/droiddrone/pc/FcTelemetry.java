@@ -268,6 +268,31 @@ public class FcTelemetry {
         for (int i = 0; i < bytes; i++) b.readByte();
     }
 
+    /**
+     * The flight mode as Betaflight's own OSD names it, from the active mode switches (box names): FAILSAFE, GPS RESCUE,
+     * POS HOLD, ALT HOLD, ANGLE, HORIZON, PASSTHRU, in that priority. ACRO is no switch of its own - it is what you fly
+     * when none of these is on.
+     */
+    public static String flightMode(List<String> activeModes) {
+        java.util.Set<String> on = new java.util.HashSet<>();
+        for (String m : activeModes) on.add(m.toUpperCase(java.util.Locale.ROOT).replace(" ", ""));
+        String[][] order = {{"FAILSAFE", "FAILSAFE"}, {"GPSRESCUE", "GPS RESCUE"}, {"POSHOLD", "POS HOLD"},
+                {"ALTHOLD", "ALT HOLD"}, {"ANGLE", "ANGLE"}, {"HORIZON", "HORIZON"}, {"PASSTHRU", "PASSTHRU"}};
+        for (String[] m : order) {
+            if (on.contains(m[0])) return m[1];
+        }
+        return "ACRO";
+    }
+
+    /** The active modes other than ARM and the flight mode itself (AIR MODE, BEEPER, ...), as Betaflight names them. */
+    public static List<String> otherModes(List<String> activeModes) {
+        String flight = flightMode(activeModes).replace(" ", "");
+        return activeModes.stream().filter(m -> {
+            String k = m.toUpperCase(java.util.Locale.ROOT).replace(" ", "");
+            return !k.equals("ARM") && !k.equals(flight);
+        }).toList();
+    }
+
     public boolean hasBoxNames() {
         return !boxNames.isEmpty();
     }

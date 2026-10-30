@@ -103,6 +103,17 @@ class FcTelemetryTest {
     }
 
     @Test
+    void flightModeIsNamedLikeBetaflightsOsd() {
+        assertEquals("ACRO", FcTelemetry.flightMode(List.of("ARM")), "no self-level mode on: acro");
+        assertEquals("ACRO", FcTelemetry.flightMode(List.of("ARM", "AIR MODE")));
+        assertEquals("ANGLE", FcTelemetry.flightMode(List.of("ARM", "ANGLE", "AIR MODE")));
+        assertEquals("HORIZON", FcTelemetry.flightMode(List.of("HORIZON")));
+        assertEquals("GPS RESCUE", FcTelemetry.flightMode(List.of("ANGLE", "GPS RESCUE")), "rescue over angle");
+        assertEquals("FAILSAFE", FcTelemetry.flightMode(List.of("ANGLE", "FAILSAFE")));
+        assertEquals(List.of("AIR MODE", "BEEPER"), FcTelemetry.otherModes(List.of("ARM", "ANGLE", "AIR MODE", "BEEPER")));
+    }
+
+    @Test
     void armedWhenArmModeIsActive() throws Exception {
         FcTelemetry t = new FcTelemetry();
         t.parse(new DataReader(boxNamesPacket("ARM;ANGLE;"), true), BETAFLIGHT);

@@ -243,11 +243,17 @@ final class OsdRenderer {
         if (s != null) {
             g.setFont(Theme.headingFont(28 * unit));
             text(s.armed() ? "ARMED" : "DISARMED", x, y, s.armed() ? GREEN : YELLOW);
-            List<String> modes = new ArrayList<>(s.activeModes());
-            modes.remove("ARM");
-            if (!modes.isEmpty()) {
-                g.setFont(Theme.headingFont(18 * unit));
-                text(String.join("  ", modes), x, y + 26 * unit, WHITE);
+            // flight mode only once Betaflight's mode names are known: without them ACRO could be wrong
+            if (t != null && t.hasBoxNames()) {
+                String mode = FcTelemetry.flightMode(s.activeModes());
+                g.setFont(Theme.headingFont(22 * unit));
+                text(mode, x, y + 27 * unit, mode.equals("FAILSAFE") || mode.equals("GPS RESCUE") ? RED : WHITE);
+                List<String> others = FcTelemetry.otherModes(s.activeModes());
+                if (!others.isEmpty()) {
+                    float mx = x + g.getFontMetrics().stringWidth(mode) + 12 * unit;
+                    g.setFont(Theme.headingFont(15 * unit));
+                    text(String.join("  ", others), mx, y + 27 * unit, Theme.MUTED);
+                }
             }
         }
         FcTelemetry.Timers timers = t == null ? null : t.getTimers();

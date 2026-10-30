@@ -48,7 +48,7 @@ Betaflight 4.4 is **not required**, only recommended:
 
 ![Main window](docs/images/main-window.png)
 
-- Press **CONNECT**. The status turns **LINK READY** and the phone's camera appears with the **OSD**: horizon and pitch ladder, heading tape with home marker, battery (voltage per cell, big, with the cell count), 4G signal and ping, GPS, timer, flight modes and warnings.
+- Press **CONNECT**. The status turns **LINK READY** and the phone's camera appears with the **OSD**: horizon and pitch ladder, heading tape with home marker, battery (voltage per cell, big, with the cell count), 4G signal and ping, GPS, timer, flight mode (ACRO / ANGLE / HORIZON ...) and warnings.
 - RC is only sent once the throttle has been seen at the bottom (**RC OUTPUT: LIVE**).
 - A **red frame** round the picture means your sticks aren't reaching the drone: **LINK LOST** (PC to phone) or **NO FLIGHT CONTROLLER** (the phone lost its USB link to the flight controller; the battery and GPS values turn grey because they're frozen).
 - **POP OUT VIDEO** puts the picture (with the OSD) in its own window, e.g. on a second screen; close it or press **VIDEO BACK** to put it back.
@@ -131,7 +131,7 @@ The protocol is unchanged, so the original Flight 2.3.0 also still works. Every 
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 75 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
+.\gradlew.bat test               # 76 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3
