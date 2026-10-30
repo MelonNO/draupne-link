@@ -96,6 +96,9 @@ public class MainWindow extends JFrame {
     private final JButton connectButton = Theme.primaryButton("Connect");
     private final JButton setupButton = Theme.secondaryButton("Setup");
     private final JButton settingsButton = Theme.secondaryButton("Settings");
+    /** Shown when GitHub has a newer release; opens its page. */
+    private final JButton updateButton = Theme.primaryButton("Update");
+    private volatile String updatePage;
     private final JLabel statePill = new JLabel("OFFLINE", SwingConstants.CENTER);
     private final JLabel pingValue = statValue();
     private final JLabel fcValue = statValue();
@@ -181,6 +184,7 @@ public class MainWindow extends JFrame {
         });
         new Timer(33, e -> refresh()).start();
         phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, java.util.concurrent.TimeUnit.SECONDS);
+        phoneWatch.scheduleWithFixedDelay(this::checkForUpdate, 8, 6 * 3600, java.util.concurrent.TimeUnit.SECONDS);
         setMinimumSize(new Dimension(1100, 760));
         setSize(1280, 820);
         setLocationRelativeTo(null);
@@ -230,6 +234,12 @@ public class MainWindow extends JFrame {
             JPopupMenu menu = setupMenu(); // right-aligned under the button, so it stays inside the window
             menu.show(setupButton, setupButton.getWidth() - menu.getPreferredSize().width, setupButton.getHeight() + 4);
         });
+        updateButton.setVisible(false);
+        updateButton.addActionListener(e -> {
+            String page = updatePage;
+            if (page != null) PcSetupWizard.openInBrowser(this, page);
+        });
+        right.add(updateButton);
         right.add(setupButton);
         settingsButton.setToolTipText("Camera mounted upside down, and other options");
         settingsButton.addActionListener(e -> SettingsDialog.open(this, videoView));
@@ -691,6 +701,29 @@ public class MainWindow extends JFrame {
         String full = file.toAbsolutePath().toString();
         String appData = System.getenv("APPDATA");
         return appData != null && full.startsWith(appData) ? "%APPDATA%" + full.substring(appData.length()) : full;
+    }
+
+    // ---------------------------------------------------------------- updates
+
+    /** Background, at start and every 6 hours: is there a newer release on GitHub? Only tells; installs nothing. */
+    private void checkForUpdate() {
+        String current = de.droiddrone.pc.AppInfo.version();
+        if ("dev".equals(current)) return;
+        try {
+            de.droiddrone.pc.setup.UpdateCheck.Release r = de.droiddrone.pc.setup.UpdateCheck.latest();
+            if (!de.droiddrone.pc.setup.UpdateCheck.isNewer(r.version(), current)) return;
+            SwingUtilities.invokeLater(() -> {
+                boolean first = updatePage == null;
+                updatePage = r.pageUrl();
+                updateButton.setText("UPDATE " + r.version());
+                updateButton.setToolTipText("DroidDrone PC " + r.version() + " is out (you have " + current
+                        + "). Opens the release page: download the installer and run it. It also brings the newest phone app.");
+                updateButton.setVisible(true);
+                if (first) logLine("DroidDrone PC " + r.version() + " is available (you have " + current + "): press UPDATE at the top.");
+            });
+        } catch (Exception e) {
+            de.droiddrone.common.Log.log("Update check: " + e.getMessage()); // offline or GitHub unreachable: try later
+        }
     }
 
     // ---------------------------------------------------------------- the phone on Tailscale

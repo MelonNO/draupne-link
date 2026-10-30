@@ -104,7 +104,7 @@ For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold t
 | Setup says the path is **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Press *Check again* after a minute. If it stays relayed, choose *Host the relay on this PC* in SETUP → *PC setup* |
 | Channels look wrong | **CALIBRATE**, then **RC CHECK** |
 
-**Versions:** DroidDrone PC's version is in its window title and in SETTINGS → About (with the phone app version it installs); the phone app shows its version at the bottom right of its screen.
+**Versions and updates:** DroidDrone PC's version is in its window title and in SETTINGS → About (with the phone app version it installs); the phone app shows its version at the bottom right of its screen. Both check GitHub for a newer release (DroidDrone PC at start and every 6 hours, the phone app when it starts) and say so: an **UPDATE** button in DroidDrone PC, a tap-to-download line in the phone app. Nothing is installed by itself.
 
 Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.
 
@@ -134,7 +134,7 @@ The protocol is unchanged, so the original Flight 2.3.0 also still works. Every 
 ```powershell
 git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
 cd droiddrone-pc
-.\gradlew.bat test               # 76 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
+.\gradlew.bat test               # 78 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
 .\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3

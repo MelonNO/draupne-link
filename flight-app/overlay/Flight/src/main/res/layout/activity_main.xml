@@ -98,6 +98,17 @@
                 android:layout_weight="1" />
 
             <TextView
+                android:id="@+id/tvUpdate"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:textColor="@color/dd_warn"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:visibility="gone" />
+
+            <TextView
                 android:id="@+id/tvOldApp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

@@ -15,7 +15,8 @@
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
  *  Modified for DroidDrone PC: the Windows app's look (cards, status pill, status colours for a dark
- *  background), and removing an earlier DroidDrone Flight. The connection logic is unchanged.
+ *  background), removing an earlier DroidDrone Flight, and telling about a newer build. The connection logic is
+ *  unchanged.
  */
 
 package de.droiddrone.flight;
@@ -69,6 +70,9 @@ public class MainActivity extends Activity {
     /** The original app's package (also DroidDrone PC's builds up to 2.3.0-pc.1): removed so it can't take the FC. */
     private static final String OLD_PACKAGE = "de.droiddrone.flight";
     private TextView tvOldApp;
+    private TextView tvUpdate;
+    /** Once per app start: is there a newer build on GitHub? */
+    private static boolean updateChecked;
     private boolean oldAppPrompted;
 
     @Override
@@ -100,6 +104,17 @@ public class MainActivity extends Activity {
         tvPill = findViewById(R.id.tvPill);
         tvOldApp = findViewById(R.id.tvOldApp);
         tvOldApp.setOnClickListener(v -> removeOldApp());
+        tvUpdate = findViewById(R.id.tvUpdate);
+        if (!updateChecked) {
+            updateChecked = true;
+            String current = versionName;
+            Thread t = new Thread(() -> {
+                UpdateCheck.Found found = UpdateCheck.newerThan(current);
+                if (found != null) runOnUiThread(() -> showUpdate(found));
+            }, "updateCheck");
+            t.setDaemon(true);
+            t.start();
+        }
         llIp = findViewById(R.id.llIp);
         colorOk = getColor(R.color.dd_ok);
         colorWarn = getColor(R.color.dd_warn);
@@ -270,6 +285,19 @@ public class MainActivity extends Activity {
             oldAppPrompted = true;
             removeOldApp();
         }
+    }
+
+    /** A newer build is on GitHub: say so; a tap downloads it (Android installs it as an update). */
+    private void showUpdate(UpdateCheck.Found found){
+        tvUpdate.setText(getString(R.string.dd_update, found.version));
+        tvUpdate.setVisibility(View.VISIBLE);
+        tvUpdate.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(found.url)));
+            } catch (Exception e) {
+                log("Cannot open the download: " + e);
+            }
+        });
     }
 
     private void removeOldApp(){
