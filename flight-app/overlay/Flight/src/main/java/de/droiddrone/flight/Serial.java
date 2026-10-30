@@ -15,7 +15,8 @@
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
  *  Modified for DroidDrone PC: one writer thread owns the USB port; stick packets
- *  (newest only) go first with a short timeout, never behind other requests, which back off while the link is slow.
+ *  (newest only) go first with a short timeout, never behind other requests, which back off while the link is slow;
+ *  reads wait asynchronously, so they never hold up a write.
  */
 
 package de.droiddrone.flight;
@@ -329,7 +330,11 @@ public class Serial {
             log("Start USB serial reader thread - OK");
             while (id == threadsId) {
                 try {
-                    int size = port.read(buf, serialPortReadWriteTimeoutMs);
+                    // DroidDrone PC: timeout 0 = an asynchronous UsbRequest, waiting for data without blocking writes.
+                    // A read with a timeout is a synchronous bulkTransfer that, on many phones, holds every write on
+                    // this connection until data comes or the timeout (100 ms) runs out: sticks then reached the
+                    // flight controller ~100 ms late, enough for Betaflight to flag RXLOSS and block arming.
+                    int size = port.read(buf, 0);
                     if (restart) continue;
                     if (size > 0){
                         serialErrors = 0;

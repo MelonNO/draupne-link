@@ -121,10 +121,10 @@ DroidDrone PC replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s 
 
 ### The phone app
 
-The setup installs **DroidDrone Flight 2.3.0-pc.3**: upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
+The setup installs **DroidDrone Flight 2.3.0-pc.4**: upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
 - **Every flight controller:** its USB list covers any flight controller with native USB (STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip it can drive (CH340/CH341, CP210x, FTDI, PL2303). Android can then remember the USB permission, and the phone reconnects to the flight controller without asking. Upstream only lists a few IDs, so AT32 boards, for example, needed a tap after every reconnect.
 - **The PC app's look:** black and red, status at a glance (OFFLINE / WAITING / LINK READY).
-- **Sticks first on the USB link:** the newest sticks always go to the flight controller before any other request, and never queue behind a slow one; the phone reports what it sees into the PC's link log.
+- **Sticks reach the flight controller on time:** upstream reads from the flight controller in a way that, on many phones, holds every USB write for up to 0.1 s, which makes Betaflight flag RXLOSS and block arming; this build reads asynchronously. The newest sticks also always go first, never queued behind a slow request, and the phone reports what it sees into the PC's link log.
 - **Replaces any earlier DroidDrone Flight:** it has its own package name (`de.droiddrone.flight.pc`), so it installs next to the original (or this project's 2.3.0-pc.1), and when it opens it asks Android to remove the earlier one: one tap on OK.
 
 The protocol is unchanged, so the original Flight 2.3.0 also still works. Every DroidDrone PC release includes it as `DroidDrone-Flight-<version>.apk`, the exact build that version installs.
