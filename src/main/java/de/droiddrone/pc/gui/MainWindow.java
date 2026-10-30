@@ -136,7 +136,7 @@ public class MainWindow extends JFrame {
     }
 
     private MainWindow(PcConfig config, Path configFile, JoystickService service) {
-        super("DroidDrone PC");
+        super("DroidDrone PC " + de.droiddrone.pc.AppInfo.version());
         setIconImages(AppIcon.images());
         this.config = config;
         this.configFile = configFile;
@@ -160,7 +160,8 @@ public class MainWindow extends JFrame {
 
         modeCombo.addActionListener(e -> updateModeUi());
         reloadSettings();
-        logLine("Flight app protocol " + SettingsCommon.versionCompatibleCode + " (DroidDrone 2.3.0). Settings: " + shortPath(configFile));
+        logLine("DroidDrone PC " + de.droiddrone.pc.AppInfo.version() + ". Phone app: DroidDrone Flight " + de.droiddrone.pc.setup.ApkShare.VERSION
+                + " (protocol " + SettingsCommon.versionCompatibleCode + "). Settings: " + shortPath(configFile));
 
         videoView.setOsdSource(this::osdData);
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));

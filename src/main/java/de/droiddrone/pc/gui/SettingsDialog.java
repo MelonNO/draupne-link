@@ -39,6 +39,12 @@ final class SettingsDialog extends JDialog {
             main.logLine(upsideDown.isSelected() ? "Picture turned upside down." : "Picture the right way up.");
         });
         card.add(left(upsideDown));
+        card.add(left(spacer()));
+        card.add(left(Theme.sectionTitle("About")));
+        card.add(left(aboutLine("DroidDrone PC", de.droiddrone.pc.AppInfo.version())));
+        card.add(left(aboutLine("Phone app it installs", "DroidDrone Flight " + de.droiddrone.pc.setup.ApkShare.VERSION)));
+        card.add(left(aboutLine("Flight app protocol", Integer.toString(de.droiddrone.common.SettingsCommon.versionCompatibleCode)
+                + " (DroidDrone 2.3.0)")));
         root.add(card, BorderLayout.CENTER);
 
         JButton close = Theme.primaryButton("Close");
@@ -66,6 +72,25 @@ final class SettingsDialog extends JDialog {
         box.setOpaque(false);
         box.setBorder(BorderFactory.createEmptyBorder(10, 0, 4, 0));
         return box;
+    }
+
+    /** "NAME   value" - the phone app shows its own version at the bottom right of its screen. */
+    private static JComponent aboutLine(String name, String value) {
+        JPanel row = new JPanel(new BorderLayout(16, 0));
+        row.setOpaque(false);
+        row.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
+        row.add(Theme.label(name.toUpperCase(), Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
+        row.add(Theme.label(value, Theme.font(Font.BOLD, 13f), Theme.TEXT), BorderLayout.EAST);
+        row.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, row.getPreferredSize().height));
+        return row;
+    }
+
+    private static JComponent spacer() {
+        JPanel p = new JPanel();
+        p.setOpaque(false);
+        p.setPreferredSize(new java.awt.Dimension(1, 14));
+        p.setMaximumSize(new java.awt.Dimension(Integer.MAX_VALUE, 14));
+        return p;
     }
 
     private static JComponent left(JComponent c) {

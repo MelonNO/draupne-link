@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'de.droiddrone.pc'
-version = '1.0.3'
+version = '1.0.4'
 
 repositories {
     mavenCentral()
@@ -54,6 +54,13 @@ tasks.withType(JavaCompile).configureEach {
 
 application {
     mainClass = 'de.droiddrone.pc.Main'
+}
+
+// the app shows its own version (window title, SETTINGS > About): AppInfo reads it from here
+jar {
+    manifest {
+        attributes 'Implementation-Title': 'DroidDrone PC', 'Implementation-Version': project.version
+    }
 }
 
 run {

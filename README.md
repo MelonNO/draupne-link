@@ -104,6 +104,8 @@ For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold t
 | Setup says the path is **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Press *Check again* after a minute. If it stays relayed, choose *Host the relay on this PC* in SETUP → *PC setup* |
 | Channels look wrong | **CALIBRATE**, then **RC CHECK** |
 
+**Versions:** DroidDrone PC's version is in its window title and in SETTINGS → About (with the phone app version it installs); the phone app shows its version at the bottom right of its screen.
+
 Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.
 
 **Link log:** every connection writes a timeline to `%APPDATA%\DroidDronePC\logs\link-<date>-<time>.csv`, 10 rows a second: ping, stick frames sent and the longest gap between them, telemetry packets and the longest gap, the flight controller's last data, RXLOSS / FAILSAFE as Betaflight reports them, radio present, the stick values sent (throttle and every channel), plus every log message. It shows which part of the chain a failsafe came from. The newest 20 are kept.

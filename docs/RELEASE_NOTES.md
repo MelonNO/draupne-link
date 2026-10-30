@@ -2,6 +2,9 @@
 
 **`DroidDrone-PC-Setup-*.exe`** is the installer. Run it and click through it (Next → Install → Finish), approving the Windows prompt once. It installs DroidDrone PC for all users and sets up this PC by itself: Tailscale, firewall rules and the High performance power plan. DroidDrone PC starts when you press Finish; follow the setup wizard that opens on the first start.
 
+New in 1.0.4:
+- **See which version you have:** DroidDrone PC shows its version in the window title and in SETTINGS → About, with the phone app version it installs. The phone app shows its own version at the bottom right of its screen.
+
 New in 1.0.3:
 - **Flight mode on the OSD:** ACRO, ANGLE, HORIZON, GPS RESCUE, FAILSAFE ... under ARMED / DISARMED, named like Betaflight's own OSD. ACRO shows when no self-levelling mode is on (it has no switch of its own). Other active switches, like AIR MODE, follow in smaller text.
 - **Warning when the phone is off Tailscale.** Every few seconds the PC asks its Tailscale whether the phone is online. If not, the link card shows **PHONE ON TAILSCALE: OFFLINE** with what to do, the log notes it, and the OSD says why under LINK LOST. Also caught: the phone address not on your Tailscale network, and Tailscale on the PC off or missing.
