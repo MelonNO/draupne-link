@@ -72,7 +72,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Ideas not done yet
 
-- **In-app phone app updater** (started, not in a release: kept outside the repo for now). Every update through the
+- **In-app phone app updater** (started, not in a release: the code so far is in the private repo,
+  `wip/in-app-updater/`, with a to-do list). Every update through the
   browser leaves a `DRAUPNE-Flight-*.apk` in the phone's Downloads, and Android doesn't let the app delete those. Plan
   the pilot chose: UPDATE downloads into the app's own cache, checks GitHub's SHA-256 (`digest` of the asset), installs
   with `PackageInstaller` (needs REQUEST_INSTALL_PACKAGES and "Install unknown apps"), deletes the file; leftovers
