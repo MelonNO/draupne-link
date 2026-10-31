@@ -2,6 +2,16 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.17
+
+- **Spectator mode** (off by default: SETTINGS > Allow spectators). A second PC that connects while you fly becomes a spectator: it shows your video and OSD a little behind you (600 ms), can record, and never sends sticks. It finds your PC through the phone and watches through it; the phone sends nothing extra, so your link is unchanged. It uses your PC's upload (about one video stream each, at most 2 spectators) and pauses by itself when your link to the drone slows down. A spectator never takes the drone over, also when you disconnect. Needs DRAUPNE Flight 2.3.0-pc.11 on the phone and direct phone mode (Tailscale).
+- **Drone setup sets your switches and failsafe:** ARM (AUX1 by default), a 3-position flight mode switch (AUX2: low acro, middle angle, high GPS position hold) and the failsafe (leave as it is, drop, or GPS rescue), with a GPS rescue switch (AUX4) once the failsafe is GPS rescue. Each can be changed or left as it is in Betaflight. ARM on any other switch is taken off, so there is one arm switch. Betaflight's settings are backed up first, as before.
+- **GPS checks:** a GPS mode or GPS rescue failsafe turns Betaflight's GPS on, and is only written once the GPS answers (no fix needed, so indoors is fine) and Betaflight is new enough (GPS rescue 4.4, GPS position hold 2025.12). No GPS found shows as a GPS hardware failure, with what to check. With GPS rescue in use, Betaflight arms only with a GPS fix: Drone setup says so.
+- **Drone setup is tidier:** five rows (flight controller, Betaflight settings, switches, failsafe, motors); the manual way is behind **By hand**.
+- **First-time setup covers everything:** it is made of PC, drone and phone setup's own steps (it was missing the connection method and the phone overview). The radio comes after the drone, and its calibration names each switch after what Drone setup put on it (AUX1 - ARM, AUX2 - flight modes, AUX4 - GPS rescue).
+- **An app log for crashes and freezes:** %APPDATA%\DraupneLink\logs\app-DATE.log, with the window's log, errors, and every thread's stack when the window stops responding.
+- **Phone app 2.3.0-pc.11:** tells a second PC which PC flies (spectator mode); otherwise unchanged.
+
 ## 1.0.16
 
 - **New name: DRAUPNE Link** (formerly DroidDrone PC), after Draupne, Odin's ring. The phone app is now **DRAUPNE Flight**. The GitHub repository moved to MelonNO/draupne-link; old links redirect.
