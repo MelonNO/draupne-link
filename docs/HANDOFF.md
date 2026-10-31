@@ -62,6 +62,13 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   - The motor test (SETTINGS > Motor test): MSP_SET_MOTOR over USB, written from Betaflight's MSP and only tested
     without a flight controller. Try it props off first.
 
+## Ideas not done yet
+
+- Spectator: a better picture than the pilot's would need a second stream from the phone (costs the phone's 4G
+  upload, so the pilot's delay): not done on purpose. A spectator in relay mode isn't supported.
+- Pilot side: show who watches (count is in the pill: LINK READY +N WATCHING).
+- Drone setup never changes `gps_rescue_allow_arming_without_fix`; it only warns.
+
 ## Rules for working on this repo
 
 - **Latency first.** This is FPV over 4G: every choice in the stick and video paths is weighed by the delay it adds.
@@ -108,18 +115,59 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 5. Installed copies find the release through UPDATE (`UpdateCheck` + `SelfUpdate`). The phone app finds a newer APK in
    the Latest release by itself.
 
+Lessons from releasing:
+- Commit and push **before** publishing the phone app: `gh release create --target` needs a pushed commit, and takes
+  `main` or a full SHA (a short SHA fails with "target_commitish is invalid").
+- Build the APK from a clean HEAD (`git status` empty) and check it: `aapt dump badging` (label, package, version) and
+  `apksigner verify --print-certs` (signer SHA-256 as in the private NOTES.md).
+- Claude Code's auto mode may refuse the push / tag step as "creating a public surface": that needs the pilot's
+  explicit OK (a "release" from the pilot is that OK; if it is still refused, say so and stop).
+- The release workflow takes about 3 minutes. Afterwards check `gh release list` (v<version> Latest) and the three
+  assets.
+
 ## Testing and diagnosing
 
-- `gradlew.bat test`: 91 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell count).
+- `gradlew.bat test`: 169 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
+  count, spectator mode end to end on loopback, flight mode / ARM / failsafe planning, setup page composition).
+  Loopback tests need full-size packets to catch size bugs: 1.0.17's spectator cut-off passed with a plain test
+  picture (see `SpectatorTest.fullSizePacketsReachTheSpectatorWhole`).
+- **App log:** `%APPDATA%\DraupneLink\logs\app-DATE.log` (`AppLog`, 14 days): System.out/err, the window's log
+  lines, uncaught exceptions with stacks, and **every thread's stack when the window stops responding for 5 s**.
+  Start here for a crash or freeze. (A freeze at 12:22 on 2026-10-31, before the log existed, left no trace.)
 - **UI checks** are done by painting windows and components off screen into PNGs from small throwaway programs (kept
   in the git-ignored `build/` folder), never by moving the mouse on the desktop.
 - **Link log:** `%APPDATA%\DraupneLink\logs\link-*.csv`, 10 rows a second while connected. It has ping, RC and
   telemetry gaps, RXLOSS / failsafe / armed, the **sticks actually sent** (`channels`, AETR + AUX), the Tailscale path,
-  and the phone's own measurements (stick gaps in and out, USB write times). Start here for any flight complaint.
+  and the phone's own measurements (stick gaps in and out, USB write times). Since 1.0.18 also the video:
+  `video_rx_fps`, `video_mbps` (as received: the phone's bitrate after `BitrateControl`), `video_damaged`,
+  `video_lost`. `video_fps` is the frames **shown**. Start here for any flight or picture complaint.
   Examples: a landed drone that leans means the sticks weren't 1500 at rest; micro failsafes meant the phone held its
   USB writes.
 - Installer changes: build with `packageInstaller` and inspect the MSI tables. jpackage's `--temp` keeps the
   intermediate `.msi`. Test with `msiexec /i ... /l*v log`.
+
+## How the newer parts work (1.0.17 / 1.0.18)
+
+- **Spectator mode** (`Spectate`, `SpectatorHost`, `SpectatorClient`; phone side in the overlay's `Udp.answerSpectator`).
+  A second PC that connects while one flies gets `PILOT_AT` from the phone (only with the right key; the phone sends
+  nothing else extra) and from then on talks only to the pilot PC: HELLO to its link port, then STREAM packets from
+  the pilot's own spectator socket. The pilot copies what the phone sent (`forward`: one array copy per packet on the
+  receive thread, nothing without spectators), resends lost packets on request (a 4096-packet ring) and pauses the
+  spectators when its ping stays 80 ms over the usual for 1 s. The spectator plays everything at the pilot's arrival
+  time + `spectatorDelayMs` (600) and spaces out bunched frames. A spectator never sends Connect again (no takeover).
+  Off by default (`allowSpectators`); direct phone mode only; at most 2 spectators.
+- **Drone setup switches** (`setup/ModeSwitch`): ARM (AUX1), a 3-position flight mode switch (AUX2: acro, angle, GPS
+  position hold), the failsafe (keep / drop / GPS rescue) and a GPS rescue switch (AUX4, only while the failsafe is GPS
+  rescue). One joint planner (`ModeSwitch.plan`) for all switches: they share Betaflight's 20 mode slots, ARM elsewhere
+  is taken off, conflicts are refused. GPS modes: Betaflight's GPS is turned on if needed, then written only when
+  the GPS answers (MSP_STATUS sensor bit, no fix needed) and Betaflight is new enough (rescue 4.4, position hold
+  2025.12). The radio calibration names each switch from these choices (`ModeSwitch.purposes`).
+- **First-time setup = the separate setups** (`SetupWizard.firstTimePages` from `PcSetupWizard.pages`,
+  `DroneSetup.pages`, `PhoneGuideWizard.pages`): add a step to one of those lists and it is in both. Order: this PC,
+  drone, radio (its calibration names the switches), phone, connection.
+- **Camera frame rate:** steady 60 by default (SETTINGS > Camera frame rate). A steady range goes only to phone app
+  2.3.0-pc.12 and on (`ControlLink.cameraFps`; the PC waits up to 1.5 s for the phone's version before the config);
+  pc.12 matches the range to one the camera lists (overlay `InternalCamera.supportedRange`).
 
 ## Betaflight facts this code relies on
 
@@ -130,15 +178,24 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 - The cell count is detected once, when the battery appears. With the FC already on the phone's USB power it can lock
   onto 1S / 2S: `CellCount` corrects the OSD, and Drone setup writes `force_battery_cell_count`.
 - With Air mode, an armed drone on the ground keeps correcting (I-term). Disarm after landing.
+- Mode ids for the CLI `aux` command (msp_box.c permanent ids): ARM 0, ANGLE 1, HORIZON 2, ALTHOLD 3, POS HOLD 11
+  (2025.12), GPS RESCUE 46. A mode is only offered (MSP_BOXIDS) when the board can do it: ANGLE needs the
+  accelerometer, GPS RESCUE the GPS feature, POS HOLD position hold built in.
+- `failsafe_procedure` values: AUTO-LAND, DROP, GPS-RESCUE. With GPS rescue as the failsafe or on a switch, Betaflight
+  arms only with a GPS fix (RESC) unless `gps_rescue_allow_arming_without_fix` is on.
+- The GPS counts as there (MSP_STATUS sensors bit 3) as soon as it talks, fix or not; cleared after 2.5 s of silence.
+  FEATURE_GPS is 1 << 7 (MSP_FEATURE_CONFIG); a UART with function 2 is the GPS port (`serial`).
 
 ## Map of the code
 
 | Area | Files |
 |---|---|
 | Link, RC, telemetry | `ControlLink`, `Connection`, `RcSession`, `RcMapper`, `Pacer`, `FcTelemetry`, `CellCount`, `LinkLog` |
+| Spectator mode | `Spectate` (packets), `SpectatorHost` (pilot side), `SpectatorClient` (spectator side) |
+| App log | `AppLog` (file, uncaught exceptions, freeze watch) |
 | Controller | `Joystick`, `JoystickService`, `CalibrationWizard`, `AxisCalibration` |
 | Video | `video/` (`VideoPipeline`, `VideoDecoder`, `FrameAssembler`, `BitrateControl`, `LatencyMeter`) |
 | Window, OSD, wizards | `gui/` (`MainWindow`, `VideoView`, `OsdRenderer`, `OsdLayout` / `OsdElement` / `OsdSettingsDialog` (SETTINGS > OSD), `SetupWizard`, `PcSetupWizard`, `PhoneGuideWizard`, `DroneSetup`, `Tactical*`) |
-| Setup helpers | `setup/` (`Tailscale`, `BetaflightPlan`, `BetaflightUsb`, `ApkShare`, `MotorTest`, `UpdateCheck`, `SelfUpdate`, `PcPrep`) |
+| Setup helpers | `setup/` (`Tailscale`, `BetaflightPlan`, `BetaflightUsb`, `ModeSwitch` (switches, failsafe, GPS rules), `ApkShare`, `MotorTest`, `UpdateCheck`, `SelfUpdate`, `PcPrep`) |
 | Installer | `src/installer/main.wxs`, `check-running.js` |
-| Phone app | `flight-app/` (overlay on upstream Flight 2.3.0; see its README) |
+| Phone app | `flight-app/` (overlay on upstream Flight 2.3.0; see its README). Overlay files replace upstream's whole: `Udp` (stats, spectator answer), `InternalCamera` (frame-rate range), `UpdateCheck`, ... |
