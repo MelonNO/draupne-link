@@ -13,6 +13,7 @@
  *
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
+ *  Video packets are paced (a key frame no longer leaves as one burst whose end the 4G uplink drops); the PC can ask for a key frame (KEY_FRAME_REQUEST); the encoder state goes to the PC with the stats.
  *
  *  Modified for DRAUPNE Link: measures stick packets arriving and sends PcLinkStats (and this app's version)
  *  to the PC every 0.1 s, as its own telemetry packet. Spectator mode: a second PC (same key) that asks while one
@@ -80,6 +81,8 @@ public class Udp {
     private static final byte SPECTATE_PILOT_QUERY = 0x60;
     private static final byte SPECTATE_PILOT_AT = 0x61;
     private static final byte SPECTATE_NO_PILOT = 0x62;
+    /** DRAUPNE Link: the PC asks for a key frame (one arrived damaged or lost). */
+    private static final byte KEY_FRAME_REQUEST = 0x6A;
     /** Answers go out from here: the receive thread, which carries the sticks, never waits on a send. One for the app. */
     private static final ExecutorService spectatorAnswers = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "spectatorAnswers");
@@ -221,6 +224,8 @@ public class Udp {
                         PcLinkStats.writeTo(stats.daos);
                         String version = MainActivity.versionName;
                         if (statsSent++ % 10 == 0 && version != null) PcLinkStats.writeVersionTo(stats.daos, version);
+                        // last in the packet: an older PC stops reading at a record it doesn't know
+                        if (statsSent % 5 == 1) PcLinkStats.writeEncoderTo(stats.daos, streamEncoder.getTargetBitRate(), streamEncoder.isIntraRefresh());
                         udpSender.sendPacket(stats.getData());
                     }
                     Thread.sleep(10);
@@ -393,6 +398,11 @@ public class Udp {
             {
                 sendVideoInitialFrame(null);
                 if (config.isSendAudioStream()) sendAudioInitialFrame(null);
+                break;
+            }
+            case KEY_FRAME_REQUEST:
+            {
+                streamEncoder.requestKeyFrame();
                 break;
             }
             case UdpCommon.ChangeBitRate:
@@ -1082,6 +1092,7 @@ public class Udp {
         videoFrameNum++;
         int size = buf.length;
         int offset = 0;
+        long gapNs = packetGapNs(size);
         long start = System.nanoTime();
         while (offset < size && udpSender != null) {
             try {
@@ -1103,7 +1114,7 @@ public class Udp {
                         offset += dataSize;
                     }
                     udpSender.sendPacket(packetData.getData());
-                    udpSync.wait(0, 200000);
+                    if (offset < size) udpSync.wait(gapNs / 1_000_000L, (int) (gapNs % 1_000_000L));
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -1114,22 +1125,33 @@ public class Udp {
         processFrameSendTime(timeMs);
     }
 
+    /**
+     * DRAUPNE Link: the PC decides the bitrate. Here only an emergency brake: a key frame that took over three frame
+     * times to leave (pacing spreads it over half a frame time on purpose) means the uplink can't keep up at all.
+     */
     private void processFrameSendTime(long timeMs){
-        int frameTimeMs = 1000 / cameraManager.getCamera().getCurrentFps();
-        if (timeMs > frameTimeMs * 1.5f){
-            streamEncoder.setLockIncreaseBitrate(true);
-            streamEncoder.changeBitRate(false);
-        }else if (timeMs >= frameTimeMs){
-            streamEncoder.setLockIncreaseBitrate(true);
+        int frameTimeMs = 1000 / Math.max(1, cameraManager.getCamera().getCurrentFps());
+        if (timeMs > frameTimeMs * 3){
+            streamEncoder.emergencyDown();
         }else{
-            int currentBr = streamEncoder.getTargetBitRate();
-            int nextBr = streamEncoder.getNextBitrate();
-            long nextTime = timeMs * nextBr / currentBr;
-            streamEncoder.setLockIncreaseBitrate(nextTime >= frameTimeMs);
+            streamEncoder.setLockIncreaseBitrate(false);
         }
         if (config.getBitrateLimit() != 0 && streamEncoder.getTargetBitRate() > config.getBitrateLimit()){
             streamEncoder.changeBitRate(false);
         }
+    }
+
+    /**
+     * DRAUPNE Link: the gap between a frame's packets. Upstream sent them 0.2 ms apart: a key frame left as one burst
+     * of 20-100 KB, and a weak 4G uplink dropped its end (the bottom of the picture went grey). Now at four times the
+     * bitrate (at least 4 Mbit/s), but a frame's packets spread over half a frame time at most, so frames never queue.
+     */
+    private long packetGapNs(int frameBytes){
+        int packets = Math.max(1, (frameBytes + UdpCommon.packetLength - 1) / UdpCommon.packetLength);
+        long paceBps = Math.max(4_000_000L, 4L * streamEncoder.getTargetBitRate());
+        long gap = UdpCommon.packetLength * 8L * 1_000_000_000L / paceBps;
+        long frameNs = 1_000_000_000L / Math.max(1, cameraManager.getCamera().getCurrentFps());
+        return Math.max(200_000L, Math.min(gap, frameNs / 2 / packets));
     }
 
     private void sendVideoFrame(byte[] buf) {
@@ -1138,6 +1160,7 @@ public class Udp {
         videoFrameNum++;
         int size = buf.length;
         int offset = 0;
+        long gapNs = packetGapNs(size);
         while (offset < size && udpSender != null) {
             try {
                 synchronized (udpSync) {
@@ -1158,7 +1181,7 @@ public class Udp {
                         offset += dataSize;
                     }
                     udpSender.sendPacket(packetData.getData());
-                    udpSync.wait(0, 200000);
+                    if (offset < size) udpSync.wait(gapNs / 1_000_000L, (int) (gapNs % 1_000_000L));
                 }
             } catch (Exception e) {
                 e.printStackTrace();

@@ -32,6 +32,15 @@ final class PcLinkStats {
     /** This app's version (versionName), once a second after the stats, so DRAUPNE Link can say when it is old. */
     static final short APP_VERSION_CODE = 0x40F1;
 
+    /** The encoder's bitrate setting (bit/s) and whether it uses intra refresh: the PC decides the bitrate from it. */
+    static final short ENCODER_CODE = 0x40F2;
+
+    static void writeEncoderTo(DataOutputStream out, int targetBitRate, boolean intraRefresh) throws IOException {
+        out.writeShort(ENCODER_CODE);
+        out.writeInt(targetBitRate);
+        out.writeByte(intraRefresh ? 1 : 0);
+    }
+
     static void writeVersionTo(DataOutputStream out, String versionName) throws IOException {
         byte[] name = versionName.getBytes(java.nio.charset.StandardCharsets.UTF_8);
         out.writeShort(APP_VERSION_CODE);

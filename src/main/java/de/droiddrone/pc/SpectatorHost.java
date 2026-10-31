@@ -57,6 +57,7 @@ final class SpectatorHost implements AutoCloseable {
     }
 
     private final String key;
+    private final Runnable joined;
     private volatile boolean allowed;
     private final DatagramSocket linkSocket;
     private final DatagramSocket socket;
@@ -78,6 +79,13 @@ final class SpectatorHost implements AutoCloseable {
      */
     SpectatorHost(String key, boolean allowed, DatagramSocket linkSocket, BooleanSupplier flying, IntSupplier ping,
                   Consumer<String> events) throws IOException {
+        this(key, allowed, linkSocket, flying, ping, events, () -> {});
+    }
+
+    /** @param joined a spectator joined: it needs a key frame to start its picture (asked of the phone) */
+    SpectatorHost(String key, boolean allowed, DatagramSocket linkSocket, BooleanSupplier flying, IntSupplier ping,
+                  Consumer<String> events, Runnable joined) throws IOException {
+        this.joined = joined;
         this.key = key;
         this.allowed = allowed;
         this.linkSocket = linkSocket;
@@ -173,6 +181,7 @@ final class SpectatorHost implements AutoCloseable {
                     viewers = list.toArray(new Viewer[0]);
                     events.accept("Spectator watching from " + ip.getHostAddress() + " (" + viewers.length + " of "
                             + MAX_SPECTATORS + "). It gets the video through this PC's upload.");
+                    joined.run();
                 }
             }
         }

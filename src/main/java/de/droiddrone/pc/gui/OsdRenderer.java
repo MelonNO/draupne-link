@@ -39,7 +39,8 @@ final class OsdRenderer {
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
-                boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording) {}
+                boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
+                String roleBanner, boolean roleAlarm) {}
 
     private static final Color ACCENT = Theme.ACCENT; // symbols and labels
     private static final Color YELLOW = Theme.WARN;  // warnings only
@@ -97,6 +98,16 @@ final class OsdRenderer {
 
             if (attFresh && this.layout.isOn(OsdElement.HORIZON)) horizon(att, d.invertPitch());
             if (this.layout.isOn(OsdElement.CROSSHAIR)) crosshair(g, w / 2f, h / 2f, unit);
+            if (d.roleBanner() != null) { // a spectator: always in sight that this PC doesn't fly (red when it wanted to)
+                g.setFont(Theme.headingFont((d.roleAlarm() ? 34 : 24) * unit));
+                if (!d.roleAlarm() || (now / 500) % 2 == 0) {
+                    put(d.roleBanner(), w / 2f, 130 * unit, d.roleAlarm() ? RED : ACCENT, OsdLayout.Align.CENTER);
+                }
+                if (d.roleAlarm()) {
+                    g.setFont(Theme.headingFont(18 * unit));
+                    put("ANOTHER PC IS THE PILOT - YOUR STICKS ARE NOT SENT", w / 2f, 162 * unit, YELLOW, OsdLayout.Align.CENTER);
+                }
+            }
             element(OsdElement.HEADING, (ex, ey, a) -> {
                 if (attFresh) headingTape(ex, ey, a, att, gps);
             });

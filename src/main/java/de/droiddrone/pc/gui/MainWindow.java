@@ -115,6 +115,12 @@ public class MainWindow extends JFrame {
     private final JTextField portField = new JTextField();
     private final JTextField keyField = new JTextField();
     private final JButton connectButton = Theme.primaryButton("Connect");
+    /** Connect as: pilot (fly) or spectator (watch only). */
+    private final JComboBox<String> roleCombo = new JComboBox<>(new String[]{ROLE_PILOT, ROLE_SPECTATOR});
+    private static final String ROLE_PILOT = "Pilot - fly the drone";
+    private static final String ROLE_SPECTATOR = "Spectator - watch only";
+    /** Wanted to fly, but another PC flies: told once per connection. */
+    private boolean toldNotFlying;
     private final JButton setupButton = Theme.secondaryButton("Setup");
     private final JButton settingsButton = Theme.secondaryButton("Settings");
     /** Shown when GitHub has a newer release; downloads and installs it (or opens its page, see startUpdate). */
@@ -277,16 +283,6 @@ public class MainWindow extends JFrame {
                         logLine("Recording stopped.");
                     }
                 }));
-        int[] fps = {config.getCameraFpsMin(), config.getCameraFpsMax()};
-        int fpsChoice = fps[0] == 60 && fps[1] == 60 ? 0 : fps[0] == 30 && fps[1] == 30 ? 1 : 2;
-        menu.add(new MenuRows.ChoiceRow("Camera frame rate", "Steady 60 (smooth) or 30 (brighter indoors); auto 30-60 by the light",
-                new String[]{"60", "30", "AUTO"}, fpsChoice, i -> {
-                    String[][] ranges = {{"60", "60"}, {"30", "30"}, {"30", "60"}};
-                    save(Map.of("cameraFpsMin", ranges[i][0], "cameraFpsMax", ranges[i][1]));
-                    logLine("Camera frame rate: " + (i == 2 ? "auto, 30-60 fps by the light" : "steady " + ranges[i][0] + " fps")
-                            + (connection == null ? "." : ", from the next connection.")
-                            + (i == 2 ? "" : " Needs phone app 2.3.0-pc.12; older ones keep 30-60."));
-                }));
         menu.add(new MenuRows.SwitchRow("Allow spectators", "Off by default. Other PCs watch your flight through this PC's upload",
                 de.droiddrone.pc.Connection.spectatorsAllowed(config), on -> {
                     save(Map.of(de.droiddrone.pc.Connection.ALLOW_SPECTATORS_KEY, Boolean.toString(on)));
@@ -427,6 +423,18 @@ public class MainWindow extends JFrame {
         c.gridwidth = 2;
         c.insets = new Insets(4, 0, 14, 0);
         link.add(portKey, c);
+        c.insets = new Insets(0, 0, 6, 0);
+        link.add(Theme.label("CONNECT AS", Theme.headingFont(11f), Theme.MUTED), c);
+        roleCombo.setSelectedItem(Connection.watchOnly(config) ? ROLE_SPECTATOR : ROLE_PILOT);
+        roleCombo.setToolTipText("Pilot flies the drone. Spectator only watches another PC's flight (needs Allow spectators on that PC).");
+        TacticalCombo.install(roleCombo);
+        roleCombo.addActionListener(e -> {
+            boolean watch = ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
+            save(Map.of(Connection.CONNECT_AS_KEY, watch ? "spectator" : "pilot"));
+            if (connection == null) connectButton.setText(watch ? "WATCH" : "CONNECT");
+        });
+        link.add(roleCombo, c);
+        c.insets = new Insets(4, 0, 14, 0);
         connectButton.addActionListener(e -> {
             if (connection == null) connect(); else disconnect();
         });
@@ -707,6 +715,7 @@ public class MainWindow extends JFrame {
             addressField.setText(config.getIp());
             portField.setText(Integer.toString(config.getPort()));
             keyField.setText(config.getKey());
+            roleCombo.setSelectedItem(Connection.watchOnly(config) ? ROLE_SPECTATOR : ROLE_PILOT);
             updateModeUi();
         }
         rebuildMapper();
@@ -744,6 +753,11 @@ public class MainWindow extends JFrame {
         if (updatingCombo) return;
         Joystick.Info info = (Joystick.Info) joystickCombo.getSelectedItem();
         if (info == null) return;
+        chooseJoystick(info);
+    }
+
+    /** This controller from now on (the main window's list, or the setup's radio step); remembered by name. */
+    void chooseJoystick(Joystick.Info info) {
         service.select(info.id());
         save(Map.of("joystick", info.name()));
     }
@@ -831,6 +845,7 @@ public class MainWindow extends JFrame {
         lastState = null;
         lastStateText = null;
         lastSpectators = 0;
+        toldNotFlying = false;
         try {
             linkLog = LinkLog.open(de.droiddrone.pc.AppPaths.dataDir().resolve("logs"));
             linkLogTimer.start();
@@ -885,10 +900,11 @@ public class MainWindow extends JFrame {
         modeCombo.setEnabled(editable);
         portField.setEnabled(editable);
         keyField.setEnabled(editable);
+        roleCombo.setEnabled(editable);
         joystickCombo.setEnabled(editable);
         calibrateButton.setEnabled(editable);
         calibrateButton.setToolTipText(editable ? null : "Locked while connected - disconnect first: RC output must stop while calibrating");
-        connectButton.setText(editable ? "CONNECT" : "DISCONNECT");
+        connectButton.setText(editable ? (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()) ? "WATCH" : "CONNECT") : "DISCONNECT");
         connectButton.setBackground(editable ? Theme.ACCENT : Theme.BAD);
         updateModeUi();
     }
@@ -1209,10 +1225,11 @@ public class MainWindow extends JFrame {
         FcTelemetry.Status st = l.getTelemetry().getStatus();
         boolean armed = st != null && st.armed() && System.currentTimeMillis() - st.receivedAt() < 2000;
         boolean radioFrozen = armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS;
+        String banner = !spectator ? null : l.isWatchOnly() ? "SPECTATOR" : "NOT FLYING - SPECTATOR";
         return new OsdRenderer.Data(true, ready, l.getPing(), spectator || (s != null && s.isRcEnabled()),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
                 osdLinkHint(), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
-                s == null ? null : s.waitingFor(), v != null && v.recordingFile() != null);
+                s == null ? null : s.waitingFor(), v != null && v.recordingFile() != null, banner, spectator && !l.isWatchOnly());
     }
 
     /** No new picture for this long while the stream runs: VIDEO FROZEN. */
@@ -1293,6 +1310,10 @@ public class MainWindow extends JFrame {
             lastState = state;
             lastStateText = stateText;
         }
+        if (link.isSpectator() && !link.isWatchOnly() && !toldNotFlying) {
+            toldNotFlying = true;
+            tellNotFlying(link);
+        }
         int spectators = link.getSpectatorCount();
         if (spectators != lastSpectators) {
             lastSpectators = spectators;
@@ -1313,8 +1334,14 @@ public class MainWindow extends JFrame {
         }
         switch (state) {
             case READY -> setPill(spectators > 0 ? "LINK READY +" + spectators + " WATCHING" : "LINK READY", Theme.OK, Theme.BG);
-            case SPECTATING -> setPill("SPECTATING", Theme.ACCENT, Theme.BG);
-            case SPECTATOR_WAITING -> setPill("SPECTATOR", Theme.WARN, Theme.BG);
+            case SPECTATING, SPECTATOR_WAITING -> {
+                if (link.isWatchOnly()) {
+                    setPill(state == ControlLink.State.SPECTATING ? "SPECTATING" : "SPECTATOR", state == ControlLink.State.SPECTATING
+                            ? Theme.ACCENT : Theme.WARN, Theme.BG);
+                } else {
+                    setPill("NOT FLYING - SPECTATOR", Theme.BAD, Theme.BG); // wanted to fly: impossible to miss
+                }
+            }
             case VERSION_MISMATCH -> setPill("VERSION MISMATCH", Theme.BAD, Theme.BG);
             case CLOSED -> setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
             default -> setPill(state == ControlLink.State.CONNECTING ? "CONNECTING" : "WAITING FOR PHONE", Theme.WARN, Theme.BG);
@@ -1327,6 +1354,24 @@ public class MainWindow extends JFrame {
         telemetryValue.setText(Long.toString(link.getTelemetryPacketsReceived()));
         rcSentValue.setText(Long.toString(link.getRcFramesSent()));
         refreshPhoneApp(state == ControlLink.State.READY ? link.getTelemetry() : null);
+    }
+
+    /**
+     * Connected as pilot, but another PC flies: this one can't, and is a spectator now. Said where it can't be missed:
+     * a message to click away, the log, the red pill and a blinking line on the video. Never a takeover: it stays a
+     * spectator until disconnected.
+     */
+    private void tellNotFlying(ControlLink link) {
+        String status = link.spectatorStatus();
+        String who = status != null && status.contains("(") ? status.substring(status.indexOf('(') + 1, status.indexOf(')')) : "another PC";
+        logLine("YOU ARE NOT FLYING: " + who + " is the pilot of this drone. This PC was made a spectator - its sticks are not sent.");
+        SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
+                "<html><div style='width:420px'><b style='font-size:16px;color:#ff5a4f'>You are not flying.</b><br><br>"
+                        + "Another PC (" + who + ") is already the pilot of this drone, so this PC can't fly it.<br><br>"
+                        + "It has been made a <b>spectator</b> instead: you see the video and OSD, a little behind, and your "
+                        + "sticks are <b>not</b> sent.<br><br>To fly from this PC: the other PC disconnects first, then "
+                        + "DISCONNECT and CONNECT here as Pilot.</div></html>",
+                "Not flying - another PC is the pilot", JOptionPane.WARNING_MESSAGE));
     }
 
     /** The phone app's version and the phone's battery; a warning (and one log line per connection) when the app is old. */

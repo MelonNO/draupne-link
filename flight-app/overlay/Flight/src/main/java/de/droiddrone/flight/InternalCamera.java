@@ -14,7 +14,8 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DRAUPNE Link: the frame-rate range is matched to one the camera lists (supportedRange).
+ *  Modified for DRAUPNE Link: the frame-rate range asked for is kept (upstream took the fastest when the size
+ *  wasn't exact) and matched to one the camera lists (supportedRange).
  */
 
 package de.droiddrone.flight;
@@ -351,16 +352,9 @@ public class InternalCamera implements Camera{
                     }
                 }
             }
-            Range<Integer>[] fpsRanges=characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
-            int max = 0;
-            if (fpsRanges != null) {
-                for (Range<Integer> fpsRange : fpsRanges) {
-                    if (fpsRange.getLower() / 2 + fpsRange.getUpper() > max) {
-                        max = fpsRange.getLower() / 2 + fpsRange.getUpper();
-                        frameRate = new Range<>(fpsRange.getLower(), fpsRange.getUpper());
-                    }
-                }
-            }
+            // DRAUPNE Link: upstream took the camera's fastest range here, whatever was asked for - and this branch runs
+            // for every camera that isn't high-speed, so the camera ran at 60 when the PC asked for 30. The range asked
+            // for stays; supportedRange below matches it to one the camera lists.
         }
         if (frameRate.getLower() <= 0 || frameRate.getLower() > 60 || frameRate.getUpper() <= 0 || frameRate.getUpper() > 240){
             frameRate = targetFrameRange;
@@ -374,7 +368,7 @@ public class InternalCamera implements Camera{
 
     /**
      * DRAUPNE Link: the camera takes only a frame-rate range it lists; one it doesn't (DRAUPNE Link asks for a steady
-     * 60-60 by default) can stop the picture. The listed range nearest the wanted one: the same, else the same top
+     * 30-30) can stop the picture. The listed range nearest the wanted one: the same, else the same top
      * with the nearest bottom (as steady as it goes), else the nearest top.
      */
     static Range<Integer> supportedRange(Range<Integer>[] listed, Range<Integer> wanted) {

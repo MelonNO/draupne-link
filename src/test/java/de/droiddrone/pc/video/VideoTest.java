@@ -52,14 +52,92 @@ class VideoTest {
         assertEquals(1, a.getDamagedFrames());
     }
 
+    /** A key frame whose last packet was lost: out (damaged) before the newer frame, not dropped without a word. */
     @Test
-    void newerFrameDropsUnfinishedOlderOnes() {
+    void keyFrameThatLostItsLastPacketGoesOutBeforeTheNextFrame() {
+        FrameAssembler a = new FrameAssembler();
+        byte[] whole = bytes(0, 300);
+        assertNull(a.put(true, (short) 10, 0, 300, whole, 0, 100));
+        assertNull(a.put(true, (short) 10, 100, 0, whole, 100, 100)); // its last 100 bytes never come
+        FrameAssembler.Frame next = a.put(false, (short) 11, 0, 50, whole, 0, 50);
+        assertNotNull(next);
+        List<FrameAssembler.Frame> earlier = a.takeFlushed();
+        assertEquals(1, earlier.size(), "the key frame goes out first: the next frames are built on it");
+        assertTrue(earlier.get(0).keyFrame());
+        assertTrue(earlier.get(0).damaged());
+        assertEquals(10, earlier.get(0).number());
+        assertEquals(300, earlier.get(0).data().length);
+        assertEquals(whole[150], earlier.get(0).data()[150]);
+        assertEquals(0, a.getLostFrames());
+        assertTrue(a.takeFlushed().isEmpty(), "taken once");
+        assertNull(a.put(true, (short) 10, 200, 0, whole, 200, 100), "too late for frame 10 now");
+    }
+
+    @Test
+    void newerFrameReleasesOlderOnesOldestFirstAndLosesThoseWithoutABeginning() {
         FrameAssembler a = new FrameAssembler();
         byte[] whole = bytes(0, 200);
-        a.put(false, (short) 10, 0, 200, whole, 0, 100);          // frame 10 never finishes
+        a.put(false, (short) 9, 100, 0, whole, 100, 100);         // frame 9: only its end - can't be decoded
+        a.put(false, (short) 10, 0, 200, whole, 0, 100);          // frame 10: beginning only
+        a.put(false, (short) 8, 0, 200, whole, 0, 100);           // frame 8: beginning only
         assertNotNull(a.put(false, (short) 11, 0, 50, whole, 0, 50));
-        assertEquals(1, a.getLostFrames());
+        List<FrameAssembler.Frame> earlier = a.takeFlushed();
+        assertEquals(List.of((short) 8, (short) 10), earlier.stream().map(FrameAssembler.Frame::number).toList());
+        assertEquals(1, a.getLostFrames(), "frame 9");
         assertNull(a.put(false, (short) 10, 100, 0, whole, 100, 100), "too late for frame 10");
+    }
+
+    /**
+     * Why a damaged key frame goes out rather than being dropped: the decoder decodes it up to the gap and conceals the
+     * rest, and the frames after it stay much closer to the real picture than when the key frame is left out (what
+     * happened when its last packet was lost). Measured with a detailed test picture, H.264, 1000 bytes lost.
+     */
+    @Test
+    void aDamagedKeyFrameBeatsLeavingItOut() {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 30, 10, true);
+        int damagedAt = 10; // the second key frame
+        TestStreams.Packet key = s.packets().get(damagedAt);
+        assertTrue(key.keyFrame() && key.data().length > 2000, "a key frame of several packets");
+        byte[] damaged = key.data().clone();
+        java.util.Arrays.fill(damaged, damaged.length / 3, damaged.length / 3 + 1000, (byte) 0);
+        for (int upTo : new int[]{12, 15}) {
+            int[] truth = decodeSequence(s, upTo, damagedAt, null, false);
+            long decoded = difference(truth, decodeSequence(s, upTo, damagedAt, damaged, false));
+            long leftOut = difference(truth, decodeSequence(s, upTo, damagedAt, null, true));
+            assertTrue(decoded < leftOut * 0.85, "frame " + upTo + ": damaged key frame " + decoded + ", left out " + leftOut);
+        }
+    }
+
+    /** Frames 0..last; frame damagedAt replaced (damaged) or left out (skip). */
+    private static int[] decodeSequence(TestStreams.Stream s, int last, int damagedAt, byte[] damaged, boolean skip) {
+        try (VideoDecoder d = new VideoDecoder(false, s.codecConfig())) {
+            for (int i = 0; i <= last; i++) {
+                if (i == damagedAt && skip) continue;
+                byte[] f = i == damagedAt && damaged != null ? damaged : s.packets().get(i).data();
+                d.decode(f, f.length);
+            }
+            int[] px = new int[320 * 240];
+            d.convert(px, 320, 240);
+            return px;
+        }
+    }
+
+    private static long difference(int[] a, int[] b) {
+        long sum = 0;
+        for (int i = 0; i < a.length; i++) {
+            for (int sh = 0; sh <= 16; sh += 8) sum += Math.abs(((a[i] >> sh) & 255) - ((b[i] >> sh) & 255));
+        }
+        return sum;
+    }
+
+    @Test
+    void aNewKeyFrameMakesOlderUnfinishedFramesLost() {
+        FrameAssembler a = new FrameAssembler();
+        byte[] whole = bytes(0, 200);
+        a.put(false, (short) 10, 0, 200, whole, 0, 100);
+        assertNotNull(a.put(true, (short) 11, 0, 50, whole, 0, 50));
+        assertTrue(a.takeFlushed().isEmpty(), "a key frame needs nothing before it");
+        assertEquals(1, a.getLostFrames());
     }
 
     @Test
@@ -125,27 +203,102 @@ class VideoTest {
         List<Boolean> changes = new ArrayList<>();
         BitrateControl b = new BitrateControl(changes::add);
         long t = 0;
-        for (int i = 0; i < 200; i++, t += 17) b.onFrame(i % 30 == 0, t, 60, 50); // ~3.4 s of clean 60 fps
+        for (int i = 0; i < 140; i++, t += 17) b.onFrame(i % 30 == 0, t, 60, 50); // ~2.4 s of clean 60 fps
         assertTrue(changes.isEmpty(), "clean stream: no change yet");
-        b.onBadFrame(true); // a lost key frame counts 5
+        for (int i = 0; i < 7; i++) b.onBadFrame(false); // 7 frames lost in a second: real trouble
         b.onFrame(false, t += 17, 60, 50);
         assertEquals(List.of(false), changes);
-        b.onBadFrame(true);
+        for (int i = 0; i < 7; i++) b.onBadFrame(false);
         b.onFrame(false, t += 17, 60, 50);
         assertEquals(1, changes.size(), "decreases are at least 2 s apart");
-        for (int i = 0; i < 700; i++, t += 17) b.onFrame(i % 30 == 0, t, 60, 50); // ~12 s clean
-        assertEquals(Boolean.TRUE, changes.get(changes.size() - 1));
+        for (int i = 0; i < 300; i++, t += 17) b.onFrame(i % 30 == 0, t, 60, 50); // ~5 s clean
+        assertEquals(Boolean.TRUE, changes.get(changes.size() - 1), "raised after 3 s of calm (was 10 s)");
     }
 
     @Test
-    void lateFramesAndHighPingLowerTheBitrate() {
+    void lateFramesLowerTheBitrateButAPingSpikeAloneDoesNot() {
         List<Boolean> changes = new ArrayList<>();
         BitrateControl b = new BitrateControl(changes::add);
         b.onFrame(true, 0, 60, 50);
         b.onFrame(true, 2500, 60, 50); // 2.5 s gap
         assertEquals(List.of(false), changes);
-        b.onFrame(true, 5000, 60, 400); // ping 400 ms
-        assertEquals(List.of(false, false), changes);
+        b.onFrame(true, 5000, 60, 400); // one ping of 400 ms: far 4G jitter, not a queue
+        assertEquals(List.of(false), changes);
+    }
+
+    /** The far 4G link of 2026-10-31: ping 100-200 ms with spikes, two damaged key frames a second. */
+    @Test
+    void aFarLinkWithDamagedKeyFramesIsNotPinnedToTheBottom() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        long t = 0;
+        java.util.Random r = new java.util.Random(1);
+        for (int i = 0; i < 60 * 60; i++, t += 17) { // a minute at 60 fps
+            int ping = 100 + r.nextInt(100) + (i % 600 == 300 ? 700 : 0); // a spike every 10 s
+            if (i % 30 == 0) b.onBadFrame(true); // each key frame arrives damaged
+            b.onFrame(i % 30 == 0, t, 60, ping);
+        }
+        long down = changes.stream().filter(c -> !c).count();
+        assertTrue(down <= 1, "lowered " + down + " times");
+        assertTrue(b.step() >= BitrateControl.FLOOR_STEP, "never below 1 Mbit/s from the PC");
+        assertTrue(changes.contains(true), "raised while it holds");
+    }
+
+    @Test
+    void thePhonesOwnReportSetsTheStep() {
+        BitrateControl b = new BitrateControl(c -> { });
+        b.onPhoneTarget(500_000);
+        assertEquals(1, b.step());
+        b.onPhoneTarget(6_000_000);
+        assertEquals(5, b.step());
+        b.onPhoneTarget(20_000_000);
+        assertEquals(5, b.step(), "above the table: the top");
+        b.onPhoneTarget(-1);
+        assertEquals(5, b.step(), "no report: unchanged");
+    }
+
+    @Test
+    void keyFramesComingRarelyAreNoTrouble() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        long t = 0;
+        for (int i = 0; i < 30 * 12; i++, t += 33) b.onFrame(i == 0, t, 30, 100); // 12 s, one key frame
+        assertFalse(changes.contains(false), "pc.13 sends key frames every 2-10 s");
+    }
+
+    /** The PC thought the phone was on 4-6 Mbit/s while 0.5 arrived: what arrives decides. */
+    @Test
+    void littleArrivingAsksThePhoneUpWhateverThePcCounted() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        long t = 0;
+        for (int i = 0; i < 60 * 8; i++, t += 17) b.onFrame(i % 30 == 0, t, 60, 100); // calm: raised to the top
+        assertTrue(b.step() > BitrateControl.FLOOR_STEP);
+        changes.clear();
+        for (int s = 0; s < 4; s++) b.onReceivedRate(0.4, t + s * 1000L);
+        assertTrue(changes.isEmpty(), "not before " + BitrateControl.RESCUE_MS + " ms");
+        for (int s = 4; s < 11; s++) b.onReceivedRate(0.4, t + s * 1000L);
+        assertEquals(List.of(true, true), changes, "asked up every " + BitrateControl.RESCUE_MS + " ms");
+        assertEquals(BitrateControl.FLOOR_STEP, b.step(), "counted as at the floor: the PC won't lower it further");
+        changes.clear();
+        b.onReceivedRate(1.2, t + 11_000);
+        b.onReceivedRate(0.4, t + 12_000);
+        assertTrue(changes.isEmpty(), "enough arrived: starts counting again");
+    }
+
+    @Test
+    void neverLowersBelowTheFloorAndAsksThePhoneUpWhenItWentLowerByItself() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        long t = 0;
+        for (int i = 0; i < 20; i++, t += 2500) { // a 2.5 s gap every time: trouble each time
+            b.onFrame(true, t, 30, 100);
+        }
+        assertEquals(BitrateControl.FLOOR_STEP, b.step());
+        assertEquals(BitrateControl.START_STEP - BitrateControl.FLOOR_STEP, changes.stream().filter(c -> !c).count());
+        changes.clear();
+        for (int s = 0; s < 6; s++) b.onReceivedRate(0.25, t + s * 1000L); // the phone sits at 0.25 by itself
+        assertEquals(List.of(true), changes, "asked up after " + BitrateControl.RESCUE_MS + " ms");
     }
 
     @Test
@@ -156,10 +309,11 @@ class VideoTest {
         for (int i = 0; i < 180; i++, t += 17) b.onFrame(i % 30 == 0, t, 60, 70 + i % 20); // ~3 s at 70-90 ms
         b.onFrame(false, t += 17, 60, 70 + BitrateControl.QUEUE_DELAY_MS + 30); // one slow ping: 4G jitter
         for (int i = 0; i < 10; i++, t += 17) b.onFrame(false, t, 60, 80);
-        assertTrue(changes.isEmpty(), "a single slow ping is ignored");
+        assertFalse(changes.contains(false), "a single slow ping is ignored");
+        int before = changes.size();
         long until = t + BitrateControl.QUEUE_HOLD_MS + 100;
         for (; t < until; t += 17) b.onFrame(false, t, 60, 180); // the uplink queues: ping stays ~110 ms higher
-        assertEquals(List.of(false), changes, "lowered while still under upstream's 300 ms limit");
+        assertEquals(List.of(false), changes.subList(before, changes.size()), "lowered while still under upstream's 300 ms limit");
     }
 
     // ------------------------------------------------------------------ LatencyMeter

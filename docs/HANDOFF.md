@@ -30,8 +30,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   - 1.0.17's Drone setup on the real board, props off: ARM to AUX1, flight modes on AUX2, failsafe GPS rescue and
     AUX4 (check the Modes and Failsafe tabs in Betaflight Configurator); "GPS hardware failure" with the GPS unplugged
     (MSP_STATUS sensor bit 3, MSP_FEATURE_CONFIG, MSP_BOXIDS - all from Betaflight's source, never on a board).
-  - The steady 60 fps with phone app pc.12: does this phone's camera list 60-60 (its log says "Min FPS / Max FPS"),
-    and how dark is it indoors? The link log's new video columns for a poor picture.
+  - The steady 30 fps (no longer a setting): does the picture stay smooth and bright enough indoors? The phone's log
+    says "Min FPS / Max FPS". The link log's video columns for a poor picture.
   - Spectator mode with two PCs and phone app pc.11 (only tested on loopback, `SpectatorTest`): picture quality at
     600 ms, the pilot's ping and sticks unchanged, the pause when the pilot's link slows.
   - The app log's freeze report (WINDOW NOT RESPONDING with all stacks) on a real freeze.
@@ -165,9 +165,13 @@ Lessons from releasing:
 - **First-time setup = the separate setups** (`SetupWizard.firstTimePages` from `PcSetupWizard.pages`,
   `DroneSetup.pages`, `PhoneGuideWizard.pages`): add a step to one of those lists and it is in both. Order: this PC,
   drone, radio (its calibration names the switches), phone, connection.
-- **Camera frame rate:** steady 60 by default (SETTINGS > Camera frame rate). A steady range goes only to phone app
-  2.3.0-pc.12 and on (`ControlLink.cameraFps`; the PC waits up to 1.5 s for the phone's version before the config);
-  pc.12 matches the range to one the camera lists (overlay `InternalCamera.supportedRange`).
+- **Camera frame rate:** always a steady 30 fps (`ControlLink.CAMERA_FPS`), no setting: 30-60 switched with the light
+  (jumpy) and 60 was dark indoors. Old `cameraFpsMin/Max` lines in a settings file are ignored. Phone app pc.12 matches
+  the range to one the camera lists (overlay `InternalCamera.supportedRange`).
+- **Connect as** (next to CONNECT, `connectAs`): pilot or spectator. A spectator by choice (`ControlLink.watchOnly`)
+  never sends Connect; it asks the phone who flies (PILOT_QUERY) and waits while nobody does. A pilot that finds another
+  PC flying is made a spectator and told so loudly: a message, the red NOT FLYING - SPECTATOR pill, a blinking line on
+  the video (`MainWindow.tellNotFlying`).
 
 ## Betaflight facts this code relies on
 

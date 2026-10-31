@@ -524,7 +524,12 @@ final class PcSetupWizard {
         private final CheckRow radio = new CheckRow("Radio connected");
         private final CheckRow calibration = new CheckRow("Sticks and switches calibrated");
         private JButton calibrateButton;
-        /** Calibrated, with the radio plugged in, when the wizard opened: nothing to show (CALIBRATE redoes it). */
+        /** Which controller, when more than one is plugged in (the same choice as the main window's list). */
+        private final javax.swing.JComboBox<de.droiddrone.pc.Joystick.Info> radioChoice = new javax.swing.JComboBox<>();
+        private boolean updatingChoice;
+        /** Another controller was chosen here: its sticks need a calibration of their own. */
+        private boolean changedController;
+        /** Calibrated, one radio plugged in, when the wizard opened: nothing to show (CALIBRATE redoes it). */
         private boolean readyAtStart;
 
         RadioPage(MainWindow main) {
@@ -538,7 +543,9 @@ final class PcSetupWizard {
 
         @Override
         void prepare() {
-            readyAtStart = main.isCalibrated() && main.service().getSnapshot().selected() != null;
+            JoystickService.Snapshot snap = main.service().getSnapshot();
+            // with several controllers plugged in, the step stays: the pilot picks the right one here
+            readyAtStart = main.isCalibrated() && snap.selected() != null && snap.joysticks().size() <= 1;
         }
 
         @Override
@@ -554,9 +561,31 @@ final class PcSetupWizard {
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
+            radioChoice.setRenderer(new javax.swing.DefaultListCellRenderer() {
+                @Override
+                public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value, int index,
+                                                                       boolean selected, boolean focus) {
+                    super.getListCellRendererComponent(list, value, index, selected, focus);
+                    if (value instanceof de.droiddrone.pc.Joystick.Info info) setText(info.name());
+                    return this;
+                }
+            });
+            radioChoice.setToolTipText("More than one controller is plugged in: pick your radio");
+            TacticalCombo.install(radioChoice);
+            radioChoice.addActionListener(e -> {
+                if (updatingChoice) return;
+                Object chosen = radioChoice.getSelectedItem();
+                JoystickService.Snapshot snap = main.service().getSnapshot();
+                if (!(chosen instanceof de.droiddrone.pc.Joystick.Info info) || info.equals(snap.selected())) return;
+                main.chooseJoystick(info);
+                changedController = true;
+                wizard.update();
+            });
+            radioChoice.setVisible(false); // shown once more than one controller is found
+            radio.addComponent(radioChoice);
             WizardDialog.addRow(col, radio);
             calibrateButton = calibration.addPrimaryAction("Calibrate", () -> {
-                main.calibrate();
+                if (main.calibrate()) changedController = false;
                 wizard.update();
             });
             WizardDialog.addRow(col, calibration);
@@ -566,22 +595,52 @@ final class PcSetupWizard {
         @Override
         void refresh() {
             JoystickService.Snapshot snap = main.service().getSnapshot();
+            showChoice(snap);
             if (snap.selected() == null) {
                 radio.set(State.BAD, "Not found yet. Select the model you fly, use the USB-C port on top of the radio, "
                         + "and choose USB Joystick (HID) on its pop-up.");
             } else {
                 int axes = snap.state() == null ? 0 : snap.state().axes().length;
-                radio.set(State.OK, "<b>" + snap.selected().name() + "</b> - " + axes + " axes.");
+                radio.set(State.OK, "<b>" + snap.selected().name() + "</b> - " + axes + " axes."
+                        + (snap.joysticks().size() > 1 ? " " + snap.joysticks().size() + " controllers found: pick yours on the right." : ""));
             }
             boolean ready = snap.selected() != null && !main.isLinkActive();
             calibrateButton.setEnabled(ready);
-            calibration.set(main.isCalibrated() ? State.OK : State.WARN, main.isCalibrated()
-                    ? "Done."
-                    : "Press Calibrate and follow the steps (about a minute).");
+            radioChoice.setEnabled(!main.isLinkActive());
+            if (changedController) {
+                calibration.set(State.WARN, "Another controller: press Calibrate for its sticks and switches.");
+            } else {
+                calibration.set(main.isCalibrated() ? State.OK : State.WARN, main.isCalibrated()
+                        ? "Done."
+                        : "Press Calibrate and follow the steps (about a minute).");
+            }
+        }
+
+        /** The list of controllers, kept up to date; only shown when there is a choice. */
+        private void showChoice(JoystickService.Snapshot snap) {
+            List<de.droiddrone.pc.Joystick.Info> list = snap.joysticks();
+            boolean show = list.size() > 1;
+            if (radioChoice.isVisible() != show) {
+                radioChoice.setVisible(show);
+                radio.revalidate();
+            }
+            javax.swing.DefaultComboBoxModel<de.droiddrone.pc.Joystick.Info> model =
+                    (javax.swing.DefaultComboBoxModel<de.droiddrone.pc.Joystick.Info>) radioChoice.getModel();
+            boolean same = model.getSize() == list.size();
+            for (int i = 0; same && i < list.size(); i++) same = model.getElementAt(i).equals(list.get(i));
+            if (same && java.util.Objects.equals(model.getSelectedItem(), snap.selected())) return;
+            updatingChoice = true;
+            if (!same) {
+                model.removeAllElements();
+                list.forEach(model::addElement);
+            }
+            model.setSelectedItem(snap.selected());
+            updatingChoice = false;
         }
 
         @Override
         String status() {
+            if (changedController) return "Calibrate the controller you picked.";
             return main.isCalibrated() ? "Radio ready." : "Calibrate the radio before flying.";
         }
     }

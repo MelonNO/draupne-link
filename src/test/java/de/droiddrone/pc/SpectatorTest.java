@@ -131,6 +131,47 @@ class SpectatorTest {
         assertArrayEquals(pilotSink.pixels, sink.pixels, "the spectator sees the pilot's picture");
     }
 
+    /** Connect as: Spectator - asks the phone who flies and watches, never a Connect. */
+    @Test
+    void connectingAsSpectatorWatchesThePilot() throws Exception {
+        phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        pilotFlying(true);
+        spectator = link(SPECTATOR_PORT, true, 300);
+        spectator.watchOnly();
+        spectator.start();
+        assertTrue(spectator.isSpectator(), "a spectator from the start");
+        waitFor(() -> spectator.getState() == ControlLink.State.SPECTATING, 5000, "watching");
+        assertTrue(spectator.isWatchOnly());
+        assertEquals(1, pilot.getSpectatorCount());
+        assertFalse(spectator.sendRc(new short[]{1500, 1500, 1500, 1000}));
+    }
+
+    /** Connect as: Spectator with nobody flying - it waits, and never becomes the pilot. */
+    @Test
+    void spectatorByChoiceWaitsWhenNobodyFlies() throws Exception {
+        phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        spectator = link(SPECTATOR_PORT, true, 300);
+        spectator.watchOnly();
+        spectator.start();
+        waitFor(() -> spectator.spectatorStatus().contains("waiting for a pilot"), 5000, "told nobody flies");
+        Thread.sleep(1500);
+        assertFalse(phone.receiverBuffer.isConnected(), "the phone never got a Connect");
+        assertEquals(ControlLink.State.SPECTATOR_WAITING, spectator.getState());
+        // a pilot comes: the spectator joins it
+        pilotFlying(true);
+        waitFor(() -> spectator.getState() == ControlLink.State.SPECTATING, 6000, "watching the new pilot");
+    }
+
+    @Test
+    void watchingThroughARelayIsRefused() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        config.set(Connection.CONNECT_AS_KEY, "spectator");
+        config.set("linkMode", "relay");
+        config.set("ip", "127.0.0.1");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> Connection.open(config));
+        assertTrue(e.getMessage().contains("spectator"));
+    }
+
     @Test
     void spectatorNeverTakesTheDroneOver() throws Exception {
         phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);

@@ -37,9 +37,15 @@ public class Connection {
             }
             remoteIp = InetAddress.getByName(config.getIp());
         }
+        boolean watch = watchOnly(config);
+        if (watch && mode != LinkMode.PHONE) {
+            throw new IllegalArgumentException("Watching as a spectator needs the connection \"" + LinkMode.PHONE.title
+                    + "\": through a relay the phone can't say which PC flies.");
+        }
         ControlLink link = new ControlLink(config, remoteIp, port, localPort);
         // only straight to the phone: through a relay the phone can't tell a second PC where the first one is
         if (mode == LinkMode.PHONE) link.enableSpectators(spectatorsAllowed(config), spectatorDelay(config));
+        if (watch) link.watchOnly();
         if (video != null) link.setVideoListener(video, !"avc".equalsIgnoreCase(config.getString("videoCodec")));
         try {
             link.start();
@@ -49,6 +55,13 @@ public class Connection {
             throw e;
         }
         return new Connection(mode, relay, link);
+    }
+
+    /** Connect as: pilot (fly the drone) or spectator (watch another PC's flight). */
+    public static final String CONNECT_AS_KEY = "connectAs";
+
+    public static boolean watchOnly(PcConfig config) {
+        return "spectator".equalsIgnoreCase(config.getString(CONNECT_AS_KEY));
     }
 
     /** SETTINGS > Allow spectators: off unless the pilot switches it on. */

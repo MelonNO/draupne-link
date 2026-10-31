@@ -31,7 +31,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     /** @param hardware the pictures are decoded on the GPU */
     public record Stats(boolean hevc, int width, int height, int receivedFps, int shownFps, double megabitsPerSecond,
-                        double decodeMs, double convertMs, long damaged, long lost, String error, boolean hardware) {}
+                        double decodeMs, double convertMs, long damaged, long lost, String error, boolean hardware,
+                        int bitrateStep, long drawSkipped, long bunched) {}
+
+    /** Frames arriving closer together than this came bunched up (4G delivers in bursts). */
+    static final long BUNCH_MS = 4;
 
     private record Config(int width, int height, boolean hevc, boolean front, byte[] codecConfig) {}
 
@@ -65,6 +69,13 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile java.nio.file.Path recordDir; // null = not recording
     private volatile java.nio.file.Path recordFile;
     private Thread recordThread;
+    /** A frame came damaged or went lost since the last intact key frame: a key frame is asked for (receive thread). */
+    private boolean needKeyFrame;
+    /** Frames that came within BUNCH_MS of the one before (receive thread); and when the last one came. */
+    private volatile long bunched;
+    private long lastAcceptAt;
+    /** Frames decoded but not drawn because a newer one was already waiting (decode thread). */
+    private volatile long drawSkipped;
     /** When the last fragment came (System.currentTimeMillis); the stats go to 0 once it is old. */
     private volatile long lastFragmentAt;
 
@@ -139,39 +150,58 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         lastFragmentAt = now;
         windowBytes += length;
         FrameAssembler.Frame frame;
+        java.util.List<FrameAssembler.Frame> earlier;
         long lost;
         synchronized (assembler) {
             frame = assembler.put(keyFrame, frameNum, offset, frameSize, buf, dataOffset, length);
+            earlier = assembler.takeFlushed(); // older unfinished frames, damaged: decoded first, they are references
             lost = assembler.getLostFrames();
         }
-        for (; lastLost < lost; lastLost++) bitrate.onBadFrame(false);
-        if (frame != null) {
-            if (recordDir != null && !recordQueue.offer(new RecFrame(frame.data(), frame.keyFrame(), now))) {
-                log("Recording: the disk is too slow, a frame was left out");
-            }
-            windowFrames++;
-            if (frame.damaged()) bitrate.onBadFrame(frame.keyFrame());
-            bitrate.onFrame(frame.keyFrame(), now, Math.max(receivedFps, 30), ping.getAsInt());
-            synchronized (this) {
-                if (currentConfig == null) {
-                    if (frame.keyFrame()) earlyFrames.clear(); // only the newest key frame on can be decoded anyway
-                    if (earlyFrames.size() >= MAX_BACKLOG) earlyFrames.remove(0);
-                    earlyFrames.add(frame);
-                } else {
-                    if (queue.size() >= MAX_BACKLOG) {
-                        queue.clear(); // hopelessly behind: start over at the next key frame
-                        queue.offer(currentConfig);
-                    }
-                    queue.offer(frame);
-                }
-            }
+        for (; lastLost < lost; lastLost++) {
+            bitrate.onBadFrame(false);
+            needKeyFrame = true;
         }
+        for (FrameAssembler.Frame f : earlier) accept(f, now);
+        if (frame != null) accept(frame, now);
         if (now - windowStart >= 1000) {
             receivedFps = (int) (windowFrames * 1000 / Math.max(1, now - windowStart));
             megabitsPerSecond = windowBytes * 8.0 / 1000.0 / Math.max(1, now - windowStart);
+            bitrate.onReceivedRate(megabitsPerSecond, now);
+            ControlLink l = link;
+            if (l != null) bitrate.onPhoneTarget(l.getTelemetry().getPhoneTargetBitRate());
             windowFrames = 0;
             windowBytes = 0;
             windowStart = now;
+        }
+    }
+
+    /** A finished frame (receive thread): recorded, counted, and queued for the decoder. */
+    private void accept(FrameAssembler.Frame frame, long now) {
+        if (recordDir != null && !recordQueue.offer(new RecFrame(frame.data(), frame.keyFrame(), now))) {
+            log("Recording: the disk is too slow, a frame was left out");
+        }
+        windowFrames++;
+        // a damaged or lost frame breaks the pictures after it until a key frame: ask for one (phone app pc.13 on;
+        // the link limits how often) rather than wait for the next one - they come every 2-10 s now
+        if (frame.damaged()) needKeyFrame = true;
+        else if (frame.keyFrame()) needKeyFrame = false;
+        if (needKeyFrame) requestKeyFrame();
+        if (lastAcceptAt != 0 && now - lastAcceptAt < BUNCH_MS) bunched++;
+        lastAcceptAt = now;
+        if (frame.damaged()) bitrate.onBadFrame(frame.keyFrame());
+        bitrate.onFrame(frame.keyFrame(), now, Math.max(receivedFps, 30), ping.getAsInt());
+        synchronized (this) {
+            if (currentConfig == null) {
+                if (frame.keyFrame()) earlyFrames.clear(); // only the newest key frame on can be decoded anyway
+                if (earlyFrames.size() >= MAX_BACKLOG) earlyFrames.remove(0);
+                earlyFrames.add(frame);
+            } else {
+                if (queue.size() >= MAX_BACKLOG) {
+                    queue.clear(); // hopelessly behind: start over at the next key frame
+                    queue.offer(currentConfig);
+                }
+                queue.offer(frame);
+            }
         }
     }
 
@@ -210,14 +240,21 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     continue;
                 }
                 FrameAssembler.Frame frame = (FrameAssembler.Frame) item;
-                if (decoder == null || (waitingForKey && !frame.keyFrame())) continue;
+                if (decoder == null || (waitingForKey && !frame.keyFrame())) {
+                    requestKeyFrame(); // a fresh decoder (stream start, or after an error) needs one
+                    continue;
+                }
                 waitingForKey = false;
                 try {
                     long t0 = System.nanoTime();
                     boolean picture = decoder.decode(frame.data(), frame.data().length);
                     long t1 = System.nanoTime();
                     decodeMs = smooth(decodeMs, (t1 - t0) / 1e6);
-                    if (!picture || !queue.isEmpty()) continue; // a newer frame is waiting: don't draw this one
+                    if (!picture) continue;
+                    if (!queue.isEmpty()) { // a newer frame is waiting: don't draw this one
+                        drawSkipped++;
+                        continue;
+                    }
                     int[] size = sink.targetSize();
                     if (size[0] <= 0 || size[1] <= 0) continue;
                     int[] pixels = sink.beginFrame(size[0], size[1]);
@@ -266,7 +303,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         }
         boolean flowing = System.currentTimeMillis() - lastFragmentAt < 1500; // stopped: no old figures
         return new Stats(c != null && c.hevc(), c == null ? 0 : c.width(), c == null ? 0 : c.height(), flowing ? receivedFps : 0,
-                flowing ? shownFps : 0, flowing ? megabitsPerSecond : 0, decodeMs, convertMs, damaged, lost, error, decodingOnGpu);
+                flowing ? shownFps : 0, flowing ? megabitsPerSecond : 0, decodeMs, convertMs, damaged, lost, error, decodingOnGpu,
+                bitrate.step(), drawSkipped, bunched);
     }
 
     /** Decode on the GPU from the next stream (re)start or decoder restart; software stays the fallback. */
@@ -277,8 +315,15 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     // ------------------------------------------------------------------ recording
 
     /** Records the stream into a new MKV file in dir from the next key frame (a new file if the stream restarts). */
+    /** A key frame from the phone soon (the link limits how often; nothing while watching or not connected). */
+    private void requestKeyFrame() {
+        ControlLink l = link;
+        if (l != null) l.requestKeyFrame();
+    }
+
     public synchronized void startRecording(java.nio.file.Path dir) {
         if (recordDir != null) return;
+        requestKeyFrame(); // a file starts at a key frame: one now rather than in up to 10 s
         recordQueue.clear();
         recordDir = dir;
         recordThread = new Thread(this::recordLoop, "videoRecord");

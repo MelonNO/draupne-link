@@ -8,8 +8,12 @@ import java.util.Map;
 /**
  * Puts encoded frames back together from their UDP fragments (port of upstream Control FrameFragments and the
  * reassembly in Control Udp.processData). Latency first, like upstream: a frame is released as soon as its first and
- * last fragments are in - a missing middle fragment is not waited for (the decoder conceals it) - and older unfinished
- * frames are dropped the moment a newer one completes. Fragments of a frame older than (or the same as) the last one
+ * last fragments are in - a missing middle fragment is not waited for (zero-filled: the decoder decodes up to the gap
+ * and conceals the rest; cut off at the gap instead it gives the very same picture, measured).
+ * <p>
+ * When a newer frame completes, an older unfinished one whose beginning is in goes out first, damaged. Before, a key
+ * frame that lost its <b>last</b> packet was dropped without a word and the frames after it decoded on top of the old
+ * picture - measured worse than the damaged key frame (VideoTest). One without its beginning is lost. Fragments of a frame older than (or the same as) the last one
  * released are dropped: on 4G packets can come reordered or twice, and a frame decoded out of turn smears the picture.
  * The phone numbers a restarted stream from 1, and its first frame is a key frame: key frame 1 starts afresh.
  * Not thread-safe: call from the receive thread only.
@@ -28,6 +32,8 @@ public class FrameAssembler {
     static final int MAX_FRAME_BYTES = 8 << 20;
 
     private final Map<Short, Pending> pending = new HashMap<>();
+    /** Older frames released (damaged) because a newer one completed: decoded before it, see {@link #takeFlushed}. */
+    private final List<Frame> flushed = new ArrayList<>();
     private long completedFrames;
     private long damagedFrames;
     private long lostFrames;
@@ -94,7 +100,7 @@ public class FrameAssembler {
         byte[] data = new byte[length];
         System.arraycopy(buf, dataOffset, data, 0, length);
         if (offset == 0 && frameSize == length) { // whole frame in one packet
-            dropOlderThan(frameNum, keyFrame);
+            retireOlder(frameNum, keyFrame);
             completedFrames++;
             lastReleased = frameNum;
             return new Frame(data, keyFrame, frameNum, false, keyFrame && frameNum == 1);
@@ -109,21 +115,45 @@ public class FrameAssembler {
         frame.put(offset, data);
         if (!frame.complete() && !(frame.startReceived && frame.endReceived)) return null;
         pending.remove(frameNum);
-        dropOlderThan(frameNum, keyFrame);
+        retireOlder(frameNum, keyFrame);
         boolean damaged = !frame.complete();
         if (damaged) damagedFrames++; else completedFrames++;
         lastReleased = frameNum;
+        return release(frame, frameNum, damaged);
+    }
+
+    private Frame release(Pending frame, short frameNum, boolean damaged) {
         return new Frame(frame.assemble(), frame.keyFrame, frameNum, damaged, frame.keyFrame && frameNum == 1);
     }
 
-    /** Older frames can no longer be shown in order; a finished P-frame leaves pending key frames alone (as upstream). */
-    private void dropOlderThan(short frameNum, boolean keyFrame) {
-        List<Short> stale = new ArrayList<>();
-        for (var e : pending.entrySet()) {
-            if (isOlder(e.getKey(), frameNum) && (keyFrame || !e.getValue().keyFrame)) stale.add(e.getKey());
+    /**
+     * Frames older than frameNum can't wait any longer. A key frame needs nothing before it: they are lost. Before
+     * any other frame, those whose beginning is in go out first, oldest first, damaged (see
+     * {@link #takeFlushed}): the frames after them need them as reference. The rest are lost.
+     */
+    private void retireOlder(short frameNum, boolean keyFrame) {
+        List<Short> older = new ArrayList<>();
+        for (short n : pending.keySet()) if (isOlder(n, frameNum)) older.add(n);
+        // oldest first: the furthest behind frameNum (wrap-around safe)
+        older.sort((a, b) -> Integer.compare((frameNum - b + 32768) % 32768, (frameNum - a + 32768) % 32768));
+        for (short n : older) {
+            Pending p = pending.remove(n);
+            if (!keyFrame && p.startReceived && p.size > 0) {
+                damagedFrames++;
+                lastReleased = n;
+                flushed.add(release(p, n, true));
+            } else {
+                lostFrames++;
+            }
         }
-        for (short n : stale) pending.remove(n);
-        lostFrames += stale.size();
+    }
+
+    /** Older frames released (damaged) by the last {@link #put}, to be decoded before the frame it returned. */
+    public List<Frame> takeFlushed() {
+        if (flushed.isEmpty()) return List.of();
+        List<Frame> out = new ArrayList<>(flushed);
+        flushed.clear();
+        return out;
     }
 
     private void dropOldest() {
@@ -145,6 +175,7 @@ public class FrameAssembler {
 
     public void reset() {
         pending.clear();
+        flushed.clear();
         lastReleased = null;
         streamRestarted = false;
     }

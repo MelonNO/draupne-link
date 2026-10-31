@@ -73,6 +73,8 @@ public class FcTelemetry {
     static final short PHONE_LINK_STATS = 0x40F0;
     /** The phone app's version, once a second (DRAUPNE Link's Flight app 2.3.0-pc.5 on). */
     static final short PHONE_APP_VERSION = 0x40F1;
+    /** The phone's encoder: bitrate setting (bit/s) and intra refresh (DRAUPNE Flight 2.3.0-pc.13 on). */
+    static final short PHONE_ENCODER = 0x40F2;
     /** Telemetry this long without a version: the phone app is older than 2.3.0-pc.5 (or upstream's own). */
     static final long PHONE_APP_SILENT_MS = 4000;
 
@@ -147,6 +149,11 @@ public class FcTelemetry {
     private volatile Battery battery;
     private final CellCount cellCount = new CellCount();
     private volatile int cameraFps = -1;
+    /** The phone's encoder output, Mbit/s, as it measures it; -1 before the first report. */
+    private volatile float phoneVideoMbps = -1;
+    /** The phone's encoder bitrate setting, bit/s; -1 before the first report (older phone apps never send it). */
+    private volatile int phoneTargetBitRate = -1;
+    private volatile boolean phoneIntraRefresh;
     private volatile int phoneBatteryPercent = -1;
     private volatile boolean phoneCharging;
     private volatile Attitude attitude;
@@ -274,7 +281,7 @@ public class FcTelemetry {
                 phoneCharging = b.readBoolean();
             }
             case FcCommon.DD_CAMERA_FPS -> cameraFps = b.readShort();
-            case FcCommon.DD_VIDEO_BIT_RATE -> skip(b, 4);
+            case FcCommon.DD_VIDEO_BIT_RATE -> phoneVideoMbps = b.readFloat(); // what the phone's encoder puts out
             case FcCommon.DD_VIDEO_RECORDER_STATE -> skip(b, 5);
             case FcCommon.DD_VIDEO_RECORDER_START_STOP -> {
                 // code only, no payload
@@ -293,6 +300,10 @@ public class FcTelemetry {
                 byte[] name = new byte[b.readShort()];
                 if (b.read(name, 0, name.length) != name.length) return false;
                 phoneAppVersion = new String(name, StandardCharsets.UTF_8);
+            }
+            case PHONE_ENCODER -> {
+                phoneTargetBitRate = b.readInt();
+                phoneIntraRefresh = b.readByte() != 0;
             }
             default -> {
                 return false;
@@ -473,6 +484,21 @@ public class FcTelemetry {
 
     public int getCameraFps() {
         return cameraFps;
+    }
+
+    /** The phone encoder's bitrate setting in bit/s, or -1 when not reported (phone app older than 2.3.0-pc.13). */
+    public int getPhoneTargetBitRate() {
+        return phoneTargetBitRate;
+    }
+
+    /** The phone's encoder refreshes a strip of the picture each frame instead of sending key frames often. */
+    public boolean isPhoneIntraRefresh() {
+        return phoneIntraRefresh;
+    }
+
+    /** The phone's encoder output in Mbit/s (its own measurement), or -1 when not reported yet. */
+    public float getPhoneVideoMbps() {
+        return phoneVideoMbps;
     }
 
     public Attitude getAttitude() {

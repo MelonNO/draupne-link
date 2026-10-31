@@ -74,7 +74,7 @@ class OsdLayoutTest {
         OsdRenderer.Data sample = new OsdPreview().data();
         // the longest block: two warnings and the two lines about the lost flight controller
         OsdRenderer.Data d = new OsdRenderer.Data(true, true, 42, false, true, sample.telemetry(), sample.video(), false, null,
-                sample.channels(), false, false, false, false, null, false);
+                sample.channels(), false, false, false, false, null, false, null, false);
         BufferedImage img = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         Map<OsdElement, Rectangle2D> bounds = new EnumMap<>(OsdElement.class);

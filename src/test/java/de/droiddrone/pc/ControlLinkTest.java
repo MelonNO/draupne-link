@@ -200,6 +200,9 @@ class ControlLinkTest {
         assertEquals("1500 1500 1500 1000 1000", row[16], "every channel as sent");
         assertTrue(Long.parseLong(row[18]) >= -1, "age of the last pong");
         assertEquals("direct", row[19], "Tailscale path");
+        assertEquals(LinkLog.HEADER.split(",").length, row.length, "every column in every row");
+        assertEquals(LinkLog.HEADER.split(",").length, lines.get(2).replace("\"Joystick lost, test\"", "e").split(",", -1).length,
+                "event rows too (the event's own comma is inside quotes)");
         assertTrue(lines.get(2).endsWith(",Joystick lost, test") || lines.get(2).endsWith(",\"Joystick lost, test\""));
     }
 
@@ -253,32 +256,20 @@ class ControlLinkTest {
         assertTrue(ms >= 470 && ms <= 700, "50 ticks at 100 Hz took " + ms + " ms"); // wide enough for CI machines
     }
 
-    /** A steady frame rate goes only to phone app 2.3.0-pc.12 and on; the PC waits for the version first. */
+    /** The camera always gets a steady 30 fps, whatever the phone app or the settings file says. */
     @Test
-    void steadyFrameRateGoesToANewEnoughPhoneApp() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        phone.appVersion = "2.3.0-pc.12";
-        PcConfig config = PcConfig.defaults();
-        assertEquals(60, config.getCameraFpsMin(), "steady 60 by default");
-        link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
-        long start = System.currentTimeMillis();
-        link.start();
-        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
-        assertTrue(System.currentTimeMillis() - start < ControlLink.PHONE_VERSION_WAIT_MS, "the version came first, no full wait");
-        assertEquals(60, phone.config.cameraFpsMin);
-        assertEquals(60, phone.config.cameraFpsMax);
-    }
-
-    @Test
-    void olderPhoneAppKeepsTheAutoFrameRate() throws Exception {
-        for (String version : new String[]{"2.3.0-pc.11", null}) {
+    void cameraAlwaysRunsAtASteady30() throws Exception {
+        for (String version : new String[]{"2.3.0-pc.12", "2.3.0-pc.11", null}) {
             phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
             phone.appVersion = version;
-            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            PcConfig config = PcConfig.defaults();
+            config.set("cameraFpsMin", "60"); // an old settings file: ignored
+            config.set("cameraFpsMax", "60");
+            link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
             link.start();
             waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
             assertEquals(30, phone.config.cameraFpsMin, "phone app " + version);
-            assertEquals(60, phone.config.cameraFpsMax);
+            assertEquals(30, phone.config.cameraFpsMax);
             link.close();
             phone.close();
         }
@@ -287,17 +278,46 @@ class ControlLinkTest {
     }
 
     @Test
-    void autoFrameRateNeedsNoWait() throws Exception {
+    void keyFrameRequestsReachThePhoneAtMostTwiceASecond() throws Exception {
         phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        PcConfig config = PcConfig.defaults();
-        config.set("cameraFpsMin", "30");
-        link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
-        long start = System.currentTimeMillis();
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
-        assertTrue(System.currentTimeMillis() - start < ControlLink.PHONE_VERSION_WAIT_MS);
-        assertEquals(30, phone.config.cameraFpsMin);
-        assertEquals(60, phone.config.cameraFpsMax);
+        for (int i = 0; i < 20; i++) {
+            link.requestKeyFrame();
+            Thread.sleep(50);
+        }
+        waitFor(() -> phone.keyFrameRequests.get() >= 2, 2000, "requests at the phone");
+        assertTrue(phone.keyFrameRequests.get() <= 3, "1 s of asking: " + phone.keyFrameRequests.get());
+        assertEquals(phone.keyFrameRequests.get(), link.getKeyFrameRequests());
+    }
+
+    /** A weak link (the phone's bitrate setting low for 5 s): the camera goes to 960x540; the sticks keep going. */
+    @Test
+    void aWeakLinkSwitchesTheCameraTo540p() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.encoderBitRate = 250_000;
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        assertEquals(1280, phone.config.cameraWidth);
+        waitFor(() -> phone.config.cameraWidth == 960, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "960x540");
+        assertTrue(link.isLowResolution());
+        assertEquals(ControlLink.State.READY, link.getState(), "still flying");
+        int rcBefore = phone.rcFrames.size();
+        assertTrue(link.sendRc(new short[]{1500, 1500, 1500, 1000}), "sticks go out during the switch");
+        waitFor(() -> phone.rcFrames.size() > rcBefore, 2000, "sticks at the phone");
+    }
+
+    @Test
+    void anOlderPhoneAppNeverSwitchesResolution() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode); // reports no encoder setting
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        Thread.sleep(ControlLink.LOW_RES_AFTER_MS + 1000);
+        assertFalse(link.isLowResolution());
+        assertTrue(phone.configs.stream().allMatch(c -> c.cameraWidth == 1280));
     }
 
     @Test
@@ -341,6 +361,12 @@ class ControlLinkTest {
         volatile boolean running = true;
         /** The app version it reports (DRAUPNE Flight's PcLinkStats record, every 0.1 s while connected); null = none. */
         volatile String appVersion;
+        /** The encoder bitrate setting it reports (pc.13's record); -1 = none, like older apps. */
+        volatile int encoderBitRate = -1;
+        /** Key frame requests received (pc.13 on). */
+        final AtomicInteger keyFrameRequests = new AtomicInteger();
+        /** Every config received, in order (a resolution switch sends a new one). */
+        final List<ParsedConfig> configs = new CopyOnWriteArrayList<>();
         /** Spectator mode answers sent (DRAUPNE Flight pc.11 and on); 0 with answerSpectators off, like older apps. */
         final AtomicInteger spectatorAnswers = new AtomicInteger();
         volatile boolean answerSpectators = true;
@@ -378,12 +404,20 @@ class ControlLinkTest {
                 while (running) {
                     try {
                         String v = appVersion;
-                        if (v != null && receiverBuffer.isConnected()) {
+                        int bps = encoderBitRate;
+                        if ((v != null || bps > 0) && receiverBuffer.isConnected()) {
                             UdpPacketData d = new UdpPacketData(UdpCommon.TelemetryData);
-                            byte[] name = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                            d.daos.writeShort(0x40F1); // PcLinkStats.APP_VERSION_CODE
-                            d.daos.writeShort(name.length);
-                            d.daos.write(name);
+                            if (v != null) {
+                                byte[] name = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                                d.daos.writeShort(0x40F1); // PcLinkStats.APP_VERSION_CODE
+                                d.daos.writeShort(name.length);
+                                d.daos.write(name);
+                            }
+                            if (bps > 0) {
+                                d.daos.writeShort(0x40F2); // PcLinkStats.ENCODER_CODE
+                                d.daos.writeInt(bps);
+                                d.daos.writeByte(0);
+                            }
                             udpSender.sendPacket(d.getData());
                         }
                         Thread.sleep(100);
@@ -480,6 +514,7 @@ class ControlLinkTest {
                     r.readUTF(); r.readUnsignedShortAsInt();
                     c.trailingBytes = r.getRemaining();
                     config = c;
+                    configs.add(c);
                     udpSender.sendPacket(new UdpPacketData(UdpCommon.ConfigReceived).getData());
                 }
                 case UdpCommon.FcInfo -> {
@@ -487,6 +522,7 @@ class ControlLinkTest {
                     d.daos.write(new byte[]{2, 4, 5, 1, 0, 1, 46, 0}); // Betaflight 4.5.1, MSP API 1.46
                     udpSender.sendPacket(d.getData());
                 }
+                case ControlLink.KEY_FRAME_REQUEST -> keyFrameRequests.incrementAndGet();
                 case UdpCommon.RcFrame -> {
                     int count = r.readByte();
                     short[] ch = new short[count];

@@ -1,13 +1,17 @@
 package de.droiddrone.pc.video;
 
 /**
- * Decides when to ask the phone's encoder for a lower or higher bitrate (port of upstream Control
- * Udp.processBitRateChange). Lower as soon as frames go missing, arrive late or the ping climbs - on 4G a too-high
- * bitrate builds queues, and queues are latency. Raise again after 10 s without trouble. Decreases are 2 s apart.
+ * Decides when to ask the phone's encoder for a lower or higher bitrate (it steps through 0.25, 0.5, 1, 2, 4, 6 Mbit/s).
+ * Lower when the link is in real trouble - frames going missing, a long gap, the ping climbing well above its own
+ * usual - and raise again after a short calm. On 4G a too-high bitrate builds queues, and queues are latency.
  * <p>
- * Upstream only reacts to a ping over 300 ms, but a mobile uplink starts queueing long before that: the ping rises
- * above its usual level and every video frame waits in the queue. So a ping that stays QUEUE_DELAY_MS above the lowest
- * ping of the last 15-30 s counts as trouble too, before any frame is lost.
+ * Tuned for far-away 4G (2026-10-31: the phone 100-200 ms away with spikes to 1.8 s): the old rules (any ping over
+ * 300 ms, a damaged key frame counting five, 10 s of calm before raising) held the encoder at 0.25 Mbit/s for good.
+ * Damaged key frames come from bursts lost on the way, not from too much data, so they no longer lower the rate on
+ * their own; the ping is judged against its own usual level only; raising waits 3 s (longer after a raise that went
+ * wrong); and the PC never lowers below 1 Mbit/s. The phone also steps down by itself (when a key frame is slow to
+ * send) and then ignores raises for 5 s, so the PC's count of the steps drifts: what arrives decides instead - under
+ * RESCUE_BELOW_MBPS for RESCUE_MS, the PC asks the phone up and takes it as at the floor.
  */
 public class BitrateControl {
     public interface Sink {
@@ -15,15 +19,23 @@ public class BitrateControl {
     }
 
     private static final int PAUSE_MS = 2000;
-    private static final int FRAME_GAP_MS = 150;
-    private static final int KEY_FRAME_GAP_MS = 1500;
-    private static final int MAX_PING_MS = 300;
-    private static final int INCREASE_AFTER_MS = 10_000;
+    /** A gap this long between frames is trouble (4G jitter alone stays under it). */
+    private static final int FRAME_GAP_MS = 300;
+    /** Raise after this long without trouble; doubled (up to MAX_CALM_MS) after a raise that brought trouble at once. */
+    static final int CALM_MS = 3000;
+    private static final int MAX_CALM_MS = 30_000;
     /** Ping this far above its recent minimum means packets are queueing on the way. */
-    static final int QUEUE_DELAY_MS = 60;
+    static final int QUEUE_DELAY_MS = 100;
     /** ...for at least this long: a single slow ping is just 4G jitter. */
-    static final int QUEUE_HOLD_MS = 600;
+    static final int QUEUE_HOLD_MS = 1000;
     private static final int BASELINE_WINDOW_MS = 15_000;
+    /** The phone's steps; it starts on 2 Mbit/s (step 3). The PC doesn't lower below step 2, 1 Mbit/s. */
+    static final int START_STEP = 3;
+    static final int FLOOR_STEP = 2;
+    private static final int TOP_STEP = 5;
+    /** Less than this arriving for RESCUE_MS while at the floor: the phone went lower by itself; ask it up. */
+    static final double RESCUE_BELOW_MBPS = 0.5;
+    static final int RESCUE_MS = 5000;
 
     private final Sink sink;
     private int badFrames;
@@ -37,20 +49,28 @@ public class BitrateControl {
     private int previousMinPing = Integer.MAX_VALUE;
     private long baselineStart;
     private long queueingSince = -1;
+    /** Where the PC thinks the phone's encoder is (the phone also steps down by itself, so only an estimate). */
+    private int step = START_STEP;
+    private int calmMs = CALM_MS;
+    private long lastRaise = -1;
+    /** The last raise brought trouble at once: the next one waits the longer calm. */
+    private boolean raiseFailed;
+    private long lowSince = -1;
+    private long lastRescue;
 
     public BitrateControl(Sink sink) {
         this.sink = sink;
     }
 
-    /** A frame was lost or arrived damaged (key frames weigh 5, as upstream). */
+    /** A frame was lost or arrived damaged. */
     public void onBadFrame(boolean keyFrame) {
-        badFrames += keyFrame ? 5 : 1;
+        badFrames++;
     }
 
     /**
      * A frame was received.
-     * @param fps   current camera frame rate (allowed bad frames per second scale with it)
-     * @param ping  round trip in ms, -1 if unknown
+     * @param fps   current frame rate (allowed bad frames per second scale with it)
+     * @param ping  round trip in ms, -1 if unknown (no pong lately: a stall)
      */
     public void onFrame(boolean keyFrame, long now, int fps, int ping) {
         if (!started) {
@@ -58,22 +78,29 @@ public class BitrateControl {
             lastFrame = lastKeyFrame = lastChange = lastTrouble = windowStart = baselineStart = now;
         }
         boolean queueing = queueing(ping, now);
-        if (now - lastChange > PAUSE_MS) {
-            boolean trouble = queueing
-                    || badFrames > Math.round(Math.max(fps, 1) / 30f)
-                    || now > lastFrame + FRAME_GAP_MS
-                    || now > lastKeyFrame + KEY_FRAME_GAP_MS
-                    || ping < 0 || ping > MAX_PING_MS;
-            if (trouble) {
-                badFrames = 0;
-                lastTrouble = now;
-                lastChange = now;
-                sink.changeBitRate(false);
-            } else if (now - lastTrouble >= INCREASE_AFTER_MS) {
-                // no pause after raising: if the higher rate causes trouble, back off at once
-                lastTrouble = now;
-                sink.changeBitRate(true);
+        boolean trouble = queueing
+                || badFrames > Math.max(2, Math.round(Math.max(fps, 1) / 10f))
+                || now > lastFrame + FRAME_GAP_MS
+                || ping < 0; // no rule on key frames: since phone app pc.13 they come every 2-10 s, and on request
+        if (trouble) {
+            lastTrouble = now;
+            if (lastRaise >= 0 && now - lastRaise < PAUSE_MS && !raiseFailed) { // raised too soon: wait longer next time
+                raiseFailed = true;
+                calmMs = Math.min(MAX_CALM_MS, calmMs * 2);
             }
+            if (now - lastChange > PAUSE_MS && step > FLOOR_STEP) {
+                badFrames = 0;
+                lastChange = now;
+                step--;
+                sink.changeBitRate(false);
+            }
+        } else if (now - lastTrouble >= calmMs && now - lastChange > PAUSE_MS) {
+            if (!raiseFailed) calmMs = CALM_MS; // the last raise held: back to quick
+            raiseFailed = false;
+            lastTrouble = now;
+            lastRaise = now; // not lastChange: if the higher rate brings trouble, back off at once
+            if (step < TOP_STEP) step++;
+            sink.changeBitRate(true); // no harm at the top: the phone stays at its limit
         }
         lastFrame = now;
         if (keyFrame) lastKeyFrame = now;
@@ -81,6 +108,45 @@ public class BitrateControl {
             badFrames = 0;
             windowStart = now;
         }
+    }
+
+    /**
+     * Once a second: the video arriving, Mbit/s. Under RESCUE_BELOW_MBPS for RESCUE_MS, whatever the PC's count of the
+     * steps says (2026-10-31: it said 4-6 Mbit/s while 0.5 arrived), the phone is lower than it should be: ask it up,
+     * every RESCUE_MS (it ignores raises for 5 s after stepping down), and count it as at the floor from now on. A still
+     * picture may also arrive under it; then a raise changes nothing worse than a steady picture.
+     */
+    public void onReceivedRate(double mbps, long now) {
+        if (mbps >= RESCUE_BELOW_MBPS) {
+            lowSince = -1;
+            return;
+        }
+        if (lowSince < 0) lowSince = now;
+        if (now - lowSince < RESCUE_MS) return;
+        step = Math.min(step, FLOOR_STEP);
+        if (now - lastRescue >= RESCUE_MS) {
+            lastRescue = now;
+            sink.changeBitRate(true);
+        }
+    }
+
+    /** The phone's steps, bit/s. */
+    static final int[] STEPS_BPS = {250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000};
+
+    /**
+     * The phone's own report of its bitrate setting (phone app 2.3.0-pc.13 on): the PC's count of the steps follows it,
+     * instead of drifting when the phone stepped by itself.
+     */
+    public void onPhoneTarget(int bps) {
+        if (bps <= 0) return;
+        int s = 0;
+        while (s < STEPS_BPS.length - 1 && STEPS_BPS[s + 1] <= bps) s++;
+        step = s;
+    }
+
+    /** The step the PC thinks the phone is on: 0-5 for 0.25-6 Mbit/s (tests, and the link log). */
+    public int step() {
+        return step;
     }
 
     /** True once the ping has stayed QUEUE_DELAY_MS above its minimum of the last 15-30 s for QUEUE_HOLD_MS. */

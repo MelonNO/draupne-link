@@ -25,7 +25,8 @@ public final class LinkLog implements AutoCloseable {
     static final String HEADER = "time,link,ping_ms,rc_frames,rc_max_gap_ms,telemetry_packets,telemetry_max_gap_ms,"
             + "fc_data_age_ms,rxloss,failsafe,armed,blockers,radio,rc_output,video_fps,throttle,channels,"
             + "ping_max_ms,pong_age_ms,path,phone_rc_in_gap_ms,phone_rc_out_gap_ms,phone_write_max_ms,phone_write_timeouts,"
-            + "phone_skipped,video_rx_fps,video_mbps,video_damaged,video_lost,event";
+            + "phone_skipped,video_rx_fps,video_mbps,video_damaged,video_lost,camera_fps,phone_video_mbps,bitrate_step,"
+            + "decode_ms,convert_ms,draw_skipped,bunched,video_res,key_requests,intra_refresh,event";
 
     private final Path file;
     private final BufferedWriter out;
@@ -34,6 +35,9 @@ public final class LinkLog implements AutoCloseable {
     private long lastFlush;
     private long lastDamaged;
     private long lastLost;
+    private long lastDrawSkipped;
+    private long lastBunched;
+    private long lastKeyRequests;
 
     private LinkLog(Path file) throws IOException {
         this.file = file;
@@ -93,10 +97,24 @@ public final class LinkLog implements AutoCloseable {
                 p == null ? "" : p.rcInGapMs(), p == null ? "" : p.rcOutGapMs(), p == null ? "" : p.writeMaxMs(),
                 p == null ? "" : p.writeTimeouts(), p == null ? "" : p.skipped(),
                 video == null ? "" : video.receivedFps(), video == null ? "" : String.format(java.util.Locale.ROOT, "%.2f", video.megabitsPerSecond()),
-                video == null ? "" : video.damaged() - lastDamaged, video == null ? "" : video.lost() - lastLost, "");
+                video == null ? "" : video.damaged() - lastDamaged, video == null ? "" : video.lost() - lastLost,
+                t.getCameraFps() < 0 ? "" : t.getCameraFps(),
+                t.getPhoneVideoMbps() < 0 ? "" : String.format(java.util.Locale.ROOT, "%.2f", t.getPhoneVideoMbps()),
+                video == null ? "" : video.bitrateStep(),
+                // decoding and scaling a frame, ms (smoothed); frames not drawn as a newer one waited; frames that came
+                // within 4 ms of the one before. Over ~16 ms a frame at 60 fps: too slow; low with many bunched: 4G
+                video == null ? "" : String.format(java.util.Locale.ROOT, "%.1f", video.decodeMs()),
+                video == null ? "" : String.format(java.util.Locale.ROOT, "%.1f", video.convertMs()),
+                video == null ? "" : video.drawSkipped() - lastDrawSkipped, video == null ? "" : video.bunched() - lastBunched,
+                video == null || video.width() == 0 ? "" : video.width() + "x" + video.height(),
+                link.getKeyFrameRequests() - lastKeyRequests,
+                t.getPhoneTargetBitRate() < 0 ? "" : flag(t.isPhoneIntraRefresh()), "");
+        lastKeyRequests = link.getKeyFrameRequests();
         if (video != null) {
             lastDamaged = video.damaged();
             lastLost = video.lost();
+            lastDrawSkipped = video.drawSkipped();
+            lastBunched = video.bunched();
         }
         lastRcFrames = rc;
         lastTelemetry = telemetry;
@@ -108,7 +126,8 @@ public final class LinkLog implements AutoCloseable {
 
     /** A message from the app's log, in the timeline. */
     public synchronized void event(String text) throws IOException {
-        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", text);
+        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
+                "", "", "", "", "", "", "", text);
     }
 
     private void row(Object... values) throws IOException {

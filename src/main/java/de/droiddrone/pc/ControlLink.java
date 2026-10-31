@@ -62,10 +62,25 @@ public class ControlLink {
         void onVideoFragment(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length);
     }
 
-    /** The first phone app that makes any frame-rate range safe (it picks the camera's nearest supported one). */
-    static final String STEADY_FPS_PHONE_APP = "2.3.0-pc.12";
-    /** How long to wait for the phone app's version before the settings go out (it comes within ~0.1 s of connecting). */
-    static final long PHONE_VERSION_WAIT_MS = 1500;
+    /**
+     * The camera always runs at a steady 30 fps. A range (30-60) let it switch with the light, which looked jumpy, and
+     * 60 is dark indoors. Not a setting. Phone app 2.3.0-pc.12 matches it to the camera's nearest supported range.
+     */
+    static final int CAMERA_FPS = 30;
+    /** Asks the phone for a key frame (DRAUPNE Flight 2.3.0-pc.13 on; older apps ignore it). */
+    static final byte KEY_FRAME_REQUEST = 0x6A;
+    /** Key frame requests at most this often (the phone limits them too). */
+    static final long KEY_FRAME_REQUEST_MS = 500;
+    /**
+     * A weak link: the phone's bitrate setting at or under LOW_RES_BPS for LOW_RES_AFTER_MS, the camera goes to 3/4 size
+     * (960x540 from 720p) - fewer pixels at a starved bitrate look cleaner. Back at HIGH_RES_BPS or more for
+     * HIGH_RES_AFTER_MS. Each switch restarts the camera (about half a second without video), hence the long holds.
+     * Phone app 2.3.0-pc.13 on (it reports the setting).
+     */
+    static final int LOW_RES_BPS = 500_000;
+    static final long LOW_RES_AFTER_MS = 5000;
+    static final int HIGH_RES_BPS = 2_000_000;
+    static final long HIGH_RES_AFTER_MS = 10_000;
 
     /** Upstream's Control app asks for the stream every 2.5 s until the codec config arrives. */
     private static final int START_VIDEO_RETRY_MS = 2500;
@@ -97,6 +112,13 @@ public class ControlLink {
     private long lastRcNs;
     private long lastTelemetryNs;
     private final FcTelemetry telemetry = new FcTelemetry();
+    private volatile long lastKeyFrameRequest;
+    private final AtomicLong keyFrameRequests = new AtomicLong();
+    /** The camera at 3/4 size because the link is weak (see LOW_RES_BPS). */
+    private volatile boolean lowRes;
+    private long resSince = -1;
+    private int configResends;
+    private long nextConfigResend;
     private volatile VideoListener videoListener;
     private volatile boolean videoHevc = true;
     private volatile boolean videoConfigReceived;
@@ -107,6 +129,8 @@ public class ControlLink {
     private volatile SpectatorHost host;
     /** Set once the phone said another PC flies: from then on this link only watches. */
     private volatile SpectatorClient spectator;
+    /** Connected as a spectator on purpose (Connect as: Spectator): never asks the phone to fly, from the start. */
+    private boolean watchOnly;
     private volatile Consumer<String> events = msg -> log(msg);
 
     public ControlLink(PcConfig config, InetAddress remoteIp, int remotePort, int localPort) {
@@ -131,6 +155,19 @@ public class ControlLink {
         spectatorsEnabled = true;
         spectatorsAllowed = allowed;
         spectatorDelayMs = delayMs;
+    }
+
+    /**
+     * Connect as a spectator (call before start, after {@link #enableSpectators}): this link never asks the phone to
+     * connect; it asks who flies and watches through that PC, and waits while nobody does.
+     */
+    public void watchOnly() {
+        watchOnly = true;
+    }
+
+    /** Connected as a spectator on purpose, rather than turned into one because another PC flies. */
+    public boolean isWatchOnly() {
+        return watchOnly;
     }
 
     /** Allow spectators switched while connected: from now on (off sends those watching away). */
@@ -158,10 +195,13 @@ public class ControlLink {
         udpSender = new UdpSender(socket);
         udpSender.connect(remoteIp, remotePort);
         receiverBuffer = new ReceiverBuffer(udpSender, false, key, key);
-        if (spectatorsEnabled) {
+        if (watchOnly) {
+            // asks the phone who flies (PILOT_QUERY, never a Connect), then joins that PC
+            spectator = new SpectatorClient(socket, remoteIp, remotePort, key, spectatorDelayMs, null, this::playSpectated);
+        } else if (spectatorsEnabled) {
             try {
                 host = new SpectatorHost(key, spectatorsAllowed, socket, () -> getState() == State.READY, this::getPing,
-                        msg -> events.accept(msg));
+                        msg -> events.accept(msg), this::requestKeyFrame); // a new spectator starts at a key frame
             } catch (IOException e) {
                 log("Spectators can't watch: " + e); // flying works as before
             }
@@ -327,7 +367,6 @@ public class ControlLink {
      */
     private void sessionRun() {
         boolean wasConnected = false;
-        long connectedAt = 0;
         long lastStartVideo = 0;
         long lastFcInfoRequest = 0;
         long lastModesRequest = 0;
@@ -345,7 +384,6 @@ public class ControlLink {
                     fcInfo = null;
                     telemetry.forgetBoxIds(); // a restarted phone app has to read them again
                 }
-                if (connected && !wasConnected) connectedAt = System.currentTimeMillis();
                 wasConnected = connected;
                 if (versionMismatch) {
                     Thread.sleep(1000);
@@ -353,12 +391,6 @@ public class ControlLink {
                     udpSender.sendConnect(1, key, SettingsCommon.versionCompatibleCode);
                     Thread.sleep(500);
                 } else if (!configReceived) {
-                    // a steady frame rate goes only to a phone app that can take it: wait for its version first
-                    if (wantsSteadyFps() && telemetry.getPhoneAppVersion() == null
-                            && System.currentTimeMillis() - connectedAt < PHONE_VERSION_WAIT_MS) {
-                        Thread.sleep(50);
-                        continue;
-                    }
                     sendConfig();
                     Thread.sleep(500);
                 } else {
@@ -367,6 +399,7 @@ public class ControlLink {
                         sendStartVideo();
                         lastStartVideo = now;
                     }
+                    adjustResolution(now);
                     if (fcInfo == null && now - lastFcInfoRequest >= 1000) {
                         sendRequest(UdpCommon.FcInfo);
                         lastFcInfoRequest = now;
@@ -497,11 +530,10 @@ public class ControlLink {
         for (int i = 0; i < SettingsCommon.maxCamerasCount; i++) {
             if (i > 0) packetData.daos.writeBoolean(false);
             packetData.daos.writeUTF(i == 0 ? config.getCameraId() : SettingsCommon.cameraId[i]);
-            packetData.daos.writeShort(config.getCameraWidth());
-            packetData.daos.writeShort(config.getCameraHeight());
-            int[] fps = cameraFps();
-            packetData.daos.writeShort(fps[0]);
-            packetData.daos.writeShort(fps[1]);
+            packetData.daos.writeShort(cameraWidth());
+            packetData.daos.writeShort(cameraHeight());
+            packetData.daos.writeShort(CAMERA_FPS); // min = max: steady
+            packetData.daos.writeShort(CAMERA_FPS);
             packetData.daos.writeBoolean(SettingsCommon.useUsbCamera);
             packetData.daos.writeByte(SettingsCommon.usbCameraFrameFormat);
             packetData.daos.writeBoolean(SettingsCommon.usbCameraReset);
@@ -532,29 +564,68 @@ public class ControlLink {
         return packetData.getData();
     }
 
-    private boolean wantsSteadyFps() {
-        return config.getCameraFpsMin() == config.getCameraFpsMax();
+    /** The camera width asked for: as set, or 3/4 of it while the link is weak. */
+    int cameraWidth() {
+        return lowRes ? config.getCameraWidth() * 3 / 4 / 2 * 2 : config.getCameraWidth();
+    }
+
+    int cameraHeight() {
+        return lowRes ? config.getCameraHeight() * 3 / 4 / 2 * 2 : config.getCameraHeight();
     }
 
     /**
-     * The frame-rate range for the phone: as set, but a steady one (min = max) only to phone app 2.3.0-pc.12 and on.
-     * Older apps hand the range to the camera unchecked, and a camera that doesn't list it may stop the picture: they
-     * get 30-60, as before.
+     * The camera size for the link: smaller while the phone's bitrate stays low, back when it recovers (see
+     * LOW_RES_BPS). The new size goes out as a config; the phone restarts only its camera (sticks keep going). Sent
+     * twice, a second apart (numbered, but nothing would ask for it again if it were lost).
      */
-    int[] cameraFps() {
-        int min = config.getCameraFpsMin(), max = config.getCameraFpsMax();
-        if (min != max) return new int[]{min, max};
-        String app = telemetry.getPhoneAppVersion();
-        if (app != null && !de.droiddrone.pc.setup.UpdateCheck.isNewer(STEADY_FPS_PHONE_APP, app)) return new int[]{min, max};
-        if (!steadyFpsWarned) {
-            steadyFpsWarned = true;
-            events.accept("Steady " + max + " fps needs phone app " + STEADY_FPS_PHONE_APP + " or newer (this phone: "
-                    + (app == null ? "an older one" : app) + "): the camera runs at 30-60 fps. Update the phone app.");
+    private void adjustResolution(long now) throws IOException {
+        if (configResends > 0 && now >= nextConfigResend) {
+            configResends--;
+            nextConfigResend = now + 1000;
+            sendConfig();
         }
-        return new int[]{30, 60};
+        int bps = telemetry.getPhoneTargetBitRate();
+        if (bps <= 0 || spectator != null) return;
+        boolean wantSwitch = lowRes ? bps >= HIGH_RES_BPS : bps <= LOW_RES_BPS;
+        if (!wantSwitch) {
+            resSince = -1;
+            return;
+        }
+        if (resSince < 0) resSince = now;
+        if (now - resSince < (lowRes ? HIGH_RES_AFTER_MS : LOW_RES_AFTER_MS)) return;
+        resSince = -1;
+        lowRes = !lowRes;
+        events.accept("Video: " + cameraWidth() + "x" + cameraHeight() + (lowRes
+                ? " while the link is weak (phone bitrate " + bps / 1000 + " kbit/s): fewer pixels look cleaner."
+                : ": the link has recovered (" + bps / 1000 + " kbit/s)."));
+        configResends = 1;
+        nextConfigResend = now + 1000;
+        sendConfig();
     }
 
-    private boolean steadyFpsWarned;
+    public boolean isLowResolution() {
+        return lowRes;
+    }
+
+    /**
+     * Asks the phone for a key frame now (phone app 2.3.0-pc.13 on; older ones drop the packet): a frame came
+     * damaged or lost, a recording or a spectator starts. At most every KEY_FRAME_REQUEST_MS; not while watching.
+     */
+    public void requestKeyFrame() {
+        long now = System.currentTimeMillis();
+        if (!running || spectator != null || !isConnected() || now - lastKeyFrameRequest < KEY_FRAME_REQUEST_MS) return;
+        lastKeyFrameRequest = now;
+        try {
+            socket.send(new DatagramPacket(new byte[]{KEY_FRAME_REQUEST}, 1, remoteIp, remotePort));
+            keyFrameRequests.incrementAndGet();
+        } catch (IOException e) {
+            // the next damaged frame asks again
+        }
+    }
+
+    public long getKeyFrameRequests() {
+        return keyFrameRequests.get();
+    }
 
     private void sendConfig() throws IOException {
         udpSender.sendPacket(buildConfigPacket());
@@ -658,11 +729,13 @@ public class ControlLink {
         String who = p == null ? "the pilot PC" : "the pilot PC (" + p.ip().getHostAddress() + ")";
         return switch (c.phase()) {
             case WATCHING -> "SPECTATOR: watching " + who + ", " + c.delayMs() + " ms behind it. This PC sends no sticks.";
-            case JOINING -> "SPECTATOR: another PC flies the drone - joining " + who + "...";
+            case JOINING -> p == null ? "SPECTATOR: asking the phone which PC flies..."
+                    : "SPECTATOR: another PC flies the drone - joining " + who + "...";
             case REFUSED_NOT_FLYING -> "SPECTATOR: " + who + " is not flying yet - waiting.";
             case REFUSED_FULL -> "SPECTATOR: " + who + " already has " + SpectatorHost.MAX_SPECTATORS + " spectators - waiting for a place.";
             case REFUSED_OFF -> "SPECTATOR: " + who + " lets nobody watch (SETTINGS > Allow spectators is off there).";
-            case NO_PILOT -> "SPECTATOR: nobody flies the drone now. To fly it from this PC, DISCONNECT and CONNECT again.";
+            case NO_PILOT -> watchOnly ? "SPECTATOR: nobody flies the drone yet - waiting for a pilot to connect."
+                    : "SPECTATOR: nobody flies the drone now. To fly it from this PC, DISCONNECT and CONNECT again.";
         };
     }
 
