@@ -4,17 +4,26 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-10-31, 1.0.15)
+## Where things stand (2026-10-31, 1.0.16)
 
-- **Released:** DRAUPNE Link **1.0.15** (Latest; 1.0.14 was never released), bundling phone app **DRAUPNE Flight 2.3.0-pc.9**. The fixes alone
-  (no new features) are tagged `fixes-1.0.14`, a fallback that was never released.
+- **Released:** DRAUPNE Link **1.0.16** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.10**. 1.0.16 is the
+  rename from DroidDrone PC (repository MelonNO/droiddrone-pc became MelonNO/draupne-link; GitHub redirects the old
+  name, so never create a repository with the old name). 1.0.15 and older can't install 1.0.16 by themselves: their
+  UPDATE opens the release page. 1.0.14 was never released; `fixes-1.0.14` is a fallback tag with the fixes alone.
+- **Kept on purpose:** Java packages `de.droiddrone.*`, the phone app's package `de.droiddrone.flight.pc` and its
+  signing key, the installer's upgrade UUID, the signing key folder `%APPDATA%\DroidDronePC-build`, and the
+  references to the upstream DroidDrone project. Legacy names still looked for: `%APPDATA%\DroidDronePC`
+  (settings copied once, `AppPaths`), the old firewall rule names (`WindowsSetup.OLD_RULES`), `DroidDrone PC.exe`
+  (installer's running check) and dead `DroidDrone PC.lnk` shortcuts.
 - **Flies:** RC, video, OSD and telemetry over 4G (phone on Tailscale) work on the real drone.
 - **Waiting on the pilot:**
-  - Phone app 2.3.0-pc.9 on the phone (pc.7-pc.9 never run on a phone): LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
+  - Phone app 2.3.0-pc.10 on the phone (pc.7-pc.10 never run on a phone): LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
     held, back ignored), portrait (both cards shown, header fits), Direct connection on a fresh install. Built and
     published, never run on a phone or emulator.
   - 1.0.11 on the drone: the FLY timer counts while armed, CORE temperature and the flight mode names show, and the
     phone now sees the drone armed (its travelled distance, used by the OSD's optional "Distance flown", counts).
+  - The upgrade from DroidDrone PC 1.0.15 to DRAUPNE Link 1.0.16: settings kept, one app in Program Files, old
+    firewall rules gone, phone app updated in place.
   - The motor test (SETTINGS > Motor test) on the real flight controller, props off.
   - First real use of **UPDATE** (1.0.9 to 1.0.10): it should download, install with a progress bar and restart.
   - Calibrate again with hands off at the centre step. The old pitch centre was 18 us off, which made the drone lean
