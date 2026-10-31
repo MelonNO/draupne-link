@@ -2,6 +2,11 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.20
+
+- **Fix: phone app 2.3.0-pc.14 replaces pc.13. Update the phone app.** On some phones pc.13 started no video (it used intra refresh where the phone's encoder claimed to support it), and the hung video start also held up the sticks to the flight controller. pc.14 doesn't use intra refresh (key frames every 2 s and whenever the PC asks), and starts the video on a thread of its own, so camera or encoder trouble can never hold up the sticks again. pc.13's other improvements stay: paced packets, 30 fps, the PC deciding the bitrate.
+- **A phone app that stops answering is now a LINK STALL** (with the warning sound): before, its telemetry kept the link looking fine while pings went unanswered and the sticks weren't getting through.
+
 ## 1.0.19
 
 - **Better video over weak 4G** (with phone app 2.3.0-pc.13). Part of the picture often went grey or green: the phone sent each key frame as one burst and a weak uplink dropped its end. Now the phone paces its packets, sends key frames every 2 s instead of every 0.5 s plus one whenever the PC sees one arrive damaged, and uses intra refresh where its encoder supports it (no bursts at all). The camera now really runs at 30 fps (it often ran at 60), so each frame gets twice the data.

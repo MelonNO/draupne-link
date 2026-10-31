@@ -4,9 +4,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-10-31, 1.0.19)
+## Where things stand (2026-10-31, 1.0.20)
 
-- **Released:** DRAUPNE Link **1.0.19** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.13**: video over weak
+- **Released:** DRAUPNE Link **1.0.20** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.14**: the fix for pc.13,
+  which on a test phone started no video (intra refresh, where its encoder claimed support) and, the video start being
+  on the packet thread, held up pings and sticks. pc.14: no intra refresh, the video starts on its own thread
+  (`Udp.videoStarter`); the PC counts pongs stopping while telemetry comes as LINK STALL. 1.0.19 brought video over weak
   4G (paced bursts, 30 fps, key frames on request, intra refresh, the PC deciding the bitrate, 540p on a weak link),
   Connect as pilot / spectator, the controller picker in setup. 1.0.18: the spectator picture fix and the link log's
   video figures. 1.0.17 brought spectator mode, the app log, and Drone setup's ARM / flight mode / failsafe /
@@ -21,7 +24,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   (installer's running check) and dead `DroidDrone PC.lnk` shortcuts.
 - **Flies:** RC, video, OSD and telemetry over 4G (phone on Tailscale) work on the real drone.
 - **Waiting on the pilot:**
-  - Phone app 2.3.0-pc.13 on the phone (pc.7-pc.13 never run on a phone): LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
+  - Phone app 2.3.0-pc.14 on the phone (pc.7-pc.12, pc.14 never run on a phone; pc.13 hung on a test phone): LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
     held, back ignored), portrait (both cards shown, header fits), Direct connection on a fresh install. Built and
     published, never run on a phone or emulator.
   - 1.0.11 on the drone: the FLY timer counts while armed, CORE temperature and the flight mode names show, and the
@@ -33,8 +36,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
     (MSP_STATUS sensor bit 3, MSP_FEATURE_CONFIG, MSP_BOXIDS - all from Betaflight's source, never on a board).
   - **Video over the far 4G link with pc.13** (2026-10-31 before: 0.25 Mbit/s, ~2 damaged key frames a second, the
     top of the screen - the end of each frame, the camera being upside down - grey or green). In the link log:
-    `video_damaged` down, `camera_fps` 30, `phone_video_mbps` over 1, `intra_refresh` (does this phone's encoder have
-    it?), `key_requests`, `video_res` (960x540 only on a weak link), `decode_ms` / `draw_skipped` / `bunched` (why
+    `video_damaged` down, `camera_fps` 30, `phone_video_mbps` over 1, `key_requests`, `video_res` (960x540 only on a weak link), `decode_ms` / `draw_skipped` / `bunched` (why
     only half the frames were drawn at 60 fps). Pacing values in the overlay's `Udp.packetGapNs` are a first guess.
   - The steady 30 fps (no longer a setting): does the picture stay smooth and bright enough indoors? The phone's log
     says "Min FPS / Max FPS". The link log's video columns for a poor picture.
@@ -69,6 +71,13 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
     without a flight controller. Try it props off first.
 
 ## Ideas not done yet
+
+- **In-app phone app updater** (started, not in a release: kept outside the repo for now). Every update through the
+  browser leaves a `DRAUPNE-Flight-*.apk` in the phone's Downloads, and Android doesn't let the app delete those. Plan
+  the pilot chose: UPDATE downloads into the app's own cache, checks GitHub's SHA-256 (`digest` of the asset), installs
+  with `PackageInstaller` (needs REQUEST_INSTALL_PACKAGES and "Install unknown apps"), deletes the file; leftovers
+  deleted at start; a one-time note with a button opening Downloads for the old ones; Phone setup says to use UPDATE
+  when the app is already there.
 
 - Spectator: a better picture than the pilot's would need a second stream from the phone (costs the phone's 4G
   upload, so the pilot's delay): not done on purpose. A spectator in relay mode isn't supported.
@@ -175,8 +184,9 @@ Lessons from releasing:
   (jumpy) and 60 was dark indoors. Old `cameraFpsMin/Max` lines in a settings file are ignored. Phone app pc.12 matches
   the range to one the camera lists (overlay `InternalCamera.supportedRange`).
 - **Video over weak 4G** (phone app pc.13 + PC): the phone paces packets (`Udp.packetGapNs`), keeps the asked frame
-  rate (`InternalCamera`), sends key frames every 2 s / on `KEY_FRAME_REQUEST` (0x6A) / intra refresh where the encoder
-  has it (`StreamEncoder`), reports its bitrate setting (record 0x40F2). The PC asks for key frames (`VideoPipeline`,
+  rate (`InternalCamera`), sends key frames every 2 s and on `KEY_FRAME_REQUEST` (0x6A) (`StreamEncoder`; intra
+  refresh was tried in pc.13 and hung a test phone's video start - don't turn it back on without trying it on the
+  phone first), reports its bitrate setting (record 0x40F2). The PC asks for key frames (`VideoPipeline`,
   `ControlLink.requestKeyFrame`), decides the bitrate (`BitrateControl`: floor 1 Mbit/s by what arrives, the phone's
   report as the step), switches to 3/4 size on a weak link (`ControlLink.adjustResolution`), and releases a key frame
   that lost its last packet (`FrameAssembler.retireOlder`). Measured: cutting a damaged frame at its gap gives the
