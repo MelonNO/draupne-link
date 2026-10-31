@@ -4,10 +4,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-10-31, 1.0.17)
+## Where things stand (2026-10-31, 1.0.18)
 
-- **Released:** DRAUPNE Link **1.0.17** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.11**: spectator mode,
-  the app log, and Drone setup's ARM / flight mode / failsafe / GPS rescue switch. 1.0.16 was the rename from
+- **Released:** DRAUPNE Link **1.0.18** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.12**: the spectator
+  picture fix (1.0.17 cut off full-size forwarded packets), a steady camera frame rate (60 by default) and the video
+  figures in the link log. 1.0.17 brought spectator mode, the app log, and Drone setup's ARM / flight mode / failsafe /
+  GPS rescue switch. 1.0.16 was the rename from
   DroidDrone PC (repository MelonNO/droiddrone-pc became MelonNO/draupne-link; GitHub redirects the old name, so never
   create a repository with the old name). 1.0.15 and older can't install newer versions by themselves: their UPDATE
   opens the release page. 1.0.14 was never released; `fixes-1.0.14` is a fallback tag with the fixes alone.
@@ -18,7 +20,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   (installer's running check) and dead `DroidDrone PC.lnk` shortcuts.
 - **Flies:** RC, video, OSD and telemetry over 4G (phone on Tailscale) work on the real drone.
 - **Waiting on the pilot:**
-  - Phone app 2.3.0-pc.11 on the phone (pc.7-pc.11 never run on a phone): LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
+  - Phone app 2.3.0-pc.12 on the phone (pc.7-pc.12 never run on a phone): LOCK SCREEN (touches ignored but the HOLD TO UNLOCK box, dimmed, rotation
     held, back ignored), portrait (both cards shown, header fits), Direct connection on a fresh install. Built and
     published, never run on a phone or emulator.
   - 1.0.11 on the drone: the FLY timer counts while armed, CORE temperature and the flight mode names show, and the
@@ -28,6 +30,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   - 1.0.17's Drone setup on the real board, props off: ARM to AUX1, flight modes on AUX2, failsafe GPS rescue and
     AUX4 (check the Modes and Failsafe tabs in Betaflight Configurator); "GPS hardware failure" with the GPS unplugged
     (MSP_STATUS sensor bit 3, MSP_FEATURE_CONFIG, MSP_BOXIDS - all from Betaflight's source, never on a board).
+  - The steady 60 fps with phone app pc.12: does this phone's camera list 60-60 (its log says "Min FPS / Max FPS"),
+    and how dark is it indoors? The link log's new video columns for a poor picture.
   - Spectator mode with two PCs and phone app pc.11 (only tested on loopback, `SpectatorTest`): picture quality at
     600 ms, the pilot's ping and sticks unchanged, the pause when the pilot's link slows.
   - The app log's freeze report (WINDOW NOT RESPONDING with all stacks) on a real freeze.

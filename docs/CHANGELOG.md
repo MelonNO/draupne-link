@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.18
+
+- **Spectator picture fixed:** it was a coloured mess. Full-size video packets reach the spectator 9 bytes longer (the pilot PC's header in front) and were cut off on arrival, which broke nearly every frame. The spectator now sees exactly the pilot's picture. Update the spectator PC; the pilot's own picture was never affected.
+- **Steady camera frame rate** (SETTINGS > Camera frame rate: **60** by default, 30, or auto). The camera used to run at 30-60 fps and, in dim light such as indoors, dropped to 30 and back up, which looked jumpy. Settings still on the old 30-60 move to a steady 60 once. Indoors a steady 60 is darker; choose 30 there for a brighter picture. A steady rate needs phone app 2.3.0-pc.12: with an older one the PC keeps 30-60 and says so.
+- **The link log records the video** (video_rx_fps, video_mbps, video_damaged, video_lost), so a poor picture shows whether the bitrate dropped or frames broke.
+- **Phone app 2.3.0-pc.12:** picks a frame-rate range the camera supports, nearest to the one asked for, so a steady 60 can't stop the picture on a camera without it.
+
 ## 1.0.17
 
 - **Spectator mode** (off by default: SETTINGS > Allow spectators). A second PC that connects while you fly becomes a spectator: it shows your video and OSD a little behind you (600 ms), can record, and never sends sticks. It finds your PC through the phone and watches through it; the phone sends nothing extra, so your link is unchanged. It uses your PC's upload (about one video stream each, at most 2 spectators) and pauses by itself when your link to the drone slows down. A spectator never takes the drone over, also when you disconnect. Needs DRAUPNE Flight 2.3.0-pc.11 on the phone and direct phone mode (Tailscale).
