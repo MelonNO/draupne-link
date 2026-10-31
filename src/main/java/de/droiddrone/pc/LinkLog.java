@@ -25,13 +25,15 @@ public final class LinkLog implements AutoCloseable {
     static final String HEADER = "time,link,ping_ms,rc_frames,rc_max_gap_ms,telemetry_packets,telemetry_max_gap_ms,"
             + "fc_data_age_ms,rxloss,failsafe,armed,blockers,radio,rc_output,video_fps,throttle,channels,"
             + "ping_max_ms,pong_age_ms,path,phone_rc_in_gap_ms,phone_rc_out_gap_ms,phone_write_max_ms,phone_write_timeouts,"
-            + "phone_skipped,event";
+            + "phone_skipped,video_rx_fps,video_mbps,video_damaged,video_lost,event";
 
     private final Path file;
     private final BufferedWriter out;
     private long lastRcFrames;
     private long lastTelemetry;
     private long lastFlush;
+    private long lastDamaged;
+    private long lastLost;
 
     private LinkLog(Path file) throws IOException {
         this.file = file;
@@ -62,6 +64,15 @@ public final class LinkLog implements AutoCloseable {
      */
     public synchronized void sample(ControlLink link, boolean radio, boolean rcOutput, int videoFps, short[] channels,
                                     String path) throws IOException {
+        sample(link, radio, rcOutput, videoFps, channels, path, null);
+    }
+
+    /**
+     * @param video the video's figures, or null without video: frames received a second, Mbit/s received (what the
+     *              phone's encoder sends, after the bitrate control), and frames damaged / lost since the last row
+     */
+    public synchronized void sample(ControlLink link, boolean radio, boolean rcOutput, int videoFps, short[] channels,
+                                    String path, de.droiddrone.pc.video.VideoPipeline.Stats video) throws IOException {
         long now = System.currentTimeMillis();
         long rc = link.getRcFramesSent();
         long telemetry = link.getTelemetryPacketsReceived();
@@ -80,7 +91,13 @@ public final class LinkLog implements AutoCloseable {
                 !rcOutput || channels == null ? "" : java.util.Arrays.toString(channels).replace(",", "").replace("[", "").replace("]", ""),
                 link.takeMaxPingMs(), link.msSinceLastPong(), path == null ? "" : path,
                 p == null ? "" : p.rcInGapMs(), p == null ? "" : p.rcOutGapMs(), p == null ? "" : p.writeMaxMs(),
-                p == null ? "" : p.writeTimeouts(), p == null ? "" : p.skipped(), "");
+                p == null ? "" : p.writeTimeouts(), p == null ? "" : p.skipped(),
+                video == null ? "" : video.receivedFps(), video == null ? "" : String.format(java.util.Locale.ROOT, "%.2f", video.megabitsPerSecond()),
+                video == null ? "" : video.damaged() - lastDamaged, video == null ? "" : video.lost() - lastLost, "");
+        if (video != null) {
+            lastDamaged = video.damaged();
+            lastLost = video.lost();
+        }
         lastRcFrames = rc;
         lastTelemetry = telemetry;
         if (now - lastFlush >= 1000) {
@@ -91,7 +108,7 @@ public final class LinkLog implements AutoCloseable {
 
     /** A message from the app's log, in the timeline. */
     public synchronized void event(String text) throws IOException {
-        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", text);
+        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", text);
     }
 
     private void row(Object... values) throws IOException {

@@ -277,6 +277,16 @@ public class MainWindow extends JFrame {
                         logLine("Recording stopped.");
                     }
                 }));
+        int[] fps = {config.getCameraFpsMin(), config.getCameraFpsMax()};
+        int fpsChoice = fps[0] == 60 && fps[1] == 60 ? 0 : fps[0] == 30 && fps[1] == 30 ? 1 : 2;
+        menu.add(new MenuRows.ChoiceRow("Camera frame rate", "Steady 60 (smooth) or 30 (brighter indoors); auto 30-60 by the light",
+                new String[]{"60", "30", "AUTO"}, fpsChoice, i -> {
+                    String[][] ranges = {{"60", "60"}, {"30", "30"}, {"30", "60"}};
+                    save(Map.of("cameraFpsMin", ranges[i][0], "cameraFpsMax", ranges[i][1]));
+                    logLine("Camera frame rate: " + (i == 2 ? "auto, 30-60 fps by the light" : "steady " + ranges[i][0] + " fps")
+                            + (connection == null ? "." : ", from the next connection.")
+                            + (i == 2 ? "" : " Needs phone app 2.3.0-pc.12; older ones keep 30-60."));
+                }));
         menu.add(new MenuRows.SwitchRow("Allow spectators", "Off by default. Other PCs watch your flight through this PC's upload",
                 de.droiddrone.pc.Connection.spectatorsAllowed(config), on -> {
                     save(Map.of(de.droiddrone.pc.Connection.ALLOW_SPECTATORS_KEY, Boolean.toString(on)));
@@ -862,8 +872,9 @@ public class MainWindow extends JFrame {
         RcSession s = session;
         VideoPipeline v = video;
         try {
+            VideoPipeline.Stats vs = v == null ? null : v.stats();
             l.sample(c.getLink(), service.getSnapshot().selected() != null, s != null && s.isRcEnabled(),
-                    v == null ? 0 : v.stats().shownFps(), s == null ? null : s.getLastChannels(), phonePath);
+                    vs == null ? 0 : vs.shownFps(), s == null ? null : s.getLastChannels(), phonePath, vs);
         } catch (IOException e) {
             linkLog = null;
             logLine("Link log stopped: " + e.getMessage());

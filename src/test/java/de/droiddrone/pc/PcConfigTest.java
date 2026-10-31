@@ -67,6 +67,22 @@ class PcConfigTest {
     }
 
     @Test
+    void upgradeMovesTheOldAutoFrameRateToASteady60Once(@org.junit.jupiter.api.io.TempDir Path dir) throws Exception {
+        Path file = dir.resolve("p.properties");
+        Files.writeString(file, "cameraFpsMin=30\ncameraFpsMax=60\nsettingsVersion=3\n");
+        PcConfig config = PcConfig.load(file);
+        assertTrue(config.upgrade(file));
+        PcConfig after = PcConfig.load(file);
+        assertEquals(60, after.getCameraFpsMin());
+        assertEquals(60, after.getCameraFpsMax());
+        // a steady 30 chosen on purpose stays
+        Files.writeString(file, "cameraFpsMin=30\ncameraFpsMax=30\nsettingsVersion=3\n");
+        PcConfig chosen = PcConfig.load(file);
+        chosen.upgrade(file);
+        assertEquals(30, PcConfig.load(file).getCameraFpsMin());
+    }
+
+    @Test
     void upgradeFromVersion2OnlyTouchesTelemetry() throws Exception {
         Path file = dir.resolve(PcConfig.FILE_NAME);
         Files.writeString(file, "rcRate=100\ntelemetryRate=10\nsettingsVersion=2\n");

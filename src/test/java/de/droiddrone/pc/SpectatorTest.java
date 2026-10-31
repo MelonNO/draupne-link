@@ -95,6 +95,42 @@ class SpectatorTest {
         assertTrue(spectator.spectatorStatus().contains("watching"));
     }
 
+    /**
+     * A detailed picture, so frames fill whole packets: the pilot passes them on 9 bytes longer (its STREAM header).
+     * Cut off on the way, the spectator's picture turned into coloured mush; it must end up the pilot's, pixel for pixel.
+     */
+    @Test
+    void fullSizePacketsReachTheSpectatorWhole() throws Exception {
+        phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.videoStream = TestStreams.h264(320, 240, 150, 10, true);
+        ControlLinkTest.CapturingSink pilotSink = new ControlLinkTest.CapturingSink();
+        pilotVideo = new VideoPipeline(pilotSink, () -> 30);
+        pilot = link(PILOT_PORT, true, 600);
+        pilot.setVideoListener(pilotVideo, false);
+        pilotVideo.attach(pilot);
+        pilot.start();
+        waitFor(() -> pilot.getState() == ControlLink.State.READY, 5000, "pilot READY");
+        ControlLinkTest.CapturingSink sink = new ControlLinkTest.CapturingSink();
+        spectatorVideo = new VideoPipeline(sink, () -> -1);
+        spectator = link(SPECTATOR_PORT, true, 300);
+        spectator.setVideoListener(spectatorVideo, false);
+        spectatorVideo.attach(spectator);
+        spectator.start();
+        waitFor(() -> sink.presented.get() >= 20, 10_000, "pictures on the spectator's screen");
+        // the stream ends (150 frames, ~5 s): then both show its last frame
+        int[] last = {-1};
+        long end = System.currentTimeMillis() + 15_000;
+        while (System.currentTimeMillis() < end) {
+            Thread.sleep(500);
+            int now = sink.presented.get();
+            if (now == last[0]) break;
+            last[0] = now;
+        }
+        assertEquals(0, spectatorVideo.stats().damaged(), "no broken frames: " + spectatorVideo.stats());
+        assertEquals(0, spectatorVideo.stats().lost());
+        assertArrayEquals(pilotSink.pixels, sink.pixels, "the spectator sees the pilot's picture");
+    }
+
     @Test
     void spectatorNeverTakesTheDroneOver() throws Exception {
         phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);

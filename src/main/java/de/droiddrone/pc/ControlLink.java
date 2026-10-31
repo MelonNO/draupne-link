@@ -62,6 +62,11 @@ public class ControlLink {
         void onVideoFragment(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length);
     }
 
+    /** The first phone app that makes any frame-rate range safe (it picks the camera's nearest supported one). */
+    static final String STEADY_FPS_PHONE_APP = "2.3.0-pc.12";
+    /** How long to wait for the phone app's version before the settings go out (it comes within ~0.1 s of connecting). */
+    static final long PHONE_VERSION_WAIT_MS = 1500;
+
     /** Upstream's Control app asks for the stream every 2.5 s until the codec config arrives. */
     private static final int START_VIDEO_RETRY_MS = 2500;
 
@@ -176,7 +181,9 @@ public class ControlLink {
     }
 
     private void receiverRun() {
-        byte[] buf = new byte[UdpCommon.packetLength];
+        // room for the phone's packets and, when watching, the same with the pilot PC's STREAM header in front: a
+        // datagram longer than the buffer is cut off without a word, and a cut video packet breaks its frame
+        byte[] buf = new byte[UdpCommon.packetLength + Spectate.STREAM_HEADER + 16];
         DatagramPacket packet = new DatagramPacket(buf, buf.length);
         while (running) {
             try {
@@ -320,6 +327,7 @@ public class ControlLink {
      */
     private void sessionRun() {
         boolean wasConnected = false;
+        long connectedAt = 0;
         long lastStartVideo = 0;
         long lastFcInfoRequest = 0;
         long lastModesRequest = 0;
@@ -337,6 +345,7 @@ public class ControlLink {
                     fcInfo = null;
                     telemetry.forgetBoxIds(); // a restarted phone app has to read them again
                 }
+                if (connected && !wasConnected) connectedAt = System.currentTimeMillis();
                 wasConnected = connected;
                 if (versionMismatch) {
                     Thread.sleep(1000);
@@ -344,6 +353,12 @@ public class ControlLink {
                     udpSender.sendConnect(1, key, SettingsCommon.versionCompatibleCode);
                     Thread.sleep(500);
                 } else if (!configReceived) {
+                    // a steady frame rate goes only to a phone app that can take it: wait for its version first
+                    if (wantsSteadyFps() && telemetry.getPhoneAppVersion() == null
+                            && System.currentTimeMillis() - connectedAt < PHONE_VERSION_WAIT_MS) {
+                        Thread.sleep(50);
+                        continue;
+                    }
                     sendConfig();
                     Thread.sleep(500);
                 } else {
@@ -484,8 +499,9 @@ public class ControlLink {
             packetData.daos.writeUTF(i == 0 ? config.getCameraId() : SettingsCommon.cameraId[i]);
             packetData.daos.writeShort(config.getCameraWidth());
             packetData.daos.writeShort(config.getCameraHeight());
-            packetData.daos.writeShort(config.getCameraFpsMin());
-            packetData.daos.writeShort(config.getCameraFpsMax());
+            int[] fps = cameraFps();
+            packetData.daos.writeShort(fps[0]);
+            packetData.daos.writeShort(fps[1]);
             packetData.daos.writeBoolean(SettingsCommon.useUsbCamera);
             packetData.daos.writeByte(SettingsCommon.usbCameraFrameFormat);
             packetData.daos.writeBoolean(SettingsCommon.usbCameraReset);
@@ -515,6 +531,30 @@ public class ControlLink {
         packetData.daos.writeShort(SettingsCommon.mavlinkUdpBridgePort);
         return packetData.getData();
     }
+
+    private boolean wantsSteadyFps() {
+        return config.getCameraFpsMin() == config.getCameraFpsMax();
+    }
+
+    /**
+     * The frame-rate range for the phone: as set, but a steady one (min = max) only to phone app 2.3.0-pc.12 and on.
+     * Older apps hand the range to the camera unchecked, and a camera that doesn't list it may stop the picture: they
+     * get 30-60, as before.
+     */
+    int[] cameraFps() {
+        int min = config.getCameraFpsMin(), max = config.getCameraFpsMax();
+        if (min != max) return new int[]{min, max};
+        String app = telemetry.getPhoneAppVersion();
+        if (app != null && !de.droiddrone.pc.setup.UpdateCheck.isNewer(STEADY_FPS_PHONE_APP, app)) return new int[]{min, max};
+        if (!steadyFpsWarned) {
+            steadyFpsWarned = true;
+            events.accept("Steady " + max + " fps needs phone app " + STEADY_FPS_PHONE_APP + " or newer (this phone: "
+                    + (app == null ? "an older one" : app) + "): the camera runs at 30-60 fps. Update the phone app.");
+        }
+        return new int[]{30, 60};
+    }
+
+    private boolean steadyFpsWarned;
 
     private void sendConfig() throws IOException {
         udpSender.sendPacket(buildConfigPacket());
