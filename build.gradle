@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'de.droiddrone.pc'
-version = '1.0.15'
+version = '1.0.16'
 
 repositories {
     mavenCentral()
@@ -59,7 +59,7 @@ application {
 // the app shows its own version (window title, SETTINGS > About): AppInfo reads it from here
 jar {
     manifest {
-        attributes 'Implementation-Title': 'DroidDrone PC', 'Implementation-Version': project.version
+        attributes 'Implementation-Title': 'DRAUPNE Link', 'Implementation-Version': project.version
     }
 }
 
@@ -77,12 +77,12 @@ test {
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Release packaging (Windows):
-//   gradlew packageApp        -> build/app-image/DroidDrone PC/DroidDrone PC.exe  (app + its own Java runtime)
-//   gradlew releaseZip        -> build/release/DroidDrone-PC-<version>-windows.zip  (portable, unzip and run)
-//   gradlew packageInstaller  -> build/release/DroidDrone-PC-Setup-<version>.exe  (needs WiX 3 on PATH; CI has it)
+//   gradlew packageApp        -> build/app-image/DRAUPNE Link/DRAUPNE Link.exe  (app + its own Java runtime)
+//   gradlew releaseZip        -> build/release/DRAUPNE-Link-<version>-windows.zip  (portable, unzip and run)
+//   gradlew packageInstaller  -> build/release/DRAUPNE-Link-Setup-<version>.exe  (needs WiX 3 on PATH; CI has it)
 
 def jpackageTool = file("${System.getProperty('java.home')}/bin/jpackage.exe")
-def iconFile = layout.buildDirectory.file('icon/droiddrone-pc.ico').get().asFile
+def iconFile = layout.buildDirectory.file('icon/draupne-link.ico').get().asFile
 def appImageDir = layout.buildDirectory.dir('app-image').get().asFile
 def releaseDir = layout.buildDirectory.dir('release').get().asFile
 
@@ -103,12 +103,12 @@ tasks.register('packageApp', Exec) {
     dependsOn installDist, appIcon
     doFirst { delete appImageDir }
     commandLine jpackageTool, '--type', 'app-image',
-            '--name', 'DroidDrone PC',
+            '--name', 'DRAUPNE Link',
             '--app-version', version,
-            '--vendor', 'droiddrone-pc',
+            '--vendor', 'draupne-link',
             '--icon', iconFile,
-            '--input', layout.buildDirectory.dir('install/droiddrone-pc/lib').get().asFile,
-            '--main-jar', "droiddrone-pc-${version}.jar",
+            '--input', layout.buildDirectory.dir('install/draupne-link/lib').get().asFile,
+            '--main-jar', "draupne-link-${version}.jar",
             '--main-class', 'de.droiddrone.pc.Main',
             '--java-options', '-Dfile.encoding=UTF-8',
             '--dest', appImageDir
@@ -119,7 +119,7 @@ tasks.register('releaseZip', Zip) {
     description = 'Portable zip of the app image'
     dependsOn packageApp
     from(appImageDir)
-    archiveFileName = "DroidDrone-PC-${version}-windows.zip"
+    archiveFileName = "DRAUPNE-Link-${version}-windows.zip"
     destinationDirectory = releaseDir
 }
 
@@ -130,10 +130,10 @@ tasks.register('packageInstaller', Exec) {
     def staging = layout.buildDirectory.dir('installer').get().asFile
     doFirst { delete staging }
     commandLine jpackageTool, '--type', 'exe',
-            '--app-image', new File(appImageDir, 'DroidDrone PC'),
-            '--name', 'DroidDrone PC',
+            '--app-image', new File(appImageDir, 'DRAUPNE Link'),
+            '--name', 'DRAUPNE Link',
             '--app-version', version,
-            '--vendor', 'droiddrone-pc',
+            '--vendor', 'draupne-link',
             '--description', 'Fly a Betaflight drone over 4G from Windows',
             '--icon', iconFile,
             // all users (Program Files), so the installer runs as administrator and can do the PC setup itself;
@@ -144,10 +144,10 @@ tasks.register('packageInstaller', Exec) {
             '--win-shortcut-prompt',
             '--win-shortcut',
             '--win-menu',
-            '--win-menu-group', 'DroidDrone PC',
+            '--win-menu-group', 'DRAUPNE Link',
             // keep this UUID forever: it lets a newer installer replace an older install
             '--win-upgrade-uuid', '5d2f1d3e-6a0b-4c9e-9f53-2b7c1a8e4d61',
-            '--resource-dir', file('src/installer'), // main.wxs: PC setup tasks, "Launch DroidDrone PC" box
+            '--resource-dir', file('src/installer'), // main.wxs: PC setup tasks, "Launch DRAUPNE Link" box
             '--dest', staging
     // main.wxs takes check-running.js from here (jpackage builds from a copy of the resource dir)
     environment 'DDPC_INSTALLER_DIR', file('src/installer').absolutePath
@@ -155,7 +155,7 @@ tasks.register('packageInstaller', Exec) {
         copy {
             from(staging) { include '*.exe' }
             into releaseDir
-            rename { "DroidDrone-PC-Setup-${version}.exe" }
+            rename { "DRAUPNE-Link-Setup-${version}.exe" }
         }
     }
 }

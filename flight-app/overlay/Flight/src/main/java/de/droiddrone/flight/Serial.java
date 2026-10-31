@@ -14,7 +14,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DroidDrone PC: one writer thread owns the USB port; stick packets
+ *  Modified for DRAUPNE Link: one writer thread owns the USB port; stick packets
  *  (newest only) go first with a short timeout, never behind other requests, which back off while the link is slow;
  *  reads wait asynchronously, so they never hold up a write.
  */
@@ -60,7 +60,7 @@ public class Serial {
     public static final int STATUS_SERIAL_PORT_OPENED = 7;
     private static final int serialDataBits = 8;
     private static final int serialPortReadWriteTimeoutMs = 100;
-    // DroidDrone PC: stick writes give up quickly and go again with the newest sticks
+    // DRAUPNE Link: stick writes give up quickly and go again with the newest sticks
     private static final int rcWriteTimeoutMs = 50;
     // a write slower than this means the flight controller's USB is busy: skip other requests for a moment
     private static final int slowWriteMs = 15;
@@ -83,20 +83,20 @@ public class Serial {
     private UsbSerialPort port;
     private UsbDeviceConnection connection;
     private UsbSerialDriver driver;
-    // DroidDrone PC: volatile - read by the reader, writer and init threads
+    // DRAUPNE Link: volatile - read by the reader, writer and init threads
     private volatile int threadsId;
     private volatile int status;
     private boolean isMavlink;
     private SerialHelper serialHelper;
     private boolean restart;
-    /** DroidDrone PC: the newest stick packet not written yet (older ones are simply replaced). */
+    /** DRAUPNE Link: the newest stick packet not written yet (older ones are simply replaced). */
     private final AtomicReference<byte[]> pendingRc = new AtomicReference<>();
-    /** DroidDrone PC: every other MSP request, in order. */
+    /** DRAUPNE Link: every other MSP request, in order. */
     private final LinkedBlockingQueue<byte[]> pendingMsp = new LinkedBlockingQueue<>(64);
     private final Object writeSignal = new Object();
     private volatile long slowUntil;
     /**
-     * DroidDrone PC: until then, look for the flight controller every FAST_RETRY_MS, not every 2 s - right after its USB
+     * DRAUPNE Link: until then, look for the flight controller every FAST_RETRY_MS, not every 2 s - right after its USB
      * link went (a loose OTG plug): Betaflight lands or disarms after 1.5 s without sticks.
      */
     private volatile long fastRetryUntil;
@@ -120,7 +120,7 @@ public class Serial {
         msp.close();
         mavlink.close();
         threadsId++;
-        closePort(); // DroidDrone PC: the old connection, or each re-init leaked one (and its reader stayed blocked)
+        closePort(); // DRAUPNE Link: the old connection, or each re-init leaked one (and its reader stayed blocked)
         Thread initThread = new Thread(initRun);
         initThread.setDaemon(false);
         initThread.setName("serialInitThread");
@@ -339,7 +339,7 @@ public class Serial {
             log("Start USB serial reader thread - OK");
             while (id == threadsId) {
                 try {
-                    // DroidDrone PC: timeout 0 = an asynchronous UsbRequest, waiting for data without blocking writes.
+                    // DRAUPNE Link: timeout 0 = an asynchronous UsbRequest, waiting for data without blocking writes.
                     // A read with a timeout is a synchronous bulkTransfer that, on many phones, holds every write on
                     // this connection until data comes or the timeout (100 ms) runs out: sticks then reached the
                     // flight controller ~100 ms late, enough for Betaflight to flag RXLOSS and block arming.
@@ -358,7 +358,7 @@ public class Serial {
                     if (id != threadsId) return; // closed on purpose
                     serialErrors++;
                     log("Serial reader thread error: " + e);
-                    // DroidDrone PC: the device gone (unplugged), or reads keep failing: reconnect now, not after 10
+                    // DRAUPNE Link: the device gone (unplugged), or reads keep failing: reconnect now, not after 10
                     // errors (~1 s) plus the service's next check (up to 1 s) plus a 2 s retry
                     if (!deviceAttached() || serialErrors > 3) {
                         lostDevice(e.toString());
@@ -374,14 +374,14 @@ public class Serial {
         }
     };
 
-    /** DroidDrone PC: is the flight controller's USB device still there? */
+    /** DRAUPNE Link: is the flight controller's USB device still there? */
     private boolean deviceAttached() {
         UsbSerialDriver d = driver;
         if (d == null || config.isUseNativeSerialPort()) return true;
         return manager.getDeviceList().containsValue(d.getDevice());
     }
 
-    /** DroidDrone PC: its USB link went: start again at once, and look for it often for a few seconds. */
+    /** DRAUPNE Link: its USB link went: start again at once, and look for it often for a few seconds. */
     private void lostDevice(String why) {
         log("Flight controller USB link lost (" + why + "): reconnecting");
         fastRetryUntil = System.currentTimeMillis() + FAST_RETRY_FOR_MS;
@@ -395,7 +395,7 @@ public class Serial {
         signalWriter();
     }
 
-    /** DroidDrone PC: a stick packet. Replaces one not written yet, and goes before every other request. */
+    /** DRAUPNE Link: a stick packet. Replaces one not written yet, and goes before every other request. */
     public void writeRcMsp(byte[] data){
         if (status != STATUS_SERIAL_PORT_OPENED || data == null || !isMspCompatible()) return;
         pendingRc.set(data);
@@ -424,7 +424,7 @@ public class Serial {
     }
 
     /**
-     * DroidDrone PC: the only thread that writes MSP to the flight controller, so a slow write can't hold sticks
+     * DRAUPNE Link: the only thread that writes MSP to the flight controller, so a slow write can't hold sticks
      * behind other requests: the newest sticks always go first, other requests one at a time in between, and while
      * the USB link is slow those are skipped (the app asks for them again).
      */
@@ -462,7 +462,7 @@ public class Serial {
     private void write(byte[] data, int timeoutMs, boolean isRc){
         long start = System.nanoTime();
         boolean timedOut = false;
-        boolean written = false; // DroidDrone PC: only a write that went out counts as sticks delivered
+        boolean written = false; // DRAUPNE Link: only a write that went out counts as sticks delivered
         try {
             if (config.isUseNativeSerialPort()){
                 if (serialHelper != null && serialHelper.isOpen()) {

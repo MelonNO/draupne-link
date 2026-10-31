@@ -3,5 +3,5 @@ build/
 out/
 *.iml
 .idea/
-droiddrone-pc.properties
+draupne-link.properties
 config.cfg

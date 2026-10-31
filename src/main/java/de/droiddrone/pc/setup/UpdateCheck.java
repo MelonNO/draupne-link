@@ -16,14 +16,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Asks GitHub which DroidDrone PC release is the latest (one anonymous request, no account, nothing sent but the
+ * Asks GitHub which DRAUPNE Link release is the latest (one anonymous request, no account, nothing sent but the
  * request itself). The app only tells the pilot; it downloads and installs only when the pilot presses UPDATE
  * ({@link SelfUpdate}).
  */
 public final class UpdateCheck {
-    public static final String LATEST_API = "https://api.github.com/repos/MelonNO/droiddrone-pc/releases/latest";
+    public static final String LATEST_API = "https://api.github.com/repos/MelonNO/draupne-link/releases/latest";
     /** Installers are only ever downloaded from this project's own releases. */
-    static final String DOWNLOADS = "https://github.com/MelonNO/droiddrone-pc/releases/download/";
+    static final String DOWNLOADS = "https://github.com/MelonNO/draupne-link/releases/download/";
     private static final Pattern NUMBER = Pattern.compile("\\d+");
 
     /**
@@ -58,7 +58,7 @@ public final class UpdateCheck {
                 JsonObject a = e.getAsJsonObject();
                 String name = a.get("name").getAsString();
                 String u = text(a, "browser_download_url");
-                if (!name.startsWith("DroidDrone-PC-Setup-") || !name.endsWith(".exe") || u == null || !u.startsWith(DOWNLOADS)) continue;
+                if (!name.startsWith("DRAUPNE-Link-Setup-") || !name.endsWith(".exe") || u == null || !u.startsWith(DOWNLOADS)) continue;
                 String digest = text(a, "digest");
                 url = u;
                 size = a.has("size") ? a.get("size").getAsLong() : -1;

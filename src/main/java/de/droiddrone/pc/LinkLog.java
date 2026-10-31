@@ -16,7 +16,7 @@ import java.util.stream.Stream;
  * A timeline of one connection, 10 rows a second, to find what is behind a failsafe: was the PC sending sticks
  * (longest gap between RC frames), did the phone answer (ping, longest gap between telemetry packets), did the
  * flight controller talk (age of its last data) and what Betaflight said (RXLOSS / FAILSAFE). One CSV file per
- * connection in %APPDATA%\DroidDronePC\logs, newest {@value #KEEP} kept.
+ * connection in %APPDATA%\DraupneLink\logs, newest {@value #KEEP} kept.
  */
 public final class LinkLog implements AutoCloseable {
     static final int KEEP = 20;

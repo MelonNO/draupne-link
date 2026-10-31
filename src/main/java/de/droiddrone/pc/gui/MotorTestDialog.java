@@ -77,7 +77,7 @@ final class MotorTestDialog extends JFrame {
     private Thread worker;
 
     private MotorTestDialog(Window owner, MainWindow main) {
-        super("Motor test - DroidDrone PC"); // a window of its own: Windows' minimise, maximise and close
+        super("Motor test - DRAUPNE Link"); // a window of its own: Windows' minimise, maximise and close
         setIconImages(AppIcon.images());
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         // opened from a setup guide (Drone setup > Check now), which blocks the app's other windows: not this one

@@ -41,10 +41,10 @@ public final class SelfUpdate {
         return p.startsWith(Path.of(programFiles)) ? p : null;
     }
 
-    /** Into %TEMP%\DroidDronePC-update; progress is reported about once per percent. */
+    /** Into %TEMP%\DraupneLink-update; progress is reported about once per percent. */
     public static Path download(UpdateCheck.Release r, Progress progress) throws IOException, InterruptedException {
         if (!r.canInstall()) throw new IOException("the release has no installer to update with");
-        Path dir = Path.of(System.getProperty("java.io.tmpdir"), "DroidDronePC-update");
+        Path dir = Path.of(System.getProperty("java.io.tmpdir"), "DraupneLink-update");
         Files.createDirectories(dir);
         Path file = dir.resolve(r.installerUrl().substring(r.installerUrl().lastIndexOf('/') + 1));
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15))
@@ -114,8 +114,8 @@ public final class SelfUpdate {
                 "$app = " + quote(app),
                 "if (-not (Test-Path -LiteralPath $app)) {",
                 "  $k = Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall' | Get-ItemProperty |",
-                "    Where-Object { $_.DisplayName -eq 'DroidDrone PC' -and $_.InstallLocation } | Select-Object -First 1",
-                "  if ($k) { $app = Join-Path $k.InstallLocation 'DroidDrone PC.exe' }",
+                "    Where-Object { $_.DisplayName -eq 'DRAUPNE Link' -and $_.InstallLocation } | Select-Object -First 1",
+                "  if ($k) { $app = Join-Path $k.InstallLocation 'DRAUPNE Link.exe' }",
                 "}",
                 "if (Test-Path -LiteralPath $app) { Start-Process -FilePath $app }",
                 "Remove-Item -LiteralPath " + quote(installer) + " -Force",

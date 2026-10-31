@@ -1,6 +1,6 @@
 # Third-party components
 
-DroidDrone PC is licensed under the GPL-3.0 (see [LICENSE](LICENSE)). The release builds include these components:
+DRAUPNE Link is licensed under the GPL-3.0 (see [LICENSE](LICENSE)). The release builds include these components:
 
 | Component | Use | License |
 |---|---|---|
@@ -13,5 +13,5 @@ DroidDrone PC is licensed under the GPL-3.0 (see [LICENSE](LICENSE)). The releas
 | [jSerialComm](https://fazecast.github.io/jSerialComm/) | Talking to Betaflight over USB | Apache-2.0 / LGPL-3.0 |
 | [Eclipse Temurin](https://adoptium.net) Java runtime (bundled by jpackage) | Runtime | GPL-2.0 with Classpath Exception |
 
-The installer installs [Tailscale](https://tailscale.com) from Tailscale's own signed package, and the setup wizard downloads this project's build of DroidDrone Flight (upstream DroidDrone Flight 2.3.0, GPL-3.0, with the changes in [`flight-app/`](flight-app)) from this project's GitHub releases. Neither is bundled.
+The installer installs [Tailscale](https://tailscale.com) from Tailscale's own signed package, and the setup wizard downloads this project's build of DRAUPNE Flight (upstream DroidDrone Flight 2.3.0, GPL-3.0, with the changes in [`flight-app/`](flight-app)) from this project's GitHub releases. Neither is bundled.
 FFmpeg's source is available from ffmpeg.org; the exact build used comes from the JavaCPP Presets project.

@@ -1,6 +1,6 @@
 <#
-  Builds DroidDrone Flight for DroidDrone PC: the pinned upstream source (../upstream) with the files in
-  overlay/ laid over it. Output: build/flight/DroidDrone-Flight-<version>.apk
+  Builds DRAUPNE Flight for DRAUPNE Link: the pinned upstream source (../upstream) with the files in
+  overlay/ laid over it. Output: build/flight/DRAUPNE-Flight-<version>.apk
 
   Needs: Android SDK with platforms;android-34, build-tools;34.0.0 and ndk;26.3.11579264 (ANDROID_HOME, or the
   default %LOCALAPPDATA%\Android\Sdk), and a JDK 17 (upstream's Android Gradle plugin 8.1 doesn't run on 21):
@@ -51,7 +51,7 @@ if (-not $keystore) {
         $env:DD_NEW_KEY_PASSWORD = $password
         Invoke-Tool { & (Join-Path $jdk 'bin\keytool.exe') -genkeypair -keystore $keystore -storepass:env DD_NEW_KEY_PASSWORD `
             -keypass:env DD_NEW_KEY_PASSWORD -alias flight -keyalg RSA -keysize 4096 -validity 10000 `
-            -dname 'CN=DroidDrone Flight for DroidDrone PC' } | Out-Null
+            -dname 'CN=DRAUPNE Flight for DRAUPNE Link' } | Out-Null
         Remove-Item Env:DD_NEW_KEY_PASSWORD
         if ($LASTEXITCODE -ne 0) { throw 'keytool failed' }
         Write-Host "New signing key: $keystore (back it up: updates must be signed with the same key)"
@@ -86,7 +86,7 @@ try {
 $apk = Get-ChildItem (Join-Path $src 'Flight\build\outputs\apk\release') -Filter '*.apk' | Select-Object -First 1
 $version = (Select-String -Path (Join-Path $src 'Flight\build.gradle') -Pattern 'versionName "([^"]+)"').Matches[0].Groups[1].Value
 New-Item -ItemType Directory -Force $out | Out-Null
-$target = Join-Path $out "DroidDrone-Flight-$version.apk"
+$target = Join-Path $out "DRAUPNE-Flight-$version.apk"
 Copy-Item $apk.FullName $target -Force
 $sha = (Get-FileHash $target -Algorithm SHA256).Hash.ToLower()
 Write-Host "$target`nSHA-256 $sha"

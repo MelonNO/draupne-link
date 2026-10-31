@@ -60,7 +60,7 @@ final class OsdSettingsDialog extends JFrame {
     private static OsdSettingsDialog open;
 
     private OsdSettingsDialog(Window owner, MainWindow main) {
-        super("OSD - DroidDrone PC"); // a window of its own: Windows' minimise, maximise and close
+        super("OSD - DRAUPNE Link"); // a window of its own: Windows' minimise, maximise and close
         setIconImages(AppIcon.images());
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         this.main = main;

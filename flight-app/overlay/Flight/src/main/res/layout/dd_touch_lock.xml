@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DroidDrone PC: the touch lock. Covers the whole screen and swallows every touch, except the HOLD TO UNLOCK box. -->
+<!-- DRAUPNE Link: the touch lock. Covers the whole screen and swallows every touch, except the HOLD TO UNLOCK box. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/touchLock"
     android:layout_width="match_parent"

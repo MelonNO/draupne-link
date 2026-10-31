@@ -58,7 +58,7 @@ public class FcTelemetry {
     }
 
     /**
-     * What DroidDrone PC's build of the Flight app measures on the phone (record {@link #PHONE_LINK_STATS}), the
+     * What DRAUPNE Link's build of the Flight app measures on the phone (record {@link #PHONE_LINK_STATS}), the
      * worst of every report since last taken: longest gap between stick packets arriving from the PC and between
      * stick writes reaching the flight controller, slowest USB write, write timeouts and skipped requests.
      */
@@ -69,9 +69,9 @@ public class FcTelemetry {
         }
     }
 
-    /** Telemetry record of DroidDrone PC's Flight app build (2.3.0-pc.3 on); the original app never sends it. */
+    /** Telemetry record of DRAUPNE Link's Flight app build (2.3.0-pc.3 on); the original app never sends it. */
     static final short PHONE_LINK_STATS = 0x40F0;
-    /** The phone app's version, once a second (DroidDrone PC's Flight app 2.3.0-pc.5 on). */
+    /** The phone app's version, once a second (DRAUPNE Link's Flight app 2.3.0-pc.5 on). */
     static final short PHONE_APP_VERSION = 0x40F1;
     /** Telemetry this long without a version: the phone app is older than 2.3.0-pc.5 (or upstream's own). */
     static final long PHONE_APP_SILENT_MS = 4000;

@@ -346,7 +346,7 @@ public class ControlLink {
         return videoConfigReceived;
     }
 
-    /** Field-for-field the same packet as upstream Control Udp.sendConfig, filled from droiddrone-pc.properties. */
+    /** Field-for-field the same packet as upstream Control Udp.sendConfig, filled from draupne-link.properties. */
     byte[] buildConfigPacket() throws IOException {
         UdpPacketData packetData = new UdpPacketData(UdpCommon.Config);
         packetData.daos.writeShort(SettingsCommon.versionCompatibleCode);

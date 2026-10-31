@@ -69,7 +69,7 @@ public class Connection {
                     ? "Connected. Sending settings..."
                     : "Relay connected - waiting for the Flight phone to join (Flight app: Connect over server)...";
             case READY -> "Flight phone accepted settings - link ready.";
-            case VERSION_MISMATCH -> "VERSION MISMATCH: install DroidDrone Flight 2.3.0 on the phone.";
+            case VERSION_MISMATCH -> "VERSION MISMATCH: install DRAUPNE Flight (or DroidDrone Flight 2.3.0) on the phone.";
             case CLOSED -> "Link closed.";
         };
     }

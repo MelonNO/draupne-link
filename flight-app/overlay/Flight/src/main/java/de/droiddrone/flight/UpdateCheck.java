@@ -1,5 +1,5 @@
 /*
- *  This file is part of DroidDrone PC's build of DroidDrone Flight.
+ *  This file is part of DRAUPNE Link's build of DRAUPNE Flight.
  *
  *  DroidDrone is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -30,13 +30,13 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Is there a newer build of this app? Every DroidDrone PC release on GitHub carries the phone app it installs
- * (DroidDrone-Flight-&lt;version&gt;.apk), so one anonymous request for the latest release answers it. Only tells the
+ * Is there a newer build of this app? Every DRAUPNE Link release on GitHub carries the phone app it installs
+ * (DRAUPNE-Flight-&lt;version&gt;.apk), so one anonymous request for the latest release answers it. Only tells the
  * pilot; installing stays a tap (Android asks).
  */
 final class UpdateCheck {
-    static final String LATEST_API = "https://api.github.com/repos/MelonNO/droiddrone-pc/releases/latest";
-    private static final Pattern APK = Pattern.compile("^DroidDrone-Flight-(.+)\\.apk$");
+    static final String LATEST_API = "https://api.github.com/repos/MelonNO/draupne-link/releases/latest";
+    private static final Pattern APK = Pattern.compile("^(?:DRAUPNE|DroidDrone)-Flight-(.+)\\.apk$");
     private static final Pattern NUMBER = Pattern.compile("\\d+");
 
     /** The newer phone app found: its version and where to download it. */

@@ -75,7 +75,7 @@ public class MainWindow extends JFrame {
     static final String HW_DECODE_KEY = "hardwareDecode";
     /** SETTINGS > Hardware video decoding (off by default; software is the tested path). */
     private boolean hardwareDecode;
-    /** SETTINGS > Record video: every connection records its video (Videos\DroidDrone PC). */
+    /** SETTINGS > Record video: every connection records its video (Videos\DRAUPNE Link). */
     private boolean recordVideo;
     /** The connection's timeline (10 rows a second) for finding the cause of failsafes; null when not connected. */
     private LinkLog linkLog;
@@ -171,7 +171,7 @@ public class MainWindow extends JFrame {
     }
 
     private MainWindow(PcConfig config, Path configFile, JoystickService service) {
-        super("DroidDrone PC " + de.droiddrone.pc.AppInfo.version());
+        super("DRAUPNE Link " + de.droiddrone.pc.AppInfo.version());
         setIconImages(AppIcon.images());
         this.config = config;
         this.configFile = configFile;
@@ -196,7 +196,7 @@ public class MainWindow extends JFrame {
         modeCombo.addActionListener(e -> updateModeUi());
         TacticalCombo.install(modeCombo);
         reloadSettings();
-        logLine("DroidDrone PC " + de.droiddrone.pc.AppInfo.version() + ". Phone app: DroidDrone Flight " + de.droiddrone.pc.setup.ApkShare.VERSION
+        logLine("DRAUPNE Link " + de.droiddrone.pc.AppInfo.version() + ". Phone app: DRAUPNE Flight " + de.droiddrone.pc.setup.ApkShare.VERSION
                 + " (protocol " + SettingsCommon.versionCompatibleCode + "). Settings: " + shortPath(configFile));
 
         videoView.setOsdSource(this::osdData);
@@ -261,7 +261,7 @@ public class MainWindow extends JFrame {
                     alertSound.setEnabled(on);
                     save(Map.of(AlertSound.KEY, Boolean.toString(on)));
                 }));
-        menu.add(new MenuRows.SwitchRow("Record video", "Every flight to Videos\\DroidDrone PC, as it comes: no extra delay",
+        menu.add(new MenuRows.SwitchRow("Record video", "Every flight to Videos\\DRAUPNE Link, as it comes: no extra delay",
                 recordVideo, on -> {
                     recordVideo = on;
                     save(Map.of(RECORD_KEY, Boolean.toString(on)));
@@ -346,8 +346,8 @@ public class MainWindow extends JFrame {
         header.setOpaque(false);
         JPanel titles = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
         titles.setOpaque(false);
-        titles.add(Theme.label("DROIDDRONE", Theme.headingFont(22f), Theme.TEXT));
-        titles.add(Theme.label("PC GROUND STATION", Theme.headingFont(22f), Theme.ACCENT));
+        titles.add(Theme.label("DRAUPNE", Theme.headingFont(22f), Theme.TEXT));
+        titles.add(Theme.label("LINK", Theme.headingFont(22f), Theme.ACCENT));
         header.add(titles, BorderLayout.WEST);
         statePill.setOpaque(true);
         statePill.setFont(Theme.headingFont(12f));
@@ -1002,7 +1002,7 @@ public class MainWindow extends JFrame {
         }
     }
 
-    /** "%APPDATA%\DroidDronePC\..." rather than a full path with the Windows user name in it. */
+    /** "%APPDATA%\DraupneLink\..." rather than a full path with the Windows user name in it. */
     private static String shortPath(Path file) {
         String full = file.toAbsolutePath().toString();
         String appData = System.getenv("APPDATA");
@@ -1024,10 +1024,10 @@ public class MainWindow extends JFrame {
                 update = r;
                 updateButton.setText("UPDATE " + r.version());
                 updateButton.setToolTipText(r.canInstall() && de.droiddrone.pc.setup.SelfUpdate.installedApp() != null
-                        ? "DroidDrone PC " + r.version() + " is out (you have " + current + "). Downloads and installs it, then starts it again."
-                        : "DroidDrone PC " + r.version() + " is out (you have " + current + "). Opens the release page.");
+                        ? "DRAUPNE Link " + r.version() + " is out (you have " + current + "). Downloads and installs it, then starts it again."
+                        : "DRAUPNE Link " + r.version() + " is out (you have " + current + "). Opens the release page.");
                 updateButton.setVisible(true);
-                if (first) logLine("DroidDrone PC " + r.version() + " is available (you have " + current + "): press UPDATE at the top.");
+                if (first) logLine("DRAUPNE Link " + r.version() + " is available (you have " + current + "): press UPDATE at the top.");
             });
         } catch (Exception e) {
             de.droiddrone.common.Log.log("Update check: " + e.getMessage()); // offline or GitHub unreachable: try later
@@ -1047,18 +1047,18 @@ public class MainWindow extends JFrame {
             return;
         }
         if (connection != null) {
-            JOptionPane.showMessageDialog(this, "Disconnect first: updating closes DroidDrone PC for a moment.",
+            JOptionPane.showMessageDialog(this, "Disconnect first: updating closes DRAUPNE Link for a moment.",
                     "Update", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        int answer = JOptionPane.showConfirmDialog(this, "<html>Update to DroidDrone PC " + r.version() + " now?<br><br>"
-                        + "It downloads the update, closes DroidDrone PC, installs it (Windows asks for permission once)<br>"
+        int answer = JOptionPane.showConfirmDialog(this, "<html>Update to DRAUPNE Link " + r.version() + " now?<br><br>"
+                        + "It downloads the update, closes DRAUPNE Link, installs it (Windows asks for permission once)<br>"
                         + "and starts it again. Your settings stay.</html>",
                 "Update", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
         updating = true;
         updateButton.setText("DOWNLOADING");
-        logLine("Downloading DroidDrone PC " + r.version() + "...");
+        logLine("Downloading DRAUPNE Link " + r.version() + "...");
         Thread t = new Thread(() -> {
             try {
                 Path installer = de.droiddrone.pc.setup.SelfUpdate.download(r, (done, total) -> SwingUtilities.invokeLater(
@@ -1070,7 +1070,7 @@ public class MainWindow extends JFrame {
                     }
                     try {
                         de.droiddrone.pc.setup.SelfUpdate.installAndRestart(installer, app, r.installerSha256());
-                        logLine("Installing DroidDrone PC " + r.version() + ": closing now, it starts again when done.");
+                        logLine("Installing DRAUPNE Link " + r.version() + ": closing now, it starts again when done.");
                         shutdown();
                     } catch (IOException ex) {
                         updateFailed(r, ex.getMessage());
@@ -1310,11 +1310,11 @@ public class MainWindow extends JFrame {
                     battery < 20 ? Theme.BAD : battery < 40 ? Theme.WARN : Theme.OK);
         }
         if (old) {
-            phoneAppWarning.setHtml("The phone runs an old DroidDrone Flight" + (version == null ? "" : " (" + version + ")")
+            phoneAppWarning.setHtml("The phone runs an old phone app" + (version == null ? "" : " (" + version + ")")
                     + "; this PC brings " + newest + ". Update it: SETUP &gt; Phone setup, or tap the update line in the phone app.");
             if (!phoneAppWarned) {
                 phoneAppWarned = true;
-                logLine("Warning: the phone runs an old DroidDrone Flight" + (version == null ? " (older than 2.3.0-pc.5)" : " " + version)
+                logLine("Warning: the phone runs an old phone app" + (version == null ? " (older than 2.3.0-pc.5)" : " " + version)
                         + ", this PC brings " + newest + ". Update it with SETUP > Phone setup.");
             }
         }

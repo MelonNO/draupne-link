@@ -1,5 +1,5 @@
 /*
- *  This file is part of DroidDrone PC's build of DroidDrone Flight.
+ *  This file is part of DRAUPNE Link's build of DRAUPNE Flight.
  *
  *  DroidDrone is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by

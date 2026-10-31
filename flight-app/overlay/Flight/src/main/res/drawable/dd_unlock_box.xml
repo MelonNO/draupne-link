@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DroidDrone PC: the one place that still takes touches while the screen is locked -->
+<!-- DRAUPNE Link: the one place that still takes touches while the screen is locked -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
     <solid android:color="#33FCD405" />
     <stroke android:width="3dp" android:color="@color/dd_warn" android:dashWidth="10dp" android:dashGap="5dp" />

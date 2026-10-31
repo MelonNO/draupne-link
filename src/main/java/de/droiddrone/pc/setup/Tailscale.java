@@ -153,12 +153,12 @@ public final class Tailscale {
         return downloadAndInstall(true);
     }
 
-    /** Windows Installer's answer while another install is running (e.g. DroidDrone PC's own installer). */
+    /** Windows Installer's answer while another install is running (e.g. DRAUPNE Link's own installer). */
     public static final int ERROR_INSTALL_ALREADY_RUNNING = 1618;
 
     /**
      * @param elevate true from the app (Windows asks for approval); false when already running as administrator,
-     *                as DroidDrone PC's installer does
+     *                as DRAUPNE Link's installer does
      */
     public static Shell.Result downloadAndInstall(boolean elevate) {
         Path msi;
@@ -180,7 +180,7 @@ public final class Tailscale {
 
     /** Downloads Tailscale's package for this PC into a new temporary folder. */
     public static Path download() throws Exception {
-        Path msi = Files.createTempDirectory("droiddrone-tailscale").resolve("tailscale-setup.msi");
+        Path msi = Files.createTempDirectory("draupne-tailscale").resolve("tailscale-setup.msi");
         HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(20)).build();
         HttpResponse<Path> response = http.send(HttpRequest.newBuilder(URI.create(msiUrl()))

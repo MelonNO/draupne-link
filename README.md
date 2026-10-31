@@ -1,16 +1,19 @@
-# DroidDrone PC
+# DRAUPNE Link
 
 **Fly your Betaflight drone over 4G from a Windows PC.**
+Named after Draupne (Old Norse *Draupnir*), Odin's ring. Based on [DroidDrone](https://github.com/DroidDrone/DroidDrone)
+and called DroidDrone PC up to version 1.0.15.
+
 Your radio plugs into the PC; an Android phone on the drone carries the sticks, the live video and the telemetry over the mobile network.
 
 ![OSD over the live video](docs/images/osd.png)
 
 ## Get started in 3 steps
 
-1. **Download** `DroidDrone-PC-Setup-<version>.exe` from the [latest release](../../releases/latest).
-2. **Run it** and click through the installer (Next → Install → Finish). Approve the Windows prompt once: the installer then also sets up this PC by itself (**Tailscale**, firewall rules, High performance power plan) and puts **DroidDrone PC** on the desktop and in the Start menu.
+1. **Download** `DRAUPNE-Link-Setup-<version>.exe` from the [latest release](../../releases/latest).
+2. **Run it** and click through the installer (Next → Install → Finish). Approve the Windows prompt once: the installer then also sets up this PC by itself (**Tailscale**, firewall rules, High performance power plan) and puts **DRAUPNE Link** on the desktop and in the Start menu.
    Windows may say *"Windows protected your PC"*, because the installer isn't code-signed. Click **More info → Run anyway**.
-3. **DroidDrone PC starts by itself** when you press Finish (untick *Launch DroidDrone PC* to skip that). **Follow the setup wizard**: it opens on the very first start, skips whatever is already done, and takes about 15 minutes. Later, **SETUP** opens it again (*First-time setup*) or each part on its own: PC, phone or drone.
+3. **DRAUPNE Link starts by itself** when you press Finish (untick *Launch DRAUPNE Link* to skip that). **Follow the setup wizard**: it opens on the very first start, skips whatever is already done, and takes about 15 minutes. Later, **SETUP** opens it again (*First-time setup*) or each part on its own: PC, phone or drone.
 
 ## What you need
 
@@ -36,7 +39,7 @@ Betaflight 4.4 is **not required**, only recommended:
 | **This PC** | The **installer** installs **Tailscale** (private network between PC and phone), adds the firewall rules and switches to the High performance power plan. The wizard opens Tailscale's sign-in page and skips every step that is already done | Sign in to Tailscale |
 | **Radio** | Detects it, then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)) | Plug it in and pick *USB Joystick (HID)* on the radio |
 | **Drone** | Over USB, with nothing else to click: sets the receiver to **MSP**, the **stick delay setting** and the battery's **cell count** (`force_battery_cell_count`, 6 unless you change it). Nothing else on the drone is touched | Check the cell count, plug it in. No USB cable? The page shows the same settings for Betaflight Configurator |
-| **Phone** | Downloads [this project's DroidDrone Flight](#the-phone-app), checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, set four phone settings from a short list |
+| **Phone** | Downloads [this project's DRAUPNE Flight](#the-phone-app), checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, set four phone settings from a short list |
 | **Connect** | Shows what to type into the Flight app and holds the link open: it turns green the moment you tap CONNECT on the phone, then measures the path (direct or relayed) and the round-trip time and gives you a verdict | Type in the values, tap CONNECT, plug the phone into the flight controller |
 
 <p>
@@ -52,7 +55,7 @@ Betaflight 4.4 is **not required**, only recommended:
 - RC is only sent once the throttle has been seen at the bottom (**RC OUTPUT: LIVE**).
 - A **red frame** round the picture means your sticks aren't reaching the drone: **LINK LOST** (PC to phone) or **NO FLIGHT CONTROLLER** (the phone lost its USB link to the flight controller; the battery and GPS values turn grey because they're frozen).
 - **POP OUT VIDEO** puts the picture (with the OSD) in its own window, e.g. on a second screen; close it or press **VIDEO BACK** to put it back.
-- **Recording:** **SETTINGS** → *Record video* saves every flight's video to `Videos\DroidDrone PC`, exactly as it comes from the phone (MKV, no extra delay). A red **REC** shows on the OSD while it records.
+- **Recording:** **SETTINGS** → *Record video* saves every flight's video to `Videos\DRAUPNE Link`, exactly as it comes from the phone (MKV, no extra delay). A red **REC** shows on the OSD while it records.
 - **Warning sounds:** a short beep when the sticks stop reaching the drone (LINK LOST, LINK STALL, FAILSAFE, NO FLIGHT CONTROLLER); **SETTINGS** → *Warning sounds* turns it off.
 - **Motor test:** **SETTINGS** → *Motor test*, like Betaflight's Motors tab, over USB with the drone on the bench and **props off**: spin each motor and check it's where its number says and turns the way its arrow points, then fit the props so their leading edges follow the arrows.
 - **Your own OSD:** **SETTINGS** → *OSD layout* works like Betaflight's OSD tab: switch elements on or off (throttle %, current, mAh, power, RSSI, GPS coordinates, clock, stick overlays and more are there, off by default) and drag them where you want them. It shows on the live OSD at once and is remembered.
@@ -89,61 +92,61 @@ Nothing in the chain invents stick values: the PC sends the radio's stick positi
 | 0.3-1.5 s | sticks centred, throttle to minimum: the drone sinks until the sticks return |
 | over 1.5 s | real failsafe: drops and disarms (OSD: *FAILSAFE*) |
 
-For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold the last throttle instead of minimum during the 0.3-1.5 s stage, so a short gap doesn't make the drone sink) and **GPS Rescue** as the failsafe procedure (it flies home instead of dropping). Both change how your drone behaves when the link fails, so test them on the bench first; DroidDrone PC doesn't set them for you.
+For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold the last throttle instead of minimum during the 0.3-1.5 s stage, so a short gap doesn't make the drone sink) and **GPS Rescue** as the failsafe procedure (it flies home instead of dropping). Both change how your drone behaves when the link fails, so test them on the bench first; DRAUPNE Link doesn't set them for you.
 
 ## Troubleshooting
 
 | What you see | What it means / what to do |
 |---|---|
 | Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A cable plus an OTG adapter (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
-| The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DroidDrone Flight when … is connected**, then OK. No tick box? You have the original Flight app: install this project's build (see [The phone app](#the-phone-app)). Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
+| The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DRAUPNE Flight when … is connected**, then OK. No tick box? You have the original Flight app: install this project's build (see [The phone app](#the-phone-app)). Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
 | **RXLOSS** / **RC SIGNAL GAP** flickers, but nothing happens | The sticks paused for 0.1-0.3 s on their way to Betaflight. Betaflight then flags RXLOSS but keeps your last sticks; it shows the flag for 0.5 s more. Only a pause over 0.3 s matters in the air (sticks centred, throttle to minimum), and over 1.5 s it fails safe and disarms. The [link log](#troubleshooting) shows where the pauses come from: the 4G link (ping and telemetry gaps jump), or the flight controller (Betaflight's `serial_update_rate_hz` left at 100 can't keep up - run SETUP → *Drone setup*) |
 | Landed and still armed, the drone **leans, tilts forward or twitches** | A stick isn't sending 1500 at rest: the controller panel shows ROLL / PIT / YAW values; with your hands off they should read 1500. If not, check the radio's trims and press CALIBRATE again, hands off at the centre step. Even when centred, Betaflight (with Air mode) keeps correcting on the ground, so disarm right after landing |
 | **NO FLIGHT CONTROLLER** comes and goes while the link is good | The phone gets nothing from the flight controller: check the OTG cable, and run SETUP → *Drone setup* (a `serial_update_rate_hz` left at 100 also causes it) |
 | OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Calibrate it in Betaflight Configurator's **Setup** tab, drone level |
 | Flight app shows the Betaflight version in **yellow** | Betaflight is older than 4.4. It still flies; update when convenient ([which version?](#which-betaflight-version)) |
-| Betaflight ignores the **arm switch** | DroidDrone sends your arm switch on AUX1. In Betaflight Configurator's **Modes** tab, put ARM on AUX 1. **RC CHECK** shows what Betaflight sees |
+| Betaflight ignores the **arm switch** | DRAUPNE Link sends your arm switch on AUX1. In Betaflight Configurator's **Modes** tab, put ARM on AUX 1. **RC CHECK** shows what Betaflight sees |
 | OSD says **ARMING BLOCKED: MSP** | Betaflight Configurator disabled arming and was unplugged without *Disconnect*. Power-cycle the flight controller. SETUP → *Drone setup* also clears it |
 | **Video is black** | It's what the camera sees: is the lens covered, or is it dark? Point it at something bright. To use another lens, set `cameraId` in the settings (often `2` or `3` is the wide-angle) |
 | **PHONE ON TAILSCALE: OFFLINE** in the link card | The phone isn't connected to Tailscale: on the phone, open Tailscale and switch it on, and check it has mobile data. *NOT FOUND* means the phone address isn't on your Tailscale network: run SETUP → *Phone setup* to find the phone again |
 | Setup says the path is **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Press *Check again* after a minute. If it stays relayed, choose *Host the relay on this PC* in SETUP → *PC setup* |
 | Channels look wrong | **CALIBRATE**, then **RC CHECK** |
 
-**Versions and updates:** DroidDrone PC's version is in its window title and at the bottom of the SETTINGS menu (with the phone app version it installs); the phone app shows its version at the bottom right of its screen. Both check GitHub for a newer release (DroidDrone PC at start and every 6 hours, the phone app when it starts) and say so: an **UPDATE** button in DroidDrone PC, a tap-to-download line in the phone app. Pressing UPDATE downloads the new installer, checks it against GitHub's checksum, closes DroidDrone PC, installs it (one Windows permission prompt) and starts it again; it won't while connected to the drone. Nothing is installed without you pressing it.
+**Versions and updates:** DRAUPNE Link's version is in its window title and at the bottom of the SETTINGS menu (with the phone app version it installs); the phone app shows its version at the bottom right of its screen. Both check GitHub for a newer release (DRAUPNE Link at start and every 6 hours, the phone app when it starts) and say so: an **UPDATE** button in DRAUPNE Link, a tap-to-download line in the phone app. Pressing UPDATE downloads the new installer, checks it against GitHub's checksum, closes DRAUPNE Link, installs it (one Windows permission prompt) and starts it again; it won't while connected to the drone. Nothing is installed without you pressing it.
 
-Settings live in `%APPDATA%\DroidDronePC\droiddrone-pc.properties`.
+Settings live in `%APPDATA%\DraupneLink\draupne-link.properties`.
 
-**Link log:** every connection writes a timeline to `%APPDATA%\DroidDronePC\logs\link-<date>-<time>.csv`, 10 rows a second: ping, stick frames sent and the longest gap between them, telemetry packets and the longest gap, the flight controller's last data, RXLOSS / FAILSAFE as Betaflight reports them, radio present, the stick values sent (throttle and every channel), the highest round trip and the age of the last reply (pings go out 20 times a second, so stalls of 0.1 s show), Tailscale's path to the phone (direct or relayed), what the phone app sees (gaps between stick packets arriving and stick writes reaching the flight controller, slowest USB write), plus every log message. It shows which part of the chain a failsafe came from. The newest 20 are kept.
+**Link log:** every connection writes a timeline to `%APPDATA%\DraupneLink\logs\link-<date>-<time>.csv`, 10 rows a second: ping, stick frames sent and the longest gap between them, telemetry packets and the longest gap, the flight controller's last data, RXLOSS / FAILSAFE as Betaflight reports them, radio present, the stick values sent (throttle and every channel), the highest round trip and the age of the last reply (pings go out 20 times a second, so stalls of 0.1 s show), Tailscale's path to the phone (direct or relayed), what the phone app sees (gaps between stick packets arriving and stick writes reaching the flight controller, slowest USB write), plus every log message. It shows which part of the chain a failsafe came from. The newest 20 are kept.
 
 ## How it works
 
 ```
 Radio --USB--> Windows PC  ==== 4G / Tailscale ====>  Android phone on the drone --USB OTG (MSP)--> Betaflight
-               DroidDrone PC  <== video + telemetry ==  DroidDrone Flight app
+               DRAUPNE Link  <== video + telemetry ==  DRAUPNE Flight app
 ```
 
-DroidDrone PC replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s *Control* phone app. It speaks the protocol of **DroidDrone Flight 2.3.0**, and compiles upstream's own protocol code from a pinned submodule, so it can't drift from the original.
+DRAUPNE Link replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s *Control* phone app. It speaks the protocol of **DroidDrone Flight 2.3.0**, and compiles upstream's own protocol code from a pinned submodule, so it can't drift from the original.
 
 ### The phone app
 
-The setup installs **DroidDrone Flight 2.3.0-pc.5**: upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
+The setup installs **DRAUPNE Flight** (2.3.0-pc.10 and on): upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
 - **Every flight controller:** its USB list covers any flight controller with native USB (STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip it can drive (CH340/CH341, CP210x, FTDI, PL2303). Android can then remember the USB permission, and the phone reconnects to the flight controller without asking. Upstream only lists a few IDs, so AT32 boards, for example, needed a tap after every reconnect.
 - **The PC app's look:** black and red, status at a glance (OFFLINE / WAITING / LINK READY).
 - **Sticks reach the flight controller on time:** upstream reads from the flight controller in a way that, on many phones, holds every USB write for up to 0.1 s, which makes Betaflight flag RXLOSS and block arming; this build reads asynchronously. The newest sticks also always go first, never queued behind a slow request, and the phone reports what it sees into the PC's link log.
-- **Says its version:** once a second, so DroidDrone PC can warn when the phone runs an older app than it brings.
+- **Says its version:** once a second, so DRAUPNE Link can warn when the phone runs an older app than it brings.
 - **Replaces any earlier DroidDrone Flight:** it has its own package name (`de.droiddrone.flight.pc`), so it installs next to the original (or this project's 2.3.0-pc.1), and when it opens it asks Android to remove the earlier one: one tap on OK.
 
-The protocol is unchanged, so the original Flight 2.3.0 also still works. Every DroidDrone PC release includes it as `DroidDrone-Flight-<version>.apk`, the exact build that version installs.
+The protocol is unchanged, so the original Flight 2.3.0 also still works. Every DRAUPNE Link release includes it as `DRAUPNE-Flight-<version>.apk`, the exact build that version installs.
 
 ## For developers
 
 Picking up the work (state, rules, build environment, release steps): [docs/HANDOFF.md](docs/HANDOFF.md).
 
 ```powershell
-git clone --recurse-submodules https://github.com/<owner>/droiddrone-pc
-cd droiddrone-pc
+git clone --recurse-submodules https://github.com/<owner>/draupne-link
+cd draupne-link
 .\gradlew.bat test               # 89 tests: protocol, video decode, telemetry, calibration, Betaflight CLI, setup helpers
-.\gradlew.bat installDist        # build\install\droiddrone-pc\bin\droiddrone-pc.bat
+.\gradlew.bat installDist        # build\install\draupne-link\bin\draupne-link.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3
 ```

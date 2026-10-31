@@ -17,7 +17,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Drone setup: the Betaflight settings DroidDrone needs - receiver mode MSP, serial_update_rate_hz and the battery's
+ * Drone setup: the Betaflight settings DRAUPNE Link needs - receiver mode MSP, serial_update_rate_hz and the battery's
  * cell count (6S unless the pilot changes it) - set over USB with nothing else to click. Everything else on the drone
  * (arm switch, accelerometer, failsafe) stays the pilot's own. The motors and props are assumed checked; the pilot
  * can say so, or check them there and then with the motor test.
@@ -87,7 +87,7 @@ final class DroneSetup {
         @Override
         String hint() {
             return "<b>Props off.</b> Check the battery's cell count, then plug the flight controller into this PC with USB. "
-                    + "The settings DroidDrone needs are made by themselves.";
+                    + "The settings DRAUPNE Link needs are made by themselves.";
         }
 
         @Override
@@ -264,12 +264,12 @@ final class DroneSetup {
             }
         }
 
-        /** Betaflight's "diff all" into Documents\DroidDrone PC\Betaflight backups; null (and logged) if it can't be saved. */
+        /** Betaflight's "diff all" into Documents\DRAUPNE Link\Betaflight backups; null (and logged) if it can't be saved. */
         private java.nio.file.Path backup(String diff, String version) {
             try {
                 String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
                 java.nio.file.Path file = de.droiddrone.pc.AppPaths.betaflightBackupsDir().resolve("betaflight-" + stamp + ".txt");
-                java.nio.file.Files.writeString(file, "# " + version + "\n# saved by DroidDrone PC before Drone setup changed it. "
+                java.nio.file.Files.writeString(file, "# " + version + "\n# saved by DRAUPNE Link before Drone setup changed it. "
                         + "To go back: paste this into Betaflight Configurator's CLI tab, then type save.\n\n" + diff + "\n");
                 return file;
             } catch (IOException e) {

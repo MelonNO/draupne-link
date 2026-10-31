@@ -205,7 +205,7 @@ final class PcSetupWizard {
                 address.set(State.PENDING, "");
                 if (installing) return;
                 if (installerBusy) {
-                    installed.set(State.PENDING, "Being installed by the DroidDrone PC installer - this takes a minute or two...");
+                    installed.set(State.PENDING, "Being installed by the DRAUPNE Link installer - this takes a minute or two...");
                     installButton.setVisible(false);
                     return;
                 }
@@ -710,7 +710,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Start DroidDrone PC with one click.";
+            return "Start DRAUPNE Link with one click.";
         }
 
         @Override
@@ -730,7 +730,7 @@ final class PcSetupWizard {
         @Override
         void onShow() {
             if (launcher == null) {
-                desktop.set(State.INFO, "Start the app from <b>DroidDrone PC.exe</b> (or droiddrone-pc.bat) to create shortcuts.");
+                desktop.set(State.INFO, "Start the app from <b>DRAUPNE Link.exe</b> (or draupne-link.bat) to create shortcuts.");
                 startMenu.set(State.INFO, "");
                 return;
             }

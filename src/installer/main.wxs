@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   jpackage's own main.wxs from JDK 21, used through jpackage's resource-dir option (see build.gradle), with additions marked
-  "DroidDrone PC" below: a "Launch DroidDrone PC" checkbox on the installer's last page, ticked by default, the
-  PC tasks the installer does as administrator, and the check that DroidDrone PC isn't running.
+  "DRAUPNE Link" below: a "Launch DRAUPNE Link" checkbox on the installer's last page, ticked by default, the
+  PC tasks the installer does as administrator, and the check that DRAUPNE Link isn't running.
   When moving the build to a newer JDK, start again from that JDK's main.wxs and re-add the marked blocks.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
@@ -108,7 +108,7 @@
 
     <UIRef Id="JpUI"/>
 
-    <!-- DroidDrone PC: start the app from the Finish page. WiX's ExitDialog shows this checkbox only after an
+    <!-- DRAUPNE Link: start the app from the Finish page. WiX's ExitDialog shows this checkbox only after an
          install (not on repair or removal); the value 1 ticks it by default. -->
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch $(var.JpAppName)" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
@@ -118,20 +118,21 @@
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed</Publish>
     </UI>
 
-    <!-- DroidDrone PC: is DroidDrone PC running? Checked when the setup starts and again right before anything is
+    <!-- DRAUPNE Link: is DRAUPNE Link running? Checked when the setup starts and again right before anything is
          removed or written (an upgrade removes the old version first, which with the app open left a half-replaced
          install). It is never closed for the pilot - that would drop a live drone link: Retry once closed, or Cancel
          with nothing changed. A quiet install (UPDATE's, after the app has exited) cancels if it still runs.
          check-running.js (JScript: Windows is phasing VBScript out), found through DDPC_INSTALLER_DIR (build.gradle). -->
-    <Property Id="DDPC_APP_EXE" Value="$(var.JpAppName).exe" />
+    <!-- the app's exe, and its name up to 1.0.15 (DroidDrone PC), which an upgrade replaces -->
+    <Property Id="DDPC_APP_EXE" Value="$(var.JpAppName).exe;DroidDrone PC.exe" />
     <Binary Id="DdpcCheckRunning" SourceFile="$(env.DDPC_INSTALLER_DIR)\check-running.js" />
     <CustomAction Id="CheckAppRunning" BinaryKey="DdpcCheckRunning" JScriptCall="CheckRunning"
                   Execute="immediate" Return="check" />
 
-    <!-- DroidDrone PC: the PC tasks, done by the installer as administrator so the setup wizard has nothing to do
+    <!-- DRAUPNE Link: the PC tasks, done by the installer as administrator so the setup wizard has nothing to do
          for them: firewall rules, power plan, and Tailscale (installed right after this installer finishes). On
          uninstall the firewall rules go again. Failures never stop the install; the wizard checks and fixes later.
-         Details: PcPrep.java, log in %ProgramData%\DroidDronePC\setup.log. -->
+         Details: PcPrep.java, log in %ProgramData%\DraupneLink\setup.log. -->
     <CustomAction Id="PreparePc" Directory="INSTALLDIR" ExeCommand="&quot;[INSTALLDIR]$(var.JpAppName).exe&quot; prepare-pc"
                   Execute="deferred" Impersonate="no" Return="ignore" />
     <CustomAction Id="CleanupPc" Directory="INSTALLDIR" ExeCommand="&quot;[INSTALLDIR]$(var.JpAppName).exe&quot; cleanup-pc"

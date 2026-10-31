@@ -10,8 +10,10 @@ import java.util.regex.Pattern;
 
 /** Windows settings the setup wizard checks and fixes: firewall rules, power plan, network adapter, shortcuts. */
 public final class WindowsSetup {
-    public static final String LINK_RULE = "DroidDronePC-Link-UDP";
-    public static final String APK_RULE = "DroidDronePC-PhoneDownload-TCP";
+    public static final String LINK_RULE = "DRAUPNE-Link-UDP";
+    public static final String APK_RULE = "DRAUPNE-Link-PhoneDownload-TCP";
+    /** The same rules' names up to 1.0.15 (DroidDrone PC): removed wherever the new ones are made or removed. */
+    static final List<String> OLD_RULES = List.of("DroidDronePC-Link-UDP", "DroidDronePC-PhoneDownload-TCP");
     public static final String HIGH_PERFORMANCE = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c";
     public static final String ULTIMATE_PERFORMANCE = "e9a42b02-d5df-448d-aa00-03f14749eb61";
     private static final Pattern SCHEME = Pattern.compile("([0-9a-fA-F]{8}-[0-9a-fA-F-]{27})\\s*\\((.*)\\)");
@@ -45,20 +47,28 @@ public final class WindowsSetup {
         return Shell.powershellElevated(Duration.ofMinutes(3), firewallScript(linkPort, apkPort));
     }
 
-    /** The same rules, for a process that already runs as administrator (DroidDrone PC's installer). */
+    /** The same rules, for a process that already runs as administrator (DRAUPNE Link's installer). */
     public static Shell.Result addFirewallRulesAsAdmin(int linkPort, int apkPort) {
         return Shell.powershell(Duration.ofMinutes(3), firewallScript(linkPort, apkPort));
     }
 
-    /** Removes both rules, as administrator, when DroidDrone PC is uninstalled. */
+    /** Removes both rules, as administrator, when DRAUPNE Link is uninstalled. */
     public static Shell.Result removeFirewallRulesAsAdmin() {
         return Shell.powershell(Duration.ofMinutes(1), String.join("\n",
+                deleteOldRules(),
                 "netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
                 "netsh advfirewall firewall delete rule name=" + APK_RULE + " | Out-Null"));
     }
 
+    private static String deleteOldRules() {
+        StringBuilder s = new StringBuilder();
+        for (String rule : OLD_RULES) s.append("netsh advfirewall firewall delete rule name=").append(rule).append(" | Out-Null\n");
+        return s.toString().strip();
+    }
+
     private static String firewallScript(int linkPort, int apkPort) {
         return String.join("\n",
+                deleteOldRules(),
                 "netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
                 "netsh advfirewall firewall add rule name=" + LINK_RULE
                         + " dir=in action=allow protocol=UDP localport=" + linkPort + " profile=any",
@@ -104,13 +114,13 @@ public final class WindowsSetup {
         String[] dirs = Shell.powershell(Duration.ofSeconds(10),
                 "[Environment]::GetFolderPath('CommonDesktopDirectory'); [Environment]::GetFolderPath('Desktop')")
                 .output().strip().split("\\R");
-        if (dirs.length < 2) return Path.of(System.getProperty("user.home"), "Desktop", "DroidDrone PC.lnk");
-        Path shared = Path.of(dirs[0].trim()).resolve("DroidDrone PC.lnk");
-        return Files.exists(shared) ? shared : Path.of(dirs[1].trim()).resolve("DroidDrone PC.lnk");
+        if (dirs.length < 2) return Path.of(System.getProperty("user.home"), "Desktop", "DRAUPNE Link.lnk");
+        Path shared = Path.of(dirs[0].trim()).resolve("DRAUPNE Link.lnk");
+        return Files.exists(shared) ? shared : Path.of(dirs[1].trim()).resolve("DRAUPNE Link.lnk");
     }
 
     /**
-     * The installer's Start menu entry (in a "DroidDrone PC" folder: for all users, or for this user from installers
+     * The installer's Start menu entry (in a "DRAUPNE Link" folder: for all users, or for this user from installers
      * before 0.5.3) if present, else where the wizard puts one.
      */
     public static Path startMenuShortcut() {
@@ -118,11 +128,28 @@ public final class WindowsSetup {
         String programData = System.getenv().getOrDefault("ProgramData", "C:\\ProgramData");
         Path programs = Path.of(appData, "Microsoft", "Windows", "Start Menu", "Programs");
         for (Path installer : List.of(
-                Path.of(programData, "Microsoft", "Windows", "Start Menu", "Programs", "DroidDrone PC", "DroidDrone PC.lnk"),
-                programs.resolve("DroidDrone PC").resolve("DroidDrone PC.lnk"))) {
+                Path.of(programData, "Microsoft", "Windows", "Start Menu", "Programs", "DRAUPNE Link", "DRAUPNE Link.lnk"),
+                programs.resolve("DRAUPNE Link").resolve("DRAUPNE Link.lnk"))) {
             if (Files.exists(installer)) return installer;
         }
-        return programs.resolve("DroidDrone PC.lnk");
+        return programs.resolve("DRAUPNE Link.lnk");
+    }
+
+    /**
+     * Shortcuts the setup wizard made for DroidDrone PC (up to 1.0.15) on this user's desktop and Start menu: once
+     * the installer has replaced it, they point at nothing. Removed only when the old app really is gone.
+     */
+    public static void removeDeadOldShortcuts() {
+        String programFiles = System.getenv("ProgramFiles");
+        if (programFiles == null || Files.exists(Path.of(programFiles, "DroidDrone PC", "DroidDrone PC.exe"))) return;
+        String appData = System.getenv().getOrDefault("APPDATA", System.getProperty("user.home"));
+        for (Path lnk : List.of(Path.of(System.getProperty("user.home"), "Desktop", "DroidDrone PC.lnk"),
+                Path.of(appData, "Microsoft", "Windows", "Start Menu", "Programs", "DroidDrone PC.lnk"))) {
+            try {
+                Files.deleteIfExists(lnk);
+            } catch (java.io.IOException ignored) {
+            }
+        }
     }
 
     public static boolean exists(Path path) {
@@ -135,7 +162,7 @@ public final class WindowsSetup {
                 "$s = (New-Object -ComObject WScript.Shell).CreateShortcut(" + Shell.psQuote(lnk.toString()) + ")",
                 "$s.TargetPath = " + Shell.psQuote(target.toString()),
                 "$s.WorkingDirectory = " + Shell.psQuote(workingDir.toString()),
-                "$s.Description = 'DroidDrone PC ground station'",
+                "$s.Description = 'DRAUPNE Link ground station'",
                 bat ? "$s.WindowStyle = 7" : "",
                 "$s.Save()");
         return Shell.powershell(Duration.ofSeconds(20), script);

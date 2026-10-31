@@ -1,5 +1,5 @@
 /*
- *  This file is part of DroidDrone PC's build of DroidDrone Flight.
+ *  This file is part of DRAUPNE Link's build of DRAUPNE Flight.
  *
  *  DroidDrone is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 
 /**
- * What the phone sees of the sticks on their way through it, for DroidDrone PC's link log: the longest gap between
+ * What the phone sees of the sticks on their way through it, for DRAUPNE Link's link log: the longest gap between
  * stick packets arriving from the PC, the longest gap between stick writes reaching the flight controller, the
  * slowest USB write, and how many writes timed out or requests were skipped. Sent every 0.1 s as its own telemetry
  * packet (record {@link #CODE}); a PC that doesn't know the record just skips that packet.
@@ -29,7 +29,7 @@ import java.io.IOException;
 final class PcLinkStats {
     /** Telemetry record code, outside upstream's ranges. */
     static final short CODE = 0x40F0;
-    /** This app's version (versionName), once a second after the stats, so DroidDrone PC can say when it is old. */
+    /** This app's version (versionName), once a second after the stats, so DRAUPNE Link can say when it is old. */
     static final short APP_VERSION_CODE = 0x40F1;
 
     static void writeVersionTo(DataOutputStream out, String versionName) throws IOException {

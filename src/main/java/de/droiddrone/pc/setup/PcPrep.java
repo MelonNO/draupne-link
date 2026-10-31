@@ -12,7 +12,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.List;
 
 /**
- * The PC tasks DroidDrone PC's installer does, so nobody has to click through them in the setup wizard. The
+ * The PC tasks DRAUPNE Link's installer does, so nobody has to click through them in the setup wizard. The
  * installer runs them as administrator: {@link #prepare} after installing, {@link #cleanup} when uninstalling.
  * <p>
  * Tailscale can't be installed from inside the installer, because Windows runs one install at a time. So prepare
@@ -22,7 +22,7 @@ import java.util.List;
  * Everything is best effort: a failure is written to setup.log and the setup wizard checks and fixes it later.
  */
 public final class PcPrep {
-    static final String TAILSCALE_TASK = "DroidDrone PC - install Tailscale";
+    static final String TAILSCALE_TASK = "DRAUPNE Link - install Tailscale";
     /** The installer's upgrade code (build.gradle); installers before 0.5.3 installed per user with the same code. */
     static final String UPGRADE_CODE = "{5D2F1D3E-6A0B-4C9E-9F53-2B7C1A8E4D61}";
     private static final String SCHEDULED = "Tailscale: install scheduled";
@@ -63,7 +63,7 @@ public final class PcPrep {
     }
 
     /**
-     * The scheduled task: downloads Tailscale and installs it silently, waiting while the DroidDrone PC installer
+     * The scheduled task: downloads Tailscale and installs it silently, waiting while the DRAUPNE Link installer
      * is still finishing, then removes the task.
      */
     public static void installTailscale() {
@@ -151,9 +151,9 @@ public final class PcPrep {
         return Shell.powershell(Duration.ofMinutes(5), script).output().strip();
     }
 
-    /** %ProgramData%\DroidDronePC\setup.log: the installer's tasks and how they went. */
+    /** %ProgramData%\DraupneLink\setup.log: the installer's tasks and how they went. */
     public static Path logFile() {
-        return Path.of(System.getenv().getOrDefault("ProgramData", "C:\\ProgramData"), "DroidDronePC", "setup.log");
+        return Path.of(System.getenv().getOrDefault("ProgramData", "C:\\ProgramData"), "DraupneLink", "setup.log");
     }
 
     private static void log(String line) {

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DroidDrone PC: black and red like the Windows app -->
+<!-- DRAUPNE Link: black and red like the Windows app -->
 <resources>
     <style name="Theme.DroidDrone" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/dd_bg</item>

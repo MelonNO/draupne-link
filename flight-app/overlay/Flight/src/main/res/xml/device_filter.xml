@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DroidDrone PC: every flight controller the app can talk to. Being listed here lets Android offer
-     "Always open DroidDrone Flight", so a reconnect needs no tap. -->
+<!-- DRAUPNE Link: every flight controller the app can talk to. Being listed here lets Android offer
+     "Always open DRAUPNE Flight", so a reconnect needs no tap. -->
 <resources>
     <!-- Any flight controller with native USB: they show up as a standard virtual COM port (USB CDC, an interface of
          class 2), whatever the chip - STM32, AT32, APM32, GD32, RP2040 - or the firmware (Betaflight, INAV,

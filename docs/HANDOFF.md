@@ -1,12 +1,12 @@
 # Handoff
 
-Everything needed to pick up work on DroidDrone PC from a new session or another computer. Read this first, then
+Everything needed to pick up work on DRAUPNE Link from a new session or another computer. Read this first, then
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
 ## Where things stand (2026-10-31, 1.0.15)
 
-- **Released:** DroidDrone PC **1.0.15** (Latest; 1.0.14 was never released), bundling phone app **DroidDrone Flight 2.3.0-pc.9**. The fixes alone
+- **Released:** DRAUPNE Link **1.0.15** (Latest; 1.0.14 was never released), bundling phone app **DRAUPNE Flight 2.3.0-pc.9**. The fixes alone
   (no new features) are tagged `fixes-1.0.14`, a fallback that was never released.
 - **Flies:** RC, video, OSD and telemetry over 4G (phone on Tailscale) work on the real drone.
 - **Waiting on the pilot:**
@@ -53,7 +53,7 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
   does not clear GitHub's contributor list, so such a line must never reach GitHub.
 - **No secrets in the repo.** The phone app's signing key lives outside it (see below).
 - **Publishing needs the maintainer's explicit go-ahead.** That covers tags, GitHub releases and the phone app release.
-- **Don't close a running DroidDrone PC that has the drone link open.** A live drone may depend on it. This is also why
+- **Don't close a running DRAUPNE Link that has the drone link open.** A live drone may depend on it. This is also why
   the installer only asks and never closes the app.
 
 ## Build environment (new computer)
@@ -61,7 +61,7 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
 | What | Needed for | Notes |
 |---|---|---|
 | JDK 21 (Temurin) | everything | `gradlew.bat test`, `installDist`, `releaseZip` |
-| WiX Toolset 3.14 on PATH | `packageInstaller` | jpackage builds the MSI with it; `src/installer/main.wxs` is jpackage's own with additions marked "DroidDrone PC" |
+| WiX Toolset 3.14 on PATH | `packageInstaller` | jpackage builds the MSI with it; `src/installer/main.wxs` is jpackage's own with additions marked "DRAUPNE Link" |
 | JDK 17, Android SDK (`platforms;android-34`, `build-tools;34.0.0`, `ndk;26.3.11579264`) | phone app | `flight-app/build.ps1`; see the top of that script |
 | Phone app signing key | phone app | `flight-release.jks` + `flight-release.password` in `%APPDATA%\DroidDronePC-build` (or `DD_FLIGHT_KEYSTORE` / `DD_FLIGHT_KEYSTORE_PASSWORD`). **Not in the repo; keep a private backup.** Android only installs an update signed with the same key: with a new key, every phone must uninstall the app once |
 | GitHub CLI, logged in with the `workflow` scope | releases | |
@@ -76,7 +76,7 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
    1. Bump `versionCode` and `versionName` in `flight-app/overlay/Flight/build.gradle`.
    2. Run `.\flight-app\build.ps1`. It prints the APK and its SHA-256.
    3. Publish the APK as its own release, **not** Latest:
-      `gh release create flight-<ver> build/flight/DroidDrone-Flight-<ver>.apk --latest=false --title "DroidDrone Flight <ver> (phone app)" --notes-file <notes>`.
+      `gh release create flight-<ver> build/flight/DRAUPNE-Flight-<ver>.apk --latest=false --title "DRAUPNE Flight <ver> (phone app)" --notes-file <notes>`.
    4. Download it back and check the SHA-256.
    5. Set `VERSION` and `APK_SHA256` in `src/main/java/de/droiddrone/pc/setup/ApkShare.java`.
 4. Run the tests, commit, push, then `git tag v<version>` and `git push origin v<version>`.
@@ -93,7 +93,7 @@ Everything needed to pick up work on DroidDrone PC from a new session or another
 - `gradlew.bat test`: 91 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell count).
 - **UI checks** are done by painting windows and components off screen into PNGs from small throwaway programs (kept
   in the git-ignored `build/` folder), never by moving the mouse on the desktop.
-- **Link log:** `%APPDATA%\DroidDronePC\logs\link-*.csv`, 10 rows a second while connected. It has ping, RC and
+- **Link log:** `%APPDATA%\DraupneLink\logs\link-*.csv`, 10 rows a second while connected. It has ping, RC and
   telemetry gaps, RXLOSS / failsafe / armed, the **sticks actually sent** (`channels`, AETR + AUX), the Tailscale path,
   and the phone's own measurements (stick gaps in and out, USB write times). Start here for any flight complaint.
   Examples: a landed drone that leans means the sticks weren't 1500 at rest; micro failsafes meant the phone held its

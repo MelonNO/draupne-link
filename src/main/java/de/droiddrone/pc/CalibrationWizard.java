@@ -356,7 +356,7 @@ public class CalibrationWizard {
         return new RcMapper(Arrays.copyOf(specs, PcConfig.THROTTLE_INDEX + 1 + SWITCH_STEPS), getCalibrations());
     }
 
-    /** Settings to write to droiddrone-pc.properties. Skipped AUX switches are written empty (unmapped). */
+    /** Settings to write to draupne-link.properties. Skipped AUX switches are written empty (unmapped). */
     public Map<String, String> result() {
         Map<String, String> result = new LinkedHashMap<>();
         for (int i = 0; i < PcConfig.THROTTLE_INDEX + 1 + SWITCH_STEPS; i++) {

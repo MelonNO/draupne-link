@@ -24,14 +24,14 @@ import java.util.List;
 import java.util.concurrent.Executors;
 
 /**
- * Gets the DroidDrone Flight app onto the phone: downloads this project's build of it (upstream 2.3.0 plus more
+ * Gets the DRAUPNE Flight app onto the phone: downloads this project's build of it (upstream 2.3.0 plus more
  * flight controllers and the PC app's look, source in flight-app/) from this project's GitHub release, checks its
  * SHA-256, and serves it from a tiny web server that only answers the local network and Tailscale.
  */
 public class ApkShare implements AutoCloseable {
     public static final String VERSION = "2.3.0-pc.9";
-    public static final String APK_NAME = "DroidDrone-Flight-" + VERSION + ".apk";
-    public static final String APK_URL = "https://github.com/MelonNO/droiddrone-pc/releases/download/flight-" + VERSION + "/" + APK_NAME;
+    public static final String APK_NAME = "DRAUPNE-Flight-" + VERSION + ".apk";
+    public static final String APK_URL = "https://github.com/MelonNO/draupne-link/releases/download/flight-" + VERSION + "/" + APK_NAME;
     /** SHA-256 of the APK built by flight-app/build.ps1 and attached to the flight-VERSION release. */
     public static final String APK_SHA256 = "7f0f81cf8da56d34d4bc543c29abc568967b3df4f5dd3a119c49b23aa42f7b45";
     public static final int PORT = 8765;
@@ -96,8 +96,8 @@ public class ApkShare implements AutoCloseable {
             String path = exchange.getRequestURI().getPath();
             if (path.equals("/") || path.equals("/index.html")) {
                 byte[] page = ("<!doctype html><html><head><meta name=viewport content='width=device-width'>"
-                        + "<title>DroidDrone Flight</title></head><body style='font-family:sans-serif;padding:24px'>"
-                        + "<h2>DroidDrone Flight " + VERSION + "</h2><p><a style='font-size:22px' href='/" + APK_NAME
+                        + "<title>DRAUPNE Flight</title></head><body style='font-family:sans-serif;padding:24px'>"
+                        + "<h2>DRAUPNE Flight " + VERSION + "</h2><p><a style='font-size:22px' href='/" + APK_NAME
                         + "'>Download the app</a></p><p>Then open the downloaded file and allow installing.</p></body></html>")
                         .getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");

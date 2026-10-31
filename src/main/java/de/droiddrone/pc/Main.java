@@ -68,12 +68,12 @@ public class Main {
 
     private static void printHelp() {
         System.out.println("""
-                droiddrone-pc - control a DroidDrone (Betaflight) drone from a Windows PC
+                draupne-link - fly a Betaflight drone over 4G from a Windows PC
                 (talks to Flight app protocol version %d, i.e. DroidDrone 2.3.0)
 
                 Commands:
                   gui                 open the main window (default)
-                  init-config         write droiddrone-pc.properties to edit
+                  init-config         write draupne-link.properties to edit
                   list                list connected joysticks
                   monitor             live view of joystick inputs and mapped RC channels (no network)
                   connect [address]   connect using linkMode from the settings and send RC from the joystick
@@ -111,6 +111,11 @@ public class Main {
         initJoystickOrExit();
         WindowsTuning.apply();
         removeOldPerUserInstall();
+        if (AppPaths.launcher() != null) {
+            Thread t = new Thread(de.droiddrone.pc.setup.WindowsSetup::removeDeadOldShortcuts, "removeOldShortcuts");
+            t.setDaemon(true);
+            t.start();
+        }
         int rcRate;
         try {
             rcRate = config.getRcRate();
@@ -118,7 +123,7 @@ public class Main {
             rcRate = ControlLink.DEFAULT_RC_RATE;
             String why = e.getMessage();
             SwingUtilities.invokeLater(() -> javax.swing.JOptionPane.showMessageDialog(null, "Setting " + why
-                    + "; using " + ControlLink.DEFAULT_RC_RATE + ". Fix rcRate in " + configFile + ".", "DroidDrone PC",
+                    + "; using " + ControlLink.DEFAULT_RC_RATE + ". Fix rcRate in " + configFile + ".", "DRAUPNE Link",
                     javax.swing.JOptionPane.WARNING_MESSAGE));
         }
         JoystickService service = new JoystickService(config.getJoystickFilter(), rcRate);

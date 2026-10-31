@@ -14,7 +14,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DroidDrone PC: the Windows app's look (cards, status pill, status colours for a dark
+ *  Modified for DRAUPNE Link: the Windows app's look (cards, status pill, status colours for a dark
  *  background), removing an earlier DroidDrone Flight, telling about a newer build, a touch lock for flying, and
  *  portrait as well as landscape, and Direct connection as the first-start connection mode.
  *  The connection logic is unchanged.
@@ -74,7 +74,7 @@ public class MainActivity extends Activity {
     private Timer uiTimer;
     private boolean isPaused = false;
     public static Config config;
-    /** The original app's package (also DroidDrone PC's builds up to 2.3.0-pc.1): removed so it can't take the FC. */
+    /** The original app's package (also DRAUPNE Link's builds up to 2.3.0-pc.1): removed so it can't take the FC. */
     private static final String OLD_PACKAGE = "de.droiddrone.flight";
     private TextView tvOldApp;
     private TextView tvUpdate;
@@ -181,7 +181,7 @@ public class MainActivity extends Activity {
         TextView tvVersion = findViewById(R.id.tvVersion);
         tvVersion.setText(getResources().getString(R.string.version, MainActivity.versionName));
         if (config.isConnectOnStartup() && !DDService.isRunning){
-            // DroidDrone PC: on the UI thread (it updates the screen), and only with the permissions the service needs
+            // DRAUPNE Link: on the UI thread (it updates the screen), and only with the permissions the service needs
             // - without them its camera / microphone start fails on Android 14
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                 if (!isFinishing() && !DDService.isRunning && checkPermissions()) startStopService();
@@ -485,7 +485,7 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * DroidDrone PC talks to the phone directly (over Tailscale), so that is the first-start choice, not upstream's
+     * DRAUPNE Link talks to the phone directly (over Tailscale), so that is the first-start choice, not upstream's
      * relay server. Written once, before Config reads it; a choice already saved stays.
      */
     private void defaultToDirect() {

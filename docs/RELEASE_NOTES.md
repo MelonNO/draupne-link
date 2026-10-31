@@ -4,8 +4,8 @@
 - **Warning sounds:** a short beep when LINK LOST, LINK STALL, FAILSAFE or NO FLIGHT CONTROLLER starts, again every 3 s while it lasts (SETTINGS > Warning sounds, on by default).
 - **RADIO FROZEN? and VIDEO FROZEN on the OSD:** armed with not one bit of the radio's input changing for 5 s (a hung USB radio still reports itself), and no new picture for 0.7 s while the stream runs.
 - **The arm switch must be off before the sticks start,** as well as the throttle down: Drone setup reads where Betaflight's ARM mode is (channel and range) and shows it; until then only the throttle rule applies. The OSD says which: RC OFF - THROTTLE DOWN / ARM SWITCH OFF.
-- **Drone setup backs up Betaflight first:** before it writes anything, Betaflight's whole "diff all" goes to Documents\DroidDrone PC\Betaflight backups (paste it into the CLI to go back); what changed is in the log. A **Port** list appears when more than one flight controller port is found.
-- **Recording:** SETTINGS > Record video records every connection's video to Videos\DroidDrone PC, as it comes from the phone (an MKV file, no re-encoding: no extra delay or CPU, and a file cut short still plays); a red REC on the OSD while it records.
+- **Drone setup backs up Betaflight first:** before it writes anything, Betaflight's whole "diff all" goes to Documents\DRAUPNE Link\Betaflight backups (paste it into the CLI to go back); what changed is in the log. A **Port** list appears when more than one flight controller port is found.
+- **Recording:** SETTINGS > Record video records every connection's video to Videos\DRAUPNE Link, as it comes from the phone (an MKV file, no re-encoding: no extra delay or CPU, and a file cut short still plays); a red REC on the OSD while it records.
 - **Hardware video decoding** (SETTINGS, off by default): decodes on the GPU (D3D11VA), software if it can't. Measured here at 720p H.264 it is slower (about 3.0 ms a frame against 1.3 ms: copying the picture back from the GPU costs more than decoding saves), so it is only worth trying with bigger pictures or a slow CPU.
 
 ### Fixed (from a full code review)
@@ -17,8 +17,8 @@
 - **Video keeps going after a bad frame** (a fresh decoder from the next key frame, instead of a frozen picture until reconnecting); reordered or doubled packets on 4G are no longer decoded out of turn or twice, and a late packet no longer lowers the bitrate; after a reconnect the new stream's first key frame is kept (no 0.5 s of garbage); the video figures go to 0 when the video stops; the decoder and the screen no longer wait for each other (three picture buffers).
 - **Drone setup writes only to Betaflight:** each candidate port is asked over MSP first (no restart, nothing written) and only Betaflight gets the CLI; a CLI answer that was cut off is never read as settings; it leaves the port alone while the motor test is open.
 - **Built-in relay: no viewers** (upstream let two in with its default key, with the video and GPS position).
-- **Installer: always in Program Files** (no folder choice: it runs the app as administrator from there), and the "is DroidDrone PC running?" check is JScript instead of VBScript, which Windows is phasing out.
-- **Updates: the installer is checked again right before it runs and held so it can't be swapped,** a half download is deleted, and nothing is installed while DroidDrone PC still runs; the Tailscale installer is held the same way.
+- **Installer: always in Program Files** (no folder choice: it runs the app as administrator from there), and the "is DRAUPNE Link running?" check is JScript instead of VBScript, which Windows is phasing out.
+- **Updates: the installer is checked again right before it runs and held so it can't be swapped,** a half download is deleted, and nothing is installed while DRAUPNE Link still runs; the Tailscale installer is held the same way.
 - **Smaller:** the stick-send error no longer floods the log (and only real sends count); a socket is closed when connecting fails half way; a wrong rcRate setting shows a message instead of quitting at start; the phone-app download server stops when the setup step is left; OSD warnings placed low stay in the picture; long tool output no longer holds up the Tailscale check; settings are saved off the Swing thread; the link log shows the sticks only when they were sent.
 - **Phone app 2.3.0-pc.9:** reconnects to the flight controller at once after a USB glitch (and looks for it every 150 ms for 5 s - before, 2-4 s, past Betaflight's 1.5 s landing); the touch lock can't open with one tap when Android's animations are off, nor with a second finger; sticks wait for Betaflight's channel map (never in the wrong order); failed USB writes no longer count as delivered sticks; the old USB connection is closed on reconnect; auto-connect at start checks the permissions; the service no longer crashes when Android restarts it.
 - **Builds:** CI also builds the phone app; a release checks the phone app it ships matches the phone app source; GitHub Actions pinned to exact versions; the signing-key password no longer goes on a command line.
@@ -36,8 +36,8 @@
 
 ## Files
 
-- **`DroidDrone-PC-Setup-*.exe`**: the installer. Run it, approve the Windows prompt once; the setup wizard opens on the first start. Windows may say *"Windows protected your PC"* because it isn't code-signed: **More info → Run anyway**.
-- **`DroidDrone-PC-*-windows.zip`**: the portable version. Unzip and run `DroidDrone PC.exe`.
-- **`DroidDrone-Flight-*.apk`**: the phone app this version installs. The setup wizard hands it to the phone by QR code.
+- **`DRAUPNE-Link-Setup-*.exe`**: the installer. Run it, approve the Windows prompt once; the setup wizard opens on the first start. Windows may say *"Windows protected your PC"* because it isn't code-signed: **More info → Run anyway**.
+- **`DRAUPNE-Link-*-windows.zip`**: the portable version. Unzip and run `DRAUPNE Link.exe`.
+- **`DRAUPNE-Flight-*.apk`**: the phone app this version installs. The setup wizard hands it to the phone by QR code.
 
-All changes: [CHANGELOG](https://github.com/MelonNO/droiddrone-pc/blob/main/docs/CHANGELOG.md)
+All changes: [CHANGELOG](https://github.com/MelonNO/draupne-link/blob/main/docs/CHANGELOG.md)

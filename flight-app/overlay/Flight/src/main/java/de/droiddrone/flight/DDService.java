@@ -14,7 +14,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DroidDrone PC: stops quietly when Android restarts it without the app's settings.
+ *  Modified for DRAUPNE Link: stops quietly when Android restarts it without the app's settings.
  */
 
 package de.droiddrone.flight;
@@ -72,7 +72,7 @@ public class DDService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // DroidDrone PC: restarted by Android after the app's process was killed, the settings (MainActivity.config)
+        // DRAUPNE Link: restarted by Android after the app's process was killed, the settings (MainActivity.config)
         // aren't there and the service crashed; stop quietly instead (the pilot starts it from the app)
         if (MainActivity.config == null) {
             stopSelf();
@@ -89,7 +89,7 @@ public class DDService extends Service {
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(getResources().getString(R.string.app_name))
-                .setContentText("DroidDrone is running")
+                .setContentText("DRAUPNE Flight is running")
                 .setSmallIcon(R.drawable.baseline_rocket_launch_24)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)

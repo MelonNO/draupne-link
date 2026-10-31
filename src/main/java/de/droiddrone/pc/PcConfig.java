@@ -17,8 +17,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class PcConfig {
-    public static final String FILE_NAME = "droiddrone-pc.properties";
-    public static final String TEMPLATE_RESOURCE = "/droiddrone-pc.example.properties";
+    public static final String FILE_NAME = "draupne-link.properties";
+    public static final String TEMPLATE_RESOURCE = "/draupne-link.example.properties";
     // DroidDrone sends RC channels in AETR order followed by AUX channels (see upstream Control Config.rcChannelsMap).
     public static final String[] CHANNEL_NAMES = {
             "roll", "pitch", "yaw", "throttle",

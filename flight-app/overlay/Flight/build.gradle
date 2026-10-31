@@ -12,14 +12,14 @@ android {
         applicationId "de.droiddrone.flight.pc"
         minSdk 26
         targetSdk 34
-        // DroidDrone PC build of 2.3.0: same protocol, more flight controllers, restyled screen
-        versionCode 2030009
-        versionName "2.3.0-pc.9"
+        // DRAUPNE Link build of 2.3.0: same protocol, more flight controllers, restyled screen
+        versionCode 2030010
+        versionName "2.3.0-pc.10"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    // DroidDrone PC: release key from outside the repo (see flight-app/build.ps1)
+    // DRAUPNE Link: release key from outside the repo (see flight-app/build.ps1)
     signingConfigs {
         release {
             storeFile System.getenv('DD_FLIGHT_KEYSTORE') ? file(System.getenv('DD_FLIGHT_KEYSTORE')) : null

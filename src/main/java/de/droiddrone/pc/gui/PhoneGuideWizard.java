@@ -219,7 +219,7 @@ final class PhoneGuideWizard {
     static final class FlightAppPage extends Page {
         private final MainWindow main;
         private final QrView qr = new QrView(220);
-        private final CheckRow file = new CheckRow("DroidDrone Flight " + ApkShare.VERSION);
+        private final CheckRow file = new CheckRow("DRAUPNE Flight " + ApkShare.VERSION);
         private final CheckRow firewall = new CheckRow("Firewall");
         private final DefaultComboBoxModel<String> urls = new DefaultComboBoxModel<>();
         private final JComboBox<String> urlChoice = new JComboBox<>(urls);
@@ -234,7 +234,7 @@ final class PhoneGuideWizard {
 
         @Override
         String title() {
-            return "Install DroidDrone Flight";
+            return "Install DRAUPNE Flight";
         }
 
         @Override
@@ -351,7 +351,7 @@ final class PhoneGuideWizard {
         JComponent build() {
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, setting("battery", "Battery: Unrestricted",
-                    "For DroidDrone Flight and for Tailscale, so Android doesn't pause them. "
+                    "For DRAUPNE Flight and for Tailscale, so Android doesn't pause them. "
                             + "Settings > Apps > the app > Battery > <b>Unrestricted</b>."));
             WizardDialog.addRow(col, setting("data", "Mobile data: unrestricted",
                     "For both apps, also with Data Saver on. Settings > Apps > the app > Mobile data > "
@@ -392,7 +392,7 @@ final class PhoneGuideWizard {
 
         private final MainWindow main;
         private final JPanel tableHolder = new JPanel(new BorderLayout());
-        private final CheckRow link = new CheckRow("DroidDrone link");
+        private final CheckRow link = new CheckRow("Phone link");
         private final CheckRow fc = new CheckRow("Flight controller");
         private final CheckRow latency = new CheckRow("Round-trip time");
         private final CheckRow path = new CheckRow("Network path");
@@ -416,7 +416,7 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "On the phone, open DroidDrone Flight, enter this and tap <b>CONNECT</b>. "
+            return "On the phone, open DRAUPNE Flight, enter this and tap <b>CONNECT</b>. "
                     + "Plug the phone into the flight controller with the OTG adapter (props off).";
         }
 
@@ -426,7 +426,7 @@ final class PhoneGuideWizard {
             tableHolder.setOpaque(false);
             WizardDialog.addRow(col, tableHolder);
             WizardDialog.addRow(col, WizardDialog.paragraph("When Android asks about the flight controller, tick "
-                    + "<b>Always open DroidDrone Flight</b>, then OK. Then it reconnects by itself, without asking, if the cable slips."));
+                    + "<b>Always open DRAUPNE Flight</b>, then OK. Then it reconnects by itself, without asking, if the cable slips."));
             WizardDialog.addRow(col, link);
             WizardDialog.addRow(col, fc);
             WizardDialog.addRow(col, latency);
@@ -521,7 +521,7 @@ final class PhoneGuideWizard {
         private void show(Snap snap) {
             long now = System.currentTimeMillis();
             if (snap.state() == ControlLink.State.VERSION_MISMATCH) {
-                link.set(State.BAD, "Version mismatch - the phone needs DroidDrone Flight " + ApkShare.VERSION + ".");
+                link.set(State.BAD, "Version mismatch - the phone needs DRAUPNE Flight " + ApkShare.VERSION + ".");
                 return;
             }
             if (snap.state() != ControlLink.State.READY) {

@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "DD"
-// DroidDrone PC: only the Flight app (upstream also builds the Control app here)
+// DRAUPNE Link: only the Flight app (upstream also builds the Control app here)
 include ':Flight'
 include ':Common'
 include ':libuvccamera'

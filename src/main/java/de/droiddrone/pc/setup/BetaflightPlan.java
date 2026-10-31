@@ -7,7 +7,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Works out which Betaflight CLI commands DroidDrone needs, and nothing else: the receiver must be "MSP RX input"
+ * Works out which Betaflight CLI commands DRAUPNE Link needs, and nothing else: the receiver must be "MSP RX input"
  * (the phone feeds the sticks over MSP), the serial task rate is raised so stick updates don't queue up, and the
  * battery's cell count is fixed to the pilot's choice (Betaflight's own count goes wrong when the flight controller
  * already runs on the phone's USB power as the battery is plugged in).

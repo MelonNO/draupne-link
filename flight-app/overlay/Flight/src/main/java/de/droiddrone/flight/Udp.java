@@ -14,7 +14,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DroidDrone PC: measures stick packets arriving and sends PcLinkStats (and this app's version)
+ *  Modified for DRAUPNE Link: measures stick packets arriving and sends PcLinkStats (and this app's version)
  *  to the PC every 0.1 s, as its own telemetry packet.
  */
 

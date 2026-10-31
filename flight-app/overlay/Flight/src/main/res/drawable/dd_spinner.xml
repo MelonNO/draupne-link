@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DroidDrone PC: dropdown = field + arrow -->
+<!-- DRAUPNE Link: dropdown = field + arrow -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@drawable/dd_field" />
     <item android:gravity="end|center_vertical" android:end="12dp" android:width="12dp" android:height="8dp">

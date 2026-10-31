@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DroidDrone PC: red action button (CONNECT) -->
+<!-- DRAUPNE Link: red action button (CONNECT) -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_enabled="false"><shape><solid android:color="@color/dd_line" /></shape></item>
     <item android:state_pressed="true"><shape><solid android:color="@color/dd_accent_pressed" /></shape></item>

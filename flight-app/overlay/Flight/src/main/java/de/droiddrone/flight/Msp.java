@@ -14,7 +14,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DroidDrone PC: stick packets go through Serial.writeRcMsp (newest first).
+ *  Modified for DRAUPNE Link: stick packets go through Serial.writeRcMsp (newest first).
  */
 
 package de.droiddrone.flight;
@@ -74,7 +74,7 @@ public class Msp {
     private long onTimestamp, flyTimestamp;
     private int onTime, flyTime, lastArmTime, flyTimeSave;
     private int[] rxMap = null;
-    /** DroidDrone PC: when the flight controller was found; sticks wait for its channel map until 2 s after that. */
+    /** DRAUPNE Link: when the flight controller was found; sticks wait for its channel map until 2 s after that. */
     private long rxMapWaitSince;
     private int[] boxIds = null;
     private int[] modeFlagsInav = null;
@@ -114,7 +114,7 @@ public class Msp {
     private void setFcInfo(){
         fcInfo = new FcInfo(fcVariant, fcVersionMajor, fcVersionMinor, fcVersionPatchLevel, apiProtocolVersion, apiVersionMajor, apiVersionMinor, platformType);
         onTimestamp = System.currentTimeMillis();
-        rxMapWaitSince = onTimestamp; // DroidDrone PC: its channel map is asked for now
+        rxMapWaitSince = onTimestamp; // DRAUPNE Link: its channel map is asked for now
         flyTimestamp = 0;
         runFcInit = false;
         runGetRxMap = true;
@@ -183,7 +183,7 @@ public class Msp {
         fcVersionPatchLevel = -1;
         platformType = -1;
         fcInfo = null;
-        rxMap = null; // DroidDrone PC: a reconnected (maybe another) flight controller: read its channel map again
+        rxMap = null; // DRAUPNE Link: a reconnected (maybe another) flight controller: read its channel map again
         rxMapWaitSince = 0;
     }
 
@@ -696,7 +696,7 @@ public class Msp {
         if (rcChannels == null || rcChannels.length > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
         long current = System.currentTimeMillis();
         if (current - rcLastFrame < rcMinPeriod) return;
-        // DroidDrone PC: not before Betaflight's channel map is known (or 2 s have passed, for a board that never
+        // DRAUPNE Link: not before Betaflight's channel map is known (or 2 s have passed, for a board that never
         // answers): sticks in the wrong order would put, say, roll on the throttle channel
         if (rxMap == null && (rxMapWaitSince == 0 || current - rxMapWaitSince < 2000)) return;
         rcLastFrame = current;

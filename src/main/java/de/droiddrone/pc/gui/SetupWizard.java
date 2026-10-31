@@ -40,7 +40,7 @@ final class SetupWizard {
                 delay.in("CONNECT"),
                 new PcSetupWizard.ShortcutsPage(main).in("FINISH"),
                 new DonePage().in("FINISH"));
-        new WizardDialog(main, "DroidDrone PC setup", pages, () -> {
+        new WizardDialog(main, "DRAUPNE Link setup", pages, () -> {
             main.save(Map.of(DONE_KEY, "true"));
             main.logLine("Setup finished.");
         }).setVisible(true);
@@ -49,7 +49,7 @@ final class SetupWizard {
     }
 
     /**
-     * The delay from the drone's camera to this screen: the number to fly by. The test needs DroidDrone PC's own
+     * The delay from the drone's camera to this screen: the number to fly by. The test needs DRAUPNE Link's own
      * connection with video, which the guide doesn't run, so it is offered for right after Finish.
      */
     private static final class DelayPage extends Page {
@@ -76,7 +76,7 @@ final class SetupWizard {
                     + "enough that it fills most of the picture, and hold still for a few seconds: the delay shows on the "
                     + "screen and in the log. Try it in a window and in <b>F11</b> full screen. Stop with <b>Esc</b>. "
                     + "Any time later: <b>SETTINGS > Latency test</b>."));
-            test.set(State.PENDING, "<b>Test after setup</b>: when you press Finish, DroidDrone PC connects to the drone and "
+            test.set(State.PENDING, "<b>Test after setup</b>: when you press Finish, DRAUPNE Link connects to the drone and "
                     + "starts the test (camera on, props off).");
             return col;
         }

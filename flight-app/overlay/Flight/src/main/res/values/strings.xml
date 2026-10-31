@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">DroidDrone Flight</string>
+    <string name="app_name">DRAUPNE Flight</string>
     <string name="connect">Connect</string>
     <string name="connect_on_startup">Connect when the app starts</string>
     <string name="disconnect">Disconnect</string>
@@ -19,7 +19,7 @@
     <string name="detected">&#160;</string>
     <string name="fc_api_compatibility_error">&#160;- not compatible!</string>
     <string name="fc_api_compatibility_warning">&#160;- other minor version, mostly works.</string>
-    <string name="version">%1$s · DroidDrone PC build</string>
+    <string name="version">%1$s · for DRAUPNE Link</string>
     <string name="ip">Server IP</string>
     <string name="port">Port</string>
     <string name="server_key">Key</string>
@@ -30,8 +30,8 @@
     <string name="connection_mode_server">Both sides connect to the relay server\'s public IP.</string>
     <string name="connection_mode_vpn">The PC connects to this phone\'s Tailscale (or Wi-Fi) address.</string>
 
-    <!-- DroidDrone PC layout -->
-    <string name="dd_title">DROIDDRONE</string>
+    <!-- DRAUPNE Link layout -->
+    <string name="dd_title">DRAUPNE</string>
     <string name="dd_subtitle">FLIGHT UNIT</string>
     <string name="dd_section_status">// STATUS</string>
     <string name="dd_section_connection">// CONNECTION</string>
@@ -42,7 +42,7 @@
     <string name="dd_pill_offline">OFFLINE</string>
     <string name="dd_pill_waiting">WAITING</string>
     <string name="dd_pill_linked">LINK READY</string>
-    <string name="dd_update">Update available: DroidDrone Flight %1$s. Tap to download it.</string>
+    <string name="dd_update">Update available: DRAUPNE Flight %1$s. Tap to download it.</string>
     <string name="dd_old_app">An earlier DroidDrone Flight is still installed and can take the flight controller. Tap here to remove it.</string>
     <string name="dd_lock_button">LOCK SCREEN</string>
     <string name="dd_locked_title">SCREEN LOCKED</string>

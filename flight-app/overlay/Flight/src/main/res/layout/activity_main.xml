@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DroidDrone PC: the Windows app's look - black, red "//" titles, cards with corner brackets.
+<!-- DRAUPNE Link: the Windows app's look - black, red "//" titles, cards with corner brackets.
      Same view ids as upstream, so MainActivity's logic is unchanged. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"

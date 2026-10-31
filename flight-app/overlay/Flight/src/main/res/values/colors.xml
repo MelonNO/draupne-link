@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- DroidDrone PC: the Windows app's palette -->
+<!-- DRAUPNE Link: the Windows app's palette -->
 <resources>
     <color name="dd_bg">#FF000000</color>
     <color name="dd_panel">#FF0A0A0A</color>
