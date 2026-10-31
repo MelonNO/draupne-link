@@ -21,6 +21,7 @@ class CheckRow extends JPanel {
     private final StatusLight light = new StatusLight();
     private final WrappingText detail = new WrappingText("", Theme.font(Font.PLAIN, 15f), Theme.MUTED);
     private final JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+    private final JPanel texts = new JPanel(new BorderLayout(0, 2));
     private State state = State.PENDING;
 
     CheckRow(String title) {
@@ -31,7 +32,6 @@ class CheckRow extends JPanel {
         JPanel lightBox = new JPanel(new BorderLayout());
         lightBox.add(light, BorderLayout.NORTH);
         add(lightBox, BorderLayout.WEST);
-        JPanel texts = new JPanel(new BorderLayout(0, 2));
         texts.add(Theme.label(title, Theme.font(Font.BOLD, 16f), Theme.TEXT), BorderLayout.NORTH);
         texts.add(detail, BorderLayout.CENTER);
         add(texts, BorderLayout.CENTER);
@@ -107,6 +107,12 @@ class CheckRow extends JPanel {
 
     void addComponent(JComponent component) {
         actions.add(component);
+    }
+
+    /** Under the detail text, across the row (choices that belong to it, too wide for the action area). */
+    void addBelow(JComponent component) {
+        component.setBorder(BorderFactory.createEmptyBorder(8, 0, 0, 0));
+        texts.add(component, BorderLayout.SOUTH);
     }
 
     private class StatusLight extends JComponent {

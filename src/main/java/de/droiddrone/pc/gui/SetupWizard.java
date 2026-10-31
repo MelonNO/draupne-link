@@ -25,27 +25,37 @@ final class SetupWizard {
 
     static void open(MainWindow main) {
         DelayPage delay = new DelayPage();
-        List<Page> pages = List.of(
-                new WelcomePage(),
-                new PcSetupWizard.TailscalePage(main).in("THIS PC"),
-                new PcSetupWizard.RelayPage(main).in("THIS PC"),
-                new PcSetupWizard.FirewallPage(main).in("THIS PC"),
-                new PcSetupWizard.LatencyPage(main).in("THIS PC"),
-                new PcSetupWizard.RadioPage(main).in("RADIO"),
-                new DroneSetup.BetaflightPage(main).in("DRONE"),
-                new PhoneGuideWizard.PhoneTailscalePage(main).in("PHONE"),
-                new PhoneGuideWizard.FlightAppPage(main).in("PHONE"),
-                new PhoneGuideWizard.PhoneSettingsPage(main).in("PHONE"),
-                new PhoneGuideWizard.ConnectPage(main).in("CONNECT"),
-                delay.in("CONNECT"),
-                new PcSetupWizard.ShortcutsPage(main).in("FINISH"),
-                new DonePage().in("FINISH"));
+        List<Page> pages = firstTimePages(PcSetupWizard.pages(main), DroneSetup.pages(main), PhoneGuideWizard.pages(main),
+                new WelcomePage(), delay, new DonePage());
         new WizardDialog(main, "DRAUPNE Link setup", pages, () -> {
-            main.save(Map.of(DONE_KEY, "true"));
+            // it covered every part: PC, drone and phone setup count as done too
+            main.save(Map.of(DONE_KEY, "true", "setup.pcDone", "true", "setup.droneDone", "true", "setup.phoneDone", "true"));
             main.logLine("Setup finished.");
         }).setVisible(true);
         main.reloadSettings();
         if (delay.testAfterSetup) main.testLatencyNow();
+    }
+
+    /**
+     * The first-time setup: every step of PC, drone and phone setup - their own lists, so none is left out - in the
+     * order a new pilot needs them: this PC (its shortcuts with it), the drone, the radio, the phone, the first
+     * connection. The radio after the drone: its calibration names each switch after what Drone setup put on it.
+     * Only the separate setups' closing pages are left for this one's own.
+     */
+    static List<Page> firstTimePages(List<Page> pc, List<Page> drone, List<Page> phone, Page welcome, Page delay, Page done) {
+        List<Page> pages = new java.util.ArrayList<>();
+        List<Page> radio = new java.util.ArrayList<>();
+        pages.add(welcome);
+        for (Page p : pc) { // this PC's steps together; the radio after the drone
+            if (p instanceof PcSetupWizard.RadioPage) radio.add(p.in("RADIO"));
+            else pages.add(p.in("THIS PC"));
+        }
+        for (Page p : drone) pages.add(p.in("DRONE"));
+        pages.addAll(radio);
+        for (Page p : phone) pages.add(p.in(p instanceof PhoneGuideWizard.ConnectPage ? "CONNECT" : "PHONE"));
+        pages.add(delay.in("CONNECT"));
+        pages.add(done.in("FINISH"));
+        return pages;
     }
 
     /**

@@ -65,7 +65,7 @@ class ControlLinkTest {
     }
 
     /** Records what the video pipeline would put on screen. */
-    private static final class CapturingSink implements VideoPipeline.FrameSink {
+    static final class CapturingSink implements VideoPipeline.FrameSink {
         final int[] pixels = new int[160 * 120];
         final AtomicInteger presented = new AtomicInteger();
         volatile int startedWidth;
@@ -271,7 +271,7 @@ class ControlLinkTest {
         waitFor(() -> link.getState() == ControlLink.State.VERSION_MISMATCH, 5000, "version mismatch");
     }
 
-    private static void waitFor(java.util.function.BooleanSupplier cond, long timeoutMs, String what) throws InterruptedException {
+    static void waitFor(java.util.function.BooleanSupplier cond, long timeoutMs, String what) throws InterruptedException {
         long end = System.currentTimeMillis() + timeoutMs;
         while (!cond.getAsBoolean()) {
             if (System.currentTimeMillis() > end) fail("Timed out waiting for " + what);
@@ -289,7 +289,12 @@ class ControlLinkTest {
         final UdpSender udpSender;
         final ReceiverBuffer receiverBuffer;
         final int versionCode;
+        final String key;
+        final boolean viaRelay;
         volatile boolean running = true;
+        /** Spectator mode answers sent (DRAUPNE Flight pc.11 and on); 0 with answerSpectators off, like older apps. */
+        final AtomicInteger spectatorAnswers = new AtomicInteger();
+        volatile boolean answerSpectators = true;
         volatile ParsedConfig config;
         final List<short[]> rcFrames = new CopyOnWriteArrayList<>();
 
@@ -300,7 +305,8 @@ class ControlLinkTest {
         /** @param relayPort >= 0: "Connect over server" mode, like upstream Flight with ConnectionMode.overServer */
         FakeFlightPhone(String key, int versionCode, int relayPort) throws Exception {
             this.versionCode = versionCode;
-            boolean viaRelay = relayPort >= 0;
+            this.key = key;
+            viaRelay = relayPort >= 0;
             socket = new DatagramSocket(viaRelay ? RELAY_PHONE_PORT : PHONE_PORT, InetAddress.getLoopbackAddress());
             udpSender = new UdpSender(socket);
             receiverBuffer = new ReceiverBuffer(udpSender, !viaRelay, key, null);
@@ -325,6 +331,17 @@ class ControlLinkTest {
                 while (running) {
                     try {
                         socket.receive(packet);
+                        // like DRAUPNE Flight's Udp.receiverRun in direct mode: once a PC is connected, nothing from
+                        // another one gets in; a second PC asking is told where the first one is
+                        if (!viaRelay && receiverBuffer.isConnected()) {
+                            if (!packet.getAddress().equals(udpSender.getIp()) || packet.getPort() != udpSender.getPort()) {
+                                answerSpectator(packet, true);
+                                continue;
+                            }
+                        } else if (!viaRelay && packet.getLength() > 0 && packet.getData()[0] == Spectate.PILOT_QUERY) {
+                            answerSpectator(packet, false);
+                            continue;
+                        }
                         receiverBuffer.addPacket(packet);
                     } catch (Exception ignored) {
                     }
@@ -345,6 +362,19 @@ class ControlLinkTest {
             });
             buffer.setDaemon(true);
             buffer.start();
+        }
+
+        /** Same checks as DRAUPNE Flight's Udp.answerSpectator. */
+        private void answerSpectator(DatagramPacket packet, boolean flying) throws java.io.IOException {
+            if (!answerSpectators) return;
+            byte[] d = packet.getData();
+            int keyAt = d[0] == Spectate.PILOT_QUERY ? 1 : flying && d[0] == UdpCommon.Connect ? 4 : -1;
+            if (keyAt < 0 || packet.getLength() < keyAt + 2) return;
+            int n = ((d[keyAt] & 0xff) << 8) | (d[keyAt + 1] & 0xff);
+            if (!key.equals(new String(d, keyAt + 2, n, java.nio.charset.StandardCharsets.UTF_8))) return;
+            byte[] answer = flying ? Spectate.pilotAt(udpSender.getIp(), udpSender.getPort()) : new byte[]{Spectate.NO_PILOT};
+            spectatorAnswers.incrementAndGet();
+            socket.send(new DatagramPacket(answer, answer.length, packet.getAddress(), packet.getPort()));
         }
 
         void process(SavedPacket packet) throws Exception {

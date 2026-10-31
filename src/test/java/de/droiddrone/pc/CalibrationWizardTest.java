@@ -199,4 +199,21 @@ class CalibrationWizardTest {
         assertEquals("axis4", w.getSpec(4));
         assertEquals(new AxisCalibration(-1f, 0f, 1f), w.getCalibrations().get(4));
     }
+
+    @Test
+    void switchStepsAreNamedAfterWhatDroneSetupPutOnThem() {
+        de.droiddrone.pc.setup.ModeSwitch.Purpose[] p = new de.droiddrone.pc.setup.ModeSwitch.Purpose[8];
+        p[0] = new de.droiddrone.pc.setup.ModeSwitch.Purpose("ARM", "arm hint");
+        p[1] = new de.droiddrone.pc.setup.ModeSwitch.Purpose("flight modes", "modes hint");
+        p[3] = new de.droiddrone.pc.setup.ModeSwitch.Purpose("GPS rescue", "rescue hint");
+        CalibrationWizard w = new CalibrationWizard(8, 4, p);
+        List<String> titles = w.steps().stream().map(CalibrationWizard.Step::title).toList();
+        assertTrue(titles.contains("AUX1 - ARM"), titles.toString());
+        assertTrue(titles.contains("AUX2 - flight modes"));
+        assertTrue(titles.contains("AUX3 switch"));
+        assertTrue(titles.contains("AUX4 - GPS rescue"));
+        assertEquals(4, w.switchCount());
+        p[5] = new de.droiddrone.pc.setup.ModeSwitch.Purpose("GPS rescue", "on AUX6");
+        assertEquals(6, new CalibrationWizard(8, 4, p).switchCount(), "a chosen switch above AUX4 is asked for too");
+    }
 }

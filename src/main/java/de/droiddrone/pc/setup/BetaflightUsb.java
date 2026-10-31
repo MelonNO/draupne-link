@@ -234,6 +234,44 @@ public final class BetaflightUsb implements AutoCloseable {
         return new String(msp(2 /* MSP_FC_VARIANT */, null), StandardCharsets.US_ASCII).trim();
     }
 
+    /**
+     * The flight modes this Betaflight offers, as permanent mode ids (MSP_BOXIDS): only those its sensors and features
+     * allow (ANGLE needs the accelerometer, GPS RESCUE the GPS feature, POS HOLD both and Betaflight 2025.12).
+     */
+    public Set<Integer> boxIds() throws IOException {
+        Set<Integer> ids = new java.util.HashSet<>();
+        for (byte b : msp(119 /* MSP_BOXIDS */, null)) ids.add(b & 0xff);
+        return ids;
+    }
+
+    /** Betaflight's GPS feature is on (MSP_FEATURE_CONFIG: FEATURE_GPS = 1 << 7). */
+    public boolean gpsFeatureOn() throws IOException {
+        byte[] p = msp(36 /* MSP_FEATURE_CONFIG */, null);
+        if (p.length < 4) throw new IOException("Short feature answer");
+        int mask = (p[0] & 0xff) | (p[1] & 0xff) << 8 | (p[2] & 0xff) << 16 | (p[3] & 0xff) << 24;
+        return (mask & (1 << 7)) != 0;
+    }
+
+    /**
+     * Waits up to timeoutMs for the GPS to talk to Betaflight: MSP_STATUS' sensor bit 3 (SENSOR_GPS). Betaflight sets
+     * it on every message from the GPS, fix or not, and clears it after 2.5 s of silence - so this works indoors.
+     * Never set means a GPS hardware failure: none fitted, not powered, or not on the port set for it.
+     */
+    public boolean waitForGps(long timeoutMs) throws IOException {
+        long end = System.currentTimeMillis() + timeoutMs;
+        do {
+            byte[] s = msp(101 /* MSP_STATUS */, null);
+            if (s.length >= 6 && ((((s[4] & 0xff) | (s[5] & 0xff) << 8)) & (1 << 3)) != 0) return true;
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        } while (System.currentTimeMillis() < end);
+        return false;
+    }
+
     private void write(String text) throws IOException {
         write(text.getBytes(StandardCharsets.US_ASCII));
     }

@@ -15,6 +15,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import static de.droiddrone.common.Log.log;
 
@@ -37,7 +38,8 @@ public class ControlLink {
     /** Betaflight's MSP_RX_MAP has 8 entries (roll, pitch, yaw, throttle, AUX1-4). */
     static final int RX_MAP_SIZE = 8;
 
-    public enum State { CONNECTING, CONFIGURING, READY, VERSION_MISMATCH, CLOSED }
+    /** SPECTATING / SPECTATOR_WAITING: another PC flies; this one watches through it (see {@link Spectate}). */
+    public enum State { CONNECTING, CONFIGURING, READY, VERSION_MISMATCH, SPECTATING, SPECTATOR_WAITING, CLOSED }
 
     /** No FC data for this long while the link is up: the phone has lost the flight controller. */
     static final long FC_SILENCE_MS = 1500;
@@ -93,6 +95,14 @@ public class ControlLink {
     private volatile VideoListener videoListener;
     private volatile boolean videoHevc = true;
     private volatile boolean videoConfigReceived;
+    /** Spectators may watch through this PC (direct phone mode only: the phone points them here). */
+    private boolean spectatorsEnabled;
+    private boolean spectatorsAllowed;
+    private int spectatorDelayMs = SpectatorClient.DEFAULT_DELAY_MS;
+    private volatile SpectatorHost host;
+    /** Set once the phone said another PC flies: from then on this link only watches. */
+    private volatile SpectatorClient spectator;
+    private volatile Consumer<String> events = msg -> log(msg);
 
     public ControlLink(PcConfig config, InetAddress remoteIp, int remotePort, int localPort) {
         this.config = config;
@@ -108,6 +118,28 @@ public class ControlLink {
         videoHevc = hevc;
     }
 
+    /**
+     * Spectator mode (call before start): a PC that connects while another flies is told so by the phone and watches
+     * through that PC. allowed = false: this PC lets nobody watch (a spectator is told so).
+     */
+    public void enableSpectators(boolean allowed, int delayMs) {
+        spectatorsEnabled = true;
+        spectatorsAllowed = allowed;
+        spectatorDelayMs = delayMs;
+    }
+
+    /** Allow spectators switched while connected: from now on (off sends those watching away). */
+    public void setSpectatorsAllowed(boolean allowed) {
+        spectatorsAllowed = allowed;
+        SpectatorHost h = host;
+        if (h != null) h.setAllowed(allowed);
+    }
+
+    /** Where spectator news goes (joined, left, paused); the app log otherwise. */
+    public void setEvents(Consumer<String> events) {
+        this.events = events;
+    }
+
     public void start() throws IOException {
         socket = new DatagramSocket(localPort);
         try {
@@ -121,6 +153,14 @@ public class ControlLink {
         udpSender = new UdpSender(socket);
         udpSender.connect(remoteIp, remotePort);
         receiverBuffer = new ReceiverBuffer(udpSender, false, key, key);
+        if (spectatorsEnabled) {
+            try {
+                host = new SpectatorHost(key, spectatorsAllowed, socket, () -> getState() == State.READY, this::getPing,
+                        msg -> events.accept(msg));
+            } catch (IOException e) {
+                log("Spectators can't watch: " + e); // flying works as before
+            }
+        }
         running = true;
         startThread(this::receiverRun, "receiverThread", Thread.MAX_PRIORITY);
         startThread(this::bufferRun, "bufferThread", Thread.NORM_PRIORITY);
@@ -141,14 +181,71 @@ public class ControlLink {
         while (running) {
             try {
                 socket.receive(packet);
-                if (!packet.getAddress().equals(remoteIp) || packet.getPort() != remotePort) continue;
+                if (!packet.getAddress().equals(remoteIp) || packet.getPort() != remotePort) {
+                    onForeignPacket(packet);
+                    continue;
+                }
                 lastReceivedAt = System.currentTimeMillis();
                 if (handleVideoFragment(packet)) continue;
+                byte[] d = packet.getData();
+                if (packet.getLength() > 0 && (d[0] == Spectate.PILOT_AT || d[0] == Spectate.NO_PILOT)) {
+                    onPhoneSpectateAnswer(d, packet.getLength());
+                    continue;
+                }
                 receiverBuffer.addPacket(packet);
             } catch (Exception e) {
                 if (running) log("Receiver error: " + e);
             }
         }
+    }
+
+    /** Not from the phone: a spectator asking this PC, or (when this PC watches) the pilot PC. */
+    private void onForeignPacket(DatagramPacket packet) {
+        if (packet.getLength() < 1) return;
+        SpectatorHost h = host;
+        SpectatorClient c = spectator;
+        if (h != null && packet.getData()[0] == Spectate.HELLO) {
+            h.onHello(packet);
+        } else if (c != null) {
+            c.onPacket(packet);
+        }
+    }
+
+    /**
+     * The phone serves another PC. Answer to our Connect (or, once watching, to a PILOT_QUERY): this link turns into
+     * a spectator for good - it stops asking the phone to connect, so it can't take the drone over.
+     */
+    private void onPhoneSpectateAnswer(byte[] d, int len) {
+        if (isConnected() || !spectatorsEnabled) return;
+        SpectatorClient c = spectator;
+        if (d[0] == Spectate.NO_PILOT) {
+            if (c != null) c.onNoPilot();
+            return;
+        }
+        Spectate.Address pilot = Spectate.readPilotAt(d, len);
+        if (pilot == null) return;
+        if (c != null) {
+            c.onPilotAt(pilot);
+            return;
+        }
+        synchronized (this) {
+            if (spectator != null || !running) return;
+            spectator = new SpectatorClient(socket, remoteIp, remotePort, key, spectatorDelayMs, pilot, this::playSpectated);
+        }
+        events.accept("Another PC flies the drone (" + pilot.ip().getHostAddress() + "): watching as a spectator, "
+                + spectatorDelayMs + " ms behind it. This PC sends no sticks.");
+    }
+
+    /** A packet the pilot PC passed on, played at its time (spectator thread). */
+    private void playSpectated(byte[] d) {
+        if (d.length < 1) return;
+        if (d[0] == UdpCommon.VideoFrame || d[0] == UdpCommon.KeyFrame) {
+            deliverVideoFragment(d, d.length);
+            return;
+        }
+        if (d[0] == UdpCommon.TelemetryData) telemetryPacketsReceived.incrementAndGet();
+        lastReceivedAt = System.currentTimeMillis();
+        processData(d);
     }
 
     /**
@@ -160,19 +257,26 @@ public class ControlLink {
         byte[] d = packet.getData();
         int len = packet.getLength();
         if (len < 1 || (d[0] != UdpCommon.VideoFrame && d[0] != UdpCommon.KeyFrame)) return false;
+        if (!isConnected()) return true;
+        deliverVideoFragment(d, len);
+        SpectatorHost h = host;
+        if (h != null) h.forward(d, len); // after our own picture: a copy into a queue, nothing without spectators
+        return true;
+    }
+
+    private void deliverVideoFragment(byte[] d, int len) {
         VideoListener listener = videoListener;
-        if (listener == null || !isConnected() || len < 7) return true;
+        if (listener == null || len < 7) return;
         short frameNum = (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff));
         int offset = readInt(d, 3);
         int frameSize = 0;
         int header = 7;
         if (offset == 0) {
-            if (len < 11) return true;
+            if (len < 11) return;
             frameSize = readInt(d, 7);
             header = 11;
         }
         listener.onVideoFragment(d[0] == UdpCommon.KeyFrame, frameNum, offset, frameSize, d, header, len - header);
-        return true;
     }
 
     private static int readInt(byte[] d, int i) {
@@ -185,7 +289,7 @@ public class ControlLink {
             try {
                 do {
                     packet = receiverBuffer.getNextPacket();
-                    if (packet != null) processData(packet);
+                    if (packet != null) processData(packet.data);
                 } while (packet != null);
                 receiverBuffer.processTimer();
                 Thread.sleep(1);
@@ -221,6 +325,10 @@ public class ControlLink {
         long lastModesRequest = 0;
         while (running) {
             try {
+                if (spectator != null) { // watching: the spectator thread does the talking, never a Connect again
+                    Thread.sleep(250);
+                    continue;
+                }
                 boolean connected = isConnected();
                 if (wasConnected && !connected) {
                     log("Link lost, reconnecting...");
@@ -267,8 +375,8 @@ public class ControlLink {
         }
     }
 
-    private void processData(SavedPacket packet) {
-        DataReader buffer = new DataReader(packet.data, true);
+    private void processData(byte[] data) {
+        DataReader buffer = new DataReader(data, true);
         byte packetName = buffer.readByte();
         if (UdpCommon.isPacketNumbered(packetName)) buffer.readShort();
         switch (packetName) {
@@ -289,14 +397,29 @@ public class ControlLink {
                 configReceived = false;
                 versionMismatch = true;
             }
-            case UdpCommon.FcInfo -> fcInfo = new FcInfo(buffer.readByte(), buffer.readByte(), buffer.readByte(),
-                    buffer.readByte(), buffer.readByte(), buffer.readByte(), buffer.readByte(), buffer.readByte());
+            case UdpCommon.FcInfo -> {
+                fcInfo = new FcInfo(buffer.readByte(), buffer.readByte(), buffer.readByte(),
+                        buffer.readByte(), buffer.readByte(), buffer.readByte(), buffer.readByte(), buffer.readByte());
+                SpectatorHost h = host;
+                if (h != null) {
+                    h.rememberFcInfo(data);
+                    h.forward(data, data.length);
+                }
+            }
             case UdpCommon.TelemetryData -> {
-                telemetryPacketsReceived.incrementAndGet();
+                if (spectator == null) telemetryPacketsReceived.incrementAndGet(); // a spectator counts on play
                 long now = System.nanoTime();
                 if (lastTelemetryNs != 0) maxTelemetryGapNs.accumulateAndGet(now - lastTelemetryNs, Math::max);
                 lastTelemetryNs = now;
+                boolean hadNames = telemetry.hasBoxNames();
+                boolean hadIds = telemetry.hasBoxIds();
                 telemetry.parse(buffer, fcInfo);
+                SpectatorHost h = host;
+                if (h != null) {
+                    if (!hadNames && telemetry.hasBoxNames()) h.rememberBoxNames(data);
+                    if (!hadIds && telemetry.hasBoxIds()) h.rememberBoxIds(data);
+                    h.forward(data, data.length);
+                }
             }
             case UdpCommon.VideoInitialFrame -> {
                 int width = buffer.readShort();
@@ -308,6 +431,11 @@ public class ControlLink {
                 videoConfigReceived = true;
                 VideoListener listener = videoListener;
                 if (listener != null) listener.onVideoConfig(width, height, hevc, front, codecConfig);
+                SpectatorHost h = host;
+                if (h != null) {
+                    h.rememberVideoConfig(data);
+                    h.forward(data, data.length);
+                }
             }
             default -> {
                 // audio and OSD packets are handled in later milestones
@@ -327,7 +455,7 @@ public class ControlLink {
 
     /** Asks the phone's encoder for a lower or higher bitrate (upstream steps through a fixed list of rates). */
     public void sendChangeBitRate(boolean increase) {
-        if (!running || !isConnected()) return;
+        if (!running || !isConnected() || spectator != null) return;
         try {
             UdpPacketData packetData = new UdpPacketData(UdpCommon.ChangeBitRate);
             packetData.daos.writeBoolean(increase);
@@ -455,6 +583,8 @@ public class ControlLink {
 
     public State getState() {
         if (!running) return State.CLOSED;
+        SpectatorClient c = spectator;
+        if (c != null) return c.phase() == SpectatorClient.Phase.WATCHING ? State.SPECTATING : State.SPECTATOR_WAITING;
         if (versionMismatch) return State.VERSION_MISMATCH;
         if (!isConnected()) return State.CONNECTING;
         if (!configReceived) return State.CONFIGURING;
@@ -473,6 +603,33 @@ public class ControlLink {
     public boolean isLinkStalled() {
         long last = lastReceivedAt;
         return getState() == State.READY && last != 0 && System.currentTimeMillis() - last > STALL_MS;
+    }
+
+    /** True once another PC flies and this one watches; it stays so until disconnected. */
+    public boolean isSpectator() {
+        return spectator != null;
+    }
+
+    /** While watching: what is going on, for the main window; null when flying. */
+    public String spectatorStatus() {
+        SpectatorClient c = spectator;
+        if (c == null) return null;
+        Spectate.Address p = c.pilot();
+        String who = p == null ? "the pilot PC" : "the pilot PC (" + p.ip().getHostAddress() + ")";
+        return switch (c.phase()) {
+            case WATCHING -> "SPECTATOR: watching " + who + ", " + c.delayMs() + " ms behind it. This PC sends no sticks.";
+            case JOINING -> "SPECTATOR: another PC flies the drone - joining " + who + "...";
+            case REFUSED_NOT_FLYING -> "SPECTATOR: " + who + " is not flying yet - waiting.";
+            case REFUSED_FULL -> "SPECTATOR: " + who + " already has " + SpectatorHost.MAX_SPECTATORS + " spectators - waiting for a place.";
+            case REFUSED_OFF -> "SPECTATOR: " + who + " lets nobody watch (SETTINGS > Allow spectators is off there).";
+            case NO_PILOT -> "SPECTATOR: nobody flies the drone now. To fly it from this PC, DISCONNECT and CONNECT again.";
+        };
+    }
+
+    /** How many PCs watch through this one. */
+    public int getSpectatorCount() {
+        SpectatorHost h = host;
+        return h == null ? 0 : h.count();
     }
 
     public FcInfo getFcInfo() {
@@ -520,6 +677,10 @@ public class ControlLink {
             log("sendDisconnect error: " + e);
         }
         running = false;
+        SpectatorClient c = spectator;
+        if (c != null) c.close();
+        SpectatorHost h = host;
+        if (h != null) h.close();
         if (udpSender != null) udpSender.close();
         if (receiverBuffer != null) receiverBuffer.close();
         if (socket != null) socket.close();

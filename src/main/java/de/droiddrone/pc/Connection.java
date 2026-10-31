@@ -38,6 +38,8 @@ public class Connection {
             remoteIp = InetAddress.getByName(config.getIp());
         }
         ControlLink link = new ControlLink(config, remoteIp, port, localPort);
+        // only straight to the phone: through a relay the phone can't tell a second PC where the first one is
+        if (mode == LinkMode.PHONE) link.enableSpectators(spectatorsAllowed(config), spectatorDelay(config));
         if (video != null) link.setVideoListener(video, !"avc".equalsIgnoreCase(config.getString("videoCodec")));
         try {
             link.start();
@@ -47,6 +49,22 @@ public class Connection {
             throw e;
         }
         return new Connection(mode, relay, link);
+    }
+
+    /** SETTINGS > Allow spectators: off unless the pilot switches it on. */
+    public static final String ALLOW_SPECTATORS_KEY = "allowSpectators";
+
+    public static boolean spectatorsAllowed(PcConfig config) {
+        return "true".equalsIgnoreCase(config.getString(ALLOW_SPECTATORS_KEY));
+    }
+
+    /** spectatorDelayMs: 200..5000, the default when missing or broken. */
+    static int spectatorDelay(PcConfig config) {
+        try {
+            return Math.max(200, Math.min(5000, Integer.parseInt(config.getString("spectatorDelayMs"))));
+        } catch (NumberFormatException e) {
+            return SpectatorClient.DEFAULT_DELAY_MS;
+        }
     }
 
     public ControlLink getLink() {
@@ -70,6 +88,7 @@ public class Connection {
                     : "Relay connected - waiting for the Flight phone to join (Flight app: Connect over server)...";
             case READY -> "Flight phone accepted settings - link ready.";
             case VERSION_MISMATCH -> "VERSION MISMATCH: install DRAUPNE Flight (or DroidDrone Flight 2.3.0) on the phone.";
+            case SPECTATING, SPECTATOR_WAITING -> link.spectatorStatus();
             case CLOSED -> "Link closed.";
         };
     }

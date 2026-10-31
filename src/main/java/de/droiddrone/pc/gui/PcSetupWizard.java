@@ -37,17 +37,22 @@ final class PcSetupWizard {
     private PcSetupWizard() {
     }
 
-    static void open(MainWindow main) {
-        boolean[] openPhoneGuide = {false};
-        List<Page> pages = List.of(
+    /** PC setup's steps. The first-time setup is made of these too (SetupWizard): a step added here is in both. */
+    static List<Page> pages(MainWindow main) {
+        return List.of(
                 new ConnectionPage(main),
                 new TailscalePage(main),
                 new RelayPage(main),
                 new FirewallPage(main),
                 new RadioPage(main),
                 new LatencyPage(main),
-                new ShortcutsPage(main),
-                new DonePage(main, openPhoneGuide));
+                new ShortcutsPage(main));
+    }
+
+    static void open(MainWindow main) {
+        boolean[] openPhoneGuide = {false};
+        List<Page> pages = new java.util.ArrayList<>(pages(main));
+        pages.add(new DonePage(main, openPhoneGuide));
         WizardDialog dialog = new WizardDialog(main, "PC setup", pages, () -> finished(main));
         dialog.setVisible(true); // modal
         main.reloadSettings();

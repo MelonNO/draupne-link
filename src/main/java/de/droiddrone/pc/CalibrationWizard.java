@@ -29,6 +29,8 @@ public class CalibrationWizard {
     /** How long a detected movement must be held before it is accepted. */
     public static final long HOLD_MS = 400;
     public static final int SWITCH_STEPS = 4;
+    /** AUX switches asked for: SWITCH_STEPS, or more when a chosen switch is higher up. */
+    private final int switchSteps;
     /**
      * The centre is taken once every axis has rested this long within STILL_TOLERANCE, as the average over that time:
      * not the one reading at the moment Next is pressed, which caught a thumb still on the stick (a pitch centre 18 us
@@ -61,6 +63,18 @@ public class CalibrationWizard {
     private long candidateSince;
 
     public CalibrationWizard(int axisCount, int buttonCount) {
+        this(axisCount, buttonCount, new de.droiddrone.pc.setup.ModeSwitch.Purpose[0]);
+    }
+
+    /**
+     * @param purposes what each AUX switch is for (index 0 = AUX1, null = nothing chosen), from Drone setup: its step
+     *                 is named after it ("AUX2 - flight modes"). At least AUX1-AUX4 are asked for, and any switch above
+     *                 those that has a purpose.
+     */
+    public CalibrationWizard(int axisCount, int buttonCount, de.droiddrone.pc.setup.ModeSwitch.Purpose[] purposes) {
+        int switches = SWITCH_STEPS;
+        for (int i = 0; i < purposes.length; i++) if (purposes[i] != null) switches = Math.max(switches, i + 1);
+        this.switchSteps = Math.min(switches, PcConfig.CHANNEL_NAMES.length - STICK_AXES);
         this.axisCount = axisCount;
         this.buttonCount = buttonCount;
         min = new float[axisCount];
@@ -79,13 +93,23 @@ public class CalibrationWizard {
                 "Push the PITCH stick fully UP (forward) and hold it there."));
         steps.add(new Step(StepKind.ASSIGN, 0, Direction.RIGHT, "Roll right",
                 "Push the ROLL stick fully RIGHT and hold it there."));
-        for (int i = 0; i < SWITCH_STEPS; i++) {
-            String what = i == 0 ? "the switch you use to ARM" : "the switch you want on AUX" + (i + 1);
-            steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " switch",
-                    "Flip " + what + " to its ON position. Press Skip if you don't need it."));
+        for (int i = 0; i < switchSteps; i++) {
+            de.droiddrone.pc.setup.ModeSwitch.Purpose p = i < purposes.length ? purposes[i] : null;
+            if (p != null) {
+                steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " - " + p.title(), p.hint()));
+            } else {
+                String what = i == 0 && purposes.length == 0 ? "the switch you use to ARM" : "the switch you want on AUX" + (i + 1);
+                steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " switch",
+                        "Flip " + what + " to its ON position. Press Skip if you don't need it."));
+            }
         }
         steps.add(new Step(StepKind.SUMMARY, -1, Direction.NONE, "Check and save",
                 "Move every stick and switch and check its channel follows. Tick Invert for anything backwards, then press Finish."));
+    }
+
+    /** How many AUX switches are asked for. */
+    public int switchCount() {
+        return switchSteps;
     }
 
     /** Feed the latest joystick state (null when the controller is gone). Auto-advances once a movement is held. */
@@ -258,6 +282,11 @@ public class CalibrationWizard {
         return index;
     }
 
+    /** Every step, in order (tests). */
+    List<Step> steps() {
+        return List.copyOf(steps);
+    }
+
     public int getStepCount() {
         return steps.size();
     }
@@ -353,13 +382,13 @@ public class CalibrationWizard {
 
     /** Mapper for the live preview on the summary step (sticks must all be assigned). */
     public RcMapper buildMapper() {
-        return new RcMapper(Arrays.copyOf(specs, PcConfig.THROTTLE_INDEX + 1 + SWITCH_STEPS), getCalibrations());
+        return new RcMapper(Arrays.copyOf(specs, PcConfig.THROTTLE_INDEX + 1 + switchSteps), getCalibrations());
     }
 
     /** Settings to write to draupne-link.properties. Skipped AUX switches are written empty (unmapped). */
     public Map<String, String> result() {
         Map<String, String> result = new LinkedHashMap<>();
-        for (int i = 0; i < PcConfig.THROTTLE_INDEX + 1 + SWITCH_STEPS; i++) {
+        for (int i = 0; i < PcConfig.THROTTLE_INDEX + 1 + switchSteps; i++) {
             result.put(PcConfig.CHANNEL_NAMES[i], specs[i] == null ? "" : specs[i]);
         }
         getCalibrations().entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(e -> {

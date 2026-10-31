@@ -15,7 +15,8 @@
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
  *  Modified for DRAUPNE Link: measures stick packets arriving and sends PcLinkStats (and this app's version)
- *  to the PC every 0.1 s, as its own telemetry packet.
+ *  to the PC every 0.1 s, as its own telemetry packet. Spectator mode: a second PC (same key) that asks while one
+ *  is connected is told which PC flies, so it can watch through that PC (DRAUPNE Link's Spectate.java).
  */
 
 package de.droiddrone.flight;
@@ -26,6 +27,8 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.FcCommon;
@@ -73,6 +76,17 @@ public class Udp {
     private short[] rcChannels = null;
     private final Object udpSync = new Object();
     private boolean isCameraRestarting;
+    // spectator mode (DRAUPNE Link Spectate.java): codes clear of upstream's packet names
+    private static final byte SPECTATE_PILOT_QUERY = 0x60;
+    private static final byte SPECTATE_PILOT_AT = 0x61;
+    private static final byte SPECTATE_NO_PILOT = 0x62;
+    /** Answers go out from here: the receive thread, which carries the sticks, never waits on a send. One for the app. */
+    private static final ExecutorService spectatorAnswers = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "spectatorAnswers");
+        t.setDaemon(true);
+        return t;
+    });
+    private long lastSpectatorAnswer;
 
     public Udp(String destIpStr, int port, String key, int connectionMode, StreamEncoder streamEncoder,
                Mp4Recorder mp4Recorder, CameraManager cameraManager, Msp msp, Mavlink mavlink, PhoneTelemetry phoneTelemetry,
@@ -174,7 +188,13 @@ public class Udp {
                                 || receiverPacket.getPort() != port) continue;
                     }else if (receiverBuffer.isConnected()){
                         if (!receiverPacket.getAddress().equals(udpSender.getIp())
-                                || receiverPacket.getPort() != udpSender.getPort()) continue;
+                                || receiverPacket.getPort() != udpSender.getPort()) {
+                            answerSpectator(receiverPacket, true);
+                            continue;
+                        }
+                    }else if (receiverPacket.getLength() > 0 && receiverPacket.getData()[0] == SPECTATE_PILOT_QUERY){
+                        answerSpectator(receiverPacket, false);
+                        continue;
                     }
                     receiverBuffer.addPacket(receiverPacket);
                 } catch (Exception e) {
@@ -300,6 +320,49 @@ public class Udp {
             audioSenderThread.start();
         }
         isAudioStarting = false;
+    }
+
+    /**
+     * Another PC asks to connect (or who flies) while one is connected: tells it where that PC is, so it can watch
+     * through it. Only with the right key, and at most 5 answers a second.
+     */
+    private void answerSpectator(DatagramPacket packet, boolean flying) {
+        byte[] d = packet.getData();
+        int len = packet.getLength();
+        if (len < 1) return;
+        int keyAt;
+        if (d[0] == SPECTATE_PILOT_QUERY) keyAt = 1;
+        else if (flying && d[0] == UdpCommon.Connect) keyAt = 4; // [8][num i16][client type u8][key UTF]
+        else return;
+        if (len < keyAt + 2) return;
+        int n = ((d[keyAt] & 0xff) << 8) | (d[keyAt + 1] & 0xff);
+        if (keyAt + 2 + n > len || !key.equals(new String(d, keyAt + 2, n, java.nio.charset.StandardCharsets.UTF_8))) return;
+        long now = System.currentTimeMillis();
+        if (now - lastSpectatorAnswer < 200) return;
+        lastSpectatorAnswer = now;
+        byte[] answer;
+        InetAddress pilotIp = udpSender.getIp();
+        if (flying && pilotIp != null) {
+            byte[] a = pilotIp.getAddress();
+            int pilotPort = udpSender.getPort();
+            answer = new byte[4 + a.length];
+            answer[0] = SPECTATE_PILOT_AT;
+            answer[1] = (byte) a.length;
+            System.arraycopy(a, 0, answer, 2, a.length);
+            answer[2 + a.length] = (byte) (pilotPort >> 8);
+            answer[3 + a.length] = (byte) pilotPort;
+        } else {
+            answer = new byte[]{SPECTATE_NO_PILOT};
+        }
+        final DatagramPacket out = new DatagramPacket(answer, answer.length, packet.getAddress(), packet.getPort());
+        final DatagramSocket s = socket;
+        spectatorAnswers.execute(() -> {
+            try {
+                s.send(out);
+            } catch (Exception e) {
+                log("Spectator answer error: " + e);
+            }
+        });
     }
 
     public boolean isConnected(){

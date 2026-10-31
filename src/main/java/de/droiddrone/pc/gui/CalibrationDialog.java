@@ -37,7 +37,8 @@ import java.util.Map;
  * Stick illustrations assume Mode 2 (throttle/yaw left, pitch/roll right).
  */
 class CalibrationDialog extends JDialog {
-    private static final int SUMMARY_CHANNELS = PcConfig.THROTTLE_INDEX + 1 + CalibrationWizard.SWITCH_STEPS;
+    /** Sticks and the AUX switches the calibration asks for. */
+    private final int summaryChannels;
 
     private final JoystickService service;
     private final int joystickId;
@@ -55,7 +56,7 @@ class CalibrationDialog extends JDialog {
     private final JPanel gimbalRow = new JPanel(new GridLayout(1, 2, 40, 0));
     private final RawAxesView rawAxes = new RawAxesView();
     private final ChannelBars channelBars = new ChannelBars();
-    private final JCheckBox[] invertBoxes = new JCheckBox[SUMMARY_CHANNELS];
+    private final JCheckBox[] invertBoxes;
     private final CardLayout cards = new CardLayout();
     private final JPanel cardPanel = new JPanel(cards);
     private final JButton backButton = Theme.secondaryButton("Back");
@@ -64,17 +65,21 @@ class CalibrationDialog extends JDialog {
     private final Timer timer;
 
     /** @return settings to save, or null if the pilot cancelled */
-    static Map<String, String> run(Window owner, JoystickService service, Joystick.Info joystick, Joystick.State state) {
-        CalibrationDialog dialog = new CalibrationDialog(owner, service, joystick, state);
+    static Map<String, String> run(Window owner, JoystickService service, Joystick.Info joystick, Joystick.State state,
+                                   de.droiddrone.pc.setup.ModeSwitch.Purpose[] purposes) {
+        CalibrationDialog dialog = new CalibrationDialog(owner, service, joystick, state, purposes);
         dialog.setVisible(true); // modal: returns when closed
         return dialog.result;
     }
 
-    private CalibrationDialog(Window owner, JoystickService service, Joystick.Info joystick, Joystick.State state) {
+    private CalibrationDialog(Window owner, JoystickService service, Joystick.Info joystick, Joystick.State state,
+                              de.droiddrone.pc.setup.ModeSwitch.Purpose[] purposes) {
         super(owner, "Controller calibration", ModalityType.APPLICATION_MODAL);
         this.service = service;
         this.joystickId = joystick.id();
-        this.wizard = new CalibrationWizard(state.axes().length, state.buttons().length);
+        this.wizard = new CalibrationWizard(state.axes().length, state.buttons().length, purposes);
+        summaryChannels = PcConfig.THROTTLE_INDEX + 1 + wizard.switchCount();
+        invertBoxes = new JCheckBox[summaryChannels];
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
 
         JPanel root = new JPanel(new BorderLayout(0, 18));
@@ -110,7 +115,7 @@ class CalibrationDialog extends JDialog {
         summary.add(channelBars, BorderLayout.CENTER);
         JPanel invertRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 14, 0));
         invertRow.add(Theme.label("INVERT", Theme.headingFont(11.5f), Theme.MUTED));
-        for (int i = 0; i < SUMMARY_CHANNELS; i++) {
+        for (int i = 0; i < summaryChannels; i++) {
             final int channel = i;
             JCheckBox box = new JCheckBox(PcConfig.CHANNEL_NAMES[i]);
             box.setForeground(Theme.TEXT);
@@ -220,7 +225,7 @@ class CalibrationDialog extends JDialog {
         leftGimbal.setValues(null, null);
         rightGimbal.setValues(null, null);
         if (step.kind() == StepKind.SUMMARY) {
-            for (int i = 0; i < SUMMARY_CHANNELS; i++) {
+            for (int i = 0; i < summaryChannels; i++) {
                 invertBoxes[i].setEnabled(wizard.getSpec(i) != null);
                 invertBoxes[i].setSelected(wizard.isInverted(i));
             }
@@ -265,7 +270,7 @@ class CalibrationDialog extends JDialog {
         if (step.kind() == StepKind.SUMMARY) {
             RcMapper preview = wizard.buildMapper();
             short[] ch = preview.map(state.axes(), state.buttons());
-            channelBars.setValues(ch, SUMMARY_CHANNELS);
+            channelBars.setValues(ch, summaryChannels);
             if (ch != null) {
                 leftGimbal.setValues((int) ch[2], (int) ch[PcConfig.THROTTLE_INDEX]);
                 rightGimbal.setValues((int) ch[0], (int) ch[1]);

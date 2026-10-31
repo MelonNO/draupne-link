@@ -37,14 +37,18 @@ final class PhoneGuideWizard {
     private PhoneGuideWizard() {
     }
 
-    static void open(MainWindow main) {
-        List<Page> pages = List.of(
+    /** Phone setup's steps. The first-time setup is made of these too (SetupWizard): a step added here is in both. */
+    static List<Page> pages(MainWindow main) {
+        return List.of(
                 new OverviewPage(main),
                 new PhoneTailscalePage(main),
                 new FlightAppPage(main),
                 new PhoneSettingsPage(main),
                 new ConnectPage(main));
-        new WizardDialog(main, "Phone setup", pages, () -> {
+    }
+
+    static void open(MainWindow main) {
+        new WizardDialog(main, "Phone setup", pages(main), () -> {
             main.save(Map.of("setup.phoneDone", "true"));
             main.logLine("Phone setup finished.");
         }).setVisible(true);

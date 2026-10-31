@@ -92,6 +92,34 @@ public final class BetaflightPlan {
         return changes;
     }
 
+    /** True if `feature` lists this one as enabled. */
+    public static boolean hasFeature(String featureOutput, String feature) {
+        List<String> enabled = enabledFeatures(featureOutput);
+        return enabled != null && enabled.contains(feature);
+    }
+
+    /** From `serial`: a port has Betaflight's GPS function (FUNCTION_GPS = 2, "Sensor input: GPS" in the Ports tab). */
+    public static boolean hasGpsPort(String serialOutput) {
+        for (String line : serialOutput.split("\\R")) {
+            String[] p = line.replaceFirst("^#\\s*", "").trim().split("\\s+");
+            if (p.length < 3 || !p[0].equals("serial")) continue;
+            try {
+                if ((Integer.parseInt(p[2]) & 2) != 0) return true;
+            } catch (NumberFormatException ignored) {
+                // not a port line
+            }
+        }
+        return false;
+    }
+
+    /** {major, minor} from the version line ("4.5.1" -> 4,5; "2025.12.0" -> 2025,12), or null. */
+    public static int[] versionNumber(String versionLine) {
+        Matcher m = VERSION.matcher(versionLine);
+        if (!m.find()) return null;
+        String[] p = m.group(3).split("\\.");
+        return new int[]{Integer.parseInt(p[0]), Integer.parseInt(p[1])};
+    }
+
     /** Betaflight's version line, e.g. "Betaflight / STM32F7X2 (S7X2) 4.5.1 Oct 13 2024 / 12:00:00". */
     public static String version(String versionOutput) {
         for (String line : versionOutput.split("\\R")) {

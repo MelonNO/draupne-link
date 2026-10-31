@@ -108,6 +108,7 @@ public class Main {
 
     /** GLFW polling stays on this (main) thread; the window runs on the Swing thread and reads snapshots. */
     private static void gui(PcConfig config, Path configFile) {
+        AppLog.start(AppPaths.dataDir().resolve("logs"));
         initJoystickOrExit();
         WindowsTuning.apply();
         removeOldPerUserInstall();

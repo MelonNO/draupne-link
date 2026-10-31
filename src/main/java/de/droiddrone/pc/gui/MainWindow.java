@@ -99,6 +99,8 @@ public class MainWindow extends JFrame {
     private Timer controllerAnim;
     private static final long CONTROLLER_ANIM_MS = 240;
     private ControlLink.State lastState;
+    private String lastStateText;
+    private int lastSpectators;
     private boolean updatingCombo;
     /** The controller as a plain field when there is only one (or none); the dropdown appears with two or more. */
     private final JLabel joystickField = Theme.label("", Theme.font(Font.BOLD, 13.5f), Theme.TEXT);
@@ -240,7 +242,7 @@ public class MainWindow extends JFrame {
         addMenuItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, connection", () -> SetupWizard.open(this));
         addMenuItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
         addMenuItem(menu, "Phone setup", "The phone on the drone: apps, settings, connection", () -> PhoneGuideWizard.open(this));
-        addMenuItem(menu, "Drone setup", "Betaflight's receiver and stick delay, set over USB", () -> DroneSetup.open(this));
+        addMenuItem(menu, "Drone setup", "Betaflight's receiver, stick delay and flight mode switch, set over USB", () -> DroneSetup.open(this));
         return menu;
     }
 
@@ -274,6 +276,14 @@ public class MainWindow extends JFrame {
                         v.stopRecording();
                         logLine("Recording stopped.");
                     }
+                }));
+        menu.add(new MenuRows.SwitchRow("Allow spectators", "Off by default. Other PCs watch your flight through this PC's upload",
+                de.droiddrone.pc.Connection.spectatorsAllowed(config), on -> {
+                    save(Map.of(de.droiddrone.pc.Connection.ALLOW_SPECTATORS_KEY, Boolean.toString(on)));
+                    Connection c = connection;
+                    if (c != null) c.getLink().setSpectatorsAllowed(on);
+                    logLine(on ? "Spectators allowed: a second PC that connects watches through this one."
+                            : "Spectators off: nobody can watch through this PC.");
                 }));
         menu.add(new MenuRows.SwitchRow("Hardware video decoding", "GPU (D3D11VA), next connection. Only for big pictures: slower at 720p",
                 hardwareDecode, on -> {
@@ -743,7 +753,9 @@ public class MainWindow extends JFrame {
                     "No controller", JOptionPane.WARNING_MESSAGE);
             return false;
         }
-        Map<String, String> result = CalibrationDialog.run(owner == null ? this : owner, service, snap.selected(), snap.state());
+        // the switch steps are named after what Drone setup put on them (ARM, flight modes, GPS rescue)
+        Map<String, String> result = CalibrationDialog.run(owner == null ? this : owner, service, snap.selected(), snap.state(),
+                de.droiddrone.pc.setup.ModeSwitch.purposes(config));
         if (result == null) {
             logLine("Calibration cancelled - nothing changed.");
             return false;
@@ -790,6 +802,7 @@ public class MainWindow extends JFrame {
         try {
             connection = Connection.open(config, video);
             linkRef[0] = connection.getLink();
+            connection.getLink().setEvents(this::logLine);
             if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
             if (video != null && recordVideo) startRecording(video);
@@ -806,6 +819,8 @@ public class MainWindow extends JFrame {
                 ArmSwitch.parse(config.getString(ArmSwitch.KEY)));
         service.setInputListener(session::onInput);
         lastState = null;
+        lastStateText = null;
+        lastSpectators = 0;
         try {
             linkLog = LinkLog.open(de.droiddrone.pc.AppPaths.dataDir().resolve("logs"));
             linkLogTimer.start();
@@ -1174,15 +1189,16 @@ public class MainWindow extends JFrame {
         Connection c = connection;
         if (c == null) return null;
         ControlLink l = c.getLink();
-        RcSession s = session;
         VideoPipeline v = video;
-        boolean ready = l.getState() == ControlLink.State.READY;
+        boolean spectator = l.isSpectator();
+        RcSession s = spectator ? null : session;
+        boolean ready = l.getState() == (spectator ? ControlLink.State.SPECTATING : ControlLink.State.READY);
         long sincePicture = videoView.msSincePicture();
         boolean videoFrozen = v != null && v.hasStream() && sincePicture > VIDEO_FROZEN_MS;
         FcTelemetry.Status st = l.getTelemetry().getStatus();
         boolean armed = st != null && st.armed() && System.currentTimeMillis() - st.receivedAt() < 2000;
         boolean radioFrozen = armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS;
-        return new OsdRenderer.Data(true, ready, l.getPing(), s != null && s.isRcEnabled(),
+        return new OsdRenderer.Data(true, ready, l.getPing(), spectator || (s != null && s.isRcEnabled()),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
                 osdLinkHint(), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
                 s == null ? null : s.waitingFor(), v != null && v.recordingFile() != null);
@@ -1208,6 +1224,7 @@ public class MainWindow extends JFrame {
         Connection c = connection;
         if (c == null) return null;
         ControlLink l = c.getLink();
+        if (l.isSpectator()) return null; // watching: no sticks to lose, no alarm
         if (l.getState() != ControlLink.State.READY) return "LINK LOST";
         if (l.isLinkStalled()) return "LINK STALL";
         if (l.isFcLost()) return "NO FLIGHT CONTROLLER";
@@ -1259,13 +1276,24 @@ public class MainWindow extends JFrame {
         }
         ControlLink link = connection.getLink();
         ControlLink.State state = link.getState();
-        if (state != lastState) {
-            logLine(connection.describe(state));
+        String stateText = connection.describe(state);
+        if (state != lastState || !Objects.equals(stateText, lastStateText)) {
+            logLine(stateText);
             lastState = state;
+            lastStateText = stateText;
+        }
+        int spectators = link.getSpectatorCount();
+        if (spectators != lastSpectators) {
+            lastSpectators = spectators;
+            if (spectators == 0) logLine("Nobody watches through this PC now.");
         }
         if (video == null) {
             videoView.setIdleText("Video is off (video=false in the settings)");
-        } else if (state != ControlLink.State.READY) {
+        } else if (state == ControlLink.State.SPECTATOR_WAITING) {
+            videoView.setIdleText("Spectator: waiting for the pilot PC...");
+        } else if (state == ControlLink.State.SPECTATING && !video.hasStream()) {
+            videoView.setIdleText("Spectator: waiting for the pilot's video...");
+        } else if (state != ControlLink.State.READY && state != ControlLink.State.SPECTATING) {
             videoView.setIdleText("Waiting for the link...");
         } else if (!video.hasStream()) {
             videoView.setIdleText("Starting the phone's camera...");
@@ -1273,7 +1301,9 @@ public class MainWindow extends JFrame {
             videoView.setIdleText("Waiting for the first key frame...");
         }
         switch (state) {
-            case READY -> setPill("LINK READY", Theme.OK, Theme.BG);
+            case READY -> setPill(spectators > 0 ? "LINK READY +" + spectators + " WATCHING" : "LINK READY", Theme.OK, Theme.BG);
+            case SPECTATING -> setPill("SPECTATING", Theme.ACCENT, Theme.BG);
+            case SPECTATOR_WAITING -> setPill("SPECTATOR", Theme.WARN, Theme.BG);
             case VERSION_MISMATCH -> setPill("VERSION MISMATCH", Theme.BAD, Theme.BG);
             case CLOSED -> setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
             default -> setPill(state == ControlLink.State.CONNECTING ? "CONNECTING" : "WAITING FOR PHONE", Theme.WARN, Theme.BG);
@@ -1481,6 +1511,7 @@ public class MainWindow extends JFrame {
             return;
         }
         log.append(LocalTime.now().format(TIME) + "  " + text + "\n");
+        de.droiddrone.pc.AppLog.line(text);
         LinkLog l = linkLog;
         if (l != null) {
             try {
