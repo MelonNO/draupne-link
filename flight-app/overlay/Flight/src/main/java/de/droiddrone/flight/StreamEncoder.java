@@ -14,7 +14,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DRAUPNE Link: key frames every 2 s (10 s with intra refresh, where the encoder has it) and on request from the PC; the PC decides the bitrate (the phone keeps an emergency brake only).
+ *  Modified for DRAUPNE Link: key frames every 2 s and on request from the PC (no intra refresh: see initializeVideo); the PC decides the bitrate (the phone keeps an emergency brake only).
  */
 
 package de.droiddrone.flight;
@@ -113,33 +113,15 @@ public class StreamEncoder {
         videoStreamOutputBuffer.clear();
         videoRecorderOutputBuffer.clear();
         videoEncoder.setCallback(encoderCallback);
-        // intra refresh where the encoder says it has it; if configuring with it fails, without it
+        // DRAUPNE Link: no intra refresh. 2.3.0-pc.13 used it where the encoder said it had it, and on a test phone
+        // the video never started (and held up the sticks, see Udp.videoStarter). Key frames every 2 s and on request.
         intraRefresh = false;
         try {
-            MediaCodecInfo.CodecCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(codecType);
-            intraRefresh = caps.isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_IntraRefresh);
+            videoEncoder.configure(getEncoderFormat(false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         } catch (Exception e) {
-            log("Intra refresh check: " + e);
-        }
-        try {
-            videoEncoder.configure(getEncoderFormat(intraRefresh), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        } catch (Exception e) {
-            if (!intraRefresh) {
-                log("StreamEncoder configure error: " + e);
-                e.printStackTrace();
-                return null;
-            }
-            log("Intra refresh refused (" + e + "): key frames instead");
-            intraRefresh = false;
-            try {
-                videoEncoder.reset();
-                videoEncoder.setCallback(encoderCallback);
-                videoEncoder.configure(getEncoderFormat(false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-            } catch (Exception e2) {
-                log("StreamEncoder configure error: " + e2);
-                e2.printStackTrace();
-                return null;
-            }
+            log("StreamEncoder configure error: " + e);
+            e.printStackTrace();
+            return null;
         }
         log("Video: " + (intraRefresh ? "intra refresh, key frame every " + KEY_FRAME_INTERVAL_INTRA_REFRESH_S + " s"
                 : "key frame every " + KEY_FRAME_INTERVAL_S + " s") + ", and on request");

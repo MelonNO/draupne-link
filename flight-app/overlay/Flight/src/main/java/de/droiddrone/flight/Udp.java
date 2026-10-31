@@ -81,6 +81,16 @@ public class Udp {
     private static final byte SPECTATE_PILOT_QUERY = 0x60;
     private static final byte SPECTATE_PILOT_AT = 0x61;
     private static final byte SPECTATE_NO_PILOT = 0x62;
+    /**
+     * DRAUPNE Link: starting the camera and encoder runs here, not on the thread that handles the PC's packets - that
+     * one also passes the sticks to the flight controller and answers pings. In 2.3.0-pc.13 a video start that hung
+     * held up both (the PC saw telemetry, but no pongs and no picture).
+     */
+    private final ExecutorService videoStarter = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "videoStarter");
+        t.setDaemon(true);
+        return t;
+    });
     /** DRAUPNE Link: the PC asks for a key frame (one arrived damaged or lost). */
     private static final byte KEY_FRAME_REQUEST = 0x6A;
     /** Answers go out from here: the receive thread, which carries the sticks, never waits on a send. One for the app. */
@@ -390,8 +400,10 @@ public class Udp {
             case UdpCommon.StartVideo:
             {
                 boolean isHevc = buffer.readBoolean();
-                startVideoStream(isHevc);
-                if (config.isSendAudioStream()) startAudioStream();
+                videoStarter.execute(() -> {
+                    startVideoStream(isHevc);
+                    if (config.isSendAudioStream()) startAudioStream();
+                });
                 break;
             }
             case UdpCommon.GetVideoConfig:

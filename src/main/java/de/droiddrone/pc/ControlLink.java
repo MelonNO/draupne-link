@@ -713,8 +713,18 @@ public class ControlLink {
      */
     public boolean isLinkStalled() {
         long last = lastReceivedAt;
-        return getState() == State.READY && last != 0 && System.currentTimeMillis() - last > STALL_MS;
+        if (getState() != State.READY) return false;
+        long now = System.currentTimeMillis();
+        if (last != 0 && now - last > STALL_MS) return true;
+        // the phone app stuck while its telemetry keeps coming (2.3.0-pc.13 on a test phone): pings go unanswered,
+        // and the sticks - handled by the same part of the app - don't reach the flight controller either. Only once
+        // pongs came on this link and then stopped: a relay, or a phone that never answers pings, isn't a stall
+        long pong = lastPingTimestamp;
+        return pong > readyAt && now - pong > PONG_SILENCE_MS;
     }
+
+    /** No pong for this long while the link is up (pings go out 20 times a second): the phone app isn't answering. */
+    static final long PONG_SILENCE_MS = 1000;
 
     /** True once another PC flies and this one watches; it stays so until disconnected. */
     public boolean isSpectator() {
