@@ -2,6 +2,16 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.21
+
+- **Video for bad coverage: SETTINGS > Video AUTO / SHARP / ROBUST.** ROBUST trades sharpness for a picture that holds on a weak link: 640x360, at most 1 Mbit/s, key frames sent twice, and after every frame a small parity packet from which the PC rebuilds any one lost packet, so a single lost packet no longer leaves a grey or green band. **AUTO** (the default) switches to it by itself after 5 s at the lowest bitrate or after 3 stalls within 30 s, and back to the sharp picture after 20 s of calm (longer if the link keeps falling back). SHARP never switches. Needs phone app 2.3.0-pc.15.
+- **Picture size changes without a long blackout:** the phone keeps the camera open and only restarts the encoder (aim: under 0.5 s instead of 1.5-2.5 s). The PC checks that the phone really changed size and asks again if it didn't.
+- **Faster reaction to a congested link:** a ping jump of 250 ms lowers the bitrate at once (then once a second while it lasts), no key frames are asked for while the link is congested (each is the biggest burst there is), and key frame requests come at most every 1.5 s.
+- **Top bitrate 4 Mbit/s** (was 6; settings on 6 move to 4 once): 6 rarely got through 4G and its bursts cost delay.
+- **Smoother spectator picture** (frames spaced out evenly, up to 250 ms of smoothing).
+- **Phone app 2.3.0-pc.15:** a camera restart or video start that went wrong could leave a flag set so the phone ignored every later size change; that can no longer happen.
+- **Link log:** the bitrate step, key frame requests, bad coverage mode and rebuilt frames (`recovered`).
+
 ## 1.0.20
 
 - **Fix: phone app 2.3.0-pc.14 replaces pc.13. Update the phone app.** On some phones pc.13 started no video (it used intra refresh where the phone's encoder claimed to support it), and the hung video start also held up the sticks to the flight controller. pc.14 doesn't use intra refresh (key frames every 2 s and whenever the PC asks), and starts the video on a thread of its own, so camera or encoder trouble can never hold up the sticks again. pc.13's other improvements stay: paced packets, 30 fps, the PC deciding the bitrate.

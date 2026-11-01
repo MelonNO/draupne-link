@@ -4,9 +4,18 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-10-31, 1.0.20)
+## Where things stand (2026-11-01, 1.0.21)
 
-- **Released:** DRAUPNE Link **1.0.20** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.14**: the fix for pc.13,
+- **Released:** DRAUPNE Link **1.0.21** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.15**: SETTINGS > Video
+  AUTO / SHARP / ROBUST (`ControlLink.VideoMode`). ROBUST = 640x360, max bitrate step 2 (1 Mbit/s), key frames twice and
+  a parity packet per frame (`VIDEO_PROFILE` 0x6B, `VIDEO_PARITY` 0x6C; `FrameAssembler.putParity` rebuilds one lost
+  packet). AUTO enters it after 5 s at <=0.5 Mbit/s or 3 stalls in 30 s, leaves after `ROBUST_HOLD_MS` of calm.
+  Size changes on the open camera (`Udp.resizeOnOpenCamera`), verified and resent by the PC. `BitrateControl` steps down
+  on a 250 ms ping spike, no key frame requests while congested, top 4 Mbit/s. `gradlew run --args="probe 60 robust"`
+  measures the link headless (a table per second). Measured on a far phone with pc.14: 720p ~4-5 damaged frames/s from
+  random packet loss, which is what the parity is for. **Not yet measured with pc.15:** the size switch gap (target
+  <0.5 s, logged as "new picture size shown X ms after"), the parity's `recovered` count, key frames twice.
+- 1.0.20 bundled phone app 2.3.0-pc.14: the fix for pc.13,
   which on a test phone started no video (intra refresh, where its encoder claimed support) and, the video start being
   on the packet thread, held up pings and sticks. pc.14: no intra refresh, the video starts on its own thread
   (`Udp.videoStarter`); the PC counts pongs stopping while telemetry comes as LINK STALL. 1.0.19 brought video over weak
@@ -143,7 +152,7 @@ Lessons from releasing:
 
 ## Testing and diagnosing
 
-- `gradlew.bat test`: 169 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
+- `gradlew.bat test`: 191 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
   count, spectator mode end to end on loopback, flight mode / ARM / failsafe planning, setup page composition).
   Loopback tests need full-size packets to catch size bugs: 1.0.17's spectator cut-off passed with a plain test
   picture (see `SpectatorTest.fullSizePacketsReachTheSpectatorWhole`).
