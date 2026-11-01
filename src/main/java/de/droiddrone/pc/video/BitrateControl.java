@@ -33,6 +33,17 @@ public class BitrateControl {
     static final int START_STEP = 3;
     static final int FLOOR_STEP = 2;
     private static final int TOP_STEP = 5;
+    /**
+     * A filling uplink queue (2026-11-01: the ping went to 3 s, then 7.7 s, at 6 Mbit/s): ping SPIKE_MS over the usual
+     * for SPIKE_HOLD_MS, or no pong at all for a while, steps down at once and again every SPIKE_PAUSE_MS while it lasts
+     * (the phone takes one step down a second) - below the 1 Mbit/s floor if need be. A live, softer picture beats a
+     * sharp one seconds old.
+     */
+    static final int SPIKE_MS = 250;
+    static final int SPIKE_HOLD_MS = 200;
+    static final int SPIKE_PAUSE_MS = 1000;
+    /** Congested (spike, queueing or no pong) this recently: no key frame requests - each is the biggest burst. */
+    static final int CONGESTED_FOR_MS = 1000;
     /** Less than this arriving for RESCUE_MS while at the floor: the phone went lower by itself; ask it up. */
     static final double RESCUE_BELOW_MBPS = 0.5;
     static final int RESCUE_MS = 5000;
@@ -57,13 +68,31 @@ public class BitrateControl {
     private boolean raiseFailed;
     private long lowSince = -1;
     private long lastRescue;
+    private long spikeSince = -1;
+    private long lastCongested = Long.MIN_VALUE / 2;
+    /** The highest step to ask for: the set limit, 1 Mbit/s in bad coverage mode (see setMaxStep). */
+    private int maxStep = TOP_STEP;
 
     public BitrateControl(Sink sink) {
         this.sink = sink;
     }
 
+    /** The highest step to ask for (the set limit, or bad coverage mode's 1 Mbit/s); above it, it steps down. */
+    public synchronized void setMaxStep(int max) {
+        maxStep = Math.max(0, Math.min(TOP_STEP, max));
+    }
+
+    /**
+     * Every 200 ms or so while the stream runs, frames or not: in a dropout no frame comes, and the steps down must not
+     * wait for one (2026-11-01: the second step came 4.8 s after the first).
+     */
+    public synchronized void onTick(long now, int ping) {
+        if (!started) return;
+        evaluate(false, false, now, 30, ping);
+    }
+
     /** A frame was lost or arrived damaged. */
-    public void onBadFrame(boolean keyFrame) {
+    public synchronized void onBadFrame(boolean keyFrame) {
         badFrames++;
     }
 
@@ -72,12 +101,36 @@ public class BitrateControl {
      * @param fps   current frame rate (allowed bad frames per second scale with it)
      * @param ping  round trip in ms, -1 if unknown (no pong lately: a stall)
      */
-    public void onFrame(boolean keyFrame, long now, int fps, int ping) {
+    public synchronized void onFrame(boolean keyFrame, long now, int fps, int ping) {
         if (!started) {
             started = true;
             lastFrame = lastKeyFrame = lastChange = lastTrouble = windowStart = baselineStart = now;
         }
+        evaluate(true, keyFrame, now, fps, ping);
+    }
+
+    private void evaluate(boolean frame, boolean keyFrame, long now, int fps, int ping) {
         boolean queueing = queueing(ping, now);
+        boolean spikeNow = ping < 0 || (ping > baseline() + SPIKE_MS && baseline() != Integer.MAX_VALUE);
+        spikeSince = spikeNow ? (spikeSince < 0 ? now : spikeSince) : -1;
+        if (spikeNow || queueing) lastCongested = now;
+        if (spikeSince >= 0 && now - spikeSince >= SPIKE_HOLD_MS) {
+            lastTrouble = now;
+            if (now - lastChange >= SPIKE_PAUSE_MS && step > 0) {
+                badFrames = 0;
+                lastChange = now;
+                step--;
+                sink.changeBitRate(false);
+            }
+            if (frame) lastFrame = now;
+            if (keyFrame) lastKeyFrame = now;
+            return;
+        }
+        if (step > maxStep && now - lastChange >= SPIKE_PAUSE_MS) { // over the top (bad coverage mode came on): down
+            lastChange = now;
+            step--;
+            sink.changeBitRate(false);
+        }
         boolean trouble = queueing
                 || badFrames > Math.max(2, Math.round(Math.max(fps, 1) / 10f))
                 || now > lastFrame + FRAME_GAP_MS
@@ -94,15 +147,16 @@ public class BitrateControl {
                 step--;
                 sink.changeBitRate(false);
             }
-        } else if (now - lastTrouble >= calmMs && now - lastChange > PAUSE_MS) {
+        } else if (now - lastTrouble >= calmMs && now - lastChange > PAUSE_MS && step < maxStep // never over the top
+                && spikeSince < 0) { // nor while a spike is building up
             if (!raiseFailed) calmMs = CALM_MS; // the last raise held: back to quick
             raiseFailed = false;
             lastTrouble = now;
             lastRaise = now; // not lastChange: if the higher rate brings trouble, back off at once
-            if (step < TOP_STEP) step++;
-            sink.changeBitRate(true); // no harm at the top: the phone stays at its limit
+            step++;
+            sink.changeBitRate(true);
         }
-        lastFrame = now;
+        if (frame) lastFrame = now;
         if (keyFrame) lastKeyFrame = now;
         if (now - windowStart >= 1000) {
             badFrames = 0;
@@ -116,13 +170,13 @@ public class BitrateControl {
      * every RESCUE_MS (it ignores raises for 5 s after stepping down), and count it as at the floor from now on. A still
      * picture may also arrive under it; then a raise changes nothing worse than a steady picture.
      */
-    public void onReceivedRate(double mbps, long now) {
+    public synchronized void onReceivedRate(double mbps, long now) {
         if (mbps >= RESCUE_BELOW_MBPS) {
             lowSince = -1;
             return;
         }
         if (lowSince < 0) lowSince = now;
-        if (now - lowSince < RESCUE_MS) return;
+        if (now - lowSince < RESCUE_MS || now - lastTrouble < RESCUE_MS) return; // congested: little is meant to arrive
         step = Math.min(step, FLOOR_STEP);
         if (now - lastRescue >= RESCUE_MS) {
             lastRescue = now;
@@ -131,13 +185,13 @@ public class BitrateControl {
     }
 
     /** The phone's steps, bit/s. */
-    static final int[] STEPS_BPS = {250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000};
+    public static final int[] STEPS_BPS = {250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000};
 
     /**
      * The phone's own report of its bitrate setting (phone app 2.3.0-pc.13 on): the PC's count of the steps follows it,
      * instead of drifting when the phone stepped by itself.
      */
-    public void onPhoneTarget(int bps) {
+    public synchronized void onPhoneTarget(int bps) {
         if (bps <= 0) return;
         int s = 0;
         while (s < STEPS_BPS.length - 1 && STEPS_BPS[s + 1] <= bps) s++;
@@ -145,8 +199,18 @@ public class BitrateControl {
     }
 
     /** The step the PC thinks the phone is on: 0-5 for 0.25-6 Mbit/s (tests, and the link log). */
-    public int step() {
+    public synchronized int step() {
         return step;
+    }
+
+    /** The link is congested now or was a moment ago: don't add key frames (see CONGESTED_FOR_MS). */
+    public synchronized boolean isCongested(long now) {
+        return now - lastCongested < CONGESTED_FOR_MS;
+    }
+
+    /** The usual ping: the lowest of the last 15-30 s (Integer.MAX_VALUE before the first). */
+    private int baseline() {
+        return Math.min(windowMinPing, previousMinPing);
     }
 
     /** True once the ping has stayed QUEUE_DELAY_MS above its minimum of the last 15-30 s for QUEUE_HOLD_MS. */

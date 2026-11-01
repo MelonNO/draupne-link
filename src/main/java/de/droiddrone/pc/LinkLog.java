@@ -26,7 +26,7 @@ public final class LinkLog implements AutoCloseable {
             + "fc_data_age_ms,rxloss,failsafe,armed,blockers,radio,rc_output,video_fps,throttle,channels,"
             + "ping_max_ms,pong_age_ms,path,phone_rc_in_gap_ms,phone_rc_out_gap_ms,phone_write_max_ms,phone_write_timeouts,"
             + "phone_skipped,video_rx_fps,video_mbps,video_damaged,video_lost,camera_fps,phone_video_mbps,bitrate_step,"
-            + "decode_ms,convert_ms,draw_skipped,bunched,video_res,key_requests,intra_refresh,event";
+            + "decode_ms,convert_ms,draw_skipped,bunched,video_res,key_requests,intra_refresh,robust,recovered,event";
 
     private final Path file;
     private final BufferedWriter out;
@@ -38,6 +38,7 @@ public final class LinkLog implements AutoCloseable {
     private long lastDrawSkipped;
     private long lastBunched;
     private long lastKeyRequests;
+    private long lastRecovered;
 
     private LinkLog(Path file) throws IOException {
         this.file = file;
@@ -108,7 +109,9 @@ public final class LinkLog implements AutoCloseable {
                 video == null ? "" : video.drawSkipped() - lastDrawSkipped, video == null ? "" : video.bunched() - lastBunched,
                 video == null || video.width() == 0 ? "" : video.width() + "x" + video.height(),
                 link.getKeyFrameRequests() - lastKeyRequests,
-                t.getPhoneTargetBitRate() < 0 ? "" : flag(t.isPhoneIntraRefresh()), "");
+                t.getPhoneTargetBitRate() < 0 ? "" : flag(t.isPhoneIntraRefresh()), flag(link.isRobust()),
+                video == null ? "" : video.recovered() - lastRecovered, "");
+        if (video != null) lastRecovered = video.recovered();
         lastKeyRequests = link.getKeyFrameRequests();
         if (video != null) {
             lastDamaged = video.damaged();
@@ -127,7 +130,7 @@ public final class LinkLog implements AutoCloseable {
     /** A message from the app's log, in the timeline. */
     public synchronized void event(String text) throws IOException {
         row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-                "", "", "", "", "", "", "", text);
+                "", "", "", "", "", "", "", "", "", text);
     }
 
     private void row(Object... values) throws IOException {

@@ -40,7 +40,9 @@ final class SpectatorClient implements AutoCloseable {
     static final long NACK_FIRST_MS = 15;
     static final long NACK_RETRY_MS = 150;
     /** Frames that came bunched are spread out by up to this much. */
-    static final long SMOOTH_MAX_MS = 150;
+    static final long SMOOTH_MAX_MS = 250;
+    /** ...to at least this share of the usual frame interval apart (frames from the 4G link often come in pairs). */
+    static final double SMOOTH_SPACING = 0.95;
 
     /** What the spectator is doing, for the main window. */
     enum Phase { JOINING, WATCHING, REFUSED_NOT_FLYING, REFUSED_FULL, REFUSED_OFF, NO_PILOT }
@@ -309,7 +311,7 @@ final class SpectatorClient implements AutoCloseable {
     private long dueAt(Item it, long offset, boolean frameStart) {
         long at = it.pilotMs() + offset + delayMs;
         if (frameStart && frameIntervalMs > 0 && lastFrameRelease > 0) {
-            long spaced = lastFrameRelease + (long) (frameIntervalMs * 0.8);
+            long spaced = lastFrameRelease + (long) (frameIntervalMs * SMOOTH_SPACING);
             if (spaced > at && spaced - at <= SMOOTH_MAX_MS) at = spaced;
         }
         return at;

@@ -67,6 +67,17 @@ class PcConfigTest {
     }
 
     @Test
+    void upgradeMovesTheOldTopBitrateTo4Once(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("p.properties");
+        Files.writeString(file, "bitrateLimitMbps=6\nsettingsVersion=4\n");
+        assertTrue(PcConfig.load(file).upgrade(file));
+        assertEquals(4, PcConfig.load(file).getBitrateLimitMbps());
+        Files.writeString(file, "bitrateLimitMbps=8\nsettingsVersion=4\n");
+        PcConfig.load(file).upgrade(file);
+        assertEquals(8, PcConfig.load(file).getBitrateLimitMbps(), "a limit chosen on purpose stays");
+    }
+
+    @Test
     void upgradeFromVersion2OnlyTouchesTelemetry() throws Exception {
         Path file = dir.resolve(PcConfig.FILE_NAME);
         Files.writeString(file, "rcRate=100\ntelemetryRate=10\nsettingsVersion=2\n");

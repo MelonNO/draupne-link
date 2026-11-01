@@ -46,6 +46,10 @@ public class Main {
                 if (args.length > 1) config.set("ip", args[1]);
                 connect(config);
             }
+            case "probe" -> {
+                LinkProbe.run(load(configFile), args.length > 1 ? Integer.parseInt(args[1]) : 60, args.length > 2 ? args[2] : null);
+                System.exit(0); // the video's threads would keep it running
+            }
             case "write-icon" -> de.droiddrone.pc.gui.AppIcon.writeIco(Path.of(args[1])); // build step for the installer
             case "init-config" -> {
                 if (Files.exists(configFile)) {

@@ -244,6 +244,149 @@ class VideoTest {
         assertTrue(changes.contains(true), "raised while it holds");
     }
 
+    /** 2026-11-01: the ping went from ~80 ms to 3 s and 7.7 s at 6 Mbit/s - down within ~0.3 s, then every second. */
+    @Test
+    void aFillingQueueStepsDownAtOnceAndAgainEverySecond() {
+        List<Long> downAt = new ArrayList<>();
+        long[] now = {0};
+        BitrateControl b = new BitrateControl(up -> { if (!up) downAt.add(now[0]); });
+        b.onPhoneTarget(6_000_000);
+        for (; now[0] < 20_000; now[0] += 33) b.onFrame(now[0] % 2000 == 0, now[0], 30, 80);
+        long start = now[0];
+        for (int ping = 400; now[0] < start + 2500; now[0] += 33, ping += 100) b.onFrame(false, now[0], 30, ping);
+        assertFalse(downAt.isEmpty(), "stepped down");
+        assertTrue(downAt.get(0) - start <= BitrateControl.SPIKE_HOLD_MS + 50, "within ~0.3 s, was " + (downAt.get(0) - start));
+        assertTrue(downAt.size() >= 3, "again every second while it lasts: " + downAt.size());
+        assertTrue(b.isCongested(now[0]), "congested: no key frame requests now");
+        for (; now[0] < start + 2500 + BitrateControl.CONGESTED_FOR_MS + 100; now[0] += 33) b.onFrame(false, now[0], 30, 80);
+        assertFalse(b.isCongested(now[0]), "cleared");
+    }
+
+    @Test
+    void aSpikeMayGoBelowTheFloorAndTheRescueWaits() {
+        List<Boolean> changes = new ArrayList<>();
+        long[] now = {0};
+        BitrateControl b = new BitrateControl(changes::add);
+        b.onPhoneTarget(1_000_000); // at the floor
+        for (; now[0] < 20_000; now[0] += 33) b.onFrame(false, now[0], 30, 80);
+        changes.clear();
+        b.onPhoneTarget(1_000_000); // the phone reports it is at the floor when the queue starts filling
+        long start = now[0];
+        for (; now[0] < start + 1500; now[0] += 33) b.onFrame(false, now[0], 30, 2000);
+        assertTrue(b.step() < BitrateControl.FLOOR_STEP, "below 1 Mbit/s while the queue fills");
+        for (int s = 0; s < 4; s++) b.onReceivedRate(0.2, now[0] + s * 1000L);
+        assertFalse(changes.contains(true), "no 'ask it up' while congested");
+    }
+
+    @Test
+    void neverAsksAboveTheTopAndStepsDownToIt() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        b.setMaxStep(4);
+        long t = 0;
+        for (; t < 60_000; t += 33) b.onFrame(t % 2000 == 0, t, 30, 80);
+        assertEquals(4, b.step(), "raised up to the top only");
+        long ups = changes.stream().filter(c -> c).count();
+        for (; t < 120_000; t += 33) b.onFrame(t % 2000 == 0, t, 30, 80);
+        assertEquals(ups, changes.stream().filter(c -> c).count(), "no more asks at the top");
+        b.setMaxStep(2); // bad coverage mode
+        for (long end = t + 3000; t < end; t += 33) b.onFrame(false, t, 30, 80);
+        assertEquals(2, b.step(), "down to 1 Mbit/s, a step a second");
+    }
+
+    @Test
+    void aDropoutWithoutFramesStillStepsDown() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        b.onPhoneTarget(4_000_000);
+        long t = 0;
+        for (; t < 20_000; t += 33) b.onFrame(false, t, 30, 80);
+        changes.clear();
+        for (long end = t + 3000; t < end; t += 200) b.onTick(t, -1); // no frames, no pongs for 3 s
+        assertTrue(changes.stream().filter(c -> !c).count() >= 2, "stepped down during the dropout: " + changes);
+    }
+
+    /** A frame as the phone splits it, and its parity (the XOR of the payloads, each padded to SEGMENT). */
+    private static byte[][] split(byte[] frame) {
+        java.util.List<byte[]> parts = new java.util.ArrayList<>();
+        for (int at = 0; at < frame.length; ) {
+            int n = Math.min(at == 0 ? FrameAssembler.FIRST_SEGMENT : FrameAssembler.SEGMENT, frame.length - at);
+            parts.add(java.util.Arrays.copyOfRange(frame, at, at + n));
+            at += n;
+        }
+        byte[] parity = new byte[FrameAssembler.SEGMENT];
+        for (byte[] p : parts) for (int i = 0; i < p.length; i++) parity[i] ^= p[i];
+        parts.add(parity);
+        return parts.toArray(new byte[0][]);
+    }
+
+    private static FrameAssembler.Frame feed(FrameAssembler a, short num, byte[] frame, int lose1, int lose2) {
+        byte[][] parts = split(frame);
+        FrameAssembler.Frame out = null;
+        int at = 0;
+        for (int i = 0; i < parts.length - 1; i++) {
+            if (i != lose1 && i != lose2) {
+                FrameAssembler.Frame f = a.put(false, num, at, at == 0 ? frame.length : 0, parts[i], 0, parts[i].length);
+                if (f != null) out = f;
+            }
+            at += parts[i].length;
+        }
+        FrameAssembler.Frame f = a.putParity(false, num, frame.length, parts[parts.length - 1], 0, FrameAssembler.SEGMENT);
+        return f != null ? f : out;
+    }
+
+    @Test
+    void theParityRebuildsAnyOneLostPacket() {
+        byte[] frame = bytes(0, FrameAssembler.FIRST_SEGMENT + 2 * FrameAssembler.SEGMENT + 300); // 4 packets
+        for (int lose = 0; lose < 4; lose++) {
+            FrameAssembler a = new FrameAssembler();
+            a.setWaitForWholeKeyFrames(true); // bad coverage mode
+            FrameAssembler.Frame f = feed(a, (short) 3, frame, lose, -1);
+            assertNotNull(f, "packet " + lose + " lost");
+            assertFalse(f.damaged(), "rebuilt, packet " + lose);
+            assertArrayEquals(frame, f.data());
+            assertEquals(1, a.getRecoveredFrames());
+        }
+    }
+
+    @Test
+    void twoLostPacketsCantBeRebuiltAndTheFrameGoesOutDamagedOnceItsParityIsIn() {
+        byte[] frame = bytes(0, FrameAssembler.FIRST_SEGMENT + 2 * FrameAssembler.SEGMENT + 300);
+        FrameAssembler a = new FrameAssembler();
+        a.setWaitForWholeKeyFrames(true);
+        FrameAssembler.Frame f = feed(a, (short) 3, frame, 1, 2);
+        assertNotNull(f, "the parity came and can't help: out at once, no waiting for nothing");
+        assertTrue(f.damaged());
+        assertEquals(0, a.getRecoveredFrames());
+    }
+
+    @Test
+    void inBadCoverageModeAKeyFrameWaitsForItsSecondCopy() {
+        FrameAssembler a = new FrameAssembler();
+        a.setWaitForWholeKeyFrames(true);
+        byte[] whole = bytes(0, 300);
+        assertNull(a.put(true, (short) 5, 0, 300, whole, 0, 100));
+        assertNull(a.put(true, (short) 5, 200, 0, whole, 200, 100), "start and end in, the middle missing: wait");
+        FrameAssembler.Frame f = a.put(true, (short) 5, 100, 0, whole, 100, 100); // from the second copy
+        assertNotNull(f);
+        assertFalse(f.damaged(), "whole after all");
+        assertArrayEquals(whole, f.data());
+        assertNull(a.put(true, (short) 5, 0, 300, whole, 0, 100), "the rest of the second copy: dropped");
+    }
+
+    @Test
+    void aKeyFrameWhoseSecondCopyAlsoMissesGoesOutWithTheNextFrame() {
+        FrameAssembler a = new FrameAssembler();
+        a.setWaitForWholeKeyFrames(true);
+        byte[] whole = bytes(0, 300);
+        a.put(true, (short) 5, 0, 300, whole, 0, 100);
+        a.put(true, (short) 5, 200, 0, whole, 200, 100);
+        assertNotNull(a.put(false, (short) 6, 0, 50, whole, 0, 50));
+        List<FrameAssembler.Frame> earlier = a.takeFlushed();
+        assertEquals(1, earlier.size());
+        assertTrue(earlier.get(0).damaged());
+    }
+
     @Test
     void thePhonesOwnReportSetsTheStep() {
         BitrateControl b = new BitrateControl(c -> { });

@@ -32,7 +32,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     /** @param hardware the pictures are decoded on the GPU */
     public record Stats(boolean hevc, int width, int height, int receivedFps, int shownFps, double megabitsPerSecond,
                         double decodeMs, double convertMs, long damaged, long lost, String error, boolean hardware,
-                        int bitrateStep, long drawSkipped, long bunched) {}
+                        int bitrateStep, long drawSkipped, long bunched, long recovered) {}
 
     /** Frames arriving closer together than this came bunched up (4G delivers in bursts). */
     static final long BUNCH_MS = 4;
@@ -69,8 +69,18 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile java.nio.file.Path recordDir; // null = not recording
     private volatile java.nio.file.Path recordFile;
     private Thread recordThread;
+    /**
+     * Watching as a spectator: every frame is drawn (frames come paced, a fixed time behind the pilot), instead of only
+     * the newest when two are waiting - the pilot's way, least delay. Smoother motion for the spectator.
+     */
+    private volatile boolean drawEveryFrame;
     /** A frame came damaged or went lost since the last intact key frame: a key frame is asked for (receive thread). */
     private boolean needKeyFrame;
+    /** When the last picture was drawn (decode thread), and - after a change of picture size - when the last one at the old size was. */
+    private volatile long lastPresentedAt;
+    private volatile long resizeFrom = -1;
+    /** The last size change: how long the picture stood still, ms (-1 before the first). */
+    private volatile long lastResizeGapMs = -1;
     /** Frames that came within BUNCH_MS of the one before (receive thread); and when the last one came. */
     private volatile long bunched;
     private long lastAcceptAt;
@@ -102,6 +112,16 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         decodeThread.start();
     }
 
+    /** How long the picture stood still at the last change of size, ms; -1 before the first. */
+    public long lastResizeGapMs() {
+        return lastResizeGapMs;
+    }
+
+    /** Spectator: draw every frame (see drawEveryFrame). */
+    public void setDrawEveryFrame(boolean on) {
+        drawEveryFrame = on;
+    }
+
     /** The link to send bitrate requests on. */
     public void attach(ControlLink link) {
         this.link = link;
@@ -117,6 +137,10 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     @Override
     public void onVideoConfig(int width, int height, boolean hevc, boolean frontCamera, byte[] codecConfig) {
         Config config = new Config(width, height, hevc, frontCamera, codecConfig);
+        Config before = currentConfig;
+        if (before != null && (before.width() != width || before.height() != height) && lastPresentedAt != 0) {
+            resizeFrom = lastPresentedAt; // measured when the first picture at the new size is drawn
+        }
         synchronized (this) {
             boolean firstConfig = currentConfig == null;
             currentConfig = config;
@@ -168,7 +192,14 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             megabitsPerSecond = windowBytes * 8.0 / 1000.0 / Math.max(1, now - windowStart);
             bitrate.onReceivedRate(megabitsPerSecond, now);
             ControlLink l = link;
-            if (l != null) bitrate.onPhoneTarget(l.getTelemetry().getPhoneTargetBitRate());
+            if (l != null) {
+                bitrate.onPhoneTarget(l.getTelemetry().getPhoneTargetBitRate());
+                bitrate.setMaxStep(l.maxBitrateStep()); // 1 Mbit/s in bad coverage mode, else the set limit
+                boolean robust = l.isRobust();
+                synchronized (assembler) {
+                    assembler.setWaitForWholeKeyFrames(robust); // key frames come twice then
+                }
+            }
             windowFrames = 0;
             windowBytes = 0;
             windowStart = now;
@@ -185,7 +216,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         // the link limits how often) rather than wait for the next one - they come every 2-10 s now
         if (frame.damaged()) needKeyFrame = true;
         else if (frame.keyFrame()) needKeyFrame = false;
-        if (needKeyFrame) requestKeyFrame();
+        // not while the link is congested: a key frame is the biggest burst there is, and it would come damaged too -
+        // asked for once the link has cleared (needKeyFrame stays)
+        if (needKeyFrame && !bitrate.isCongested(now)) requestKeyFrame();
         if (lastAcceptAt != 0 && now - lastAcceptAt < BUNCH_MS) bunched++;
         lastAcceptAt = now;
         if (frame.damaged()) bitrate.onBadFrame(frame.keyFrame());
@@ -205,6 +238,19 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         }
     }
 
+    @Override
+    public void onVideoParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length) {
+        long now = System.currentTimeMillis();
+        FrameAssembler.Frame frame;
+        java.util.List<FrameAssembler.Frame> earlier;
+        synchronized (assembler) {
+            frame = assembler.putParity(keyFrame, frameNum, frameSize, buf, dataOffset, length);
+            earlier = assembler.takeFlushed();
+        }
+        for (FrameAssembler.Frame f : earlier) accept(f, now);
+        if (frame != null) accept(frame, now);
+    }
+
     // ------------------------------------------------------------------ decode thread
 
     private void decodeLoop() {
@@ -217,6 +263,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             while (running) {
                 Object item = queue.poll(200, TimeUnit.MILLISECONDS);
                 long now = System.currentTimeMillis();
+                // the bitrate control also acts when no frame comes (a dropout), while there is a stream
+                if (item == null && now - lastFragmentAt < 10_000) bitrate.onTick(now, ping.getAsInt());
                 if (now - shownWindow >= 1000) {
                     shownFps = (int) (shown * 1000 / (now - shownWindow));
                     shown = 0;
@@ -251,7 +299,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     long t1 = System.nanoTime();
                     decodeMs = smooth(decodeMs, (t1 - t0) / 1e6);
                     if (!picture) continue;
-                    if (!queue.isEmpty()) { // a newer frame is waiting: don't draw this one
+                    if (!drawEveryFrame && !queue.isEmpty()) { // a newer frame is waiting: don't draw this one
                         drawSkipped++;
                         continue;
                     }
@@ -261,6 +309,14 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     decoder.convert(pixels, size[0], size[1]);
                     decodingOnGpu = decoder.isHardware();
                     sink.presentFrame();
+                    long shownAt = System.currentTimeMillis();
+                    lastPresentedAt = shownAt;
+                    long from = resizeFrom;
+                    if (from > 0) { // the first picture at the new size: how long the picture stood still
+                        resizeFrom = -1;
+                        lastResizeGapMs = shownAt - from;
+                        log("Video: new picture size shown " + lastResizeGapMs + " ms after the last one at the old size");
+                    }
                     convertMs = smooth(convertMs, (System.nanoTime() - t1) / 1e6);
                     shown++;
                 } catch (RuntimeException e) {
@@ -297,14 +353,16 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         Config c = currentConfig;
         long damaged;
         long lost;
+        long recovered;
         synchronized (assembler) {
             damaged = assembler.getDamagedFrames();
             lost = assembler.getLostFrames();
+            recovered = assembler.getRecoveredFrames();
         }
         boolean flowing = System.currentTimeMillis() - lastFragmentAt < 1500; // stopped: no old figures
         return new Stats(c != null && c.hevc(), c == null ? 0 : c.width(), c == null ? 0 : c.height(), flowing ? receivedFps : 0,
                 flowing ? shownFps : 0, flowing ? megabitsPerSecond : 0, decodeMs, convertMs, damaged, lost, error, decodingOnGpu,
-                bitrate.step(), drawSkipped, bunched);
+                bitrate.step(), drawSkipped, bunched, recovered);
     }
 
     /** Decode on the GPU from the next stream (re)start or decoder restart; software stays the fallback. */

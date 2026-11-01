@@ -55,6 +55,65 @@ final class MenuRows {
         }
     }
 
+    /** One of a few values: segments at the right edge, the chosen one lit; a click picks one, the menu stays open. */
+    static final class ChoiceRow extends JMenuItem {
+        private static final int SEG_W = 58, SEG_H = 22;
+        private final String[] options;
+        private final Consumer<Integer> changed;
+        private int selected;
+
+        ChoiceRow(String title, String detail, String[] options, int selected, Consumer<Integer> changed) {
+            super(html(title, detail));
+            this.options = options;
+            this.selected = selected;
+            this.changed = changed;
+            style(this, 14 + options.length * SEG_W + 8);
+        }
+
+        private int left() {
+            return getWidth() - 14 - options.length * SEG_W;
+        }
+
+        @Override
+        protected void processMouseEvent(MouseEvent e) {
+            if (e.getID() == MouseEvent.MOUSE_RELEASED && isEnabled() && contains(e.getPoint())) {
+                int i = (e.getX() - left()) / SEG_W;
+                if (e.getX() >= left() && i >= 0 && i < options.length && i != selected) {
+                    selected = i;
+                    repaint();
+                    changed.accept(i);
+                }
+                e.consume(); // a click beside the segments changes nothing and keeps the menu open
+                return;
+            }
+            super.processMouseEvent(e);
+        }
+
+        @Override
+        protected void paintComponent(Graphics graphics) {
+            super.paintComponent(graphics);
+            Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
+            try {
+                int x0 = left(), y = (getHeight() - SEG_H) / 2;
+                g.setColor(Theme.LINE);
+                g.fillRoundRect(x0, y, options.length * SEG_W, SEG_H, 8, 8);
+                g.setFont(Theme.headingFont(10.5f));
+                for (int i = 0; i < options.length; i++) {
+                    int x = x0 + i * SEG_W;
+                    if (i == selected) {
+                        g.setColor(Theme.ACCENT);
+                        g.fillRoundRect(x + 2, y + 2, SEG_W - 4, SEG_H - 4, 6, 6);
+                    }
+                    g.setColor(i == selected ? Color.WHITE : Theme.MUTED);
+                    int w = g.getFontMetrics().stringWidth(options[i]);
+                    g.drawString(options[i], x + (SEG_W - w) / 2, y + SEG_H / 2 + 4);
+                }
+            } finally {
+                g.dispose();
+            }
+        }
+    }
+
     /** An on/off setting: a switch at the right edge that slides when clicked; the menu stays open. */
     static final class SwitchRow extends JMenuItem {
         private static final int SW = 40, SH = 20;

@@ -60,6 +60,10 @@ public class ControlLink {
 
         /** One UDP fragment of a frame; frameSize is only known (> 0) on the fragment at offset 0. */
         void onVideoFragment(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length);
+
+        /** A frame's parity packet (bad coverage mode, phone app 2.3.0-pc.15): a single lost packet can be rebuilt. */
+        default void onVideoParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length) {
+        }
     }
 
     /**
@@ -67,20 +71,42 @@ public class ControlLink {
      * 60 is dark indoors. Not a setting. Phone app 2.3.0-pc.12 matches it to the camera's nearest supported range.
      */
     static final int CAMERA_FPS = 30;
+    /** A frame's parity packet: [0x6C][frame number i16][frame size i32][key frame u8][parity] (phone app pc.15). */
+    static final byte VIDEO_PARITY = 0x6C;
     /** Asks the phone for a key frame (DRAUPNE Flight 2.3.0-pc.13 on; older apps ignore it). */
     static final byte KEY_FRAME_REQUEST = 0x6A;
-    /** Key frame requests at most this often (the phone limits them too). */
-    static final long KEY_FRAME_REQUEST_MS = 500;
     /**
-     * A weak link: the phone's bitrate setting at or under LOW_RES_BPS for LOW_RES_AFTER_MS, the camera goes to 3/4 size
-     * (960x540 from 720p) - fewer pixels at a starved bitrate look cleaner. Back at HIGH_RES_BPS or more for
-     * HIGH_RES_AFTER_MS. Each switch restarts the camera (about half a second without video), hence the long holds.
-     * Phone app 2.3.0-pc.13 on (it reports the setting).
+     * Key frame requests at most this often. Each answer is the biggest burst there is: at 0.5 s the far link of
+     * 2026-11-01 asked 1.3-1.5 times a second and its key frames came damaged in turn.
      */
+    static final long KEY_FRAME_REQUEST_MS = 1500;
+    /**
+     * Bad coverage mode: 640x360 (at most 3/4 of the set size), up to 1 Mbit/s, key frames sent twice (phone app 2.3.0-pc.15
+     * on; the PC waits a moment for the second copy). Small, light frames in short bursts: far less is lost on a weak
+     * uplink. SETTINGS > Video: AUTO switches by itself, SHARP never, ROBUST always.
+     */
+    public enum VideoMode { AUTO, SHARP, ROBUST;
+        public static VideoMode parse(String s) {
+            for (VideoMode m : values()) if (m.name().equalsIgnoreCase(s == null ? "" : s.trim())) return m;
+            return AUTO;
+        }
+    }
+    public static final String VIDEO_MODE_KEY = "videoMode";
+    static final int ROBUST_WIDTH = 640, ROBUST_HEIGHT = 360;
+    /** The bitrate step bad coverage mode stays at or under: 1 Mbit/s. */
+    public static final int ROBUST_MAX_STEP = 2;
+    /** Tells the phone the video profile: [0x6B][flags], bit 0 = send key frames twice. */
+    static final byte VIDEO_PROFILE = 0x6B;
+    /** AUTO goes to bad coverage when the phone's bitrate stays at or under LOW_RES_BPS for LOW_RES_AFTER_MS... */
     static final int LOW_RES_BPS = 500_000;
     static final long LOW_RES_AFTER_MS = 5000;
-    static final int HIGH_RES_BPS = 2_000_000;
-    static final long HIGH_RES_AFTER_MS = 10_000;
+    /** ...or the link stalls (no pong for STALL_EVENT_MS) STALLS_FOR_ROBUST times within STALLS_WINDOW_MS. */
+    static final long STALL_EVENT_MS = 500;
+    static final int STALLS_FOR_ROBUST = 3;
+    static final long STALLS_WINDOW_MS = 30_000;
+    /** Back to normal after this long calm in bad coverage mode; doubled (up to 5 min) when it had to go back soon. */
+    static final long ROBUST_HOLD_MS = 20_000;
+    private static final long MAX_ROBUST_HOLD_MS = 300_000;
 
     /** Upstream's Control app asks for the stream every 2.5 s until the codec config arrives. */
     private static final int START_VIDEO_RETRY_MS = 2500;
@@ -114,11 +140,27 @@ public class ControlLink {
     private final FcTelemetry telemetry = new FcTelemetry();
     private volatile long lastKeyFrameRequest;
     private final AtomicLong keyFrameRequests = new AtomicLong();
-    /** The camera at 3/4 size because the link is weak (see LOW_RES_BPS). */
-    private volatile boolean lowRes;
-    private long resSince = -1;
+    /** Bad coverage mode is on (see VideoMode). */
+    private volatile boolean robust;
+    private volatile VideoMode videoMode;
+    private long lowRateSince = -1;
+    private final java.util.ArrayDeque<Long> stalls = new java.util.ArrayDeque<>();
+    private boolean inStall;
+    private long robustSince;
+    private long lastCalmEnd;
+    private long robustHoldMs = ROBUST_HOLD_MS;
+    private long leftRobustAt = -1;
+    private int profileSends;
+    private long nextProfileSend;
     private int configResends;
     private long nextConfigResend;
+    /** The picture width of the phone's last video stream (its VideoInitialFrame); 0 before the first. */
+    private volatile int videoWidth;
+    /** A size switch not yet seen in the phone's stream: checked from this time on, at most VERIFY_TRIES times. */
+    private long verifyFrom = -1;
+    private int verifyTries;
+    static final long VERIFY_AFTER_MS = 3000;
+    static final int VERIFY_TRIES = 3;
     private volatile VideoListener videoListener;
     private volatile boolean videoHevc = true;
     private volatile boolean videoConfigReceived;
@@ -286,7 +328,7 @@ public class ControlLink {
     /** A packet the pilot PC passed on, played at its time (spectator thread). */
     private void playSpectated(byte[] d) {
         if (d.length < 1) return;
-        if (d[0] == UdpCommon.VideoFrame || d[0] == UdpCommon.KeyFrame) {
+        if (d[0] == UdpCommon.VideoFrame || d[0] == UdpCommon.KeyFrame || d[0] == VIDEO_PARITY) {
             deliverVideoFragment(d, d.length);
             return;
         }
@@ -303,7 +345,7 @@ public class ControlLink {
     private boolean handleVideoFragment(DatagramPacket packet) {
         byte[] d = packet.getData();
         int len = packet.getLength();
-        if (len < 1 || (d[0] != UdpCommon.VideoFrame && d[0] != UdpCommon.KeyFrame)) return false;
+        if (len < 1 || (d[0] != UdpCommon.VideoFrame && d[0] != UdpCommon.KeyFrame && d[0] != VIDEO_PARITY)) return false;
         if (!isConnected()) return true;
         deliverVideoFragment(d, len);
         SpectatorHost h = host;
@@ -314,6 +356,10 @@ public class ControlLink {
     private void deliverVideoFragment(byte[] d, int len) {
         VideoListener listener = videoListener;
         if (listener == null || len < 7) return;
+        if (d[0] == VIDEO_PARITY) {
+            if (len > 8) listener.onVideoParity(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), readInt(d, 3), d, 8, len - 8);
+            return;
+        }
         short frameNum = (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff));
         int offset = readInt(d, 3);
         int frameSize = 0;
@@ -474,6 +520,7 @@ public class ControlLink {
                 int height = buffer.readShort();
                 boolean hevc = buffer.readBoolean();
                 boolean front = buffer.readBoolean();
+                videoWidth = width;
                 byte[] codecConfig = new byte[buffer.getRemaining()];
                 buffer.read(codecConfig, 0, codecConfig.length);
                 videoConfigReceived = true;
@@ -564,19 +611,38 @@ public class ControlLink {
         return packetData.getData();
     }
 
-    /** The camera width asked for: as set, or 3/4 of it while the link is weak. */
+    /** The camera width asked for: as set, or the bad coverage size. */
     int cameraWidth() {
-        return lowRes ? config.getCameraWidth() * 3 / 4 / 2 * 2 : config.getCameraWidth();
+        return robust ? Math.min(ROBUST_WIDTH, config.getCameraWidth() * 3 / 4) / 2 * 2 : config.getCameraWidth();
     }
 
     int cameraHeight() {
-        return lowRes ? config.getCameraHeight() * 3 / 4 / 2 * 2 : config.getCameraHeight();
+        return robust ? Math.min(ROBUST_HEIGHT, config.getCameraHeight() * 3 / 4) / 2 * 2 : config.getCameraHeight();
+    }
+
+    /** SETTINGS > Video, also while connected. */
+    public void setVideoMode(VideoMode mode) {
+        videoMode = mode;
+    }
+
+    private VideoMode videoMode() {
+        VideoMode m = videoMode;
+        return m != null ? m : VideoMode.parse(config.getString(VIDEO_MODE_KEY));
+    }
+
+    /** The highest bitrate step now: 1 Mbit/s in bad coverage mode, else the set limit (bitrateLimitMbps). */
+    public int maxBitrateStep() {
+        if (robust) return ROBUST_MAX_STEP;
+        int limit = config.getBitrateLimitMbps() * 1_000_000;
+        int[] steps = de.droiddrone.pc.video.BitrateControl.STEPS_BPS;
+        int s = 0;
+        while (s < steps.length - 1 && steps[s + 1] <= limit) s++;
+        return s;
     }
 
     /**
-     * The camera size for the link: smaller while the phone's bitrate stays low, back when it recovers (see
-     * LOW_RES_BPS). The new size goes out as a config; the phone restarts only its camera (sticks keep going). Sent
-     * twice, a second apart (numbered, but nothing would ask for it again if it were lost).
+     * Bad coverage mode on or off (see VideoMode): the size goes out as a config (the phone changes it on the open camera,
+     * phone app 2.3.0-pc.15), the profile as a packet of its own; both sent again until the phone's stream shows it.
      */
     private void adjustResolution(long now) throws IOException {
         if (configResends > 0 && now >= nextConfigResend) {
@@ -584,27 +650,93 @@ public class ControlLink {
             nextConfigResend = now + 1000;
             sendConfig();
         }
-        int bps = telemetry.getPhoneTargetBitRate();
-        if (bps <= 0 || spectator != null) return;
-        boolean wantSwitch = lowRes ? bps >= HIGH_RES_BPS : bps <= LOW_RES_BPS;
-        if (!wantSwitch) {
-            resSince = -1;
-            return;
+        if (profileSends > 0 && now >= nextProfileSend) {
+            profileSends--;
+            nextProfileSend = now + 700;
+            sendProfile();
         }
-        if (resSince < 0) resSince = now;
-        if (now - resSince < (lowRes ? HIGH_RES_AFTER_MS : LOW_RES_AFTER_MS)) return;
-        resSince = -1;
-        lowRes = !lowRes;
-        events.accept("Video: " + cameraWidth() + "x" + cameraHeight() + (lowRes
-                ? " while the link is weak (phone bitrate " + bps / 1000 + " kbit/s): fewer pixels look cleaner."
-                : ": the link has recovered (" + bps / 1000 + " kbit/s)."));
+        // did the phone really switch? Its new stream says (2026-11-01: a switch back to 720p never happened, and PC
+        // and phone disagreed for 3 minutes). If not, the size goes out again
+        if (verifyFrom >= 0 && now >= verifyFrom) {
+            boolean switched = videoWidth > 0 && (robust ? videoWidth < config.getCameraWidth() : videoWidth >= config.getCameraWidth());
+            if (switched || verifyTries >= VERIFY_TRIES) {
+                if (!switched) events.accept("Video: the phone didn't change the picture size (still " + videoWidth + " wide).");
+                verifyFrom = -1;
+            } else {
+                verifyTries++;
+                verifyFrom = now + VERIFY_AFTER_MS;
+                log("Video size not changed by the phone yet: sending it again (" + verifyTries + ")");
+                sendConfig();
+                sendProfile();
+            }
+        }
+        if (spectator != null) return;
+        // stalls: no pong for STALL_EVENT_MS, counted once each
+        long sincePong = msSinceLastPong();
+        boolean stalled = sincePong > STALL_EVENT_MS;
+        if (stalled && !inStall) stalls.addLast(now);
+        inStall = stalled;
+        while (!stalls.isEmpty() && now - stalls.peekFirst() > STALLS_WINDOW_MS) stalls.pollFirst();
+        if (stalled) lastCalmEnd = now;
+        int bps = telemetry.getPhoneTargetBitRate();
+        lowRateSince = bps > 0 && bps <= LOW_RES_BPS ? (lowRateSince < 0 ? now : lowRateSince) : -1;
+        VideoMode mode = videoMode();
+        boolean want;
+        String why;
+        if (mode == VideoMode.ROBUST) {
+            want = true;
+            why = "SETTINGS > Video is ROBUST";
+        } else if (mode == VideoMode.SHARP) {
+            want = false;
+            why = "SETTINGS > Video is SHARP";
+        } else if (!robust) {
+            boolean lowRate = lowRateSince >= 0 && now - lowRateSince >= LOW_RES_AFTER_MS;
+            want = lowRate || stalls.size() >= STALLS_FOR_ROBUST;
+            why = lowRate ? "the bitrate stayed at " + bps / 1000 + " kbit/s" : stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s";
+            if (want && leftRobustAt >= 0 && now - leftRobustAt < 60_000) {
+                robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2); // back too soon: stay longer next time
+            }
+        } else {
+            // calm long enough in bad coverage mode: no stall, and the bitrate not struggling under its 1 Mbit/s
+            boolean calm = now - robustSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs
+                    && (bps <= 0 || bps > LOW_RES_BPS);
+            want = !calm;
+            why = "calm for " + robustHoldMs / 1000 + " s";
+        }
+        if (want == robust) return;
+        robust = want;
+        if (robust) {
+            robustSince = now;
+            stalls.clear();
+        } else {
+            leftRobustAt = now;
+        }
+        events.accept(robust
+                ? "Video: bad coverage mode (" + why + "): " + cameraWidth() + "x" + cameraHeight()
+                        + ", up to 1 Mbit/s, key frames sent twice - softer, but it holds."
+                : "Video: normal mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".");
         configResends = 1;
         nextConfigResend = now + 1000;
+        profileSends = 2;
+        nextProfileSend = now + 700;
+        verifyFrom = videoListener == null ? -1 : now + VERIFY_AFTER_MS; // without video there is nothing to check
+        verifyTries = 0;
         sendConfig();
+        sendProfile();
     }
 
-    public boolean isLowResolution() {
-        return lowRes;
+    /** The phone's video profile (phone app 2.3.0-pc.15 on; older ones drop it): key frames twice in bad coverage. */
+    private void sendProfile() {
+        try {
+            socket.send(new DatagramPacket(new byte[]{VIDEO_PROFILE, (byte) (robust ? 1 : 0)}, 2, remoteIp, remotePort));
+        } catch (IOException e) {
+            // sent again with the next round
+        }
+    }
+
+    /** Bad coverage mode is on. */
+    public boolean isRobust() {
+        return robust;
     }
 
     /**

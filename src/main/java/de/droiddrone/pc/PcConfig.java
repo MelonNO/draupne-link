@@ -148,13 +148,14 @@ public class PcConfig {
     public int getPort() { return getInt("port"); }
     public String getKey() { return getString("key"); }
     public String getJoystickFilter() { return getString("joystick"); }
-    static final int SETTINGS_VERSION = 4;
+    static final int SETTINGS_VERSION = 5;
 
     /**
      * Moves a settings file written by an older version to the current defaults, once per version (it then records
      * settingsVersion), so a value changed deliberately afterwards is left alone. Only old defaults are replaced.
      * Version 2: rcRate 100 -> 250 (less stick delay). Version 3: telemetryRate 10 -> 20 (OSD lags half as much).
      * Version 4: nothing left (it moved the camera's frame rate, which is no setting any more).
+     * Version 5: bitrateLimitMbps 6 -> 4 (as good a 720p picture at 30 fps, more headroom before a 4G queue fills).
      * @return true if the file was changed
      */
     public boolean upgrade(Path file) throws IOException {
@@ -169,6 +170,7 @@ public class PcConfig {
         Map<String, String> updates = new LinkedHashMap<>();
         if (version < 2 && "100".equals(getString("rcRate"))) updates.put("rcRate", "250");
         if (version < 3 && "10".equals(getString("telemetryRate"))) updates.put("telemetryRate", "20");
+        if (version < 5 && "6".equals(getString("bitrateLimitMbps"))) updates.put("bitrateLimitMbps", "4");
         updates.put("settingsVersion", Integer.toString(SETTINGS_VERSION));
         save(file, updates);
         return true;

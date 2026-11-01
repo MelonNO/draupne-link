@@ -278,35 +278,74 @@ class ControlLinkTest {
     }
 
     @Test
-    void keyFrameRequestsReachThePhoneAtMostTwiceASecond() throws Exception {
+    void keyFrameRequestsReachThePhoneAtMostEvery1Point5Seconds() throws Exception {
         phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
         link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < 40; i++) {
             link.requestKeyFrame();
             Thread.sleep(50);
         }
         waitFor(() -> phone.keyFrameRequests.get() >= 2, 2000, "requests at the phone");
-        assertTrue(phone.keyFrameRequests.get() <= 3, "1 s of asking: " + phone.keyFrameRequests.get());
+        assertTrue(phone.keyFrameRequests.get() <= 2, "2 s of asking: " + phone.keyFrameRequests.get());
         assertEquals(phone.keyFrameRequests.get(), link.getKeyFrameRequests());
     }
 
-    /** A weak link (the phone's bitrate setting low for 5 s): the camera goes to 960x540; the sticks keep going. */
+    /** A weak link (the phone's bitrate setting low for 5 s): bad coverage mode, 640x360; the sticks keep going. */
     @Test
-    void aWeakLinkSwitchesTheCameraTo540p() throws Exception {
+    void aWeakLinkSwitchesToBadCoverageMode() throws Exception {
         phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
         phone.encoderBitRate = 250_000;
         link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         assertEquals(1280, phone.config.cameraWidth);
-        waitFor(() -> phone.config.cameraWidth == 960, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "960x540");
-        assertTrue(link.isLowResolution());
+        waitFor(() -> phone.config.cameraWidth == 640, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "640x360");
+        assertTrue(link.isRobust());
+        waitFor(() -> phone.videoProfile == 1, 2000, "key frames twice");
+        assertEquals(ControlLink.ROBUST_MAX_STEP, link.maxBitrateStep(), "up to 1 Mbit/s");
         assertEquals(ControlLink.State.READY, link.getState(), "still flying");
         int rcBefore = phone.rcFrames.size();
         assertTrue(link.sendRc(new short[]{1500, 1500, 1500, 1000}), "sticks go out during the switch");
         waitFor(() -> phone.rcFrames.size() > rcBefore, 2000, "sticks at the phone");
+    }
+
+    /** The phone ignores the switch (its config arrives, the picture stays): the PC sends the size again. */
+    @Test
+    void aSwitchThePhoneDidntMakeIsSentAgain() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.encoderBitRate = 250_000;
+        phone.videoStream = TestStreams.h264(320, 240, 600, 10); // the stream stays 320 wide: the switch is never made
+        ControlLinkTest.CapturingSink sink = new ControlLinkTest.CapturingSink();
+        try (VideoPipeline video = new VideoPipeline(sink, () -> 30)) {
+            PcConfig config = PcConfig.defaults();
+            config.set("cameraWidth", "320");
+            config.set("cameraHeight", "240");
+            link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link.setVideoListener(video, false);
+            video.attach(link);
+            link.start();
+            waitFor(() -> link.isRobust(), (int) ControlLink.LOW_RES_AFTER_MS + 4000, "switched down");
+            int after = phone.configs.size();
+            waitFor(() -> phone.configs.size() >= after + 2, (int) ControlLink.VERIFY_AFTER_MS + 3000, "sent again");
+            assertEquals(240, phone.configs.get(phone.configs.size() - 1).cameraWidth, "the small size again");
+        }
+    }
+
+    @Test
+    void videoRobustAndSharpAreObeyedAtOnce() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        PcConfig config = PcConfig.defaults();
+        config.set(ControlLink.VIDEO_MODE_KEY, "robust");
+        link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> phone.config.cameraWidth == 640 && phone.videoProfile == 1, 3000, "bad coverage mode from the start");
+        assertEquals(4, PcConfig.defaults().getBitrateLimitMbps());
+        link.setVideoMode(ControlLink.VideoMode.SHARP);
+        waitFor(() -> phone.config.cameraWidth == 1280 && phone.videoProfile == 0, 3000, "back to the full picture");
+        assertEquals(4, link.maxBitrateStep(), "the set 4 Mbit/s");
     }
 
     @Test
@@ -316,7 +355,7 @@ class ControlLinkTest {
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         Thread.sleep(ControlLink.LOW_RES_AFTER_MS + 1000);
-        assertFalse(link.isLowResolution());
+        assertFalse(link.isRobust());
         assertTrue(phone.configs.stream().allMatch(c -> c.cameraWidth == 1280));
     }
 
@@ -365,6 +404,8 @@ class ControlLinkTest {
         volatile int encoderBitRate = -1;
         /** Key frame requests received (pc.13 on). */
         final AtomicInteger keyFrameRequests = new AtomicInteger();
+        /** The last video profile received (pc.15 on): -1 = none yet, else its flags (bit 0: key frames twice). */
+        volatile int videoProfile = -1;
         /** Every config received, in order (a resolution switch sends a new one). */
         final List<ParsedConfig> configs = new CopyOnWriteArrayList<>();
         /** Spectator mode answers sent (DRAUPNE Flight pc.11 and on); 0 with answerSpectators off, like older apps. */
@@ -523,6 +564,7 @@ class ControlLinkTest {
                     udpSender.sendPacket(d.getData());
                 }
                 case ControlLink.KEY_FRAME_REQUEST -> keyFrameRequests.incrementAndGet();
+                case ControlLink.VIDEO_PROFILE -> videoProfile = r.readByte();
                 case UdpCommon.RcFrame -> {
                     int count = r.readByte();
                     short[] ch = new short[count];

@@ -15,7 +15,8 @@
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
  *  Modified for DRAUPNE Link: the frame-rate range asked for is kept (upstream took the fastest when the size
- *  wasn't exact) and matched to one the camera lists (supportedRange).
+ *  wasn't exact) and matched to one the camera lists (supportedRange); sizes keep the picture's shape; a session can
+ *  be stopped without closing the camera (stopSession).
  */
 
 package de.droiddrone.flight;
@@ -106,6 +107,26 @@ public class InternalCamera implements Camera{
             log("Camera device found. ID: " + cameraId);
         }
         return getCameraCharacteristics(config.getCameraId());
+    }
+
+    /**
+     * DRAUPNE Link: stops the capture session but leaves the camera open, for a change of picture size: the video then
+     * restarts on the open camera (a new encoder and session, a few hundred ms) instead of closing and reopening it
+     * (1.5-2.6 s without video, measured).
+     */
+    public void stopSession(){
+        CameraCaptureSession session = mCameraCaptureSession;
+        mCameraCaptureSession = null;
+        isStarted = false;
+        if (session == null) return;
+        try {
+            session.stopRepeating();
+        } catch (Exception ignored) {
+        }
+        try {
+            session.close();
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
@@ -341,14 +362,21 @@ public class InternalCamera implements Camera{
                     if (s != null && (sizes == null || s.length > sizes.length)) sizes = s;
                 }
             }
+            // DRAUPNE Link: the nearest size of the same shape (16:9 for 16:9), else the nearest of any. Upstream took the
+            // nearest of any: 1024x768 (4:3) for 960x540 on a test phone - a squashed picture, hardly fewer pixels
             int minDiff = -1;
             if (sizes != null) {
-                for (Size size : sizes) {
-                    int diff = Math.abs(size.getWidth() - targetResolution.getWidth()) + Math.abs(size.getHeight() - targetResolution.getHeight());
-                    if (diff < minDiff || minDiff == -1) {
-                        minDiff = diff;
-                        width = size.getWidth();
-                        height = size.getHeight();
+                double aspect = (double) targetResolution.getWidth() / Math.max(1, targetResolution.getHeight());
+                for (int pass = 0; pass < 2 && minDiff == -1; pass++) {
+                    for (Size size : sizes) {
+                        boolean sameShape = Math.abs((double) size.getWidth() / Math.max(1, size.getHeight()) - aspect) < 0.03;
+                        if (pass == 0 && !sameShape) continue;
+                        int diff = Math.abs(size.getWidth() - targetResolution.getWidth()) + Math.abs(size.getHeight() - targetResolution.getHeight());
+                        if (diff < minDiff || minDiff == -1) {
+                            minDiff = diff;
+                            width = size.getWidth();
+                            height = size.getHeight();
+                        }
                     }
                 }
             }

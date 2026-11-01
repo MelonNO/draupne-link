@@ -32,9 +32,16 @@ public class FrameAssembler {
     static final int MAX_FRAME_BYTES = 8 << 20;
 
     private final Map<Short, Pending> pending = new HashMap<>();
+    /**
+     * Bad coverage mode: the phone sends key frames twice, so a key frame with a gap isn't released at once - its second
+     * copy usually fills it. It goes out when whole, or (damaged) when the next frame completes.
+     */
+    private boolean waitForWholeKeyFrames;
     /** Older frames released (damaged) because a newer one completed: decoded before it, see {@link #takeFlushed}. */
     private final List<Frame> flushed = new ArrayList<>();
     private long completedFrames;
+    /** Frames made whole from their parity packet (bad coverage mode). */
+    private long recoveredFrames;
     private long damagedFrames;
     private long lostFrames;
     /** The newest frame released, or null; nothing at or before it is put together again. */
@@ -42,8 +49,17 @@ public class FrameAssembler {
     /** Key frame 1 has come since the last {@link #startedAfresh()}: a new stream is under way. */
     private boolean streamRestarted;
 
+    /**
+     * The phone's packet payloads: the first carries FIRST_SEGMENT bytes of the frame, every later one SEGMENT (its
+     * header counted as 13 and 9 bytes, upstream's sums). The parity packet (bad coverage mode) is the XOR of them all.
+     */
+    static final int FIRST_SEGMENT = de.droiddrone.common.UdpCommon.packetLength - 13;
+    static final int SEGMENT = de.droiddrone.common.UdpCommon.packetLength - 9;
+
     private static final class Pending {
         final boolean keyFrame;
+        /** The frame's parity packet (bad coverage mode), or null. */
+        byte[] parity;
         int size = -1; // unknown until the offset-0 fragment arrives
         int received;
         boolean startReceived;
@@ -70,6 +86,36 @@ public class FrameAssembler {
 
         boolean complete() {
             return size > 0 && received >= size;
+        }
+
+        /**
+         * With the parity in and exactly one packet missing, rebuilds it: the parity XOR every packet that came.
+         * @return true if the frame is whole now
+         */
+        boolean recover() {
+            if (parity == null || size <= 0 || complete()) return complete();
+            int missingAt = -1, missingLength = 0;
+            for (int at = 0; at < size; ) {
+                int length = Math.min(at == 0 ? FIRST_SEGMENT : SEGMENT, size - at);
+                byte[] got = fragments.get(at);
+                if (got == null) {
+                    if (missingAt >= 0) return false; // two or more lost: a single parity can't help
+                    missingAt = at;
+                    missingLength = length;
+                } else if (got.length != length) {
+                    return false; // not the phone's usual layout: leave it
+                }
+                at += length;
+            }
+            if (missingAt < 0) return complete();
+            byte[] rebuilt = java.util.Arrays.copyOf(parity, Math.max(parity.length, SEGMENT));
+            for (var e : fragments.entrySet()) {
+                byte[] d = e.getValue();
+                for (int i = 0; i < d.length && i < rebuilt.length; i++) rebuilt[i] ^= d[i];
+            }
+            put(missingAt, java.util.Arrays.copyOf(rebuilt, missingLength));
+            if (missingAt == 0) startReceived = true;
+            return complete();
         }
 
         byte[] assemble() {
@@ -105,15 +151,42 @@ public class FrameAssembler {
             lastReleased = frameNum;
             return new Frame(data, keyFrame, frameNum, false, keyFrame && frameNum == 1);
         }
+        Pending frame = pending(frameNum, keyFrame);
+        if (offset == 0) frame.setSize(frameSize);
+        frame.put(offset, data);
+        return finish(frameNum, frame, keyFrame);
+    }
+
+    /**
+     * The parity packet of a frame (bad coverage mode, phone app 2.3.0-pc.15): rebuilds a single lost packet of it.
+     * @return the frame, if that made it whole (or it was waiting for this), else null
+     */
+    public Frame putParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length) {
+        if (frameSize <= 0 || frameSize > MAX_FRAME_BYTES || length <= 0) return null;
+        if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
+        Pending frame = pending(frameNum, keyFrame);
+        if (frame.size <= 0) frame.setSize(frameSize);
+        frame.parity = java.util.Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
+        if (frame.recover()) recoveredFrames++;
+        return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
+    }
+
+    private Pending pending(short frameNum, boolean keyFrame) {
         Pending frame = pending.get(frameNum);
         if (frame == null) {
             if (pending.size() >= MAX_PENDING) dropOldest();
             frame = new Pending(keyFrame);
             pending.put(frameNum, frame);
         }
-        if (offset == 0) frame.setSize(frameSize);
-        frame.put(offset, data);
+        return frame;
+    }
+
+    private Frame finish(short frameNum, Pending frame, boolean keyFrame) {
+        if (!frame.complete() && frame.parity != null && frame.recover()) recoveredFrames++;
         if (!frame.complete() && !(frame.startReceived && frame.endReceived)) return null;
+        // bad coverage mode: an incomplete frame waits for its parity (right behind it) or a key frame's second copy;
+        // if neither makes it whole, it goes out damaged when the next frame completes (retireOlder)
+        if (!frame.complete() && waitForWholeKeyFrames && (frame.keyFrame || frame.parity == null)) return null;
         pending.remove(frameNum);
         retireOlder(frameNum, keyFrame);
         boolean damaged = !frame.complete();
@@ -173,6 +246,10 @@ public class FrameAssembler {
         return diff > 0 && diff < ORDER_WINDOW;
     }
 
+    public void setWaitForWholeKeyFrames(boolean on) {
+        waitForWholeKeyFrames = on;
+    }
+
     public void reset() {
         pending.clear();
         flushed.clear();
@@ -193,6 +270,10 @@ public class FrameAssembler {
 
     public long getCompletedFrames() {
         return completedFrames;
+    }
+
+    public long getRecoveredFrames() {
+        return recoveredFrames;
     }
 
     public long getDamagedFrames() {

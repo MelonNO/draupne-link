@@ -19,7 +19,7 @@ import java.nio.charset.StandardCharsets;
  */
 final class OsdPreview {
     private static final FcInfo BETAFLIGHT = new FcInfo(FcInfo.FC_VARIANT_BETAFLIGHT, 4, 5, 1, 0, 1, 46, 0);
-    private static final VideoPipeline.Stats VIDEO = new VideoPipeline.Stats(true, 1280, 720, 60, 60, 4.2, 0.9, 0.6, 0, 0, null, false, 4, 0, 0);
+    private static final VideoPipeline.Stats VIDEO = new VideoPipeline.Stats(true, 1280, 720, 60, 60, 4.2, 0.9, 0.6, 0, 0, null, false, 4, 0, 0, 0);
     /** roll, pitch, yaw, throttle: a little right roll and forward pitch, 35 % throttle. */
     private static final short[] CHANNELS = {1580, 1430, 1500, 1350};
 
