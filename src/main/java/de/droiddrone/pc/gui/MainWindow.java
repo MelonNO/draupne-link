@@ -1764,6 +1764,7 @@ public class MainWindow extends JFrame {
         });
         frame.pack();
         frame.setLocationByPlatform(true);
+        WindowReveal.onOpen(frame); // fades in, like the program's other windows
         frame.setVisible(true);
         videoHolder.revalidate();
         videoHolder.repaint();

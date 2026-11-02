@@ -325,6 +325,14 @@ final class MapWindow extends JFrame {
         saver.accept(Map.of(BOUNDS_KEY, r.x + "," + r.y + "," + r.width + "," + r.height));
     }
 
+    /** Every opening fades the window in, like the program's other windows (not only the first). */
+    @Override
+    public void setVisible(boolean visible) {
+        boolean opening = visible && !isVisible();
+        super.setVisible(visible);
+        if (opening) WindowReveal.fadeIn((javax.swing.JComponent) getContentPane());
+    }
+
     /** Wide enough for the toolbar's buttons and both choices, and the six figures. */
     @Override
     public Dimension getMinimumSize() {
