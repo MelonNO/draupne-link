@@ -190,8 +190,9 @@ final class BootReveal extends JComponent {
     private static void morphCrosshair(Graphics2D g, double cx, double cy, double s, float unit, double m, double white) {
         if (m >= 1) { // arrived: the OSD's own drawing, so it sits pixel for pixel on the real one, only the colour runs
             int red = Logo.RED.getRed(), green = Logo.RED.getGreen(), blue = Logo.RED.getBlue();
-            java.awt.Color color = new java.awt.Color((int) lerp(red, 255, white), (int) lerp(green, 255, white), (int) lerp(blue, 255, white));
-            java.awt.Color edge = white <= 0 ? null : new java.awt.Color(0, 0, 0, (int) Math.round(200 * Math.min(1, white)));
+            double w = Math.max(0, Math.min(1, white)); // a late first frame (Java2D's first use) can overshoot the phase
+            java.awt.Color color = new java.awt.Color((int) lerp(red, 255, w), (int) lerp(green, 255, w), (int) lerp(blue, 255, w));
+            java.awt.Color edge = w <= 0 ? null : new java.awt.Color(0, 0, 0, (int) Math.round(200 * w));
             OsdRenderer.crosshair(g, (float) cx, (float) cy, unit, color, edge);
             return;
         }

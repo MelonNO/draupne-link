@@ -50,8 +50,7 @@ final class PcLinkStats {
         out.writeShort((int) Math.min(65535, l.hasAccuracy() ? Math.round(l.getAccuracy()) : 65535));
         out.writeShort((int) Math.min(65535, l.hasSpeed() ? Math.round(l.getSpeed() * 36) : 0));
         out.writeShort(l.hasBearing() ? Math.round(l.getBearing()) % 360 : 0);
-        long ageMs = (android.os.SystemClock.elapsedRealtimeNanos() - l.getElapsedRealtimeNanos()) / 1_000_000L;
-        out.writeShort((int) Math.min(65535, Math.max(0, ageMs / 1000)));
+        out.writeShort((int) Math.min(65535, Math.max(0, PhoneLocation.ageMs(l) / 1000)));
     }
 
     static void writeEncoderTo(DataOutputStream out, int targetBitRate, boolean intraRefresh) throws IOException {

@@ -23,6 +23,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
     its bounds in `mapWindow`, fades in on every opening), `gui/PinManagerDialog`, `gui/FindDroneDialog`.
   - **Phone GPS:** phone app pc.16 sends record `0x40F3` (`PcLinkStats.writePhonePositionTo`, `PhoneLocation`; the
     location permission is asked once, the service runs without it; foreground type `location` only when granted).
+    pc.16/17 asked the bare GPS provider only: no fix indoors, where Google Maps (fused: Wi-Fi + cell) has one - the
+    pilot's report of 2026-11-02. pc.18 asks GPS, network and (Android 12+) fused, a fresh GPS fix winning; the phone's
+    status card says what the GPS is doing (not allowed - a tap asks; no position yet; provider, accuracy, age), and
+    the link log has `phone_lat/lon/acc_m/age_s`, blank when the phone sends none: start there for the next report.
     `FcTelemetry.PhonePosition`; `gpsSource` setting (MENU > TOOLS > Position from).
   - **Header:** `gui/SlideMenu` - MENU (the one filled, black-text button) slides out SETUP, VIDEO (+OSD rows), LINK,
     TOOLS (Find drone, Position from, Tracks folder, tests, versions), UPDATE when there is one; stays open until

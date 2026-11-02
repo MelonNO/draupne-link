@@ -47,6 +47,10 @@
     <string name="dd_update_connected">Disconnect first: the update closes this app, and the sticks with it. Then tap here again.</string>
     <string name="dd_update_installing">Installing the update... Android asks you to confirm.</string>
     <string name="dd_update_failed">Update not installed (%1$s). Tap here to try again.</string>
+    <string name="dd_gps_not_allowed">Phone GPS for the PC\'s map: not allowed. Tap to allow it (While using the app).</string>
+    <string name="dd_gps_restart">Phone GPS for the PC\'s map: allowed now. Disconnect and connect again to start it.</string>
+    <string name="dd_gps_waiting">Phone GPS: no position yet (outdoors, or Wi-Fi on, helps).</string>
+    <string name="dd_gps_fix">Phone GPS: %1$s, within %2$d m, %3$d s ago.</string>
     <string name="dd_old_downloads">Earlier updates may have left DRAUPNE Flight installers in Downloads. Tap here to open Downloads and delete them.</string>
     <string name="dd_old_app">An earlier DroidDrone Flight is still installed and can take the flight controller. Tap here to remove it.</string>
     <string name="dd_lock_button">LOCK SCREEN</string>

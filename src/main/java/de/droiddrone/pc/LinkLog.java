@@ -27,7 +27,7 @@ public final class LinkLog implements AutoCloseable {
             + "ping_max_ms,pong_age_ms,path,phone_rc_in_gap_ms,phone_rc_out_gap_ms,phone_write_max_ms,phone_write_timeouts,"
             + "phone_skipped,video_rx_fps,video_mbps,video_damaged,video_lost,camera_fps,phone_video_mbps,bitrate_step,"
             + "decode_ms,convert_ms,draw_skipped,bunched,video_res,key_requests,intra_refresh,robust,recovered,"
-            + "lat,lon,gps_alt_m,gps_sats,event";
+            + "lat,lon,gps_alt_m,gps_sats,phone_lat,phone_lon,phone_acc_m,phone_age_s,event";
 
     private final Path file;
     private final BufferedWriter out;
@@ -90,6 +90,10 @@ public final class LinkLog implements AutoCloseable {
         FcTelemetry.PhoneLink p = t.takePhoneLink();
         FcTelemetry.Gps gps = t.getGps();
         boolean fix = gps != null && gps.fix() >= 1 && gps.receivedAt() > 0 && !(gps.latDeg() == 0 && gps.lonDeg() == 0);
+        // the phone's own position (record 0x40F3, once a second): blank when the phone sends none - no permission,
+        // no fix yet, or an app before pc.16
+        FcTelemetry.PhonePosition pp = t.getPhonePosition();
+        boolean phoneFix = pp != null && pp.receivedAt() > 0 && now - pp.receivedAt() < 2500 && !(pp.latDeg() == 0 && pp.lonDeg() == 0);
         row(link.getState().name(), link.getPing(), rc - lastRcFrames, link.takeMaxRcGapMs(), telemetry - lastTelemetry,
                 link.takeMaxTelemetryGapMs(), fcAge == Long.MAX_VALUE ? -1 : fcAge,
                 fresh ? flag(blockers.contains("RXLOSS")) : "", fresh ? flag(blockers.contains("FAILSAFE")) : "",
@@ -115,7 +119,9 @@ public final class LinkLog implements AutoCloseable {
                 t.getPhoneTargetBitRate() < 0 ? "" : flag(t.isPhoneIntraRefresh()), flag(link.isRobust()),
                 video == null ? "" : video.recovered() - lastRecovered,
                 fix ? String.format(java.util.Locale.ROOT, "%.6f", gps.latDeg()) : "", fix ? String.format(java.util.Locale.ROOT, "%.6f", gps.lonDeg()) : "",
-                fix ? gps.altM() : "", fix ? gps.sats() : "", "");
+                fix ? gps.altM() : "", fix ? gps.sats() : "",
+                phoneFix ? String.format(java.util.Locale.ROOT, "%.6f", pp.latDeg()) : "", phoneFix ? String.format(java.util.Locale.ROOT, "%.6f", pp.lonDeg()) : "",
+                phoneFix ? pp.accuracyM() : "", phoneFix ? pp.ageS() : "", "");
         if (video != null) lastRecovered = video.recovered();
         lastKeyRequests = link.getKeyFrameRequests();
         if (video != null) {
@@ -134,8 +140,10 @@ public final class LinkLog implements AutoCloseable {
 
     /** A message from the app's log, in the timeline. */
     public synchronized void event(String text) throws IOException {
-        row("", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-                "", "", "", "", "", "", "", "", "", "", "", "", "", text);
+        Object[] values = new Object[HEADER.split(",").length - 1]; // every column but time blank, the event last
+        java.util.Arrays.fill(values, "");
+        values[values.length - 1] = text;
+        row(values);
     }
 
     private void row(Object... values) throws IOException {

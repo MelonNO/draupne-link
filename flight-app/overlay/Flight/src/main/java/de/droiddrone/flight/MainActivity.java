@@ -204,7 +204,56 @@ public class MainActivity extends Activity {
         tvPill.setTextColor(foreground);
     }
 
+    /**
+     * What the phone's GPS for the PC's map is doing, on the status card: not allowed (a tap asks), allowed too late
+     * for this connection, no position yet, or the position it has - so a map without the phone on it can be
+     * understood from the phone.
+     */
+    private void updatePhoneGps(){
+        TextView line = findViewById(R.id.tvPhoneGps);
+        boolean allowed = checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+        if (!allowed) {
+            line.setText(R.string.dd_gps_not_allowed);
+            line.setTextColor(colorWarn);
+            line.setOnClickListener(v -> askLocationAgain());
+        } else if (!DDService.isRunning) {
+            line.setVisibility(View.GONE);
+            return;
+        } else if (!PhoneLocation.isRunning()) {
+            line.setText(R.string.dd_gps_restart);
+            line.setTextColor(colorWarn);
+            line.setOnClickListener(null);
+        } else {
+            android.location.Location l = PhoneLocation.last();
+            if (l == null) {
+                line.setText(R.string.dd_gps_waiting);
+                line.setTextColor(colorWarn);
+            } else {
+                line.setText(getString(R.string.dd_gps_fix, l.getProvider(), l.hasAccuracy() ? Math.round(l.getAccuracy()) : -1,
+                        PhoneLocation.ageMs(l) / 1000));
+                line.setTextColor(colorMuted);
+            }
+            line.setOnClickListener(null);
+        }
+        line.setVisibility(View.VISIBLE);
+    }
+
+    /** The location permission was refused before: ask once more, or, when Android no longer asks, open the app's settings. */
+    private void askLocationAgain(){
+        if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_FINE_LOCATION) || !locationAsked) {
+            locationAsked = true;
+            requestPermission(Manifest.permission.ACCESS_FINE_LOCATION, 4);
+            return;
+        }
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+        } catch (Exception e) {
+            log("Cannot open the app's settings: " + e);
+        }
+    }
+
     private void updateUi(){
+        updatePhoneGps();
         if (DDService.isRunning){
             bStartStopService.setText(getResources().getString(R.string.disconnect));
             bStartStopService.setBackgroundResource(R.drawable.dd_button_stop);

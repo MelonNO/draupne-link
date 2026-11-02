@@ -154,6 +154,16 @@
                 android:visibility="gone" />
 
             <TextView
+                android:id="@+id/tvPhoneGps"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:textColor="@color/dd_muted"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/dd_hint_props"
