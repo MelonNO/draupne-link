@@ -263,6 +263,7 @@ final class PhoneGuideWizard {
             WizardDialog.addRow(col, WizardDialog.paragraph(
                     "Tap <b>Download the app</b> and open the file. If Android asks, allow installing from your browser, then <b>Install</b>. "
                             + "Then press Next.<br>"
+                            + "DRAUPNE Flight 2.3.0-pc.18 or newer already on the phone? Skip the download: tap its yellow <b>Update available</b> line instead, then press Next.<br>"
                             + "An older DroidDrone Flight on the phone? The new app asks to remove it when it opens: tap <b>OK</b>.<br>"
                             + "Link doesn't open? Pick another address under the code."));
             WizardDialog.addRow(col, file);

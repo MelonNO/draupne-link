@@ -39,14 +39,16 @@ final class UpdateCheck {
     private static final Pattern APK = Pattern.compile("^(?:DRAUPNE|DroidDrone)-Flight-(.+)\\.apk$");
     private static final Pattern NUMBER = Pattern.compile("\\d+");
 
-    /** The newer phone app found: its version and where to download it. */
+    /** The newer phone app found: its version, where to download it and its SHA-256 (null if GitHub gave none). */
     static final class Found {
         final String version;
         final String url;
+        final String sha256;
 
-        Found(String version, String url) {
+        Found(String version, String url, String sha256) {
             this.version = version;
             this.url = url;
+            this.sha256 = sha256;
         }
     }
 
@@ -71,12 +73,21 @@ final class UpdateCheck {
             for (int i = 0; i < assets.length(); i++) {
                 JSONObject a = assets.getJSONObject(i);
                 Matcher m = APK.matcher(a.getString("name"));
-                if (m.matches() && isNewer(m.group(1), current)) return new Found(m.group(1), a.getString("browser_download_url"));
+                if (m.matches() && isNewer(m.group(1), current)) {
+                    return new Found(m.group(1), a.getString("browser_download_url"), sha256(a.optString("digest")));
+                }
             }
         } catch (Exception e) {
             // offline or GitHub unreachable: nothing to show
         }
         return null;
+    }
+
+    /** GitHub gives each release asset a "digest" of "sha256:&lt;hex&gt;"; null when it is missing or another kind. */
+    static String sha256(String digest) {
+        if (digest == null || !digest.startsWith("sha256:")) return null;
+        String hex = digest.substring("sha256:".length());
+        return hex.matches("[0-9a-fA-F]{64}") ? hex : null;
     }
 
     /** Numbers compared in order: 2.3.0-pc.4 is newer than 2.3.0-pc.3, 2.3.1 than 2.3.0-pc.9. */

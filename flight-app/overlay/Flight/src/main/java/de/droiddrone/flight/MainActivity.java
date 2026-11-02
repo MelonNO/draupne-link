@@ -15,8 +15,8 @@
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
  *  Modified for DRAUPNE Link: the Windows app's look (cards, status pill, status colours for a dark
- *  background), removing an earlier DroidDrone Flight, telling about a newer build, a touch lock for flying, and
- *  portrait as well as landscape, and Direct connection as the first-start connection mode.
+ *  background), removing an earlier DroidDrone Flight, installing a newer build from inside the app, a touch lock
+ *  for flying, and portrait as well as landscape, and Direct connection as the first-start connection mode.
  *  The connection logic is unchanged.
  */
 
@@ -24,6 +24,8 @@ package de.droiddrone.flight;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.DownloadManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
@@ -80,6 +82,9 @@ public class MainActivity extends Activity {
     private TextView tvUpdate;
     /** Once per app start: is there a newer build on GitHub? */
     private static boolean updateChecked;
+    /** UPDATE is downloading or handing over to Android's installer: a second tap does nothing. */
+    private boolean updating;
+    private static final String OLD_DOWNLOADS_NOTED = "oldDownloadsNoted";
     private boolean oldAppPrompted;
     /** The touch lock: the whole screen ignores touches but for its HOLD TO UNLOCK box. Null while unlocked. */
     private View touchLock;
@@ -127,10 +132,12 @@ public class MainActivity extends Activity {
         tvUpdate = findViewById(R.id.tvUpdate);
         findViewById(R.id.lockScreen).setOnClickListener(v -> lockTouches());
         if (savedInstanceState != null && savedInstanceState.getBoolean(LOCKED_STATE)) lockTouches();
+        showOldDownloadsOnce();
         if (!updateChecked) {
             updateChecked = true;
             String current = versionName;
             Thread t = new Thread(() -> {
+                AppUpdater.cleanUp(getApplicationContext()); // an update cut short
                 UpdateCheck.Found found = UpdateCheck.newerThan(current);
                 if (found != null) runOnUiThread(() -> showUpdate(found));
             }, "updateCheck");
@@ -309,15 +316,67 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** A newer build is on GitHub: say so; a tap downloads it (Android installs it as an update). */
+    /** A newer build is on GitHub: say so; a tap installs it from inside the app ({@link AppUpdater}). */
     private void showUpdate(UpdateCheck.Found found){
         tvUpdate.setText(getString(R.string.dd_update, found.version));
         tvUpdate.setVisibility(View.VISIBLE);
-        tvUpdate.setOnClickListener(v -> {
+        tvUpdate.setOnClickListener(v -> installUpdate(found));
+    }
+
+    private void installUpdate(UpdateCheck.Found found){
+        if (updating) return;
+        if (DDService.isRunning) {
+            tvUpdate.setText(R.string.dd_update_connected);
+            return;
+        }
+        if (!getPackageManager().canRequestPackageInstalls()) {
+            tvUpdate.setText(R.string.dd_update_allow);
             try {
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(found.url)));
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + getPackageName())));
             } catch (Exception e) {
-                log("Cannot open the download: " + e);
+                log("Cannot open the install permission: " + e);
+            }
+            return;
+        }
+        updating = true;
+        Context app = getApplicationContext();
+        Thread t = new Thread(() -> {
+            String done;
+            try {
+                AppUpdater.downloadAndInstall(app, found, text -> runOnUiThread(() -> tvUpdate.setText(text)));
+                done = getString(R.string.dd_update, found.version); // Android's prompt is up; cancelled, the line offers it again
+            } catch (Exception e) {
+                log("Update failed: " + e);
+                done = DDService.isRunning ? getString(R.string.dd_update_connected)
+                        : getString(R.string.dd_update_failed, e.getMessage() == null ? e.toString() : e.getMessage());
+            }
+            String text = done;
+            runOnUiThread(() -> {
+                tvUpdate.setText(text);
+                updating = false;
+            });
+        }, "appUpdate");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /**
+     * Updates before this one went through the browser, which left each version's installer in Downloads, where only
+     * the pilot can delete them. Said on the first start of this version; a tap opens Downloads.
+     */
+    private void showOldDownloadsOnce(){
+        android.content.SharedPreferences preferences = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this);
+        if (preferences.getBoolean(OLD_DOWNLOADS_NOTED, false)) return;
+        preferences.edit().putBoolean(OLD_DOWNLOADS_NOTED, true).apply();
+        TextView note = findViewById(R.id.tvOldDownloads);
+        note.setVisibility(View.VISIBLE);
+        note.setOnClickListener(v -> {
+            note.setVisibility(View.GONE);
+            try {
+                startActivity(new Intent(DownloadManager.ACTION_VIEW_DOWNLOADS));
+            } catch (Exception e) {
+                log("Cannot open Downloads: " + e);
             }
         });
     }

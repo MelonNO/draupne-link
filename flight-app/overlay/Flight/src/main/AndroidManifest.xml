@@ -27,6 +27,8 @@
     <uses-permission android:name="android.permission.READ_BASIC_PHONE_STATE" />
     <!-- DRAUPNE Link: find and remove an earlier DroidDrone Flight (the user confirms) -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- DRAUPNE Link: UPDATE installs the newer app itself (Android asks; "Install unknown apps" once) -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <queries>
         <package android:name="de.droiddrone.flight" />
     </queries>
@@ -52,6 +54,10 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="camera|microphone|dataSync|location"/>
+        <!-- DRAUPNE Link: Android's installer answers the in-app update here -->
+        <receiver
+            android:name=".AppUpdateReceiver"
+            android:exported="false" />
 
         <activity
             android:name=".MainActivity"

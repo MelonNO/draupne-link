@@ -42,7 +42,12 @@
     <string name="dd_pill_offline">OFFLINE</string>
     <string name="dd_pill_waiting">WAITING</string>
     <string name="dd_pill_linked">LINK READY</string>
-    <string name="dd_update">Update available: DRAUPNE Flight %1$s. Tap to download it.</string>
+    <string name="dd_update">Update available: DRAUPNE Flight %1$s. Tap to install it.</string>
+    <string name="dd_update_allow">Allow DRAUPNE Flight to install apps (switch it on, then come back), then tap here again.</string>
+    <string name="dd_update_connected">Disconnect first: the update closes this app, and the sticks with it. Then tap here again.</string>
+    <string name="dd_update_installing">Installing the update... Android asks you to confirm.</string>
+    <string name="dd_update_failed">Update not installed (%1$s). Tap here to try again.</string>
+    <string name="dd_old_downloads">Earlier updates may have left DRAUPNE Flight installers in Downloads. Tap here to open Downloads and delete them.</string>
     <string name="dd_old_app">An earlier DroidDrone Flight is still installed and can take the flight controller. Tap here to remove it.</string>
     <string name="dd_lock_button">LOCK SCREEN</string>
     <string name="dd_locked_title">SCREEN LOCKED</string>

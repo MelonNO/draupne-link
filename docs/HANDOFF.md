@@ -42,6 +42,16 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   - Measured on a far phone with pc.14 (1.0.21): 720p ~4-5 damaged frames/s from random packet loss, which is what
     the parity is for. **Not yet measured with pc.15/16:** the size switch gap, the parity's `recovered` count; the
     phone GPS on a real phone; the map on a real flight.
+- **On main, not released: phone app 2.3.0-pc.18, the in-app updater** (overlay `AppUpdater`, `AppUpdateReceiver`).
+  Every update through the browser left a `DRAUPNE-Flight-*.apk` in the phone's Downloads, which Android doesn't let
+  the app delete. Now the update line's tap downloads into the app's cache, checks GitHub's SHA-256 (`digest` of the
+  asset, `UpdateCheck.sha256`; no digest, no check: Android's signature check still holds), installs with
+  `PackageInstaller` (REQUEST_INSTALL_PACKAGES; "Install unknown apps" asked once) and deletes the file; leftovers go
+  at start. Refused while connected, checked again before the install and before Android's prompt: installing ends
+  the app and the sticks. A note on the first start of pc.18 opens Downloads for the old installers. Phone setup says
+  to use the update line when pc.18+ is already there. **Never run on a phone or emulator**; the first real test is
+  pc.17 to pc.18 through the browser, then pc.18 to the next version in the app. (The draft lived in the private
+  repo's `wip/in-app-updater/`.)
 - 1.0.21 brought video for bad coverage (AUTO / SHARP / ROBUST, parity packets, fast size switch) with pc.15.
 - 1.0.20 bundled phone app 2.3.0-pc.14: the fix for pc.13,
   which on a test phone started no video (intra refresh, where its encoder claimed support) and, the video start being
@@ -108,14 +118,6 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
     without a flight controller. Try it props off first.
 
 ## Ideas not done yet
-
-- **In-app phone app updater** (started, not in a release: the code so far is in the private repo,
-  `wip/in-app-updater/`, with a to-do list). Every update through the
-  browser leaves a `DRAUPNE-Flight-*.apk` in the phone's Downloads, and Android doesn't let the app delete those. Plan
-  the pilot chose: UPDATE downloads into the app's own cache, checks GitHub's SHA-256 (`digest` of the asset), installs
-  with `PackageInstaller` (needs REQUEST_INSTALL_PACKAGES and "Install unknown apps"), deletes the file; leftovers
-  deleted at start; a one-time note with a button opening Downloads for the old ones; Phone setup says to use UPDATE
-  when the app is already there.
 
 - Spectator: a better picture than the pilot's would need a second stream from the phone (costs the phone's 4G
   upload, so the pilot's delay): not done on purpose. A spectator in relay mode isn't supported.

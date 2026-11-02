@@ -14,9 +14,10 @@ The phone app that flies on the drone: upstream [DroidDrone](https://github.com/
 | `Flight/src/main/java/de/droiddrone/flight/Msp.java` | Sticks go through `Serial.writeRcMsp`, and only once Betaflight's channel map is known (or 2 s after the FC was found), never in the wrong order |
 | `Flight/src/main/java/de/droiddrone/flight/DDService.java` | Stops quietly when Android restarts it without the app's settings (it crashed) |
 | `Flight/src/main/java/de/droiddrone/flight/Udp.java` | Measures stick packets arriving; sends `PcLinkStats` every 0.1 s as its own telemetry packet, and the app's version once a second |
-| `Flight/src/main/java/de/droiddrone/flight/UpdateCheck.java` | New: asks GitHub for the latest DRAUPNE Link release and whether the phone app in it is newer; MainActivity shows a tap-to-download line |
+| `Flight/src/main/java/de/droiddrone/flight/UpdateCheck.java` | New: asks GitHub for the latest DRAUPNE Link release, whether the phone app in it is newer, and its SHA-256 (the asset's `digest`); MainActivity shows a tap-to-install line |
+| `Flight/src/main/java/de/droiddrone/flight/AppUpdater.java`, `AppUpdateReceiver.java` | New (pc.18): the tap downloads the APK into the app's own cache, checks its SHA-256, installs it with `PackageInstaller` (Android asks) and deletes it; leftovers go at the next start. Never while connected: installing ends the app. MainActivity also says once that earlier browser updates left installers in Downloads, and opens Downloads on a tap |
 | `Flight/src/main/java/de/droiddrone/flight/PcLinkStats.java` | New: the phone's measurements (record 0x40F0) for DRAUPNE Link's link log; the app's version (record 0x40F1) |
-| `Flight/src/main/AndroidManifest.xml` | The theme; permission to ask for the earlier app's removal, and to see it; any orientation (`fullUser`, was landscape only) |
+| `Flight/src/main/AndroidManifest.xml` | The theme; permission to ask for the earlier app's removal, and to see it; permission to install its own update and the installer's answer (`AppUpdateReceiver`); any orientation (`fullUser`, was landscape only) |
 | `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.9`, release signing from outside the repo |
 | `settings.gradle` | Builds only the Flight app (not upstream's Control app) |
 
