@@ -63,6 +63,17 @@ final class BootReveal extends JComponent {
         JLayeredPane layer = window.getRootPane().getLayeredPane();
         layer.add(reveal, JLayeredPane.DRAG_LAYER);
         reveal.follow();
+        // the window has no size until it is packed or shown: the cover takes the whole pane the moment it gets one,
+        // before the first paint, or the UI shows for a frame before the black
+        layer.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                reveal.follow();
+            }
+        });
+        window.getContentPane().setBackground(Theme.BG);
+        window.getRootPane().setBackground(Theme.BG);
+        window.setBackground(Theme.BG); // the native window too: Windows shows that before Swing's first paint
         window.addWindowListener(new WindowAdapter() {
             @Override
             public void windowOpened(WindowEvent e) {
