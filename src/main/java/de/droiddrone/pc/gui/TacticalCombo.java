@@ -63,38 +63,10 @@ final class TacticalCombo {
         });
     }
 
-    /**
-     * An empty popup menu that rolls open from the top, the scan bar at its edge, its items appearing one after
-     * another as the roll passes them, like a dropdown's options. Nothing of it pops: the part not yet rolled out
-     * isn't painted at all (the menu is see-through there).
-     */
+    /** An empty popup menu whose items appear one after another, like a dropdown's options. */
     static JPopupMenu menu() {
         long[] openedAt = {0};
         JPopupMenu menu = new JPopupMenu() {
-            private long rollMs() {
-                return STAGGER_MS * Math.max(0, getComponentCount() - 1) + REVEAL_MS;
-            }
-
-            @Override
-            public void paint(Graphics g) {
-                long since = System.currentTimeMillis() - openedAt[0];
-                float p = openedAt[0] == 0 ? 1 : Math.min(1f, since / (float) rollMs());
-                if (p >= 1) {
-                    super.paint(g);
-                    return;
-                }
-                float ease = 1 - (1 - p) * (1 - p);
-                int edge = Math.round(getHeight() * ease);
-                Graphics c = g.create(0, 0, getWidth(), edge);
-                try {
-                    super.paint(c);
-                } finally {
-                    c.dispose();
-                }
-                g.setColor(Theme.ACCENT);
-                g.fillRect(0, Math.max(0, edge - 3), getWidth(), 3);
-            }
-
             @Override
             protected void paintChildren(Graphics g) {
                 super.paintChildren(g);
@@ -109,7 +81,6 @@ final class TacticalCombo {
                 }
             }
         };
-        menu.setOpaque(false); // see-through where it hasn't rolled out yet (a lightweight popup, inside the window)
         // the whole menu each tick: an item repainted on its own (hovered) would otherwise skip the cover
         Timer timer = new Timer(15, null);
         timer.addActionListener(e -> {
