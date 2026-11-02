@@ -127,6 +127,45 @@ class MapTest {
     }
 
     @Test
+    void thePhonesPositionRecordParsesAndFillsInWhenTheDroneHasNone() throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+        out.writeShort(0x40F3);
+        out.writeInt(599139000); // 59.9139
+        out.writeInt(107522000); // 10.7522
+        out.writeShort(123);     // alt m
+        out.writeShort(7);       // accuracy m
+        out.writeShort(425);     // 42.5 km/h
+        out.writeShort(270);     // course
+        out.writeShort(2);       // 2 s old
+        FcTelemetry t = new FcTelemetry();
+        t.parse(new de.droiddrone.common.DataReader(bytes.toByteArray(), true), null);
+        FcTelemetry.PhonePosition p = t.getPhonePosition();
+        assertNotNull(p);
+        assertEquals(59.9139, p.latDeg(), 1e-7);
+        assertEquals(10.7522, p.lonDeg(), 1e-7);
+        assertEquals(123, p.altM());
+        assertEquals(7, p.accuracyM());
+        assertEquals(42.5, p.speedKmh(), 1e-9);
+        assertEquals(270, p.courseDeg());
+        assertEquals(2, p.ageS());
+
+        // the drone's GPS is preferred, but there is none: the phone's position is taken after the 5 s grace
+        FlightTrack track = new FlightTrack(null);
+        track.sample(null, p, true, false);
+        assertEquals(1, track.points().size(), "no drone position ever: the phone's at once");
+        assertTrue(track.last().phone());
+        assertEquals(59.9139, track.home().lat(), 1e-7, "armed: home from the phone");
+
+        // the phone preferred: a drone fix is ignored while the phone keeps reporting
+        FlightTrack phoneFirst = new FlightTrack(null);
+        phoneFirst.sample(fix(OSLO_LAT, OSLO_LON, 1000, 2), p, true, true);
+        assertTrue(phoneFirst.last().phone());
+        phoneFirst.sample(fix(OSLO_LAT, OSLO_LON, 1500, 2), p, true, true); // the same phone report again: nothing new
+        assertEquals(1, phoneFirst.points().size(), "the drone's fix waits for the fallback time");
+    }
+
+    @Test
     void aTrackWithoutAFolderStaysInMemory() {
         FlightTrack track = new FlightTrack(null);
         track.sample(fix(OSLO_LAT, OSLO_LON, 1000, 2), true);

@@ -6,28 +6,30 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-02, 1.0.21 + the map, not released)
 
-- **Not released yet (2026-11-02): the map.** MAP button (header) and F3: a map in the video's bottom-left corner
-  (SMALL / LARGE) with the drone's position and heading, its path, home (H) and range rings; Kartverket topo /
-  printed map, satellite (Esri World Imagery), OpenStreetMap, or AUTO (Kartverket in Norway); SAT / MAP and FOLLOW
-  on the map, right-click for the rest, wheel zooms about the pointer, double-click fits the flight. Every GPS report
-  (2 a second from the phone) goes to `Documents\DRAUPNE Link\Tracks	rack-DATE.gpx` as it comes, with
-  `last-position.txt` next to it; MAP > Find drone shows the last known position with copy and map links. Code:
-  `map/Mercator`, `map/TileSource`, `map/TileCache` (`%APPDATA%\DraupneLink	iles`, 2 fetch threads, User-Agent
-  names the app as the OSM policy wants, tiles refetched after 30 days, saved ones shown without internet),
-  `map/FlightTrack`, `gui/MapView` (a child of `VideoView`, so it follows it to full screen and the popped-out
-  window), `gui/FindDroneDialog`. `FcTelemetry.Gps` gained course, HDOP and receivedAt; the link log has
-  lat/lon/alt/sats. Not done on purpose: the phone's own GPS (the pilot said no). The whole thing stays off the
-  stick and video threads (painted with the HUD's 30 Hz refresh). Release it as 1.0.22 when the pilot says so.
-
-- **Released:** DRAUPNE Link **1.0.21** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.15**: SETTINGS > Video
-  AUTO / SHARP / ROBUST (`ControlLink.VideoMode`). ROBUST = 640x360, max bitrate step 2 (1 Mbit/s), key frames twice and
-  a parity packet per frame (`VIDEO_PROFILE` 0x6B, `VIDEO_PARITY` 0x6C; `FrameAssembler.putParity` rebuilds one lost
-  packet). AUTO enters it after 5 s at <=0.5 Mbit/s or 3 stalls in 30 s, leaves after `ROBUST_HOLD_MS` of calm.
-  Size changes on the open camera (`Udp.resizeOnOpenCamera`), verified and resent by the PC. `BitrateControl` steps down
-  on a 250 ms ping spike, no key frame requests while congested, top 4 Mbit/s. `gradlew run --args="probe 60 robust"`
-  measures the link headless (a table per second). Measured on a far phone with pc.14: 720p ~4-5 damaged frames/s from
-  random packet loss, which is what the parity is for. **Not yet measured with pc.15:** the size switch gap (target
-  <0.5 s, logged as "new picture size shown X ms after"), the parity's `recovered` count, key frames twice.
+- **Not released yet (2026-11-02): the map, the header's MENU, phone app pc.16 (built, not published).**
+  - **Map window** (MENU > MAP > Map window, F3): a window of its own for a second screen, hidden until opened,
+    remembers its place (`mapWindow` setting). `gui/MapWindow` = toolbar (FOLLOW, FIT FLIGHT, HOME, FIND DRONE, the
+    map picture, the coordinate format) + `gui/MapView` + the figures: cursor position, terrain height under the
+    cursor (m and ft, `map/Elevation`: Kartverket's height service in Norway, Open-Meteo elsewhere), the drone's
+    position, altitude m/ft, home distance/bearing, POSITION FROM (drone or phone GPS). Coordinates in MGRS (default),
+    UTM, decimal or DMS (`map/Coordinates`, Krüger UTM + Norway's zone exceptions; tested against GeographicLib's
+    38SMB example). Pictures: Kartverket topo / printed map, satellite (Esri World Imagery), OpenStreetMap, AUTO.
+  - **Offline:** tiles are kept for good (`%APPDATA%\DraupneLink	iles`, never refetched or deleted) and when the map
+    rests on a place for 1.2 s the levels 4 under and 3 over it are fetched too (`TileCache.prefetch`, 1500 tiles a
+    rest, a slow third thread) - not for OpenStreetMap (its policy forbids it); Esri's terms are a grey area, the
+    pilot wanted it. Every position goes to `Documents\DRAUPNE Link\Tracks	rack-DATE.gpx` as it comes, plus
+    `last-position.txt` (now with MGRS); MENU > MAP > Find drone shows the last known position.
+  - **Phone GPS** (MENU > MAP > Position from: DRONE / PHONE): phone app **pc.16** sends its own GPS once a second as
+    record `0x40F3` (`PcLinkStats.writePhonePositionTo`, `PhoneLocation`; ACCESS_FINE_LOCATION asked for once, the
+    service runs without it; foreground type `location` only when granted). `FlightTrack.sample` takes both; the other
+    fills in after `FALLBACK_MS` (5 s) without the chosen one, so a dead FC still leaves the phone's position. pc.16
+    is built (`build/flight/DRAUPNE-Flight-2.3.0-pc.16.apk`, not from a clean HEAD) but not published or pinned:
+    release it with the next PC version (1.0.22).
+  - **Header:** one MENU button (`gui/SlideMenu`) slides out SETUP, VIDEO, OSD, MAP, LINK, TOOLS (and UPDATE when there
+    is one) and stays open until pressed again; the old SETTINGS rows are sorted into those. The menus' reveal covered
+    rows with their own background, which showed black bars on a label or separator row: now the menu's colour.
+  - Measured on a far phone with pc.14 (1.0.21): 720p ~4-5 damaged frames/s from random packet loss, which is what the
+    parity is for. **Not yet measured with pc.15/16:** the size switch gap, the parity's `recovered` count.
 - 1.0.20 bundled phone app 2.3.0-pc.14: the fix for pc.13,
   which on a test phone started no video (intra refresh, where its encoder claimed support) and, the video start being
   on the packet thread, held up pings and sticks. pc.14: no intra refresh, the video starts on its own thread
@@ -165,7 +167,7 @@ Lessons from releasing:
 
 ## Testing and diagnosing
 
-- `gradlew.bat test`: 205 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
+- `gradlew.bat test`: 217 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
   count, spectator mode end to end on loopback, flight mode / ARM / failsafe planning, setup page composition).
   Loopback tests need full-size packets to catch size bugs: 1.0.17's spectator cut-off passed with a plain test
   picture (see `SpectatorTest.fullSizePacketsReachTheSpectatorWhole`).

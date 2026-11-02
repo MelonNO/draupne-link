@@ -82,17 +82,28 @@ public class MainWindow extends JFrame {
     private final Timer linkLogTimer = new Timer(100, e -> sampleLinkLog());
     private VideoPipeline video;
     private final VideoView videoView = new VideoView();
-    /** The map in the video's corner (MAP > Show map, F3): where the drone is and has been. */
+    /** The map in its own window (MENU > MAP > Map window, F3), for a second screen: where the drone is and has been. */
     private final de.droiddrone.pc.map.TileCache tileCache = new de.droiddrone.pc.map.TileCache(de.droiddrone.pc.map.TileCache.defaultDir());
-    private final MapView mapView = new MapView(tileCache);
-    private final JButton mapButton = Theme.secondaryButton("Map");
-    static final String MAP_SHOW_KEY = "mapShow";
+    private final de.droiddrone.pc.map.Elevation elevation = new de.droiddrone.pc.map.Elevation();
+    private MapWindow mapWindow;
     static final String MAP_SOURCE_KEY = "mapSource";
-    private static final String[] MAP_SHOW = {"off", "small", "large"};
-    private String mapShow = "small";
+    static final String COORDINATES_KEY = "coordinateFormat";
+    static final String GPS_SOURCE_KEY = "gpsSource";
+    private de.droiddrone.pc.map.TileSource mapSource;
+    private de.droiddrone.pc.map.Coordinates.Format coordinateFormat = de.droiddrone.pc.map.Coordinates.Format.MGRS;
+    /** MAP > Position from: the phone's own GPS rather than the drone's (the other fills in when it has nothing). */
+    private boolean preferPhone;
     /** The connection's GPS positions, written to a GPX file as they come; kept after disconnecting for FIND DRONE. */
     private de.droiddrone.pc.map.FlightTrack track;
     private long mapIdleUpdatedAt;
+    /** The header: MENU slides out into these, each with a menu of its own. */
+    private final JButton menuButton = Theme.secondaryButton("Menu");
+    private final SlideMenu headerMenu = new SlideMenu(menuButton);
+    private final JButton videoButton = Theme.secondaryButton("Video");
+    private final JButton osdButton = Theme.secondaryButton("OSD");
+    private final JButton mapButton = Theme.secondaryButton("Map");
+    private final JButton linkButton = Theme.secondaryButton("Link");
+    private final JButton toolsButton = Theme.secondaryButton("Tools");
     /** Where videoView normally lives; it moves to fullScreen and back. */
     private JPanel videoHolder;
     private JFrame fullScreen;
@@ -133,7 +144,6 @@ public class MainWindow extends JFrame {
     /** Wanted to fly, but another PC flies: told once per connection. */
     private boolean toldNotFlying;
     private final JButton setupButton = Theme.secondaryButton("Setup");
-    private final JButton settingsButton = Theme.secondaryButton("Settings");
     /** Shown when GitHub has a newer release; downloads and installs it (or opens its page, see startUpdate). */
     private final JButton updateButton = Theme.primaryButton("Update");
     private volatile de.droiddrone.pc.setup.UpdateCheck.Release update;
@@ -225,20 +235,11 @@ public class MainWindow extends JFrame {
         hardwareDecode = "true".equalsIgnoreCase(config.getString(HW_DECODE_KEY));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
         videoView.setUpsideDown("true".equalsIgnoreCase(config.getString(UPSIDE_DOWN_KEY)));
-        String show = config.getString(MAP_SHOW_KEY);
-        mapShow = show != null && java.util.Arrays.asList(MAP_SHOW).contains(show) ? show : "small";
-        mapView.setSource(de.droiddrone.pc.map.TileSource.parse(config.getString(MAP_SOURCE_KEY)));
-        mapView.setOnSourceChosen(s -> save(Map.of(MAP_SOURCE_KEY, s == null ? de.droiddrone.pc.map.TileSource.AUTO : s.id)));
-        videoView.add(mapView); // a child of the video view: it goes along to full screen and the popped-out window
-        videoView.addComponentListener(new java.awt.event.ComponentAdapter() {
-            @Override
-            public void componentResized(java.awt.event.ComponentEvent e) {
-                layoutMap();
-            }
-        });
-        layoutMap();
+        mapSource = de.droiddrone.pc.map.TileSource.parse(config.getString(MAP_SOURCE_KEY));
+        coordinateFormat = de.droiddrone.pc.map.Coordinates.Format.parse(config.getString(COORDINATES_KEY));
+        preferPhone = "phone".equalsIgnoreCase(config.getString(GPS_SOURCE_KEY));
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
-        bindKey(java.awt.event.KeyEvent.VK_F3, () -> setMapShow(MAP_SHOW[(java.util.Arrays.asList(MAP_SHOW).indexOf(mapShow) + 1) % MAP_SHOW.length]));
+        bindKey(java.awt.event.KeyEvent.VK_F3, this::toggleMapWindow);
         bindKey(java.awt.event.KeyEvent.VK_F2, () -> {
             videoView.setOsdEnabled(!videoView.isOsdEnabled());
             save(Map.of("osd", Boolean.toString(videoView.isOsdEnabled())));
@@ -276,22 +277,35 @@ public class MainWindow extends JFrame {
         return menu;
     }
 
-    /** SETTINGS' menu, like SETUP's: each option with what it does; the versions at the bottom. */
-    private JPopupMenu settingsMenu() {
+    /** A menu in the header's style. */
+    private static JPopupMenu styledMenu() {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
-        // a setting flipped where it is ...
+        return menu;
+    }
+
+    /** VIDEO: the picture, its recording, where it is shown. */
+    private JPopupMenu videoMenu() {
+        JPopupMenu menu = styledMenu();
+        ControlLink.VideoMode videoMode = ControlLink.VideoMode.parse(config.getString(ControlLink.VIDEO_MODE_KEY));
+        menu.add(new MenuRows.ChoiceRow("Video", "Bad coverage mode: 640x360, up to 1 Mbit/s, sturdier. Auto switches by itself",
+                new String[]{"AUTO", "SHARP", "ROBUST"}, videoMode.ordinal(), i -> {
+                    ControlLink.VideoMode m = ControlLink.VideoMode.values()[i];
+                    save(Map.of(ControlLink.VIDEO_MODE_KEY, m.name().toLowerCase(java.util.Locale.ROOT)));
+                    Connection c = connection;
+                    if (c != null) c.getLink().setVideoMode(m);
+                    logLine(switch (m) {
+                        case AUTO -> "Video: bad coverage mode comes on by itself when the link is weak.";
+                        case SHARP -> "Video: always the full picture (no bad coverage mode).";
+                        case ROBUST -> "Video: bad coverage mode always - 640x360, up to 1 Mbit/s, key frames sent twice.";
+                    });
+                }));
         menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;; the OSD stays upright. No delay",
                 videoView.isUpsideDown(), on -> {
                     videoView.setUpsideDown(on);
                     save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
                     logLine(on ? "Picture turned upside down." : "Picture the right way up.");
-                }));
-        menu.add(new MenuRows.SwitchRow("Warning sounds", "A beep when the sticks stop reaching the drone",
-                alertSound.isEnabled(), on -> {
-                    alertSound.setEnabled(on);
-                    save(Map.of(AlertSound.KEY, Boolean.toString(on)));
                 }));
         menu.add(new MenuRows.SwitchRow("Record video", "Every flight to Videos\\DRAUPNE Link, as it comes: no extra delay",
                 recordVideo, on -> {
@@ -307,18 +321,39 @@ public class MainWindow extends JFrame {
                         logLine("Recording stopped.");
                     }
                 }));
-        ControlLink.VideoMode videoMode = ControlLink.VideoMode.parse(config.getString(ControlLink.VIDEO_MODE_KEY));
-        menu.add(new MenuRows.ChoiceRow("Video", "Bad coverage mode: 640x360, up to 1 Mbit/s, sturdier. Auto switches by itself",
-                new String[]{"AUTO", "SHARP", "ROBUST"}, videoMode.ordinal(), i -> {
-                    ControlLink.VideoMode m = ControlLink.VideoMode.values()[i];
-                    save(Map.of(ControlLink.VIDEO_MODE_KEY, m.name().toLowerCase(java.util.Locale.ROOT)));
-                    Connection c = connection;
-                    if (c != null) c.getLink().setVideoMode(m);
-                    logLine(switch (m) {
-                        case AUTO -> "Video: bad coverage mode comes on by itself when the link is weak.";
-                        case SHARP -> "Video: always the full picture (no bad coverage mode).";
-                        case ROBUST -> "Video: bad coverage mode always - 640x360, up to 1 Mbit/s, key frames sent twice.";
-                    });
+        menu.add(new MenuRows.SwitchRow("Hardware video decoding", "GPU (D3D11VA), next connection. Only for big pictures: slower at 720p",
+                hardwareDecode, on -> {
+                    hardwareDecode = on;
+                    save(Map.of(HW_DECODE_KEY, Boolean.toString(on)));
+                    logLine(on ? "Hardware video decoding: from the next connection (software if the GPU can't)."
+                            : "Software video decoding from the next connection.");
+                }));
+        menu.addSeparator();
+        menu.add(new MenuRows.WindowRow(popOut == null ? "Pop out video" : "Video back",
+                popOut == null ? "The video in a window of its own, e.g. on a second screen" : "The video back into this window", this::togglePopOut));
+        menu.add(new MenuRows.WindowRow("Full screen", "The video over the whole screen. F11; Esc ends it", this::toggleFullScreen));
+        return menu;
+    }
+
+    /** OSD: the HUD over the video. */
+    private JPopupMenu osdMenu() {
+        JPopupMenu menu = styledMenu();
+        menu.add(new MenuRows.SwitchRow("OSD", "The HUD over the video. F2 switches", videoView.isOsdEnabled(), on -> {
+            videoView.setOsdEnabled(on);
+            save(Map.of("osd", Boolean.toString(on)));
+        }));
+        menu.add(new MenuRows.WindowRow("OSD layout", "Choose the OSD elements and place them, like Betaflight",
+                () -> OsdSettingsDialog.open(this, this)));
+        return menu;
+    }
+
+    /** LINK: how the connection behaves. */
+    private JPopupMenu linkMenu() {
+        JPopupMenu menu = styledMenu();
+        menu.add(new MenuRows.SwitchRow("Warning sounds", "A beep when the sticks stop reaching the drone",
+                alertSound.isEnabled(), on -> {
+                    alertSound.setEnabled(on);
+                    save(Map.of(AlertSound.KEY, Boolean.toString(on)));
                 }));
         menu.add(new MenuRows.SwitchRow("Allow spectators", "Off by default. Other PCs watch your flight through this PC's upload",
                 de.droiddrone.pc.Connection.spectatorsAllowed(config), on -> {
@@ -328,19 +363,14 @@ public class MainWindow extends JFrame {
                     logLine(on ? "Spectators allowed: a second PC that connects watches through this one."
                             : "Spectators off: nobody can watch through this PC.");
                 }));
-        menu.add(new MenuRows.SwitchRow("Hardware video decoding", "GPU (D3D11VA), next connection. Only for big pictures: slower at 720p",
-                hardwareDecode, on -> {
-                    hardwareDecode = on;
-                    save(Map.of(HW_DECODE_KEY, Boolean.toString(on)));
-                    logLine(on ? "Hardware video decoding: from the next connection (software if the GPU can't)."
-                            : "Software video decoding from the next connection.");
-                }));
+        return menu;
+    }
+
+    /** TOOLS: tests, and what this is. */
+    private JPopupMenu toolsMenu() {
+        JPopupMenu menu = styledMenu();
         menu.add(new MenuRows.SwitchRow("Latency test", "A time code for the drone's camera: the real delay",
                 latencyMeter != null, this::setLatencyTest));
-        menu.addSeparator();
-        // ... and settings with a window of their own
-        menu.add(new MenuRows.WindowRow("OSD layout", "Choose the OSD elements and place them, like Betaflight",
-                () -> OsdSettingsDialog.open(this, this)));
         JMenuItem motors = new MenuRows.WindowRow("Motor test", isLinkActive()
                 ? "Disconnect from the drone first: it runs over USB"
                 : "Spin each motor: right place, right direction?", () -> MotorTestDialog.open(this, this));
@@ -408,21 +438,26 @@ public class MainWindow extends JFrame {
         setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         right.setOpaque(false);
+        menuButton.setToolTipText("Setup, video, OSD, map, link and tools");
         setupButton.setToolTipText("First-time setup, or PC, phone or drone setup on its own");
         dropdown(setupButton, this::setupMenu);
+        videoButton.setToolTipText("Bad coverage mode, camera upside down, recording, pop out, full screen");
+        dropdown(videoButton, this::videoMenu);
+        osdButton.setToolTipText("The HUD over the video: on or off, its layout");
+        dropdown(osdButton, this::osdMenu);
+        mapButton.setToolTipText("Where the drone is and has been: the map window, satellite or topo, find a lost drone");
+        dropdown(mapButton, this::mapMenu);
+        linkButton.setToolTipText("Warning sounds, spectators");
+        dropdown(linkButton, this::linkMenu);
+        toolsButton.setToolTipText("Latency test, motor test, versions");
+        dropdown(toolsButton, this::toolsMenu);
         updateButton.setVisible(false);
         updateButton.addActionListener(e -> startUpdate());
-        right.add(updateButton);
-        right.add(setupButton);
-        settingsButton.setToolTipText("Camera upside down, OSD layout, motor test");
-        dropdown(settingsButton, this::settingsMenu);
-        right.add(settingsButton);
-        mapButton.setToolTipText("Where the drone is and has been: show the map, satellite or topo, find a lost drone");
-        dropdown(mapButton, this::mapMenu);
-        right.add(mapButton);
-        popOutButton.setToolTipText("Show the video in a separate window, e.g. on a second screen");
         popOutButton.addActionListener(e -> togglePopOut());
-        right.add(popOutButton);
+        // the first added sits nearest MENU: UPDATE (when there is one), then the rest, SETUP at the far left
+        for (JButton b : new JButton[]{updateButton, toolsButton, linkButton, mapButton, osdButton, videoButton, setupButton}) headerMenu.addItem(b);
+        headerMenu.finishNow();
+        right.add(headerMenu);
         right.add(Box.createHorizontalStrut(8));
         right.add(statePill);
         header.add(right, BorderLayout.EAST);
@@ -935,7 +970,7 @@ public class MainWindow extends JFrame {
         if (c != null && tr != null) {
             de.droiddrone.pc.FcTelemetry t = c.getLink().getTelemetry();
             de.droiddrone.pc.FcTelemetry.Status st = t.getStatus();
-            tr.sample(t.getGps(), st != null && st.armed());
+            tr.sample(t.getGps(), t.getPhonePosition(), st != null && st.armed(), preferPhone);
         }
         if (l == null || c == null) return;
         RcSession s = session;
@@ -950,15 +985,16 @@ public class MainWindow extends JFrame {
         }
     }
 
-    /** The map gets the latest position and heading; idle (no link) only once a second, there is nothing to move. */
+    /** The map window gets the latest position and heading; idle (no link) only once a second, nothing moves. */
     private void refreshMap() {
-        if (!mapView.isVisible()) return;
+        MapWindow w = mapWindow;
+        if (w == null || !w.isVisible()) return;
         Connection c = connection;
         long now = System.currentTimeMillis();
         if (c == null) {
             if (now - mapIdleUpdatedAt < 1000) return;
             mapIdleUpdatedAt = now;
-            mapView.update(track, null, -1, false, false);
+            w.update(track, null, -1, false, false);
             return;
         }
         ControlLink link = c.getLink();
@@ -966,47 +1002,68 @@ public class MainWindow extends JFrame {
         de.droiddrone.pc.FcTelemetry.Attitude att = t.getAttitude();
         boolean attFresh = att != null && now - att.receivedAt() < 2000;
         ControlLink.State state = link.getState();
-        mapView.update(track, t.getGps(), attFresh ? att.headingDeg() : -1, link.isFcLost(),
+        w.update(track, t.getGps(), attFresh ? att.headingDeg() : -1, link.isFcLost(),
                 state == ControlLink.State.READY || state == ControlLink.State.SPECTATING);
     }
 
-    /** The map sits in the video's bottom-left corner: a third of it, or half when LARGE. */
-    private void layoutMap() {
-        int w = videoView.getWidth(), h = videoView.getHeight();
-        boolean show = !"off".equals(mapShow) && w > 200 && h > 150;
-        mapView.setVisible(show);
-        if (!show) return;
-        boolean large = "large".equals(mapShow);
-        int mw = (int) Math.round(w * (large ? 0.5 : 0.32)), mh = (int) Math.round(h * (large ? 0.62 : 0.38));
-        mw = Math.min(w - 32, Math.max(mw, 300));
-        mh = Math.min(h - 32, Math.max(mh, 220));
-        mapView.setBounds(16, h - mh - 16, mw, mh);
+    private MapWindow mapWindow() {
+        if (mapWindow == null) {
+            mapWindow = new MapWindow(this, tileCache, elevation, mapSource, coordinateFormat, config.getString(MapWindow.BOUNDS_KEY), this::save,
+                    this::setMapSource, this::setCoordinateFormat, this::openFindDrone);
+            mapWindow.setPreferPhone(preferPhone);
+        }
+        return mapWindow;
     }
 
-    private void setMapShow(String show) {
-        mapShow = show;
-        save(Map.of(MAP_SHOW_KEY, show));
-        layoutMap();
-        videoView.repaint();
+    /** MAP > Map window, F3: opens it (in front), or hides it. */
+    private void toggleMapWindow() {
+        MapWindow w = mapWindow();
+        if (w.isVisible()) {
+            w.setVisible(false);
+            return;
+        }
+        mapIdleUpdatedAt = 0;
+        w.setVisible(true);
+        w.toFront();
+        refreshMap();
     }
 
-    /** MAP's menu: show it, which map, find the drone, the track files. */
+    private void setMapSource(de.droiddrone.pc.map.TileSource source) {
+        mapSource = source;
+        save(Map.of(MAP_SOURCE_KEY, source == null ? de.droiddrone.pc.map.TileSource.AUTO : source.id));
+        if (mapWindow != null && mapWindow.source() != source) mapWindow.setSource(source);
+    }
+
+    private void setCoordinateFormat(de.droiddrone.pc.map.Coordinates.Format format) {
+        coordinateFormat = format;
+        save(Map.of(COORDINATES_KEY, format.id));
+        if (mapWindow != null) mapWindow.setFormat(format);
+    }
+
+    private void openFindDrone() {
+        FindDroneDialog.open(this, track, tileCache, mapSource);
+    }
+
+    /** MAP's menu: the window, the picture, how positions are written, which GPS, find the drone, the track files. */
     private JPopupMenu mapMenu() {
-        JPopupMenu menu = TacticalCombo.menu();
-        menu.setBackground(Theme.PANEL_2);
-        menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
-        menu.add(new MenuRows.ChoiceRow("Show map", "In the video's bottom-left corner. F3 switches; drag to pan, wheel to zoom, double-click fits the flight",
-                new String[]{"OFF", "SMALL", "LARGE"}, java.util.Arrays.asList(MAP_SHOW).indexOf(mapShow), i -> setMapShow(MAP_SHOW[i])));
+        JPopupMenu menu = styledMenu();
+        menu.add(new MenuRows.WindowRow("Map window", "Where the drone is and has been, in a window of its own for a second screen. F3",
+                this::toggleMapWindow));
         de.droiddrone.pc.map.TileSource[] sources = {null, de.droiddrone.pc.map.TileSource.KARTVERKET_TOPO,
                 de.droiddrone.pc.map.TileSource.KARTVERKET_RASTER, de.droiddrone.pc.map.TileSource.SATELLITE, de.droiddrone.pc.map.TileSource.OSM};
-        int selected = Math.max(0, java.util.Arrays.asList(sources).indexOf(mapView.source()));
-        menu.add(new MenuRows.ChoiceRow("Map", "Auto: Kartverket's topo map in Norway, OpenStreetMap elsewhere. Paper: Kartverket's printed map. SAT / MAP on the map switches too",
-                new String[]{"AUTO", "TOPO", "PAPER", "SAT", "OSM"}, selected, i -> {
-                    mapView.setSource(sources[i]);
-                    save(Map.of(MAP_SOURCE_KEY, sources[i] == null ? de.droiddrone.pc.map.TileSource.AUTO : sources[i].id));
+        int selected = Math.max(0, java.util.Arrays.asList(sources).indexOf(mapSource));
+        menu.add(new MenuRows.ChoiceRow("Map", "Auto: Kartverket's topo map in Norway, OpenStreetMap elsewhere. Paper: Kartverket's printed map. Sat: Esri's pictures",
+                new String[]{"AUTO", "TOPO", "PAPER", "SAT", "OSM"}, selected, i -> setMapSource(sources[i])));
+        menu.add(new MenuRows.ChoiceRow("Coordinates", "How positions are written: MGRS (the military grid), UTM, decimal degrees, degrees-minutes-seconds",
+                new String[]{"MGRS", "UTM", "LAT LON", "DMS"}, coordinateFormat.ordinal(),
+                i -> setCoordinateFormat(de.droiddrone.pc.map.Coordinates.Format.values()[i])));
+        menu.add(new MenuRows.ChoiceRow("Position from", "The drone's GPS, or the phone's own (phone app pc.16, location allowed). The other fills in when the chosen one has nothing",
+                new String[]{"DRONE", "PHONE"}, preferPhone ? 1 : 0, i -> {
+                    preferPhone = i == 1;
+                    save(Map.of(GPS_SOURCE_KEY, preferPhone ? "phone" : "drone"));
+                    if (mapWindow != null) mapWindow.setPreferPhone(preferPhone);
                 }));
-        menu.add(new MenuRows.WindowRow("Find drone", "The last known position with the coordinates to copy and map links, to go and get it",
-                () -> FindDroneDialog.open(this, track, tileCache, mapView.source())));
+        menu.add(new MenuRows.WindowRow("Find drone", "The last known position with the coordinates to copy and map links, to go and get it", this::openFindDrone));
         menu.add(new MenuRows.WindowRow("Tracks folder", "Every flight's path as a GPX file, and last-position.txt (Documents\\DRAUPNE Link\\Tracks)", () -> {
             try {
                 java.awt.Desktop.getDesktop().open(de.droiddrone.pc.map.FlightTrack.defaultDir().toFile());

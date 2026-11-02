@@ -73,6 +73,8 @@ public class FcTelemetry {
     static final short PHONE_LINK_STATS = 0x40F0;
     /** The phone app's version, once a second (DRAUPNE Link's Flight app 2.3.0-pc.5 on). */
     static final short PHONE_APP_VERSION = 0x40F1;
+    /** The phone's own GPS position (phone app 2.3.0-pc.16 on, once a second when the pilot allowed location). */
+    static final short PHONE_POSITION = 0x40F3;
     /** The phone's encoder: bitrate setting (bit/s) and intra refresh (DRAUPNE Flight 2.3.0-pc.13 on). */
     static final short PHONE_ENCODER = 0x40F2;
     /** Telemetry this long without a version: the phone app is older than 2.3.0-pc.5 (or upstream's own). */
@@ -91,6 +93,9 @@ public class FcTelemetry {
                       double latDeg, double lonDeg, int travelledM, int courseDeg, double hdop, long receivedAt) {}
 
     public record Timers(int onSeconds, int flySeconds, int lastArmSeconds) {}
+
+    /** The phone's own GPS: accuracy in m (65535 = unknown), ageS how old the fix was when sent. */
+    public record PhonePosition(double latDeg, double lonDeg, int altM, int accuracyM, double speedKmh, int courseDeg, int ageS, long receivedAt) {}
 
     /** The phone's mobile network: "LTE", "5G", ... and signal 0-100 %. */
     public record Network(String name, int strengthPercent) {}
@@ -171,6 +176,7 @@ public class FcTelemetry {
     private volatile long lastFcDataAt;
     private PhoneLink phoneLink;
     private volatile String phoneAppVersion;
+    private volatile PhonePosition phonePosition;
     /** When the first record from the phone arrived; 0 = none yet. */
     private volatile long firstRecordAt;
 
@@ -307,11 +313,25 @@ public class FcTelemetry {
                 phoneTargetBitRate = b.readInt();
                 phoneIntraRefresh = b.readByte() != 0;
             }
+            case PHONE_POSITION -> {
+                double lat = b.readInt() / 1e7, lon = b.readInt() / 1e7;
+                int alt = b.readShort();
+                int accuracy = b.readShort() & 0xffff;
+                double kmh = (b.readShort() & 0xffff) / 10.0;
+                int course = b.readShort() & 0xffff;
+                int age = b.readShort() & 0xffff;
+                phonePosition = new PhonePosition(lat, lon, alt, accuracy, kmh, course, age, System.currentTimeMillis());
+            }
             default -> {
                 return false;
             }
         }
         return true;
+    }
+
+    /** The phone's own GPS position, or null: none yet, or a phone app older than 2.3.0-pc.16 / no location allowed. */
+    public PhonePosition getPhonePosition() {
+        return phonePosition;
     }
 
     /** The phone app's version as it says, or null: not said yet, or an app too old to say (see phoneAppSilent). */

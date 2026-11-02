@@ -35,6 +35,25 @@ final class PcLinkStats {
     /** The encoder's bitrate setting (bit/s) and whether it uses intra refresh: the PC decides the bitrate from it. */
     static final short ENCODER_CODE = 0x40F2;
 
+    /**
+     * The phone's own GPS position, once a second when the pilot allowed location: lat and lon (1e-7 degrees),
+     * altitude (m), accuracy (m), speed (km/h x 10), course (degrees), age of the fix (s). The PC's map shows it
+     * instead of, or when there is no longer, the drone's.
+     */
+    static final short PHONE_POSITION_CODE = 0x40F3;
+
+    static void writePhonePositionTo(DataOutputStream out, android.location.Location l) throws IOException {
+        out.writeShort(PHONE_POSITION_CODE);
+        out.writeInt((int) Math.round(l.getLatitude() * 1e7));
+        out.writeInt((int) Math.round(l.getLongitude() * 1e7));
+        out.writeShort((int) Math.max(-32768, Math.min(32767, Math.round(l.hasAltitude() ? l.getAltitude() : 0))));
+        out.writeShort((int) Math.min(65535, l.hasAccuracy() ? Math.round(l.getAccuracy()) : 65535));
+        out.writeShort((int) Math.min(65535, l.hasSpeed() ? Math.round(l.getSpeed() * 36) : 0));
+        out.writeShort(l.hasBearing() ? Math.round(l.getBearing()) % 360 : 0);
+        long ageMs = (android.os.SystemClock.elapsedRealtimeNanos() - l.getElapsedRealtimeNanos()) / 1_000_000L;
+        out.writeShort((int) Math.min(65535, Math.max(0, ageMs / 1000)));
+    }
+
     static void writeEncoderTo(DataOutputStream out, int targetBitRate, boolean intraRefresh) throws IOException {
         out.writeShort(ENCODER_CODE);
         out.writeInt(targetBitRate);

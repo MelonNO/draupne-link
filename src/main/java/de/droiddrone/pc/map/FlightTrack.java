@@ -17,24 +17,33 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Where the drone has been this connection: every GPS position the flight controller reported (about 2 a second),
- * written as it comes to a GPX file (Documents\DRAUPNE Link\Tracks\track-DATE.gpx: any map program opens it, and a
- * file cut short by a crash still holds every point) and, once a second, to last-position.txt next to it: the drone's
- * last known position with links to open it on a map. Home is where the drone first had a 3D fix while armed, as
- * Betaflight sets it. Thread-safe: samples come from the window's timer, readers from the painter.
+ * Where the drone has been this connection: every position reported (about 2 a second from the drone's GPS, 1 a
+ * second from the phone's), written as it comes to a GPX file (Documents\DRAUPNE Link\Tracks\track-DATE.gpx: any map
+ * program opens it, and a file cut short by a crash still holds every point) and, once a second, to
+ * last-position.txt next to it: the drone's last known position with links to open it on a map.
+ * <p>
+ * Two sources: the drone's GPS through the flight controller, and the phone's own GPS (phone app 2.3.0-pc.16 on,
+ * when the pilot allowed location). The pilot chooses one in the settings; the other fills in when the chosen one
+ * has given nothing for {@value #FALLBACK_MS} ms, so a dead flight controller still leaves the phone's position, and
+ * a phone without a fix the drone's. Home is where the drone first had a 3D fix while armed, as Betaflight sets it.
+ * Thread-safe: samples come from the window's timer, readers from the painter.
  */
 public final class FlightTrack {
-    /** One GPS report. Speed in km/h, course and altitude as the GPS gave them. */
-    public record Point(long timeMs, double lat, double lon, int altM, double speedKmh, int courseDeg, int sats, boolean armed) {}
+    /** One position report. Speed in km/h, course and altitude as the GPS gave them; phone = from the phone's GPS. */
+    public record Point(long timeMs, double lat, double lon, int altM, double speedKmh, int courseDeg, int sats, boolean armed, boolean phone) {}
 
+    static final long FALLBACK_MS = 5000;
     private static final DateTimeFormatter FILE = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_INSTANT;
     private static final long LAST_POSITION_EVERY_MS = 1000;
+    /** A phone position older than this (the phone's GPS lost) isn't a position. */
+    private static final int PHONE_MAX_AGE_S = 30;
 
     private final Path dir;
     private final List<Point> points = new ArrayList<>();
     private Point home;
-    private long lastReceivedAt;
+    private long lastDroneAt, lastPhoneAt;
+    private long lastDronePointAt, lastPhonePointAt;
     private Path file;
     private BufferedWriter out;
     private long lastPositionWrittenAt;
@@ -51,14 +60,37 @@ public final class FlightTrack {
         return Files.createDirectories(Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Tracks"));
     }
 
-    /** The newest GPS report (the same one twice is ignored) and whether the FC says armed. */
-    public synchronized void sample(FcTelemetry.Gps gps, boolean armed) {
-        if (closed || gps == null || gps.receivedAt() == 0 || gps.receivedAt() == lastReceivedAt) return;
-        lastReceivedAt = gps.receivedAt();
-        if (gps.fix() < 1 || (gps.latDeg() == 0 && gps.lonDeg() == 0)) return;
-        Point p = new Point(gps.receivedAt(), gps.latDeg(), gps.lonDeg(), gps.altM(), gps.speedKmh(), gps.courseDeg(), gps.sats(), armed);
+    /** The drone's GPS only. */
+    public void sample(FcTelemetry.Gps gps, boolean armed) {
+        sample(gps, null, armed, false);
+    }
+
+    /**
+     * The newest reports (the same one twice is ignored) and whether the FC says armed.
+     * @param preferPhone the pilot chose the phone's GPS; the drone's fills in when the phone gives nothing
+     */
+    public synchronized void sample(FcTelemetry.Gps gps, FcTelemetry.PhonePosition phone, boolean armed, boolean preferPhone) {
+        if (closed) return;
+        long now = System.currentTimeMillis();
+        boolean droneNew = gps != null && gps.receivedAt() != 0 && gps.receivedAt() != lastDroneAt;
+        if (droneNew) lastDroneAt = gps.receivedAt();
+        boolean droneFix = droneNew && gps.fix() >= 1 && !(gps.latDeg() == 0 && gps.lonDeg() == 0);
+        boolean phoneNew = phone != null && phone.receivedAt() != 0 && phone.receivedAt() != lastPhoneAt;
+        if (phoneNew) lastPhoneAt = phone.receivedAt();
+        boolean phoneFix = phoneNew && phone.ageS() <= PHONE_MAX_AGE_S && !(phone.latDeg() == 0 && phone.lonDeg() == 0);
+
+        Point p = null;
+        if (preferPhone) {
+            if (phoneFix) p = phonePoint(phone, armed);
+            else if (droneFix && now - lastPhonePointAt > FALLBACK_MS) p = dronePoint(gps, armed);
+        } else {
+            if (droneFix) p = dronePoint(gps, armed);
+            else if (phoneFix && now - lastDronePointAt > FALLBACK_MS) p = phonePoint(phone, armed);
+        }
+        if (p == null) return;
+        if (p.phone()) lastPhonePointAt = now; else lastDronePointAt = now;
         points.add(p);
-        if (home == null && armed && gps.fix() >= 2) home = p;
+        if (home == null && armed && (p.phone() || gps.fix() >= 2)) home = p;
         if (dir != null) {
             try {
                 write(p);
@@ -70,6 +102,14 @@ public final class FlightTrack {
                 // the files are a convenience; the map in the window still has the track
             }
         }
+    }
+
+    private static Point dronePoint(FcTelemetry.Gps gps, boolean armed) {
+        return new Point(gps.receivedAt(), gps.latDeg(), gps.lonDeg(), gps.altM(), gps.speedKmh(), gps.courseDeg(), gps.sats(), armed, false);
+    }
+
+    private static Point phonePoint(FcTelemetry.PhonePosition phone, boolean armed) {
+        return new Point(phone.receivedAt(), phone.latDeg(), phone.lonDeg(), phone.altM(), phone.speedKmh(), phone.courseDeg(), 0, armed, true);
     }
 
     public synchronized List<Point> points() {
@@ -118,8 +158,9 @@ public final class FlightTrack {
         }
         out.write(String.format(Locale.ROOT,
                 "   <trkpt lat=\"%.7f\" lon=\"%.7f\"><ele>%d</ele><time>%s</time><sat>%d</sat>"
-                        + "<extensions><dl:speed_kmh>%.1f</dl:speed_kmh><dl:course>%d</dl:course><dl:armed>%d</dl:armed></extensions></trkpt>\n",
-                p.lat(), p.lon(), p.altM(), ISO.format(Instant.ofEpochMilli(p.timeMs())), p.sats(), p.speedKmh(), p.courseDeg(), p.armed() ? 1 : 0));
+                        + "<extensions><dl:speed_kmh>%.1f</dl:speed_kmh><dl:course>%d</dl:course><dl:armed>%d</dl:armed><dl:source>%s</dl:source></extensions></trkpt>\n",
+                p.lat(), p.lon(), p.altM(), ISO.format(Instant.ofEpochMilli(p.timeMs())), p.sats(), p.speedKmh(), p.courseDeg(), p.armed() ? 1 : 0,
+                p.phone() ? "phone" : "drone"));
         out.flush(); // every point: a crash loses nothing
     }
 
@@ -129,10 +170,11 @@ public final class FlightTrack {
         StringBuilder sb = new StringBuilder();
         sb.append("DRAUPNE Link - the drone's last known position\n\n");
         sb.append("Time:      ").append(LocalDateTime.ofInstant(Instant.ofEpochMilli(p.timeMs()), ZoneId.systemDefault())
-                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))).append('\n');
+                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))).append("  (").append(p.phone() ? "the phone's GPS" : "the drone's GPS").append(")\n");
         sb.append(String.format(Locale.ROOT, "Position:  %.6f, %.6f%n", p.lat(), p.lon()));
-        sb.append(String.format(Locale.ROOT, "Altitude:  %d m (GPS)   Speed: %.0f km/h   Satellites: %d   %s%n",
-                p.altM(), p.speedKmh(), p.sats(), p.armed() ? "armed" : "not armed"));
+        sb.append("MGRS:      ").append(Coordinates.mgrs(p.lat(), p.lon(), 5)).append('\n');
+        sb.append(String.format(Locale.ROOT, "Altitude:  %d m (GPS)   Speed: %.0f km/h   %s%s%n",
+                p.altM(), p.speedKmh(), p.phone() ? "" : "Satellites: " + p.sats() + "   ", p.armed() ? "armed" : "not armed"));
         if (h != null) {
             sb.append(String.format(Locale.ROOT, "From home: %.0f m, bearing %03d (home %.6f, %.6f)%n",
                     Mercator.distanceM(h.lat(), h.lon(), p.lat(), p.lon()), Mercator.bearingDeg(h.lat(), h.lon(), p.lat(), p.lon()), h.lat(), h.lon()));

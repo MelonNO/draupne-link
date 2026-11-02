@@ -76,7 +76,7 @@ final class TacticalCombo {
                     if (p >= 1) continue;
                     Component item = getComponent(i);
                     Graphics c = g.create(item.getX(), item.getY(), item.getWidth(), item.getHeight());
-                    cover(c, item.getWidth(), item.getHeight(), Math.max(0, p), item.getBackground());
+                    cover(c, item.getWidth(), item.getHeight(), Math.max(0, p), getBackground());
                     c.dispose();
                 }
             }

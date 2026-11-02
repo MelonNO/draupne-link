@@ -10,17 +10,18 @@ import java.util.Locale;
 public enum TileSource {
     KARTVERKET_TOPO("kartverket", "Kartverket topo",
             "https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/{z}/{y}/{x}.png",
-            "© Kartverket", 18, true),
+            "© Kartverket", 18, true, true),
     KARTVERKET_RASTER("kartverket-raster", "Kartverket paper map",
             "https://cache.kartverket.no/v1/wmts/1.0.0/toporaster/default/webmercator/{z}/{y}/{x}.png",
-            "© Kartverket", 18, true),
+            "© Kartverket", 18, true, true),
     /** Esri's world imagery, the satellite layer most web maps use; Norway's own aerial photos have no open service. */
     SATELLITE("satellite", "Satellite",
             "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-            "© Esri, Maxar, Earthstar Geographics", 19, false),
+            "© Esri, Maxar, Earthstar Geographics", 19, false, true),
+    /** Its tile policy: only what is being looked at, so no prefetching. */
     OSM("osm", "OpenStreetMap",
             "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-            "© OpenStreetMap contributors", 19, false);
+            "© OpenStreetMap contributors", 19, false, false);
 
     /** The settings value for "pick by where the drone is". */
     public static final String AUTO = "auto";
@@ -32,14 +33,17 @@ public enum TileSource {
     public final int maxZoom;
     /** Covers Norway only (blank tiles elsewhere). */
     public final boolean norwayOnly;
+    /** The levels under the place looked at may be fetched ahead, for offline use. */
+    public final boolean prefetchAllowed;
 
-    TileSource(String id, String title, String template, String attribution, int maxZoom, boolean norwayOnly) {
+    TileSource(String id, String title, String template, String attribution, int maxZoom, boolean norwayOnly, boolean prefetchAllowed) {
         this.id = id;
         this.title = title;
         this.template = template;
         this.attribution = attribution;
         this.maxZoom = maxZoom;
         this.norwayOnly = norwayOnly;
+        this.prefetchAllowed = prefetchAllowed;
     }
 
     public String url(int z, int x, int y) {

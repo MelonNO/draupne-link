@@ -94,13 +94,19 @@ public class DDService extends Service {
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .build();
+        // DRAUPNE Link: location too, when the pilot allowed it (the phone's own GPS for the PC's map); without the
+        // permission the type isn't allowed, and Android refuses the whole service
+        boolean location = checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
         if (Build.VERSION.SDK_INT >= 30) {
-            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
                     | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                    | ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                    | ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+            if (location) types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+            startForeground(1, notification, types);
         }else{
             startForeground(1, notification);
         }
+        if (location) PhoneLocation.start(this);
 
         if (cameraManager == null) cameraManager = new CameraManager(this, MainActivity.config);
         if (audioSource == null) audioSource = new AudioSource(this);
@@ -136,6 +142,7 @@ public class DDService extends Service {
 
     @Override
     public void onDestroy() {
+        PhoneLocation.stop();
         closeAll();
     }
 

@@ -20,7 +20,6 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Point;
-import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -36,20 +35,26 @@ import java.util.function.Consumer;
 /**
  * The map: where the drone is and where it has been, over Kartverket's topo map, satellite pictures or
  * OpenStreetMap. Pan by dragging, zoom with the wheel (smooth, about the pointer), double-click to fit the whole
- * flight; FOLLOW keeps the drone centred, SAT / MAP swaps the picture, right-click lists everything. The drone is an
- * arrow pointing where it heads; when its position is old (link or flight controller gone) it turns grey under a red
- * LAST KNOWN badge with the age, which is the point of the map: the place to start looking. Home is where it armed,
- * with range rings. Repaints come from the window's 30 Hz refresh; tiles arrive on their own threads.
+ * flight, right-click for the map picture and the rest; the buttons live in {@link MapWindow}'s toolbar. The drone
+ * is an arrow pointing where it heads; when its position is old (link or flight controller gone) it turns grey
+ * under a red LAST KNOWN badge with the age, which is the point of the map: the place to start looking. Home is
+ * where it armed, with range rings. When the map rests on a place, the levels under it are fetched for offline use
+ * (see TileCache.prefetch). Repaints come from the window's 30 Hz refresh; tiles arrive on their own threads.
  */
 class MapView extends JComponent {
     private static final double MIN_ZOOM = 2, FIRST_FIX_ZOOM = 16;
     private static final long STALE_MS = 3000;
     private static final int[] RING_M = {50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
+    /** Levels fetched ahead under and over the one looked at, and the most tiles per rest. */
+    private static final int PREFETCH_DOWN = 4, PREFETCH_UP = 3, PREFETCH_BUDGET = 1500;
+    private static final Color BOX = new Color(10, 10, 10, 215);
 
     private final TileCache cache;
     private TileSource chosen; // null = auto (by where the drone is)
     private Consumer<TileSource> onSourceChosen;
+    private Consumer<double[]> onCursor;
     private final Runnable tileReady = () -> SwingUtilities.invokeLater(this::repaint);
+    private final Timer settled = new Timer(1200, e -> prefetchVisible());
 
     private double centerLat = 64.5, centerLon = 12.0, zoom = 4.3; // Norway, until a fix comes
     private double targetZoom = zoom;
@@ -67,12 +72,11 @@ class MapView extends JComponent {
     private boolean fcLost;
     private boolean connected;
 
-    private Rectangle sourceButton = new Rectangle(), followButton = new Rectangle();
-
     MapView(TileCache cache) {
         this.cache = cache;
         setOpaque(true);
         setFocusable(false);
+        settled.setRepeats(false);
         MouseAdapter mouse = new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
@@ -95,7 +99,8 @@ class MapView extends JComponent {
                 follow = false;
                 centerLon = Mercator.lon(Mercator.x(dragLon, zoom) - dx, zoom);
                 centerLat = Mercator.lat(Mercator.y(dragLat, zoom) - dy, zoom);
-                repaint();
+                viewChanged();
+                tellCursor(e);
             }
 
             @Override
@@ -105,14 +110,17 @@ class MapView extends JComponent {
 
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (!SwingUtilities.isLeftMouseButton(e) || dragged) return;
-                if (sourceButton.contains(e.getPoint())) {
-                    choose(effectiveSource() == TileSource.SATELLITE ? mapFor(centerLat, centerLon) : TileSource.SATELLITE);
-                } else if (followButton.contains(e.getPoint())) {
-                    setFollow(true);
-                } else if (e.getClickCount() == 2) {
-                    fitTrack();
-                }
+                if (SwingUtilities.isLeftMouseButton(e) && !dragged && e.getClickCount() == 2) fitTrack();
+            }
+
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                tellCursor(e);
+            }
+
+            @Override
+            public void mouseExited(MouseEvent e) {
+                if (onCursor != null) onCursor.accept(null);
             }
 
             @Override
@@ -128,19 +136,42 @@ class MapView extends JComponent {
         addMouseWheelListener(mouse);
     }
 
+    private void tellCursor(MouseEvent e) {
+        if (onCursor == null) return;
+        double[] ll = toLatLon(e.getX(), e.getY());
+        onCursor.accept(ll);
+    }
+
+    /** The place under a pixel. */
+    double[] toLatLon(int x, int y) {
+        double lon = Mercator.lon(Mercator.x(centerLon, zoom) + x - getWidth() / 2.0, zoom);
+        double lat = Mercator.lat(Mercator.y(centerLat, zoom) + y - getHeight() / 2.0, zoom);
+        return new double[]{lat, lon};
+    }
+
+    /** Gets the place under the mouse as {lat, lon}, or null when it leaves the map. */
+    void setOnCursor(Consumer<double[]> listener) {
+        onCursor = listener;
+    }
+
+    private void viewChanged() {
+        settled.restart();
+        repaint();
+    }
+
     // ------------------------------------------------------------------ what to show
 
     /** The source chosen in the settings; null = auto. */
     void setSource(TileSource source) {
         chosen = source;
-        repaint();
+        viewChanged();
     }
 
     TileSource source() {
         return chosen;
     }
 
-    /** Called when the pilot picks a source on the map (SAT / MAP or the right-click menu), to save it. */
+    /** Called when the pilot picks a source on the map (the right-click menu), to save it. */
     void setOnSourceChosen(Consumer<TileSource> listener) {
         onSourceChosen = listener;
     }
@@ -148,18 +179,17 @@ class MapView extends JComponent {
     private void choose(TileSource source) {
         chosen = source;
         if (onSourceChosen != null) onSourceChosen.accept(source);
-        repaint();
-    }
-
-    /** Auto: the best map for this place. */
-    private static TileSource mapFor(double lat, double lon) {
-        return TileSource.forPosition(lat, lon);
+        viewChanged();
     }
 
     TileSource effectiveSource() {
         if (chosen != null) return chosen;
         FlightTrack.Point p = track == null ? null : track.last();
-        return p != null ? mapFor(p.lat(), p.lon()) : mapFor(centerLat, centerLon);
+        return p != null ? TileSource.forPosition(p.lat(), p.lon()) : TileSource.forPosition(centerLat, centerLon);
+    }
+
+    double zoom() {
+        return zoom;
     }
 
     /**
@@ -179,9 +209,11 @@ class MapView extends JComponent {
                 centerLat = p.lat();
                 centerLon = p.lon();
                 zoom = targetZoom = FIRST_FIX_ZOOM;
-            } else if (follow) {
+                viewChanged();
+            } else if (follow && (centerLat != p.lat() || centerLon != p.lon())) {
                 centerLat = p.lat();
                 centerLon = p.lon();
+                viewChanged();
             }
         }
         repaint();
@@ -194,7 +226,7 @@ class MapView extends JComponent {
             centerLat = p.lat();
             centerLon = p.lon();
         }
-        repaint();
+        viewChanged();
     }
 
     boolean isFollowing() {
@@ -207,7 +239,7 @@ class MapView extends JComponent {
         centerLat = lat;
         centerLon = lon;
         this.zoom = targetZoom = zoom;
-        repaint();
+        viewChanged();
     }
 
     /** The whole flight (and home) in view. */
@@ -236,7 +268,7 @@ class MapView extends JComponent {
         centerLat = Mercator.lat((Mercator.y(minLat, z) + Mercator.y(maxLat, z)) / 2, z);
         centerLon = (minLon + maxLon) / 2;
         zoom = targetZoom = Math.min(z, effectiveSource().maxZoom);
-        repaint();
+        viewChanged();
     }
 
     private void animateZoom() {
@@ -247,7 +279,7 @@ class MapView extends JComponent {
         } else {
             setZoomKeeping(zoomAnchor, zoom + d * 0.3);
         }
-        repaint();
+        viewChanged();
     }
 
     /** Changes the zoom so the place under anchor (null: the centre) stays put. */
@@ -264,8 +296,19 @@ class MapView extends JComponent {
         centerLat = Mercator.lat(Mercator.y(lat, zoom) - ay, zoom);
     }
 
+    /** The map has rested on a place: the levels under (and over) it are fetched for offline use. */
+    private void prefetchVisible() {
+        if (!isShowing() || getWidth() < 16) return;
+        TileSource src = effectiveSource();
+        if (!src.prefetchAllowed) return;
+        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
+        double[] nw = toLatLon(0, 0), se = toLatLon(getWidth(), getHeight());
+        cache.prefetch(src, zi, zi - PREFETCH_UP, zi + PREFETCH_DOWN, se[0], nw[0], nw[1], se[1], PREFETCH_BUDGET);
+    }
+
     private JPopupMenu menu() {
         JPopupMenu menu = TacticalCombo.menu();
+        menu.setBackground(Theme.PANEL_2);
         for (TileSource s : TileSource.values()) {
             JRadioButtonMenuItem item = new JRadioButtonMenuItem(s.title, s == chosen);
             item.addActionListener(e -> choose(s));
@@ -315,11 +358,10 @@ class MapView extends JComponent {
             if (home != null) paintHome(g, home, zi, scale, wcx, wcy, w, h);
             FlightTrack.Point last = pts.isEmpty() ? null : pts.get(pts.size() - 1);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
+            else paintNoPosition(g, w, h);
 
-            paintInfo(g, last, home, w);
             paintScale(g, h);
             paintAttribution(g, src, w, h);
-            paintButtons(g, src, w);
             g.setColor(Theme.LINE);
             g.drawRect(0, 0, w - 1, h - 1);
         } finally {
@@ -394,10 +436,10 @@ class MapView extends JComponent {
             g.setColor(new Color(255, 255, 255, 130));
             g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
             String label = m >= 1000 ? (m / 1000) + " KM" : m + " M";
-            g.setColor(new Color(0, 0, 0, 150));
             FontMetrics fm = g.getFontMetrics();
-            int lx = (int) c.getX() - fm.stringWidth(label) / 2, ly = (int) (c.getY() - r) - 3;
-            g.fillRoundRect(lx - 4, ly - fm.getAscent(), fm.stringWidth(label) + 8, fm.getHeight(), 6, 6);
+            int lx = (int) c.getX() - fm.stringWidth(label) / 2, ly = (int) (c.getY() - r) - 4;
+            g.setColor(BOX);
+            g.fillRect(lx - 4, ly - fm.getAscent(), fm.stringWidth(label) + 8, fm.getHeight());
             g.setColor(new Color(255, 255, 255, 200));
             g.drawString(label, lx, ly);
             if (++shown == 3) break;
@@ -420,8 +462,8 @@ class MapView extends JComponent {
     private void paintDrone(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {
         Point2D c = toScreen(last.lat(), last.lon(), zi, scale, wcx, wcy, w, h);
         long age = System.currentTimeMillis() - last.timeMs();
-        boolean stale = age > STALE_MS || fcLost || !connected;
-        int heading = headingDeg >= 0 && !stale ? headingDeg : last.courseDeg();
+        boolean stale = age > STALE_MS || (fcLost && !last.phone()) || !connected;
+        int heading = headingDeg >= 0 && !stale && !last.phone() ? headingDeg : last.courseDeg();
         AffineTransform saved = g.getTransform();
         g.translate(c.getX(), c.getY());
         g.rotate(Math.toRadians(heading));
@@ -440,17 +482,53 @@ class MapView extends JComponent {
         g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.draw(arrow);
         g.setTransform(saved);
-        if (stale) {
-            String text = "LAST KNOWN  " + ageText(age);
-            g.setFont(Theme.headingFont(12f));
-            FontMetrics fm = g.getFontMetrics();
-            int tw = fm.stringWidth(text) + 16, th = fm.getHeight() + 6;
-            int x = (int) c.getX() - tw / 2, y = (int) c.getY() - 22 - th;
-            g.setColor(Theme.ACCENT);
-            g.fillRoundRect(x, y, tw, th, 8, 8);
+        if (last.phone()) { // the phone's GPS, not the drone's
+            g.setFont(Theme.headingFont(10.5f));
             g.setColor(Color.WHITE);
-            g.drawString(text, x + 8, y + 3 + fm.getAscent());
+            g.drawString("PHONE", (float) c.getX() + 13, (float) c.getY() + 4);
         }
+        if (stale) badge(g, "LAST KNOWN  " + ageText(age), (int) c.getX(), (int) c.getY() - 24);
+    }
+
+    /** A red tag above a point: the program's square style with bracket corners. */
+    private void badge(Graphics2D g, String text, int cx, int bottom) {
+        g.setFont(Theme.headingFont(12f));
+        FontMetrics fm = g.getFontMetrics();
+        int tw = fm.stringWidth(text) + 18, th = fm.getHeight() + 8;
+        int x = cx - tw / 2, y = bottom - th;
+        g.setColor(Theme.ACCENT);
+        g.fillRect(x, y, tw, th);
+        g.setColor(Color.WHITE);
+        g.drawString(text, x + 9, y + 4 + fm.getAscent());
+        brackets(g, x, y, tw, th, Color.WHITE);
+    }
+
+    /** The theme's corner brackets round a box. */
+    private static void brackets(Graphics2D g, int x, int y, int w, int h, Color color) {
+        int arm = 5;
+        g.setColor(color);
+        g.setStroke(new BasicStroke(1.5f));
+        g.drawLine(x, y, x + arm, y);
+        g.drawLine(x, y, x, y + arm);
+        g.drawLine(x + w - 1, y, x + w - 1 - arm, y);
+        g.drawLine(x + w - 1, y, x + w - 1, y + arm);
+        g.drawLine(x, y + h - 1, x + arm, y + h - 1);
+        g.drawLine(x, y + h - 1, x, y + h - 1 - arm);
+        g.drawLine(x + w - 1, y + h - 1, x + w - 1 - arm, y + h - 1);
+        g.drawLine(x + w - 1, y + h - 1, x + w - 1, y + h - 1 - arm);
+    }
+
+    private void paintNoPosition(Graphics2D g, int w, int h) {
+        String text = !connected ? "NO DRONE POSITION" : "WAITING FOR A GPS FIX";
+        g.setFont(Theme.headingFont(13f));
+        FontMetrics fm = g.getFontMetrics();
+        int tw = fm.stringWidth(text) + 24, th = fm.getHeight() + 10;
+        int x = (w - tw) / 2, y = 12;
+        g.setColor(BOX);
+        g.fillRect(x, y, tw, th);
+        g.setColor(Theme.MUTED);
+        g.drawString(text, x + 12, y + 5 + fm.getAscent());
+        brackets(g, x, y, tw, th, Theme.ACCENT);
     }
 
     static String ageText(long ms) {
@@ -458,31 +536,6 @@ class MapView extends JComponent {
         if (s < 60) return s + " S AGO";
         if (s < 3600) return (s / 60) + " MIN AGO";
         return (s / 3600) + " H " + (s % 3600 / 60) + " MIN AGO";
-    }
-
-    private void paintInfo(Graphics2D g, FlightTrack.Point last, FlightTrack.Point home, int w) {
-        String line1, line2 = null;
-        if (last == null) {
-            line1 = !connected ? "NO DRONE POSITION" : "WAITING FOR A GPS FIX";
-        } else {
-            FcTelemetry.Gps cur = gps;
-            int sats = cur != null && cur.receivedAt() == last.timeMs() ? cur.sats() : last.sats();
-            line1 = String.format(Locale.ROOT, "SAT %d   ALT %d M   %.0f KM/H", sats, last.altM(), last.speedKmh());
-            if (home != null) {
-                line2 = String.format(Locale.ROOT, "HOME %s   BRG %03d°",
-                        distanceText(Mercator.distanceM(home.lat(), home.lon(), last.lat(), last.lon())),
-                        Mercator.bearingDeg(home.lat(), home.lon(), last.lat(), last.lon()));
-            }
-        }
-        g.setFont(Theme.monoFont(Font.BOLD, 11.5f));
-        FontMetrics fm = g.getFontMetrics();
-        int tw = Math.max(fm.stringWidth(line1), line2 == null ? 0 : fm.stringWidth(line2)) + 16;
-        int th = fm.getHeight() * (line2 == null ? 1 : 2) + 8;
-        g.setColor(new Color(0, 0, 0, 165));
-        g.fillRoundRect(8, 8, tw, th, 8, 8);
-        g.setColor(Theme.TEXT);
-        g.drawString(line1, 16, 12 + fm.getAscent());
-        if (line2 != null) g.drawString(line2, 16, 12 + fm.getAscent() + fm.getHeight());
     }
 
     static String distanceText(double m) {
@@ -495,12 +548,13 @@ class MapView extends JComponent {
         double pow = Math.pow(10, Math.floor(Math.log10(target)));
         double nice = target / pow >= 5 ? 5 * pow : target / pow >= 2 ? 2 * pow : pow;
         int px = (int) Math.round(nice / mpp);
-        String label = nice >= 1000 ? String.format(Locale.ROOT, "%.0f km", nice / 1000) : String.format(Locale.ROOT, "%.0f m", nice);
+        String label = nice >= 1000 ? String.format(Locale.ROOT, "%.0f KM", nice / 1000) : String.format(Locale.ROOT, "%.0f M", nice);
         g.setFont(Theme.headingFont(10.5f));
         FontMetrics fm = g.getFontMetrics();
-        int x = 10, y = h - 12;
-        g.setColor(new Color(0, 0, 0, 165));
-        g.fillRoundRect(x - 4, y - fm.getAscent() - 8, Math.max(px, fm.stringWidth(label)) + 12, fm.getHeight() + 12, 6, 6);
+        int x = 12, y = h - 14;
+        int bw = Math.max(px, fm.stringWidth(label)) + 16, bh = fm.getHeight() + 14;
+        g.setColor(BOX);
+        g.fillRect(x - 8, y - bh + 6, bw, bh);
         g.setColor(Color.WHITE);
         g.setStroke(new BasicStroke(2f));
         g.drawLine(x, y, x + px, y);
@@ -514,34 +568,10 @@ class MapView extends JComponent {
         g.setFont(Theme.font(Font.PLAIN, 10f));
         FontMetrics fm = g.getFontMetrics();
         int tw = fm.stringWidth(text) + 10;
-        g.setColor(new Color(0, 0, 0, 150));
-        g.fillRoundRect(w - tw - 6, h - fm.getHeight() - 8, tw, fm.getHeight() + 2, 6, 6);
+        g.setColor(BOX);
+        g.fillRect(w - tw - 8, h - fm.getHeight() - 10, tw, fm.getHeight() + 2);
         g.setColor(new Color(255, 255, 255, 210));
-        g.drawString(text, w - tw - 1, h - 8 - fm.getDescent() + 1);
-    }
-
-    private void paintButtons(Graphics2D g, TileSource src, int w) {
-        g.setFont(Theme.headingFont(11.5f));
-        FontMetrics fm = g.getFontMetrics();
-        int bh = fm.getHeight() + 8, x = w - 8;
-        // FOLLOW: lit while on
-        String f = "FOLLOW";
-        int fw = fm.stringWidth(f) + 18;
-        x -= fw;
-        followButton = new Rectangle(x, 8, fw, bh);
-        g.setColor(follow ? Theme.ACCENT : new Color(0, 0, 0, 165));
-        g.fillRoundRect(x, 8, fw, bh, 8, 8);
-        g.setColor(follow ? Color.WHITE : Theme.MUTED);
-        g.drawString(f, x + 9, 12 + fm.getAscent());
-        // SAT / MAP: what a click switches to
-        String s = src == TileSource.SATELLITE ? "MAP" : "SAT";
-        int sw = fm.stringWidth(s) + 18;
-        x -= sw + 6;
-        sourceButton = new Rectangle(x, 8, sw, bh);
-        g.setColor(new Color(0, 0, 0, 165));
-        g.fillRoundRect(x, 8, sw, bh, 8, 8);
-        g.setColor(Color.WHITE);
-        g.drawString(s, x + 9, 12 + fm.getAscent());
+        g.drawString(text, w - tw - 3, h - 10 - fm.getDescent() + 1);
     }
 
     /** For tests: the map as painted at this size. */

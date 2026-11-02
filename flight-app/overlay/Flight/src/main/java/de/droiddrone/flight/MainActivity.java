@@ -344,7 +344,18 @@ public class MainActivity extends Activity {
         boolean storagePermission = isStoragePermissionGranted();
         boolean audioPermission = isAudioPermissionGranted();
         boolean phoneStatePermission = isPhoneStatePermissionGranted();
-        return cameraPermission && storagePermission && audioPermission && phoneStatePermission;
+        boolean all = cameraPermission && storagePermission && audioPermission && phoneStatePermission;
+        if (all) askLocationPermission();
+        return all;
+    }
+
+    private boolean locationAsked;
+
+    /** DRAUPNE Link: the phone's own position for the PC's map. Optional: the service runs without it. */
+    private void askLocationPermission() {
+        if (locationAsked || this.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) return;
+        locationAsked = true;
+        activity.requestPermission(Manifest.permission.ACCESS_FINE_LOCATION, 4);
     }
 
     private boolean isCameraPermissionGranted(){
@@ -558,6 +569,10 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 4) { // location: allowed after the service started - start the GPS now
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && DDService.isRunning) PhoneLocation.start(this);
+            return;
+        }
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             if (requestCode >= 0 && requestCode <= 3 && checkPermissions()) startStopService();
         } else {

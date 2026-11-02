@@ -262,6 +262,10 @@ public class Udp {
                         if (statsSent++ % 10 == 0 && version != null) PcLinkStats.writeVersionTo(stats.daos, version);
                         // last in the packet: an older PC stops reading at a record it doesn't know
                         if (statsSent % 5 == 1) PcLinkStats.writeEncoderTo(stats.daos, streamEncoder.getTargetBitRate(), streamEncoder.isIntraRefresh());
+                        if (statsSent % 10 == 5) { // once a second, last in its packet too
+                            android.location.Location l = PhoneLocation.last();
+                            if (l != null) PcLinkStats.writePhonePositionTo(stats.daos, l);
+                        }
                         udpSender.sendPacket(stats.getData());
                     }
                     Thread.sleep(10);
