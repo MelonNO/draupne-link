@@ -80,9 +80,15 @@ public final class Elevation {
     }
 
     static String url(double lat, double lon) {
-        return TileSource.inNorway(lat, lon)
-                ? String.format(Locale.ROOT, "https://ws.geonorge.no/hoydedata/v1/punkt?nord=%.6f&ost=%.6f&koordsys=4258&geojson=false", lat, lon)
-                : String.format(Locale.ROOT, "https://api.open-meteo.com/v1/elevation?latitude=%.6f&longitude=%.6f", lat, lon);
+        return TileSource.inNorway(lat, lon) ? kartverketUrl(lat, lon) : worldUrl(lat, lon);
+    }
+
+    static String kartverketUrl(double lat, double lon) {
+        return String.format(Locale.ROOT, "https://ws.geonorge.no/hoydedata/v1/punkt?nord=%.6f&ost=%.6f&koordsys=4258&geojson=false", lat, lon);
+    }
+
+    static String worldUrl(double lat, double lon) {
+        return String.format(Locale.ROOT, "https://api.open-meteo.com/v1/elevation?latitude=%.6f&longitude=%.6f", lat, lon);
     }
 
     static Double parse(String json) {
@@ -99,10 +105,16 @@ public final class Elevation {
         }
     }
 
+    /** Kartverket over Norway; the world service elsewhere, and also when Kartverket has nothing for a border place. */
     private Double fetch(double lat, double lon) {
         if (!network) return null;
+        Double z = TileSource.inNorway(lat, lon) ? fetch(kartverketUrl(lat, lon)) : null;
+        return z != null ? z : fetch(worldUrl(lat, lon));
+    }
+
+    private Double fetch(String url) {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url(lat, lon))).timeout(Duration.ofSeconds(8))
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(8))
                     .header("User-Agent", userAgent).header("Accept", "application/json").GET().build();
             HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
             return response.statusCode() == 200 ? parse(response.body()) : null;

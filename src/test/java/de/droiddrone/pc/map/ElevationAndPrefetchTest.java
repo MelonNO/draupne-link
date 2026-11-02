@@ -11,6 +11,7 @@ class ElevationAndPrefetchTest {
     void kartverketInNorwayOpenMeteoElsewhere() {
         assertTrue(Elevation.url(59.9139, 10.7522).startsWith("https://ws.geonorge.no/hoydedata/v1/punkt?nord=59.913900&ost=10.752200"));
         assertTrue(Elevation.url(52.52, 13.41).startsWith("https://api.open-meteo.com/v1/elevation?latitude=52.520000&longitude=13.410000"));
+        assertTrue(Elevation.url(59.33, 18.07).startsWith("https://api.open-meteo.com"), "Stockholm: not Kartverket");
     }
 
     @Test

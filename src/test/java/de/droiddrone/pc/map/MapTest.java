@@ -55,6 +55,15 @@ class MapTest {
         assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(OSLO_LAT, OSLO_LON));
         assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(78.22, 15.63), "Longyearbyen");
         assertEquals(TileSource.OSM, TileSource.forPosition(52.52, 13.40), "Berlin");
+        assertEquals(TileSource.OSM, TileSource.forPosition(59.33, 18.07), "Stockholm");
+        assertEquals(TileSource.OSM, TileSource.forPosition(67.86, 20.23), "Kiruna");
+        assertEquals(TileSource.OSM, TileSource.forPosition(57.71, 11.97), "Gothenburg");
+        assertEquals(TileSource.OSM, TileSource.forPosition(68.91, 27.03), "Inari, Finland");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(69.65, 18.96), "Tromso");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(60.39, 5.32), "Bergen");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(70.66, 23.68), "Hammerfest");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(58.15, 8.0), "Kristiansand");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(59.12, 11.39), "Halden, by the Swedish border");
     }
 
     @Test

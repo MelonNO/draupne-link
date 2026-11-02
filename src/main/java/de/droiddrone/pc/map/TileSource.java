@@ -63,9 +63,20 @@ public enum TileSource {
         return inNorway(latDeg, lonDeg) ? KARTVERKET_TOPO : OSM;
     }
 
-    static boolean inNorway(double latDeg, double lonDeg) {
-        if (latDeg >= 57.5 && latDeg <= 71.5 && lonDeg >= 4.0 && lonDeg <= 31.5) return true;   // mainland
+    /** The mainland's outline, roughly (lat, lon), clockwise from the south-west: Sweden and Finland stay outside. */
+    private static final double[][] MAINLAND = {
+            {58.0, 5.0}, {62.0, 4.5}, {65.0, 10.0}, {68.0, 12.5}, {70.0, 17.0}, {71.3, 25.0}, {70.9, 31.2}, {69.6, 30.6},
+            {69.1, 28.9}, {70.1, 27.9}, {69.0, 26.0}, {68.9, 24.9}, {69.0, 22.3}, {68.4, 20.3}, {68.0, 18.1}, {66.0, 15.5},
+            {64.0, 14.1}, {62.0, 12.4}, {60.0, 12.6}, {59.0, 11.8}, {58.6, 11.3}, {58.0, 8.0}};
+
+    public static boolean inNorway(double latDeg, double lonDeg) {
         if (latDeg >= 74.0 && latDeg <= 81.0 && lonDeg >= 10.0 && lonDeg <= 35.0) return true;  // Svalbard
-        return latDeg >= 70.5 && latDeg <= 71.3 && lonDeg >= -9.5 && lonDeg <= -7.5;             // Jan Mayen
+        if (latDeg >= 70.5 && latDeg <= 71.3 && lonDeg >= -9.5 && lonDeg <= -7.5) return true;  // Jan Mayen
+        boolean inside = false; // the mainland: a ray east from the point crosses the outline an odd number of times
+        for (int i = 0, j = MAINLAND.length - 1; i < MAINLAND.length; j = i++) {
+            double lat1 = MAINLAND[i][0], lon1 = MAINLAND[i][1], lat2 = MAINLAND[j][0], lon2 = MAINLAND[j][1];
+            if ((lat1 > latDeg) != (lat2 > latDeg) && lonDeg < (lon2 - lon1) * (latDeg - lat1) / (lat2 - lat1) + lon1) inside = !inside;
+        }
+        return inside;
     }
 }
