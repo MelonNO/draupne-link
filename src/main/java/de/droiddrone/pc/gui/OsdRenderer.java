@@ -243,8 +243,29 @@ final class OsdRenderer {
      * on the live OSD and on the no-video screen. unit = picture height / 720.
      */
     static void crosshair(Graphics2D g, float cx, float cy, float unit) {
+        crosshair(g, cx, cy, unit, WHITE, OUTLINE);
+    }
+
+    /** The crosshair in any colour (the boot animation's turns from the mark's red into this white one). */
+    static void crosshair(Graphics2D g, float cx, float cy, float unit, Color color, Color outline) {
+        Path2D p = crosshairPath(cx, cy, unit);
+        java.awt.geom.Ellipse2D centre = crosshairDot(cx, cy, unit);
+        float width = crosshairWidth(unit);
+        if (outline != null) {
+            g.setColor(outline);
+            g.setStroke(new BasicStroke(width + 2.5f, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
+            g.draw(p);
+            g.draw(centre);
+        }
+        g.setColor(color);
+        g.setStroke(new BasicStroke(width, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
+        g.draw(p);
+        g.fill(centre);
+    }
+
+    /** The two arms with their down-ticks: one polyline each, so the corners are mitred. */
+    static Path2D crosshairPath(float cx, float cy, float unit) {
         float in = 14 * unit, out = 44 * unit, tick = 10 * unit;
-        float width = Math.max(2f, 3f * unit);
         Path2D p = new Path2D.Float();
         p.moveTo(cx - out, cy);
         p.lineTo(cx - in, cy);
@@ -252,16 +273,16 @@ final class OsdRenderer {
         p.moveTo(cx + out, cy);
         p.lineTo(cx + in, cy);
         p.lineTo(cx + in, cy + tick);
+        return p;
+    }
+
+    static java.awt.geom.Ellipse2D crosshairDot(float cx, float cy, float unit) {
         float dot = Math.max(3f, 5f * unit);
-        java.awt.geom.Ellipse2D centre = new java.awt.geom.Ellipse2D.Float(cx - dot / 2, cy - dot / 2, dot, dot);
-        g.setColor(OUTLINE);
-        g.setStroke(new BasicStroke(width + 2.5f, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
-        g.draw(p);
-        g.draw(centre);
-        g.setColor(WHITE);
-        g.setStroke(new BasicStroke(width, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
-        g.draw(p);
-        g.fill(centre);
+        return new java.awt.geom.Ellipse2D.Float(cx - dot / 2, cy - dot / 2, dot, dot);
+    }
+
+    static float crosshairWidth(float unit) {
+        return Math.max(2f, 3f * unit);
     }
 
     /**

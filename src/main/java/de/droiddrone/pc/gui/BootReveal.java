@@ -147,9 +147,10 @@ final class BootReveal extends JComponent {
             // the crosshair to the middle of the video, where it splits and becomes the OSD's crosshair (same shape,
             // same size, same place), then turns the OSD's white: the real one is drawn there underneath
             Rectangle v = videoBounds == null ? null : videoBounds.get();
-            double vcx = v == null || v.width == 0 ? w / 2.0 : v.getCenterX();
-            double vcy = v == null || v.height == 0 ? h / 2.0 : v.getCenterY();
-            float unit = (v == null || v.height == 0 ? h : v.height) / 720f; // as VideoView's no-video screen: the whole view
+            // exactly where VideoView's no-video screen puts its crosshair: the view's middle in whole pixels
+            double vcx = v == null || v.width == 0 ? w / 2 : v.x + v.width / 2;
+            double vcy = v == null || v.height == 0 ? h / 2 : v.y + v.height / 2;
+            float unit = (v == null || v.height == 0 ? h : v.height) / 720f;
             double travel = ease(Math.min(1, fly / 0.6));
             double morph = ease(Math.max(0, (fly - 0.55) / 0.45));
             double chSize = size + (size * 0.45 - size) * travel;
@@ -171,6 +172,13 @@ final class BootReveal extends JComponent {
      * inner down-ticks, the ring shrinks to the dot, the disc goes. white 0..1: red to the OSD's white with its dark edge.
      */
     private static void morphCrosshair(Graphics2D g, double cx, double cy, double s, float unit, double m, double white) {
+        if (m >= 1) { // arrived: the OSD's own drawing, so it sits pixel for pixel on the real one, only the colour runs
+            int red = Logo.RED.getRed(), green = Logo.RED.getGreen(), blue = Logo.RED.getBlue();
+            java.awt.Color color = new java.awt.Color((int) lerp(red, 255, white), (int) lerp(green, 255, white), (int) lerp(blue, 255, white));
+            java.awt.Color edge = white <= 0 ? null : new java.awt.Color(0, 0, 0, (int) Math.round(200 * Math.min(1, white)));
+            OsdRenderer.crosshair(g, (float) cx, (float) cy, unit, color, edge);
+            return;
+        }
         double in = 14 * unit, out = 44 * unit, tick = 10 * unit;
         double width = Math.max(2f, 3f * unit), dot = Math.max(3f, 5f * unit);
         java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
