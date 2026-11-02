@@ -13,8 +13,8 @@ android {
         minSdk 26
         targetSdk 34
         // DRAUPNE Link build of 2.3.0: same protocol, more flight controllers, restyled screen
-        versionCode 2030016
-        versionName "2.3.0-pc.16"
+        versionCode 2030017
+        versionName "2.3.0-pc.17"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
