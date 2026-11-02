@@ -4,9 +4,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-02, 1.0.25)
+## Where things stand (2026-11-02, 1.0.26)
 
-- **Unreleased, for 1.0.26's notes - the pilot's SETUP feedback, all of it:** the first-time guide is 13 steps (the
+- **Released:** DRAUPNE Link **1.0.26** (Latest), phone app unchanged (**2.3.0-pc.18**): the pilot's SETUP feedback, all of it. The first-time guide is 13 steps (the
   phone overview, "Measure the delay" and "Ready" pages are gone; `WizardDialog` is unchanged). FINISH plays
   `SetupFinale` (the mark, SETUP COMPLETE) and, the first time, offers the **tour** (`Tour`: a `TourNotice` with
   NEXT / SKIP TOUR and a dimming overlay, MENU > controller fold > pop-out video > the LINK card, then the map
@@ -27,7 +27,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   window shows DOWNLOADING n / m, a click brings it back), SELECT WITH CURSOR (`MapView.selectAreaNext`). The main
   window opens maximized. README's guide pictures redone (13 steps). None of it tried on hardware; the pictures
   came from the throwaway `FeedbackShot` in build/shot (git-ignored), painted off screen.
-- **Released:** DRAUPNE Link **1.0.25** (Latest), phone app unchanged (**2.3.0-pc.18**): the two items below.
+- **1.0.25**, phone app unchanged: the two items below.
 - **1.0.25 - Drone setup on Betaflight 2025.12:** the receiver could not be set. 2025.12's
   CLI has no name for RX_MSP (`feature RX_MSP` answers "Invalid name", and `feature` can't list it; the bit,
   1 << 14, is unchanged and master has the name back). Found on the pilot's iFlight Blitz F722 on 2025.12.2: three

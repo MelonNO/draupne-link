@@ -2,6 +2,15 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.26
+
+- **The setup guide reworked from a pilot's walk-through:** 13 steps (the phone overview, "Measure the delay" and "Ready" pages are gone); FINISH plays SETUP COMPLETE and, the first time, offers a **tour** of the window and the map (MENU > SETUP > *Tour* any time). Betaflight step: "Plug a USB data cable", enter the cell count, a note on the AUX channels, RETRY, DISCONNECT / RECONNECT, other firmware named, "you can unplug the drone". Radio: the controller list always shown; a spare AUX is "reserve" in the calibration. Phone: "Install the mobile app" (neutral until the phone connects), "Settings on the phone", "Connect DRAUPNE Flight" with Always allow and a **camera check** with FLIP. No "USB OTG adapter": a USB data cable.
+- **Motor test:** the risk line shakes when the box isn't ticked, a pop-up asks for a battery, a click on a motor in the picture runs it for 3 s.
+- **Latency test:** "Press ESC to end the latency test".
+- **Download area:** MAP TYPE, a warning instead of a size limit, HIDE with a progress line in the map window, SELECT WITH CURSOR.
+- The window opens maximized.
+- Phone app unchanged (2.3.0-pc.18).
+
 ## 1.0.25
 
 - **Fix: Drone setup could not set the receiver on Betaflight 2025.12.** Its CLI has no name for RX_MSP, so Drone setup logged the change, saved, and left the board with no receiver. The receiver is now read and set over MSP (the feature mask, as Betaflight Configurator does), on 4.5 and 2025.12 alike; the CLI writes the rest.
