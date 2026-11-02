@@ -7,6 +7,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -94,7 +95,10 @@ public class PcConfig {
             lines.add("");
             pending.forEach((key, value) -> lines.add(key + "=" + value));
         }
-        Files.write(file, lines, StandardCharsets.UTF_8);
+        // whole, then moved into place: a crash or a power cut mid-write never leaves half a settings file
+        Path tmp = file.resolveSibling(file.getFileName() + ".part");
+        Files.write(tmp, lines, StandardCharsets.UTF_8);
+        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         updates.forEach(props::setProperty);
     }
 

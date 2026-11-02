@@ -1,6 +1,8 @@
 package de.droiddrone.pc.map;
 
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Positions as the pilot wants to read them: MGRS (the military grid, the default), UTM, decimal degrees or
@@ -122,5 +124,98 @@ public final class Coordinates {
 
     public static String feet(double meters) {
         return String.format(Locale.ROOT, "%.0f FT", meters * 3.28084);
+    }
+
+    // ------------------------------------------------------------------ reading positions (GO TO)
+
+    /** UTM back to WGS84: the Krüger series the other way round (the same millimetre accuracy). */
+    public static double[] fromUtm(int zone, boolean north, double easting, double northing) {
+        double n = F / (2 - F);
+        double aa = A / (1 + n) * (1 + n * n / 4 + n * n * n * n / 64);
+        double b1 = n / 2 - 2 * n * n / 3 + 37 * n * n * n / 96;
+        double b2 = n * n / 48 + n * n * n / 15;
+        double b3 = 17 * n * n * n / 480;
+        double d1 = 2 * n - 2 * n * n / 3 - 2 * n * n * n;
+        double d2 = 7 * n * n / 3 - 8 * n * n * n / 5;
+        double d3 = 56 * n * n * n / 15;
+        double xi = (northing - (north ? 0 : 10_000_000)) / (K0 * aa), eta = (easting - 500000) / (K0 * aa);
+        double xi2 = xi - (b1 * Math.sin(2 * xi) * Math.cosh(2 * eta) + b2 * Math.sin(4 * xi) * Math.cosh(4 * eta) + b3 * Math.sin(6 * xi) * Math.cosh(6 * eta));
+        double eta2 = eta - (b1 * Math.cos(2 * xi) * Math.sinh(2 * eta) + b2 * Math.cos(4 * xi) * Math.sinh(4 * eta) + b3 * Math.cos(6 * xi) * Math.sinh(6 * eta));
+        double chi = Math.asin(Math.sin(xi2) / Math.cosh(eta2));
+        double phi = chi + d1 * Math.sin(2 * chi) + d2 * Math.sin(4 * chi) + d3 * Math.sin(6 * chi);
+        double lon0 = Math.toRadians((zone - 1) * 6 - 180 + 3);
+        double lambda = lon0 + Math.atan2(Math.sinh(eta2), Math.cos(xi2));
+        return new double[]{Math.toDegrees(phi), Math.toDegrees(lambda)};
+    }
+
+    private static final Pattern DECIMAL_PAIR = Pattern.compile("^([-+]?\\d{1,2}(?:\\.\\d+)?)\\s*([NS])?\\s*[,;]?\\s*([-+]?\\d{1,3}(?:\\.\\d+)?)\\s*([EW])?$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern DMS_PAIR = Pattern.compile("^(\\d{1,2})\\D+(\\d{1,2})\\D+(\\d{1,2}(?:\\.\\d+)?)\\D*([NS])\\s*,?\\s*(\\d{1,3})\\D+(\\d{1,2})\\D+(\\d{1,2}(?:\\.\\d+)?)\\D*([EW])$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern MGRS = Pattern.compile("^(\\d{1,2})\\s*([C-HJ-NP-X])\\s*([A-HJ-NP-Z])([A-HJ-NP-V])\\s*(\\d{1,10}(?:\\s+\\d{1,5})?)$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern UTM = Pattern.compile("^(\\d{1,2})\\s*([C-HJ-NP-X])\\s+(\\d{5,7}(?:\\.\\d+)?)\\s*(?:M?\\s*E)?\\s*,?\\s+(\\d{6,8}(?:\\.\\d+)?)\\s*(?:M?\\s*N)?$", Pattern.CASE_INSENSITIVE);
+
+    /**
+     * A position as the pilot types or pastes it, in any of the formats the map writes: MGRS ("32V NM 97254 42617",
+     * also without the spaces), UTM ("32V 597254 E 6642617 N" or "32V 597254 6642617"), decimal degrees
+     * ("59.9139, 10.7522", also "59.9139 N 10.7522 E") or degrees-minutes-seconds. {lat, lon}, or null when it
+     * reads as none of them.
+     */
+    public static double[] parse(String text) {
+        if (text == null) return null;
+        String s = text.trim().replace(' ', ' ').replaceAll("\\s+", " ");
+        if (s.isEmpty()) return null;
+        Matcher m = DECIMAL_PAIR.matcher(s);
+        if (m.matches()) {
+            double lat = Double.parseDouble(m.group(1)), lon = Double.parseDouble(m.group(3));
+            if (m.group(2) != null && m.group(2).equalsIgnoreCase("S")) lat = -Math.abs(lat);
+            if (m.group(4) != null && m.group(4).equalsIgnoreCase("W")) lon = -Math.abs(lon);
+            return valid(lat, lon);
+        }
+        m = DMS_PAIR.matcher(s);
+        if (m.matches()) {
+            double lat = Integer.parseInt(m.group(1)) + Integer.parseInt(m.group(2)) / 60.0 + Double.parseDouble(m.group(3)) / 3600;
+            double lon = Integer.parseInt(m.group(5)) + Integer.parseInt(m.group(6)) / 60.0 + Double.parseDouble(m.group(7)) / 3600;
+            if (m.group(4).equalsIgnoreCase("S")) lat = -lat;
+            if (m.group(8).equalsIgnoreCase("W")) lon = -lon;
+            return valid(lat, lon);
+        }
+        m = MGRS.matcher(s);
+        if (m.matches() && m.group(5).replaceAll("\\s", "").length() % 2 == 0) {
+            int zone = Integer.parseInt(m.group(1));
+            char band = Character.toUpperCase(m.group(2).charAt(0));
+            char col = Character.toUpperCase(m.group(3).charAt(0)), row = Character.toUpperCase(m.group(4).charAt(0));
+            String digits = m.group(5).replaceAll("\\s", ""); // "97254 42617" or "9725442617"
+            if (m.group(5).contains(" ") && m.group(5).indexOf(' ') != digits.length() / 2) return null; // halves of unequal length
+            int half = digits.length() / 2;
+            double unit = Math.pow(10, 5 - half);
+            double e = Integer.parseInt(digits.substring(0, half)) * unit, nn = Integer.parseInt(digits.substring(half)) * unit;
+            int e100 = COLUMNS[(zone - 1) % 3].indexOf(col) + 1;
+            if (e100 < 1 || zone < 1 || zone > 60) return null;
+            int rowIndex = ROWS.indexOf(row);
+            if (rowIndex < 0) return null;
+            int n100 = Math.floorMod(rowIndex - (zone % 2 == 0 ? 5 : 0), 20);
+            boolean north = band >= 'N';
+            // the row letters repeat every 2 000 km: the band says which repetition
+            double latMin = BANDS.indexOf(band) * 8 - 80;
+            double minNorthing = toUtm(latMin + 1e-9, (zone - 1) * 6 - 180 + 3).northing();
+            double northing = n100 * 100_000 + nn;
+            while (northing < minNorthing - 100_000) northing += 2_000_000;
+            return valid(fromUtm(zone, north, e100 * 100_000 + e, northing));
+        }
+        m = UTM.matcher(s);
+        if (m.matches()) {
+            int zone = Integer.parseInt(m.group(1));
+            char band = Character.toUpperCase(m.group(2).charAt(0));
+            if (zone < 1 || zone > 60) return null;
+            return valid(fromUtm(zone, band >= 'N', Double.parseDouble(m.group(3)), Double.parseDouble(m.group(4))));
+        }
+        return null;
+    }
+
+    private static double[] valid(double[] ll) {
+        return valid(ll[0], ll[1]);
+    }
+
+    private static double[] valid(double lat, double lon) {
+        return Double.isNaN(lat) || Double.isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180 ? null : new double[]{lat, lon};
     }
 }

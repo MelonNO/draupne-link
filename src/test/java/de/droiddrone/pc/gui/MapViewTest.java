@@ -87,6 +87,62 @@ class MapViewTest {
     }
 
     @Test
+    void aPhonePointDrawsItsAccuracyAndAnEarlierTrackIsMuted(@TempDir Path dir) {
+        MapView map = new MapView(new TileCache(dir, "test", false));
+        FlightTrack track = new FlightTrack(null);
+        long now = System.currentTimeMillis();
+        track.sample(null, new FcTelemetry.PhonePosition(59.9139, 10.7522, 50, 40, 0, 0, 0, now), true, true);
+        map.update(track, null, -1, false, true);
+        BufferedImage with = map.snapshot(400, 300);
+        FlightTrack bare = new FlightTrack(null);
+        bare.sample(null, new FcTelemetry.PhonePosition(59.9139, 10.7522, 50, 65535, 0, 0, 0, now), true, true);
+        map.update(bare, null, -1, false, true);
+        BufferedImage without = map.snapshot(400, 300);
+        int whiteWith = 0, whiteWithout = 0;
+        for (int y = 0; y < 300; y++) {
+            for (int x = 0; x < 400; x++) {
+                if ((with.getRGB(x, y) & 0xffffff) == 0xffffff) whiteWith++;
+                if ((without.getRGB(x, y) & 0xffffff) == 0xffffff) whiteWithout++;
+            }
+        }
+        assertTrue(whiteWith > whiteWithout + 100, "the accuracy ring: " + whiteWith + " vs " + whiteWithout);
+
+        FlightTrack old = new FlightTrack(null);
+        old.sample(fix(59.9139, 10.7522, now - 5000), true);
+        old.sample(fix(59.9239, 10.7622, now - 4000), true);
+        map.setOldTrack(old.points(), "2026-11-01 10:00");
+        assertTrue(map.hasOldTrack());
+        map.fitOldTrack();
+        BufferedImage img = map.snapshot(400, 300);
+        int grey = 0;
+        for (int y = 0; y < 300; y++) for (int x = 0; x < 400; x++) if ((img.getRGB(x, y) & 0xffffff) == 0xb0b0a4) grey++;
+        assertTrue(grey > 20, "the muted line: " + grey);
+        map.setOldTrack(null, null);
+        assertFalse(map.hasOldTrack());
+    }
+
+    @Test
+    void theDownloadWindowKnowsNorwayAndTimes() {
+        assertTrue(MapDownloadDialog.touchesNorway(new double[]{59.9, 59.95, 10.7, 10.8}), "Oslo");
+        assertFalse(MapDownloadDialog.touchesNorway(new double[]{52.4, 52.6, 13.3, 13.5}), "Berlin");
+        assertTrue(MapDownloadDialog.touchesNorway(new double[]{58.5, 59.5, 11.0, 13.0}), "a box over the Swedish border: its west corners are in");
+        assertEquals("UNDER A MINUTE", MapDownloadDialog.timeText(100));
+        assertEquals("ROUGHLY 3 MIN", MapDownloadDialog.timeText(1000));
+        assertEquals("ROUGHLY 1 H 23 MIN", MapDownloadDialog.timeText(30_000));
+        assertEquals("ROUGHLY 5 MIN", MapDownloadDialog.timeText(1000, 3.3), "at the measured pace");
+        assertEquals("2026-11-02 14:05", MapWindow.trackTitle("track-20261102-140512.gpx"));
+        assertEquals("other.gpx", MapWindow.trackTitle("other.gpx"));
+        String text = FindDroneDialog.describe(new FlightTrack.Point(System.currentTimeMillis() - 5000, 59.9139, 10.7522, 50, 3, 90, 0, true, true, 7),
+                null, java.nio.file.Path.of("track-20261102-140512.gpx"), true);
+        assertTrue(text.contains("(phone GPS, \u00b1 7 m)"), text);
+        assertTrue(text.contains("MGRS            32V"), text);
+        assertTrue(text.contains("From the file   track-20261102-140512.gpx"), text);
+        assertFalse(text.contains("Satellites"));
+        String drone = FindDroneDialog.describe(new FlightTrack.Point(System.currentTimeMillis(), 59.9139, 10.7522, 50, 3, 90, 11, false, false, 0), null, null, false);
+        assertTrue(drone.contains("Satellites 11"), drone);
+    }
+
+    @Test
     void altDragDrawsABoxAndHandsOverItsArea(@TempDir Path dir) {
         MapView map = new MapView(new TileCache(dir, "test", false));
         map.setSize(400, 300);
@@ -110,6 +166,36 @@ class MapViewTest {
         double[] view = map.visibleArea();
         assertEquals(map.toLatLon(0, 0)[0], view[1], 1e-9);
         assertEquals(map.toLatLon(400, 300)[1], view[3], 1e-9);
+
+        // SELECT WITH CURSOR: a plain click ends the mode (the window is told) and selects nothing; a right-click too
+        boolean[] ended = {false};
+        got[0] = null;
+        map.setOnSelectModeEnded(() -> ended[0] = true);
+        map.selectAreaNext();
+        assertTrue(map.isSelectingArea());
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_PRESSED, 0, InputEvent.BUTTON1_DOWN_MASK, 100, 100, 1, false, MouseEvent.BUTTON1));
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_RELEASED, 0, 0, 101, 100, 1, false, MouseEvent.BUTTON1));
+        assertNull(got[0], "a click is no box");
+        assertFalse(map.isSelectingArea());
+        assertTrue(ended[0], "the download window is told, so it comes back");
+        assertEquals(java.awt.Cursor.DEFAULT_CURSOR, map.getCursor().getType());
+        ended[0] = false;
+        map.selectAreaNext();
+        assertEquals(java.awt.Cursor.CROSSHAIR_CURSOR, map.getCursor().getType());
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_PRESSED, 0, InputEvent.BUTTON3_DOWN_MASK, 100, 100, 1, true, MouseEvent.BUTTON3));
+        assertFalse(map.isSelectingArea(), "a right-click calls it off");
+        assertTrue(ended[0]);
+        assertEquals(java.awt.Cursor.DEFAULT_CURSOR, map.getCursor().getType(), "the cursor is back");
+        // and a drag without Alt in the mode draws the box
+        ended[0] = false;
+        map.selectAreaNext();
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_PRESSED, 0, InputEvent.BUTTON1_DOWN_MASK, 100, 100, 1, false, MouseEvent.BUTTON1));
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_DRAGGED, 0, InputEvent.BUTTON1_DOWN_MASK, 200, 180, 1, false, MouseEvent.NOBUTTON));
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_RELEASED, 0, 0, 200, 180, 1, false, MouseEvent.BUTTON1));
+        assertNotNull(got[0]);
+        assertTrue(ended[0]);
+        assertFalse(map.isSelectingArea());
+        got[0] = null;
 
         // without Alt a drag pans the map and selects nothing
         got[0] = null;

@@ -136,6 +136,10 @@ final class PinManagerDialog extends JDialog {
         });
         buttons.add(atLaunch);
         buttons.add(Box.createHorizontalStrut(10));
+        JButton export = Theme.secondaryButton("Export GPX");
+        export.setToolTipText("Every pin as a GPX waypoint file, for another map program or a phone");
+        export.addActionListener(e -> exportGpx());
+        buttons.add(export);
         JButton clear = Theme.secondaryButton("Remove all");
         clear.addActionListener(e -> {
             if (pins.list().isEmpty()) return;
@@ -173,12 +177,45 @@ final class PinManagerDialog extends JDialog {
         if (p != null) map.centreOn(p.lat(), p.lon(), Math.max(map.zoom(), 15));
     }
 
-    /** One row: the name, the position, and the way to it from the drone. */
+    /** EXPORT GPX: the pins as waypoints, to a file the pilot names (Documents\DRAUPNE Link\pins.gpx to begin with). */
+    private void exportGpx() {
+        if (pins.list().isEmpty()) {
+            JOptionPane.showMessageDialog(this, "No pins to export.", "Pins", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser();
+        chooser.setDialogTitle("Export pins as GPX");
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("GPX files", "gpx"));
+        try {
+            chooser.setSelectedFile(Pins.defaultFile().resolveSibling("pins.gpx").toFile());
+        } catch (java.io.IOException ignored) {
+        }
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+        java.nio.file.Path target = chooser.getSelectedFile().toPath();
+        if (!target.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".gpx")) target = target.resolveSibling(target.getFileName() + ".gpx");
+        java.nio.file.Path file = target;
+        new Thread(() -> { // the disk, off the Swing thread
+            String problem = null;
+            try {
+                pins.exportGpx(file);
+            } catch (java.io.IOException e) {
+                problem = e.getMessage();
+            }
+            String why = problem;
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                if (why == null) JOptionPane.showMessageDialog(this, "Pins written to " + file.getFileName() + ".", "Pins", JOptionPane.INFORMATION_MESSAGE);
+                else JOptionPane.showMessageDialog(this, "Could not write the file: " + why, "Pins", JOptionPane.WARNING_MESSAGE);
+            });
+        }, "pinsExport").start();
+    }
+
+    /** One row: the name, the position, and the way to it from the drone (D) and from the launch point (L). */
     private String line(Pins.Pin p) {
         FlightTrack t = track.get();
         FlightTrack.Point last = t == null ? null : t.last();
-        String way = last == null ? "" : String.format(Locale.ROOT, "   %s  %03d°",
-                MapView.distanceText(Mercator.distanceM(last.lat(), last.lon(), p.lat(), p.lon())), Mercator.bearingDeg(last.lat(), last.lon(), p.lat(), p.lon()));
+        FlightTrack.Point home = t == null ? null : t.home();
+        String way = last == null ? "" : "   " + (home == null ? "" : "D ") + MapView.wayText(last.lat(), last.lon(), p);
+        if (home != null) way += "   L " + MapView.wayText(home.lat(), home.lon(), p);
         return String.format(Locale.ROOT, "%-14s %s%s", p.name().toUpperCase(Locale.ROOT), Coordinates.format(format.get(), p.lat(), p.lon()), way);
     }
 

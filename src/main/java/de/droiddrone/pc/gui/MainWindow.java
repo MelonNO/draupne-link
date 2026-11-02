@@ -93,9 +93,22 @@ public class MainWindow extends JFrame {
     private de.droiddrone.pc.map.Coordinates.Format coordinateFormat = de.droiddrone.pc.map.Coordinates.Format.MGRS;
     /** MAP > Position from: the phone's own GPS rather than the drone's (the other fills in when it has nothing). */
     private boolean preferPhone;
-    /** The connection's GPS positions, written to a GPX file as they come; kept after disconnecting for FIND DRONE. */
+    /**
+     * The track shown on the map and in FIND DRONE: the connection's once it has a position, until then the last
+     * one's (a second CONNECT after losing the drone must not wipe its last known position).
+     */
     private de.droiddrone.pc.map.FlightTrack track;
+    /** The connection's own track, written to a GPX file as it comes; becomes {@link #track} with its first point. */
+    private de.droiddrone.pc.map.FlightTrack liveTrack;
+    /** Which GPS the shown position last came from, for one log line per switch; null before the first. */
+    private Boolean positionFromPhone;
+    /** The last time the FC reported armed; LOST DRONE shows when the link drops within a few minutes of it. */
+    private long lastArmedAt;
+    private final JButton lostDroneButton = Theme.primaryButton("Lost drone");
     private long mapIdleUpdatedAt;
+    static final String MAIN_BOUNDS_KEY = "mainWindow";
+    private final MapWindow.Bounds mainBounds = new MapWindow.Bounds(this);
+    private final Timer saveMainBounds = new Timer(800, e -> saveMainBounds());
     /** The header: MENU (the one filled button) slides out into these, each with a menu of its own. */
     private final JButton menuButton = Theme.primaryButton("Menu");
     private final SlideMenu headerMenu = new SlideMenu(menuButton);
@@ -113,6 +126,7 @@ public class MainWindow extends JFrame {
     /** The video in its own window (POP OUT VIDEO), or null while it sits in this one. */
     private JFrame popOut;
     private final JButton popOutButton = Theme.secondaryButton("Pop out video");
+    private final JButton fullScreenButton = Theme.secondaryButton("Full screen");
     private final JLabel poppedOutNote = Theme.label("VIDEO IS IN ITS OWN WINDOW", Theme.headingFont(16f), Theme.MUTED);
     private de.droiddrone.pc.video.LatencyMeter latencyMeter;
     private JComponent linkColumn;
@@ -252,6 +266,7 @@ public class MainWindow extends JFrame {
         }
         miniMap.setPins(pins);
         miniMap.setSource(mapSource);
+        miniMap.setOnSourceChosen(this::setMapSource); // the minimap's right-click choice is saved and shared too
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
         bindKey(java.awt.event.KeyEvent.VK_F3, this::toggleMapWindow);
         bindKey(java.awt.event.KeyEvent.VK_F2, () -> {
@@ -273,9 +288,25 @@ public class MainWindow extends JFrame {
             return t;
         }).scheduleWithFixedDelay(this::checkForUpdate, 0, 6 * 3600, java.util.concurrent.TimeUnit.SECONDS);
         setMinimumSize(new Dimension(1100, 760));
-        setSize(1280, 820);
-        setLocationRelativeTo(null);
-        setExtendedState(JFrame.MAXIMIZED_BOTH); // opens maximized; the size above is what un-maximizing gives
+        // where it was last time (screen, size, maximized); the first time maximized, the size below is what un-maximizing gives
+        if (!mainBounds.restore(config.getString(MAIN_BOUNDS_KEY))) {
+            setSize(1280, 820);
+            setLocationRelativeTo(null);
+            setExtendedState(JFrame.MAXIMIZED_BOTH);
+        }
+        saveMainBounds.setRepeats(false);
+        addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentMoved(java.awt.event.ComponentEvent e) {
+                saveMainBounds.restart();
+            }
+
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                saveMainBounds.restart();
+            }
+        });
+        addWindowStateListener(e -> saveMainBounds.restart());
     }
 
     // ---------------------------------------------------------------- layout
@@ -348,11 +379,7 @@ public class MainWindow extends JFrame {
         }));
         menu.add(new MenuRows.WindowRow("OSD layout", "Choose the OSD elements and place them, like Betaflight",
                 () -> OsdSettingsDialog.open(this, this)));
-        menu.addSeparator();
-        menu.add(new MenuRows.WindowRow(popOut == null ? "Pop out video" : "Video back",
-                popOut == null ? "The video in a window of its own, e.g. on a second screen" : "The video back into this window", this::togglePopOut));
-        menu.add(new MenuRows.WindowRow("Full screen", "The video over the whole screen. F11; Esc ends it", this::toggleFullScreen));
-        return menu;
+        return menu; // POP OUT VIDEO and FULL SCREEN are buttons on the video card, always in sight
     }
 
     /** LINK: how the connection behaves. */
@@ -473,10 +500,12 @@ public class MainWindow extends JFrame {
         updateButton.setVisible(false);
         updateButton.addActionListener(e -> startUpdate());
         popOutButton.addActionListener(e -> togglePopOut());
-        // the first added sits nearest MENU: UPDATE (when there is one), then the rest, SETUP at the far left
-        for (JButton b : new JButton[]{updateButton, toolsButton, linkButton, videoButton, setupButton}) headerMenu.addItem(b);
+        // the first added sits nearest MENU: TOOLS, then the rest, SETUP at the far left
+        for (JButton b : new JButton[]{toolsButton, linkButton, videoButton, setupButton}) headerMenu.addItem(b);
         headerMenu.finishNow();
         right.add(headerMenu);
+        // UPDATE next to MENU, outside the slide-out: an update must stay in sight with the menu folded
+        right.add(updateButton);
         right.add(Box.createHorizontalStrut(8));
         right.add(statePill);
         header.add(right, BorderLayout.EAST);
@@ -553,6 +582,12 @@ public class MainWindow extends JFrame {
             if (connection == null) connect(); else disconnect();
         });
         link.add(connectButton, c);
+        // the link dropped while the drone was armed: one click opens FIND DRONE and copies the MGRS to send on
+        lostDroneButton.setBackground(Theme.BAD);
+        lostDroneButton.setToolTipText("The link dropped while armed: the last known position in FIND DRONE, its MGRS copied to the clipboard");
+        lostDroneButton.setVisible(false);
+        lostDroneButton.addActionListener(e -> lostDrone());
+        link.add(lostDroneButton, c);
 
         // what matters in flight stays; the rest folds away with the fields
         JPanel stats = new JPanel(new GridLayout(3, 2, 8, 6));
@@ -635,6 +670,16 @@ public class MainWindow extends JFrame {
         video.setBackground(Color.BLACK);
         video.add(videoView, BorderLayout.CENTER);
         videoHolder = video;
+        // a thin bar over the picture: where the video is shown, always in sight (the tour points at these)
+        JPanel videoBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
+        videoBar.setBackground(Theme.PANEL);
+        videoBar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.LINE));
+        popOutButton.setToolTipText("The video in a window of its own, e.g. on a second screen; again to put it back");
+        videoBar.add(popOutButton);
+        fullScreenButton.setToolTipText("The video over the whole screen (F11); Esc or a double-click ends it");
+        fullScreenButton.addActionListener(e -> toggleFullScreen());
+        videoBar.add(fullScreenButton);
+        video.add(videoBar, BorderLayout.NORTH);
         videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off");
         videoView.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
@@ -974,13 +1019,16 @@ public class MainWindow extends JFrame {
             linkLog = null;
             logLine("No link log: " + e.getMessage());
         }
-        if (track != null) track.close();
+        if (liveTrack != null) liveTrack.close();
         try {
-            track = new de.droiddrone.pc.map.FlightTrack(de.droiddrone.pc.map.FlightTrack.defaultDir());
+            liveTrack = new de.droiddrone.pc.map.FlightTrack(de.droiddrone.pc.map.FlightTrack.defaultDir());
         } catch (IOException e) {
-            track = new de.droiddrone.pc.map.FlightTrack(null);
+            liveTrack = new de.droiddrone.pc.map.FlightTrack(null);
             logLine("No track file: " + e.getMessage());
         }
+        if (track == null || track.isEmpty()) track = liveTrack; // else the last flight stays shown until a fix comes
+        positionFromPhone = null;
+        lastArmedAt = 0;
         linkLogTimer.start();
         updateFlightLayout();
         logLine("Connecting: " + mode + (mode == LinkMode.HOST_RELAY ? "" : " " + addressField.getText().trim()) + ":" + port);
@@ -991,7 +1039,8 @@ public class MainWindow extends JFrame {
         service.setInputListener(null);
         sampleLinkLog();
         linkLogTimer.stop();
-        if (track != null) track.close(pins.list()); // stays for FIND DRONE and the map
+        if (liveTrack != null) liveTrack.close(pins.list()); // stays for FIND DRONE and the map
+        lostDroneButton.setVisible(false);
         if (connection != null) connection.close();
         connection = null;
         updateFlightLayout();
@@ -1014,11 +1063,20 @@ public class MainWindow extends JFrame {
     private void sampleLinkLog() {
         LinkLog l = linkLog;
         Connection c = connection;
-        de.droiddrone.pc.map.FlightTrack tr = track;
+        de.droiddrone.pc.map.FlightTrack tr = liveTrack;
         if (c != null && tr != null) {
             de.droiddrone.pc.FcTelemetry t = c.getLink().getTelemetry();
             de.droiddrone.pc.FcTelemetry.Status st = t.getStatus();
-            tr.sample(t.getGps(), t.getPhonePosition(), st != null && st.armed(), preferPhone);
+            tr.sample(t.getGps(), t.getPhonePosition(), st != null && st.armed(), preferPhone); // the file goes on its own thread
+            de.droiddrone.pc.map.FlightTrack.Point last = tr.last();
+            if (last != null) {
+                if (track != tr) track = tr; // the new connection's first position: its track is the one shown now
+                if (positionFromPhone == null || positionFromPhone != last.phone()) {
+                    positionFromPhone = last.phone();
+                    logLine(last.phone() ? "Position from the phone's GPS" + (preferPhone ? "." : " (the drone's gives none).")
+                            : "Position from the drone's GPS" + (preferPhone ? " (the phone's gives none)." : "."));
+                }
+            }
         }
         if (l == null || c == null) return;
         RcSession s = session;
@@ -1035,7 +1093,7 @@ public class MainWindow extends JFrame {
 
     /** The map window and the minimap get the latest position and heading; idle (no link) only once a second. */
     private void refreshMap() {
-        MapWindow w = mapWindow != null && mapWindow.isVisible() ? mapWindow : null;
+        MapWindow w = mapWindow != null && mapWindow.isShown() ? mapWindow : null;
         boolean mini = miniFold != null && miniFold.isShown();
         if (w == null && !mini) return;
         Connection c = connection;
@@ -1065,7 +1123,7 @@ public class MainWindow extends JFrame {
      * unfolds. With the map in its own window (or disconnected) the card has its fields and figures back.
      */
     private void updateFlightLayout() {
-        boolean mini = connection != null && !(mapWindow != null && mapWindow.isVisible());
+        boolean mini = connection != null && !(mapWindow != null && mapWindow.isShown()); // minimized to the taskbar: not shown
         fieldsFold.setShown(!mini, true);
         detailsFold.setShown(!mini, true);
         miniFold.setShown(mini, true);
@@ -1080,6 +1138,8 @@ public class MainWindow extends JFrame {
             mapWindow = new MapWindow(this, tileCache, elevation, pins, mapSource, coordinateFormat, config.getString(MapWindow.BOUNDS_KEY), this::save,
                     this::setMapSource, this::setCoordinateFormat, this::openFindDrone);
             mapWindow.setPreferPhone(preferPhone);
+            mapWindow.setOnShownChanged(this::updateFlightLayout);
+            mapWindow.bindKey(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_F3, 0), this::toggleMapWindow); // F3 there too
             // popped out: the LINK card gets its fields and figures back; closed again in flight: the minimap returns
             mapWindow.addComponentListener(new java.awt.event.ComponentAdapter() {
                 @Override
@@ -1099,6 +1159,11 @@ public class MainWindow extends JFrame {
     /** MAP > Map window, F3: opens it (in front), or hides it. */
     private void toggleMapWindow() {
         MapWindow w = mapWindow();
+        if (w.isVisible() && !w.isShown()) { // minimized to the taskbar: back up, not hidden
+            w.setExtendedState(w.getExtendedState() & ~JFrame.ICONIFIED);
+            w.toFront();
+            return;
+        }
         if (w.isVisible()) {
             w.setVisible(false);
             return;
@@ -1122,9 +1187,41 @@ public class MainWindow extends JFrame {
         if (mapWindow != null) mapWindow.setFormat(format);
     }
 
-    private void openFindDrone() {
-        FindDroneDialog.open(this, track, tileCache, mapSource, pins);
+    private FindDroneDialog openFindDrone() {
+        return FindDroneDialog.open(this, () -> track, this::isLinkUp, () -> {
+            Connection c = connection;
+            return c != null && c.getLink().isFcLost();
+        }, tileCache, mapSource, pins);
     }
+
+    /** LOST DRONE: FIND DRONE opens and the last known position's MGRS is on the clipboard, ready to send to a phone. */
+    private void lostDrone() {
+        FindDroneDialog d = openFindDrone();
+        String mgrs = d.mgrs();
+        if (mgrs != null) {
+            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(mgrs), null);
+            logLine("LOST DRONE: last known position " + mgrs + " copied to the clipboard.");
+        } else {
+            logLine("LOST DRONE: no position to show yet.");
+        }
+    }
+
+    /** The link dropped (or the FC went) within a few minutes of the drone being armed: LOST DRONE comes up. */
+    private void refreshLostDrone(ControlLink link, ControlLink.State state) {
+        long now = System.currentTimeMillis();
+        FcTelemetry.Status st = link.getTelemetry().getStatus();
+        if (st != null && st.armed() && now - st.receivedAt() < 2000) lastArmedAt = now;
+        boolean dropped = !link.isSpectator() && (state != ControlLink.State.READY || link.isFcLost() || link.isLinkStalled());
+        boolean show = dropped && lastArmedAt != 0 && now - lastArmedAt < LOST_DRONE_WINDOW_MS && track != null && !track.isEmpty();
+        if (show && !lostDroneButton.isVisible()) logLine("The link dropped while the drone was armed: LOST DRONE opens FIND DRONE with its last known position.");
+        if (lostDroneButton.isVisible() != show) {
+            lostDroneButton.setVisible(show);
+            lostDroneButton.getParent().revalidate();
+        }
+    }
+
+    /** How long after the last armed report a dropped link still counts as a lost drone. */
+    private static final long LOST_DRONE_WINDOW_MS = 10 * 60_000;
 
     private void setLinkEditable(boolean editable) {
         modeCombo.setEnabled(editable);
@@ -1167,10 +1264,22 @@ public class MainWindow extends JFrame {
         return t;
     });
 
+    /** The window's place, a moment after it moved, resized, maximized or came back: off the Swing thread. */
+    private void saveMainBounds() {
+        String v = mainBounds.current();
+        if (v != null) settingsWriter.execute(() -> save(Map.of(MAIN_BOUNDS_KEY, v)));
+    }
+
     private void shutdown() {
         phoneWatch.shutdownNow();
         if (popOut != null) popOut.dispose();
         if (connection != null) disconnect();
+        settingsWriter.shutdown(); // what is queued (the OSD layout, the window's place) reaches the file before the exit
+        try {
+            settingsWriter.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         service.stop(); // the main thread leaves its polling loop and exits the app
         dispose();
     }
@@ -1262,7 +1371,7 @@ public class MainWindow extends JFrame {
 
         FcTelemetry.Status fc = connection == null ? null : connection.getLink().getTelemetry().getStatus();
         if (connection != null && connection.getLink().isFcLost()) {
-            setLabel(fcStateLabel, "FC: NOT CONNECTED TO THE PHONE - CHECK THE OTG CABLE", Theme.BAD);
+            setLabel(fcStateLabel, "FC: NOT CONNECTED TO THE PHONE - CHECK THE USB DATA CABLE", Theme.BAD);
         } else if (fc == null || System.currentTimeMillis() - fc.receivedAt() > 3000) {
             setLabel(fcStateLabel, connection == null ? " " : "FC: NO STATUS YET", Theme.MUTED);
         } else if (fc.armed()) {
@@ -1578,6 +1687,7 @@ public class MainWindow extends JFrame {
             case CLOSED -> setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
             default -> setPill(state == ControlLink.State.CONNECTING ? "CONNECTING" : "WAITING FOR PHONE", Theme.WARN, Theme.BG);
         }
+        refreshLostDrone(link, state);
         int ping = link.getPing();
         pingValue.setText(ping < 0 ? "-" : ping + " ms");
         pingValue.setForeground(ping < 0 ? Theme.MUTED : ping > 150 ? Theme.BAD : ping > 80 ? Theme.WARN : Theme.OK);
@@ -1670,12 +1780,49 @@ public class MainWindow extends JFrame {
         return minimizeButton;
     }
 
+    /** POP OUT VIDEO / VIDEO BACK on the video card: always in sight, connected or not. */
     JComponent tourPopOutButton() {
         return popOutButton;
     }
 
+    /** FULL SCREEN next to it. */
+    JComponent tourFullScreenButton() {
+        return fullScreenButton;
+    }
+
     JComponent tourLinkCard() {
         return linkCard;
+    }
+
+    /** Slides the header menu out, so SETUP, VIDEO, LINK and TOOLS are in sight; nothing when it is out already. */
+    void tourOpenMenu() {
+        headerMenu.setOpen(true);
+    }
+
+    JComponent tourSetupButton() {
+        return setupButton;
+    }
+
+    JComponent tourVideoButton() {
+        return videoButton;
+    }
+
+    JComponent tourLinkButton() {
+        return linkButton;
+    }
+
+    JComponent tourToolsButton() {
+        return toolsButton;
+    }
+
+    /** UPDATE, next to MENU; invisible while no update is known. */
+    JComponent tourUpdateButton() {
+        return updateButton;
+    }
+
+    /** LOST DRONE under CONNECT; invisible until the link drops while armed. */
+    JComponent tourLostDroneButton() {
+        return lostDroneButton;
     }
 
     /** The map window in front (F3 does the same, and hides it again). */

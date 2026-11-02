@@ -134,7 +134,9 @@ public final class TileCache {
                 memory.put(key, img);
                 failedUntil.remove(key);
             } else {
-                failedUntil.put(key, System.currentTimeMillis() + RETRY_MS);
+                long now = System.currentTimeMillis();
+                failedUntil.values().removeIf(until -> until <= now); // a long offline session would otherwise keep every miss
+                failedUntil.put(key, now + RETRY_MS);
             }
         }
         if (img != null && onReady != null) onReady.run();
@@ -207,6 +209,8 @@ public final class TileCache {
     public static final int MAX_DOWNLOAD = 250_000;
     /** Fetches in a row that reached no server before a download gives up. */
     private static final int GIVE_UP_AFTER = 20;
+    /** Answers in a row that weren't a tile (403, 429, 404 ...) before a picture is left out: the server said no. */
+    private static final int REFUSED_AFTER = 40;
 
     /** How many tiles cover the area at every zoom from zMin to zMax (counted, not listed: may be billions). */
     public static long count(int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
@@ -221,18 +225,69 @@ public final class TileCache {
     }
 
     /**
+     * The area's tiles one at a time, coarse level first, row by row: nothing is listed ahead, so an area of
+     * hundreds of millions of tiles costs no memory (listing it froze the window and ran out of heap). Shared by a
+     * picture's workers.
+     */
+    static final class Walk {
+        private final int zMax;
+        private final double minLat, maxLat, minLon, maxLon;
+        private int z, x0, x1, y0, y1, x, y;
+        private boolean ended;
+
+        Walk(int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
+            this.zMax = zMax;
+            this.minLat = minLat;
+            this.maxLat = maxLat;
+            this.minLon = minLon;
+            this.maxLon = maxLon;
+            z = Math.max(0, zMin) - 1;
+            ended = !nextLevel();
+        }
+
+        /** Moves to the next level that has tiles; false when past the last. */
+        private boolean nextLevel() {
+            while (++z <= zMax) {
+                int n = 1 << z;
+                x0 = (int) Math.floor(Mercator.x(minLon, z) / Mercator.TILE);
+                x1 = (int) Math.floor(Mercator.x(maxLon, z) / Mercator.TILE);
+                y0 = Math.max(0, (int) Math.floor(Mercator.y(maxLat, z) / Mercator.TILE));
+                y1 = Math.min(n - 1, (int) Math.floor(Mercator.y(minLat, z) / Mercator.TILE));
+                if (x1 >= x0 && y1 >= y0) {
+                    x = x0;
+                    y = y0;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** The next tile, or null when the area is through. */
+        synchronized Tile next() {
+            if (ended) return null;
+            Tile t = new Tile(z, Math.floorMod(x, 1 << z), y);
+            if (++x > x1) {
+                x = x0;
+                if (++y > y1) ended = !nextLevel();
+            }
+            return t;
+        }
+    }
+
+    /**
      * An area being fetched for offline use: every tile of it from one level to another for each picture asked for,
      * picture after picture, coarse levels first, those already on disk skipped. The figures are read as it runs;
-     * {@link #cancel} stops it (what is saved stays).
+     * {@link #cancel} stops it (what is saved stays), {@link #pause} holds it.
      */
     public final class Download {
-        public final int total;
+        public final long total;
         private final AtomicInteger done = new AtomicInteger(), fetched = new AtomicInteger(), onDisk = new AtomicInteger(),
                 failed = new AtomicInteger();
+        private final List<TileSource> refused = new java.util.concurrent.CopyOnWriteArrayList<>();
         private volatile TileSource current;
-        private volatile boolean cancelled, finished, gaveUp;
+        private volatile boolean cancelled, finished, gaveUp, paused;
 
-        private Download(int total) {
+        private Download(long total) {
             this.total = total;
         }
 
@@ -259,6 +314,11 @@ public final class TileCache {
             return failed.get();
         }
 
+        /** Pictures left out because their server kept saying no (403, 429 ...): the rest of them was skipped. */
+        public List<TileSource> refused() {
+            return refused;
+        }
+
         public boolean isFinished() {
             return finished;
         }
@@ -272,13 +332,36 @@ public final class TileCache {
             return gaveUp;
         }
 
+        public boolean isPaused() {
+            return paused;
+        }
+
+        /** Holds the fetching (the workers wait); {@link #resume} goes on where it was. */
+        public void pause() {
+            paused = true;
+        }
+
+        public void resume() {
+            paused = false;
+        }
+
         public void cancel() {
             cancelled = true;
         }
-    }
 
-    /** One picture's share of a download. */
-    private record Job(TileSource source, List<Tile> tiles) {}
+        /** Waits while paused; false when cancelled meanwhile. */
+        private boolean waitWhilePaused() {
+            while (paused && !cancelled) {
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return !cancelled;
+        }
+    }
 
     /** How many tiles the area takes for these pictures from zMin to zMax (each picture to its own deepest level). */
     public static long count(List<TileSource> sources, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
@@ -290,24 +373,18 @@ public final class TileCache {
     /**
      * Fetches the whole area from zMin to zMax for every picture given, one picture after another, like Mission
      * Planner's prefetch, on threads of its own; however many tiles that is (count first: the window warns above
-     * {@link #MAX_DOWNLOAD}). Kartverket and Esri with two connections; OpenStreetMap, whose policy frowns on this,
-     * with one and a pause between tiles - keep its areas small.
+     * {@link #MAX_DOWNLOAD}). The tiles are walked as they are fetched, never listed. Kartverket and Esri with two
+     * connections; OpenStreetMap, whose policy frowns on this, with one and a pause between tiles - keep its areas
+     * small. A picture whose server keeps refusing is left out and the next one started.
      */
     public Download download(List<TileSource> sources, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
         int z0 = Math.max(0, zMin);
-        List<Job> jobs = new ArrayList<>();
-        int total = 0;
-        for (TileSource s : sources) {
-            List<Tile> tiles = plan(z0, z0, Math.min(s.maxZoom, zMax), minLat, maxLat, minLon, maxLon, Integer.MAX_VALUE - total);
-            jobs.add(new Job(s, tiles));
-            total += tiles.size();
-        }
-        Download d = new Download(total);
+        Download d = new Download(count(sources, z0, zMax, minLat, maxLat, minLon, maxLon));
         Thread runner = thread(() -> {
-            for (Job job : jobs) {
+            for (TileSource s : sources) {
                 if (d.cancelled || d.gaveUp) break;
-                d.current = job.source();
-                run(d, job);
+                d.current = s;
+                run(d, s, new Walk(z0, Math.min(s.maxZoom, zMax), minLat, maxLat, minLon, maxLon));
             }
             d.finished = true;
         }, "mapDownload");
@@ -319,33 +396,35 @@ public final class TileCache {
         return download(List.of(source), zMin, zMax, minLat, maxLat, minLon, maxLon);
     }
 
-    /** One picture's tiles on its own workers; returns when they are through, cancelled or given up. */
-    private void run(Download d, Job job) {
-        TileSource source = job.source();
-        List<Tile> tiles = job.tiles();
+    /** One picture's tiles on its own workers; returns when they are through, cancelled, given up or refused. */
+    private void run(Download d, TileSource source, Walk walk) {
         int threads = source.prefetchAllowed ? 2 : 1;
         long gapMs = source.prefetchAllowed ? 0 : 250;
         ExecutorService workers = Executors.newFixedThreadPool(threads, r -> thread(r, "mapDownload-" + source.id));
-        AtomicInteger next = new AtomicInteger();
-        AtomicInteger misses = new AtomicInteger();
+        AtomicInteger misses = new AtomicInteger(); // fetches in a row that reached no server
+        AtomicInteger refusals = new AtomicInteger(); // answers in a row that weren't a tile
         for (int i = 0; i < threads; i++) {
             workers.execute(() -> {
-                for (int k; (k = next.getAndIncrement()) < tiles.size(); ) {
-                    if (d.cancelled) break;
+                for (Tile t; (t = walk.next()) != null; ) {
+                    if (!d.waitWhilePaused()) break;
                     if (misses.get() >= GIVE_UP_AFTER) {
                         d.gaveUp = true;
                         break;
                     }
-                    Tile t = tiles.get(k);
+                    if (refusals.get() >= REFUSED_AFTER) {
+                        if (!d.refused.contains(source)) d.refused.add(source);
+                        break;
+                    }
                     Path file = file(source, t.z(), t.x(), t.y());
                     if (Files.isRegularFile(file)) {
                         d.onDisk.incrementAndGet();
                     } else {
-                        boolean ok = false;
+                        boolean ok = false, answered = false;
                         try {
-                            byte[] data = fetch(source.url(t.z(), t.x(), t.y()));
-                            if (data != null && ImageIO.read(new java.io.ByteArrayInputStream(data)) != null) {
-                                write(file, data);
+                            Answer a = answer(source.url(t.z(), t.x(), t.y()));
+                            answered = a.status() != 0;
+                            if (a.body() != null && ImageIO.read(new java.io.ByteArrayInputStream(a.body())) != null) {
+                                write(file, a.body());
                                 ok = true;
                             }
                         } catch (IOException | RuntimeException e) {
@@ -354,9 +433,11 @@ public final class TileCache {
                         if (ok) {
                             d.fetched.incrementAndGet();
                             misses.set(0);
+                            refusals.set(0);
                         } else {
                             d.failed.incrementAndGet();
-                            if (offline) misses.incrementAndGet();
+                            if (answered) refusals.incrementAndGet();
+                            else if (offline) misses.incrementAndGet();
                         }
                         if (gapMs > 0) {
                             try {
@@ -380,23 +461,30 @@ public final class TileCache {
         }
     }
 
+    /** What a server said: status 0 = not reached; body only for a 200. */
+    private record Answer(int status, byte[] body) {}
+
     private byte[] fetch(String url) throws IOException {
+        return answer(url).body();
+    }
+
+    private Answer answer(String url) throws IOException {
         if (!network) {
             offline = true;
-            return null;
+            return new Answer(0, null);
         }
         HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(12))
                 .header("User-Agent", userAgent).header("Accept", "image/png,image/*").GET().build();
         try {
             HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
             offline = false;
-            return response.statusCode() == 200 ? response.body() : null;
+            return new Answer(response.statusCode(), response.statusCode() == 200 ? response.body() : null);
         } catch (java.net.ConnectException | java.net.UnknownHostException | java.net.http.HttpTimeoutException e) {
             offline = true;
-            return null;
+            return new Answer(0, null);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return null;
+            return new Answer(0, null);
         }
     }
 

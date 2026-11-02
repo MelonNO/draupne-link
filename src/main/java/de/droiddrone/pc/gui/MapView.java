@@ -10,7 +10,6 @@ import de.droiddrone.pc.map.TileSource;
 import javax.swing.JComponent;
 import javax.swing.JMenuItem;
 import javax.swing.JPopupMenu;
-import javax.swing.JRadioButtonMenuItem;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import java.awt.AlphaComposite;
@@ -61,8 +60,21 @@ class MapView extends JComponent {
     private Point selectStart, selectEnd;
     /** SELECT WITH CURSOR in the download window: the next left drag draws a box, Alt or not. */
     private boolean selectNext;
+    /** The box being drawn came from SELECT WITH CURSOR: the window is told when it is over. */
+    private boolean selectingByRequest;
+    private Runnable onSelectModeEnded;
     private final Runnable tileReady = () -> SwingUtilities.invokeLater(this::repaint);
     private final Timer settled = new Timer(1200, e -> prefetchVisible());
+    /**
+     * Following the drone the view never rests, so the rest prefetch never fires: every few seconds the levels under
+     * the drone are fetched instead, when it has moved.
+     */
+    private static final int FOLLOW_PREFETCH_MS = 5000;
+    private final Timer followPrefetch = new Timer(FOLLOW_PREFETCH_MS, e -> prefetchAroundDrone());
+    private boolean movedSincePrefetch;
+    /** An earlier flight's track (TRACKS in the map window), drawn muted under the live one; null for none. */
+    private List<FlightTrack.Point> oldTrack;
+    private String oldTrackName;
 
     private double centerLat = 64.5, centerLon = 12.0, zoom = 4.3; // Norway, until a fix comes
     private double targetZoom = zoom;
@@ -88,18 +100,22 @@ class MapView extends JComponent {
         setOpaque(true);
         setFocusable(false);
         settled.setRepeats(false);
+        followPrefetch.setRepeats(true);
         MouseAdapter mouse = new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (SwingUtilities.isRightMouseButton(e)) {
+                    if (selectNext) { // the pilot changed their mind: no box
+                        endSelectMode();
+                        return;
+                    }
                     TacticalCombo.show(menu(e.getX(), e.getY()), MapView.this, e.getX(), e.getY());
                     return;
                 }
                 dragged = false;
                 if ((e.isAltDown() || selectNext) && SwingUtilities.isLeftMouseButton(e) && onAreaSelected != null) {
                     selectStart = selectEnd = e.getPoint(); // a box to download, not a pan
-                    selectNext = false;
-                    setCursor(java.awt.Cursor.getDefaultCursor());
+                    selectingByRequest = selectNext;
                     return;
                 }
                 dragStart = e.getPoint();
@@ -133,6 +149,9 @@ class MapView extends JComponent {
                 Rectangle box = selection();
                 selectStart = selectEnd = null;
                 repaint();
+                // SELECT WITH CURSOR ends either way: a box drawn, or a plain click that meant to call it off
+                if (selectingByRequest) endSelectMode();
+                selectingByRequest = false;
                 if (box.width >= 8 && box.height >= 8) onAreaSelected.accept(area(box));
             }
 
@@ -209,6 +228,17 @@ class MapView extends JComponent {
         return selectNext;
     }
 
+    /** Told when SELECT WITH CURSOR ends: a box drawn, or a right-click that called it off. */
+    void setOnSelectModeEnded(Runnable listener) {
+        onSelectModeEnded = listener;
+    }
+
+    private void endSelectMode() {
+        selectNext = false;
+        setCursor(java.awt.Cursor.getDefaultCursor());
+        if (onSelectModeEnded != null) onSelectModeEnded.run();
+    }
+
     /** The box being drawn, normalised. */
     private Rectangle selection() {
         int x = Math.min(selectStart.x, selectEnd.x), y = Math.min(selectStart.y, selectEnd.y);
@@ -237,6 +267,43 @@ class MapView extends JComponent {
     void setPins(Pins pins) {
         this.pins = pins;
         repaint();
+    }
+
+    /** An earlier flight's track, drawn muted under the live one; null clears it. */
+    void setOldTrack(List<FlightTrack.Point> points, String name) {
+        oldTrack = points == null || points.isEmpty() ? null : points;
+        oldTrackName = name;
+        repaint();
+    }
+
+    boolean hasOldTrack() {
+        return oldTrack != null;
+    }
+
+    /** The whole earlier track in view. */
+    void fitOldTrack() {
+        if (oldTrack != null) fit(oldTrack, null);
+    }
+
+    /** A pin at a place (the CURSOR cell's right-click, GO TO's "pin here"). */
+    void addPinAt(double lat, double lon, String name) {
+        if (pins == null) return;
+        pins.add(name, lat, lon);
+        repaint();
+    }
+
+    /** Centres on the drone's last known position and follows it again; nothing without a position. */
+    void centreOnDrone() {
+        FlightTrack.Point p = track == null ? null : track.last();
+        if (p == null) return;
+        centreOn(p.lat(), p.lon(), Math.max(zoom, 15));
+        follow = true;
+    }
+
+    /** Centres on the launch point; nothing before the drone armed. */
+    void centreOnHome() {
+        FlightTrack.Point h = track == null ? null : track.home();
+        if (h != null) centreOn(h.lat(), h.lon(), Math.max(zoom, 15));
     }
 
     /** The pin under a pixel (within its marker), or null. */
@@ -286,12 +353,6 @@ class MapView extends JComponent {
         onSourceChosen = listener;
     }
 
-    private void choose(TileSource source) {
-        chosen = source;
-        if (onSourceChosen != null) onSourceChosen.accept(source);
-        viewChanged();
-    }
-
     TileSource effectiveSource() {
         if (chosen != null) return chosen;
         FlightTrack.Point p = track == null ? null : track.last();
@@ -321,12 +382,34 @@ class MapView extends JComponent {
                 zoom = targetZoom = FIRST_FIX_ZOOM;
                 viewChanged();
             } else if (follow && (centerLat != p.lat() || centerLon != p.lon())) {
+                // not viewChanged(): that would restart the rest timer on every fix and prefetch nothing in flight
                 centerLat = p.lat();
                 centerLon = p.lon();
-                viewChanged();
+                movedSincePrefetch = true;
             }
         }
         repaint();
+    }
+
+    /** The follow prefetch runs while the map is on screen only (FIND DRONE makes a map of its own each time). */
+    @Override
+    public void addNotify() {
+        super.addNotify();
+        followPrefetch.start();
+    }
+
+    @Override
+    public void removeNotify() {
+        followPrefetch.stop();
+        settled.stop();
+        super.removeNotify();
+    }
+
+    /** Every few seconds while following: the levels round the drone, when it has moved since the last time. */
+    private void prefetchAroundDrone() {
+        if (!follow || !movedSincePrefetch) return;
+        movedSincePrefetch = false;
+        prefetchVisible();
     }
 
     void setFollow(boolean on) {
@@ -356,6 +439,10 @@ class MapView extends JComponent {
     void fitTrack() {
         List<FlightTrack.Point> pts = track == null ? List.of() : track.points();
         if (pts.isEmpty()) return;
+        fit(pts, track.home());
+    }
+
+    private void fit(List<FlightTrack.Point> pts, FlightTrack.Point h) {
         double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
         for (FlightTrack.Point p : pts) {
             minLat = Math.min(minLat, p.lat());
@@ -363,7 +450,6 @@ class MapView extends JComponent {
             minLon = Math.min(minLon, p.lon());
             maxLon = Math.max(maxLon, p.lon());
         }
-        FlightTrack.Point h = track.home();
         if (h != null) {
             minLat = Math.min(minLat, h.lat());
             maxLat = Math.max(maxLat, h.lat());
@@ -438,15 +524,7 @@ class MapView extends JComponent {
             }
             menu.addSeparator();
         }
-        for (TileSource s : TileSource.values()) {
-            JRadioButtonMenuItem item = new JRadioButtonMenuItem(s.title, s == chosen);
-            item.addActionListener(e -> choose(s));
-            menu.add(item);
-        }
-        JRadioButtonMenuItem auto = new JRadioButtonMenuItem("Auto (Kartverket in Norway, else OpenStreetMap)", chosen == null);
-        auto.addActionListener(e -> choose(null));
-        menu.add(auto);
-        menu.addSeparator();
+        // the map picture is chosen with the toolbar's MAP TYPE (the minimap takes the map window's choice)
         JMenuItem followItem = new JMenuItem("Follow the drone");
         followItem.addActionListener(e -> setFollow(true));
         menu.add(followItem);
@@ -489,10 +567,11 @@ class MapView extends JComponent {
             List<FlightTrack.Point> pts = track == null ? List.of() : track.points();
             FlightTrack.Point home = track == null ? null : track.home();
             if (home != null) paintRings(g, home, zi, scale, wcx, wcy, w, h);
+            if (oldTrack != null) paintOldTrack(g, zi, scale, wcx, wcy, w, h);
             paintTrack(g, pts, zi, scale, wcx, wcy, w, h);
             if (home != null) paintHome(g, home, zi, scale, wcx, wcy, w, h);
             FlightTrack.Point last = pts.isEmpty() ? null : pts.get(pts.size() - 1);
-            if (pins != null) paintPins(g, last, zi, scale, wcx, wcy, w, h);
+            if (pins != null) paintPins(g, last, home, zi, scale, wcx, wcy, w, h);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
             else paintNoPosition(g, w, h);
 
@@ -560,6 +639,35 @@ class MapView extends JComponent {
         }
     }
 
+    /** An earlier flight: a thin muted line with its file's name at its end, under everything live. */
+    private void paintOldTrack(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+        List<FlightTrack.Point> pts = oldTrack;
+        if (pts == null || pts.isEmpty()) return;
+        Path2D path = new Path2D.Double();
+        boolean first = true;
+        Point2D end = null;
+        for (FlightTrack.Point p : pts) {
+            end = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
+            if (first) path.moveTo(end.getX(), end.getY()); else path.lineTo(end.getX(), end.getY());
+            first = false;
+        }
+        g.setStroke(new BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setColor(new Color(0, 0, 0, 90));
+        g.draw(path);
+        g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 10f, new float[]{7f, 5f}, 0f));
+        g.setColor(new Color(0xb0, 0xb0, 0xa4, 200));
+        g.draw(path);
+        if (oldTrackName != null && end != null) {
+            g.setFont(Theme.headingFont(10.5f));
+            FontMetrics fm = g.getFontMetrics();
+            int tw = fm.stringWidth(oldTrackName) + 10;
+            g.setColor(BOX);
+            g.fillRect((int) end.getX() + 8, (int) end.getY() - fm.getHeight() / 2, tw, fm.getHeight() + 2);
+            g.setColor(Theme.MUTED);
+            g.drawString(oldTrackName, (int) end.getX() + 13, (int) end.getY() + fm.getAscent() / 2 - 1);
+        }
+    }
+
     private void paintTrack(Graphics2D g, List<FlightTrack.Point> pts, int zi, double scale, double wcx, double wcy, int w, int h) {
         if (pts.size() < 2) return;
         Path2D path = new Path2D.Double();
@@ -619,8 +727,17 @@ class MapView extends JComponent {
         g.drawString("L", (float) c.getX() - fm.stringWidth("L") / 2f, (float) c.getY() + fm.getAscent() / 2f - 1.5f);
     }
 
-    /** A pin: a diamond with its name, and from the drone's last position the distance and bearing to it. */
-    private void paintPins(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {
+    /** "1.25 KM  045°": the way from a place to a pin. */
+    static String wayText(double fromLat, double fromLon, Pins.Pin p) {
+        return distanceText(Mercator.distanceM(fromLat, fromLon, p.lat(), p.lon()))
+                + "  " + String.format(Locale.ROOT, "%03d°", Mercator.bearingDeg(fromLat, fromLon, p.lat(), p.lon()));
+    }
+
+    /**
+     * A pin: a diamond with its name, and the distance and bearing to it from the drone's last position (D) and from
+     * the launch point (L), for the one who walks there.
+     */
+    private void paintPins(Graphics2D g, FlightTrack.Point last, FlightTrack.Point home, int zi, double scale, double wcx, double wcy, int w, int h) {
         for (Pins.Pin p : pins.list()) {
             Point2D c = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
             if (c.getX() < -200 || c.getX() > w + 200 || c.getY() < -200 || c.getY() > h + 200) continue;
@@ -639,26 +756,46 @@ class MapView extends JComponent {
             g.setStroke(new BasicStroke(1.4f));
             g.draw(d);
             String line1 = p.name().toUpperCase(Locale.ROOT);
-            String line2 = last == null ? null : distanceText(Mercator.distanceM(last.lat(), last.lon(), p.lat(), p.lon()))
-                    + "  " + String.format(Locale.ROOT, "%03d\u00b0", Mercator.bearingDeg(last.lat(), last.lon(), p.lat(), p.lon()));
+            String line2 = last == null ? null : (home == null ? "" : "D  ") + wayText(last.lat(), last.lon(), p);
+            String line3 = home == null ? null : "L  " + wayText(home.lat(), home.lon(), p);
             g.setFont(Theme.headingFont(11f));
             FontMetrics fm = g.getFontMetrics();
-            int tw = Math.max(fm.stringWidth(line1), line2 == null ? 0 : fm.stringWidth(line2)) + 12;
-            int th = fm.getHeight() * (line2 == null ? 1 : 2) + 6;
+            int lines = 1 + (line2 == null ? 0 : 1) + (line3 == null ? 0 : 1);
+            int tw = Math.max(fm.stringWidth(line1), Math.max(line2 == null ? 0 : fm.stringWidth(line2), line3 == null ? 0 : fm.stringWidth(line3))) + 12;
+            int th = fm.getHeight() * lines + 6;
             int x = (int) c.getX() + 11, y = (int) c.getY() - th / 2;
             g.setColor(BOX);
             g.fillRect(x, y, tw, th);
             g.setColor(Theme.WARN);
             g.drawString(line1, x + 6, y + 3 + fm.getAscent());
+            int ly = y + 3 + fm.getAscent() + fm.getHeight();
             if (line2 != null) {
                 g.setColor(Theme.TEXT);
-                g.drawString(line2, x + 6, y + 3 + fm.getAscent() + fm.getHeight());
+                g.drawString(line2, x + 6, ly);
+                ly += fm.getHeight();
+            }
+            if (line3 != null) {
+                g.setColor(Theme.MUTED);
+                g.drawString(line3, x + 6, ly);
             }
         }
     }
 
+    /** The phone's accuracy round its point: a faint disc, the drone is somewhere in it. */
+    private void paintAccuracy(Graphics2D g, FlightTrack.Point last, Point2D c) {
+        if (!last.phone() || last.accuracyM() <= 0) return;
+        double r = last.accuracyM() / Mercator.metersPerPixel(last.lat(), zoom);
+        if (r < 6) return;
+        g.setColor(new Color(255, 255, 255, 40));
+        g.fill(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
+        g.setStroke(new BasicStroke(1.2f));
+        g.setColor(new Color(255, 255, 255, 150));
+        g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
+    }
+
     private void paintDrone(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {
         Point2D c = toScreen(last.lat(), last.lon(), zi, scale, wcx, wcy, w, h);
+        paintAccuracy(g, last, c);
         long age = System.currentTimeMillis() - last.timeMs();
         boolean stale = age > STALE_MS || (fcLost && !last.phone()) || !connected;
         int heading = headingDeg >= 0 && !stale && !last.phone() ? headingDeg : last.courseDeg();
@@ -683,7 +820,7 @@ class MapView extends JComponent {
         if (last.phone()) { // the phone's GPS, not the drone's
             g.setFont(Theme.headingFont(10.5f));
             g.setColor(Color.WHITE);
-            g.drawString("PHONE", (float) c.getX() + 13, (float) c.getY() + 4);
+            g.drawString("PHONE" + (last.accuracyM() > 0 ? "  ± " + last.accuracyM() + " M" : ""), (float) c.getX() + 13, (float) c.getY() + 4);
         }
         if (stale) badge(g, "LAST KNOWN  " + ageText(age), (int) c.getX(), (int) c.getY() - 24);
     }
