@@ -82,6 +82,17 @@ public class MainWindow extends JFrame {
     private final Timer linkLogTimer = new Timer(100, e -> sampleLinkLog());
     private VideoPipeline video;
     private final VideoView videoView = new VideoView();
+    /** The map in the video's corner (MAP > Show map, F3): where the drone is and has been. */
+    private final de.droiddrone.pc.map.TileCache tileCache = new de.droiddrone.pc.map.TileCache(de.droiddrone.pc.map.TileCache.defaultDir());
+    private final MapView mapView = new MapView(tileCache);
+    private final JButton mapButton = Theme.secondaryButton("Map");
+    static final String MAP_SHOW_KEY = "mapShow";
+    static final String MAP_SOURCE_KEY = "mapSource";
+    private static final String[] MAP_SHOW = {"off", "small", "large"};
+    private String mapShow = "small";
+    /** The connection's GPS positions, written to a GPX file as they come; kept after disconnecting for FIND DRONE. */
+    private de.droiddrone.pc.map.FlightTrack track;
+    private long mapIdleUpdatedAt;
     /** Where videoView normally lives; it moves to fullScreen and back. */
     private JPanel videoHolder;
     private JFrame fullScreen;
@@ -214,7 +225,20 @@ public class MainWindow extends JFrame {
         hardwareDecode = "true".equalsIgnoreCase(config.getString(HW_DECODE_KEY));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
         videoView.setUpsideDown("true".equalsIgnoreCase(config.getString(UPSIDE_DOWN_KEY)));
+        String show = config.getString(MAP_SHOW_KEY);
+        mapShow = show != null && java.util.Arrays.asList(MAP_SHOW).contains(show) ? show : "small";
+        mapView.setSource(de.droiddrone.pc.map.TileSource.parse(config.getString(MAP_SOURCE_KEY)));
+        mapView.setOnSourceChosen(s -> save(Map.of(MAP_SOURCE_KEY, s == null ? de.droiddrone.pc.map.TileSource.AUTO : s.id)));
+        videoView.add(mapView); // a child of the video view: it goes along to full screen and the popped-out window
+        videoView.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                layoutMap();
+            }
+        });
+        layoutMap();
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
+        bindKey(java.awt.event.KeyEvent.VK_F3, () -> setMapShow(MAP_SHOW[(java.util.Arrays.asList(MAP_SHOW).indexOf(mapShow) + 1) % MAP_SHOW.length]));
         bindKey(java.awt.event.KeyEvent.VK_F2, () -> {
             videoView.setOsdEnabled(!videoView.isOsdEnabled());
             save(Map.of("osd", Boolean.toString(videoView.isOsdEnabled())));
@@ -393,6 +417,9 @@ public class MainWindow extends JFrame {
         settingsButton.setToolTipText("Camera upside down, OSD layout, motor test");
         dropdown(settingsButton, this::settingsMenu);
         right.add(settingsButton);
+        mapButton.setToolTipText("Where the drone is and has been: show the map, satellite or topo, find a lost drone");
+        dropdown(mapButton, this::mapMenu);
+        right.add(mapButton);
         popOutButton.setToolTipText("Show the video in a separate window, e.g. on a second screen");
         popOutButton.addActionListener(e -> togglePopOut());
         right.add(popOutButton);
@@ -861,12 +888,19 @@ public class MainWindow extends JFrame {
         toldNotFlying = false;
         try {
             linkLog = LinkLog.open(de.droiddrone.pc.AppPaths.dataDir().resolve("logs"));
-            linkLogTimer.start();
             logLine("Link log: " + shortPath(linkLog.file()));
         } catch (IOException e) {
             linkLog = null;
             logLine("No link log: " + e.getMessage());
         }
+        if (track != null) track.close();
+        try {
+            track = new de.droiddrone.pc.map.FlightTrack(de.droiddrone.pc.map.FlightTrack.defaultDir());
+        } catch (IOException e) {
+            track = new de.droiddrone.pc.map.FlightTrack(null);
+            logLine("No track file: " + e.getMessage());
+        }
+        linkLogTimer.start();
         logLine("Connecting: " + mode + (mode == LinkMode.HOST_RELAY ? "" : " " + addressField.getText().trim()) + ":" + port);
         setLinkEditable(false);
     }
@@ -875,6 +909,7 @@ public class MainWindow extends JFrame {
         service.setInputListener(null);
         sampleLinkLog();
         linkLogTimer.stop();
+        if (track != null) track.close(); // stays for FIND DRONE and the map
         if (connection != null) connection.close();
         connection = null;
         session = null;
@@ -896,6 +931,12 @@ public class MainWindow extends JFrame {
     private void sampleLinkLog() {
         LinkLog l = linkLog;
         Connection c = connection;
+        de.droiddrone.pc.map.FlightTrack tr = track;
+        if (c != null && tr != null) {
+            de.droiddrone.pc.FcTelemetry t = c.getLink().getTelemetry();
+            de.droiddrone.pc.FcTelemetry.Status st = t.getStatus();
+            tr.sample(t.getGps(), st != null && st.armed());
+        }
         if (l == null || c == null) return;
         RcSession s = session;
         VideoPipeline v = video;
@@ -907,6 +948,73 @@ public class MainWindow extends JFrame {
             linkLog = null;
             logLine("Link log stopped: " + e.getMessage());
         }
+    }
+
+    /** The map gets the latest position and heading; idle (no link) only once a second, there is nothing to move. */
+    private void refreshMap() {
+        if (!mapView.isVisible()) return;
+        Connection c = connection;
+        long now = System.currentTimeMillis();
+        if (c == null) {
+            if (now - mapIdleUpdatedAt < 1000) return;
+            mapIdleUpdatedAt = now;
+            mapView.update(track, null, -1, false, false);
+            return;
+        }
+        ControlLink link = c.getLink();
+        de.droiddrone.pc.FcTelemetry t = link.getTelemetry();
+        de.droiddrone.pc.FcTelemetry.Attitude att = t.getAttitude();
+        boolean attFresh = att != null && now - att.receivedAt() < 2000;
+        ControlLink.State state = link.getState();
+        mapView.update(track, t.getGps(), attFresh ? att.headingDeg() : -1, link.isFcLost(),
+                state == ControlLink.State.READY || state == ControlLink.State.SPECTATING);
+    }
+
+    /** The map sits in the video's bottom-left corner: a third of it, or half when LARGE. */
+    private void layoutMap() {
+        int w = videoView.getWidth(), h = videoView.getHeight();
+        boolean show = !"off".equals(mapShow) && w > 200 && h > 150;
+        mapView.setVisible(show);
+        if (!show) return;
+        boolean large = "large".equals(mapShow);
+        int mw = (int) Math.round(w * (large ? 0.5 : 0.32)), mh = (int) Math.round(h * (large ? 0.62 : 0.38));
+        mw = Math.min(w - 32, Math.max(mw, 300));
+        mh = Math.min(h - 32, Math.max(mh, 220));
+        mapView.setBounds(16, h - mh - 16, mw, mh);
+    }
+
+    private void setMapShow(String show) {
+        mapShow = show;
+        save(Map.of(MAP_SHOW_KEY, show));
+        layoutMap();
+        videoView.repaint();
+    }
+
+    /** MAP's menu: show it, which map, find the drone, the track files. */
+    private JPopupMenu mapMenu() {
+        JPopupMenu menu = TacticalCombo.menu();
+        menu.setBackground(Theme.PANEL_2);
+        menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
+        menu.add(new MenuRows.ChoiceRow("Show map", "In the video's bottom-left corner. F3 switches; drag to pan, wheel to zoom, double-click fits the flight",
+                new String[]{"OFF", "SMALL", "LARGE"}, java.util.Arrays.asList(MAP_SHOW).indexOf(mapShow), i -> setMapShow(MAP_SHOW[i])));
+        de.droiddrone.pc.map.TileSource[] sources = {null, de.droiddrone.pc.map.TileSource.KARTVERKET_TOPO,
+                de.droiddrone.pc.map.TileSource.KARTVERKET_RASTER, de.droiddrone.pc.map.TileSource.SATELLITE, de.droiddrone.pc.map.TileSource.OSM};
+        int selected = Math.max(0, java.util.Arrays.asList(sources).indexOf(mapView.source()));
+        menu.add(new MenuRows.ChoiceRow("Map", "Auto: Kartverket's topo map in Norway, OpenStreetMap elsewhere. Paper: Kartverket's printed map. SAT / MAP on the map switches too",
+                new String[]{"AUTO", "TOPO", "PAPER", "SAT", "OSM"}, selected, i -> {
+                    mapView.setSource(sources[i]);
+                    save(Map.of(MAP_SOURCE_KEY, sources[i] == null ? de.droiddrone.pc.map.TileSource.AUTO : sources[i].id));
+                }));
+        menu.add(new MenuRows.WindowRow("Find drone", "The last known position with the coordinates to copy and map links, to go and get it",
+                () -> FindDroneDialog.open(this, track, tileCache, mapView.source())));
+        menu.add(new MenuRows.WindowRow("Tracks folder", "Every flight's path as a GPX file, and last-position.txt (Documents\\DRAUPNE Link\\Tracks)", () -> {
+            try {
+                java.awt.Desktop.getDesktop().open(de.droiddrone.pc.map.FlightTrack.defaultDir().toFile());
+            } catch (Exception e) {
+                logLine("Can't open the tracks folder: " + e.getMessage());
+            }
+        }));
+        return menu;
     }
 
     private void setLinkEditable(boolean editable) {
@@ -966,6 +1074,7 @@ public class MainWindow extends JFrame {
         refreshController(snap);
         refreshLink();
         alertSound.update(stickWarning(), System.currentTimeMillis());
+        refreshMap();
         // keeps the HUD (and the latency test's time code) live even when no video frames arrive
         if (connection != null || latencyMeter != null) videoView.repaint();
     }

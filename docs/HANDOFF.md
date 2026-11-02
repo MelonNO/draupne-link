@@ -4,7 +4,20 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-01, 1.0.21)
+## Where things stand (2026-11-02, 1.0.21 + the map, not released)
+
+- **Not released yet (2026-11-02): the map.** MAP button (header) and F3: a map in the video's bottom-left corner
+  (SMALL / LARGE) with the drone's position and heading, its path, home (H) and range rings; Kartverket topo /
+  printed map, satellite (Esri World Imagery), OpenStreetMap, or AUTO (Kartverket in Norway); SAT / MAP and FOLLOW
+  on the map, right-click for the rest, wheel zooms about the pointer, double-click fits the flight. Every GPS report
+  (2 a second from the phone) goes to `Documents\DRAUPNE Link\Tracks	rack-DATE.gpx` as it comes, with
+  `last-position.txt` next to it; MAP > Find drone shows the last known position with copy and map links. Code:
+  `map/Mercator`, `map/TileSource`, `map/TileCache` (`%APPDATA%\DraupneLink	iles`, 2 fetch threads, User-Agent
+  names the app as the OSM policy wants, tiles refetched after 30 days, saved ones shown without internet),
+  `map/FlightTrack`, `gui/MapView` (a child of `VideoView`, so it follows it to full screen and the popped-out
+  window), `gui/FindDroneDialog`. `FcTelemetry.Gps` gained course, HDOP and receivedAt; the link log has
+  lat/lon/alt/sats. Not done on purpose: the phone's own GPS (the pilot said no). The whole thing stays off the
+  stick and video threads (painted with the HUD's 30 Hz refresh). Release it as 1.0.22 when the pilot says so.
 
 - **Released:** DRAUPNE Link **1.0.21** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.15**: SETTINGS > Video
   AUTO / SHARP / ROBUST (`ControlLink.VideoMode`). ROBUST = 640x360, max bitrate step 2 (1 Mbit/s), key frames twice and
@@ -152,7 +165,7 @@ Lessons from releasing:
 
 ## Testing and diagnosing
 
-- `gradlew.bat test`: 191 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
+- `gradlew.bat test`: 205 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
   count, spectator mode end to end on loopback, flight mode / ARM / failsafe planning, setup page composition).
   Loopback tests need full-size packets to catch size bugs: 1.0.17's spectator cut-off passed with a plain test
   picture (see `SpectatorTest.fullSizePacketsReachTheSpectatorWhole`).

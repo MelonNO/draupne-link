@@ -88,7 +88,7 @@ public class FcTelemetry {
      * while it sees the drone armed, -1 if unknown.
      */
     public record Gps(int fix, int sats, double speedKmh, int altM, int distanceHomeM, int directionHomeDeg,
-                      double latDeg, double lonDeg, int travelledM) {}
+                      double latDeg, double lonDeg, int travelledM, int courseDeg, double hdop, long receivedAt) {}
 
     public record Timers(int onSeconds, int flySeconds, int lastArmSeconds) {}
 
@@ -255,19 +255,21 @@ public class FcTelemetry {
                 double lat = b.readInt() / 1e7, lon = b.readInt() / 1e7;
                 int altM = b.readShort();
                 double kmh = b.readShort() * 0.036; // cm/s
-                skip(b, 4); // course, hdop
+                int course = Math.floorMod(b.readShort() / 10, 360); // decidegrees
+                double hdop = b.readShort() / 100.0;
                 int travelled = b.readInt(); // the Flight app's own count, in m
                 Gps old = gps;
                 gps = new Gps(fix, sats, kmh, altM, old == null ? -1 : old.distanceHomeM(), old == null ? 0 : old.directionHomeDeg(),
-                        lat, lon, travelled);
+                        lat, lon, travelled, course, hdop, System.currentTimeMillis());
             }
             case FcCommon.MSP_COMP_GPS -> {
                 int dist = b.readShort();
                 int dir = b.readShort();
                 b.readByte();
                 Gps old = gps;
-                gps = old == null ? new Gps(0, 0, 0, 0, dist, dir, 0, 0, -1)
-                        : new Gps(old.fix(), old.sats(), old.speedKmh(), old.altM(), dist, dir, old.latDeg(), old.lonDeg(), old.travelledM());
+                gps = old == null ? new Gps(0, 0, 0, 0, dist, dir, 0, 0, -1, 0, 0, 0)
+                        : new Gps(old.fix(), old.sats(), old.speedKmh(), old.altM(), dist, dir, old.latDeg(), old.lonDeg(), old.travelledM(),
+                        old.courseDeg(), old.hdop(), old.receivedAt());
             }
             case FcCommon.MSP_OSD_CANVAS -> skip(b, 2);
             case FcCommon.MSP2_INAV_STATUS -> {
