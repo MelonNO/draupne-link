@@ -6,6 +6,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-02, 1.0.24)
 
+- **Unreleased, for 1.0.25's notes:** the setup guide's hint under the title wraps (`WizardDialog.hint` is a
+  `WrappingText` sized to the window's width; the Betaflight page's hint was cut off at the right edge). The README's
+  pictures were redone from a throwaway `ReadmeShot` (build/shot, git-ignored): the mark with the name, the main
+  window as it opens, the OSD over a drawn landscape, four guide pages, and the map window with a made-up flight
+  over Reine (Lofoten) on topo and satellite, the Alt + drag box and the DOWNLOAD AREA dialog. Real tiles were
+  fetched into a temp cache for them; nothing was shown on screen.
 - **Released:** DRAUPNE Link **1.0.24** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.18**: the map's
   DOWNLOAD AREA, the phone's position from every location provider, the in-app phone updater, the link log's phone
   position columns (all three below). 1.0.23 (pc.17): the icons without the brackets, the boot window opening black.

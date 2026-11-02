@@ -1,4 +1,4 @@
-# DRAUPNE Link
+<p align="center"><img src="docs/images/logo.png" width="70%" alt="DRAUPNE Link"></p>
 
 **Fly your Betaflight drone over 4G from a Windows PC.**
 Named after Draupne (Old Norse *Draupnir*), Odin's ring. Based on [DroidDrone](https://github.com/DroidDrone/DroidDrone)
@@ -81,11 +81,20 @@ Betaflight 4.4 is **not required**, only recommended:
 
 ## The map
 
+![The map window: a flight over Kartverket's topo map, pins, launch rings](docs/images/map-topo.png)
+
 **POP OUT MAP** on the LINK card (or **F3**) opens the map in a window of its own, for a second screen: where the drone is and has been, over **Kartverket's** topo or printed map, **satellite** pictures or **OpenStreetMap** (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE and PINS buttons; + and -, the wheel and dragging move it. Under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in **MGRS** (default), UTM, decimal degrees or degrees-minutes-seconds.
+
+![The same flight over satellite pictures](docs/images/map-satellite.png)
 
 - **Pins:** right-click on the map drops one (Alpha, Bravo ... Zulu); each shows distance and bearing from the drone. Right-click a pin to rename or remove it; **PINS** lists them all. Kept between sessions and written into the flight's GPX file.
 - **Every flight's path is saved as it comes** to `Documents\DRAUPNE Link\Tracks\track-<date>.gpx` (opens in any map program), with `last-position.txt` beside it: the drone's last known position with MGRS and map links.
 - **Works without internet** for every place looked at before: map tiles are kept for good. **DOWNLOAD AREA** saves a whole area before you leave, like Mission Planner's prefetch: press the button, **Alt + drag** a box on the map, or right-click > *Download this view*. One START fetches every tile of the area for all four pictures and every zoom level (or one picture, fewer levels); it shows the count and rough size first, a bar while it runs, and CANCEL keeps what is saved. OpenStreetMap comes one tile at a time with a pause, by its policy: keep its areas small.
+
+<p>
+<img src="docs/images/map-download-area.png" width="69%" alt="Alt + drag draws the area to download">
+<img src="docs/images/map-download-dialog.png" width="23%" alt="DOWNLOAD AREA: pictures, levels, tile count and size">
+</p>
 - **The phone's own position** (MENU > TOOLS > *Position from*): the phone asks the GPS, the network and the fused position, so it has one indoors too, and its screen says what the GPS is doing (not allowed - tap to allow; no position yet; or the provider, accuracy and age of the position it sends).
 
 ## Watching from a second PC

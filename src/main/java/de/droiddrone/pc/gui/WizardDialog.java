@@ -114,7 +114,20 @@ class WizardDialog extends JDialog {
     private final StepProgress progress = new StepProgress();
     private final JLabel stepCounter = Theme.label("", Theme.headingFont(12f), Theme.MUTED);
     private final JLabel title = Theme.label("", Theme.headingFont(30f), Theme.TEXT);
-    private final JLabel hint = Theme.label("", Theme.font(Font.PLAIN, 17f), Theme.MUTED);
+    /** Wraps to the window's width (a long hint in a JLabel was cut off at the right edge). */
+    private final WrappingText hint = new WrappingText("", Theme.font(Font.PLAIN, 17f), Theme.MUTED) {
+        @Override
+        public Dimension getPreferredSize() {
+            int width = 0;
+            for (java.awt.Container c = getParent(); c != null && width <= 0; c = c.getParent()) {
+                width = c.getWidth() - c.getInsets().left - c.getInsets().right;
+            }
+            if (width <= 0) return super.getPreferredSize();
+            javax.swing.text.View v = getUI().getRootView(this);
+            v.setSize(width, 0);
+            return new Dimension(width, (int) Math.ceil(v.getPreferredSpan(javax.swing.text.View.Y_AXIS)));
+        }
+    };
     private final JLabel status = Theme.label(" ", Theme.font(Font.BOLD, 13.5f), Theme.MUTED);
     private final CardLayout cards = new CardLayout();
     private final JPanel cardPanel = new JPanel(cards);
@@ -138,6 +151,7 @@ class WizardDialog extends JDialog {
         header.add(progress, BorderLayout.CENTER);
         JPanel titles = new JPanel();
         titles.setLayout(new BoxLayout(titles, BoxLayout.Y_AXIS));
+        for (JComponent c : new JComponent[]{stepCounter, title, hint}) c.setAlignmentX(LEFT_ALIGNMENT);
         titles.add(Box.createVerticalStrut(8));
         titles.add(stepCounter);
         titles.add(Box.createVerticalStrut(4));
@@ -256,7 +270,7 @@ class WizardDialog extends JDialog {
         progress.setProgress(shownIndex, shownTotal);
         stepCounter.setText("STEP " + (shownIndex + 1) + " OF " + shownTotal + (page.section.isEmpty() ? "" : "   //   " + page.section));
         title.setText(page.title().toUpperCase());
-        hint.setText("<html>" + page.hint() + "</html>");
+        hint.setHtml(page.hint());
         cards.show(cardPanel, Integer.toString(index));
         WindowReveal.fadeIn(cardPanel); // Next and Back: the page fades in
         page.onShow();
