@@ -4,9 +4,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-02, 1.0.22)
+## Where things stand (2026-11-02, 1.0.23)
 
-- **Released:** DRAUPNE Link **1.0.22** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.16**. (Its first two
+- **Released:** DRAUPNE Link **1.0.23** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.17** (the icons
+  without the brackets; the boot window opens black). 1.0.22 (pc.16) brought everything below. (Its first two
   tags failed on the release runner: the boot test measured real time while Java2D's first use took seconds, and one
   UDP loopback frame broke in SpectatorTest; both tests are tolerant now, and test failures print their message.) The map and
   everything round it, the MENU header, the boot animation and the new mark. Where the pieces live:

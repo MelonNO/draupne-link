@@ -2,6 +2,12 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.23
+
+- **The icon is the DRAUPNE mark without its corner brackets, bigger:** the window, the taskbar, the installer and the phone app's launcher. The boot animation keeps the brackets.
+- **No flash of the UI before the boot animation:** the window opens black.
+- Phone app pc.17 (bundled): the launcher icon; otherwise as pc.16.
+
 ## 1.0.22
 
 - **The map, in a window of its own** for a second screen (MENU > TOOLS or the POP OUT MAP button, F3): where the drone is and has been, over Kartverket's topo or printed map, satellite pictures or OpenStreetMap (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE, PINS; + and - buttons, the wheel, drag; the figures under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in MGRS (default), UTM, decimal degrees or degrees-minutes-seconds.

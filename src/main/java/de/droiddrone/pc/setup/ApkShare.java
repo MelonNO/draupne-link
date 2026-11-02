@@ -29,11 +29,11 @@ import java.util.concurrent.Executors;
  * SHA-256, and serves it from a tiny web server that only answers the local network and Tailscale.
  */
 public class ApkShare implements AutoCloseable {
-    public static final String VERSION = "2.3.0-pc.16";
+    public static final String VERSION = "2.3.0-pc.17";
     public static final String APK_NAME = "DRAUPNE-Flight-" + VERSION + ".apk";
     public static final String APK_URL = "https://github.com/MelonNO/draupne-link/releases/download/flight-" + VERSION + "/" + APK_NAME;
     /** SHA-256 of the APK built by flight-app/build.ps1 and attached to the flight-VERSION release. */
-    public static final String APK_SHA256 = "f1f8d1c67d94b742eee0329aed5e71a9f3c1c8f4b645ab33eca70a92f6aff16d";
+    public static final String APK_SHA256 = "f63891fb6acd0cfbcf54422cfc1feffdf1525acff4556451464c4d3e6147accf";
     public static final int PORT = 8765;
 
     private HttpServer server;
