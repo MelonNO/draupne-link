@@ -65,6 +65,10 @@ final class SpectatorClient implements AutoCloseable {
     private volatile long lastFromPilot;
     private volatile long lastStream;
     private volatile boolean haveSnapshot;
+    /** When the pilot PC last said its stream is paused (its link to the drone is slow); 0 = it isn't. */
+    private volatile long pausedAt;
+    /** A pause notice older than this (the pilot sends one every 500 ms) has lapsed. */
+    static final long PAUSE_NOTICE_FRESH_MS = 1500;
 
     // under lock
     private final TreeMap<Integer, Item> pending = new TreeMap<>();
@@ -115,6 +119,12 @@ final class SpectatorClient implements AutoCloseable {
         synchronized (lock) {
             return lost;
         }
+    }
+
+    /** The pilot PC holds its stream because its own link to the drone is slow: "PAUSED (pilot link slow)". */
+    boolean isPaused() {
+        long at = pausedAt;
+        return at != 0 && System.currentTimeMillis() - at <= PAUSE_NOTICE_FRESH_MS;
     }
 
     // ------------------------------------------------------------------ the link's receive thread
@@ -168,6 +178,7 @@ final class SpectatorClient implements AutoCloseable {
                 if (len <= Spectate.STREAM_HEADER || packet.getPort() != streamPort) return;
                 lastFromPilot = now;
                 lastStream = now;
+                pausedAt = 0; // the stream goes on
                 int seq = Spectate.readInt(d, 1);
                 int pilotMs = Spectate.readInt(d, 5);
                 byte[] data = Arrays.copyOfRange(d, Spectate.STREAM_HEADER, len);
@@ -202,6 +213,11 @@ final class SpectatorClient implements AutoCloseable {
                 haveSnapshot = true;
                 snapshots.add(Arrays.copyOfRange(d, 1, len));
             }
+            case Spectate.PAUSE -> {
+                if (len < 2 || packet.getPort() != streamPort) return;
+                lastFromPilot = now;
+                pausedAt = d[1] != 0 ? now : 0;
+            }
             default -> {
             }
         }
@@ -215,12 +231,16 @@ final class SpectatorClient implements AutoCloseable {
 
     private void resetStream() {
         haveSnapshot = false; // a new pilot or stream: its config and FC info again
+        pausedAt = 0;
         synchronized (lock) {
             pending.clear();
             gaps.clear();
             nextSeq = -1;
             highestSeq = -1;
             offsetNow = offsetBefore = Long.MAX_VALUE;
+            // the same snapshot again (a rejoin after the pilot went, or its stream restarted) must be played again:
+            // the video decoder starts afresh and needs the codec config, however familiar
+            appliedSnapshots.clear();
         }
     }
 
@@ -266,8 +286,10 @@ final class SpectatorClient implements AutoCloseable {
     /** A snapshot packet is played once: sent again (until it arrives) it would restart the video each time. */
     private void applySnapshot(byte[] packet) {
         byte name = packet[0];
-        if (Arrays.equals(appliedSnapshots.get(name), packet)) return;
-        appliedSnapshots.put(name, packet);
+        synchronized (lock) { // resetStream clears the map from the receive thread
+            if (Arrays.equals(appliedSnapshots.get(name), packet)) return;
+            appliedSnapshots.put(name, packet);
+        }
         deliver.accept(packet);
     }
 

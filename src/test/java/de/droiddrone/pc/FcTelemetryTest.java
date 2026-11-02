@@ -154,6 +154,93 @@ class FcTelemetryTest {
     }
 
     @Test
+    void readsThePhonesState() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream o = new DataOutputStream(bytes);
+        o.writeShort(FcTelemetry.PHONE_STATE);
+        o.writeByte(0b1001); o.writeByte(37); o.writeShort(12); o.writeShort(9);
+        o.write(betaflightPacket(0, 0)); // what follows is still read
+        FcTelemetry t = new FcTelemetry();
+        assertNull(t.getPhoneState());
+        long before = System.currentTimeMillis();
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        FcTelemetry.PhoneState s = t.getPhoneState();
+        assertNotNull(s);
+        assertTrue(s.channelMapKnown());
+        assertEquals(FcTelemetry.UsbPermission.OK, s.usbPermissionState());
+        assertTrue(s.cameraOpen());
+        assertEquals(37, s.lastRcSeq());
+        assertEquals(12, s.rcWriteAgeMs());
+        assertEquals(9, s.rcInToOutMs());
+        assertTrue(s.receivedAt() >= before);
+        assertNotNull(t.getStatus(), "the record after it was read");
+        assertEquals(0, t.getUnknownCodes());
+
+        // the "unknown" values, and the USB permission flags
+        bytes.reset();
+        o.writeShort(FcTelemetry.PHONE_STATE);
+        o.writeByte(0b010); o.writeByte(255); o.writeShort(65535); o.writeShort(65535);
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        s = t.getPhoneState();
+        assertEquals(-1, s.lastRcSeq());
+        assertEquals(-1, s.rcWriteAgeMs());
+        assertEquals(-1, s.rcInToOutMs());
+        assertFalse(s.channelMapKnown());
+        assertFalse(s.cameraOpen());
+        assertEquals(FcTelemetry.UsbPermission.PENDING, s.usbPermissionState());
+        bytes.reset();
+        o.writeShort(FcTelemetry.PHONE_STATE);
+        o.writeByte(0b110); o.writeByte(0); o.writeShort(0); o.writeShort(0);
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        assertEquals(FcTelemetry.UsbPermission.DENIED, t.getPhoneState().usbPermissionState(), "denied wins over pending");
+        assertEquals(0, t.getPhoneState().lastRcSeq(), "0 is a sequence number, not unknown");
+    }
+
+    @Test
+    void thePhoneAppsBuildNumberIsReadFromItsVersion() throws Exception {
+        assertEquals(18, FcTelemetry.pcBuild("2.3.0-pc.18"));
+        assertEquals(19, FcTelemetry.pcBuild("2.3.0-pc.19"));
+        assertEquals(5, FcTelemetry.pcBuild("2.3.0-pc.5-test"), "digits up to the next non-digit");
+        assertEquals(-1, FcTelemetry.pcBuild("2.3.0"), "upstream's own app");
+        assertEquals(-1, FcTelemetry.pcBuild("2.3.0-pc."), "no number");
+        assertEquals(-1, FcTelemetry.pcBuild(null));
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream o = new DataOutputStream(bytes);
+        byte[] name = "2.3.0-pc.19".getBytes(StandardCharsets.UTF_8);
+        o.writeShort(FcTelemetry.PHONE_APP_VERSION);
+        o.writeShort(name.length);
+        o.write(name);
+        FcTelemetry t = new FcTelemetry();
+        assertEquals(-1, t.getPhonePcBuild());
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        assertEquals(19, t.getPhonePcBuild());
+    }
+
+    @Test
+    void armedNowOnlyFromAFreshStatus() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        long now = System.currentTimeMillis();
+        assertFalse(t.isArmedNow(now, 2000), "nothing known");
+        t.parse(new DataReader(boxNamesPacket("ARM;ANGLE;"), true), BETAFLIGHT);
+        t.parse(new DataReader(betaflightPacket(0, 0b10), true), BETAFLIGHT);
+        assertFalse(t.isArmedNow(System.currentTimeMillis(), 2000), "disarmed");
+        t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
+        assertTrue(t.isArmedNow(System.currentTimeMillis(), 2000));
+        assertFalse(t.isArmedNow(System.currentTimeMillis() + 2001, 2000), "too old to say: the link may have been down since");
+    }
+
+    @Test
+    void modeNamesAreForgottenAfterALinkLoss() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        t.parse(new DataReader(boxNamesPacket("ARM;ANGLE;"), true), BETAFLIGHT);
+        assertTrue(t.hasBoxNames());
+        t.forgetBoxNames();
+        assertFalse(t.hasBoxNames(), "a different FC may answer next: its names are read again");
+        t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
+        assertFalse(t.getStatus().armed(), "without names, bit 0 isn't known to be ARM");
+    }
+
+    @Test
     void flightModeIsNamedLikeBetaflightsOsd() {
         assertEquals("ACRO", FcTelemetry.flightMode(List.of("ARM")), "no self-level mode on: acro");
         assertEquals("AIR", FcTelemetry.flightMode(List.of("ARM", "AIR MODE")), "acro with the air mode switch");

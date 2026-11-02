@@ -238,6 +238,48 @@ class SpectatorTest {
         assertEquals(ControlLink.State.READY, pilot.getState());
     }
 
+    /**
+     * After a link loss the phone may still hold this PC's old session and name it as the pilot: this PC is no
+     * spectator of itself - it says so and keeps asking to connect, a little faster, until the phone lets go.
+     */
+    @Test
+    void aPhoneNamingThisPcsOwnSessionAsThePilotIsAskedAgain() throws Exception {
+        phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.staleSession = new Spectate.Address(LOOPBACK, PILOT_PORT); // where this PC's previous session sat
+        List<String> events = new CopyOnWriteArrayList<>();
+        pilot = link(PILOT_PORT, true, 600);
+        pilot.setEvents(events::add);
+        pilot.start();
+        waitFor(() -> events.stream().anyMatch(e -> e.contains("previous session")), 3000, "told what the phone does");
+        int answersBefore = phone.spectatorAnswers.get();
+        Thread.sleep(1500);
+        assertFalse(pilot.isSpectator(), "no spectator of itself");
+        assertEquals(ControlLink.State.CONNECTING, pilot.getState());
+        assertTrue(phone.spectatorAnswers.get() - answersBefore >= 4, "kept asking to connect, faster than every 500 ms: "
+                + (phone.spectatorAnswers.get() - answersBefore) + " in 1.5 s");
+        assertEquals(1, events.stream().filter(e -> e.contains("previous session")).count(), "said once, not with every answer");
+        phone.staleSession = null; // the phone lets the old session go
+        waitFor(() -> pilot.getState() == ControlLink.State.READY, 5000, "connected at last");
+        assertFalse(pilot.isSpectator());
+    }
+
+    /** The same by address: this PC's own addresses at this link's port or a session's that just closed. */
+    @Test
+    void thisPcIsKnownByItsAddressesAndRecentPorts() throws Exception {
+        ControlLink closed = link(PILOT_PORT, true, 600);
+        closed.start();
+        closed.close();
+        ControlLink fresh = link(SPECTATOR_PORT, true, 600);
+        assertTrue(fresh.isThisPc(new Spectate.Address(LOOPBACK, SPECTATOR_PORT)), "its own port");
+        assertTrue(fresh.isThisPc(new Spectate.Address(LOOPBACK, PILOT_PORT)), "the session that just closed");
+        assertFalse(fresh.isThisPc(new Spectate.Address(LOOPBACK, PILOT_PORT + 7)), "some other PC on this address: a pilot");
+        assertFalse(fresh.isThisPc(new Spectate.Address(InetAddress.getByName("192.0.2.1"), SPECTATOR_PORT)), "not this PC's address");
+        pilot = link(PILOT_PORT, true, 600);
+        pilot.start(); // the closed port is a live session again (a pilot, as in the tests above)
+        assertFalse(fresh.isThisPc(new Spectate.Address(LOOPBACK, PILOT_PORT)));
+        fresh.close();
+    }
+
     @Test
     void wrongKeyLearnsNothing() throws Exception {
         phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
@@ -250,6 +292,152 @@ class SpectatorTest {
         Thread.sleep(1500);
         assertFalse(spectator.isSpectator());
         assertEquals(0, phone.spectatorAnswers.get(), "the phone doesn't tell where the pilot is");
+    }
+
+    /**
+     * The host alone against a scripted spectator: a slow link to the drone pauses the stream, the spectator is told,
+     * the sequence stands still (nothing to ask for again), and a packet from before the pause is not resent after it.
+     */
+    @Test
+    void aCongestionPauseLeavesNoGapAndIsAnnounced() throws Exception {
+        try (DatagramSocket linkSocket = new DatagramSocket(0, LOOPBACK);
+             DatagramSocket viewer = new DatagramSocket(0, LOOPBACK)) {
+            viewer.setSoTimeout(2500);
+            int[] ping = {20};
+            List<String> events = new CopyOnWriteArrayList<>();
+            SpectatorHost host = new SpectatorHost("DD", true, linkSocket, () -> true, () -> ping[0], events::add);
+            try {
+                byte[] hello = Spectate.keyed(Spectate.HELLO, "DD");
+                host.onHello(new DatagramPacket(hello, hello.length, LOOPBACK, viewer.getLocalPort()));
+                assertEquals(1, host.count());
+                DatagramPacket in = new DatagramPacket(new byte[2048], 2048);
+                viewer.receive(in);
+                assertEquals(Spectate.WELCOME, in.getData()[0]);
+                int streamPort = host.streamPort();
+                byte[] keep = Spectate.keep(0, new int[0], 0);
+                viewer.send(new DatagramPacket(keep, keep.length, LOOPBACK, streamPort));
+                Thread keeper = new Thread(() -> { // as a real spectator: KEEP 4 times a second, or it counts as gone
+                    while (!viewer.isClosed()) {
+                        try {
+                            viewer.send(new DatagramPacket(keep, keep.length, LOOPBACK, streamPort));
+                            Thread.sleep(250);
+                        } catch (Exception e) {
+                            return;
+                        }
+                    }
+                });
+                keeper.setDaemon(true);
+                keeper.start();
+                byte[] packet = {UdpCommon.TelemetryData, 1};
+                host.forward(packet, packet.length);
+                int seq0 = receiveStream(viewer, in);
+                assertEquals(0, seq0);
+                Thread.sleep(1200); // one full second of ping 20: "the usual"
+                ping[0] = 200;
+                long high = System.currentTimeMillis();
+                waitFor(host::isPaused, (int) SpectatorHost.CONGESTION_HOLD_MS + 1000, "paused");
+                assertTrue(System.currentTimeMillis() - high >= SpectatorHost.CONGESTION_HOLD_MS - 100, "not before the hold time");
+                assertTrue(events.get(events.size() - 1).startsWith("Spectator video paused"));
+                host.forward(packet, packet.length); // during the pause: dropped, and no number used up
+                viewer.receive(in);
+                assertEquals(Spectate.PAUSE, in.getData()[0], "told: paused");
+                assertEquals(1, in.getData()[1]);
+                ping[0] = 20;
+                waitFor(() -> !host.isPaused(), (int) SpectatorHost.PAUSE_MS + 1000, "on again");
+                boolean onAgain = false;
+                long end = System.currentTimeMillis() + 2000;
+                while (!onAgain && System.currentTimeMillis() < end) {
+                    viewer.receive(in);
+                    onAgain = in.getData()[0] == Spectate.PAUSE && in.getData()[1] == 0;
+                }
+                assertTrue(onAgain, "told: on again");
+                host.forward(packet, packet.length);
+                assertEquals(1, receiveStream(viewer, in), "the sequence stood still during the pause: no gap to ask for");
+                // asked again: the one from before the pause is not resent, the one after is
+                byte[] nack = Spectate.keep(0, new int[]{0, 1}, 2);
+                viewer.send(new DatagramPacket(nack, nack.length, LOOPBACK, streamPort));
+                assertEquals(1, receiveStream(viewer, in), "only packet 1 again");
+                assertThrows(java.net.SocketTimeoutException.class, () -> viewer.receive(in), "packet 0 is never resent");
+            } finally {
+                host.close();
+            }
+        }
+    }
+
+    /** The next STREAM packet's sequence number; PAUSE notices on the way are skipped. */
+    private static int receiveStream(DatagramSocket viewer, DatagramPacket in) throws java.io.IOException {
+        while (true) {
+            viewer.receive(in);
+            if (in.getData()[0] == Spectate.STREAM) return Spectate.readInt(in.getData(), 1);
+        }
+    }
+
+    /**
+     * The client alone against a scripted pilot: a pause notice shows as PAUSED until the stream goes on, and a
+     * snapshot already played is played again after a rejoin (the decoder starts afresh and needs it).
+     */
+    @Test
+    void pauseIsShownAndASnapshotIsPlayedAgainAfterARejoin() throws Exception {
+        try (DatagramSocket pilotSocket = new DatagramSocket(0, LOOPBACK);
+             DatagramSocket clientSocket = new DatagramSocket(0, LOOPBACK)) {
+            pilotSocket.setSoTimeout(3000);
+            List<byte[]> played = new CopyOnWriteArrayList<>();
+            SpectatorClient client = new SpectatorClient(clientSocket, LOOPBACK, 1, "DD", 100,
+                    new Spectate.Address(LOOPBACK, pilotSocket.getLocalPort()), played::add);
+            Thread feeder = new Thread(() -> {
+                byte[] buf = new byte[2048];
+                DatagramPacket p = new DatagramPacket(buf, buf.length);
+                while (!clientSocket.isClosed()) {
+                    try {
+                        p.setLength(buf.length);
+                        clientSocket.receive(p);
+                        client.onPacket(p);
+                    } catch (Exception e) {
+                        return;
+                    }
+                }
+            });
+            feeder.setDaemon(true);
+            feeder.start();
+            try {
+                DatagramPacket in = new DatagramPacket(new byte[2048], 2048);
+                pilotSocket.receive(in);
+                assertEquals(Spectate.HELLO, in.getData()[0]);
+                InetAddress clientIp = in.getAddress();
+                int clientPort = in.getPort();
+                byte[] welcome = Spectate.withPort(Spectate.WELCOME, pilotSocket.getLocalPort());
+                pilotSocket.send(new DatagramPacket(welcome, welcome.length, clientIp, clientPort));
+                waitFor(() -> client.phase() == SpectatorClient.Phase.WATCHING, 2000, "welcomed");
+                assertFalse(client.isPaused());
+                byte[] snapshot = Spectate.snapshot(new byte[]{UdpCommon.FcInfo, 0, 1, 2, 4, 5, 1, 0, 1, 46, 0});
+                pilotSocket.send(new DatagramPacket(snapshot, snapshot.length, clientIp, clientPort));
+                waitFor(() -> played.size() == 1, 2000, "the snapshot played");
+                pilotSocket.send(new DatagramPacket(snapshot, snapshot.length, clientIp, clientPort));
+                Thread.sleep(300);
+                assertEquals(1, played.size(), "the same snapshot again is not played again");
+
+                byte[] pause = {Spectate.PAUSE, 1};
+                pilotSocket.send(new DatagramPacket(pause, pause.length, clientIp, clientPort));
+                waitFor(client::isPaused, 1000, "PAUSED");
+                byte[] s = Spectate.stream(0, 0, new byte[]{UdpCommon.TelemetryData, 1}, 2);
+                pilotSocket.send(new DatagramPacket(s, s.length, clientIp, clientPort));
+                waitFor(() -> !client.isPaused(), 1000, "the stream goes on: not paused");
+                waitFor(() -> played.size() == 2, 2000, "the stream packet played");
+
+                // the pilot goes and comes back: the spectator rejoins, and the snapshot it knows is played again
+                byte[] bye = {Spectate.BYE};
+                pilotSocket.send(new DatagramPacket(bye, bye.length, clientIp, clientPort));
+                waitFor(() -> client.phase() == SpectatorClient.Phase.JOINING, 2000, "pilot gone");
+                pilotSocket.receive(in); // its HELLO again
+                pilotSocket.send(new DatagramPacket(welcome, welcome.length, clientIp, clientPort));
+                waitFor(() -> client.phase() == SpectatorClient.Phase.WATCHING, 2000, "welcomed again");
+                pilotSocket.send(new DatagramPacket(snapshot, snapshot.length, clientIp, clientPort));
+                waitFor(() -> played.size() == 3, 2000, "the snapshot played again after the rejoin");
+                assertEquals(UdpCommon.FcInfo, played.get(2)[0]);
+            } finally {
+                client.close();
+            }
+        }
     }
 
     /** The client alone against a scripted pilot: a lost packet is asked for, and everything plays in order, late. */

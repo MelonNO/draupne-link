@@ -27,7 +27,15 @@ public final class LinkLog implements AutoCloseable {
             + "ping_max_ms,pong_age_ms,path,phone_rc_in_gap_ms,phone_rc_out_gap_ms,phone_write_max_ms,phone_write_timeouts,"
             + "phone_skipped,video_rx_fps,video_mbps,video_damaged,video_lost,camera_fps,phone_video_mbps,bitrate_step,"
             + "decode_ms,convert_ms,draw_skipped,bunched,video_res,key_requests,intra_refresh,robust,recovered,"
-            + "lat,lon,gps_alt_m,gps_sats,phone_lat,phone_lon,phone_acc_m,phone_age_s,event";
+            + "lat,lon,gps_alt_m,gps_sats,phone_lat,phone_lon,phone_acc_m,phone_age_s,"
+            // the phone's own state (record 0x40F4, phone app pc.19 on): age of its last stick write to the FC, how
+            // long that frame took from arriving to the USB write, its sequence number, the flags as sent (bit 0
+            // channel map known, 1 USB permission pending, 2 denied, 3 camera open); pc_to_fc_ms = half the ping +
+            // phone_rc_in_to_out_ms, the stick's way from this PC to the flight controller; glfw_poll_max_ms = the
+            // slowest GLFW event pump on the RC thread (a USB plug event re-reads the devices and can hold a tick up)
+            + "phone_rc_write_age_ms,phone_rc_in_to_out_ms,phone_rc_seq,phone_flags,pc_to_fc_ms,glfw_poll_max_ms,event";
+    /** A phone state older than this is not shown: the phone has stopped reporting. */
+    static final long PHONE_STATE_FRESH_MS = 2500;
 
     private final Path file;
     private final BufferedWriter out;
@@ -79,7 +87,16 @@ public final class LinkLog implements AutoCloseable {
      */
     public synchronized void sample(ControlLink link, boolean radio, boolean rcOutput, int videoFps, short[] channels,
                                     String path, de.droiddrone.pc.video.VideoPipeline.Stats video) throws IOException {
+        sample(link, radio, rcOutput, videoFps, channels, path, video, -1);
+    }
+
+    /** @param glfwPollMaxMs the slowest GLFW event pump lately ({@link JoystickService#getPollMaxMs}), -1 = not measured */
+    public synchronized void sample(ControlLink link, boolean radio, boolean rcOutput, int videoFps, short[] channels,
+                                    String path, de.droiddrone.pc.video.VideoPipeline.Stats video, long glfwPollMaxMs) throws IOException {
         long now = System.currentTimeMillis();
+        FcTelemetry.PhoneState ps = link.getTelemetry().getPhoneState();
+        if (ps != null && now - ps.receivedAt() > PHONE_STATE_FRESH_MS) ps = null;
+        int ping = link.getPing();
         long rc = link.getRcFramesSent();
         long telemetry = link.getTelemetryPacketsReceived();
         FcTelemetry t = link.getTelemetry();
@@ -94,7 +111,7 @@ public final class LinkLog implements AutoCloseable {
         // no fix yet, or an app before pc.16
         FcTelemetry.PhonePosition pp = t.getPhonePosition();
         boolean phoneFix = pp != null && pp.receivedAt() > 0 && now - pp.receivedAt() < 2500 && !(pp.latDeg() == 0 && pp.lonDeg() == 0);
-        row(link.getState().name(), link.getPing(), rc - lastRcFrames, link.takeMaxRcGapMs(), telemetry - lastTelemetry,
+        row(link.getState().name(), ping, rc - lastRcFrames, link.takeMaxRcGapMs(), telemetry - lastTelemetry,
                 link.takeMaxTelemetryGapMs(), fcAge == Long.MAX_VALUE ? -1 : fcAge,
                 fresh ? flag(blockers.contains("RXLOSS")) : "", fresh ? flag(blockers.contains("FAILSAFE")) : "",
                 fresh ? flag(s.armed()) : "", blockers, flag(radio), flag(rcOutput), videoFps,
@@ -121,7 +138,11 @@ public final class LinkLog implements AutoCloseable {
                 fix ? String.format(java.util.Locale.ROOT, "%.6f", gps.latDeg()) : "", fix ? String.format(java.util.Locale.ROOT, "%.6f", gps.lonDeg()) : "",
                 fix ? gps.altM() : "", fix ? gps.sats() : "",
                 phoneFix ? String.format(java.util.Locale.ROOT, "%.6f", pp.latDeg()) : "", phoneFix ? String.format(java.util.Locale.ROOT, "%.6f", pp.lonDeg()) : "",
-                phoneFix ? pp.accuracyM() : "", phoneFix ? pp.ageS() : "", "");
+                phoneFix ? pp.accuracyM() : "", phoneFix ? pp.ageS() : "",
+                ps == null || ps.rcWriteAgeMs() < 0 ? "" : ps.rcWriteAgeMs(), ps == null || ps.rcInToOutMs() < 0 ? "" : ps.rcInToOutMs(),
+                ps == null || ps.lastRcSeq() < 0 ? "" : ps.lastRcSeq(), ps == null ? "" : ps.flags(),
+                ps == null || ps.rcInToOutMs() < 0 || ping < 0 ? "" : ping / 2 + ps.rcInToOutMs(),
+                glfwPollMaxMs < 0 ? "" : glfwPollMaxMs, "");
         if (video != null) lastRecovered = video.recovered();
         lastKeyRequests = link.getKeyFrameRequests();
         if (video != null) {

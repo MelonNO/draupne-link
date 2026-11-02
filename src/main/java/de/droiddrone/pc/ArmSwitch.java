@@ -15,10 +15,17 @@ public record ArmSwitch(int channel, List<int[]> ranges) {
     private static final int MODE_ARM = 0;
     private static final int FIRST_AUX = 4;
 
-    /** True if this frame would arm (the switch is on). */
+    /**
+     * True if this frame would arm (the switch is on). Judged on the frame as the flight controller gets it: a channel
+     * this frame doesn't carry goes out as 1000 when it is one of the first 8 ({@link ControlLink#padForRxMap}), and
+     * Betaflight sets any channel beyond what it receives to 0 (rx_msp.c) - with an inverted range (900-1100 arms)
+     * the padded 1000 is inside it. Betaflight's own check is value &lt; 900 + endStep * 25, the end exclusive; this
+     * one includes the end, erring on the side of "on" (the sticks wait a little longer, never start too early).
+     */
     public boolean on(short[] channels) {
-        if (channels == null || channel >= channels.length) return false;
-        int v = channels[channel];
+        if (channels == null) return false;
+        int v = channel < channels.length ? channels[channel]
+                : channel < ControlLink.RX_MAP_SIZE ? RcMapper.MIN_CHANNEL_LEVEL : 0;
         for (int[] r : ranges) if (v >= r[0] && v <= r[1]) return true;
         return false;
     }

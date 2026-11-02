@@ -131,4 +131,96 @@ class RcSessionTest {
         session.onInput(sticks(0.4f));
         assertFalse(session.isRcEnabled());
     }
+
+    /**
+     * The link was down long enough for the failsafe, but the FC says it is still armed (GPS rescue flying it home):
+     * the sticks go live as they are - a frame with the arm switch off would disarm it in the air.
+     */
+    @Test
+    void anArmedDroneGetsTheSticksBackAtOnceAfterALinkLoss() {
+        boolean[] fcArmed = {false};
+        RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
+        RcSession armed = new RcSession(new NoLink().link, five, events::add, () -> now[0], () -> linkUp[0], () -> fcArmed[0],
+                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        armed.onInput(new Joystick.State(new float[]{0, 0, 0, -1f, -1f}, new boolean[0])); // throttle down, arm off
+        assertTrue(armed.isRcEnabled());
+        Joystick.State flying = new Joystick.State(new float[]{0, 0, 0, 0.4f, 1f}, new boolean[0]); // throttle up, arm ON
+        armed.onInput(flying);
+        linkUp[0] = false;
+        armed.onInput(flying);
+        assertFalse(armed.isRcEnabled());
+        now[0] += 5000;
+        linkUp[0] = true;
+        armed.onInput(flying);
+        assertFalse(armed.isRcEnabled(), "no fresh word from the FC yet: the throttle-low, arm-off rule");
+        assertEquals("THROTTLE DOWN, ARM OFF", armed.waitingFor());
+        assertNull(armed.lastResumeBanner());
+        fcArmed[0] = true;
+        armed.onInput(flying);
+        assertTrue(armed.isRcEnabled(), "the FC is armed and flying: the sticks as they are, now");
+        assertEquals("Link back - FC armed - sticks live.", events.get(events.size() - 1));
+        assertEquals(new RcSession.Banner(RcSession.ARMED_RESUME_BANNER, now[0]), armed.lastResumeBanner());
+        assertEquals(1700, armed.getLastChannels()[PcConfig.THROTTLE_INDEX], "with the throttle where it is");
+        assertNull(armed.waitingFor());
+    }
+
+    /** The FC disarmed (or nothing is known): the rule as before - throttle down and the arm switch off. */
+    @Test
+    void aDisarmedOrUnknownDroneStillNeedsTheThrottleLowAfterALinkLoss() {
+        boolean[] fcArmed = {false};
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> linkUp[0], () -> fcArmed[0], null);
+        s.onInput(sticks(-1f));
+        s.onInput(sticks(0.4f));
+        linkUp[0] = false;
+        s.onInput(sticks(0.4f));
+        now[0] += 5000;
+        linkUp[0] = true;
+        s.onInput(sticks(0.4f));
+        assertFalse(s.isRcEnabled(), "disarmed: the throttle-low rule");
+        s.onInput(sticks(0.4f));
+        assertFalse(s.isRcEnabled());
+        assertEquals("THROTTLE DOWN", s.waitingFor());
+        assertNull(s.lastResumeBanner(), "no banner: nothing out of the ordinary happened");
+        s.onInput(sticks(-1f));
+        assertTrue(s.isRcEnabled());
+        assertEquals("Throttle low - RC output enabled.", events.get(events.size() - 1));
+    }
+
+    /**
+     * The radio sends 4 channels, the arm switch sits on AUX1 with an inverted range (900-1100 arms, as a switch
+     * wired "on when down" would): the frame goes out padded to 8 with AUX1 = 1000, which is inside that range.
+     */
+    @Test
+    void anArmChannelTheRadioDoesntSendIsJudgedAsThePaddedFrame() {
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true,
+                new ArmSwitch(4, java.util.List.of(new int[]{900, 1100})));
+        s.onInput(sticks(-1f));
+        assertFalse(s.isRcEnabled(), "AUX1 goes out as 1000: the switch is on");
+        assertEquals("ARM SWITCH OFF", s.waitingFor());
+        RcSession usual = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true,
+                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        usual.onInput(sticks(-1f));
+        assertTrue(usual.isRcEnabled(), "the usual range: 1000 is off");
+    }
+
+    @Test
+    void waitingForSaysWhyThereIsNothingToSend() {
+        assertEquals("NO RADIO", session.waitingFor(), "nothing seen yet");
+        session.onInput(null);
+        assertEquals("NO RADIO", session.waitingFor());
+        session.onInput(new Joystick.State(new float[]{0, 0}, new boolean[0])); // a device without the throttle axis
+        assertEquals("MAPPING INCOMPLETE", session.waitingFor());
+        session.onInput(sticks(0.5f));
+        assertEquals("THROTTLE DOWN", session.waitingFor());
+        session.onInput(sticks(-1f));
+        assertNull(session.waitingFor());
+    }
+
+    @Test
+    void theArmSwitchIsUnknownUntilDroneSetupReadIt() {
+        assertTrue(session.isArmSwitchUnknown());
+        RcSession known = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true,
+                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        assertFalse(known.isArmSwitchUnknown());
+    }
 }

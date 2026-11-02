@@ -226,9 +226,12 @@ public class ControlLink {
 
     public void start() throws IOException {
         socket = new DatagramSocket(localPort);
+        if (localPort == lastClosedPort) lastClosedPort = -1; // this port is a live session of this PC again
         try {
             socket.setReceiveBufferSize(UdpCommon.packetLength * 300);
-            socket.setSendBufferSize(UdpCommon.packetLength);
+            // room for a burst (config, requests, pings and a stick frame in the same moment): with one packet's
+            // worth, the second packet in a tick is dropped by the socket, not delayed
+            socket.setSendBufferSize(64 * 1024);
             socket.setTrafficClass(0x10);
         } catch (IOException | RuntimeException e) {
             socket.close(); // or the port stays taken and the next CONNECT fails
@@ -313,6 +316,18 @@ public class ControlLink {
         }
         Spectate.Address pilot = Spectate.readPilotAt(d, len);
         if (pilot == null) return;
+        if (isThisPc(pilot)) {
+            // the phone still holds this PC's previous session (seen 2026-11-02 after a link loss: it named this
+            // very PC as the pilot, and this PC sat as a spectator of itself, never asking to connect again). Not
+            // a pilot to watch: keep asking, a little faster, until the phone lets go
+            long now = System.currentTimeMillis();
+            if (now - ownSessionNamedLog >= 2000) {
+                ownSessionNamedLog = now;
+                events.accept("The phone still thinks this PC's previous session is the pilot - connecting again.");
+            }
+            ownSessionNamedAt = now;
+            return;
+        }
         if (c != null) {
             c.onPilotAt(pilot);
             return;
@@ -323,6 +338,44 @@ public class ControlLink {
         }
         events.accept("Another PC flies the drone (" + pilot.ip().getHostAddress() + "): watching as a spectator, "
                 + spectatorDelayMs + " ms behind it. This PC sends no sticks.");
+    }
+
+    /** A session of this PC closed this recently may still be the phone's idea of the pilot. */
+    static final long RECENT_SESSION_MS = 10_000;
+    /** Connect goes out this often while the phone names this PC's old session as the pilot (500 ms otherwise). */
+    static final long OWN_SESSION_RETRY_MS = 250;
+    private volatile long ownSessionNamedAt, ownSessionNamedLog;
+    /** This PC's addresses, read from the interfaces when first needed (the Tailscale 100.x one among them). */
+    private volatile java.util.Set<InetAddress> ownAddresses;
+    /** The last session's local port and when it closed, process-wide: a new link may be asked about the old one. */
+    private static volatile int lastClosedPort = -1;
+    private static volatile long lastClosedAt;
+
+    /**
+     * The pilot the phone names is this PC: one of its own addresses, at this link's port or at a session's that
+     * closed within RECENT_SESSION_MS. Another PC on the same machine's address at another port (a second DRAUPNE
+     * Link, as the tests run) is a pilot like any other.
+     */
+    boolean isThisPc(Spectate.Address pilot) {
+        boolean ownPort = pilot.port() == localPort
+                || pilot.port() == lastClosedPort && System.currentTimeMillis() - lastClosedAt <= RECENT_SESSION_MS;
+        return ownPort && ownAddresses().contains(pilot.ip());
+    }
+
+    private java.util.Set<InetAddress> ownAddresses() {
+        java.util.Set<InetAddress> own = ownAddresses;
+        if (own != null) return own;
+        own = new java.util.HashSet<>();
+        try {
+            for (java.net.NetworkInterface nif : java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces())) {
+                own.addAll(java.util.Collections.list(nif.getInetAddresses()));
+            }
+        } catch (IOException e) {
+            log("Own addresses unknown: " + e); // then only another PC can be the pilot, as before
+        }
+        own.add(InetAddress.getLoopbackAddress());
+        ownAddresses = own;
+        return own;
     }
 
     /** A packet the pilot PC passed on, played at its time (spectator thread). */
@@ -429,13 +482,15 @@ public class ControlLink {
                     videoConfigReceived = false;
                     fcInfo = null;
                     telemetry.forgetBoxIds(); // a restarted phone app has to read them again
+                    telemetry.forgetBoxNames(); // and a different FC has its modes on other bits: read them again too
                 }
                 wasConnected = connected;
                 if (versionMismatch) {
                     Thread.sleep(1000);
                 } else if (!connected) {
                     udpSender.sendConnect(1, key, SettingsCommon.versionCompatibleCode);
-                    Thread.sleep(500);
+                    boolean phoneHoldsOldSession = System.currentTimeMillis() - ownSessionNamedAt < RECENT_SESSION_MS;
+                    Thread.sleep(phoneHoldsOldSession ? OWN_SESSION_RETRY_MS : 500);
                 } else if (!configReceived) {
                     sendConfig();
                     Thread.sleep(500);
@@ -776,10 +831,8 @@ public class ControlLink {
         if (!running || !configReceived || !isConnected()) return false;
         short[] frame = padForRxMap(channels);
         try {
-            UdpPacketData packetData = new UdpPacketData(UdpCommon.RcFrame);
-            packetData.daos.writeByte(frame.length);
-            for (short channel : frame) packetData.daos.writeShort(channel);
-            byte[] data = packetData.getData();
+            byte[] data = rcFrame(frame, telemetry.getPhonePcBuild() >= RC_SEQ_MIN_PC_BUILD ? rcSeq : -1);
+            rcSeq = (rcSeq + 1) & 0xff;
             // straight out, once: upstream's sendPacket retries ten times and swallows the error, so a dead adapter
             // looked like frames sent - and a frame late is a frame wrong
             socket.send(new DatagramPacket(data, data.length, remoteIp, remotePort));
@@ -799,6 +852,25 @@ public class ControlLink {
     }
 
     /**
+     * The stick frame as upstream lays it out, [24][count u8][count x int16], plus one byte DRAUPNE Flight 2.3.0-pc.19
+     * and newer read: a sequence number (0-255, wrapping) that lets the phone drop a frame overtaken by a newer one on
+     * the way - over 4G frames arrive bunched and out of order, and a frame late is a frame wrong. Older phone apps
+     * refuse a frame with a byte too many, so they get the old layout (seq &lt; 0).
+     */
+    static byte[] rcFrame(short[] frame, int seq) throws IOException {
+        UdpPacketData packetData = new UdpPacketData(UdpCommon.RcFrame);
+        packetData.daos.writeByte(frame.length);
+        for (short channel : frame) packetData.daos.writeShort(channel);
+        if (seq >= 0) packetData.daos.writeByte(seq);
+        return packetData.getData();
+    }
+
+    /** The first phone app build that reads the stick frame's sequence byte. */
+    static final int RC_SEQ_MIN_PC_BUILD = 19;
+    /** The next stick frame's sequence number; the input thread alone touches it. */
+    private int rcSeq;
+
+    /**
      * Upstream Flight Msp.processRxMap reorders channels to Betaflight's channel map (8 entries), but silently skips
      * the reordering when a frame has fewer than 8 channels - with any map other than AETR1234 the sticks would then
      * land on the wrong channels. So frames are always at least 8 long; extra AUX channels idle at 1000.
@@ -810,8 +882,17 @@ public class ControlLink {
         return padded;
     }
 
+    /**
+     * Nothing at all from the phone for this long: the link is lost. Upstream's buffer only gives up after 4000 of its
+     * ticks (4-5 s on a PC, longer with the coarse Windows timer); whichever comes first counts, so a reconnect
+     * (Connect, config, video again) starts sooner after a real loss.
+     */
+    static final long LINK_LOST_MS = 2000;
+
     public boolean isConnected() {
-        return receiverBuffer != null && receiverBuffer.isConnected();
+        if (receiverBuffer == null || !receiverBuffer.isConnected()) return false;
+        long last = lastReceivedAt;
+        return last == 0 || System.currentTimeMillis() - last <= LINK_LOST_MS;
     }
 
     /**
@@ -881,6 +962,12 @@ public class ControlLink {
         };
     }
 
+    /** While watching: the pilot PC holds its stream because its own link to the drone is slow (PAUSED on the OSD). */
+    public boolean isSpectatorPaused() {
+        SpectatorClient c = spectator;
+        return c != null && c.isPaused();
+    }
+
     /** How many PCs watch through this one. */
     public int getSpectatorCount() {
         SpectatorHost h = host;
@@ -932,6 +1019,8 @@ public class ControlLink {
             log("sendDisconnect error: " + e);
         }
         running = false;
+        lastClosedPort = localPort;
+        lastClosedAt = System.currentTimeMillis();
         SpectatorClient c = spectator;
         if (c != null) c.close();
         SpectatorHost h = host;

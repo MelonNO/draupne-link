@@ -26,6 +26,28 @@ class ArmSwitchTest {
         assertFalse(a.on(new short[]{1500, 1500, 1500, 1000, 1000}));
     }
 
+    /** A channel the frame doesn't carry is judged as the FC gets it: 1000 (padded) up to the 8th, 0 beyond. */
+    @Test
+    void aMissingChannelCountsAsWhatTheFlightControllerGets() {
+        ArmSwitch inverted = new ArmSwitch(5, List.of(new int[]{900, 1100})); // AUX2, arms when low
+        assertTrue(inverted.on(new short[]{1500, 1500, 1500, 1000}), "AUX2 goes out padded as 1000: inside the range");
+        assertFalse(inverted.on(new short[]{1500, 1500, 1500, 1000, 1000, 1500}), "sent as 1500: off");
+        ArmSwitch usual = new ArmSwitch(5, List.of(new int[]{1700, 2100}));
+        assertFalse(usual.on(new short[]{1500, 1500, 1500, 1000}), "padded 1000 is below the usual range");
+        ArmSwitch beyond = new ArmSwitch(9, List.of(new int[]{900, 1100})); // AUX6: not padded, Betaflight sets it to 0
+        assertFalse(beyond.on(new short[]{1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000}));
+        assertTrue(beyond.on(new short[]{1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000}), "sent as 1000: on");
+        assertFalse(usual.on(null));
+    }
+
+    @Test
+    void theRangeEndIsIncludedErringOnTheSideOfOn() {
+        ArmSwitch a = new ArmSwitch(4, List.of(new int[]{1700, 2100}));
+        assertTrue(a.on(new short[]{1500, 1500, 1500, 1000, 2100}), "Betaflight's own check would say off at exactly 2100");
+        assertTrue(a.on(new short[]{1500, 1500, 1500, 1000, 1700}));
+        assertFalse(a.on(new short[]{1500, 1500, 1500, 1000, 1699}));
+    }
+
     @Test
     void noArmModeOrArmOnTwoChannelsMeansUnknown() {
         assertNull(ArmSwitch.fromCli("aux 0 1 0 1700 2100 0 0"));

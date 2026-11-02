@@ -35,6 +35,8 @@ final class SpectatorHost implements AutoCloseable {
     static final int CONGESTION_MS = 80;
     static final long CONGESTION_HOLD_MS = 1000;
     static final long PAUSE_MS = 3000;
+    /** While paused the spectators are told so this often (PAUSE packet), so they can say why the picture stands. */
+    static final long PAUSE_NOTICE_MS = 500;
     /** At most this many resends a second per spectator. */
     static final int RESEND_BUDGET = 150;
 
@@ -70,6 +72,13 @@ final class SpectatorHost implements AutoCloseable {
     private final ArrayBlockingQueue<byte[]> outgoing = new ArrayBlockingQueue<>(1024);
     private volatile Viewer[] viewers = new Viewer[0];
     private volatile boolean paused;
+    /**
+     * Packets numbered before this are never resent: a pause throws away what was queued but not sent, and the
+     * sequence stands still while it lasts (forward takes no number), so the spectators' only gap is those thrown
+     * away. Left unanswered, the spectators give the gap up as soon as the stream goes on; answered after the pause,
+     * it would be a burst of stale pictures on top of the fresh ones.
+     */
+    private volatile int resendFrom;
     private volatile boolean running = true;
     private volatile byte[] videoConfig, fcInfo, boxNames, boxIds;
 
@@ -210,6 +219,7 @@ final class SpectatorHost implements AutoCloseable {
         java.util.Arrays.fill(lowest, Long.MAX_VALUE);
         long highSince = 0;
         long pausedUntil = 0;
+        long nextPauseNotice = 0;
         while (running) {
             try {
                 byte[] p = outgoing.poll(100, TimeUnit.MILLISECONDS);
@@ -236,11 +246,18 @@ final class SpectatorHost implements AutoCloseable {
                     paused = true;
                     pausedUntil = now + PAUSE_MS;
                     outgoing.clear();
+                    resendFrom = seq.get(); // what was queued is gone for good; the stream goes on from here
+                    nextPauseNotice = 0;
                     events.accept("Spectator video paused for " + PAUSE_MS / 1000 + " s: the link to the drone slowed down"
                             + " (ping " + pingMs + " ms, usually " + usual + ").");
                 } else if (paused && now >= pausedUntil) {
                     paused = false;
                     highSince = 0;
+                    for (Viewer v : viewers) send(new byte[]{Spectate.PAUSE, 0}, v);
+                }
+                if (paused && now >= nextPauseNotice) {
+                    nextPauseNotice = now + PAUSE_NOTICE_MS;
+                    for (Viewer v : viewers) send(new byte[]{Spectate.PAUSE, 1}, v);
                 }
             } catch (InterruptedException e) {
                 return;
@@ -280,7 +297,7 @@ final class SpectatorHost implements AutoCloseable {
             v.budgetWindow = now;
             v.resends = 0;
         }
-        if (v.resends >= RESEND_BUDGET || paused) return;
+        if (v.resends >= RESEND_BUDGET || paused || s < resendFrom) return;
         byte[] p = ring.get(s & (RING - 1));
         if (p == null || Spectate.readInt(p, 1) != s) return; // too old: overwritten
         v.resends++;

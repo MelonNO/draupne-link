@@ -25,7 +25,9 @@ import java.nio.charset.StandardCharsets;
  * pilot -> spectator   SNAPSHOT    [0x69][packet]                  stream config, FC info, flight mode names
  * either way           BYE         [0x67]
  * spectator -> pilot   KEEP        [0x68][flags u8][n u8][missing seq i32 x n]   to the stream port, 4 a second
+ * pilot -> spectator   PAUSE       [0x6D][paused u8]                 the stream is held (pilot link slow); 0 = on again
  * </pre>
+ * 0x6A-0x6C are the PC-to-phone video packets (ControlLink), so PAUSE skips to 0x6D. An older spectator drops it.
  */
 final class Spectate {
     static final byte PILOT_QUERY = 0x60;
@@ -38,6 +40,7 @@ final class Spectate {
     static final byte BYE = 0x67;
     static final byte KEEP = 0x68;
     static final byte SNAPSHOT = 0x69;
+    static final byte PAUSE = 0x6D;
 
     static final byte REFUSED_NOT_FLYING = 1;
     static final byte REFUSED_FULL = 2;
@@ -53,7 +56,7 @@ final class Spectate {
     }
 
     static boolean isSpectatePacket(byte code) {
-        return code >= PILOT_QUERY && code <= SNAPSHOT;
+        return code >= PILOT_QUERY && code <= SNAPSHOT || code == PAUSE;
     }
 
     static byte[] keyed(byte code, String key) {
