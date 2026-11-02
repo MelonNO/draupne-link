@@ -20,7 +20,10 @@ import java.util.function.Supplier;
 /**
  * Shows the decoded camera picture. The decoder scales straight to this component's letterboxed size and writes into
  * a back buffer; presenting swaps buffers and repaints, so painting is a 1:1 copy with no scaling.
- * Not double-buffered by Swing (the picture covers everything it paints), which saves one more copy per frame.
+ * Swing still paints it through the window's double buffer: setDoubleBuffered(false) on a child changes nothing while
+ * an ancestor (the root pane) buffers, and the RepaintManager is one per application, not per window, so the pop-out
+ * and full-screen windows can't be switched to direct painting on their own without the main window losing its
+ * buffer too. The copy is there; the flag is kept only as a statement of intent.
  * The picture can be turned upside down for a camera mounted that way; the OSD is drawn on top, the right way up.
  * Turning it happens in the same copy (measured: no slower than a plain one).
  */
@@ -76,7 +79,19 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             public void componentResized(java.awt.event.ComponentEvent e) {
                 updateTarget();
             }
+
+            @Override
+            public void componentShown(java.awt.event.ComponentEvent e) {
+                updateTarget();
+            }
         });
+    }
+
+    /** Moved into another window (pop-out, full screen): the next frame converts at the new size, not the old one's. */
+    @Override
+    public void addNotify() {
+        super.addNotify();
+        updateTarget();
     }
 
     void setStatsSource(Supplier<VideoPipeline.Stats> stats) {
@@ -105,6 +120,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             readyFresh = false;
             back = null;
         }
+        presentedAt = 0; // no picture: nothing to call frozen until the next one
         repaint();
     }
 
@@ -128,6 +144,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             videoHeight = height;
         }
         this.mirror = mirror;
+        presentedAt = 0; // a (re)started stream: VIDEO FROZEN waits for its first picture, not the old one's age
         updateTarget();
     }
 
@@ -211,6 +228,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             int[] t = target;
             int ow = shown != null ? shown[0] : t[0] > 0 ? t[0] : w;
             int oh = shown != null ? shown[1] : t[1] > 0 ? t[1] : h;
+            osd.setDisplayMs(displayMs);
             osd.paint(g, (w - ow) / 2, (h - oh) / 2, ow, oh, data, osdLayout);
         } else {
             paintStats(g);

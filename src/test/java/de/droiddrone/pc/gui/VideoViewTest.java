@@ -72,6 +72,24 @@ class VideoViewTest {
         assertArrayEquals(new int[]{640, 360}, VideoView.fit(1280, 720, 640, 400), "shrunk view: scaled down");
     }
 
+    /** VIDEO FROZEN is judged by the age of the last picture: none after a clear or a restarted stream. */
+    @Test
+    void thePictureAgeStartsOverWithAClearOrANewStream() {
+        VideoView view = new VideoView();
+        view.setSize(16, 8);
+        assertEquals(-1, view.msSincePicture(), "no picture yet");
+        view.videoStarted(16, 8, false);
+        view.beginFrame(16, 8);
+        view.presentFrame();
+        assertTrue(view.msSincePicture() >= 0);
+        view.clear(); // disconnected
+        assertEquals(-1, view.msSincePicture(), "nothing to call frozen until the next picture");
+        view.beginFrame(16, 8);
+        view.presentFrame();
+        view.videoStarted(16, 8, false); // the stream restarted (a size switch): its first picture is still to come
+        assertEquals(-1, view.msSincePicture());
+    }
+
     @Test
     void mirroredFrontCameraTurnsToo() {
         assertEquals(RED, at(show(true, false), 14, 1), "mirrored: top-right");

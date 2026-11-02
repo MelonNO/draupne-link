@@ -459,6 +459,204 @@ class VideoTest {
         assertEquals(List.of(false), changes.subList(before, changes.size()), "lowered while still under upstream's 300 ms limit");
     }
 
+    /** Bad coverage mode holds the phone at 1 Mbit/s; a calm scene arrives well under 0.5 there and is no reason to ask up. */
+    @Test
+    void aCalmSceneAtTheBadCoverageLimitIsNotRescuedUpAndDown() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        b.setMaxStep(BitrateControl.FLOOR_STEP);
+        b.onPhoneTarget(1_000_000);
+        long t = 0;
+        for (; t < 30_000; t += 33) {
+            b.onFrame(t % 2000 == 0, t, 30, 80);
+            if (t % 1000 == 0) b.onReceivedRate(0.3, t);
+        }
+        assertFalse(changes.contains(true), "no rescue at the limit: " + changes);
+        assertEquals(BitrateControl.FLOOR_STEP, b.step());
+    }
+
+    /** The phone reports it went below the floor by itself: asked up, in bad coverage mode too (1 Mbit/s is its limit). */
+    @Test
+    void aPhoneReportingBelowTheFloorIsAskedUpWhateverArrives() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        b.setMaxStep(BitrateControl.FLOOR_STEP);
+        b.onPhoneTarget(500_000);
+        long t = 0;
+        for (; t < 30_000; t += 33) {
+            b.onFrame(t % 2000 == 0, t, 30, 80);
+            if (t % 1000 == 0) b.onReceivedRate(0.45, t);
+        }
+        long ups = changes.stream().filter(c -> c).count();
+        assertTrue(ups >= 1 && ups <= 30_000 / BitrateControl.RESCUE_MS, "asked up every " + BitrateControl.RESCUE_MS + " ms: " + ups);
+        changes.clear();
+        b.onPhoneTarget(1_000_000); // it listened
+        for (long end = t + 12_000; t < end; t += 33) {
+            b.onFrame(t % 2000 == 0, t, 30, 80);
+            if (t % 1000 == 0) b.onReceivedRate(0.45, t);
+        }
+        assertFalse(changes.contains(true), "at the floor and the limit: done");
+    }
+
+    @Test
+    void keyFrameRequestsBackOffWhileTheyComeDamaged() {
+        VideoPipeline.KeyFrameBackoff k = new VideoPipeline.KeyFrameBackoff();
+        assertTrue(k.shouldSend(0));
+        assertFalse(k.shouldSend(1400), "the link's own spacing");
+        k.onKeyFrame(true); // the requested one came damaged
+        assertEquals(3000, k.spacingMs());
+        assertFalse(k.shouldSend(2000));
+        assertTrue(k.shouldSend(3000));
+        k.onKeyFrame(true);
+        assertEquals(6000, k.spacingMs());
+        assertTrue(k.shouldSend(9000));
+        k.onKeyFrame(true);
+        assertEquals(6000, k.spacingMs(), "no further than 6 s");
+        k.onKeyFrame(false); // a whole one
+        assertEquals(VideoPipeline.KeyFrameBackoff.BASE_MS, k.spacingMs(), "back to the start");
+        k.onKeyFrame(true); // damaged, but not one that was asked for: a scheduled key frame lost on the way
+        assertEquals(VideoPipeline.KeyFrameBackoff.BASE_MS, k.spacingMs());
+        k.setRobust(true);
+        assertEquals(VideoPipeline.KeyFrameBackoff.ROBUST_BASE_MS, k.spacingMs(), "bad coverage: the second copy first");
+    }
+
+    @Test
+    void theColourMatrixFollowsThePictureAndHdIsBt709() {
+        assertEquals(org.bytedeco.ffmpeg.global.swscale.SWS_CS_ITU709, VideoDecoder.coefficients(org.bytedeco.ffmpeg.global.avutil.AVCOL_SPC_BT709, 240));
+        assertEquals(org.bytedeco.ffmpeg.global.swscale.SWS_CS_ITU601, VideoDecoder.coefficients(org.bytedeco.ffmpeg.global.avutil.AVCOL_SPC_BT470BG, 1080));
+        assertEquals(org.bytedeco.ffmpeg.global.swscale.SWS_CS_ITU709, VideoDecoder.coefficients(org.bytedeco.ffmpeg.global.avutil.AVCOL_SPC_UNSPECIFIED, 720));
+        assertEquals(org.bytedeco.ffmpeg.global.swscale.SWS_CS_ITU601, VideoDecoder.coefficients(org.bytedeco.ffmpeg.global.avutil.AVCOL_SPC_UNSPECIFIED, 480));
+    }
+
+    @Test
+    void aFragmentBeyondTheFrameIsClippedAndTheFrameStillCompletes() {
+        FrameAssembler a = new FrameAssembler();
+        byte[] whole = bytes(0, 250);
+        assertNull(a.put(false, (short) 4, 0, 250, whole, 0, 100, 1234));
+        assertNull(a.put(false, (short) 4, 100, 0, whole, 100, 100, 1235));
+        FrameAssembler.Frame f = a.put(false, (short) 4, 200, 0, new byte[80], 0, 80, 1236); // 30 bytes too many
+        assertNotNull(f);
+        assertEquals(250, f.data().length);
+        assertEquals(1236, f.arrivedMs(), "the time of the fragment that completed it");
+        assertFalse(f.damaged());
+    }
+
+    // ------------------------------------------------------------------ VideoPipeline (fake sink)
+
+    /** A screen that counts: pictures presented and stream starts, with a gate to hold the decode thread in beginFrame. */
+    static final class FakeScreen implements VideoPipeline.FrameSink {
+        final List<int[]> starts = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final java.util.concurrent.atomic.AtomicInteger presented = new java.util.concurrent.atomic.AtomicInteger();
+        volatile java.util.concurrent.CountDownLatch gate;
+        final java.util.concurrent.CountDownLatch inBeginFrame = new java.util.concurrent.CountDownLatch(1);
+        private int[] buffer = new int[0];
+
+        public void videoStarted(int width, int height, boolean mirror) {
+            starts.add(new int[]{width, height});
+        }
+
+        public int[] targetSize() {
+            return new int[]{320, 240};
+        }
+
+        public int[] beginFrame(int width, int height) {
+            inBeginFrame.countDown();
+            java.util.concurrent.CountDownLatch g = gate;
+            if (g != null) {
+                try {
+                    g.await();
+                } catch (InterruptedException ignored) {
+                }
+            }
+            if (buffer.length < width * height) buffer = new int[width * height];
+            return buffer;
+        }
+
+        public void presentFrame() {
+            presented.incrementAndGet();
+        }
+    }
+
+    private static boolean waitFor(java.util.function.BooleanSupplier condition, long ms) throws InterruptedException {
+        for (long end = System.currentTimeMillis() + ms; System.currentTimeMillis() < end; Thread.sleep(10)) {
+            if (condition.getAsBoolean()) return true;
+        }
+        return condition.getAsBoolean();
+    }
+
+    private static void feed(VideoPipeline p, TestStreams.Stream s, int from, int to, int firstNumber) {
+        for (int i = from; i < to; i++) {
+            byte[] d = s.packets().get(i).data();
+            p.onVideoFragment(s.packets().get(i).keyFrame(), (short) (firstNumber + i - from), 0, d.length, d, 0, d.length);
+        }
+    }
+
+    /** A restarted stream's key frame 1 often comes before its config: held for it, not decoded under the old one. */
+    @Test
+    void aRestartedStreamsFirstKeyFrameWaitsForItsConfig() throws Exception {
+        TestStreams.Stream a = TestStreams.h264(320, 240, 10, 5);
+        TestStreams.Stream b = TestStreams.h264(160, 120, 10, 5);
+        FakeScreen screen = new FakeScreen();
+        try (VideoPipeline p = new VideoPipeline(screen, () -> 40)) {
+            p.onVideoConfig(320, 240, false, false, a.codecConfig());
+            feed(p, a, 0, 10, 1);
+            assertTrue(waitFor(() -> screen.presented.get() >= 1, 2000), "the first stream shows");
+            int shown = screen.presented.get();
+            feed(p, b, 0, 1, 1); // the new stream's key frame 1, before its config
+            Thread.sleep(300);
+            assertEquals(shown, screen.presented.get(), "not decoded under the old config");
+            assertEquals(1, screen.starts.size());
+            p.onVideoConfig(160, 120, false, false, b.codecConfig());
+            assertTrue(waitFor(() -> screen.presented.get() > shown, 2000), "the held key frame shows once its config is in");
+            assertEquals(2, screen.starts.size());
+            assertArrayEquals(new int[]{160, 120}, screen.starts.get(1));
+        }
+    }
+
+    /** No config after the restart (one lost): decoded under the old one after CONFIG_WAIT_MS rather than frozen. */
+    @Test
+    void aHeldKeyFrameIsReleasedWhenNoConfigComes() throws Exception {
+        TestStreams.Stream a = TestStreams.h264(320, 240, 10, 5);
+        FakeScreen screen = new FakeScreen();
+        try (VideoPipeline p = new VideoPipeline(screen, () -> 40)) {
+            p.onVideoConfig(320, 240, false, false, a.codecConfig());
+            feed(p, a, 0, 10, 1);
+            assertTrue(waitFor(() -> screen.presented.get() >= 1, 2000));
+            int shown = screen.presented.get();
+            feed(p, a, 5, 6, 1); // "restarted": key frame 1 again (the same size, so it decodes under the old config)
+            Thread.sleep(VideoPipeline.CONFIG_WAIT_MS + 200);
+            assertEquals(shown, screen.presented.get(), "held");
+            feed(p, a, 6, 7, 2);
+            assertTrue(waitFor(() -> screen.presented.get() > shown, 2000), "released with the next frame");
+            assertEquals(1, screen.starts.size());
+        }
+    }
+
+    /** A backlog is dropped by flushing the decoder, not by rebuilding it (a black gap); then from the next key frame. */
+    @Test
+    void aDroppedBacklogKeepsTheDecoder() throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 50, 45); // key frames 0 and 45
+        FakeScreen screen = new FakeScreen();
+        java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
+        try (VideoPipeline p = new VideoPipeline(screen, () -> 40)) {
+            p.setKeyFrameSender(requests::incrementAndGet);
+            screen.gate = new java.util.concurrent.CountDownLatch(1);
+            p.onVideoConfig(320, 240, false, false, s.codecConfig());
+            feed(p, s, 0, 1, 1);
+            assertTrue(screen.inBeginFrame.await(2, java.util.concurrent.TimeUnit.SECONDS), "the decoder is held in beginFrame");
+            feed(p, s, 1, 45, 2); // 44 frames pile up behind it: more than the backlog allows
+            screen.gate.countDown();
+            assertTrue(waitFor(() -> screen.presented.get() == 1, 2000));
+            Thread.sleep(300);
+            assertEquals(1, screen.presented.get(), "the frames after the drop wait for a key frame");
+            assertEquals(1, screen.starts.size(), "the decoder was not rebuilt");
+            assertTrue(requests.get() >= 1, "a key frame was asked for");
+            feed(p, s, 45, 50, 46);
+            assertTrue(waitFor(() -> screen.presented.get() >= 2, 2000), "decoding again from the key frame");
+            assertEquals(1, screen.starts.size());
+        }
+    }
+
     // ------------------------------------------------------------------ LatencyMeter
 
     /** A grey "camera picture" of the screen with the code painted at (x, y), modules of the given size. */
@@ -549,6 +747,29 @@ class VideoTest {
         System.out.printf("720p H.264 (textured, %.1f Mbit/s at 30 fps): decode %.2f ms, convert+copy %.2f ms per frame%n",
                 bytes * 8.0 * 30 / s.packets().size() / 1e6, dec, conv);
         assertTrue(dec + conv < 16, "must keep up with 60 fps with room to spare");
+    }
+
+    /** The screen is bigger than the camera picture: 720p scaled up to 1080p BGRA, the scaler's heaviest job here. */
+    @Test
+    void convertTo1080pTime() {
+        TestStreams.Stream s = TestStreams.h264(1280, 720, 40, 20, true);
+        long convertNs = 0;
+        int n = 0;
+        try (VideoDecoder d = new VideoDecoder(false, s.codecConfig())) {
+            int[] rgb = new int[1920 * 1080];
+            for (TestStreams.Packet p : s.packets()) {
+                if (!d.decode(p.data(), p.data().length)) continue;
+                long t1 = System.nanoTime();
+                d.convert(rgb, 1920, 1080);
+                long t2 = System.nanoTime();
+                if (n++ >= 5) convertNs += t2 - t1;
+            }
+        }
+        double conv = convertNs / 1e6 / (n - 5);
+        // measured 2026-11-02: 3.09 ms with one scaler thread, 2.43 ms with one per core
+        System.out.printf("720p -> 1080p BGRA, scaler threads %s: convert+copy %.2f ms per frame%n",
+                VideoDecoder.SCALE_THREADS == 0 ? "one per core" : Integer.toString(VideoDecoder.SCALE_THREADS), conv);
+        assertTrue(conv < 12, "must leave room in a 16 ms frame: " + conv);
     }
 
     @Test
