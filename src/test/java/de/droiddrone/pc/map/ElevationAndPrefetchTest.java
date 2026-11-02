@@ -123,6 +123,43 @@ class ElevationAndPrefetchTest {
         assertEquals(1, d.failed());
     }
 
+    @Test
+    void theWalkGivesEveryTileOnceCoarseFirstWithoutListingThem() {
+        double minLat = 59.910, maxLat = 59.918, minLon = 10.745, maxLon = 10.760;
+        TileCache.Walk walk = new TileCache.Walk(12, 18, minLat, maxLat, minLon, maxLon);
+        List<TileCache.Tile> planned = TileCache.plan(12, 12, 18, minLat, maxLat, minLon, maxLon, 1_000_000);
+        java.util.Set<TileCache.Tile> seen = new java.util.HashSet<>();
+        int lastZ = -1;
+        for (TileCache.Tile t; (t = walk.next()) != null; ) {
+            assertTrue(t.z() >= lastZ, "coarse levels first");
+            lastZ = t.z();
+            assertTrue(seen.add(t), "each tile once: " + t);
+        }
+        assertEquals(new java.util.HashSet<>(planned), seen, "the same tiles the list had");
+        assertEquals(TileCache.count(12, 18, minLat, maxLat, minLon, maxLon), seen.size());
+        assertNull(walk.next(), "stays through");
+        assertNull(new TileCache.Walk(5, 4, minLat, maxLat, minLon, maxLon).next(), "nothing when TO is under FROM");
+        // a huge area costs nothing to start: the first tile comes at once
+        TileCache.Walk world = new TileCache.Walk(2, 19, -85, 85, -180, 180);
+        assertEquals(2, world.next().z());
+    }
+
+    @Test
+    void aDownloadCanBePausedAndResumed(@TempDir Path dir) throws Exception {
+        TileCache cache = new TileCache(dir, "test", false);
+        TileCache.Download d = cache.download(TileSource.SATELLITE, 2, 10, 59.910, 59.918, 10.745, 10.760);
+        d.pause();
+        assertTrue(d.isPaused());
+        Thread.sleep(300);
+        int done = d.done();
+        assertFalse(d.isFinished(), "held");
+        Thread.sleep(300);
+        assertTrue(d.done() <= done + 2, "nothing much while paused");
+        d.resume();
+        assertTrue(await(d), "goes on and finishes (gives up: no server)");
+        assertTrue(d.refused().isEmpty(), "no server answered, so nothing was refused");
+    }
+
     private static boolean await(TileCache.Download d) throws InterruptedException {
         for (int i = 0; i < 500 && !d.isFinished(); i++) Thread.sleep(10);
         return d.isFinished();

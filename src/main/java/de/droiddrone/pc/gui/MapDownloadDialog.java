@@ -20,6 +20,7 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.Window;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
@@ -28,15 +29,19 @@ import java.util.function.Consumer;
  * DOWNLOAD AREA: the map saved for offline use, like Mission Planner's prefetch. Every tile of an area - the view, a
  * box drawn on the map with SELECT WITH CURSOR or Alt + drag - for every map type and every zoom level, one START (or
  * one type and a narrower range of levels). Says how many tiles that is, roughly how much and how long before START,
- * and warns when it is a lot; the bar and the figures while it runs; CANCEL stops it, what is saved stays. HIDE puts
- * the window away while the download goes on: the map window shows a line with its progress, which brings it back.
- * Closing the window doesn't stop a download. A new box while one runs waits for it.
+ * and warns when it is a lot; the bar and the figures while it runs, with the time left from the measured pace;
+ * PAUSE holds it, CANCEL stops it, what is saved stays. HIDE puts the window away while the download goes on: the map
+ * window shows a line with its progress, which brings it back. Closing the window doesn't stop a download. A new box
+ * while one runs waits for it. An area outside Norway leaves Kartverket out ("All map types"): its servers have
+ * nothing there.
  */
 final class MapDownloadDialog extends JDialog {
     private static final int MIN_LEVEL = 2, MAX_LEVEL = 19;
     private static final int KB_PER_TILE = 20; // a rough average over the map types
     private static final double TILES_PER_SECOND = 6; // a rough average: two connections, far-away servers
     private static final String ALL = "All map types";
+    /** The measured pace counts from this many tiles on; before, the guess above. */
+    private static final int MEASURE_AFTER = 40;
 
     private final TileCache cache;
     private final Consumer<String> progress;
@@ -44,11 +49,14 @@ final class MapDownloadDialog extends JDialog {
     private final SpinnerNumberModel fromModel = new SpinnerNumberModel(MIN_LEVEL, MIN_LEVEL, MAX_LEVEL, 1), toModel = new SpinnerNumberModel(MAX_LEVEL, MIN_LEVEL, MAX_LEVEL, 1);
     private final JLabel areaValue = value(), tilesValue = value(), status = Theme.label(" ", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
     private final JProgressBar bar = new JProgressBar(0, 1000);
-    private final JButton start = Theme.primaryButton("Start"), cancel = Theme.secondaryButton("Cancel"), hide = Theme.secondaryButton("Hide");
+    private final JButton start = Theme.primaryButton("Start"), pause = Theme.secondaryButton("Pause"), cancel = Theme.secondaryButton("Cancel"),
+            hide = Theme.secondaryButton("Hide");
     private final Timer refresh = new Timer(250, e -> refresh());
     private double[] area; // minLat, maxLat, minLon, maxLon
     private TileCache.Download download;
     private boolean settingUp;
+    /** The download's running time without the pauses, for the pace. */
+    private long startedAt, pausedAt, pausedMs;
 
     /**
      * @param selectWithCursor puts the map into drawing a box with the next drag
@@ -73,10 +81,11 @@ final class MapDownloadDialog extends JDialog {
         areaRow.setOpaque(false);
         areaRow.add(areaValue, BorderLayout.CENTER);
         JButton select = Theme.secondaryButton("Select with cursor");
-        select.setToolTipText("Draw the area on the map: press on one corner and drag to the other (Alt + drag does the same any time)");
+        select.setToolTipText("Draw the area on the map: press on one corner and drag to the other (Alt + drag does the same any time); right-click on the map calls it off");
         select.addActionListener(e -> {
             selectWithCursor.run();
             areaValue.setText("DRAW A BOX ON THE MAP");
+            setVisible(false); // out of the way of the map; back when the box is drawn (or the mode is called off)
         });
         areaRow.add(select, BorderLayout.EAST);
         row(rows, "AREA", areaRow);
@@ -112,12 +121,20 @@ final class MapDownloadDialog extends JDialog {
         hide.addActionListener(e -> setVisible(false));
         start.setToolTipText("Fetch every tile of the area that isn't saved yet");
         start.addActionListener(e -> start());
+        pause.setToolTipText("Hold the download; RESUME goes on where it was");
         cancel.setToolTipText("Stop; the tiles saved so far stay");
-        cancel.setEnabled(false);
+        // HIDE, PAUSE and CANCEL only mean something while a download runs: they appear with START
+        hide.setVisible(false);
+        pause.setVisible(false);
+        cancel.setVisible(false);
         cancel.addActionListener(e -> {
-            if (download != null) download.cancel();
+            if (download != null) {
+                download.resume(); // a paused download must run to notice the cancel
+                download.cancel();
+            }
         });
         buttons.add(hide);
+        buttons.add(pause);
         buttons.add(cancel);
         buttons.add(start);
         root.add(buttons, BorderLayout.SOUTH);
@@ -156,33 +173,61 @@ final class MapDownloadDialog extends JDialog {
             toModel.setValue(MAX_LEVEL);
         }
         settingUp = false;
-        double midLat = (area[0] + area[1]) / 2;
-        areaValue.setText(MapView.distanceText(Mercator.distanceM(midLat, area[2], midLat, area[3])) + " x "
-                + MapView.distanceText(Mercator.distanceM(area[0], area[2], area[1], area[2])));
+        showArea();
         count();
     }
 
-    /** The map types chosen: all four, or the one. */
+    private void showArea() {
+        double midLat = (area[0] + area[1]) / 2;
+        areaValue.setText(MapView.distanceText(Mercator.distanceM(midLat, area[2], midLat, area[3])) + " x "
+                + MapView.distanceText(Mercator.distanceM(area[0], area[2], area[1], area[2])));
+    }
+
+    /**
+     * SELECT WITH CURSOR ended on the map (a box drawn - setArea gets it right after - or called off with a click or
+     * a right-click): the window comes back, its area line saying the area again.
+     */
+    void selectionEnded() {
+        if (area != null) showArea();
+        setVisible(true);
+        toFront();
+    }
+
+    /** Any of the area in Norway (its corners or its middle): Kartverket has something there. */
+    static boolean touchesNorway(double[] a) {
+        return TileSource.inNorway(a[0], a[2]) || TileSource.inNorway(a[0], a[3]) || TileSource.inNorway(a[1], a[2]) || TileSource.inNorway(a[1], a[3])
+                || TileSource.inNorway((a[0] + a[1]) / 2, (a[2] + a[3]) / 2);
+    }
+
+    /** The map types chosen: all four (without Kartverket outside Norway), or the one. */
     private List<TileSource> sources() {
         int i = picture.getSelectedIndex();
-        return i == 0 ? List.of(TileSource.values()) : List.of(TileSource.values()[i - 1]);
+        if (i > 0) return List.of(TileSource.values()[i - 1]);
+        List<TileSource> all = new ArrayList<>();
+        boolean norway = touchesNorway(area);
+        for (TileSource s : TileSource.values()) if (norway || !s.norwayOnly) all.add(s);
+        return all;
     }
 
     /** How many tiles the choice means, roughly how much and how long; a warning when it is a lot. */
     private void count() {
         int from = (Integer) fromModel.getValue(), to = (Integer) toModel.getValue();
         if (to < from) {
-            tilesValue.setText("TO LEVEL is above FROM LEVEL");
+            tilesValue.setText("TO LEVEL must not be lower than FROM LEVEL");
             tilesValue.setForeground(Theme.BAD);
             start.setEnabled(false);
             return;
         }
-        long n = TileCache.count(sources(), from, to, area[0], area[1], area[2], area[3]);
-        tilesValue.setText(String.format(Locale.ROOT, "%,d  (ABOUT %s, %s)", n, sizeText(n * KB_PER_TILE), timeText(n)));
+        List<TileSource> sources = sources();
+        long n = TileCache.count(sources, from, to, area[0], area[1], area[2], area[3]);
+        boolean kartverketOut = picture.getSelectedIndex() == 0 && sources.size() < TileSource.values().length;
+        tilesValue.setText(String.format(Locale.ROOT, "%,d  (ABOUT %s, %s)%s", n, sizeText(n * KB_PER_TILE), timeText(n), kartverketOut ? "   NO KARTVERKET" : ""));
         boolean aLot = n > TileCache.MAX_DOWNLOAD;
         tilesValue.setForeground(aLot ? Theme.WARN : Theme.TEXT);
         if (download == null || download.isFinished()) {
-            status.setText(aLot ? "A lot of tiles: this will take a long time. A smaller area or a lower TO LEVEL is much quicker." : " ");
+            String warn = aLot ? "A lot of tiles: this will take a long time. A smaller area or a lower TO LEVEL is much quicker." : "";
+            String out = kartverketOut ? "Kartverket is left out: the area is outside Norway, where its maps end." : "";
+            status.setText(warn.isEmpty() && out.isEmpty() ? " " : warn.isEmpty() || out.isEmpty() ? warn + out : "<html>" + warn + "<br>" + out + "</html>");
             status.setForeground(Theme.WARN);
         }
         start.setEnabled(download == null || download.isFinished());
@@ -194,9 +239,13 @@ final class MapDownloadDialog extends JDialog {
         return kb >= 1024 ? String.format(Locale.ROOT, "%.0f MB", kb / 1024.0) : kb + " KB";
     }
 
-    /** "ROUGHLY 2 H 10 MIN", "ROUGHLY 4 MIN", "UNDER A MINUTE", "ROUGHLY 3 DAYS", "MONTHS". */
+    /** "ROUGHLY 2 H 10 MIN", "ROUGHLY 4 MIN", "UNDER A MINUTE", "ROUGHLY 3 DAYS", "MONTHS": at the guessed pace. */
     static String timeText(long tiles) {
-        long seconds = Math.round(tiles / TILES_PER_SECOND);
+        return timeText(tiles, TILES_PER_SECOND);
+    }
+
+    static String timeText(long tiles, double tilesPerSecond) {
+        long seconds = Math.round(tiles / tilesPerSecond);
         if (seconds < 60) return "UNDER A MINUTE";
         long minutes = (seconds + 30) / 60;
         if (minutes < 60) return "ROUGHLY " + minutes + " MIN";
@@ -208,12 +257,40 @@ final class MapDownloadDialog extends JDialog {
 
     private void start() {
         download = cache.download(sources(), (Integer) fromModel.getValue(), (Integer) toModel.getValue(), area[0], area[1], area[2], area[3]);
+        startedAt = System.currentTimeMillis();
+        pausedMs = 0;
         start.setEnabled(false);
-        cancel.setEnabled(true);
+        pause.setText("PAUSE");
+        for (JButton b : new JButton[]{hide, pause, cancel}) b.setVisible(true);
         bar.setValue(0);
         status.setForeground(Theme.MUTED);
         refresh.start();
         refresh();
+        pack();
+    }
+
+    private void togglePause() {
+        TileCache.Download d = download;
+        if (d == null || d.isFinished()) return;
+        if (d.isPaused()) {
+            d.resume();
+            pausedMs += System.currentTimeMillis() - pausedAt;
+            pause.setText("PAUSE");
+        } else {
+            d.pause();
+            pausedAt = System.currentTimeMillis();
+            pause.setText("RESUME");
+        }
+        refresh();
+    }
+
+    /** The time left from the pace so far (the guess until enough tiles have gone by), as "ABOUT 12 MIN LEFT". */
+    private String timeLeft(TileCache.Download d) {
+        long left = d.total - d.done();
+        if (left <= 0) return "";
+        long running = System.currentTimeMillis() - startedAt - pausedMs - (d.isPaused() ? System.currentTimeMillis() - pausedAt : 0);
+        double pace = d.done() >= MEASURE_AFTER && running > 2000 ? d.done() * 1000.0 / running : TILES_PER_SECOND;
+        return "   " + timeText(left, pace).replace("ROUGHLY", "ABOUT") + " LEFT";
     }
 
     private void refresh() {
@@ -225,15 +302,23 @@ final class MapDownloadDialog extends JDialog {
                 done, d.total, d.fetched(), d.onDisk(), d.failed());
         if (!d.isFinished()) {
             TileSource now = d.current();
-            status.setText((now == null ? "" : now.title + " - ") + figures);
-            if (progress != null) progress.accept(String.format(Locale.ROOT, "DOWNLOADING %,d / %,d", done, d.total));
+            status.setText((d.isPaused() ? "PAUSED - " : now == null ? "" : now.title + " - ") + figures + (d.isPaused() ? "" : timeLeft(d)));
+            if (progress != null) progress.accept(String.format(Locale.ROOT, d.isPaused() ? "DOWNLOAD PAUSED %,d / %,d" : "DOWNLOADING %,d / %,d", done, d.total));
             return;
         }
         refresh.stop();
-        cancel.setEnabled(false);
+        pause.setText("PAUSE");
+        for (JButton b : new JButton[]{hide, pause, cancel}) b.setVisible(false);
         start.setEnabled(true);
+        pack();
+        String refused = "";
+        if (!d.refused().isEmpty()) {
+            StringBuilder names = new StringBuilder();
+            for (TileSource s : d.refused()) names.append(names.length() == 0 ? "" : ", ").append(s.title);
+            refused = " - " + names + " left out: the server kept refusing";
+        }
         String how = d.isCancelled() ? "Cancelled" : d.gaveUp() ? "Stopped: no map server could be reached" : d.failed() > 0 ? "Done, with failures (try again for them)" : "Done";
-        status.setText(how + " - " + figures);
+        status.setText(how + refused + " - " + figures);
         status.setForeground(d.isCancelled() || d.gaveUp() ? Theme.WARN : d.failed() > 0 ? Theme.WARN : Theme.OK);
         if (progress != null) progress.accept(null);
     }

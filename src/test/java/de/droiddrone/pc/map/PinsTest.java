@@ -26,6 +26,22 @@ class PinsTest {
     }
 
     @Test
+    void exportedAsGpxWaypoints(@TempDir Path dir) throws Exception {
+        Pins pins = new Pins(null);
+        pins.add("Car <van>", 59.9139, 10.7522);
+        pins.add(null, 59.9339, 10.7522);
+        String gpx = pins.toGpx();
+        assertTrue(gpx.startsWith("<?xml"));
+        assertTrue(gpx.contains("<wpt lat=\"59.9139000\" lon=\"10.7522000\"><name>Car &lt;van&gt;</name></wpt>"), gpx);
+        assertTrue(gpx.contains("<name>Alpha</name>"));
+        assertTrue(gpx.trim().endsWith("</gpx>"));
+        Path file = dir.resolve("out").resolve("pins.gpx");
+        pins.exportGpx(file);
+        assertEquals(gpx, Files.readString(file));
+        assertFalse(Files.exists(dir.resolve("out").resolve("pins.gpx.part")));
+    }
+
+    @Test
     void renameRemoveNearestAndKeptOnDisk(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("pins.txt");
         Pins pins = new Pins(file);

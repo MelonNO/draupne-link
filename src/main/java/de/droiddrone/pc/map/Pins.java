@@ -99,6 +99,24 @@ public final class Pins {
         return best;
     }
 
+    /** The pins as a GPX file's waypoints: for another map program or a phone. */
+    public synchronized String toGpx() {
+        StringBuilder sb = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                + "<gpx version=\"1.1\" creator=\"DRAUPNE Link " + de.droiddrone.pc.AppInfo.version() + "\" xmlns=\"http://www.topografix.com/GPX/1/1\">\n");
+        for (Pin p : pins) {
+            sb.append(String.format(Locale.ROOT, " <wpt lat=\"%.7f\" lon=\"%.7f\"><name>%s</name></wpt>%n", p.lat(), p.lon(), FlightTrack.xml(p.name())));
+        }
+        return sb.append("</gpx>\n").toString();
+    }
+
+    /** Writes {@link #toGpx} whole, then moves it into place. */
+    public void exportGpx(Path target) throws IOException {
+        Files.createDirectories(target.toAbsolutePath().getParent());
+        Path tmp = target.resolveSibling(target.getFileName() + ".part");
+        Files.writeString(tmp, toGpx(), StandardCharsets.UTF_8);
+        Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+    }
+
     private void save() {
         if (file == null) return;
         StringBuilder sb = new StringBuilder();

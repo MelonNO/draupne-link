@@ -124,6 +124,7 @@ class MapTest {
         assertEquals(OSLO_LAT + 0.001, track.home().lat(), 1e-9, "home: the first 3D fix while armed");
         assertEquals(2000, track.last().timeMs());
 
+        track.flush(); // the files are written on the track's own thread
         String gpx = Files.readString(track.file());
         assertEquals(3, gpx.split("<trkpt ").length - 1, "every point on disk before close()");
         assertTrue(gpx.contains("lat=\"59.9149000\""));
@@ -172,6 +173,64 @@ class MapTest {
         assertTrue(phoneFirst.last().phone());
         phoneFirst.sample(fix(OSLO_LAT, OSLO_LON, 1500, 2), p, true, true); // the same phone report again: nothing new
         assertEquals(1, phoneFirst.points().size(), "the drone's fix waits for the fallback time");
+    }
+
+    @Test
+    void closeWritesTheFinalPositionAndThePinsAtomically(@TempDir Path dir) throws Exception {
+        FlightTrack track = new FlightTrack(dir);
+        track.sample(fix(OSLO_LAT, OSLO_LON, 1000, 2), true);
+        track.sample(fix(OSLO_LAT, OSLO_LON + 0.01, 1300, 2), true); // 300 ms later: not in last-position.txt yet
+        track.flush();
+        assertFalse(Files.readString(dir.resolve("last-position.txt")).contains("10.762200"));
+        Pins pins = new Pins(null);
+        pins.add("Car & van", 59.9, 10.7);
+        track.close(pins.list());
+        String last = Files.readString(dir.resolve("last-position.txt"));
+        assertTrue(last.contains("10.762200"), "the final point is the one for finding the drone: " + last);
+        String gpx = Files.readString(track.file());
+        assertTrue(gpx.indexOf("<wpt") < gpx.indexOf("<trk>"), "the pins come first");
+        assertTrue(gpx.contains("Car &amp; van"));
+        assertTrue(gpx.trim().endsWith("</gpx>"));
+        assertFalse(Files.exists(dir.resolve(track.file().getFileName() + ".part")), "moved into place");
+
+        // read back: the same points, home at the first armed one, the file named
+        FlightTrack again = FlightTrack.read(track.file());
+        assertEquals(2, again.points().size());
+        assertEquals(OSLO_LON + 0.01, again.last().lon(), 1e-7);
+        assertEquals(1300, again.last().timeMs());
+        assertEquals(12, again.last().sats());
+        assertEquals(OSLO_LAT, again.home().lat(), 1e-9);
+        assertEquals(track.file(), again.file());
+        assertEquals(track.file(), FlightTrack.newest(dir));
+        assertEquals(1, FlightTrack.files(dir).size());
+        assertNull(FlightTrack.newest(dir.resolve("nothing")));
+    }
+
+    @Test
+    void aPhonePointCarriesItsAccuracyAndTheFixTime(@TempDir Path dir) throws Exception {
+        long now = 1_700_000_000_000L;
+        FcTelemetry.PhonePosition p = new FcTelemetry.PhonePosition(OSLO_LAT, OSLO_LON, 50, 7, 3.0, 90, 2, now);
+        FlightTrack track = new FlightTrack(dir);
+        track.sample(null, p, true, true);
+        assertEquals(7, track.last().accuracyM());
+        assertEquals(now - 2000, track.last().timeMs(), "the fix was taken 2 s before it arrived");
+        assertEquals("\u00b1 7 m (phone GPS)", FlightTrack.accuracyText(track.last()));
+        track.flush();
+        assertTrue(Files.readString(dir.resolve("last-position.txt")).contains("\u00b1 7 m (phone GPS)"));
+        // the phone repeats the same fix, older each time (its GPS lost): no new point, the map says LAST KNOWN
+        track.sample(null, new FcTelemetry.PhonePosition(OSLO_LAT, OSLO_LON, 50, 7, 3.0, 90, 12, now + 10_000), true, true);
+        assertEquals(1, track.points().size());
+        // an unknown accuracy is 0
+        track.sample(null, new FcTelemetry.PhonePosition(OSLO_LAT + 0.001, OSLO_LON, 50, 65535, 3.0, 90, 0, now + 11_000), true, true);
+        assertEquals(0, track.last().accuracyM());
+        assertEquals("", FlightTrack.accuracyText(track.last()));
+        track.flush();
+        String gpx = Files.readString(track.file());
+        assertTrue(gpx.contains("<dl:accuracy_m>7</dl:accuracy_m>"), gpx);
+        assertFalse(Files.readString(dir.resolve("last-position.txt")).contains("phone GPS)"), "the newest point has no accuracy");
+        track.close();
+        assertEquals(7, FlightTrack.read(track.file()).points().get(0).accuracyM());
+        assertTrue(FlightTrack.read(track.file()).points().get(0).phone());
     }
 
     @Test

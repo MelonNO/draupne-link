@@ -35,11 +35,13 @@ import java.util.function.Consumer;
 
 /**
  * The map in a window of its own, for a second screen (MAP > Map window, F3). Hidden until opened; remembers where
- * it was. A toolbar in the program's style above the map (FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE; the map picture and
- * the coordinate format), the figures under it: the place under the mouse and the terrain height there (m and ft),
- * the drone's position, altitude, distance and bearing from the launch point, and which GPS the position comes from.
- * Right-click on the map drops a pin (Alpha, Bravo ...), or renames or removes one. DOWNLOAD AREA (or Alt + drag a
- * box on the map) saves the map for offline use, like Mission Planner's prefetch.
+ * it was (and whether maximized). A toolbar in the program's style above the map (FOLLOW, GO TO, TRACKS, PINS,
+ * DOWNLOAD AREA, FIND DRONE; the map picture and the coordinate format), the figures under it: the place under the
+ * mouse and the terrain height there (m and ft), the drone's position, altitude, distance and bearing from the
+ * launch point, and which GPS the position comes from (with the phone's accuracy). Right-click on the map drops a
+ * pin (Alpha, Bravo ...), or renames or removes one; the CURSOR cell's right-click pins where the mouse last was.
+ * Keys: + / - zoom, Home the launch point, End the drone, F3 hides the window. DOWNLOAD AREA (or Alt + drag a box on
+ * the map) saves the map for offline use, like Mission Planner's prefetch.
  */
 final class MapWindow extends JFrame {
     static final String BOUNDS_KEY = "mapWindow";
@@ -52,6 +54,7 @@ final class MapWindow extends JFrame {
     private final Consumer<Map<String, String>> saver;
     private final JButton followButton = Theme.secondaryButton("Follow: on");
     private final JButton pinsButton = Theme.secondaryButton("Pins");
+    private final JButton tracksButton = Theme.secondaryButton("Tracks");
     private final JButton downloadButton = Theme.secondaryButton("Download area");
     /** A hidden download's progress, in the toolbar; a click brings its window back. */
     private final JLabel downloadLine = Theme.label("", Theme.headingFont(12f), Theme.ACCENT);
@@ -96,6 +99,9 @@ final class MapWindow extends JFrame {
         });
         map.setOnCursor(this::cursorAt);
         map.setOnAreaSelected(this::downloadArea);
+        map.setOnSelectModeEnded(() -> {
+            if (downloader != null) downloader.selectionEnded();
+        });
 
         // ---- toolbar
         JPanel bar = Theme.card(new BorderLayout(12, 0));
@@ -109,21 +115,14 @@ final class MapWindow extends JFrame {
             syncFollow();
         });
         left.add(followButton);
-        JButton fit = Theme.secondaryButton("Whole flight");
-        fit.setToolTipText("The whole flight and the launch point in view (also a double-click on the map)");
-        fit.addActionListener(e -> {
-            map.fitTrack();
-            syncFollow();
-        });
-        left.add(fit);
-        JButton home = Theme.secondaryButton("Launch");
-        home.setToolTipText("Centre on the launch point: where the drone armed");
-        home.addActionListener(e -> {
-            FlightTrack.Point h = track == null ? null : track.home();
-            if (h != null) map.centreOn(h.lat(), h.lon(), Math.max(map.zoom(), 15));
-            syncFollow();
-        });
-        left.add(home);
+        // the whole flight: a double-click on the map; the launch point: the Home key (End: the drone)
+        JButton goTo = Theme.secondaryButton("Go to");
+        goTo.setToolTipText("Centre the map on a position typed or pasted: MGRS, UTM, or latitude, longitude");
+        goTo.addActionListener(e -> goToPosition());
+        left.add(goTo);
+        tracksButton.setToolTipText("An earlier flight's track on the map, from the Tracks folder");
+        tracksButton.addActionListener(e -> TacticalCombo.show(tracksMenu(), tracksButton, 0, tracksButton.getHeight() + 4));
+        left.add(tracksButton);
         pinsButton.setToolTipText("Every pin: go to, rename, remove, add at the drone or the launch point");
         pinsButton.addActionListener(e -> {
             if (pinManager == null || !pinManager.isDisplayable()) {
@@ -183,6 +182,13 @@ final class MapWindow extends JFrame {
         // ---- the figures
         JPanel stats = Theme.card(new GridLayout(1, 6, 14, 0));
         cursorCell = stat(stats, "CURSOR", cursorValue);
+        cursorCell.setToolTipText("Right-click: a pin where the cursor last was on the map");
+        cursorCell.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e)) TacticalCombo.show(cursorMenu(), cursorCell, e.getX(), e.getY());
+            }
+        });
         stat(stats, "TERRAIN HEIGHT", terrainValue);
         droneCell = stat(stats, "DRONE", droneValue);
         stat(stats, "ALTITUDE (GPS)", altitudeValue);
@@ -194,7 +200,7 @@ final class MapWindow extends JFrame {
         syncFollow();
 
         if (!restoreBounds(savedBounds)) {
-            setSize(1120, 780);
+            setSize(1180, 780);
             setLocationRelativeTo(owner);
         }
         addComponentListener(new ComponentAdapter() {
@@ -208,6 +214,34 @@ final class MapWindow extends JFrame {
                 saveBounds.restart();
             }
         });
+        addWindowStateListener(e -> saveBounds.restart()); // maximized or back: the flag
+        // minimized to the taskbar counts as not shown: the main window's LINK card gets its minimap back
+        addWindowStateListener(e -> {
+            if (((e.getOldState() ^ e.getNewState()) & ICONIFIED) != 0) onShownChanged.run();
+        });
+
+        // keys: + / - zoom, Home the launch point, End the drone
+        for (int k : new int[]{java.awt.event.KeyEvent.VK_PLUS, java.awt.event.KeyEvent.VK_ADD, java.awt.event.KeyEvent.VK_EQUALS}) {
+            bindKey(javax.swing.KeyStroke.getKeyStroke(k, 0), () -> map.zoomBy(1));
+        }
+        for (int k : new int[]{java.awt.event.KeyEvent.VK_MINUS, java.awt.event.KeyEvent.VK_SUBTRACT}) {
+            bindKey(javax.swing.KeyStroke.getKeyStroke(k, 0), () -> map.zoomBy(-1));
+        }
+        bindKey(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_HOME, 0), () -> {
+            map.centreOnHome();
+            syncFollow();
+        });
+        bindKey(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_END, 0), () -> {
+            map.centreOnDrone();
+            syncFollow();
+        });
+    }
+
+    /** Called when the window is minimized or brought back (the LINK card's minimap depends on it); set by the owner. */
+    private Runnable onShownChanged = () -> { };
+
+    void setOnShownChanged(Runnable listener) {
+        onShownChanged = listener;
     }
 
     private static JLabel value() {
@@ -246,6 +280,16 @@ final class MapWindow extends JFrame {
 
     javax.swing.JComponent tourDrone() {
         return droneCell;
+    }
+
+    /** The MAP TYPE combo (the map picture). */
+    javax.swing.JComponent tourMapType() {
+        return pictureCombo;
+    }
+
+    /** The coordinate format combo. */
+    javax.swing.JComponent tourFormat() {
+        return formatCombo;
     }
 
     /** DOWNLOAD AREA, the menu or a box drawn on the map: the download window for that area, with the map type shown. */
@@ -329,15 +373,119 @@ final class MapWindow extends JFrame {
         FlightTrack.Point h = track.home();
         homeValue.setText(h == null ? "NOT ARMED YET" : MapView.distanceText(Mercator.distanceM(h.lat(), h.lon(), last.lat(), last.lon()))
                 + "   BRG " + String.format(Locale.ROOT, "%03d°", Mercator.bearingDeg(h.lat(), h.lon(), last.lat(), last.lon())));
-        String source = last.phone() ? "PHONE GPS" : "DRONE GPS";
+        // short: the cell has room for about 22 characters
+        String source = last.phone() ? "PHONE" + (last.accuracyM() > 0 ? " ±" + last.accuracyM() + " M" : " GPS") : "DRONE GPS";
         if (last.phone() != preferPhone) source += "  (FALLBACK)";
         sourceValue.setText(source);
     }
 
+    // ------------------------------------------------------------------ GO TO, TRACKS, the CURSOR cell
+
+    /** GO TO: a position pasted in any format the map writes; the map centres there, with a pin if asked. */
+    private void goToPosition() {
+        javax.swing.JTextField field = new javax.swing.JTextField(28);
+        JLabel hint = Theme.label("MGRS (32V NM 97254 42617), UTM (32V 597254 6642617) or 59.9139, 10.7522", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
+        JPanel box = new JPanel(new BorderLayout(0, 6));
+        box.setOpaque(false);
+        box.add(field, BorderLayout.NORTH);
+        box.add(hint, BorderLayout.SOUTH);
+        Object[] options = {"Go", "Go and pin", "Cancel"};
+        while (true) {
+            int answer = javax.swing.JOptionPane.showOptionDialog(this, box, "Go to position", javax.swing.JOptionPane.DEFAULT_OPTION,
+                    javax.swing.JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
+            if (answer != 0 && answer != 1) return;
+            double[] ll = Coordinates.parse(field.getText());
+            if (ll == null) {
+                hint.setText("Not a position I can read. " + hint.getText());
+                hint.setForeground(Theme.BAD);
+                continue;
+            }
+            map.centreOn(ll[0], ll[1], Math.max(map.zoom(), 15));
+            syncFollow();
+            if (answer == 1) map.addPinAt(ll[0], ll[1], null);
+            return;
+        }
+    }
+
+    /** TRACKS: the earlier flights in the Tracks folder, newest first; one on the map at a time, or none. */
+    private javax.swing.JPopupMenu tracksMenu() {
+        javax.swing.JPopupMenu menu = TacticalCombo.menu();
+        menu.setBackground(Theme.PANEL_2);
+        java.util.List<java.nio.file.Path> files = java.util.List.of();
+        try {
+            files = FlightTrack.files(FlightTrack.defaultDir());
+        } catch (java.io.IOException ignored) {
+        }
+        if (files.isEmpty()) {
+            javax.swing.JMenuItem none = new javax.swing.JMenuItem("No earlier flights in the Tracks folder");
+            none.setEnabled(false);
+            menu.add(none);
+        }
+        int shown = 0;
+        for (java.nio.file.Path f : files) {
+            if (++shown > 25) break;
+            String name = f.getFileName().toString();
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(trackTitle(name));
+            item.addActionListener(e -> showOldTrack(f));
+            menu.add(item);
+        }
+        if (map.hasOldTrack()) {
+            menu.addSeparator();
+            javax.swing.JMenuItem fit = new javax.swing.JMenuItem("Fit the earlier flight");
+            fit.addActionListener(e -> {
+                map.fitOldTrack();
+                syncFollow();
+            });
+            menu.add(fit);
+            javax.swing.JMenuItem clear = new javax.swing.JMenuItem("Clear the earlier flight");
+            clear.addActionListener(e -> map.setOldTrack(null, null));
+            menu.add(clear);
+        }
+        return menu;
+    }
+
+    /** "2026-11-02 14:05" from track-20261102-140512.gpx; the file's name when it isn't one of ours. */
+    static String trackTitle(String fileName) {
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("track-(\\d{4})(\\d{2})(\\d{2})-(\\d{2})(\\d{2})\\d{2}\\.gpx").matcher(fileName);
+        return m.matches() ? m.group(1) + "-" + m.group(2) + "-" + m.group(3) + " " + m.group(4) + ":" + m.group(5) : fileName;
+    }
+
+    private void showOldTrack(java.nio.file.Path file) {
+        try {
+            FlightTrack t = FlightTrack.read(file);
+            if (t.isEmpty()) {
+                javax.swing.JOptionPane.showMessageDialog(this, "No positions in " + file.getFileName() + ".", "Tracks", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            map.setOldTrack(t.points(), trackTitle(file.getFileName().toString()));
+            map.fitOldTrack();
+            syncFollow();
+        } catch (java.io.IOException e) {
+            javax.swing.JOptionPane.showMessageDialog(this, "Can't read " + file.getFileName() + ": " + e.getMessage(), "Tracks", javax.swing.JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    /** The CURSOR cell's right-click: a pin where the mouse last was on the map (it has to leave the map to get here). */
+    private javax.swing.JPopupMenu cursorMenu() {
+        javax.swing.JPopupMenu menu = TacticalCombo.menu();
+        menu.setBackground(Theme.PANEL_2);
+        double[] at = lastCursor;
+        javax.swing.JMenuItem pin = new javax.swing.JMenuItem(at == null ? "Move the mouse over the map first"
+                : "Add pin at " + Coordinates.format(format, at[0], at[1]));
+        pin.setEnabled(at != null);
+        pin.addActionListener(e -> map.addPinAt(at[0], at[1], null));
+        menu.add(pin);
+        return menu;
+    }
+
     // ------------------------------------------------------------------ the mouse
+
+    /** Where the mouse last was on the map; stays when it leaves (the CURSOR cell's pin). */
+    private double[] lastCursor;
 
     private void cursorAt(double[] latLon) {
         cursor = latLon;
+        if (latLon != null) lastCursor = latLon;
         cursorSerial++;
         if (latLon == null) {
             cursorValue.setText("-");
@@ -361,30 +509,75 @@ final class MapWindow extends JFrame {
 
     // ------------------------------------------------------------------ where the window is
 
-    private boolean restoreBounds(String saved) {
-        if (saved == null || saved.isBlank()) return false;
-        try {
-            String[] p = saved.split(",");
-            Rectangle r = new Rectangle(Integer.parseInt(p[0].trim()), Integer.parseInt(p[1].trim()), Integer.parseInt(p[2].trim()), Integer.parseInt(p[3].trim()));
-            if (r.width < 400 || r.height < 300) return false;
-            for (GraphicsDevice d : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
-                Rectangle screen = d.getDefaultConfiguration().getBounds();
-                Rectangle on = screen.intersection(r);
-                if (on.width >= 200 && on.height >= 150) { // enough of it on a screen that is still there
-                    setBounds(r);
-                    return true;
-                }
-            }
-        } catch (RuntimeException e) {
-            // not ours to parse
+    /**
+     * A window's place between runs, as "x,y,width,height[,max]": the un-maximized bounds and whether it was
+     * maximized. Minimized is never saved (Windows reports -32000,-32000 then), and bounds off every screen that is
+     * still there are not restored. For this window and the main one.
+     */
+    static final class Bounds {
+        private final JFrame frame;
+        private Rectangle normal; // the last bounds seen while neither maximized nor minimized
+
+        Bounds(JFrame frame) {
+            this.frame = frame;
         }
-        return false;
+
+        /** Puts the frame where it was; false (nothing changed) when there is nothing usable to restore. */
+        boolean restore(String saved) {
+            if (saved == null || saved.isBlank()) return false;
+            try {
+                String[] p = saved.split(",");
+                Rectangle r = new Rectangle(Integer.parseInt(p[0].trim()), Integer.parseInt(p[1].trim()), Integer.parseInt(p[2].trim()), Integer.parseInt(p[3].trim()));
+                boolean max = p.length > 4 && "max".equals(p[4].trim());
+                if (r.width < 400 || r.height < 300) return false;
+                for (GraphicsDevice d : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
+                    Rectangle screen = d.getDefaultConfiguration().getBounds();
+                    Rectangle on = screen.intersection(r);
+                    if (on.width >= 200 && on.height >= 150) { // enough of it on a screen that is still there
+                        frame.setBounds(r);
+                        normal = r;
+                        if (max) frame.setExtendedState(frame.getExtendedState() | JFrame.MAXIMIZED_BOTH);
+                        return true;
+                    }
+                }
+            } catch (RuntimeException e) {
+                // not ours to parse
+            }
+            return false;
+        }
+
+        /** The value to save now, or null when the window's state says nothing worth keeping. */
+        String current() {
+            if (!frame.isVisible()) return null;
+            int state = frame.getExtendedState();
+            if ((state & JFrame.ICONIFIED) != 0) return null;
+            boolean max = (state & JFrame.MAXIMIZED_BOTH) != 0;
+            if (!max) normal = frame.getBounds();
+            Rectangle r = normal;
+            if (r == null) return null;
+            return r.x + "," + r.y + "," + r.width + "," + r.height + (max ? ",max" : "");
+        }
+    }
+
+    private final Bounds bounds = new Bounds(this);
+
+    private boolean restoreBounds(String saved) {
+        return bounds.restore(saved);
     }
 
     private void saveBounds() {
-        if (!isVisible() || (getExtendedState() & MAXIMIZED_BOTH) != 0) return;
-        Rectangle r = getBounds();
-        saver.accept(Map.of(BOUNDS_KEY, r.x + "," + r.y + "," + r.width + "," + r.height));
+        String value = bounds.current();
+        if (value != null) saver.accept(Map.of(BOUNDS_KEY, value));
+    }
+
+    /** True when the window is open on screen: not hidden, not minimized to the taskbar. */
+    boolean isShown() {
+        return isVisible() && (getExtendedState() & ICONIFIED) == 0;
+    }
+
+    /** A key that works anywhere in this window (F3, the map's keys). */
+    void bindKey(javax.swing.KeyStroke key, Runnable action) {
+        getRootPane().registerKeyboardAction(e -> action.run(), key, javax.swing.JComponent.WHEN_IN_FOCUSED_WINDOW);
     }
 
     /** Every opening fades the window in, like the program's other windows (not only the first). */
@@ -398,6 +591,6 @@ final class MapWindow extends JFrame {
     /** Wide enough for the toolbar's buttons and both choices, and the six figures. */
     @Override
     public Dimension getMinimumSize() {
-        return new Dimension(1080, 560);
+        return new Dimension(1120, 560);
     }
 }
