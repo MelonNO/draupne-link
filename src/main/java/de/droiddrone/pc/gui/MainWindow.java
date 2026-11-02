@@ -442,7 +442,7 @@ public class MainWindow extends JFrame {
                 public void popupMenuCanceled(javax.swing.event.PopupMenuEvent ev) {
                 }
             });
-            menu.show(button, button.getWidth() - menu.getPreferredSize().width, button.getHeight() + 4);
+            TacticalCombo.show(menu, button, button.getWidth() - menu.getPreferredSize().width, button.getHeight() + 4);
         });
     }
 

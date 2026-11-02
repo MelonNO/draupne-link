@@ -86,7 +86,7 @@ class MapView extends JComponent {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (SwingUtilities.isRightMouseButton(e)) {
-                    menu(e.getX(), e.getY()).show(MapView.this, e.getX(), e.getY());
+                    TacticalCombo.show(menu(e.getX(), e.getY()), MapView.this, e.getX(), e.getY());
                     return;
                 }
                 dragStart = e.getPoint();
