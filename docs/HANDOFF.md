@@ -4,9 +4,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-02, 1.0.22)
+## Where things stand (2026-11-02, 1.0.23)
 
-- **Released:** DRAUPNE Link **1.0.22** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.16**. The map and
+- **Released:** DRAUPNE Link **1.0.23** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.16** (the tag
+  v1.0.22 exists but has no release: its workflow failed on a boot-test pixel check; delete the tag when convenient). The map and
   everything round it, the MENU header, the boot animation and the new mark. Where the pieces live:
   - **Map:** `map/Mercator`, `map/TileSource` (Kartverket topo/paper, Esri satellite, OSM; `inNorway` is a 22-point
     outline of the mainland + Svalbard + Jan Mayen, so Sweden and Finland are outside), `map/TileCache`
