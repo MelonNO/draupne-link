@@ -106,6 +106,8 @@ public class MainActivity extends Activity {
 
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         setContentView(R.layout.activity_main);
+        // DRAUPNE Link: the boot animation, on a cold start only (not after a rotation or a return)
+        if (savedInstanceState == null) BootRevealView.show(this);
         activity = this;
         main = findViewById(R.id.llMain);
         main.setKeepScreenOn(true);
