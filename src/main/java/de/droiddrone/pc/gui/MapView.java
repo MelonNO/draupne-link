@@ -21,6 +21,7 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -70,6 +71,8 @@ class MapView extends JComponent {
     private FlightTrack track;
     private Pins pins;
     private FcTelemetry.Gps gps;
+    /** The + and - buttons, drawn on the map (top right); set while painting. */
+    private Rectangle zoomInButton = new Rectangle(), zoomOutButton = new Rectangle();
     private int headingDeg = -1;
     private boolean fcLost;
     private boolean connected;
@@ -112,7 +115,10 @@ class MapView extends JComponent {
 
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (SwingUtilities.isLeftMouseButton(e) && !dragged && e.getClickCount() == 2) fitTrack();
+                if (!SwingUtilities.isLeftMouseButton(e) || dragged) return;
+                if (zoomInButton.contains(e.getPoint())) zoomBy(1);
+                else if (zoomOutButton.contains(e.getPoint())) zoomBy(-1);
+                else if (e.getClickCount() == 2) fitTrack();
             }
 
             @Override
@@ -127,15 +133,20 @@ class MapView extends JComponent {
 
             @Override
             public void mouseWheelMoved(java.awt.event.MouseWheelEvent e) {
-                TileSource src = effectiveSource();
-                targetZoom = Math.max(MIN_ZOOM, Math.min(src.maxZoom + 1, targetZoom - e.getPreciseWheelRotation() * 0.6));
                 zoomAnchor = follow ? null : e.getPoint();
-                if (!zoomAnim.isRunning()) zoomAnim.start();
+                zoomBy(-e.getPreciseWheelRotation() * 0.6);
             }
         };
         addMouseListener(mouse);
         addMouseMotionListener(mouse);
         addMouseWheelListener(mouse);
+    }
+
+    /** Zooms in (positive) or out by this many levels, smoothly; the + and - buttons, the wheel and the keys use it. */
+    void zoomBy(double levels) {
+        TileSource src = effectiveSource();
+        targetZoom = Math.max(MIN_ZOOM, Math.min(src.maxZoom + 1, targetZoom + levels));
+        if (!zoomAnim.isRunning()) zoomAnim.start();
     }
 
     private void tellCursor(MouseEvent e) {
@@ -422,6 +433,7 @@ class MapView extends JComponent {
 
             paintScale(g, h);
             paintAttribution(g, src, w, h);
+            paintZoomButtons(g, w);
             g.setColor(Theme.LINE);
             g.drawRect(0, 0, w - 1, h - 1);
         } finally {
@@ -670,6 +682,29 @@ class MapView extends JComponent {
         g.fillRect(w - tw - 8, h - fm.getHeight() - 10, tw, fm.getHeight() + 2);
         g.setColor(new Color(255, 255, 255, 210));
         g.drawString(text, w - tw - 3, h - 10 - fm.getDescent() + 1);
+    }
+
+    /** + and - at the top right, for zooming without a wheel: the program's square boxes with bracket corners. */
+    private void paintZoomButtons(Graphics2D g, int w) {
+        int size = 30, gap = 4, x = w - 10 - size;
+        zoomInButton = new Rectangle(x, 10, size, size);
+        zoomOutButton = new Rectangle(x, 10 + size + gap, size, size);
+        for (Rectangle r : new Rectangle[]{zoomInButton, zoomOutButton}) {
+            g.setColor(BOX);
+            g.fillRect(r.x, r.y, r.width, r.height);
+            g.setColor(Theme.LINE);
+            g.setStroke(new BasicStroke(1f));
+            g.drawRect(r.x, r.y, r.width - 1, r.height - 1);
+            brackets(g, r.x, r.y, r.width, r.height, Theme.ACCENT);
+        }
+        g.setColor(Color.WHITE);
+        g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+        int cx = x + size / 2, arm = 7;
+        int cy = zoomInButton.y + size / 2;
+        g.drawLine(cx - arm, cy, cx + arm, cy);
+        g.drawLine(cx, cy - arm, cx, cy + arm);
+        cy = zoomOutButton.y + size / 2;
+        g.drawLine(cx - arm, cy, cx + arm, cy);
     }
 
     /** For tests: the map as painted at this size. */
