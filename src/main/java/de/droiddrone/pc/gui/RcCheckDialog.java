@@ -37,7 +37,11 @@ final class RcCheckDialog extends JDialog {
     private final CheckRow output = new CheckRow("RC output from this PC");
     private final CheckRow received = new CheckRow("Sticks reach Betaflight");
     private final CheckRow throttle = new CheckRow("Throttle on the right channel");
-    private final CheckRow arm = new CheckRow("Arm switch (AUX1)");
+    /** Where ARM is: as Drone setup read it from Betaflight, else as chosen there (AUX1 by default). */
+    private final de.droiddrone.pc.ArmSwitch armSwitch;
+    /** The arm switch's channel in the frame this PC sends (4 = AUX1). */
+    private final int armChannel;
+    private final CheckRow arm;
     private final CheckRow modes = new CheckRow("Active flight modes");
     private final WrappingText blockers = new WrappingText("", Theme.font(Font.PLAIN, 13.5f), Theme.TEXT);
     private final Timer timer;
@@ -49,6 +53,11 @@ final class RcCheckDialog extends JDialog {
     private RcCheckDialog(MainWindow main) {
         super(main, "RC check", ModalityType.MODELESS);
         this.main = main;
+        PcConfig config = main.config();
+        armSwitch = de.droiddrone.pc.ArmSwitch.parse(config.getString(de.droiddrone.pc.ArmSwitch.KEY));
+        int chosenAux = de.droiddrone.pc.setup.ModeSwitch.parseArmAux(config.getString(de.droiddrone.pc.setup.ModeSwitch.ARM_KEY));
+        armChannel = armSwitch != null ? armSwitch.channel() : 3 + (chosenAux > 0 ? chosenAux : de.droiddrone.pc.setup.ModeSwitch.DEFAULT_ARM_AUX);
+        arm = new CheckRow("Arm switch (AUX" + (armChannel - 3) + ")");
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         JPanel root = new JPanel(new BorderLayout(0, 16));
         root.setBackground(Theme.BG);
@@ -69,8 +78,8 @@ final class RcCheckDialog extends JDialog {
         left.add(bars, BorderLayout.CENTER);
         JPanel leftBottom = WizardDialog.column();
         WizardDialog.addRow(leftBottom, output);
-        WizardDialog.addRow(leftBottom, WizardDialog.paragraph("Channels go out as Roll, Pitch, Yaw, Throttle, AUX1-4. "
-                + "The Flight app reorders them to the channel map set in Betaflight's Receiver tab."));
+        WizardDialog.addRow(leftBottom, WizardDialog.paragraph("Channels go out as Roll, Pitch, Yaw, Throttle, then the switches: "
+                + auxNames(config) + ". The Flight app reorders them to the channel map set in Betaflight's Receiver tab."));
         left.add(leftBottom, BorderLayout.SOUTH);
 
         JPanel rightColumn = WizardDialog.column();
@@ -117,6 +126,18 @@ final class RcCheckDialog extends JDialog {
         super.dispose();
     }
 
+    /** "AUX1 = ARM, AUX2 = flight modes, AUX3 = spare, AUX4 = GPS rescue": each AUX after what Drone setup put on it. */
+    private static String auxNames(PcConfig config) {
+        de.droiddrone.pc.setup.ModeSwitch.Purpose[] purposes = de.droiddrone.pc.setup.ModeSwitch.purposes(config);
+        java.util.List<String> names = new java.util.ArrayList<>();
+        int last = 3;
+        for (int i = 0; i < purposes.length; i++) if (purposes[i] != null) last = Math.max(last, i);
+        for (int i = 0; i <= last; i++) {
+            names.add("AUX" + (i + 1) + " = " + (purposes[i] == null ? "spare" : purposes[i].title()));
+        }
+        return String.join(", ", names);
+    }
+
     private void refresh() {
         RcSession session = main.rcSession();
         short[] ch = session == null ? main.previewChannels() : session.getLastChannels();
@@ -161,20 +182,24 @@ final class RcCheckDialog extends JDialog {
                     : "Pull the throttle stick fully down to check.");
         }
 
-        int aux1 = ch != null && ch.length > 4 ? ch[4] : -1;
+        String auxName = "AUX" + (armChannel - 3);
+        int aux = ch != null && ch.length > armChannel ? ch[armChannel] : -1;
+        // in Betaflight's ARM range as Drone setup read it; without that, the usual "up" (1700 and over)
+        boolean on = aux >= 0 && (armSwitch != null ? armSwitch.on(ch) : aux >= 1700);
         if (s.armed()) {
             arm.set(State.WARN, "<b>ARMED</b> - Betaflight follows your arm switch. Motors can spin!");
         } else if (rxLoss) {
             arm.set(State.PENDING, "Needs RC first.");
-        } else if (aux1 >= 1700) {
+        } else if (on) {
             boolean seen = has(s, "ARMSWITCH");
             arm.set(seen ? State.OK : State.WARN, seen
                     ? "Betaflight sees the arm switch ON, but won't arm yet - see the reasons below."
-                    : "AUX1 is " + aux1 + " but Betaflight doesn't react. In the Modes tab, ARM must be on AUX 1 with a range that includes " + aux1 + ".");
-        } else if (aux1 >= 0) {
-            arm.set(State.INFO, "AUX1 is " + aux1 + " (off). Flip your arm switch to test - props off!");
+                    : auxName + " is " + aux + " but Betaflight doesn't react. In the Modes tab, ARM must be on " + auxName
+                    + " with a range that includes " + aux + ".");
+        } else if (aux >= 0) {
+            arm.set(State.INFO, auxName + " is " + aux + " (off). Flip your arm switch to test - props off!");
         } else {
-            arm.set(State.WARN, "AUX1 isn't mapped - run CALIBRATE and flip your arm switch at the AUX1 step.");
+            arm.set(State.WARN, auxName + " isn't mapped - run CALIBRATE and flip your arm switch at the " + auxName + " step.");
         }
 
         modes.set(State.INFO, s.activeModes().isEmpty()

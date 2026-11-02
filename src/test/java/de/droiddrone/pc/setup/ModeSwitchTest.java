@@ -259,4 +259,32 @@ class ModeSwitchTest {
         config.set(ModeSwitch.RESCUE_FITTED_KEY, "true");
         assertEquals("GPS rescue", ModeSwitch.purposes(config)[3].title(), "fitted by Drone setup already");
     }
+
+    @Test
+    void armHintShowsTheRealRangeWhenItIsntUp() throws Exception {
+        de.droiddrone.pc.PcConfig config = de.droiddrone.pc.PcConfig.defaults();
+        assertTrue(ModeSwitch.purposes(config)[0].hint().endsWith("(up)."), "nothing read yet: up");
+        config.set(de.droiddrone.pc.ArmSwitch.KEY, "4:1700-2100"); // read from the board: AUX1, up
+        assertTrue(ModeSwitch.purposes(config)[0].hint().endsWith("(up)."));
+        config.set(de.droiddrone.pc.ArmSwitch.KEY, "4:900-1300"); // the plan keeps an ARM already on the switch: it arms low
+        assertTrue(ModeSwitch.purposes(config)[0].hint().endsWith("(down - Betaflight arms at 900-1300)."), ModeSwitch.purposes(config)[0].hint());
+        config.set(de.droiddrone.pc.ArmSwitch.KEY, "5:900-1300"); // on another switch than the one chosen: the chosen one is written up
+        assertTrue(ModeSwitch.purposes(config)[0].hint().endsWith("(up)."));
+        assertEquals("the middle - Betaflight arms at 1300-1700", ModeSwitch.armedPosition(new de.droiddrone.pc.ArmSwitch(4, List.of(new int[]{1300, 1700}))));
+    }
+
+    @Test
+    void armOnSeveralSwitchesIsSeen() {
+        assertEquals(Set.of(), ModeSwitch.armAuxes(aux()));
+        assertEquals(Set.of(1), ModeSwitch.armAuxes(aux("aux 0 0 0 1700 2100 0 0")));
+        assertEquals(Set.of(1, 3), ModeSwitch.armAuxes(aux("aux 0 0 0 1700 2100 0 0", "aux 5 0 2 1700 2100 0 0")));
+        assertNull(de.droiddrone.pc.ArmSwitch.fromCli(aux("aux 0 0 0 1700 2100 0 0", "aux 5 0 2 1700 2100 0 0")), "not covered");
+    }
+
+    @Test
+    void modesAreNamedAsConfiguratorDoesForTheManualWay() {
+        assertEquals("POS HOLD", ModeSwitch.Mode.POS_HOLD.configuratorName);
+        assertEquals("GPS RESCUE", ModeSwitch.Mode.GPS_RESCUE.configuratorName);
+        assertEquals("ANGLE", ModeSwitch.Mode.ANGLE.configuratorName);
+    }
 }

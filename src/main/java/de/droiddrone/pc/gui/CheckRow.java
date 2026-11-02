@@ -19,7 +19,8 @@ class CheckRow extends JPanel {
     enum State { OK, WARN, BAD, PENDING, INFO, TODO }
 
     private final StatusLight light = new StatusLight();
-    private final WrappingText detail = new WrappingText("", Theme.font(Font.PLAIN, 15f), Theme.MUTED);
+    /** Fitting: a row shown (or given a longer text) after the first layout gets its height for its width, not one clipped line. */
+    private final WrappingText detail = WrappingText.fitting("", Theme.font(Font.PLAIN, 15f), Theme.MUTED);
     private final JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
     private final JPanel texts = new JPanel(new BorderLayout(0, 2));
     private State state = State.PENDING;

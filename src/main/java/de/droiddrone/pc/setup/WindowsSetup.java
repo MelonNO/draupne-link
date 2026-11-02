@@ -84,6 +84,20 @@ public final class WindowsSetup {
         return m.find() ? new PowerPlan(m.group(1), m.group(2).trim()) : null;
     }
 
+    /**
+     * Modern Standby (S0 Low Power Idle): on these PCs - most laptops since Windows 10 - the power plans do nothing;
+     * Settings' Power mode slider decides. Read from "powercfg /a", whose first block lists the states available.
+     */
+    public static boolean modernStandby() {
+        return modernStandby(Shell.run(Duration.ofSeconds(10), "powercfg", "/a").output());
+    }
+
+    static boolean modernStandby(String powercfgA) {
+        // the available states come first; the unavailable ones (with the reason) after a blank line
+        String available = powercfgA.strip().split("\\R\\s*\\R", 2)[0];
+        return available.toLowerCase(Locale.ROOT).contains("(s0");
+    }
+
     /** Switches to High performance; on PCs where that plan is hidden, creates it from the built-in template first. */
     public static Shell.Result useHighPerformance() {
         Shell.Result r = Shell.run(Duration.ofSeconds(10), "powercfg", "/setactive", HIGH_PERFORMANCE);

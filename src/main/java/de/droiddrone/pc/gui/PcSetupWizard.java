@@ -6,7 +6,6 @@ import de.droiddrone.pc.LinkMode;
 import de.droiddrone.pc.setup.ApkShare;
 import de.droiddrone.pc.setup.NetInfo;
 import de.droiddrone.pc.setup.PcPrep;
-import de.droiddrone.pc.setup.Shell;
 import de.droiddrone.pc.setup.Tailscale;
 import de.droiddrone.pc.setup.WindowsSetup;
 import de.droiddrone.pc.gui.CheckRow.State;
@@ -142,6 +141,13 @@ final class PcSetupWizard {
         private boolean autoInstallTried;
         private boolean autoSignInTried;
         private volatile boolean installerBusy;
+        /** Since when this page has waited for the installer's Tailscale task; after INSTALLER_WAIT_MS Install shows anyway. */
+        private long installerWaitSince;
+        private static final long INSTALLER_WAIT_MS = 3 * 60_000;
+        /** Since when Tailscale's service hasn't answered; the first seconds after an install are normal. */
+        private long serviceDownSince;
+        private static final long SERVICE_GRACE_MS = 15_000;
+        private JButton openButton;
         private String installError = "";
 
         TailscalePage(MainWindow main) {
@@ -172,6 +178,11 @@ final class PcSetupWizard {
         JComponent build() {
             JPanel col = WizardDialog.column();
             installButton = installed.addPrimaryAction("Install", this::install);
+            openButton = installed.addAction("Open Tailscale", () -> {
+                if (!Tailscale.openApp()) main.logLine("Could not open Tailscale's window.");
+            });
+            openButton.setToolTipText("Tailscale's own window: its service starts with it");
+            openButton.setVisible(false);
             signInButton = signedIn.addPrimaryAction("Sign in", this::signIn);
             WizardDialog.addRow(col, installed);
             WizardDialog.addRow(col, signedIn);
@@ -210,8 +221,11 @@ final class PcSetupWizard {
                 address.set(State.PENDING, "");
                 if (installing) return;
                 if (installerBusy) {
-                    installed.set(State.PENDING, "Being installed by the DRAUPNE Link installer - this takes a minute or two...");
-                    installButton.setVisible(false);
+                    if (installerWaitSince == 0) installerWaitSince = System.currentTimeMillis();
+                    boolean tooLong = System.currentTimeMillis() - installerWaitSince > INSTALLER_WAIT_MS;
+                    installed.set(State.PENDING, "Being installed by the DRAUPNE Link installer - this takes a minute or two..."
+                            + (tooLong ? " Taking long: press Install to do it here instead." : ""));
+                    installButton.setVisible(tooLong); // the installer's task may be stuck: not waited for forever
                     return;
                 }
                 if (!autoInstallTried) { // nothing to click: start the install straight away
@@ -225,8 +239,21 @@ final class PcSetupWizard {
                 return;
             }
             installButton.setVisible(false);
-            installed.set(s.running() ? State.OK : State.WARN,
-                    s.running() ? "Installed and running." : "Installed, but its service isn't answering yet - give it a few seconds.");
+            if (!s.running()) { // `tailscale status` printed no JSON: the service isn't there to ask
+                if (serviceDownSince == 0) serviceDownSince = System.currentTimeMillis();
+                boolean justInstalled = System.currentTimeMillis() - serviceDownSince < SERVICE_GRACE_MS;
+                installed.set(State.WARN, justInstalled ? "Installed, but its service isn't answering yet - give it a few seconds."
+                        : "Installed, but Tailscale's service isn't running - restart the PC, or start Tailscale from the Start menu "
+                        + "(<b>Open Tailscale</b>).");
+                openButton.setVisible(!justInstalled);
+                signedIn.set(State.PENDING, "Once Tailscale runs.");
+                signInButton.setVisible(false);
+                address.set(State.PENDING, "");
+                return;
+            }
+            serviceDownSince = 0;
+            openButton.setVisible(false);
+            installed.set(State.OK, "Installed and running.");
             if (s.signedIn()) {
                 signedIn.set(State.OK, "Signed in as this device: " + s.selfName());
                 signInButton.setVisible(false);
@@ -235,7 +262,7 @@ final class PcSetupWizard {
             } else {
                 signInButton.setVisible(true);
                 boolean stopped = "Stopped".equals(s.backendState());
-                signedIn.set(State.WARN, stopped ? "Tailscale is switched off. Switching it on - sign in when your browser opens."
+                signedIn.set(State.WARN, stopped ? "Tailscale is switched off. Switching it on - sign in when your browser opens (or press Sign in)."
                         : "Not signed in. Your browser opens Tailscale's login page - sign in there (or press Sign in).");
                 address.set(State.PENDING, "Appears after signing in.");
                 if (!autoSignInTried && s.running()) { // nothing to click: ask for the sign-in page straight away
@@ -268,12 +295,8 @@ final class PcSetupWizard {
         }
 
         private void signIn() {
-            if (status != null && "Stopped".equals(status.backendState())) {
-                Path exe = Tailscale.exe();
-                if (exe != null) background(() -> Shell.run(java.time.Duration.ofSeconds(20), exe.toString(), "up"), r -> nextPoll = 0);
-                openLinkWhenReady = true;
-                return;
-            }
+            // Stopped (switched off, or never signed in): `tailscale login` brings it up and asks for a sign-in link in
+            // one go - `up` alone would wait for a login that never comes
             if (status != null && !status.authUrl().isEmpty()) {
                 openInBrowser(main, status.authUrl());
             } else {
@@ -536,9 +559,15 @@ final class PcSetupWizard {
             this.main = main;
         }
 
+        /** Shown unless it was ready when the wizard opened - and always when Drone setup changed the switches since. */
         @Override
         boolean isApplicable() {
-            return !readyAtStart;
+            return shown(readyAtStart, main.config());
+        }
+
+        /** The step's rule, on its own for the tests: an old calibration may have any switch on the AUX Drone setup wrote. */
+        static boolean shown(boolean readyAtStart, de.droiddrone.pc.PcConfig config) {
+            return !readyAtStart || DroneSetup.radioNeedsRedo(config);
         }
 
         @Override
@@ -584,7 +613,10 @@ final class PcSetupWizard {
             radio.addComponent(radioChoice); // always there, so another controller can be picked at any time
             WizardDialog.addRow(col, radio);
             calibrateButton = calibration.addPrimaryAction("Calibrate", () -> {
-                if (main.calibrate()) changedController = false;
+                if (main.calibrate()) {
+                    changedController = false;
+                    main.save(Map.of(DroneSetup.RADIO_REDO_KEY, "false")); // the switches are named afresh
+                }
                 wizard.update();
             });
             WizardDialog.addRow(col, calibration);
@@ -608,6 +640,8 @@ final class PcSetupWizard {
             radioChoice.setEnabled(!main.isLinkActive());
             if (changedController) {
                 calibration.set(State.WARN, "Another controller: press Calibrate for its sticks and switches.");
+            } else if (main.isCalibrated() && DroneSetup.radioNeedsRedo(main.config())) {
+                calibration.set(State.WARN, DroneSetup.radioRedoText(main.config()) + " Drone setup changed the switches.");
             } else {
                 calibration.set(main.isCalibrated() ? State.OK : State.WARN, main.isCalibrated()
                         ? "Done."
@@ -635,6 +669,7 @@ final class PcSetupWizard {
         @Override
         String status() {
             if (changedController) return "Calibrate the controller you picked.";
+            if (main.isCalibrated() && DroneSetup.radioNeedsRedo(main.config())) return "Calibrate the radio again: Drone setup changed the switches.";
             return main.isCalibrated() ? "Radio ready." : "Calibrate the radio before flying.";
         }
     }
@@ -656,9 +691,12 @@ final class PcSetupWizard {
             return !readyAtStart;
         }
 
+        /** Modern Standby: the plans do nothing on this PC, Settings' Power mode slider does - the step stays, to say so. */
+        private volatile boolean modernStandby;
+
         @Override
         void prepare() {
-            record Prepared(boolean ready, boolean switched) {}
+            record Prepared(boolean ready, boolean switched, boolean modernStandby) {}
             background(() -> {
                 WindowsSetup.PowerPlan plan = WindowsSetup.activePowerPlan();
                 boolean switched = false;
@@ -666,10 +704,12 @@ final class PcSetupWizard {
                     switched = true;
                     plan = WindowsSetup.activePowerPlan();
                 }
-                return new Prepared(plan == null || plan.isHighPerformance(), switched);
+                boolean standby = WindowsSetup.modernStandby();
+                return new Prepared((plan == null || plan.isHighPerformance()) && !standby, switched, standby);
             }, p -> {
                 if (p == null) return;
                 readyAtStart = p.ready();
+                modernStandby = p.modernStandby();
                 if (p.switched()) main.logLine("Power plan set to High performance.");
             });
         }
@@ -701,7 +741,12 @@ final class PcSetupWizard {
 
         private void checkPower() {
             background(WindowsSetup::activePowerPlan, plan -> {
-                if (plan == null) {
+                if (modernStandby) {
+                    power.set(State.INFO, "This PC uses Modern Standby: the power plans change nothing here"
+                            + (plan == null || !plan.isHighPerformance() ? "" : " (" + plan.name() + " is set anyway)")
+                            + ". Set Settings > System > Power > Power mode to <b>Best performance</b>, on battery and plugged in.");
+                    powerButton.setVisible(plan != null && !plan.isHighPerformance());
+                } else if (plan == null) {
                     power.set(State.INFO, "Could not read the power plan.");
                 } else if (plan.isHighPerformance()) {
                     power.set(State.OK, plan.name() + ".");

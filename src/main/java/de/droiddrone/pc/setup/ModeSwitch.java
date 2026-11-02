@@ -32,20 +32,23 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
      * aren't offered), GPS position hold from 2025.12 (where it came in, as POS HOLD).
      */
     public enum Mode {
-        ACRO("Acro", -1, "no self-levelling", false, 0, 0),
-        ANGLE("Angle", 1, "self-levelling; needs the accelerometer", false, 0, 0),
-        POS_HOLD("GPS position hold", 11, "holds its place; needs a GPS", true, 2025, 12),
-        GPS_RESCUE("GPS rescue", 46, "flies home; needs a GPS", true, 4, 4);
+        ACRO("Acro", "ACRO", -1, "no self-levelling", false, 0, 0),
+        ANGLE("Angle", "ANGLE", 1, "self-levelling; needs the accelerometer", false, 0, 0),
+        POS_HOLD("GPS position hold", "POS HOLD", 11, "holds its place; needs a GPS", true, 2025, 12),
+        GPS_RESCUE("GPS rescue", "GPS RESCUE", 46, "flies home; needs a GPS", true, 4, 4);
 
         public final String title;
+        /** The mode's name as Betaflight Configurator's Modes tab shows it. */
+        public final String configuratorName;
         /** Betaflight's permanent mode id; -1 for acro (no mode). */
         public final int id;
         public final String detail;
         public final boolean needsGps;
         private final int minMajor, minMinor;
 
-        Mode(String title, int id, String detail, boolean needsGps, int minMajor, int minMinor) {
+        Mode(String title, String configuratorName, int id, String detail, boolean needsGps, int minMajor, int minMinor) {
             this.title = title;
+            this.configuratorName = configuratorName;
             this.id = id;
             this.detail = detail;
             this.needsGps = needsGps;
@@ -113,6 +116,13 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         boolean used() {
             return start < end;
         }
+    }
+
+    /** The AUX numbers (1 = AUX1) ARM is on in the CLI's "aux" output: none, one, or - not covered - several. */
+    public static Set<Integer> armAuxes(String auxOutput) {
+        Set<Integer> auxes = new java.util.TreeSet<>();
+        for (Slot s : slots(auxOutput)) if (s.used() && s.mode() == MODE_ARM) auxes.add(s.channel() + 1);
+        return auxes;
     }
 
     static List<Slot> slots(String auxOutput) {
@@ -202,12 +212,12 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
     public static Purpose[] purposes(de.droiddrone.pc.PcConfig config) {
         Purpose[] p = new Purpose[MAX_AUX];
         int arm = parseArmAux(config.getString(ARM_KEY));
-        if (arm == 0) {
-            de.droiddrone.pc.ArmSwitch read = de.droiddrone.pc.ArmSwitch.parse(config.getString(de.droiddrone.pc.ArmSwitch.KEY));
-            if (read != null) arm = read.channel() - 3;
-        }
+        de.droiddrone.pc.ArmSwitch read = de.droiddrone.pc.ArmSwitch.parse(config.getString(de.droiddrone.pc.ArmSwitch.KEY));
+        if (arm == 0 && read != null) arm = read.channel() - 3;
         if (arm >= 1 && arm <= MAX_AUX) {
-            p[arm - 1] = new Purpose("ARM", "Flip the switch you ARM with to its armed position (up).");
+            // an ARM that was already on that switch keeps its own range (plan): it may arm low, not up
+            p[arm - 1] = new Purpose("ARM", "Flip the switch you ARM with to its armed position ("
+                    + (read != null && read.channel() - 3 == arm ? armedPosition(read) : "up") + ").");
         }
         ModeSwitch modes = parse(config.getString(KEY));
         if (modes != null && p[modes.aux - 1] == null) {
@@ -221,6 +231,20 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             p[rescue - 1] = new Purpose("GPS rescue", "Flip the GPS rescue switch up (rescue on).");
         }
         return p;
+    }
+
+    /** "up", or where Betaflight really arms when the saved ARM range isn't the top: "down - Betaflight arms at 900-1300". */
+    public static String armedPosition(de.droiddrone.pc.ArmSwitch arm) {
+        int top = 0, bottom = Integer.MAX_VALUE;
+        List<String> ranges = new ArrayList<>();
+        for (int[] r : arm.ranges()) {
+            top = Math.max(top, r[1]);
+            bottom = Math.min(bottom, r[0]);
+            ranges.add(r[0] + "-" + r[1]);
+        }
+        if (top >= ARM_RANGE[1] - 100 && bottom >= 1500) return "up";
+        String where = top <= 1500 ? "down" : bottom >= 1200 && top <= 1800 ? "the middle" : "not up";
+        return where + " - Betaflight arms at " + String.join(", ", ranges);
     }
 
     /** GPS rescue's own switch (besides the failsafe): up, on a 2- or 3-position switch. Default AUX4; "off" = none. */

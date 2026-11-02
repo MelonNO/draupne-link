@@ -111,7 +111,22 @@ public final class PcPrep {
      * starting a second install.
      */
     public static boolean tailscaleInstallPending() {
-        return tailscaleInstallPending(logFile());
+        return tailscaleInstallPending(logFile()) && taskRunning(tailscaleTaskState());
+    }
+
+    /**
+     * The scheduled task's state ("Running", "Ready", "Queued", "Disabled"), or "" when there is no such task: it
+     * deletes itself when done. A log that says "scheduled" with no task running means the task never ran (or was
+     * never registered): nothing to wait for.
+     */
+    static String tailscaleTaskState() {
+        Shell.Result r = Shell.powershell(Duration.ofSeconds(20), "$t = Get-ScheduledTask -TaskName " + Shell.psQuote(TAILSCALE_TASK)
+                + " -ErrorAction SilentlyContinue\nif ($t) { [string]$t.State }");
+        return r.ok() ? r.output().strip() : "";
+    }
+
+    static boolean taskRunning(String state) {
+        return state.equalsIgnoreCase("Running") || state.equalsIgnoreCase("Queued");
     }
 
     static boolean tailscaleInstallPending(Path file) {

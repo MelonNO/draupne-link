@@ -95,6 +95,18 @@ public final class Tailscale {
         return Files.isRegularFile(path) ? path : null;
     }
 
+    /** Opens Tailscale's own window (the tray app), for when its service isn't answering. False if it isn't there. */
+    public static boolean openApp() {
+        Path app = Path.of(System.getenv().getOrDefault("ProgramFiles", "C:\\Program Files"), "Tailscale", "tailscale-ipn.exe");
+        if (!Files.isRegularFile(app)) return false;
+        try {
+            new ProcessBuilder(app.toString()).start();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public static Status status() {
         Path exe = exe();
         if (exe == null) return Status.notInstalled();

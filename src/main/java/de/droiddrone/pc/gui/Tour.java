@@ -15,6 +15,8 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
+import java.awt.Window;
+import java.awt.event.MouseAdapter;
 import java.awt.geom.Area;
 import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
@@ -24,29 +26,43 @@ import java.util.function.Supplier;
 
 /**
  * The tour of the window, offered once the first-time setup is finished and under SETUP any time: one control at a
- * time is lit while the rest dims, with a notice in the style of the locked-button notices saying what it does
- * (NEXT / SKIP TOUR). It walks the main window (MENU, the controller card's fold, pop-out video, the map's place),
- * then opens the map window for the map itself: pins, what the cursor shows, the drone, DOWNLOAD AREA.
+ * time is lit while the rest dims (and is dead to the mouse), with a notice in the style of the locked-button notices
+ * saying what it does (NEXT / EXIT TOUR). It walks the main window (MENU and each of its slide-out buttons, the
+ * controller card's fold, pop-out video, full screen, the map's place), then opens the map window for the map itself:
+ * pins, what the cursor shows, the drone, the map picture and coordinate format, DOWNLOAD AREA. A step whose control
+ * isn't on screen (UPDATE with no update known) is skipped; a window closed under the tour ends it.
  */
 final class Tour {
-    /** @param before done as the step comes up (opens the map window); null for nothing */
+    /** @param before done as the step comes up (opens the menu, the map window); null for nothing */
     private record Step(String title, String text, Supplier<JComponent> anchor, Runnable before) {}
+
+    /** A control not on screen after this many tries (150 ms apart) is skipped: the step would wait forever. */
+    private static final int MAX_TRIES = 7;
 
     private final MainWindow main;
     private final List<Step> steps = new ArrayList<>();
     private int index = -1;
+    private int tries;
     private TourNotice notice;
     private final Timer retry = new Timer(150, e -> show());
 
     private Tour(MainWindow main) {
         this.main = main;
         retry.setRepeats(false);
-        steps.add(new Step("MENU", "Everything lives here. SETUP holds the guides, VIDEO the picture and the OSD, LINK the sounds "
-                + "and spectators, TOOLS the map tools and tests. Press it and the four slide out.", main::tourMenuButton, null));
+        Runnable openMenu = main::tourOpenMenu;
+        steps.add(new Step("MENU", "Everything lives here. Press it and SETUP, VIDEO, LINK and TOOLS slide out - as now.",
+                main::tourMenuButton, openMenu));
+        steps.add(new Step("SETUP", "The guides: first-time setup, PC, drone and phone setup, and this tour.", main::tourSetupButton, openMenu));
+        steps.add(new Step("VIDEO", "The picture, the OSD and recording.", main::tourVideoButton, openMenu));
+        steps.add(new Step("LINK", "The link's sounds, and who may watch as a spectator.", main::tourLinkButton, openMenu));
+        steps.add(new Step("TOOLS", "Find the drone, the tracks folder and the tests.", main::tourToolsButton, openMenu));
+        steps.add(new Step("UPDATE", "A newer DRAUPNE Link is ready: one press installs it.", main::tourUpdateButton, openMenu));
         steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card away for more video, and brings it back. The sticks "
                 + "and switches keep working either way.", main::tourMinimizeButton, null));
         steps.add(new Step("POP OUT VIDEO", "The picture in a window of its own, for a second screen. A double-click on the video "
-                + "shows it alone; F11 is full screen, Esc goes back.", main::tourPopOutButton, null));
+                + "shows it alone.", main::tourPopOutButton, null));
+        steps.add(new Step("FULL SCREEN", "The picture fills the whole screen (F11 too). Esc brings the window back.",
+                main::tourFullScreenButton, null));
         steps.add(new Step("THE MAP", "In flight the minimap takes this place, with POP OUT MAP under it. F3 opens the map window "
                 + "any time - as now.", main::tourLinkCard, null));
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
@@ -57,10 +73,14 @@ final class Tour {
                 + "terrain height there show here. DRONE, ALTITUDE and LAUNCH are live.", () -> main.mapWindow().tourCursor(), null));
         steps.add(new Step("THE DRONE", "The arrow is the drone, pointing where it heads, with its track behind it. The ring marked "
                 + "L is the launch point. LAST KNOWN on the arrow means its position is old.", () -> main.mapWindow().tourDrone(), null));
+        steps.add(new Step("MAP TYPE", "The map picture: topo, paper map, satellite or OpenStreetMap. Change it here any time; "
+                + "what you have looked at is kept for flying without internet.", () -> main.mapWindow().tourMapType(), null));
+        steps.add(new Step("COORDINATES", "The coordinate system for the cursor, the drone and the pins: degrees, UTM or MGRS. "
+                + "Change it here.", () -> main.mapWindow().tourFormat(), null));
         steps.add(new Step("OFFLINE MAPS", "DOWNLOAD AREA saves the map for flying without internet: this view, or a box you draw "
                 + "with SELECT WITH CURSOR (or Alt + drag). Every map type and zoom level, one START.", () -> main.mapWindow().tourDownload(), null));
         steps.add(new Step("THAT'S THE TOUR", "SETUP > Tour shows it again. Press CONNECT in the main window when the drone and "
-                + "the phone are ready.", main::tourMenuButton, null));
+                + "the phone are ready.", main::tourMenuButton, openMenu));
     }
 
     /** Asks first; the tour runs on yes. */
@@ -79,13 +99,21 @@ final class Tour {
         if (notice != null) notice.dismiss();
         notice = null;
         index++;
+        tries = 0;
         if (index >= steps.size()) return;
         Step s = steps.get(index);
-        if (s.before() != null) s.before().run();
+        if (s.before() != null) {
+            try {
+                s.before().run();
+            } catch (RuntimeException e) {
+                main.logLine("Tour: step " + (index + 1) + " (" + s.title() + ") could not open its window: " + e);
+            }
+        }
         retry.restart(); // the window just opened: let it lay out first
     }
 
-    private void skip() {
+    /** EXIT TOUR, or a window gone: over, cleanly. */
+    private void end() {
         if (notice != null) notice.dismiss();
         notice = null;
         index = steps.size();
@@ -94,48 +122,64 @@ final class Tour {
     private void show() {
         if (index < 0 || index >= steps.size()) return;
         Step s = steps.get(index);
-        JComponent anchor = s.anchor().get();
+        JComponent anchor = null;
+        try {
+            anchor = s.anchor().get();
+        } catch (RuntimeException e) {
+            // the window isn't there (yet): as not showing
+        }
         if (anchor == null || !anchor.isShowing()) {
+            if (++tries >= MAX_TRIES) { // not on screen (UPDATE with no update known, a layout without the control): skipped
+                main.logLine("Tour: step " + (index + 1) + " (" + s.title() + ") skipped - its control isn't shown.");
+                next();
+                return;
+            }
             retry.restart();
             return;
         }
-        notice = new TourNotice(anchor, s.title(), s.text(), index + 1, steps.size(), this::next, this::skip);
+        notice = new TourNotice(anchor, s.title(), s.text(), index + 1, steps.size(), this::next, this::end);
         if (!notice.pop()) retry.restart();
     }
 
-    /** The notice: pointer at the control, the text, STEP i OF n, NEXT and SKIP TOUR; the rest of the window dims. */
+    /** The notice: pointer at the control, the text, STEP i OF n, NEXT and EXIT TOUR; the rest of the window dims. */
     private static final class TourNotice extends JComponent {
-        private static final int WIDTH = 400;
+        private static final int WIDTH = 460;
         private static final int PAD = 12;
         private static final int POINTER = 8;
         private static final int GAP = 6;
         private static final long IN_MS = 180;
+        /** The control hidden this long (a card folded): the step moves on. */
+        private static final long HIDDEN_MS = 2500;
+        /** Its window gone this long (closed): the tour ends. */
+        private static final long WINDOW_GONE_MS = 3000;
 
         private final JComponent anchor;
         private final String title;
         private final List<String> lines;
         private final String counter;
         private final JButton next = Theme.primaryButton("Next");
-        private final JButton skip = Theme.secondaryButton("Skip tour");
+        private final JButton exit = Theme.secondaryButton("Exit tour");
+        private final Runnable onEnd;
         private final Dim dim = new Dim();
         private final Timer timer = new Timer(33, e -> tick());
         private long shownAt;
         private boolean above;
         private long notShowingSince;
 
-        TourNotice(JComponent anchor, String title, String text, int step, int of, Runnable onNext, Runnable onSkip) {
+        TourNotice(JComponent anchor, String title, String text, int step, int of, Runnable onNext, Runnable onEnd) {
             this.anchor = anchor;
             this.title = title;
+            this.onEnd = onEnd;
             counter = "STEP " + step + " OF " + of;
             setOpaque(false);
             setLayout(null);
             lines = wrap(text, getFontMetrics(textFont()), WIDTH - 2 * PAD);
             next.setText(step == of ? "Done" : "Next");
             next.addActionListener(e -> onNext.run());
-            skip.addActionListener(e -> onSkip.run());
-            skip.setVisible(step != of);
+            exit.addActionListener(e -> onEnd.run());
+            exit.setVisible(step != of);
             add(next);
-            add(skip);
+            add(exit);
         }
 
         boolean pop() {
@@ -171,7 +215,11 @@ final class Tour {
         private void tick() {
             if (!anchor.isShowing()) {
                 if (notShowingSince == 0) notShowingSince = System.currentTimeMillis();
-                else if (System.currentTimeMillis() - notShowingSince > 2500) next.doClick(); // its window went: move on
+                long hidden = System.currentTimeMillis() - notShowingSince;
+                Window w = SwingUtilities.getWindowAncestor(anchor);
+                boolean windowGone = w == null || !w.isDisplayable() || !w.isVisible();
+                if (windowGone && hidden > WINDOW_GONE_MS) onEnd.run(); // its window was closed: the tour is over
+                else if (!windowGone && hidden > HIDDEN_MS) next.doClick(); // only the control went (folded away): move on
                 return;
             }
             notShowingSince = 0;
@@ -200,11 +248,10 @@ final class Tour {
             int y = above ? a.y - GAP - h : a.y + a.height + GAP;
             Rectangle r = new Rectangle(x, Math.max(0, Math.min(y, layer.getHeight() - h)), WIDTH, h);
             if (!r.equals(getBounds())) setBounds(r);
-            int by = h - 4 - 34 + (above ? 0 : 0) - (above ? 0 : 0);
             int top = above ? 0 : POINTER;
-            by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + 8 - PAD;
+            int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + 8 - PAD;
             next.setBounds(WIDTH - PAD - 86, by, 86, 30);
-            skip.setBounds(PAD, by, 110, 30);
+            exit.setBounds(PAD, by, 130, 30);
             return true;
         }
 
@@ -300,15 +347,24 @@ final class Tour {
             return lines;
         }
 
-        /** Dims the window but the control, which gets a pulsing ring; mouse events pass through it. */
+        /**
+         * Dims the window but the control, which gets a pulsing ring. The mouse is dead everywhere but over the control
+         * (it owns every point outside it, and listens, so clicks end here); keyboard shortcuts still work.
+         */
         private final class Dim extends JComponent {
             Dim() {
                 setOpaque(false);
+                MouseAdapter swallow = new MouseAdapter() {
+                };
+                addMouseListener(swallow);
+                addMouseMotionListener(swallow);
+                addMouseWheelListener(swallow);
             }
 
             @Override
             public boolean contains(int x, int y) {
-                return false;
+                Rectangle a = anchorBounds();
+                return a == null || !a.contains(x, y);
             }
 
             @Override

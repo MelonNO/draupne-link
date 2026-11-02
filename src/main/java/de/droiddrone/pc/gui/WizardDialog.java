@@ -89,21 +89,40 @@ class WizardDialog extends JDialog {
             return null;
         }
 
+        /** A background job of this page failed: shown in the footer instead of status() until the next one succeeds. */
+        volatile String error;
+
         final JComponent view() {
             if (view == null) view = build();
             return view;
         }
 
+        /** To the app log (the main window's), when the wizard has one. */
+        void log(String line) {
+            if (wizard != null) wizard.log(line);
+        }
+
         <T> void background(Supplier<T> work, Consumer<T> done) {
+            WizardDialog w = wizard;
+            if (w != null) w.jobStarted();
             WORKERS.submit(() -> {
                 T result;
+                String failure = null;
                 try {
                     result = work.get();
                 } catch (RuntimeException e) {
                     result = null;
+                    failure = e.toString();
+                    log("Setup guide, " + title() + ": " + e);
+                    e.printStackTrace(); // the app log keeps System.err
                 }
                 T r = result;
-                SwingUtilities.invokeLater(() -> done.accept(r));
+                String f = failure;
+                SwingUtilities.invokeLater(() -> {
+                    error = f == null ? null : "Something went wrong: " + f;
+                    if (w != null) w.jobDone();
+                    done.accept(r);
+                });
             });
         }
     }
@@ -134,6 +153,14 @@ class WizardDialog extends JDialog {
     private final JButton backButton = Theme.secondaryButton("Back");
     private final JButton nextButton = Theme.primaryButton("Next");
     private final Timer timer;
+    /**
+     * The step count waits for the pages' prepare() checks (they decide which steps are skipped), at most a second:
+     * shown at once it jumped ("OF 13", then "OF 9") as each result came in.
+     */
+    private boolean countShown;
+    private boolean preparing;
+    private int jobsPending;
+    private final Timer countTimer = new Timer(1000, e -> showCount());
 
     WizardDialog(Window owner, String heading, List<Page> pages, Runnable onFinish) {
         super(owner, heading, ModalityType.APPLICATION_MODAL);
@@ -213,7 +240,11 @@ class WizardDialog extends JDialog {
         setSize(1020, Math.max(640, Math.min(880, screenHeight - 80)));
         setLocationRelativeTo(owner);
         WindowReveal.onOpen(this);
+        preparing = true;
         for (Page page : pages) page.prepare();
+        preparing = false;
+        countTimer.setRepeats(false);
+        if (jobsPending == 0) showCount(); else countTimer.start();
         go(+1);
         timer.start();
     }
@@ -221,7 +252,35 @@ class WizardDialog extends JDialog {
     @Override
     public void dispose() {
         timer.stop();
+        countTimer.stop();
         super.dispose();
+    }
+
+    /** To the app log, when the wizard belongs to the main window. */
+    void log(String line) {
+        if (getOwner() instanceof MainWindow m) m.logLine(line);
+        else System.out.println(line);
+    }
+
+    private void jobStarted() {
+        if (preparing) jobsPending++;
+    }
+
+    private void jobDone() {
+        if (jobsPending > 0 && --jobsPending == 0 && !countShown) showCount();
+    }
+
+    private void showCount() {
+        countTimer.stop();
+        countShown = true;
+        if (index >= 0) showStep(pages.get(index));
+    }
+
+    private void showStep(Page page) {
+        int shownTotal = (int) pages.stream().filter(Page::isApplicable).count();
+        int shownIndex = (int) pages.subList(0, index).stream().filter(Page::isApplicable).count();
+        progress.setProgress(shownIndex, shownTotal);
+        stepCounter.setText("STEP " + (shownIndex + 1) + " OF " + shownTotal + (page.section.isEmpty() ? "" : "   //   " + page.section));
     }
 
     /** Re-evaluates navigation now (pages call this after their state changes). */
@@ -236,9 +295,10 @@ class WizardDialog extends JDialog {
         backButton.setEnabled(previousApplicable(index) >= 0);
         nextButton.setEnabled(page.canContinue());
         nextButton.setText(isLastPage() ? "FINISH" : "NEXT");
-        String text = page.status();
+        status.setForeground(page.canContinue() ? Theme.MUTED : Theme.WARN); // first: status() may choose its own colour
+        String text = page.error != null ? page.error : page.status();
         status.setText(text == null ? " " : text);
-        status.setForeground(page.canContinue() ? Theme.MUTED : Theme.WARN);
+        if (page.error != null) status.setForeground(Theme.BAD);
     }
 
     void setStatusColor(Color color) {
@@ -265,10 +325,8 @@ class WizardDialog extends JDialog {
         if (index >= 0) pages.get(index).onHide();
         index = target;
         Page page = pages.get(index);
-        int shownTotal = (int) pages.stream().filter(Page::isApplicable).count();
-        int shownIndex = (int) pages.subList(0, index).stream().filter(Page::isApplicable).count();
-        progress.setProgress(shownIndex, shownTotal);
-        stepCounter.setText("STEP " + (shownIndex + 1) + " OF " + shownTotal + (page.section.isEmpty() ? "" : "   //   " + page.section));
+        if (countShown) showStep(page);
+        else stepCounter.setText(page.section.isEmpty() ? " " : page.section);
         title.setText(page.title().toUpperCase());
         hint.setHtml(page.hint());
         cards.show(cardPanel, Integer.toString(index));

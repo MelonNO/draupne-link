@@ -5,7 +5,6 @@ import javax.swing.JDialog;
 import javax.swing.JFrame;
 import javax.swing.Timer;
 import java.awt.AlphaComposite;
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FontMetrics;
@@ -22,7 +21,7 @@ import java.awt.event.MouseEvent;
 final class SetupFinale extends JComponent {
     private static final long MARK_MS = 700;
     private static final long TEXT_MS = 500;
-    private static final long HOLD_MS = 2200;
+    private static final long HOLD_MS = 4400;
     private static final long OUT_MS = 350;
     private static final int W = 560, H = 320;
 
@@ -92,12 +91,7 @@ final class SetupFinale extends JComponent {
             g.fillRect(0, 0, w, h);
             float out = closing ? (float) ease((System.currentTimeMillis() - closingAt) / (double) OUT_MS) : 0;
             g.setComposite(AlphaComposite.SrcOver.derive(1 - out));
-            // frame line, like the cards
-            g.setColor(Theme.LINE);
-            g.setStroke(new BasicStroke(1f));
-            g.drawRect(0, 0, w - 1, h - 1);
-            g.setColor(Theme.ACCENT);
-            g.fillRect(0, 0, 3, h);
+            // no frame line or accent bar: on the black window they read as stray lines
 
             // the mark: grows in, and its brackets close in from outside
             double mark = ease(t / (double) MARK_MS);
