@@ -144,15 +144,73 @@ final class BootReveal extends JComponent {
                 Logo.paintBracket(g, c, lx + (tx - lx) * fly, ly + (ty - ly) * fly, cs, pieceAlpha);
             }
 
-            // the crosshair to the middle of the video
+            // the crosshair to the middle of the video, where it splits and becomes the OSD's crosshair (same shape,
+            // same size, same place), then turns the OSD's white: the real one is drawn there underneath
             Rectangle v = videoBounds == null ? null : videoBounds.get();
             double vcx = v == null || v.width == 0 ? w / 2.0 : v.getCenterX();
             double vcy = v == null || v.height == 0 ? h / 2.0 : v.getCenterY();
-            double chSize = size + (size * 0.5 - size) * fly;
-            double cx = w / 2.0 + (vcx - w / 2.0) * fly, cy = h / 2.0 + (vcy - h / 2.0) * fly;
-            Logo.paintCrosshair(g, cx - chSize / 2, cy - chSize / 2, chSize, pieceAlpha);
+            float unit = (v == null || v.height == 0 ? h : v.height) / 720f; // as VideoView's no-video screen: the whole view
+            double travel = ease(Math.min(1, fly / 0.6));
+            double morph = ease(Math.max(0, (fly - 0.55) / 0.45));
+            double chSize = size + (size * 0.45 - size) * travel;
+            double cx = w / 2.0 + (vcx - w / 2.0) * travel, cy = h / 2.0 + (vcy - h / 2.0) * travel;
+            morphCrosshair(g, cx, cy, chSize / Logo.BOX, unit, morph, out);
         } finally {
             g.dispose();
+        }
+    }
+
+    private static double lerp(double a, double b, double t) {
+        return a + (b - a) * t;
+    }
+
+    /**
+     * The mark's crosshair (ring, four ticks, on its dark disc; s = pixels per logo unit) turning into the OSD's
+     * (OsdRenderer.crosshair: two arms with down-ticks at their inner ends and a centre dot, at unit = picture
+     * height / 720). m 0..1: the side ticks grow into the arms, the top and bottom ticks swing down to become the
+     * inner down-ticks, the ring shrinks to the dot, the disc goes. white 0..1: red to the OSD's white with its dark edge.
+     */
+    private static void morphCrosshair(Graphics2D g, double cx, double cy, double s, float unit, double m, double white) {
+        double in = 14 * unit, out = 44 * unit, tick = 10 * unit;
+        double width = Math.max(2f, 3f * unit), dot = Math.max(3f, 5f * unit);
+        java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
+        double a1 = lerp(11 * s, in, m), a2 = lerp(39 * s, out, m);
+        p.moveTo(cx - a2, cy);
+        p.lineTo(cx - a1, cy);
+        p.moveTo(cx + a2, cy);
+        p.lineTo(cx + a1, cy);
+        // the top tick swings down to the left arm's inner end, the bottom one to the right arm's
+        p.moveTo(lerp(cx, cx - in, m), lerp(cy - 11 * s, cy, m));
+        p.lineTo(lerp(cx, cx - in, m), lerp(cy - 39 * s, cy + tick, m));
+        p.moveTo(lerp(cx, cx + in, m), lerp(cy + 11 * s, cy, m));
+        p.lineTo(lerp(cx, cx + in, m), lerp(cy + 39 * s, cy + tick, m));
+        double r = lerp(24 * s, dot / 2, m);
+        java.awt.geom.Ellipse2D.Double ring = new java.awt.geom.Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r);
+        float stroke = (float) lerp(10 * s, width, m);
+        Graphics2D c = (Graphics2D) g.create();
+        try {
+            if (m < 1) {
+                double dr = 44 * s * (1 - m);
+                c.setComposite(AlphaComposite.SrcOver.derive((float) (1 - m)));
+                c.setColor(Logo.DARK);
+                c.fill(new java.awt.geom.Ellipse2D.Double(cx - dr, cy - dr, 2 * dr, 2 * dr));
+                c.setComposite(AlphaComposite.SrcOver);
+            }
+            if (white > 0) { // the OSD's dark edge under the white
+                c.setComposite(AlphaComposite.SrcOver.derive((float) Math.min(1, white)));
+                c.setColor(new java.awt.Color(0, 0, 0, 200));
+                c.setStroke(new java.awt.BasicStroke(stroke + 2.5f, java.awt.BasicStroke.CAP_SQUARE, java.awt.BasicStroke.JOIN_MITER));
+                c.draw(p);
+                c.draw(ring);
+                c.setComposite(AlphaComposite.SrcOver);
+            }
+            int red = Logo.RED.getRed(), green = Logo.RED.getGreen(), blue = Logo.RED.getBlue();
+            c.setColor(new java.awt.Color((int) lerp(red, 255, white), (int) lerp(green, 255, white), (int) lerp(blue, 255, white)));
+            c.setStroke(new java.awt.BasicStroke(stroke, m >= 1 ? java.awt.BasicStroke.CAP_SQUARE : java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER));
+            c.draw(p);
+            if (m >= 1) c.fill(ring); else c.draw(ring);
+        } finally {
+            c.dispose();
         }
     }
 

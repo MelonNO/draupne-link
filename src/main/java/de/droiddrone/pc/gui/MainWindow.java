@@ -980,7 +980,7 @@ public class MainWindow extends JFrame {
             logLine("No track file: " + e.getMessage());
         }
         linkLogTimer.start();
-        setFlightLayout(true);
+        updateFlightLayout();
         logLine("Connecting: " + mode + (mode == LinkMode.HOST_RELAY ? "" : " " + addressField.getText().trim()) + ":" + port);
         setLinkEditable(false);
     }
@@ -990,9 +990,9 @@ public class MainWindow extends JFrame {
         sampleLinkLog();
         linkLogTimer.stop();
         if (track != null) track.close(pins.list()); // stays for FIND DRONE and the map
-        setFlightLayout(false);
         if (connection != null) connection.close();
         connection = null;
+        updateFlightLayout();
         session = null;
         if (video != null) video.close();
         video = null;
@@ -1058,12 +1058,16 @@ public class MainWindow extends JFrame {
         if (mini) miniMap.update(track, gps, heading, fcLost, connected);
     }
 
-    /** Connected: the connection fields and the detail figures fold away and the minimap unfolds; back on disconnect. */
-    private void setFlightLayout(boolean flying) {
-        fieldsFold.setShown(!flying, true);
-        detailsFold.setShown(!flying, true);
-        miniFold.setShown(flying, true);
-        if (flying) {
+    /**
+     * Connected, with the map not popped out: the connection fields and the detail figures fold away and the minimap
+     * unfolds. With the map in its own window (or disconnected) the card has its fields and figures back.
+     */
+    private void updateFlightLayout() {
+        boolean mini = connection != null && !(mapWindow != null && mapWindow.isVisible());
+        fieldsFold.setShown(!mini, true);
+        detailsFold.setShown(!mini, true);
+        miniFold.setShown(mini, true);
+        if (mini) {
             miniMap.setFollow(true);
             mapIdleUpdatedAt = 0;
         }
@@ -1074,6 +1078,18 @@ public class MainWindow extends JFrame {
             mapWindow = new MapWindow(this, tileCache, elevation, pins, mapSource, coordinateFormat, config.getString(MapWindow.BOUNDS_KEY), this::save,
                     this::setMapSource, this::setCoordinateFormat, this::openFindDrone);
             mapWindow.setPreferPhone(preferPhone);
+            // popped out: the LINK card gets its fields and figures back; closed again in flight: the minimap returns
+            mapWindow.addComponentListener(new java.awt.event.ComponentAdapter() {
+                @Override
+                public void componentShown(java.awt.event.ComponentEvent e) {
+                    updateFlightLayout();
+                }
+
+                @Override
+                public void componentHidden(java.awt.event.ComponentEvent e) {
+                    updateFlightLayout();
+                }
+            });
         }
         return mapWindow;
     }
