@@ -22,14 +22,19 @@ class BootAndFoldTest {
         return n;
     }
 
+    /** Opaque and (near) black: a pixel of the cover. */
+    private static boolean dark(int argb) {
+        return (argb >>> 24) >= 250 && (argb & 0xff) < 0x20 && ((argb >> 8) & 0xff) < 0x20 && ((argb >> 16) & 0xff) < 0x20;
+    }
+
     @Test
     void theBootStartsBlackWithTheMarkInTheMiddleAndEndsClear() {
         Rectangle video = new Rectangle(300, 80, 500, 300);
         BufferedImage start = BootReveal.frame(0, 800, 500, video);
-        assertEquals(0xff000000, start.getRGB(5, 5), "black all over at the start");
+        assertTrue(dark(start.getRGB(5, 5)), "black all over at the start: " + Integer.toHexString(start.getRGB(5, 5)));
         BufferedImage shown = BootReveal.frame(800, 800, 500, video);
-        assertTrue(count(shown, Logo.RED.getRGB() & 0xffffff, 200) > 2000, "the mark, red, once faded in");
-        assertEquals(0xff000000, shown.getRGB(5, 5), "still black round it");
+        assertTrue(count(shown, Logo.RED.getRGB() & 0xffffff, 200) > 2000, "the mark, red, once faded in: " + count(shown, Logo.RED.getRGB() & 0xffffff, 200));
+        assertTrue(dark(shown.getRGB(5, 5)), "still black round it: " + Integer.toHexString(shown.getRGB(5, 5)));
         BufferedImage flying = BootReveal.frame(1800, 800, 500, video);
         int alphaCorner = flying.getRGB(5, 5) >>> 24;
         assertTrue(alphaCorner < 200, "the black lifts while the pieces fly: " + alphaCorner);

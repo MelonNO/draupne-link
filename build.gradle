@@ -73,6 +73,10 @@ test {
     // upstream's relay (RelayHost) writes config.cfg into the working directory
     workingDir = layout.buildDirectory.dir('test-work').get().asFile
     doFirst { workingDir.mkdirs() }
+    testLogging { // a failure on the release runner shows its message in the log, not only its line
+        events 'failed'
+        exceptionFormat 'full'
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
