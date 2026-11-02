@@ -194,7 +194,7 @@ Picking up the work (state, rules, build environment, release steps): [docs/HAND
 ```powershell
 git clone --recurse-submodules https://github.com/MelonNO/draupne-link
 cd draupne-link
-.\gradlew.bat test               # 225 tests: protocol, video, telemetry, calibration, Betaflight CLI, setup, spectators, map
+.\gradlew.bat test               # 226 tests: protocol, video, telemetry, calibration, Betaflight CLI, setup, spectators, map
 .\gradlew.bat installDist        # build\install\draupne-link\bin\draupne-link.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3

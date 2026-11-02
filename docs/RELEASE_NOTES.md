@@ -1,13 +1,13 @@
 <!-- The release page text: only the version being released. Older versions are in CHANGELOG.md. -->
-## New in 1.0.24
+## New in 1.0.25
 
-- **The map saved for offline use: DOWNLOAD AREA** in the map window (or hold **Alt** and drag a box on the map, or right-click > *Download this view*), like Mission Planner's prefetch. One START fetches every tile of the area for all four pictures (Kartverket topo, paper map, satellite, OpenStreetMap) and every zoom level, each picture to its deepest; the window says how many tiles and roughly how much first, shows a bar and the figures while it runs, and CANCEL keeps what is saved. One picture or fewer levels can be chosen instead. Tiles already saved are skipped, so an area can be run again for what is missing. OpenStreetMap is fetched one tile at a time, with a pause: keep its areas small.
-- **The phone's GPS works indoors too (phone app 2.3.0-pc.18):** the phone asked Android's bare GPS only, so the map never got the phone's position indoors, where Google Maps has one. Now it asks the GPS, the network (Wi-Fi and cell) and, on Android 12 and up, the fused position; a fresh GPS fix wins. The phone's screen says what its GPS is doing: not allowed (tap to allow), no position yet, or the provider, accuracy and age of the position it sends.
-- **The phone app updates itself (pc.18):** the *Update available* line downloads the new app, checks it against GitHub's checksum and installs it from inside the app, so nothing piles up in Downloads any more. The first time, Android asks to allow the app to install apps. It refuses while connected: an update closes the app, and the sticks with it. A one-time note opens Downloads for the installers earlier updates left there. (The update **to** pc.18 still goes through the browser, as before.)
-- **Link log:** the phone's position (`phone_lat`, `phone_lon`, `phone_acc_m`, `phone_age_s`), blank when the phone sends none.
-- **Fix:** an error in the boot animation when its first frame came late (an uncaught exception in the app log).
+- **Fix: Drone setup could not set the receiver on Betaflight 2025.12.** That Betaflight's CLI has no name for the MSP receiver (`feature RX_MSP` is an invalid name there, and its feature listing cannot show it), so Drone setup logged the change, saved, and left the board with **no receiver at all** while reporting the receiver as not set. The receiver is now read and set the way Betaflight Configurator's Receiver tab does it, over MSP, which works on 4.5 and 2025.12 alike; the CLI still writes the rest. If Drone setup already ran on a 2025.12 board, run it again: it switches the receiver to MSP RX input in one go.
+- **Drone setup says what Betaflight refused.** A CLI command Betaflight does not take is logged ("Betaflight refused: ...") and shown on the USB row, instead of passing as success.
+- **The backup stays honest:** the settings file saved before a change shows the receiver as it was.
+- **Fix:** the setup guide's hint under the page title wraps; the Betaflight page's was cut off at the right edge.
+- README: new pictures (the mark with the name, the map window on topo and satellite, DOWNLOAD AREA).
 
-The phone app in this release is DRAUPNE Flight **2.3.0-pc.18**. Update it: in the app, tap *Update available ... Tap to install it* (this time it opens the browser; from pc.18 on it installs itself), or SETUP > Phone setup on the PC.
+The phone app is unchanged: DRAUPNE Flight **2.3.0-pc.18**.
 
 ## Files
 

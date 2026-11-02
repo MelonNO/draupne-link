@@ -2,6 +2,14 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.25
+
+- **Fix: Drone setup could not set the receiver on Betaflight 2025.12.** Its CLI has no name for RX_MSP, so Drone setup logged the change, saved, and left the board with no receiver. The receiver is now read and set over MSP (the feature mask, as Betaflight Configurator does), on 4.5 and 2025.12 alike; the CLI writes the rest.
+- **Drone setup says what Betaflight refused** (logged and on the USB row) instead of passing it as success; the backup shows the receiver as it was.
+- **Fix:** the setup guide's hint under the page title wraps.
+- README: new pictures (the mark with the name, the map window, DOWNLOAD AREA).
+- Phone app unchanged (2.3.0-pc.18).
+
 ## 1.0.24
 
 - **The map saved for offline use: DOWNLOAD AREA** in the map window (or Alt + drag a box on the map, or right-click > *Download this view*), like Mission Planner's prefetch. One START fetches every tile of the area for all four pictures and every zoom level, each picture to its deepest; the count and rough size first, a bar and the figures while it runs, CANCEL keeps what is saved; one picture or fewer levels can be chosen. Saved tiles are skipped. OpenStreetMap one tile at a time, with a pause: keep its areas small.

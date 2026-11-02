@@ -4,9 +4,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-02, 1.0.24)
+## Where things stand (2026-11-02, 1.0.25)
 
-- **Unreleased, for 1.0.25's notes - Drone setup on Betaflight 2025.12:** the receiver could not be set. 2025.12's
+- **Released:** DRAUPNE Link **1.0.25** (Latest), phone app unchanged (**2.3.0-pc.18**): the two items below.
+- **1.0.25 - Drone setup on Betaflight 2025.12:** the receiver could not be set. 2025.12's
   CLI has no name for RX_MSP (`feature RX_MSP` answers "Invalid name", and `feature` can't list it; the bit,
   1 << 14, is unchanged and master has the name back). Found on the pilot's iFlight Blitz F722 on 2025.12.2: three
   tries, three identical backups, and the board left with no receiver at all (`feature -RX_SERIAL`, nothing on).
@@ -17,13 +18,13 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   (`restoreReceiver`, since the "diff all" is taken after the switch), and a CLI answer with `###ERROR` or
   `Unavailable` is logged ("Betaflight refused: ...") and shown on the USB row instead of passing as success.
   Not yet tried on the board.
-- **Unreleased, for 1.0.25's notes:** the setup guide's hint under the title wraps (`WizardDialog.hint` is a
+- **1.0.25:** the setup guide's hint under the title wraps (`WizardDialog.hint` is a
   `WrappingText` sized to the window's width; the Betaflight page's hint was cut off at the right edge). The README's
   pictures were redone from a throwaway `ReadmeShot` (build/shot, git-ignored): the mark with the name, the main
   window as it opens, the OSD over a drawn landscape, four guide pages, and the map window with a made-up flight
   over Reine (Lofoten) on topo and satellite, the Alt + drag box and the DOWNLOAD AREA dialog. Real tiles were
   fetched into a temp cache for them; nothing was shown on screen.
-- **Released:** DRAUPNE Link **1.0.24** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.18**: the map's
+- **1.0.24**, bundling phone app **DRAUPNE Flight 2.3.0-pc.18**: the map's
   DOWNLOAD AREA, the phone's position from every location provider, the in-app phone updater, the link log's phone
   position columns (all three below). 1.0.23 (pc.17): the icons without the brackets, the boot window opening black.
   1.0.22 (pc.16) brought everything below. (Its first two
@@ -213,7 +214,7 @@ Lessons from releasing:
 
 ## Testing and diagnosing
 
-- `gradlew.bat test`: 222 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
+- `gradlew.bat test`: 226 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
   count, spectator mode end to end on loopback, flight mode / ARM / failsafe planning, setup page composition).
   Loopback tests need full-size packets to catch size bugs: 1.0.17's spectator cut-off passed with a plain test
   picture (see `SpectatorTest.fullSizePacketsReachTheSpectatorWhole`).
