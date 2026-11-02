@@ -77,8 +77,40 @@ public class FcTelemetry {
     static final short PHONE_POSITION = 0x40F3;
     /** The phone's encoder: bitrate setting (bit/s) and intra refresh (DRAUPNE Flight 2.3.0-pc.13 on). */
     static final short PHONE_ENCODER = 0x40F2;
+    /**
+     * The phone's state (DRAUPNE Flight 2.3.0-pc.19 on): [flags u8][last RC sequence u8][RC write age u16][RC in to
+     * out u16]. Flags: bit 0 the FC's channel map is known, bit 1 USB permission asked and pending, bit 2 USB
+     * permission denied, bit 3 the camera is open.
+     */
+    static final short PHONE_STATE = 0x40F4;
     /** Telemetry this long without a version: the phone app is older than 2.3.0-pc.5 (or upstream's own). */
     static final long PHONE_APP_SILENT_MS = 4000;
+
+    /** The phone's USB permission for the flight controller, as its PHONE_STATE flags say. */
+    public enum UsbPermission { OK, PENDING, DENIED }
+
+    /**
+     * What the phone says about itself (record {@link #PHONE_STATE}), the latest report. lastRcSeq is the sequence
+     * number of the last stick frame it wrote to the FC (-1 = none yet); rcWriteAgeMs how long ago that write was,
+     * rcInToOutMs how long that frame took from arriving at the phone to its USB write (-1 = unknown).
+     */
+    public record PhoneState(int flags, int lastRcSeq, int rcWriteAgeMs, int rcInToOutMs, long receivedAt) {
+        static final int FLAG_CHANNEL_MAP = 1, FLAG_USB_PENDING = 2, FLAG_USB_DENIED = 4, FLAG_CAMERA_OPEN = 8;
+
+        /** The phone has read the FC's channel map (MSP_RX_MAP): the sticks land on the right channels. */
+        public boolean channelMapKnown() {
+            return (flags & FLAG_CHANNEL_MAP) != 0;
+        }
+
+        public UsbPermission usbPermissionState() {
+            return (flags & FLAG_USB_DENIED) != 0 ? UsbPermission.DENIED
+                    : (flags & FLAG_USB_PENDING) != 0 ? UsbPermission.PENDING : UsbPermission.OK;
+        }
+
+        public boolean cameraOpen() {
+            return (flags & FLAG_CAMERA_OPEN) != 0;
+        }
+    }
 
     /** roll/pitch in degrees (right / nose up positive as Betaflight reports), heading 0-359. */
     public record Attitude(double rollDeg, double pitchDeg, int headingDeg, long receivedAt) {}
@@ -176,7 +208,10 @@ public class FcTelemetry {
     private volatile long lastFcDataAt;
     private PhoneLink phoneLink;
     private volatile String phoneAppVersion;
+    /** The "pc.N" build number of the phone app's version, -1 while unknown: read once per version record. */
+    private volatile int phonePcBuild = -1;
     private volatile PhonePosition phonePosition;
+    private volatile PhoneState phoneState;
     /** When the first record from the phone arrived; 0 = none yet. */
     private volatile long firstRecordAt;
 
@@ -307,7 +342,17 @@ public class FcTelemetry {
             case PHONE_APP_VERSION -> {
                 byte[] name = new byte[b.readShort()];
                 if (b.read(name, 0, name.length) != name.length) return false;
-                phoneAppVersion = new String(name, StandardCharsets.UTF_8);
+                String v = new String(name, StandardCharsets.UTF_8);
+                phonePcBuild = pcBuild(v);
+                phoneAppVersion = v;
+            }
+            case PHONE_STATE -> {
+                int flags = b.readUnsignedByteAsInt();
+                int seq = b.readUnsignedByteAsInt();
+                int age = b.readShort() & 0xffff;
+                int inToOut = b.readShort() & 0xffff;
+                phoneState = new PhoneState(flags, seq == 255 ? -1 : seq, age == 65535 ? -1 : age,
+                        inToOut == 65535 ? -1 : inToOut, System.currentTimeMillis());
             }
             case PHONE_ENCODER -> {
                 phoneTargetBitRate = b.readInt();
@@ -337,6 +382,39 @@ public class FcTelemetry {
     /** The phone app's version as it says, or null: not said yet, or an app too old to say (see phoneAppSilent). */
     public String getPhoneAppVersion() {
         return phoneAppVersion;
+    }
+
+    /**
+     * The build number N of a DRAUPNE Flight version "2.3.0-pc.N", or -1: no version yet, or not such a build. What
+     * the link checks before using a packet layout only newer phone apps understand.
+     */
+    public int getPhonePcBuild() {
+        return phonePcBuild;
+    }
+
+    static int pcBuild(String version) {
+        if (version == null) return -1;
+        int at = version.indexOf("-pc.");
+        if (at < 0) return -1;
+        int n = -1;
+        for (int i = at + 4; i < version.length() && Character.isDigit(version.charAt(i)); i++) {
+            n = (n < 0 ? 0 : n * 10) + (version.charAt(i) - '0');
+        }
+        return n;
+    }
+
+    /** The phone's latest self-report (record PHONE_STATE), or null: none yet, or a phone app older than 2.3.0-pc.19. */
+    public PhoneState getPhoneState() {
+        return phoneState;
+    }
+
+    /**
+     * The flight controller said it is armed, in a status no older than maxAgeMs. False when it said disarmed, or
+     * when nothing recent is known - a stale "armed" from before a link loss says nothing about now.
+     */
+    public boolean isArmedNow(long nowMs, long maxAgeMs) {
+        Status s = status;
+        return s != null && s.armed() && nowMs - s.receivedAt() <= maxAgeMs;
     }
 
     /** The phone has sent telemetry for a while but no version: its app is older than 2.3.0-pc.5. */
@@ -487,6 +565,11 @@ public class FcTelemetry {
 
     void forgetBoxIds() {
         hasBoxIds = false;
+    }
+
+    /** After a link loss: the phone may come back on another flight controller, whose modes sit on other bits. */
+    void forgetBoxNames() {
+        boxNames = List.of();
     }
 
     /** null until the first MSP_STATUS arrives. */

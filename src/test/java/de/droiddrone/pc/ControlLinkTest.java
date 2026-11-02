@@ -166,10 +166,69 @@ class ControlLinkTest {
         assertArrayEquals(sticks, java.util.Arrays.copyOf(received, sticks.length));
     }
 
+    /** The stick frame's bytes: upstream's layout, and with the sequence byte for phone apps that read it. */
+    @Test
+    void rcFrameCarriesASequenceByteOnlyWhenAsked() throws Exception {
+        short[] frame = {1500, 1600, 1400, 1000, 2000, 1000, 1000, 1000};
+        byte[] old = ControlLink.rcFrame(frame, -1);
+        assertEquals(2 + 8 * 2, old.length, "[24][count][8 x int16]");
+        assertEquals(UdpCommon.RcFrame, old[0]);
+        assertEquals(8, old[1]);
+        assertEquals(1600, ((old[4] & 0xff) << 8) | (old[5] & 0xff), "big-endian pitch");
+        byte[] withSeq = ControlLink.rcFrame(frame, 200);
+        assertEquals(old.length + 1, withSeq.length);
+        assertArrayEquals(old, java.util.Arrays.copyOf(withSeq, old.length), "the same frame in front");
+        assertEquals(200, withSeq[withSeq.length - 1] & 0xff);
+        assertEquals(255, ControlLink.rcFrame(frame, 255)[withSeq.length - 1] & 0xff, "the whole byte");
+    }
+
+    /** A phone app from pc.19 on gets numbered frames; an older one (which refuses extra bytes) the old frames. */
+    @Test
+    void sequenceByteGoesOutOnlyToAPhoneAppThatReadsIt() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.appVersion = "2.3.0-pc.18";
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> "2.3.0-pc.18".equals(link.getTelemetry().getPhoneAppVersion()), 5000, "version known");
+        short[] sticks = {1500, 1500, 1500, 1000};
+        assertTrue(link.sendRc(sticks));
+        waitFor(() -> phone.rcFrames.size() >= 1, 2000, "RC frame");
+        assertTrue(phone.rcSeqs.isEmpty(), "pc.18: no sequence byte");
+        phone.appVersion = "2.3.0-pc.19";
+        waitFor(() -> link.getTelemetry().getPhonePcBuild() == 19, 5000, "newer version known");
+        for (int i = 0; i < 3; i++) assertTrue(link.sendRc(sticks));
+        waitFor(() -> phone.rcSeqs.size() >= 3, 2000, "numbered frames");
+        int first = phone.rcSeqs.get(0);
+        assertEquals(List.of(first, (first + 1) & 0xff, (first + 2) & 0xff), phone.rcSeqs.subList(0, 3), "counted up per frame");
+        assertEquals(4, phone.rcFrames.size(), "every frame reached the phone whole");
+    }
+
+    /** Nothing from the phone for 2 s: the link counts as lost, well before upstream's 4000 ticks. */
+    @Test
+    void silenceOfTwoSecondsIsALinkLoss() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        Thread.sleep(300);
+        assertTrue(link.isConnected());
+        phone.silent = true;
+        long quietFrom = System.currentTimeMillis();
+        waitFor(() -> !link.isConnected(), ControlLink.LINK_LOST_MS + 1500, "link lost");
+        long took = System.currentTimeMillis() - quietFrom;
+        assertTrue(took >= ControlLink.LINK_LOST_MS - 200, "not before the 2 s: " + took + " ms");
+        assertEquals(ControlLink.State.CONNECTING, link.getState());
+        // the phone back: the handshake again
+        phone.silent = false;
+        waitFor(() -> link.getState() == ControlLink.State.READY, 6000, "READY again");
+    }
+
     @Test
     void linkLogRecordsTheTimeline(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
         for (int i = 0; i < 25; i++) java.nio.file.Files.writeString(dir.resolve(String.format("link-20260101-0000%02d.csv", i)), "old");
         phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.phoneStateFlags = 0b1001; // channel map known, camera open
         link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
@@ -182,7 +241,11 @@ class ControlLinkTest {
                 link.sendRc(sticks);
                 Thread.sleep(20);
             }
-            log.sample(link, true, true, 0, sticks, "direct");
+            waitFor(() -> {
+                FcTelemetry.PhoneState s = link.getTelemetry().getPhoneState();
+                return s != null && s.rcWriteAgeMs() == 4 && link.getPing() >= 0;
+            }, 3000, "the phone's state after the sticks, and a ping");
+            log.sample(link, true, true, 0, sticks, "direct", null, 7);
             log.event("Joystick lost, test");
         }
         try (var files = java.nio.file.Files.list(dir)) {
@@ -200,6 +263,14 @@ class ControlLinkTest {
         assertEquals("1500 1500 1500 1000 1000", row[16], "every channel as sent");
         assertTrue(Long.parseLong(row[18]) >= -1, "age of the last pong");
         assertEquals("direct", row[19], "Tailscale path");
+        List<String> columns = List.of(LinkLog.HEADER.split(","));
+        assertEquals("4", row[columns.indexOf("phone_rc_write_age_ms")]);
+        assertEquals("3", row[columns.indexOf("phone_rc_in_to_out_ms")]);
+        assertEquals("", row[columns.indexOf("phone_rc_seq")], "an old-layout frame: the phone saw no sequence");
+        assertEquals("9", row[columns.indexOf("phone_flags")]);
+        assertEquals(Integer.toString(Integer.parseInt(row[2]) / 2 + 3), row[columns.indexOf("pc_to_fc_ms")], "half the ping + the phone's in-to-out");
+        assertEquals("7", row[columns.indexOf("glfw_poll_max_ms")]);
+        assertEquals("event", columns.get(columns.size() - 1), "the event stays the last column");
         assertEquals(LinkLog.HEADER.split(",").length, row.length, "every column in every row");
         assertEquals(LinkLog.HEADER.split(",").length, lines.get(2).replace("\"Joystick lost, test\"", "e").split(",", -1).length,
                 "event rows too (the event's own comma is inside quotes)");
@@ -402,6 +473,12 @@ class ControlLinkTest {
         volatile String appVersion;
         /** The encoder bitrate setting it reports (pc.13's record); -1 = none, like older apps. */
         volatile int encoderBitRate = -1;
+        /** The flags of the PHONE_STATE record it reports (pc.19 on); -1 = none, like older apps. */
+        volatile int phoneStateFlags = -1;
+        /** Gone quiet: drops everything that comes in and sends nothing, like a phone whose 4G is gone. */
+        volatile boolean silent;
+        /** The sequence byte of every RC frame that carried one (pc.19 layout), in order. */
+        final List<Integer> rcSeqs = new CopyOnWriteArrayList<>();
         /** Key frame requests received (pc.13 on). */
         final AtomicInteger keyFrameRequests = new AtomicInteger();
         /** The last video profile received (pc.15 on): -1 = none yet, else its flags (bit 0: key frames twice). */
@@ -411,6 +488,11 @@ class ControlLinkTest {
         /** Spectator mode answers sent (DRAUPNE Flight pc.11 and on); 0 with answerSpectators off, like older apps. */
         final AtomicInteger spectatorAnswers = new AtomicInteger();
         volatile boolean answerSpectators = true;
+        /**
+         * A phone still holding a session that is gone: every Connect is answered with PILOT_AT naming this address
+         * instead of being accepted (seen on 2026-11-02 after a link loss, naming the PC's own previous session).
+         */
+        volatile Spectate.Address staleSession;
         volatile ParsedConfig config;
         final List<short[]> rcFrames = new CopyOnWriteArrayList<>();
 
@@ -446,7 +528,8 @@ class ControlLinkTest {
                     try {
                         String v = appVersion;
                         int bps = encoderBitRate;
-                        if ((v != null || bps > 0) && receiverBuffer.isConnected()) {
+                        int flags = phoneStateFlags;
+                        if ((v != null || bps > 0 || flags >= 0) && receiverBuffer.isConnected() && !silent) {
                             UdpPacketData d = new UdpPacketData(UdpCommon.TelemetryData);
                             if (v != null) {
                                 byte[] name = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -458,6 +541,13 @@ class ControlLinkTest {
                                 d.daos.writeShort(0x40F2); // PcLinkStats.ENCODER_CODE
                                 d.daos.writeInt(bps);
                                 d.daos.writeByte(0);
+                            }
+                            if (flags >= 0) {
+                                d.daos.writeShort(0x40F4); // PcLinkStats.PHONE_STATE_CODE
+                                d.daos.writeByte(flags);
+                                d.daos.writeByte(rcSeqs.isEmpty() ? 255 : rcSeqs.get(rcSeqs.size() - 1));
+                                d.daos.writeShort(rcFrames.isEmpty() ? 65535 : 4);
+                                d.daos.writeShort(rcFrames.isEmpty() ? 65535 : 3);
                             }
                             udpSender.sendPacket(d.getData());
                         }
@@ -475,6 +565,7 @@ class ControlLinkTest {
                 while (running) {
                     try {
                         socket.receive(packet);
+                        if (silent) continue;
                         // like DRAUPNE Flight's Udp.receiverRun in direct mode: once a PC is connected, nothing from
                         // another one gets in; a second PC asking is told where the first one is
                         if (!viaRelay && receiverBuffer.isConnected()) {
@@ -484,6 +575,9 @@ class ControlLinkTest {
                             }
                         } else if (!viaRelay && packet.getLength() > 0 && packet.getData()[0] == Spectate.PILOT_QUERY) {
                             answerSpectator(packet, false);
+                            continue;
+                        } else if (!viaRelay && staleSession != null && packet.getLength() > 0 && packet.getData()[0] == UdpCommon.Connect) {
+                            answerSpectator(packet, true);
                             continue;
                         }
                         receiverBuffer.addPacket(packet);
@@ -498,7 +592,7 @@ class ControlLinkTest {
                     try {
                         SavedPacket p;
                         while ((p = receiverBuffer.getNextPacket()) != null) process(p);
-                        receiverBuffer.processTimer();
+                        if (!silent) receiverBuffer.processTimer(); // its own pings would still go out
                         Thread.sleep(1);
                     } catch (Exception ignored) {
                     }
@@ -516,7 +610,9 @@ class ControlLinkTest {
             if (keyAt < 0 || packet.getLength() < keyAt + 2) return;
             int n = ((d[keyAt] & 0xff) << 8) | (d[keyAt + 1] & 0xff);
             if (!key.equals(new String(d, keyAt + 2, n, java.nio.charset.StandardCharsets.UTF_8))) return;
-            byte[] answer = flying ? Spectate.pilotAt(udpSender.getIp(), udpSender.getPort()) : new byte[]{Spectate.NO_PILOT};
+            Spectate.Address stale = staleSession;
+            byte[] answer = !flying ? new byte[]{Spectate.NO_PILOT}
+                    : stale != null ? Spectate.pilotAt(stale.ip(), stale.port()) : Spectate.pilotAt(udpSender.getIp(), udpSender.getPort());
             spectatorAnswers.incrementAndGet();
             socket.send(new DatagramPacket(answer, answer.length, packet.getAddress(), packet.getPort()));
         }
@@ -563,12 +659,20 @@ class ControlLinkTest {
                     d.daos.write(new byte[]{2, 4, 5, 1, 0, 1, 46, 0}); // Betaflight 4.5.1, MSP API 1.46
                     udpSender.sendPacket(d.getData());
                 }
+                case UdpCommon.Ping -> { // like Flight Udp.processData: the PC's ping comes back as a pong at once
+                    boolean toEndPoint = r.readBoolean();
+                    long time = r.readLong();
+                    udpSender.sendPong(toEndPoint, time, (byte) -1);
+                }
                 case ControlLink.KEY_FRAME_REQUEST -> keyFrameRequests.incrementAndGet();
                 case ControlLink.VIDEO_PROFILE -> videoProfile = r.readByte();
                 case UdpCommon.RcFrame -> {
                     int count = r.readByte();
                     short[] ch = new short[count];
                     for (int i = 0; i < count; i++) ch[i] = r.readShort();
+                    // pc.19 on: a trailing sequence byte is read; an older app refuses any length but count * 2
+                    if (r.getRemaining() == 1) rcSeqs.add(r.readUnsignedByteAsInt());
+                    else if (r.getRemaining() != 0) return;
                     rcFrames.add(ch);
                 }
                 case UdpCommon.BoxNames -> {

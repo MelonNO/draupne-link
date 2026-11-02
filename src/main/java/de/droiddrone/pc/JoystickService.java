@@ -13,6 +13,12 @@ import static de.droiddrone.common.Log.log;
 public class JoystickService {
     public record Snapshot(List<Joystick.Info> joysticks, Joystick.Info selected, Joystick.State state) {}
 
+    /**
+     * How long GLFW's event pump (Joystick.poll) takes is watched per window of this many ms (the link log's row):
+     * GLFW re-reads the device list on a USB plug event, which can hold the RC tick up.
+     */
+    static final long POLL_WINDOW_MS = 100;
+
     private volatile Snapshot snapshot = new Snapshot(List.of(), null, null);
     private volatile int requestedId = -1;
     /**
@@ -25,6 +31,9 @@ public class JoystickService {
     private final int pollHz;
     private volatile Consumer<Joystick.State> inputListener;
     private volatile boolean running = true;
+    /** The slowest poll in the running window and in the one before it. */
+    private volatile long pollMaxNs, lastPollMaxNs;
+    private long pollWindowStart;
 
     public JoystickService(String initialFilter, int pollHz) {
         this.initialFilter = initialFilter == null ? "" : initialFilter.toLowerCase();
@@ -38,8 +47,10 @@ public class JoystickService {
         Thread.currentThread().setPriority(Thread.MAX_PRIORITY); // this thread sends the RC frames
         Pacer pacer = new Pacer(pollHz);
         while (running) {
+            long before = System.nanoTime();
             Joystick.poll();
             long now = System.currentTimeMillis();
+            notePoll(System.nanoTime() - before, now);
             if (now >= nextListRefresh) {
                 joysticks = Joystick.list();
                 nextListRefresh = now + 1000;
@@ -61,6 +72,21 @@ public class JoystickService {
                 return;
             }
         }
+    }
+
+    /** One poll took tookNs at nowMs; the window rolls every POLL_WINDOW_MS. Polling thread only. */
+    void notePoll(long tookNs, long nowMs) {
+        if (nowMs - pollWindowStart >= POLL_WINDOW_MS) {
+            lastPollMaxNs = pollMaxNs;
+            pollMaxNs = 0;
+            pollWindowStart = nowMs;
+        }
+        if (tookNs > pollMaxNs) pollMaxNs = tookNs;
+    }
+
+    /** The slowest Joystick.poll over the last 100-200 ms, in ms rounded up; the link log's glfw_poll_max_ms. */
+    public long getPollMaxMs() {
+        return (Math.max(pollMaxNs, lastPollMaxNs) + 999_999) / 1_000_000;
     }
 
     Joystick.Info resolve(List<Joystick.Info> joysticks) {
