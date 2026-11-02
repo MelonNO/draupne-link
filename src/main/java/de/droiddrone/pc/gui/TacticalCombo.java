@@ -145,4 +145,93 @@ final class TacticalCombo {
             cover(g, getWidth(), getHeight(), progress, getBackground());
         }
     }
+
+    /**
+     * A menu closing: a picture of it stays on the window's layered pane for a moment and its rows wipe away from
+     * the right, the scan bar at the edge, the bottom row first - the opening in reverse. Takes no mouse events, so
+     * whatever the pilot clicks next gets the click.
+     */
+    private static final class ClosingGhost extends javax.swing.JComponent {
+        private static final long WIPE_MS = 130, STAGGER = 28;
+
+        private final java.awt.image.BufferedImage picture;
+        private final java.awt.Rectangle[] rows;
+        private final long startedAt = System.currentTimeMillis();
+        private final Timer timer = new Timer(15, e -> tick());
+
+        private ClosingGhost(java.awt.image.BufferedImage picture, java.awt.Rectangle[] rows) {
+            this.picture = picture;
+            this.rows = rows;
+            setOpaque(false);
+        }
+
+        static void play(JPopupMenu menu) {
+            if (!menu.isShowing() || menu.getWidth() == 0 || menu.getHeight() == 0 || menu.getInvoker() == null) return;
+            javax.swing.JRootPane root = javax.swing.SwingUtilities.getRootPane(menu.getInvoker());
+            if (root == null) return;
+            java.awt.image.BufferedImage picture = new java.awt.image.BufferedImage(menu.getWidth(), menu.getHeight(), java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            java.awt.Graphics2D g = picture.createGraphics();
+            try {
+                menu.paint(g);
+            } finally {
+                g.dispose();
+            }
+            java.awt.Rectangle[] rows = new java.awt.Rectangle[menu.getComponentCount()];
+            for (int i = 0; i < rows.length; i++) rows[i] = menu.getComponent(i).getBounds();
+            javax.swing.JLayeredPane layer = root.getLayeredPane();
+            java.awt.Point at = menu.getLocationOnScreen();
+            javax.swing.SwingUtilities.convertPointFromScreen(at, layer);
+            ClosingGhost ghost = new ClosingGhost(picture, rows);
+            ghost.setBounds(at.x, at.y, menu.getWidth(), menu.getHeight());
+            layer.add(ghost, javax.swing.JLayeredPane.POPUP_LAYER);
+            ghost.timer.start();
+        }
+
+        private long totalMs() {
+            return STAGGER * Math.max(0, rows.length - 1) + WIPE_MS;
+        }
+
+        private void tick() {
+            if (System.currentTimeMillis() - startedAt >= totalMs()) {
+                timer.stop();
+                Component layer = getParent();
+                if (layer != null) {
+                    java.awt.Rectangle r = getBounds();
+                    ((javax.swing.JComponent) layer).remove(this);
+                    layer.repaint(r.x, r.y, r.width, r.height);
+                }
+                return;
+            }
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            long since = System.currentTimeMillis() - startedAt;
+            int n = rows.length;
+            for (int i = 0; i < n; i++) {
+                java.awt.Rectangle r = rows[i];
+                float p = (since - (n - 1 - i) * STAGGER) / (float) WIPE_MS; // the bottom row goes first
+                float ease = 1 - (1 - Math.max(0, Math.min(1, p))) * (1 - Math.max(0, Math.min(1, p)));
+                int keep = Math.round(r.width * (1 - ease)); // what is left of the row, from its left edge
+                if (keep <= 0) continue;
+                Graphics c = g.create(r.x, r.y, keep, r.height);
+                try {
+                    c.drawImage(picture, -r.x, -r.y, null);
+                } finally {
+                    c.dispose();
+                }
+                if (p > 0 && p < 1) {
+                    g.setColor(Theme.ACCENT);
+                    g.fillRect(r.x + Math.max(0, keep - 2), r.y + 2, 3, r.height - 4);
+                }
+            }
+            // the frame goes with the last row
+            float frame = 1 - Math.max(0, Math.min(1, (since - (n - 1) * STAGGER) / (float) WIPE_MS));
+            if (frame > 0) {
+                g.setColor(Theme.alpha(Theme.ACCENT, Math.round(255 * frame)));
+                g.drawRect(0, 0, getWidth() - 1, getHeight() - 1);
+            }
+        }
+    }
 }
