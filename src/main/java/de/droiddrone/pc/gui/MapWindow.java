@@ -55,6 +55,7 @@ final class MapWindow extends JFrame {
             homeValue = value(), sourceValue = value();
     private Coordinates.Format format;
     private boolean preferPhone;
+    private PinManagerDialog pinManager;
     private double[] cursor;
     private long cursorSerial;
     private final Timer terrainLookup = new Timer(250, e -> lookupTerrain());
@@ -113,6 +114,16 @@ final class MapWindow extends JFrame {
             syncFollow();
         });
         left.add(home);
+        JButton pinsButton = Theme.secondaryButton("Pins");
+        pinsButton.setToolTipText("Every pin: go to, rename, remove, add at the drone or the launch point");
+        pinsButton.addActionListener(e -> {
+            if (pinManager == null || !pinManager.isDisplayable()) {
+                pinManager = new PinManagerDialog(this, pins, map, () -> this.format, () -> track);
+            }
+            pinManager.setVisible(true);
+            pinManager.toFront();
+        });
+        left.add(pinsButton);
         JButton find = Theme.primaryButton("Find drone");
         find.setToolTipText("The last known position, with the coordinates to copy and map links");
         find.addActionListener(e -> findDrone.run());

@@ -78,20 +78,48 @@ final class TacticalCombo {
     static JPopupMenu menu() {
         long[] openedAt = {0};
         JPopupMenu menu = new JPopupMenu() {
+            /**
+             * Row by row, the scan bar reveals everything - frame, background and text together: left of the bar
+             * the menu is painted, right of it nothing at all, so the window shows through until the bar has passed.
+             */
             @Override
-            protected void paintChildren(Graphics g) {
-                super.paintChildren(g);
+            public void paint(Graphics g) {
                 long since = System.currentTimeMillis() - openedAt[0];
-                for (int i = 0; i < getComponentCount(); i++) {
-                    float p = (since - i * STAGGER_MS) / (float) REVEAL_MS;
-                    if (p >= 1) continue;
+                int n = getComponentCount();
+                if (openedAt[0] == 0 || n == 0 || since >= STAGGER_MS * (n - 1) + REVEAL_MS) {
+                    super.paint(g);
+                    return;
+                }
+                java.awt.geom.Area shown = new java.awt.geom.Area();
+                int[] bars = new int[n];
+                for (int i = 0; i < n; i++) {
                     Component item = getComponent(i);
-                    Graphics c = g.create(item.getX(), item.getY(), item.getWidth(), item.getHeight());
-                    cover(c, item.getWidth(), item.getHeight(), Math.max(0, p), getBackground());
+                    float p = Math.max(0, Math.min(1, (since - i * STAGGER_MS) / (float) REVEAL_MS));
+                    float ease = 1 - (1 - p) * (1 - p);
+                    int edge = Math.round(getWidth() * ease);
+                    bars[i] = p > 0 && p < 1 ? edge : -1;
+                    // a row's strip runs to the next row's top (the gaps between them belong to someone), the first
+                    // from the very top and the last to the very bottom: the frame comes with them
+                    int top = i == 0 ? 0 : item.getY();
+                    int bottom = i == n - 1 ? getHeight() : getComponent(i + 1).getY();
+                    if (edge > 0) shown.add(new java.awt.geom.Area(new java.awt.Rectangle(0, top, edge, bottom - top)));
+                }
+                java.awt.Graphics2D c = (java.awt.Graphics2D) g.create();
+                try {
+                    c.clip(shown);
+                    super.paint(c);
+                } finally {
                     c.dispose();
+                }
+                g.setColor(Theme.ACCENT);
+                for (int i = 0; i < n; i++) {
+                    if (bars[i] < 0) continue;
+                    Component item = getComponent(i);
+                    g.fillRect(Math.max(0, bars[i] - 2), item.getY() + 2, 3, item.getHeight() - 4);
                 }
             }
         };
+        menu.setOpaque(false); // see-through where the scan bar hasn't been (a lightweight popup, inside the window)
         // the whole menu each tick: an item repainted on its own (hovered) would otherwise skip the cover
         Timer timer = new Timer(15, null);
         timer.addActionListener(e -> {
