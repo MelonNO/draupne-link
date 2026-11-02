@@ -2,9 +2,7 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## 1.0.23
-
-(1.0.22 was tagged but never built: a test failed on the release runner. Same contents.)
+## 1.0.22
 
 - **The map, in a window of its own** for a second screen (MENU > TOOLS or the POP OUT MAP button, F3): where the drone is and has been, over Kartverket's topo or printed map, satellite pictures or OpenStreetMap (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE, PINS; + and - buttons, the wheel, drag; the figures under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in MGRS (default), UTM, decimal degrees or degrees-minutes-seconds.
 - **Pins:** right-click on any map drops one (Alpha, Bravo ... Zulu, then Alpha2 ...), right-click a pin to rename or remove it; each shows distance and bearing from the drone. PINS lists them all with GO TO, RENAME, REMOVE, ADD AT DRONE, ADD AT LAUNCH. Kept between sessions and written into the flight's GPX file.
