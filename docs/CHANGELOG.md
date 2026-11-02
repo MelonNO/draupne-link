@@ -2,6 +2,14 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.24
+
+- **The map saved for offline use: DOWNLOAD AREA** in the map window (or Alt + drag a box on the map, or right-click > *Download this view*), like Mission Planner's prefetch. One START fetches every tile of the area for all four pictures and every zoom level, each picture to its deepest; the count and rough size first, a bar and the figures while it runs, CANCEL keeps what is saved; one picture or fewer levels can be chosen. Saved tiles are skipped. OpenStreetMap one tile at a time, with a pause: keep its areas small.
+- **The phone's GPS works indoors too (phone app 2.3.0-pc.18):** it asked Android's bare GPS only; now the GPS, the network and (Android 12+) the fused position, a fresh GPS fix winning. The phone's screen says what its GPS is doing (not allowed - tap to allow; no position yet; provider, accuracy and age).
+- **The phone app updates itself (pc.18):** the *Update available* line downloads, checks (GitHub's SHA-256) and installs the new app from inside the app; nothing left in Downloads; Android asks once to allow installs; refused while connected. A one-time note opens Downloads for the old installers. The update to pc.18 itself still goes through the browser.
+- **Link log:** `phone_lat`, `phone_lon`, `phone_acc_m`, `phone_age_s`.
+- **Fix:** an uncaught exception in the boot animation when its first frame came late.
+
 ## 1.0.23
 
 - **The icon is the DRAUPNE mark without its corner brackets, bigger:** the window, the taskbar, the installer and the phone app's launcher. The boot animation keeps the brackets.

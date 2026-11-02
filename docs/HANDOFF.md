@@ -4,10 +4,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-02, 1.0.23)
+## Where things stand (2026-11-02, 1.0.24)
 
-- **Released:** DRAUPNE Link **1.0.23** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.17** (the icons
-  without the brackets; the boot window opens black). 1.0.22 (pc.16) brought everything below. (Its first two
+- **Released:** DRAUPNE Link **1.0.24** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.18**: the map's
+  DOWNLOAD AREA, the phone's position from every location provider, the in-app phone updater, the link log's phone
+  position columns (all three below). 1.0.23 (pc.17): the icons without the brackets, the boot window opening black.
+  1.0.22 (pc.16) brought everything below. (Its first two
   tags failed on the release runner: the boot test measured real time while Java2D's first use took seconds, and one
   UDP loopback frame broke in SpectatorTest; both tests are tolerant now, and test failures print their message.) The map and
   everything round it, the MENU header, the boot animation and the new mark. Where the pieces live:
@@ -47,7 +49,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   - Measured on a far phone with pc.14 (1.0.21): 720p ~4-5 damaged frames/s from random packet loss, which is what
     the parity is for. **Not yet measured with pc.15/16:** the size switch gap, the parity's `recovered` count; the
     phone GPS on a real phone; the map on a real flight.
-- **On main, not released: phone app 2.3.0-pc.18, the in-app updater** (overlay `AppUpdater`, `AppUpdateReceiver`).
+- **1.0.24 / phone app 2.3.0-pc.18: the in-app updater** (overlay `AppUpdater`, `AppUpdateReceiver`).
   Every update through the browser left a `DRAUPNE-Flight-*.apk` in the phone's Downloads, which Android doesn't let
   the app delete. Now the update line's tap downloads into the app's cache, checks GitHub's SHA-256 (`digest` of the
   asset, `UpdateCheck.sha256`; no digest, no check: Android's signature check still holds), installs with
@@ -57,7 +59,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   to use the update line when pc.18+ is already there. **Never run on a phone or emulator**; the first real test is
   pc.17 to pc.18 through the browser, then pc.18 to the next version in the app. (The draft lived in the private
   repo's `wip/in-app-updater/`.)
-- **On main, not released: DOWNLOAD AREA**, the map saved for offline use like Mission Planner's prefetch
+- **1.0.24: DOWNLOAD AREA**, the map saved for offline use like Mission Planner's prefetch
   (`TileCache.download`, `MapDownloadDialog`; the map window's button, Alt + drag a box, or the right-click menu's
   "Download this view"). One START takes every tile of the area for all four pictures, one after another, from level
   2 to each picture's deepest (or one picture, a narrower range), coarse first, those on disk skipped, at most
