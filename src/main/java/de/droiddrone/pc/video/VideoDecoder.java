@@ -7,7 +7,6 @@ import org.bytedeco.ffmpeg.avutil.AVDictionary;
 import org.bytedeco.ffmpeg.avutil.AVFrame;
 import org.bytedeco.ffmpeg.swscale.SwsContext;
 import org.bytedeco.javacpp.BytePointer;
-import org.bytedeco.javacpp.DoublePointer;
 import org.bytedeco.javacpp.IntPointer;
 import org.bytedeco.javacpp.PointerPointer;
 
@@ -122,6 +121,14 @@ public final class VideoDecoder implements AutoCloseable {
         return frame.height();
     }
 
+    /**
+     * Forgets the pictures in hand (a dropped backlog): the next frame decodes on a clean slate, from the next key
+     * frame. The decoder itself stays - a new one costs a black gap.
+     */
+    public void flush() {
+        avcodec_flush_buffers(ctx);
+    }
+
     /** Converts the last picture to 0xRRGGBB pixels of the given size into dst (length >= width * height). */
     public void convert(int[] dst, int width, int height) {
         // FFmpeg asserts (and kills the process) on an empty frame, so never hand it one
@@ -132,9 +139,7 @@ public final class VideoDecoder implements AutoCloseable {
             if (av_hwframe_transfer_data(copied, frame, 0) < 0) throw new IllegalStateException("Could not copy the picture from the GPU");
             src = copied;
         }
-        sws = sws_getCachedContext(sws, src.width(), src.height(), src.format(),
-                width, height, AV_PIX_FMT_BGRA, SWS_FAST_BILINEAR, null, null, (DoublePointer) null);
-        if (sws == null || sws.isNull()) throw new IllegalStateException("No colour converter for pixel format " + frame.format());
+        converter(src, width, height);
         long needed = (long) width * height * 4;
         if (rgb == null || rgbCapacity < needed) {
             if (rgb != null) av_free(rgb);
@@ -147,6 +152,63 @@ public final class VideoDecoder implements AutoCloseable {
         // BGRA bytes read as little-endian ints are 0xAARRGGBB
         rgb.position(0).limit(needed).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(dst, 0, width * height);
     }
+
+    /**
+     * The scaler for this picture and screen size, kept between frames like sws_getCachedContext would - made by hand
+     * so its options can be set before it is initialised: slice threads (FFmpeg 5.1 on; the bundled one is 7.1) share
+     * the scaling of a big picture between cores. The colour matrix follows the picture: the phone's H.265 is BT.709
+     * (HD) and the scaler's default is BT.601 (SD), which shifts reds and greens. Unspecified: BT.709 for HD sizes.
+     */
+    private void converter(AVFrame src, int width, int height) {
+        int colorspace = frame.colorspace(), range = frame.color_range();
+        if (sws != null && src.width() == swsSrcW && src.height() == swsSrcH && src.format() == swsSrcFmt
+                && width == swsDstW && height == swsDstH && colorspace == swsColorspace && range == swsRange) return;
+        if (sws != null) sws_freeContext(sws);
+        sws = sws_alloc_context();
+        if (sws == null || sws.isNull()) throw new IllegalStateException("No colour converter");
+        av_opt_set_int(sws, "srcw", src.width(), 0);
+        av_opt_set_int(sws, "srch", src.height(), 0);
+        av_opt_set_int(sws, "src_format", src.format(), 0);
+        av_opt_set_int(sws, "dstw", width, 0);
+        av_opt_set_int(sws, "dsth", height, 0);
+        av_opt_set_int(sws, "dst_format", AV_PIX_FMT_BGRA, 0);
+        av_opt_set_int(sws, "sws_flags", SWS_FAST_BILINEAR, 0);
+        av_opt_set_int(sws, "threads", SCALE_THREADS, 0);
+        if (sws_init_context(sws, null, null) < 0) {
+            sws_freeContext(sws);
+            sws = null;
+            throw new IllegalStateException("No colour converter for pixel format " + frame.format());
+        }
+        int cs = coefficients(colorspace, src.height());
+        // source range as flagged (the phone's encoder: limited), BGRA out is always full
+        sws_setColorspaceDetails(sws, sws_getCoefficients(cs), range == AVCOL_RANGE_JPEG ? 1 : 0,
+                sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16, 1 << 16);
+        swsSrcW = src.width();
+        swsSrcH = src.height();
+        swsSrcFmt = src.format();
+        swsDstW = width;
+        swsDstH = height;
+        swsColorspace = colorspace;
+        swsRange = range;
+    }
+
+    /** The scaler's YUV matrix for a picture's colourspace tag (AVCOL_SPC_*); untagged pictures by their size. */
+    static int coefficients(int colorspace, int height) {
+        return switch (colorspace) {
+            case AVCOL_SPC_BT709 -> SWS_CS_ITU709;
+            case AVCOL_SPC_BT470BG -> SWS_CS_ITU601;
+            case AVCOL_SPC_SMPTE170M -> SWS_CS_SMPTE170M;
+            case AVCOL_SPC_SMPTE240M -> SWS_CS_SMPTE240M;
+            case AVCOL_SPC_FCC -> SWS_CS_FCC;
+            case AVCOL_SPC_BT2020_NCL, AVCOL_SPC_BT2020_CL -> SWS_CS_BT2020;
+            default -> height >= 720 ? SWS_CS_ITU709 : SWS_CS_ITU601;
+        };
+    }
+
+    /** The scaler's slice threads: 0 = one per core. Measured on 720p -> 1080p BGRA, see VideoTest.decodeAndDrawTimeAt720p. */
+    static final int SCALE_THREADS = 0;
+
+    private int swsSrcW, swsSrcH, swsSrcFmt = -1, swsDstW, swsDstH, swsColorspace = -1, swsRange = -1;
 
     public long getErrors() {
         return errors;

@@ -36,11 +36,32 @@ final class OsdRenderer {
      * @param radioFrozen armed, and the radio's input hasn't changed at all for seconds (its USB may have hung)
      * @param rcWaiting   what the sticks wait for while RC is off ("THROTTLE DOWN", "ARM SWITCH OFF"); null = throttle
      * @param recording   the video is being recorded to a file
+     * @param sticksAgeMs the phone's reported age of its last RC write to the flight controller, ms; -1 = unknown
+     * @param armSwitchUnknown the arm switch was never read from Betaflight: a warning line to run Drone setup
+     * @param banner      a short line about what just happened ("LINK BACK - ARMED - STICKS LIVE"), shown while non-null
+     * @param spectatorPaused a spectator's playback is paused because the pilot's link is slow
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
                 boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
-                String roleBanner, boolean roleAlarm) {}
+                String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused) {
+        /** The fields up to 1.0.26: the new ones unknown / off. */
+        Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
+             VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
+             boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
+             String roleBanner, boolean roleAlarm) {
+            this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
+                    linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, -1, false, null, false);
+        }
+    }
+
+    /** Sticks older than this (the phone's RC write age) are drawn as an alarm. */
+    static final int STICKS_AGE_ALARM_MS = 100;
+    /** The picture's age (arrival to screen): yellow from here, red from twice it; VIDEO FROZEN comes at 700. */
+    static final int PICTURE_AGE_WARN_MS = 150;
+    /** LINK colour by how far the ping is over the link's own usual (BitrateControl's 15-30 s minimum). */
+    static final int PING_EXCESS_WARN_MS = 60;
+    static final int PING_EXCESS_ALARM_MS = 150;
 
     private static final Color ACCENT = Theme.ACCENT; // symbols and labels
     private static final Color YELLOW = Theme.WARN;  // warnings only
@@ -65,12 +86,19 @@ final class OsdRenderer {
     private float unit;
     private int w, h;
     private OsdLayout layout;
+    /** The view's measured time from a picture handed over to painted (added to the picture age). */
+    private volatile double displayMs;
     /** The editor's: where each element was drawn this time. Null while flying. */
     private Map<OsdElement, Rectangle2D> boundsOut;
     private Rectangle2D box; // the element being drawn, while boundsOut is wanted
 
     void paint(Graphics2D graphics, int x, int y, int w, int h, Data d, OsdLayout layout) {
         paint(graphics, x, y, w, h, d, layout, null);
+    }
+
+    /** The view's display time, ms: the picture age shows arrival to screen, not just arrival to hand-over. */
+    void setDisplayMs(double ms) {
+        displayMs = ms;
     }
 
     /** @param bounds filled with each element's bounds in picture coordinates (the OSD editor), or null */
@@ -112,12 +140,23 @@ final class OsdRenderer {
                 if (attFresh) headingTape(ex, ey, a, att, gps);
             });
             element(OsdElement.BATTERY, (ex, ey, a) -> battery(ex, ey, a, t, fcFresh));
-            element(OsdElement.PING, (ex, ey, a) -> ping(ex, ey, a, d.pingMs()));
+            element(OsdElement.PING, (ex, ey, a) -> ping(ex, ey, a, d.pingMs(), d.video() == null ? -1 : d.video().pingBaselineMs()));
             element(OsdElement.NETWORK, (ex, ey, a) -> network(ex, ey, a, t == null ? null : t.getNetwork()));
             element(OsdElement.VIDEO, (ex, ey, a) -> video(ex, ey, a, d.video()));
             element(OsdElement.PHONE_BATTERY, (ex, ey, a) -> {
                 int phone = t == null ? -1 : t.getPhoneBatteryPercent();
                 if (phone >= 0) phoneBattery(ex, ey, a, phone, t.isPhoneCharging());
+            });
+            element(OsdElement.PICTURE_AGE, (ex, ey, a) -> pictureAge(ex, ey, a, d.video()));
+            element(OsdElement.STICKS_AGE, (ex, ey, a) -> {
+                if (d.sticksAgeMs() < 0) return;
+                g.setFont(Theme.monoFont(Font.BOLD, 15 * unit));
+                put("STICKS " + d.sticksAgeMs() + " MS", ex, ey, d.sticksAgeMs() > STICKS_AGE_ALARM_MS ? RED : WHITE, a);
+            });
+            element(OsdElement.BANNER, (ex, ey, a) -> {
+                if (d.banner() == null) return;
+                g.setFont(Theme.headingFont(20 * unit));
+                put(d.banner(), ex, ey, GREEN, a);
             });
             element(OsdElement.ARMED, (ex, ey, a) -> {
                 if (s == null) return;
@@ -415,11 +454,29 @@ final class OsdRenderer {
         put(String.format(Locale.ROOT, "%.2fV  %dmAh  %.1fA", b.volts(), b.mahDrawn(), b.amps()), x, by + 26 * unit, fresh ? WHITE : STALE, a);
     }
 
-    private void ping(float x, float y, OsdLayout.Align a, int pingMs) {
+    /**
+     * The ping, coloured by how far it is over the link's own usual (a far 4G link sits at 150 ms and is fine there;
+     * what hurts is a queue building on top of it). Without a baseline yet, by the fixed 80 / 150 ms.
+     */
+    private void ping(float x, float y, OsdLayout.Align a, int pingMs, int baselineMs) {
         label("LINK", x, y, a);
         g.setFont(Theme.monoFont(Font.BOLD, 22 * unit));
-        Color pingColor = pingMs < 0 ? RED : pingMs > 150 ? RED : pingMs > 80 ? YELLOW : GREEN;
-        put(pingMs < 0 ? "--- MS" : pingMs + " MS", x, y + 26 * unit, pingColor, a);
+        put(pingMs < 0 ? "--- MS" : pingMs + " MS", x, y + 26 * unit, pingColor(pingMs, baselineMs), a);
+    }
+
+    static Color pingColor(int pingMs, int baselineMs) {
+        if (pingMs < 0) return RED;
+        if (baselineMs < 0) return pingMs > 150 ? RED : pingMs > 80 ? YELLOW : GREEN;
+        int excess = pingMs - baselineMs;
+        return excess > PING_EXCESS_ALARM_MS ? RED : excess > PING_EXCESS_WARN_MS ? YELLOW : GREEN;
+    }
+
+    /** "AGE 45MS": the picture's age from the frame's arrival to the screen - a backlog creeping up shows here first. */
+    private void pictureAge(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v) {
+        if (v == null || v.width() <= 0 || v.pictureAgeMs() < 0) return;
+        long age = v.pictureAgeMs() + Math.round(displayMs);
+        g.setFont(Theme.monoFont(Font.PLAIN, 15 * unit));
+        put("AGE " + age + "MS", x, y, age > 2 * PICTURE_AGE_WARN_MS ? RED : age > PICTURE_AGE_WARN_MS ? YELLOW : WHITE, a);
     }
 
     /** "LTE 82%" and four signal bars after it. */
@@ -436,7 +493,8 @@ final class OsdRenderer {
     private void video(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v) {
         if (v == null || v.width() <= 0) return;
         g.setFont(Theme.monoFont(Font.PLAIN, 15 * unit));
-        put(String.format(Locale.ROOT, "VID %dFPS %.1fMB", v.shownFps(), v.megabitsPerSecond()), x, y, WHITE, a);
+        // the frames arriving (the shown count drops when frames bunch, see the debug line) and the bitrate in Mbit/s
+        put(String.format(Locale.ROOT, "VID %dFPS %.1f MBPS", v.receivedFps(), v.megabitsPerSecond()), x, y, WHITE, a);
     }
 
     /** The phone's battery: a small battery icon with its charge, and the percentage. */
@@ -552,6 +610,7 @@ final class OsdRenderer {
         if (d.linkReady() && !d.rcLive()) big.add("RC OFF - " + (d.rcWaiting() == null ? "THROTTLE DOWN" : d.rcWaiting()));
         if (d.radioFrozen()) big.add("RADIO FROZEN?");
         if (d.videoFrozen() && d.linkReady()) big.add("VIDEO FROZEN");
+        if (d.spectatorPaused()) big.add("PAUSED (PILOT LINK SLOW)");
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
         if (!d.fcLost() && b != null && b.volts() > 0 && b.cellCountKnown()
@@ -560,38 +619,42 @@ final class OsdRenderer {
         if (t != null && t.getPhoneBatteryPercent() >= 0 && t.getPhoneBatteryPercent() <= 15 && !t.isPhoneCharging()) big.add("PHONE BATTERY LOW");
         if (d.preview() && big.isEmpty()) big.add("LOW BATTERY"); // the editor: something to see and drag
         boolean blink = d.preview() || (now / 400) % 2 == 0;
+        // the steady lines under the blinking block: why the link is down, the lost FC (two lines), a sticks gap or
+        // what blocks arming - one of those - and the unread arm switch
+        boolean hint = !d.linkReady() && d.linkHint() != null;
+        boolean blocked = !hint && !d.fcLost() && !rcGap && s != null && !s.armed() && !s.blockers().isEmpty();
+        int lines = (hint ? 1 : d.fcLost() ? 2 : rcGap || blocked ? 1 : 0) + (d.armSwitchUnknown() ? 1 : 0);
         // the whole block stays in the picture, also when placed low: it moves up by what doesn't fit
         float below = !big.isEmpty() ? (big.size() - 1) * 38 * unit : 0;
-        if (!d.linkReady() && d.linkHint() != null) below += 38 * unit + 4 * unit;
-        else if (d.fcLost()) below += 38 * unit + 28 * unit;
-        else if (rcGap || (s != null && !s.armed() && !s.blockers().isEmpty())) below += 38 * unit + 4 * unit;
-        y = Math.min(y, h - 14 * unit - below);
+        float sub = lines == 0 ? 0 : (18 + 24 * lines) * unit;
+        y = Math.min(y, h - 14 * unit - below - sub);
         g.setFont(Theme.headingFont(34 * unit));
         for (String text : big) {
             if (blink) put(text, x, y, YELLOW_WARNINGS.contains(text) || text.startsWith("RC OFF") ? YELLOW : RED, a);
             else mark(x, y, 1, 1);
             y += 38 * unit;
         }
-        if (!d.linkReady() && d.linkHint() != null) { // steady, under LINK LOST: why
-            g.setFont(Theme.headingFont(18 * unit));
-            put(d.linkHint(), x, y + 4 * unit, YELLOW, a);
-            return;
-        }
-        if (d.fcLost()) { // steady, under the blinking title: what it means and where to look
-            g.setFont(Theme.headingFont(18 * unit));
-            put("THE PHONE LOST ITS USB LINK TO THE FC - YOUR STICKS DON'T REACH THE DRONE", x, y + 4 * unit, YELLOW, a);
-            put("CHECK THE OTG CABLE. KEEPS HAPPENING? SETUP > DRONE SETUP", x, y + 28 * unit, YELLOW, a);
-            return;
-        }
-        if (rcGap) {
+        float ly = y + 4 * unit;
+        g.setFont(Theme.headingFont(18 * unit));
+        if (hint) { // under LINK LOST: why
+            put(d.linkHint(), x, ly, YELLOW, a);
+            ly += 24 * unit;
+        } else if (d.fcLost()) { // under the blinking title: what it means and where to look
+            put("THE PHONE LOST ITS USB LINK TO THE FC - YOUR STICKS DON'T REACH THE DRONE", x, ly, YELLOW, a);
+            put("CHECK THE OTG CABLE. KEEPS HAPPENING? SETUP > DRONE SETUP", x, ly + 24 * unit, YELLOW, a);
+            ly += 48 * unit;
+        } else if (rcGap) {
             g.setFont(Theme.headingFont(22 * unit));
-            put("RC SIGNAL GAP", x, y + 4 * unit, YELLOW, a);
-            return;
-        }
-        if (s != null && !s.armed() && !s.blockers().isEmpty()) {
+            put("RC SIGNAL GAP", x, ly, YELLOW, a);
             g.setFont(Theme.headingFont(18 * unit));
+            ly += 24 * unit;
+        } else if (blocked) {
             String names = s.blockers().stream().map(FcTelemetry.Blocker::osdName).reduce((p, c) -> p + " " + c).orElse("");
-            put("ARMING BLOCKED: " + names, x, y + 4 * unit, YELLOW, a);
+            put("ARMING BLOCKED: " + names, x, ly, YELLOW, a);
+            ly += 24 * unit;
+        }
+        if (d.armSwitchUnknown()) { // the sticks can't arm until Drone setup has read which switch arms
+            put("ARM SWITCH NOT READ - RUN DRONE SETUP", x, ly, YELLOW, a);
         }
     }
 
@@ -621,8 +684,8 @@ final class OsdRenderer {
 
     private void debugLine(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v) {
         if (v == null || v.width() == 0) return;
-        String line = String.format(Locale.ROOT, "%s%s %dx%d  DEC %.1fMS  DRAW %.1fMS  DMG %d  LOST %d",
-                v.hevc() ? "H265" : "H264", v.hardware() ? " GPU" : "", v.width(), v.height(), v.decodeMs(), v.convertMs(), v.damaged(), v.lost());
+        String line = String.format(Locale.ROOT, "%s%s %dx%d  SHOWN %dFPS  DEC %.1fMS  DRAW %.1fMS  DMG %d  LOST %d",
+                v.hevc() ? "H265" : "H264", v.hardware() ? " GPU" : "", v.width(), v.height(), v.shownFps(), v.decodeMs(), v.convertMs(), v.damaged(), v.lost());
         g.setFont(Theme.monoFont(Font.PLAIN, 12 * unit));
         put(line, x, y, Theme.MUTED, a);
     }
@@ -687,7 +750,12 @@ final class OsdRenderer {
         text(s, startX(x, g.getFontMetrics().stringWidth(s), a), y, c);
     }
 
-    /** Text with a black outline. */
+    /**
+     * Text with a black outline: the string eight times, shifted, then itself. Looks like a lot, but Java2D keeps
+     * rendered glyphs in a cache, so each pass is a few blits - measured 0.027 ms a string on a 1280x720 image, where
+     * stroking a glyph outline (TextLayout / GlyphVector.getOutline, even with the stroked shape cached) costs
+     * 0.12-0.17 ms: the stroke is rasterised afresh every time. A whole HUD is about 60 strings, under 2 ms.
+     */
     private void text(String s, float x, float y, Color c) {
         g.setColor(OUTLINE);
         for (int dx = -1; dx <= 1; dx++) {

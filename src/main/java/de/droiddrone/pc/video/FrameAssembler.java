@@ -16,20 +16,31 @@ import java.util.Map;
  * picture - measured worse than the damaged key frame (VideoTest). One without its beginning is lost. Fragments of a frame older than (or the same as) the last one
  * released are dropped: on 4G packets can come reordered or twice, and a frame decoded out of turn smears the picture.
  * The phone numbers a restarted stream from 1, and its first frame is a key frame: key frame 1 starts afresh.
+ * <p>
+ * Each fragment is copied once, straight into the frame-sized array the frame is handed over in (the offset-0 fragment
+ * carries the size; the rare fragment that comes before it goes into a provisional array that grows). What came is
+ * kept as a short list of offsets, not a map: fragments arrive in order nearly always, and a frame has a few dozen.
  * Not thread-safe: call from the receive thread only.
  */
 public class FrameAssembler {
     /**
      * @param damaged     true if fragments were missing (zero-filled)
      * @param streamStart the first frame of a (re)started stream (key frame number 1)
+     * @param arrivedMs   when the fragment that completed it came (System.currentTimeMillis), 0 if not given
      */
-    public record Frame(byte[] data, boolean keyFrame, short number, boolean damaged, boolean streamStart) {}
+    public record Frame(byte[] data, boolean keyFrame, short number, boolean damaged, boolean streamStart, long arrivedMs) {
+        public Frame(byte[] data, boolean keyFrame, short number, boolean damaged, boolean streamStart) {
+            this(data, keyFrame, number, damaged, streamStart, 0);
+        }
+    }
 
     private static final int MAX_PENDING = 64;
     /** Frame numbers count 1..32767 and wrap; numbers within this distance behind a frame count as older. */
     private static final int ORDER_WINDOW = 1000;
     /** Bigger than any frame the phone sends; a size from a broken packet beyond it is not allocated. */
     static final int MAX_FRAME_BYTES = 8 << 20;
+    /** The provisional array for fragments that come before the size is known: a start, and how it grows. */
+    private static final int PROVISIONAL_BYTES = 16 << 10;
 
     private final Map<Short, Pending> pending = new HashMap<>();
     /**
@@ -48,6 +59,8 @@ public class FrameAssembler {
     private Short lastReleased;
     /** Key frame 1 has come since the last {@link #startedAfresh()}: a new stream is under way. */
     private boolean streamRestarted;
+    /** The time of the last put, handed to the frames released by it (also the older ones flushed). */
+    private long now;
 
     /**
      * The phone's packet payloads: the first carries FIRST_SEGMENT bytes of the frame, every later one SEGMENT (its
@@ -64,23 +77,50 @@ public class FrameAssembler {
         int received;
         boolean startReceived;
         boolean endReceived;
-        final Map<Integer, byte[]> fragments = new HashMap<>();
+        /** The frame itself, fragments copied in place; sized to the frame once the size is known. */
+        byte[] data = new byte[0];
+        /** The fragments that came: offset and length each, count of them (duplicates are told by the offset). */
+        int[] offsets = new int[16];
+        int[] lengths = new int[16];
+        int count;
 
         Pending(boolean keyFrame) {
             this.keyFrame = keyFrame;
         }
 
-        void put(int offset, byte[] data) {
-            if (fragments.putIfAbsent(offset, data) != null) return;
-            received += data.length;
+        private int indexOf(int offset) {
+            for (int i = 0; i < count; i++) if (offsets[i] == offset) return i;
+            return -1;
+        }
+
+        /** @return false if a fragment at this offset was in already (the same datagram twice) */
+        boolean put(int offset, byte[] buf, int bufOffset, int length) {
+            if (indexOf(offset) >= 0) return false;
+            int end = offset + length;
+            if (size > 0 && end > size) length = Math.max(0, size - offset); // beyond the frame: not the phone's; clipped
+            if (data.length < offset + length) { // before the size is known: a provisional array that grows
+                int grown = Math.max(offset + length, Math.max(PROVISIONAL_BYTES, data.length * 2));
+                data = java.util.Arrays.copyOf(data, Math.min(grown, MAX_FRAME_BYTES + SEGMENT));
+            }
+            System.arraycopy(buf, bufOffset, data, offset, length);
+            if (count == offsets.length) {
+                offsets = java.util.Arrays.copyOf(offsets, count * 2);
+                lengths = java.util.Arrays.copyOf(lengths, count * 2);
+            }
+            offsets[count] = offset;
+            lengths[count] = length;
+            count++;
+            received += length;
             if (offset == 0) startReceived = true;
-            if (size > 0 && offset + data.length == size) endReceived = true;
+            if (size > 0 && end == size) endReceived = true;
+            return true;
         }
 
         void setSize(int frameSize) {
             size = frameSize;
-            for (var e : fragments.entrySet()) {
-                if (e.getKey() + e.getValue().length == size) endReceived = true;
+            if (data.length != size) data = java.util.Arrays.copyOf(data, size); // zero-fills what hasn't come
+            for (int i = 0; i < count; i++) {
+                if (offsets[i] + lengths[i] == size) endReceived = true;
             }
         }
 
@@ -97,35 +137,29 @@ public class FrameAssembler {
             int missingAt = -1, missingLength = 0;
             for (int at = 0; at < size; ) {
                 int length = Math.min(at == 0 ? FIRST_SEGMENT : SEGMENT, size - at);
-                byte[] got = fragments.get(at);
-                if (got == null) {
+                int got = indexOf(at);
+                if (got < 0) {
                     if (missingAt >= 0) return false; // two or more lost: a single parity can't help
                     missingAt = at;
                     missingLength = length;
-                } else if (got.length != length) {
+                } else if (lengths[got] != length) {
                     return false; // not the phone's usual layout: leave it
                 }
                 at += length;
             }
             if (missingAt < 0) return complete();
             byte[] rebuilt = java.util.Arrays.copyOf(parity, Math.max(parity.length, SEGMENT));
-            for (var e : fragments.entrySet()) {
-                byte[] d = e.getValue();
-                for (int i = 0; i < d.length && i < rebuilt.length; i++) rebuilt[i] ^= d[i];
+            for (int i = 0; i < count; i++) {
+                int off = offsets[i], n = Math.min(lengths[i], rebuilt.length);
+                for (int j = 0; j < n; j++) rebuilt[j] ^= data[off + j];
             }
-            put(missingAt, java.util.Arrays.copyOf(rebuilt, missingLength));
-            if (missingAt == 0) startReceived = true;
+            put(missingAt, rebuilt, 0, missingLength);
             return complete();
         }
 
+        /** The frame's bytes: the array the fragments went into, when it is the frame's size (nearly always). */
         byte[] assemble() {
-            byte[] frame = new byte[size];
-            for (var e : fragments.entrySet()) {
-                int offset = e.getKey();
-                byte[] data = e.getValue();
-                if (offset >= 0 && offset + data.length <= size) System.arraycopy(data, 0, frame, offset, data.length);
-            }
-            return frame;
+            return data.length == size ? data : java.util.Arrays.copyOf(data, size);
         }
     }
 
@@ -135,6 +169,12 @@ public class FrameAssembler {
      * @return the finished frame, or null
      */
     public Frame put(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length) {
+        return put(keyFrame, frameNum, offset, frameSize, buf, dataOffset, length, 0);
+    }
+
+    /** @param now when the fragment came (System.currentTimeMillis), kept on the frames it releases */
+    public Frame put(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length, long now) {
+        this.now = now;
         if (offset < 0 || length < 0 || (offset == 0 && (frameSize <= 0 || frameSize > MAX_FRAME_BYTES))) return null;
         if (offset > MAX_FRAME_BYTES) return null;
         if (keyFrame && frameNum == 1 && lastReleased != null && lastReleased != 1 && !pending.containsKey(frameNum)) {
@@ -143,17 +183,17 @@ public class FrameAssembler {
             streamRestarted = true;
         }
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
-        byte[] data = new byte[length];
-        System.arraycopy(buf, dataOffset, data, 0, length);
-        if (offset == 0 && frameSize == length) { // whole frame in one packet
+        if (offset == 0 && frameSize == length && !pending.containsKey(frameNum)) { // whole frame in one packet
+            byte[] data = new byte[length];
+            System.arraycopy(buf, dataOffset, data, 0, length);
             retireOlder(frameNum, keyFrame);
             completedFrames++;
             lastReleased = frameNum;
-            return new Frame(data, keyFrame, frameNum, false, keyFrame && frameNum == 1);
+            return new Frame(data, keyFrame, frameNum, false, keyFrame && frameNum == 1, now);
         }
         Pending frame = pending(frameNum, keyFrame);
         if (offset == 0) frame.setSize(frameSize);
-        frame.put(offset, data);
+        frame.put(offset, buf, dataOffset, length);
         return finish(frameNum, frame, keyFrame);
     }
 
@@ -162,6 +202,11 @@ public class FrameAssembler {
      * @return the frame, if that made it whole (or it was waiting for this), else null
      */
     public Frame putParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length) {
+        return putParity(keyFrame, frameNum, frameSize, buf, dataOffset, length, 0);
+    }
+
+    public Frame putParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length, long now) {
+        this.now = now;
         if (frameSize <= 0 || frameSize > MAX_FRAME_BYTES || length <= 0) return null;
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
         Pending frame = pending(frameNum, keyFrame);
@@ -196,7 +241,7 @@ public class FrameAssembler {
     }
 
     private Frame release(Pending frame, short frameNum, boolean damaged) {
-        return new Frame(frame.assemble(), frame.keyFrame, frameNum, damaged, frame.keyFrame && frameNum == 1);
+        return new Frame(frame.assemble(), frame.keyFrame, frameNum, damaged, frame.keyFrame && frameNum == 1, now);
     }
 
     /**
@@ -205,6 +250,7 @@ public class FrameAssembler {
      * {@link #takeFlushed}): the frames after them need them as reference. The rest are lost.
      */
     private void retireOlder(short frameNum, boolean keyFrame) {
+        if (pending.isEmpty()) return;
         List<Short> older = new ArrayList<>();
         for (short n : pending.keySet()) if (isOlder(n, frameNum)) older.add(n);
         // oldest first: the furthest behind frameNum (wrap-around safe)

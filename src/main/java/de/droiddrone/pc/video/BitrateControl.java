@@ -72,6 +72,8 @@ public class BitrateControl {
     private long lastCongested = Long.MIN_VALUE / 2;
     /** The highest step to ask for: the set limit, 1 Mbit/s in bad coverage mode (see setMaxStep). */
     private int maxStep = TOP_STEP;
+    /** The phone's last report of its bitrate setting (bit/s), or -1 from a phone that doesn't report. */
+    private int phoneTargetBps = -1;
 
     public BitrateControl(Sink sink) {
         this.sink = sink;
@@ -165,19 +167,23 @@ public class BitrateControl {
     }
 
     /**
-     * Once a second: the video arriving, Mbit/s. Under RESCUE_BELOW_MBPS for RESCUE_MS, whatever the PC's count of the
-     * steps says (2026-10-31: it said 4-6 Mbit/s while 0.5 arrived), the phone is lower than it should be: ask it up,
-     * every RESCUE_MS (it ignores raises for 5 s after stepping down), and count it as at the floor from now on. A still
-     * picture may also arrive under it; then a raise changes nothing worse than a steady picture.
+     * Once a second: the video arriving, Mbit/s. The phone below the floor for RESCUE_MS - by its own report (phone app
+     * pc.13 on), or, from a phone that doesn't report, under RESCUE_BELOW_MBPS arriving whatever the PC's count of the
+     * steps says (2026-10-31: it said 4-6 Mbit/s while 0.5 arrived) - means it stepped down by itself: ask it up, every
+     * RESCUE_MS (it ignores raises for 5 s after stepping down), and count it as at the floor from now on. Never above
+     * maxStep: in bad coverage mode a calm scene arrives well under 0.5 Mbit/s at the 1 Mbit/s setting, and a rescue
+     * there pushed it to 2 and back every 5 s (the reported target tells the two apart).
      */
     public synchronized void onReceivedRate(double mbps, long now) {
-        if (mbps >= RESCUE_BELOW_MBPS) {
+        boolean low = phoneTargetBps > 0 ? step < FLOOR_STEP : mbps < RESCUE_BELOW_MBPS;
+        if (!low) {
             lowSince = -1;
             return;
         }
         if (lowSince < 0) lowSince = now;
         if (now - lowSince < RESCUE_MS || now - lastTrouble < RESCUE_MS) return; // congested: little is meant to arrive
         step = Math.min(step, FLOOR_STEP);
+        if (step >= maxStep) return; // where it is meant to be
         if (now - lastRescue >= RESCUE_MS) {
             lastRescue = now;
             sink.changeBitRate(true);
@@ -193,6 +199,7 @@ public class BitrateControl {
      */
     public synchronized void onPhoneTarget(int bps) {
         if (bps <= 0) return;
+        phoneTargetBps = bps;
         int s = 0;
         while (s < STEPS_BPS.length - 1 && STEPS_BPS[s + 1] <= bps) s++;
         step = s;
@@ -201,6 +208,12 @@ public class BitrateControl {
     /** The step the PC thinks the phone is on: 0-5 for 0.25-6 Mbit/s (tests, and the link log). */
     public synchronized int step() {
         return step;
+    }
+
+    /** The link's own usual ping: the lowest of the last 15-30 s, ms; -1 before the first (the OSD colours by it). */
+    public synchronized int baselinePingMs() {
+        int b = baseline();
+        return b == Integer.MAX_VALUE ? -1 : b;
     }
 
     /** The link is congested now or was a moment ago: don't add key frames (see CONGESTED_FOR_MS). */
