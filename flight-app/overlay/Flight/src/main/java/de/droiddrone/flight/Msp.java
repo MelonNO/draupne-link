@@ -14,7 +14,9 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DRAUPNE Link: stick packets go through Serial.writeRcMsp (newest first).
+ *  Modified for DRAUPNE Link: stick packets go through Serial.writeRcMsp (newest first), and only once the
+ *  flight controller's channel map is known (asked for every tick until it answers). MSP replies are parsed as a
+ *  byte stream (a reply cut by the end of a USB read waits for the rest).
  */
 
 package de.droiddrone.flight;
@@ -63,7 +65,6 @@ public class Msp {
     private FcInfo fcInfo;
     private boolean runFcInit;
     private boolean runGetBoxNames;
-    private boolean runGetRxMap;
     private boolean runGetBoxIds;
     private byte bfBoxNamesPage = 0;
     private byte bfBoxIdsPage = 0;
@@ -73,9 +74,14 @@ public class Msp {
     private boolean runGetBatteryConfig;
     private long onTimestamp, flyTimestamp;
     private int onTime, flyTime, lastArmTime, flyTimeSave;
-    private int[] rxMap = null;
-    /** DRAUPNE Link: when the flight controller was found; sticks wait for its channel map until 2 s after that. */
-    private long rxMapWaitSince;
+    /**
+     * DRAUPNE Link: the flight controller's channel map (MSP_RX_MAP); sticks go out only once it is known - never in
+     * the order the PC sends them, which could put roll on the throttle channel. Volatile: read on the receive thread.
+     */
+    private volatile int[] rxMap = null;
+    /** DRAUPNE Link: a reply cut by the end of a USB read, waiting for the rest (parsePackets). */
+    private byte[] carry = null;
+    private static final int MAX_CARRY = 4096;
     private int[] boxIds = null;
     private int[] modeFlagsInav = null;
     private byte[] modeFlagsBtfl = null;
@@ -114,16 +120,26 @@ public class Msp {
     private void setFcInfo(){
         fcInfo = new FcInfo(fcVariant, fcVersionMajor, fcVersionMinor, fcVersionPatchLevel, apiProtocolVersion, apiVersionMajor, apiVersionMinor, platformType);
         onTimestamp = System.currentTimeMillis();
-        rxMapWaitSince = onTimestamp; // DRAUPNE Link: its channel map is asked for now
         flyTimestamp = 0;
         runFcInit = false;
-        runGetRxMap = true;
         log(fcInfo.getFcName() + " Ver. " + fcInfo.getFcVersionStr() + " detected.");
         log("MSP API Ver.: " + fcInfo.getFcApiVersionStr());
+        if (rxMap == null) getRxMap(); // DRAUPNE Link: its channel map now, not at the next tick
     }
 
+    /**
+     * Upstream drops a stick frame arriving within half a frame time of the one before. DRAUPNE Link's PC announces
+     * 255 (the most the byte holds) and numbers its frames (Udp.handleRcFrame drops the stale ones), so for it the
+     * window is 0: every frame that arrives in order goes out.
+     */
     public void setRcMinPeriod(){
-        rcMinPeriod = 1000 / config.getRcRefreshRate() / 2;
+        int rate = config.getRcRefreshRate();
+        rcMinPeriod = rate >= 255 ? 0 : 1000 / Math.max(1, rate) / 2;
+    }
+
+    /** DRAUPNE Link: whether the flight controller's channel map is known (sticks go out only then). */
+    public boolean isRxMapKnown(){
+        return rxMap != null;
     }
 
     public FcInfo getFcInfo(){
@@ -141,6 +157,7 @@ public class Msp {
         setRcMinPeriod();
         telemetryOutputBuffer.clear();
         serialRawData.clear();
+        carry = null;
         threadsId++;
         Thread mspThread = new Thread(mspRun);
         mspThread.setDaemon(false);
@@ -184,7 +201,7 @@ public class Msp {
         platformType = -1;
         fcInfo = null;
         rxMap = null; // DRAUPNE Link: a reconnected (maybe another) flight controller: read its channel map again
-        rxMapWaitSince = 0;
+        carry = null;
     }
 
     private final Runnable mspRun = new Runnable() {
@@ -197,6 +214,10 @@ public class Msp {
                     timerDiv++;
 
                     if (!isInitialized && isInitialized()) setFcInfo();
+                    // DRAUPNE Link: the channel map every tick (10 a second) from the port opening until it is
+                    // known - no sticks go out before. Not through the writer's slow-link backoff, which skips
+                    // ordinary requests
+                    if (rxMap == null) getRxMap();
                     if (runFcInit) {
                         if (fcVariant == 0) getFcVariant();
                         if (apiVersionMajor == -1) getMspApiVersion();
@@ -235,7 +256,6 @@ public class Msp {
                             }
                         }
                         if (runGetOsdConfig) getOsdConfig();
-                        if (runGetRxMap) getRxMap();
                         if (runGetBatteryConfig) {
                             if (fcVariant == FcInfo.FC_VARIANT_INAV){
                                 runGetBatteryConfig = false;
@@ -293,54 +313,90 @@ public class Msp {
         }
     }
 
+    /**
+     * DRAUPNE Link: the whole MSP frames in data, as a byte stream. Upstream took data as whole frames and dropped
+     * the rest of a read at the first frame that was cut short - and a USB read ends wherever it ends: long replies
+     * (BOXNAMES, OSD_CONFIG) split across two reads were lost, asked for again, and lost again. Here a frame that
+     * isn't complete yet stays in {@link #carry} for the next read; a byte that is no frame start, or a frame with
+     * a bad checksum, is stepped over one byte at a time until the next frame start.
+     */
     private List<MspPacket> parsePackets(byte[] data){
-        DataReader reader = new DataReader(data, false);
         List<MspPacket> packets = new ArrayList<>();
-        while (reader.getRemaining() > 0) {
-            byte headerStart = reader.readByte();
-            if (headerStart != MSP_HEADER_START) return packets;
-            byte magic = reader.readByte();
-            if (magic != MSP_HEADER_V1 && magic != MSP_HEADER_V2) return packets;
+        byte[] s = data;
+        if (carry != null) {
+            s = new byte[carry.length + data.length];
+            System.arraycopy(carry, 0, s, 0, carry.length);
+            System.arraycopy(data, 0, s, carry.length, data.length);
+            carry = null;
+        }
+        int len = s.length;
+        int i = 0;
+        while (i < len) {
+            if (s[i] != MSP_HEADER_START) {
+                i++;
+                continue;
+            }
+            if (len - i < 3) break; // the rest of the header comes with the next read
+            byte magic = s[i + 1];
+            byte type = s[i + 2];
             boolean isMsp2 = magic == MSP_HEADER_V2;
-            byte type = reader.readByte();
-            if (type != MSP_HEADER_REQUEST && type != MSP_HEADER_RESPONSE && type != MSP_HEADER_ERROR) return packets;
-            byte[] payload = null;
-            if (isMsp2){
-                if (reader.getRemaining() < MSP_V2_MIN_REQUEST_SIZE - 3) return packets;
-                byte flag = reader.readByte();
-                int code = reader.readUnsignedShortAsInt();
-                int payloadSize = reader.readUnsignedShortAsInt();
-                if (reader.getRemaining() < payloadSize + 1) return packets;
+            if (magic != MSP_HEADER_V1 && !isMsp2 || type != MSP_HEADER_REQUEST && type != MSP_HEADER_RESPONSE && type != MSP_HEADER_ERROR) {
+                i++;
+                continue;
+            }
+            int frameSize;
+            if (isMsp2) {
+                if (len - i < MSP_V2_HEADER_SIZE) break;
+                byte flag = s[i + 3];
+                int code = (s[i + 4] & 0xFF) | (s[i + 5] & 0xFF) << 8;
+                int payloadSize = (s[i + 6] & 0xFF) | (s[i + 7] & 0xFF) << 8;
+                if (payloadSize > MAX_CARRY) { // no MSP reply is that long: not a frame start
+                    i++;
+                    continue;
+                }
+                frameSize = MSP_V2_HEADER_SIZE + payloadSize + MSP_CRC_SIZE;
+                if (len - i < frameSize) break;
+                byte[] payload = null;
                 if (payloadSize > 0) {
                     payload = new byte[payloadSize];
-                    reader.read(payload, 0, payloadSize);
+                    System.arraycopy(s, i + MSP_V2_HEADER_SIZE, payload, 0, payloadSize);
                 }
-                int checksum = reader.readUnsignedByteAsInt();
-                if (checksum == calculateCrcV2(flag, code, payloadSize, payload)){
+                int checksum = s[i + frameSize - 1] & 0xFF;
+                if (checksum == calculateCrcV2(flag, code, payloadSize, payload)) {
                     packets.add(new MspPacket(type, flag, code, payloadSize, payload));
-                }else{
-                    return packets;
+                    i += frameSize;
+                } else {
+                    i++;
                 }
-            }else{
-                if (reader.getRemaining() < MSP_V1_MIN_REQUEST_SIZE - 3) return packets;
-                int payloadSize = reader.readUnsignedByteAsInt();
-                if (reader.getRemaining() < payloadSize + 2) return packets;
-                int code = reader.readUnsignedByteAsInt();
+            } else {
+                if (len - i < MSP_V1_HEADER_SIZE) break;
+                int payloadSize = s[i + 3] & 0xFF;
+                int code = s[i + 4] & 0xFF;
+                frameSize = MSP_V1_HEADER_SIZE + payloadSize + MSP_CRC_SIZE;
+                if (len - i < frameSize) break;
+                byte[] payload = null;
                 if (payloadSize > 0) {
                     payload = new byte[payloadSize];
-                    reader.read(payload, 0, payloadSize);
+                    System.arraycopy(s, i + MSP_V1_HEADER_SIZE, payload, 0, payloadSize);
                 }
-                int checksum = reader.readUnsignedByteAsInt();
-                if (checksum == calculateCrcV1(code, payloadSize, payload)){
+                int checksum = s[i + frameSize - 1] & 0xFF;
+                if (checksum == calculateCrcV1(code, payloadSize, payload)) {
                     packets.add(new MspPacket(type, code, payloadSize, payload));
+                    i += frameSize;
+                } else {
+                    i++;
                 }
             }
+        }
+        if (i < len) {
+            int rest = len - i;
+            if (rest <= MAX_CARRY) carry = Arrays.copyOfRange(s, i, len);
         }
         return packets;
     }
 
     public void addData(byte[] buf, int dataLength){
-        if (dataLength <= MSP_V1_HEADER_SIZE) return;
+        if (dataLength <= 0) return; // DRAUPNE Link: a short read can be the end of a frame begun in the last one
         byte[] data = new byte[dataLength];
         System.arraycopy(buf, 0, data, 0, dataLength);
         serialRawData.offer(data);
@@ -507,11 +563,12 @@ public class Msp {
                     }
                     case FcCommon.MSP_RX_MAP: {
                         if (buffer.getSize() == 0) break;
-                        rxMap = new int[buffer.getSize()];
-                        for (int i = 0; i < buffer.getSize(); i++) {
-                            rxMap[i] = buffer.readUnsignedByteAsInt();
+                        int[] map = new int[buffer.getSize()];
+                        for (int i = 0; i < map.length; i++) {
+                            map[i] = buffer.readUnsignedByteAsInt();
                         }
-                        runGetRxMap = false;
+                        if (rxMap == null) log("Channel map known: " + Arrays.toString(map) + " - sticks go out now");
+                        rxMap = map;
                         break;
                     }
                     case FcCommon.MSP_OSD_CONFIG: {
@@ -692,38 +749,39 @@ public class Msp {
         telemetryOutputBuffer.offer(new TelemetryData(FcCommon.DD_TIMERS, writer.getData()));
     }
 
-    public void setRawRc(short[] rcChannels){
-        if (rcChannels == null || rcChannels.length > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
+    /**
+     * A stick frame (the first count channels of rcChannels, AETR then AUX), on the receive thread. Only once the
+     * flight controller's channel map is known: never unmapped (the PC sees why on the PHONE_STATE record), as sticks
+     * in the wrong order would put, say, roll on the throttle channel. The MSP_SET_RAW_RC packet is built here and
+     * handed to the serial writer; nothing waits.
+     */
+    public void setRawRc(short[] rcChannels, int count){
+        if (rcChannels == null || count < 4 || count > rcChannels.length || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
+        int[] map = rxMap;
+        if (map == null) return;
         long current = System.currentTimeMillis();
-        if (current - rcLastFrame < rcMinPeriod) return;
-        // DRAUPNE Link: not before Betaflight's channel map is known (or 2 s have passed, for a board that never
-        // answers): sticks in the wrong order would put, say, roll on the throttle channel
-        if (rxMap == null && (rxMapWaitSince == 0 || current - rxMapWaitSince < 2000)) return;
+        if (rcMinPeriod > 0 && current - rcLastFrame < rcMinPeriod) return;
         rcLastFrame = current;
-        DataWriter writer = new DataWriter(false);
-        short[] mappedChannels = processRxMap(rcChannels);
-        for (short rcChannel : mappedChannels) {
-            writer.writeShort(rcChannel);
+        byte[] payload = new byte[count * 2];
+        for (int i = 0; i < count; i++) {
+            int at = i; // where the PC's channel i goes in Betaflight's order
+            if (i < map.length) {
+                if (map[i] < 0 || map[i] >= count) return; // a map that doesn't fit the frame: no sticks
+                at = map[i];
+            }
+            payload[at * 2] = (byte) (rcChannels[i] & 0xFF); // MSP is little-endian
+            payload[at * 2 + 1] = (byte) (rcChannels[i] >> 8 & 0xFF);
         }
-        serial.writeRcMsp(getMspRequestWithPayload(FcCommon.MSP_SET_RAW_RC, writer.getData()));
-    }
-
-    private short[] processRxMap(short[] rcChannels){
-        if (rxMap == null || rxMap.length < 4) return rcChannels;
-        short[] mappedChannels = rcChannels.clone();
-        for (int i = 0; i < rxMap.length; i++) {
-            if (rxMap[i] < 0 || rxMap[i] >= rcChannels.length) return rcChannels;
-            mappedChannels[rxMap[i]] = rcChannels[i];
-        }
-        return mappedChannels;
+        serial.writeRcMsp(getMspRequestWithPayload(FcCommon.MSP_SET_RAW_RC, payload));
     }
 
     public void getBatteryState(){
         serial.writeDataMsp(getMspRequest(FcCommon.MSP_BATTERY_STATE), true);
     }
 
+    /** DRAUPNE Link: ahead of the writer's slow-link backoff, and before the version check (any MSP board answers). */
     public void getRxMap(){
-        serial.writeDataMsp(getMspRequest(FcCommon.MSP_RX_MAP), true);
+        serial.writeDataMspUrgent(getMspRequest(FcCommon.MSP_RX_MAP));
     }
 
     public void getInavStatus(){

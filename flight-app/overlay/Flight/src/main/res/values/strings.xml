@@ -10,8 +10,10 @@
     <string name="status_connecting">Connecting…</string>
     <string name="status_awaiting_connection">Waiting for the PC…</string>
     <string name="fc_status_device_found">USB device found - checking permission…</string>
-    <string name="fc_status_permission_requested">Tap Allow on the USB pop-up…</string>
-    <string name="fc_status_permission_denied">USB permission denied - unplug, plug in, tap Allow.</string>
+    <string name="fc_status_permission_requested">Tap Allow on the USB pop-up (tick \'Always open DRAUPNE Flight\')</string>
+    <string name="fc_status_permission_denied">USB permission not given - unplug the flight controller, plug it in again, tap Allow.</string>
+    <string name="fc_status_no_device">No flight controller on USB - plug in the USB cable</string>
+    <string name="dd_wrong_key">A PC at %1$s tried to connect with another key</string>
     <string name="fc_status_permission_granted">USB permission granted - opening the port…</string>
     <string name="fc_status_serial_port_error">USB link lost - reconnecting…</string>
     <string name="fc_status_serial_port_opened">Connected.</string>
@@ -48,7 +50,8 @@
     <string name="dd_update_installing">Installing the update... Android asks you to confirm.</string>
     <string name="dd_update_failed">Update not installed (%1$s). Tap here to try again.</string>
     <string name="dd_gps_not_allowed">Phone GPS for the PC\'s map: not allowed. Tap to allow it (While using the app).</string>
-    <string name="dd_gps_restart">Phone GPS for the PC\'s map: allowed now. Disconnect and connect again to start it.</string>
+    <string name="dd_gps_restart">Phone GPS for the PC\'s map: allowed now, starting… If this line stays, disconnect and connect again.</string>
+    <string name="dd_update_no_digest">GitHub gave no SHA-256 for this release, so it can\'t be checked: not installed.</string>
     <string name="dd_gps_waiting">Phone GPS: no position yet (outdoors, or Wi-Fi on, helps).</string>
     <string name="dd_gps_fix">Phone GPS: %1$s, within %2$d m, %3$d s ago.</string>
     <string name="dd_old_downloads">Earlier updates may have left DRAUPNE Flight installers in Downloads. Tap here to open Downloads and delete them.</string>

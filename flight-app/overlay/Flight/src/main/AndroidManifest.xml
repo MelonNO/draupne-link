@@ -20,6 +20,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- DRAUPNE Link: Android 13+ shows the running notification only when asked (MainActivity asks once) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- DRAUPNE Link: the phone's own GPS for the PC's map (optional) -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />

@@ -36,7 +36,8 @@ import java.util.regex.Pattern;
  */
 final class UpdateCheck {
     static final String LATEST_API = "https://api.github.com/repos/MelonNO/draupne-link/releases/latest";
-    private static final Pattern APK = Pattern.compile("^(?:DRAUPNE|DroidDrone)-Flight-(.+)\\.apk$");
+    // pc.19: only this app's own name - an asset called DroidDrone-Flight-*.apk would be another app's build
+    private static final Pattern APK = Pattern.compile("^DRAUPNE-Flight-(.+)\\.apk$");
     private static final Pattern NUMBER = Pattern.compile("\\d+");
 
     /** The newer phone app found: its version, where to download it and its SHA-256 (null if GitHub gave none). */

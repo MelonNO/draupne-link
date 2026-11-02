@@ -33,6 +33,7 @@ import de.droiddrone.common.MediaCommon;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import static de.droiddrone.common.Logcat.log;
 
@@ -45,9 +46,10 @@ public class StreamEncoder {
     private String codecType = MediaCommon.hevcCodecMime;
     private MediaCodec videoEncoder, audioEncoder;
     private final int maxOutputBufferSize = 30;
-    public final ConcurrentLinkedQueue<MediaCodecBuffer> videoStreamOutputBuffer = new ConcurrentLinkedQueue<>();
+    // DRAUPNE Link: blocking queues, so the sender threads (Udp) wait for a frame instead of polling in a tight loop
+    public final LinkedBlockingQueue<MediaCodecBuffer> videoStreamOutputBuffer = new LinkedBlockingQueue<>();
     public final ConcurrentLinkedQueue<MediaCodecBuffer> videoRecorderOutputBuffer = new ConcurrentLinkedQueue<>();
-    public final ConcurrentLinkedQueue<MediaCodecBuffer> audioOutputBuffer = new ConcurrentLinkedQueue<>();
+    public final LinkedBlockingQueue<MediaCodecBuffer> audioOutputBuffer = new LinkedBlockingQueue<>();
     private int audioBitRate;
     private long bitRateCounter = 0;
     private long bitRateTimestamp = 0;
@@ -116,15 +118,28 @@ public class StreamEncoder {
         // DRAUPNE Link: no intra refresh. 2.3.0-pc.13 used it where the encoder said it had it, and on a test phone
         // the video never started (and held up the sticks, see Udp.videoStarter). Key frames every 2 s and on request.
         intraRefresh = false;
+        // DRAUPNE Link (pc.19): first with the low-latency hints (getEncoderFormat); a codec that refuses the format
+        // is created again and gets the plain one, as before - the hints are a trial, never a reason for no picture
+        boolean lowLatency = true;
         try {
-            videoEncoder.configure(getEncoderFormat(false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            videoEncoder.configure(getEncoderFormat(false, true), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         } catch (Exception e) {
-            log("StreamEncoder configure error: " + e);
-            e.printStackTrace();
-            return null;
+            log("StreamEncoder configure error with the low-latency hints: " + e + " - trying without");
+            lowLatency = false;
+            try {
+                videoEncoder.release();
+                videoEncoder = MediaCodec.createByCodecName(encoderName);
+                videoEncoder.setCallback(encoderCallback);
+                videoEncoder.configure(getEncoderFormat(false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+            } catch (Exception e2) {
+                log("StreamEncoder configure error: " + e2);
+                e2.printStackTrace();
+                return null;
+            }
         }
         log("Video: " + (intraRefresh ? "intra refresh, key frame every " + KEY_FRAME_INTERVAL_INTRA_REFRESH_S + " s"
-                : "key frame every " + KEY_FRAME_INTERVAL_S + " s") + ", and on request");
+                : "key frame every " + KEY_FRAME_INTERVAL_S + " s") + ", and on request"
+                + (lowLatency ? ", low-latency hints" : ", plain format"));
         try {
             surface = videoEncoder.createInputSurface();
             videoEncoder.start();
@@ -403,9 +418,15 @@ public class StreamEncoder {
             if (encoderBitrateChange){
                 log("Encoder bitrate change: " + baseBitRates[bitRateIndex]);
                 encoderBitrateChange = false;
-                Bundle param = new Bundle();
-                param.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, baseBitRates[bitRateIndex]);
-                videoEncoder.setParameters(param);
+                // DRAUPNE Link: on the codec this callback is for, inside try - close() nulls videoEncoder from another
+                // thread, and an exception on the codec's thread ends the whole app
+                try {
+                    Bundle param = new Bundle();
+                    param.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, baseBitRates[bitRateIndex]);
+                    codec.setParameters(param);
+                } catch (Exception e) {
+                    log("Encoder bitrate change error: " + e);
+                }
             }
         }
 
@@ -421,6 +442,17 @@ public class StreamEncoder {
     };
 
     private MediaFormat getEncoderFormat(boolean withIntraRefresh){
+        return getEncoderFormat(withIntraRefresh, false);
+    }
+
+    /**
+     * @param lowLatency DRAUPNE Link (pc.19): the encoder told to hand each frame out at once (KEY_LATENCY 1), to
+     *                   run as a real-time stream (KEY_PRIORITY 0), without B-frames (which would hold frames back
+     *                   to reorder them) and at a constant bitrate (no quality-driven bursts the 4G uplink can't
+     *                   take) where the codec says it can. Each is only a hint; a codec that rejects the format gets
+     *                   it again without them (initializeVideo).
+     */
+    private MediaFormat getEncoderFormat(boolean withIntraRefresh, boolean lowLatency){
         int fps = cameraManager.getCamera().getTargetFps();
         MediaFormat mediaFormat = MediaFormat.createVideoFormat(codecType, cameraManager.getCamera().getWidth(), cameraManager.getCamera().getHeight());
         mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, baseBitRates[bitRateIndex]);
@@ -430,7 +462,24 @@ public class StreamEncoder {
         if (withIntraRefresh) {
             mediaFormat.setInteger(MediaFormat.KEY_INTRA_REFRESH_PERIOD, Math.max(5, Math.round(fps * INTRA_REFRESH_S)));
         }
+        if (lowLatency) {
+            mediaFormat.setInteger(MediaFormat.KEY_LATENCY, 1);
+            mediaFormat.setInteger(MediaFormat.KEY_PRIORITY, 0); // 0 = realtime
+            if (Build.VERSION.SDK_INT >= 29) mediaFormat.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0);
+            if (supportsCbr()) mediaFormat.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
+        }
         return mediaFormat;
+    }
+
+    /** Whether the encoder created says it can hold a constant bitrate. */
+    private boolean supportsCbr(){
+        try {
+            MediaCodecInfo.EncoderCapabilities caps = videoEncoder.getCodecInfo().getCapabilitiesForType(codecType).getEncoderCapabilities();
+            return caps != null && caps.isBitrateModeSupported(MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
+        } catch (Exception e) {
+            log("Encoder capabilities error: " + e);
+            return false;
+        }
     }
 
     public void startSendFrames(){
