@@ -18,6 +18,9 @@
  *  Modified for DRAUPNE Link: measures stick packets arriving and sends PcLinkStats (and this app's version)
  *  to the PC every 0.1 s, as its own telemetry packet. Spectator mode: a second PC (same key) that asks while one
  *  is connected is told which PC flies, so it can watch through that PC (DRAUPNE Link's Spectate.java).
+ *  pc.19: stick frames go to the flight controller straight from the receive thread (handleRcFrame), with the
+ *  PC's sequence byte keeping a late frame from going out after a newer one; a PC that restarts gets its session
+ *  back at once (receiverRun).
  */
 
 package de.droiddrone.flight;
@@ -30,6 +33,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.FcCommon;
@@ -71,11 +75,25 @@ public class Udp {
     private byte[] audioInitialFrame = null;
     private int videoSenderThreadId, audioSenderThreadId, udpThreadsId;
     private UdpSender udpSender;
-    private ReceiverBuffer receiverBuffer;
+    // DRAUPNE Link: replaced on the receive thread when the PC starts a new session, read by the buffer thread
+    private volatile ReceiverBuffer receiverBuffer;
     private boolean isVideoStarting, isAudioStarting;
-    private final Object rcSync = new Object();
-    private short[] rcChannels = null;
     private final Object udpSync = new Object();
+    /** When the pilot PC was last heard from (any packet from its address and port). */
+    private volatile long lastPilotPacketMs;
+    /** A pilot silent for this long is not announced to a Connect from elsewhere (PILOT_AT): that PC takes over. */
+    private static final long PILOT_ALIVE_MS = 1000;
+    /**
+     * The sequence byte of the last stick frame taken (pc.19: [24][count u8][count x i16][seq u8]; a PC that knows
+     * only the older layout sends none). Only read and written on the receive thread.
+     */
+    private volatile int lastRcSeq = -1; // volatile: the stats thread reports it
+    private boolean rcSeqValid;
+    /** The channels of the last stick frame, filled in place on the receive thread: no allocation per frame. */
+    private final short[] rcFrame = new short[FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT];
+    /** A PC that tried to connect with another key (shown on the screen): its address and when. */
+    static volatile String wrongKeyFrom;
+    static volatile long wrongKeyAt;
     private boolean isCameraRestarting;
     // spectator mode (DRAUPNE Link Spectate.java): codes clear of upstream's packet names
     private static final byte SPECTATE_PILOT_QUERY = 0x60;
@@ -162,7 +180,10 @@ public class Udp {
         try {
             if (socket != null) socket.close();
             socket = new DatagramSocket(port);
-            socket.setReceiveBufferSize(UdpCommon.packetLength * 2);
+            // DRAUPNE Link: upstream's 2 KB held two packets: a 4G burst (a key frame's packets delivered at once,
+            // sticks behind them) tail-dropped the newest frames. 256 KB holds the burst; the sequence byte and
+            // the writer's newest-first rule keep stale sticks from going out
+            socket.setReceiveBufferSize(256 * 1024);
             socket.setSendBufferSize(UdpCommon.packetLength * 30);
             socket.setTrafficClass(0x10);
             udpSender = new UdpSender(socket);
@@ -183,10 +204,8 @@ public class Udp {
             telemetrySenderThread.setDaemon(false);
             telemetrySenderThread.setName("telemetrySenderThread");
             telemetrySenderThread.start();
-            Thread rcThread = new Thread(rcRun);
-            rcThread.setDaemon(false);
-            rcThread.setName("rcThread");
-            rcThread.start();
+            // DRAUPNE Link: no rcThread any more - stick frames go to the flight controller from the receive thread
+            // (handleRcFrame), which runs at MAX_PRIORITY like the serial writer that takes them
             return true;
         } catch (Exception e) {
             log("socketInit error: " + e);
@@ -221,27 +240,130 @@ public class Udp {
             while (socket != null && !socket.isClosed() && id == udpThreadsId) {
                 try {
                     socket.receive(receiverPacket);
+                    int len = receiverPacket.getLength();
+                    if (len < 1) continue;
+                    byte[] d = receiverPacket.getData();
+                    ReceiverBuffer buffer = receiverBuffer;
                     // check IP & port
                     if (connectionMode == SettingsCommon.ConnectionMode.overServer){
                         if (!receiverPacket.getAddress().equals(destIp)
                                 || receiverPacket.getPort() != port) continue;
-                    }else if (receiverBuffer.isConnected()){
-                        if (!receiverPacket.getAddress().equals(udpSender.getIp())
-                                || receiverPacket.getPort() != udpSender.getPort()) {
-                            answerSpectator(receiverPacket, true);
+                    }else if (buffer.isConnected()){
+                        if (receiverPacket.getAddress().equals(udpSender.getIp())
+                                && receiverPacket.getPort() == udpSender.getPort()) {
+                            lastPilotPacketMs = System.currentTimeMillis();
+                        } else {
+                            if (!otherPcWhileConnected(receiverPacket, d, len)) continue;
+                            buffer = receiverBuffer; // the new session
+                        }
+                    }else{
+                        if (d[0] == SPECTATE_PILOT_QUERY) {
+                            answerSpectator(receiverPacket, false);
                             continue;
                         }
-                    }else if (receiverPacket.getLength() > 0 && receiverPacket.getData()[0] == SPECTATE_PILOT_QUERY){
-                        answerSpectator(receiverPacket, false);
+                        rcSeqValid = false; // every (re)connect passes here: the PC's stick sequence starts over
+                        if (d[0] == UdpCommon.Connect) {
+                            if (!keyMatches(d, len, 4)) {
+                                noteWrongKey(receiverPacket);
+                                continue;
+                            }
+                            lastPilotPacketMs = System.currentTimeMillis(); // heard from: no takeover in its first half second
+                        }
+                    }
+                    // DRAUPNE Link: sticks straight to the flight controller from here - not through the buffer, a
+                    // polling thread and a hand-over (the frame is unnumbered and never acknowledged, so the buffer
+                    // had nothing to do with it). The session stays alive on the PC's pings (20 a second)
+                    if (d[0] == UdpCommon.RcFrame) {
+                        if (buffer.isConnected()) handleRcFrame(d, len);
                         continue;
                     }
-                    receiverBuffer.addPacket(receiverPacket);
+                    buffer.addPacket(receiverPacket);
                 } catch (Exception e) {
                     log("Receiver error: " + e);
                 }
             }
         }
     };
+
+    /**
+     * A stick frame, on the receive thread: [24][count u8][count x i16][seq u8 - pc.19, only from a PC that knows
+     * this app takes it]. With a sequence, a frame older than (or the same as) the last one taken - a late packet
+     * arriving after a newer one - is dropped, except the first after a (re)connect, where the count starts over.
+     * No allocation: the channels are read into {@link #rcFrame} in place.
+     */
+    private void handleRcFrame(byte[] d, int len) {
+        if (len < 2) return;
+        int count = d[1] & 0xff;
+        if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
+        int remaining = len - 2;
+        if (remaining == count * 2 + 1) {
+            int seq = d[len - 1] & 0xff;
+            if (rcSeqValid && (byte) (seq - lastRcSeq) <= 0) return;
+            lastRcSeq = seq;
+            rcSeqValid = true;
+        } else if (remaining == count * 2) {
+            lastRcSeq = -1;
+        } else {
+            return;
+        }
+        int at = 2;
+        for (int i = 0; i < count; i++, at += 2) {
+            rcFrame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
+        }
+        PcLinkStats.rcIn();
+        if (msp.isInitialized()) msp.setRawRc(rcFrame, count);
+        if (mavlink.isInitialized()) mavlink.setRcChannelsOverride(java.util.Arrays.copyOf(rcFrame, count));
+    }
+
+    /**
+     * A packet from another address or port while a PC is connected. A keyed Connect from the pilot's own address
+     * (it started again, on a new port) or from anywhere while the pilot has been silent for {@link #PILOT_ALIVE_MS}
+     * (its session is only still open because the 4 s timeout hasn't run out) starts the new session now: before,
+     * such a PC was told PILOT_AT - the dead session's address - and became a spectator of itself for up to 4 s, a
+     * restarted PC never connecting. Anything else is a spectator's question, or a wrong key.
+     * @return true if the packet belongs to a (new) session and is to be taken
+     */
+    private boolean otherPcWhileConnected(DatagramPacket packet, byte[] d, int len) {
+        boolean pilotAlive = System.currentTimeMillis() - lastPilotPacketMs < PILOT_ALIVE_MS;
+        if (d[0] == UdpCommon.Connect) {
+            if (!keyMatches(d, len, 4)) {
+                noteWrongKey(packet);
+                return false;
+            }
+            if (packet.getAddress().equals(udpSender.getIp()) || !pilotAlive) {
+                log("New session from " + packet.getAddress().getHostAddress() + ":" + packet.getPort()
+                        + (pilotAlive ? " (the pilot's address)" : " (the pilot is silent)"));
+                newSession();
+                return true;
+            }
+        }
+        answerSpectator(packet, pilotAlive);
+        return false;
+    }
+
+    /** A new receiver session: the next Connect taken starts it (ReceiverBuffer.addPacket). */
+    private void newSession() {
+        ReceiverBuffer old = receiverBuffer;
+        receiverBuffer = new ReceiverBuffer(udpSender, (connectionMode != SettingsCommon.ConnectionMode.overServer), key, null);
+        if (old != null) old.close();
+        rcSeqValid = false;
+    }
+
+    /** Whether the key written (UTF) at keyAt - 4 in a Connect, 1 in a PILOT_QUERY - is this phone's. */
+    private boolean keyMatches(byte[] d, int len, int keyAt) {
+        if (len < keyAt + 2) return false;
+        int n = ((d[keyAt] & 0xff) << 8) | (d[keyAt + 1] & 0xff);
+        return keyAt + 2 + n <= len && key.equals(new String(d, keyAt + 2, n, java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /** A PC tried to connect with another key: ReceiverBuffer drops it without a word; the screen says so. */
+    private void noteWrongKey(DatagramPacket packet) {
+        long now = System.currentTimeMillis();
+        String from = packet.getAddress().getHostAddress();
+        if (now - wrongKeyAt > 5000 || !from.equals(wrongKeyFrom)) log("A PC at " + from + " tried to connect with another key");
+        wrongKeyFrom = from;
+        wrongKeyAt = now;
+    }
 
     private final Runnable telemetrySenderRun = new Runnable() {
         public void run() {
@@ -266,6 +388,7 @@ public class Udp {
                             android.location.Location l = PhoneLocation.last();
                             if (l != null) PcLinkStats.writePhonePositionTo(stats.daos, l);
                         }
+                        if (statsSent % 10 == 3) PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), lastRcSeq); // pc.19, once a second
                         udpSender.sendPacket(stats.getData());
                     }
                     Thread.sleep(10);
@@ -390,9 +513,7 @@ public class Udp {
         if (d[0] == SPECTATE_PILOT_QUERY) keyAt = 1;
         else if (flying && d[0] == UdpCommon.Connect) keyAt = 4; // [8][num i16][client type u8][key UTF]
         else return;
-        if (len < keyAt + 2) return;
-        int n = ((d[keyAt] & 0xff) << 8) | (d[keyAt + 1] & 0xff);
-        if (keyAt + 2 + n > len || !key.equals(new String(d, keyAt + 2, n, java.nio.charset.StandardCharsets.UTF_8))) return;
+        if (!keyMatches(d, len, keyAt)) return;
         long now = System.currentTimeMillis();
         if (now - lastSpectatorAnswer < 200) return;
         lastSpectatorAnswer = now;
@@ -422,7 +543,20 @@ public class Udp {
     }
 
     public boolean isConnected(){
-        return (receiverBuffer != null && receiverBuffer.isConnected());
+        ReceiverBuffer buffer = receiverBuffer;
+        return (buffer != null && buffer.isConnected());
+    }
+
+    /** The PHONE_STATE flags: what the PC needs to say why no sticks reach the drone, or why there is no picture. */
+    private int phoneStateFlags() {
+        int flags = 0;
+        if (msp.isRxMapKnown()) flags |= PcLinkStats.STATE_RX_MAP_KNOWN;
+        int serialStatus = serial.getStatus();
+        if (serialStatus == Serial.STATUS_USB_PERMISSION_REQUESTED) flags |= PcLinkStats.STATE_USB_PERMISSION_PENDING;
+        if (serialStatus == Serial.STATUS_USB_PERMISSION_DENIED) flags |= PcLinkStats.STATE_USB_PERMISSION_DENIED;
+        Camera camera = cameraManager.getCamera();
+        if (camera != null && camera.isOpened(config.getCameraId())) flags |= PcLinkStats.STATE_CAMERA_OPEN;
+        return flags;
     }
 
     public InetAddress getSenderIp(){
@@ -519,16 +653,20 @@ public class Udp {
             case UdpCommon.StartStopRecording:
             {
                 boolean start = buffer.readBoolean();
-                boolean withAudio = config.isRecordAudio();
-                if (start){
-                    if (config.isUseExtraEncoder()){
-                        mp4Recorder.startRecording(withAudio);
+                // DRAUPNE Link: on the videoStarter thread, like StartVideo - the muxer's start and stop take hundreds
+                // of ms, and this thread delivers the PC's packets
+                videoStarter.execute(() -> {
+                    boolean withAudio = config.isRecordAudio();
+                    if (start){
+                        if (config.isUseExtraEncoder()){
+                            mp4Recorder.startRecording(withAudio);
+                        }else{
+                            mp4Recorder.startRecording(withAudio, streamEncoder);
+                        }
                     }else{
-                        mp4Recorder.startRecording(withAudio, streamEncoder);
+                        mp4Recorder.stopRecording();
                     }
-                }else{
-                    mp4Recorder.stopRecording();
-                }
+                });
                 break;
             }
             case UdpCommon.Config:
@@ -552,23 +690,13 @@ public class Udp {
                 }
                 break;
             }
-            case UdpCommon.RcFrame:
-            {
-                byte channelsCount = buffer.readByte();
-                if (channelsCount < 4 || channelsCount > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) break;
-                if (channelsCount * 2 != buffer.getRemaining()) break;
-                short[] rcChannels = new short[channelsCount];
-                for (int i = 0; i < channelsCount; i++) {
-                    rcChannels[i] = buffer.readShort();
-                }
-                setRcChannels(rcChannels);
-                break;
-            }
+            // UdpCommon.RcFrame never gets here: the receive thread takes it (handleRcFrame)
             case UdpCommon.Disconnect:
             {
-                // stop stream when controller disconnected
-                stopAudioVideo();
+                // stop stream when controller disconnected - on the videoStarter thread (the camera and muxer take
+                // their time to close, and this thread delivers the PC's packets)
                 videoInitialFrame = null;
+                videoStarter.execute(this::stopAudioVideo);
                 break;
             }
             case UdpCommon.ChangeCamera:
@@ -722,38 +850,6 @@ public class Udp {
         }
     }
 
-    public void setRcChannels(short[] rcChannels){
-        PcLinkStats.rcIn();
-        synchronized (rcSync) {
-            this.rcChannels = rcChannels;
-            rcSync.notify();
-        }
-    }
-
-    private final Runnable rcRun = new Runnable() {
-        public void run() {
-            final int id = udpThreadsId;
-            while (id == udpThreadsId) {
-                try {
-                    short[] rc;
-                    synchronized (rcSync) {
-                        rc = rcChannels;
-                        rcChannels = null;
-                    }
-                    if (rc != null) {
-                        if (msp.isInitialized()) msp.setRawRc(rc);
-                        if (mavlink.isInitialized()) mavlink.setRcChannelsOverride(rc);
-                    }
-                    synchronized (rcSync) {
-                        if (rcChannels == null) rcSync.wait(100);
-                    }
-                } catch (Exception e) {
-                    log("RC thread error: " + e);
-                }
-            }
-        }
-    };
-
     private void startStopRecording() {
         if (mp4Recorder.isRecording()) {
             mp4Recorder.stopRecording();
@@ -773,7 +869,8 @@ public class Udp {
             log("Video sender thread is running");
             while (id == videoSenderThreadId) {
                 try {
-                    MediaCodecBuffer buf = streamEncoder.videoStreamOutputBuffer.poll();
+                    // DRAUPNE Link: waits for the encoder (upstream polled in a tight loop: a full core all flight)
+                    MediaCodecBuffer buf = streamEncoder.videoStreamOutputBuffer.poll(100, TimeUnit.MILLISECONDS);
                     if (buf == null) continue;
                     switch (buf.flags){
                         case MediaCodec.BUFFER_FLAG_CODEC_CONFIG:
@@ -806,7 +903,7 @@ public class Udp {
                         streamEncoder.stopAudioEncoder();
                         break;
                     }
-                    MediaCodecBuffer buf = streamEncoder.audioOutputBuffer.poll();
+                    MediaCodecBuffer buf = streamEncoder.audioOutputBuffer.poll(100, TimeUnit.MILLISECONDS);
                     if (buf == null) continue;
                     if (buf.flags == MediaCodec.BUFFER_FLAG_CODEC_CONFIG) {
                         sendAudioInitialFrame(buf.data);
@@ -1124,7 +1221,7 @@ public class Udp {
                     break;
                 }
                 case FcCommon.DD_VIDEO_RECORDER_START_STOP: {
-                    startStopRecording();
+                    videoStarter.execute(this::startStopRecording); // the muxer's start / stop, off this thread
                     break;
                 }
                 case FcCommon.DD_NETWORK_STATE: {

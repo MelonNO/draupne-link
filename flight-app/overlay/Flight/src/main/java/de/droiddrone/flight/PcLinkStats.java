@@ -42,6 +42,19 @@ final class PcLinkStats {
      */
     static final short PHONE_POSITION_CODE = 0x40F3;
 
+    /**
+     * The phone's state (pc.19), once a second: u8 flags ({@link #STATE_RX_MAP_KNOWN}, {@link #STATE_USB_PERMISSION_PENDING},
+     * {@link #STATE_USB_PERMISSION_DENIED}, {@link #STATE_CAMERA_OPEN}), u8 the last stick frame's sequence (255 =
+     * none), u16 ms since the last stick frame was written to the flight controller (65535 = unknown), u16 ms from
+     * the last frame's arrival over UDP to its USB write (65535 = unknown). The PC shows why no sticks reach the
+     * drone (no channel map yet, USB permission) without a look at the phone.
+     */
+    static final short PHONE_STATE_CODE = 0x40F4;
+    static final int STATE_RX_MAP_KNOWN = 1;
+    static final int STATE_USB_PERMISSION_PENDING = 2;
+    static final int STATE_USB_PERMISSION_DENIED = 4;
+    static final int STATE_CAMERA_OPEN = 8;
+
     static void writePhonePositionTo(DataOutputStream out, android.location.Location l) throws IOException {
         out.writeShort(PHONE_POSITION_CODE);
         out.writeInt((int) Math.round(l.getLatitude() * 1e7));
@@ -66,8 +79,21 @@ final class PcLinkStats {
         out.write(name);
     }
 
+    /** The PHONE_STATE record; lastRcSeq is -1 for none. */
+    static synchronized void writePhoneStateTo(DataOutputStream out, int flags, int lastRcSeq) throws IOException {
+        long now = System.currentTimeMillis();
+        out.writeShort(PHONE_STATE_CODE);
+        out.writeByte(flags);
+        out.writeByte(lastRcSeq < 0 ? 255 : lastRcSeq & 0xff);
+        out.writeShort(lastRcOut == 0 ? 65535 : (int) Math.min(65535, now - lastRcOut));
+        out.writeShort(rcInToOutMs < 0 ? 65535 : (int) Math.min(65535, rcInToOutMs));
+    }
+
     private static long lastRcIn;
+    private static long lastRcInNs;
     private static long lastRcOut;
+    /** Phone receive to USB write of the last stick frame written; -1 = none yet. */
+    private static long rcInToOutMs = -1;
     private static long rcInMaxGap;
     private static long rcOutMaxGap;
     private static long writeMaxMs;
@@ -82,13 +108,24 @@ final class PcLinkStats {
         long now = System.currentTimeMillis();
         if (lastRcIn != 0) rcInMaxGap = Math.max(rcInMaxGap, now - lastRcIn);
         lastRcIn = now;
+        lastRcInNs = System.nanoTime();
     }
 
-    /** A stick write reached the flight controller. */
+    /**
+     * A stick write reached the flight controller. The newest frame is always the one written, so the time since
+     * the last arrival is (near enough) that frame's way through the phone.
+     */
     static synchronized void rcOut() {
         long now = System.currentTimeMillis();
         if (lastRcOut != 0) rcOutMaxGap = Math.max(rcOutMaxGap, now - lastRcOut);
         lastRcOut = now;
+        if (lastRcInNs != 0) rcInToOutMs = (System.nanoTime() - lastRcInNs) / 1_000_000L;
+    }
+
+    /** The flight controller's port closed: the next state record says the write age is unknown, not growing. */
+    static synchronized void rcPortClosed() {
+        lastRcOut = 0;
+        rcInToOutMs = -1;
     }
 
     /** One USB write to the flight controller and how long it took. */

@@ -14,7 +14,9 @@
  *  You should have received a copy of the GNU General Public License
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
- *  Modified for DRAUPNE Link: stops quietly when Android restarts it without the app's settings.
+ *  Modified for DRAUPNE Link: stops quietly when Android restarts it without the app's settings; one start only
+ *  (a second CONNECT tap is ignored); holds a partial wake lock while running; takes the location foreground type
+ *  when the pilot allows location later; re-probes the USB when the flight controller is plugged in.
  */
 
 package de.droiddrone.flight;
@@ -30,6 +32,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.PowerManager;
 
 import androidx.core.app.NotificationCompat;
 
@@ -60,6 +63,13 @@ public class DDService extends Service {
     private PhoneTelemetry phoneTelemetry;
     private MavlinkUdpBridge mavlinkUdpBridge;
     private int connectionMode;
+    /** DRAUPNE Link: the pilot allowed location after the service started (MainActivity): take the foreground type now. */
+    public static final String ACTION_LOCATION_GRANTED = "de.droiddrone.flight.pc.LOCATION_GRANTED";
+    private static volatile DDService running;
+    /** DRAUPNE Link: keeps the CPU up while the drone flies on this phone - the screen may be off or locked. */
+    private PowerManager.WakeLock wakeLock;
+    private Notification notification;
+    private boolean locationType;
 
 
     public DDService() {
@@ -78,6 +88,13 @@ public class DDService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
+        if (isRunning) {
+            // DRAUPNE Link: a second start (CONNECT tapped twice, or the location grant below) while running. Upstream
+            // started everything again: the second udp.close() could make the first bind fail, and the service
+            // stopped itself. The foreground call goes again all the same: Android wants one per startForegroundService
+            goForeground(locationType || (intent != null && ACTION_LOCATION_GRANTED.equals(intent.getAction())));
+            return START_REDELIVER_INTENT;
+        }
         isConnected = false;
         String destIp = MainActivity.config.getIp();
         int port = MainActivity.config.getPort();
@@ -87,26 +104,16 @@ public class DDService extends Service {
         createNotificationChannel();
         Intent notificationIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
-        Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
+        notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle(getResources().getString(R.string.app_name))
                 .setContentText("DRAUPNE Flight is running")
                 .setSmallIcon(R.drawable.baseline_rocket_launch_24)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
                 .build();
-        // DRAUPNE Link: location too, when the pilot allowed it (the phone's own GPS for the PC's map); without the
-        // permission the type isn't allowed, and Android refuses the whole service
-        boolean location = checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
-        if (Build.VERSION.SDK_INT >= 30) {
-            int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
-                    | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                    | ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
-            if (location) types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
-            startForeground(1, notification, types);
-        }else{
-            startForeground(1, notification);
-        }
-        if (location) PhoneLocation.start(this);
+        goForeground(true);
+        acquireWakeLock();
+        running = this;
 
         if (cameraManager == null) cameraManager = new CameraManager(this, MainActivity.config);
         if (audioSource == null) audioSource = new AudioSource(this);
@@ -140,10 +147,77 @@ public class DDService extends Service {
         return START_REDELIVER_INTENT;
     }
 
+    /**
+     * DRAUPNE Link: the foreground types - and location too, when wanted and the pilot allowed it (the phone's own
+     * GPS for the PC's map): without the permission the type isn't allowed, and Android refuses the whole service.
+     * Called again with the type added when the pilot allows location while the service runs: on Android 14 a
+     * service without the type gets no location updates in the background.
+     */
+    private void goForeground(boolean withLocation) {
+        boolean location = withLocation
+                && checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                int types = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                        | ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC;
+                if (location) types |= ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+                startForeground(1, notification, types);
+            }else{
+                startForeground(1, notification);
+            }
+            locationType = location;
+        } catch (Exception e) {
+            // the location type refused (the app not in the foreground at that moment): keep what there was
+            log("startForeground error: " + e);
+            if (location && !locationType) {
+                goForeground(false);
+                return;
+            }
+        }
+        if (location) PhoneLocation.start(getApplicationContext());
+    }
+
+    private void acquireWakeLock() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null || wakeLock != null) return;
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DRAUPNE:flight");
+            wakeLock.acquire();
+        } catch (Exception e) {
+            log("Wake lock error: " + e);
+        }
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Exception e) {
+            log("Wake lock release error: " + e);
+        }
+        wakeLock = null;
+    }
+
+    /** The flight controller was plugged in (MainActivity got USB_DEVICE_ATTACHED): look for it now, if not on it. */
+    public static void usbDeviceAttached() {
+        DDService s = running;
+        if (s == null || s.serial == null) return;
+        int status = s.serial.getStatus();
+        if (status == Serial.STATUS_SERIAL_PORT_OPENED) return;
+        log("USB device attached: looking for the flight controller");
+        if (status == Serial.STATUS_USB_PERMISSION_DENIED || status == Serial.STATUS_USB_PERMISSION_REQUESTED) {
+            s.serial.initialize(s.msp, s.mavlink); // the probe over again: the permission is asked for anew
+        } else {
+            s.serial.wakeInit();
+        }
+    }
+
     @Override
     public void onDestroy() {
+        running = null;
         PhoneLocation.stop();
         closeAll();
+        releaseWakeLock();
     }
 
     private void createNotificationChannel() {

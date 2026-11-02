@@ -165,14 +165,29 @@ public class InternalCamera implements Camera{
             startPreview();
         }
 
+        // DRAUPNE Link: a camera taken away (another app, a system error) is marked closed, so the next StartVideo
+        // opens it again. Upstream only logged, isOpened stayed true, and startPreview went to a dead device for ever
         @Override
         public void onDisconnected(@NonNull CameraDevice cameraDevice){
             log("Camera device disconnected.");
+            lost(cameraDevice);
         }
 
         @Override
         public void onError(@NonNull CameraDevice cameraDevice, int i){
-            log("Camera device error.");
+            log("Camera device error: " + i);
+            lost(cameraDevice);
+        }
+
+        private void lost(CameraDevice cameraDevice) {
+            isOpened = false;
+            isStarted = false;
+            mCameraCaptureSession = null;
+            if (camera == cameraDevice) camera = null;
+            try {
+                cameraDevice.close();
+            } catch (Exception ignored) {
+            }
         }
     };
 

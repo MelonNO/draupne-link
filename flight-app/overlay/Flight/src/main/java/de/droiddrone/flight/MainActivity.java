@@ -196,6 +196,7 @@ public class MainActivity extends Activity {
                 if (!isFinishing() && !DDService.isRunning && checkPermissions()) startStopService();
             }, 3000);
         }
+        handleUsbAttached(getIntent()); // opened by the flight controller being plugged in
     }
 
     private void setPill(int text, int background, int foreground){
@@ -254,9 +255,15 @@ public class MainActivity extends Activity {
 
     private void updateUi(){
         updatePhoneGps();
+        // DRAUPNE Link: CONNECT / DISCONNECT is off until the service has followed the last tap (a second tap
+        // started the service twice, and the second start could stop the first); on again after 5 s whatever
+        // happened, so a start that failed doesn't leave it dead
+        bStartStopService.setEnabled(DDService.isRunning == serviceWantedRunning || System.currentTimeMillis() - serviceSwitchedAt > 5000);
         if (DDService.isRunning){
             bStartStopService.setText(getResources().getString(R.string.disconnect));
             bStartStopService.setBackgroundResource(R.drawable.dd_button_stop);
+            String wrongKey = Udp.wrongKeyFrom;
+            boolean wrongKeyNow = wrongKey != null && System.currentTimeMillis() - Udp.wrongKeyAt < 30000;
             if (DDService.isConnected){
                 tvNetworkStatus.setText(getResources().getString(R.string.status_connected));
                 tvNetworkStatus.setTextColor(colorOk);
@@ -273,11 +280,16 @@ public class MainActivity extends Activity {
                 }
                 tvNetworkStatus.setTextColor(colorWarn);
             }
+            if (wrongKeyNow) { // a PC with another key is dropped without a word by the link: say so for 30 s
+                tvNetworkStatus.setText(tvNetworkStatus.getText() + "\n" + getString(R.string.dd_wrong_key, wrongKey));
+                if (!DDService.isConnected) tvNetworkStatus.setTextColor(colorBad);
+            }
             int serialPortStatus = DDService.getSerialPortStatus();
             switch (serialPortStatus){
                 case Serial.STATUS_NOT_INITIALIZED:
                 case Serial.STATUS_DEVICE_NOT_CONNECTED:
-                    tvFcStatus.setText(getResources().getString(R.string.status_disconnected));
+                    // not "Disconnected" (the network line's word): what to do
+                    tvFcStatus.setText(getResources().getString(R.string.fc_status_no_device));
                     tvFcStatus.setTextColor(colorBad);
                     break;
                 case Serial.STATUS_DEVICE_FOUND:
@@ -438,14 +450,21 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** What the last CONNECT / DISCONNECT tap asked for, and when: the button waits for the service to follow. */
+    private boolean serviceWantedRunning;
+    private long serviceSwitchedAt;
+
     private void startStopService(){
         Intent intent = new Intent(getApplicationContext(), DDService.class);
         if (DDService.isRunning){
             stopService(intent);
+            serviceWantedRunning = false;
         }else{
             if (!config.updateConfig()) return;
             getApplicationContext().startForegroundService(intent);
+            serviceWantedRunning = true;
         }
+        serviceSwitchedAt = System.currentTimeMillis();
         updateUi();
     }
 
@@ -455,8 +474,24 @@ public class MainActivity extends Activity {
         boolean audioPermission = isAudioPermissionGranted();
         boolean phoneStatePermission = isPhoneStatePermissionGranted();
         boolean all = cameraPermission && storagePermission && audioPermission && phoneStatePermission;
+        if (all && !isNotificationPermissionAsked()) return false;
         if (all) askLocationPermission();
         return all;
+    }
+
+    private boolean notificationsAsked;
+
+    /**
+     * DRAUPNE Link: Android 13+ shows the service's "running" notification only with POST_NOTIFICATIONS. Asked once;
+     * a No doesn't stop the service (the notification is all it loses).
+     * @return true when nothing is being asked now
+     */
+    private boolean isNotificationPermissionAsked(){
+        if (Build.VERSION.SDK_INT < 33 || notificationsAsked
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return true;
+        notificationsAsked = true;
+        requestPermission(Manifest.permission.POST_NOTIFICATIONS, 5);
+        return false;
     }
 
     private boolean locationAsked;
@@ -508,6 +543,7 @@ public class MainActivity extends Activity {
     protected void onResume(){
         super.onResume();
         checkOldApp();
+        if (System.currentTimeMillis() - serviceSwitchedAt > 5000) serviceWantedRunning = DDService.isRunning;
         isPaused = false;
         main.setKeepScreenOn(true);
         updateUi();
@@ -666,6 +702,23 @@ public class MainActivity extends Activity {
         super.onStart();
     }
 
+    /**
+     * DRAUPNE Link: the flight controller plugged in while the app is open (the USB_DEVICE_ATTACHED filter brings
+     * the intent here, singleTop): the service looks for it now, and asks for the permission anew after a Deny.
+     */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleUsbAttached(intent);
+    }
+
+    private void handleUsbAttached(Intent intent) {
+        if (intent == null || !android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) return;
+        log("USB device attached (intent)");
+        if (DDService.isRunning) DDService.usbDeviceAttached();
+    }
+
     @Override
     protected void onDestroy(){
         unlockTimer.removeCallbacks(unlockAfterHold);
@@ -679,8 +732,17 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == 4) { // location: allowed after the service started - start the GPS now
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && DDService.isRunning) PhoneLocation.start(this);
+        if (requestCode == 4) { // location: allowed after the service started - the service takes the location
+            // foreground type and starts the GPS (on Android 14 a service without the type gets no updates in the
+            // background); through the service, so no Activity context ends up in PhoneLocation's static
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && DDService.isRunning) {
+                Intent intent = new Intent(getApplicationContext(), DDService.class).setAction(DDService.ACTION_LOCATION_GRANTED);
+                getApplicationContext().startForegroundService(intent);
+            }
+            return;
+        }
+        if (requestCode == 5) { // notifications: whatever the answer, on with the start
+            if (checkPermissions()) startStopService();
             return;
         }
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {

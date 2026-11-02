@@ -66,6 +66,9 @@ final class AppUpdater {
      * Never while connected: installing ends this app, and with it the sticks to the flight controller.
      */
     static void downloadAndInstall(Context c, UpdateCheck.Found found, Progress progress) throws IOException {
+        // DRAUPNE Link (pc.19): nothing is installed that can't be checked - a release GitHub gave no SHA-256 for
+        // (or not a sha256 one) isn't downloaded at all
+        if (found.sha256 == null) throw new IOException(c.getString(R.string.dd_update_no_digest));
         File d = dir(c);
         cleanUp(c);
         if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room for the download");
@@ -110,7 +113,7 @@ final class AppUpdater {
             }
         }
         String got = hex(sha.digest());
-        if (found.sha256 != null && !found.sha256.equalsIgnoreCase(got)) {
+        if (found.sha256 == null || !found.sha256.equalsIgnoreCase(got)) {
             throw new IOException("the download doesn't match the release's SHA-256");
         }
     }

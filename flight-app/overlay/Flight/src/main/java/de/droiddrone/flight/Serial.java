@@ -16,7 +16,8 @@
  *
  *  Modified for DRAUPNE Link: one writer thread owns the USB port; stick packets
  *  (newest only) go first with a short timeout, never behind other requests, which back off while the link is slow;
- *  reads wait asynchronously, so they never hold up a write.
+ *  reads wait asynchronously, so they never hold up a write. The USB permission's answer is listened for (Deny
+ *  shows, a replug asks again).
  */
 
 package de.droiddrone.flight;
@@ -25,8 +26,10 @@ import static de.droiddrone.common.Logcat.log;
 
 import android.annotation.SuppressLint;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
@@ -91,8 +94,32 @@ public class Serial {
     private boolean restart;
     /** DRAUPNE Link: the newest stick packet not written yet (older ones are simply replaced). */
     private final AtomicReference<byte[]> pendingRc = new AtomicReference<>();
+    /** DRAUPNE Link: a request that goes after the sticks but before everything else, and never skipped (MSP_RX_MAP). */
+    private final AtomicReference<byte[]> pendingUrgent = new AtomicReference<>();
     /** DRAUPNE Link: every other MSP request, in order. */
     private final LinkedBlockingQueue<byte[]> pendingMsp = new LinkedBlockingQueue<>(64);
+    /** DRAUPNE Link: when the USB permission was asked for; no answer in PERMISSION_WAIT_MS counts as Deny. */
+    private volatile long permissionRequestedAt;
+    private static final long PERMISSION_WAIT_MS = 10000;
+    /** The USB devices seen at the last probe; a change while the permission was denied asks again. */
+    private String lastDeviceList = "";
+    private boolean receiverRegistered;
+    /**
+     * DRAUPNE Link: Android's answer to the USB permission pop-up. Upstream never listened: after Deny the status
+     * stayed "requested" for ever, and a replug did nothing.
+     */
+    private final BroadcastReceiver permissionReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent intent) {
+            if (!ACTION_USB_PERMISSION.equals(intent.getAction())) return;
+            boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+            log("USB permission " + (granted ? "granted" : "denied"));
+            if (status != STATUS_USB_PERMISSION_REQUESTED) return;
+            status = granted ? STATUS_USB_PERMISSION_GRANTED : STATUS_USB_PERMISSION_DENIED;
+            if (granted) wakeInit();
+        }
+    };
+    private final Object initSignal = new Object();
     private final Object writeSignal = new Object();
     private volatile long slowUntil;
     /**
@@ -121,6 +148,7 @@ public class Serial {
         mavlink.close();
         threadsId++;
         closePort(); // DRAUPNE Link: the old connection, or each re-init leaked one (and its reader stayed blocked)
+        registerPermissionReceiver();
         Thread initThread = new Thread(initRun);
         initThread.setDaemon(false);
         initThread.setName("serialInitThread");
@@ -129,6 +157,67 @@ public class Serial {
 
     public int getStatus(){
         return status;
+    }
+
+    private synchronized void registerPermissionReceiver() {
+        if (receiverRegistered) return;
+        try {
+            IntentFilter filter = new IntentFilter(ACTION_USB_PERMISSION);
+            if (android.os.Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(permissionReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                context.registerReceiver(permissionReceiver, filter);
+            }
+            receiverRegistered = true;
+        } catch (Exception e) {
+            log("USB permission receiver error: " + e);
+        }
+    }
+
+    private synchronized void unregisterPermissionReceiver() {
+        if (!receiverRegistered) return;
+        receiverRegistered = false;
+        try {
+            context.unregisterReceiver(permissionReceiver);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** The init loop's next try now (the permission was granted, or the flight controller plugged in). */
+    public void wakeInit() {
+        synchronized (initSignal) {
+            initSignal.notifyAll();
+        }
+    }
+
+    /**
+     * DRAUPNE Link: the USB devices there now, as one string, so a change (the flight controller plugged in again,
+     * or another device) can be told from a probe that found the same.
+     */
+    private String deviceListNow() {
+        StringBuilder sb = new StringBuilder();
+        for (String name : manager.getDeviceList().keySet()) sb.append(name).append(' ');
+        return sb.toString();
+    }
+
+    /**
+     * DRAUPNE Link: after Deny (or no answer to the pop-up in 10 s) the permission is asked for again only when the
+     * flight controller is plugged in again (or the USB devices change), never every 2 s - a pop-up every 2 s would be
+     * worse than none. The device going lets the probe start over.
+     */
+    private void checkPermissionState() {
+        if (status == STATUS_USB_PERMISSION_REQUESTED && System.currentTimeMillis() - permissionRequestedAt > PERMISSION_WAIT_MS) {
+            log("USB permission: no answer in " + PERMISSION_WAIT_MS / 1000 + " s, counted as denied");
+            status = STATUS_USB_PERMISSION_DENIED;
+        }
+        if (status == STATUS_USB_PERMISSION_DENIED || status == STATUS_USB_PERMISSION_REQUESTED) {
+            String devices = deviceListNow();
+            if (!deviceAttached() || !devices.equals(lastDeviceList)) {
+                log("USB devices changed: looking for the flight controller again");
+                driver = null;
+                status = STATUS_DEVICE_NOT_CONNECTED;
+            }
+        }
     }
 
     private final Runnable initRun = new Runnable() {
@@ -145,6 +234,7 @@ public class Serial {
                             return;
                         }
                     }else {
+                        checkPermissionState();
                         if (findDevice()) {
                             if (checkPermission()) {
                                 if (openUsbSerialPort()) {
@@ -154,7 +244,9 @@ public class Serial {
                             }
                         }
                     }
-                    Thread.sleep(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
+                    synchronized (initSignal) {
+                        initSignal.wait(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
+                    }
                 } catch (Exception e) {
                     log("Serial init thread error: " + e);
                     try {
@@ -168,6 +260,7 @@ public class Serial {
 
     private boolean findDevice(){
         if (status != STATUS_DEVICE_NOT_CONNECTED && driver != null) return true;
+        lastDeviceList = deviceListNow();
         List<UsbSerialDriver> availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(manager);
         if (availableDrivers.isEmpty()) {
             status = STATUS_DEVICE_NOT_CONNECTED;
@@ -224,7 +317,8 @@ public class Serial {
             status = STATUS_USB_PERMISSION_GRANTED;
             return true;
         }
-        if (status == STATUS_USB_PERMISSION_REQUESTED) return false;
+        // DRAUPNE Link: denied stays denied until the device is plugged in again (checkPermissionState)
+        if (status == STATUS_USB_PERMISSION_REQUESTED || status == STATUS_USB_PERMISSION_DENIED) return false;
         PendingIntent pendingIntent;
         Intent intent = new Intent(ACTION_USB_PERMISSION);
         intent.setPackage(context.getPackageName());
@@ -234,6 +328,7 @@ public class Serial {
             pendingIntent = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_UPDATE_CURRENT);
         }
         status = STATUS_USB_PERMISSION_REQUESTED;
+        permissionRequestedAt = System.currentTimeMillis();
         manager.requestPermission(driver.getDevice(), pendingIntent);
         return false;
     }
@@ -310,10 +405,11 @@ public class Serial {
         try {
             port.open(connection);
             port.setParameters(config.getSerialBaudRate(), serialDataBits, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             status = STATUS_SERIAL_PORT_ERROR;
             log("USB Serial error: " + e);
             e.printStackTrace();
+            closePort(); // DRAUPNE Link: the connection too, or every failed open leaked one
             return false;
         }
         Thread readerThread = new Thread(readerRun);
@@ -395,6 +491,17 @@ public class Serial {
         signalWriter();
     }
 
+    /**
+     * DRAUPNE Link: a request that must get through - the channel map, without which no sticks go out: right after
+     * the sticks, before the other requests, and not skipped while the link is slow. One at a time (a newer one
+     * replaces it).
+     */
+    public void writeDataMspUrgent(byte[] data){
+        if (status != STATUS_SERIAL_PORT_OPENED || data == null) return;
+        pendingUrgent.set(data);
+        signalWriter();
+    }
+
     /** DRAUPNE Link: a stick packet. Replaces one not written yet, and goes before every other request. */
     public void writeRcMsp(byte[] data){
         if (status != STATUS_SERIAL_PORT_OPENED || data == null || !isMspCompatible()) return;
@@ -415,6 +522,7 @@ public class Serial {
 
     private void startWriter(){
         pendingRc.set(null);
+        pendingUrgent.set(null);
         pendingMsp.clear();
         Thread writerThread = new Thread(writerRun);
         writerThread.setDaemon(true);
@@ -438,6 +546,11 @@ public class Serial {
                         write(rc, rcWriteTimeoutMs, true);
                         continue;
                     }
+                    byte[] urgent = pendingUrgent.getAndSet(null);
+                    if (urgent != null) {
+                        write(urgent, serialPortReadWriteTimeoutMs, false);
+                        continue;
+                    }
                     byte[] other = pendingMsp.poll();
                     if (other != null) {
                         if (System.currentTimeMillis() < slowUntil) {
@@ -448,7 +561,7 @@ public class Serial {
                         continue;
                     }
                     synchronized (writeSignal) {
-                        if (pendingRc.get() == null && pendingMsp.isEmpty()) writeSignal.wait(20);
+                        if (pendingRc.get() == null && pendingUrgent.get() == null && pendingMsp.isEmpty()) writeSignal.wait(20);
                     }
                 } catch (InterruptedException e) {
                     return;
@@ -506,6 +619,8 @@ public class Serial {
     public void close(){
         threadsId++;
         signalWriter();
+        wakeInit();
+        unregisterPermissionReceiver();
         if (msp != null) msp.close();
         if (mavlink != null) mavlink.close();
         closePort();
@@ -515,6 +630,7 @@ public class Serial {
     /** The port and its USB connection (or the native serial port), if open. */
     private void closePort() {
         signalWriter();
+        PcLinkStats.rcPortClosed();
         try {
             if (port != null) port.close();
         } catch (Exception e) {
