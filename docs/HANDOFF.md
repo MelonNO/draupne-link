@@ -35,8 +35,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   - **Boot:** `gui/BootReveal` over the layered pane (3 s: fade in 560, hold 320, fly 1560, out 560 ms; click or key
     skips): brackets to the window corners, the link folds, the crosshair flies to the video's middle, splits into
     the OSD's crosshair (`OsdRenderer.crosshair(g, cx, cy, unit, color, outline)` at the end, so it sits pixel for
-    pixel on the real one) and turns white. `gui/Logo` draws the mark from its SVG; `AppIcon` loads the designer's
-    PNGs/.ico from resources/icon; the phone app's launcher uses the same set. The phone has `BootRevealView`.
+    pixel on the real one) and turns white. `gui/Logo` draws the mark from its SVG; the icons (`AppIcon`, the .ico, the
+    phone app's launcher PNGs) are the mark *without* its brackets, 1.75 x bigger (`Logo.paintIconMark`); only the
+    boot animation keeps the brackets. The launcher PNGs were generated with a throwaway test (scratchpad `IconShot`). The phone has `BootRevealView`.
   - Measured on a far phone with pc.14 (1.0.21): 720p ~4-5 damaged frames/s from random packet loss, which is what
     the parity is for. **Not yet measured with pc.15/16:** the size switch gap, the parity's `recovered` count; the
     phone GPS on a real phone; the map on a real flight.

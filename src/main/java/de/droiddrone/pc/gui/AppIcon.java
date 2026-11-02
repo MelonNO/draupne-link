@@ -10,8 +10,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The window icon: the DRAUPNE Link mark (resources/icon, made from its SVG at each size, so the small ones stay
- * crisp); drawn from {@link Logo} if a resource is missing. The .ico for the .exe and installer comes from the same set.
+ * The window icon: the DRAUPNE Link mark without its brackets, drawn from {@link Logo} at each size (a resource
+ * PNG under resources/icon takes precedence if one is there). The .ico for the .exe and installer is written from
+ * the same drawings.
  */
 public final class AppIcon {
     private static final int[] SIZES = {16, 24, 32, 48, 64, 128, 256};
@@ -65,14 +66,14 @@ public final class AppIcon {
         return draw(size);
     }
 
-    /** The mark on its dark rounded tile, as the SVG has it. */
+    /** The mark without its brackets, enlarged, on its dark rounded tile (the brackets stay in the boot animation). */
     static BufferedImage draw(int size) {
         BufferedImage img = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = Theme.smooth(img.createGraphics());
         g.setColor(Logo.DARK);
         int r = Math.round(size * 112f / 512);
         g.fillRoundRect(0, 0, size, size, r, r);
-        Logo.paint(g, 0, 0, size, 1f);
+        Logo.paintIconMark(g, 0, 0, size, 1f);
         g.dispose();
         return img;
     }

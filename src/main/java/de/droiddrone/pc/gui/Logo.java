@@ -25,11 +25,24 @@ final class Logo {
     private Logo() {
     }
 
-    /** The whole mark with its top-left corner at x, y and this size (pixels). */
+    /** The whole mark, brackets and all, with its top-left corner at x, y and this size (pixels): the boot animation. */
     static void paint(Graphics2D g, double x, double y, double size, float alpha) {
         for (Corner c : Corner.values()) paintBracket(g, c, x, y, size, alpha);
+        paintMark(g, x, y, size, alpha);
+    }
+
+    /** The mark without its brackets - the link and the crosshair - in the same box. */
+    static void paintMark(Graphics2D g, double x, double y, double size, float alpha) {
         paintLink(g, x, y, size, alpha);
         paintCrosshair(g, x, y, size, alpha);
+    }
+
+    /** The icon's mark: without brackets and 1.75 x bigger, so its bars fill the tile. */
+    static final double ICON_SCALE = 1.75;
+
+    static void paintIconMark(Graphics2D g, double x, double y, double size, float alpha) {
+        double big = size * ICON_SCALE;
+        paintMark(g, x + (size - big) / 2, y + (size - big) / 2, big, alpha);
     }
 
     private static Graphics2D at(Graphics2D g, double x, double y, double size, float alpha) {
