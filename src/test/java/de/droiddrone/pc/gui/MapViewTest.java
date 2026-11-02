@@ -7,6 +7,8 @@ import de.droiddrone.pc.map.TileSource;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.awt.event.InputEvent;
+import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 
@@ -82,5 +84,40 @@ class MapViewTest {
         assertEquals("3 MIN AGO", MapView.ageText(190_000));
         assertEquals("1.25 KM", MapView.distanceText(1250));
         assertEquals("230 M", MapView.distanceText(230.4));
+    }
+
+    @Test
+    void altDragDrawsABoxAndHandsOverItsArea(@TempDir Path dir) {
+        MapView map = new MapView(new TileCache(dir, "test", false));
+        map.setSize(400, 300);
+        double[][] got = new double[1][];
+        map.setOnAreaSelected(a -> got[0] = a);
+        int alt = InputEvent.ALT_DOWN_MASK | InputEvent.BUTTON1_DOWN_MASK;
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_PRESSED, 0, alt, 100, 100, 1, false, MouseEvent.BUTTON1));
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_DRAGGED, 0, alt, 220, 180, 1, false, MouseEvent.NOBUTTON));
+        BufferedImage during = map.snapshot(400, 300);
+        assertTrue(count(during, ACCENT) > 200, "the box's frame shows while dragging: " + count(during, ACCENT));
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_RELEASED, 0, InputEvent.ALT_DOWN_MASK, 220, 180, 1, false, MouseEvent.BUTTON1));
+        assertNotNull(got[0], "the area was handed over");
+        double[] nw = map.toLatLon(100, 100), se = map.toLatLon(220, 180);
+        assertEquals(se[0], got[0][0], 1e-9, "minLat");
+        assertEquals(nw[0], got[0][1], 1e-9, "maxLat");
+        assertEquals(nw[1], got[0][2], 1e-9, "minLon");
+        assertEquals(se[1], got[0][3], 1e-9, "maxLon");
+        assertTrue(count(map.snapshot(400, 300), ACCENT) < count(during, ACCENT), "the box is gone after");
+
+        // the view as an area: the corners
+        double[] view = map.visibleArea();
+        assertEquals(map.toLatLon(0, 0)[0], view[1], 1e-9);
+        assertEquals(map.toLatLon(400, 300)[1], view[3], 1e-9);
+
+        // without Alt a drag pans the map and selects nothing
+        got[0] = null;
+        double before = map.toLatLon(200, 150)[0];
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_PRESSED, 0, InputEvent.BUTTON1_DOWN_MASK, 100, 100, 1, false, MouseEvent.BUTTON1));
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_DRAGGED, 0, InputEvent.BUTTON1_DOWN_MASK, 100, 160, 1, false, MouseEvent.NOBUTTON));
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_RELEASED, 0, 0, 100, 160, 1, false, MouseEvent.BUTTON1));
+        assertNull(got[0]);
+        assertNotEquals(before, map.toLatLon(200, 150)[0], "panned");
     }
 }

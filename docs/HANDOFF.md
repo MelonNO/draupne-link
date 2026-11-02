@@ -13,7 +13,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   everything round it, the MENU header, the boot animation and the new mark. Where the pieces live:
   - **Map:** `map/Mercator`, `map/TileSource` (Kartverket topo/paper, Esri satellite, OSM; `inNorway` is a 22-point
     outline of the mainland + Svalbard + Jan Mayen, so Sweden and Finland are outside), `map/TileCache`
-    (`%APPDATA%\DraupneLink\tiles`, kept for good, `prefetch` of the levels under a rest, not for OSM),
+    (`%APPDATA%\DraupneLink\tiles`, kept for good, `prefetch` of the levels under a rest, not for OSM; `download` of a
+    whole area for every picture, `gui/MapDownloadDialog`: DOWNLOAD AREA, Alt + drag, the right-click menu),
     `map/Coordinates` (MGRS / UTM Krüger with Norway's zone exceptions, tested against GeographicLib's 38SMB example),
     `map/Elevation` (Kartverket's height service in Norway, Open-Meteo elsewhere and as fallback), `map/FlightTrack`
     (GPX as it comes, `last-position.txt`, both GPS sources with a 5 s fallback, pins as waypoints on close),
@@ -52,6 +53,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   to use the update line when pc.18+ is already there. **Never run on a phone or emulator**; the first real test is
   pc.17 to pc.18 through the browser, then pc.18 to the next version in the app. (The draft lived in the private
   repo's `wip/in-app-updater/`.)
+- **On main, not released: DOWNLOAD AREA**, the map saved for offline use like Mission Planner's prefetch
+  (`TileCache.download`, `MapDownloadDialog`; the map window's button, Alt + drag a box, or the right-click menu's
+  "Download this view"). Every tile of the area from one level to another, coarse first, those on disk skipped, at
+  most 250 000 tiles a go; two connections, OpenStreetMap one with a 250 ms pause (its policy forbids bulk
+  downloads; the pilot chose to include it anyway - if OSM ever blocks the app's User-Agent, drop it from
+  `download`). The rest prefetch is unchanged (never OSM). Tried off screen only, never with a server.
 - 1.0.21 brought video for bad coverage (AUTO / SHARP / ROBUST, parity packets, fast size switch) with pc.15.
 - 1.0.20 bundled phone app 2.3.0-pc.14: the fix for pc.13,
   which on a test phone started no video (intra refresh, where its encoder claimed support) and, the video start being

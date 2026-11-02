@@ -1,7 +1,12 @@
 package de.droiddrone.pc.map;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -56,8 +61,47 @@ class ElevationAndPrefetchTest {
     }
 
     @Test
-    void openStreetMapIsNeverPrefetched() {
+    void openStreetMapIsNotPrefetchedAtRestButAnAskedForAreaIs(@TempDir Path dir) throws Exception {
         assertFalse(TileSource.OSM.prefetchAllowed);
         assertTrue(TileSource.KARTVERKET_TOPO.prefetchAllowed);
+        TileCache cache = new TileCache(dir, "test", false);
+        TileCache.Download d = cache.download(TileSource.OSM, 3, 3, 59.910, 59.918, 10.745, 10.760);
+        assertEquals(1, d.total, "one tile at zoom 3");
+        assertTrue(await(d), "finished");
+    }
+
+    @Test
+    void anAreaDownloadCountsItsTilesSkipsSavedOnesAndStopsWhenNoServerAnswers(@TempDir Path dir) throws Exception {
+        double minLat = 59.910, maxLat = 59.918, minLon = 10.745, maxLon = 10.760;
+        assertEquals(TileCache.plan(12, 12, 18, minLat, maxLat, minLon, maxLon, 1_000_000).size(), TileCache.count(12, 18, minLat, maxLat, minLon, maxLon),
+                "counted as planned");
+        assertEquals(1, TileCache.count(12, 12, minLat, maxLat, minLon, maxLon));
+        assertTrue(TileCache.count(2, 19, -85, 85, -180, 180) > TileCache.MAX_DOWNLOAD, "the world is too much");
+
+        // one tile of the area already on disk
+        int x = (int) (Mercator.x(minLon, 12) / Mercator.TILE), y = (int) (Mercator.y(maxLat, 12) / Mercator.TILE);
+        Path file = dir.resolve("kartverket").resolve("12").resolve(Integer.toString(x)).resolve(y + ".png");
+        Files.createDirectories(file.getParent());
+        ImageIO.write(new BufferedImage(256, 256, BufferedImage.TYPE_INT_RGB), "png", file.toFile());
+
+        TileCache cache = new TileCache(dir, "test", false); // no network: every fetch fails to reach a server
+        TileCache.Download d = cache.download(TileSource.KARTVERKET_TOPO, 12, 18, minLat, maxLat, minLon, maxLon);
+        assertEquals(TileCache.count(12, 18, minLat, maxLat, minLon, maxLon), d.total);
+        assertTrue(await(d), "finished");
+        assertEquals(1, d.onDisk(), "the saved tile was skipped, not fetched");
+        assertEquals(0, d.fetched());
+        assertTrue(d.failed() >= 20, "tried before giving up: " + d.failed());
+        assertTrue(d.gaveUp(), "no server: stops instead of failing every tile");
+        assertTrue(d.done() < d.total);
+
+        TileCache.Download c = cache.download(TileSource.KARTVERKET_TOPO, 12, 18, minLat, maxLat, minLon, maxLon);
+        c.cancel();
+        assertTrue(await(c));
+        assertTrue(c.isCancelled());
+    }
+
+    private static boolean await(TileCache.Download d) throws InterruptedException {
+        for (int i = 0; i < 500 && !d.isFinished(); i++) Thread.sleep(10);
+        return d.isFinished();
     }
 }

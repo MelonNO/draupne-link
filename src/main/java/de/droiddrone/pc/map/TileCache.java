@@ -26,7 +26,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Map tiles: in memory for the ones on screen, on disk for good (tiles\source\z\x\y.png: nothing is ever deleted or
  * fetched again, so every place looked at works without internet), fetched with two connections at most. When the
  * map rests on a place, {@link #prefetch} also fetches the levels below it (zooming in later works offline too) on a
- * third, slow thread; not for OpenStreetMap, whose tile policy forbids fetching what isn't being looked at.
+ * third, slow thread; not for OpenStreetMap, whose tile policy forbids fetching what isn't being looked at. An area
+ * the pilot asks for ({@link #download}, like Mission Planner's prefetch) is fetched whole, for every picture.
  * Thread-safe; the fetches call back when a tile is in.
  */
 public final class TileCache {
@@ -198,6 +199,142 @@ public final class TileCache {
                 if (prefetchGeneration.get() == generation) prefetchLeft.set(--left);
             }
         });
+    }
+
+    // ------------------------------------------------------------------ downloading an area for offline use
+
+    /** The most tiles one download may take; more means a smaller area or a shallower deepest level. */
+    public static final int MAX_DOWNLOAD = 250_000;
+    /** Fetches in a row that reached no server before a download gives up. */
+    private static final int GIVE_UP_AFTER = 20;
+
+    /** How many tiles cover the area at every zoom from zMin to zMax (counted, not listed: may be billions). */
+    public static long count(int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
+        long n = 0;
+        for (int z = Math.max(0, zMin); z <= zMax; z++) {
+            long side = 1L << z;
+            long x0 = (long) Math.floor(Mercator.x(minLon, z) / Mercator.TILE), x1 = (long) Math.floor(Mercator.x(maxLon, z) / Mercator.TILE);
+            long y0 = Math.max(0, (long) Math.floor(Mercator.y(maxLat, z) / Mercator.TILE)), y1 = Math.min(side - 1, (long) Math.floor(Mercator.y(minLat, z) / Mercator.TILE));
+            if (x1 >= x0 && y1 >= y0) n += (x1 - x0 + 1) * (y1 - y0 + 1);
+        }
+        return n;
+    }
+
+    /**
+     * An area being fetched for offline use: every tile of it from one level to another, coarse levels first, those
+     * already on disk skipped. The figures are read as it runs; {@link #cancel} stops it (what is saved stays).
+     */
+    public final class Download {
+        public final TileSource source;
+        public final int total;
+        private final AtomicInteger done = new AtomicInteger(), fetched = new AtomicInteger(), onDisk = new AtomicInteger(),
+                failed = new AtomicInteger(), running = new AtomicInteger();
+        private volatile boolean cancelled, finished, gaveUp;
+
+        private Download(TileSource source, int total) {
+            this.source = source;
+            this.total = total;
+        }
+
+        /** Tiles looked at so far (fetched, on disk already, or failed). */
+        public int done() {
+            return done.get();
+        }
+
+        public int fetched() {
+            return fetched.get();
+        }
+
+        /** Tiles that were on disk already. */
+        public int onDisk() {
+            return onDisk.get();
+        }
+
+        public int failed() {
+            return failed.get();
+        }
+
+        public boolean isFinished() {
+            return finished;
+        }
+
+        public boolean isCancelled() {
+            return cancelled;
+        }
+
+        /** It stopped by itself: no server could be reached for a while. */
+        public boolean gaveUp() {
+            return gaveUp;
+        }
+
+        public void cancel() {
+            cancelled = true;
+        }
+    }
+
+    /**
+     * Fetches the whole area from zMin to zMax for this picture, like Mission Planner's prefetch, on threads of its
+     * own; at most {@link #MAX_DOWNLOAD} tiles (count first). Kartverket and Esri with two connections;
+     * OpenStreetMap, whose policy frowns on this, with one and a pause between tiles - keep its areas small.
+     */
+    public Download download(TileSource source, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
+        int z0 = Math.max(0, zMin);
+        List<Tile> tiles = plan(z0, z0, Math.min(source.maxZoom, zMax), minLat, maxLat, minLon, maxLon, MAX_DOWNLOAD);
+        Download d = new Download(source, tiles.size());
+        int threads = source.prefetchAllowed ? 2 : 1;
+        long gapMs = source.prefetchAllowed ? 0 : 250;
+        ExecutorService workers = Executors.newFixedThreadPool(threads, r -> thread(r, "mapDownload"));
+        AtomicInteger next = new AtomicInteger();
+        AtomicInteger misses = new AtomicInteger();
+        d.running.set(threads);
+        for (int i = 0; i < threads; i++) {
+            workers.execute(() -> {
+                for (int k; (k = next.getAndIncrement()) < tiles.size(); ) {
+                    if (d.cancelled) break;
+                    if (misses.get() >= GIVE_UP_AFTER) {
+                        d.gaveUp = true;
+                        break;
+                    }
+                    Tile t = tiles.get(k);
+                    Path file = file(source, t.z(), t.x(), t.y());
+                    if (Files.isRegularFile(file)) {
+                        d.onDisk.incrementAndGet();
+                    } else {
+                        boolean ok = false;
+                        try {
+                            byte[] data = fetch(source.url(t.z(), t.x(), t.y()));
+                            if (data != null && ImageIO.read(new java.io.ByteArrayInputStream(data)) != null) {
+                                write(file, data);
+                                ok = true;
+                            }
+                        } catch (IOException | RuntimeException e) {
+                            // counted as failed
+                        }
+                        if (ok) {
+                            d.fetched.incrementAndGet();
+                            misses.set(0);
+                        } else {
+                            d.failed.incrementAndGet();
+                            if (offline) misses.incrementAndGet();
+                        }
+                        if (gapMs > 0) {
+                            try {
+                                Thread.sleep(gapMs);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+                    }
+                    d.done.incrementAndGet();
+                }
+                if (d.running.decrementAndGet() == 0) {
+                    d.finished = true;
+                    workers.shutdown();
+                }
+            });
+        }
+        return d;
     }
 
     private byte[] fetch(String url) throws IOException {

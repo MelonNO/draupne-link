@@ -38,7 +38,8 @@ import java.util.function.Consumer;
  * it was. A toolbar in the program's style above the map (FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE; the map picture and
  * the coordinate format), the figures under it: the place under the mouse and the terrain height there (m and ft),
  * the drone's position, altitude, distance and bearing from the launch point, and which GPS the position comes from.
- * Right-click on the map drops a pin (Alpha, Bravo ...), or renames or removes one.
+ * Right-click on the map drops a pin (Alpha, Bravo ...), or renames or removes one. DOWNLOAD AREA (or Alt + drag a
+ * box on the map) saves the map for offline use, like Mission Planner's prefetch.
  */
 final class MapWindow extends JFrame {
     static final String BOUNDS_KEY = "mapWindow";
@@ -46,6 +47,7 @@ final class MapWindow extends JFrame {
     private static final TileSource[] SOURCES = {null, TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_RASTER, TileSource.SATELLITE, TileSource.OSM};
 
     private final MapView map;
+    private final TileCache cache;
     private final Elevation elevation;
     private final Consumer<Map<String, String>> saver;
     private final JButton followButton = Theme.secondaryButton("Follow: on");
@@ -56,6 +58,7 @@ final class MapWindow extends JFrame {
     private Coordinates.Format format;
     private boolean preferPhone;
     private PinManagerDialog pinManager;
+    private MapDownloadDialog downloader;
     private double[] cursor;
     private long cursorSerial;
     private final Timer terrainLookup = new Timer(250, e -> lookupTerrain());
@@ -65,6 +68,7 @@ final class MapWindow extends JFrame {
     MapWindow(JFrame owner, TileCache cache, Elevation elevation, Pins pins, TileSource source, Coordinates.Format format, String savedBounds,
               Consumer<Map<String, String>> saver, Consumer<TileSource> onSource, Consumer<Coordinates.Format> onFormat, Runnable findDrone) {
         super("DRAUPNE Link map");
+        this.cache = cache;
         this.elevation = elevation;
         this.saver = saver;
         this.format = format;
@@ -86,6 +90,7 @@ final class MapWindow extends JFrame {
             syncCombos();
         });
         map.setOnCursor(this::cursorAt);
+        map.setOnAreaSelected(this::downloadArea);
 
         // ---- toolbar
         JPanel bar = Theme.card(new BorderLayout(12, 0));
@@ -124,6 +129,10 @@ final class MapWindow extends JFrame {
             pinManager.toFront();
         });
         left.add(pinsButton);
+        JButton downloadButton = Theme.secondaryButton("Download area");
+        downloadButton.setToolTipText("Save the map for offline use: this view, or hold Alt and drag a box on the map");
+        downloadButton.addActionListener(e -> downloadArea(map.visibleArea()));
+        left.add(downloadButton);
         JButton find = Theme.primaryButton("Find drone");
         find.setToolTipText("The last known position, with the coordinates to copy and map links");
         find.addActionListener(e -> findDrone.run());
@@ -198,6 +207,17 @@ final class MapWindow extends JFrame {
 
     MapView map() {
         return map;
+    }
+
+    /** DOWNLOAD AREA, the menu or an Alt + drag box: the download window for that area, with the picture shown. */
+    private void downloadArea(double[] area) {
+        if (downloader == null || !downloader.isDisplayable()) {
+            downloader = new MapDownloadDialog(this, cache, map.effectiveSource(), map.zoom(), area);
+        } else {
+            downloader.setArea(area, map.effectiveSource(), map.zoom());
+        }
+        downloader.setVisible(true);
+        downloader.toFront();
     }
 
     TileSource source() {
@@ -336,6 +356,6 @@ final class MapWindow extends JFrame {
     /** Wide enough for the toolbar's buttons and both choices, and the six figures. */
     @Override
     public Dimension getMinimumSize() {
-        return new Dimension(960, 560);
+        return new Dimension(1080, 560);
     }
 }

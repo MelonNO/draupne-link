@@ -18,7 +18,7 @@ public enum TileSource {
     SATELLITE("satellite", "Satellite",
             "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
             "© Esri, Maxar, Earthstar Geographics", 19, false, true),
-    /** Its tile policy: only what is being looked at, so no prefetching. */
+    /** Its tile policy: only what is being looked at, so nothing fetched at rest; an area asked for, one tile at a time. */
     OSM("osm", "OpenStreetMap",
             "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
             "© OpenStreetMap contributors", 19, false, false);
@@ -33,7 +33,7 @@ public enum TileSource {
     public final int maxZoom;
     /** Covers Norway only (blank tiles elsewhere). */
     public final boolean norwayOnly;
-    /** The levels under the place looked at may be fetched ahead, for offline use. */
+    /** The levels under the place looked at may be fetched ahead, for offline use (an asked-for area always may). */
     public final boolean prefetchAllowed;
 
     TileSource(String id, String title, String template, String attribution, int maxZoom, boolean norwayOnly, boolean prefetchAllowed) {

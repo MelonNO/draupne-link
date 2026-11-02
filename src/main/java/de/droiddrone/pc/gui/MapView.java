@@ -41,7 +41,8 @@ import java.util.function.Consumer;
  * is an arrow pointing where it heads; when its position is old (link or flight controller gone) it turns grey
  * under a red LAST KNOWN badge with the age, which is the point of the map: the place to start looking. Home is
  * where it armed, with range rings. When the map rests on a place, the levels under it are fetched for offline use
- * (see TileCache.prefetch). Repaints come from the window's 30 Hz refresh; tiles arrive on their own threads.
+ * (see TileCache.prefetch); hold Alt and drag a box to download that area whole (see MapDownloadDialog). Repaints
+ * come from the window's 30 Hz refresh; tiles arrive on their own threads.
  */
 class MapView extends JComponent {
     private static final double MIN_ZOOM = 2, FIRST_FIX_ZOOM = 16;
@@ -55,6 +56,9 @@ class MapView extends JComponent {
     private TileSource chosen; // null = auto (by where the drone is)
     private Consumer<TileSource> onSourceChosen;
     private Consumer<double[]> onCursor;
+    private Consumer<double[]> onAreaSelected;
+    /** Alt + drag: the box being drawn, in pixels; null when none. */
+    private Point selectStart, selectEnd;
     private final Runnable tileReady = () -> SwingUtilities.invokeLater(this::repaint);
     private final Timer settled = new Timer(1200, e -> prefetchVisible());
 
@@ -89,14 +93,24 @@ class MapView extends JComponent {
                     TacticalCombo.show(menu(e.getX(), e.getY()), MapView.this, e.getX(), e.getY());
                     return;
                 }
+                dragged = false;
+                if (e.isAltDown() && SwingUtilities.isLeftMouseButton(e) && onAreaSelected != null) {
+                    selectStart = selectEnd = e.getPoint(); // a box to download, not a pan
+                    return;
+                }
                 dragStart = e.getPoint();
                 dragLat = centerLat;
                 dragLon = centerLon;
-                dragged = false;
             }
 
             @Override
             public void mouseDragged(MouseEvent e) {
+                if (selectStart != null) {
+                    selectEnd = e.getPoint();
+                    dragged = true;
+                    repaint();
+                    return;
+                }
                 if (dragStart == null) return;
                 int dx = e.getX() - dragStart.x, dy = e.getY() - dragStart.y;
                 if (!dragged && Math.abs(dx) + Math.abs(dy) < 3) return;
@@ -111,6 +125,11 @@ class MapView extends JComponent {
             @Override
             public void mouseReleased(MouseEvent e) {
                 dragStart = null;
+                if (selectStart == null) return;
+                Rectangle box = selection();
+                selectStart = selectEnd = null;
+                repaint();
+                if (box.width >= 8 && box.height >= 8) onAreaSelected.accept(area(box));
             }
 
             @Override
@@ -165,6 +184,31 @@ class MapView extends JComponent {
     /** Gets the place under the mouse as {lat, lon}, or null when it leaves the map. */
     void setOnCursor(Consumer<double[]> listener) {
         onCursor = listener;
+    }
+
+    /**
+     * Gets an area to download for offline use as {minLat, maxLat, minLon, maxLon}: a box drawn with Alt + drag, or
+     * the view from the right-click menu. Without a listener Alt + drag pans like any drag.
+     */
+    void setOnAreaSelected(Consumer<double[]> listener) {
+        onAreaSelected = listener;
+    }
+
+    /** The box being drawn, normalised. */
+    private Rectangle selection() {
+        int x = Math.min(selectStart.x, selectEnd.x), y = Math.min(selectStart.y, selectEnd.y);
+        return new Rectangle(x, y, Math.abs(selectEnd.x - selectStart.x), Math.abs(selectEnd.y - selectStart.y));
+    }
+
+    /** The places at a box's corners as {minLat, maxLat, minLon, maxLon}. */
+    private double[] area(Rectangle box) {
+        double[] nw = toLatLon(box.x, box.y), se = toLatLon(box.x + box.width, box.y + box.height);
+        return new double[]{se[0], nw[0], nw[1], se[1]};
+    }
+
+    /** What the map shows, as {minLat, maxLat, minLon, maxLon}. */
+    double[] visibleArea() {
+        return area(new Rectangle(0, 0, getWidth(), getHeight()));
     }
 
     private void viewChanged() {
@@ -399,6 +443,12 @@ class MapView extends JComponent {
         fit.setEnabled(track != null && !track.isEmpty());
         fit.addActionListener(e -> fitTrack());
         menu.add(fit);
+        if (onAreaSelected != null) {
+            menu.addSeparator();
+            JMenuItem download = new JMenuItem("Download this view for offline use...");
+            download.addActionListener(e -> onAreaSelected.accept(visibleArea()));
+            menu.add(download);
+        }
         return menu;
     }
 
@@ -434,11 +484,34 @@ class MapView extends JComponent {
             paintScale(g, h);
             paintAttribution(g, src, w, h);
             paintZoomButtons(g, w);
+            if (selectStart != null) paintSelection(g);
             g.setColor(Theme.LINE);
             g.drawRect(0, 0, w - 1, h - 1);
         } finally {
             g.dispose();
         }
+    }
+
+    /** The box being drawn with Alt + drag: red frame, its size on the ground. */
+    private void paintSelection(Graphics2D g) {
+        Rectangle box = selection();
+        g.setColor(Theme.alpha(Theme.ACCENT, 40));
+        g.fillRect(box.x, box.y, box.width, box.height);
+        g.setColor(Theme.ACCENT);
+        g.setStroke(new BasicStroke(2f));
+        g.drawRect(box.x, box.y, box.width, box.height);
+        if (box.width < 40 || box.height < 24) return;
+        double[] a = area(box);
+        double midLat = (a[0] + a[1]) / 2;
+        String text = distanceText(Mercator.distanceM(midLat, a[2], midLat, a[3])) + " x " + distanceText(Mercator.distanceM(a[0], a[2], a[1], a[2]))
+                + "   DOWNLOAD";
+        g.setFont(Theme.headingFont(11f));
+        FontMetrics fm = g.getFontMetrics();
+        int tw = fm.stringWidth(text);
+        g.setColor(BOX);
+        g.fillRect(box.x + 2, box.y + 2, tw + 12, fm.getHeight() + 4);
+        g.setColor(Theme.TEXT);
+        g.drawString(text, box.x + 8, box.y + 2 + fm.getAscent() + 2);
     }
 
     private void paintTiles(Graphics2D g, TileSource src, int zi, double scale, double wcx, double wcy, int w, int h) {
