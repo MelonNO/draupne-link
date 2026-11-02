@@ -98,6 +98,7 @@ final class TacticalCombo {
             @Override
             public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
                 timer.stop();
+                ClosingGhost.play(menu); // the rows go the way they came, over the window, once the menu itself is gone
             }
 
             @Override
