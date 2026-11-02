@@ -32,7 +32,12 @@ final class BootReveal extends JComponent {
     private final Supplier<Rectangle> videoBounds;
     private final Timer timer = new Timer(15, e -> tick());
     private long startedAt; // 0 = not started: all black
+    private long fixedNow = -1; // tests: the clock stands still at this time
     private boolean done;
+
+    private long now() {
+        return fixedNow >= 0 ? fixedNow : System.currentTimeMillis();
+    }
 
     private BootReveal(Supplier<Rectangle> videoBounds) {
         this.videoBounds = videoBounds;
@@ -104,7 +109,7 @@ final class BootReveal extends JComponent {
         Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
         try {
             int w = getWidth(), h = getHeight();
-            long t = startedAt == 0 ? 0 : System.currentTimeMillis() - startedAt;
+            long t = startedAt == 0 ? 0 : now() - startedAt;
             double size = Math.min(w, h) * 0.42;
             double lx = (w - size) / 2, ly = (h - size) / 2;
 
@@ -236,7 +241,9 @@ final class BootReveal extends JComponent {
     static java.awt.image.BufferedImage frame(long atMs, int w, int h, Rectangle video) {
         BootReveal r = new BootReveal(() -> video);
         r.setSize(w, h);
-        r.startedAt = System.currentTimeMillis() - atMs;
+        // the clock stands still: on a slow build machine Java2D's first use took seconds between here and the paint
+        r.startedAt = 1;
+        r.fixedNow = 1 + atMs;
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
         r.paintComponent(g);

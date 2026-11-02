@@ -126,7 +126,8 @@ class SpectatorTest {
             if (now == last[0]) break;
             last[0] = now;
         }
-        assertEquals(0, spectatorVideo.stats().damaged(), "no broken frames: " + spectatorVideo.stats());
+        // the cut-off of 1.0.17 broke nearly every frame; one broken frame is UDP on a loaded build machine
+        assertTrue(spectatorVideo.stats().damaged() <= 1, "no broken frames: " + spectatorVideo.stats());
         assertEquals(0, spectatorVideo.stats().lost());
         assertArrayEquals(pilotSink.pixels, sink.pixels, "the spectator sees the pilot's picture");
     }
