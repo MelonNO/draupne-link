@@ -55,6 +55,17 @@ final class TacticalCombo {
             @Override
             public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
                 timer.stop();
+                // the dropdown's options go the way they came, like a menu's rows
+                Object popup = combo.getUI().getAccessibleChild(combo, 0);
+                JList<?> list = popupList(combo);
+                if (popup instanceof JPopupMenu p && list != null && list.getModel().getSize() > 0) {
+                    java.awt.Rectangle[] rows = new java.awt.Rectangle[list.getModel().getSize()];
+                    for (int i = 0; i < rows.length; i++) {
+                        java.awt.Rectangle r = list.getCellBounds(i, i);
+                        rows[i] = r == null ? new java.awt.Rectangle() : javax.swing.SwingUtilities.convertRectangle(list, r, p);
+                    }
+                    ClosingGhost.play(p, rows);
+                }
             }
 
             @Override
@@ -98,7 +109,10 @@ final class TacticalCombo {
             @Override
             public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
                 timer.stop();
-                ClosingGhost.play(menu); // the rows go the way they came, over the window, once the menu itself is gone
+                // the rows go the way they came, over the window, once the menu itself is gone
+                java.awt.Rectangle[] rows = new java.awt.Rectangle[menu.getComponentCount()];
+                for (int i = 0; i < rows.length; i++) rows[i] = menu.getComponent(i).getBounds();
+                ClosingGhost.play(menu, rows);
             }
 
             @Override
@@ -166,7 +180,8 @@ final class TacticalCombo {
             setOpaque(false);
         }
 
-        static void play(JPopupMenu menu) {
+        /** @param rows the rows that wipe away, in the popup's coordinates (a menu's items, a dropdown's options) */
+        static void play(JPopupMenu menu, java.awt.Rectangle[] rows) {
             if (!menu.isShowing() || menu.getWidth() == 0 || menu.getHeight() == 0 || menu.getInvoker() == null) return;
             javax.swing.JRootPane root = javax.swing.SwingUtilities.getRootPane(menu.getInvoker());
             if (root == null) return;
@@ -177,8 +192,6 @@ final class TacticalCombo {
             } finally {
                 g.dispose();
             }
-            java.awt.Rectangle[] rows = new java.awt.Rectangle[menu.getComponentCount()];
-            for (int i = 0; i < rows.length; i++) rows[i] = menu.getComponent(i).getBounds();
             javax.swing.JLayeredPane layer = root.getLayeredPane();
             java.awt.Point at = menu.getLocationOnScreen();
             javax.swing.SwingUtilities.convertPointFromScreen(at, layer);
