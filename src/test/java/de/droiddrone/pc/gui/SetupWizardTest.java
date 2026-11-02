@@ -59,4 +59,33 @@ class SetupWizardTest {
         assertEquals("DRONE", drone.get(0).section);
         assertTrue(all.indexOf(drone.get(0)) < all.indexOf(phone.get(0)), "the drone before the phone");
     }
+
+    @Test
+    void radioStepComesBackWhenDroneSetupChangedTheSwitches() throws Exception {
+        de.droiddrone.pc.PcConfig config = de.droiddrone.pc.PcConfig.defaults();
+        assertFalse(DroneSetup.radioNeedsRedo(config));
+        assertTrue(PcSetupWizard.RadioPage.shown(false, config), "not calibrated: shown");
+        assertFalse(PcSetupWizard.RadioPage.shown(true, config), "calibrated, nothing changed: skipped");
+        // Drone setup wrote ARM to AUX1 (or a choice changed): an old calibration may have any switch there
+        config.set(DroneSetup.RADIO_REDO_KEY, "true");
+        assertTrue(DroneSetup.radioNeedsRedo(config));
+        assertTrue(PcSetupWizard.RadioPage.shown(true, config), "shown again until a calibration is saved");
+        String text = DroneSetup.radioRedoText(config);
+        assertTrue(text.startsWith("Calibrate the radio again so AUX1 (ARM)"), text);
+        assertTrue(text.contains("AUX2 (flight modes)"), text);
+        // a calibration saved: cleared
+        config.set(DroneSetup.RADIO_REDO_KEY, "false");
+        assertFalse(PcSetupWizard.RadioPage.shown(true, config));
+        // one switch only
+        config.set(de.droiddrone.pc.setup.ModeSwitch.KEY, "off");
+        config.set(de.droiddrone.pc.setup.ModeSwitch.RESCUE_KEY, "off");
+        assertEquals("Calibrate the radio again so AUX1 (ARM) is the right switch.", DroneSetup.radioRedoText(config));
+    }
+
+    @Test
+    void cliRepliesAreLoggedShort() {
+        assertEquals("(ok)", DroneSetup.BetaflightPage.brief("\r\n"));
+        assertEquals("serial_update_rate_hz set to 2000", DroneSetup.BetaflightPage.brief("serial_update_rate_hz set to 2000\r\n\r\n"));
+        assertEquals(80, DroneSetup.BetaflightPage.brief("x".repeat(200)).length());
+    }
 }

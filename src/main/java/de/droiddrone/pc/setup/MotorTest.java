@@ -30,8 +30,16 @@ public final class MotorTest implements AutoCloseable {
         }
     }
 
-    /** What it does now: each motor's output, battery voltage (0 = no battery), armed. */
-    public record Live(int[] motors, double volts, boolean armed) {}
+    /** What it does now: each motor's output, battery voltage, Betaflight's cell count (0 = none seen), armed. */
+    public record Live(int[] motors, double volts, int cells, boolean armed) {
+        /** A battery is in: Betaflight counts its cells, or the voltage is above USB power's (a 1S pack reads 3-4 V). */
+        public boolean batteryIn() {
+            return cells > 0 || volts >= NO_BATTERY_VOLTS;
+        }
+    }
+
+    /** Below this there is no battery, only USB power (a 1S pack reads well above it). */
+    public static final double NO_BATTERY_VOLTS = 3;
 
     private final BetaflightUsb fc;
     private final Info info;
@@ -86,8 +94,14 @@ public final class MotorTest implements AutoCloseable {
         if (closed) throw new IOException("The motor test is closed");
         int[] motors = motors(fc.msp(MSP_MOTOR, null));
         double volts = volts(fc.msp(FcCommon.MSP_ANALOG, null));
+        int cells = 0;
+        try {
+            cells = fc.batteryState().cells();
+        } catch (IOException e) {
+            // an old Betaflight without it: the voltage decides
+        }
         boolean armed = armed(fc.msp(FcCommon.MSP_STATUS, null));
-        return new Live(Arrays.copyOf(motors, info.motorCount()), volts, armed);
+        return new Live(Arrays.copyOf(motors, info.motorCount()), volts, cells, armed);
     }
 
     /** Every motor to STOP, trying a few times; never throws. */

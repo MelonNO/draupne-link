@@ -54,6 +54,11 @@ final class PhoneGuideWizard {
         main.reloadSettings();
     }
 
+    /** A page of the first-time guide (SetupWizard gives its pages a section; Phone setup's own have none). */
+    private static boolean inFirstTimeGuide(Page page) {
+        return !page.section.isEmpty();
+    }
+
     private static JComponent valueTable(String[][] rows) {
         JPanel table = new JPanel(new GridLayout(0, 2, 16, 8));
         table.setBackground(Theme.PANEL_2);
@@ -152,7 +157,8 @@ final class PhoneGuideWizard {
 
         private void apply(Tailscale.Status s) {
             if (!s.signedIn()) {
-                pc.set(State.BAD, "Not signed in - finish the Tailscale step in SETUP > PC setup first.");
+                pc.set(State.BAD, "Not signed in - " + (inFirstTimeGuide() ? "press Back to the Tailscale / firewall step."
+                        : "finish the Tailscale step in SETUP > PC setup first."));
                 return;
             }
             pc.set(State.OK, s.selfName() + " - " + s.selfIp());
@@ -177,6 +183,10 @@ final class PhoneGuideWizard {
                         + (current.online() ? " - online. Address saved for the link." : " - offline: open Tailscale on the phone and switch it on."));
             }
             wizard.update();
+        }
+
+        private boolean inFirstTimeGuide() {
+            return PhoneGuideWizard.inFirstTimeGuide(this);
         }
 
         private void choose(Tailscale.Peer p) {
@@ -234,6 +244,7 @@ final class PhoneGuideWizard {
             WizardDialog.addRow(col, WizardDialog.paragraph(
                     "On the phone: tap <b>Download the app</b>, open the file, allow installing from the browser if Android asks, "
                             + "<b>Install</b>. Press Next once DRAUPNE Flight is on the phone.<br>"
+                            + "The phone must be on Tailscale (or on this PC's Wi-Fi) for the download to open. "
                             + "Link doesn't open? Pick another address under the code."));
             WizardDialog.addRow(col, file);
             firewall.setVisible(false);
@@ -248,7 +259,8 @@ final class PhoneGuideWizard {
         void onShow() {
             background(() -> WindowsSetup.firewallRuleExists(WindowsSetup.APK_RULE), ok -> {
                 firewall.setVisible(!Boolean.TRUE.equals(ok)); // shown only when it's missing
-                firewall.set(State.WARN, "No firewall rule yet - Windows may block the phone. SETUP > PC setup adds it.");
+                firewall.set(State.WARN, "No firewall rule yet - Windows may block the phone. "
+                        + (inFirstTimeGuide(this) ? "Press Back to the Tailscale / firewall step." : "SETUP > PC setup adds it."));
             });
             showing = true;
             if (share != null || preparing) return;
@@ -364,7 +376,19 @@ final class PhoneGuideWizard {
         /** Waiting this long without a link adds the usual reasons. */
         private static final long HINT_AFTER_MS = 20_000;
 
-        private record Snap(ControlLink.State state, FcInfo fc, int ping) {}
+        /**
+         * @param stateText what the link is doing, in words (Connection.describe)
+         * @param spectator the phone named another session as the pilot, so this one became a spectator
+         * @param stats     the video pipeline's figures (null before the stream)
+         * @param hasStream the phone's video settings have arrived (frames can be decoded)
+         * @param event     the link's last event line, or null
+         */
+        private record Snap(ControlLink.State state, FcInfo fc, int ping, String stateText, boolean spectator,
+                            de.droiddrone.pc.video.VideoPipeline.Stats stats, boolean hasStream, String event) {
+            Snap(ControlLink.State state, FcInfo fc, int ping) {
+                this(state, fc, ping, "", false, null, false, null);
+            }
+        }
 
         private final MainWindow main;
         private final JPanel tableHolder = new JPanel(new BorderLayout());
@@ -379,6 +403,10 @@ final class PhoneGuideWizard {
         private final List<Integer> rtts = new ArrayList<>();
         /** The running session's stop flag; a new one per session, so an old session can't touch the page. */
         private AtomicBoolean stop;
+        /** A session told to stop is still closing its link: the next one waits for the port. */
+        private volatile boolean closing;
+        /** The link's last event line (setEvents), shown with the link row and logged. */
+        private volatile String lastEvent;
         private long nextStart;
         private long waitingSince;
         private long readySince;
@@ -463,7 +491,13 @@ final class PhoneGuideWizard {
             pathChecked = false;
             nextStart = 0;
             flipped = false;
+            lastEvent = null;
             preview.setUpsideDown(main.isUpsideDown());
+            // the preview's picture size follows its on-screen size: told now, so the first frame isn't converted for 0 x 0
+            SwingUtilities.invokeLater(() -> {
+                preview.revalidate();
+                preview.dispatchEvent(new java.awt.event.ComponentEvent(preview, java.awt.event.ComponentEvent.COMPONENT_RESIZED));
+            });
             link.set(State.PENDING, "Waiting for DRAUPNE Flight...");
             for (CheckRow r : new CheckRow[]{fc, camera, latency, path}) r.set(State.PENDING, "");
         }
@@ -474,6 +508,10 @@ final class PhoneGuideWizard {
         }
 
         private void start() {
+            if (closing) { // the last session still has the port: a moment
+                nextStart = System.currentTimeMillis() + 500;
+                return;
+            }
             if (main.isLinkActive()) {
                 link.set(State.WARN, "The main window is connected. Press DISCONNECT there and the link opens here.");
                 nextStart = System.currentTimeMillis() + 1000;
@@ -487,17 +525,31 @@ final class PhoneGuideWizard {
             }
             AtomicBoolean s = new AtomicBoolean();
             stop = s;
+            main.logLine("Connect step: opening the link to the phone.");
             background(() -> session(config, s), error -> {
                 if (stop != s) return;
                 stop = null;
                 if (error != null) {
-                    link.set(State.BAD, error);
+                    boolean reconnect = error.startsWith(RECONNECT);
+                    link.set(reconnect ? State.WARN : State.BAD, error);
+                    main.logLine("Connect step: " + error);
                     nextStart = System.currentTimeMillis() + 3000;
                 }
             });
         }
 
-        /** Holds the link open until the page is left, reporting its state four times a second; the video to the preview. */
+        private static final String RECONNECT = "The phone thinks another session is the pilot";
+
+        /** The link's event lines: to the app log, and the last one with the link row. */
+        private void event(String line) {
+            lastEvent = line;
+            main.logLine("Connect step: " + line);
+        }
+
+        /**
+         * Holds the link open until the page is left, reporting its state four times a second; the video to the preview.
+         * @return null when stopped from the page; otherwise why it ended (shown, and a new session follows)
+         */
         private String session(PcConfig config, AtomicBoolean s) {
             Connection connection = null;
             ControlLink[] linkRef = new ControlLink[1];
@@ -507,9 +559,18 @@ final class PhoneGuideWizard {
                 connection = Connection.open(config, video);
                 ControlLink l = connection.getLink();
                 linkRef[0] = l;
+                l.setEvents(this::event);
                 video.attach(l);
+                long spectatorSince = 0;
                 while (!s.get()) {
-                    Snap snap = new Snap(l.getState(), l.getFcInfo(), l.getPing());
+                    ControlLink.State state = l.getState();
+                    boolean spectator = l.isSpectator() || state == ControlLink.State.SPECTATING || state == ControlLink.State.SPECTATOR_WAITING;
+                    if (spectator) { // the phone still had an older session as the pilot: this one is told so, then tries afresh
+                        if (spectatorSince == 0) spectatorSince = System.currentTimeMillis();
+                        if (System.currentTimeMillis() - spectatorSince > 2000) return RECONNECT + " - reconnecting...";
+                    }
+                    Snap snap = new Snap(state, l.getFcInfo(), l.getPing(), connection.describe(state), spectator, video.stats(),
+                            video.hasStream(), lastEvent);
                     SwingUtilities.invokeLater(() -> {
                         if (stop == s) show(snap);
                     });
@@ -521,6 +582,8 @@ final class PhoneGuideWizard {
             } finally {
                 if (connection != null) connection.close();
                 video.close();
+                closing = false;
+                main.logLine("Connect step: link closed.");
                 SwingUtilities.invokeLater(preview::clear);
             }
         }
@@ -528,7 +591,13 @@ final class PhoneGuideWizard {
         private void show(Snap snap) {
             long now = System.currentTimeMillis();
             if (snap.state() == ControlLink.State.VERSION_MISMATCH) {
-                link.set(State.BAD, "Version mismatch - the phone needs DRAUPNE Flight " + ApkShare.VERSION + ".");
+                link.set(State.BAD, "The phone's DRAUPNE Flight is another version - this PC needs " + ApkShare.VERSION
+                        + ". On the phone, tap the yellow <b>Update available</b> line. No such line: install it from the app step (Back).");
+                return;
+            }
+            String event = snap.event() == null ? "" : "<br>" + snap.event();
+            if (snap.spectator()) {
+                link.set(State.WARN, RECONNECT + " - reconnecting..." + event);
                 return;
             }
             if (snap.state() != ControlLink.State.READY) {
@@ -539,31 +608,42 @@ final class PhoneGuideWizard {
                     logged = false;
                     for (CheckRow r : new CheckRow[]{fc, camera, latency}) r.set(State.PENDING, "");
                 }
-                link.set(now - waitingSince < HINT_AFTER_MS ? State.PENDING : State.WARN, now - waitingSince < HINT_AFTER_MS
-                        ? "Waiting for DRAUPNE Flight - tap <b>CONNECT</b> on the phone."
+                boolean configuring = snap.state() == ControlLink.State.CONFIGURING;
+                link.set(now - waitingSince < HINT_AFTER_MS || configuring ? State.PENDING : State.WARN, (configuring
+                        ? "The phone answered - sending it the settings..."
+                        : now - waitingSince < HINT_AFTER_MS ? "Waiting for DRAUPNE Flight - tap <b>CONNECT</b> on the phone."
                         : "Still waiting. Check the phone shows exactly the values above, that CONNECT is tapped"
-                        + (main.config().getLinkMode() == LinkMode.PHONE ? ", and that Tailscale is on." : "."));
+                        + (main.config().getLinkMode() == LinkMode.PHONE ? ", and that Tailscale is on." : "."))
+                        + "<br><i>" + snap.stateText() + "</i>" + event);
                 return;
             }
             if (readySince == 0) readySince = now;
-            link.set(State.OK, "Connected.");
+            link.set(State.OK, "Connected." + event);
             if (snap.fc() != null) {
                 fc.set(snap.fc().getFcVariant() == FcInfo.FC_VARIANT_BETAFLIGHT ? State.OK : State.WARN,
                         snap.fc().getFcName() + " " + snap.fc().getFcVersionStr());
             } else if (now - readySince > 3000) {
-                fc.set(State.BAD, "The phone isn't talking to the flight controller. Tap <b>Allow</b> on the phone's USB pop-up. Many flight "
-                        + "controllers ignore USB-C to USB-C: use a USB-A data cable, and check the phone's OTG setting.");
+                fc.set(State.BAD, "The phone isn't talking to the flight controller. Tap <b>Allow</b> on the phone's USB pop-up. "
+                        + "Try another cable: USB-C on the phone, the drone's plug on the other end, and one that carries data - "
+                        + "not every cable does. Check the phone's OTG setting.");
             } else {
                 fc.set(State.PENDING, "Asking the flight controller...");
             }
+            de.droiddrone.pc.video.VideoPipeline.Stats stats = snap.stats();
             if (flipped) {
                 // the FLIP line stays
+            } else if (stats != null && stats.error() != null) {
+                camera.set(State.BAD, "The picture can't be decoded: " + stats.error());
             } else if (preview.hasPicture()) {
                 camera.set(State.INFO, "Is the picture the right way up, with the sky at the top? If not, press <b>Flip</b>; the phone stays as it is mounted.");
-            } else if (now - readySince > 4000) {
-                camera.set(State.WARN, "No picture yet. On the phone, allow DRAUPNE Flight to use the camera, and check its camera setting.");
+            } else if (!snap.hasStream()) {
+                camera.set(now - readySince > 4000 ? State.WARN : State.PENDING, "No video settings from the phone yet (StartVideo sent)."
+                        + (now - readySince > 4000 ? " On the phone, allow DRAUPNE Flight to use the camera, and check its camera setting." : ""));
+            } else if (stats != null && stats.receivedFps() > 0) {
+                camera.set(State.PENDING, "Frames arriving (" + stats.width() + "x" + stats.height() + ", " + stats.receivedFps() + " fps), decoding...");
             } else {
-                camera.set(State.PENDING, "Waiting for the picture...");
+                camera.set(now - readySince > 6000 ? State.WARN : State.PENDING, "Video settings received (" + (stats == null ? "" : stats.width()
+                        + "x" + stats.height() + ", ") + "waiting for frames...");
             }
             if (snap.ping() >= 0 && (rtts.isEmpty() || rtts.get(rtts.size() - 1) != snap.ping())) rtts.add(snap.ping());
             showLatency(now - readySince >= MEASURE_MS);
@@ -616,7 +696,10 @@ final class PhoneGuideWizard {
 
         @Override
         void onHide() {
-            if (stop != null) stop.set(true); // the session closes the link
+            if (stop != null) {
+                stop.set(true); // the session closes the link; the next one waits for that
+                closing = true;
+            }
             stop = null;
         }
 

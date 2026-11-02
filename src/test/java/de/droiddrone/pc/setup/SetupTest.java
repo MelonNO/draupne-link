@@ -156,6 +156,46 @@ class SetupTest {
     }
 
     @Test
+    void installerTaskCountsOnlyWhileItRuns() {
+        assertTrue(PcPrep.taskRunning("Running"));
+        assertTrue(PcPrep.taskRunning("Queued"));
+        assertFalse(PcPrep.taskRunning("Ready"), "registered but never started");
+        assertFalse(PcPrep.taskRunning(""), "no such task (it deletes itself, or was never registered)");
+        assertFalse(PcPrep.taskRunning("Disabled"));
+    }
+
+    @Test
+    void modernStandbyIsReadFromTheAvailableStatesOnly() {
+        String modern = """
+                The following sleep states are available on this system:
+                    Standby (S0 Low Power Idle) Network Connected
+                    Hibernate
+                    Fast Startup
+
+                The following sleep states are not available on this system:
+                    Standby (S1)
+                        The system firmware does not support this standby state.
+                    Standby (S3)
+                        This standby state is disabled when S0 low power idle is supported.
+                """;
+        assertTrue(WindowsSetup.modernStandby(modern));
+        String classic = """
+                The following sleep states are available on this system:
+                    Standby (S3)
+                    Hibernate
+                    Fast Startup
+
+                The following sleep states are not available on this system:
+                    Standby (S1)
+                        The system firmware does not support this standby state.
+                    Standby (S0 Low Power Idle)
+                        The system firmware does not support this standby state.
+                """;
+        assertFalse(WindowsSetup.modernStandby(classic), "S0 only among the unavailable states");
+        assertFalse(WindowsSetup.modernStandby(""));
+    }
+
+    @Test
     void wizardWaitsWhileTheInstallerInstallsTailscale() throws Exception {
         Path log = dir.resolve("setup.log");
         assertFalse(PcPrep.tailscaleInstallPending(log), "no log: nothing pending");

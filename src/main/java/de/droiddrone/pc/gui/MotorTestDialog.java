@@ -63,8 +63,16 @@ final class MotorTestDialog extends JFrame {
 
     /** What the sliders ask for; the motor thread sends it. All STOP unless the box is ticked. */
     private volatile int[] wanted = new int[0];
-    /** The battery's voltage as the flight controller reports it; below 5 V there is none (USB power only). */
+    /** The battery's voltage as the flight controller reports it; -1 before the first reading. */
     private double volts = -1;
+    /** A battery is in (Betaflight counts its cells, or the voltage is above USB power's): else nothing can spin. */
+    private boolean batteryIn;
+    /** Any motor running this long stops by itself (on top of the stop on leaving the window). */
+    private static final long AUTO_STOP_MS = 20_000;
+    private long spinningSince;
+    private final Timer autoStop = new Timer(250, e -> checkAutoStop());
+    /** Under the sliders: why the motors stopped by themselves. */
+    private final WrappingText note = new WrappingText("", Theme.font(Font.PLAIN, 13f), Theme.WARN);
     /** A click on a motor in the picture: it runs this long at PULSE, then stops; one timer per motor. */
     private static final int PULSE_MS = 3000;
     private static final int PULSE = MotorTest.STOP + (MotorTest.MAX - MotorTest.STOP) * 4 / 10;
@@ -145,6 +153,23 @@ final class MotorTestDialog extends JFrame {
         worker = new Thread(this::run, "motor-test");
         worker.setDaemon(true);
         worker.start();
+        autoStop.start();
+    }
+
+    /** Twenty seconds of any motor running: all stop, whatever the sliders say. Enough to see each one turn. */
+    private void checkAutoStop() {
+        boolean spinning = false;
+        for (Slider s : sliders) spinning |= s.value > MotorTest.STOP;
+        if (!spinning) {
+            spinningSince = 0;
+            return;
+        }
+        if (spinningSince == 0) spinningSince = System.currentTimeMillis();
+        if (System.currentTimeMillis() - spinningSince < AUTO_STOP_MS) return;
+        stopAll();
+        spinningSince = 0;
+        note.setHtml("Stopped by themselves after " + AUTO_STOP_MS / 1000 + " s. Raise a slider to carry on.");
+        main.logLine("Motor test: motors stopped by themselves after " + AUTO_STOP_MS / 1000 + " s.");
     }
 
     /** The one open, if any: opening it again brings that one forward. */
@@ -182,6 +207,7 @@ final class MotorTestDialog extends JFrame {
     public void dispose() {
         if (open == this) open = null;
         flip.stop();
+        autoStop.stop();
         stopAll();
         running = false;
         if (worker != null) worker.interrupt();
@@ -267,6 +293,7 @@ final class MotorTestDialog extends JFrame {
         sliders.add(sliderRow, BorderLayout.CENTER);
         sliders.add(master, BorderLayout.EAST);
         card.add(sliders, BorderLayout.CENTER);
+        card.add(note, BorderLayout.SOUTH);
         return card;
     }
 
@@ -321,7 +348,7 @@ final class MotorTestDialog extends JFrame {
             shakeUnderstood();
             return false;
         }
-        if (volts >= 0 && volts < 5) {
+        if (volts >= 0 && !batteryIn) {
             stopAll();
             JOptionPane.showMessageDialog(this, "Plug in a battery to test the motors.\nOn USB power alone the motors can't spin.\n\nProps off.",
                     "No battery", JOptionPane.WARNING_MESSAGE);
@@ -368,6 +395,7 @@ final class MotorTestDialog extends JFrame {
     }
 
     private void slidersChanged() {
+        note.setHtml("");
         int[] v = new int[sliders.size()];
         for (int i = 0; i < v.length; i++) v[i] = sliders.get(i).value;
         wanted = understood.isSelected() ? v : new int[0];
@@ -507,10 +535,12 @@ final class MotorTestDialog extends JFrame {
             return;
         }
         volts = live.volts();
-        if (live.volts() < 5) {
+        batteryIn = live.batteryIn();
+        if (!batteryIn) {
             battery.set(State.WARN, "No battery: on USB power the motors can't spin. Plug in the battery (props off).");
         } else {
-            battery.set(State.OK, String.format(java.util.Locale.ROOT, "%.2f V", live.volts()));
+            battery.set(State.OK, String.format(java.util.Locale.ROOT, "%.2f V", live.volts())
+                    + (live.cells() > 0 ? " - " + live.cells() + "S" : ""));
         }
         for (int i = 0; i < sliders.size() && i < live.motors().length; i++) sliders.get(i).reported = live.motors()[i];
         for (Slider s : sliders) s.repaint();

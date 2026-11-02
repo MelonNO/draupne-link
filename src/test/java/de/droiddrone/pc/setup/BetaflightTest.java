@@ -88,6 +88,151 @@ class BetaflightTest {
     }
 
     @Test
+    void cellCountIsOnlyForcedOnceThePilotConfirmedIt() {
+        String unset = "force_battery_cell_count = 0\r\nAllowed range: 0 - 24\r\n";
+        // 6S is only a default: nothing is written until the pilot has touched or confirmed the spinner
+        assertTrue(BetaflightPlan.plan(RATE_SET, F7, unset, 6, false).isEmpty(), "Betaflight keeps counting itself");
+        assertTrue(BetaflightPlan.plan(RATE_SET, F7, "force_battery_cell_count = 4", 6, false).isEmpty(), "a count it forces is kept");
+        assertEquals(List.of("set force_battery_cell_count = 6"), BetaflightPlan.plan(RATE_SET, F7, unset, 6, true).get(0).commands());
+        assertEquals(List.of("set force_battery_cell_count = 6"),
+                BetaflightPlan.plan(RATE_SET, F7, "force_battery_cell_count = 4", 6, true).get(0).commands(), "confirmed: changed");
+        // the stick delay is written regardless
+        assertEquals(1, BetaflightPlan.plan(RATE_DEFAULT, F7, unset, 6, false).size());
+    }
+
+    @Test
+    void boardAndCraftNamesAreRead() {
+        assertEquals("IFLIGHT_BLITZ_F722", BetaflightPlan.boardName("# board_name\r\nboard_name IFLIGHT_BLITZ_F722\r\n"));
+        assertEquals("", BetaflightPlan.boardName("board_name -"), "none set");
+        assertEquals("", BetaflightPlan.boardName("###ERROR: UNKNOWN COMMAND###"));
+        assertEquals("Vanguard", BetaflightPlan.craftName("craft_name = Vanguard\r\nAllowed length: 16"), "4.4 on");
+        assertEquals("Vanguard", BetaflightPlan.craftName("name: Vanguard"), "older");
+        assertEquals("", BetaflightPlan.craftName("name = -"));
+        assertEquals("", BetaflightPlan.craftName("###ERROR IN get: INVALID NAME: craft_name###"));
+        assertEquals("", BetaflightPlan.craftName("Unknown command, try 'help'"));
+    }
+
+    @Test
+    void batteryStateIsParsed() throws Exception {
+        // 4S, 1500 mAh, 16.8 V legacy, 0 mAh drawn, 0 A, state 0, 16.82 V
+        byte[] p = {4, (byte) 0xDC, 5, (byte) 168, 0, 0, 0, 0, 0, (byte) 0x92, 0x06};
+        BetaflightUsb.BatteryState b = BetaflightUsb.parseBatteryState(p);
+        assertEquals(4, b.cells());
+        assertEquals(16.82, b.volts(), 1e-9);
+        assertTrue(b.present());
+        assertFalse(BetaflightUsb.parseBatteryState(new byte[]{0, 0, 0, 1, 0, 0, 0, 0, 0, 10, 0}).present(), "USB power: 0.1 V, no cells");
+        assertTrue(BetaflightUsb.parseBatteryState(new byte[]{0, 0, 0, 38, 0, 0, 0, 0, 0}).present(), "an old Betaflight: 3.8 V, a 1S pack");
+    }
+
+    /** A flight controller on a fake port: what it prints, in chunks, each after a pause. */
+    static final class FakeWire implements BetaflightUsb.Wire {
+        private final java.util.ArrayDeque<Object[]> chunks = new java.util.ArrayDeque<>(); // {delay ms, bytes}
+        /** What each write (in order) is answered with: released into chunks as the writes come. */
+        private final java.util.ArrayDeque<java.util.List<Object[]>> replies = new java.util.ArrayDeque<>();
+        private long readyAt;
+        final StringBuilder written = new StringBuilder();
+        boolean open = true;
+
+        /** The answer to the next write, in chunks: a delay in ms before each chunk's text. */
+        void reply(Object... delayThenText) {
+            java.util.List<Object[]> group = new java.util.ArrayList<>();
+            for (int i = 0; i < delayThenText.length; i += 2) {
+                group.add(new Object[]{((Number) delayThenText[i]).longValue(),
+                        ((String) delayThenText[i + 1]).getBytes(java.nio.charset.StandardCharsets.US_ASCII)});
+            }
+            replies.add(group);
+        }
+
+        @Override
+        public int read(byte[] buf) {
+            long end = System.currentTimeMillis() + 100; // the port's read timeout
+            while (System.currentTimeMillis() < end) {
+                if (available() > 0) {
+                    byte[] b = (byte[]) chunks.poll()[1];
+                    System.arraycopy(b, 0, buf, 0, b.length);
+                    readyAt = 0;
+                    return b.length;
+                }
+                sleep(2);
+            }
+            return 0;
+        }
+
+        @Override
+        public int available() {
+            Object[] next = chunks.peek();
+            if (next == null) return 0;
+            if (readyAt == 0) readyAt = System.currentTimeMillis() + (long) next[0];
+            return System.currentTimeMillis() >= readyAt ? ((byte[]) next[1]).length : 0;
+        }
+
+        @Override
+        public void write(byte[] data) {
+            written.append(new String(data, java.nio.charset.StandardCharsets.US_ASCII));
+            java.util.List<Object[]> group = replies.poll();
+            if (group != null) chunks.addAll(group);
+        }
+
+        @Override
+        public boolean isOpen() {
+            return open;
+        }
+
+        @Override
+        public void close() {
+            open = false;
+        }
+
+        private static void sleep(long ms) {
+            try {
+                Thread.sleep(ms);
+            } catch (InterruptedException ignored) {
+            }
+        }
+    }
+
+    @Test
+    void aPromptInsideDiffAllIsNotTheEnd() throws Exception {
+        FakeWire wire = new FakeWire();
+        wire.reply(0, "\r\nEntering CLI Mode, type 'exit' to return, or 'help'\r\n\r\n# "); // to '#'
+        wire.reply(0, "# diff all\r\n# ",                      // a chunk ending in "# ": the "# feature" line's start
+                25, "feature\r\nfeature GPS\r\n\r\n# ");       // the rest, a moment later
+        try (BetaflightUsb fc = BetaflightUsb.onWire(wire)) {
+            fc.enterCli();
+            assertEquals("# feature\r\nfeature GPS", fc.command("diff all"));
+            assertTrue(fc.inCli());
+        }
+        assertTrue(wire.written.toString().endsWith("exit\n"), "closed with the CLI open: exit sent - " + wire.written);
+        assertFalse(wire.open);
+    }
+
+    @Test
+    void thePromptAloneIsAcceptedQuickly() throws Exception {
+        FakeWire wire = new FakeWire();
+        wire.reply(0, "# version\r\n# " + F7 + "\r\n# ");
+        try (BetaflightUsb fc = BetaflightUsb.onWire(wire)) {
+            long t = System.currentTimeMillis();
+            assertEquals("# " + F7, fc.command("version"));
+            assertTrue(System.currentTimeMillis() - t < 1000, "the prompt settles within a fraction of a second");
+            assertFalse(fc.inCli(), "command() alone doesn't open the CLI");
+        }
+        assertFalse(wire.written.toString().contains("exit"), "no CLI open: nothing to leave");
+    }
+
+    @Test
+    void aCutOffAnswerIsAnError() throws Exception {
+        FakeWire wire = new FakeWire();
+        wire.reply(0, "\r\nEntering CLI Mode, type 'exit' to return, or 'he");
+        try (BetaflightUsb fc = BetaflightUsb.onWire(wire)) {
+            fc.enterCli(); // the banner never comes
+            fail("should have thrown");
+        } catch (java.io.IOException e) {
+            assertTrue(e.getMessage().contains("cut off"), e.getMessage());
+        }
+        assertTrue(wire.written.toString().endsWith("exit\n"), "the board may be in the CLI anyway: exit sent");
+    }
+
+    @Test
     void versionLineIsFound() {
         String line = BetaflightPlan.version("# version\n# " + F7 + "\n# config rev: 1");
         assertEquals(F7, line);

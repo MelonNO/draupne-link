@@ -23,6 +23,21 @@ public final class BetaflightUsb implements AutoCloseable {
         }
     }
 
+    /** The bytes to and from the flight controller: the serial port, or a fake one in tests. */
+    interface Wire {
+        /** What has arrived, waiting a little (the port's read timeout) for the first byte: 0 = nothing, -1 = gone. */
+        int read(byte[] buf) throws IOException;
+
+        /** Bytes waiting to be read, without waiting. */
+        int available() throws IOException;
+
+        void write(byte[] data) throws IOException;
+
+        boolean isOpen();
+
+        void close();
+    }
+
     /**
      * USB vendors of flight controllers: the chip makers whose virtual COM port the firmware uses, the boards' own
      * IDs, and the USB-serial bridge chips on boards without native USB.
@@ -42,10 +57,23 @@ public final class BetaflightUsb implements AutoCloseable {
             0x0403,  // FTDI bridge
             0x067B); // Prolific PL2303 bridge
 
-    private final SerialPort port;
+    /**
+     * A prompt at the end of what arrived only counts once nothing more follows for this long: "diff all" and
+     * "version" print lines that begin with "# " (e.g. "# feature"), and a USB chunk can end right after that "# ".
+     */
+    static final long PROMPT_SETTLE_MS = 60;
 
-    private BetaflightUsb(SerialPort port) {
-        this.port = port;
+    private final Wire wire;
+    /** The CLI is open: closing the port then sends "exit", so the board isn't left in CLI mode. */
+    private boolean inCli;
+
+    private BetaflightUsb(Wire wire) {
+        this.wire = wire;
+    }
+
+    /** For tests: a flight controller on a fake wire. */
+    static BetaflightUsb onWire(Wire wire) {
+        return new BetaflightUsb(wire);
     }
 
     /** Serial ports that look like a flight controller's USB, by vendor or by name. */
@@ -73,7 +101,41 @@ public final class BetaflightUsb implements AutoCloseable {
             throw new IOException(p.systemName() + " is in use - close Betaflight Configurator (or anything else using the flight controller) and try again.");
         }
         port.flushIOBuffers();
-        return new BetaflightUsb(port);
+        return new BetaflightUsb(new PortWire(port));
+    }
+
+    /** The real thing: a jSerialComm port. */
+    private static final class PortWire implements Wire {
+        private final SerialPort port;
+
+        PortWire(SerialPort port) {
+            this.port = port;
+        }
+
+        @Override
+        public int read(byte[] buf) {
+            return port.readBytes(buf, buf.length);
+        }
+
+        @Override
+        public int available() {
+            return port.bytesAvailable();
+        }
+
+        @Override
+        public void write(byte[] data) throws IOException {
+            if (port.writeBytes(data, data.length) != data.length) throw new IOException("Could not write to the flight controller");
+        }
+
+        @Override
+        public boolean isOpen() {
+            return port.isOpen();
+        }
+
+        @Override
+        public void close() {
+            if (port.isOpen()) port.closePort();
+        }
     }
 
     // ------------------------------------------------------------------ MSP
@@ -89,7 +151,7 @@ public final class BetaflightUsb implements AutoCloseable {
         byte[] buf = new byte[256];
         long end = System.currentTimeMillis() + 1000;
         while (System.currentTimeMillis() < end) {
-            int n = port.readBytes(buf, buf.length);
+            int n = wire.read(buf);
             if (n < 0) throw new IOException("The flight controller disconnected");
             for (int i = 0; i < n; i++) {
                 MspParser.Frame f = parser.feed(buf[i]);
@@ -172,8 +234,14 @@ public final class BetaflightUsb implements AutoCloseable {
 
     /** Enters the CLI (Betaflight answers '#' with a banner and the "# " prompt). */
     public String enterCli() throws IOException {
+        inCli = true; // from the first byte: a cut-off banner still leaves the board in the CLI
         write("#");
         return readUntilPrompt(3000);
+    }
+
+    /** The CLI is open (and would be left with "exit" on close). */
+    public boolean inCli() {
+        return inCli;
     }
 
     /** Runs one CLI command and returns what it printed (without the echo and prompt). */
@@ -192,17 +260,13 @@ public final class BetaflightUsb implements AutoCloseable {
 
     /** Leaves the CLI without saving. Betaflight restarts (the port goes away), which also clears a stale MSP arming block. */
     public void exitCli() {
-        try {
-            write("exit\n");
-            Thread.sleep(300);
-        } catch (IOException | InterruptedException ignored) {
-        }
         close();
     }
 
     /** "save": stores the settings; the FC reboots and this port goes away. */
     public void saveAndReboot() throws IOException {
         write("save\n");
+        inCli = false; // the board restarts: no "exit" to send
         try {
             Thread.sleep(500);
         } catch (InterruptedException ignored) {
@@ -215,18 +279,36 @@ public final class BetaflightUsb implements AutoCloseable {
         byte[] buf = new byte[1024];
         long end = System.currentTimeMillis() + timeoutMs;
         while (System.currentTimeMillis() < end) {
-            int n = port.readBytes(buf, buf.length);
+            int n = wire.read(buf);
             if (n < 0) throw new IOException("The flight controller disconnected");
-            if (n > 0) {
-                out.write(buf, 0, n);
-                String s = out.toString(StandardCharsets.US_ASCII);
-                if (s.endsWith("\n# ") || s.endsWith("\r\n# ") || s.equals("# ")) return s;
-            }
+            if (n == 0) continue;
+            out.write(buf, 0, n);
+            String s = out.toString(StandardCharsets.US_ASCII);
+            if (endsWithPrompt(s) && quietFor(PROMPT_SETTLE_MS)) return s;
         }
         String s = out.toString(StandardCharsets.US_ASCII);
         if (s.isEmpty()) throw new IOException("No answer from the flight controller - is it running Betaflight?");
         // part of an answer: never read settings from it (or decide what to write)
         throw new IOException("The flight controller's answer was cut off - try again");
+    }
+
+    static boolean endsWithPrompt(String s) {
+        return s.endsWith("\n# ") || s.endsWith("\r\n# ") || s.equals("# ");
+    }
+
+    /** True when nothing more arrives for ms: only then is a "# " at the end the prompt and not a "# ..." line's start. */
+    private boolean quietFor(long ms) throws IOException {
+        long until = System.currentTimeMillis() + ms;
+        while (System.currentTimeMillis() < until) {
+            if (wire.available() > 0) return false;
+            try {
+                Thread.sleep(5);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        return wire.available() <= 0;
     }
 
     /** What firmware answers on this port over MSP ("BTFL", "INAV", ...), without entering the CLI (no restart). */
@@ -259,6 +341,26 @@ public final class BetaflightUsb implements AutoCloseable {
         msp(37 /* MSP_SET_FEATURE_CONFIG */, new byte[]{(byte) mask, (byte) (mask >> 8), (byte) (mask >> 16), (byte) (mask >> 24)});
     }
 
+    /** The battery as Betaflight sees it: its cell count (0 = no battery detected) and the pack voltage. */
+    public record BatteryState(int cells, double volts) {
+        /** A battery is plugged in (USB power alone reads well under 3 V, a 1S pack over it). */
+        public boolean present() {
+            return cells > 0 || volts >= 3;
+        }
+    }
+
+    /** MSP_BATTERY_STATE: Betaflight's own cell count and the voltage, for the cell count the pilot enters. */
+    public BatteryState batteryState() throws IOException {
+        return parseBatteryState(msp(130 /* MSP_BATTERY_STATE */, null));
+    }
+
+    /** cells u8, capacity u16, legacy voltage u8 (0.1 V), mAh u16, amps u16, state u8, voltage u16 (0.01 V, from 4.0). */
+    static BatteryState parseBatteryState(byte[] p) throws IOException {
+        if (p.length < 4) throw new IOException("Short battery answer");
+        double volts = p.length >= 11 ? ((p[9] & 0xff) | (p[10] & 0xff) << 8) / 100.0 : (p[3] & 0xff) / 10.0;
+        return new BatteryState(p[0] & 0xff, volts);
+    }
+
     /**
      * Waits up to timeoutMs for the GPS to talk to Betaflight: MSP_STATUS' sensor bit 3 (SENSOR_GPS). Betaflight sets
      * it on every message from the GPS, fix or not, and clears it after 2.5 s of silence - so this works indoors.
@@ -284,11 +386,21 @@ public final class BetaflightUsb implements AutoCloseable {
     }
 
     private void write(byte[] data) throws IOException {
-        if (port.writeBytes(data, data.length) != data.length) throw new IOException("Could not write to the flight controller");
+        wire.write(data);
     }
 
+    /** Lets go of the port; with the CLI open, "exit" goes first so the board isn't left in CLI mode (it restarts). */
     @Override
     public void close() {
-        if (port.isOpen()) port.closePort();
+        if (inCli && wire.isOpen()) {
+            inCli = false;
+            try {
+                write("exit\n");
+                Thread.sleep(300);
+            } catch (IOException | InterruptedException ignored) {
+                // the port may be gone already
+            }
+        }
+        wire.close();
     }
 }

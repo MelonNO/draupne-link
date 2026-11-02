@@ -132,15 +132,50 @@ public final class BetaflightPlan {
         return changes;
     }
 
-    /** As above, plus the cell count from `get force_battery_cell_count` set to cells. */
+    /** As above, plus the cell count from `get force_battery_cell_count` set to cells (the count confirmed). */
     public static List<Change> plan(String serialRateOutput, String versionLine, String cellsOutput, int cells) {
+        return plan(serialRateOutput, versionLine, cellsOutput, cells, true);
+    }
+
+    /**
+     * As above; the cell count is only written once the pilot has confirmed (or changed) it. Before that Betaflight
+     * keeps what it has: its own count, or a count it already forces.
+     */
+    public static List<Change> plan(String serialRateOutput, String versionLine, String cellsOutput, int cells, boolean cellsConfirmed) {
         List<Change> changes = new ArrayList<>(plan(serialRateOutput, versionLine));
         int forced = forcedCells(cellsOutput);
-        if (forced >= 0 && forced != cells) {
+        if (cellsConfirmed && forced >= 0 && forced != cells) {
             changes.add(new Change("Battery: force_battery_cell_count " + forced + " -> " + cells + " (" + cells + "S)",
                     List.of("set force_battery_cell_count = " + cells)));
         }
         return changes;
+    }
+
+    /** From `board_name` ("board_name IFLIGHT_BLITZ_F722"): the board's name, or "" when none is set. */
+    public static String boardName(String boardNameOutput) {
+        for (String line : boardNameOutput.split("\\R")) {
+            String l = line.replaceFirst("^#\\s*", "").trim();
+            if (l.startsWith("board_name")) {
+                String name = l.substring("board_name".length()).replaceFirst("^\\s*[=:]?\\s*", "").trim();
+                if (name.isEmpty()) continue; // the command's echo
+                return name.equals("-") || refused(l) ? "" : name;
+            }
+        }
+        return "";
+    }
+
+    /** From `get craft_name` (4.4 on) or `name` (older: "name: X" / "name = X"): the craft's name, or "" when none. */
+    public static String craftName(String nameOutput) {
+        for (String line : nameOutput.split("\\R")) {
+            String l = line.replaceFirst("^#\\s*", "").trim();
+            if (refused(l)) return "";
+            Matcher m = Pattern.compile("^(?:craft_)?name\\s*[=:]\\s*(.*)$").matcher(l);
+            if (m.find()) {
+                String name = m.group(1).trim();
+                return name.equals("-") || name.equalsIgnoreCase("(null)") ? "" : name;
+            }
+        }
+        return "";
     }
 
     /** From `serial`: a port has Betaflight's GPS function (FUNCTION_GPS = 2, "Sensor input: GPS" in the Ports tab). */

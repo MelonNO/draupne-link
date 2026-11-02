@@ -61,6 +61,10 @@ class MotorTestTest {
         byte[] analog = {(byte) 234, 0, 0, 0, 0, 0, 0, (byte) (2345 & 0xff), (byte) (2345 >> 8)};
         assertEquals(23.45, MotorTest.volts(analog), 1e-9);
         assertEquals(23.4, MotorTest.volts(new byte[]{(byte) 234, 0, 0, 0, 0, 0, 0}), 1e-9, "older Betaflight: 0.1 V");
+        // a battery is in: Betaflight counts cells, or the voltage is above USB power's (a 1S pack is 3-4 V)
+        assertTrue(new MotorTest.Live(new int[0], 3.9, 0, false).batteryIn(), "a 1S pack");
+        assertTrue(new MotorTest.Live(new int[0], 0.2, 1, false).batteryIn(), "Betaflight's count wins");
+        assertFalse(new MotorTest.Live(new int[0], 0.4, 0, false).batteryIn(), "USB power only");
         assertTrue(MotorTest.is3d(new byte[]{0, 0x10, 0, 0}));
         assertFalse(MotorTest.is3d(new byte[]{(byte) 0xff, 0x0f, 0, 0}));
     }
