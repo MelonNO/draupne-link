@@ -166,11 +166,16 @@ final class TacticalCombo {
         java.awt.Rectangle[] rows = new java.awt.Rectangle[menu.getComponentCount()];
         for (int i = 0; i < rows.length; i++) rows[i] = menu.getComponent(i).getBounds();
         javax.swing.JLayeredPane layer = root.getLayeredPane();
+        if (!OPENING.add(layer)) return; // a second press while a menu is still wiping in: nothing
         java.awt.Point at = javax.swing.SwingUtilities.convertPoint(invoker, x, y, layer);
         Ghost.play(layer, new java.awt.Rectangle(at.x, at.y, size.width, size.height), picture, rows, true, () -> {
+            OPENING.remove(layer);
             if (invoker.isShowing()) menu.show(invoker, x, y);
         });
     }
+
+    /** The windows in which a menu is wiping in right now. */
+    private static final java.util.Set<javax.swing.JLayeredPane> OPENING = new java.util.HashSet<>();
 
     /**
      * A menu opening or closing: a picture of it on the window's layered pane whose rows the scan bar wipes in
