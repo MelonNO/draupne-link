@@ -221,19 +221,24 @@ public final class TileCache {
     }
 
     /**
-     * An area being fetched for offline use: every tile of it from one level to another, coarse levels first, those
-     * already on disk skipped. The figures are read as it runs; {@link #cancel} stops it (what is saved stays).
+     * An area being fetched for offline use: every tile of it from one level to another for each picture asked for,
+     * picture after picture, coarse levels first, those already on disk skipped. The figures are read as it runs;
+     * {@link #cancel} stops it (what is saved stays).
      */
     public final class Download {
-        public final TileSource source;
         public final int total;
         private final AtomicInteger done = new AtomicInteger(), fetched = new AtomicInteger(), onDisk = new AtomicInteger(),
-                failed = new AtomicInteger(), running = new AtomicInteger();
+                failed = new AtomicInteger();
+        private volatile TileSource current;
         private volatile boolean cancelled, finished, gaveUp;
 
-        private Download(TileSource source, int total) {
-            this.source = source;
+        private Download(int total) {
             this.total = total;
+        }
+
+        /** The picture being fetched now. */
+        public TileSource current() {
+            return current;
         }
 
         /** Tiles looked at so far (fetched, on disk already, or failed). */
@@ -272,21 +277,57 @@ public final class TileCache {
         }
     }
 
+    /** One picture's share of a download. */
+    private record Job(TileSource source, List<Tile> tiles) {}
+
+    /** How many tiles the area takes for these pictures from zMin to zMax (each picture to its own deepest level). */
+    public static long count(List<TileSource> sources, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
+        long n = 0;
+        for (TileSource s : sources) n += count(zMin, Math.min(s.maxZoom, zMax), minLat, maxLat, minLon, maxLon);
+        return n;
+    }
+
     /**
-     * Fetches the whole area from zMin to zMax for this picture, like Mission Planner's prefetch, on threads of its
-     * own; at most {@link #MAX_DOWNLOAD} tiles (count first). Kartverket and Esri with two connections;
-     * OpenStreetMap, whose policy frowns on this, with one and a pause between tiles - keep its areas small.
+     * Fetches the whole area from zMin to zMax for every picture given, one picture after another, like Mission
+     * Planner's prefetch, on threads of its own; at most {@link #MAX_DOWNLOAD} tiles in all (count first).
+     * Kartverket and Esri with two connections; OpenStreetMap, whose policy frowns on this, with one and a pause
+     * between tiles - keep its areas small.
      */
-    public Download download(TileSource source, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
+    public Download download(List<TileSource> sources, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
         int z0 = Math.max(0, zMin);
-        List<Tile> tiles = plan(z0, z0, Math.min(source.maxZoom, zMax), minLat, maxLat, minLon, maxLon, MAX_DOWNLOAD);
-        Download d = new Download(source, tiles.size());
+        List<Job> jobs = new ArrayList<>();
+        int total = 0;
+        for (TileSource s : sources) {
+            List<Tile> tiles = plan(z0, z0, Math.min(s.maxZoom, zMax), minLat, maxLat, minLon, maxLon, MAX_DOWNLOAD - total);
+            jobs.add(new Job(s, tiles));
+            total += tiles.size();
+        }
+        Download d = new Download(total);
+        Thread runner = thread(() -> {
+            for (Job job : jobs) {
+                if (d.cancelled || d.gaveUp) break;
+                d.current = job.source();
+                run(d, job);
+            }
+            d.finished = true;
+        }, "mapDownload");
+        runner.start();
+        return d;
+    }
+
+    public Download download(TileSource source, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
+        return download(List.of(source), zMin, zMax, minLat, maxLat, minLon, maxLon);
+    }
+
+    /** One picture's tiles on its own workers; returns when they are through, cancelled or given up. */
+    private void run(Download d, Job job) {
+        TileSource source = job.source();
+        List<Tile> tiles = job.tiles();
         int threads = source.prefetchAllowed ? 2 : 1;
         long gapMs = source.prefetchAllowed ? 0 : 250;
-        ExecutorService workers = Executors.newFixedThreadPool(threads, r -> thread(r, "mapDownload"));
+        ExecutorService workers = Executors.newFixedThreadPool(threads, r -> thread(r, "mapDownload-" + source.id));
         AtomicInteger next = new AtomicInteger();
         AtomicInteger misses = new AtomicInteger();
-        d.running.set(threads);
         for (int i = 0; i < threads; i++) {
             workers.execute(() -> {
                 for (int k; (k = next.getAndIncrement()) < tiles.size(); ) {
@@ -328,13 +369,15 @@ public final class TileCache {
                     }
                     d.done.incrementAndGet();
                 }
-                if (d.running.decrementAndGet() == 0) {
-                    d.finished = true;
-                    workers.shutdown();
-                }
             });
         }
-        return d;
+        workers.shutdown();
+        try {
+            workers.awaitTermination(365, java.util.concurrent.TimeUnit.DAYS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            d.cancelled = true;
+        }
     }
 
     private byte[] fetch(String url) throws IOException {

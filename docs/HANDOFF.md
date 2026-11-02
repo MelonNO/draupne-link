@@ -55,8 +55,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   repo's `wip/in-app-updater/`.)
 - **On main, not released: DOWNLOAD AREA**, the map saved for offline use like Mission Planner's prefetch
   (`TileCache.download`, `MapDownloadDialog`; the map window's button, Alt + drag a box, or the right-click menu's
-  "Download this view"). Every tile of the area from one level to another, coarse first, those on disk skipped, at
-  most 250 000 tiles a go; two connections, OpenStreetMap one with a 250 ms pause (its policy forbids bulk
+  "Download this view"). One START takes every tile of the area for all four pictures, one after another, from level
+  2 to each picture's deepest (or one picture, a narrower range), coarse first, those on disk skipped, at most
+  250 000 tiles a go; two connections, OpenStreetMap one with a 250 ms pause (its policy forbids bulk
   downloads; the pilot chose to include it anyway - if OSM ever blocks the app's User-Agent, drop it from
   `download`). The rest prefetch is unchanged (never OSM). Tried off screen only, never with a server.
 - 1.0.21 brought video for bad coverage (AUTO / SHARP / ROBUST, parity packets, fast size switch) with pc.15.

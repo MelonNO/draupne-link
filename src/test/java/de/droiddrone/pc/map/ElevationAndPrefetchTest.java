@@ -100,6 +100,29 @@ class ElevationAndPrefetchTest {
         assertTrue(c.isCancelled());
     }
 
+    @Test
+    void oneDownloadTakesEveryPictureToItsOwnDeepestLevel(@TempDir Path dir) throws Exception {
+        double minLat = 59.910, maxLat = 59.918, minLon = 10.745, maxLon = 10.760;
+        List<TileSource> all = List.of(TileSource.values());
+        long each18 = TileCache.count(2, 18, minLat, maxLat, minLon, maxLon), each19 = TileCache.count(2, 19, minLat, maxLat, minLon, maxLon);
+        assertEquals(2 * each18 + 2 * each19, TileCache.count(all, 2, 19, minLat, maxLat, minLon, maxLon),
+                "Kartverket's two pictures stop at 18, satellite and OpenStreetMap go to 19");
+        assertTrue(each19 > each18);
+
+        // the saved tile of one picture doesn't count for another
+        int x = (int) (Mercator.x(minLon, 3) / Mercator.TILE), y = (int) (Mercator.y(maxLat, 3) / Mercator.TILE);
+        Path file = dir.resolve("satellite").resolve("3").resolve(Integer.toString(x)).resolve(y + ".png");
+        Files.createDirectories(file.getParent());
+        ImageIO.write(new BufferedImage(256, 256, BufferedImage.TYPE_INT_RGB), "png", file.toFile());
+        TileCache cache = new TileCache(dir, "test", false);
+        TileCache.Download d = cache.download(List.of(TileSource.SATELLITE, TileSource.KARTVERKET_TOPO), 3, 3, minLat, maxLat, minLon, maxLon);
+        assertEquals(2, d.total, "one tile at zoom 3 for each picture");
+        assertTrue(await(d));
+        assertEquals(2, d.done(), "both pictures were gone through, one after the other");
+        assertEquals(1, d.onDisk());
+        assertEquals(1, d.failed());
+    }
+
     private static boolean await(TileCache.Download d) throws InterruptedException {
         for (int i = 0; i < 500 && !d.isFinished(); i++) Thread.sleep(10);
         return d.isFinished();

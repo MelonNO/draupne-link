@@ -20,21 +20,24 @@ import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.GridLayout;
 import java.awt.Window;
+import java.util.List;
 import java.util.Locale;
 
 /**
  * DOWNLOAD AREA: the map saved for offline use, like Mission Planner's prefetch. Every tile of an area - the view, or
- * a box drawn on the map with Alt + drag - from one zoom level to another, for the chosen picture. Says how many
- * tiles that is and roughly how much before START; the bar and the figures while it runs; CANCEL stops it, what is
- * saved stays. Closing the window doesn't stop a download. A new box while one runs waits for it.
+ * a box drawn on the map with Alt + drag - for every picture and every zoom level, one START (or one picture and a
+ * narrower range of levels). Says how many tiles that is and roughly how much before START; the bar and the figures
+ * while it runs; CANCEL stops it, what is saved stays. Closing the window doesn't stop a download. A new box while
+ * one runs waits for it.
  */
 final class MapDownloadDialog extends JDialog {
-    private static final int MIN_LEVEL = 2, LEVELS_DOWN = 4;
+    private static final int MIN_LEVEL = 2, MAX_LEVEL = 19;
     private static final int KB_PER_TILE = 20; // a rough average over the pictures
+    private static final String ALL = "All pictures";
 
     private final TileCache cache;
     private final JComboBox<String> picture = new JComboBox<>();
-    private final SpinnerNumberModel fromModel = new SpinnerNumberModel(10, MIN_LEVEL, 19, 1), toModel = new SpinnerNumberModel(14, MIN_LEVEL, 19, 1);
+    private final SpinnerNumberModel fromModel = new SpinnerNumberModel(MIN_LEVEL, MIN_LEVEL, MAX_LEVEL, 1), toModel = new SpinnerNumberModel(MAX_LEVEL, MIN_LEVEL, MAX_LEVEL, 1);
     private final JLabel areaValue = value(), tilesValue = value(), status = Theme.label(" ", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
     private final JProgressBar bar = new JProgressBar(0, 1000);
     private final JButton start = Theme.primaryButton("Start"), cancel = Theme.secondaryButton("Cancel");
@@ -57,16 +60,17 @@ final class MapDownloadDialog extends JDialog {
         JPanel rows = new JPanel(new GridLayout(5, 2, 12, 8));
         rows.setOpaque(false);
         row(rows, "AREA", areaValue);
+        picture.addItem(ALL);
         for (TileSource s : TileSource.values()) picture.addItem(s.title);
         TacticalCombo.install(picture);
-        picture.setToolTipText("Which map picture to save. OpenStreetMap is fetched one tile at a time: keep its areas small");
+        picture.setToolTipText("Which map pictures to save: all four, one after another, or one. OpenStreetMap is fetched one tile at a time: keep its areas small");
         picture.addActionListener(e -> {
             if (!settingUp) count();
         });
         row(rows, "PICTURE", picture);
         JSpinner from = spinner(fromModel), to = spinner(toModel);
-        from.setToolTipText("The coarsest zoom level to save (the map's levels run 2 to 18 or 19)");
-        to.setToolTipText("The finest zoom level to save: each level down has four times the tiles");
+        from.setToolTipText("The coarsest zoom level to save: 2 is the whole world in a few tiles, so every level costs little until about 12");
+        to.setToolTipText("The finest zoom level to save: 19 is the deepest there is (18 for Kartverket), and each level down has four times the tiles");
         row(rows, "FROM LEVEL", from);
         row(rows, "TO LEVEL", to);
         row(rows, "TILES", tilesValue);
@@ -119,15 +123,14 @@ final class MapDownloadDialog extends JDialog {
         return s;
     }
 
-    /** A new area (a box or the view) with the picture the map shows; the levels start at the one looked at. */
+    /** A new area (a box or the view): every picture and every level, unless a download is running. */
     void setArea(double[] area, TileSource shown, double zoom) {
         this.area = area;
         settingUp = true;
         if (download == null || download.isFinished()) {
-            picture.setSelectedIndex(shown.ordinal());
-            int from = (int) Math.max(MIN_LEVEL, Math.min(shown.maxZoom, Math.floor(zoom)));
-            fromModel.setValue(from);
-            toModel.setValue(Math.min(shown.maxZoom, from + LEVELS_DOWN));
+            picture.setSelectedIndex(0);
+            fromModel.setValue(MIN_LEVEL);
+            toModel.setValue(MAX_LEVEL);
         }
         settingUp = false;
         double midLat = (area[0] + area[1]) / 2;
@@ -136,21 +139,22 @@ final class MapDownloadDialog extends JDialog {
         count();
     }
 
-    private TileSource source() {
-        return TileSource.values()[picture.getSelectedIndex()];
+    /** The pictures chosen: all four, or the one. */
+    private List<TileSource> sources() {
+        int i = picture.getSelectedIndex();
+        return i == 0 ? List.of(TileSource.values()) : List.of(TileSource.values()[i - 1]);
     }
 
     /** How many tiles the choice means, and whether it is allowed. */
     private void count() {
-        TileSource s = source();
-        int from = (Integer) fromModel.getValue(), to = Math.min(s.maxZoom, (Integer) toModel.getValue());
+        int from = (Integer) fromModel.getValue(), to = (Integer) toModel.getValue();
         if (to < from) {
             tilesValue.setText("TO LEVEL is above FROM LEVEL");
             tilesValue.setForeground(Theme.BAD);
             start.setEnabled(false);
             return;
         }
-        long n = TileCache.count(from, to, area[0], area[1], area[2], area[3]);
+        long n = TileCache.count(sources(), from, to, area[0], area[1], area[2], area[3]);
         if (n > TileCache.MAX_DOWNLOAD) {
             tilesValue.setText(String.format(Locale.ROOT, "%,d - TOO MANY (AT MOST %,d): A SMALLER AREA OR A LOWER TO LEVEL", n, TileCache.MAX_DOWNLOAD));
             tilesValue.setForeground(Theme.BAD);
@@ -164,12 +168,12 @@ final class MapDownloadDialog extends JDialog {
     }
 
     private static String sizeText(long kb) {
+        if (kb >= 1024 * 1024) return String.format(Locale.ROOT, "%.1f GB", kb / 1024.0 / 1024.0);
         return kb >= 1024 ? String.format(Locale.ROOT, "%.0f MB", kb / 1024.0) : kb + " KB";
     }
 
     private void start() {
-        TileSource s = source();
-        download = cache.download(s, (Integer) fromModel.getValue(), (Integer) toModel.getValue(), area[0], area[1], area[2], area[3]);
+        download = cache.download(sources(), (Integer) fromModel.getValue(), (Integer) toModel.getValue(), area[0], area[1], area[2], area[3]);
         start.setEnabled(false);
         cancel.setEnabled(true);
         bar.setValue(0);
@@ -186,7 +190,8 @@ final class MapDownloadDialog extends JDialog {
         String figures = String.format(Locale.ROOT, "%,d of %,d tiles: %,d fetched, %,d saved already, %,d failed",
                 done, d.total, d.fetched(), d.onDisk(), d.failed());
         if (!d.isFinished()) {
-            status.setText(d.source.title + " - " + figures);
+            TileSource now = d.current();
+            status.setText((now == null ? "" : now.title + " - ") + figures);
             return;
         }
         refresh.stop();
