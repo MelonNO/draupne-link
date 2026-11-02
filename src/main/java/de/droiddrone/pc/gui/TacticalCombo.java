@@ -50,6 +50,20 @@ final class TacticalCombo {
             public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
                 openedAt[0] = System.currentTimeMillis();
                 timer.restart();
+                // the dropdown's box shows nothing before the scan bar: a picture of the window lies over it
+                Object popup = combo.getUI().getAccessibleChild(combo, 0);
+                if (popup instanceof JPopupMenu p) {
+                    RevealCover.arm(p, () -> {
+                        JList<?> list = popupList(combo);
+                        if (list == null) return new java.awt.Rectangle[0];
+                        java.awt.Rectangle[] rows = new java.awt.Rectangle[list.getModel().getSize()];
+                        for (int i = 0; i < rows.length; i++) {
+                            java.awt.Rectangle r = list.getCellBounds(i, i);
+                            rows[i] = r == null ? new java.awt.Rectangle() : javax.swing.SwingUtilities.convertRectangle(list, r, p);
+                        }
+                        return rows;
+                    });
+                }
             }
 
             @Override
@@ -74,69 +88,25 @@ final class TacticalCombo {
         });
     }
 
-    /** An empty popup menu whose items appear one after another, like a dropdown's options. */
+    /**
+     * An empty popup menu, its ordinary grey self, that the scan bar reveals row by row - frame, background and
+     * text together: a picture of the window as it was lies over it ({@link RevealCover}) and the bar wipes that
+     * away, so nothing of the menu shows before the bar has passed.
+     */
     static JPopupMenu menu() {
-        long[] openedAt = {0};
-        JPopupMenu menu = new JPopupMenu() {
-            /**
-             * Row by row, the scan bar reveals everything - frame, background and text together: left of the bar
-             * the menu is painted, right of it nothing at all, so the window shows through until the bar has passed.
-             */
-            @Override
-            public void paint(Graphics g) {
-                long since = System.currentTimeMillis() - openedAt[0];
-                int n = getComponentCount();
-                if (openedAt[0] == 0 || n == 0 || since >= STAGGER_MS * (n - 1) + REVEAL_MS) {
-                    super.paint(g);
-                    return;
-                }
-                java.awt.geom.Area shown = new java.awt.geom.Area();
-                int[] bars = new int[n];
-                for (int i = 0; i < n; i++) {
-                    Component item = getComponent(i);
-                    float p = Math.max(0, Math.min(1, (since - i * STAGGER_MS) / (float) REVEAL_MS));
-                    float ease = 1 - (1 - p) * (1 - p);
-                    int edge = Math.round(getWidth() * ease);
-                    bars[i] = p > 0 && p < 1 ? edge : -1;
-                    // a row's strip runs to the next row's top (the gaps between them belong to someone), the first
-                    // from the very top and the last to the very bottom: the frame comes with them
-                    int top = i == 0 ? 0 : item.getY();
-                    int bottom = i == n - 1 ? getHeight() : getComponent(i + 1).getY();
-                    if (edge > 0) shown.add(new java.awt.geom.Area(new java.awt.Rectangle(0, top, edge, bottom - top)));
-                }
-                java.awt.Graphics2D c = (java.awt.Graphics2D) g.create();
-                try {
-                    c.clip(shown);
-                    super.paint(c);
-                } finally {
-                    c.dispose();
-                }
-                g.setColor(Theme.ACCENT);
-                for (int i = 0; i < n; i++) {
-                    if (bars[i] < 0) continue;
-                    Component item = getComponent(i);
-                    g.fillRect(Math.max(0, bars[i] - 2), item.getY() + 2, 3, item.getHeight() - 4);
-                }
-            }
-        };
-        menu.setOpaque(false); // see-through where the scan bar hasn't been (a lightweight popup, inside the window)
-        // the whole menu each tick: an item repainted on its own (hovered) would otherwise skip the cover
-        Timer timer = new Timer(15, null);
-        timer.addActionListener(e -> {
-            menu.repaint();
-            long total = STAGGER_MS * Math.max(0, menu.getComponentCount() - 1) + REVEAL_MS + 30;
-            if (System.currentTimeMillis() - openedAt[0] > total) timer.stop();
-        });
+        JPopupMenu menu = new JPopupMenu();
         menu.addPopupMenuListener(new PopupMenuListener() {
             @Override
             public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
-                openedAt[0] = System.currentTimeMillis();
-                timer.restart();
+                RevealCover.arm(menu, () -> {
+                    java.awt.Rectangle[] rows = new java.awt.Rectangle[menu.getComponentCount()];
+                    for (int i = 0; i < rows.length; i++) rows[i] = menu.getComponent(i).getBounds();
+                    return rows;
+                });
             }
 
             @Override
             public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
-                timer.stop();
                 // the rows go the way they came, over the window, once the menu itself is gone
                 java.awt.Rectangle[] rows = new java.awt.Rectangle[menu.getComponentCount()];
                 for (int i = 0; i < rows.length; i++) rows[i] = menu.getComponent(i).getBounds();
@@ -186,6 +156,104 @@ final class TacticalCombo {
         public void paint(Graphics g) {
             super.paint(g);
             cover(g, getWidth(), getHeight(), progress, getBackground());
+        }
+    }
+
+    /**
+     * A menu or dropdown opening: a picture of the window as it was, taken just before, lies over the popup on the
+     * window's layered pane, and the scan bar wipes it away row by row from the left (the first row first), so the
+     * popup - frame, grey background, text - shows only where the bar has been. Gone when the last row is bare.
+     * Takes no mouse events. (A popup that reaches outside the window is a window of its own, which this can't
+     * cover: it simply appears.)
+     */
+    private static final class RevealCover extends javax.swing.JComponent {
+        private final java.awt.image.BufferedImage behind;
+        private final java.awt.Rectangle[] rows;
+        private final long startedAt = System.currentTimeMillis();
+        private final Timer timer = new Timer(15, e -> tick());
+
+        private RevealCover(java.awt.image.BufferedImage behind, java.awt.Rectangle[] rows) {
+            this.behind = behind;
+            this.rows = rows;
+            setOpaque(false);
+        }
+
+        /** Called as the popup is about to show: the window is photographed now, the cover laid once it is up. */
+        static void arm(JPopupMenu popup, java.util.function.Supplier<java.awt.Rectangle[]> rows) {
+            Component invoker = popup.getInvoker();
+            javax.swing.JRootPane root = invoker == null ? null : javax.swing.SwingUtilities.getRootPane(invoker);
+            if (root == null) return;
+            javax.swing.JLayeredPane layer = root.getLayeredPane();
+            if (layer.getWidth() <= 0 || layer.getHeight() <= 0) return;
+            java.awt.image.BufferedImage snap = new java.awt.image.BufferedImage(layer.getWidth(), layer.getHeight(), java.awt.image.BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D g = snap.createGraphics();
+            try {
+                layer.paint(g);
+            } finally {
+                g.dispose();
+            }
+            // runs before the popup's first paint: posted now, the paint is queued later, when the popup is up
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                if (!popup.isShowing() || popup.getWidth() == 0) return;
+                java.awt.Point at = popup.getLocationOnScreen();
+                javax.swing.SwingUtilities.convertPointFromScreen(at, layer);
+                java.awt.Rectangle b = new java.awt.Rectangle(at.x, at.y, popup.getWidth(), popup.getHeight())
+                        .intersection(new java.awt.Rectangle(0, 0, layer.getWidth(), layer.getHeight()));
+                if (b.isEmpty()) return;
+                java.awt.Rectangle[] r = rows.get();
+                for (int i = 0; i < r.length; i++) r[i] = new java.awt.Rectangle(r[i].x + at.x - b.x, r[i].y + at.y - b.y, r[i].width, r[i].height);
+                RevealCover cover = new RevealCover(snap.getSubimage(b.x, b.y, b.width, b.height), r);
+                cover.setBounds(b);
+                layer.add(cover, javax.swing.JLayeredPane.DRAG_LAYER);
+                cover.timer.start();
+            });
+        }
+
+        private long totalMs() {
+            return STAGGER_MS * Math.max(0, rows.length - 1) + REVEAL_MS;
+        }
+
+        private void tick() {
+            if (System.currentTimeMillis() - startedAt >= totalMs()) {
+                timer.stop();
+                Component layer = getParent();
+                if (layer != null) {
+                    java.awt.Rectangle r = getBounds();
+                    ((javax.swing.JComponent) layer).remove(this);
+                    layer.repaint(r.x, r.y, r.width, r.height);
+                }
+                return;
+            }
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            long since = System.currentTimeMillis() - startedAt;
+            int n = rows.length, w = getWidth(), h = getHeight();
+            if (n == 0) return;
+            for (int i = 0; i < n; i++) {
+                float p = Math.max(0, Math.min(1, (since - i * STAGGER_MS) / (float) REVEAL_MS));
+                float ease = 1 - (1 - p) * (1 - p);
+                int edge = Math.round(w * ease);
+                // a row's strip runs to the next row's top, the first from the very top, the last to the very bottom:
+                // the frame and the gaps come with the rows
+                int top = i == 0 ? 0 : rows[i].y;
+                int bottom = i == n - 1 ? h : rows[i + 1].y;
+                if (bottom <= top) continue;
+                if (edge < w) {
+                    Graphics c = g.create(edge, top, w - edge, bottom - top);
+                    try {
+                        c.drawImage(behind, -edge, -top, null);
+                    } finally {
+                        c.dispose();
+                    }
+                }
+                if (p > 0 && p < 1) {
+                    g.setColor(Theme.ACCENT);
+                    g.fillRect(Math.max(0, edge - 2), rows[i].y + 2, 3, rows[i].height - 4);
+                }
+            }
         }
     }
 
