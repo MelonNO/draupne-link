@@ -4,45 +4,41 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-02, 1.0.21 + the map, not released)
+## Where things stand (2026-11-02, 1.0.22)
 
-- **Not released yet (2026-11-02): the map, the header's MENU, phone app pc.16 (built, not published).**
-  - **Map window** (MENU > MAP > Map window, F3): a window of its own for a second screen, hidden until opened,
-    remembers its place (`mapWindow` setting). `gui/MapWindow` = toolbar (FOLLOW, FIT FLIGHT, HOME, FIND DRONE, the
-    map picture, the coordinate format) + `gui/MapView` + the figures: cursor position, terrain height under the
-    cursor (m and ft, `map/Elevation`: Kartverket's height service in Norway, Open-Meteo elsewhere), the drone's
-    position, altitude m/ft, home distance/bearing, POSITION FROM (drone or phone GPS). Coordinates in MGRS (default),
-    UTM, decimal or DMS (`map/Coordinates`, Krüger UTM + Norway's zone exceptions; tested against GeographicLib's
-    38SMB example). Pictures: Kartverket topo / printed map, satellite (Esri World Imagery), OpenStreetMap, AUTO.
-  - **Offline:** tiles are kept for good (`%APPDATA%\DraupneLink	iles`, never refetched or deleted) and when the map
-    rests on a place for 1.2 s the levels 4 under and 3 over it are fetched too (`TileCache.prefetch`, 1500 tiles a
-    rest, a slow third thread) - not for OpenStreetMap (its policy forbids it); Esri's terms are a grey area, the
-    pilot wanted it. Every position goes to `Documents\DRAUPNE Link\Tracks	rack-DATE.gpx` as it comes, plus
-    `last-position.txt` (now with MGRS); MENU > MAP > Find drone shows the last known position.
-  - **Phone GPS** (MENU > MAP > Position from: DRONE / PHONE): phone app **pc.16** sends its own GPS once a second as
-    record `0x40F3` (`PcLinkStats.writePhonePositionTo`, `PhoneLocation`; ACCESS_FINE_LOCATION asked for once, the
-    service runs without it; foreground type `location` only when granted). `FlightTrack.sample` takes both; the other
-    fills in after `FALLBACK_MS` (5 s) without the chosen one, so a dead FC still leaves the phone's position. pc.16
-    is built (`build/flight/DRAUPNE-Flight-2.3.0-pc.16.apk`, not from a clean HEAD) but not published or pinned:
-    release it with the next PC version (1.0.22).
-  - **Header:** one MENU button, the filled one (`gui/SlideMenu`), slides out SETUP, VIDEO (with the OSD rows), LINK,
-    TOOLS (Find drone, Position from, Tracks folder, tests, versions) and UPDATE when there is one; it stays open until
-    pressed again. The map's picture and coordinate format are chosen in the map window's toolbar only.
-  - **In flight** (`setFlightLayout`): the LINK card's connection fields and detail figures fold away (`gui/Fold`) and a
-    minimap (`MapView`) with a POP OUT MAP button unfolds at its top; back on disconnect. F3 also opens the map window.
-    The controller card starts folded (`controllerMinimized=true` in the template).
-  - **Pins** (`map/Pins`, Documents\DRAUPNE Link\pins.txt): right-click on any map adds one (Alpha, Bravo ... Zulu,
-    Alpha2 ...), right-click a pin renames or removes it; drawn with distance and bearing from the drone; written as
-    waypoints into the flight's GPX on disconnect. Home is called LAUNCH everywhere on the map side (the OSD keeps
-    Betaflight's HOME); FIT FLIGHT is WHOLE FLIGHT.
-  - **Boot animation** (`gui/BootReveal`, 1.5 s, click or key skips): the mark (`gui/Logo`, drawn from the SVG) fades in
-    on black, its brackets fly to the window's corners, the crosshair to the video's middle, the link folds away.
-  - **The logo:** resources/icon (PNGs 16-256 and the .ico from the designer's set; `AppIcon` loads them, draws the mark
-    if missing) and the phone app's launcher (mipmap-* from the same set). pc.16 must be rebuilt for the icon.
-  - The menus' reveal covered rows with their own background, which showed black bars on a label or separator row:
-    now the menu's colour.
-  - Measured on a far phone with pc.14 (1.0.21): 720p ~4-5 damaged frames/s from random packet loss, which is what the
-    parity is for. **Not yet measured with pc.15/16:** the size switch gap, the parity's `recovered` count.
+- **Released:** DRAUPNE Link **1.0.22** (Latest), bundling phone app **DRAUPNE Flight 2.3.0-pc.16**. The map and
+  everything round it, the MENU header, the boot animation and the new mark. Where the pieces live:
+  - **Map:** `map/Mercator`, `map/TileSource` (Kartverket topo/paper, Esri satellite, OSM; `inNorway` is a 22-point
+    outline of the mainland + Svalbard + Jan Mayen, so Sweden and Finland are outside), `map/TileCache`
+    (`%APPDATA%\DraupneLink\tiles`, kept for good, `prefetch` of the levels under a rest, not for OSM),
+    `map/Coordinates` (MGRS / UTM Krüger with Norway's zone exceptions, tested against GeographicLib's 38SMB example),
+    `map/Elevation` (Kartverket's height service in Norway, Open-Meteo elsewhere and as fallback), `map/FlightTrack`
+    (GPX as it comes, `last-position.txt`, both GPS sources with a 5 s fallback, pins as waypoints on close),
+    `map/Pins` (Documents\DRAUPNE Link\pins.txt, Alpha..Zulu, Alpha2..), `gui/MapView` (tiles, track, launch "L",
+    rings, pins, LAST KNOWN badge, + / - buttons, right-click menu), `gui/MapWindow` (toolbar + figures, remembers
+    its bounds in `mapWindow`, fades in on every opening), `gui/PinManagerDialog`, `gui/FindDroneDialog`.
+  - **Phone GPS:** phone app pc.16 sends record `0x40F3` (`PcLinkStats.writePhonePositionTo`, `PhoneLocation`; the
+    location permission is asked once, the service runs without it; foreground type `location` only when granted).
+    `FcTelemetry.PhonePosition`; `gpsSource` setting (MENU > TOOLS > Position from).
+  - **Header:** `gui/SlideMenu` - MENU (the one filled, black-text button) slides out SETUP, VIDEO (+OSD rows), LINK,
+    TOOLS (Find drone, Position from, Tracks folder, tests, versions), UPDATE when there is one; stays open until
+    pressed again. The map picture and coordinate format are chosen in the map window only.
+  - **Menus:** FlatLaf gives popups a window of their own on Windows (for the shadow), so nothing inside the main
+    window can cover them. `TacticalCombo.show` therefore wipes in a *picture* of the menu (`Ghost`, row by row with
+    the scan bar, frame and all) and shows the real menu only afterwards; closing wipes a picture out, bottom row
+    first. Dropdowns (JComboBox) open through Swing itself and keep the old cell reveal; they close with the ghost.
+  - **In flight:** `MainWindow.updateFlightLayout` - the LINK card's fields and detail figures fold (`gui/Fold`) and
+    the minimap + POP OUT MAP unfold; the map popped out (or disconnect) brings everything back. The controller card
+    starts folded (`controllerMinimized=true` in the template).
+  - **Boot:** `gui/BootReveal` over the layered pane (3 s: fade in 560, hold 320, fly 1560, out 560 ms; click or key
+    skips): brackets to the window corners, the link folds, the crosshair flies to the video's middle, splits into
+    the OSD's crosshair (`OsdRenderer.crosshair(g, cx, cy, unit, color, outline)` at the end, so it sits pixel for
+    pixel on the real one) and turns white. `gui/Logo` draws the mark from its SVG; `AppIcon` loads the designer's
+    PNGs/.ico from resources/icon; the phone app's launcher uses the same set. The phone has `BootRevealView`.
+  - Measured on a far phone with pc.14 (1.0.21): 720p ~4-5 damaged frames/s from random packet loss, which is what
+    the parity is for. **Not yet measured with pc.15/16:** the size switch gap, the parity's `recovered` count; the
+    phone GPS on a real phone; the map on a real flight.
+- 1.0.21 brought video for bad coverage (AUTO / SHARP / ROBUST, parity packets, fast size switch) with pc.15.
 - 1.0.20 bundled phone app 2.3.0-pc.14: the fix for pc.13,
   which on a test phone started no video (intra refresh, where its encoder claimed support) and, the video start being
   on the packet thread, held up pings and sticks. pc.14: no intra refresh, the video starts on its own thread
