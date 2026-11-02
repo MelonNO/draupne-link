@@ -27,13 +27,13 @@ class BootAndFoldTest {
         Rectangle video = new Rectangle(300, 80, 500, 300);
         BufferedImage start = BootReveal.frame(0, 800, 500, video);
         assertEquals(0xff000000, start.getRGB(5, 5), "black all over at the start");
-        BufferedImage shown = BootReveal.frame(400, 800, 500, video);
+        BufferedImage shown = BootReveal.frame(800, 800, 500, video);
         assertTrue(count(shown, Logo.RED.getRGB() & 0xffffff, 200) > 2000, "the mark, red, once faded in");
         assertEquals(0xff000000, shown.getRGB(5, 5), "still black round it");
-        BufferedImage flying = BootReveal.frame(900, 800, 500, video);
+        BufferedImage flying = BootReveal.frame(1800, 800, 500, video);
         int alphaCorner = flying.getRGB(5, 5) >>> 24;
         assertTrue(alphaCorner < 200, "the black lifts while the pieces fly: " + alphaCorner);
-        BufferedImage end = BootReveal.frame(1495, 800, 500, video);
+        BufferedImage end = BootReveal.frame(2990, 800, 500, video);
         assertTrue((end.getRGB(400, 250) >>> 24) < 20, "see-through at the end");
         assertTrue(count(end, Logo.RED.getRGB() & 0xffffff, 200) < 50, "the pieces have faded");
     }

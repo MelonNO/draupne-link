@@ -21,10 +21,10 @@ import java.util.function.Supplier;
  * The start: a black window, the mark fades in fast in the middle, then comes apart - the four brackets fly to the
  * window's corners (where the cards' bracket borders are), the crosshair to the middle of the video, the link
  * between the bars folds away - as the black lifts and the UI shows through; the pieces fade out on arrival. About
- * 1.5 s; a click or key skips it. Drawn on the window's layered pane over everything, taking the mouse meanwhile.
+ * 3 s; a click or key skips it. Drawn on the window's layered pane over everything, taking the mouse meanwhile.
  */
 final class BootReveal extends JComponent {
-    private static final long FADE_IN_MS = 280, HOLD_MS = 160, FLY_MS = 780, OUT_MS = 280;
+    private static final long FADE_IN_MS = 560, HOLD_MS = 320, FLY_MS = 1560, OUT_MS = 560; // 3 s in all
     private static final long TOTAL_MS = FADE_IN_MS + HOLD_MS + FLY_MS + OUT_MS;
     /** The brackets' size on arrival (the card borders' brackets are about this big). */
     private static final double CORNER_SIZE = 150;
