@@ -2,6 +2,7 @@ package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.Mercator;
+import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
 import de.droiddrone.pc.map.TileSource;
 
@@ -35,7 +36,7 @@ import java.util.Locale;
 final class FindDroneDialog extends JDialog {
     private final MapView map;
 
-    private FindDroneDialog(Window owner, FlightTrack track, TileCache cache, TileSource source) {
+    private FindDroneDialog(Window owner, FlightTrack track, TileCache cache, TileSource source, Pins pins) {
         super(owner, "Find drone", ModalityType.MODELESS);
         setIconImages(owner.getIconImages());
         JPanel root = new JPanel(new BorderLayout(0, 12));
@@ -59,6 +60,7 @@ final class FindDroneDialog extends JDialog {
         root.add(card, BorderLayout.NORTH);
 
         map = new MapView(cache);
+        map.setPins(pins);
         map.setSource(source);
         map.setPreferredSize(new Dimension(640, 420));
         map.update(track, null, -1, true, false);
@@ -103,8 +105,8 @@ final class FindDroneDialog extends JDialog {
         setLocationRelativeTo(owner);
     }
 
-    static FindDroneDialog open(Window owner, FlightTrack track, TileCache cache, TileSource source) {
-        FindDroneDialog d = new FindDroneDialog(owner, track, cache, source);
+    static FindDroneDialog open(Window owner, FlightTrack track, TileCache cache, TileSource source, Pins pins) {
+        FindDroneDialog d = new FindDroneDialog(owner, track, cache, source, pins);
         d.setVisible(true);
         return d;
     }
@@ -119,7 +121,7 @@ final class FindDroneDialog extends JDialog {
         sb.append(String.format(Locale.ROOT, "Altitude        %d m GPS     Speed %.0f km/h     Satellites %d     %s%n",
                 last.altM(), last.speedKmh(), last.sats(), last.armed() ? "armed" : "not armed"));
         if (home != null) {
-            sb.append(String.format(Locale.ROOT, "From home       %s, bearing %03d°%n",
+            sb.append(String.format(Locale.ROOT, "From launch     %s, bearing %03d°%n",
                     MapView.distanceText(Mercator.distanceM(home.lat(), home.lon(), last.lat(), last.lon())).toLowerCase(Locale.ROOT),
                     Mercator.bearingDeg(home.lat(), home.lon(), last.lat(), last.lon())));
         }

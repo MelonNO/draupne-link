@@ -5,6 +5,7 @@ import de.droiddrone.pc.map.Coordinates;
 import de.droiddrone.pc.map.Elevation;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.Mercator;
+import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
 import de.droiddrone.pc.map.TileSource;
 
@@ -34,9 +35,10 @@ import java.util.function.Consumer;
 
 /**
  * The map in a window of its own, for a second screen (MAP > Map window, F3). Hidden until opened; remembers where
- * it was. A toolbar in the program's style above the map (FOLLOW, FIT FLIGHT, HOME, FIND DRONE; the map picture and
+ * it was. A toolbar in the program's style above the map (FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE; the map picture and
  * the coordinate format), the figures under it: the place under the mouse and the terrain height there (m and ft),
- * the drone's position, altitude, distance and bearing from home, and which GPS the position comes from.
+ * the drone's position, altitude, distance and bearing from the launch point, and which GPS the position comes from.
+ * Right-click on the map drops a pin (Alpha, Bravo ...), or renames or removes one.
  */
 final class MapWindow extends JFrame {
     static final String BOUNDS_KEY = "mapWindow";
@@ -59,7 +61,7 @@ final class MapWindow extends JFrame {
     private final Timer saveBounds = new Timer(800, e -> saveBounds());
     private boolean settingCombos;
 
-    MapWindow(JFrame owner, TileCache cache, Elevation elevation, TileSource source, Coordinates.Format format, String savedBounds,
+    MapWindow(JFrame owner, TileCache cache, Elevation elevation, Pins pins, TileSource source, Coordinates.Format format, String savedBounds,
               Consumer<Map<String, String>> saver, Consumer<TileSource> onSource, Consumer<Coordinates.Format> onFormat, Runnable findDrone) {
         super("DRAUPNE Link map");
         this.elevation = elevation;
@@ -76,6 +78,7 @@ final class MapWindow extends JFrame {
         setContentPane(root);
 
         map = new MapView(cache);
+        map.setPins(pins);
         map.setSource(source);
         map.setOnSourceChosen(s -> {
             onSource.accept(s);
@@ -95,15 +98,15 @@ final class MapWindow extends JFrame {
             syncFollow();
         });
         left.add(followButton);
-        JButton fit = Theme.secondaryButton("Fit flight");
-        fit.setToolTipText("The whole flight and home in view (also a double-click on the map)");
+        JButton fit = Theme.secondaryButton("Whole flight");
+        fit.setToolTipText("The whole flight and the launch point in view (also a double-click on the map)");
         fit.addActionListener(e -> {
             map.fitTrack();
             syncFollow();
         });
         left.add(fit);
-        JButton home = Theme.secondaryButton("Home");
-        home.setToolTipText("Centre on where the drone armed");
+        JButton home = Theme.secondaryButton("Launch");
+        home.setToolTipText("Centre on the launch point: where the drone armed");
         home.addActionListener(e -> {
             FlightTrack.Point h = track == null ? null : track.home();
             if (h != null) map.centreOn(h.lat(), h.lon(), Math.max(map.zoom(), 15));
@@ -146,7 +149,7 @@ final class MapWindow extends JFrame {
         stat(stats, "TERRAIN HEIGHT", terrainValue);
         stat(stats, "DRONE", droneValue);
         stat(stats, "ALTITUDE (GPS)", altitudeValue);
-        stat(stats, "HOME", homeValue);
+        stat(stats, "LAUNCH", homeValue);
         stat(stats, "POSITION FROM", sourceValue);
         root.add(stats, BorderLayout.SOUTH);
         clearStats();

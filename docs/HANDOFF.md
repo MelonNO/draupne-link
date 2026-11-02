@@ -25,9 +25,22 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
     fills in after `FALLBACK_MS` (5 s) without the chosen one, so a dead FC still leaves the phone's position. pc.16
     is built (`build/flight/DRAUPNE-Flight-2.3.0-pc.16.apk`, not from a clean HEAD) but not published or pinned:
     release it with the next PC version (1.0.22).
-  - **Header:** one MENU button (`gui/SlideMenu`) slides out SETUP, VIDEO, OSD, MAP, LINK, TOOLS (and UPDATE when there
-    is one) and stays open until pressed again; the old SETTINGS rows are sorted into those. The menus' reveal covered
-    rows with their own background, which showed black bars on a label or separator row: now the menu's colour.
+  - **Header:** one MENU button, the filled one (`gui/SlideMenu`), slides out SETUP, VIDEO (with the OSD rows), LINK,
+    TOOLS (Find drone, Position from, Tracks folder, tests, versions) and UPDATE when there is one; it stays open until
+    pressed again. The map's picture and coordinate format are chosen in the map window's toolbar only.
+  - **In flight** (`setFlightLayout`): the LINK card's connection fields and detail figures fold away (`gui/Fold`) and a
+    minimap (`MapView`) with a POP OUT MAP button unfolds at its top; back on disconnect. F3 also opens the map window.
+    The controller card starts folded (`controllerMinimized=true` in the template).
+  - **Pins** (`map/Pins`, Documents\DRAUPNE Link\pins.txt): right-click on any map adds one (Alpha, Bravo ... Zulu,
+    Alpha2 ...), right-click a pin renames or removes it; drawn with distance and bearing from the drone; written as
+    waypoints into the flight's GPX on disconnect. Home is called LAUNCH everywhere on the map side (the OSD keeps
+    Betaflight's HOME); FIT FLIGHT is WHOLE FLIGHT.
+  - **Boot animation** (`gui/BootReveal`, 1.5 s, click or key skips): the mark (`gui/Logo`, drawn from the SVG) fades in
+    on black, its brackets fly to the window's corners, the crosshair to the video's middle, the link folds away.
+  - **The logo:** resources/icon (PNGs 16-256 and the .ico from the designer's set; `AppIcon` loads them, draws the mark
+    if missing) and the phone app's launcher (mipmap-* from the same set). pc.16 must be rebuilt for the icon.
+  - The menus' reveal covered rows with their own background, which showed black bars on a label or separator row:
+    now the menu's colour.
   - Measured on a far phone with pc.14 (1.0.21): 720p ~4-5 damaged frames/s from random packet loss, which is what the
     parity is for. **Not yet measured with pc.15/16:** the size switch gap, the parity's `recovered` count.
 - 1.0.20 bundled phone app 2.3.0-pc.14: the fix for pc.13,
@@ -167,7 +180,7 @@ Lessons from releasing:
 
 ## Testing and diagnosing
 
-- `gradlew.bat test`: 217 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
+- `gradlew.bat test`: 222 tests (protocol, video, telemetry, calibration, Betaflight CLI plans, update check, cell
   count, spectator mode end to end on loopback, flight mode / ARM / failsafe planning, setup page composition).
   Loopback tests need full-size packets to catch size bugs: 1.0.17's spectator cut-off passed with a plain test
   picture (see `SpectatorTest.fullSizePacketsReachTheSpectatorWhole`).

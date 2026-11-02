@@ -134,11 +134,26 @@ public final class FlightTrack {
 
     /** Ends the GPX file properly; the track stays readable in memory. */
     public synchronized void close() {
+        close(List.of());
+    }
+
+    /** Ends the GPX file, with the pilot's pins as its waypoints (GPX wants them before the track: it is rewritten). */
+    public synchronized void close(List<Pins.Pin> pins) {
         closed = true;
         if (out == null) return;
         try {
             out.write("  </trkseg>\n </trk>\n</gpx>\n");
             out.close();
+            if (!pins.isEmpty() && file != null) {
+                StringBuilder wpts = new StringBuilder();
+                for (Pins.Pin p : pins) {
+                    wpts.append(String.format(Locale.ROOT, " <wpt lat=\"%.7f\" lon=\"%.7f\"><name>%s</name></wpt>%n", p.lat(), p.lon(),
+                            p.name().replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")));
+                }
+                String gpx = Files.readString(file, StandardCharsets.UTF_8);
+                int at = gpx.indexOf(" <trk>");
+                if (at > 0) Files.writeString(file, gpx.substring(0, at) + wpts + gpx.substring(at), StandardCharsets.UTF_8);
+            }
         } catch (IOException ignored) {
         }
         out = null;
@@ -176,7 +191,7 @@ public final class FlightTrack {
         sb.append(String.format(Locale.ROOT, "Altitude:  %d m (GPS)   Speed: %.0f km/h   %s%s%n",
                 p.altM(), p.speedKmh(), p.phone() ? "" : "Satellites: " + p.sats() + "   ", p.armed() ? "armed" : "not armed"));
         if (h != null) {
-            sb.append(String.format(Locale.ROOT, "From home: %.0f m, bearing %03d (home %.6f, %.6f)%n",
+            sb.append(String.format(Locale.ROOT, "From launch: %.0f m, bearing %03d (launch %.6f, %.6f)%n",
                     Mercator.distanceM(h.lat(), h.lon(), p.lat(), p.lon()), Mercator.bearingDeg(h.lat(), h.lon(), p.lat(), p.lon()), h.lat(), h.lon()));
         }
         sb.append('\n').append(googleMapsUrl(p.lat(), p.lon())).append('\n').append(openStreetMapUrl(p.lat(), p.lon())).append('\n');

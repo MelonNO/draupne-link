@@ -3,6 +3,7 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.Mercator;
+import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
 import de.droiddrone.pc.map.TileSource;
 
@@ -67,6 +68,7 @@ class MapView extends JComponent {
     private boolean dragged;
 
     private FlightTrack track;
+    private Pins pins;
     private FcTelemetry.Gps gps;
     private int headingDeg = -1;
     private boolean fcLost;
@@ -81,7 +83,7 @@ class MapView extends JComponent {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (SwingUtilities.isRightMouseButton(e)) {
-                    menu().show(MapView.this, e.getX(), e.getY());
+                    menu(e.getX(), e.getY()).show(MapView.this, e.getX(), e.getY());
                     return;
                 }
                 dragStart = e.getPoint();
@@ -160,6 +162,44 @@ class MapView extends JComponent {
     }
 
     // ------------------------------------------------------------------ what to show
+
+    /** The pilot's pins, drawn with their names and the way to them from the drone; right-click adds, renames, removes. */
+    void setPins(Pins pins) {
+        this.pins = pins;
+        repaint();
+    }
+
+    /** The pin under a pixel (within its marker), or null. */
+    private Pins.Pin pinAt(int x, int y) {
+        if (pins == null) return null;
+        TileSource src = effectiveSource();
+        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
+        double scale = Math.pow(2, zoom - zi);
+        double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
+        for (Pins.Pin p : pins.list()) {
+            Point2D s = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, getWidth(), getHeight());
+            if (Math.abs(s.getX() - x) <= 12 && Math.abs(s.getY() - y) <= 12) return p;
+        }
+        return null;
+    }
+
+    private void addPin(int x, int y) {
+        if (pins == null) return;
+        double[] ll = toLatLon(x, y);
+        String name = (String) javax.swing.JOptionPane.showInputDialog(this, "Name of the pin", "Add pin",
+                javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, pins.nextName());
+        if (name == null) return;
+        pins.add(name, ll[0], ll[1]);
+        repaint();
+    }
+
+    private void renamePin(Pins.Pin pin) {
+        String name = (String) javax.swing.JOptionPane.showInputDialog(this, "New name", "Rename " + pin.name(),
+                javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, pin.name());
+        if (name == null || name.isBlank()) return;
+        pins.rename(pin, name);
+        repaint();
+    }
 
     /** The source chosen in the settings; null = auto. */
     void setSource(TileSource source) {
@@ -306,9 +346,28 @@ class MapView extends JComponent {
         cache.prefetch(src, zi, zi - PREFETCH_UP, zi + PREFETCH_DOWN, se[0], nw[0], nw[1], se[1], PREFETCH_BUDGET);
     }
 
-    private JPopupMenu menu() {
+    private JPopupMenu menu(int x, int y) {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
+        if (pins != null) {
+            Pins.Pin hit = pinAt(x, y);
+            if (hit != null) {
+                JMenuItem rename = new JMenuItem("Rename " + hit.name() + "...");
+                rename.addActionListener(e -> renamePin(hit));
+                menu.add(rename);
+                JMenuItem remove = new JMenuItem("Remove " + hit.name());
+                remove.addActionListener(e -> {
+                    pins.remove(hit);
+                    repaint();
+                });
+                menu.add(remove);
+            } else {
+                JMenuItem add = new JMenuItem("Add pin here (" + pins.nextName() + ")");
+                add.addActionListener(e -> addPin(x, y));
+                menu.add(add);
+            }
+            menu.addSeparator();
+        }
         for (TileSource s : TileSource.values()) {
             JRadioButtonMenuItem item = new JRadioButtonMenuItem(s.title, s == chosen);
             item.addActionListener(e -> choose(s));
@@ -321,7 +380,7 @@ class MapView extends JComponent {
         JMenuItem followItem = new JMenuItem("Follow the drone");
         followItem.addActionListener(e -> setFollow(true));
         menu.add(followItem);
-        JMenuItem homeItem = new JMenuItem("Centre on home");
+        JMenuItem homeItem = new JMenuItem("Centre on the launch point");
         homeItem.setEnabled(track != null && track.home() != null);
         homeItem.addActionListener(e -> centreOn(track.home().lat(), track.home().lon(), Math.max(zoom, 15)));
         menu.add(homeItem);
@@ -357,6 +416,7 @@ class MapView extends JComponent {
             paintTrack(g, pts, zi, scale, wcx, wcy, w, h);
             if (home != null) paintHome(g, home, zi, scale, wcx, wcy, w, h);
             FlightTrack.Point last = pts.isEmpty() ? null : pts.get(pts.size() - 1);
+            if (pins != null) paintPins(g, last, zi, scale, wcx, wcy, w, h);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
             else paintNoPosition(g, w, h);
 
@@ -456,7 +516,45 @@ class MapView extends JComponent {
         g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
         g.setFont(Theme.headingFont(12f));
         FontMetrics fm = g.getFontMetrics();
-        g.drawString("H", (float) c.getX() - fm.stringWidth("H") / 2f, (float) c.getY() + fm.getAscent() / 2f - 1.5f);
+        g.drawString("L", (float) c.getX() - fm.stringWidth("L") / 2f, (float) c.getY() + fm.getAscent() / 2f - 1.5f);
+    }
+
+    /** A pin: a diamond with its name, and from the drone's last position the distance and bearing to it. */
+    private void paintPins(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {
+        for (Pins.Pin p : pins.list()) {
+            Point2D c = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
+            if (c.getX() < -200 || c.getX() > w + 200 || c.getY() < -200 || c.getY() > h + 200) continue;
+            Path2D d = new Path2D.Double();
+            d.moveTo(c.getX(), c.getY() - 9);
+            d.lineTo(c.getX() + 7, c.getY());
+            d.lineTo(c.getX(), c.getY() + 9);
+            d.lineTo(c.getX() - 7, c.getY());
+            d.closePath();
+            g.setColor(new Color(0, 0, 0, 150));
+            g.setStroke(new BasicStroke(4f));
+            g.draw(d);
+            g.setColor(Theme.WARN);
+            g.fill(d);
+            g.setColor(Color.WHITE);
+            g.setStroke(new BasicStroke(1.4f));
+            g.draw(d);
+            String line1 = p.name().toUpperCase(Locale.ROOT);
+            String line2 = last == null ? null : distanceText(Mercator.distanceM(last.lat(), last.lon(), p.lat(), p.lon()))
+                    + "  " + String.format(Locale.ROOT, "%03d\u00b0", Mercator.bearingDeg(last.lat(), last.lon(), p.lat(), p.lon()));
+            g.setFont(Theme.headingFont(11f));
+            FontMetrics fm = g.getFontMetrics();
+            int tw = Math.max(fm.stringWidth(line1), line2 == null ? 0 : fm.stringWidth(line2)) + 12;
+            int th = fm.getHeight() * (line2 == null ? 1 : 2) + 6;
+            int x = (int) c.getX() + 11, y = (int) c.getY() - th / 2;
+            g.setColor(BOX);
+            g.fillRect(x, y, tw, th);
+            g.setColor(Theme.WARN);
+            g.drawString(line1, x + 6, y + 3 + fm.getAscent());
+            if (line2 != null) {
+                g.setColor(Theme.TEXT);
+                g.drawString(line2, x + 6, y + 3 + fm.getAscent() + fm.getHeight());
+            }
+        }
     }
 
     private void paintDrone(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {
