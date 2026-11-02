@@ -91,6 +91,13 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     }
 
     /** Back to the idle screen (disconnected). */
+    /** A picture has arrived (the setup guide's camera check). */
+    boolean hasPicture() {
+        synchronized (lock) {
+            return front != null || ready != null;
+        }
+    }
+
     void clear() {
         synchronized (lock) {
             front = null;
@@ -403,7 +410,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         g.setColor(Theme.TEXT);
         ty += 34;
         for (String line : new String[]{"Point the drone's camera at this code,", "close enough that it fills most of the picture.",
-                "Hold still for a few seconds.", "", "Esc or SETTINGS > Latency test: stop    F11: full screen"}) {
+                "Hold still until a time shows below: that is your delay.", "", "Press ESC to end the latency test."}) {
             g.drawString(line, tx, ty);
             ty += 21;
         }

@@ -51,6 +51,11 @@ final class MapWindow extends JFrame {
     private final Elevation elevation;
     private final Consumer<Map<String, String>> saver;
     private final JButton followButton = Theme.secondaryButton("Follow: on");
+    private final JButton pinsButton = Theme.secondaryButton("Pins");
+    private final JButton downloadButton = Theme.secondaryButton("Download area");
+    /** A hidden download's progress, in the toolbar; a click brings its window back. */
+    private final JLabel downloadLine = Theme.label("", Theme.headingFont(12f), Theme.ACCENT);
+    private JPanel cursorCell, droneCell;
     private final JComboBox<String> pictureCombo = new JComboBox<>(PICTURES);
     private final JComboBox<String> formatCombo = new JComboBox<>();
     private final JLabel cursorValue = value(), terrainValue = value(), droneValue = value(), altitudeValue = value(),
@@ -119,7 +124,6 @@ final class MapWindow extends JFrame {
             syncFollow();
         });
         left.add(home);
-        JButton pinsButton = Theme.secondaryButton("Pins");
         pinsButton.setToolTipText("Every pin: go to, rename, remove, add at the drone or the launch point");
         pinsButton.addActionListener(e -> {
             if (pinManager == null || !pinManager.isDisplayable()) {
@@ -129,8 +133,7 @@ final class MapWindow extends JFrame {
             pinManager.toFront();
         });
         left.add(pinsButton);
-        JButton downloadButton = Theme.secondaryButton("Download area");
-        downloadButton.setToolTipText("Save the map for offline use: this view, or hold Alt and drag a box on the map");
+        downloadButton.setToolTipText("Save the map for offline use: this view, or a box drawn on the map (SELECT WITH CURSOR, or Alt + drag)");
         downloadButton.addActionListener(e -> downloadArea(map.visibleArea()));
         left.add(downloadButton);
         JButton find = Theme.primaryButton("Find drone");
@@ -140,6 +143,20 @@ final class MapWindow extends JFrame {
         bar.add(left, BorderLayout.WEST);
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         right.setOpaque(false);
+        // a download put away with HIDE goes on here; a click brings its window back
+        downloadLine.setVisible(false);
+        downloadLine.setToolTipText("A download is running: click for its window");
+        downloadLine.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+        downloadLine.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                if (downloader != null) {
+                    downloader.setVisible(true);
+                    downloader.toFront();
+                }
+            }
+        });
+        right.add(downloadLine);
         TacticalCombo.install(pictureCombo);
         pictureCombo.setToolTipText("The map picture. Auto: Kartverket's topo map in Norway, OpenStreetMap elsewhere. Satellite from Esri");
         pictureCombo.addActionListener(e -> {
@@ -165,9 +182,9 @@ final class MapWindow extends JFrame {
 
         // ---- the figures
         JPanel stats = Theme.card(new GridLayout(1, 6, 14, 0));
-        stat(stats, "CURSOR", cursorValue);
+        cursorCell = stat(stats, "CURSOR", cursorValue);
         stat(stats, "TERRAIN HEIGHT", terrainValue);
-        stat(stats, "DRONE", droneValue);
+        droneCell = stat(stats, "DRONE", droneValue);
         stat(stats, "ALTITUDE (GPS)", altitudeValue);
         stat(stats, "LAUNCH", homeValue);
         stat(stats, "POSITION FROM", sourceValue);
@@ -197,22 +214,47 @@ final class MapWindow extends JFrame {
         return Theme.label("-", Theme.monoFont(Font.BOLD, 12.5f), Theme.TEXT);
     }
 
-    private static void stat(JPanel panel, String name, JLabel value) {
+    private static JPanel stat(JPanel panel, String name, JLabel value) {
         JPanel cell = new JPanel(new GridLayout(2, 1, 0, 3));
         cell.setOpaque(false);
         cell.add(Theme.label(name, Theme.headingFont(11f), Theme.MUTED));
         cell.add(value);
         panel.add(cell);
+        return cell;
     }
 
     MapView map() {
         return map;
     }
 
-    /** DOWNLOAD AREA, the menu or an Alt + drag box: the download window for that area, with the picture shown. */
+    // ---- what the tour points at
+    javax.swing.JComponent tourFollow() {
+        return followButton;
+    }
+
+    javax.swing.JComponent tourPins() {
+        return pinsButton;
+    }
+
+    javax.swing.JComponent tourDownload() {
+        return downloadButton;
+    }
+
+    javax.swing.JComponent tourCursor() {
+        return cursorCell;
+    }
+
+    javax.swing.JComponent tourDrone() {
+        return droneCell;
+    }
+
+    /** DOWNLOAD AREA, the menu or a box drawn on the map: the download window for that area, with the map type shown. */
     private void downloadArea(double[] area) {
         if (downloader == null || !downloader.isDisplayable()) {
-            downloader = new MapDownloadDialog(this, cache, map.effectiveSource(), map.zoom(), area);
+            downloader = new MapDownloadDialog(this, cache, map.effectiveSource(), map.zoom(), area, map::selectAreaNext, line -> {
+                downloadLine.setText(line == null ? "" : line);
+                downloadLine.setVisible(line != null && downloader != null && !downloader.isVisible());
+            });
         } else {
             downloader.setArea(area, map.effectiveSource(), map.zoom());
         }

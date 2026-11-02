@@ -6,6 +6,27 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-02, 1.0.25)
 
+- **Unreleased, for 1.0.26's notes - the pilot's SETUP feedback, all of it:** the first-time guide is 13 steps (the
+  phone overview, "Measure the delay" and "Ready" pages are gone; `WizardDialog` is unchanged). FINISH plays
+  `SetupFinale` (the mark, SETUP COMPLETE) and, the first time, offers the **tour** (`Tour`: a `TourNotice` with
+  NEXT / SKIP TOUR and a dimming overlay, MENU > controller fold > pop-out video > the LINK card, then the map
+  window opens for FOLLOW, PINS, the CURSOR cell, the DRONE cell, DOWNLOAD AREA; SETUP > Tour any time; the
+  anchors are `tour*()` accessors on MainWindow / MapWindow). Betaflight page: "Plug a USB data cable into the drone
+  and this computer", the cell-count line says to enter it, a short AUX note under the switches (`WrappingText.fitting`),
+  RETRY (the Read again button while nothing answers), DISCONNECT / RECONNECT (`paused`: the rounds stop, the
+  port is free for Betaflight Configurator), INAV / ArduPilot named when found, "Done - you can unplug the drone".
+  Radio page: the controller list is always shown. Calibration: an AUX with nothing from Drone setup is
+  "AUXn - reserve". Phone pages: "Install the mobile app" (the app row stays neutral: this PC can't see the install),
+  "Settings on the phone" (short, DRAUPNE Flight by name, names differ by phone), "Connect DRAUPNE Flight" with
+  Always allow / Use by default, and the **camera check**: the live picture in a small `VideoView` (the page's
+  session now opens the video too, `VideoPipeline` on the preview) and FLIP, which is VIDEO > Camera upside down.
+  No "USB OTG adapter" anywhere: "USB data cable". Motor test: a slider or the picture without the box ticked
+  shakes the risk line; without a battery a pop-up says to plug one in; a click on a motor in the picture runs it
+  for 3 s at 40 % of the test range (`pulse`). Latency test text: "Press ESC to end the latency test". Download
+  area: "MAP TYPE", no hard limit (a warning above `TileCache.MAX_DOWNLOAD`, with a rough time), HIDE (the map
+  window shows DOWNLOADING n / m, a click brings it back), SELECT WITH CURSOR (`MapView.selectAreaNext`). The main
+  window opens maximized. README's guide pictures redone (13 steps). None of it tried on hardware; the pictures
+  came from the throwaway `FeedbackShot` in build/shot (git-ignored), painted off screen.
 - **Released:** DRAUPNE Link **1.0.25** (Latest), phone app unchanged (**2.3.0-pc.18**): the two items below.
 - **1.0.25 - Drone setup on Betaflight 2025.12:** the receiver could not be set. 2025.12's
   CLI has no name for RX_MSP (`feature RX_MSP` answers "Invalid name", and `feature` can't list it; the bit,

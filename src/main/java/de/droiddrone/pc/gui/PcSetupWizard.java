@@ -570,7 +570,7 @@ final class PcSetupWizard {
                     return this;
                 }
             });
-            radioChoice.setToolTipText("More than one controller is plugged in: pick your radio");
+            radioChoice.setToolTipText("Which controller is the radio: the list follows what is plugged in");
             TacticalCombo.install(radioChoice);
             radioChoice.addActionListener(e -> {
                 if (updatingChoice) return;
@@ -581,8 +581,7 @@ final class PcSetupWizard {
                 changedController = true;
                 wizard.update();
             });
-            radioChoice.setVisible(false); // shown once more than one controller is found
-            radio.addComponent(radioChoice);
+            radio.addComponent(radioChoice); // always there, so another controller can be picked at any time
             WizardDialog.addRow(col, radio);
             calibrateButton = calibration.addPrimaryAction("Calibrate", () -> {
                 if (main.calibrate()) changedController = false;
@@ -602,7 +601,7 @@ final class PcSetupWizard {
             } else {
                 int axes = snap.state() == null ? 0 : snap.state().axes().length;
                 radio.set(State.OK, "<b>" + snap.selected().name() + "</b> - " + axes + " axes."
-                        + (snap.joysticks().size() > 1 ? " " + snap.joysticks().size() + " controllers found: pick yours on the right." : ""));
+                        + (snap.joysticks().size() > 1 ? " " + snap.joysticks().size() + " controllers found: pick your radio on the right." : ""));
             }
             boolean ready = snap.selected() != null && !main.isLinkActive();
             calibrateButton.setEnabled(ready);
@@ -616,14 +615,9 @@ final class PcSetupWizard {
             }
         }
 
-        /** The list of controllers, kept up to date; only shown when there is a choice. */
+        /** The list of controllers, kept up to date as they are plugged in and out. */
         private void showChoice(JoystickService.Snapshot snap) {
             List<de.droiddrone.pc.Joystick.Info> list = snap.joysticks();
-            boolean show = list.size() > 1;
-            if (radioChoice.isVisible() != show) {
-                radioChoice.setVisible(show);
-                radio.revalidate();
-            }
             javax.swing.DefaultComboBoxModel<de.droiddrone.pc.Joystick.Info> model =
                     (javax.swing.DefaultComboBoxModel<de.droiddrone.pc.Joystick.Info>) radioChoice.getModel();
             boolean same = model.getSize() == list.size();

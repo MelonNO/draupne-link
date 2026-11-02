@@ -97,10 +97,13 @@ public class CalibrationWizard {
             de.droiddrone.pc.setup.ModeSwitch.Purpose p = i < purposes.length ? purposes[i] : null;
             if (p != null) {
                 steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " - " + p.title(), p.hint()));
+            } else if (i == 0 && purposes.length == 0) {
+                steps.add(new Step(StepKind.SWITCH, 4, Direction.NONE, "AUX1 switch",
+                        "Flip the switch you use to ARM to its ON position. Press Skip if you don't need it."));
             } else {
-                String what = i == 0 && purposes.length == 0 ? "the switch you use to ARM" : "the switch you want on AUX" + (i + 1);
-                steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " switch",
-                        "Flip " + what + " to its ON position. Press Skip if you don't need it."));
+                // nothing chosen for it in Drone setup: a spare, for whatever the pilot sets in Betaflight later
+                steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " - reserve",
+                        "Nothing is set for AUX" + (i + 1) + " yet. Flip a spare switch to ON to keep it for later, or press Skip."));
             }
         }
         steps.add(new Step(StepKind.SUMMARY, -1, Direction.NONE, "Check and save",

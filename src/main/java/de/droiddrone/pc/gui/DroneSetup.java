@@ -12,6 +12,7 @@ import javax.swing.JPanel;
 import javax.swing.JSpinner;
 import javax.swing.SpinnerNumberModel;
 import java.awt.FlowLayout;
+import java.awt.Font;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
@@ -112,6 +113,11 @@ final class DroneSetup {
         /** The same settings by hand, in Betaflight Configurator: behind the USB row's "By hand" button. */
         private String manualHtml = "";
         private javax.swing.JButton byHand;
+        /** RETRY while nothing answers, READ AGAIN once the flight controller is there. */
+        private javax.swing.JButton readAgain;
+        /** DISCONNECT lets go of the USB port (for Betaflight Configurator); RECONNECT carries on. */
+        private javax.swing.JButton disconnect;
+        private boolean paused;
         private boolean busy;
         private volatile boolean writing;
         private boolean found;
@@ -131,8 +137,7 @@ final class DroneSetup {
 
         @Override
         String hint() {
-            return "<b>Props off.</b> Pick the battery, switches and failsafe below, then plug the flight controller into "
-                    + "this PC with USB: everything is set by itself.";
+            return "Plug a USB data cable into the drone and this computer. <b>Props off.</b>";
         }
 
         /** Rank for a combined row's light: the worst part shows; INFO (nothing to do) only when all are. */
@@ -212,6 +217,12 @@ final class DroneSetup {
             switchChoices.add(modeChoices());
             switchChoices.add(javax.swing.Box.createVerticalStrut(6));
             switchChoices.add(rescueChoices());
+            switchChoices.add(javax.swing.Box.createVerticalStrut(8));
+            switchChoices.add(WrappingText.fitting("AUX1, AUX2 ... are the radio's switch channels. Which switch on your radio is "
+                    + "which AUX is chosen later, in the radio step. In doubt, leave these as they are.", Theme.font(Font.PLAIN, 13f), Theme.MUTED));
+            for (java.awt.Component c : switchChoices.getComponents()) { // all at the left edge, like the lines above them
+                if (c instanceof JComponent j) j.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
+            }
             switches.row.addBelow(switchChoices);
             failsafeRow.addComponent(failsafeChoices());
             portChoice.setToolTipText("Which USB port the flight controller is on, if more than one is found");
@@ -228,8 +239,10 @@ final class DroneSetup {
             portChoice.setVisible(false); // shown once more than one port is found
             byHand = usb.addAction("By hand", this::showByHand);
             byHand.setToolTipText("The same settings in Betaflight Configurator, for a drone without USB to this PC");
-            usb.addAction("Read again", this::checkModesAgain).setToolTipText(
-                    "Read the flight controller again: after plugging the battery in, or changing something in Betaflight");
+            readAgain = usb.addAction("Retry", this::checkModesAgain);
+            readAgain.setToolTipText("Look for the flight controller again, or read it again after plugging the battery in or changing something in Betaflight");
+            disconnect = usb.addAction("Disconnect", this::togglePaused);
+            disconnect.setToolTipText("Let go of the USB port, e.g. for Betaflight Configurator; RECONNECT carries on");
             WizardDialog.addRow(col, usb);
             WizardDialog.addRow(col, settings.row);
             WizardDialog.addRow(col, switches.row);
@@ -241,7 +254,7 @@ final class DroneSetup {
             usb.set(State.PENDING, "Looking for it...");
             receiver.set(State.PENDING, "");
             stickDelay.set(State.PENDING, "");
-            battery.set(State.PENDING, "");
+            battery.set(State.PENDING, "Enter your battery's cell count on the right (6 = a 6S pack).");
             ArmSwitch known = ArmSwitch.parse(main.config().getString(ArmSwitch.KEY));
             armRow.set(State.PENDING, armAux > 0 ? "<b>AUX" + armAux + "</b> - written when the flight controller is found."
                     : known == null ? "Read from Betaflight when the flight controller is found." : describe(known));
@@ -531,10 +544,29 @@ final class DroneSetup {
             return parts.isEmpty() ? "nothing (acro throughout)" : String.join(", ", parts);
         }
 
+        /** DISCONNECT / RECONNECT: the rounds stop, so the USB port is free; nothing is open between rounds anyway. */
+        private void togglePaused() {
+            paused = !paused;
+            disconnect.setText(paused ? "Reconnect" : "Disconnect");
+            if (paused) {
+                found = false;
+                failed = false;
+                done = false;
+                markByHand(false);
+                usb.set(State.INFO, "Disconnected: the USB port is free, e.g. for Betaflight Configurator. Press <b>Reconnect</b> to carry on.");
+                for (Part p : new Part[]{receiver, stickDelay, battery}) p.set(State.PENDING, "");
+            } else {
+                applies = 0;
+                nextTry = 0;
+                usb.set(State.PENDING, "Looking for it...");
+            }
+            wizard.update();
+        }
+
         @Override
         void refresh() {
             // the motor test may have the port, however it was opened (Check now or SETTINGS)
-            if (motorTestOpen || MotorTestDialog.isOpen() || busy || done || System.currentTimeMillis() < nextTry) return;
+            if (paused || motorTestOpen || MotorTestDialog.isOpen() || busy || done || System.currentTimeMillis() < nextTry) return;
             busy = true;
             boolean mayApply = applies < MAX_APPLIES;
             int cellTarget = cells;
@@ -564,7 +596,8 @@ final class DroneSetup {
                 try (BetaflightUsb fc = BetaflightUsb.open(port)) {
                     String firmware = fc.firmware();
                     if (!firmware.startsWith("BTFL")) {
-                        why = port.systemName() + " runs " + (firmware.isEmpty() ? "something else" : firmware) + ", not Betaflight - nothing was changed.";
+                        why = port.systemName() + " runs <b>" + firmwareName(firmware) + "</b>, not Betaflight. DRAUPNE Link needs "
+                                + "Betaflight: flash it with Betaflight Configurator. Nothing was changed.";
                         continue;
                     }
                     return work(fc, port, mayApply, cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, names);
@@ -708,6 +741,19 @@ final class DroneSetup {
             }
         }
 
+        /** MSP's four-letter firmware id as a name: INAV, ArduPilot, Cleanflight ... */
+        static String firmwareName(String variant) {
+            return switch (variant) {
+                case "INAV" -> "INAV";
+                case "ARDU" -> "ArduPilot";
+                case "CLFL" -> "Cleanflight";
+                case "BAFL" -> "Baseflight";
+                case "EMUF" -> "EmuFlight";
+                case "" -> "something that doesn't answer MSP";
+                default -> variant;
+            };
+        }
+
         /** The GPS didn't answer within GPS_WAIT_MS: Betaflight's "GPS hardware failure". */
         private static String noGps(boolean gpsPort) {
             return "No GPS found: Betaflight gets nothing from it (GPS hardware failure). " + (gpsPort
@@ -758,28 +804,28 @@ final class DroneSetup {
             found = r != null;
             failed = r != null && r.error() != null;
             markByHand(r == null);
+            readAgain.setText(r == null || r.error() != null ? "Retry" : "Read again");
             if (r == null) {
                 nextTry = System.currentTimeMillis() + 1500;
-                usb.set(State.WARN, "Not found yet. Use a data USB cable; if Windows doesn't see it, install the "
-                        + "STM32 VCP driver (ImpulseRC Driver Fixer) once.");
+                usb.set(State.WARN, "Not found yet. Use a USB <b>data</b> cable (some only charge). If Windows doesn't see the drone, "
+                        + "install the STM32 VCP driver (ImpulseRC Driver Fixer) once.");
                 receiver.set(State.PENDING, "");
                 stickDelay.set(State.PENDING, "");
-                battery.set(State.PENDING, "");
                 return;
             }
             showPorts(r.ports());
             portChoice.setVisible(r.ports() != null && r.ports().size() > 1 || chosenPort != null);
             if (r.error() != null) {
                 nextTry = System.currentTimeMillis() + 2000;
-                usb.set(State.BAD, r.error() + "<br>Trying again by itself every few seconds.");
+                usb.set(State.BAD, r.error() + "<br>Trying again by itself every few seconds, or press <b>Retry</b>.");
                 return;
             }
             if (!r.version().isEmpty()) fcVersion = r.version();
             if (r.applied()) lastRefused = r.refused();
-            usb.set(lastRefused == null ? State.OK : State.WARN, "<b>" + r.port() + "</b>"
-                    + (r.version().isEmpty() ? "" : " - " + BetaflightPlan.shortVersion(r.version()))
+            String usbText = "<b>" + r.port() + "</b>" + (r.version().isEmpty() ? "" : " - " + BetaflightPlan.shortVersion(r.version()))
                     + (r.backup() == null ? "" : "<br>Its settings before the change: " + r.backup())
-                    + (lastRefused == null ? "" : "<br>Betaflight refused: " + lastRefused));
+                    + (lastRefused == null ? "" : "<br>Betaflight refused: " + lastRefused);
+            usb.set(lastRefused == null ? State.OK : State.WARN, usbText);
             ModeSwitch.Plan armPlan = r.modes();
             if (r.armTarget() > 0 && armPlan != null && armPlan.armProblem() != null) {
                 armRow.set(State.WARN, armPlan.armProblem());
@@ -829,8 +875,12 @@ final class DroneSetup {
             boolean modesWrong = showModes(r);
             modesWrong |= showRescue(r);
             modesWrong |= showFailsafe(r);
-            markByHand(!r.msp() || (r.rate() >= 0 && r.rate() < r.target()) || (r.cells() >= 0 && r.cells() != r.cellTarget())
-                    || modesWrong);
+            boolean byHandNeeded = !r.msp() || (r.rate() >= 0 && r.rate() < r.target()) || (r.cells() >= 0 && r.cells() != r.cellTarget())
+                    || modesWrong;
+            markByHand(byHandNeeded);
+            if (!byHandNeeded && lastRefused == null) {
+                usb.set(State.OK, usbText + "<br><b>Done - you can unplug the drone from the PC.</b>");
+            }
         }
 
         /** The failsafe row after a round that changed nothing. @return true if it is not as chosen */
@@ -927,9 +977,10 @@ final class DroneSetup {
 
         @Override
         String status() {
-            if (done) return "Betaflight is set up.";
-            if (!found) return "Waiting for the flight controller (or press Next and use the settings below).";
-            if (failed) return "Waiting for the flight controller - close or Disconnect Betaflight Configurator.";
+            if (paused) return "Disconnected from the USB port - press Reconnect to carry on.";
+            if (done) return "Betaflight is set up - you can unplug the drone from the PC.";
+            if (!found) return "Waiting for the flight controller (or press Next and use the settings by hand).";
+            if (failed) return "Waiting for the flight controller - close or Disconnect Betaflight Configurator, then Retry.";
             return "Setting up Betaflight...";
         }
 

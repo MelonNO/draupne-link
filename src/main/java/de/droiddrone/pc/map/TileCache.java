@@ -203,7 +203,7 @@ public final class TileCache {
 
     // ------------------------------------------------------------------ downloading an area for offline use
 
-    /** The most tiles one download may take; more means a smaller area or a shallower deepest level. */
+    /** Above this many tiles the download window warns that it will take long (hours); it is not a limit. */
     public static final int MAX_DOWNLOAD = 250_000;
     /** Fetches in a row that reached no server before a download gives up. */
     private static final int GIVE_UP_AFTER = 20;
@@ -289,16 +289,16 @@ public final class TileCache {
 
     /**
      * Fetches the whole area from zMin to zMax for every picture given, one picture after another, like Mission
-     * Planner's prefetch, on threads of its own; at most {@link #MAX_DOWNLOAD} tiles in all (count first).
-     * Kartverket and Esri with two connections; OpenStreetMap, whose policy frowns on this, with one and a pause
-     * between tiles - keep its areas small.
+     * Planner's prefetch, on threads of its own; however many tiles that is (count first: the window warns above
+     * {@link #MAX_DOWNLOAD}). Kartverket and Esri with two connections; OpenStreetMap, whose policy frowns on this,
+     * with one and a pause between tiles - keep its areas small.
      */
     public Download download(List<TileSource> sources, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon) {
         int z0 = Math.max(0, zMin);
         List<Job> jobs = new ArrayList<>();
         int total = 0;
         for (TileSource s : sources) {
-            List<Tile> tiles = plan(z0, z0, Math.min(s.maxZoom, zMax), minLat, maxLat, minLon, maxLon, MAX_DOWNLOAD - total);
+            List<Tile> tiles = plan(z0, z0, Math.min(s.maxZoom, zMax), minLat, maxLat, minLon, maxLon, Integer.MAX_VALUE - total);
             jobs.add(new Job(s, tiles));
             total += tiles.size();
         }

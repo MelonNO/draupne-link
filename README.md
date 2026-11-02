@@ -13,14 +13,14 @@ Your radio plugs into the PC; an Android phone on the drone carries the sticks, 
 1. **Download** `DRAUPNE-Link-Setup-<version>.exe` from the [latest release](../../releases/latest).
 2. **Run it** and click through the installer (Next → Install → Finish). Approve the Windows prompt once: the installer then also sets up this PC by itself (**Tailscale**, firewall rules, High performance power plan) and puts **DRAUPNE Link** on the desktop and in the Start menu.
    Windows may say *"Windows protected your PC"*, because the installer isn't code-signed. Click **More info → Run anyway**.
-3. **DRAUPNE Link starts by itself** when you press Finish (untick *Launch DRAUPNE Link* to skip that). **Follow the setup wizard**: it opens on the very first start, skips whatever is already done, and takes about 15 minutes. Later, **MENU > SETUP** opens it again (*First-time setup*) or each part on its own: PC, phone or drone.
+3. **DRAUPNE Link starts by itself** when you press Finish (untick *Launch DRAUPNE Link* to skip that). **Follow the setup wizard**: it opens on the very first start, skips whatever is already done, and takes about 15 minutes. It ends with a short **tour** of the window (MENU > SETUP > *Tour* any time). Later, **MENU > SETUP** opens it again (*First-time setup*) or each part on its own: PC, phone or drone.
 
 ## What you need
 
 - A Windows 10/11 PC on the internet (cable or Wi-Fi)
 - A radio that works as a USB joystick (RadioMaster or any EdgeTX radio)
 - A drone with a **Betaflight** flight controller, plus a USB cable for it ([which version?](#which-betaflight-version))
-- An Android phone (8 or newer, 11+ recommended) with mobile data, and a **USB OTG adapter** to plug it into the flight controller
+- An Android phone (8 or newer, 11+ recommended) with mobile data, and a **USB data cable** to plug it into the flight controller
 
 ### Which Betaflight version?
 
@@ -89,11 +89,11 @@ Betaflight 4.4 is **not required**, only recommended:
 
 - **Pins:** right-click on the map drops one (Alpha, Bravo ... Zulu); each shows distance and bearing from the drone. Right-click a pin to rename or remove it; **PINS** lists them all. Kept between sessions and written into the flight's GPX file.
 - **Every flight's path is saved as it comes** to `Documents\DRAUPNE Link\Tracks\track-<date>.gpx` (opens in any map program), with `last-position.txt` beside it: the drone's last known position with MGRS and map links.
-- **Works without internet** for every place looked at before: map tiles are kept for good. **DOWNLOAD AREA** saves a whole area before you leave, like Mission Planner's prefetch: press the button, **Alt + drag** a box on the map, or right-click > *Download this view*. One START fetches every tile of the area for all four pictures and every zoom level (or one picture, fewer levels); it shows the count and rough size first, a bar while it runs, and CANCEL keeps what is saved. OpenStreetMap comes one tile at a time with a pause, by its policy: keep its areas small.
+- **Works without internet** for every place looked at before: map tiles are kept for good. **DOWNLOAD AREA** saves a whole area before you leave, like Mission Planner's prefetch: press the button, draw a box on the map (SELECT WITH CURSOR, or **Alt + drag**), or right-click > *Download this view*. One START fetches every tile of the area for all four map types and every zoom level (or one type, fewer levels); it shows the count, rough size and time first, warns when it is a lot, HIDE puts the window away while the rest of the map is used, and CANCEL keeps what is saved. OpenStreetMap comes one tile at a time with a pause, by its policy: keep its areas small.
 
 <p>
-<img src="docs/images/map-download-area.png" width="69%" alt="Alt + drag draws the area to download">
-<img src="docs/images/map-download-dialog.png" width="23%" alt="DOWNLOAD AREA: pictures, levels, tile count and size">
+<img src="docs/images/map-download-area.png" width="69%" alt="A box drawn on the map is the area to download">
+<img src="docs/images/map-download-dialog.png" width="23%" alt="DOWNLOAD AREA: map types, levels, tile count and size">
 </p>
 - **The phone's own position** (MENU > TOOLS > *Position from*): the phone asks the GPS, the network and the fused position, so it has one indoors too, and its screen says what the GPS is doing (not allowed - tap to allow; no position yet; or the provider, accuracy and age of the position it sends).
 
@@ -109,7 +109,7 @@ Every part is built for the least delay:
 - **Video:** each frame is decoded the moment its last packet arrives, and only the newest picture is drawn. The PC side takes about 3–4 ms per 720p frame from the last packet to the screen; the stats line shows the live numbers. The camera runs at a steady 30 fps, the phone paces its packets, and key frames come every 2 s or when the PC asks.
 - **Video bitrate:** the PC decides it (up to 4 Mbit/s): lowered the moment the ping jumps, before frames get lost, and raised again after 3 s of calm. Mobile networks queue up a too-high bitrate, and queueing is delay. On a really weak link the picture goes to 960x540 or the bad coverage mode (see *Video* above) and back when the link recovers.
 - **Measure it:** MENU > TOOLS > *Latency test* shows the whole camera-to-screen delay. Try it in a window and in **F11** full screen.
-- **Connection:** Tailscale normally finds a **direct** path. The setup's *Connect the Flight app* step tells you if it doesn't.
+- **Connection:** Tailscale normally finds a **direct** path. The setup's *Connect DRAUPNE Flight* step tells you if it doesn't.
 
 The 4G network itself (typically 40–100 ms round trip) is the biggest delay. A wired PC helps a little.
 
@@ -136,13 +136,13 @@ For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold t
 
 | What you see | What it means / what to do |
 |---|---|
-| Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A cable plus an OTG adapter (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
+| Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A data cable (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
 | The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DRAUPNE Flight when … is connected**, then OK. No tick box? You have the original Flight app: install this project's build (see [The phone app](#the-phone-app)). Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
 | **RXLOSS** / **RC SIGNAL GAP** flickers, but nothing happens | The sticks paused for 0.1-0.3 s on their way to Betaflight. Betaflight then flags RXLOSS but keeps your last sticks; it shows the flag for 0.5 s more. Only a pause over 0.3 s matters in the air (sticks centred, throttle to minimum), and over 1.5 s it fails safe and disarms. The [link log](#logs) shows where the pauses come from: the 4G link (ping and telemetry gaps jump), or the flight controller (Betaflight's `serial_update_rate_hz` left at 100 can't keep up - run MENU > SETUP > *Drone setup*) |
 | **LINK STALL** | The phone app stopped answering for 0.3 s while the link was up: the 4G link stalled, or the phone is busy. Short ones pass; frequent ones mean poor coverage |
 | **Grey or green bands** in the picture, or it breaks up | A weak uplink drops the end of big frames. AUTO video switches to the bad coverage mode by itself after a few stalls; MENU > VIDEO > *Video: ROBUST* keeps it there for the whole flight |
 | Landed and still armed, the drone **leans, tilts forward or twitches** | A stick isn't sending 1500 at rest: the controller panel shows ROLL / PIT / YAW values; with your hands off they should read 1500. If not, check the radio's trims and press CALIBRATE again, hands off at the centre step. Even when centred, Betaflight (with Air mode) keeps correcting on the ground, so disarm right after landing |
-| **NO FLIGHT CONTROLLER** comes and goes while the link is good | The phone gets nothing from the flight controller: check the OTG cable, and run MENU > SETUP > *Drone setup* (a `serial_update_rate_hz` left at 100 also causes it) |
+| **NO FLIGHT CONTROLLER** comes and goes while the link is good | The phone gets nothing from the flight controller: check the USB cable to the flight controller, and run MENU > SETUP > *Drone setup* (a `serial_update_rate_hz` left at 100 also causes it) |
 | OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Calibrate it in Betaflight Configurator's **Setup** tab, drone level |
 | Flight app shows the Betaflight version in **yellow** | Betaflight is older than 4.4. It still flies; update when convenient ([which version?](#which-betaflight-version)) |
 | Betaflight ignores the **arm switch** | DRAUPNE Link sends your arm switch on AUX1. Drone setup puts ARM there; otherwise, in Betaflight Configurator's **Modes** tab, put ARM on AUX 1. **RC CHECK** shows what Betaflight sees |
@@ -167,7 +167,7 @@ Settings live in `%APPDATA%\DraupneLink\draupne-link.properties`.
 ## How it works
 
 ```
-Radio --USB--> Windows PC  ==== 4G / Tailscale ====>  Android phone on the drone --USB OTG (MSP)--> Betaflight
+Radio --USB--> Windows PC  ==== 4G / Tailscale ====>  Android phone on the drone --USB (MSP)--> Betaflight
                DRAUPNE Link  <== video + telemetry ==  DRAUPNE Flight app
 ```
 

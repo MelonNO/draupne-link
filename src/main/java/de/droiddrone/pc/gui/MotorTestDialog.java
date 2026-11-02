@@ -14,6 +14,7 @@ import javax.swing.WindowConstants;
 import javax.swing.JPanel;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
+import javax.swing.JOptionPane;
 import javax.swing.Timer;
 import java.awt.BasicStroke;
 import java.awt.BorderLayout;
@@ -62,6 +63,14 @@ final class MotorTestDialog extends JFrame {
 
     /** What the sliders ask for; the motor thread sends it. All STOP unless the box is ticked. */
     private volatile int[] wanted = new int[0];
+    /** The battery's voltage as the flight controller reports it; below 5 V there is none (USB power only). */
+    private double volts = -1;
+    /** A click on a motor in the picture: it runs this long at PULSE, then stops; one timer per motor. */
+    private static final int PULSE_MS = 3000;
+    private static final int PULSE = MotorTest.STOP + (MotorTest.MAX - MotorTest.STOP) * 4 / 10;
+    private final java.util.Map<Integer, Timer> pulses = new java.util.HashMap<>();
+    /** The risk line shakes when the motors are asked for without the box ticked. */
+    private Timer shake;
     private volatile boolean running = true;
     private volatile MotorTest.Info info;
     private boolean propsOut;
@@ -302,6 +311,62 @@ final class MotorTestDialog extends JFrame {
         diagram.repaint();
     }
 
+    /**
+     * May the motors be asked for? Not without the flight controller, not without the box ticked (the risk line
+     * shakes to say so), not without a battery (a pop-up says so: on USB power alone nothing spins).
+     */
+    private boolean readyToSpin() {
+        if (!understood.isEnabled()) return false;
+        if (!understood.isSelected()) {
+            shakeUnderstood();
+            return false;
+        }
+        if (volts >= 0 && volts < 5) {
+            stopAll();
+            JOptionPane.showMessageDialog(this, "Plug in a battery to test the motors.\nOn USB power alone the motors can't spin.\n\nProps off.",
+                    "No battery", JOptionPane.WARNING_MESSAGE);
+            return false;
+        }
+        return true;
+    }
+
+    /** The risk line wags from side to side for half a second and turns yellow, so the box gets noticed. */
+    private void shakeUnderstood() {
+        if (shake != null && shake.isRunning()) return;
+        java.awt.Point base = understood.getLocation();
+        java.awt.Color colour = understood.getForeground();
+        long start = System.currentTimeMillis();
+        understood.setForeground(Theme.WARN);
+        shake = new Timer(16, e -> {
+            long t = System.currentTimeMillis() - start;
+            if (t >= 520) {
+                ((Timer) e.getSource()).stop();
+                understood.setLocation(base);
+                understood.setForeground(colour);
+                return;
+            }
+            double fade = 1 - t / 520.0;
+            understood.setLocation(base.x + (int) Math.round(9 * Math.sin(t / 22.0) * fade), base.y);
+        });
+        shake.start();
+    }
+
+    /** A click on a motor in the picture: it runs for a few seconds at a low value, then stops by itself. */
+    private void pulse(int motor) {
+        if (motor < 1 || motor > sliders.size() || !readyToSpin()) return;
+        Slider s = sliders.get(motor - 1);
+        s.set(PULSE);
+        Timer old = pulses.remove(motor);
+        if (old != null) old.stop();
+        Timer t = new Timer(PULSE_MS, e -> {
+            pulses.remove(motor);
+            if (s.value == PULSE) s.set(MotorTest.STOP); // unless the pilot moved it meanwhile
+        });
+        t.setRepeats(false);
+        pulses.put(motor, t);
+        t.start();
+    }
+
     private void slidersChanged() {
         int[] v = new int[sliders.size()];
         for (int i = 0; i < v.length; i++) v[i] = sliders.get(i).value;
@@ -441,6 +506,7 @@ final class MotorTestDialog extends JFrame {
             battery.set(State.BAD, "The drone is armed - motor test stopped. Disarm it.");
             return;
         }
+        volts = live.volts();
         if (live.volts() < 5) {
             battery.set(State.WARN, "No battery: on USB power the motors can't spin. Plug in the battery (props off).");
         } else {
@@ -484,12 +550,13 @@ final class MotorTestDialog extends JFrame {
             MouseAdapter mouse = new MouseAdapter() {
                 @Override
                 public void mousePressed(MouseEvent e) {
-                    drag(e.getY());
+                    if (!isEnabled() && MotorTestDialog.this.isActive()) readyToSpin(); // says why not: the box, or no battery
+                    else drag(e.getY());
                 }
 
                 @Override
                 public void mouseDragged(MouseEvent e) {
-                    drag(e.getY());
+                    if (isEnabled()) drag(e.getY());
                 }
 
                 @Override
@@ -524,7 +591,8 @@ final class MotorTestDialog extends JFrame {
         }
 
         private void drag(int y) {
-            if (!isEnabled() || !MotorTestDialog.this.isActive()) return;
+            if (!MotorTestDialog.this.isActive()) return;
+            if (!isEnabled() || !readyToSpin()) return;
             double f = 1 - (y - trackTop()) / (double) (trackBottom() - trackTop());
             set((int) Math.round(MotorTest.STOP + Math.max(0, Math.min(1, f)) * (MotorTest.MAX - MotorTest.STOP)));
         }
@@ -647,6 +715,47 @@ final class MotorTestDialog extends JFrame {
 
         Diagram() {
             setPreferredSize(new Dimension(DW / 2, DH / 2));
+            setToolTipText("Click a motor: it runs for " + PULSE_MS / 1000 + " seconds (box ticked, battery in, props off)");
+            MouseAdapter mouse = new MouseAdapter() {
+                @Override
+                public void mouseMoved(MouseEvent e) {
+                    int m = motorAt(e);
+                    if (m != hover) {
+                        hover = m;
+                        setCursor(Cursor.getPredefinedCursor(m > 0 ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR));
+                        repaint();
+                    }
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    hover = -1;
+                    repaint();
+                }
+
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    int m = motorAt(e);
+                    if (m > 0 && MotorTestDialog.this.isActive()) pulse(m);
+                }
+            };
+            addMouseListener(mouse);
+            addMouseMotionListener(mouse);
+        }
+
+        /** Which motor's disc is under the mouse (1-4), or -1; the same transform as the painting. */
+        private int motorAt(MouseEvent e) {
+            MotorTest.Info i = info;
+            if (i == null || !i.quadX()) return -1;
+            int w = getWidth(), h = getHeight();
+            double k = Math.min(w / (double) DW, h / (double) DH);
+            double x = (e.getX() - (w - DW * k) / 2) / k, y = (e.getY() - (h - DH * k) / 2) / k;
+            float cx = DW / 2f, cy = DH / 2f + 6, span = 92, prop = 58;
+            for (int m = 1; m <= 4; m++) {
+                int[] pos = MotorTest.quadXPosition(m);
+                if (Math.hypot(x - (cx + pos[0] * span), y - (cy + pos[1] * span)) <= prop + 9) return m;
+            }
+            return -1;
         }
 
         void animate() {

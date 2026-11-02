@@ -117,6 +117,8 @@ public class MainWindow extends JFrame {
     private de.droiddrone.pc.video.LatencyMeter latencyMeter;
     private JComponent linkColumn;
     private JComponent controllerCard;
+    /** The LINK card: the connection fields, in flight the minimap; the tour points at it. */
+    private JComponent linkCard;
     /** The controller card's height while it folds or unfolds (MINIMIZE / EXPAND); -1 = its own. */
     private int controllerAnimHeight = -1;
     /** What the pilot chose; the sticks stay visible while the card folds, so their visibility doesn't say. */
@@ -273,6 +275,7 @@ public class MainWindow extends JFrame {
         setMinimumSize(new Dimension(1100, 760));
         setSize(1280, 820);
         setLocationRelativeTo(null);
+        setExtendedState(JFrame.MAXIMIZED_BOTH); // opens maximized; the size above is what un-maximizing gives
     }
 
     // ---------------------------------------------------------------- layout
@@ -286,6 +289,8 @@ public class MainWindow extends JFrame {
         addMenuItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
         addMenuItem(menu, "Phone setup", "The phone on the drone: apps, settings, connection", () -> PhoneGuideWizard.open(this));
         addMenuItem(menu, "Drone setup", "Betaflight's receiver, stick delay and flight mode switch, set over USB", () -> DroneSetup.open(this));
+        menu.addSeparator();
+        addMenuItem(menu, "Tour", "The window's buttons, the map and the offline maps, one at a time", () -> Tour.start(this));
         return menu;
     }
 
@@ -314,11 +319,7 @@ public class MainWindow extends JFrame {
                     });
                 }));
         menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;; the OSD stays upright. No delay",
-                videoView.isUpsideDown(), on -> {
-                    videoView.setUpsideDown(on);
-                    save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
-                    logLine(on ? "Picture turned upside down." : "Picture the right way up.");
-                }));
+                videoView.isUpsideDown(), this::setUpsideDown));
         menu.add(new MenuRows.SwitchRow("Record video", "Every flight to Videos\\DRAUPNE Link, as it comes: no extra delay",
                 recordVideo, on -> {
                     recordVideo = on;
@@ -488,6 +489,7 @@ public class MainWindow extends JFrame {
         column.setPreferredSize(new Dimension(340, 100));
 
         JPanel link = Theme.card(new GridBagLayout());
+        linkCard = link;
         GridBagConstraints c = new GridBagConstraints();
         c.gridx = 0;
         c.gridwidth = 2;
@@ -1073,7 +1075,7 @@ public class MainWindow extends JFrame {
         }
     }
 
-    private MapWindow mapWindow() {
+    MapWindow mapWindow() {
         if (mapWindow == null) {
             mapWindow = new MapWindow(this, tileCache, elevation, pins, mapSource, coordinateFormat, config.getString(MapWindow.BOUNDS_KEY), this::save,
                     this::setMapSource, this::setCoordinateFormat, this::openFindDrone);
@@ -1649,7 +1651,7 @@ public class MainWindow extends JFrame {
         if (on) {
             latencyMeter = new de.droiddrone.pc.video.LatencyMeter();
             videoView.setLatencyMeter(latencyMeter);
-            logLine("Latency test: point the drone's camera at the code on the screen. Esc or SETTINGS > Latency test to stop.");
+            logLine("Latency test: point the drone's camera at the code on the screen. Press Esc to end it.");
         } else {
             logLine("Latency test, camera to screen" + (fullScreen != null ? " (full screen)" : "") + ": " + latencyMeter);
             videoView.setLatencyMeter(null);
@@ -1658,10 +1660,40 @@ public class MainWindow extends JFrame {
         }
     }
 
-    /** The setup guide's "Measure the delay", after Finish: connects (unless connected) and starts the latency test. */
-    void testLatencyNow() {
-        if (connection == null) connect();
-        if (connection != null) setLatencyTest(true);
+    // ---------------------------------------------------------------- for the tour and the setup guide
+
+    JComponent tourMenuButton() {
+        return menuButton;
+    }
+
+    JComponent tourMinimizeButton() {
+        return minimizeButton;
+    }
+
+    JComponent tourPopOutButton() {
+        return popOutButton;
+    }
+
+    JComponent tourLinkCard() {
+        return linkCard;
+    }
+
+    /** The map window in front (F3 does the same, and hides it again). */
+    void showMapWindow() {
+        MapWindow w = mapWindow();
+        if (!w.isVisible()) toggleMapWindow();
+        else w.toFront();
+    }
+
+    boolean isUpsideDown() {
+        return videoView.isUpsideDown();
+    }
+
+    /** VIDEO > Camera upside down, also from the setup guide's camera check. */
+    void setUpsideDown(boolean on) {
+        videoView.setUpsideDown(on);
+        save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
+        logLine(on ? "Picture turned upside down." : "Picture the right way up.");
     }
 
     /**

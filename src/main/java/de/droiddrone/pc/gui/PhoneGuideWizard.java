@@ -40,7 +40,6 @@ final class PhoneGuideWizard {
     /** Phone setup's steps. The first-time setup is made of these too (SetupWizard): a step added here is in both. */
     static List<Page> pages(MainWindow main) {
         return List.of(
-                new OverviewPage(main),
                 new PhoneTailscalePage(main),
                 new FlightAppPage(main),
                 new PhoneSettingsPage(main),
@@ -68,34 +67,6 @@ final class PhoneGuideWizard {
     }
 
     // ------------------------------------------------------------------------------------------------ pages
-
-    static final class OverviewPage extends Page {
-        private final MainWindow main;
-
-        OverviewPage(MainWindow main) {
-            this.main = main;
-        }
-
-        @Override
-        String title() {
-            return "Set up the flying phone";
-        }
-
-        @Override
-        String hint() {
-            return "This phone rides on the drone: USB to the flight controller, 4G to this PC.";
-        }
-
-        @Override
-        JComponent build() {
-            JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, WizardDialog.subheading("Have ready"));
-            WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "&bull; An Android phone (8 or newer) with mobile data<br>"
-                            + "&bull; A USB OTG adapter from the phone to the flight controller"));
-            return col;
-        }
-    }
 
     /** Tailscale on the phone; the PC detects the phone joining and stores its address. */
     static final class PhoneTailscalePage extends Page {
@@ -139,7 +110,7 @@ final class PhoneGuideWizard {
             page.add(left, BorderLayout.WEST);
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "Install <b>Tailscale</b>, sign in with <b>the same account</b> as on this PC, and allow the VPN. "
+                    "Install <b>Tailscale</b>, sign in with <b>the same account</b> as on this PC, allow the VPN. "
                             + "The phone appears below by itself."));
             WizardDialog.addRow(col, pc);
             phoneChoice.setRenderer(new javax.swing.DefaultListCellRenderer() {
@@ -238,12 +209,12 @@ final class PhoneGuideWizard {
 
         @Override
         String title() {
-            return "Install DRAUPNE Flight";
+            return "Install the mobile app";
         }
 
         @Override
         String hint() {
-            return "Scan the code with the phone's camera.";
+            return "A new code: scan it with the phone's camera to download <b>DRAUPNE Flight</b>, the app that flies on the drone.";
         }
 
         @Override
@@ -261,10 +232,8 @@ final class PhoneGuideWizard {
             page.add(left, BorderLayout.WEST);
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "Tap <b>Download the app</b> and open the file. If Android asks, allow installing from your browser, then <b>Install</b>. "
-                            + "Then press Next.<br>"
-                            + "DRAUPNE Flight 2.3.0-pc.18 or newer already on the phone? Skip the download: tap its yellow <b>Update available</b> line instead, then press Next.<br>"
-                            + "An older DroidDrone Flight on the phone? The new app asks to remove it when it opens: tap <b>OK</b>.<br>"
+                    "On the phone: tap <b>Download the app</b>, open the file, allow installing from the browser if Android asks, "
+                            + "<b>Install</b>. Press Next once DRAUPNE Flight is on the phone.<br>"
                             + "Link doesn't open? Pick another address under the code."));
             WizardDialog.addRow(col, file);
             firewall.setVisible(false);
@@ -303,7 +272,8 @@ final class PhoneGuideWizard {
                     return;
                 }
                 share = s;
-                file.set(State.OK, "Verified (SHA-256) and ready to download.");
+                // neutral, not green: this PC can't see whether the phone has installed it (the Connect step can)
+                file.set(State.INFO, "Ready for the phone to download (checked, SHA-256).");
                 List<String> list = ApkShare.urls();
                 if (main.config().getLinkMode() != LinkMode.PHONE) {
                     List<String> lanFirst = new ArrayList<>(list);
@@ -328,6 +298,11 @@ final class PhoneGuideWizard {
             if (share != null) share.close(); // only serve while this step is open
             share = null;
         }
+
+        @Override
+        String status() {
+            return "Press Next once DRAUPNE Flight is installed on the phone.";
+        }
     }
 
     static final class PhoneSettingsPage extends Page {
@@ -339,13 +314,13 @@ final class PhoneGuideWizard {
 
         @Override
         String title() {
-            return "Keep the phone connected";
+            return "Settings on the phone";
         }
 
         @Override
         String hint() {
-            return "Android pauses apps in the background to save battery. In the air that means a failsafe. "
-                    + "Set these on the phone, and click each one here when it's done:";
+            return "Android pauses apps in the background; in the air that means a failsafe. Set these, tick each one here. "
+                    + "The names differ from phone to phone.";
         }
 
         /**
@@ -355,23 +330,19 @@ final class PhoneGuideWizard {
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, setting("battery", "Battery: Unrestricted",
-                    "For DRAUPNE Flight and for Tailscale, so Android doesn't pause them. "
-                            + "Settings > Apps > the app > Battery > <b>Unrestricted</b>."));
+            WizardDialog.addRow(col, setting("battery", "Battery: unrestricted",
+                    "For DRAUPNE Flight and for Tailscale: Settings > Apps > DRAUPNE Flight > Battery > <b>Unrestricted</b>."));
             WizardDialog.addRow(col, setting("data", "Mobile data: unrestricted",
-                    "For both apps, also with Data Saver on. Settings > Apps > the app > Mobile data > "
-                            + "<b>Unrestricted data usage</b>."));
+                    "For both apps: Settings > Apps > DRAUPNE Flight > Mobile data > <b>Unrestricted data usage</b>."));
             if (main.config().getLinkMode() == LinkMode.PHONE) {
                 WizardDialog.addRow(col, setting("vpn", "Tailscale: Always-on VPN",
-                        "So the phone stays reachable when Android restarts the VPN. Settings > Network &amp; internet "
-                                + "> VPN > the settings icon next to Tailscale > <b>Always-on VPN</b>."));
+                        "Settings > Network &amp; internet > VPN > the gear next to Tailscale > <b>Always-on VPN</b>."));
             }
             WizardDialog.addRow(col, setting("otg", "OTG switched on (some phones)",
-                    "Some phones (e.g. OPPO, realme, OnePlus, vivo) have an <b>OTG</b> switch: search Settings for OTG. While "
-                            + "it is off, the phone can't see the flight controller. Many switch it off again after about 10 "
-                            + "minutes unused, so switch it on just before plugging in. No such switch? Nothing to do."));
+                    "OPPO, realme, OnePlus, vivo and some others have an <b>OTG</b> switch: search Settings for OTG and switch it "
+                            + "on just before plugging in (it turns off by itself after some minutes). No such switch: nothing to do."));
             WizardDialog.addRow(col, setting("wifi", "Wi-Fi off before flying",
-                    "So the phone stays on 4G. A Wi-Fi network it walks out of would take the link with it."));
+                    "So the phone stays on 4G instead of a Wi-Fi it then walks out of."));
             return col;
         }
 
@@ -399,8 +370,12 @@ final class PhoneGuideWizard {
         private final JPanel tableHolder = new JPanel(new BorderLayout());
         private final CheckRow link = new CheckRow("Phone link");
         private final CheckRow fc = new CheckRow("Flight controller");
+        private final CheckRow camera = new CheckRow("Camera");
         private final CheckRow latency = new CheckRow("Round-trip time");
         private final CheckRow path = new CheckRow("Network path");
+        /** The live picture, small, for the camera check: is it the right way up? */
+        private final VideoView preview = new VideoView();
+        private boolean flipped;
         private final List<Integer> rtts = new ArrayList<>();
         /** The running session's stop flag; a new one per session, so an old session can't touch the page. */
         private AtomicBoolean stop;
@@ -416,28 +391,46 @@ final class PhoneGuideWizard {
 
         @Override
         String title() {
-            return "Connect the Flight app";
+            return "Connect DRAUPNE Flight";
         }
 
         @Override
         String hint() {
             return "On the phone, open DRAUPNE Flight, enter this and tap <b>CONNECT</b>. "
-                    + "Plug the phone into the flight controller with the OTG adapter (props off).";
+                    + "Plug the phone into the drone with a USB data cable (props off).";
         }
 
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
             tableHolder.setOpaque(false);
-            WizardDialog.addRow(col, tableHolder);
-            WizardDialog.addRow(col, WizardDialog.paragraph("When Android asks about the flight controller, tick "
-                    + "<b>Always open DRAUPNE Flight</b>, then OK. Then it reconnects by itself, without asking, if the cable slips."));
+            JPanel top = new JPanel(new BorderLayout(18, 0));
+            top.setOpaque(false);
+            top.add(tableHolder, BorderLayout.CENTER);
+            preview.setPreferredSize(new java.awt.Dimension(320, 180));
+            preview.setIdleText("THE PICTURE SHOWS HERE");
+            top.add(preview, BorderLayout.EAST);
+            WizardDialog.addRow(col, top);
+            WizardDialog.addRow(col, WizardDialog.paragraph("Android asks whether DRAUPNE Flight may use the flight controller: "
+                    + "tick <b>Always allow</b> (or <b>Use by default</b>) and tap <b>OK</b>. Then it reconnects by itself if the cable slips."));
             WizardDialog.addRow(col, link);
             WizardDialog.addRow(col, fc);
+            camera.addAction("Flip", this::flip).setToolTipText("Turn the picture 180 degrees: for a phone mounted upside down. Kept as VIDEO > Camera upside down");
+            WizardDialog.addRow(col, camera);
             WizardDialog.addRow(col, latency);
             path.addAction("Check again", this::checkPath);
             WizardDialog.addRow(col, path);
             return col;
+        }
+
+        /** The camera check's FLIP: the setting the main window uses, so the phone stays as it is mounted. */
+        private void flip() {
+            if (main == null) return;
+            main.setUpsideDown(!main.isUpsideDown());
+            preview.setUpsideDown(main.isUpsideDown());
+            flipped = true;
+            camera.set(State.OK, "Turned " + (main.isUpsideDown() ? "upside down" : "the right way up") + " - kept under VIDEO > Camera upside down. "
+                    + "Not right yet? Press Flip again.");
         }
 
         @Override
@@ -469,8 +462,10 @@ final class PhoneGuideWizard {
             logged = false;
             pathChecked = false;
             nextStart = 0;
-            link.set(State.PENDING, "Waiting for the Flight app...");
-            for (CheckRow r : new CheckRow[]{fc, latency, path}) r.set(State.PENDING, "");
+            flipped = false;
+            preview.setUpsideDown(main.isUpsideDown());
+            link.set(State.PENDING, "Waiting for DRAUPNE Flight...");
+            for (CheckRow r : new CheckRow[]{fc, camera, latency, path}) r.set(State.PENDING, "");
         }
 
         @Override
@@ -502,12 +497,17 @@ final class PhoneGuideWizard {
             });
         }
 
-        /** Holds the link open until the page is left, reporting its state four times a second. */
+        /** Holds the link open until the page is left, reporting its state four times a second; the video to the preview. */
         private String session(PcConfig config, AtomicBoolean s) {
             Connection connection = null;
+            ControlLink[] linkRef = new ControlLink[1];
+            de.droiddrone.pc.video.VideoPipeline video = new de.droiddrone.pc.video.VideoPipeline(preview,
+                    () -> linkRef[0] == null ? -1 : linkRef[0].getPing());
             try {
-                connection = Connection.open(config);
+                connection = Connection.open(config, video);
                 ControlLink l = connection.getLink();
+                linkRef[0] = l;
+                video.attach(l);
                 while (!s.get()) {
                     Snap snap = new Snap(l.getState(), l.getFcInfo(), l.getPing());
                     SwingUtilities.invokeLater(() -> {
@@ -520,6 +520,8 @@ final class PhoneGuideWizard {
                 return "Could not open the link: " + e.getMessage();
             } finally {
                 if (connection != null) connection.close();
+                video.close();
+                SwingUtilities.invokeLater(preview::clear);
             }
         }
 
@@ -535,10 +537,10 @@ final class PhoneGuideWizard {
                     waitingSince = now;
                     rtts.clear();
                     logged = false;
-                    for (CheckRow r : new CheckRow[]{fc, latency}) r.set(State.PENDING, "");
+                    for (CheckRow r : new CheckRow[]{fc, camera, latency}) r.set(State.PENDING, "");
                 }
                 link.set(now - waitingSince < HINT_AFTER_MS ? State.PENDING : State.WARN, now - waitingSince < HINT_AFTER_MS
-                        ? "Waiting for the Flight app - tap <b>CONNECT</b> on the phone."
+                        ? "Waiting for DRAUPNE Flight - tap <b>CONNECT</b> on the phone."
                         : "Still waiting. Check the phone shows exactly the values above, that CONNECT is tapped"
                         + (main.config().getLinkMode() == LinkMode.PHONE ? ", and that Tailscale is on." : "."));
                 return;
@@ -549,10 +551,19 @@ final class PhoneGuideWizard {
                 fc.set(snap.fc().getFcVariant() == FcInfo.FC_VARIANT_BETAFLIGHT ? State.OK : State.WARN,
                         snap.fc().getFcName() + " " + snap.fc().getFcVersionStr());
             } else if (now - readySince > 3000) {
-                fc.set(State.BAD, "The phone isn't talking to the flight controller. Tap Allow on the phone's USB pop-up. Many flight "
-                        + "controllers ignore USB-C to USB-C: use a USB-A cable with an OTG adapter, and check the phone's OTG setting.");
+                fc.set(State.BAD, "The phone isn't talking to the flight controller. Tap <b>Allow</b> on the phone's USB pop-up. Many flight "
+                        + "controllers ignore USB-C to USB-C: use a USB-A data cable, and check the phone's OTG setting.");
             } else {
                 fc.set(State.PENDING, "Asking the flight controller...");
+            }
+            if (flipped) {
+                // the FLIP line stays
+            } else if (preview.hasPicture()) {
+                camera.set(State.INFO, "Is the picture the right way up, with the sky at the top? If not, press <b>Flip</b>; the phone stays as it is mounted.");
+            } else if (now - readySince > 4000) {
+                camera.set(State.WARN, "No picture yet. On the phone, allow DRAUPNE Flight to use the camera, and check its camera setting.");
+            } else {
+                camera.set(State.PENDING, "Waiting for the picture...");
             }
             if (snap.ping() >= 0 && (rtts.isEmpty() || rtts.get(rtts.size() - 1) != snap.ping())) rtts.add(snap.ping());
             showLatency(now - readySince >= MEASURE_MS);
@@ -611,7 +622,7 @@ final class PhoneGuideWizard {
 
         @Override
         String status() {
-            return readySince != 0 ? "Connected to the drone's phone." : "Waiting for the Flight app.";
+            return readySince != 0 ? "Connected to the drone's phone." : "Waiting for DRAUPNE Flight.";
         }
     }
 }

@@ -210,7 +210,7 @@ class CalibrationWizardTest {
         List<String> titles = w.steps().stream().map(CalibrationWizard.Step::title).toList();
         assertTrue(titles.contains("AUX1 - ARM"), titles.toString());
         assertTrue(titles.contains("AUX2 - flight modes"));
-        assertTrue(titles.contains("AUX3 switch"));
+        assertTrue(titles.contains("AUX3 - reserve"), "nothing chosen for it: a spare");
         assertTrue(titles.contains("AUX4 - GPS rescue"));
         assertEquals(4, w.switchCount());
         p[5] = new de.droiddrone.pc.setup.ModeSwitch.Purpose("GPS rescue", "on AUX6");

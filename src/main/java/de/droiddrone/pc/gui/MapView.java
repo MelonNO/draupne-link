@@ -59,6 +59,8 @@ class MapView extends JComponent {
     private Consumer<double[]> onAreaSelected;
     /** Alt + drag: the box being drawn, in pixels; null when none. */
     private Point selectStart, selectEnd;
+    /** SELECT WITH CURSOR in the download window: the next left drag draws a box, Alt or not. */
+    private boolean selectNext;
     private final Runnable tileReady = () -> SwingUtilities.invokeLater(this::repaint);
     private final Timer settled = new Timer(1200, e -> prefetchVisible());
 
@@ -94,8 +96,10 @@ class MapView extends JComponent {
                     return;
                 }
                 dragged = false;
-                if (e.isAltDown() && SwingUtilities.isLeftMouseButton(e) && onAreaSelected != null) {
+                if ((e.isAltDown() || selectNext) && SwingUtilities.isLeftMouseButton(e) && onAreaSelected != null) {
                     selectStart = selectEnd = e.getPoint(); // a box to download, not a pan
+                    selectNext = false;
+                    setCursor(java.awt.Cursor.getDefaultCursor());
                     return;
                 }
                 dragStart = e.getPoint();
@@ -192,6 +196,17 @@ class MapView extends JComponent {
      */
     void setOnAreaSelected(Consumer<double[]> listener) {
         onAreaSelected = listener;
+    }
+
+    /** The next left drag on the map draws the box to download (the download window's SELECT WITH CURSOR). */
+    void selectAreaNext() {
+        selectNext = true;
+        setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.CROSSHAIR_CURSOR));
+        repaint();
+    }
+
+    boolean isSelectingArea() {
+        return selectNext;
     }
 
     /** The box being drawn, normalised. */
