@@ -18,7 +18,7 @@ The phone app that flies on the drone: upstream [DroidDrone](https://github.com/
 | `Flight/src/main/java/de/droiddrone/flight/AppUpdater.java`, `AppUpdateReceiver.java` | New (pc.18): the tap downloads the APK into the app's own cache, checks its SHA-256, installs it with `PackageInstaller` (Android asks) and deletes it; leftovers go at the next start. Never while connected: installing ends the app. MainActivity also says once that earlier browser updates left installers in Downloads, and opens Downloads on a tap |
 | `Flight/src/main/java/de/droiddrone/flight/PcLinkStats.java` | New: the phone's measurements (record 0x40F0) for DRAUPNE Link's link log; the app's version (record 0x40F1) |
 | `Flight/src/main/AndroidManifest.xml` | The theme; permission to ask for the earlier app's removal, and to see it; permission to install its own update and the installer's answer (`AppUpdateReceiver`); any orientation (`fullUser`, was landscape only) |
-| `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.18`, release signing from outside the repo |
+| `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.19`, release signing from outside the repo |
 | `settings.gradle` | Builds only the Flight app (not upstream's Control app) |
 
 The network protocol is unchanged (the phone's measurements travel as an extra telemetry packet that other PC versions skip), so DRAUPNE Link works with this build and with the original 2.3.0.

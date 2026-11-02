@@ -75,8 +75,8 @@ final class OsdRenderer {
     private static final int CORE_TEMP_ALARM_C = 70; // Betaflight's default osd_core_temp_alarm
 
     /** Warnings that aren't (yet) a loss of control: yellow; the rest red. */
-    private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "PHONE BATTERY LOW",
-            "RADIO FROZEN?", "VIDEO FROZEN");
+    private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "RC OFF - NO RADIO",
+            "RC OFF - MAPPING INCOMPLETE", "PHONE BATTERY LOW", "RADIO FROZEN?", "VIDEO FROZEN");
 
     private interface Element {
         void paint(float x, float y, OsdLayout.Align align);

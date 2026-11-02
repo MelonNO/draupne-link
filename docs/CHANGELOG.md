@@ -2,6 +2,14 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.27
+
+- **Review of the whole program, every finding fixed; phone app 2.3.0-pc.19.** Link: sticks resume at once after a loss when the drone is still armed (no mid-air disarm during a GPS rescue), a restarted PC no longer becomes a spectator of itself, stick frames carry a sequence (pc.19) and the phone never sends them unmapped, the phone's stick path is two thread hops shorter with a bigger receive buffer and no spinning sender threads, loss after 2 s of silence, STICKS n MS on the HUD and `pc_to_fc_ms` in the link log.
+- Video: a size switch no longer freezes the picture, a backlog flushes instead of rebuilding the decoder, key-frame request backoff, no bitrate oscillation in bad coverage, BT.709 colours, multi-threaded scaling, AGE n MS on the HUD, LINK colour relative to the link's baseline, an OSD CSV next to recordings.
+- Setup: Drone setup lists "What will change" and writes only on WRITE; the cell count is forced only once confirmed (or measured); the radio step comes back after a switch change; CLI replies can't be cut at a "# " line; the board never stays in CLI mode; RC check uses the real arm switch; texts clarified; 1S packs in the motor test and a 20 s auto-stop; the tour rewritten (menu first, one step per button, EXIT TOUR, dead buttons while a step shows, MAP TYPE and coordinates); connect step diagnostics; the finale without the stray line.
+- Phone app: USB permission denial noticed, camera reopened, one service start, wake lock, Android 13 notification, updater needs a checksum, byte-stream MSP parsing, low-latency encoder hints.
+- Map and window: CONNECT keeps the last known position, FIND DRONE live with a file fallback, COPY MGRS and LOST DRONE, phone fix accuracy, streamed DOWNLOAD AREA with PAUSE / RESUME and refusals handled, GO TO, TRACKS, EXPORT GPX, keys, pins from the cursor cell, bounds and maximized state remembered, UPDATE outside the folded menu, POP OUT VIDEO / FULL SCREEN buttons over the video, atomic settings / track / pins writes.
+
 ## 1.0.26
 
 - **The setup guide reworked from a pilot's walk-through:** 13 steps (the phone overview, "Measure the delay" and "Ready" pages are gone); FINISH plays SETUP COMPLETE and, the first time, offers a **tour** of the window and the map (MENU > SETUP > *Tour* any time). Betaflight step: "Plug a USB data cable", enter the cell count, a note on the AUX channels, RETRY, DISCONNECT / RECONNECT, other firmware named, "you can unplug the drone". Radio: the controller list always shown; a spare AUX is "reserve" in the calibration. Phone: "Install the mobile app" (neutral until the phone connects), "Settings on the phone", "Connect DRAUPNE Flight" with Always allow and a **camera check** with FLIP. No "USB OTG adapter": a USB data cable.

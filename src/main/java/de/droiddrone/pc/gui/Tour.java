@@ -66,7 +66,7 @@ final class Tour {
         steps.add(new Step("THE MAP", "In flight the minimap takes this place, with POP OUT MAP under it. F3 opens the map window "
                 + "any time - as now.", main::tourLinkCard, null));
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
-                + "drone in the middle; WHOLE FLIGHT and LAUNCH jump there.", () -> main.mapWindow().tourFollow(), main::showMapWindow));
+                + "drone in the middle; Home jumps to the launch point, End to the drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow));
         steps.add(new Step("PINS", "Right-click the map to drop a pin (Alpha, Bravo ...), or to rename or remove one. PINS lists "
                 + "them all. Each pin shows its distance and bearing from the drone.", () -> main.mapWindow().tourPins(), null));
         steps.add(new Step("UNDER THE CURSOR", "Move the mouse over the map: the position, in the format chosen top right, and the "

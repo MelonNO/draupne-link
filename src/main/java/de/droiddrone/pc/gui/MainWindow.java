@@ -951,6 +951,7 @@ public class MainWindow extends JFrame {
             return false;
         }
         if (save(result)) {
+            save(Map.of(DroneSetup.RADIO_REDO_KEY, "false")); // the switches Drone setup wrote are now the right ones
             rebuildMapper();
             logLine("Calibration saved: " + mappingSummary());
             return true;
@@ -1084,7 +1085,7 @@ public class MainWindow extends JFrame {
         try {
             VideoPipeline.Stats vs = v == null ? null : v.stats();
             l.sample(c.getLink(), service.getSnapshot().selected() != null, s != null && s.isRcEnabled(),
-                    vs == null ? 0 : vs.shownFps(), s == null ? null : s.getLastChannels(), phonePath, vs);
+                    vs == null ? 0 : vs.shownFps(), s == null ? null : s.getLastChannels(), phonePath, vs, service.getPollMaxMs());
         } catch (IOException e) {
             linkLog = null;
             logLine("Link log stopped: " + e.getMessage());
@@ -1566,11 +1567,22 @@ public class MainWindow extends JFrame {
         boolean armed = st != null && st.armed() && System.currentTimeMillis() - st.receivedAt() < 2000;
         boolean radioFrozen = armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS;
         String banner = !spectator ? null : l.isWatchOnly() ? "SPECTATOR" : "NOT FLYING - SPECTATOR";
+        // the phone's own word on the sticks (pc.19+): how long ago its last stick frame reached the FC
+        FcTelemetry.PhoneState ps = l.getTelemetry().getPhoneState();
+        long now = System.currentTimeMillis();
+        int sticksAge = ps == null || now - ps.receivedAt() > 2500 || ps.rcWriteAgeMs() < 0 ? -1
+                : (int) Math.min(65_534, ps.rcWriteAgeMs() + (now - ps.receivedAt()));
+        RcSession.Banner resume = s == null ? null : s.lastResumeBanner();
+        String liveBanner = resume != null && now - resume.at() < RESUME_BANNER_MS ? resume.text() : null;
         return new OsdRenderer.Data(true, ready, l.getPing(), spectator || (s != null && s.isRcEnabled()),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
                 osdLinkHint(), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
-                s == null ? null : s.waitingFor(), v != null && v.recordingFile() != null, banner, spectator && !l.isWatchOnly());
+                s == null ? null : s.waitingFor(), v != null && v.recordingFile() != null, banner, spectator && !l.isWatchOnly(),
+                sticksAge, s != null && s.isArmSwitchUnknown(), liveBanner, spectator && l.isSpectatorPaused());
     }
+
+    /** How long "LINK BACK - ARMED - STICKS LIVE" stays on the HUD. */
+    private static final long RESUME_BANNER_MS = 3000;
 
     /** No new picture for this long while the stream runs: VIDEO FROZEN. */
     private static final long VIDEO_FROZEN_MS = 700;

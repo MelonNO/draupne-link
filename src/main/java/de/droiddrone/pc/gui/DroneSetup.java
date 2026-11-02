@@ -924,7 +924,7 @@ final class DroneSetup {
 
         /** " Taken off: ARM on AUX3, BEEPER on AUX2." or "". */
         private static String takenOff(List<String> replaced) {
-            return replaced.isEmpty() ? "" : " Taken off: " + String.join(", ", replaced) + ".";
+            return replaced.isEmpty() ? "" : ". Taken off: " + String.join(", ", replaced) + ".";
         }
 
         /** MSP's four-letter firmware id as a name: INAV, ArduPilot, Cleanflight ... */

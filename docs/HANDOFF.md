@@ -4,9 +4,55 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-02, 1.0.26)
+## Where things stand (2026-11-03, 1.0.27)
 
-- **Released:** DRAUPNE Link **1.0.26** (Latest), phone app unchanged (**2.3.0-pc.18**): the pilot's SETUP feedback, all of it. The first-time guide is 13 steps (the
+- **Released:** DRAUPNE Link **1.0.27** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.19**: a full code review
+  (five areas, read-only, then five parallel workers in git worktrees) with every finding fixed and every suggested
+  feature built, plus the pilot's second SETUP feedback round. **None of it has flown**: first a bench test, props off.
+  Where the pieces live:
+  - **Link:** after a link loss the sticks resume at once when the FC's status (no older than 2 s) says armed
+    (`RcSession`, `fcArmedNow`; a GPS-rescue drone must not get an ARM-off frame); otherwise throttle low + arm off as
+    before. Stick frames carry a trailing sequence byte for phone apps pc.19+ (`ControlLink.rcFrame`,
+    `FcTelemetry.getPhonePcBuild`); older apps get the old frame. The phone's PHONE_STATE (0x40F4) feeds the link log's
+    `pc_to_fc_ms` = ping/2 + its in-to-out time, and the HUD's STICKS n MS. The link counts as lost after 2 s of
+    silence (upstream's 4000 ticks kept as the other bound). A PILOT_AT naming this PC's own address/port is ignored
+    and Connect keeps going (seen 2026-11-02: the connect step became a spectator of itself). Spectator pauses are
+    announced with PAUSE 0x6D. `ArmSwitch.on` treats an unsent AUX as 1000. `JoystickService.getPollMaxMs` (GLFW's
+    event pump) goes to the link log as `glfw_poll_max_ms`.
+  - **Phone (pc.19):** `Udp.receiverRun` hands an RcFrame to `handleRcFrame` on the receive thread itself; it parses the
+    channels in place and calls `Msp.setRawRc(rc, count)`, which maps them with MSP_RX_MAP (required - no map, no
+    sticks; PHONE_STATE bit0) and sets `Serial.pendingRc`; the serial writer (newest sticks first, then `pendingUrgent`
+    = the RX_MAP request, then the queue) writes it. `(byte)(seq-last) <= 0` is dropped. A Connect from the pilot's IP
+    or while the pilot is silent > 1 s creates a new `ReceiverBuffer` (the session keeps alive on the PC's pings).
+    USB permission answers are received in `Serial`; after Deny only a replug/device change asks again. Senders use
+    blocking queues; recording start/stop on `videoStarter`; a lost camera reopens; one service start; a partial wake
+    lock; POST_NOTIFICATIONS; the updater refuses an APK without a digest; `Msp.parsePackets` carries bytes over.
+    Encoder hints (KEY_LATENCY, PRIORITY 0, no B-frames, CBR) fall back to the plain format if configure throws -
+    **needs a phone trial**.
+  - **Video:** a restarted stream's key frame 1 waits up to 1 s for its config (`VideoPipeline.startsAhead`); a
+    dropped backlog flushes the decoder (`FLUSH`) rather than rebuilding it; key-frame requests back off 1.5/3/6 s
+    while requested key frames come damaged (`KeyFrameBackoff`, 3 s base in bad coverage); the bitrate rescue only
+    fires when the phone's reported target is below 1 Mbit/s and never above `maxStep`; the scaler uses the picture's
+    colour matrix (BT.709 for HD) and slice threads; recording writes an OSD CSV next to the MKV. OSD: LINK colour is
+    the ping over the link's own 15-30 s minimum, VID shows received fps, AGE is the picture's age, STICKS the phone's
+    write age, a BANNER element, ARM SWITCH NOT READ, PAUSED for spectators. Text outlines stay 9-pass drawString
+    (measured 4-6x cheaper than stroked glyphs).
+  - **Setup:** Drone setup no longer writes by itself: a round reads, lists the plan in "What will change" and waits
+    for WRITE (then changed choices write as before); the cell count is forced only once confirmed
+    (`drone.cellCountConfirmed`), with "Use measured" from MSP_BATTERY_STATE. `BetaflightUsb` has a `Wire` seam (fake
+    ports in BetaflightTest), a 60 ms prompt settle, `inCli` with `exit` on close, and board/craft names. A switch
+    written or changed sets `setup.radioNeedsRedo`, which brings the radio step back until a calibration is saved
+    (`MainWindow.calibrate` clears it). The tour (18 steps) opens the menu first, skips controls that aren't shown,
+    ends when a window closes, and dims the rest dead to the mouse; the Connect step logs its link events and says
+    what the video pipeline is doing. `CheckRow`'s detail is a `WrappingText.fitting`.
+  - **Map / window:** `TileCache.Walk` streams an area's tiles (no list; `Download.total` is a long), counts refusals
+    (a 403/429 picture is skipped), pauses. `FlightTrack` writes on its own thread (`flush()` in tests), keeps the
+    phone's accuracy and fix time, reads GPX back (`read/files/newest`). MainWindow: `liveTrack` vs shown `track`,
+    LOST DRONE, `mainWindow` bounds key, UPDATE outside the slide-out, the video bar (POP OUT VIDEO / FULL SCREEN).
+    MapWindow: GO TO (`Coordinates.parse/fromUtm`), TRACKS (`MapView.setOldTrack`), keys, `Bounds` helper,
+    `isShown()`. FindDroneDialog refreshes from suppliers. `PcConfig.save` and the pins/GPX rewrites go through
+    `.part` + ATOMIC_MOVE.
+- **1.0.26**, phone app unchanged (**2.3.0-pc.18**): the pilot's SETUP feedback, all of it. The first-time guide is 13 steps (the
   phone overview, "Measure the delay" and "Ready" pages are gone; `WizardDialog` is unchanged). FINISH plays
   `SetupFinale` (the mark, SETUP COMPLETE) and, the first time, offers the **tour** (`Tour`: a `TourNotice` with
   NEXT / SKIP TOUR and a dimming overlay, MENU > controller fold > pop-out video > the LINK card, then the map

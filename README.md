@@ -65,7 +65,7 @@ Betaflight 4.4 is **not required**, only recommended:
 - **Record video** saves every flight's video to `Videos\DRAUPNE Link`, exactly as it comes from the phone (MKV, no extra delay). A red **REC** shows on the OSD while it records.
 - **Hardware video decoding** (off by default) decodes on the GPU. Only worth trying with big pictures or a slow CPU: at 720p it's slower.
 - **OSD** on or off, and **OSD layout**, which works like Betaflight's OSD tab: switch elements on or off (throttle %, current, mAh, power, RSSI, GPS coordinates, clock, stick overlays and more are there, off by default) and drag them where you want them. It shows on the live OSD at once and is remembered.
-- **Pop out video** puts the picture (with the OSD) in its own window, e.g. on a second screen; close it or press *Video back* to put it back. **Full screen** is F11.
+- **POP OUT VIDEO** (the button over the video) puts the picture (with the OSD) in its own window, e.g. on a second screen; close it or press *VIDEO BACK* to put it back. **FULL SCREEN** is the button next to it. **Full screen** is F11.
 
 **MENU > LINK**
 - **Warning sounds:** a short beep when the sticks stop reaching the drone (LINK LOST, LINK STALL, FAILSAFE, NO FLIGHT CONTROLLER), on by default.
@@ -86,6 +86,9 @@ Betaflight 4.4 is **not required**, only recommended:
 **POP OUT MAP** on the LINK card (or **F3**) opens the map in a window of its own, for a second screen: where the drone is and has been, over **Kartverket's** topo or printed map, **satellite** pictures or **OpenStreetMap** (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE and PINS buttons; + and -, the wheel and dragging move it. Under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in **MGRS** (default), UTM, decimal degrees or degrees-minutes-seconds.
 
 ![The same flight over satellite pictures](docs/images/map-satellite.png)
+
+- **GO TO** takes a pasted position (MGRS, UTM, decimal degrees or degrees-minutes-seconds) and centres the map there, or drops a pin. **TRACKS** draws earlier flights from the Tracks folder in a muted colour. **PINS > EXPORT GPX** saves the pins for other map apps; a right-click on the CURSOR figure drops a pin at the cursor. Keys: **+ / -** zoom, **Home** the launch point, **End** the drone, **F3** closes the window. Pin labels give distance and bearing from the drone and from the launch point.
+- **LOST DRONE** appears on the LINK card when the link drops while the drone is armed: one press opens FIND DRONE with the MGRS on the clipboard. FIND DRONE refreshes live, falls back to the last track file after a restart, and shows a phone fix's accuracy.
 
 - **Pins:** right-click on the map drops one (Alpha, Bravo ... Zulu); each shows distance and bearing from the drone. Right-click a pin to rename or remove it; **PINS** lists them all. Kept between sessions and written into the flight's GPX file.
 - **Every flight's path is saved as it comes** to `Documents\DRAUPNE Link\Tracks\track-<date>.gpx` (opens in any map program), with `last-position.txt` beside it: the drone's last known position with MGRS and map links.
@@ -150,7 +153,7 @@ For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold t
 | **Video is black** | It's what the camera sees: is the lens covered, or is it dark? Point it at something bright. To use another lens, set `cameraId` in the settings (often `2` or `3` is the wide-angle) |
 | **PHONE ON TAILSCALE: OFFLINE** in the link card | The phone isn't connected to Tailscale: on the phone, open Tailscale and switch it on, and check it has mobile data. *NOT FOUND* means the phone address isn't on your Tailscale network: run MENU > SETUP > *Phone setup* to find the phone again |
 | Setup says the path is **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Press *Check again* after a minute. If it stays relayed, choose *Host the relay on this PC* in MENU > SETUP > *PC setup* |
-| Phone app says **Phone GPS: not allowed**, or *Position from: PHONE* shows nothing | Tap that line on the phone and allow location *While using the app*. Needs phone app 2.3.0-pc.18 for a position indoors |
+| Phone app says **Phone GPS: not allowed**, or *Position from: PHONE* shows nothing | Tap that line on the phone and allow location *While using the app*. Needs phone app 2.3.0-pc.18 or newer for a position indoors |
 | The map is **blank** out in the field | No internet and nothing saved for that place. Before leaving, open the map at home and use **DOWNLOAD AREA** |
 | Channels look wrong | **CALIBRATE**, then **RC CHECK** |
 
@@ -175,7 +178,7 @@ DRAUPNE Link replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s *
 
 ### The phone app
 
-The setup installs **DRAUPNE Flight** (2.3.0-pc.18): upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
+The setup installs **DRAUPNE Flight** (2.3.0-pc.19): upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
 - **Every flight controller:** its USB list covers any flight controller with native USB (STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip it can drive (CH340/CH341, CP210x, FTDI, PL2303). Android can then remember the USB permission, and the phone reconnects to the flight controller without asking. Upstream only lists a few IDs, so AT32 boards, for example, needed a tap after every reconnect.
 - **Sticks reach the flight controller on time:** upstream reads from the flight controller in a way that, on many phones, holds every USB write for up to 0.1 s, which makes Betaflight flag RXLOSS and block arming; this build reads asynchronously. The newest sticks also always go first, never queued behind a slow request; after a USB glitch it reconnects at once; and the phone reports what it sees into the PC's link log.
 - **Video that survives weak 4G:** a steady 30 fps, packets paced instead of sent in bursts, key frames every 2 s and whenever the PC asks, the PC deciding the bitrate, and the bad coverage mode (640x360, key frames twice, a parity packet after every frame). The video runs on a thread of its own, so camera trouble can never hold up the sticks.
