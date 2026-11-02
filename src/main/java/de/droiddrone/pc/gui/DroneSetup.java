@@ -52,19 +52,22 @@ final class DroneSetup {
         /**
          * @param arm    Betaflight's arm switch, or null if ARM isn't on a switch
          * @param backup where Betaflight's settings were saved before writing, or null
-         * @param ports  every port that looked like a flight controller this round
+         * @param ports   every port that looked like a flight controller this round
+         * @param refused CLI commands Betaflight didn't take while writing, with its answers; null if none
          */
         private record Read(String port, String version, boolean msp, int rate, int target, int cells, int cellTarget,
                             boolean applied, String error, ArmSwitch arm, java.nio.file.Path backup, List<String> ports,
                             ModeSwitch modeTarget, ModeSwitch.Plan modes, Boolean gpsFound, String rescueNote,
                             int rescueTarget, String failsafe, ModeSwitch.Failsafe failsafeTarget, boolean rescueFitted,
-                            String failsafeProblem, String failsafeNote, int armTarget) {
+                            String failsafeProblem, String failsafeNote, int armTarget, String refused) {
             Read(String port, String error, int cellTarget, ModeSwitch modeTarget, int rescueTarget,
                  ModeSwitch.Failsafe failsafeTarget, int armTarget, List<String> ports) {
                 this(port, "", false, -1, 0, -1, cellTarget, false, error, null, null, ports, modeTarget, null, null, null,
-                        rescueTarget, null, failsafeTarget, false, null, null, armTarget);
+                        rescueTarget, null, failsafeTarget, false, null, null, armTarget, null);
             }
         }
+        /** What Betaflight refused on the last write, shown with the port until a write goes through cleanly. */
+        private String lastRefused;
         static final String CELLS_KEY = "drone.cellCount";
         static final String MOTORS_CHECKED_KEY = "setup.motorsChecked";
 
@@ -581,26 +584,34 @@ final class DroneSetup {
                 } catch (IOException e) {
                     // unknown: every chosen mode is written
                 }
+                int featureMask = fc.featureMask();
                 // a GPS mode chosen: is a GPS there? Only asked while Betaflight's GPS is on (else it is turned on first)
                 Boolean gpsFound = null;
                 if (modeTarget != null && !modeTarget.gpsModes().isEmpty() || rescueTarget > 0
                         || failsafeTarget == ModeSwitch.Failsafe.GPS_RESCUE) {
                     try {
-                        if (fc.gpsFeatureOn()) gpsFound = fc.waitForGps(GPS_WAIT_MS);
+                        if (BetaflightPlan.hasGps(featureMask)) gpsFound = fc.waitForGps(GPS_WAIT_MS);
                     } catch (IOException e) {
                         // not known: GPS modes wait
                     }
                 }
+                // the receiver, over MSP and before the CLI (see BetaflightPlan): the CLI's save below stores it
+                boolean mspRx = BetaflightPlan.isMspReceiver(featureMask);
+                boolean switchRx = !mspRx && mayApply;
+                if (switchRx) fc.setFeatureMask(BetaflightPlan.mspReceiverMask(featureMask));
                 fc.enterCli();
                 String version = BetaflightPlan.version(fc.command("version"));
                 // where the arm switch is: the sticks then also wait for it to be off (RcSession)
                 String aux = fc.command("aux");
                 ArmSwitch arm = ArmSwitch.fromCli(aux);
                 if (arm != null) main.save(Map.of(ArmSwitch.KEY, arm.format()));
-                String features = fc.command("feature");
                 String rate = fc.command("get serial_update_rate_hz");
                 String forced = fc.command("get force_battery_cell_count");
-                List<BetaflightPlan.Change> plan = new java.util.ArrayList<>(BetaflightPlan.plan(features, rate, version, forced, cellTarget));
+                List<BetaflightPlan.Change> plan = new java.util.ArrayList<>(BetaflightPlan.plan(rate, version, forced, cellTarget));
+                if (switchRx) {
+                    plan.add(0, new BetaflightPlan.Change("Receiver mode: MSP RX input (the phone sends the sticks over MSP), was "
+                            + BetaflightPlan.receiverNames(featureMask) + " - set over MSP", List.of()));
+                }
                 java.util.Map<ModeSwitch.Mode, String> blocked = new java.util.EnumMap<>(ModeSwitch.Mode.class);
                 String rescueNote = null;
                 String failsafeNote = null;
@@ -617,7 +628,7 @@ final class DroneSetup {
                     gpsModes.add(ModeSwitch.Mode.GPS_RESCUE);
                 }
                 if (!gpsModes.isEmpty()) {
-                    boolean gpsOn = BetaflightPlan.hasFeature(features, "GPS");
+                    boolean gpsOn = BetaflightPlan.hasGps(featureMask);
                     boolean gpsPort = BetaflightPlan.hasGpsPort(fc.command("serial"));
                     boolean turnOn = false;
                     for (ModeSwitch.Mode m : gpsModes) {
@@ -665,22 +676,33 @@ final class DroneSetup {
                 }
                 boolean apply = mayApply && !plan.isEmpty() && version.startsWith("Betaflight"); // never INAV & co.
                 java.nio.file.Path backup = null;
+                String refused = null;
                 if (apply) {
                     writing = true;
-                    backup = backup(fc.command("diff all", 20_000), version); // what it was, before anything changes
+                    String diff = fc.command("diff all", 20_000); // what it was, before anything changes
+                    if (switchRx) diff = BetaflightPlan.restoreReceiver(diff, featureMask); // but for the receiver, already switched
+                    backup = backup(diff, version);
+                    List<String> refusals = new java.util.ArrayList<>();
                     for (BetaflightPlan.Change c : plan) {
-                        for (String cmd : c.commands()) fc.command(cmd);
+                        for (String cmd : c.commands()) {
+                            String reply = fc.command(cmd);
+                            if (BetaflightPlan.refused(reply)) refusals.add(cmd + " -> " + reply.lines().findFirst().orElse("").trim());
+                        }
                     }
                     fc.saveAndReboot();
                     main.logLine("Betaflight: " + plan.stream().map(BetaflightPlan.Change::description).collect(Collectors.joining("; "))
                             + (backup == null ? "" : ". Its settings before: " + backup));
+                    if (!refusals.isEmpty()) {
+                        refused = String.join("; ", refusals);
+                        main.logLine("Betaflight refused: " + refused);
+                    }
                 } else {
-                    fc.exitCli(); // Betaflight restarts (nothing changed) - which also clears a stale "MSP" arming block
+                    fc.exitCli(); // Betaflight restarts (nothing changed, or the receiver only in RAM) - which also clears a stale "MSP" arming block
                 }
-                return new Read(port.systemName(), version, BetaflightPlan.isMspReceiver(features), BetaflightPlan.serialRate(rate),
+                return new Read(port.systemName(), version, mspRx, BetaflightPlan.serialRate(rate),
                         BetaflightPlan.targetSerialRate(version), BetaflightPlan.forcedCells(forced), cellTarget, apply, null, arm, backup, ports,
                         modeTarget, modes, gpsFound, rescueNote, rescueTarget, failsafe, failsafeTarget, rescueFailsafe,
-                        failsafeProblem, failsafeNote, armTarget);
+                        failsafeProblem, failsafeNote, armTarget, refused);
             } catch (IOException e) {
                 return new Read(port.systemName(), e.getMessage(), cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, ports);
             }
@@ -753,8 +775,11 @@ final class DroneSetup {
                 return;
             }
             if (!r.version().isEmpty()) fcVersion = r.version();
-            usb.set(State.OK, "<b>" + r.port() + "</b>" + (r.version().isEmpty() ? "" : " - " + BetaflightPlan.shortVersion(r.version()))
-                    + (r.backup() == null ? "" : "<br>Its settings before the change: " + r.backup()));
+            if (r.applied()) lastRefused = r.refused();
+            usb.set(lastRefused == null ? State.OK : State.WARN, "<b>" + r.port() + "</b>"
+                    + (r.version().isEmpty() ? "" : " - " + BetaflightPlan.shortVersion(r.version()))
+                    + (r.backup() == null ? "" : "<br>Its settings before the change: " + r.backup())
+                    + (lastRefused == null ? "" : "<br>Betaflight refused: " + lastRefused));
             ModeSwitch.Plan armPlan = r.modes();
             if (r.armTarget() > 0 && armPlan != null && armPlan.armProblem() != null) {
                 armRow.set(State.WARN, armPlan.armProblem());

@@ -244,12 +244,19 @@ public final class BetaflightUsb implements AutoCloseable {
         return ids;
     }
 
-    /** Betaflight's GPS feature is on (MSP_FEATURE_CONFIG: FEATURE_GPS = 1 << 7). */
-    public boolean gpsFeatureOn() throws IOException {
+    /** Betaflight's feature mask (MSP_FEATURE_CONFIG; bits in {@link BetaflightPlan}). */
+    public int featureMask() throws IOException {
         byte[] p = msp(36 /* MSP_FEATURE_CONFIG */, null);
         if (p.length < 4) throw new IOException("Short feature answer");
-        int mask = (p[0] & 0xff) | (p[1] & 0xff) << 8 | (p[2] & 0xff) << 16 | (p[3] & 0xff) << 24;
-        return (mask & (1 << 7)) != 0;
+        return (p[0] & 0xff) | (p[1] & 0xff) << 8 | (p[2] & 0xff) << 16 | (p[3] & 0xff) << 24;
+    }
+
+    /**
+     * Replaces the feature mask (MSP_SET_FEATURE_CONFIG), as Betaflight Configurator's Receiver tab does. Held in
+     * RAM until a save: the CLI's "save" that follows stores it with the rest.
+     */
+    public void setFeatureMask(int mask) throws IOException {
+        msp(37 /* MSP_SET_FEATURE_CONFIG */, new byte[]{(byte) mask, (byte) (mask >> 8), (byte) (mask >> 16), (byte) (mask >> 24)});
     }
 
     /**

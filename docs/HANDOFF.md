@@ -6,6 +6,17 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-02, 1.0.24)
 
+- **Unreleased, for 1.0.25's notes - Drone setup on Betaflight 2025.12:** the receiver could not be set. 2025.12's
+  CLI has no name for RX_MSP (`feature RX_MSP` answers "Invalid name", and `feature` can't list it; the bit,
+  1 << 14, is unchanged and master has the name back). Found on the pilot's iFlight Blitz F722 on 2025.12.2: three
+  tries, three identical backups, and the board left with no receiver at all (`feature -RX_SERIAL`, nothing on).
+  Now the receiver is read and set through the feature mask over MSP (`BetaflightUsb.featureMask` /
+  `setFeatureMask`, MSP_FEATURE_CONFIG / MSP_SET_FEATURE_CONFIG, as Betaflight Configurator's Receiver tab does)
+  before the CLI opens; the CLI's `save` stores it. `BetaflightPlan` works on the mask (`isMspReceiver`,
+  `mspReceiverMask`, `hasGps`), the backup's receiver lines are put back to what they were
+  (`restoreReceiver`, since the "diff all" is taken after the switch), and a CLI answer with `###ERROR` or
+  `Unavailable` is logged ("Betaflight refused: ...") and shown on the USB row instead of passing as success.
+  Not yet tried on the board.
 - **Unreleased, for 1.0.25's notes:** the setup guide's hint under the title wraps (`WizardDialog.hint` is a
   `WrappingText` sized to the window's width; the Betaflight page's hint was cut off at the right edge). The README's
   pictures were redone from a throwaway `ReadmeShot` (build/shot, git-ignored): the mark with the name, the main

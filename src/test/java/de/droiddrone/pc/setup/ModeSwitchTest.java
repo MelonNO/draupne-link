@@ -143,9 +143,8 @@ class ModeSwitchTest {
         String serial = "# serial\nserial 20 1 115200 57600 0 115200\nserial 0 64 115200 57600 0 115200\nserial 1 2 115200 57600 0 115200\n";
         assertTrue(BetaflightPlan.hasGpsPort(serial));
         assertFalse(BetaflightPlan.hasGpsPort("serial 20 1 115200 57600 0 115200\nserial 0 64 115200 57600 0 115200\n"));
-        String features = "Enabled: RX_MSP OSD GPS AIRMODE\nDisabled: RX_SERIAL\n";
-        assertTrue(BetaflightPlan.hasFeature(features, "GPS"));
-        assertFalse(BetaflightPlan.hasFeature("Enabled: RX_MSP OSD\n", "GPS"));
+        assertTrue(BetaflightPlan.hasGps(BetaflightPlan.FEATURE_RX_MSP | BetaflightPlan.FEATURE_GPS));
+        assertFalse(BetaflightPlan.hasGps(BetaflightPlan.FEATURE_RX_MSP | 1 << 18));
     }
 
     @Test
