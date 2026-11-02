@@ -155,7 +155,7 @@ class TacticalButton extends JButton {
         try {
             int w = getWidth(), h = getHeight();
             float ease = 1 - (1 - hover) * (1 - hover);
-            Color mark = primary ? Color.WHITE : Theme.ACCENT;
+            Color mark = primary ? Theme.BG : Theme.ACCENT; // black marks on the red, like its text
             // corner brackets closing in
             if (ease > 0) {
                 int inset = Math.round(5 - 2 * ease);
@@ -177,7 +177,7 @@ class TacticalButton extends JButton {
             if (flashStart != 0) {
                 float t = Math.min(1, (System.currentTimeMillis() - flashStart) / (float) FLASH_MS);
                 g.setComposite(AlphaComposite.SrcOver.derive((1 - t) * (primary ? 0.45f : 0.35f)));
-                g.setColor(primary ? Color.WHITE : Theme.ACCENT);
+                g.setColor(primary ? Theme.BG : Theme.ACCENT);
                 g.fillRect(0, 0, w, h);
             }
         } finally {

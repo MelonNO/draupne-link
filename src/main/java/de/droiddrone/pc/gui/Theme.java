@@ -116,7 +116,7 @@ final class Theme {
         JButton button = new TacticalButton(text.toUpperCase(), true);
         button.setFont(headingFont(14.5f));
         button.setBackground(ACCENT);
-        button.setForeground(Color.WHITE);
+        button.setForeground(BG); // black on the red
         button.setFocusPainted(false);
         button.setBorder(BorderFactory.createEmptyBorder(9, 22, 9, 22));
         return button;
