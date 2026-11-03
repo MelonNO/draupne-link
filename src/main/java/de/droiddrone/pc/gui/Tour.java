@@ -28,13 +28,27 @@ import java.util.function.Supplier;
  * The tour of the window, offered once the first-time setup is finished and under SETUP any time: one control at a
  * time is lit while the rest dims (and is dead to the mouse), with a notice in the style of the locked-button notices
  * saying what it does (NEXT / EXIT TOUR). It walks the main window (MENU and each of its slide-out buttons, the
- * controller card's fold, pop-out video, full screen, the map's place), then opens the map window for the map itself:
- * pins, what the cursor shows, the drone, the map picture and coordinate format, DOWNLOAD AREA. A step whose control
- * isn't on screen (UPDATE with no update known) is skipped; a window closed under the tour ends it.
+ * controller card's fold, the map's place), then opens the map window for the map itself: pins, what the cursor
+ * shows, the drone, the map picture and coordinate format, DOWNLOAD AREA. The pilot learns by doing: a step at a
+ * button or a choice keeps NEXT locked ("Press it") until that control was pressed. A step whose control isn't on
+ * screen (UPDATE with no update known) is skipped; a window closed under the tour ends it.
  */
 final class Tour {
-    /** @param before done as the step comes up (opens the menu, the map window); null for nothing */
-    private record Step(String title, String text, Supplier<JComponent> anchor, Runnable before) {}
+    /**
+     * @param before done as the step comes up (opens the menu, the map window); null for nothing
+     * @param press  the pilot must press the control before NEXT works (a button or a choice); false for a plain
+     *               area, and for UPDATE, whose press would start the update
+     */
+    private record Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press,
+                        Supplier<JComponent> live) {
+        Step(String title, String text, Supplier<JComponent> anchor, Runnable before) {
+            this(title, text, anchor, before, true, null);
+        }
+
+        Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press) {
+            this(title, text, anchor, before, press, null);
+        }
+    }
 
     /** A control not on screen after this many tries (150 ms apart) is skipped: the step would wait forever. */
     private static final int MAX_TRIES = 7;
@@ -56,31 +70,36 @@ final class Tour {
         steps.add(new Step("VIDEO", "The picture, the OSD and recording.", main::tourVideoButton, openMenu));
         steps.add(new Step("LINK", "The link's sounds, and who may watch as a spectator.", main::tourLinkButton, openMenu));
         steps.add(new Step("TOOLS", "Find the drone, the tracks folder and the tests.", main::tourToolsButton, openMenu));
-        steps.add(new Step("UPDATE", "A newer DRAUPNE Link is ready: one press installs it.", main::tourUpdateButton, openMenu));
+        steps.add(new Step("UPDATE", "A newer DRAUPNE Link is ready: one press installs it (not now - after the tour).",
+                main::tourUpdateButton, openMenu, false));
         steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card away for more video, and brings it back. The sticks "
-                + "and switches keep working either way.", main::tourMinimizeButton, null));
-        steps.add(new Step("POP OUT VIDEO", "The picture in a window of its own, for a second screen. A double-click on the video "
-                + "shows it alone.", main::tourPopOutButton, null));
-        steps.add(new Step("FULL SCREEN", "The picture fills the whole screen (F11 too). Esc brings the window back.",
-                main::tourFullScreenButton, null));
+                + "and switches keep working either way. Press it.", main::tourMinimizeButton, null));
         steps.add(new Step("THE MAP", "In flight the minimap takes this place, with POP OUT MAP under it. F3 opens the map window "
-                + "any time - as now.", main::tourLinkCard, null));
+                + "any time - as now.", main::tourLinkCard, null, false));
+        // on the map steps the map itself stays live under the dimming: panning, the wheel, pins and the cursor figures work
+        Supplier<JComponent> map = () -> main.mapWindow().map();
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
-                + "drone in the middle; Home jumps to the launch point, End to the drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow));
+                + "drone in the middle; Home jumps to the launch point, End to the drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow, true, map));
         steps.add(new Step("PINS", "Right-click the map to drop a pin (Alpha, Bravo ...), or to rename or remove one. PINS lists "
-                + "them all. Each pin shows its distance and bearing from the drone.", () -> main.mapWindow().tourPins(), null));
+                + "them all. Each pin shows its distance and bearing from the drone.", () -> main.mapWindow().tourPins(), null, true, map));
         steps.add(new Step("UNDER THE CURSOR", "Move the mouse over the map: the position, in the format chosen top right, and the "
-                + "terrain height there show here. DRONE, ALTITUDE and LAUNCH are live.", () -> main.mapWindow().tourCursor(), null));
+                + "terrain height there show here. DRONE, ALTITUDE and LAUNCH are live.", () -> main.mapWindow().tourCursor(), null, false, map));
         steps.add(new Step("THE DRONE", "The arrow is the drone, pointing where it heads, with its track behind it. The ring marked "
-                + "L is the launch point. LAST KNOWN on the arrow means its position is old.", () -> main.mapWindow().tourDrone(), null));
+                + "L is the launch point. LAST KNOWN on the arrow means its position is old.", () -> main.mapWindow().tourDrone(), null, false, map));
         steps.add(new Step("MAP TYPE", "The map picture: topo, paper map, satellite or OpenStreetMap. Change it here any time; "
                 + "what you have looked at is kept for flying without internet.", () -> main.mapWindow().tourMapType(), null));
         steps.add(new Step("COORDINATES", "The coordinate system for the cursor, the drone and the pins: degrees, UTM or MGRS. "
                 + "Change it here.", () -> main.mapWindow().tourFormat(), null));
         steps.add(new Step("OFFLINE MAPS", "DOWNLOAD AREA saves the map for flying without internet: this view, or a box you draw "
                 + "with SELECT WITH CURSOR (or Alt + drag). Every map type and zoom level, one START.", () -> main.mapWindow().tourDownload(), null));
+        // the last step is back in the main window: it comes to the front over the map window by itself
+        Runnable backToMain = () -> {
+            main.toFront();
+            main.requestFocus();
+            main.tourOpenMenu();
+        };
         steps.add(new Step("THAT'S THE TOUR", "SETUP > Tour shows it again. Press CONNECT in the main window when the drone and "
-                + "the phone are ready.", main::tourMenuButton, openMenu));
+                + "the phone are ready.", main::tourMenuButton, backToMain, false));
     }
 
     /** Asks first; the tour runs on yes. */
@@ -138,6 +157,14 @@ final class Tour {
             return;
         }
         notice = new TourNotice(anchor, s.title(), s.text(), index + 1, steps.size(), this::next, this::end);
+        notice.requirePress(s.press());
+        if (s.live() != null) {
+            try {
+                notice.setLive(s.live().get());
+            } catch (RuntimeException e) {
+                // no live area then
+            }
+        }
         if (!notice.pop()) retry.restart();
     }
 
@@ -165,6 +192,15 @@ final class Tour {
         private long shownAt;
         private boolean above;
         private long notShowingSince;
+        /** NEXT is locked until the control was pressed: a mouse button let go over it (or its button fired). */
+        private boolean waitingForPress;
+        private final java.awt.event.AWTEventListener pressWatch = this::watchPress;
+        private final java.awt.event.ActionListener firedWatch = e -> pressed();
+
+        private void watchPress(java.awt.AWTEvent event) {
+            if (event.getID() != java.awt.event.MouseEvent.MOUSE_RELEASED || !(event.getSource() instanceof Component c)) return;
+            if (c == anchor || SwingUtilities.isDescendingFrom(c, anchor)) pressed();
+        }
 
         TourNotice(JComponent anchor, String title, String text, int step, int of, Runnable onNext, Runnable onEnd) {
             this.anchor = anchor;
@@ -182,9 +218,35 @@ final class Tour {
             add(exit);
         }
 
+        /** An area the mouse still works over while this step shows (the map under the map steps); null = none. */
+        private JComponent live;
+
+        void setLive(JComponent live) {
+            this.live = live;
+        }
+
+        /** The pilot learns by doing: NEXT says "Press it" and waits until the control was pressed. */
+        void requirePress(boolean required) {
+            waitingForPress = required;
+            next.setEnabled(!required);
+            next.setText(required ? "Press it" : next.getText());
+        }
+
+        private void pressed() {
+            if (!waitingForPress) return;
+            waitingForPress = false;
+            next.setEnabled(true);
+            next.setText("Next");
+            repaint();
+        }
+
         boolean pop() {
             JRootPane root = SwingUtilities.getRootPane(anchor);
             if (root == null || !anchor.isShowing()) return false;
+            if (waitingForPress) {
+                java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(pressWatch, java.awt.AWTEvent.MOUSE_EVENT_MASK);
+                if (anchor instanceof javax.swing.AbstractButton b) b.addActionListener(firedWatch);
+            }
             JLayeredPane layer = root.getLayeredPane();
             layer.add(dim, JLayeredPane.POPUP_LAYER);
             layer.add(this, JLayeredPane.DRAG_LAYER);
@@ -203,6 +265,8 @@ final class Tour {
 
         void dismiss() {
             timer.stop();
+            java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(pressWatch);
+            if (anchor instanceof javax.swing.AbstractButton b) b.removeActionListener(firedWatch);
             for (JComponent c : new JComponent[]{this, dim}) {
                 Component parent = c.getParent();
                 if (parent == null) continue;
@@ -364,7 +428,13 @@ final class Tour {
             @Override
             public boolean contains(int x, int y) {
                 Rectangle a = anchorBounds();
-                return a == null || !a.contains(x, y);
+                if (a != null && a.contains(x, y)) return false;
+                JComponent l = live;
+                if (l != null && l.isShowing() && getParent() != null && l.getParent() != null) {
+                    Rectangle r = SwingUtilities.convertRectangle(l.getParent(), l.getBounds(), getParent());
+                    if (r.contains(x, y)) return false; // the map stays live: the cursor figures, panning, pins
+                }
+                return true;
             }
 
             @Override
