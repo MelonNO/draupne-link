@@ -772,8 +772,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume(){
         super.onResume();
-        checkOldApp();
-        checkForUpdate();
+        if (PowerMode.mode() != PowerMode.DEEP_SLEEP) { // pc.23: a sleeping phone does nothing it needn't - no GitHub
+            checkOldApp();
+            checkForUpdate();
+        }
         if (System.currentTimeMillis() - serviceSwitchedAt > 5000) serviceWantedRunning = DDService.isRunning;
         isPaused = false;
         main.setKeepScreenOn(true);
@@ -781,12 +783,15 @@ public class MainActivity extends Activity {
         updateUi();
         uiTimer = new Timer();
         TimerTask tt = new TimerTask() {
+            private int ticks;
+
             @Override
             public void run() {
                 if (isPaused){
                     uiTimer.cancel();
                     return;
                 }
+                if (PowerMode.mode() == PowerMode.DEEP_SLEEP && ++ticks % 5 != 0) return; // asleep: every 5 s is plenty
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {

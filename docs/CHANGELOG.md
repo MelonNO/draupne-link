@@ -6,6 +6,7 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 
 - **Boot animation as a morph** (PC and phone app 2.3.0-pc.23): each piece of the mark's D is one shape that slides, turns and grows into a big card's outline (PC: LINK, LOG, the controller card; phone: the status and connection cards, CONNECT) and opens from the inside; the first frame is the mark, 4 s in all.
 - Update check every 15 min on the PC and every 10 min on the phone (on resume).
+- Phone app: deep sleep also stops the telemetry thread, the microphone and the service timer; no update check and a 5 s screen refresh while asleep.
 - Guide: the connect step about connecting only; a new *Sleep before take-off* step with a working copy of STANDBY / DEEP SLEEP / WAKE.
 - Tour: POP OUT VIDEO and FULL SCREEN steps back (explained, not pressed); DOWNLOAD AREA explained, not pressed; the pin manager lists the example pins; menu animations in front of the tour's notice; offered once on PCs set up before the tour existed.
 

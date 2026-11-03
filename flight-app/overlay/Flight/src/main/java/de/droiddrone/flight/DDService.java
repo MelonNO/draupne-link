@@ -303,6 +303,12 @@ public class DDService extends Service {
         serial.close();
         PhoneLocation.stop();
         udp.close();
+        // pc.23: nothing left ticking - the phone telemetry thread (camera fps, battery, network state once a
+        // second), the microphone's thread and the service's own timer all stop; the alarm is all that wakes it
+        phoneTelemetry.close();
+        audioSource.close();
+        stopMainTimer();
+        isConnected = false;
         powerSleepOn(nextCheckAt);
         releaseWakeLock();
         lockScreen();
@@ -316,6 +322,7 @@ public class DDService extends Service {
     /** A check window: the socket open and listening (new receive, buffer and stats threads). */
     void powerListen() {
         if (!udp.initialize()) log("Sleep check: the socket could not be opened");
+        startMainTimer(); // tends the socket for the window
         updateNotification(getString(R.string.dd_notification_checking));
     }
 
@@ -345,6 +352,8 @@ public class DDService extends Service {
     /** The check window closed without the PC: the socket shut again. */
     void powerListenEnd() {
         udp.close();
+        stopMainTimer();
+        isConnected = false;
     }
 
     /**
@@ -354,6 +363,12 @@ public class DDService extends Service {
      */
     void powerWake(boolean fromSleep) {
         acquireWakeLock();
+        if (fromSleep) { // what deep sleep stopped, back: the telemetry thread, the microphone, the timer
+            phoneTelemetry.initialize();
+            if (MainActivity.config.isRecordAudio()) audioSource.initialize(MediaCommon.mp4AudioConsumerId);
+            if (MainActivity.config.isSendAudioStream()) audioSource.initialize(MediaCommon.streamAudioConsumerId);
+            startMainTimer();
+        }
         msp.setSlowPoll(false);
         PhoneLocation.setInterval(PhoneLocation.NORMAL_INTERVAL_MS);
         if (serial.getStatus() == Serial.STATUS_NOT_INITIALIZED) {
@@ -434,11 +449,18 @@ public class DDService extends Service {
         return fcApiCompatibilityLevel;
     }
 
-    private void startMainTimer() {
+    /** Deep sleep between checks: the timer itself stops; startMainTimer brings it back for a check or the wake. */
+    private void stopMainTimer() {
         if (mainTimer != null) {
             mainTimer.cancel();
             mainTimer.purge();
+            mainTimer = null;
         }
+    }
+
+    private void startMainTimer() {
+        if (!isRunning && running == null) return;
+        stopMainTimer();
         mainTimer = new Timer();
         TimerTask tt = new TimerTask() {
             @Override
@@ -448,7 +470,7 @@ public class DDService extends Service {
                     return;
                 }
                 if (PowerMode.isAsleep()) { // pc.21: the socket and the port are closed on purpose; nothing to tend
-                    isConnected = false;
+                    isConnected = false;    // (pc.23: the timer is stopped in sleep; this is the odd tick in between)
                     return;
                 }
                 isConnected = udp.isConnected();

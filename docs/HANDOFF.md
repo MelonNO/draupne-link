@@ -18,6 +18,13 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 - **1.0.30:** update checks every 15 min on the PC (`MainWindow`, `scheduleWithFixedDelay`) and every 10 min on
   the phone (`MainActivity.checkForUpdate` from onCreate and onResume, `updateCheckedAt`) - the pilot saw no update
   because the PC asked every 6 h and the phone once per process.
+- **1.0.30, phone app pc.23, deep sleep quieter:** `DDService.powerSleep` also closes `phoneTelemetry` (its
+  thread read the camera fps, the battery and the telephony state once a second), `audioSource` (the microphone's
+  thread) and the service's `mainTimer` (`stopMainTimer`); `powerListen` starts the timer for the check window and
+  `powerListenEnd` stops it again; `powerWake(fromSleep)` re-initializes the telemetry, the audio (the two config
+  lines from onStartCommand) and the timer. `MainActivity.onResume` skips `checkOldApp` / `checkForUpdate` in deep
+  sleep and its uiTimer acts on every fifth tick. Still running in sleep: the alarm (`PowerAlarmReceiver`) and the
+  foreground notification. Untried on a phone.
 - **1.0.30, guide:** the connect step talks about connecting only; `PhoneGuideWizard.SleepPage` ("Sleep before
   take-off", section CONNECT, last in both Phone setup and the first-time setup) is a working copy of the LINK
   card's power row (the same `Theme` buttons, CHECK EVERY combo, status line) whose `refresh()` (twice a second
