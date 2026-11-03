@@ -6,6 +6,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.28)
 
+- **Unreleased, for 1.0.29's notes:** the video's POP OUT / FULL SCREEN are two 30 px drawn buttons (`GlyphButton`:
+  a window with an arrow out, the arrow back in once popped out, the four brackets for full screen) in a 38 px strip
+  at the right edge of the picture; the names stay as the buttons' text for the tour and the tooltips.
+
 - **Released:** DRAUPNE Link **1.0.28** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.21**: everything in the
   1.0.28 bullets below (STANDBY / DEEP SLEEP, the Tailscale warning, UPDATE made visible, the tour's third round, the
   video buttons at the side, the channel bar labels). None of it tried on a phone yet.

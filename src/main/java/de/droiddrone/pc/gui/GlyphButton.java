@@ -65,15 +65,9 @@ final class GlyphButton extends JButton {
                     g.drawLine(w - m, m + 1, w / 2, h / 2 + 1);
                 }
                 case VIDEO_BACK -> {
-                    // the window, and the arrow coming back into it
-                    g.drawRect(m, m + 4, w - 2 * m - 4, h - 2 * m - 4);
-                    int px = w / 2 + 2, py = h / 2 + 3; // the arrow's tip, inside the window; its barbs point back out
-                    Path2D a = new Path2D.Float();
-                    a.moveTo(px + 7, py);
-                    a.lineTo(px, py);
-                    a.lineTo(px, py - 7);
-                    g.draw(a);
-                    g.drawLine(w - m, m + 1, px, py);
+                    // the window with the picture sitting in it again (no arrow: at this size one reads both ways)
+                    g.drawRect(m, m + 2, w - 2 * m, h - 2 * m - 2);
+                    g.fillRect(m + 4, m + 6, w - 2 * m - 8, h - 2 * m - 10);
                 }
                 case FULL_SCREEN -> {
                     // the mark's four corner brackets: the picture over the whole screen
