@@ -11,6 +11,14 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   off" with Open Tailscale / Connect anyway / Cancel, and the network line says "Waiting for the PC - Tailscale is
   off on this phone" while it runs that way. Release order as always: push, `gh release create flight-2.3.0-pc.20`
   (not Latest) with build/flight/DRAUPNE-Flight-2.3.0-pc.20.apk, download and check the SHA, then tag v1.0.28.
+- **Unreleased, STANDBY / DEEP SLEEP (PC side done; phone pc.21 in work):** the LINK card's power row
+  (`MainWindow.powerPanel/refreshPower`): STANDBY, DEEP SLEEP, WAKE, CHECK EVERY 1/2/5 min (`phone.sleepCheckMin`).
+  `ControlLink.sendPowerMode` (0x6E), `setDormant` (no Connect while the phone sleeps), `restartVideo`;
+  `FcTelemetry.getPhonePower` (0x40F5). In standby the stick listener feeds the session null (as if the radio were
+  gone), so the sticks wait for a low throttle on waking; the HUD banner says STANDBY - PRESS WAKE; both modes are
+  refused and left while the FC reports armed. Deep sleep: once the phone reports mode 2 and the link drops, the PC
+  goes dormant and counts down to the phone's next listening window; WAKE clears dormant and the Connects resume.
+  Protocol in docs/PROTOCOL.md. Untried on a phone.
 - **Unreleased, tour (pilot's third round):** no POP OUT VIDEO / FULL SCREEN steps; a step at a button or a choice
   keeps NEXT locked as "Press it" until that control was pressed (`TourNotice.requirePress`: an AWT mouse-released
   watch on the control and its children, plus the button's action; UPDATE, the LINK card, the CURSOR and DRONE cells
