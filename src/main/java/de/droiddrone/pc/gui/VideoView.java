@@ -50,8 +50,10 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private volatile OsdLayout osdLayout = OsdLayout.defaults();
     /** When the newest picture was handed over, and the smoothed wait until Swing painted it (shown in the stats). */
     private volatile long presentedNs;
-    /** When the newest picture was handed over (System.currentTimeMillis); 0 = none since the stream started. */
+    /** When the newest picture was handed over (System.currentTimeMillis); 0 = none yet. */
     private volatile long presentedAt;
+    /** When the stream last (re)started (videoStarted); 0 = never. */
+    private volatile long streamStartedAt;
     private volatile double displayMs;
     private volatile LatencyMeter meter;
     private Supplier<OsdRenderer.Data> osdData = () -> null;
@@ -144,7 +146,10 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             videoHeight = height;
         }
         this.mirror = mirror;
-        presentedAt = 0; // a (re)started stream: VIDEO FROZEN waits for its first picture, not the old one's age
+        // the old picture's age stays: a restarted stream whose first key frame goes missing left a static old
+        // picture with no VIDEO FROZEN for seconds (before 1.0.33 the age started over here). The window gives
+        // the switch itself a moment (msSinceStreamStart)
+        streamStartedAt = System.currentTimeMillis();
         updateTarget();
     }
 
@@ -287,6 +292,12 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     /** ms since the last picture came, or -1 if none has yet (VIDEO FROZEN on the OSD). */
     long msSincePicture() {
         long at = presentedAt;
+        return at == 0 ? -1 : System.currentTimeMillis() - at;
+    }
+
+    /** ms since the stream last (re)started, or -1 if it never has. */
+    long msSinceStreamStart() {
+        long at = streamStartedAt;
         return at == 0 ? -1 : System.currentTimeMillis() - at;
     }
 

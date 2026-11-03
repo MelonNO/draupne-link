@@ -374,9 +374,10 @@ class ControlLinkTest {
         // the waits are long: the release runner is slow and a thread may get no turn for a second or more
         waitFor(() -> !phone.powerModes.isEmpty(), 8000, "the power mode at the phone");
         assertArrayEquals(new int[]{ControlLink.POWER_DEEP_SLEEP, 2}, phone.powerModes.get(0));
-        // the phone sleeps (silent); this PC, told so, keeps quiet: a Connect in a listening window would wake it
+        // the phone sleeps (silent, its socket closed); this PC, told so, keeps quiet: a Connect in a listening
+        // window would wake it
         link.setDormant(true);
-        phone.silent = true;
+        phone.sleep();
         waitFor(() -> !link.isConnected(), 4000, "link lost");
         int before = phone.connects.get();
         Thread.sleep(1500);
@@ -413,8 +414,10 @@ class ControlLinkTest {
         assertEquals(1280, phone.config.cameraWidth);
         waitFor(() -> phone.config.cameraWidth == 640, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "640x360");
         assertTrue(link.isRobust());
-        waitFor(() -> phone.videoProfile == 1, 2000, "key frames twice");
+        waitFor(() -> phone.videoProfile > 0 && (phone.videoProfile & 1) == 1, 2000, "key frames twice");
         assertEquals(ControlLink.ROBUST_MAX_STEP, link.maxBitrateStep(), "up to 1 Mbit/s");
+        assertEquals(1_000_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[ControlLink.ROBUST_MAX_STEP]);
+        assertEquals(2 | 4, phone.videoProfile & 6, "a parity per group, H.264 (the setting is H.265)");
         assertEquals(ControlLink.State.READY, link.getState(), "still flying");
         int rcBefore = phone.rcFrames.size();
         assertTrue(link.sendRc(new short[]{1500, 1500, 1500, 1000}), "sticks go out during the switch");
@@ -451,11 +454,148 @@ class ControlLinkTest {
         link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
-        waitFor(() -> phone.config.cameraWidth == 640 && phone.videoProfile == 1, 3000, "bad coverage mode from the start");
+        waitFor(() -> phone.config.cameraWidth == 640 && phone.videoProfile > 0 && (phone.videoProfile & 1) == 1, 3000, "bad coverage mode from the start");
+        assertEquals(640, phone.configs.get(0).cameraWidth, "the very first config already carries the small size (1.0.33)");
         assertEquals(4, PcConfig.defaults().getBitrateLimitMbps());
         link.setVideoMode(ControlLink.VideoMode.SHARP);
         waitFor(() -> phone.config.cameraWidth == 1280 && phone.videoProfile == 0, 3000, "back to the full picture");
-        assertEquals(4, link.maxBitrateStep(), "the set 4 Mbit/s");
+        assertEquals(5, link.maxBitrateStep(), "the set 4 Mbit/s");
+        assertEquals(4_000_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[link.maxBitrateStep()]);
+    }
+
+    /** Bad coverage mode not enough (the bitrate at the bottom for 5 s more): the survival tier, 480x270 at 15 fps. */
+    @Test
+    void aLinkThatCantCarryBadCoverageModeGetsTheSurvivalTier() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.encoderBitRate = 250_000;
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getTier() == ControlLink.Tier.ROBUST, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "bad coverage mode");
+        waitFor(() -> link.getTier() == ControlLink.Tier.SURVIVAL, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "the survival tier");
+        waitFor(() -> phone.config.cameraWidth == 480 && phone.config.cameraFpsMax == 15, 3000, "480x270 at 15 fps");
+        assertEquals(ControlLink.SURVIVAL_MAX_STEP, link.maxBitrateStep());
+        assertEquals(250_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[link.maxBitrateStep()], "up to 250 kbit/s");
+        assertTrue(link.isRobust());
+        link.setVideoMode(ControlLink.VideoMode.SHARP);
+        waitFor(() -> link.getTier() == ControlLink.Tier.NORMAL && phone.config.cameraWidth == 1280 && phone.config.cameraFpsMax == 30, 3000, "SHARP: everything back");
+    }
+
+    /**
+     * The sticks keep going through a link loss (1.0.33): the phone's uplink is the weak direction on 4G, and a
+     * drone whose sticks arrive is under control while its video and telemetry are gone. The flight controller's
+     * state is kept too, so the armed-resume rule has it; the handshake comes at once when the phone is heard.
+     */
+    @Test
+    void sticksAndFcStateSurviveALinkLoss() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> link.getTelemetry().hasBoxNames() && link.getFcInfo() != null, 5000, "FC state");
+        short[] sticks = {1500, 1500, 1500, 1400, 2000};
+        assertTrue(link.sendRc(sticks));
+        phone.silent = true;
+        waitFor(() -> !link.isConnected(), ControlLink.LINK_LOST_MS + 1500, "link lost");
+        assertEquals(ControlLink.State.CONNECTING, link.getState());
+        assertTrue(link.sticksWanted(), "the sticks are still wanted");
+        assertTrue(link.sendRc(sticks), "and still go out, blind");
+        assertNotNull(link.getFcInfo(), "the FC's state is kept through a short loss");
+        assertTrue(link.getTelemetry().hasBoxNames());
+        int connects = phone.connects.get();
+        Thread.sleep(700);
+        assertTrue(phone.connects.get() - connects >= 3, "Connect every " + ControlLink.CONNECT_FAST_MS + " ms after a loss: " + (phone.connects.get() - connects));
+        int frames = phone.rcFrames.size();
+        phone.silent = false;
+        long back = System.currentTimeMillis();
+        assertTrue(link.sendRc(sticks));
+        waitFor(() -> phone.rcFrames.size() > frames, 2000, "the frame reaches the phone the moment it listens");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 3000, "READY again");
+        assertTrue(System.currentTimeMillis() - back < 1500, "the handshake within a few round trips");
+        assertNotNull(link.getFcInfo());
+    }
+
+    /** The link comes back and the video never stopped: the stream is not asked for again (no encoder restart). */
+    @Test
+    void aReconnectLeavesARunningStreamAlone() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.videoStream = TestStreams.h264(320, 240, 900, 10); // 30 s of frames
+        CapturingSink sink = new CapturingSink();
+        try (VideoPipeline video = new VideoPipeline(sink, () -> 30)) {
+            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link.setVideoListener(video, false);
+            video.attach(link);
+            link.start();
+            waitFor(() -> sink.presented.get() >= 10, 10_000, "pictures");
+            assertEquals(1, phone.startVideoRequests.get());
+            phone.silent = true;
+            waitFor(() -> !link.isConnected(), ControlLink.LINK_LOST_MS + 1500, "link lost");
+            int shown = sink.presented.get();
+            phone.silent = false;
+            waitFor(() -> sink.presented.get() > shown + 5, 3000, "pictures again, with the config in hand");
+            waitFor(() -> link.getState() == ControlLink.State.READY, 3000, "READY again");
+            Thread.sleep(ControlLink.VIDEO_CHECK_MS + 700);
+            assertEquals(1, phone.startVideoRequests.get(), "the stream was never asked for again");
+            assertTrue(link.isVideoConfigReceived());
+        }
+    }
+
+    /** The link comes back but the stream really stopped (the phone app restarted): it is asked for again. */
+    @Test
+    void aStreamThatStoppedIsAskedForAgainAfterAReconnect() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.videoStream = TestStreams.h264(320, 240, 60, 10); // 2 s of frames, then nothing
+        phone.appVersion = "2.3.0-pc.26";
+        CapturingSink sink = new CapturingSink();
+        try (VideoPipeline video = new VideoPipeline(sink, () -> 30)) {
+            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link.setVideoListener(video, false);
+            video.attach(link);
+            link.start();
+            waitFor(() -> sink.presented.get() >= 10, 10_000, "pictures");
+            waitFor(() -> phone.startVideoRequests.get() >= 2, ControlLink.VIDEO_DEAD_MS + 6000,
+                    "the stream ended while telemetry goes on: StartVideo again (the watchdog)");
+        }
+    }
+
+    /** Phone app pc.26 reads a 16-bit stick sequence; pc.19-25 one byte; older none. */
+    @Test
+    void theStickSequenceIsSixteenBitsForAPhoneAppThatReadsIt() throws Exception {
+        short[] frame = {1500, 1600, 1400, 1000, 2000, 1000, 1000, 1000};
+        byte[] wide = ControlLink.rcFrame(frame, 0x1234, true);
+        assertEquals(2 + 8 * 2 + 2, wide.length);
+        assertEquals(0x12, wide[wide.length - 2] & 0xff);
+        assertEquals(0x34, wide[wide.length - 1] & 0xff);
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.appVersion = "2.3.0-pc.26";
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getTelemetry().getPhonePcBuild() == 26, 5000, "version known");
+        short[] sticks = {1500, 1500, 1500, 1000};
+        for (int i = 0; i < 3; i++) assertTrue(link.sendRc(sticks));
+        waitFor(() -> phone.rcSeqs.size() >= 3, 2000, "numbered frames");
+        int first = phone.rcSeqs.get(0);
+        assertEquals(List.of(first, first + 1, first + 2), phone.rcSeqs.subList(0, 3));
+        assertEquals(3, phone.rcSeqWidth, "two bytes");
+    }
+
+    /** SET_BITRATE (pc.26): the step outright; an older phone app gets one relative step. */
+    @Test
+    void theBitrateStepGoesOutrightToAPhoneAppThatTakesIt() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.appVersion = "2.3.0-pc.25";
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY && link.getTelemetry().getPhonePcBuild() == 25, 5000, "READY, version known");
+        link.sendBitrateStep(3, 5);
+        waitFor(() -> phone.bitRateChanges.size() == 1, 2000, "one relative step");
+        assertEquals(false, phone.bitRateChanges.get(0), "down");
+        assertTrue(phone.bitRateSteps.isEmpty());
+        phone.appVersion = "2.3.0-pc.26";
+        waitFor(() -> link.getTelemetry().getPhonePcBuild() == 26, 5000, "newer version known");
+        link.sendBitrateStep(3, 5);
+        waitFor(() -> phone.bitRateSteps.size() == 1, 2000, "the step itself");
+        assertEquals(3, phone.bitRateSteps.get(0));
+        assertEquals(1, phone.bitRateChanges.size(), "no relative step for it");
     }
 
     @Test
@@ -503,7 +643,7 @@ class ControlLinkTest {
     static class FakeFlightPhone {
         final DatagramSocket socket;
         final UdpSender udpSender;
-        final ReceiverBuffer receiverBuffer;
+        volatile ReceiverBuffer receiverBuffer;
         final int versionCode;
         final String key;
         final boolean viaRelay;
@@ -526,12 +666,28 @@ class ControlLinkTest {
         /** The PC's answers to this phone's sleep hellos: 0 sleep on, 1 wake. */
         final List<Integer> sleepAnswers = new CopyOnWriteArrayList<>();
 
+        /**
+         * Gone to sleep: silent, and its session dropped (the real phone closes its socket), so only a Connect
+         * brings it back - the PC's pings, which go on once the link has been up (1.0.33), are not answered.
+         */
+        void sleep() {
+            silent = true;
+            ReceiverBuffer old = receiverBuffer;
+            receiverBuffer = new ReceiverBuffer(udpSender, !viaRelay, key, null);
+            old.close();
+        }
+
         /** The sleeping phone's "still here" from a check window (pc.22), to the PC it last flew with. */
         void sendSleepHello(int batteryPercent, boolean charging, int nextCheckMin) {
             udpSender.sendPacket(new byte[]{ControlLink.SLEEP_HELLO, (byte) batteryPercent, (byte) (charging ? 1 : 0), (byte) nextCheckMin, 0x0F, (byte) 0xA0});
         }
         /** The last video profile received (pc.15 on): -1 = none yet, else its flags (bit 0: key frames twice). */
         volatile int videoProfile = -1;
+        /** ChangeBitRate packets (true = up) and SET_BITRATE steps (pc.26), in order. */
+        final List<Boolean> bitRateChanges = new CopyOnWriteArrayList<>();
+        final List<Integer> bitRateSteps = new CopyOnWriteArrayList<>();
+        /** How many bytes the last stick frame's sequence took: 0, 1 (pc.19) or 2 (pc.26) - stored as width + 1. */
+        volatile int rcSeqWidth;
         /** Every config received, in order (a resolution switch sends a new one). */
         final List<ParsedConfig> configs = new CopyOnWriteArrayList<>();
         /** Spectator mode answers sent (DRAUPNE Flight pc.11 and on); 0 with answerSpectators off, like older apps. */
@@ -721,12 +877,17 @@ class ControlLinkTest {
                 case ControlLink.KEY_FRAME_REQUEST -> keyFrameRequests.incrementAndGet();
                 case ControlLink.POWER_MODE -> powerModes.add(new int[]{r.readByte(), r.readByte()});
                 case ControlLink.VIDEO_PROFILE -> videoProfile = r.readByte();
+                case ControlLink.SET_BITRATE -> bitRateSteps.add(r.readUnsignedByteAsInt());
+                case UdpCommon.ChangeBitRate -> bitRateChanges.add(r.readBoolean());
+                case UdpCommon.GetVideoConfig -> videoConfigRequests.incrementAndGet();
                 case UdpCommon.RcFrame -> {
                     int count = r.readByte();
                     short[] ch = new short[count];
                     for (int i = 0; i < count; i++) ch[i] = r.readShort();
-                    // pc.19 on: a trailing sequence byte is read; an older app refuses any length but count * 2
+                    // pc.19 on: a trailing sequence byte is read; pc.26 two; an older app refuses any length but count * 2
+                    rcSeqWidth = r.getRemaining() + 1;
                     if (r.getRemaining() == 1) rcSeqs.add(r.readUnsignedByteAsInt());
+                    else if (r.getRemaining() == 2) rcSeqs.add(r.readUnsignedShortAsInt());
                     else if (r.getRemaining() != 0) return;
                     rcFrames.add(ch);
                 }
@@ -762,6 +923,7 @@ class ControlLinkTest {
         volatile boolean requestedHevc = true;
         volatile boolean videoStarted;
         final java.util.concurrent.atomic.AtomicInteger startVideoRequests = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger videoConfigRequests = new java.util.concurrent.atomic.AtomicInteger();
 
         private void sendVideo(TestStreams.Stream stream) {
             try {
@@ -794,7 +956,7 @@ class ControlLinkTest {
                         d.daos.write(buf, offset, n);
                         offset += n;
                         boolean lose = frameNum == dropFrame && fragmentInFrame++ == 1;
-                        if (!lose) udpSender.sendPacket(d.getData());
+                        if (!lose && !silent) udpSender.sendPacket(d.getData()); // silent: the frames go lost too
                     }
                     Thread.sleep(33);
                 }

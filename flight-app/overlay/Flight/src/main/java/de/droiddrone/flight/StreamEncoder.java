@@ -15,6 +15,9 @@
  *  along with DroidDrone.  If not, see <https://www.gnu.org/licenses/>.
  *
  *  Modified for DRAUPNE Link: key frames every 2 s and on request from the PC (no intra refresh: see initializeVideo); the PC decides the bitrate (the phone keeps an emergency brake only).
+ *  pc.26: a 150 kbit/s step under the 250 (the survival tier); the PC can set the step outright (setBitRateIndex);
+ *  a full output queue is cut back to its newest key frame instead of losing its oldest frame (which was the key
+ *  frame everything after it needs).
  */
 
 package de.droiddrone.flight;
@@ -38,7 +41,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import static de.droiddrone.common.Logcat.log;
 
 public class StreamEncoder {
-    private static final int[] baseBitRates = {250000, 500000, 1000000, 2000000, 4000000, 6000000,
+    private static final int[] baseBitRates = {150000, 250000, 500000, 1000000, 2000000, 4000000, 6000000,
             8000000, 10000000, 15000000, 20000000};
     private final CameraManager cameraManager;
     private final AudioSource audioSource;
@@ -54,7 +57,7 @@ public class StreamEncoder {
     private long bitRateCounter = 0;
     private long bitRateTimestamp = 0;
     private float lastBitRateMbs = 0;
-    private int bitRateIndex = 3;
+    private int bitRateIndex = 4; // 2 Mbit/s
     private boolean lockIncreaseBitrate = false;
     private long lockIncreaseBitrateTs;
     /**
@@ -318,6 +321,22 @@ public class StreamEncoder {
         changeBitRate(false);
     }
 
+    /**
+     * pc.26: the PC sets the step outright (SET_BITRATE): a filling uplink queue goes to the floor in one packet. A
+     * raise is still held back for 2 s after this phone's own emergency brake; the PC's bitrate limit holds.
+     */
+    public void setBitRateIndex(int index){
+        if (index < 0 || index >= baseBitRates.length) return;
+        if (index > bitRateIndex && lockIncreaseBitrate) return;
+        if (config.getBitrateLimit() != 0) {
+            while (index > 0 && baseBitRates[index] > config.getBitrateLimit()) index--;
+        }
+        if (index == bitRateIndex) return;
+        if (index < bitRateIndex) lastBitrateReduceTs = System.currentTimeMillis();
+        bitRateIndex = index;
+        encoderBitrateChange = true;
+    }
+
     /** A key frame now (the PC got one damaged); at most every 0.3 s, every 1 s with intra refresh (it heals anyway). */
     public void requestKeyFrame(){
         MediaCodec encoder = videoEncoder;
@@ -409,7 +428,7 @@ public class StreamEncoder {
             }
             if (sendFrames || info.flags == MediaCodec.BUFFER_FLAG_CODEC_CONFIG) {
                 videoStreamOutputBuffer.offer(new MediaCodecBuffer(info, buf));
-                if (videoStreamOutputBuffer.size() > maxOutputBufferSize) videoStreamOutputBuffer.remove();
+                if (videoStreamOutputBuffer.size() > maxOutputBufferSize) trimOutputQueue();
             }
             if (writeToRecorder) {
                 videoRecorderOutputBuffer.offer(new MediaCodecBuffer(info, buf));
@@ -440,6 +459,25 @@ public class StreamEncoder {
             log("encoderCallback - onOutputFormatChanged");
         }
     };
+
+    /**
+     * pc.26: the output queue is a second behind (the uplink can't keep up at all): everything up to its newest key
+     * frame goes, so what is sent next decodes. Upstream dropped the oldest frame - the key frame the rest needed.
+     * Without a key frame in it the queue is emptied and the encoder asked for one.
+     */
+    private void trimOutputQueue(){
+        java.util.List<MediaCodecBuffer> queued = new java.util.ArrayList<>();
+        videoStreamOutputBuffer.drainTo(queued);
+        int start = -1;
+        for (int i = 0; i < queued.size(); i++) {
+            if (queued.get(i).flags == MediaCodec.BUFFER_FLAG_KEY_FRAME || queued.get(i).flags == MediaCodec.BUFFER_FLAG_CODEC_CONFIG) start = i;
+        }
+        if (start < 0) {
+            requestKeyFrame();
+            return;
+        }
+        for (int i = start; i < queued.size(); i++) videoStreamOutputBuffer.offer(queued.get(i));
+    }
 
     private MediaFormat getEncoderFormat(boolean withIntraRefresh){
         return getEncoderFormat(withIntraRefresh, false);

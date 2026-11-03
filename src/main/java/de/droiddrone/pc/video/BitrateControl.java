@@ -1,9 +1,15 @@
 package de.droiddrone.pc.video;
 
 /**
- * Decides when to ask the phone's encoder for a lower or higher bitrate (it steps through 0.25, 0.5, 1, 2, 4, 6 Mbit/s).
- * Lower when the link is in real trouble - frames going missing, a long gap, the ping climbing well above its own
- * usual - and raise again after a short calm. On 4G a too-high bitrate builds queues, and queues are latency.
+ * Decides when to ask the phone's encoder for a lower or higher bitrate (it steps through 0.15 (phone app pc.26),
+ * 0.25, 0.5, 1, 2, 4, 6 Mbit/s). Lower when the link is in real trouble - frames going missing, a long gap, the
+ * ping climbing well above its own usual - and raise again after a short calm. On 4G a too-high bitrate builds
+ * queues, and queues are latency.
+ * <p>
+ * 1.0.33: a spike is judged against the median of the last second's pings, not the quietest ping of the last 30 s -
+ * on a jittery 4G link every second ping was a "spike" by that rule, the steps went to the bottom and a raise never
+ * came (the calm it needs never came either). Short spikes no longer count as trouble for the calm; a spike that
+ * holds goes straight to the floor in one SET_BITRATE (phone app pc.26) instead of a step a second.
  * <p>
  * Tuned for far-away 4G (2026-10-31: the phone 100-200 ms away with spikes to 1.8 s): the old rules (any ping over
  * 300 ms, a damaged key frame counting five, 10 s of calm before raising) held the encoder at 0.25 Mbit/s for good.
@@ -16,6 +22,11 @@ package de.droiddrone.pc.video;
 public class BitrateControl {
     public interface Sink {
         void changeBitRate(boolean increase);
+
+        /** The step outright (SET_BITRATE, phone app pc.26); older phones get one relative step towards it. */
+        default void setStep(int step, int from) {
+            changeBitRate(step > from);
+        }
     }
 
     private static final int PAUSE_MS = 2000;
@@ -29,19 +40,27 @@ public class BitrateControl {
     /** ...for at least this long: a single slow ping is just 4G jitter. */
     static final int QUEUE_HOLD_MS = 1000;
     private static final int BASELINE_WINDOW_MS = 15_000;
-    /** The phone's steps; it starts on 2 Mbit/s (step 3). The PC doesn't lower below step 2, 1 Mbit/s. */
-    static final int START_STEP = 3;
-    static final int FLOOR_STEP = 2;
-    private static final int TOP_STEP = 5;
+    /** The phone's steps; it starts on 2 Mbit/s (step 4). The PC doesn't lower below step 3, 1 Mbit/s. */
+    static final int START_STEP = 4;
+    static final int FLOOR_STEP = 3;
+    private static final int TOP_STEP = 6;
     /**
      * A filling uplink queue (2026-11-01: the ping went to 3 s, then 7.7 s, at 6 Mbit/s): ping SPIKE_MS over the usual
-     * for SPIKE_HOLD_MS, or no pong at all for a while, steps down at once and again every SPIKE_PAUSE_MS while it lasts
-     * (the phone takes one step down a second) - below the 1 Mbit/s floor if need be. A live, softer picture beats a
-     * sharp one seconds old.
+     * (the median of the last second) for SPIKE_HOLD_MS, or no pong at all for a while, goes to the floor at once
+     * (one step at a time on a phone app before pc.26) and, while it lasts SPIKE_DEEP_MS and more, one step further
+     * down every SPIKE_PAUSE_MS - below the 1 Mbit/s floor if need be. A live, softer picture beats a sharp one
+     * seconds old.
      */
     static final int SPIKE_MS = 250;
+    /** A ping this far over the quietest of the last 30 s is a queue whatever the jitter (a steady 2 s ping is no "typical"). */
+    static final int SPIKE_ABSOLUTE_MS = 1000;
     static final int SPIKE_HOLD_MS = 200;
     static final int SPIKE_PAUSE_MS = 1000;
+    static final int SPIKE_DEEP_MS = 2000;
+    /** A raise waits this long after the last spike (and the calm after the last real trouble). */
+    static final int SPIKE_CALM_MS = 2000;
+    /** The pings a spike is judged against: the median of the last this many (about a second of frames). */
+    private static final int TYPICAL_PINGS = 15;
     /** Congested (spike, queueing or no pong) this recently: no key frame requests - each is the biggest burst. */
     static final int CONGESTED_FOR_MS = 1000;
     /** Less than this arriving for RESCUE_MS while at the floor: the phone went lower by itself; ask it up. */
@@ -69,7 +88,10 @@ public class BitrateControl {
     private long lowSince = -1;
     private long lastRescue;
     private long spikeSince = -1;
+    private long lastSpike = Long.MIN_VALUE / 2;
     private long lastCongested = Long.MIN_VALUE / 2;
+    private final int[] recentPings = new int[TYPICAL_PINGS];
+    private int recentCount, recentAt;
     /** The highest step to ask for: the set limit, 1 Mbit/s in bad coverage mode (see setMaxStep). */
     private int maxStep = TOP_STEP;
     /** The phone's last report of its bitrate setting (bit/s), or -1 from a phone that doesn't report. */
@@ -113,16 +135,30 @@ public class BitrateControl {
 
     private void evaluate(boolean frame, boolean keyFrame, long now, int fps, int ping) {
         boolean queueing = queueing(ping, now);
-        boolean spikeNow = ping < 0 || (ping > baseline() + SPIKE_MS && baseline() != Integer.MAX_VALUE);
+        int typical = typical();
+        if (ping >= 0) {
+            recentPings[recentAt] = ping;
+            recentAt = (recentAt + 1) % TYPICAL_PINGS;
+            if (recentCount < TYPICAL_PINGS) recentCount++;
+        }
+        boolean spikeNow = ping < 0 || (typical >= 0 && ping > typical + SPIKE_MS)
+                || (baseline() != Integer.MAX_VALUE && ping > baseline() + SPIKE_ABSOLUTE_MS);
         spikeSince = spikeNow ? (spikeSince < 0 ? now : spikeSince) : -1;
         if (spikeNow || queueing) lastCongested = now;
         if (spikeSince >= 0 && now - spikeSince >= SPIKE_HOLD_MS) {
-            lastTrouble = now;
-            if (now - lastChange >= SPIKE_PAUSE_MS && step > 0) {
+            lastSpike = now;
+            if (lastRaise >= 0 && now - lastRaise < PAUSE_MS && !raiseFailed) { // raised too soon: wait longer next time
+                raiseFailed = true;
+                calmMs = Math.min(MAX_CALM_MS, calmMs * 2);
+            }
+            boolean deep = now - spikeSince >= SPIKE_DEEP_MS;
+            if (deep) lastTrouble = now;
+            if (now - lastChange >= SPIKE_PAUSE_MS && step > 0 && (step > FLOOR_STEP || deep)) {
                 badFrames = 0;
                 lastChange = now;
-                step--;
-                sink.changeBitRate(false);
+                int to = step > FLOOR_STEP ? Math.min(FLOOR_STEP, maxStep) : step - 1; // to the floor in one go
+                sink.setStep(to, step);
+                step = to;
             }
             if (frame) lastFrame = now;
             if (keyFrame) lastKeyFrame = now;
@@ -150,7 +186,7 @@ public class BitrateControl {
                 sink.changeBitRate(false);
             }
         } else if (now - lastTrouble >= calmMs && now - lastChange > PAUSE_MS && step < maxStep // never over the top
-                && spikeSince < 0) { // nor while a spike is building up
+                && spikeSince < 0 && now - lastSpike >= SPIKE_CALM_MS) { // nor while a spike is building up, or just after one
             if (!raiseFailed) calmMs = CALM_MS; // the last raise held: back to quick
             raiseFailed = false;
             lastTrouble = now;
@@ -190,8 +226,8 @@ public class BitrateControl {
         }
     }
 
-    /** The phone's steps, bit/s. */
-    public static final int[] STEPS_BPS = {250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000};
+    /** The phone's steps, bit/s (150 kbit/s from phone app pc.26; an older phone stops at 250). */
+    public static final int[] STEPS_BPS = {150_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000};
 
     /**
      * The phone's own report of its bitrate setting (phone app 2.3.0-pc.13 on): the PC's count of the steps follows it,
@@ -224,6 +260,19 @@ public class BitrateControl {
     /** The usual ping: the lowest of the last 15-30 s (Integer.MAX_VALUE before the first). */
     private int baseline() {
         return Math.min(windowMinPing, previousMinPing);
+    }
+
+    /** The ping of the moment: the median of the last TYPICAL_PINGS pongs; -1 before the first. */
+    private int typical() {
+        if (recentCount == 0) return -1;
+        int[] sorted = java.util.Arrays.copyOf(recentPings, recentCount);
+        java.util.Arrays.sort(sorted);
+        return sorted[recentCount / 2];
+    }
+
+    /** Tests and the link log: the ping of the moment the spike rule judges by (-1 before the first pong). */
+    public synchronized int typicalPingMs() {
+        return typical();
     }
 
     /** True once the ping has stayed QUEUE_DELAY_MS above its minimum of the last 15-30 s for QUEUE_HOLD_MS. */

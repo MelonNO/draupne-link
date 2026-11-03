@@ -2,6 +2,15 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.33
+
+- **Weak reception** (PC and phone app 2.3.0-pc.26): the sticks and pings keep going through a link loss; a loss keeps the flight controller's state and the video config, and the stream is only asked for again when it really stopped; Connect every 150 ms after a loss, the Config the moment the phone answers; the phone takes the pilot's own re-Connect at once; another PC takes over after 10 s of silence (was 1 s), never while armed; 16-bit stick sequence.
+- Transport: the resend timer that died after the first reconnect (upstream bug, both sides), no empty resend requests, the client takes the answer to its own re-Connect.
+- Video: ROBUST's small size from the first config (the phone also waits for a camera still opening); the picture shows whenever its config is known; a backlog keeps its newest key frame; key frame requests held at most 0.4 s and at once after a gap; the config asked for (GetVideoConfig) when a restarted stream's config is missing or a key frame gives no picture; the decode thread never ends on an error; GPU decoding falls back to software for good after a failure; VIDEO FROZEN keeps the old picture's age across a restart; the survival tier (480x270 at 15 fps, 150-250 kbit/s) under bad coverage mode; H.264 in bad coverage mode and under; a parity packet per group of 8 packets; key frames paced at twice the bitrate; the phone's video watchdog; the frame counter wraps to 2.
+- Bitrate: spikes judged against the last second's median (jitter is no spike), to the floor in one SET_BITRATE, raises not blocked by jitter.
+- OSD: NO STICKS AT FC (the phone's stick write age over 300 ms, reported ten times a second), RELAY - MORE DELAY, STICKS STILL SENT under LINK LOST; AUTO holds bad coverage mode over a Tailscale relay.
+- Phone app: telemetry in one datagram per 30 ms; the camera part of a config change on the video starter thread.
+
 ## 1.0.32
 
 - Boot animation (PC and phone app 2.3.0-pc.25): the mark fades in as one solid shape, not as parts.

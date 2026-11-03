@@ -4,7 +4,40 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.32)
+## Where things stand (2026-11-03, 1.0.33 in the tree)
+
+- **1.0.33 (weak reception), phone app pc.26 - built, tested on the PC, not released, not flown:** the pilot asked
+  for a review of the weak-reception handling and then for every finding to be fixed. Both apps changed, and the
+  protocol grew (PROTOCOL.md: the Transport, RC and Video sections). The PC build compiles upstream's
+  `UdpSender` and `ReceiverBuffer` from `flight-app/overlay/Common` now (the resend timer that died after the
+  first reconnect, the client taking the answer to its own re-Connect). Where to look:
+  - *Sticks:* `ControlLink.sendRc` / `sticksWanted` (sticks and pings go on through a loss once the link has been
+    READY; `everReady`), `RcSession` (its gate waits for `sticksWanted`; a loss no longer stops it),
+    `sessionRun` (Connect every `CONNECT_FAST_MS`, Config every 250 ms, the FC state kept `FC_STATE_KEEP_MS`,
+    `refreshFc`, `videoCheckAt` and the video watchdog `VIDEO_DEAD_MS`). Phone: `Udp.receiverRun` (the pilot's
+    own Connect starts a new session), `PILOT_ALIVE_MS` 10 s and `msp.isArmed()`, `handleRcFrame` (16-bit
+    sequence from pc.26 PCs, `RC_SEQ_RESET_MS`).
+  - *Video:* `ControlLink.Tier` (NORMAL / ROBUST / SURVIVAL: `adjustResolution`, `decideForcedTier` before the
+    first config, `sendTier`, `profileFlags` bits 0-2, `wantHevc`), `handleVideoFragment` (delivered whenever the
+    config is known), `requestVideoConfig`, `sendBitrateStep` (`SET_BITRATE`, pc.26). `VideoPipeline.dropBacklog`,
+    `KEY_REQUEST_PENDING_MS`, `GAP_MS`, `CONFIG_ASK_MS`, `NO_PICTURE_RUN`, `hardwareFailed`, the decode loop's
+    per-iteration try. `FrameAssembler.PARITY_GROUP` / `putParityGroup`, the wrap rule. `BitrateControl`: the
+    steps table has 150 kbit/s at 0 (FLOOR 3, START 4, TOP 6), `typical()` median, `SPIKE_ABSOLUTE_MS`,
+    `SPIKE_DEEP_MS`, `Sink.setStep`. `VideoView.msSinceStreamStart` and `MainWindow.VIDEO_RESTART_GRACE_MS`.
+    Phone: `Udp.sendFragments` (pacing `packetGapNs(size, keyFrame)`, group parity), `restartVideo` (the
+    watchdog), `wantedHevc`, `checkCameraConfigUpdate` on the video starter thread (waits for `isOpening`),
+    `nextFrameNum` wraps to 2; `StreamEncoder.setBitRateIndex`, `trimOutputQueue`.
+  - *OSD:* `OsdRenderer` NO STICKS AT FC (`STICKS_LOST_ALARM_MS`), RELAY - MORE DELAY (`Data.relayed`),
+    `MainWindow.osdLinkHint` STICKS STILL SENT; `ControlLink.setLinkPath` from the Tailscale check.
+  - *Tests:* `TransportTest` (the overlay), `PipelineRecoveryTest` (backlog, missing config, no picture),
+    `ControlLinkTest` (`sticksAndFcStateSurviveALinkLoss`, `aReconnectLeavesARunningStreamAlone`,
+    `aStreamThatStoppedIsAskedForAgainAfterAReconnect`, the survival tier, 16-bit sequence, SET_BITRATE),
+    `VideoTest` (group parity, the wrap, jitter, the huge ping, the floor in one go).
+  - *Not done, on purpose:* the stick rate stays 250 Hz (a lower rate with the previous frame appended was
+    weighed and left: at 250 Hz the next frame is 4 ms behind a lost one); the second copy of key frames in
+    bad coverage mode stays next to the group parity. *Untested on hardware:* all of it. The far phone on 4G
+    first, with `%APPDATA%\DraupneLink\logs\link-*.csv` kept; the PC's log says "Link lost, reconnecting...
+    The sticks keep going." and "Link back after N ms."; the phone's logcat "The pilot connects again".
 
 - **Released:** DRAUPNE Link **1.0.32** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.25** (release
   `flight-2.3.0-pc.25`, APK SHA-256 `05ffec7f…`, pinned in `ApkShare`): the 1.0.32 bullet below. The tag's release

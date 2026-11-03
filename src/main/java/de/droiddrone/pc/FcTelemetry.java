@@ -80,7 +80,8 @@ public class FcTelemetry {
     /**
      * The phone's state (DRAUPNE Flight 2.3.0-pc.19 on): [flags u8][last RC sequence u8][RC write age u16][RC in to
      * out u16]. Flags: bit 0 the FC's channel map is known, bit 1 USB permission asked and pending, bit 2 USB
-     * permission denied, bit 3 the camera is open.
+     * permission denied, bit 3 the camera is open, bit 4 (pc.26) the video is being restarted by the phone's own
+     * watchdog (its encoder gave nothing for 2 s). Once a second up to pc.25, ten times a second from pc.26.
      */
     static final short PHONE_STATE = 0x40F4;
     /** Telemetry this long without a version: the phone app is older than 2.3.0-pc.5 (or upstream's own). */
@@ -120,7 +121,12 @@ public class FcTelemetry {
     }
 
     public record PhoneState(int flags, int lastRcSeq, int rcWriteAgeMs, int rcInToOutMs, long receivedAt) {
-        static final int FLAG_CHANNEL_MAP = 1, FLAG_USB_PENDING = 2, FLAG_USB_DENIED = 4, FLAG_CAMERA_OPEN = 8;
+        static final int FLAG_CHANNEL_MAP = 1, FLAG_USB_PENDING = 2, FLAG_USB_DENIED = 4, FLAG_CAMERA_OPEN = 8, FLAG_VIDEO_RESTARTING = 16;
+
+        /** The phone's own watchdog is restarting its camera and encoder (no encoder output for 2 s). */
+        public boolean videoRestarting() {
+            return (flags & FLAG_VIDEO_RESTARTING) != 0;
+        }
 
         /** The phone has read the FC's channel map (MSP_RX_MAP): the sticks land on the right channels. */
         public boolean channelMapKnown() {

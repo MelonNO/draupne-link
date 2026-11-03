@@ -72,13 +72,19 @@ class VideoViewTest {
         assertArrayEquals(new int[]{640, 360}, VideoView.fit(1280, 720, 640, 400), "shrunk view: scaled down");
     }
 
-    /** VIDEO FROZEN is judged by the age of the last picture: none after a clear or a restarted stream. */
+    /**
+     * VIDEO FROZEN is judged by the age of the last picture: none after a clear; a restarted stream keeps the old
+     * picture's age (1.0.33: a restart whose first key frame went missing left a static picture with no alarm) and
+     * says when it restarted, so the window can give the switch itself a moment.
+     */
     @Test
-    void thePictureAgeStartsOverWithAClearOrANewStream() {
+    void thePictureAgeStartsOverWithAClearButNotWithANewStream() {
         VideoView view = new VideoView();
         view.setSize(16, 8);
         assertEquals(-1, view.msSincePicture(), "no picture yet");
+        assertEquals(-1, view.msSinceStreamStart());
         view.videoStarted(16, 8, false);
+        assertTrue(view.msSinceStreamStart() >= 0);
         view.beginFrame(16, 8);
         view.presentFrame();
         assertTrue(view.msSincePicture() >= 0);
@@ -86,8 +92,9 @@ class VideoViewTest {
         assertEquals(-1, view.msSincePicture(), "nothing to call frozen until the next picture");
         view.beginFrame(16, 8);
         view.presentFrame();
-        view.videoStarted(16, 8, false); // the stream restarted (a size switch): its first picture is still to come
-        assertEquals(-1, view.msSincePicture());
+        view.videoStarted(16, 8, false); // the stream restarted (a size switch): the old picture's age stays
+        assertTrue(view.msSincePicture() >= 0);
+        assertTrue(view.msSinceStreamStart() >= 0 && view.msSinceStreamStart() < 1000);
     }
 
     @Test

@@ -68,11 +68,22 @@ public class FrameAssembler {
      */
     static final int FIRST_SEGMENT = de.droiddrone.common.UdpCommon.packetLength - 13;
     static final int SEGMENT = de.droiddrone.common.UdpCommon.packetLength - 9;
+    /**
+     * Group parity (phone app pc.26): the phone sends the XOR of every PARITY_GROUP packets of a frame as one
+     * parity packet, so a frame survives one loss per group - a 40-packet key frame on a link losing one packet in
+     * 20 was rarely saved by a single parity over all of it. Packet i of a frame is at FIRST_SEGMENT + (i - 1) *
+     * SEGMENT (i > 0); group g holds packets g * PARITY_GROUP ... (g + 1) * PARITY_GROUP - 1.
+     */
+    public static final int PARITY_GROUP = 8;
 
     private static final class Pending {
         final boolean keyFrame;
+        /** The first frame of a (re)started stream (judged when the first fragment came, see isStreamStart). */
+        final boolean streamStart;
         /** The frame's parity packet (bad coverage mode), or null. */
         byte[] parity;
+        /** The parity of each group of PARITY_GROUP packets (pc.26), by group; null until the first came. */
+        byte[][] groupParity;
         int size = -1; // unknown until the offset-0 fragment arrives
         int received;
         boolean startReceived;
@@ -84,8 +95,9 @@ public class FrameAssembler {
         int[] lengths = new int[16];
         int count;
 
-        Pending(boolean keyFrame) {
+        Pending(boolean keyFrame, boolean streamStart) {
             this.keyFrame = keyFrame;
+            this.streamStart = streamStart;
         }
 
         private int indexOf(int offset) {
@@ -128,33 +140,68 @@ public class FrameAssembler {
             return size > 0 && received >= size;
         }
 
+        /** How many packets the phone splits this frame into (the size known). */
+        int packets() {
+            return size <= FIRST_SEGMENT ? 1 : 1 + (size - FIRST_SEGMENT + SEGMENT - 1) / SEGMENT;
+        }
+
+        static int offsetOf(int packet) {
+            return packet == 0 ? 0 : FIRST_SEGMENT + (packet - 1) * SEGMENT;
+        }
+
+        int lengthOf(int packet) {
+            return Math.min(packet == 0 ? FIRST_SEGMENT : SEGMENT, size - offsetOf(packet));
+        }
+
+        /** Every parity the phone sends for this frame has come (one in all, or one per group). */
+        boolean parityIn() {
+            if (parity != null) return true;
+            if (groupParity == null || size <= 0) return false;
+            int groups = (packets() + PARITY_GROUP - 1) / PARITY_GROUP;
+            if (groupParity.length < groups) return false;
+            for (int g = 0; g < groups; g++) if (groupParity[g] == null) return false;
+            return true;
+        }
+
         /**
-         * With the parity in and exactly one packet missing, rebuilds it: the parity XOR every packet that came.
+         * With a parity in and exactly one packet of its span missing, rebuilds it: the parity XOR every packet of
+         * the span that came. Each group's parity first (pc.26), then the one over the whole frame (pc.15).
          * @return true if the frame is whole now
          */
         boolean recover() {
-            if (parity == null || size <= 0 || complete()) return complete();
-            int missingAt = -1, missingLength = 0;
-            for (int at = 0; at < size; ) {
-                int length = Math.min(at == 0 ? FIRST_SEGMENT : SEGMENT, size - at);
+            if (size <= 0 || complete()) return complete();
+            int packets = packets();
+            if (groupParity != null) {
+                for (int g = 0; g < groupParity.length && g * PARITY_GROUP < packets; g++) {
+                    if (groupParity[g] != null) recoverSpan(groupParity[g], g * PARITY_GROUP, Math.min(packets, (g + 1) * PARITY_GROUP));
+                }
+            }
+            if (parity != null && !complete()) recoverSpan(parity, 0, packets);
+            return complete();
+        }
+
+        /** @return true if the one missing packet of packets [from, to) was rebuilt from their parity */
+        private boolean recoverSpan(byte[] parity, int from, int to) {
+            int missing = -1;
+            for (int p = from; p < to; p++) {
+                int at = offsetOf(p);
                 int got = indexOf(at);
                 if (got < 0) {
-                    if (missingAt >= 0) return false; // two or more lost: a single parity can't help
-                    missingAt = at;
-                    missingLength = length;
-                } else if (lengths[got] != length) {
+                    if (missing >= 0) return false; // two or more lost: a single parity can't help
+                    missing = p;
+                } else if (lengths[got] != lengthOf(p)) {
                     return false; // not the phone's usual layout: leave it
                 }
-                at += length;
             }
-            if (missingAt < 0) return complete();
+            if (missing < 0) return false;
             byte[] rebuilt = java.util.Arrays.copyOf(parity, Math.max(parity.length, SEGMENT));
-            for (int i = 0; i < count; i++) {
-                int off = offsets[i], n = Math.min(lengths[i], rebuilt.length);
+            for (int p = from; p < to; p++) {
+                if (p == missing) continue;
+                int off = offsetOf(p), n = Math.min(lengthOf(p), rebuilt.length);
                 for (int j = 0; j < n; j++) rebuilt[j] ^= data[off + j];
             }
-            put(missingAt, rebuilt, 0, missingLength);
-            return complete();
+            put(offsetOf(missing), rebuilt, 0, lengthOf(missing));
+            return true;
         }
 
         /** The frame's bytes: the array the fragments went into, when it is the frame's size (nearly always). */
@@ -177,7 +224,8 @@ public class FrameAssembler {
         this.now = now;
         if (offset < 0 || length < 0 || (offset == 0 && (frameSize <= 0 || frameSize > MAX_FRAME_BYTES))) return null;
         if (offset > MAX_FRAME_BYTES) return null;
-        if (keyFrame && frameNum == 1 && lastReleased != null && lastReleased != 1 && !pending.containsKey(frameNum)) {
+        boolean start = isStreamStart(keyFrame, frameNum);
+        if (start && lastReleased != null && lastReleased != 1) {
             pending.clear(); // the phone restarted its stream: the old one's leftovers are useless
             lastReleased = null;
             streamRestarted = true;
@@ -189,9 +237,9 @@ public class FrameAssembler {
             retireOlder(frameNum, keyFrame);
             completedFrames++;
             lastReleased = frameNum;
-            return new Frame(data, keyFrame, frameNum, false, keyFrame && frameNum == 1, now);
+            return new Frame(data, keyFrame, frameNum, false, start, now);
         }
-        Pending frame = pending(frameNum, keyFrame);
+        Pending frame = pending(frameNum, keyFrame, start);
         if (offset == 0) frame.setSize(frameSize);
         frame.put(offset, buf, dataOffset, length);
         return finish(frameNum, frame, keyFrame);
@@ -209,29 +257,58 @@ public class FrameAssembler {
         this.now = now;
         if (frameSize <= 0 || frameSize > MAX_FRAME_BYTES || length <= 0) return null;
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
-        Pending frame = pending(frameNum, keyFrame);
+        Pending frame = pending(frameNum, keyFrame, isStreamStart(keyFrame, frameNum));
         if (frame.size <= 0) frame.setSize(frameSize);
         frame.parity = java.util.Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
         if (frame.recover()) recoveredFrames++;
         return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
     }
 
-    private Pending pending(short frameNum, boolean keyFrame) {
+    /**
+     * The parity of one group of a frame's packets (bad coverage mode, phone app 2.3.0-pc.26, see PARITY_GROUP):
+     * rebuilds a single lost packet of that group.
+     * @return the frame, if that made it whole (or it was waiting for this), else null
+     */
+    public Frame putParityGroup(boolean keyFrame, short frameNum, int frameSize, int group, byte[] buf, int dataOffset, int length, long now) {
+        this.now = now;
+        if (frameSize <= 0 || frameSize > MAX_FRAME_BYTES || length <= 0 || group < 0 || group > 255) return null;
+        if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
+        Pending frame = pending(frameNum, keyFrame, isStreamStart(keyFrame, frameNum));
+        if (frame.size <= 0) frame.setSize(frameSize);
+        int groups = Math.max(group + 1, (frame.packets() + PARITY_GROUP - 1) / PARITY_GROUP);
+        if (frame.groupParity == null) frame.groupParity = new byte[groups][];
+        else if (frame.groupParity.length < groups) frame.groupParity = java.util.Arrays.copyOf(frame.groupParity, groups);
+        frame.groupParity[group] = java.util.Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
+        if (frame.recover()) recoveredFrames++;
+        return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
+    }
+
+    private Pending pending(short frameNum, boolean keyFrame, boolean streamStart) {
         Pending frame = pending.get(frameNum);
         if (frame == null) {
             if (pending.size() >= MAX_PENDING) dropOldest();
-            frame = new Pending(keyFrame);
+            frame = new Pending(keyFrame, streamStart);
             pending.put(frameNum, frame);
         }
         return frame;
     }
 
+    /**
+     * A key frame numbered 1 that isn't under way yet is the first frame of a (re)started stream - unless the last
+     * frame released sits right under the top of the counter: then it is the counter wrapping (phone apps before
+     * pc.26 wrap to 1; pc.26 wraps to 2).
+     */
+    private boolean isStreamStart(boolean keyFrame, short frameNum) {
+        return keyFrame && frameNum == 1 && !pending.containsKey(frameNum)
+                && (lastReleased == null || !isOlder(lastReleased, (short) 1));
+    }
+
     private Frame finish(short frameNum, Pending frame, boolean keyFrame) {
-        if (!frame.complete() && frame.parity != null && frame.recover()) recoveredFrames++;
+        if (!frame.complete() && (frame.parity != null || frame.groupParity != null) && frame.recover()) recoveredFrames++;
         if (!frame.complete() && !(frame.startReceived && frame.endReceived)) return null;
         // bad coverage mode: an incomplete frame waits for its parity (right behind it) or a key frame's second copy;
         // if neither makes it whole, it goes out damaged when the next frame completes (retireOlder)
-        if (!frame.complete() && waitForWholeKeyFrames && (frame.keyFrame || frame.parity == null)) return null;
+        if (!frame.complete() && waitForWholeKeyFrames && (frame.keyFrame || !frame.parityIn())) return null;
         pending.remove(frameNum);
         retireOlder(frameNum, keyFrame);
         boolean damaged = !frame.complete();
@@ -241,7 +318,7 @@ public class FrameAssembler {
     }
 
     private Frame release(Pending frame, short frameNum, boolean damaged) {
-        return new Frame(frame.assemble(), frame.keyFrame, frameNum, damaged, frame.keyFrame && frameNum == 1, now);
+        return new Frame(frame.assemble(), frame.keyFrame, frameNum, damaged, frame.streamStart, now);
     }
 
     /**

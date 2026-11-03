@@ -22,6 +22,14 @@
  *  PC's sequence byte keeping a late frame from going out after a newer one; a PC that restarts gets its session
  *  back at once (receiverRun). pc.21: the PC's PowerMode packet and the PHONE_POWER record (PowerMode); no sticks
  *  and no StartVideo in standby or deep sleep; the socket closes and opens again for deep sleep's checks.
+ *  pc.26 (weak reception): a Connect from the pilot's own address and port starts a new session at once (the PC
+ *  thinks the link is lost; before, it was dropped until this side's 4 s timer ran out); another PC takes over
+ *  only after 10 s of silence and never while armed; the stick sequence is 16 bits wide and starts over after
+ *  300 ms without a frame; a video watchdog restarts the camera and encoder when they give nothing for 2 s; key
+ *  frames leave at twice the bitrate, not in a burst; a parity packet per group of 8 packets (VIDEO_PARITY_GROUP);
+ *  H.264 on request (profile bit 2); SET_BITRATE sets the step outright; the telemetry goes out in one datagram
+ *  per 30 ms and the PHONE_STATE record ten times a second; the frame counter wraps to 2, so frame 1 always means
+ *  a restarted stream; the camera part of a config change runs on the video starter thread, like StartVideo.
  */
 
 package de.droiddrone.flight;
@@ -82,14 +90,27 @@ public class Udp {
     private final Object udpSync = new Object();
     /** When the pilot PC was last heard from (any packet from its address and port). */
     private volatile long lastPilotPacketMs;
-    /** A pilot silent for this long is not announced to a Connect from elsewhere (PILOT_AT): that PC takes over. */
-    private static final long PILOT_ALIVE_MS = 1000;
     /**
-     * The sequence byte of the last stick frame taken (pc.19: [24][count u8][count x i16][seq u8]; a PC that knows
-     * only the older layout sends none). Only read and written on the receive thread.
+     * A pilot silent for this long is not announced to a Connect from elsewhere (PILOT_AT): that PC takes over.
+     * pc.26: 10 s, was 1 s - a routine 4G fade of 1.5 s handed the drone to any second PC left on its CONNECT
+     * screen, and the real pilot became a spectator for good. Never while the flight controller reports armed.
+     */
+    private static final long PILOT_ALIVE_MS = 10_000;
+    /**
+     * The sequence of the last stick frame taken (pc.19: [24][count u8][count x i16][seq u8]; pc.26: [seq u16] from
+     * a PC that knows this build; a PC that knows only the older layout sends none). Only read and written on the
+     * receive thread.
      */
     private volatile int lastRcSeq = -1; // volatile: the stats thread reports it
     private boolean rcSeqValid;
+    /** When the last stick frame was taken; the sequence rule starts over after RC_SEQ_RESET_MS without one. */
+    private long lastRcTakenMs;
+    /**
+     * No stick frame taken for this long: the next one is taken whatever its sequence. With the 8-bit sequence a
+     * frame 128 or more behind looked newer (a cell handover flushing old packets), and the fresh frames after it
+     * were dropped until the count passed it; with this the loss is bounded.
+     */
+    private static final long RC_SEQ_RESET_MS = 300;
     /** The channels of the last stick frame, filled in place on the receive thread: no allocation per frame. */
     private final short[] rcFrame = new short[FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT];
     /** A PC that tried to connect with another key (shown on the screen): its address and when. */
@@ -118,6 +139,32 @@ public class Udp {
      */
     private static final byte VIDEO_PROFILE = 0x6B;
     private volatile boolean keyFramesTwice;
+    /** Profile bit 1 (pc.26): a parity packet per group of PARITY_GROUP packets instead of one per frame. */
+    private volatile boolean groupParity;
+    /** Profile bit 2 (pc.26): H.264 wanted (FFmpeg conceals a damaged H.264 frame; its H.265 decoder shows the damage). */
+    private volatile boolean profileAvc;
+    /** What the PC's StartVideo asked for; the profile may override it (profileAvc). */
+    private volatile boolean defaultHevc = true;
+    /**
+     * [0x71][frame number i16][frame size i32][key frame u8][group u8][XOR of the group's packet payloads, each
+     * zero-padded to the longest] (pc.26). Packets of a frame are grouped PARITY_GROUP at a time: any one lost
+     * packet per group is rebuilt by the PC, where one parity over a 40-packet key frame rarely saved it.
+     */
+    private static final byte VIDEO_PARITY_GROUP = 0x71;
+    static final int PARITY_GROUP = 8;
+    /** [0x72][step u8] (pc.26): the PC sets the encoder's bitrate step outright (StreamEncoder.baseBitRates). */
+    private static final byte SET_BITRATE = 0x72;
+    /**
+     * The video watchdog (pc.26): the encoder gave no output for this long while the stream should run - the camera
+     * was taken away (heat, another app) or the encoder died - so the camera and encoder are started again. Before,
+     * a dead camera meant a black picture for the rest of the flight (the PC asks for the stream again only until it
+     * has the config). At most every VIDEO_RESTART_MIN_GAP_MS.
+     */
+    private static final long VIDEO_DEAD_MS = 2000;
+    private static final long VIDEO_RESTART_MIN_GAP_MS = 5000;
+    private volatile long lastVideoRestartMs;
+    /** The watchdog is restarting the video: PHONE_STATE says so (STATE_VIDEO_RESTARTING). */
+    private volatile boolean videoRestarting;
     /**
      * [0x6C][frame number i16][frame size i32][key frame u8][XOR of the frame's packet payloads, each zero-padded to
      * the longest]. A weak 4G link (2026-11-01) lost a packet in about one frame of five, at random: with this the PC
@@ -135,6 +182,16 @@ public class Udp {
         packetData.daos.writeShort(frameNum);
         packetData.daos.writeInt(size);
         packetData.daos.writeByte(keyFrame ? 1 : 0);
+        packetData.daos.write(parity, 0, parity.length);
+        udpSender.sendPacket(packetData.getData());
+    }
+
+    private void sendGroupParity(short frameNum, int size, boolean keyFrame, int group, byte[] parity) throws Exception {
+        UdpPacketData packetData = new UdpPacketData(VIDEO_PARITY_GROUP);
+        packetData.daos.writeShort(frameNum);
+        packetData.daos.writeInt(size);
+        packetData.daos.writeByte(keyFrame ? 1 : 0);
+        packetData.daos.writeByte(group);
         packetData.daos.write(parity, 0, parity.length);
         udpSender.sendPacket(packetData.getData());
     }
@@ -268,6 +325,14 @@ public class Udp {
                             lastPilotPacketMs = System.currentTimeMillis();
                             lastPcIp = udpSender.getIp(); // kept across deep sleep: the check window's hello goes there
                             lastPcPort = udpSender.getPort();
+                            if (d[0] == UdpCommon.Connect && keyMatches(d, len, 4)) {
+                                // pc.26: the pilot itself asks to connect again - it counts the link as lost (2 s of
+                                // silence from here). A new session now; before, the Connect was dropped until this
+                                // side's own 4 s timer ran out, and the PC sat without its handshake meanwhile
+                                log("The pilot connects again (its link was lost): a new session");
+                                newSession();
+                                buffer = receiverBuffer;
+                            }
                         } else {
                             if (!otherPcWhileConnected(receiverPacket, d, len)) continue;
                             buffer = receiverBuffer; // the new session
@@ -318,7 +383,14 @@ public class Udp {
         int count = d[1] & 0xff;
         if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
         int remaining = len - 2;
-        if (remaining == count * 2 + 1) {
+        long now = System.currentTimeMillis();
+        if (rcSeqValid && now - lastRcTakenMs > RC_SEQ_RESET_MS) rcSeqValid = false; // a gap: whatever comes next is newest
+        if (remaining == count * 2 + 2) { // pc.26: a 16-bit sequence
+            int seq = ((d[len - 2] & 0xff) << 8) | (d[len - 1] & 0xff);
+            if (rcSeqValid && (short) (seq - lastRcSeq) <= 0) return;
+            lastRcSeq = seq;
+            rcSeqValid = true;
+        } else if (remaining == count * 2 + 1) {
             int seq = d[len - 1] & 0xff;
             if (rcSeqValid && (byte) (seq - lastRcSeq) <= 0) return;
             lastRcSeq = seq;
@@ -328,6 +400,7 @@ public class Udp {
         } else {
             return;
         }
+        lastRcTakenMs = now;
         int at = 2;
         for (int i = 0; i < count; i++, at += 2) {
             rcFrame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
@@ -346,7 +419,8 @@ public class Udp {
      * @return true if the packet belongs to a (new) session and is to be taken
      */
     private boolean otherPcWhileConnected(DatagramPacket packet, byte[] d, int len) {
-        boolean pilotAlive = System.currentTimeMillis() - lastPilotPacketMs < PILOT_ALIVE_MS;
+        // armed: the pilot's silence is a fade, not an absence - nobody takes the drone over in the air
+        boolean pilotAlive = System.currentTimeMillis() - lastPilotPacketMs < PILOT_ALIVE_MS || msp.isArmed();
         if (d[0] == UdpCommon.Connect) {
             if (!keyMatches(d, len, 4)) {
                 noteWrongKey(packet);
@@ -387,16 +461,23 @@ public class Udp {
         wrongKeyAt = now;
     }
 
+    /** The telemetry records are gathered this long and go out in one datagram (pc.26; was one per 10 ms tick). */
+    private static final long TELEMETRY_TICK_MS = 30;
+
     private final Runnable telemetrySenderRun = new Runnable() {
         public void run() {
             final int id = udpThreadsId;
             log("Start telemetry sender thread - OK");
             long nextStats = 0;
+            long nextTelemetry = 0;
             int statsSent = 0;
             while (id == udpThreadsId) {
                 try {
-                    sendTelemetryData();
                     long now = System.currentTimeMillis();
+                    if (now >= nextTelemetry) {
+                        nextTelemetry = now + TELEMETRY_TICK_MS;
+                        sendTelemetryData();
+                    }
                     if (now >= nextStats && isConnected()) {
                         nextStats = now + 100;
                         UdpPacketData stats = new UdpPacketData(UdpCommon.TelemetryData);
@@ -410,7 +491,8 @@ public class Udp {
                             android.location.Location l = PhoneLocation.last();
                             if (l != null) PcLinkStats.writePhonePositionTo(stats.daos, l);
                         }
-                        if (statsSent % 10 == 3) PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), lastRcSeq); // pc.19, once a second
+                        // pc.19, once a second; pc.26: every time - the PC's NO STICKS AT FC alarm reads the write age
+                        PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), lastRcSeq);
                         // pc.21, once a second and three times when the mode changes; always the last record: a
                         // pc.20 PC stops reading at it
                         if (statsSent % 10 == 7 || PowerMode.burstDue(now)) PowerMode.writeRecordTo(stats.daos);
@@ -447,6 +529,11 @@ public class Udp {
             }
         }
     };
+
+    /** The codec to encode with: what the PC's StartVideo asked for, unless its profile asks for H.264 (pc.26). */
+    private boolean wantedHevc() {
+        return defaultHevc && !profileAvc;
+    }
 
     private void startVideoStream(boolean isHevc) {
         if (isVideoStarting) return;
@@ -487,6 +574,33 @@ public class Udp {
         videoSenderThread.setName("videoSenderThread");
         videoSenderThread.start();
         isVideoStarting = false;
+    }
+
+    /**
+     * The video watchdog's restart (pc.26), on the video starter thread: the camera and encoder closed and started
+     * again, as a Disconnect followed by a StartVideo would.
+     */
+    private void restartVideo(String why) {
+        long now = System.currentTimeMillis();
+        if (now - lastVideoRestartMs < VIDEO_RESTART_MIN_GAP_MS || PowerMode.mode() != PowerMode.NORMAL || !isConnected()) return;
+        lastVideoRestartMs = now;
+        videoRestarting = true;
+        log("Video restart: " + why);
+        videoStarter.execute(() -> {
+            try {
+                stopAudioVideo();
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ignored) {
+                }
+                startVideoStream(wantedHevc());
+                if (config.isSendAudioStream()) startAudioStream();
+            } catch (RuntimeException e) {
+                log("Video restart error: " + e);
+            } finally {
+                videoRestarting = false;
+            }
+        });
     }
 
     private void stopAudioVideo(){
@@ -604,6 +718,7 @@ public class Udp {
         if (serialStatus == Serial.STATUS_USB_PERMISSION_DENIED) flags |= PcLinkStats.STATE_USB_PERMISSION_DENIED;
         Camera camera = cameraManager.getCamera();
         if (camera != null && camera.isOpened(config.getCameraId())) flags |= PcLinkStats.STATE_CAMERA_OPEN;
+        if (videoRestarting) flags |= PcLinkStats.STATE_VIDEO_RESTARTING;
         return flags;
     }
 
@@ -631,10 +746,16 @@ public class Udp {
                     break;
                 }
                 videoRefusedSaid = false;
+                defaultHevc = isHevc;
                 videoStarter.execute(() -> {
-                    startVideoStream(isHevc);
+                    startVideoStream(wantedHevc());
                     if (config.isSendAudioStream()) startAudioStream();
                 });
+                break;
+            }
+            case SET_BITRATE:
+            {
+                if (buffer.getRemaining() > 0) streamEncoder.setBitRateIndex(buffer.readUnsignedByteAsInt());
                 break;
             }
             case UdpCommon.GetVideoConfig:
@@ -645,9 +766,39 @@ public class Udp {
             }
             case VIDEO_PROFILE:
             {
-                boolean twice = buffer.getRemaining() > 0 && (buffer.readByte() & 1) != 0;
-                if (twice != keyFramesTwice) log("Video profile: key frames " + (twice ? "twice" : "once"));
+                int flags = buffer.getRemaining() > 0 ? buffer.readByte() : 0;
+                boolean twice = (flags & 1) != 0;
+                boolean groups = (flags & 2) != 0;
+                boolean avc = (flags & 4) != 0;
+                if (twice != keyFramesTwice || groups != groupParity || avc != profileAvc) {
+                    log("Video profile: key frames " + (twice ? "twice" : "once") + ", parity " + (groups ? "per group" : "per frame")
+                            + ", " + (avc ? "H.264" : "the codec asked for"));
+                }
                 keyFramesTwice = twice;
+                groupParity = groups;
+                boolean wasHevc = wantedHevc();
+                profileAvc = avc;
+                // the codec changed while the stream runs and no config change (which restarts the camera anyway, with
+                // the codec read then) is on its way: the encoder is started again with the new one
+                if (wasHevc != wantedHevc() && (videoInitialFrame != null || cameraManager.getCamera().isStarted())
+                        && !config.isCameraConfigChanged() && !isCameraRestarting) {
+                    final boolean hevc = wantedHevc();
+                    videoStarter.execute(() -> {
+                        try { // the PC sends the profile right before a config: that one restarts the camera itself
+                            Thread.sleep(150);
+                        } catch (InterruptedException ignored) {
+                        }
+                        if (isCameraRestarting || config.isCameraConfigChanged() || hevc != wantedHevc()) return;
+                        Camera camera = cameraManager.getCamera();
+                        if (camera instanceof InternalCamera && camera.isOpened(config.getCameraId()) && !mp4Recorder.isRecording()) {
+                            ((InternalCamera) camera).stopSession();
+                            startVideoStream(hevc); // on the open camera, like a size change
+                        } else {
+                            stopAudioVideo();
+                            startVideoStream(hevc);
+                        }
+                    });
+                }
                 break;
             }
             case KEY_FRAME_REQUEST:
@@ -746,10 +897,13 @@ public class Udp {
                     sendConfigReceived();
                     final boolean sizeOnly = oldId != null && oldId.equals(config.getCameraId()) && oldFpsMin == config.getCameraFpsMin()
                             && oldFpsMax == config.getCameraFpsMax() && oldUsb == config.isUseUsbCamera();
+                    // pc.26: the camera part on the video starter thread, in line with StartVideo and the watchdog
+                    // (two threads restarted the encoder at once before); the rest at once, on a thread of its own
                     Thread t1 = new Thread(() -> {
-                        checkConfigUpdate(oldCamera, sizeOnly);
+                        checkConfigUpdate(oldCamera, sizeOnly, false);
                     });
                     t1.start();
+                    if (config.isCameraConfigChanged()) videoStarter.execute(() -> checkConfigUpdate(oldCamera, sizeOnly, true));
                 }else if (resCode == -1){
                     sendVersionMismatch();
                 }
@@ -769,10 +923,7 @@ public class Udp {
                 if (isCameraRestarting) break;
                 final Camera oldCamera = cameraManager.getCamera();
                 config.changeCamera();
-                Thread t1 = new Thread(() -> {
-                    checkConfigUpdate(oldCamera);
-                });
-                t1.start();
+                videoStarter.execute(() -> checkConfigUpdate(oldCamera));
                 break;
             }
             case UdpCommon.MavlinkRawPacket:
@@ -800,7 +951,8 @@ public class Udp {
     }
 
     private void checkConfigUpdate(Camera camera){
-        checkConfigUpdate(camera, false);
+        checkConfigUpdate(camera, false, false);
+        checkConfigUpdate(camera, false, true);
     }
 
     /**
@@ -814,7 +966,7 @@ public class Udp {
         isCameraRestarting = true;
         try {
             long start = System.currentTimeMillis();
-            boolean isHevc = MediaCommon.hevcCodecMime.equals(streamEncoder.getCurrentCodecType());
+            boolean isHevc = wantedHevc(); // pc.26: the profile's codec, not the one running (bad coverage mode: H.264)
             ((InternalCamera) camera).stopSession();
             startVideoStream(isHevc); // initialize (the new size), then on the open camera: a new encoder and session
             log("Picture size changed on the open camera in " + (System.currentTimeMillis() - start) + " ms");
@@ -826,7 +978,15 @@ public class Udp {
         return true;
     }
 
-    private void checkConfigUpdate(Camera camera, boolean sizeOnly){
+    /**
+     * @param cameraPart the camera's part (on the video starter thread), or everything else (a thread of its own):
+     *                   the two halves of upstream's one method, see the Config case
+     */
+    private void checkConfigUpdate(Camera camera, boolean sizeOnly, boolean cameraPart){
+        if (cameraPart) {
+            checkCameraConfigUpdate(camera, sizeOnly);
+            return;
+        }
         if (config.isRcConfigChanged()) {
             msp.setRcMinPeriod();
             mavlink.setRcMinPeriod();
@@ -844,6 +1004,22 @@ public class Udp {
             }
             config.mavlinkUdpBridgeConfigUpdated();
         }
+        if (config.isRecorderConfigChanged()) {
+            boolean isRecording = mp4Recorder.isRecording();
+            if (isRecording) {
+                mp4Recorder.stopRecording();
+                startStopRecording();
+            }
+            config.recorderConfigUpdated();
+        }
+        if (config.isAudioStreamConfigChanged()){
+            stopAudioStream();
+            if (config.isSendAudioStream()) startAudioStream();
+            config.audioStreamConfigUpdated();
+        }
+    }
+
+    private void checkCameraConfigUpdate(Camera camera, boolean sizeOnly){
         if (config.isCameraConfigChanged()) {
             // DRAUPNE Link: a camera restart still under way: wait for it (upstream marked the change done without
             // making it - the picture size then stayed wrong until the next change, seen 2026-11-01)
@@ -857,12 +1033,21 @@ public class Udp {
                 log("Camera restart flag stuck: cleared");
                 isCameraRestarting = false;
             }
+            // pc.26: a video start still under way (the camera opening for the PC's StartVideo): wait for it, or the
+            // new size is marked done while the camera opens at the old one - every ROBUST session ran at the full
+            // size that way (the PC's first config said 1280x720, the small size came 0.1 s later)
+            for (int i = 0; i < 50 && (isVideoStarting || camera.isOpening()) && !camera.isStarted(); i++) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ignored) {
+                }
+            }
             if (sizeOnly && (camera.isStarted() || videoInitialFrame != null) && resizeOnOpenCamera(camera)) {
                 // done without closing the camera
             } else if ((camera.isStarted() || videoInitialFrame != null) && !isCameraRestarting){
                 isCameraRestarting = true;
                 boolean isRecording = mp4Recorder.isRecording();
-                boolean isHevc = MediaCommon.hevcCodecMime.equals(streamEncoder.getCurrentCodecType());
+                boolean isHevc = wantedHevc();
                 try {
                     if (isRecording) mp4Recorder.stopRecording(camera);
                     stopAudioVideo();
@@ -900,19 +1085,6 @@ public class Udp {
             }
             config.cameraConfigUpdated();
         }
-        if (config.isRecorderConfigChanged()) {
-            boolean isRecording = mp4Recorder.isRecording();
-            if (isRecording) {
-                mp4Recorder.stopRecording();
-                startStopRecording();
-            }
-            config.recorderConfigUpdated();
-        }
-        if (config.isAudioStreamConfigChanged()){
-            stopAudioStream();
-            if (config.isSendAudioStream()) startAudioStream();
-            config.audioStreamConfigUpdated();
-        }
     }
 
     private void startStopRecording() {
@@ -932,23 +1104,36 @@ public class Udp {
         public void run() {
             final int id = videoSenderThreadId;
             log("Video sender thread is running");
+            long lastOutput = System.currentTimeMillis() + 3000; // the camera gets a moment to open and deliver
             while (id == videoSenderThreadId) {
                 try {
                     // DRAUPNE Link: waits for the encoder (upstream polled in a tight loop: a full core all flight)
                     MediaCodecBuffer buf = streamEncoder.videoStreamOutputBuffer.poll(100, TimeUnit.MILLISECONDS);
-                    if (buf == null) continue;
+                    if (buf == null) {
+                        // pc.26: the watchdog - nothing from the encoder for VIDEO_DEAD_MS while it should run
+                        if (System.currentTimeMillis() - lastOutput > VIDEO_DEAD_MS && id == videoSenderThreadId) {
+                            lastOutput = System.currentTimeMillis();
+                            restartVideo("no encoder output for " + VIDEO_DEAD_MS + " ms");
+                        }
+                        continue;
+                    }
+                    lastOutput = System.currentTimeMillis();
+                    boolean keyFrame = false;
                     switch (buf.flags){
                         case MediaCodec.BUFFER_FLAG_CODEC_CONFIG:
                             sendVideoInitialFrame(buf.data);
                             break;
                         case MediaCodec.BUFFER_FLAG_KEY_FRAME:
                             sendKeyFrame(buf.data);
+                            keyFrame = true;
                             break;
                         default:
                             sendVideoFrame(buf.data);
                             break;
                     }
-                    if (streamEncoder.videoStreamOutputBuffer.size() > Math.round(5 * cameraManager.getCamera().getCurrentFps() / 30f)){
+                    // a queue behind a key frame is the key frame's own doing (paced over a few frame times): judged
+                    // after the next frame; a queue behind a plain frame means the uplink can't keep up
+                    if (!keyFrame && streamEncoder.videoStreamOutputBuffer.size() > Math.round(5 * cameraManager.getCamera().getCurrentFps() / 30f)){
                         streamEncoder.changeBitRate(false);
                     }
                 } catch (Exception e) {
@@ -1359,57 +1544,82 @@ public class Udp {
         }
     }
 
+    /** The next frame number: 1..32767, wrapping to 2 (pc.26) - number 1 is a (re)started stream's first frame, only. */
+    private void nextFrameNum() {
+        if (videoFrameNum >= Short.MAX_VALUE) videoFrameNum = 1;
+        videoFrameNum++;
+    }
+
     private void sendKeyFrame(byte[] buf) {
         if (socket == null || socket.isClosed()) return;
-        if (videoFrameNum == Short.MAX_VALUE) videoFrameNum = 0;
-        videoFrameNum++;
+        nextFrameNum();
         int size = buf.length;
-        long gapNs = packetGapNs(size);
         long start = System.nanoTime();
         // DRAUPNE Link: in bad coverage mode the whole key frame goes twice: a packet the 4G uplink dropped from the
         // first copy usually comes in the second (the PC waits for it)
-        byte[] parity = keyFramesTwice ? new byte[UdpCommon.packetLength - 9] : null;
         for (int copy = 0; copy < (keyFramesTwice ? 2 : 1); copy++) {
-            int offset = 0;
-            while (offset < size && udpSender != null) {
-                try {
-                    synchronized (udpSync) {
-                        UdpPacketData packetData = new UdpPacketData(UdpCommon.KeyFrame);
-                        packetData.daos.writeShort(videoFrameNum);
-                        packetData.daos.writeInt(offset);
-                        int headerSize = 9;
-                        if (offset == 0) {
-                            packetData.daos.writeInt(size);
-                            headerSize += 4;
-                        }
-                        int dataSize = UdpCommon.packetLength - headerSize;
-                        int segment = offset;
-                        if (size - offset <= dataSize) {
-                            packetData.daos.write(buf, offset, size - offset);
-                            offset = size;
-                        } else {
-                            packetData.daos.write(buf, offset, dataSize);
-                            offset += dataSize;
-                        }
-                        if (parity != null && copy == 0) addParity(parity, buf, segment, offset - segment);
-                        udpSender.sendPacket(packetData.getData());
-                        if (offset < size) udpSync.wait(gapNs / 1_000_000L, (int) (gapNs % 1_000_000L));
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    log("sendKeyFrame error: " + e);
-                }
-            }
-            if (parity != null && copy == 0 && udpSender != null) {
-                try {
-                    sendParity((short) videoFrameNum, size, true, parity);
-                } catch (Exception e) {
-                    log("sendParity error: " + e);
-                }
-            }
+            sendFragments(UdpCommon.KeyFrame, buf, true, copy == 0 && keyFramesTwice);
         }
         long timeMs = (System.nanoTime() - start) / 1000000;
         processFrameSendTime(timeMs);
+    }
+
+    /**
+     * A frame's packets, paced (packetGapNs), with its parity (bad coverage mode: one packet per PARITY_GROUP
+     * packets, pc.26, or one for the whole frame for a PC that asked for that only).
+     */
+    private void sendFragments(byte packetName, byte[] buf, boolean keyFrame, boolean withParity) {
+        int size = buf.length;
+        long gapNs = packetGapNs(size, keyFrame);
+        int offset = 0;
+        int packet = 0;
+        byte[] parity = withParity ? new byte[UdpCommon.packetLength - 9] : null;
+        boolean parityUsed = false;
+        while (offset < size && udpSender != null) {
+            try {
+                synchronized (udpSync) {
+                    UdpPacketData packetData = new UdpPacketData(packetName);
+                    packetData.daos.writeShort(videoFrameNum);
+                    packetData.daos.writeInt(offset);
+                    int headerSize = 9;
+                    if (offset == 0) {
+                        packetData.daos.writeInt(size);
+                        headerSize += 4;
+                    }
+                    int dataSize = UdpCommon.packetLength - headerSize;
+                    int segment = offset;
+                    if (size - offset <= dataSize) {
+                        packetData.daos.write(buf, offset, size - offset);
+                        offset = size;
+                    } else {
+                        packetData.daos.write(buf, offset, dataSize);
+                        offset += dataSize;
+                    }
+                    if (parity != null) {
+                        addParity(parity, buf, segment, offset - segment);
+                        parityUsed = true;
+                    }
+                    udpSender.sendPacket(packetData.getData());
+                    packet++;
+                    if (parity != null && groupParity && (packet % PARITY_GROUP == 0 || offset >= size)) {
+                        sendGroupParity((short) videoFrameNum, size, keyFrame, (packet - 1) / PARITY_GROUP, parity);
+                        java.util.Arrays.fill(parity, (byte) 0);
+                        parityUsed = false;
+                    }
+                    if (offset < size) udpSync.wait(gapNs / 1_000_000L, (int) (gapNs % 1_000_000L));
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                log("sendFragments error: " + e);
+            }
+        }
+        if (parity != null && !groupParity && parityUsed && udpSender != null) {
+            try {
+                sendParity((short) videoFrameNum, size, keyFrame, parity);
+            } catch (Exception e) {
+                log("sendParity error: " + e);
+            }
+        }
     }
 
     /**
@@ -1430,61 +1640,29 @@ public class Udp {
 
     /**
      * DRAUPNE Link: the gap between a frame's packets. Upstream sent them 0.2 ms apart: a key frame left as one burst
-     * of 20-100 KB, and a weak 4G uplink dropped its end (the bottom of the picture went grey). Now at four times the
-     * bitrate (at least 4 Mbit/s), but a frame's packets spread over half a frame time at most, so frames never queue.
+     * of 20-100 KB, and a weak 4G uplink dropped its end (the bottom of the picture went grey). A plain frame goes at
+     * four times the bitrate (at least 4 Mbit/s), its packets spread over half a frame time at most, so frames never
+     * queue. A key frame (pc.26) goes at twice the bitrate (at least 1 Mbit/s), spread over up to KEY_FRAME_TIMES
+     * frame times: at the old pace a 40 KB key frame left at about 19 Mbit/s into an uplink of half a megabit, and
+     * the pongs the PC judges the link by sat behind it in the modem's queue.
      */
-    private long packetGapNs(int frameBytes){
+    private long packetGapNs(int frameBytes, boolean keyFrame){
         int packets = Math.max(1, (frameBytes + UdpCommon.packetLength - 1) / UdpCommon.packetLength);
-        long paceBps = Math.max(4_000_000L, 4L * streamEncoder.getTargetBitRate());
+        long paceBps = keyFrame ? Math.max(1_000_000L, 2L * streamEncoder.getTargetBitRate())
+                : Math.max(4_000_000L, 4L * streamEncoder.getTargetBitRate());
         long gap = UdpCommon.packetLength * 8L * 1_000_000_000L / paceBps;
         long frameNs = 1_000_000_000L / Math.max(1, cameraManager.getCamera().getCurrentFps());
-        return Math.max(200_000L, Math.min(gap, frameNs / 2 / packets));
+        long spread = keyFrame ? frameNs * KEY_FRAME_TIMES / packets : frameNs / 2 / packets;
+        return Math.max(200_000L, Math.min(gap, spread));
     }
+
+    /** A key frame's packets are spread over at most this many frame times. */
+    private static final int KEY_FRAME_TIMES = 3;
 
     private void sendVideoFrame(byte[] buf) {
         if (socket == null || socket.isClosed()) return;
-        if (videoFrameNum == Short.MAX_VALUE) videoFrameNum = 0;
-        videoFrameNum++;
-        int size = buf.length;
-        int offset = 0;
-        long gapNs = packetGapNs(size);
-        byte[] parity = keyFramesTwice ? new byte[UdpCommon.packetLength - 9] : null;
-        while (offset < size && udpSender != null) {
-            try {
-                synchronized (udpSync) {
-                    UdpPacketData packetData = new UdpPacketData(UdpCommon.VideoFrame);
-                    packetData.daos.writeShort(videoFrameNum);
-                    packetData.daos.writeInt(offset);
-                    int headerSize = 9;
-                    if (offset == 0) {
-                        packetData.daos.writeInt(size);
-                        headerSize += 4;
-                    }
-                    int dataSize = UdpCommon.packetLength - headerSize;
-                    int segment = offset;
-                    if (size - offset <= dataSize) {
-                        packetData.daos.write(buf, offset, size - offset);
-                        offset = size;
-                    } else {
-                        packetData.daos.write(buf, offset, dataSize);
-                        offset += dataSize;
-                    }
-                    if (parity != null) addParity(parity, buf, segment, offset - segment);
-                    udpSender.sendPacket(packetData.getData());
-                    if (offset < size) udpSync.wait(gapNs / 1_000_000L, (int) (gapNs % 1_000_000L));
-                }
-            } catch (Exception e) {
-                e.printStackTrace();
-                log("sendVideoFrame error: " + e);
-            }
-        }
-        if (parity != null && udpSender != null) {
-            try {
-                sendParity((short) videoFrameNum, size, false, parity);
-            } catch (Exception e) {
-                log("sendParity error: " + e);
-            }
-        }
+        nextFrameNum();
+        sendFragments(UdpCommon.VideoFrame, buf, false, keyFramesTwice);
     }
 
     private void sendAudioInitialFrame(byte[] buf) {

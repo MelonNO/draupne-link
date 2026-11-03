@@ -253,12 +253,17 @@ class VideoTest {
         b.onPhoneTarget(6_000_000);
         for (; now[0] < 20_000; now[0] += 33) b.onFrame(now[0] % 2000 == 0, now[0], 30, 80);
         long start = now[0];
-        for (int ping = 400; now[0] < start + 2500; now[0] += 33, ping += 100) b.onFrame(false, now[0], 30, ping);
+        int ping = 400;
+        for (; now[0] < start + 1500; now[0] += 33, ping += 100) b.onFrame(false, now[0], 30, ping);
         assertFalse(downAt.isEmpty(), "stepped down");
         assertTrue(downAt.get(0) - start <= BitrateControl.SPIKE_HOLD_MS + 50, "within ~0.3 s, was " + (downAt.get(0) - start));
-        assertTrue(downAt.size() >= 3, "again every second while it lasts: " + downAt.size());
+        assertEquals(BitrateControl.FLOOR_STEP, b.step(), "to the floor in one go (1.0.33)");
+        assertEquals(1, downAt.size());
+        for (; now[0] < start + 3500; now[0] += 33, ping += 100) b.onFrame(false, now[0], 30, ping);
+        assertTrue(downAt.size() >= 2, "under the floor, a step a second, once the queue has held " + BitrateControl.SPIKE_DEEP_MS + " ms: " + downAt.size());
+        assertTrue(b.step() < BitrateControl.FLOOR_STEP);
         assertTrue(b.isCongested(now[0]), "congested: no key frame requests now");
-        for (; now[0] < start + 2500 + BitrateControl.CONGESTED_FOR_MS + 100; now[0] += 33) b.onFrame(false, now[0], 30, 80);
+        for (; now[0] < start + 3500 + BitrateControl.CONGESTED_FOR_MS + 100; now[0] += 33) b.onFrame(false, now[0], 30, 80);
         assertFalse(b.isCongested(now[0]), "cleared");
     }
 
@@ -272,8 +277,8 @@ class VideoTest {
         changes.clear();
         b.onPhoneTarget(1_000_000); // the phone reports it is at the floor when the queue starts filling
         long start = now[0];
-        for (; now[0] < start + 1500; now[0] += 33) b.onFrame(false, now[0], 30, 2000);
-        assertTrue(b.step() < BitrateControl.FLOOR_STEP, "below 1 Mbit/s while the queue fills");
+        for (; now[0] < start + BitrateControl.SPIKE_DEEP_MS + 1500; now[0] += 33) b.onFrame(false, now[0], 30, 2000);
+        assertTrue(b.step() < BitrateControl.FLOOR_STEP, "below 1 Mbit/s while the queue stays full");
         for (int s = 0; s < 4; s++) b.onReceivedRate(0.2, now[0] + s * 1000L);
         assertFalse(changes.contains(true), "no 'ask it up' while congested");
     }
@@ -282,16 +287,43 @@ class VideoTest {
     void neverAsksAboveTheTopAndStepsDownToIt() {
         List<Boolean> changes = new ArrayList<>();
         BitrateControl b = new BitrateControl(changes::add);
-        b.setMaxStep(4);
+        b.setMaxStep(5);
         long t = 0;
         for (; t < 60_000; t += 33) b.onFrame(t % 2000 == 0, t, 30, 80);
-        assertEquals(4, b.step(), "raised up to the top only");
+        assertEquals(5, b.step(), "raised up to the top only");
         long ups = changes.stream().filter(c -> c).count();
         for (; t < 120_000; t += 33) b.onFrame(t % 2000 == 0, t, 30, 80);
         assertEquals(ups, changes.stream().filter(c -> c).count(), "no more asks at the top");
-        b.setMaxStep(2); // bad coverage mode
+        b.setMaxStep(3); // bad coverage mode
         for (long end = t + 3000; t < end; t += 33) b.onFrame(false, t, 30, 80);
-        assertEquals(2, b.step(), "down to 1 Mbit/s, a step a second");
+        assertEquals(3, b.step(), "down to 1 Mbit/s, a step a second");
+    }
+
+    /** A jittery 4G link (pings all over 80-400 ms) is not a queue: no stepping down, and raises still come. */
+    @Test
+    void jitterAloneIsNoSpikeAndDoesNotPinTheBitrate() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        b.onPhoneTarget(2_000_000);
+        java.util.Random r = new java.util.Random(7);
+        long t = 0;
+        for (int i = 0; i < 30 * 40; i++, t += 33) b.onFrame(i % 60 == 0, t, 30, 80 + r.nextInt(320)); // 40 s
+        assertFalse(changes.contains(false), "never stepped down on jitter: " + changes);
+        assertTrue(changes.contains(true), "raised while it holds");
+    }
+
+    /** A ping a full second over the quietest is a queue whatever the jitter (a steady 2 s ping is no "typical"). */
+    @Test
+    void aSteadyHugePingIsAQueue() {
+        List<Boolean> changes = new ArrayList<>();
+        BitrateControl b = new BitrateControl(changes::add);
+        b.onPhoneTarget(4_000_000);
+        long t = 0;
+        for (; t < 20_000; t += 33) b.onFrame(false, t, 30, 80);
+        changes.clear();
+        for (long end = t + 1000; t < end; t += 33) b.onFrame(false, t, 30, 2000);
+        assertTrue(changes.contains(false), "down: " + changes);
+        assertEquals(BitrateControl.FLOOR_STEP, b.step());
     }
 
     @Test
@@ -333,6 +365,86 @@ class VideoTest {
         }
         FrameAssembler.Frame f = a.putParity(false, num, frame.length, parts[parts.length - 1], 0, FrameAssembler.SEGMENT);
         return f != null ? f : out;
+    }
+
+    /** The phone's group parity (pc.26): the XOR of each PARITY_GROUP packets, each padded to SEGMENT. */
+    private static List<byte[]> groupParities(byte[][] parts) {
+        List<byte[]> out = new ArrayList<>();
+        for (int g = 0; g * FrameAssembler.PARITY_GROUP < parts.length - 1; g++) {
+            byte[] parity = new byte[FrameAssembler.SEGMENT];
+            for (int i = g * FrameAssembler.PARITY_GROUP; i < Math.min(parts.length - 1, (g + 1) * FrameAssembler.PARITY_GROUP); i++) {
+                for (int j = 0; j < parts[i].length; j++) parity[j] ^= parts[i][j];
+            }
+            out.add(parity);
+        }
+        return out;
+    }
+
+    /** A 20-packet frame losing one packet in each of its three groups: whole again from the group parities. */
+    @Test
+    void theGroupParityRebuildsOneLostPacketPerGroup() {
+        byte[] frame = bytes(0, FrameAssembler.FIRST_SEGMENT + 18 * FrameAssembler.SEGMENT + 300); // 20 packets
+        byte[][] parts = split(frame);
+        List<byte[]> parities = groupParities(parts);
+        assertEquals(3, parities.size());
+        FrameAssembler a = new FrameAssembler();
+        a.setWaitForWholeKeyFrames(true);
+        java.util.Set<Integer> lost = java.util.Set.of(2, 9, 19);
+        FrameAssembler.Frame out = null;
+        int at = 0;
+        for (int i = 0; i < parts.length - 1; i++) {
+            if (!lost.contains(i)) {
+                FrameAssembler.Frame f = a.put(true, (short) 5, at, at == 0 ? frame.length : 0, parts[i], 0, parts[i].length);
+                if (f != null) out = f;
+            }
+            at += parts[i].length;
+            if (i % FrameAssembler.PARITY_GROUP == FrameAssembler.PARITY_GROUP - 1 || i == parts.length - 2) {
+                FrameAssembler.Frame f = a.putParityGroup(true, (short) 5, frame.length, i / FrameAssembler.PARITY_GROUP,
+                        parities.get(i / FrameAssembler.PARITY_GROUP), 0, FrameAssembler.SEGMENT, 0);
+                if (f != null) out = f;
+            }
+        }
+        assertNotNull(out, "whole once the last group's parity is in");
+        assertFalse(out.damaged());
+        assertArrayEquals(frame, out.data());
+        assertEquals(1, a.getRecoveredFrames());
+    }
+
+    /** Two packets lost in one group: that group can't be rebuilt; the frame goes out damaged with the next one. */
+    @Test
+    void twoLostInOneGroupIsBeyondTheGroupParity() {
+        byte[] frame = bytes(0, FrameAssembler.FIRST_SEGMENT + 10 * FrameAssembler.SEGMENT); // 11 packets, 2 groups
+        byte[][] parts = split(frame);
+        List<byte[]> parities = groupParities(parts);
+        FrameAssembler a = new FrameAssembler();
+        a.setWaitForWholeKeyFrames(true);
+        int at = 0;
+        for (int i = 0; i < parts.length - 1; i++) {
+            if (i != 3 && i != 4) assertNull(a.put(false, (short) 5, at, at == 0 ? frame.length : 0, parts[i], 0, parts[i].length));
+            at += parts[i].length;
+        }
+        assertNull(a.putParityGroup(false, (short) 5, frame.length, 0, parities.get(0), 0, FrameAssembler.SEGMENT, 0), "waits for the last group's parity");
+        FrameAssembler.Frame out = a.putParityGroup(false, (short) 5, frame.length, 1, parities.get(1), 0, FrameAssembler.SEGMENT, 0);
+        assertNotNull(out, "every parity in and still not whole: out damaged now, not with the next frame");
+        assertTrue(out.damaged());
+        assertEquals(0, a.getRecoveredFrames());
+    }
+
+    /** The phone's frame counter wrapping (apps before pc.26 wrap to 1): not a restarted stream. */
+    @Test
+    void aWrappedCounterIsNotARestart() {
+        FrameAssembler a = new FrameAssembler();
+        assertNotNull(a.put(true, (short) 32766, 0, 10, bytes(0, 10), 0, 10));
+        assertNotNull(a.put(false, (short) 32767, 0, 10, bytes(0, 10), 0, 10));
+        FrameAssembler.Frame f = a.put(true, (short) 1, 0, 10, bytes(0, 10), 0, 10);
+        assertNotNull(f);
+        assertFalse(f.streamStart(), "the counter wrapped: the stream goes on");
+        assertNotNull(a.put(false, (short) 2, 0, 10, bytes(0, 10), 0, 10));
+        FrameAssembler b = new FrameAssembler();
+        assertNotNull(b.put(true, (short) 500, 0, 10, bytes(0, 10), 0, 10));
+        FrameAssembler.Frame restart = b.put(true, (short) 1, 0, 10, bytes(0, 10), 0, 10);
+        assertNotNull(restart);
+        assertTrue(restart.streamStart(), "from 500 to 1: a restart");
     }
 
     @Test
@@ -391,13 +503,38 @@ class VideoTest {
     void thePhonesOwnReportSetsTheStep() {
         BitrateControl b = new BitrateControl(c -> { });
         b.onPhoneTarget(500_000);
-        assertEquals(1, b.step());
+        assertEquals(2, b.step());
+        b.onPhoneTarget(150_000);
+        assertEquals(0, b.step(), "the survival tier's floor (phone app pc.26)");
         b.onPhoneTarget(6_000_000);
-        assertEquals(5, b.step());
+        assertEquals(6, b.step());
         b.onPhoneTarget(20_000_000);
-        assertEquals(5, b.step(), "above the table: the top");
+        assertEquals(6, b.step(), "above the table: the top");
         b.onPhoneTarget(-1);
-        assertEquals(5, b.step(), "no report: unchanged");
+        assertEquals(6, b.step(), "no report: unchanged");
+    }
+
+    /** The step outright to the floor (SET_BITRATE) when the queue fills; the relative command for the rest. */
+    @Test
+    void aFillingQueueAsksForTheFloorInOneGo() {
+        List<String> sent = new ArrayList<>();
+        BitrateControl b = new BitrateControl(new BitrateControl.Sink() {
+            @Override
+            public void changeBitRate(boolean increase) {
+                sent.add(increase ? "up" : "down");
+            }
+
+            @Override
+            public void setStep(int step, int from) {
+                sent.add("set " + step + " from " + from);
+            }
+        });
+        b.onPhoneTarget(6_000_000);
+        long t = 0;
+        for (; t < 20_000; t += 33) b.onFrame(false, t, 30, 80);
+        sent.clear();
+        for (long end = t + 600; t < end; t += 33) b.onFrame(false, t, 30, 1500);
+        assertEquals(List.of("set " + BitrateControl.FLOOR_STEP + " from 6"), sent);
     }
 
     @Test

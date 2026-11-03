@@ -10,12 +10,19 @@ import java.util.function.LongSupplier;
  * A radio that comes back within {@link #RESUME_WINDOW_MS} (a USB blip) resumes at once, whatever the throttle, so a
  * glitch in flight doesn't cut the sticks until the pilot pulls the throttle down. After a longer gap Betaflight has
  * failed safe and disarmed (1.5 s by default), and the throttle-low rule applies again. The same when the link to the
- * phone comes up: nothing is sent until it is up and the throttle has been seen low then, and a link that goes down
- * stops the sticks until both again. With Betaflight's arm switch known (Drone setup reads it), it must be off too.
+ * phone first comes up: nothing is sent until it is up and the throttle has been seen low then. With Betaflight's arm
+ * switch known (Drone setup reads it), it must be off too.
  * <p>
- * The one exception: fresh telemetry saying the flight controller is still armed. Then the drone is in the air (the
- * failsafe is GPS rescue and it is flying home, or the loss was shorter than the failsafe's stage 2), and waiting for
- * throttle low and arm off would make the first frame disarm it in flight. The sticks go live at once, as they are.
+ * A link that goes down in flight no longer stops the sticks (1.0.33, {@link ControlLink#sticksWanted}): they keep
+ * going out as they are, and reach the drone the moment its uplink works again - on 4G that is often while the
+ * phone's own packets still don't come through. Betaflight's own rules keep that safe: a drone its failsafe landed
+ * and disarmed won't arm again until the arm switch has been seen off, and never with the throttle up. The sticks
+ * stop only when the pilot asks (STANDBY, DEEP SLEEP), the radio goes, or the link is given up.
+ * <p>
+ * When they did stop and the flight controller says it is still armed (fresh telemetry), the drone is in the air
+ * (the failsafe is GPS rescue and it is flying home, or the loss was shorter than the failsafe's stage 2), and
+ * waiting for throttle low and arm off would make the first frame disarm it in flight. The sticks go live at once,
+ * as they are.
  */
 public class RcSession {
     /** Throttle must be at or below this before RC output starts, so a link-up never spins motors unexpectedly. */
@@ -51,7 +58,7 @@ public class RcSession {
     private volatile Banner banner;
 
     public RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, ArmSwitch armSwitch) {
-        this(link, mapper, events, System::currentTimeMillis, () -> link.getState() == ControlLink.State.READY,
+        this(link, mapper, events, System::currentTimeMillis, link::sticksWanted,
                 () -> link.getTelemetry().isArmedNow(System.currentTimeMillis(), FC_ARMED_FRESH_MS), armSwitch);
     }
 
@@ -85,7 +92,7 @@ public class RcSession {
         if (state == null || lastAxes == null || !java.util.Arrays.equals(state.axes(), lastAxes)) inputChangedAt = now;
         lastAxes = state == null ? null : state.axes();
         if (!linkUp.getAsBoolean()) {
-            if (rcEnabled) events.accept("Link down - RC output stopped until it is back and the throttle is low.");
+            if (rcEnabled) events.accept("Link given up - RC output stopped until it is back and the throttle is low.");
             rcEnabled = false;
             lostAt = 0; // a link that was down long enough to notice: Betaflight has failed safe, no quick resume
             return;

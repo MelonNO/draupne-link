@@ -40,11 +40,16 @@ final class OsdRenderer {
      * @param armSwitchUnknown the arm switch was never read from Betaflight: a warning line to run Drone setup
      * @param banner      a short line about what just happened ("LINK BACK - ARMED - STICKS LIVE"), shown while non-null
      * @param spectatorPaused a spectator's playback is paused because the pilot's link is slow
+     * @param relayed     Tailscale's way to the phone is a relay now (more delay, the sticks on TCP)
+     * @param sticksLost  the phone's own report says its last stick write to the flight controller is older than
+     *                    STICKS_LOST_ALARM_MS (judged on the report's figure, not the extrapolated age: an app before
+     *                    pc.26 reports once a second)
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
                 boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
-                String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused) {
+                String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
+                boolean relayed, boolean sticksLost) {
         /** The fields up to 1.0.26: the new ones unknown / off. */
         Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
              VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -53,10 +58,25 @@ final class OsdRenderer {
             this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
                     linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, -1, false, null, false);
         }
+
+        /** The fields up to 1.0.32. */
+        Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
+             VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
+             boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
+             String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused) {
+            this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
+                    linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown,
+                    banner, spectatorPaused, false, false);
+        }
     }
 
     /** Sticks older than this (the phone's RC write age) are drawn as an alarm. */
     static final int STICKS_AGE_ALARM_MS = 100;
+    /**
+     * Sticks live, and the phone's last stick write to the flight controller older than this: NO STICKS AT FC - the
+     * one direct measure of "are my sticks arriving" (Betaflight holds the last sticks 300 ms, then fails safe).
+     */
+    static final int STICKS_LOST_ALARM_MS = 300;
     /** The picture's age (arrival to screen): yellow from here, red from twice it; VIDEO FROZEN comes at 700. */
     static final int PICTURE_AGE_WARN_MS = 150;
     /** LINK colour by how far the ping is over the link's own usual (BitrateControl's 15-30 s minimum). */
@@ -76,7 +96,7 @@ final class OsdRenderer {
 
     /** Warnings that aren't (yet) a loss of control: yellow; the rest red. */
     private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "RC OFF - NO RADIO",
-            "RC OFF - MAPPING INCOMPLETE", "PHONE BATTERY LOW", "RADIO FROZEN?", "VIDEO FROZEN");
+            "RC OFF - MAPPING INCOMPLETE", "PHONE BATTERY LOW", "RADIO FROZEN?", "VIDEO FROZEN", "RELAY - MORE DELAY");
 
     private interface Element {
         void paint(float x, float y, OsdLayout.Align align);
@@ -608,8 +628,11 @@ final class OsdRenderer {
         boolean rcGap = !failsafe && s != null && s.armed() && s.blockers().stream().anyMatch(b -> b.osdName().equals("RXLOSS"));
         if (failsafe) big.add("FAILSAFE");
         if (d.linkReady() && !d.rcLive()) big.add("RC OFF - " + (d.rcWaiting() == null ? "THROTTLE DOWN" : d.rcWaiting()));
+        // the phone's own word: its last stick write to the FC is old while this PC sends (the way there is broken)
+        if (d.linkReady() && d.rcLive() && d.sticksLost() && !d.linkStalled()) big.add("NO STICKS AT FC");
         if (d.radioFrozen()) big.add("RADIO FROZEN?");
         if (d.videoFrozen() && d.linkReady()) big.add("VIDEO FROZEN");
+        if (d.relayed() && d.linkReady()) big.add("RELAY - MORE DELAY");
         if (d.spectatorPaused()) big.add("PAUSED (PILOT LINK SLOW)");
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();

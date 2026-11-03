@@ -53,6 +53,21 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private static final Object STOP = new Object();
     /** A dropped backlog: the decoder forgets what it holds and waits for a key frame - it is not rebuilt (a black gap). */
     private static final Object FLUSH = new Object();
+    /**
+     * A key frame is needed (a frame came damaged or lost) and the link counts as congested: the request still goes
+     * after this long - on a jittery 4G link "congested" is most of the time, and without it a smeared picture
+     * waited for the next periodic key frame (2 s).
+     */
+    static final long KEY_REQUEST_PENDING_MS = 400;
+    /** No frame for this long: the first one after it is the end of a blackout - a key frame is asked for at once. */
+    static final long GAP_MS = 500;
+    /**
+     * A (re)started stream's key frame 1 waited this long for its config: the config is asked for (GetVideoConfig,
+     * answered from the phone's cache) rather than waited for up to CONFIG_WAIT_MS and then guessed at.
+     */
+    static final long CONFIG_ASK_MS = 300;
+    /** Frames decoded without a picture coming out, one after another: the decoder is lost; a key frame is asked for. */
+    static final int NO_PICTURE_RUN = 10;
 
     private final FrameSink sink;
     private final IntSupplier ping;
@@ -95,12 +110,20 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile boolean drawEveryFrame;
     /** A frame came damaged or went lost since the last intact key frame: a key frame is asked for (receive thread). */
     private boolean needKeyFrame;
+    private long needKeyFrameSince;
     private final KeyFrameBackoff keyFrames = new KeyFrameBackoff();
     /** Sends the request to the phone: through the link, or a test's counter. */
     private volatile Runnable keyFrameSender = () -> {
         ControlLink l = link;
         if (l != null) l.requestKeyFrame();
     };
+    /** Asks the phone for the stream's config again (GetVideoConfig): through the link, or a test's counter. */
+    private volatile Runnable configRequester = () -> {
+        ControlLink l = link;
+        if (l != null) l.requestVideoConfig();
+    };
+    /** Decoding on the GPU failed once: software from the next decoder on (the GPU path was rebuilt for ever before). */
+    private volatile boolean hardwareFailed;
     /** When the last picture was drawn (decode thread), and - after a change of picture size - when the last one at the old size was. */
     private volatile long lastPresentedAt;
     private volatile long resizeFrom = -1;
@@ -129,9 +152,18 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         this.sink = sink;
         this.ping = ping;
         windowStart = System.currentTimeMillis();
-        this.bitrate = new BitrateControl(increase -> {
-            ControlLink l = link;
-            if (l != null) l.sendChangeBitRate(increase);
+        this.bitrate = new BitrateControl(new BitrateControl.Sink() {
+            @Override
+            public void changeBitRate(boolean increase) {
+                ControlLink l = link;
+                if (l != null) l.sendChangeBitRate(increase);
+            }
+
+            @Override
+            public void setStep(int step, int from) {
+                ControlLink l = link;
+                if (l != null) l.sendBitrateStep(step, from);
+            }
         });
         decodeThread = new Thread(this::decodeLoop, "videoDecode");
         decodeThread.setDaemon(true);
@@ -212,6 +244,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         }
         for (; lastLost < lost; lastLost++) {
             bitrate.onBadFrame(false);
+            if (!needKeyFrame) needKeyFrameSince = now;
             needKeyFrame = true;
         }
         for (FrameAssembler.Frame f : earlier) accept(f, now);
@@ -244,12 +277,18 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         windowFrames++;
         // a damaged or lost frame breaks the pictures after it until a key frame: ask for one (phone app pc.13 on;
         // the link limits how often) rather than wait for the next one - they come every 2-10 s now
-        if (frame.damaged()) needKeyFrame = true;
-        else if (frame.keyFrame()) needKeyFrame = false;
+        if (frame.damaged()) {
+            if (!needKeyFrame) needKeyFrameSince = now;
+            needKeyFrame = true;
+        } else if (frame.keyFrame()) {
+            needKeyFrame = false;
+        }
         if (frame.keyFrame()) keyFrames.onKeyFrame(frame.damaged());
         // not while the link is congested: a key frame is the biggest burst there is, and it would come damaged too -
-        // asked for once the link has cleared (needKeyFrame stays)
-        if (needKeyFrame && !bitrate.isCongested(now)) requestKeyFrame();
+        // asked for once the link has cleared (needKeyFrame stays); but not held longer than KEY_REQUEST_PENDING_MS,
+        // and never after a gap: the first frame after a blackout is the moment to start afresh
+        boolean afterGap = lastAcceptAt != 0 && now - lastAcceptAt > GAP_MS;
+        if (needKeyFrame && (afterGap || !bitrate.isCongested(now) || now - needKeyFrameSince >= KEY_REQUEST_PENDING_MS)) requestKeyFrame();
         if (lastAcceptAt != 0 && now - lastAcceptAt < BUNCH_MS) bunched++;
         lastAcceptAt = now;
         if (frame.damaged()) bitrate.onBadFrame(frame.keyFrame());
@@ -263,6 +302,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 }
             }
             boolean awaiting = startsAhead > 0 && currentConfig != null;
+            if (awaiting && now - awaitingSince > CONFIG_ASK_MS) configRequester.run(); // the link limits how often
             if (awaiting && now - awaitingSince > CONFIG_WAIT_MS) { // no config came: under the old one, not frozen
                 startsAhead = 0;
                 awaiting = false;
@@ -271,15 +311,32 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             }
             if (currentConfig == null || awaiting) {
                 if (frame.keyFrame()) earlyFrames.clear(); // only the newest key frame on can be decoded anyway
-                if (earlyFrames.size() >= MAX_BACKLOG) earlyFrames.remove(0);
+                // full: the oldest P-frame goes, never the key frame at the front (nothing decodes without it)
+                if (earlyFrames.size() >= MAX_BACKLOG) earlyFrames.remove(earlyFrames.get(0).keyFrame() && earlyFrames.size() > 1 ? 1 : 0);
                 earlyFrames.add(frame);
             } else {
-                if (queue.size() >= MAX_BACKLOG) {
-                    queue.clear(); // hopelessly behind: start over at the next key frame, with the decoder it has
-                    queue.offer(FLUSH);
-                }
+                if (queue.size() >= MAX_BACKLOG) dropBacklog();
                 queue.offer(frame);
             }
+        }
+    }
+
+    /**
+     * Hopelessly behind: the queue is cut back to its newest whole key frame (or config), so the decoder starts
+     * over there at once. Without one, everything goes and the decoder waits for the next key frame (FLUSH) - before
+     * 1.0.33 that was always the case, and the burst that ends a blackout left with the key frame in it.
+     */
+    private void dropBacklog() {
+        java.util.List<Object> queued = new java.util.ArrayList<>();
+        queue.drainTo(queued);
+        int start = -1;
+        for (int i = 0; i < queued.size(); i++) {
+            Object o = queued.get(i);
+            if (o instanceof Config || (o instanceof FrameAssembler.Frame f && f.keyFrame() && !f.damaged())) start = i;
+        }
+        if (start < 0) queue.offer(FLUSH);
+        for (int i = 0; i < queued.size(); i++) {
+            if (i >= start || queued.get(i) == STOP) queue.offer(queued.get(i));
         }
     }
 
@@ -296,6 +353,19 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (frame != null) accept(frame, now);
     }
 
+    @Override
+    public void onVideoParityGroup(boolean keyFrame, short frameNum, int frameSize, int group, byte[] buf, int dataOffset, int length) {
+        long now = System.currentTimeMillis();
+        FrameAssembler.Frame frame;
+        java.util.List<FrameAssembler.Frame> earlier;
+        synchronized (assembler) {
+            frame = assembler.putParityGroup(keyFrame, frameNum, frameSize, group, buf, dataOffset, length, now);
+            earlier = assembler.takeFlushed();
+        }
+        for (FrameAssembler.Frame f : earlier) accept(f, now);
+        if (frame != null) accept(frame, now);
+    }
+
     // ------------------------------------------------------------------ decode thread
 
     private void decodeLoop() {
@@ -303,6 +373,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         boolean waitingForKey = true;
         boolean mirror = false;
         int shown = 0;
+        int noPictureRun = 0;
         long shownWindow = System.currentTimeMillis();
         try {
             while (running) {
@@ -312,94 +383,116 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 } catch (InterruptedException e) {
                     break;
                 }
-                long now = System.currentTimeMillis();
-                // the bitrate control also acts when no frame comes (a dropout), while there is a stream
-                if (item == null && now - lastFragmentAt < 10_000) bitrate.onTick(now, ping.getAsInt());
-                if (now - shownWindow >= 1000) {
-                    shownFps = (int) (shown * 1000 / (now - shownWindow));
-                    shown = 0;
-                    shownWindow = now;
-                }
-                if (item == null) continue;
-                if (item == STOP) break;
-                if (item == FLUSH) {
-                    if (decoder != null) decoder.flush();
-                    waitingForKey = true;
-                    requestKeyFrame();
-                    continue;
-                }
-                if (item instanceof Config c) {
-                    if (decoder != null) decoder.close();
-                    decoder = null;
-                    try {
-                        decoder = new VideoDecoder(c.hevc(), c.codecConfig(), hardwareDecode);
-                        error = null;
-                    } catch (Throwable e) { // also a missing native library: the HUD says so
-                        error = e.getMessage() == null ? e.toString() : e.getMessage();
-                        log("Video decoder: " + e);
+                try { // nothing ends this thread but STOP: an error is shown on the HUD and the next frame is tried
+                    long now = System.currentTimeMillis();
+                    // the bitrate control also acts when no frame comes (a dropout), while there is a stream
+                    if (item == null && now - lastFragmentAt < 10_000) bitrate.onTick(now, ping.getAsInt());
+                    if (now - shownWindow >= 1000) {
+                        shownFps = (int) (shown * 1000 / (now - shownWindow));
+                        shown = 0;
+                        shownWindow = now;
                     }
-                    mirror = c.front();
-                    sink.videoStarted(c.width(), c.height(), mirror);
-                    waitingForKey = true;
-                    continue;
-                }
-                FrameAssembler.Frame frame = (FrameAssembler.Frame) item;
-                if (decoder == null || (waitingForKey && !frame.keyFrame())) {
-                    requestKeyFrame(); // a fresh decoder (stream start, or after an error) needs one
-                    continue;
-                }
-                waitingForKey = false;
-                try {
-                    long t0 = System.nanoTime();
-                    boolean picture = decoder.decode(frame.data(), frame.data().length);
-                    long t1 = System.nanoTime();
-                    decodeMs = smooth(decodeMs, (t1 - t0) / 1e6);
-                    if (!picture) continue;
-                    if (!drawEveryFrame && !queue.isEmpty()) { // a newer frame is waiting: don't draw this one
-                        drawSkipped++;
+                    if (item == null) continue;
+                    if (item == STOP) break;
+                    if (item == FLUSH) {
+                        if (decoder != null) decoder.flush();
+                        waitingForKey = true;
+                        requestKeyFrame();
                         continue;
                     }
-                    int[] size = sink.targetSize();
-                    if (size[0] <= 0 || size[1] <= 0) continue;
-                    int[] pixels = sink.beginFrame(size[0], size[1]);
-                    decoder.convert(pixels, size[0], size[1]);
-                    decodingOnGpu = decoder.isHardware();
-                    sink.presentFrame();
-                    long shownAt = System.currentTimeMillis();
-                    lastPresentedAt = shownAt;
-                    shownArrivedMs = frame.arrivedMs() > 0 ? frame.arrivedMs() : shownAt;
-                    if (recordDir != null) recordQueue.offer(osdRow(shownArrivedMs)); // the HUD's figures, for a replay
-                    long from = resizeFrom;
-                    if (from > 0) { // the first picture at the new size: how long the picture stood still
-                        resizeFrom = -1;
-                        lastResizeGapMs = shownAt - from;
-                        log("Video: new picture size shown " + lastResizeGapMs + " ms after the last one at the old size");
-                    }
-                    convertMs = smooth(convertMs, (System.nanoTime() - t1) / 1e6);
-                    shown++;
-                } catch (Throwable e) {
-                    // one bad frame must not end the video: a fresh decoder, from the next key frame
-                    error = e.toString();
-                    log("Video decode error (decoder restarted): " + e);
-                    try {
-                        decoder.close();
-                    } catch (Throwable ignored) {
-                    }
-                    decoder = null;
-                    Config c = currentConfig;
-                    if (c != null) {
+                    if (item instanceof Config c) {
+                        if (decoder != null) decoder.close();
+                        decoder = null;
                         try {
-                            decoder = new VideoDecoder(c.hevc(), c.codecConfig(), hardwareDecode);
-                        } catch (Throwable again) {
-                            log("Video decoder: " + again);
+                            decoder = new VideoDecoder(c.hevc(), c.codecConfig(), hardwareDecode && !hardwareFailed);
+                            error = null;
+                        } catch (Throwable e) { // also a missing native library: the HUD says so
+                            error = e.getMessage() == null ? e.toString() : e.getMessage();
+                            log("Video decoder: " + e);
                         }
+                        mirror = c.front();
+                        sink.videoStarted(c.width(), c.height(), mirror);
+                        waitingForKey = true;
+                        noPictureRun = 0;
+                        continue;
                     }
-                    waitingForKey = true;
+                    FrameAssembler.Frame frame = (FrameAssembler.Frame) item;
+                    if (decoder == null || (waitingForKey && !frame.keyFrame())) {
+                        requestKeyFrame(); // a fresh decoder (stream start, or after an error) needs one
+                        continue;
+                    }
+                    waitingForKey = false;
+                    try {
+                        long t0 = System.nanoTime();
+                        boolean picture = decoder.decode(frame.data(), frame.data().length);
+                        long t1 = System.nanoTime();
+                        decodeMs = smooth(decodeMs, (t1 - t0) / 1e6);
+                        if (!picture) {
+                            // every frame should give a picture (no B-frames, LOW_DELAY). None from a key frame: the
+                            // config in hand isn't the stream's - asked for again, then a key frame to start on.
+                            // None from frames in a row: the decoder is lost; a key frame. Before 1.0.33 nothing
+                            // happened here, and the picture stood until the next periodic key frame or for good
+                            noPictureRun++;
+                            if (frame.keyFrame()) {
+                                log("Video: a key frame gave no picture - asking for the stream's config and a key frame");
+                                configRequester.run();
+                                requestKeyFrame();
+                                waitingForKey = true;
+                            } else if (noPictureRun >= NO_PICTURE_RUN) {
+                                requestKeyFrame();
+                            }
+                            continue;
+                        }
+                        noPictureRun = 0;
+                        if (!drawEveryFrame && !queue.isEmpty()) { // a newer frame is waiting: don't draw this one
+                            drawSkipped++;
+                            continue;
+                        }
+                        int[] size = sink.targetSize();
+                        if (size[0] <= 0 || size[1] <= 0) continue;
+                        int[] pixels = sink.beginFrame(size[0], size[1]);
+                        decoder.convert(pixels, size[0], size[1]);
+                        decodingOnGpu = decoder.isHardware();
+                        sink.presentFrame();
+                        long shownAt = System.currentTimeMillis();
+                        lastPresentedAt = shownAt;
+                        shownArrivedMs = frame.arrivedMs() > 0 ? frame.arrivedMs() : shownAt;
+                        if (recordDir != null) recordQueue.offer(osdRow(shownArrivedMs)); // the HUD's figures, for a replay
+                        long from = resizeFrom;
+                        if (from > 0) { // the first picture at the new size: how long the picture stood still
+                            resizeFrom = -1;
+                            lastResizeGapMs = shownAt - from;
+                            log("Video: new picture size shown " + lastResizeGapMs + " ms after the last one at the old size");
+                        }
+                        convertMs = smooth(convertMs, (System.nanoTime() - t1) / 1e6);
+                        shown++;
+                    } catch (Throwable e) {
+                        // one bad frame must not end the video: a fresh decoder, from the next key frame
+                        error = e.toString();
+                        boolean onGpu = decoder.isHardware() || (hardwareDecode && !hardwareFailed);
+                        log("Video decode error (decoder restarted" + (onGpu ? ", in software from now on" : "") + "): " + e);
+                        if (onGpu) hardwareFailed = true; // the GPU path failed: not rebuilt for ever, as before 1.0.33
+                        try {
+                            decoder.close();
+                        } catch (Throwable ignored) {
+                        }
+                        decoder = null;
+                        Config c = currentConfig;
+                        if (c != null) {
+                            try {
+                                decoder = new VideoDecoder(c.hevc(), c.codecConfig(), hardwareDecode && !hardwareFailed);
+                            } catch (Throwable again) {
+                                log("Video decoder: " + again);
+                            }
+                        }
+                        waitingForKey = true;
+                        requestKeyFrame();
+                    }
+                } catch (Throwable e) { // nothing above should get here; if it does, the HUD shows it and the loop goes on
+                    error = e.toString();
+                    log("Video decode thread error: " + e);
                 }
             }
-        } catch (Throwable e) { // nothing above should get here; if it does, the HUD shows it
-            error = e.toString();
-            log("Video decode thread ended: " + e);
         } finally {
             if (decoder != null) decoder.close();
         }
@@ -430,6 +523,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     /** Decode on the GPU from the next stream (re)start or decoder restart; software stays the fallback. */
     public void setHardwareDecode(boolean on) {
         hardwareDecode = on;
+        if (on) hardwareFailed = false; // asked for again: one more try
     }
 
     // ------------------------------------------------------------------ key frame requests
@@ -492,6 +586,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     /** Tests: where key frame requests go instead of the link. */
     void setKeyFrameSender(Runnable sender) {
         keyFrameSender = sender;
+    }
+
+    /** Tests: where requests for the stream's config go instead of the link. */
+    void setConfigRequester(Runnable requester) {
+        configRequester = requester;
     }
 
     // ------------------------------------------------------------------ recording

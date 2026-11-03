@@ -76,6 +76,8 @@ public class InternalCamera implements Camera{
     private CaptureRequest.Builder mCaptureRequest;
     private CameraCaptureSession mCameraCaptureSession;
     private boolean isStarted;
+    /** openCamera was called and the device hasn't answered yet (pc.26: a config change waits for it). */
+    private volatile boolean isOpening;
 
     public InternalCamera(Context context, Config config) {
         this.context = context;
@@ -148,12 +150,19 @@ public class InternalCamera implements Camera{
             handlerThread = new HandlerThread("CameraThread");
             handlerThread.start();
             final Handler handler = new Handler(handlerThread.getLooper());
+            isOpening = true;
             cameraManager.openCamera(config.getCameraId(), cameraStateCallback, handler);
         }catch (Exception e){
+            isOpening = false;
             log("openCamera error: "+ e);
             return false;
         }
         return true;
+    }
+
+    @Override
+    public boolean isOpening(){
+        return isOpening;
     }
 
     private final CameraDevice.StateCallback cameraStateCallback = new CameraDevice.StateCallback(){
@@ -161,6 +170,7 @@ public class InternalCamera implements Camera{
         public void onOpened(@NonNull CameraDevice cameraDevice){
             camera = cameraDevice;
             isOpened = true;
+            isOpening = false;
             log("Camera device opened.");
             startPreview();
         }
@@ -181,6 +191,7 @@ public class InternalCamera implements Camera{
 
         private void lost(CameraDevice cameraDevice) {
             isOpened = false;
+            isOpening = false;
             isStarted = false;
             mCameraCaptureSession = null;
             if (camera == cameraDevice) camera = null;

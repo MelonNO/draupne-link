@@ -64,6 +64,13 @@ public class ControlLink {
         /** A frame's parity packet (bad coverage mode, phone app 2.3.0-pc.15): a single lost packet can be rebuilt. */
         default void onVideoParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length) {
         }
+
+        /**
+         * The parity of one group of a frame's packets (bad coverage mode, phone app 2.3.0-pc.26): any one lost
+         * packet of that group can be rebuilt, so a frame survives one loss per group, not one in all.
+         */
+        default void onVideoParityGroup(boolean keyFrame, short frameNum, int frameSize, int group, byte[] buf, int dataOffset, int length) {
+        }
     }
 
     /**
@@ -73,6 +80,20 @@ public class ControlLink {
     static final int CAMERA_FPS = 30;
     /** A frame's parity packet: [0x6C][frame number i16][frame size i32][key frame u8][parity] (phone app pc.15). */
     static final byte VIDEO_PARITY = 0x6C;
+    /**
+     * The parity of one group of {@link de.droiddrone.pc.video.FrameAssembler#PARITY_GROUP} packets of a frame:
+     * [0x71][frame number i16][frame size i32][key frame u8][group u8][parity] (phone app pc.26, asked for by
+     * profile bit 1; older PCs drop the packet).
+     */
+    static final byte VIDEO_PARITY_GROUP = 0x71;
+    /**
+     * Sets the phone's bitrate step outright: [0x72][step u8], the index into BitrateControl.STEPS_BPS (phone app
+     * pc.26; older apps drop it and get the relative ChangeBitRate instead). A filling uplink queue is answered with
+     * one packet to the floor, not one step per second.
+     */
+    static final byte SET_BITRATE = 0x72;
+    /** The first phone app build that takes SET_BITRATE, the group parity, the 16-bit stick sequence and profile bit 2. */
+    static final int PC26_BUILD = 26;
     /** Asks the phone for a key frame (DRAUPNE Flight 2.3.0-pc.13 on; older apps ignore it). */
     static final byte KEY_FRAME_REQUEST = 0x6A;
     /**
@@ -83,7 +104,9 @@ public class ControlLink {
     /**
      * Bad coverage mode: 640x360 (at most 3/4 of the set size), up to 1 Mbit/s, key frames sent twice (phone app 2.3.0-pc.15
      * on; the PC waits a moment for the second copy). Small, light frames in short bursts: far less is lost on a weak
-     * uplink. SETTINGS > Video: AUTO switches by itself, SHARP never, ROBUST always.
+     * uplink. SETTINGS > Video: AUTO switches by itself, SHARP never, ROBUST always. Under it (1.0.33) the survival
+     * tier: 480x270 at 15 fps, up to 250 kbit/s, for a link that can't even carry bad coverage mode - some picture
+     * rather than none. AUTO and ROBUST both go there when they must; SHARP never leaves the full picture.
      */
     public enum VideoMode { AUTO, SHARP, ROBUST;
         public static VideoMode parse(String s) {
@@ -91,12 +114,27 @@ public class ControlLink {
             return AUTO;
         }
     }
+    /** How much of the picture the link gets: everything, bad coverage mode, or the survival tier (see VideoMode). */
+    public enum Tier { NORMAL, ROBUST, SURVIVAL }
     public static final String VIDEO_MODE_KEY = "videoMode";
     static final int ROBUST_WIDTH = 640, ROBUST_HEIGHT = 360;
-    /** The bitrate step bad coverage mode stays at or under: 1 Mbit/s. */
-    public static final int ROBUST_MAX_STEP = 2;
-    /** Tells the phone the video profile: [0x6B][flags], bit 0 = send key frames twice. */
+    static final int SURVIVAL_WIDTH = 480, SURVIVAL_HEIGHT = 270;
+    static final int SURVIVAL_FPS = 15;
+    /** The bitrate step bad coverage mode stays at or under: 1 Mbit/s (BitrateControl.STEPS_BPS). */
+    public static final int ROBUST_MAX_STEP = 3;
+    /** The survival tier's top: 250 kbit/s; its floor is the phone's lowest, 150 kbit/s (phone app pc.26). */
+    public static final int SURVIVAL_MAX_STEP = 1;
+    /**
+     * Tells the phone the video profile: [0x6B][flags]. Bit 0 = send key frames twice (pc.15), bit 1 = a parity
+     * packet per group of packets instead of one per frame (pc.26), bit 2 = encode H.264 instead of H.265 (pc.26:
+     * FFmpeg conceals a damaged H.264 frame from the one before; its H.265 decoder shows the damage).
+     */
     static final byte VIDEO_PROFILE = 0x6B;
+    static final int PROFILE_KEY_FRAMES_TWICE = 1, PROFILE_GROUP_PARITY = 2, PROFILE_AVC = 4;
+    /** The bitrate at or under which bad coverage mode goes to the survival tier (after LOW_RES_AFTER_MS). */
+    static final int SURVIVAL_BPS = 250_000;
+    /** Bad coverage mode has to have had this long before the survival tier is judged. */
+    static final long SURVIVAL_AFTER_MS = 5000;
     /** AUTO goes to bad coverage when the phone's bitrate stays at or under LOW_RES_BPS for LOW_RES_AFTER_MS... */
     static final int LOW_RES_BPS = 500_000;
     static final long LOW_RES_AFTER_MS = 5000;
@@ -110,6 +148,29 @@ public class ControlLink {
 
     /** Upstream's Control app asks for the stream every 2.5 s until the codec config arrives. */
     private static final int START_VIDEO_RETRY_MS = 2500;
+    /**
+     * The link back after a loss: this long later the PC looks whether the video came back with it. The phone's
+     * stream usually never stopped (the loss was the link, not the phone), and asking for it again would close and
+     * rebuild the phone's encoder and camera session: 3-5 s of no picture. Only a stream that really stopped (the
+     * phone app restarted) is asked for again.
+     */
+    static final long VIDEO_CHECK_MS = 1500;
+    /** Telemetry comes but no video fragment for this long: the phone's camera or encoder died; StartVideo again. */
+    static final long VIDEO_DEAD_MS = 3000;
+    /** A size or codec switch was sent: the video watchdog waits this long for the phone's restart. */
+    private static final long VIDEO_SWITCH_QUIET_MS = 5000;
+    /**
+     * The flight controller's state (FcInfo, the mode names the armed flag is read by) is kept this long into a
+     * link loss: a short loss ends with the same FC, and the sticks' armed-resume rule needs the state. Longer, and
+     * a different FC or a restarted phone app is likely enough to read it all again.
+     */
+    static final long FC_STATE_KEEP_MS = 60_000;
+    /** Connect goes out this often while reconnecting: for RECONNECT_FAST_MS after a loss, then every CONNECT_MS. */
+    static final long CONNECT_FAST_MS = 150, CONNECT_MS = 500, RECONNECT_FAST_MS = 5000;
+    /** Config goes out this often until the phone has taken it. */
+    static final long CONFIG_RETRY_MS = 250;
+    /** The session thread's tick while connecting: a Connect answered is followed by the Config within this. */
+    private static final long SESSION_TICK_MS = 50;
 
     private final PcConfig config;
     private final InetAddress remoteIp;
@@ -118,10 +179,27 @@ public class ControlLink {
     private final String key;
     private DatagramSocket socket;
     private UdpSender udpSender;
-    private ReceiverBuffer receiverBuffer;
+    private volatile ReceiverBuffer receiverBuffer;
     private volatile boolean running;
     private volatile boolean configReceived;
     private volatile long readyAt;
+    /** The link has been READY once: from then on the sticks and pings go out whether or not the phone is heard. */
+    private volatile boolean everReady;
+    /** When the link was last lost (System.currentTimeMillis); 0 = never. */
+    private volatile long lostAt;
+    /** When the link last came back after a loss; 0 = never. */
+    private volatile long reconnectedAt;
+    /** Ask the phone for FcInfo and the mode names once more (the link came back: kept meanwhile, refreshed now). */
+    private boolean refreshFc;
+    /** When to look whether the video came back with the link (0 = not due). */
+    private long videoCheckAt;
+    /** The video watchdog is quiet until then (a switch was sent). */
+    private long videoQuietUntil;
+    /** When the last video fragment and the last telemetry packet came from the phone; 0 = none yet. */
+    private volatile long lastVideoFragmentAt, lastTelemetryAt;
+    /** Tailscale's way to the phone is a relay (DERP): the sticks ride TCP there, and AUTO holds bad coverage mode. */
+    private volatile boolean relayed;
+    private volatile long lastVideoConfigRequest;
     private volatile boolean versionMismatch;
     private volatile FcInfo fcInfo;
     private volatile int pingMs;
@@ -140,10 +218,12 @@ public class ControlLink {
     private final FcTelemetry telemetry = new FcTelemetry();
     private volatile long lastKeyFrameRequest;
     private final AtomicLong keyFrameRequests = new AtomicLong();
-    /** Bad coverage mode is on (see VideoMode). */
-    private volatile boolean robust;
+    /** Bad coverage mode or the survival tier (see VideoMode, Tier). */
+    private volatile Tier tier = Tier.NORMAL;
     private volatile VideoMode videoMode;
     private long lowRateSince = -1;
+    private long survivalRateSince = -1;
+    private long tierSince;
     private final java.util.ArrayDeque<Long> stalls = new java.util.ArrayDeque<>();
     private boolean inStall;
     private long robustSince;
@@ -385,7 +465,7 @@ public class ControlLink {
     /** A packet the pilot PC passed on, played at its time (spectator thread). */
     private void playSpectated(byte[] d) {
         if (d.length < 1) return;
-        if (d[0] == UdpCommon.VideoFrame || d[0] == UdpCommon.KeyFrame || d[0] == VIDEO_PARITY) {
+        if (d[0] == UdpCommon.VideoFrame || d[0] == UdpCommon.KeyFrame || d[0] == VIDEO_PARITY || d[0] == VIDEO_PARITY_GROUP) {
             deliverVideoFragment(d, d.length);
             return;
         }
@@ -402,8 +482,11 @@ public class ControlLink {
     private boolean handleVideoFragment(DatagramPacket packet) {
         byte[] d = packet.getData();
         int len = packet.getLength();
-        if (len < 1 || (d[0] != UdpCommon.VideoFrame && d[0] != UdpCommon.KeyFrame && d[0] != VIDEO_PARITY)) return false;
-        if (!isConnected()) return true;
+        if (len < 1 || (d[0] != UdpCommon.VideoFrame && d[0] != UdpCommon.KeyFrame && d[0] != VIDEO_PARITY && d[0] != VIDEO_PARITY_GROUP)) return false;
+        // shown whenever the stream's config is known: before 1.0.33 the fragments were thrown away while the link
+        // counted as lost (2 s of silence), so a picture that was arriving again stayed black until the handshake
+        if (!isConnected() && !videoConfigReceived) return true;
+        lastVideoFragmentAt = System.currentTimeMillis();
         deliverVideoFragment(d, len);
         SpectatorHost h = host;
         if (h != null) h.forward(d, len); // after our own picture: a copy into a queue, nothing without spectators
@@ -415,6 +498,10 @@ public class ControlLink {
         if (listener == null || len < 7) return;
         if (d[0] == VIDEO_PARITY) {
             if (len > 8) listener.onVideoParity(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), readInt(d, 3), d, 8, len - 8);
+            return;
+        }
+        if (d[0] == VIDEO_PARITY_GROUP) {
+            if (len > 9) listener.onVideoParityGroup(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), readInt(d, 3), d[8] & 0xff, d, 9, len - 9);
             return;
         }
         short frameNum = (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff));
@@ -454,7 +541,9 @@ public class ControlLink {
     private void pingRun() {
         while (running) {
             try {
-                if (isConnected()) udpSender.sendPing(true);
+                // also while the phone isn't heard, once the link has been up: on a one-way outage (the phone's
+                // uplink dead, its downlink fine) the pings keep the phone's session alive for the sticks
+                if (isConnected() || everReady && !dormant && spectator == null) udpSender.sendPing(true);
                 // 20 a second: the bitrate control watches the ping for queueing on the uplink, and the link log
                 // sees stalls of 0.1 s and more (where Betaflight flags RXLOSS) as the age of the last pong
                 Thread.sleep(50);
@@ -466,45 +555,90 @@ public class ControlLink {
 
     /**
      * Same order as upstream MainActivity.startConnectionThread: connect, send config, then start the video stream
-     * (if wanted) and ask for FC info.
+     * (if wanted) and ask for FC info. After a loss (1.0.33): Connect every CONNECT_FAST_MS, the Config the moment
+     * the phone answers, the FC's state and the video config kept - the sticks never stopped (see sendRc).
      */
     private void sessionRun() {
         boolean wasConnected = false;
         long lastStartVideo = 0;
         long lastFcInfoRequest = 0;
         long lastModesRequest = 0;
+        long lastConnect = 0;
+        long lastConfig = 0;
         while (running) {
             try {
                 if (spectator != null) { // watching: the spectator thread does the talking, never a Connect again
                     Thread.sleep(250);
                     continue;
                 }
+                long now = System.currentTimeMillis();
                 boolean connected = isConnected();
                 if (wasConnected && !connected) {
-                    log("Link lost, reconnecting...");
+                    log("Link lost, reconnecting..." + (everReady ? " The sticks keep going." : ""));
+                    lostAt = now;
                     configReceived = false;
-                    videoConfigReceived = false;
+                    // kept: the flight controller's state (for FC_STATE_KEEP_MS, see below) and the video config -
+                    // the phone's stream usually never stopped, and asking for it again would rebuild its encoder
+                }
+                if (!wasConnected && connected && lostAt > 0) {
+                    log("Link back after " + (now - lostAt) + " ms.");
+                    refreshFc = fcInfo != null;
+                    reconnectedAt = now;
+                    videoCheckAt = videoListener != null && videoConfigReceived ? now + VIDEO_CHECK_MS : 0;
+                }
+                wasConnected = connected;
+                if (!connected && lostAt > 0 && fcInfo != null && now - lostAt > FC_STATE_KEEP_MS) {
+                    log("No link for " + FC_STATE_KEEP_MS / 1000 + " s: the flight controller's state is read again when it is back.");
                     fcInfo = null;
                     telemetry.forgetBoxIds(); // a restarted phone app has to read them again
                     telemetry.forgetBoxNames(); // and a different FC has its modes on other bits: read them again too
                 }
-                wasConnected = connected;
                 if (versionMismatch) {
                     Thread.sleep(1000);
                 } else if (!connected && dormant) {
                     Thread.sleep(250); // the phone sleeps on purpose: a Connect in its listening window would wake it
                 } else if (!connected) {
-                    udpSender.sendConnect(1, key, SettingsCommon.versionCompatibleCode);
-                    boolean phoneHoldsOldSession = System.currentTimeMillis() - ownSessionNamedAt < RECENT_SESSION_MS;
-                    Thread.sleep(phoneHoldsOldSession ? OWN_SESSION_RETRY_MS : 500);
+                    boolean phoneHoldsOldSession = now - ownSessionNamedAt < RECENT_SESSION_MS;
+                    long every = phoneHoldsOldSession ? OWN_SESSION_RETRY_MS
+                            : lostAt > 0 && now - lostAt < RECONNECT_FAST_MS ? CONNECT_FAST_MS : CONNECT_MS;
+                    if (now - lastConnect >= every) {
+                        sendConnect();
+                        lastConnect = now;
+                    }
+                    Thread.sleep(SESSION_TICK_MS);
                 } else if (!configReceived) {
-                    sendConfig();
-                    Thread.sleep(500);
+                    if (now - lastConfig >= CONFIG_RETRY_MS) {
+                        decideForcedTier(now); // ROBUST set: the first config already carries the small size
+                        sendConfig();
+                        lastConfig = now;
+                    }
+                    Thread.sleep(SESSION_TICK_MS);
                 } else {
-                    long now = System.currentTimeMillis();
-                    if (videoListener != null && !videoConfigReceived && now - lastStartVideo >= START_VIDEO_RETRY_MS) {
-                        sendStartVideo();
-                        lastStartVideo = now;
+                    if (refreshFc) { // the same FC, most likely: its state was kept, and is asked for once more
+                        refreshFc = false;
+                        sendRequest(UdpCommon.FcInfo);
+                        sendRequest(UdpCommon.BoxNames);
+                        lastFcInfoRequest = lastModesRequest = now;
+                    }
+                    if (videoListener != null) {
+                        if (videoCheckAt > 0 && now >= videoCheckAt) {
+                            videoCheckAt = 0;
+                            if (lastVideoFragmentAt < reconnectedAt) {
+                                log("No video since the link came back: asking for the stream again.");
+                                videoConfigReceived = false;
+                            }
+                        }
+                        boolean telemetryFlows = now - lastTelemetryAt < 1000;
+                        boolean videoDead = videoConfigReceived && telemetryFlows && now - lastVideoFragmentAt > VIDEO_DEAD_MS
+                                && now >= videoQuietUntil;
+                        if (!videoConfigReceived && now - lastStartVideo >= START_VIDEO_RETRY_MS) {
+                            sendStartVideo();
+                            lastStartVideo = now;
+                        } else if (videoDead && now - lastStartVideo >= START_VIDEO_RETRY_MS) {
+                            log("Telemetry comes but no video for " + (now - lastVideoFragmentAt) + " ms: asking for the stream again.");
+                            sendStartVideo();
+                            lastStartVideo = now;
+                        }
                     }
                     adjustResolution(now);
                     if (fcInfo == null && now - lastFcInfoRequest >= 1000) {
@@ -530,6 +664,15 @@ public class ControlLink {
         }
     }
 
+    /** The Connect, sent on this thread (upstream's sendConnect starts a thread per call). */
+    private void sendConnect() throws IOException {
+        UdpPacketData packetData = new UdpPacketData(UdpCommon.Connect, -1);
+        packetData.daos.writeByte(1);
+        packetData.daos.writeUTF(key);
+        packetData.daos.writeShort(SettingsCommon.versionCompatibleCode);
+        udpSender.sendPacket(packetData.getData());
+    }
+
     private void processData(byte[] data) {
         DataReader buffer = new DataReader(data, true);
         byte packetName = buffer.readByte();
@@ -547,6 +690,7 @@ public class ControlLink {
             case UdpCommon.ConfigReceived -> {
                 if (!configReceived) readyAt = System.currentTimeMillis();
                 configReceived = true;
+                everReady = true;
             }
             case UdpCommon.VersionMismatch -> {
                 configReceived = false;
@@ -566,6 +710,7 @@ public class ControlLink {
                 long now = System.nanoTime();
                 if (lastTelemetryNs != 0) maxTelemetryGapNs.accumulateAndGet(now - lastTelemetryNs, Math::max);
                 lastTelemetryNs = now;
+                lastTelemetryAt = System.currentTimeMillis();
                 boolean hadNames = telemetry.hasBoxNames();
                 boolean hadIds = telemetry.hasBoxIds();
                 telemetry.parse(buffer, fcInfo);
@@ -605,8 +750,42 @@ public class ControlLink {
 
     private void sendStartVideo() throws IOException {
         UdpPacketData packetData = new UdpPacketData(UdpCommon.StartVideo);
-        packetData.daos.writeBoolean(videoHevc);
+        packetData.daos.writeBoolean(wantHevc());
         udpSender.sendPacket(packetData.getData());
+    }
+
+    /** H.265 as set, but H.264 in bad coverage mode and under (see PROFILE_AVC). */
+    private boolean wantHevc() {
+        return videoHevc && tier == Tier.NORMAL;
+    }
+
+    /**
+     * Asks the phone for the stream's config again (GetVideoConfig; it answers from its cache, nothing restarts):
+     * a stream (re)started but its VideoInitialFrame never came, or frames don't decode under the config in hand.
+     * At most once a second; not while watching.
+     */
+    public void requestVideoConfig() {
+        long now = System.currentTimeMillis();
+        if (!running || spectator != null || !isConnected() || now - lastVideoConfigRequest < 1000) return;
+        lastVideoConfigRequest = now;
+        try {
+            sendRequest(UdpCommon.GetVideoConfig);
+        } catch (IOException e) {
+            // asked again with the next frame that needs it
+        }
+    }
+
+    /**
+     * Tailscale's way to the phone, from the main window's checks ("direct", "relay fra", ...): over a relay the
+     * sticks ride TCP (one lost segment holds every frame behind it), so AUTO holds bad coverage mode there.
+     */
+    public void setLinkPath(String path) {
+        relayed = path != null && path.startsWith("relay");
+    }
+
+    /** The way to the phone goes over a Tailscale relay now (RELAY on the OSD). */
+    public boolean isRelayed() {
+        return relayed;
     }
 
     /**
@@ -678,6 +857,24 @@ public class ControlLink {
         }
     }
 
+    /**
+     * Sets the phone's bitrate step outright (SET_BITRATE, phone app pc.26 on): straight to the floor when the uplink
+     * queue fills, instead of one step a second. An older phone app gets one relative step towards it.
+     * @param from the step the PC counts the phone on now
+     */
+    public void sendBitrateStep(int step, int from) {
+        if (!running || !isConnected() || spectator != null || step == from) return;
+        if (telemetry.getPhonePcBuild() < PC26_BUILD) {
+            sendChangeBitRate(step > from);
+            return;
+        }
+        try {
+            socket.send(new DatagramPacket(new byte[]{SET_BITRATE, (byte) step}, 2, remoteIp, remotePort));
+        } catch (IOException e) {
+            log("sendBitrateStep error: " + e);
+        }
+    }
+
     /** What the flight controller reports (armed state, modes, arming blockers, battery). */
     public FcTelemetry getTelemetry() {
         return telemetry;
@@ -697,8 +894,8 @@ public class ControlLink {
             packetData.daos.writeUTF(i == 0 ? config.getCameraId() : SettingsCommon.cameraId[i]);
             packetData.daos.writeShort(cameraWidth());
             packetData.daos.writeShort(cameraHeight());
-            packetData.daos.writeShort(CAMERA_FPS); // min = max: steady
-            packetData.daos.writeShort(CAMERA_FPS);
+            packetData.daos.writeShort(cameraFps()); // min = max: steady
+            packetData.daos.writeShort(cameraFps());
             packetData.daos.writeBoolean(SettingsCommon.useUsbCamera);
             packetData.daos.writeByte(SettingsCommon.usbCameraFrameFormat);
             packetData.daos.writeBoolean(SettingsCommon.usbCameraReset);
@@ -729,13 +926,26 @@ public class ControlLink {
         return packetData.getData();
     }
 
-    /** The camera width asked for: as set, or the bad coverage size. */
+    /** The camera width asked for: as set, the bad coverage size, or the survival tier's. */
     int cameraWidth() {
-        return robust ? Math.min(ROBUST_WIDTH, config.getCameraWidth() * 3 / 4) / 2 * 2 : config.getCameraWidth();
+        return switch (tier) {
+            case NORMAL -> config.getCameraWidth();
+            case ROBUST -> Math.min(ROBUST_WIDTH, config.getCameraWidth() * 3 / 4) / 2 * 2;
+            case SURVIVAL -> Math.min(SURVIVAL_WIDTH, config.getCameraWidth() / 2) / 2 * 2;
+        };
     }
 
     int cameraHeight() {
-        return robust ? Math.min(ROBUST_HEIGHT, config.getCameraHeight() * 3 / 4) / 2 * 2 : config.getCameraHeight();
+        return switch (tier) {
+            case NORMAL -> config.getCameraHeight();
+            case ROBUST -> Math.min(ROBUST_HEIGHT, config.getCameraHeight() * 3 / 4) / 2 * 2;
+            case SURVIVAL -> Math.min(SURVIVAL_HEIGHT, config.getCameraHeight() / 2) / 2 * 2;
+        };
+    }
+
+    /** The camera's frame rate asked for: steady 30, 15 in the survival tier (twice the bits per frame). */
+    int cameraFps() {
+        return tier == Tier.SURVIVAL ? SURVIVAL_FPS : CAMERA_FPS;
     }
 
     /** SETTINGS > Video, also while connected. */
@@ -748,9 +958,10 @@ public class ControlLink {
         return m != null ? m : VideoMode.parse(config.getString(VIDEO_MODE_KEY));
     }
 
-    /** The highest bitrate step now: 1 Mbit/s in bad coverage mode, else the set limit (bitrateLimitMbps). */
+    /** The highest bitrate step now: 1 Mbit/s in bad coverage mode, 250 kbit/s in the survival tier, else the set limit. */
     public int maxBitrateStep() {
-        if (robust) return ROBUST_MAX_STEP;
+        if (tier == Tier.SURVIVAL) return SURVIVAL_MAX_STEP;
+        if (tier == Tier.ROBUST) return ROBUST_MAX_STEP;
         int limit = config.getBitrateLimitMbps() * 1_000_000;
         int[] steps = de.droiddrone.pc.video.BitrateControl.STEPS_BPS;
         int s = 0;
@@ -759,8 +970,9 @@ public class ControlLink {
     }
 
     /**
-     * Bad coverage mode on or off (see VideoMode): the size goes out as a config (the phone changes it on the open camera,
-     * phone app 2.3.0-pc.15), the profile as a packet of its own; both sent again until the phone's stream shows it.
+     * The tier (see VideoMode, Tier): the size and frame rate go out as a config (the phone changes them on the open
+     * camera, phone app 2.3.0-pc.15), the profile as a packet of its own; both sent again until the phone's stream
+     * shows it.
      */
     private void adjustResolution(long now) throws IOException {
         if (configResends > 0 && now >= nextConfigResend) {
@@ -776,7 +988,11 @@ public class ControlLink {
         // did the phone really switch? Its new stream says (2026-11-01: a switch back to 720p never happened, and PC
         // and phone disagreed for 3 minutes). If not, the size goes out again
         if (verifyFrom >= 0 && now >= verifyFrom) {
-            boolean switched = videoWidth > 0 && (robust ? videoWidth < config.getCameraWidth() : videoWidth >= config.getCameraWidth());
+            boolean switched = videoWidth > 0 && switch (tier) {
+                case NORMAL -> videoWidth >= config.getCameraWidth();
+                case ROBUST -> videoWidth < config.getCameraWidth();
+                case SURVIVAL -> videoWidth <= Math.min(ROBUST_WIDTH, config.getCameraWidth() * 3 / 4); // or the nearest size it has
+            };
             if (switched || verifyTries >= VERIFY_TRIES) {
                 if (!switched) events.accept("Video: the phone didn't change the picture size (still " + videoWidth + " wide).");
                 verifyFrom = -1;
@@ -798,63 +1014,133 @@ public class ControlLink {
         if (stalled) lastCalmEnd = now;
         int bps = telemetry.getPhoneTargetBitRate();
         lowRateSince = bps > 0 && bps <= LOW_RES_BPS ? (lowRateSince < 0 ? now : lowRateSince) : -1;
+        survivalRateSince = bps > 0 && bps <= SURVIVAL_BPS ? (survivalRateSince < 0 ? now : survivalRateSince) : -1;
         VideoMode mode = videoMode();
-        boolean want;
+        Tier want;
         String why;
-        if (mode == VideoMode.ROBUST) {
-            want = true;
-            why = "SETTINGS > Video is ROBUST";
-        } else if (mode == VideoMode.SHARP) {
-            want = false;
+        if (mode == VideoMode.SHARP) {
+            want = Tier.NORMAL;
             why = "SETTINGS > Video is SHARP";
-        } else if (!robust) {
+        } else if (tier == Tier.NORMAL) {
             boolean lowRate = lowRateSince >= 0 && now - lowRateSince >= LOW_RES_AFTER_MS;
-            want = lowRate || stalls.size() >= STALLS_FOR_ROBUST;
-            why = lowRate ? "the bitrate stayed at " + bps / 1000 + " kbit/s" : stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s";
-            if (want && leftRobustAt >= 0 && now - leftRobustAt < 60_000) {
-                robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2); // back too soon: stay longer next time
+            boolean stalls3 = stalls.size() >= STALLS_FOR_ROBUST;
+            if (mode == VideoMode.ROBUST) {
+                want = Tier.ROBUST;
+                why = "SETTINGS > Video is ROBUST";
+            } else {
+                want = lowRate || stalls3 || relayed ? Tier.ROBUST : Tier.NORMAL;
+                why = lowRate ? "the bitrate stayed at " + bps / 1000 + " kbit/s"
+                        : stalls3 ? stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s" : "the way to the phone is a relay";
+                if (want != tier && leftRobustAt >= 0 && now - leftRobustAt < 60_000) {
+                    robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2); // back too soon: stay longer next time
+                }
+            }
+        } else if (tier == Tier.ROBUST) {
+            // bad coverage mode isn't enough: the bitrate sits at the bottom or the stalls go on - the survival tier
+            boolean lowRate = survivalRateSince >= 0 && now - survivalRateSince >= LOW_RES_AFTER_MS;
+            boolean stalls3 = stalls.size() >= STALLS_FOR_ROBUST;
+            boolean worse = now - tierSince >= SURVIVAL_AFTER_MS && (lowRate || stalls3);
+            if (worse) {
+                want = Tier.SURVIVAL;
+                why = lowRate ? "the bitrate stayed at " + bps / 1000 + " kbit/s in bad coverage mode" : stalls.size() + " stalls in bad coverage mode";
+                if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2);
+            } else if (mode == VideoMode.ROBUST || relayed) {
+                want = Tier.ROBUST;
+                why = mode == VideoMode.ROBUST ? "SETTINGS > Video is ROBUST" : "the way to the phone is a relay";
+            } else {
+                // calm long enough in bad coverage mode: no stall, and the bitrate not struggling under its 1 Mbit/s
+                boolean calm = now - tierSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs
+                        && (bps <= 0 || bps > LOW_RES_BPS);
+                want = calm ? Tier.NORMAL : Tier.ROBUST;
+                why = "calm for " + robustHoldMs / 1000 + " s";
             }
         } else {
-            // calm long enough in bad coverage mode: no stall, and the bitrate not struggling under its 1 Mbit/s
-            boolean calm = now - robustSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs
-                    && (bps <= 0 || bps > LOW_RES_BPS);
-            want = !calm;
+            boolean calm = now - tierSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs;
+            want = calm ? Tier.ROBUST : Tier.SURVIVAL;
             why = "calm for " + robustHoldMs / 1000 + " s";
         }
-        if (want == robust) return;
-        robust = want;
-        if (robust) {
-            robustSince = now;
+        if (want == tier) return;
+        Tier was = tier;
+        tier = want;
+        tierSince = now;
+        if (want.ordinal() > was.ordinal()) {
             stalls.clear();
         } else {
             leftRobustAt = now;
         }
-        events.accept(robust
-                ? "Video: bad coverage mode (" + why + "): " + cameraWidth() + "x" + cameraHeight()
-                        + ", up to 1 Mbit/s, key frames sent twice - softer, but it holds."
-                : "Video: normal mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".");
+        events.accept(switch (want) {
+            case ROBUST -> was == Tier.NORMAL
+                    ? "Video: bad coverage mode (" + why + "): " + cameraWidth() + "x" + cameraHeight()
+                            + ", up to 1 Mbit/s, key frames sent twice - softer, but it holds."
+                    : "Video: bad coverage mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
+            case SURVIVAL -> "Video: survival tier (" + why + "): " + cameraWidth() + "x" + cameraHeight() + " at " + cameraFps()
+                    + " fps, up to 250 kbit/s - a small picture rather than none.";
+            case NORMAL -> "Video: normal mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
+        });
+        sendTier(now);
+    }
+
+    /**
+     * SETTINGS > Video is ROBUST: decided before the first config goes out, so it already carries the small size.
+     * Before 1.0.33 the first config said 1280x720 and the small size came while the phone's camera was still
+     * opening - which the phone took as done; every ROBUST session then ran at the full size.
+     */
+    private void decideForcedTier(long now) {
+        VideoMode mode = videoMode();
+        if (mode == VideoMode.ROBUST && tier == Tier.NORMAL) {
+            tier = Tier.ROBUST;
+            tierSince = now;
+            events.accept("Video: bad coverage mode (SETTINGS > Video is ROBUST): " + cameraWidth() + "x" + cameraHeight()
+                    + ", up to 1 Mbit/s, key frames sent twice - softer, but it holds.");
+            profileSends = 2;
+            nextProfileSend = now + 700;
+            verifyFrom = videoListener == null ? -1 : now + VERIFY_AFTER_MS;
+            verifyTries = 0;
+            sendProfile();
+        } else if (mode == VideoMode.SHARP && tier != Tier.NORMAL) {
+            tier = Tier.NORMAL;
+            tierSince = now;
+            sendProfile();
+        }
+    }
+
+    /** The tier's size, frame rate and profile to the phone, again until its stream shows the change. */
+    private void sendTier(long now) throws IOException {
         configResends = 1;
         nextConfigResend = now + 1000;
         profileSends = 2;
         nextProfileSend = now + 700;
         verifyFrom = videoListener == null ? -1 : now + VERIFY_AFTER_MS; // without video there is nothing to check
         verifyTries = 0;
+        videoQuietUntil = now + VIDEO_SWITCH_QUIET_MS; // the phone restarts its encoder for it: no watchdog meanwhile
+        sendProfile(); // first: the phone's restart for the config reads the codec from it
         sendConfig();
-        sendProfile();
     }
 
-    /** The phone's video profile (phone app 2.3.0-pc.15 on; older ones drop it): key frames twice in bad coverage. */
+    /**
+     * The phone's video profile (phone app 2.3.0-pc.15 on; older ones drop it): in bad coverage mode and under, key
+     * frames twice, a parity per group of packets and H.264 (pc.26; older apps read bit 0 only).
+     */
     private void sendProfile() {
         try {
-            socket.send(new DatagramPacket(new byte[]{VIDEO_PROFILE, (byte) (robust ? 1 : 0)}, 2, remoteIp, remotePort));
+            socket.send(new DatagramPacket(new byte[]{VIDEO_PROFILE, (byte) profileFlags()}, 2, remoteIp, remotePort));
         } catch (IOException e) {
             // sent again with the next round
         }
     }
 
-    /** Bad coverage mode is on. */
+    int profileFlags() {
+        if (tier == Tier.NORMAL) return 0;
+        return PROFILE_KEY_FRAMES_TWICE | PROFILE_GROUP_PARITY | (videoHevc ? PROFILE_AVC : 0);
+    }
+
+    /** Bad coverage mode (or the survival tier) is on. */
     public boolean isRobust() {
-        return robust;
+        return tier != Tier.NORMAL;
+    }
+
+    public Tier getTier() {
+        return tier;
     }
 
     /**
@@ -885,17 +1171,23 @@ public class ControlLink {
      * Sends stick values (AETR+AUX order) right now, on the caller's thread: no queue or timer between reading the
      * joystick and the packet leaving. Call once per input tick; frames only go out while the caller keeps calling,
      * so a stalled input loop means no RC, the phone stops feeding MSP and Betaflight fails safe.
+     * <p>
+     * Once the link has been up, frames go out whether or not the phone is heard (1.0.33): on 4G the phone's uplink
+     * is the weak direction, and a drone whose sticks still arrive is a drone under control while its video and
+     * telemetry are gone. The phone takes them as long as it has a session for this PC (its own 4 s timer), and the
+     * Connects that reconnect it go out meanwhile. Before, the sticks stopped 2 s into every silence from the phone.
      * @return true if a frame was sent (false while not connected/configured)
      */
     public boolean sendRc(short[] channels) {
         if (channels.length < 4 || channels.length > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) {
             throw new IllegalArgumentException("RC channel count must be 4.." + FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT);
         }
-        if (!running || !configReceived || !isConnected()) return false;
+        if (!sticksWanted() || !(everReady || configReceived && isConnected())) return false;
         short[] frame = padForRxMap(channels);
         try {
-            byte[] data = rcFrame(frame, telemetry.getPhonePcBuild() >= RC_SEQ_MIN_PC_BUILD ? rcSeq : -1);
-            rcSeq = (rcSeq + 1) & 0xff;
+            int build = telemetry.getPhonePcBuild();
+            byte[] data = rcFrame(frame, build >= RC_SEQ_MIN_PC_BUILD ? rcSeq : -1, build >= PC26_BUILD);
+            rcSeq = (rcSeq + 1) & 0xffff;
             // straight out, once: upstream's sendPacket retries ten times and swallows the error, so a dead adapter
             // looked like frames sent - and a frame late is a frame wrong
             socket.send(new DatagramPacket(data, data.length, remoteIp, remotePort));
@@ -918,20 +1210,40 @@ public class ControlLink {
      * The stick frame as upstream lays it out, [24][count u8][count x int16], plus one byte DRAUPNE Flight 2.3.0-pc.19
      * and newer read: a sequence number (0-255, wrapping) that lets the phone drop a frame overtaken by a newer one on
      * the way - over 4G frames arrive bunched and out of order, and a frame late is a frame wrong. Older phone apps
-     * refuse a frame with a byte too many, so they get the old layout (seq &lt; 0).
+     * refuse a frame with a byte too many, so they get the old layout (seq &lt; 0). Phone app pc.26 and newer read
+     * two bytes (0-65535): with one, a frame 128 or more behind looked newer (a cell handover flushing old packets),
+     * and the fresh frames after it were dropped until the count passed it - up to half a second without sticks.
      */
-    static byte[] rcFrame(short[] frame, int seq) throws IOException {
+    static byte[] rcFrame(short[] frame, int seq, boolean wide) throws IOException {
         UdpPacketData packetData = new UdpPacketData(UdpCommon.RcFrame);
         packetData.daos.writeByte(frame.length);
         for (short channel : frame) packetData.daos.writeShort(channel);
-        if (seq >= 0) packetData.daos.writeByte(seq);
+        if (seq >= 0 && wide) packetData.daos.writeShort(seq);
+        else if (seq >= 0) packetData.daos.writeByte(seq);
         return packetData.getData();
+    }
+
+    static byte[] rcFrame(short[] frame, int seq) throws IOException {
+        return rcFrame(frame, seq, false);
     }
 
     /** The first phone app build that reads the stick frame's sequence byte. */
     static final int RC_SEQ_MIN_PC_BUILD = 19;
     /** The next stick frame's sequence number; the input thread alone touches it. */
     private int rcSeq;
+
+    /**
+     * Stick frames are wanted: the link is up, or has been and may come back - never while watching, asleep on
+     * purpose, or refused for the version. What RcSession's gate waits for; see {@link #sendRc}.
+     */
+    public boolean sticksWanted() {
+        return running && spectator == null && !versionMismatch && !dormant && (everReady || getState() == State.READY);
+    }
+
+    /** The link has been READY once since start(). */
+    public boolean wasEverReady() {
+        return everReady;
+    }
 
     /**
      * Upstream Flight Msp.processRxMap reorders channels to Betaflight's channel map (8 entries), but silently skips

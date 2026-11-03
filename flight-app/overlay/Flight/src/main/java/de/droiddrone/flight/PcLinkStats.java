@@ -44,7 +44,7 @@ final class PcLinkStats {
 
     /**
      * The phone's state (pc.19), once a second: u8 flags ({@link #STATE_RX_MAP_KNOWN}, {@link #STATE_USB_PERMISSION_PENDING},
-     * {@link #STATE_USB_PERMISSION_DENIED}, {@link #STATE_CAMERA_OPEN}), u8 the last stick frame's sequence (255 =
+     * {@link #STATE_USB_PERMISSION_DENIED}, {@link #STATE_CAMERA_OPEN}, {@link #STATE_VIDEO_RESTARTING}), u8 the last stick frame's sequence (255 =
      * none), u16 ms since the last stick frame was written to the flight controller (65535 = unknown), u16 ms from
      * the last frame's arrival over UDP to its USB write (65535 = unknown). The PC shows why no sticks reach the
      * drone (no channel map yet, USB permission) without a look at the phone.
@@ -54,6 +54,8 @@ final class PcLinkStats {
     static final int STATE_USB_PERMISSION_PENDING = 2;
     static final int STATE_USB_PERMISSION_DENIED = 4;
     static final int STATE_CAMERA_OPEN = 8;
+    /** pc.26: the video watchdog is restarting the camera and encoder (no encoder output for 2 s). */
+    static final int STATE_VIDEO_RESTARTING = 16;
 
     /**
      * The phone's power mode (pc.21, {@link PowerMode}), once a second and three times 300 ms apart when it changes:
@@ -105,7 +107,7 @@ final class PcLinkStats {
         long now = System.currentTimeMillis();
         out.writeShort(PHONE_STATE_CODE);
         out.writeByte(flags);
-        out.writeByte(lastRcSeq < 0 ? 255 : lastRcSeq & 0xff);
+        out.writeByte(lastRcSeq < 0 ? 255 : lastRcSeq & 0xff); // the low byte of a 16-bit sequence (pc.26)
         out.writeShort(lastRcOut == 0 ? 65535 : (int) Math.min(65535, now - lastRcOut));
         out.writeShort(rcInToOutMs < 0 ? 65535 : (int) Math.min(65535, rcInToOutMs));
     }

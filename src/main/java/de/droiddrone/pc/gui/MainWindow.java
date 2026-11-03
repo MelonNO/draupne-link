@@ -1594,6 +1594,8 @@ public class MainWindow extends JFrame {
                         + (path.startsWith("relay") ? " (relayed: more delay and stalls)" : "")));
             }
             phonePath = path;
+            Connection c = connection;
+            if (c != null) c.getLink().setLinkPath(path); // a relay holds bad coverage mode, RELAY on the OSD
             SwingUtilities.invokeLater(() -> setPhoneState(state));
         } catch (RuntimeException e) {
             de.droiddrone.common.Log.log("Phone check: " + e);
@@ -1663,7 +1665,10 @@ public class MainWindow extends JFrame {
         RcSession s = spectator ? null : session;
         boolean ready = l.getState() == (spectator ? ControlLink.State.SPECTATING : ControlLink.State.READY);
         long sincePicture = videoView.msSincePicture();
-        boolean videoFrozen = v != null && v.hasStream() && sincePicture > VIDEO_FROZEN_MS;
+        long sinceStreamStart = videoView.msSinceStreamStart();
+        // a stream (re)start gets a moment for its first picture (a size switch takes up to ~2 s) - but no longer
+        boolean videoFrozen = v != null && v.hasStream() && sincePicture > VIDEO_FROZEN_MS
+                && (sinceStreamStart < 0 || sinceStreamStart > VIDEO_RESTART_GRACE_MS || sincePicture < sinceStreamStart);
         FcTelemetry.Status st = l.getTelemetry().getStatus();
         boolean armed = st != null && st.armed() && System.currentTimeMillis() - st.receivedAt() < 2000;
         boolean radioFrozen = armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS;
@@ -1678,10 +1683,14 @@ public class MainWindow extends JFrame {
         if (liveBanner == null && !spectator && powerWanted == ControlLink.POWER_STANDBY) liveBanner = "STANDBY - PRESS WAKE";
         return new OsdRenderer.Data(true, ready, l.getPing(), spectator || (s != null && s.isRcEnabled()),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
-                osdLinkHint(), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
+                osdLinkHint(s), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
                 s == null ? null : s.waitingFor(), v != null && v.recordingFile() != null, banner, spectator && !l.isWatchOnly(),
-                sticksAge, s != null && s.isArmSwitchUnknown(), liveBanner, spectator && l.isSpectatorPaused());
+                sticksAge, s != null && s.isArmSwitchUnknown(), liveBanner, spectator && l.isSpectatorPaused(), l.isRelayed(),
+                ps != null && now - ps.receivedAt() <= 2500 && ps.rcWriteAgeMs() > OsdRenderer.STICKS_LOST_ALARM_MS);
     }
+
+    /** A stream (re)start may take this long to show its first picture before VIDEO FROZEN says so. */
+    private static final long VIDEO_RESTART_GRACE_MS = 2500;
 
     /** How long "LINK BACK - ARMED - STICKS LIVE" stays on the HUD. */
     private static final long RESUME_BANNER_MS = 3000;
@@ -1716,10 +1725,12 @@ public class MainWindow extends JFrame {
         return null;
     }
 
-    /** Under LINK LOST on the OSD: the reason, when Tailscale knows it. */
-    private String osdLinkHint() {
+    /** Under LINK LOST on the OSD: the reason, when Tailscale knows it; else that the sticks still go out. */
+    private String osdLinkHint(RcSession session) {
         Tailscale.PhoneState s = shownPhoneState();
-        if (s == null || !s.isProblem()) return null;
+        if (s == null || !s.isProblem()) {
+            return session != null && session.isRcEnabled() ? "STICKS STILL SENT - RECONNECTING" : null;
+        }
         return switch (s) {
             case OFFLINE -> "THE PHONE IS NOT CONNECTED TO TAILSCALE";
             case NOT_FOUND -> "THE PHONE ADDRESS IS NOT ON YOUR TAILSCALE NETWORK";
