@@ -95,7 +95,8 @@ final class Tour {
                 + "puts it back. A double-click on the video shows it alone. Try it after the tour.", main::tourPopOutButton, null, false));
         steps.add(new Step("FULL SCREEN", "The picture fills the whole screen (F11 too). Esc or a double-click brings the window back. "
                 + "Try it after the tour.", main::tourFullScreenButton, null, false));
-        steps.add(new Step("CONNECT", "CONNECT opens the link to the phone (WATCH joins another PC's flight as a spectator). "
+        steps.add(new Step("CONNECT", "Pick the phone by its name - MobileAlpha, MobileBravo ... - every phone with DRAUPNE Flight open on "
+                + "your Tailscale network is in the list. CONNECT opens the link (WATCH joins a pilot PC's flight as a spectator). "
                 + "In flight the minimap takes this card's place, with POP OUT MAP under it. F3 opens the map window any time.",
                 main::tourLinkCard, null, false));
         // the sleep buttons only show while connected: the step puts them on the card as a demo that answers presses

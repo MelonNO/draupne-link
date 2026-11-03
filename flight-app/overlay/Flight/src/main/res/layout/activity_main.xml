@@ -112,6 +112,14 @@
                 style="@style/DD.Value"
                 android:text="@string/status_disconnected" />
 
+            <!-- pc.28: what this phone is called and where it is on the network (the address the PC connects to); a tap copies the address -->
+            <TextView style="@style/DD.Label" android:text="@string/dd_label_this_phone" />
+
+            <TextView
+                android:id="@+id/tvPhoneInfo"
+                style="@style/DD.Value"
+                android:text="-" />
+
             <!-- pushes the lines below to the card's bottom in landscape; gone in portrait (see MainActivity) -->
             <View
                 android:id="@+id/statusSpacer"
@@ -230,8 +238,10 @@
 
                 <TextView style="@style/DD.SectionTitle" android:text="@string/dd_section_connection" />
 
+                <!-- pc.28: direct (Tailscale) is the one way: the mode, its hint and the address are hidden (Config reads them) -->
                 <Spinner
                     android:id="@+id/connectionMode"
+                    android:visibility="gone"
                     android:layout_width="match_parent"
                     android:layout_height="44dp"
                     android:background="@drawable/dd_spinner"
@@ -239,20 +249,38 @@
 
                 <TextView
                     android:id="@+id/tvConnectionModeHint"
+                    android:visibility="gone"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:text="@string/connection_mode_server"
                     android:textColor="@color/dd_muted"
                     android:textSize="12sp" />
-
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/dd_phone_listens"
+                    android:textColor="@color/dd_muted"
+                    android:textSize="12sp" />
+                <TextView
+                    android:id="@+id/tvAdvanced"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:padding="4dp"
+                    android:text="@string/dd_advanced"
+                    android:textColor="@color/dd_accent"
+                    android:textSize="12sp" />
                 <LinearLayout
+                    android:id="@+id/llAdvanced"
+                    android:visibility="gone"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal">
 
                     <LinearLayout
                         android:id="@+id/llIp"
+                        android:visibility="gone"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_marginEnd="8dp"
@@ -322,6 +350,7 @@
 
                 <CheckBox
                     android:id="@+id/cbConnectOnStartup"
+                    android:visibility="gone"
                     android:layout_width="wrap_content"
                     android:layout_height="44dp"
                     android:layout_marginTop="4dp"

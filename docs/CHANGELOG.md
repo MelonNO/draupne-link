@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.35
+
+- **Names instead of addresses** (PC and phone app 2.3.0-pc.28): every phone is MobileAlpha, MobileBravo ..., every PC PCAlpha, PCBravo ... The PC asks every device on its Tailscale network who it is (NAME_QUERY on the link port), a PC names itself with the first free PC letter, and the pilot PC with the highest letter online names each phone that has none. The LINK card's address field is a PHONE list (as a spectator: the PILOT PC list); MENU > LINK > Name map shows every device seen with its address, this PC's name, the port and the key.
+- **One way to the phone:** the connection method (Direct / Connect over server / Host the relay) is gone on both ends; it is Tailscale straight to the phone. The PC setup's connection and relay steps are gone; the firewall step recommends the UDP rule for name queries and spectators.
+- **Phone app pc.28:** it listens for the PC by itself as soon as it is open (no CONNECT); the mode, address and start-up choice are gone, the port and key sit behind *Advanced*. THIS PHONE on the status card: its name (a tap picks one by hand), the phone's name and model, its Tailscale address in green (a long press copies it) and its other addresses.
+- **Spectators** pick the pilot PC by name and watch that PC whatever phone it flies; the pilot PC still needs *Allow spectators*.
+
 ## 1.0.34
 
 - **Video quality** (PC and phone app 2.3.0-pc.27): the phone's own emergency brakes counted the time its packet pacing takes on purpose (a key frame is spread over up to three frame times, six with the two copies of bad coverage mode), so they fired at nearly every key frame at 2 Mbit/s and under, the bitrate spiralled to 150 kbit/s and the raise lock kept it there - on a perfect link (12 minutes at 45 ms ping). They now count the socket's own time, and the queue check waits out a key frame.

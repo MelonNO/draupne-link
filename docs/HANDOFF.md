@@ -4,8 +4,37 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.34)
+## Where things stand (2026-11-03, 1.0.35)
 
+- **1.0.35 (names), phone app 2.3.0-pc.28 - built, PC tests green, not released, nothing tried on hardware:** the
+  pilot's ask: "each phone is MobileAlpha, MobileBravo ..., each PC PCAlpha ...; the user only picks the phone's name
+  and connects; remove the Direct connection option on both ends; a name map in the settings". *The names:*
+  `Names` (the map: `name.<Name>=kind|ip|device|host|version|lastSeen` in the settings; letters; the packets
+  NAME_QUERY 0x73 / NAME_REPLY 0x74 / NAME_ASSIGN 0x75, see PROTOCOL) and `NameService` (every 5 s: `Tailscale.status()`,
+  a query to each online peer's link port from an ephemeral socket, replies filed, `onlineOnly`; this PC's own name
+  `pcName` = the first free PC letter; the master = the pilot PC with the highest letter online (`Names.isMaster`)
+  names each phone that answers without a name; other PCs' queries answered from the link port while no link holds
+  it (`pause` / `resume` round `Connection.open` in the main window and the connect step), the open link answers them
+  itself (`ControlLink.setNameReply`, `onForeignPacket`)). Tests: `NamesTest` (letters, map, packets, and the service
+  against fake devices on loopback: the PC letter, the master rule, the nameless phone named). *The PC:* `LinkMode` and
+  `RelayHost` are gone; `Connection.open` goes straight to `ip` (the chosen device's address, saved with `phoneName`);
+  watching uses the pilot PC's address straight (`ControlLink.watchOnly(true)`, `SpectatorClient.pilotIsFixed`: no
+  PILOT_QUERY to a phone). LINK card: the PHONE list (`updatePhoneList` / `choosePhone`, as a spectator the PILOT PC
+  list) with a hint line and NAME MAP (`NameMapDialog`: the table, THIS PC IS, port and key, REMOVE, ASK AGAIN);
+  MENU > LINK > Name map too. PC setup: `ConnectionPage` and `RelayPage` gone, `FirewallPage` recommends the UDP rule
+  (name queries, spectators). Phone setup: the Tailscale page only shows the phone; the connect step has a Phone row
+  with the name list (`fillPhones` / `choosePhone`, the session restarts on a change) and no address to type.
+  *The phone (pc.28):* `Udp.answerName` (queries and assigns in any state, before the session checks; the name kept in
+  the preferences, `MainActivity.phoneName` / `setPhoneName`, `deviceName`); the mode spinner, its hint, the address
+  field and the start-up checkbox are hidden (kept: upstream's `Config.updateConfig` reads them; direct is forced),
+  port and key under *Advanced* (`llAdvanced`), the service starts by itself 3 s after the app opens, the button is
+  START / STOP. THIS PHONE on the status card (`updatePhoneInfo`, every 2 s): the name (or "No name yet"; a tap
+  `pickPhoneName`, a long press copies the address), the device name, the Tailscale address (green; yellow when
+  off), the other addresses. *Untried:* the whole thing. First try: open DRAUPNE Flight on the phone, start DRAUPNE
+  Link: the PC's log should say "This PC is PCAlpha" and "Names: the phone at ... is MobileAlpha now", the LINK
+  card's PHONE list should show MobileAlpha online, CONNECT should work without any address typed. If the name map
+  stays empty: is the phone's key the PC's (Advanced on the phone), is UDP 6286 open on the phone's side (it always
+  was: the link uses it), does `tailscale status` list the phone online?
 - **Released:** DRAUPNE Link **1.0.34** with phone app **DRAUPNE Flight 2.3.0-pc.27** (release
   `flight-2.3.0-pc.27`, APK SHA-256 `034a424c…`, pinned in `ApkShare`). Nothing of it has flown yet.
 - **1.0.34 (pilot's eighth round), phone app 2.3.0-pc.27 - released 2026-11-03, nothing flown:** the pilot's list after a day on 1.0.33, then "the video quality is very bad, SHARP is exactly the same".

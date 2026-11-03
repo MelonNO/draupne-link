@@ -1,0 +1,204 @@
+package de.droiddrone.pc;
+
+import de.droiddrone.pc.setup.Tailscale;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/** DRAUPNE names (1.0.35): the letters, the map, the packets, and the service that asks the network. */
+class NamesTest {
+    private FakeDevice phone, otherPc;
+    private NameService service;
+
+    @AfterEach
+    void stop() {
+        if (service != null) service.stop();
+        if (phone != null) phone.close();
+        if (otherPc != null) otherPc.close();
+    }
+
+    @Test
+    void lettersNamesAndTheMap() throws Exception {
+        assertEquals("MobileAlpha", Names.Kind.PHONE.name(0));
+        assertEquals("PCZulu", Names.Kind.PC.name(25));
+        assertEquals(Names.Kind.PHONE, Names.kindOf("MobileCharlie"));
+        assertEquals(Names.Kind.PC, Names.kindOf("PCBravo"));
+        assertNull(Names.kindOf("Pixel"));
+        assertEquals(2, Names.letterOf("MobileCharlie"));
+        assertEquals(-1, Names.letterOf("Mobile"));
+
+        Map<String, String> saved = new HashMap<>();
+        Names names = new Names(PcConfig.defaults(), saved::putAll);
+        assertEquals("MobileAlpha", names.firstFree(Names.Kind.PHONE, List.of()));
+        assertEquals("MobileBravo", names.firstFree(Names.Kind.PHONE, List.of("MobileAlpha")));
+        assertNull(names.seen(new Names.Reply(Names.Kind.PHONE, "MobileAlpha", "Pixel 8", "2.3.0-pc.28"), "100.64.0.5", "pixel-8"));
+        assertEquals("MobileBravo", names.firstFree(Names.Kind.PHONE, List.of()));
+        assertEquals("100.64.0.5", names.ipOf("MobileAlpha"));
+        assertEquals("MobileAlpha", names.nameAt("100.64.0.5"));
+        assertTrue(names.get("mobilealpha").online(), "names are not case-sensitive");
+        assertEquals("100.64.0.5", names.seen(new Names.Reply(Names.Kind.PHONE, "MobileAlpha", "Pixel 8", "2.3.0-pc.28"), "100.64.0.9", "pixel-8"),
+                "a name that moved: the old address is reported");
+        assertEquals("100.64.0.9", names.ipOf("MobileAlpha"));
+        names.onlineOnly(List.of());
+        assertFalse(names.get("MobileAlpha").online());
+        assertTrue(saved.containsKey("name.MobileAlpha"), "kept in the settings: " + saved);
+
+        // the map is read back from the settings
+        PcConfig config = PcConfig.defaults();
+        saved.forEach(config::set);
+        Names again = new Names(config, null);
+        Names.Entry e = again.get("MobileAlpha");
+        assertNotNull(e);
+        assertEquals("100.64.0.9", e.ip());
+        assertEquals("Pixel 8", e.device());
+        assertEquals("pixel-8", e.host());
+        assertFalse(e.online(), "offline until seen again");
+        assertEquals("Pixel 8  (pixel-8) - 2.3.0-pc.28", e.detail());
+
+        // the master: the highest PC letter online
+        again.seen(new Names.Reply(Names.Kind.PC, "PCCharlie", "pc3", "1.0.35"), "100.64.0.30", "pc3");
+        assertFalse(again.isMaster("PCAlpha"), "PCCharlie is online and higher");
+        assertTrue(again.isMaster("PCDelta"));
+        again.onlineOnly(List.of());
+        assertTrue(again.isMaster("PCAlpha"), "alone online: the master");
+        assertFalse(again.isMaster(""), "a PC without a name is never the master");
+    }
+
+    @Test
+    void thePacketsRoundTrip() {
+        byte[] q = Names.query("DD");
+        assertEquals(Names.NAME_QUERY, q[0]);
+        assertEquals("DD", Names.keyOf(q, q.length));
+        byte[] r = Names.reply("DD", Names.Kind.PHONE, "", "Pixel 8", "2.3.0-pc.28");
+        Names.Reply reply = Names.parseReply(r, r.length, "DD");
+        assertNotNull(reply);
+        assertEquals(Names.Kind.PHONE, reply.kind());
+        assertEquals("", reply.name());
+        assertEquals("Pixel 8", reply.device());
+        assertNull(Names.parseReply(r, r.length, "other"), "another key: not ours");
+        byte[] a = Names.assign("DD", "MobileBravo");
+        assertEquals("MobileBravo", Names.parseAssign(a, a.length, "DD"));
+        assertNull(Names.parseAssign(a, a.length, "xx"));
+        assertNull(Names.parseAssign(q, q.length, "DD"), "a query is no assign");
+        assertEquals("2 min ago", Names.agoText(1000, 1000 + 150_000));
+        assertEquals("just now", Names.agoText(1000, 2000));
+    }
+
+    /**
+     * The service asks the online devices of a (fake) Tailscale network, files their answers, names this PC with the
+     * first free PC letter, is the master when its letter is the highest online, and names the nameless phone.
+     */
+    @Test
+    void theServiceNamesThePcAndTheNamelessPhone() throws Exception {
+        phone = new FakeDevice(Names.Kind.PHONE, "", "Pixel 8");
+        otherPc = new FakeDevice(Names.Kind.PC, "PCAlpha", "other-pc");
+        // both fake devices listen on their own ports, so the service is told the port of the one it asks:
+        // the "network" has one peer per service port - two services, one per fake device
+        PcConfig config = PcConfig.defaults();
+        Map<String, String> saved = new HashMap<>();
+        Names names = new Names(config, m -> {
+            saved.putAll(m);
+            m.forEach(config::set);
+        });
+        List<String> log = new CopyOnWriteArrayList<>();
+        Tailscale.Peer phonePeer = new Tailscale.Peer("pixel-8", "android", true, "127.0.0.1", "127.0.0.1:1", "");
+        Tailscale.Status status = new Tailscale.Status(true, true, "Running", "", "127.0.0.2", "this-pc", List.of(phonePeer));
+        service = new NameService(config, names, () -> status, phone.port(), false, m -> {
+            saved.putAll(m);
+            m.forEach(config::set);
+        }, log::add);
+        service.scan();
+        assertEquals("PCAlpha", config.getString(Names.PC_NAME_KEY), "the first PC letter: nobody else online");
+        assertTrue(service.isMaster());
+        waitFor(() -> "MobileAlpha".equals(phone.name), 2000, "the nameless phone was given MobileAlpha");
+        service.scan();
+        Names.Entry e = names.get("MobileAlpha");
+        assertNotNull(e, "the phone answers with its name now: " + names.all());
+        assertEquals("127.0.0.1", e.ip());
+        assertEquals("Pixel 8", e.device());
+        assertEquals("pixel-8", e.host(), "the Tailscale machine name from the peer list");
+        assertTrue(e.online());
+        assertTrue(saved.containsKey("name.MobileAlpha"));
+
+        // another PC with a higher letter online: this PC is not the master, and a nameless phone is left alone
+        phone.name = "";
+        NameService second = new NameService(config, names, () -> status, otherPc.port(), false, m -> m.forEach(config::set), log::add);
+        try {
+            second.scan(); // asks the other PC (it answers PCAlpha): this PC's own name PCAlpha is taken
+            assertEquals("PCBravo", config.getString(Names.PC_NAME_KEY), "PCAlpha was taken: the next letter");
+            assertTrue(names.get("PCAlpha").online());
+            assertTrue(second.isMaster(), "PCBravo is higher than PCAlpha");
+            otherPc.name = "PCCharlie";
+            second.scan();
+            assertFalse(second.isMaster(), "PCCharlie online is higher than PCBravo");
+        } finally {
+            second.stop();
+        }
+    }
+
+    private static void waitFor(java.util.function.BooleanSupplier ok, int ms, String what) throws InterruptedException {
+        long end = System.currentTimeMillis() + ms;
+        while (!ok.getAsBoolean()) {
+            if (System.currentTimeMillis() > end) fail("Timed out waiting for " + what);
+            Thread.sleep(20);
+        }
+    }
+
+    /** A device on loopback that answers queries and takes a name. */
+    static final class FakeDevice {
+        private final DatagramSocket socket = new DatagramSocket(0, InetAddress.getLoopbackAddress());
+        private final Names.Kind kind;
+        private final String device;
+        volatile String name;
+        private final Thread thread;
+
+        FakeDevice(Names.Kind kind, String name, String device) throws Exception {
+            this.kind = kind;
+            this.name = name;
+            this.device = device;
+            socket.setSoTimeout(100);
+            thread = new Thread(this::run, "fake-" + kind);
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        int port() {
+            return socket.getLocalPort();
+        }
+
+        private void run() {
+            byte[] buf = new byte[512];
+            DatagramPacket packet = new DatagramPacket(buf, buf.length);
+            while (!socket.isClosed()) {
+                try {
+                    socket.receive(packet);
+                    byte[] d = packet.getData();
+                    int len = packet.getLength();
+                    if (len < 1 || !"DD".equals(Names.keyOf(d, len))) continue;
+                    if (d[0] == Names.NAME_QUERY) {
+                        byte[] r = Names.reply("DD", kind, name, device, "test");
+                        socket.send(new DatagramPacket(r, r.length, packet.getAddress(), packet.getPort()));
+                    } else if (d[0] == Names.NAME_ASSIGN && kind == Names.Kind.PHONE) {
+                        name = Names.parseAssign(d, len, "DD");
+                    }
+                } catch (java.net.SocketTimeoutException ignored) {
+                } catch (Exception e) {
+                    return;
+                }
+            }
+        }
+
+        void close() {
+            socket.close();
+        }
+    }
+}

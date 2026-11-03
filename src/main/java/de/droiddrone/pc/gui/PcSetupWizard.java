@@ -2,7 +2,6 @@ package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.AppPaths;
 import de.droiddrone.pc.JoystickService;
-import de.droiddrone.pc.LinkMode;
 import de.droiddrone.pc.setup.ApkShare;
 import de.droiddrone.pc.setup.NetInfo;
 import de.droiddrone.pc.setup.PcPrep;
@@ -30,7 +29,7 @@ import java.util.Map;
 
 /**
  * Everything the Windows side needs, one step at a time; steps that are already done are skipped:
- * connection method, Tailscale, firewall, radio + calibration, power plan, shortcuts.
+ * Tailscale, firewall, radio + calibration, power plan, shortcuts.
  */
 final class PcSetupWizard {
     private PcSetupWizard() {
@@ -39,9 +38,7 @@ final class PcSetupWizard {
     /** PC setup's steps. The first-time setup is made of these too (SetupWizard): a step added here is in both. */
     static List<Page> pages(MainWindow main) {
         return List.of(
-                new ConnectionPage(main),
                 new TailscalePage(main),
-                new RelayPage(main),
                 new FirewallPage(main),
                 new RadioPage(main),
                 new LatencyPage(main),
@@ -74,55 +71,6 @@ final class PcSetupWizard {
     // ------------------------------------------------------------------------------------------------ pages
 
     /** Step 1: how the PC reaches the phone on 4G. */
-    static final class ConnectionPage extends Page {
-        private final MainWindow main;
-
-        ConnectionPage(MainWindow main) {
-            this.main = main;
-        }
-
-        @Override
-        String title() {
-            return "How will the PC reach the phone?";
-        }
-
-        @Override
-        String hint() {
-            return "Tailscale is right for almost everyone. Change this only if you know you need a relay.";
-        }
-
-        @Override
-        JComponent build() {
-            JPanel col = WizardDialog.column();
-            ButtonGroup group = new ButtonGroup();
-            addOption(col, group, LinkMode.PHONE, "Tailscale VPN  (recommended)",
-                    "Works on any 4G network, no router changes.");
-            addOption(col, group, LinkMode.HOST_RELAY, "Host the relay on this PC",
-                    "Needs a port forward on your router and a public IPv4 address.");
-            addOption(col, group, LinkMode.RELAY, "Relay server elsewhere",
-                    "A DroidDrone relay server on the internet. Adds latency.");
-            return col;
-        }
-
-        private void addOption(JPanel col, ButtonGroup group, LinkMode mode, String title, String text) {
-            JPanel card = new JPanel(new BorderLayout(12, 4));
-            card.setBackground(Theme.PANEL_2);
-            card.setBorder(BorderFactory.createEmptyBorder(14, 14, 14, 14));
-            JRadioButton radio = new JRadioButton(title);
-            radio.setFont(Theme.font(Font.BOLD, 15f));
-            radio.setForeground(Theme.TEXT);
-            radio.setOpaque(false);
-            radio.setSelected(main.config().getLinkMode() == mode);
-            radio.addActionListener(e -> main.save(Map.of("linkMode", mode.key)));
-            group.add(radio);
-            card.add(radio, BorderLayout.NORTH);
-            WrappingText desc = new WrappingText(text, Theme.font(Font.PLAIN, 13.5f), Theme.MUTED);
-            desc.setBorder(BorderFactory.createEmptyBorder(0, 28, 0, 0));
-            card.add(desc, BorderLayout.CENTER);
-            WizardDialog.addRow(col, card);
-        }
-    }
-
     /** Step 2 (Tailscale): installed, running, signed in. */
     static final class TailscalePage extends Page {
         private final MainWindow main;
@@ -156,7 +104,7 @@ final class PcSetupWizard {
 
         @Override
         boolean isApplicable() {
-            return main.config().getLinkMode() == LinkMode.PHONE && !readyAtStart;
+            return !readyAtStart;
         }
 
         @Override
@@ -316,122 +264,6 @@ final class PcSetupWizard {
         }
     }
 
-    /** Step 2 (relay modes): public IP / port forward, or the relay server's address. */
-    static final class RelayPage extends Page {
-        private final MainWindow main;
-        private final CheckRow publicIp = new CheckRow("Your public IP address");
-        private final CheckRow forward = new CheckRow("Router port forward");
-        private final JPanel hostPanel = WizardDialog.column();
-        private final JPanel relayPanel = WizardDialog.column();
-        private final JTextField relayAddress = new JTextField();
-
-        RelayPage(MainWindow main) {
-            this.main = main;
-        }
-
-        @Override
-        boolean isApplicable() {
-            LinkMode mode = main.config().getLinkMode();
-            return mode == LinkMode.HOST_RELAY || mode == LinkMode.RELAY;
-        }
-
-        @Override
-        String title() {
-            return main.config().getLinkMode() == LinkMode.HOST_RELAY ? "Open your router to the phone" : "Relay server";
-        }
-
-        @Override
-        String hint() {
-            return main.config().getLinkMode() == LinkMode.HOST_RELAY
-                    ? "The phone on 4G must be able to reach this PC through your home's public IP address."
-                    : "Enter the public address of the machine running DroidDrone's relay server.";
-        }
-
-        @Override
-        JComponent build() {
-            JPanel col = WizardDialog.column();
-            publicIp.addAction("Check", this::checkPublicIp);
-            publicIp.set(State.PENDING, "Press Check (asks api.ipify.org which address your connection has).");
-            WizardDialog.addRow(hostPanel, publicIp);
-            WizardDialog.addRow(hostPanel, forward);
-            WizardDialog.addRow(hostPanel, WizardDialog.paragraph(
-                    "Compare the public IP with the <b>WAN / Internet IP</b> shown in your router's status page. "
-                            + "If they differ, your provider shares one address between customers (CGNAT) and a port "
-                            + "forward cannot work - go Back and choose Tailscale."));
-            WizardDialog.addRow(relayPanel, WizardDialog.subheading("Relay server address"));
-            relayAddress.setText(main.config().getIp());
-            relayAddress.putClientProperty("JTextField.placeholderText", "e.g. 203.0.113.10 or relay.example.com");
-            relayAddress.getDocument().addDocumentListener(new DocumentListener() {
-                @Override
-                public void insertUpdate(DocumentEvent e) {
-                    store();
-                }
-
-                @Override
-                public void removeUpdate(DocumentEvent e) {
-                    store();
-                }
-
-                @Override
-                public void changedUpdate(DocumentEvent e) {
-                    store();
-                }
-            });
-            WizardDialog.addRow(relayPanel, relayAddress);
-            WizardDialog.addRow(relayPanel, WizardDialog.paragraph(
-                    "On that machine run upstream's DD_Server (Java) with UDP port " + main.config().getPort()
-                            + " open, and the same key as here (" + main.config().getKey() + ")."));
-            WizardDialog.addRow(col, hostPanel);
-            WizardDialog.addRow(col, relayPanel);
-            return col;
-        }
-
-        private void store() {
-            main.save(Map.of("ip", relayAddress.getText().trim()));
-        }
-
-        @Override
-        void onShow() {
-            boolean host = main.config().getLinkMode() == LinkMode.HOST_RELAY;
-            hostPanel.setVisible(host);
-            relayPanel.setVisible(!host);
-            List<String> lan = NetInfo.lanAddresses();
-            forward.set(State.INFO, "In your router, forward <b>UDP " + main.config().getPort() + "</b> to this PC"
-                    + (lan.isEmpty() ? "" : " (<b>" + String.join(" / ", lan) + "</b>)")
-                    + ". Give this PC a fixed address in the router (DHCP reservation) so the forward keeps working.");
-        }
-
-        private void checkPublicIp() {
-            publicIp.set(State.PENDING, "Asking...");
-            background(() -> {
-                try {
-                    return NetInfo.publicIp();
-                } catch (Exception e) {
-                    return null;
-                }
-            }, ip -> {
-                if (ip == null) {
-                    publicIp.set(State.BAD, "Could not find out - is the PC online?");
-                } else {
-                    publicIp.set(State.OK, "<b>" + ip + "</b> - enter this in the Flight app (Connect over server).");
-                    main.save(Map.of("publicIp", ip));
-                    main.logLine("Public IP: " + ip);
-                }
-            });
-        }
-
-        @Override
-        String status() {
-            if (main.config().getLinkMode() == LinkMode.RELAY && main.config().getIp().isEmpty()) return "Enter the relay address.";
-            return null;
-        }
-
-        @Override
-        boolean canContinue() {
-            return main.config().getLinkMode() != LinkMode.RELAY || !main.config().getIp().isEmpty();
-        }
-    }
-
     /** Step 3: inbound firewall rules. */
     static final class FirewallPage extends Page {
         private final MainWindow main;
@@ -504,15 +336,9 @@ final class PcSetupWizard {
         }
 
         private void show(boolean link, boolean apk) {
-            boolean host = main.config().getLinkMode() == LinkMode.HOST_RELAY;
             int port = main.config().getPort();
-            if (link) {
-                linkRule.set(State.OK, "Inbound UDP " + port + " allowed.");
-            } else if (host) {
-                linkRule.set(State.BAD, "Required: the 4G phone connects in to the relay on UDP " + port + ".");
-            } else {
-                linkRule.set(State.INFO, "Not needed for your connection method (only for hosting the relay).");
-            }
+            linkRule.set(link ? State.OK : State.WARN, link ? "Inbound UDP " + port + " allowed: other PCs find this PC by its name, spectators connect to it."
+                    : "Recommended: other PCs find this PC by its name, and spectators connect to it, on UDP " + port + ".");
             apkRule.set(apk ? State.OK : State.WARN, apk ? "Allowed from your home network and Tailscale."
                     : "Recommended: lets the phone download the Flight app straight from this PC.");
             addButton.setVisible(!(link && apk));
@@ -534,9 +360,6 @@ final class PcSetupWizard {
 
         @Override
         String status() {
-            if (main.config().getLinkMode() == LinkMode.HOST_RELAY && linkRule.getState() == State.BAD) {
-                return "Hosting the relay needs the UDP rule.";
-            }
             return null;
         }
     }

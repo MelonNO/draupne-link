@@ -22,7 +22,6 @@ class PcConfigTest {
         PcConfig config = PcConfig.load(file);
         Map<String, String> updates = new LinkedHashMap<>();
         updates.put("ip", "100.64.1.2");
-        updates.put("linkMode", "host");
         updates.put("axis2.min", "-0.9000");
         updates.put("axis2.center", "-0.9000");
         updates.put("axis2.max", "0.9000");
@@ -35,7 +34,6 @@ class PcConfigTest {
 
         PcConfig reloaded = PcConfig.load(file);
         assertEquals("100.64.1.2", reloaded.getIp());
-        assertEquals(LinkMode.HOST_RELAY, reloaded.getLinkMode());
         assertEquals(new AxisCalibration(-0.9f, -0.9f, 0.9f), reloaded.getAxisCalibrations().get(2));
         assertEquals("100.64.1.2", config.getIp(), "in-memory copy updated too");
     }

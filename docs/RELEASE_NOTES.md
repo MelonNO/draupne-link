@@ -1,13 +1,11 @@
 <!-- The release page text: only the version being released. Older versions are in CHANGELOG.md. -->
-## New in 1.0.34
+## New in 1.0.35
 
-Phone app **DRAUPNE Flight 2.3.0-pc.27** goes with it: update the phone (tap its yellow *Update available* line). The video fixes need both.
+Phone app **DRAUPNE Flight 2.3.0-pc.28** goes with it: update the phone (tap its yellow *Update available* line). Both are needed.
 
-- **Why the picture was bad.** The phone's own emergency brakes counted the time its packet pacing takes on purpose, so at 2 Mbit/s and under nearly every key frame tripped them: a step down each time, raises locked for 2 s, and the bitrate sank to 150 kbit/s and stayed there on a perfect link (the 2026-11-03 log: 12 minutes at 45 ms ping). The brakes now count the socket's own time only. Bad coverage mode also never shrank the picture on a phone without a small 16:9 size (it took 1280x720 again); it takes 640x480 now, letterboxed on the PC.
-- **SHARP means sharp.** A sharp tier above the normal picture: 1920x1080 at up to 8 Mbit/s (settings `sharpWidth`, `sharpHeight`, `sharpBitrateLimitMbps`). MENU > VIDEO > *Video*: **SHARP** is always there; **AUTO** goes there after 20 s of calm at the top bitrate and drops back to the normal picture at the first stall; **ROBUST** is always bad coverage mode. The log says "Video: sharp (calm at 4 Mbit/s for 20 s)". It costs about 2 ms of decoding per frame on a modern PC.
-- A 720p picture on a 1080p screen is up-scaled with a sharper filter (0.4 ms more a frame).
-- **Video mode:** the PC tells the phone its video profile with the first settings of every session, the normal one included, so a phone left in bad coverage mode by the session before no longer stays in it.
-- **Tour:** the first step tells you every button can be pressed twice. EXIT TOUR is a small cross in the top right corner of the notice; NEXT spans the box.
-- **Guide:** the *Connect DRAUPNE Flight* step no longer scrolls down by itself. The *Sleep before take-off* step is gone: the tour's SLEEP BUTTONS step covers it.
+- **Names, not addresses.** Every phone is now MobileAlpha, MobileBravo ..., every PC PCAlpha, PCBravo ... Open DRAUPNE Flight on the phone (on Tailscale), and the PC names it and lists it; on the LINK card pick the phone and press CONNECT - that is all. MENU > LINK > *Name map* lists every device seen, its address and when, this PC's own name, and the port and key.
+- **One way to connect.** The connection method is gone on both ends: it is Tailscale straight to the phone. The PC setup lost its connection and relay steps.
+- **The phone listens by itself** as soon as DRAUPNE Flight is open: no CONNECT, no address to type. THIS PHONE on its status card shows the name it got (tap to pick one yourself), the phone's name and model, and its Tailscale address (long press to copy). Port and key are under *Advanced*.
+- **Spectators** pick the pilot PC by name and follow that PC, whatever phone it flies.
 
-None of the video changes has flown: a bench test with the far phone on 4G first, in AUTO, with the link logs kept.
+Untried on hardware: the first run on the phone and the PC together names the phone within a few seconds; the log says "Names: the phone at ... is MobileAlpha now".

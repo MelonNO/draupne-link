@@ -3,15 +3,11 @@ package de.droiddrone.pc;
 import java.io.IOException;
 import java.net.InetAddress;
 
-/** A ControlLink set up for the configured LinkMode, plus the in-process relay when hosting one. */
+/** A ControlLink straight to the phone (or, watching, to the pilot PC) at the address in the settings. */
 public class Connection {
-    private final LinkMode mode;
-    private final RelayHost relay;
     private final ControlLink link;
 
-    private Connection(LinkMode mode, RelayHost relay, ControlLink link) {
-        this.mode = mode;
-        this.relay = relay;
+    private Connection(ControlLink link) {
         this.link = link;
     }
 
@@ -21,40 +17,24 @@ public class Connection {
 
     /** @param video receives the camera stream (requested as H.265 or H.264 per the videoCodec setting); null = no video */
     public static Connection open(PcConfig config, ControlLink.VideoListener video) throws IOException {
-        LinkMode mode = config.getLinkMode();
         int port = config.getPort();
-        RelayHost relay = null;
-        InetAddress remoteIp;
-        int localPort = port;
-        if (mode == LinkMode.HOST_RELAY) {
-            relay = new RelayHost();
-            relay.start(port, config.getKey());
-            remoteIp = InetAddress.getLoopbackAddress();
-            localPort = port + 1; // the relay owns the public port; we talk to it over loopback
-        } else {
-            if (config.getIp().isEmpty()) {
-                throw new IllegalArgumentException("Set the " + (mode == LinkMode.RELAY ? "relay server" : "phone") + " address first.");
-            }
-            remoteIp = InetAddress.getByName(config.getIp());
+        if (config.getIp().isEmpty()) {
+            throw new IllegalArgumentException(watchOnly(config) ? "Pick the pilot PC to watch first." : "Pick the phone first.");
         }
+        InetAddress remoteIp = InetAddress.getByName(config.getIp());
         boolean watch = watchOnly(config);
-        if (watch && mode != LinkMode.PHONE) {
-            throw new IllegalArgumentException("Watching as a spectator needs the connection \"" + LinkMode.PHONE.title
-                    + "\": through a relay the phone can't say which PC flies.");
-        }
-        ControlLink link = new ControlLink(config, remoteIp, port, localPort);
-        // only straight to the phone: through a relay the phone can't tell a second PC where the first one is
-        if (mode == LinkMode.PHONE) link.enableSpectators(spectatorsAllowed(config), spectatorDelay(config));
-        if (watch) link.watchOnly();
+        ControlLink link = new ControlLink(config, remoteIp, port, port);
+        link.enableSpectators(spectatorsAllowed(config), spectatorDelay(config));
+        // watching: the address is the pilot PC's (its DRAUPNE name, 1.0.35), asked straight for its stream
+        if (watch) link.watchOnly(Names.kindOf(config.getString(Names.PHONE_NAME_KEY)) != Names.Kind.PHONE);
         if (video != null) link.setVideoListener(video, !"avc".equalsIgnoreCase(config.getString("videoCodec")));
         try {
             link.start();
         } catch (IOException | RuntimeException e) {
             link.close();
-            if (relay != null) relay.stop();
             throw e;
         }
-        return new Connection(mode, relay, link);
+        return new Connection(link);
     }
 
     /** Connect as: pilot (fly the drone) or spectator (watch another PC's flight). */
@@ -84,21 +64,12 @@ public class Connection {
         return link;
     }
 
-    public LinkMode getMode() {
-        return mode;
-    }
 
     public String describe(ControlLink.State state) {
         return switch (state) {
-            case CONNECTING -> switch (mode) {
-                case PHONE -> "Waiting for the Flight phone... (Flight app connected in Direct mode, reachable address, same key?)";
-                case RELAY -> "Waiting for the relay server... (address, port and key right?)";
-                case HOST_RELAY -> "Starting the relay on this PC...";
-            };
-            // through a relay, the relay answers our Connect itself; settings are only accepted once the phone is there
-            case CONFIGURING -> mode == LinkMode.PHONE
-                    ? "Connected. Sending settings..."
-                    : "Relay connected - waiting for the Flight phone to join (Flight app: Connect over server)...";
+            case CONNECTING -> link.isWatchOnly() ? "Waiting for the pilot PC... (is it connected, with Allow spectators on?)"
+                    : "Waiting for the phone... (DRAUPNE Flight open on it, the phone on Tailscale, the same key?)";
+            case CONFIGURING -> "Connected. Sending settings...";
             case READY -> "Flight phone accepted settings - link ready.";
             case VERSION_MISMATCH -> "VERSION MISMATCH: install DRAUPNE Flight (or DroidDrone Flight 2.3.0) on the phone.";
             case SPECTATING, SPECTATOR_WAITING -> link.spectatorStatus();
@@ -108,6 +79,5 @@ public class Connection {
 
     public void close() {
         link.close();
-        if (relay != null) relay.stop();
     }
 }

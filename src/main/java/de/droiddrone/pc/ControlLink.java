@@ -297,8 +297,19 @@ public class ControlLink {
      * connect; it asks who flies and watches through that PC, and waits while nobody does.
      */
     public void watchOnly() {
-        watchOnly = true;
+        watchOnly(false);
     }
+
+    /**
+     * @param pilotPc the address this link was given is the pilot PC's (1.0.35: a PC picked by name), not the phone's:
+     *                its stream is asked for straight (HELLO), without asking a phone who flies
+     */
+    public void watchOnly(boolean pilotPc) {
+        watchOnly = true;
+        watchPilotPc = pilotPc;
+    }
+
+    private boolean watchPilotPc;
 
     /** Connected as a spectator on purpose, rather than turned into one because another PC flies. */
     public boolean isWatchOnly() {
@@ -335,7 +346,9 @@ public class ControlLink {
         receiverBuffer = new ReceiverBuffer(udpSender, false, key, key);
         if (watchOnly) {
             // asks the phone who flies (PILOT_QUERY, never a Connect), then joins that PC
-            spectator = new SpectatorClient(socket, remoteIp, remotePort, key, spectatorDelayMs, null, this::playSpectated);
+            spectator = new SpectatorClient(socket, remoteIp, remotePort, key, spectatorDelayMs,
+                    watchPilotPc ? new Spectate.Address(remoteIp, remotePort) : null, this::playSpectated);
+            if (watchPilotPc) spectator.pilotIsFixed();
         } else if (spectatorsEnabled) {
             try {
                 host = new SpectatorHost(key, spectatorsAllowed, socket, () -> getState() == State.READY, this::getPing,
@@ -388,9 +401,21 @@ public class ControlLink {
         }
     }
 
-    /** Not from the phone: a spectator asking this PC, or (when this PC watches) the pilot PC. */
+    /** The reply to another PC's NAME_QUERY (1.0.35): set by the main window, which knows this PC's name. */
+    private volatile java.util.function.Supplier<byte[]> nameReply;
+
+    public void setNameReply(java.util.function.Supplier<byte[]> reply) {
+        nameReply = reply;
+    }
+
+    /** Not from the phone: a spectator asking this PC, (when this PC watches) the pilot PC, or a PC asking who this is. */
     private void onForeignPacket(DatagramPacket packet) {
         if (packet.getLength() < 1) return;
+        if (packet.getData()[0] == Names.NAME_QUERY) {
+            java.util.function.Supplier<byte[]> r = nameReply;
+            if (r != null) NameService.answer(socket, packet, config.getKey(), r);
+            return;
+        }
         SpectatorHost h = host;
         SpectatorClient c = spectator;
         if (h != null && packet.getData()[0] == Spectate.HELLO) {

@@ -1,8 +1,8 @@
 <resources>
     <string name="app_name">DRAUPNE Flight</string>
-    <string name="connect">Connect</string>
+    <string name="connect">Start</string>
     <string name="connect_on_startup">Connect when the app starts</string>
-    <string name="disconnect">Disconnect</string>
+    <string name="disconnect">Stop</string>
     <string name="status_network">NETWORK</string>
     <string name="status_fc">FLIGHT CONTROLLER</string>
     <string name="status_disconnected">Disconnected</string>
@@ -99,4 +99,14 @@ TO UNLOCK</string>
     <string name="dd_power_admin_why">So the screen can go off by itself in deep sleep.</string>
     <string name="dd_power_exact_line">Exact alarms not allowed: deep sleep\'s checks for the PC may come late. Tap to allow them.</string>
     <string name="dd_power_battery_line">Battery optimisation is on: a deep sleep check may not reach the PC. Tap to switch it off for this app.</string>
+    <string name="dd_label_this_phone">THIS PHONE</string>
+    <string name="dd_phone_tailscale">Tailscale %1$s</string>
+    <string name="dd_phone_tailscale_off">Tailscale: not connected</string>
+    <string name="dd_phone_other_ip">Wi-Fi / mobile %1$s</string>
+    <string name="dd_phone_copied">Copied %1$s</string>
+    <string name="dd_phone_no_name">No name yet - a DRAUPNE Link PC on your Tailscale network gives one. Tap to pick one yourself.</string>
+    <string name="dd_phone_name_auto">Let the PC name this phone</string>
+    <string name="dd_phone_name_title">This phone\'s name</string>
+    <string name="dd_phone_listens">This phone listens for the PC by itself. On the PC, pick this phone\'s name and press CONNECT.</string>
+    <string name="dd_advanced">Advanced: port and key</string>
 </resources>

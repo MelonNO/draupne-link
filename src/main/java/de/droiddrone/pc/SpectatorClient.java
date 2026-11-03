@@ -111,6 +111,13 @@ final class SpectatorClient implements AutoCloseable {
         return pilot;
     }
 
+    /** The pilot's address was given (a PC picked by name, 1.0.35): never ask a phone who flies, keep calling that PC. */
+    void pilotIsFixed() {
+        pilotFixed = true;
+    }
+
+    private volatile boolean pilotFixed;
+
     int delayMs() {
         return delayMs;
     }
@@ -262,7 +269,7 @@ final class SpectatorClient implements AutoCloseable {
                         nextHello = now + (phase == Phase.JOINING ? HELLO_MS : 2000);
                     }
                     // nobody answers, or nobody flies: ask the phone (never a Connect - that could take the drone)
-                    if ((p == null || now - lastFromPilot > PILOT_GONE_MS || phase == Phase.NO_PILOT) && now >= nextQuery) {
+                    if (!pilotFixed && (p == null || now - lastFromPilot > PILOT_GONE_MS || phase == Phase.NO_PILOT) && now >= nextQuery) {
                         send(Spectate.keyed(Spectate.PILOT_QUERY, key), phoneIp, phonePort);
                         nextQuery = now + QUERY_MS;
                     }

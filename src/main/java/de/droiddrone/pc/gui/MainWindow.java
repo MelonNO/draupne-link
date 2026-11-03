@@ -9,7 +9,8 @@ import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.Joystick;
 import de.droiddrone.pc.JoystickService;
 import de.droiddrone.pc.LinkLog;
-import de.droiddrone.pc.LinkMode;
+import de.droiddrone.pc.NameService;
+import de.droiddrone.pc.Names;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.RcMapper;
 import de.droiddrone.pc.RcSession;
@@ -185,12 +186,16 @@ public class MainWindow extends JFrame {
     private final JPanel joystickSlot = new JPanel(joystickCards);
     private Color joystickFrame;
 
-    private final JComboBox<LinkMode> modeCombo = new JComboBox<>(LinkMode.values());
-    private final JLabel modeHint = Theme.label("", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
-    private final JLabel addressLabel = Theme.label("ADDRESS", Theme.headingFont(11f), Theme.MUTED);
-    private final JTextField addressField = new JTextField();
-    private final JTextField portField = new JTextField();
-    private final JTextField keyField = new JTextField();
+    /** DRAUPNE names (1.0.35): the devices seen on the Tailscale network, and the service that keeps asking them. */
+    private final Names names;
+    private final NameService nameService;
+    private final JLabel phoneLabel = Theme.label("PHONE", Theme.headingFont(11f), Theme.MUTED);
+    /** The phone to fly (as a spectator: the pilot PC to watch), by name; the address comes from the name map. */
+    private final JComboBox<String> phoneCombo = new JComboBox<>();
+    private final JButton nameMapButton = Theme.secondaryButton("Name map");
+    private final JLabel phoneHint = Theme.label("", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
+    private java.util.List<Names.Entry> phoneList = java.util.List.of();
+    private boolean fillingPhones;
     private final JButton connectButton = Theme.primaryButton("Connect");
     /** Connect as: pilot (fly) or spectator (watch only). */
     private final JComboBox<String> roleCombo = new JComboBox<>(new String[]{ROLE_PILOT, ROLE_SPECTATOR});
@@ -281,6 +286,8 @@ public class MainWindow extends JFrame {
         this.config = config;
         this.configFile = configFile;
         this.service = service;
+        names = new Names(config, this::save);
+        nameService = new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             @Override
@@ -298,8 +305,6 @@ public class MainWindow extends JFrame {
         root.add(linkColumn, BorderLayout.WEST);
         root.add(buildRightColumn(), BorderLayout.CENTER);
 
-        modeCombo.addActionListener(e -> updateModeUi());
-        TacticalCombo.install(modeCombo);
         reloadSettings();
         logLine("DRAUPNE Link " + de.droiddrone.pc.AppInfo.version() + ". Phone app: DRAUPNE Flight " + de.droiddrone.pc.setup.ApkShare.VERSION
                 + " (protocol " + SettingsCommon.versionCompatibleCode + "). Settings: " + shortPath(configFile));
@@ -335,6 +340,8 @@ public class MainWindow extends JFrame {
         });
         new Timer(33, e -> refresh()).start();
         phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, java.util.concurrent.TimeUnit.SECONDS);
+        nameService.onChange(() -> SwingUtilities.invokeLater(this::updatePhoneList)); // the PHONE list follows the network
+        nameService.start();
         // at once on opening, then every 15 minutes; its own thread, so a slow GitHub never holds up the phone check
         java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "updateCheck");
@@ -455,6 +462,8 @@ public class MainWindow extends JFrame {
                     logLine(on ? "Spectators allowed: a second PC that connects watches through this one."
                             : "Spectators off: nobody can watch through this PC.");
                 }));
+        menu.add(new MenuRows.WindowRow("Name map", "Every phone and PC seen on your Tailscale network: names and addresses, this PC's name, the port and key",
+                this::openNameMap));
         return menu;
     }
 
@@ -600,27 +609,23 @@ public class MainWindow extends JFrame {
 
         JPanel fields = new JPanel(new GridBagLayout());
         fields.setOpaque(false);
-        fields.add(Theme.label("CONNECTION", Theme.headingFont(11f), Theme.MUTED), c);
-        fields.add(modeCombo, c);
-        c.insets = new Insets(0, 0, 10, 0);
-        modeHint.setPreferredSize(new Dimension(300, 52));
-        modeHint.setVerticalAlignment(SwingConstants.TOP);
-        fields.add(modeHint, c);
-        c.insets = new Insets(0, 0, 6, 0);
-        fields.add(addressLabel, c);
-        addressField.putClientProperty("JTextField.placeholderText", "e.g. 100.64.0.20");
-        fields.add(addressField, c);
-        c.gridwidth = 1;
-        c.gridy = GridBagConstraints.RELATIVE;
-        JPanel portKey = new JPanel(new GridLayout(2, 2, 10, 6));
-        portKey.setOpaque(false);
-        portKey.add(Theme.label("PORT", Theme.headingFont(11f), Theme.MUTED));
-        portKey.add(Theme.label("KEY", Theme.headingFont(11f), Theme.MUTED));
-        portKey.add(portField);
-        portKey.add(keyField);
+        fields.add(phoneLabel, c);
+        TacticalCombo.install(phoneCombo);
+        phoneCombo.setToolTipText("The phone to fly, by its DRAUPNE name (MobileAlpha ...): every phone with DRAUPNE Flight open on your Tailscale network is here");
+        phoneCombo.addActionListener(e -> {
+            if (!fillingPhones) choosePhone();
+        });
+        fields.add(phoneCombo, c);
+        c.insets = new Insets(0, 0, 8, 0);
+        phoneHint.setPreferredSize(new Dimension(300, 36));
+        phoneHint.setVerticalAlignment(SwingConstants.TOP);
+        fields.add(phoneHint, c);
         c.gridwidth = 2;
-        c.insets = new Insets(4, 0, 14, 0);
-        fields.add(portKey, c);
+        c.gridy = GridBagConstraints.RELATIVE;
+        nameMapButton.setToolTipText("Every device seen, with its name, address and when; this PC's own name; the port and the key");
+        nameMapButton.addActionListener(e -> openNameMap());
+        c.insets = new Insets(0, 0, 14, 0);
+        fields.add(nameMapButton, c);
         c.insets = new Insets(0, 0, 6, 0);
         fields.add(Theme.label("CONNECT AS", Theme.headingFont(11f), Theme.MUTED), c);
         roleCombo.setSelectedItem(Connection.watchOnly(config) ? ROLE_SPECTATOR : ROLE_PILOT);
@@ -630,6 +635,7 @@ public class MainWindow extends JFrame {
             boolean watch = ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
             save(Map.of(Connection.CONNECT_AS_KEY, watch ? "spectator" : "pilot"));
             if (connection == null) connectButton.setText(watch ? "WATCH" : "CONNECT");
+            updatePhoneList(); // phones to fly, or PCs to watch
         });
         fields.add(roleCombo, c);
         fieldsFold = new Fold(fields, true);
@@ -925,30 +931,72 @@ public class MainWindow extends JFrame {
 
     // ---------------------------------------------------------------- behaviour
 
-    private void updateModeUi() {
-        LinkMode mode = (LinkMode) modeCombo.getSelectedItem();
-        int port;
+    /**
+     * The PHONE list (as a spectator: the PILOT PC list) from the name map, online first, the saved choice selected;
+     * a first device seen is taken as the choice. Called as the name service hears answers.
+     */
+    private void updatePhoneList() {
+        boolean watch = ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
+        Names.Kind kind = watch ? Names.Kind.PC : Names.Kind.PHONE;
+        phoneLabel.setText(watch ? "PILOT PC" : "PHONE");
+        String chosen = config.getString(Names.PHONE_NAME_KEY);
+        java.util.List<Names.Entry> list = names.list(kind);
+        if (kind == Names.Kind.PC) list.removeIf(e -> e.name().equalsIgnoreCase(nameService.ownName()));
+        long now = System.currentTimeMillis();
+        int at = -1;
+        for (int i = 0; i < list.size(); i++) if (list.get(i).name().equalsIgnoreCase(chosen)) at = i;
+        fillingPhones = true;
         try {
-            port = Integer.parseInt(portField.getText().trim());
-        } catch (NumberFormatException e) {
-            port = SettingsCommon.port;
+            phoneList = list;
+            phoneCombo.removeAllItems();
+            for (Names.Entry e : list) phoneCombo.addItem(e.name() + (e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
+            if (list.isEmpty()) phoneCombo.addItem(kind == Names.Kind.PHONE ? "No phone seen yet" : "No pilot PC seen yet");
+            phoneCombo.setSelectedIndex(Math.max(0, at));
+        } finally {
+            fillingPhones = false;
         }
-        modeHint.setText("<html>" + Objects.requireNonNull(mode).hint(port) + "</html>");
-        boolean needsAddress = mode != LinkMode.HOST_RELAY;
-        addressField.setEnabled(needsAddress && connection == null);
-        addressLabel.setText(mode == LinkMode.RELAY ? "RELAY SERVER ADDRESS" : mode == LinkMode.PHONE ? "PHONE ADDRESS" : "ADDRESS (NOT USED)");
+        if (at < 0 && !list.isEmpty() && connection == null) {
+            choosePhone(); // the first one seen: taken, so CONNECT just works
+            return;
+        }
+        Names.Entry e = at < 0 ? null : list.get(at);
+        String hint = e == null
+                ? (kind == Names.Kind.PHONE ? "Open DRAUPNE Flight on the phone, on Tailscale: it shows up here by itself."
+                        : "A PC running DRAUPNE Link on your Tailscale network shows up here by itself.")
+                : e.online() ? e.detail() + "  -  " + e.ip()
+                : e.name() + " was last seen " + Names.agoText(e.lastSeen(), now) + (kind == Names.Kind.PHONE ? ": open DRAUPNE Flight on it." : ".");
+        phoneHint.setText("<html>" + hint + "</html>");
+    }
+
+    /** The list's choice: saved by name, its address with it. */
+    private void choosePhone() {
+        int i = phoneCombo.getSelectedIndex();
+        if (i < 0 || i >= phoneList.size()) return;
+        Names.Entry e = phoneList.get(i);
+        if (!e.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) || !String.valueOf(e.ip()).equals(config.getIp())) {
+            save(Map.of(Names.PHONE_NAME_KEY, e.name(), "ip", e.ip() == null ? "" : e.ip()));
+        }
+        updatePhoneList();
+    }
+
+    private void openNameMap() {
+        new NameMapDialog(this, names, nameService, config, this::save, this::updatePhoneList).setVisible(true);
+    }
+
+    Names names() {
+        return names;
+    }
+
+    NameService nameService() {
+        return nameService;
     }
 
     /** Shows the saved settings again (the setup wizards change them). */
     void reloadSettings() {
         channelBars.setPurposes(de.droiddrone.pc.setup.ModeSwitch.purposes(config)); // AUX rows named after Drone setup's switches
         if (connection == null) {
-            modeCombo.setSelectedItem(config.getLinkMode());
-            addressField.setText(config.getIp());
-            portField.setText(Integer.toString(config.getPort()));
-            keyField.setText(config.getKey());
             roleCombo.setSelectedItem(Connection.watchOnly(config) ? ROLE_SPECTATOR : ROLE_PILOT);
-            updateModeUi();
+            updatePhoneList();
         }
         rebuildMapper();
     }
@@ -1041,25 +1089,23 @@ public class MainWindow extends JFrame {
                     "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        LinkMode mode = (LinkMode) modeCombo.getSelectedItem();
-        String port = portField.getText().trim();
-        try {
-            int p = Integer.parseInt(port);
-            if (p < 1024 || p > 65534) throw new NumberFormatException();
-        } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "Port must be a number between 1024 and 65534.", "Cannot connect", JOptionPane.WARNING_MESSAGE);
+        boolean watch = ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
+        Names.Entry target = names.get(config.getString(Names.PHONE_NAME_KEY));
+        if (target == null || target.kind() != (watch ? Names.Kind.PC : Names.Kind.PHONE) || target.ip() == null || target.ip().isEmpty()) {
+            JOptionPane.showMessageDialog(this, watch ? "Pick the pilot PC to watch first: it shows up in the list once DRAUPNE Link runs on it."
+                    : "Pick the phone first: it shows up in the list once DRAUPNE Flight is open on it, on Tailscale.", "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        if (!save(Map.of("linkMode", Objects.requireNonNull(mode).key, "ip", addressField.getText().trim(),
-                "port", port, "key", keyField.getText().trim()))) {
-            return;
-        }
+        if (!save(Map.of("ip", target.ip()))) return;
+        int port = config.getPort();
+        nameService.pause(); // the link takes the port, and answers name queries itself meanwhile
         boolean wantVideo = !"false".equalsIgnoreCase(config.getString("video"));
         ControlLink[] linkRef = new ControlLink[1];
         video = wantVideo ? new VideoPipeline(videoView, () -> linkRef[0] == null ? -1 : linkRef[0].getPing()) : null;
         try {
             connection = Connection.open(config, video);
             linkRef[0] = connection.getLink();
+            connection.getLink().setNameReply(nameService::replyPacket);
             connection.getLink().setEvents(this::logLine);
             if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
@@ -1067,6 +1113,7 @@ public class MainWindow extends JFrame {
             videoView.setStatsSource(video == null ? null : video::stats);
         } catch (IOException | RuntimeException e) {
             connection = null;
+            nameService.resume();
             if (video != null) video.close();
             video = null;
             logLine("Connect failed: " + e.getMessage());
@@ -1102,7 +1149,7 @@ public class MainWindow extends JFrame {
         lastArmedAt = 0;
         linkLogTimer.start();
         updateFlightLayout();
-        logLine("Connecting: " + mode + (mode == LinkMode.HOST_RELAY ? "" : " " + addressField.getText().trim()) + ":" + port);
+        logLine((watch ? "Watching " : "Connecting to ") + target.name() + " (" + target.ip() + ":" + port + ")" + (target.online() ? "" : " - last seen " + Names.agoText(target.lastSeen(), System.currentTimeMillis())));
         setLinkEditable(false);
     }
 
@@ -1117,6 +1164,7 @@ public class MainWindow extends JFrame {
         lostDroneButton.setVisible(false);
         if (connection != null) connection.close();
         connection = null;
+        nameService.resume();
         updateFlightLayout();
         session = null;
         if (video != null) video.close();
@@ -1298,16 +1346,13 @@ public class MainWindow extends JFrame {
     private static final long LOST_DRONE_WINDOW_MS = 10 * 60_000;
 
     private void setLinkEditable(boolean editable) {
-        modeCombo.setEnabled(editable);
-        portField.setEnabled(editable);
-        keyField.setEnabled(editable);
+        phoneCombo.setEnabled(editable);
         roleCombo.setEnabled(editable);
         joystickCombo.setEnabled(editable);
         calibrateButton.setEnabled(editable);
         calibrateButton.setToolTipText(editable ? null : "Locked while connected - disconnect first: RC output must stop while calibrating");
         connectButton.setText(editable ? (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()) ? "WATCH" : "CONNECT") : "DISCONNECT");
         connectButton.setBackground(editable ? Theme.ACCENT : Theme.BAD);
-        updateModeUi();
     }
 
     boolean save(Map<String, String> updates) {
@@ -1346,6 +1391,7 @@ public class MainWindow extends JFrame {
 
     private void shutdown() {
         phoneWatch.shutdownNow();
+        nameService.stop();
         if (popOut != null) popOut.dispose();
         if (connection != null) disconnect();
         settingsWriter.shutdown(); // what is queued (the OSD layout, the window's place) reaches the file before the exit
@@ -1586,7 +1632,7 @@ public class MainWindow extends JFrame {
     private void checkPhone() {
         try {
             String ip = config.getIp();
-            boolean tailscale = config.getLinkMode() == LinkMode.PHONE && !ip.isEmpty();
+            boolean tailscale = !ip.isEmpty();
             Tailscale.Status status = tailscale ? Tailscale.status() : null;
             Tailscale.PhoneState state = status == null ? null : Tailscale.phoneState(status, ip);
             String path = status == null ? "" : Tailscale.phonePath(status, ip);

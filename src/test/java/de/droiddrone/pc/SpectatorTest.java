@@ -164,14 +164,14 @@ class SpectatorTest {
         waitFor(() -> spectator.getState() == ControlLink.State.SPECTATING, 6000, "watching the new pilot");
     }
 
+    /** Watching needs a pilot PC picked by name (1.0.35); without one the connection says so instead of guessing. */
     @Test
-    void watchingThroughARelayIsRefused() throws Exception {
+    void watchingNeedsAPilotPcPicked() throws Exception {
         PcConfig config = PcConfig.defaults();
         config.set(Connection.CONNECT_AS_KEY, "spectator");
-        config.set("linkMode", "relay");
-        config.set("ip", "127.0.0.1");
+        config.set("ip", "");
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> Connection.open(config));
-        assertTrue(e.getMessage().contains("spectator"));
+        assertTrue(e.getMessage().contains("pilot PC"), e.getMessage());
     }
 
     @Test

@@ -122,6 +122,40 @@ public class Udp {
     private boolean videoRefusedSaid;
     // spectator mode (DRAUPNE Link Spectate.java): codes clear of upstream's packet names
     private static final byte SPECTATE_PILOT_QUERY = 0x60;
+    /**
+     * DRAUPNE names (pc.28), from DRAUPNE Link 1.0.35: NAME_QUERY [0x73][key UTF] is answered with NAME_REPLY
+     * [0x74][key UTF][0 = phone][name UTF][device UTF][version UTF] (the name "" while this phone has none);
+     * NAME_ASSIGN [0x75][key UTF][name UTF] from the master PC gives this phone its name (kept), answered the same.
+     * Another key: dropped without a word.
+     */
+    static final byte NAME_QUERY = 0x73, NAME_REPLY = 0x74, NAME_ASSIGN = 0x75;
+
+    private void answerName(DatagramPacket packet, byte[] d, int len) {
+        if (!keyMatches(d, len, 1)) return;
+        try {
+            if (d[0] == NAME_ASSIGN) {
+                java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(d, 1, len - 1));
+                in.readUTF(); // the key
+                String name = in.readUTF();
+                if (!name.isEmpty() && !name.equals(MainActivity.phoneName())) {
+                    MainActivity.setPhoneName(name);
+                    log("This phone is " + name + " now (named by the PC at " + packet.getAddress().getHostAddress() + ")");
+                }
+            }
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+            out.writeByte(NAME_REPLY);
+            out.writeUTF(key);
+            out.writeByte(0);
+            out.writeUTF(MainActivity.phoneName());
+            out.writeUTF(MainActivity.deviceName());
+            out.writeUTF(MainActivity.versionName == null ? "" : MainActivity.versionName);
+            byte[] r = bytes.toByteArray();
+            socket.send(new DatagramPacket(r, r.length, packet.getAddress(), packet.getPort()));
+        } catch (Exception e) {
+            log("answerName error: " + e);
+        }
+    }
     private static final byte SPECTATE_PILOT_AT = 0x61;
     private static final byte SPECTATE_NO_PILOT = 0x62;
     /**
@@ -315,6 +349,11 @@ public class Udp {
                     int len = receiverPacket.getLength();
                     if (len < 1) continue;
                     byte[] d = receiverPacket.getData();
+                    // DRAUPNE names (pc.28): a PC asking who this phone is, or the master PC naming it - in any state
+                    if (d[0] == NAME_QUERY || d[0] == NAME_ASSIGN) {
+                        answerName(receiverPacket, d, len);
+                        continue;
+                    }
                     ReceiverBuffer buffer = receiverBuffer;
                     // check IP & port
                     if (connectionMode == SettingsCommon.ConnectionMode.overServer){

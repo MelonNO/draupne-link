@@ -43,27 +43,6 @@ class ControlLinkTest {
         if (phone != null) phone.close();
     }
 
-    @Test
-    void hostRelayModeCarriesConfigAndRcThroughUpstreamRelay() throws Exception {
-        PcConfig config = PcConfig.defaults();
-        config.set("linkMode", "host");
-        config.set("port", Integer.toString(RELAY_PORT));
-        config.set("key", "DD");
-        connection = Connection.open(config);
-        ControlLink relayed = connection.getLink();
-        waitFor(() -> relayed.getState() == ControlLink.State.CONFIGURING, 5000, "relay answering Connect");
-
-        // the phone shows up later, as it would over 4G
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode, RELAY_PORT);
-        waitFor(() -> relayed.getState() == ControlLink.State.READY, 8000, "phone accepting config via relay");
-        assertEquals(0, phone.config.trailingBytes);
-
-        short[] sticks = {1500, 1500, 1500, 1000, 2000};
-        assertTrue(relayed.sendRc(sticks));
-        waitFor(() -> !phone.rcFrames.isEmpty(), 3000, "RC frame via relay");
-        assertArrayEquals(ControlLink.padForRxMap(sticks), phone.rcFrames.get(phone.rcFrames.size() - 1));
-    }
-
     /** Records what the video pipeline would put on screen. */
     static final class CapturingSink implements VideoPipeline.FrameSink {
         final int[] pixels = new int[160 * 120];

@@ -133,6 +133,11 @@ public class PcConfig {
         return new RcMapper(getChannelSpecs(), getAxisCalibrations());
     }
 
+    /** Every key with a value: the file's and the template's (the name map's name.* keys among them). */
+    public synchronized java.util.Set<String> keys() {
+        return props.stringPropertyNames();
+    }
+
     public String getString(String key) {
         String value = props.getProperty(key);
         return value == null ? "" : value.trim();
@@ -147,7 +152,6 @@ public class PcConfig {
         }
     }
 
-    public LinkMode getLinkMode() { return LinkMode.fromKey(getString("linkMode")); }
     public String getIp() { return getString("ip"); }
     public int getPort() { return getInt("port"); }
     public String getKey() { return getString("key"); }

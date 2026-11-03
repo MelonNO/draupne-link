@@ -217,8 +217,8 @@ public class Main {
         }
         ControlLink link = connection.getLink();
         Runtime.getRuntime().addShutdownHook(new Thread(connection::close));
-        System.out.printf("Joystick: %s%nMode: %s (port %d). Press Enter to disconnect.%n",
-                joystick.name(), connection.getMode(), config.getPort()); // not the key: consoles get pasted
+        System.out.printf("Joystick: %s%nPhone: %s at %s (port %d). Press Enter to disconnect.%n",
+                joystick.name(), config.getString(Names.PHONE_NAME_KEY), config.getIp(), config.getPort()); // not the key: consoles get pasted
         startQuitListener();
 
         RcSession session = new RcSession(link, mapper, msg -> System.out.println("\n" + msg), ArmSwitch.parse(config.getString(ArmSwitch.KEY)));

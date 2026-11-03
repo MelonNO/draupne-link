@@ -4,7 +4,7 @@ import de.droiddrone.common.FcInfo;
 import de.droiddrone.pc.AppPaths;
 import de.droiddrone.pc.Connection;
 import de.droiddrone.pc.ControlLink;
-import de.droiddrone.pc.LinkMode;
+import de.droiddrone.pc.Names;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.setup.ApkShare;
 import de.droiddrone.pc.setup.Tailscale;
@@ -90,11 +90,6 @@ final class PhoneGuideWizard {
         }
 
         @Override
-        boolean isApplicable() {
-            return main.config().getLinkMode() == LinkMode.PHONE;
-        }
-
-        @Override
         String title() {
             return "Tailscale on the phone";
         }
@@ -128,7 +123,7 @@ final class PhoneGuideWizard {
                 }
             });
             phoneChoice.addActionListener(e -> {
-                if (!updatingChoice && phoneChoice.getSelectedItem() instanceof Tailscale.Peer p) choose(p);
+                if (!updatingChoice) wizard.update();
             });
             phoneChoice.setVisible(false);
             phone.addComponent(phoneChoice);
@@ -168,9 +163,7 @@ final class PhoneGuideWizard {
             Object selected = phoneChoice.getSelectedItem();
             phones.removeAllElements();
             androids.forEach(phones::addElement);
-            String savedIp = main.config().getIp();
-            Tailscale.Peer current = androids.stream().filter(p -> p.ip().equals(savedIp)).findFirst()
-                    .orElse(selected instanceof Tailscale.Peer p && androids.contains(p) ? p : null);
+            Tailscale.Peer current = selected instanceof Tailscale.Peer p && androids.contains(p) ? p : null;
             if (current == null && !androids.isEmpty()) current = androids.get(0);
             phones.setSelectedItem(current);
             phoneChoice.setVisible(androids.size() > 1);
@@ -178,9 +171,9 @@ final class PhoneGuideWizard {
             if (current == null) {
                 phone.set(State.PENDING, "Waiting for an Android device on your Tailscale network...");
             } else {
-                if (!current.ip().equals(savedIp)) choose(current);
                 phone.set(current.online() ? State.OK : State.WARN, "<b>" + current.hostName() + "</b> - " + current.ip()
-                        + (current.online() ? " - online. Address saved for the link." : " - offline: open Tailscale on the phone and switch it on."));
+                        + (current.online() ? " - online. DRAUPNE Flight (the next steps) gives it its name: MobileAlpha, MobileBravo ..."
+                        : " - offline: open Tailscale on the phone and switch it on."));
             }
             wizard.update();
         }
@@ -189,10 +182,6 @@ final class PhoneGuideWizard {
             return PhoneGuideWizard.inFirstTimeGuide(this);
         }
 
-        private void choose(Tailscale.Peer p) {
-            main.save(Map.of("ip", p.ip(), "phoneName", p.hostName()));
-            main.logLine("Phone address set to " + p.ip() + " (" + p.hostName() + ").");
-        }
 
         @Override
         String status() {
@@ -287,11 +276,6 @@ final class PhoneGuideWizard {
                 // neutral, not green: this PC can't see whether the phone has installed it (the Connect step can)
                 file.set(State.INFO, "Ready for the phone to download (checked, SHA-256).");
                 List<String> list = ApkShare.urls();
-                if (main.config().getLinkMode() != LinkMode.PHONE) {
-                    List<String> lanFirst = new ArrayList<>(list);
-                    lanFirst.sort((a, b) -> Boolean.compare(a.startsWith("http://100."), b.startsWith("http://100.")));
-                    list = lanFirst;
-                }
                 urls.removeAllElements();
                 list.forEach(urls::addElement);
                 if (!list.isEmpty()) urls.setSelectedItem(list.get(0));
@@ -346,10 +330,8 @@ final class PhoneGuideWizard {
                     "For DRAUPNE Flight and for Tailscale: Settings > Apps > DRAUPNE Flight > Battery > <b>Unrestricted</b>."));
             WizardDialog.addRow(col, setting("data", "Mobile data: unrestricted",
                     "For both apps: Settings > Apps > DRAUPNE Flight > Mobile data > <b>Unrestricted data usage</b>."));
-            if (main.config().getLinkMode() == LinkMode.PHONE) {
-                WizardDialog.addRow(col, setting("vpn", "Tailscale: Always-on VPN",
-                        "Settings > Network &amp; internet > VPN > the gear next to Tailscale > <b>Always-on VPN</b>."));
-            }
+            WizardDialog.addRow(col, setting("vpn", "Tailscale: Always-on VPN",
+                    "Settings > Network &amp; internet > VPN > the gear next to Tailscale > <b>Always-on VPN</b>."));
             WizardDialog.addRow(col, setting("otg", "OTG switched on (some phones)",
                     "OPPO, realme, OnePlus, vivo and some others have an <b>OTG</b> switch: search Settings for OTG and switch it "
                             + "on just before plugging in (it turns off by itself after some minutes). No such switch: nothing to do."));
@@ -406,6 +388,12 @@ final class PhoneGuideWizard {
         private final CheckRow camera = new CheckRow("Camera");
         private final CheckRow latency = new CheckRow("Round-trip time");
         private final CheckRow path = new CheckRow("Network path");
+        /** The phone to fly by its DRAUPNE name (1.0.35): the name map's phones, kept fresh while the step shows. */
+        private final CheckRow phoneRow = new CheckRow("Phone");
+        private final DefaultComboBoxModel<Names.Entry> phones = new DefaultComboBoxModel<>();
+        private final JComboBox<Names.Entry> phoneChoice = new JComboBox<>(phones);
+        private boolean fillingPhones;
+        private long nextPhones;
         /** The live picture, small, for the camera check: is it the right way up? */
         private final VideoView preview = new VideoView();
         private boolean flipped;
@@ -433,7 +421,7 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "On the phone, open DRAUPNE Flight, enter this and tap <b>CONNECT</b>. "
+            return "On the phone, open DRAUPNE Flight: it listens for this PC by itself and gets its name. "
                     + "Plug the phone into the drone with a USB data cable (props off).";
         }
 
@@ -448,6 +436,21 @@ final class PhoneGuideWizard {
             preview.setIdleText("THE PICTURE SHOWS HERE");
             top.add(preview, BorderLayout.EAST);
             WizardDialog.addRow(col, top);
+            phoneChoice.setRenderer(new javax.swing.DefaultListCellRenderer() {
+                @Override
+                public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
+                                                                       int index, boolean selected, boolean focus) {
+                    super.getListCellRendererComponent(list, value, index, selected, focus);
+                    if (value instanceof Names.Entry p) setText(p.name() + "  " + p.detail() + (p.online() ? "" : "  (offline)"));
+                    return this;
+                }
+            });
+            phoneChoice.addActionListener(e -> {
+                if (!fillingPhones && phoneChoice.getSelectedItem() instanceof Names.Entry p) choosePhone(p);
+            });
+            phoneChoice.setVisible(false);
+            phoneRow.addComponent(phoneChoice);
+            WizardDialog.addRow(col, phoneRow);
             WizardDialog.addRow(col, WizardDialog.paragraph("Android asks whether DRAUPNE Flight may use the flight controller: "
                     + "tick <b>Always allow</b> (or <b>Use by default</b>) and tap <b>OK</b>. Then it reconnects by itself if the cable slips."));
             WizardDialog.addRow(col, link);
@@ -470,29 +473,67 @@ final class PhoneGuideWizard {
                     + "Not right yet? Press Flip again.");
         }
 
-        @Override
-        void onShow() {
+        /** The table: the phone chosen (by name, with its address), the port and the key. */
+        private void showTable() {
             PcConfig c = main.config();
-            String[][] rows = switch (c.getLinkMode()) {
-                case PHONE -> new String[][]{
-                        {"Connection", "Direct connection"},
-                        {"Port", Integer.toString(c.getPort())},
-                        {"Key", c.getKey()}};
-                case HOST_RELAY -> new String[][]{
-                        {"Connection", "Connect over server"},
-                        {"IP", c.getString("publicIp").isEmpty() ? "your public IP (SETUP > PC setup)" : c.getString("publicIp")},
-                        {"Port", Integer.toString(c.getPort())},
-                        {"Server key", c.getKey()}};
-                case RELAY -> new String[][]{
-                        {"Connection", "Connect over server"},
-                        {"IP", c.getIp().isEmpty() ? "your relay server (SETUP > PC setup)" : c.getIp()},
-                        {"Port", Integer.toString(c.getPort())},
-                        {"Server key", c.getKey()}};
-            };
+            Names.Entry chosen = main.names().get(c.getString(Names.PHONE_NAME_KEY));
+            String[][] rows = {
+                    {"Phone", chosen == null ? "pick it below" : chosen.name() + (chosen.ip() == null || chosen.ip().isEmpty() ? "" : "   " + chosen.ip())},
+                    {"Port", Integer.toString(c.getPort())},
+                    {"Key", c.getKey()}};
             tableHolder.removeAll();
             tableHolder.add(valueTable(rows), BorderLayout.CENTER);
             tableHolder.revalidate();
-            path.setVisible(c.getLinkMode() == LinkMode.PHONE); // only Tailscale can tell direct from relayed
+            tableHolder.repaint();
+        }
+
+        /** The name map's phones into the list; the chosen one shown, the first one seen taken. */
+        private void fillPhones() {
+            List<Names.Entry> list = main.names().list(Names.Kind.PHONE);
+            String chosenName = main.config().getString(Names.PHONE_NAME_KEY);
+            Names.Entry chosen = null;
+            fillingPhones = true;
+            try {
+                phones.removeAllElements();
+                for (Names.Entry e : list) {
+                    phones.addElement(e);
+                    if (e.name().equalsIgnoreCase(chosenName)) chosen = e;
+                }
+                if (chosen == null && !list.isEmpty()) chosen = list.get(0);
+                phones.setSelectedItem(chosen);
+                phoneChoice.setVisible(list.size() > 1);
+            } finally {
+                fillingPhones = false;
+            }
+            if (chosen != null && !chosen.name().equalsIgnoreCase(chosenName)) choosePhone(chosen);
+            if (chosen == null) {
+                phoneRow.set(State.PENDING, "Waiting for a phone with DRAUPNE Flight open, on Tailscale...");
+            } else {
+                phoneRow.set(chosen.online() ? State.OK : State.WARN, "<b>" + chosen.name() + "</b> - " + chosen.detail()
+                        + (chosen.online() ? " - online." : " - last seen " + Names.agoText(chosen.lastSeen(), System.currentTimeMillis()) + ": open DRAUPNE Flight on it."));
+            }
+        }
+
+        /** The phone picked: saved as the link's; a session waiting on another phone starts again. */
+        private void choosePhone(Names.Entry e) {
+            main.save(Map.of(Names.PHONE_NAME_KEY, e.name(), "ip", e.ip() == null ? "" : e.ip()));
+            main.logLine("Phone: " + e.name() + (e.ip() == null ? "" : " (" + e.ip() + ")") + ".");
+            if (stop != null) {
+                stop.set(true);
+                closing = true;
+                stop = null;
+            }
+            nextStart = System.currentTimeMillis() + 600;
+            showTable();
+        }
+
+        @Override
+        void onShow() {
+            PcConfig c = main.config();
+            showTable();
+            nextPhones = 0;
+            main.nameService().scanSoon();
+            path.setVisible(true);
             readySince = 0;
             waitingSince = System.currentTimeMillis();
             rtts.clear();
@@ -513,6 +554,10 @@ final class PhoneGuideWizard {
 
         @Override
         void refresh() {
+            if (System.currentTimeMillis() >= nextPhones) {
+                nextPhones = System.currentTimeMillis() + 2500;
+                fillPhones();
+            }
             if (stop == null && System.currentTimeMillis() >= nextStart) start();
         }
 
@@ -527,8 +572,8 @@ final class PhoneGuideWizard {
                 return;
             }
             PcConfig config = main.config();
-            if (config.getLinkMode() == LinkMode.PHONE && config.getIp().isEmpty()) {
-                link.set(State.BAD, "No phone address yet - finish the Tailscale on the phone step.");
+            if (config.getIp().isEmpty()) {
+                link.set(State.BAD, "No phone chosen yet: it shows up above once DRAUPNE Flight is open on it, on Tailscale.");
                 nextStart = System.currentTimeMillis() + 2000;
                 return;
             }
@@ -564,10 +609,12 @@ final class PhoneGuideWizard {
             ControlLink[] linkRef = new ControlLink[1];
             de.droiddrone.pc.video.VideoPipeline video = new de.droiddrone.pc.video.VideoPipeline(preview,
                     () -> linkRef[0] == null ? -1 : linkRef[0].getPing());
+            main.nameService().pause(); // the link takes the port
             try {
                 connection = Connection.open(config, video);
                 ControlLink l = connection.getLink();
                 linkRef[0] = l;
+                l.setNameReply(main.nameService()::replyPacket);
                 l.setEvents(this::event);
                 video.attach(l);
                 long spectatorSince = 0;
@@ -590,6 +637,7 @@ final class PhoneGuideWizard {
                 return "Could not open the link: " + e.getMessage();
             } finally {
                 if (connection != null) connection.close();
+                main.nameService().resume();
                 video.close();
                 closing = false;
                 main.logLine("Connect step: link closed.");
@@ -620,9 +668,9 @@ final class PhoneGuideWizard {
                 boolean configuring = snap.state() == ControlLink.State.CONFIGURING;
                 link.set(now - waitingSince < HINT_AFTER_MS || configuring ? State.PENDING : State.WARN, (configuring
                         ? "The phone answered - sending it the settings..."
-                        : now - waitingSince < HINT_AFTER_MS ? "Waiting for DRAUPNE Flight - tap <b>CONNECT</b> on the phone."
-                        : "Still waiting. Check the phone shows exactly the values above, that CONNECT is tapped"
-                        + (main.config().getLinkMode() == LinkMode.PHONE ? ", and that Tailscale is on." : "."))
+                        : now - waitingSince < HINT_AFTER_MS ? "Waiting for DRAUPNE Flight - is it open on the phone?"
+                        : "Still waiting. Check that DRAUPNE Flight is open on the phone picked above, that its key (Advanced) is the one above"
+                        + ", and that Tailscale is on.")
                         + "<br><i>" + snap.stateText() + "</i>" + event);
                 return;
             }

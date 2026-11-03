@@ -73,12 +73,57 @@ public class MainActivity extends Activity {
     Spinner connectionMode;
     EditText etIp, etPort, etKey;
     private TextView tvNetworkStatus, tvFcStatus, tvConnectionModeHint, tvPill;
+    /** pc.28: this phone's name and addresses (THIS PHONE on the status card); a tap copies the Tailscale address. */
+    private TextView tvPhoneInfo;
+    private long phoneInfoAt;
+    private String phoneInfoAddress;
     private View llIp;
     private int colorOk, colorWarn, colorBad, colorMuted;
     CheckBox cbConnectOnStartup;
     private Timer uiTimer;
     private boolean isPaused = false;
     public static Config config;
+    /** The application context, for the name kept in the preferences (the service answers queries without the screen). */
+    private static android.content.Context appContext;
+
+    /** This phone's DRAUPNE name (MobileAlpha ...), "" until a DRAUPNE Link PC gives one or the user picks one. */
+    static String phoneName() {
+        android.content.Context c = appContext;
+        if (c == null) return "";
+        String n = androidx.preference.PreferenceManager.getDefaultSharedPreferences(c).getString("ddName", "");
+        return n == null ? "" : n;
+    }
+
+    static void setPhoneName(String name) {
+        android.content.Context c = appContext;
+        if (c == null) return;
+        androidx.preference.PreferenceManager.getDefaultSharedPreferences(c).edit().putString("ddName", name == null ? "" : name).apply();
+    }
+
+    /** The name Android gives this phone (Settings > About phone > Device name), else its model. */
+    static String deviceName() {
+        android.content.Context c = appContext;
+        String model = ((Build.MANUFACTURER == null ? "" : Build.MANUFACTURER + " ") + (Build.MODEL == null ? "" : Build.MODEL)).trim();
+        String name = null;
+        if (c != null) {
+            try {
+                name = android.provider.Settings.Global.getString(c.getContentResolver(), android.provider.Settings.Global.DEVICE_NAME);
+            } catch (RuntimeException ignored) {
+            }
+            if (name == null || name.trim().isEmpty()) {
+                try {
+                    name = android.provider.Settings.Secure.getString(c.getContentResolver(), "bluetooth_name");
+                } catch (RuntimeException ignored) {
+                }
+            }
+        }
+        if (name == null || name.trim().isEmpty() || name.trim().equalsIgnoreCase(model)) return model.isEmpty() ? "Android phone" : model;
+        return name.trim() + (model.isEmpty() ? "" : "  (" + model + ")");
+    }
+
+    static final String[] NAME_LETTERS = {"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
+            "Juliett", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform",
+            "Victor", "Whiskey", "X-ray", "Yankee", "Zulu"};
     /** The original app's package (also DRAUPNE Link's builds up to 2.3.0-pc.1): removed so it can't take the FC. */
     private static final String OLD_PACKAGE = "de.droiddrone.flight";
     private TextView tvOldApp;
@@ -132,6 +177,7 @@ public class MainActivity extends Activity {
         // DRAUPNE Link: the boot animation, on a cold start only (not after a rotation or a return)
         if (savedInstanceState == null) BootRevealView.show(this);
         activity = this;
+        appContext = getApplicationContext();
         main = findViewById(R.id.llMain);
         main.setKeepScreenOn(true);
         bStartStopService = findViewById(R.id.startStopService);
@@ -151,6 +197,16 @@ public class MainActivity extends Activity {
         etKey = findViewById(R.id.editText_key);
         tvNetworkStatus = findViewById(R.id.tvNetworkConnectionStatus);
         tvFcStatus = findViewById(R.id.tvFcConnectionStatus);
+        tvPhoneInfo = findViewById(R.id.tvPhoneInfo);
+        tvPhoneInfo.setOnClickListener(v -> pickPhoneName());
+        tvPhoneInfo.setOnLongClickListener(v -> {
+            copyPhoneAddress();
+            return true;
+        });
+        findViewById(R.id.tvAdvanced).setOnClickListener(v -> {
+            View row = findViewById(R.id.llAdvanced);
+            row.setVisibility(row.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+        });
         tvConnectionModeHint = findViewById(R.id.tvConnectionModeHint);
         tvPill = findViewById(R.id.tvPill);
         tvOldApp = findViewById(R.id.tvOldApp);
@@ -229,12 +285,15 @@ public class MainActivity extends Activity {
         etIp.setText(config.getIp());
         etPort.setText(String.valueOf(config.getPort()));
         etKey.setText(config.getKey());
-        connectionMode.setSelection(config.getConnectionMode());
+        // pc.28: direct (Tailscale) is the one way; the mode, the address and the start-up choice are no longer
+        // asked - the views stay, hidden, because Config.updateConfig reads them
+        connectionMode.setSelection(SettingsCommon.ConnectionMode.direct);
+        etIp.setText("");
         cbConnectOnStartup = findViewById(R.id.cbConnectOnStartup);
-        cbConnectOnStartup.setChecked(config.isConnectOnStartup());
+        cbConnectOnStartup.setChecked(true);
         TextView tvVersion = findViewById(R.id.tvVersion);
         tvVersion.setText(getResources().getString(R.string.version, MainActivity.versionName));
-        if (config.isConnectOnStartup() && !DDService.isRunning){
+        if (!DDService.isRunning){ // pc.28: the phone always listens for the PC once the app is open
             // DRAUPNE Link: on the UI thread (it updates the screen), and only with the permissions the service needs
             // - without them its camera / microphone start fails on Android 14
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
@@ -407,6 +466,7 @@ public class MainActivity extends Activity {
 
     private void updateUi(){
         updatePhoneGps();
+        updatePhoneInfo();
         // DRAUPNE Link: CONNECT / DISCONNECT is off until the service has followed the last tap (a second tap
         // started the service twice, and the second start could stop the first); on again after 5 s whatever
         // happened, so a start that failed doesn't leave it dead
@@ -622,6 +682,93 @@ public class MainActivity extends Activity {
     /** What the last CONNECT / DISCONNECT tap asked for, and when: the button waits for the service to follow. */
     private boolean serviceWantedRunning;
     private long serviceSwitchedAt;
+
+    /**
+     * THIS PHONE (pc.28): the phone's name (as set in Android, else its model) and its addresses - the Tailscale one
+     * the PC connects to (or that Tailscale is off), and the Wi-Fi / mobile ones. Looked at every 2 s.
+     */
+    private void updatePhoneInfo() {
+        long now = System.currentTimeMillis();
+        if (now - phoneInfoAt < 2000) return;
+        phoneInfoAt = now;
+        String tailscale = null;
+        StringBuilder others = new StringBuilder();
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> all = java.net.NetworkInterface.getNetworkInterfaces();
+            while (all != null && all.hasMoreElements()) {
+                java.net.NetworkInterface nif = all.nextElement();
+                if (!nif.isUp() || nif.isLoopback()) continue;
+                for (java.net.InterfaceAddress ia : nif.getInterfaceAddresses()) {
+                    if (!(ia.getAddress() instanceof java.net.Inet4Address)) continue;
+                    String ip = ia.getAddress().getHostAddress();
+                    if (isTailscaleAddress(ia.getAddress().getAddress())) {
+                        if (tailscale == null) tailscale = ip;
+                    } else {
+                        if (others.length() > 0) others.append(", ");
+                        others.append(ip);
+                    }
+                }
+            }
+        } catch (java.net.SocketException ignored) {
+            // no interfaces to look at
+        }
+        phoneInfoAddress = tailscale != null ? tailscale : others.length() > 0 ? others.toString().split(", ")[0] : null;
+        String ddName = phoneName();
+        StringBuilder text = new StringBuilder(ddName.isEmpty() ? getString(R.string.dd_phone_no_name) : ddName);
+        text.append('\n').append(deviceName());
+        text.append('\n').append(tailscale != null ? getString(R.string.dd_phone_tailscale, tailscale) : getString(R.string.dd_phone_tailscale_off));
+        if (others.length() > 0) text.append('\n').append(getString(R.string.dd_phone_other_ip, others));
+        String s = text.toString();
+        if (!s.contentEquals(tvPhoneInfo.getText())) tvPhoneInfo.setText(s);
+        tvPhoneInfo.setTextColor(tailscale != null ? colorOk : colorWarn);
+    }
+
+    private String phoneNameLine() {
+        String model = (Build.MANUFACTURER == null ? "" : Build.MANUFACTURER + " ") + (Build.MODEL == null ? "" : Build.MODEL);
+        String name = null;
+        if (Build.VERSION.SDK_INT >= 25) {
+            try {
+                name = android.provider.Settings.Global.getString(getContentResolver(), android.provider.Settings.Global.DEVICE_NAME);
+            } catch (RuntimeException ignored) {
+            }
+        }
+        if (name == null || name.trim().isEmpty()) {
+            try {
+                name = android.provider.Settings.Secure.getString(getContentResolver(), "bluetooth_name");
+            } catch (RuntimeException ignored) {
+            }
+        }
+        model = model.trim();
+        if (name == null || name.trim().isEmpty() || name.trim().equalsIgnoreCase(model)) return model.isEmpty() ? "Android phone" : model;
+        return name.trim() + (model.isEmpty() ? "" : "  (" + model + ")");
+    }
+
+    /** A tap on THIS PHONE: pick the name by hand (the master PC gives one otherwise; a pick overrides it). */
+    private void pickPhoneName() {
+        String[] items = new String[NAME_LETTERS.length + 1];
+        items[0] = getString(R.string.dd_phone_name_auto);
+        for (int i = 0; i < NAME_LETTERS.length; i++) items[i + 1] = "Mobile" + NAME_LETTERS[i];
+        String now = phoneName();
+        int checked = 0;
+        for (int i = 1; i < items.length; i++) if (items[i].equals(now)) checked = i;
+        new android.app.AlertDialog.Builder(this).setTitle(R.string.dd_phone_name_title)
+                .setSingleChoiceItems(items, checked, (dialog, which) -> {
+                    setPhoneName(which == 0 ? "" : items[which]);
+                    phoneInfoAt = 0;
+                    updatePhoneInfo();
+                    dialog.dismiss();
+                }).setNegativeButton(android.R.string.cancel, null).show();
+    }
+
+    /** A long press on THIS PHONE: the Tailscale address (else the first other one) to the clipboard. */
+    private void copyPhoneAddress() {
+        String ip = phoneInfoAddress;
+        if (ip == null) return;
+        android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (clipboard == null) return;
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DRAUPNE Flight address", ip));
+        android.widget.Toast.makeText(this, getString(R.string.dd_phone_copied, ip), android.widget.Toast.LENGTH_SHORT).show();
+    }
 
     /** Tailscale's own package; its launch intent opens it, the Play Store page when it isn't installed. */
     private static final String TAILSCALE_PACKAGE = "com.tailscale.ipn";
