@@ -45,16 +45,37 @@ final class PhoneLocation {
     /** A GPS fix this fresh beats a network position however new. */
     private static final long GPS_WINS_MS = 5000;
 
+    /** How often a position is asked for: every second, or every 30 s in standby (pc.21), where nobody flies on it. */
+    static final long NORMAL_INTERVAL_MS = 1000;
+    static final long STANDBY_INTERVAL_MS = 30000;
+
     private static LocationManager manager;
     private static final List<LocationListener> listeners = new ArrayList<>();
     private static volatile Location gps, other;
+    private static Context appContext;
+    private static long intervalMs = NORMAL_INTERVAL_MS;
 
     private PhoneLocation() {
     }
 
     static synchronized void start(Context context) {
+        start(context, intervalMs);
+    }
+
+    /** The rate from now on; takes effect at once when running, and at the next start when not. */
+    static synchronized void setInterval(long ms) {
+        if (ms == intervalMs) return;
+        intervalMs = ms;
+        if (manager == null || appContext == null) return;
+        stop();
+        start(appContext, ms);
+    }
+
+    private static synchronized void start(Context context, long interval) {
         if (manager != null) return;
         if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return;
+        appContext = context.getApplicationContext();
+        intervalMs = interval;
         LocationManager m = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
         if (m == null) return;
         List<String> providers = new ArrayList<>();
@@ -81,7 +102,7 @@ final class PhoneLocation {
                 }
             };
             try {
-                m.requestLocationUpdates(provider, 1000, 0, l, Looper.getMainLooper());
+                m.requestLocationUpdates(provider, interval, 0, l, Looper.getMainLooper());
                 take(m.getLastKnownLocation(provider));
                 listeners.add(l);
             } catch (SecurityException | IllegalArgumentException e) {

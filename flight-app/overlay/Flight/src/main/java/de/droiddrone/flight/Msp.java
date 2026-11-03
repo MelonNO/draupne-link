@@ -92,6 +92,11 @@ public class Msp {
     private int platformType;
     private FcCommon.GpsFixTypes fixType = FcCommon.GpsFixTypes.GPS_NO_FIX;
     boolean isArmed = false;
+    /**
+     * DRAUPNE Link (pc.21): standby polls the flight controller once a second instead of telemetryRefreshRate times
+     * - the FC's answers are of no use to a PC that shows no picture, and the USB traffic costs battery.
+     */
+    private volatile boolean slowPoll;
     private float groundSpeed; // km/h
     private float latDeg;
     private float lonDeg;
@@ -140,6 +145,19 @@ public class Msp {
     /** DRAUPNE Link: whether the flight controller's channel map is known (sticks go out only then). */
     public boolean isRxMapKnown(){
         return rxMap != null;
+    }
+
+    /** DRAUPNE Link: whether the flight controller reports ARM on (its mode flags, read every half second). */
+    public boolean isArmed(){
+        return isInitialized && isArmed;
+    }
+
+    /**
+     * DRAUPNE Link: once a second (standby) or at the usual rate. At 1 Hz the loop below counts five ticks per
+     * second, so the status (the ARM flag, which ends standby) still comes every second, the rest every other.
+     */
+    public void setSlowPoll(boolean slow){
+        slowPoll = slow;
     }
 
     public FcInfo getFcInfo(){
@@ -211,7 +229,7 @@ public class Msp {
             log("Start MSP thread - OK");
             while (id == threadsId) {
                 try {
-                    timerDiv++;
+                    timerDiv += slowPoll ? 5 : 1;
 
                     if (!isInitialized && isInitialized()) setFcInfo();
                     // DRAUPNE Link: the channel map every tick (10 a second) from the port opening until it is
@@ -278,7 +296,7 @@ public class Msp {
                     }
 
                     getAttitude();
-                    Thread.sleep(1000 / config.getTelemetryRefreshRate());
+                    Thread.sleep(slowPoll ? 1000 : 1000 / config.getTelemetryRefreshRate());
                 } catch (Exception e) {
                     log("MSP thread error: " + e);
                 }

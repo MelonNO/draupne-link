@@ -55,6 +55,27 @@ final class PcLinkStats {
     static final int STATE_USB_PERMISSION_DENIED = 4;
     static final int STATE_CAMERA_OPEN = 8;
 
+    /**
+     * The phone's power mode (pc.21, {@link PowerMode}), once a second and three times 300 ms apart when it changes:
+     * u8 the mode in force (0 normal, 1 standby, 2 deep sleep), u8 the deep sleep check interval in minutes, u16
+     * seconds until the phone goes to deep sleep (0 when it isn't about to), u8 what the phone may do
+     * ({@link #CAP_DEVICE_ADMIN}: it can lock its own screen, {@link #CAP_EXACT_ALARMS}: its sleep checks come on
+     * time, {@link #CAP_NO_BATTERY_OPTIMISATION}: Android lets it use the network during a check). Last in its
+     * packet: a PC that doesn't know it stops reading there.
+     */
+    static final short PHONE_POWER_CODE = 0x40F5;
+    static final int CAP_DEVICE_ADMIN = 1;
+    static final int CAP_EXACT_ALARMS = 2;
+    static final int CAP_NO_BATTERY_OPTIMISATION = 4;
+
+    static void writePhonePowerTo(DataOutputStream out, int mode, int checkIntervalMin, int sleepInS, int caps) throws IOException {
+        out.writeShort(PHONE_POWER_CODE);
+        out.writeByte(mode);
+        out.writeByte(Math.max(0, Math.min(255, checkIntervalMin)));
+        out.writeShort(Math.max(0, Math.min(65535, sleepInS)));
+        out.writeByte(caps);
+    }
+
     static void writePhonePositionTo(DataOutputStream out, android.location.Location l) throws IOException {
         out.writeShort(PHONE_POSITION_CODE);
         out.writeInt((int) Math.round(l.getLatitude() * 1e7));

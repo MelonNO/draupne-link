@@ -62,4 +62,29 @@
     <string name="dd_unlock">HOLD 2 S
 TO UNLOCK</string>
     <string name="dd_hint_props">Props off on the bench. Leave this app running while flying.</string>
+
+    <!-- pc.21: power modes (PowerMode) -->
+    <string name="dd_label_power">POWER</string>
+    <string name="dd_power_standby">STANDBY</string>
+    <string name="dd_power_deep_sleep">DEEP SLEEP</string>
+    <string name="dd_power_wake">WAKE</string>
+    <string name="dd_power_hint">Standby: no video, screen dim, the PC wakes it. Deep sleep: everything off, a check for the PC every few minutes. Not while armed.</string>
+    <string name="dd_pill_standby">STANDBY</string>
+    <string name="dd_pill_sleeping">SLEEPING</string>
+    <string name="dd_pill_checking">CHECKING</string>
+    <string name="dd_status_standby">STANDBY - the PC wakes this phone</string>
+    <string name="dd_status_sleep_soon">Going to deep sleep…</string>
+    <string name="dd_status_sleeping">Deep sleep - next check at %1$s</string>
+    <string name="dd_status_checking">Sleep check - listening for the PC…</string>
+    <string name="dd_notification_running">DRAUPNE Flight is running</string>
+    <string name="dd_notification_standby">Standby - the PC wakes this phone</string>
+    <string name="dd_notification_sleep">Deep sleep - next check at %1$s</string>
+    <string name="dd_notification_checking">Sleep check - listening for the PC</string>
+    <string name="dd_wake_channel">Wake-up</string>
+    <string name="dd_wake_channel_why">Turns the screen on when the PC wakes the phone from deep sleep.</string>
+    <string name="dd_wake_text">Awake - the PC called</string>
+    <string name="dd_power_admin_line">Allow the app to lock the screen (deep sleep turns it off by itself). Tap to set it up.</string>
+    <string name="dd_power_admin_why">So the screen can go off by itself in deep sleep.</string>
+    <string name="dd_power_exact_line">Exact alarms not allowed: deep sleep\'s checks for the PC may come late. Tap to allow them.</string>
+    <string name="dd_power_battery_line">Battery optimisation is on: a deep sleep check may not reach the PC. Tap to switch it off for this app.</string>
 </resources>

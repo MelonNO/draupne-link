@@ -31,6 +31,11 @@
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- DRAUPNE Link: UPDATE installs the newer app itself (Android asks; "Install unknown apps" once) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- DRAUPNE Link (pc.21): deep sleep's checks for the PC on time (Android 12+ asks the pilot), the screen lit
+         over the lock screen when the PC wakes the phone, and the network usable during a check in doze -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <queries>
         <package android:name="de.droiddrone.flight" />
     </queries>
@@ -60,6 +65,21 @@
         <receiver
             android:name=".AppUpdateReceiver"
             android:exported="false" />
+        <!-- DRAUPNE Link (pc.21): deep sleep's check alarm, and the device admin that may lock the screen -->
+        <receiver
+            android:name=".PowerAlarmReceiver"
+            android:exported="false" />
+        <receiver
+            android:name=".PowerAdminReceiver"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".MainActivity"
