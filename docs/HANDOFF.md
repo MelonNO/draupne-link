@@ -6,8 +6,18 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.27)
 
-- **Unreleased, for 1.0.28's notes:** the channel bars (RC check and the controller card) name each AUX after what
-  Drone setup put on it ("AUX1 ARM", `ChannelBars.setPurposes`), the last item of the review left open. Still open
+- **Unreleased, for 1.0.28's notes:** UPDATE made visible end to end after the pilot's "it downloads, closes, and
+  nothing opens": the helper script (`SelfUpdate.script`) writes every step to `%TEMP%\DraupneLink-update\update.log`,
+  waits up to 30 s for a locked installer and 2 min for the app, and whatever fails it starts the app again and
+  leaves a `RESULT` line, which the next start reports (`SelfUpdate.takeHelperResult`, `MainWindow.reportLastUpdate`:
+  a pop-up when it failed). `startUpdate` logs and explains each early exit (connected: "disconnect first"; not the
+  installed copy: the release page, with where it runs from, `AppInfo.runningFrom`). `AppLog.drain` runs in
+  `shutdown()` so the last lines reach the file. Found on this PC: Program Files still held 1.0.24 while 1.0.27 was
+  out, Windows Installer never ran for 1.0.25-1.0.27, and the app log had no "Downloading" line for them - the
+  pilot's presses never reached the download in the installed copy (a build/install run was in use too). The video
+  buttons (POP OUT VIDEO / FULL SCREEN) stand at the right of the picture, one under the other. Also: the channel
+  bars (RC check and the controller card) name each AUX after what Drone setup put on it ("AUX1 ARM",
+  `ChannelBars.setPurposes`), the last item of the review left open. Still open
   from the review, by choice: per-window double buffering for the popped-out video (unmeasurable here; the comment
   in `VideoView` says what the setting does), and the OSD outline drawing (measured: the nine-pass drawString is
   4-6x cheaper than stroked glyphs, so it stays).
