@@ -109,4 +109,9 @@ TO UNLOCK</string>
     <string name="dd_phone_name_title">This phone\'s name</string>
     <string name="dd_phone_listens">This phone listens for the PC by itself. On the PC, pick this phone\'s name and press CONNECT.</string>
     <string name="dd_advanced">Advanced: port and key</string>
+    <string name="dd_data_saver_line">Data Saver restricts this app: mobile data can stop in the background. Tap to allow unrestricted data.</string>
+    <string name="dd_radios_line">%1$s. Before flying: Wi-Fi off, Bluetooth off, Battery Saver on. Tap for the setting.</string>
+    <string name="dd_wifi_on">Wi-Fi is on</string>
+    <string name="dd_bluetooth_on">Bluetooth is on</string>
+    <string name="dd_saver_off">Battery Saver is off</string>
 </resources>

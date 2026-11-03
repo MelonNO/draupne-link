@@ -172,6 +172,53 @@ class MapToolsTest {
         assertEquals(1, g.inside(got[0][0], got[0][1], got[0][2], got[0][3]).size(), "the rectangle has a point in the box; the symbol at x 300 is outside");
     }
 
+    /** A double-click on a point picks it up, the next click drops it there; the eraser takes an item off; PLACE AT puts a symbol at a position. */
+    @Test
+    void pointsMoveByDoubleClickTheEraserErasesAndPlaceAtPlaces(@TempDir Path dir) {
+        MapGraphics g = new MapGraphics(null);
+        MapView map = map(dir, g);
+        map.setTool(MapView.Tool.LINE);
+        click(map, 100, 100);
+        click(map, 200, 100);
+        map.finishTool();
+        MapGraphics.Item line = g.list().get(0);
+        click(map, 200, 100, 2); // the second point, picked up
+        assertTrue(map.isMoving());
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_MOVED, 0, 0, 220, 160, 0, false, MouseEvent.NOBUTTON));
+        click(map, 220, 160); // dropped
+        assertFalse(map.isMoving());
+        MapGraphics.Item moved = g.list().get(0);
+        assertNotSame(line, moved);
+        double[] at = map.toLatLon(220, 160);
+        assertEquals(at[0], moved.points().get(1).lat(), 1e-9, "the second point is where it was dropped");
+        assertEquals(line.points().get(0), moved.points().get(0), "the first point stayed");
+        // a right-click while moving puts the point back
+        click(map, 100, 100, 2);
+        assertTrue(map.isMoving());
+        map.dispatchEvent(new MouseEvent(map, MouseEvent.MOUSE_MOVED, 0, 0, 50, 50, 0, false, MouseEvent.NOBUTTON));
+        rightClick(map, 50, 50);
+        assertFalse(map.isMoving());
+        assertEquals(moved, g.list().get(0), "unchanged");
+
+        map.setSymbolStyle(MapGraphics.UnitType.ISR_ROTOR, MapGraphics.Affiliation.FRIEND, MapGraphics.Echelon.TEAM);
+        map.placeAt(59.95, 10.80);
+        assertEquals(2, g.list().size());
+        MapGraphics.Item symbol = g.list().get(1);
+        assertEquals(MapGraphics.Kind.SYMBOL, symbol.kind());
+        assertEquals(MapGraphics.UnitType.ISR_ROTOR, symbol.unit());
+        assertEquals(59.95, symbol.points().get(0).lat(), 1e-9);
+        assertFalse(map.isFollowing(), "the map went there");
+        double[] centre = map.toLatLon(200, 150);
+        assertEquals(59.95, centre[0], 1e-4, "centred on the symbol");
+
+        map.setTool(MapView.Tool.ERASER);
+        click(map, 200, 150); // the symbol is at the centre now
+        assertEquals(1, g.list().size(), "the symbol is erased");
+        assertEquals(MapView.Tool.ERASER, map.tool(), "the eraser stays until Esc");
+        map.cancelTool();
+        assertEquals(MapView.Tool.NONE, map.tool());
+    }
+
     @Test
     void symbolsPaintEveryTypeAndAffiliation() {
         BufferedImage img = new BufferedImage(60, 60, BufferedImage.TYPE_INT_RGB);

@@ -6,6 +6,23 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.35)
 
+- **1.0.35, the pilot's second map round - built, tests green, not released:** more symbols (`UnitType` ISR_FIXED,
+  ATTACK_FIXED, ISR_ROTOR, ATTACK_ROTOR with `UnitSymbol.role` - an eye for ISR, an arrowhead for attack - and
+  UTILITY, SUPPLY, MEDIC); moving (`MapView.pickUpAt` on a double-click at a point or symbol while no tool is on,
+  `movingLive` painted instead of the item, a click `dropMoving` -> `MapGraphics.replace`, a right click or Esc
+  `cancelMoving`); `Tool.ERASER` (`eraseAt`, stays until Esc); `placeAt` (`MapToolsPanel.placeAt` -> `MapWindow.placeAtPosition`
+  with `Coordinates.parse`: a point of the drawing on, else a symbol in the chosen style; the map centres there).
+  *The smeared map window (the pilot's screenshots after FIND DRONE):* the tools panel's `JScrollPane` sat WEST in a
+  clip panel of width 0..196 and its viewport blit-scrolled: `copyArea` moved pixels across the whole window (the
+  map under the toolbar, the figures row doubled, white where nothing had painted). Now `SIMPLE_SCROLL_MODE`, the
+  viewport in PANEL_2, CENTER of the clip. The LINK card's NAME MAP button is gone (the menu row stays). *Guide:*
+  `FlightAppPage.refresh` turns the app row green when `main.names()` has an online phone; `PhoneSettingsPage` is
+  three tickable rows; `ConnectPage` has no table, `phoneRow` carries the phone and the link (`setPhone` /
+  `setLink` / `renderPhone`), `quality` carries round trip and path (`latencyState` / `pathState` / `renderQuality`),
+  FLIP sits on the camera row beside the preview. *Phone (pc.28):* `updateChecks` every 2 s - `tvDataSaver`
+  (`ConnectivityManager.getRestrictBackgroundStatus`) always, `tvRadios` (Wi-Fi on, Bluetooth on, Battery Saver
+  off) once a PC is connected; a tap opens the matching setting (`openSetting`); BLUETOOTH permission up to API 30.
+  Tests: `MapToolsTest.pointsMoveByDoubleClickTheEraserErasesAndPlaceAtPlaces`, the symbol loop covers the new types.
 - **1.0.35 map tools - built, PC tests green, not released:** the pilot's list (ruler with an elevation profile, lines,
   rectangles, arrows, NATO symbols, a MAP TOOLS slide-out, export / import, tour steps, an update-specific tour).
   `map/MapGraphics` (the items: MEASUREMENT, LINE, AREA, ARROW, SYMBOL with `LatLon` points, colour, width, fill,

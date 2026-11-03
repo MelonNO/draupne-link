@@ -201,6 +201,9 @@ final class PhoneGuideWizard {
         /** This step is on screen: a download that finishes after it was left must not start the server. */
         private boolean showing;
         private boolean preparing;
+        /** A phone with DRAUPNE Flight open answered the name service: the app is on it (1.0.35). */
+        private boolean installed;
+        private long nextCheck;
 
         FlightAppPage(MainWindow main) {
             this.main = main;
@@ -241,6 +244,7 @@ final class PhoneGuideWizard {
             page.add(col, BorderLayout.CENTER);
             file.set(State.PENDING, "Preparing...");
             firewall.set(State.PENDING, "Checking...");
+            main.nameService().scanSoon();
             return page;
         }
 
@@ -295,9 +299,23 @@ final class PhoneGuideWizard {
             share = null;
         }
 
+        /** Every 2.5 s: a phone that answers by name has the app open - the row turns green by itself. */
+        @Override
+        void refresh() {
+            if (System.currentTimeMillis() < nextCheck) return;
+            nextCheck = System.currentTimeMillis() + 2500;
+            Names.Entry online = null;
+            for (Names.Entry e : main.names().list(Names.Kind.PHONE)) if (e.online()) online = e;
+            if (online == null) return;
+            if (!installed) main.nameService().scanSoon();
+            installed = true;
+            file.set(State.OK, "<b>" + online.name() + "</b> has it: DRAUPNE Flight " + online.version() + " is open on " + online.detail() + ".");
+            wizard.update();
+        }
+
         @Override
         String status() {
-            return "Press Next once DRAUPNE Flight is installed on the phone.";
+            return installed ? "DRAUPNE Flight is on the phone." : "Waiting for DRAUPNE Flight to be installed and opened on the phone...";
         }
     }
 
@@ -315,37 +333,24 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "Android pauses apps in the background; in the air that means a failsafe. Set these, tick each one here. "
-                    + "The names differ from phone to phone. The last three the phone asks for by itself: say yes.";
+            return "DRAUPNE Flight checks the phone itself: a yellow line for each thing to fix, with what to tap. "
+                    + "Two things it can't see are below.";
         }
 
-        /**
-         * One box per setting, like the checks on the other steps. This PC can't see the phone's settings, so each box
-         * says what to set and where, with a neutral light.
-         */
+        /** Three boxes the pilot ticks; the phone app watches everything else and says so in yellow. */
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, setting("battery", "Battery: unrestricted",
-                    "For DRAUPNE Flight and for Tailscale: Settings > Apps > DRAUPNE Flight > Battery > <b>Unrestricted</b>."));
-            WizardDialog.addRow(col, setting("data", "Mobile data: unrestricted",
-                    "For both apps: Settings > Apps > DRAUPNE Flight > Mobile data > <b>Unrestricted data usage</b>."));
-            WizardDialog.addRow(col, setting("vpn", "Tailscale: Always-on VPN",
-                    "Settings > Network &amp; internet > VPN > the gear next to Tailscale > <b>Always-on VPN</b>."));
+            WizardDialog.addRow(col, setting("yellow", "Yellow lines in DRAUPNE Flight: tap each, allow",
+                    "Notifications, alarms and reminders, locking the screen, battery optimisation, Data Saver, Tailscale off - and "
+                            + "once a PC is connected: Wi-Fi, Bluetooth and Battery Saver before flying. Each line says what to tap. "
+                            + "Tick this when no yellow line is left."));
+            WizardDialog.addRow(col, setting("vpn", "Tailscale: Always-on VPN (recommended)",
+                    "Keeps Tailscale up by itself after a restart: Settings > Network &amp; internet > VPN > the gear next to Tailscale > "
+                            + "<b>Always-on VPN</b>. The phone can't check this."));
             WizardDialog.addRow(col, setting("otg", "OTG switched on (some phones)",
                     "OPPO, realme, OnePlus, vivo and some others have an <b>OTG</b> switch: search Settings for OTG and switch it "
                             + "on just before plugging in (it turns off by itself after some minutes). No such switch: nothing to do."));
-            WizardDialog.addRow(col, setting("wifi", "Before flying: Wi-Fi off, Bluetooth off, Battery Saver on",
-                    "All three in the phone's quick settings: 4G only, and the battery lasts through the wait."));
-            // the three the phone asks for itself (pc.21): say yes to each, once
-            WizardDialog.addRow(col, setting("notifications", "Notifications: Allow",
-                    "DRAUPNE Flight asks when it starts. Tap <b>Allow</b>."));
-            WizardDialog.addRow(col, setting("alarms", "Alarms &amp; reminders: Allow",
-                    "In DRAUPNE Flight, tap the yellow line <b>Exact alarms not allowed</b>, then <b>Allow</b>. Without it the "
-                            + "sleeping phone cannot wake up to look for this PC."));
-            WizardDialog.addRow(col, setting("admin", "Lock the screen: Activate",
-                    "In DRAUPNE Flight, tap the yellow line <b>Allow the app to lock the screen</b>, then <b>Activate</b>. Without it "
-                            + "the screen only dims in deep sleep."));
             return col;
         }
 
@@ -382,12 +387,12 @@ final class PhoneGuideWizard {
         }
 
         private final MainWindow main;
-        private final JPanel tableHolder = new JPanel(new BorderLayout());
-        private final CheckRow link = new CheckRow("Phone link");
         private final CheckRow fc = new CheckRow("Flight controller");
         private final CheckRow camera = new CheckRow("Camera");
-        private final CheckRow latency = new CheckRow("Round-trip time");
-        private final CheckRow path = new CheckRow("Network path");
+        /** Round-trip time and Tailscale path in one row (1.0.35): the two halves kept apart, shown together. */
+        private final CheckRow quality = new CheckRow("Link quality");
+        private State phoneState = State.PENDING, linkState, latencyState = State.PENDING, pathState;
+        private String phoneText = "", linkText = "", latencyText = "", pathText = "";
         /** The phone to fly by its DRAUPNE name (1.0.35): the name map's phones, kept fresh while the step shows. */
         private final CheckRow phoneRow = new CheckRow("Phone");
         private final DefaultComboBoxModel<Names.Entry> phones = new DefaultComboBoxModel<>();
@@ -428,14 +433,7 @@ final class PhoneGuideWizard {
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            tableHolder.setOpaque(false);
-            JPanel top = new JPanel(new BorderLayout(18, 0));
-            top.setOpaque(false);
-            top.add(tableHolder, BorderLayout.CENTER);
-            preview.setPreferredSize(new java.awt.Dimension(320, 180));
-            preview.setIdleText("THE PICTURE SHOWS HERE");
-            top.add(preview, BorderLayout.EAST);
-            WizardDialog.addRow(col, top);
+            // the phone, by name, with the link's state on the same row
             phoneChoice.setRenderer(new javax.swing.DefaultListCellRenderer() {
                 @Override
                 public java.awt.Component getListCellRendererComponent(javax.swing.JList<?> list, Object value,
@@ -453,14 +451,43 @@ final class PhoneGuideWizard {
             WizardDialog.addRow(col, phoneRow);
             WizardDialog.addRow(col, WizardDialog.paragraph("Android asks whether DRAUPNE Flight may use the flight controller: "
                     + "tick <b>Always allow</b> (or <b>Use by default</b>) and tap <b>OK</b>. Then it reconnects by itself if the cable slips."));
-            WizardDialog.addRow(col, link);
             WizardDialog.addRow(col, fc);
+            // the camera check next to its picture, FLIP on the row
+            JPanel cam = new JPanel(new BorderLayout(18, 0));
+            cam.setOpaque(false);
             camera.addAction("Flip", this::flip).setToolTipText("Turn the picture 180 degrees: for a phone mounted upside down. Kept as VIDEO > Camera upside down");
-            WizardDialog.addRow(col, camera);
-            WizardDialog.addRow(col, latency);
-            path.addAction("Check again", this::checkPath);
-            WizardDialog.addRow(col, path);
+            cam.add(camera, BorderLayout.CENTER);
+            preview.setPreferredSize(new java.awt.Dimension(320, 180));
+            preview.setIdleText("THE PICTURE SHOWS HERE");
+            cam.add(preview, BorderLayout.EAST);
+            WizardDialog.addRow(col, cam);
+            quality.addAction("Check again", this::checkPath);
+            WizardDialog.addRow(col, quality);
             return col;
+        }
+
+        /** The phone row: the phone's line, and the link's under it; the link's light once the link has something to say. */
+        private void setPhone(State state, String text) {
+            phoneState = state;
+            phoneText = text;
+            renderPhone();
+        }
+
+        private void setLink(State state, String text) {
+            linkState = state;
+            linkText = text;
+            renderPhone();
+        }
+
+        private void renderPhone() {
+            phoneRow.set(linkState != null ? linkState : phoneState, phoneText + (linkText.isEmpty() ? "" : "<br>" + linkText));
+        }
+
+        /** The quality row: the round trip's verdict and the Tailscale path together; red if either is bad. */
+        private void renderQuality() {
+            State state = pathState == State.BAD ? State.BAD : latencyState == State.PENDING ? State.PENDING
+                    : pathState == State.WARN && latencyState == State.OK ? State.WARN : latencyState;
+            quality.set(state, latencyText + (pathText.isEmpty() ? "" : (latencyText.isEmpty() ? "" : "<br>") + pathText));
         }
 
         /** The camera check's FLIP: the setting the main window uses, so the phone stays as it is mounted. */
@@ -471,20 +498,6 @@ final class PhoneGuideWizard {
             flipped = true;
             camera.set(State.OK, "Turned " + (main.isUpsideDown() ? "upside down" : "the right way up") + " - kept under VIDEO > Camera upside down. "
                     + "Not right yet? Press Flip again.");
-        }
-
-        /** The table: the phone chosen (by name, with its address), the port and the key. */
-        private void showTable() {
-            PcConfig c = main.config();
-            Names.Entry chosen = main.names().get(c.getString(Names.PHONE_NAME_KEY));
-            String[][] rows = {
-                    {"Phone", chosen == null ? "pick it below" : chosen.name() + (chosen.ip() == null || chosen.ip().isEmpty() ? "" : "   " + chosen.ip())},
-                    {"Port", Integer.toString(c.getPort())},
-                    {"Key", c.getKey()}};
-            tableHolder.removeAll();
-            tableHolder.add(valueTable(rows), BorderLayout.CENTER);
-            tableHolder.revalidate();
-            tableHolder.repaint();
         }
 
         /** The name map's phones into the list; the chosen one shown, the first one seen taken. */
@@ -507,9 +520,9 @@ final class PhoneGuideWizard {
             }
             if (chosen != null && !chosen.name().equalsIgnoreCase(chosenName)) choosePhone(chosen);
             if (chosen == null) {
-                phoneRow.set(State.PENDING, "Waiting for a phone with DRAUPNE Flight open, on Tailscale...");
+                setPhone(State.PENDING, "Waiting for a phone with DRAUPNE Flight open, on Tailscale...");
             } else {
-                phoneRow.set(chosen.online() ? State.OK : State.WARN, "<b>" + chosen.name() + "</b> - " + chosen.detail()
+                setPhone(chosen.online() ? State.OK : State.WARN, "<b>" + chosen.name() + "</b> - " + chosen.detail()
                         + (chosen.online() ? " - online." : " - last seen " + Names.agoText(chosen.lastSeen(), System.currentTimeMillis()) + ": open DRAUPNE Flight on it."));
             }
         }
@@ -524,16 +537,12 @@ final class PhoneGuideWizard {
                 stop = null;
             }
             nextStart = System.currentTimeMillis() + 600;
-            showTable();
         }
 
         @Override
         void onShow() {
-            PcConfig c = main.config();
-            showTable();
             nextPhones = 0;
             main.nameService().scanSoon();
-            path.setVisible(true);
             readySince = 0;
             waitingSince = System.currentTimeMillis();
             rtts.clear();
@@ -548,8 +557,14 @@ final class PhoneGuideWizard {
                 preview.revalidate();
                 preview.dispatchEvent(new java.awt.event.ComponentEvent(preview, java.awt.event.ComponentEvent.COMPONENT_RESIZED));
             });
-            link.set(State.PENDING, "Waiting for DRAUPNE Flight...");
-            for (CheckRow r : new CheckRow[]{fc, camera, latency, path}) r.set(State.PENDING, "");
+            setLink(State.PENDING, "Waiting for DRAUPNE Flight...");
+            for (CheckRow r : new CheckRow[]{fc, camera}) r.set(State.PENDING, "");
+            linkState = null;
+            linkText = "";
+            latencyState = State.PENDING;
+            pathState = null;
+            latencyText = pathText = "";
+            renderQuality();
         }
 
         @Override
@@ -567,13 +582,13 @@ final class PhoneGuideWizard {
                 return;
             }
             if (main.isLinkActive()) {
-                link.set(State.WARN, "The main window is connected. Press DISCONNECT there and the link opens here.");
+                setLink(State.WARN, "The main window is connected. Press DISCONNECT there and the link opens here.");
                 nextStart = System.currentTimeMillis() + 1000;
                 return;
             }
             PcConfig config = main.config();
             if (config.getIp().isEmpty()) {
-                link.set(State.BAD, "No phone chosen yet: it shows up above once DRAUPNE Flight is open on it, on Tailscale.");
+                setLink(State.BAD, "No phone chosen yet: it shows up above once DRAUPNE Flight is open on it, on Tailscale.");
                 nextStart = System.currentTimeMillis() + 2000;
                 return;
             }
@@ -585,7 +600,7 @@ final class PhoneGuideWizard {
                 stop = null;
                 if (error != null) {
                     boolean reconnect = error.startsWith(RECONNECT);
-                    link.set(reconnect ? State.WARN : State.BAD, error);
+                    setLink(reconnect ? State.WARN : State.BAD, error);
                     main.logLine("Connect step: " + error);
                     nextStart = System.currentTimeMillis() + 3000;
                 }
@@ -648,13 +663,13 @@ final class PhoneGuideWizard {
         private void show(Snap snap) {
             long now = System.currentTimeMillis();
             if (snap.state() == ControlLink.State.VERSION_MISMATCH) {
-                link.set(State.BAD, "The phone's DRAUPNE Flight is another version - this PC needs " + ApkShare.VERSION
+                setLink(State.BAD, "The phone's DRAUPNE Flight is another version - this PC needs " + ApkShare.VERSION
                         + ". On the phone, tap the yellow <b>Update available</b> line. No such line: install it from the app step (Back).");
                 return;
             }
             String event = snap.event() == null ? "" : "<br>" + snap.event();
             if (snap.spectator()) {
-                link.set(State.WARN, RECONNECT + " - reconnecting..." + event);
+                setLink(State.WARN, RECONNECT + " - reconnecting..." + event);
                 return;
             }
             if (snap.state() != ControlLink.State.READY) {
@@ -663,10 +678,13 @@ final class PhoneGuideWizard {
                     waitingSince = now;
                     rtts.clear();
                     logged = false;
-                    for (CheckRow r : new CheckRow[]{fc, camera, latency}) r.set(State.PENDING, "");
+                    for (CheckRow r : new CheckRow[]{fc, camera}) r.set(State.PENDING, "");
+                    latencyState = State.PENDING;
+                    latencyText = "";
+                    renderQuality();
                 }
                 boolean configuring = snap.state() == ControlLink.State.CONFIGURING;
-                link.set(now - waitingSince < HINT_AFTER_MS || configuring ? State.PENDING : State.WARN, (configuring
+                setLink(now - waitingSince < HINT_AFTER_MS || configuring ? State.PENDING : State.WARN, (configuring
                         ? "The phone answered - sending it the settings..."
                         : now - waitingSince < HINT_AFTER_MS ? "Waiting for DRAUPNE Flight - is it open on the phone?"
                         : "Still waiting. Check that DRAUPNE Flight is open on the phone picked above, that its key (Advanced) is the one above"
@@ -675,7 +693,7 @@ final class PhoneGuideWizard {
                 return;
             }
             if (readySince == 0) readySince = now;
-            link.set(State.OK, "Connected." + event);
+            setLink(State.OK, "Connected." + event);
             if (snap.fc() != null) {
                 fc.set(snap.fc().getFcVariant() == FcInfo.FC_VARIANT_BETAFLIGHT ? State.OK : State.WARN,
                         snap.fc().getFcName() + " " + snap.fc().getFcVersionStr());
@@ -704,7 +722,7 @@ final class PhoneGuideWizard {
             }
             if (snap.ping() >= 0 && (rtts.isEmpty() || rtts.get(rtts.size() - 1) != snap.ping())) rtts.add(snap.ping());
             showLatency(now - readySince >= MEASURE_MS);
-            if (!pathChecked && path.isVisible()) {
+            if (!pathChecked) {
                 pathChecked = true;
                 checkPath();
             }
@@ -712,7 +730,9 @@ final class PhoneGuideWizard {
 
         private void showLatency(boolean measured) {
             if (rtts.isEmpty()) {
-                latency.set(State.PENDING, "Measuring...");
+                latencyState = State.PENDING;
+                latencyText = "Measuring the round trip...";
+                renderQuality();
                 return;
             }
             List<Integer> sorted = new ArrayList<>(rtts);
@@ -720,13 +740,16 @@ final class PhoneGuideWizard {
             int median = sorted.get(sorted.size() / 2);
             int worst = sorted.get(sorted.size() - 1);
             if (!measured) {
-                latency.set(State.PENDING, "Measuring... typical " + median + " ms so far.");
+                latencyState = State.PENDING;
+                latencyText = "Measuring... typical " + median + " ms so far.";
+                renderQuality();
                 return;
             }
-            State s = median < 80 ? State.OK : median < 150 ? State.WARN : State.BAD;
+            latencyState = median < 80 ? State.OK : median < 150 ? State.WARN : State.BAD;
             String verdict = median < 80 ? "Great." : median < 150 ? "Flyable - stay gentle and close." : "Too slow to fly safely.";
-            latency.set(s, "Typical <b>" + median + " ms</b>, worst " + worst + " ms. " + verdict
-                    + " Stick commands take about half the round trip.");
+            latencyText = "Round trip typical <b>" + median + " ms</b>, worst " + worst + " ms. " + verdict
+                    + " Stick commands take about half of it.";
+            renderQuality();
             if (!logged) {
                 logged = true;
                 main.logLine("Link test: RTT median " + median + " ms, worst " + worst + " ms.");
@@ -736,18 +759,22 @@ final class PhoneGuideWizard {
         private void checkPath() {
             String ip = main.config().getIp();
             if (ip.isEmpty()) return;
-            path.set(State.PENDING, "Pinging the phone over Tailscale...");
+            pathState = State.PENDING;
+            pathText = "Pinging the phone over Tailscale...";
+            renderQuality();
             background(() -> Tailscale.ping(ip), p -> {
                 if (p == null || !p.reached()) {
-                    path.set(State.BAD, "The phone didn't answer over Tailscale. Is Tailscale on and connected on the phone?");
+                    pathState = State.BAD;
+                    pathText = "The phone didn't answer over Tailscale. Is Tailscale on and connected on the phone?";
                 } else if (p.direct()) {
-                    path.set(State.OK, "<b>Direct</b> (" + p.via() + "): typical " + p.medianMs() + " ms, best "
-                            + p.bestMs() + " ms - the lowest-latency path.");
+                    pathState = State.OK;
+                    pathText = "Path <b>direct</b> (" + p.via() + "): the lowest-latency way.";
                 } else {
-                    path.set(State.WARN, "<b>Relayed</b> through Tailscale's " + p.via() + " server: typical " + p.medianMs()
-                            + " ms. This adds latency; it often turns direct within a minute - press Check again. "
-                            + "If it stays relayed, your 4G carrier blocks direct paths: consider hosting the relay on this PC.");
+                    pathState = State.WARN;
+                    pathText = "Path <b>relayed</b> through Tailscale's " + p.via() + " server: more delay. It often turns direct within a minute - "
+                            + "press Check again.";
                 }
+                renderQuality();
             });
         }
 

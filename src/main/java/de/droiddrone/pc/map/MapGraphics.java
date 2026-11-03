@@ -45,7 +45,10 @@ public final class MapGraphics {
     /** The unit type: the icon inside the frame. */
     public enum UnitType {
         INFANTRY("Infantry"), MECHANIZED("Mechanised infantry"), ARMOUR("Armour"), ARTILLERY("Artillery"), RECON("Reconnaissance"),
-        ANTI_TANK("Anti-tank"), ENGINEER("Engineer"), AIR_DEFENCE("Air defence"), HQ("Headquarters"), UNIT("Unit");
+        ANTI_TANK("Anti-tank"), ENGINEER("Engineer"), AIR_DEFENCE("Air defence"),
+        ISR_FIXED("ISR drone, fixed-wing"), ATTACK_FIXED("Attack drone, fixed-wing"), ISR_ROTOR("ISR drone, multirotor"),
+        ATTACK_ROTOR("Attack drone, multirotor"), UTILITY("Utility"), SUPPLY("Supply"), MEDIC("Medical"),
+        HQ("Headquarters"), UNIT("Unit");
 
         public final String title;
 

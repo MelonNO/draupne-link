@@ -160,6 +160,9 @@ public class MainActivity extends Activity {
         PowerMode.request(PowerMode.NORMAL, 0, "the phone's WAKE button, held");
     };
     private TextView tvPowerMode, tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery;
+    /** pc.28: Data Saver, and the radios before flying - checked here, not listed in the PC's guide any more. */
+    private TextView tvDataSaver, tvRadios;
+    private long checksAt;
 
     @Override
     protected void onCreate(Bundle savedInstanceState){
@@ -242,6 +245,10 @@ public class MainActivity extends Activity {
         tvPowerExact.setOnClickListener(v -> askExactAlarms());
         tvPowerBattery = findViewById(R.id.tvPowerBattery);
         tvPowerBattery.setOnClickListener(v -> askNoBatteryOptimisation());
+        tvDataSaver = findViewById(R.id.tvDataSaver);
+        tvDataSaver.setOnClickListener(v -> openSetting(android.provider.Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS, true));
+        tvRadios = findViewById(R.id.tvRadios);
+        tvRadios.setOnClickListener(v -> openSetting(radiosSetting, false));
         showOverLockScreen(getIntent());
         showOldDownloadsOnce();
         checkForUpdate();
@@ -361,6 +368,73 @@ public class MainActivity extends Activity {
         tvPowerAdmin.setVisibility(admin ? View.GONE : View.VISIBLE);
         tvPowerExact.setVisibility(PowerMode.canExactAlarms(this) ? View.GONE : View.VISIBLE);
         tvPowerBattery.setVisibility(PowerMode.ignoresBatteryOptimisation(this) ? View.GONE : View.VISIBLE);
+        updateChecks();
+    }
+
+    private String radiosSetting = android.provider.Settings.ACTION_WIFI_SETTINGS;
+
+    /**
+     * pc.28: the checks the PC's setup guide used to list for the pilot to do by hand: Data Saver (always), and once a PC
+     * is connected - the wait before take-off - Wi-Fi off, Bluetooth off, Battery Saver on. A yellow line each, a tap
+     * opens the setting. Every 2 s.
+     */
+    private void updateChecks() {
+        long now = System.currentTimeMillis();
+        if (now - checksAt < 2000) return;
+        checksAt = now;
+        boolean dataSaver = false;
+        try {
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            dataSaver = cm != null && cm.getRestrictBackgroundStatus() == android.net.ConnectivityManager.RESTRICT_BACKGROUND_STATUS_ENABLED;
+        } catch (RuntimeException ignored) {
+        }
+        tvDataSaver.setVisibility(dataSaver ? View.VISIBLE : View.GONE);
+        StringBuilder wrong = new StringBuilder();
+        String setting = null;
+        if (DDService.isConnected) {
+            try {
+                android.net.wifi.WifiManager wifi = (android.net.wifi.WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                if (wifi != null && wifi.isWifiEnabled()) {
+                    wrong.append(getString(R.string.dd_wifi_on));
+                    setting = android.provider.Settings.ACTION_WIFI_SETTINGS;
+                }
+            } catch (RuntimeException ignored) {
+            }
+            try {
+                android.bluetooth.BluetoothAdapter bt = android.bluetooth.BluetoothAdapter.getDefaultAdapter();
+                if (bt != null && bt.isEnabled()) {
+                    if (wrong.length() > 0) wrong.append(", ");
+                    wrong.append(getString(R.string.dd_bluetooth_on));
+                    if (setting == null) setting = android.provider.Settings.ACTION_BLUETOOTH_SETTINGS;
+                }
+            } catch (RuntimeException ignored) {
+            }
+            try {
+                android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+                if (pm != null && !pm.isPowerSaveMode()) {
+                    if (wrong.length() > 0) wrong.append(", ");
+                    wrong.append(getString(R.string.dd_saver_off));
+                    if (setting == null) setting = android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS;
+                }
+            } catch (RuntimeException ignored) {
+            }
+        }
+        boolean show = wrong.length() > 0;
+        tvRadios.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (show) {
+            tvRadios.setText(getString(R.string.dd_radios_line, wrong));
+            radiosSetting = setting;
+        }
+    }
+
+    /** A settings screen; with the package for the ones that take one; a failure to open it is just logged. */
+    private void openSetting(String action, boolean withPackage) {
+        try {
+            Intent intent = withPackage ? new Intent(action, Uri.parse("package:" + getPackageName())) : new Intent(action);
+            startActivity(intent);
+        } catch (Exception e) {
+            log("Cannot open the setting " + action + ": " + e);
+        }
     }
 
     /**

@@ -152,6 +152,8 @@ final class MapWindow extends JFrame {
         tools.rectangle.addActionListener(e -> map.setTool(MapView.Tool.AREA));
         tools.arrow.addActionListener(e -> map.setTool(MapView.Tool.ARROW));
         tools.symbol.addActionListener(e -> map.setTool(MapView.Tool.SYMBOL));
+        tools.eraser.addActionListener(e -> map.setTool(MapView.Tool.ERASER));
+        tools.placeAt.addActionListener(e -> placeAtPosition());
         tools.keep.addActionListener(e -> map.keepMeasurement());
         tools.clearMeasure.addActionListener(e -> map.clearMeasurement());
         tools.export.addActionListener(e -> map.setTool(MapView.Tool.EXPORT_BOX));
@@ -418,6 +420,20 @@ final class MapWindow extends JFrame {
         } catch (java.io.IOException | RuntimeException e) {
             javax.swing.JOptionPane.showMessageDialog(this, "Import failed: " + e.getMessage(), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
         }
+    }
+
+    /** PLACE AT: a position typed or pasted in any format the map writes; a point of the drawing on, else a symbol. */
+    private void placeAtPosition() {
+        String text = (String) javax.swing.JOptionPane.showInputDialog(this,
+                "Position: MGRS (32V PN 35026 85877), UTM, or latitude, longitude", "Place at", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, "");
+        if (text == null || text.isBlank()) return;
+        double[] ll = Coordinates.parse(text);
+        if (ll == null) {
+            javax.swing.JOptionPane.showMessageDialog(this, "Not a position I can read: " + text, "Place at", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        map.placeAt(ll[0], ll[1]);
+        syncFollow();
     }
 
     /** The tour's MAP TOOLS tab (opens the tools), and the tools inside it. */

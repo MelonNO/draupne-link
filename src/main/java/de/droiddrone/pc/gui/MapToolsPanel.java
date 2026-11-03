@@ -47,6 +47,8 @@ final class MapToolsPanel extends JPanel {
     final JButton rectangle = Theme.secondaryButton("Rectangle");
     final JButton arrow = Theme.secondaryButton("Arrow");
     final JButton symbol = Theme.secondaryButton("Symbol");
+    final JButton eraser = Theme.secondaryButton("Eraser");
+    final JButton placeAt = Theme.secondaryButton("Place at...");
     final JButton pins = Theme.secondaryButton("Pins");
     final JButton goTo = Theme.secondaryButton("Go to");
     final JButton download = Theme.secondaryButton("Download area");
@@ -92,7 +94,13 @@ final class MapToolsPanel extends JPanel {
         scroll.setBorder(BorderFactory.createEmptyBorder());
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         scroll.setPreferredSize(new Dimension(BODY_WIDTH, 10));
-        clip.add(scroll, BorderLayout.WEST);
+        // no blit scrolling: a viewport wider than its clipped parent copied pixels across the whole window (the map
+        // under the toolbar, the figures row doubled, white where nothing was painted); and the panel's own colour
+        // where the body ends on a tall screen
+        scroll.getViewport().setScrollMode(javax.swing.JViewport.SIMPLE_SCROLL_MODE);
+        scroll.getViewport().setBackground(Theme.PANEL_2);
+        scroll.setBackground(Theme.PANEL_2);
+        clip.add(scroll, BorderLayout.CENTER);
         add(clip, BorderLayout.CENTER);
         slide.setRepeats(true);
         build();
@@ -190,6 +198,12 @@ final class MapToolsPanel extends JPanel {
         echelonCombo.addActionListener(e -> syncSymbol());
         row(echelonCombo);
 
+        section("EDIT");
+        eraser.setToolTipText("Click a drawing or symbol to take it off the map; Esc ends. A double-click on a point of any drawing picks it up to move it");
+        placeAt.setToolTipText("A position typed or pasted (MGRS, UTM or latitude, longitude): a point of the line being drawn, else a symbol there");
+        row(eraser);
+        row(placeAt);
+
         section("MAP");
         row(pins);
         row(goTo);
@@ -254,6 +268,7 @@ final class MapToolsPanel extends JPanel {
         lit(arrow, t == MapView.Tool.ARROW);
         lit(symbol, t == MapView.Tool.SYMBOL);
         lit(export, t == MapView.Tool.EXPORT_BOX);
+        lit(eraser, t == MapView.Tool.ERASER);
         boolean measured = map.currentMeasurement() != null;
         if (measureRow.isVisible() != measured) {
             measureRow.setVisible(measured);

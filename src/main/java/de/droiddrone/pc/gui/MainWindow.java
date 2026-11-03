@@ -194,7 +194,6 @@ public class MainWindow extends JFrame {
     private final JLabel phoneLabel = Theme.label("PHONE", Theme.headingFont(11f), Theme.MUTED);
     /** The phone to fly (as a spectator: the pilot PC to watch), by name; the address comes from the name map. */
     private final JComboBox<String> phoneCombo = new JComboBox<>();
-    private final JButton nameMapButton = Theme.secondaryButton("Name map");
     private final JLabel phoneHint = Theme.label("", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
     private java.util.List<Names.Entry> phoneList = java.util.List.of();
     private boolean fillingPhones;
@@ -642,10 +641,6 @@ public class MainWindow extends JFrame {
         fields.add(phoneHint, c);
         c.gridwidth = 2;
         c.gridy = GridBagConstraints.RELATIVE;
-        nameMapButton.setToolTipText("Every device seen, with its name, address and when; this PC's own name; the port and the key");
-        nameMapButton.addActionListener(e -> openNameMap());
-        c.insets = new Insets(0, 0, 14, 0);
-        fields.add(nameMapButton, c);
         c.insets = new Insets(0, 0, 6, 0);
         fields.add(Theme.label("CONNECT AS", Theme.headingFont(11f), Theme.MUTED), c);
         roleCombo.setSelectedItem(Connection.watchOnly(config) ? ROLE_SPECTATOR : ROLE_PILOT);

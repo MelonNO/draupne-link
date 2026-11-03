@@ -91,7 +91,7 @@ class MapView extends JComponent {
     private Pins pins;
 
     // ---- MAP TOOLS (1.0.35): what the pilot draws
-    enum Tool { NONE, RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX }
+    enum Tool { NONE, RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX, ERASER }
 
     private MapGraphics graphics;
     private Tool tool = Tool.NONE;
@@ -111,6 +111,9 @@ class MapView extends JComponent {
     private final Runnable graphicsChanged = () -> SwingUtilities.invokeLater(this::repaint);
     /** Painting for a picture (EXPORT): no zoom buttons, no NO POSITION text. */
     private boolean forPicture;
+    /** A point picked up with a double-click (the item, which of its points) follows the mouse until a click drops it. */
+    private MapGraphics.Item moving, movingLive;
+    private int movingIndex = -1;
     private FcTelemetry.Gps gps;
     /** The + and - buttons, drawn on the map (top right); set while painting. */
     private Rectangle zoomInButton = new Rectangle(), zoomOutButton = new Rectangle();
@@ -128,6 +131,10 @@ class MapView extends JComponent {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (SwingUtilities.isRightMouseButton(e)) {
+                    if (moving != null) { // the point goes back where it was
+                        cancelMoving();
+                        return;
+                    }
                     if (tool != Tool.NONE) { // a step back in the tool, or out of it
                         undoToolPoint();
                         return;
@@ -193,10 +200,19 @@ class MapView extends JComponent {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (!SwingUtilities.isLeftMouseButton(e) || dragged) return;
+                if (moving != null) { // the point picked up is dropped here
+                    dropMoving();
+                    return;
+                }
+                if (tool == Tool.ERASER) {
+                    eraseAt(e.getX(), e.getY());
+                    return;
+                }
                 if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW || tool == Tool.SYMBOL) {
                     toolClick(e);
                     return;
                 }
+                if (tool == Tool.NONE && e.getClickCount() == 2 && pickUpAt(e.getX(), e.getY())) return;
                 if (zoomInButton.contains(e.getPoint())) zoomBy(1);
                 else if (zoomOutButton.contains(e.getPoint())) zoomBy(-1);
                 else if (e.getClickCount() == 2) fitTrack();
@@ -206,6 +222,7 @@ class MapView extends JComponent {
             public void mouseMoved(MouseEvent e) {
                 tellCursor(e);
                 mouseAt = e.getPoint();
+                if (moving != null) followMoving(e.getX(), e.getY());
                 if (tool != Tool.NONE) repaint(); // the rubber band to the cursor
             }
 
@@ -678,8 +695,9 @@ class MapView extends JComponent {
         return tool;
     }
 
-    /** Esc: the tool ends, what it was drawing is dropped. */
+    /** Esc: the tool ends, what it was drawing is dropped; a point picked up goes back. */
     void cancelTool() {
+        if (moving != null) cancelMoving();
         tool = Tool.NONE;
         drawing.clear();
         selectStart = selectEnd = null;
@@ -880,11 +898,105 @@ class MapView extends JComponent {
         return null;
     }
 
+    /** The ERASER's click: the drawing or symbol under it goes (the measurement too). */
+    private void eraseAt(int x, int y) {
+        MapGraphics.Item hit = itemAt(x, y);
+        if (hit == null) return;
+        if (hit == measurement) clearMeasurement();
+        else if (graphics != null) graphics.remove(hit);
+    }
+
+    /**
+     * A double-click on a point of a drawing, or on a symbol: picked up; it follows the mouse until a click drops it
+     * (a right click or Esc puts it back). The measurement's points too.
+     * @return true if something was picked up
+     */
+    private boolean pickUpAt(int x, int y) {
+        if (graphics == null) return false;
+        List<MapGraphics.Item> items = graphics.list();
+        if (measurement != null) items.add(measurement);
+        double[] v = view();
+        for (MapGraphics.Item it : items) {
+            List<MapGraphics.LatLon> pts = it.points();
+            for (int i = 0; i < pts.size(); i++) {
+                Point2D c = toScreen(pts.get(i).lat(), pts.get(i).lon(), (int) v[0], v[1], v[2], v[3], getWidth(), getHeight());
+                boolean hit = it.kind() == MapGraphics.Kind.SYMBOL
+                        ? UnitSymbol.bounds((int) c.getX(), (int) c.getY(), it.affiliation()).contains(x, y)
+                        : c.distance(x, y) <= 8;
+                if (hit) {
+                    moving = it;
+                    movingIndex = i;
+                    movingLive = it;
+                    setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.MOVE_CURSOR));
+                    repaint();
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void followMoving(int x, int y) {
+        double[] ll = toLatLon(x, y);
+        List<MapGraphics.LatLon> pts = new java.util.ArrayList<>(moving.points());
+        pts.set(movingIndex, new MapGraphics.LatLon(ll[0], ll[1]));
+        movingLive = moving.withPoints(pts);
+        repaint();
+    }
+
+    private void dropMoving() {
+        MapGraphics.Item was = moving, now = movingLive;
+        moving = movingLive = null;
+        movingIndex = -1;
+        setCursor(java.awt.Cursor.getDefaultCursor());
+        if (was == measurement) {
+            measurement = now;
+            if (onMeasurement != null) onMeasurement.accept(now);
+        } else if (graphics != null && now != was) {
+            graphics.replace(was, now);
+        }
+        repaint();
+    }
+
+    private void cancelMoving() {
+        moving = movingLive = null;
+        movingIndex = -1;
+        setCursor(tool == Tool.NONE ? java.awt.Cursor.getDefaultCursor() : java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.CROSSHAIR_CURSOR));
+        repaint();
+    }
+
+    /** Something is being moved: for the window (Esc puts it back). */
+    boolean isMoving() {
+        return moving != null;
+    }
+
+    /**
+     * PLACE AT: a typed position. With the ruler, a line or an arrow on, the point joins what is being drawn; otherwise
+     * a symbol in the chosen style goes there. The map centres on it.
+     */
+    void placeAt(double lat, double lon) {
+        MapGraphics.LatLon at = new MapGraphics.LatLon(lat, lon);
+        if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW) {
+            drawing.add(at);
+        } else if (graphics != null) {
+            graphics.add(MapGraphics.Item.symbol(graphics.nextName(MapGraphics.Kind.SYMBOL, symbolUnit), at, symbolUnit, symbolAffiliation, symbolEchelon));
+            if (tool == Tool.SYMBOL) endTool();
+        }
+        setFollow(false);
+        centreOn(lat, lon, zoom);
+    }
+
     // ---- painting the tools
 
     private void paintGraphics(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
-        if (graphics != null) for (MapGraphics.Item it : graphics.list()) paintItem(g, it, false, zi, scale, wcx, wcy, w, h);
-        if (measurement != null) paintItem(g, measurement, false, zi, scale, wcx, wcy, w, h);
+        if (graphics != null) {
+            for (MapGraphics.Item it : graphics.list()) {
+                if (it == moving) continue; // its moving copy is painted instead
+                paintItem(g, it, false, zi, scale, wcx, wcy, w, h);
+            }
+        }
+        if (measurement != null && measurement != moving) paintItem(g, measurement, false, zi, scale, wcx, wcy, w, h);
+        if (movingLive != null) paintItem(g, movingLive, false, zi, scale, wcx, wcy, w, h);
         if (tool == Tool.NONE || forPicture) return;
         // what is being drawn, with the rubber band to the cursor
         if (tool == Tool.SYMBOL && mouseAt != null) {

@@ -138,8 +138,54 @@ final class UnitSymbol {
                 g.drawLine(x1 - 3, top, x1 - 3, top + len);
             }
             case AIR_DEFENCE -> g.draw(new QuadCurve2D.Double(x0 + 2, y1, cx, y0 - r.height * 0.6, x1 - 2, y1));
+            case ISR_FIXED, ATTACK_FIXED -> { // a fixed-wing drone: the wing across, the body down, the tail
+                g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g.drawLine(x0 + 2, cy - 2, x1 - 2, cy - 2);
+                g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g.drawLine(cx, y0 + 1, cx, y1 - 2);
+                g.drawLine(cx - 4, y1 - 2, cx + 4, y1 - 2);
+                role(g, r, unit == MapGraphics.UnitType.ISR_FIXED);
+            }
+            case ISR_ROTOR, ATTACK_ROTOR -> { // a multirotor: four arms with a rotor at each end
+                int a = Math.min(r.width, r.height) / 2 - 2;
+                g.drawLine(cx - a, cy - a, cx + a, cy + a);
+                g.drawLine(cx - a, cy + a, cx + a, cy - a);
+                for (int sx = -1; sx <= 1; sx += 2) {
+                    for (int sy = -1; sy <= 1; sy += 2) g.draw(new Ellipse2D.Double(cx + sx * a - 3, cy + sy * a - 3, 6, 6));
+                }
+                role(g, r, unit == MapGraphics.UnitType.ISR_ROTOR);
+            }
+            case UTILITY -> { // the letter, as the standard writes a role it has no icon for
+                g.setFont(Theme.headingFont(12f));
+                FontMetrics fm = g.getFontMetrics();
+                g.drawString("U", cx - fm.stringWidth("U") / 2, cy + fm.getAscent() / 2 - 1);
+            }
+            case SUPPLY -> g.drawLine(x0 + 2, y0 + r.height / 3, x1 - 2, y0 + r.height / 3); // the supply line across
+            case MEDIC -> { // the cross
+                g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER));
+                int h = r.height / 3, w = Math.min(r.width / 4, h);
+                g.drawLine(cx, cy - h, cx, cy + h);
+                g.drawLine(cx - w, cy, cx + w, cy);
+            }
             case HQ, UNIT -> {
             }
+        }
+    }
+
+    /** A drone's role under its icon: ISR an eye (an ellipse with its pupil), attack a filled arrowhead down. */
+    private static void role(Graphics2D g, Rectangle r, boolean isr) {
+        int cx = r.x + r.width / 2, y = r.y + r.height - 3;
+        if (isr) {
+            g.setStroke(new BasicStroke(1.2f));
+            g.draw(new Ellipse2D.Double(cx - 5, y - 2.5, 10, 5));
+            g.fill(new Ellipse2D.Double(cx - 1.5, y - 1.5, 3, 3));
+        } else {
+            Path2D head = new Path2D.Double();
+            head.moveTo(cx - 5, y - 4);
+            head.lineTo(cx + 5, y - 4);
+            head.lineTo(cx, y + 1);
+            head.closePath();
+            g.fill(head);
         }
     }
 }
