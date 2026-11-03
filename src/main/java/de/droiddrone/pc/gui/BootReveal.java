@@ -2,7 +2,6 @@ package de.droiddrone.pc.gui;
 
 import javax.swing.JComponent;
 import javax.swing.JFrame;
-import javax.swing.JLayeredPane;
 import javax.swing.KeyStroke;
 import javax.swing.Timer;
 import java.awt.AlphaComposite;
@@ -60,17 +59,11 @@ final class BootReveal extends JComponent {
      */
     static void onOpen(JFrame window, Supplier<Rectangle> videoBounds) {
         BootReveal reveal = new BootReveal(videoBounds);
-        JLayeredPane layer = window.getRootPane().getLayeredPane();
-        layer.add(reveal, JLayeredPane.DRAG_LAYER);
-        reveal.follow();
-        // the window has no size until it is packed or shown: the cover takes the whole pane the moment it gets one,
-        // before the first paint, or the UI shows for a frame before the black
-        layer.addComponentListener(new java.awt.event.ComponentAdapter() {
-            @Override
-            public void componentResized(java.awt.event.ComponentEvent e) {
-                reveal.follow();
-            }
-        });
+        // the cover is the root pane's glass pane: the root pane's own layout sizes it with the window on every
+        // layout, before any paint - a component on the layered pane got its size a frame after a resize (the window
+        // opens maximized: it grows right after it shows), and in that frame the UI showed before the black
+        window.getRootPane().setGlassPane(reveal);
+        reveal.setVisible(true);
         window.getContentPane().setBackground(Theme.BG);
         window.getRootPane().setBackground(Theme.BG);
         window.setBackground(Theme.BG); // the native window too: Windows shows that before Swing's first paint
@@ -103,10 +96,17 @@ final class BootReveal extends JComponent {
         if (done) return;
         done = true;
         timer.stop();
-        Component layer = getParent();
-        if (layer != null) {
-            ((JComponent) layer).remove(this);
-            layer.repaint();
+        Component parent = getParent();
+        if (parent instanceof javax.swing.JRootPane root && root.getGlassPane() == this) {
+            setVisible(false);
+            javax.swing.JPanel plain = new javax.swing.JPanel(); // the usual glass pane: invisible, taking nothing
+            plain.setOpaque(false);
+            plain.setVisible(false);
+            root.setGlassPane(plain);
+            root.repaint();
+        } else if (parent != null) {
+            ((JComponent) parent).remove(this);
+            parent.repaint();
         }
     }
 
@@ -245,6 +245,7 @@ final class BootReveal extends JComponent {
     }
 
     static boolean isShowingOn(JFrame window) {
+        if (window.getRootPane().getGlassPane() instanceof BootReveal r && r.isRunning()) return true;
         for (Component c : window.getRootPane().getLayeredPane().getComponents()) if (c instanceof BootReveal r && r.isRunning()) return true;
         return false;
     }

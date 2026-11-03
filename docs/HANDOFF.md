@@ -15,6 +15,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   the PC sets the modes; the phone has a MODE line and one HOLD TO WAKE button (2 s hold); the permissions are asked
   through the yellow status lines (the guide says so). On the PC the two sleep buttons fold away (`Fold`) while the
   FC reports armed and unfold on disarm. The guide's connect step and the tour's LINK card step explain the modes.
+- **Unreleased, two flickers:** the boot cover (`BootReveal`) is the root pane's glass pane, which the root layout
+  sizes before any paint - on the layered pane it got its size a frame after the window grew to maximized, and the
+  UI showed in that frame. A menu's opening picture (`TacticalCombo.Ghost`) now shows the real menu first and goes
+  two frames later (it went first, and the window showed through for a frame); `SlideMenu` re-lays out the header
+  only when its width changed (the slide's last frame did it once more for nothing).
 - **Unreleased (pilot's fourth round):** the phone's running notification is on a new quiet channel
   (`DDService.QUIET_CHANNEL_ID`, IMPORTANCE_LOW, silent, only-alert-once): deep sleep changes its text at every
   check and the old high channel would sound or light the screen each time. Tour: NEXT is 124 px wide (PRESS IT was

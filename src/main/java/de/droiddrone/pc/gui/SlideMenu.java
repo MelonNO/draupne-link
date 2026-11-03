@@ -65,10 +65,18 @@ final class SlideMenu extends JPanel {
         relayout();
     }
 
+    private int laidOutWidth = -1;
+
+    /** Lays the header out again only when this panel's width changed: the last frame of a slide, where it hasn't,
+     *  would otherwise re-lay out the whole header once more for nothing - and that showed as a flicker. */
     private void relayout() {
-        revalidate();
-        Component parent = getParent();
-        if (parent instanceof JPanel p) p.revalidate();
+        int width = getPreferredSize().width;
+        if (width != laidOutWidth) {
+            laidOutWidth = width;
+            revalidate();
+            Component parent = getParent();
+            if (parent instanceof JPanel p) p.revalidate();
+        }
         repaint();
     }
 

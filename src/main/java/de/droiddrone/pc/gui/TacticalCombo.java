@@ -235,13 +235,19 @@ final class TacticalCombo {
         private void tick() {
             if (System.currentTimeMillis() - startedAt >= totalMs()) {
                 timer.stop();
-                Component layer = getParent();
-                if (layer != null) {
-                    java.awt.Rectangle r = getBounds();
-                    ((javax.swing.JComponent) layer).remove(this);
-                    layer.repaint(r.x, r.y, r.width, r.height);
-                }
+                // opening: the real menu first, under this picture of it (pixel for pixel the same), and the picture
+                // goes two frames later - the other way round the window showed through for a frame, a flicker
                 if (done != null) done.run();
+                Timer gone = new Timer(done != null ? 40 : 0, e -> {
+                    Component layer = getParent();
+                    if (layer != null) {
+                        java.awt.Rectangle r = getBounds();
+                        ((javax.swing.JComponent) layer).remove(this);
+                        layer.repaint(r.x, r.y, r.width, r.height);
+                    }
+                });
+                gone.setRepeats(false);
+                gone.start();
                 return;
             }
             repaint();
