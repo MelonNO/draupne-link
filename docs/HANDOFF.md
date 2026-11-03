@@ -6,6 +6,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.27)
 
+- **Unreleased, phone app pc.20 (built, SHA pinned in ApkShare, NOT published):** CONNECT in Direct mode with no
+  Tailscale address on the phone (no interface in 100.64.0.0/10, `MainActivity.onTailscale`) shows "Tailscale is
+  off" with Open Tailscale / Connect anyway / Cancel, and the network line says "Waiting for the PC - Tailscale is
+  off on this phone" while it runs that way. Release order as always: push, `gh release create flight-2.3.0-pc.20`
+  (not Latest) with build/flight/DRAUPNE-Flight-2.3.0-pc.20.apk, download and check the SHA, then tag v1.0.28.
 - **Unreleased, for 1.0.28's notes:** UPDATE made visible end to end after the pilot's "it downloads, closes, and
   nothing opens": the helper script (`SelfUpdate.script`) writes every step to `%TEMP%\DraupneLink-update\update.log`,
   waits up to 30 s for a locked installer and 2 min for the app, and whatever fails it starts the app again and

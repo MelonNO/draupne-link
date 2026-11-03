@@ -56,6 +56,12 @@
     <string name="dd_gps_fix">Phone GPS: %1$s, within %2$d m, %3$d s ago.</string>
     <string name="dd_old_downloads">Earlier updates may have left DRAUPNE Flight installers in Downloads. Tap here to open Downloads and delete them.</string>
     <string name="dd_old_app">An earlier DroidDrone Flight is still installed and can take the flight controller. Tap here to remove it.</string>
+    <string name="dd_tailscale_title">Tailscale is off</string>
+    <string name="dd_tailscale_off">This phone is not on Tailscale, and the PC reaches it through Tailscale.\n\nOpen Tailscale, switch it on (and check the phone has mobile data), then press Connect again.</string>
+    <string name="dd_tailscale_open">Open Tailscale</string>
+    <string name="dd_connect_anyway">Connect anyway</string>
+    <string name="dd_tailscale_not_found">Tailscale is not installed on this phone: get it from the Play Store.</string>
+    <string name="dd_tailscale_off_line">Waiting for the PC - Tailscale is off on this phone</string>
     <string name="dd_lock_button">LOCK SCREEN</string>
     <string name="dd_locked_title">SCREEN LOCKED</string>
     <string name="dd_locked_text">Touches are ignored, so nothing changes by accident in flight. The link to the PC and the flight controller keep running.</string>

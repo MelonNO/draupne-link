@@ -118,7 +118,15 @@ public class MainActivity extends Activity {
         main.setKeepScreenOn(true);
         bStartStopService = findViewById(R.id.startStopService);
         bStartStopService.setOnClickListener(v -> {
-            if (checkPermissions()) startStopService();
+            if (!checkPermissions()) return;
+            // DRAUPNE Link: in Direct mode the PC reaches this phone at its Tailscale address, so with Tailscale off
+            // a CONNECT waits for ever. Say so before starting, with the way to Tailscale; the pilot may still go on.
+            if (!DDService.isRunning && connectionMode.getSelectedItemPosition() == SettingsCommon.ConnectionMode.direct
+                    && !onTailscale()) {
+                warnTailscaleOff();
+                return;
+            }
+            startStopService();
         });
         etIp = findViewById(R.id.editText_ip);
         etPort = findViewById(R.id.editText_port);
@@ -275,7 +283,8 @@ public class MainActivity extends Activity {
                         tvNetworkStatus.setText(getResources().getString(R.string.status_connecting));
                         break;
                     case SettingsCommon.ConnectionMode.direct:
-                        tvNetworkStatus.setText(getResources().getString(R.string.status_awaiting_connection));
+                        tvNetworkStatus.setText(getResources().getString(onTailscaleCached()
+                                ? R.string.status_awaiting_connection : R.string.dd_tailscale_off_line));
                         break;
                 }
                 tvNetworkStatus.setTextColor(colorWarn);
@@ -453,6 +462,67 @@ public class MainActivity extends Activity {
     /** What the last CONNECT / DISCONNECT tap asked for, and when: the button waits for the service to follow. */
     private boolean serviceWantedRunning;
     private long serviceSwitchedAt;
+
+    /** Tailscale's own package; its launch intent opens it, the Play Store page when it isn't installed. */
+    private static final String TAILSCALE_PACKAGE = "com.tailscale.ipn";
+    private long tailscaleCheckedAt;
+    private boolean tailscaleCached;
+
+    /**
+     * Is this phone on Tailscale right now: an interface with an address in Tailscale's 100.64.0.0/10 range (the
+     * address the PC connects to). A VPN that is not Tailscale doesn't count: the PC can't reach it.
+     */
+    static boolean onTailscale() {
+        try {
+            java.util.Enumeration<java.net.NetworkInterface> all = java.net.NetworkInterface.getNetworkInterfaces();
+            while (all != null && all.hasMoreElements()) {
+                java.net.NetworkInterface nif = all.nextElement();
+                if (!nif.isUp()) continue;
+                for (java.net.InterfaceAddress ia : nif.getInterfaceAddresses()) {
+                    if (ia.getAddress() instanceof java.net.Inet4Address && isTailscaleAddress(ia.getAddress().getAddress())) return true;
+                }
+            }
+        } catch (java.net.SocketException ignored) {
+            // no interfaces to look at: not on Tailscale as far as we can tell
+        }
+        return false;
+    }
+
+    /** 100.64.0.0/10: the first byte 100, the second 64..127. */
+    static boolean isTailscaleAddress(byte[] ip) {
+        return ip.length == 4 && (ip[0] & 0xff) == 100 && (ip[1] & 0xc0) == 0x40;
+    }
+
+    /** The status line is refreshed often: the interfaces are looked at once a second at most. */
+    private boolean onTailscaleCached() {
+        long now = System.currentTimeMillis();
+        if (now - tailscaleCheckedAt > 1000) {
+            tailscaleCheckedAt = now;
+            tailscaleCached = onTailscale();
+        }
+        return tailscaleCached;
+    }
+
+    /** CONNECT with Tailscale off: open Tailscale, go on anyway (the PC's Wi-Fi, say), or not. */
+    private void warnTailscaleOff() {
+        new android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.dd_tailscale_title)
+                .setMessage(R.string.dd_tailscale_off)
+                .setPositiveButton(R.string.dd_tailscale_open, (d, w) -> openTailscale())
+                .setNegativeButton(R.string.dd_connect_anyway, (d, w) -> startStopService())
+                .setNeutralButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void openTailscale() {
+        Intent launch = getPackageManager().getLaunchIntentForPackage(TAILSCALE_PACKAGE);
+        if (launch == null) launch = new Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=" + TAILSCALE_PACKAGE));
+        try {
+            startActivity(launch);
+        } catch (android.content.ActivityNotFoundException e) {
+            android.widget.Toast.makeText(this, R.string.dd_tailscale_not_found, android.widget.Toast.LENGTH_LONG).show();
+        }
+    }
 
     private void startStopService(){
         Intent intent = new Intent(getApplicationContext(), DDService.class);
