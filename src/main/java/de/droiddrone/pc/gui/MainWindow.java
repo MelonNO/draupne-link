@@ -213,6 +213,7 @@ public class MainWindow extends JFrame {
         BootReveal.onOpen(window, () -> window.videoView.getParent() == null ? null
                 : SwingUtilities.convertRectangle(window.videoView.getParent(), window.videoView.getBounds(), window.getRootPane().getLayeredPane()));
         window.setVisible(true);
+        SwingUtilities.invokeLater(window::reportLastUpdate);
         if (firstStart) {
             // the very first start only: walk through the whole setup; after that it opens from SETUP
             window.save(Map.of(SetupWizard.OFFERED_KEY, "true"));
@@ -671,15 +672,27 @@ public class MainWindow extends JFrame {
         video.add(videoView, BorderLayout.CENTER);
         videoHolder = video;
         // a thin bar over the picture: where the video is shown, always in sight (the tour points at these)
-        JPanel videoBar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 4));
+        // the two video buttons stand at the side of the picture, one under the other (the pilot's wish: not over it)
+        JPanel videoBar = new JPanel();
+        videoBar.setLayout(new BoxLayout(videoBar, BoxLayout.Y_AXIS));
         videoBar.setBackground(Theme.PANEL);
-        videoBar.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.LINE));
+        videoBar.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, Theme.LINE),
+                BorderFactory.createEmptyBorder(6, 6, 6, 6)));
         popOutButton.setToolTipText("The video in a window of its own, e.g. on a second screen; again to put it back");
-        videoBar.add(popOutButton);
         fullScreenButton.setToolTipText("The video over the whole screen (F11); Esc or a double-click ends it");
         fullScreenButton.addActionListener(e -> toggleFullScreen());
+        Dimension same = new Dimension(Math.max(popOutButton.getPreferredSize().width, fullScreenButton.getPreferredSize().width),
+                Math.max(popOutButton.getPreferredSize().height, fullScreenButton.getPreferredSize().height));
+        for (JButton b : new JButton[]{popOutButton, fullScreenButton}) {
+            b.setPreferredSize(same);
+            b.setMaximumSize(same);
+            b.setAlignmentX(CENTER_ALIGNMENT);
+        }
+        videoBar.add(popOutButton);
+        videoBar.add(Box.createVerticalStrut(6));
         videoBar.add(fullScreenButton);
-        video.add(videoBar, BorderLayout.NORTH);
+        videoBar.add(Box.createVerticalGlue());
+        video.add(videoBar, BorderLayout.EAST);
         videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off");
         videoView.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
@@ -1283,8 +1296,24 @@ public class MainWindow extends JFrame {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+        de.droiddrone.pc.AppLog.drain(2000); // the last lines ("Installing ...") reach the file before the exit
         service.stop(); // the main thread leaves its polling loop and exits the app
         dispose();
+    }
+
+    /**
+     * The update helper's log from the last UPDATE: once per start, says in the log (and in a pop-up when it failed)
+     * what happened after the app closed - the installer that ran, or why nothing was installed.
+     */
+    private void reportLastUpdate() {
+        String result = de.droiddrone.pc.setup.SelfUpdate.takeHelperResult();
+        if (result == null) return;
+        logLine("Last update: " + result);
+        if (!result.startsWith("OK")) {
+            JOptionPane.showMessageDialog(this, "<html>The last update did not install:<br>" + result
+                    + "<br><br>Press UPDATE to try again, or download the installer from the release page.</html>",
+                    "Update", JOptionPane.WARNING_MESSAGE);
+        }
     }
 
     // ---------------------------------------------------------------- periodic refresh
@@ -1425,15 +1454,28 @@ public class MainWindow extends JFrame {
      */
     private void startUpdate() {
         de.droiddrone.pc.setup.UpdateCheck.Release r = update;
-        if (r == null || updating) return;
+        if (r == null) return;
+        if (updating) {
+            logLine("Update: already downloading.");
+            return;
+        }
         Path app = de.droiddrone.pc.setup.SelfUpdate.installedApp();
         if (!r.canInstall() || app == null) {
+            String why = app == null
+                    ? "This copy of DRAUPNE Link is not the installed one (it runs from " + de.droiddrone.pc.AppInfo.runningFrom()
+                    + "), so it can't update itself."
+                    : "This release has no installer that can be checked, so it can't be installed from here.";
+            logLine("Update: " + why + " Opening the release page.");
+            JOptionPane.showMessageDialog(this, "<html>" + why + "<br><br>The release page opens in your browser: download the "
+                    + "installer there and run it (close DRAUPNE Link first).</html>", "Update", JOptionPane.INFORMATION_MESSAGE);
             PcSetupWizard.openInBrowser(this, r.pageUrl());
             return;
         }
         if (connection != null) {
-            JOptionPane.showMessageDialog(this, "Disconnect first: updating closes DRAUPNE Link for a moment.",
-                    "Update", JOptionPane.WARNING_MESSAGE);
+            logLine("Update: refused while connected - disconnect first.");
+            JOptionPane.showMessageDialog(this, "<html>You are connected to the drone.<br><br>Updating closes DRAUPNE Link to "
+                    + "install the new version, and the sticks would stop with it.<br>Press DISCONNECT first, then UPDATE again.</html>",
+                    "Update", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         int answer = JOptionPane.showConfirmDialog(this, "<html>Update to DRAUPNE Link " + r.version() + " now?<br><br>"
@@ -1455,7 +1497,8 @@ public class MainWindow extends JFrame {
                     }
                     try {
                         de.droiddrone.pc.setup.SelfUpdate.installAndRestart(installer, app, r.installerSha256());
-                        logLine("Installing DRAUPNE Link " + r.version() + ": closing now, it starts again when done.");
+                        logLine("Installing DRAUPNE Link " + r.version() + ": closing now, it starts again when done. The helper's log: "
+                                + de.droiddrone.pc.setup.SelfUpdate.helperLog());
                         shutdown();
                     } catch (IOException ex) {
                         updateFailed(r, ex.getMessage());

@@ -73,6 +73,24 @@ public final class AppLog {
         queue.offer(LocalDateTime.now().format(TIME) + "  " + text);
     }
 
+    /** Waits (at most maxMs) until every queued line has been handed to the writer: before an exit. */
+    public static void drain(long maxMs) {
+        long end = System.currentTimeMillis() + maxMs;
+        while (!queue.isEmpty() && System.currentTimeMillis() < end) {
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        try {
+            Thread.sleep(250); // the writer's buffered file closes 200 ms after the last line
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     static String stack(Throwable e) {
         java.io.StringWriter s = new java.io.StringWriter();
         e.printStackTrace(new java.io.PrintWriter(s));

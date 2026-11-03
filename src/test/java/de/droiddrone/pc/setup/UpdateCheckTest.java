@@ -58,10 +58,17 @@ class UpdateCheckTest {
     void helperScriptQuotesPathsSafely() {
         String s = SelfUpdate.script(java.nio.file.Path.of("C:\\Temp\\it's here\\Setup.exe"), 1234,
                 java.nio.file.Path.of("C:\\Program Files\\DRAUPNE Link\\DRAUPNE Link.exe"), "ab12'; xyz");
-        assertTrue(s.contains("Wait-Process -Id 1234"));
-        assertTrue(s.contains("if (Get-Process -Id 1234) { exit }"), "still running after 60 s: nothing installed");
+        assertTrue(s.contains("Wait-Process -Id 1234 -Timeout 120"));
+        assertTrue(s.contains("if (Get-Process -Id 1234) {"), "still running after 2 minutes: nothing installed");
         assertTrue(s.contains("if ($h -ne 'ab12') {"), "checked again before running; only hex digits get into the script");
-        assertTrue(s.contains("'C:\\Temp\\it''s here\\Setup.exe' -ArgumentList '/passive','/norestart' -Wait"), s);
+        assertTrue(s.contains("'C:\\Temp\\it''s here\\Setup.exe' -ArgumentList '/passive','/norestart' -Wait -PassThru"), s);
         assertTrue(s.contains("$app = 'C:\\Program Files\\DRAUPNE Link\\DRAUPNE Link.exe'"), s);
+        assertTrue(s.contains("$log = 'C:\\Temp\\it''s here\\update.log'"), "every step is logged next to the installer");
+        // whatever goes wrong, the app is started again and a RESULT line says why
+        for (String failure : new String[]{"locked by a virus scan", "changed since it was checked", "permission prompt was declined", "stopped with code"}) {
+            assertTrue(s.contains("Finish '" + failure) || s.contains("Finish ('" + failure) || s.contains(failure), failure);
+        }
+        assertTrue(s.indexOf("function Finish") < s.indexOf("Wait-Process"), "defined before use");
+        assertTrue(s.contains("StartApp; Remove-Item"), "Finish starts the app again before the installer is deleted");
     }
 }
