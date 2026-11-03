@@ -6,6 +6,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.30)
 
+- **Released:** DRAUPNE Link **1.0.30** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.23** (release
+  `flight-2.3.0-pc.23`, APK SHA-256 `0173711c…`, pinned in `ApkShare`): the 1.0.30 bullets below. Nothing of the
+  sleep path or the boot animations has run on a real phone yet.
 - **1.0.30 (pilot's fifth round), phone app pc.23:** the boot animation is a morph. `BootReveal.paintD` /
   `BootRevealView.drawD`: each of the D's four pieces is a thick line cut by a box, in the mark (a bar: a 42-wide
   line down its middle cut by its bounds; a diagonal: the X's line cut by the bars' box, exactly what `Logo.paintLink`
