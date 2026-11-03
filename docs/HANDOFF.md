@@ -6,6 +6,15 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.28)
 
+- **Unreleased, phone app pc.22 (built, SHA pinned, NOT published) and the PC side for 1.0.29:** the sleep check's
+  "still here": in each window the phone sends `SleepHello 0x6F` (battery %, charging, next check, mV) to the PC it
+  last flew with (`Udp.lastPcIp/lastPcPort`, kept across the socket's close; `DDService.powerHello`), the PC answers
+  `SleepAnswer 0x70` 0/1 at once (`ControlLink.onSleepHello`, before the link's liveness mark: a hello is not the link)
+  and the phone closes its window on 0 (`PowerMode.sleepAnswer`) or wakes on 1; the LINK card shows "Heard n ago,
+  battery n %" and takes the next-check time from the hello. The phone's own STANDBY / DEEP SLEEP buttons are gone:
+  the PC sets the modes; the phone has a MODE line and one HOLD TO WAKE button (2 s hold); the permissions are asked
+  through the yellow status lines (the guide says so). On the PC the two sleep buttons fold away (`Fold`) while the
+  FC reports armed and unfold on disarm. The guide's connect step and the tour's LINK card step explain the modes.
 - **Unreleased, for 1.0.29's notes:** the video's POP OUT / FULL SCREEN are two 30 px drawn buttons (`GlyphButton`:
   a window with an arrow out, the arrow back in once popped out, the four brackets for full screen) in a 38 px strip
   at the right edge of the picture; the names stay as the buttons' text for the tour and the tooltips.

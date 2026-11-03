@@ -115,6 +115,8 @@ public class MainWindow extends JFrame {
     private final WrappingText powerStatusText = WrappingText.fitting(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
     private final PowerStatus powerStatus = new PowerStatus();
     private JPanel powerRow;
+    /** STANDBY and DEEP SLEEP, folded away (animated) while the drone is armed: no sleep then. */
+    private Fold sleepFold;
 
     /** setText on the wrapping text, with the html wrapper the old label calls used. */
     private final class PowerStatus {
@@ -132,6 +134,8 @@ public class MainWindow extends JFrame {
     private long sleepStartAt;
     private int checkIntervalMin = 5;
     private static final String CHECK_INTERVAL_KEY = "phone.sleepCheckMin";
+    /** The last "still here" from the sleeping phone that went to the log (one line per check). */
+    private long lastHelloLogged;
     private long mapIdleUpdatedAt;
     static final String MAIN_BOUNDS_KEY = "mainWindow";
     private final MapWindow.Bounds mainBounds = new MapWindow.Bounds(this);
@@ -1741,7 +1745,8 @@ public class MainWindow extends JFrame {
         wakeButton.addActionListener(e -> wakePhone());
         buttons.add(standbyButton);
         buttons.add(deepSleepButton);
-        powerRow.add(buttons, c);
+        sleepFold = new Fold(buttons, true); // folds away while the drone is armed, and back when it is disarmed
+        powerRow.add(sleepFold, c);
         powerRow.add(wakeButton, c);
         JPanel interval = new JPanel(new BorderLayout(8, 0));
         interval.setOpaque(false);
@@ -1805,6 +1810,7 @@ public class MainWindow extends JFrame {
         int reported = pp == null ? -1 : pp.mode();
         boolean ready = link.getState() == ControlLink.State.READY;
         if (!powerRow.isVisible()) powerRow.setVisible(true);
+        sleepFold.setShown(!fcArmedNow(), true); // armed: the two sleep buttons slide away; disarmed: they slide back
         if (powerWanted != ControlLink.POWER_NORMAL && fcArmedNow()) {
             powerWanted = ControlLink.POWER_NORMAL;
             powerSentAt = 0;
@@ -1828,12 +1834,27 @@ public class MainWindow extends JFrame {
             } else {
                 long interval = Math.max(1, checkIntervalMin) * 60_000L;
                 long next = sleepStartAt + interval;
+                // the phone's own word from its last check (pc.22): when the next one is, and its battery
+                ControlLink.SleepHello hello = link.getSleepHello();
+                String alive = "";
+                if (hello != null && hello.receivedAt() >= sleepStartAt - 5000) {
+                    if (hello.nextCheckMin() > 0) next = hello.receivedAt() + hello.nextCheckMin() * 60_000L;
+                    long ago = (now - hello.receivedAt()) / 1000;
+                    alive = "Heard " + (ago < 60 ? ago + " s" : ago / 60 + " min") + " ago"
+                            + (hello.batteryPercent() >= 0 ? ", battery " + hello.batteryPercent() + " %" : "")
+                            + (hello.charging() ? " (charging)" : "") + ". ";
+                    if (hello.receivedAt() != lastHelloLogged) {
+                        lastHelloLogged = hello.receivedAt();
+                        logLine("Phone asleep, still here: battery " + (hello.batteryPercent() >= 0 ? hello.batteryPercent() + " %" : "unknown")
+                                + (hello.charging() ? ", charging" : "") + ", next check in " + hello.nextCheckMin() + " min.");
+                    }
+                }
                 while (next < now) next += interval;
                 long left = (next - now) / 1000;
                 String in = String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
                 powerStatus.setText(link.isDormant()
-                        ? "<html>DEEP SLEEP - the phone listens for this PC every " + checkIntervalMin + " min; next check in " + in + ". WAKE brings it back.</html>"
-                        : "<html>WAKE sent - the phone takes it at its next check, in " + in + ", then its camera starts.</html>");
+                        ? "<html>DEEP SLEEP - " + alive + "The phone checks for this PC every " + checkIntervalMin + " min; next check in " + in + ". WAKE brings it back.</html>"
+                        : "<html>WAKE sent - " + alive + "The phone takes it at its next check, in " + in + ", then its camera starts.</html>");
                 standbyButton.setEnabled(false);
                 deepSleepButton.setEnabled(false);
                 wakeButton.setEnabled(link.isDormant());

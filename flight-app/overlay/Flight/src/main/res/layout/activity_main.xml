@@ -339,28 +339,21 @@
 
                     <TextView style="@style/DD.Label" android:text="@string/dd_label_power" />
 
-                    <LinearLayout
+                    <TextView
+                        android:id="@+id/tvPowerMode"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal">
+                        android:layout_marginBottom="6dp"
+                        android:text="@string/dd_power_mode_normal"
+                        android:textColor="@color/dd_text"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
 
-                        <Button
-                            android:id="@+id/powerStandby"
-                            style="@style/DD.PowerButton"
-                            android:layout_marginEnd="8dp"
-                            android:text="@string/dd_power_standby" />
-
-                        <Button
-                            android:id="@+id/powerDeepSleep"
-                            style="@style/DD.PowerButton"
-                            android:layout_marginEnd="8dp"
-                            android:text="@string/dd_power_deep_sleep" />
-
-                        <Button
-                            android:id="@+id/powerWake"
-                            style="@style/DD.PowerButton"
-                            android:text="@string/dd_power_wake" />
-                    </LinearLayout>
+                    <Button
+                        android:id="@+id/powerWake"
+                        style="@style/DD.PowerButton"
+                        android:layout_width="match_parent"
+                        android:text="@string/dd_power_wake" />
 
                     <TextView
                         android:layout_width="wrap_content"

@@ -380,8 +380,22 @@ class ControlLinkTest {
         int before = phone.connects.get();
         Thread.sleep(1500);
         assertEquals(before, phone.connects.get(), "no Connect while dormant");
-        // WAKE: the Connects resume, and the phone, listening again, takes one
+        // the phone's check window: "still here" with its battery; the dormant PC says sleep on
+        phone.sendSleepHello(67, true, 5);
+        waitFor(() -> !phone.sleepAnswers.isEmpty(), 2000, "the PC's answer to the hello");
+        assertEquals(0, phone.sleepAnswers.get(0), "dormant: sleep on");
+        ControlLink.SleepHello hello = link.getSleepHello();
+        assertNotNull(hello);
+        assertEquals(67, hello.batteryPercent());
+        assertTrue(hello.charging());
+        assertEquals(5, hello.nextCheckMin());
+        assertEquals(0x0FA0, hello.milliVolts());
+        assertEquals(before, phone.connects.get(), "a hello wakes nothing while dormant");
+        // WAKE: the next hello is answered with 1, the Connects resume, and the phone, listening again, takes one
         link.setDormant(false);
+        phone.sendSleepHello(66, false, 5);
+        waitFor(() -> phone.sleepAnswers.size() >= 2, 2000, "the second answer");
+        assertEquals(1, phone.sleepAnswers.get(1), "after WAKE: wake");
         phone.silent = false;
         waitFor(() -> phone.connects.get() > before, 2000, "a Connect after WAKE");
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link back");
@@ -508,6 +522,13 @@ class ControlLinkTest {
         /** PowerMode packets as {mode, checkIntervalMin}, and every Connect that reached the socket. */
         final List<int[]> powerModes = new CopyOnWriteArrayList<>();
         final AtomicInteger connects = new AtomicInteger();
+        /** The PC's answers to this phone's sleep hellos: 0 sleep on, 1 wake. */
+        final List<Integer> sleepAnswers = new CopyOnWriteArrayList<>();
+
+        /** The sleeping phone's "still here" from a check window (pc.22), to the PC it last flew with. */
+        void sendSleepHello(int batteryPercent, boolean charging, int nextCheckMin) {
+            udpSender.sendPacket(new byte[]{ControlLink.SLEEP_HELLO, (byte) batteryPercent, (byte) (charging ? 1 : 0), (byte) nextCheckMin, 0x0F, (byte) 0xA0});
+        }
         /** The last video profile received (pc.15 on): -1 = none yet, else its flags (bit 0: key frames twice). */
         volatile int videoProfile = -1;
         /** Every config received, in order (a resolution switch sends a new one). */
@@ -593,6 +614,10 @@ class ControlLinkTest {
                     try {
                         socket.receive(packet);
                         if (packet.getLength() > 0 && packet.getData()[0] == UdpCommon.Connect) connects.incrementAndGet();
+                        if (packet.getLength() > 1 && packet.getData()[0] == ControlLink.SLEEP_ANSWER) {
+                            sleepAnswers.add((int) packet.getData()[1]);
+                            continue;
+                        }
                         if (silent) continue;
                         // like DRAUPNE Flight's Udp.receiverRun in direct mode: once a PC is connected, nothing from
                         // another one gets in; a second PC asking is told where the first one is

@@ -306,6 +306,29 @@ public class DDService extends Service {
         updateNotification(getString(R.string.dd_notification_checking));
     }
 
+    /** The sleep check's "still here" to the PC: the battery as Android reports it. */
+    void powerHello(int nextCheckMin) {
+        int percent = 255;
+        try {
+            android.os.BatteryManager bm = (android.os.BatteryManager) getSystemService(BATTERY_SERVICE);
+            if (bm != null) percent = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
+        } catch (Exception ignored) {
+            // unknown then
+        }
+        boolean charging = false;
+        int mV = 0;
+        try {
+            android.content.Intent b = registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+            if (b != null) {
+                charging = b.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0;
+                mV = b.getIntExtra(android.os.BatteryManager.EXTRA_VOLTAGE, 0);
+            }
+        } catch (Exception ignored) {
+            // unknown then
+        }
+        if (!udp.sendSleepHello(percent < 0 ? 255 : percent, charging, nextCheckMin, mV)) log("Sleep check: no PC address to say hello to");
+    }
+
     /** The check window closed without the PC: the socket shut again. */
     void powerListenEnd() {
         udp.close();

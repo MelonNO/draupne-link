@@ -104,11 +104,15 @@ public class MainActivity extends Activity {
     public static final String ACTION_WAKE = "de.droiddrone.flight.pc.WAKE";
     /** The screen is dimmed and may go off (standby, deep sleep); set once per change, not every second. */
     private boolean powerLookLow;
-    /** DEEP SLEEP tapped, a prompt (device admin, exact alarms) in between: the sleep follows when it returns. */
-    private boolean sleepWhenBack;
     private View llPowerRow;
-    private Button bStandby, bDeepSleep, bWake;
-    private TextView tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery;
+    /** The one button: WAKE, held for WAKE_HOLD_MS so a brush of the screen in the field does nothing. */
+    private Button bWake;
+    private static final long WAKE_HOLD_MS = 2000;
+    private final Runnable wakeAfterHold = () -> {
+        bWake.setText(R.string.dd_power_wake);
+        PowerMode.request(PowerMode.NORMAL, 0, "the phone's WAKE button, held");
+    };
+    private TextView tvPowerMode, tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery;
 
     @Override
     protected void onCreate(Bundle savedInstanceState){
@@ -153,12 +157,26 @@ public class MainActivity extends Activity {
         findViewById(R.id.lockScreen).setOnClickListener(v -> lockTouches());
         if (savedInstanceState != null && savedInstanceState.getBoolean(LOCKED_STATE)) lockTouches();
         llPowerRow = findViewById(R.id.llPowerRow);
-        bStandby = findViewById(R.id.powerStandby);
-        bDeepSleep = findViewById(R.id.powerDeepSleep);
+        tvPowerMode = findViewById(R.id.tvPowerMode);
         bWake = findViewById(R.id.powerWake);
-        bStandby.setOnClickListener(v -> PowerMode.request(PowerMode.STANDBY, 0, "the phone's STANDBY button"));
-        bDeepSleep.setOnClickListener(v -> deepSleepTapped());
-        bWake.setOnClickListener(v -> PowerMode.request(PowerMode.NORMAL, 0, "the phone's WAKE button"));
+        // the modes are the PC's to set; the phone only wakes, and only when the button is held
+        bWake.setOnTouchListener((v, ev) -> {
+            switch (ev.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    if (!bWake.isEnabled()) return false;
+                    bWake.setText(R.string.dd_power_holding);
+                    bWake.postDelayed(wakeAfterHold, WAKE_HOLD_MS);
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                case android.view.MotionEvent.ACTION_CANCEL:
+                    bWake.removeCallbacks(wakeAfterHold);
+                    bWake.setText(R.string.dd_power_wake);
+                    v.performClick();
+                    return true;
+                default:
+                    return false;
+            }
+        });
         tvPowerEvent = findViewById(R.id.tvPowerEvent);
         tvPowerAdmin = findViewById(R.id.tvPowerAdmin);
         tvPowerAdmin.setOnClickListener(v -> askDeviceAdmin());
@@ -251,9 +269,17 @@ public class MainActivity extends Activity {
         applyPowerLook(mode != PowerMode.NORMAL);
         boolean running = DDService.isRunning;
         llPowerRow.setVisibility(running ? View.VISIBLE : View.GONE);
-        bStandby.setEnabled(running && mode != PowerMode.STANDBY);
-        bDeepSleep.setEnabled(running && mode != PowerMode.DEEP_SLEEP);
         bWake.setEnabled(running && mode != PowerMode.NORMAL);
+        if (!bWake.isEnabled()) {
+            bWake.removeCallbacks(wakeAfterHold);
+            bWake.setText(R.string.dd_power_wake);
+        }
+        tvPowerMode.setText(mode == PowerMode.STANDBY ? getString(R.string.dd_power_mode_standby)
+                : mode != PowerMode.DEEP_SLEEP ? getString(R.string.dd_power_mode_normal)
+                : PowerMode.isChecking() ? getString(R.string.dd_power_mode_checking)
+                : PowerMode.nextCheckAt() != 0 ? getString(R.string.dd_power_mode_sleeping, PowerMode.time(this, PowerMode.nextCheckAt()))
+                : getString(R.string.dd_power_mode_sleep_soon));
+        tvPowerMode.setTextColor(mode == PowerMode.NORMAL ? colorOk : colorWarn);
         String event = PowerMode.lastEvent();
         tvPowerEvent.setVisibility(running && !event.isEmpty() ? View.VISIBLE : View.GONE);
         tvPowerEvent.setText(event);
@@ -299,33 +325,11 @@ public class MainActivity extends Activity {
         main.setKeepScreenOn(!low);
     }
 
-    /**
-     * DEEP SLEEP on the phone: the first time, the device admin prompt (so the screen can lock itself) and, on
-     * Android 12 and up, the exact alarm permission come first; the sleep follows when the app is back.
-     */
-    private void deepSleepTapped(){
-        android.content.SharedPreferences preferences = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this);
-        if (!PowerMode.isDeviceAdmin(this) && !preferences.getBoolean(PowerMode.PREF_ADMIN_ASKED, false)) {
-            preferences.edit().putBoolean(PowerMode.PREF_ADMIN_ASKED, true).apply();
-            sleepWhenBack = true;
-            askDeviceAdmin();
-            return;
-        }
-        if (!PowerMode.canExactAlarms(this) && !preferences.getBoolean(PowerMode.PREF_EXACT_ALARM_ASKED, false)) {
-            preferences.edit().putBoolean(PowerMode.PREF_EXACT_ALARM_ASKED, true).apply();
-            sleepWhenBack = true;
-            askExactAlarms();
-            return;
-        }
-        PowerMode.request(PowerMode.DEEP_SLEEP, 0, "the phone's DEEP SLEEP button");
-    }
-
     private void askDeviceAdmin(){
         try {
             startActivity(PowerMode.addDeviceAdminIntent(this));
         } catch (Exception e) {
             log("Cannot open the device admin prompt: " + e);
-            sleepWhenBack = false;
         }
     }
 
@@ -335,7 +339,6 @@ public class MainActivity extends Activity {
             startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:" + getPackageName())));
         } catch (Exception e) {
             log("Cannot open the exact alarm setting: " + e);
-            sleepWhenBack = false;
         }
     }
 
@@ -767,13 +770,6 @@ public class MainActivity extends Activity {
         isPaused = false;
         main.setKeepScreenOn(true);
         powerLookLow = false; // the line above undid it; updateUi dims again if the mode wants
-        if (sleepWhenBack) { // back from the device admin or exact alarm prompt after a DEEP SLEEP tap
-            sleepWhenBack = false;
-            deepSleepTapped();
-        } else if (PowerMode.isAsleep() || PowerMode.isChecking()) {
-            // the app opened (its notification tapped, or from the launcher) while the phone sleeps: that is a wake
-            PowerMode.request(PowerMode.NORMAL, 0, "the app was opened");
-        }
         updateUi();
         uiTimer = new Timer();
         TimerTask tt = new TimerTask() {

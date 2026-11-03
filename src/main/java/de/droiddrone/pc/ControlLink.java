@@ -277,9 +277,13 @@ public class ControlLink {
                     onForeignPacket(packet);
                     continue;
                 }
+                byte[] d = packet.getData();
+                if (packet.getLength() > 0 && d[0] == SLEEP_HELLO) { // the sleeping phone's check: answered at once;
+                    onSleepHello(d, packet.getLength());               // not a sign of the link, which is down on purpose
+                    continue;
+                }
                 lastReceivedAt = System.currentTimeMillis();
                 if (handleVideoFragment(packet)) continue;
-                byte[] d = packet.getData();
                 if (packet.getLength() > 0 && (d[0] == Spectate.PILOT_AT || d[0] == Spectate.NO_PILOT)) {
                     onPhoneSpectateAnswer(d, packet.getLength());
                     continue;
@@ -637,6 +641,29 @@ public class ControlLink {
     /** After STANDBY: the phone stopped its stream, so StartVideo goes out again as if the stream never started. */
     public void restartVideo() {
         videoConfigReceived = false;
+    }
+
+    /**
+     * The sleeping phone's "still here" from each check window (phone app pc.22 on): [0x6F][battery % u8, 255 =
+     * unknown][charging u8][nextCheckMin u8][mV u16]. This PC answers [0x70][wake u8] at once: 0 while dormant (the
+     * phone closes its window and sleeps on, saving the 20 s of listening), 1 after WAKE (it wakes fully).
+     */
+    public static final byte SLEEP_HELLO = 0x6F, SLEEP_ANSWER = 0x70;
+
+    public record SleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, long receivedAt) {}
+
+    private volatile SleepHello sleepHello;
+
+    /** The latest "still here" from the sleeping phone, or null. */
+    public SleepHello getSleepHello() {
+        return sleepHello;
+    }
+
+    private void onSleepHello(byte[] d, int len) {
+        if (len < 6) return;
+        int pct = d[1] & 0xff;
+        sleepHello = new SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff, ((d[4] & 0xff) << 8) | (d[5] & 0xff), System.currentTimeMillis());
+        udpSender.sendPacket(new byte[]{SLEEP_ANSWER, (byte) (dormant ? 0 : 1)});
     }
 
     /** Asks the phone's encoder for a lower or higher bitrate (upstream steps through a fixed list of rates). */

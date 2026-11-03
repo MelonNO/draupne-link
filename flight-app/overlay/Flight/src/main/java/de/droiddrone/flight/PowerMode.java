@@ -55,6 +55,10 @@ final class PowerMode {
     static final int DEEP_SLEEP = 2;
     /** PC to phone, unnumbered like StartVideo: [0x6E][mode u8][checkIntervalMin u8]. */
     static final byte PACKET = 0x6E;
+    /** pc.22: the sleep check's "still here" to the PC, and the PC's answer (0 = sleep on, 1 = wake). */
+    static final byte SLEEP_HELLO = 0x6F, SLEEP_ANSWER = 0x70;
+    static final int HELLO_COUNT = 3;
+    static final long HELLO_GAP_MS = 500;
     static final int DEFAULT_CHECK_MIN = 5;
     /** How long the socket listens for the PC's Connect after an alarm. */
     static final long CHECK_WINDOW_MS = 20_000;
@@ -319,6 +323,26 @@ final class PowerMode {
         event("Sleep check: listening for the PC for " + CHECK_WINDOW_MS / 1000 + " s");
         cancelPending();
         pending = worker.scheduleAtFixedRate(this::pollWindow, WINDOW_POLL_MS, WINDOW_POLL_MS, TimeUnit.MILLISECONDS);
+        // "still here" to the PC, three times: its answer ends the window early (sleep on) or wakes the phone
+        for (int i = 0; i < HELLO_COUNT; i++) {
+            worker.schedule(() -> {
+                if (checking) service.powerHello(checkIntervalMin);
+            }, 200 + i * HELLO_GAP_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    /** The PC answered the hello: sleep on (the window closes now) or wake. */
+    static void sleepAnswer(boolean wake) {
+        PowerMode p = current;
+        if (p == null) return;
+        p.worker.execute(() -> {
+            if (p.mode != DEEP_SLEEP || !p.checking) return;
+            if (wake) p.wake("the PC called");
+            else {
+                p.event("Sleep check: the PC says sleep on");
+                p.closeWindow();
+            }
+        });
     }
 
     private void pollWindow() {

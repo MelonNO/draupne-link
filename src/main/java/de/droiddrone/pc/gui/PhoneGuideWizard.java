@@ -359,11 +359,11 @@ final class PhoneGuideWizard {
             WizardDialog.addRow(col, setting("notifications", "Notifications: Allow",
                     "DRAUPNE Flight asks when it starts. Tap <b>Allow</b>."));
             WizardDialog.addRow(col, setting("alarms", "Alarms &amp; reminders: Allow",
-                    "Tap <b>DEEP SLEEP</b> on the phone once: Android asks. Tap <b>Allow</b>. Without it the sleeping phone cannot "
-                            + "wake up to look for this PC."));
+                    "In DRAUPNE Flight, tap the yellow line <b>Exact alarms not allowed</b>, then <b>Allow</b>. Without it the "
+                            + "sleeping phone cannot wake up to look for this PC."));
             WizardDialog.addRow(col, setting("admin", "Lock the screen: Activate",
-                    "The same tap asks to let DRAUPNE Flight lock the screen (\"device admin\"). Tap <b>Activate</b>. Without it the "
-                            + "screen only dims in deep sleep."));
+                    "In DRAUPNE Flight, tap the yellow line <b>Allow the app to lock the screen</b>, then <b>Activate</b>. Without it "
+                            + "the screen only dims in deep sleep."));
             return col;
         }
 
@@ -452,6 +452,10 @@ final class PhoneGuideWizard {
                     + "tick <b>Always allow</b> (or <b>Use by default</b>) and tap <b>OK</b>. Then it reconnects by itself if the cable slips."));
             WizardDialog.addRow(col, link);
             WizardDialog.addRow(col, fc);
+            WizardDialog.addRow(col, WizardDialog.paragraph("<b>Waiting for take-off?</b> On the LINK card, <b>STANDBY</b> stops the phone's camera "
+                    + "and dims its screen (back in two seconds with <b>WAKE</b>); <b>DEEP SLEEP</b> locks the phone and lets it sleep, checking "
+                    + "for this PC every few minutes, so WAKE brings it back at its next check with nobody touching the phone. "
+                    + "Neither works while the drone is armed. On the phone, holding <b>HOLD TO WAKE</b> wakes it too."));
             camera.addAction("Flip", this::flip).setToolTipText("Turn the picture 180 degrees: for a phone mounted upside down. Kept as VIDEO > Camera upside down");
             WizardDialog.addRow(col, camera);
             WizardDialog.addRow(col, latency);

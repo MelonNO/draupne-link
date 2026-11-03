@@ -266,6 +266,8 @@ public class Udp {
                         if (receiverPacket.getAddress().equals(udpSender.getIp())
                                 && receiverPacket.getPort() == udpSender.getPort()) {
                             lastPilotPacketMs = System.currentTimeMillis();
+                            lastPcIp = udpSender.getIp(); // kept across deep sleep: the check window's hello goes there
+                            lastPcPort = udpSender.getPort();
                         } else {
                             if (!otherPcWhileConnected(receiverPacket, d, len)) continue;
                             buffer = receiverBuffer; // the new session
@@ -276,6 +278,11 @@ public class Udp {
                             continue;
                         }
                         rcSeqValid = false; // every (re)connect passes here: the PC's stick sequence starts over
+                        // pc.22: the PC's answer to this phone's sleep check hello (from the PC it last flew with)
+                        if (d[0] == PowerMode.SLEEP_ANSWER) {
+                            if (len >= 2 && receiverPacket.getAddress().equals(lastPcIp)) PowerMode.sleepAnswer(d[1] != 0);
+                            continue;
+                        }
                         if (d[0] == UdpCommon.Connect) {
                             if (!keyMatches(d, len, 4)) {
                                 noteWrongKey(receiverPacket);
@@ -558,6 +565,29 @@ public class Udp {
                 log("Spectator answer error: " + e);
             }
         });
+    }
+
+    /** The PC this phone last flew with: where the sleep check's hello goes, socket re-opened or not. */
+    private volatile InetAddress lastPcIp;
+    private volatile int lastPcPort;
+
+    /**
+     * The sleeping phone's "still here" (pc.22): [0x6F][battery % u8][charging u8][nextCheckMin u8][mV u16] to the
+     * PC's last address; it answers whether to sleep on or wake. Nothing to send to before the first flight.
+     */
+    public boolean sendSleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts) {
+        InetAddress ip = lastPcIp;
+        DatagramSocket s = socket;
+        if (ip == null || s == null || s.isClosed()) return false;
+        byte[] d = {PowerMode.SLEEP_HELLO, (byte) Math.min(255, Math.max(0, batteryPercent)), (byte) (charging ? 1 : 0),
+                (byte) Math.min(255, nextCheckMin), (byte) (milliVolts >> 8), (byte) milliVolts};
+        try {
+            s.send(new DatagramPacket(d, d.length, ip, lastPcPort));
+            return true;
+        } catch (Exception e) {
+            log("Sleep hello error: " + e);
+            return false;
+        }
     }
 
     public boolean isConnected(){

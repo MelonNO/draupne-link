@@ -78,8 +78,9 @@ final class Tour {
                 main::tourUpdateButton, openMenu, false));
         steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card away for more video, and brings it back. The sticks "
                 + "and switches keep working either way. Press it.", main::tourMinimizeButton, null));
-        steps.add(new Step("THE MAP", "In flight the minimap takes this place, with POP OUT MAP under it. F3 opens the map window "
-                + "any time - as now.", main::tourLinkCard, null, false));
+        steps.add(new Step("THE LINK CARD", "CONNECT, and while connected STANDBY, DEEP SLEEP and WAKE: the phone saves its battery "
+                + "before take-off and the PC wakes it. In flight the minimap takes this place, with POP OUT MAP under it. F3 opens "
+                + "the map window any time - as now.", main::tourLinkCard, null, false));
         // on the map steps the map itself stays live under the dimming: panning, the wheel, pins and the cursor figures work
         Supplier<JComponent> map = () -> main.mapWindow().map();
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "

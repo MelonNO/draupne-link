@@ -71,10 +71,14 @@ TO UNLOCK</string>
 
     <!-- pc.21: power modes (PowerMode) -->
     <string name="dd_label_power">POWER</string>
-    <string name="dd_power_standby">STANDBY</string>
-    <string name="dd_power_deep_sleep">DEEP SLEEP</string>
-    <string name="dd_power_wake">WAKE</string>
-    <string name="dd_power_hint">Standby: no video, screen dim, the PC wakes it. Deep sleep: everything off, a check for the PC every few minutes. Not while armed.</string>
+    <string name="dd_power_wake">HOLD TO WAKE</string>
+    <string name="dd_power_holding">HOLD… WAKING</string>
+    <string name="dd_power_mode_normal">MODE: NORMAL - camera and sticks live</string>
+    <string name="dd_power_mode_standby">MODE: STANDBY - camera off, waiting for the PC\'s WAKE</string>
+    <string name="dd_power_mode_sleep_soon">MODE: going to deep sleep…</string>
+    <string name="dd_power_mode_sleeping">MODE: DEEP SLEEP - next check for the PC at %1$s</string>
+    <string name="dd_power_mode_checking">MODE: DEEP SLEEP - listening for the PC now</string>
+    <string name="dd_power_hint">The PC sets the mode (STANDBY, DEEP SLEEP, WAKE on its LINK card). To wake this phone by hand, hold the button for two seconds.</string>
     <string name="dd_pill_standby">STANDBY</string>
     <string name="dd_pill_sleeping">SLEEPING</string>
     <string name="dd_pill_checking">CHECKING</string>
