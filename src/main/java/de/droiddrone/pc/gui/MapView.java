@@ -264,6 +264,30 @@ class MapView extends JComponent {
     // ------------------------------------------------------------------ what to show
 
     /** The pilot's pins, drawn with their names and the way to them from the drone; right-click adds, renames, removes. */
+    /** The tour's example pins: drawn like the real ones, never saved, gone when the tour ends. */
+    private List<Pins.Pin> examplePins = List.of();
+
+    /** Three made-up pins round the view's centre, so the tour can show what pins look like; off clears them. */
+    void showExamplePins(boolean on) {
+        if (!on) {
+            examplePins = List.of();
+        } else {
+            double mPerDegLat = 111_320, mPerDegLon = 111_320 * Math.cos(Math.toRadians(centerLat));
+            examplePins = List.of(
+                    new Pins.Pin("Alpha", centerLat + 250 / mPerDegLat, centerLon + 300 / mPerDegLon),
+                    new Pins.Pin("Bravo", centerLat - 400 / mPerDegLat, centerLon - 200 / mPerDegLon),
+                    new Pins.Pin("Charlie", centerLat + 80 / mPerDegLat, centerLon - 450 / mPerDegLon));
+        }
+        repaint();
+    }
+
+    private List<Pins.Pin> allPins() {
+        if (examplePins.isEmpty()) return pins.list();
+        List<Pins.Pin> all = new java.util.ArrayList<>(pins.list());
+        all.addAll(examplePins);
+        return all;
+    }
+
     void setPins(Pins pins) {
         this.pins = pins;
         repaint();
@@ -313,7 +337,7 @@ class MapView extends JComponent {
         int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
         double scale = Math.pow(2, zoom - zi);
         double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
-        for (Pins.Pin p : pins.list()) {
+        for (Pins.Pin p : allPins()) {
             Point2D s = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, getWidth(), getHeight());
             if (Math.abs(s.getX() - x) <= 12 && Math.abs(s.getY() - y) <= 12) return p;
         }
@@ -738,7 +762,7 @@ class MapView extends JComponent {
      * the launch point (L), for the one who walks there.
      */
     private void paintPins(Graphics2D g, FlightTrack.Point last, FlightTrack.Point home, int zi, double scale, double wcx, double wcy, int w, int h) {
-        for (Pins.Pin p : pins.list()) {
+        for (Pins.Pin p : allPins()) {
             Point2D c = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
             if (c.getX() < -200 || c.getX() > w + 200 || c.getY() < -200 || c.getY() > h + 200) continue;
             Path2D d = new Path2D.Double();

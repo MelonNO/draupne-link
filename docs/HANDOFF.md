@@ -15,6 +15,14 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   the PC sets the modes; the phone has a MODE line and one HOLD TO WAKE button (2 s hold); the permissions are asked
   through the yellow status lines (the guide says so). On the PC the two sleep buttons fold away (`Fold`) while the
   FC reports armed and unfold on disarm. The guide's connect step and the tour's LINK card step explain the modes.
+- **Unreleased (pilot's fourth round):** the phone's running notification is on a new quiet channel
+  (`DDService.QUIET_CHANNEL_ID`, IMPORTANCE_LOW, silent, only-alert-once): deep sleep changes its text at every
+  check and the old high channel would sound or light the screen each time. Tour: NEXT is 124 px wide (PRESS IT was
+  cut), the dim sits in MODAL_LAYER so menus and the rows that fly as they close show over it, the live area (the
+  header on the menu steps, the map on the map steps) is un-dimmed as well as mouse-live, and the PINS step shows
+  three made-up pins (`MapView.showExamplePins`, never saved) until the tour ends. Deep sleep and the phone's own
+  power: the app can't switch on Battery Saver or airplane mode (Android keeps both from apps), it releases its wake
+  lock and lets the phone doze; the pilot can turn Battery Saver on by hand.
 - **Unreleased, for 1.0.29's notes:** the video's POP OUT / FULL SCREEN are two 30 px drawn buttons (`GlyphButton`:
   a window with an arrow out, the arrow back in once popped out, the four brackets for full screen) in a 38 px strip
   at the right edge of the picture; the names stay as the buttons' text for the tour and the tooltips.

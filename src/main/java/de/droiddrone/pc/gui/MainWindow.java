@@ -165,6 +165,8 @@ public class MainWindow extends JFrame {
     private JComponent controllerCard;
     /** The LINK card: the connection fields, in flight the minimap; the tour points at it. */
     private JComponent linkCard;
+    /** The header with MENU and its slide-out: the tour keeps it clear while it walks the menu. */
+    private JComponent headerPanel;
     /** The controller card's height while it folds or unfolds (MINIMIZE / EXPAND); -1 = its own. */
     private int controllerAnimHeight = -1;
     /** What the pilot chose; the sticks stay visible while the card folds, so their visibility doesn't say. */
@@ -509,6 +511,7 @@ public class MainWindow extends JFrame {
 
     private JComponent buildHeader() {
         JPanel header = new JPanel(new BorderLayout());
+        headerPanel = header;
         header.setOpaque(false);
         JPanel titles = new JPanel(new FlowLayout(FlowLayout.LEFT, 12, 0));
         titles.setOpaque(false);
@@ -2063,6 +2066,10 @@ public class MainWindow extends JFrame {
 
     JComponent tourLinkCard() {
         return linkCard;
+    }
+
+    JComponent tourHeader() {
+        return headerPanel;
     }
 
     /** Slides the header menu out, so SETUP, VIDEO, LINK and TOOLS are in sight; nothing when it is out already. */

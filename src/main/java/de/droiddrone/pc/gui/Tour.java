@@ -68,14 +68,15 @@ final class Tour {
         this.main = main;
         retry.setRepeats(false);
         Runnable openMenu = main::tourOpenMenu;
+        Supplier<JComponent> header = main::tourHeader; // the menu steps: the header stays clear, so the slide-out and the menus show in front
         steps.add(new Step("MENU", "Everything lives here. Press it and SETUP, VIDEO, LINK and TOOLS slide out - as now.",
-                main::tourMenuButton, openMenu));
-        steps.add(new Step("SETUP", "The guides: first-time setup, PC, drone and phone setup, and this tour.", main::tourSetupButton, openMenu));
-        steps.add(new Step("VIDEO", "The picture, the OSD and recording.", main::tourVideoButton, openMenu));
-        steps.add(new Step("LINK", "The link's sounds, and who may watch as a spectator.", main::tourLinkButton, openMenu));
-        steps.add(new Step("TOOLS", "Find the drone, the tracks folder and the tests.", main::tourToolsButton, openMenu));
+                main::tourMenuButton, openMenu, true, header));
+        steps.add(new Step("SETUP", "The guides: first-time setup, PC, drone and phone setup, and this tour.", main::tourSetupButton, openMenu, true, header));
+        steps.add(new Step("VIDEO", "The picture, the OSD and recording.", main::tourVideoButton, openMenu, true, header));
+        steps.add(new Step("LINK", "The link's sounds, and who may watch as a spectator.", main::tourLinkButton, openMenu, true, header));
+        steps.add(new Step("TOOLS", "Find the drone, the tracks folder and the tests.", main::tourToolsButton, openMenu, true, header));
         steps.add(new Step("UPDATE", "A newer DRAUPNE Link is ready: one press installs it (not now - after the tour).",
-                main::tourUpdateButton, openMenu, false));
+                main::tourUpdateButton, openMenu, false, header));
         steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card away for more video, and brings it back. The sticks "
                 + "and switches keep working either way. Press it.", main::tourMinimizeButton, null));
         steps.add(new Step("THE LINK CARD", "CONNECT, and while connected STANDBY, DEEP SLEEP and WAKE: the phone saves its battery "
@@ -86,7 +87,11 @@ final class Tour {
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
                 + "drone in the middle; Home jumps to the launch point, End to the drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow, true, map));
         steps.add(new Step("PINS", "Right-click the map to drop a pin (Alpha, Bravo ...), or to rename or remove one. PINS lists "
-                + "them all. Each pin shows its distance and bearing from the drone.", () -> main.mapWindow().tourPins(), null, true, map));
+                + "them all. Each pin shows its distance and bearing from the drone. The three here are examples; they go when the tour ends.",
+                () -> main.mapWindow().tourPins(), () -> {
+                    main.mapWindow().map().showExamplePins(true);
+                    examplePins = true;
+                }, true, map));
         steps.add(new Step("UNDER THE CURSOR", "Move the mouse over the map: the position, in the format chosen top right, and the "
                 + "terrain height there show here. DRONE, ALTITUDE and LAUNCH are live.", () -> main.mapWindow().tourCursor(), null, false, map,
                 () -> main.mapWindow().tourTerrain()));
@@ -125,7 +130,10 @@ final class Tour {
         notice = null;
         index++;
         tries = 0;
-        if (index >= steps.size()) return;
+        if (index >= steps.size()) {
+            clearExamplePins();
+            return;
+        }
         Step s = steps.get(index);
         if (s.before() != null) {
             try {
@@ -142,6 +150,20 @@ final class Tour {
         if (notice != null) notice.dismiss();
         notice = null;
         index = steps.size();
+        clearExamplePins();
+    }
+
+    /** The tour's made-up pins on the map: shown by the PINS step, gone when the tour is over. */
+    private boolean examplePins;
+
+    private void clearExamplePins() {
+        if (!examplePins) return;
+        examplePins = false;
+        try {
+            main.mapWindow().map().showExamplePins(false);
+        } catch (RuntimeException e) {
+            // the map window is gone with them
+        }
     }
 
     private void show() {
@@ -267,7 +289,8 @@ final class Tour {
                 if (anchor instanceof javax.swing.AbstractButton b) b.addActionListener(firedWatch);
             }
             JLayeredPane layer = root.getLayeredPane();
-            layer.add(dim, JLayeredPane.POPUP_LAYER);
+            // the dim sits under the popup layer: a menu that opens, and the rows that fly as it closes, show over it
+            layer.add(dim, JLayeredPane.MODAL_LAYER);
             layer.add(this, JLayeredPane.DRAG_LAYER);
             dim.setBounds(0, 0, layer.getWidth(), layer.getHeight());
             if (!place()) {
@@ -333,7 +356,7 @@ final class Tour {
             if (!r.equals(getBounds())) setBounds(r);
             int top = above ? 0 : POINTER;
             int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + 8 - PAD;
-            next.setBounds(WIDTH - PAD - 86, by, 86, 30);
+            next.setBounds(WIDTH - PAD - 124, by, 124, 30); // room for PRESS IT as well as NEXT
             exit.setBounds(PAD, by, 130, 30);
             return true;
         }
@@ -472,6 +495,11 @@ final class Tour {
                     Area shade = new Area(new Rectangle(0, 0, getWidth(), getHeight()));
                     RoundRectangle2D hole = new RoundRectangle2D.Float(a.x - 6, a.y - 6, a.width + 12, a.height + 12, 10, 10);
                     shade.subtract(new Area(hole));
+                    JComponent l = live; // the live area (the header on the menu steps, the map on the map steps) stays clear too
+                    if (l != null && l.isShowing() && l.getParent() != null) {
+                        Rectangle r = SwingUtilities.convertRectangle(l.getParent(), l.getBounds(), getParent());
+                        shade.subtract(new Area(new Rectangle(r.x - 2, r.y - 2, r.width + 4, r.height + 4)));
+                    }
                     g.setColor(Theme.alpha(java.awt.Color.BLACK, Math.round(150 * in)));
                     g.fill(shade);
                     double pulse = 0.5 + 0.5 * Math.sin((System.currentTimeMillis() - shownAt) / 320.0);

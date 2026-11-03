@@ -90,6 +90,8 @@ TO UNLOCK</string>
     <string name="dd_notification_standby">Standby - the PC wakes this phone</string>
     <string name="dd_notification_sleep">Deep sleep - next check at %1$s</string>
     <string name="dd_notification_checking">Sleep check - listening for the PC</string>
+    <string name="dd_quiet_channel">Running</string>
+    <string name="dd_quiet_channel_why">The running notification: changes quietly, never sounds or lights the screen.</string>
     <string name="dd_wake_channel">Wake-up</string>
     <string name="dd_wake_channel_why">Turns the screen on when the PC wakes the phone from deep sleep.</string>
     <string name="dd_wake_text">Awake - the PC called</string>

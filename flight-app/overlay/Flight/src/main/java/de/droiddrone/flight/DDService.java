@@ -50,6 +50,7 @@ import de.droiddrone.common.SettingsCommon;
 
 public class DDService extends Service {
     public static final String CHANNEL_ID = "DDServiceChannel";
+    static final String QUIET_CHANNEL_ID = "DD_quiet";
     public static boolean isRunning = false;
     public static boolean isConnected = false;
     private static int serialPortStatus = Serial.STATUS_NOT_INITIALIZED;
@@ -228,6 +229,15 @@ public class DDService extends Service {
         NotificationChannel serviceChannel = new NotificationChannel(CHANNEL_ID, "DD", NotificationManager.IMPORTANCE_HIGH);
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(serviceChannel);
+        // pc.22: the running notification on a quiet channel (a channel's importance can't be lowered once made, so
+        // a new one): deep sleep changes its text at every check, and a high channel would sound, buzz or light
+        // the screen for each - power and annoyance for nothing
+        NotificationChannel quiet = new NotificationChannel(QUIET_CHANNEL_ID, getString(R.string.dd_quiet_channel), NotificationManager.IMPORTANCE_LOW);
+        quiet.setDescription(getString(R.string.dd_quiet_channel_why));
+        quiet.setSound(null, null);
+        quiet.enableVibration(false);
+        quiet.enableLights(false);
+        manager.createNotificationChannel(quiet);
         // pc.21: a high-importance channel of its own for the wake notification, or its full-screen intent is ignored
         NotificationChannel wakeChannel = new NotificationChannel(WAKE_CHANNEL_ID, getString(R.string.dd_wake_channel), NotificationManager.IMPORTANCE_HIGH);
         wakeChannel.setDescription(getString(R.string.dd_wake_channel_why));
@@ -238,12 +248,15 @@ public class DDService extends Service {
     private Notification buildNotification(String text) {
         Intent notificationIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
+        return new NotificationCompat.Builder(this, QUIET_CHANNEL_ID)
                 .setContentTitle(getResources().getString(R.string.app_name))
                 .setContentText(text)
                 .setSmallIcon(R.drawable.baseline_rocket_launch_24)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
                 .build();
     }
 

@@ -33,7 +33,7 @@ public class ApkShare implements AutoCloseable {
     public static final String APK_NAME = "DRAUPNE-Flight-" + VERSION + ".apk";
     public static final String APK_URL = "https://github.com/MelonNO/draupne-link/releases/download/flight-" + VERSION + "/" + APK_NAME;
     /** SHA-256 of the APK built by flight-app/build.ps1 and attached to the flight-VERSION release. */
-    public static final String APK_SHA256 = "9bcd56aead0c19b78198220a8759f99fe8e8ad868ce12f14e20ce05e7f9cc3f8";
+    public static final String APK_SHA256 = "569a4cd9c3170bd8f7bc95a8f5e5938cfd9e3df633422cf9a1dbfdd13df2ac63";
     public static final int PORT = 8765;
 
     private HttpServer server;
