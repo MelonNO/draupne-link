@@ -2,6 +2,14 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.28
+
+- **STANDBY and DEEP SLEEP** (phone app 2.3.0-pc.21): the phone saves its battery before take-off; STANDBY is back in two seconds on WAKE, DEEP SLEEP locks the phone's screen and listens for the PC every 1, 2 or 5 minutes, so WAKE brings it back without anyone touching the phone. Refused and left while armed. The phone asks once for notifications, alarms and reminders and locking the screen; the guide lists them.
+- Phone app: CONNECT warns when the phone is not on Tailscale.
+- UPDATE: the helper logs every step, always starts the app again, and the next start reports the result; clear pop-ups when connected or not the installed copy; the app log is drained before exit.
+- Tour: no pop-out / full-screen steps, NEXT locked until the control was pressed, the map live under the map steps, CURSOR and TERRAIN HEIGHT lit together, the main window to the front for the last step.
+- Video buttons at the side of the picture; channel bars named after the switches' purposes.
+
 ## 1.0.27
 
 - **Review of the whole program, every finding fixed; phone app 2.3.0-pc.19.** Link: sticks resume at once after a loss when the drone is still armed (no mid-air disarm during a GPS rescue), a restarted PC no longer becomes a spectator of itself, stick frames carry a sequence (pc.19) and the phone never sends them unmapped, the phone's stick path is two thread hops shorter with a bigger receive buffer and no spinning sender threads, loss after 2 s of silence, STICKS n MS on the HUD and `pc_to_fc_ms` in the link log.

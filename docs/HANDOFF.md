@@ -4,15 +4,17 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.27)
+## Where things stand (2026-11-03, 1.0.28)
 
-- **Unreleased, phone app pc.20 (built, SHA pinned in ApkShare, NOT published):** CONNECT in Direct mode with no
+- **Released:** DRAUPNE Link **1.0.28** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.21**: everything in the
+  1.0.28 bullets below (STANDBY / DEEP SLEEP, the Tailscale warning, UPDATE made visible, the tour's third round, the
+  video buttons at the side, the channel bar labels). None of it tried on a phone yet.
+- **1.0.28, phone app (pc.20, never published on its own, folded into pc.21):** CONNECT in Direct mode with no
   Tailscale address on the phone (no interface in 100.64.0.0/10, `MainActivity.onTailscale`) shows "Tailscale is
   off" with Open Tailscale / Connect anyway / Cancel, and the network line says "Waiting for the PC - Tailscale is
   off on this phone" while it runs that way. Release order as always: push, `gh release create flight-2.3.0-pc.20`
   (not Latest) with build/flight/DRAUPNE-Flight-2.3.0-pc.20.apk, download and check the SHA, then tag v1.0.28.
-- **Unreleased, phone app pc.21 (built from the merged tree, SHA pinned in ApkShare, NOT published; pc.20 was never
-  published and is folded into it):** `PowerMode` (one worker thread) owns the modes; `DDService` hooks do the work,
+- **1.0.28, phone app pc.21 (built from the merged tree, SHA pinned in ApkShare):** `PowerMode` (one worker thread) owns the modes; `DDService` hooks do the work,
   `Udp` drops sticks and StartVideo outside mode 0 and re-`initialize()`s its socket for the 20 s check window,
   `Msp.setSlowPoll` / `PhoneLocation.setInterval` are the standby rates. Deep sleep keeps the foreground service; the
   alarm receiver (`PowerAlarmReceiver`, `setExactAndAllowWhileIdle`) takes a wake lock before handing to the worker;
@@ -23,9 +25,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   The guide's "Settings on the phone" step lists the three answers to give. Untried on a phone: doze with the screen
   locked, the alarm firing on time and the socket getting network in the window, lockNow with a PIN, the full-screen
   intent lighting the screen (some makers need "display over other apps"), the USB port reopening after sleep.
-- **Unreleased, tour:** the UNDER THE CURSOR step lights the CURSOR and TERRAIN HEIGHT cells together
+- **1.0.28, tour:** the UNDER THE CURSOR step lights the CURSOR and TERRAIN HEIGHT cells together
   (`TourNotice.setExtra`, the union of both).
-- **Unreleased, STANDBY / DEEP SLEEP (PC side):** the LINK card's power row
+- **1.0.28, STANDBY / DEEP SLEEP (PC side):** the LINK card's power row
   (`MainWindow.powerPanel/refreshPower`): STANDBY, DEEP SLEEP, WAKE, CHECK EVERY 1/2/5 min (`phone.sleepCheckMin`).
   `ControlLink.sendPowerMode` (0x6E), `setDormant` (no Connect while the phone sleeps), `restartVideo`;
   `FcTelemetry.getPhonePower` (0x40F5). In standby the stick listener feeds the session null (as if the radio were
@@ -33,13 +35,13 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   refused and left while the FC reports armed. Deep sleep: once the phone reports mode 2 and the link drops, the PC
   goes dormant and counts down to the phone's next listening window; WAKE clears dormant and the Connects resume.
   Protocol in docs/PROTOCOL.md. Untried on a phone.
-- **Unreleased, tour (pilot's third round):** no POP OUT VIDEO / FULL SCREEN steps; a step at a button or a choice
+- **1.0.28, tour (pilot's third round):** no POP OUT VIDEO / FULL SCREEN steps; a step at a button or a choice
   keeps NEXT locked as "Press it" until that control was pressed (`TourNotice.requirePress`: an AWT mouse-released
   watch on the control and its children, plus the button's action; UPDATE, the LINK card, the CURSOR and DRONE cells
   and the last step don't require it); on the map steps the map itself stays live under the dimming
   (`Step.live`, `Dim.contains`), so the CURSOR figures, panning, the wheel and pins work during the tour; the last
   step brings the main window to the front over the map window.
-- **Unreleased, for 1.0.28's notes:** UPDATE made visible end to end after the pilot's "it downloads, closes, and
+- **1.0.28:** UPDATE made visible end to end after the pilot's "it downloads, closes, and
   nothing opens": the helper script (`SelfUpdate.script`) writes every step to `%TEMP%\DraupneLink-update\update.log`,
   waits up to 30 s for a locked installer and 2 min for the app, and whatever fails it starts the app again and
   leaves a `RESULT` line, which the next start reports (`SelfUpdate.takeHelperResult`, `MainWindow.reportLastUpdate`:
