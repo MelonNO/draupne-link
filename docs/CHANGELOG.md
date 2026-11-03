@@ -2,6 +2,15 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.29
+
+- **The sleeping phone reports in** (phone app 2.3.0-pc.22): battery, charging and the next check at every sleep check; the PC answers sleep on or wake, so the window closes in seconds; the LINK card shows "Heard n ago, battery n %".
+- Phone app: one HOLD TO WAKE button and a MODE line instead of STANDBY / DEEP SLEEP buttons; a quiet notification channel; the boot animation's D and crosshair become the CONNECT button, the LOCK SCREEN outline and the pill.
+- LINK card: the sleep buttons slide away while armed. Guide: the sleep modes explained, Wi-Fi / Bluetooth / Battery Saver in one row, the permission rows name the yellow lines.
+- Tour: PRESS IT fits, menus in front of the dimming, CURSOR and TERRAIN HEIGHT lit together, example pins.
+- Video buttons as small glyphs at the right edge. No flicker at boot or when opening menus. The boot animation's D becomes the video buttons and the CALIBRATE / RC CHECK outlines.
+- Phone app unchanged otherwise (pc.22).
+
 ## 1.0.28
 
 - **STANDBY and DEEP SLEEP** (phone app 2.3.0-pc.21): the phone saves its battery before take-off; STANDBY is back in two seconds on WAKE, DEEP SLEEP locks the phone's screen and listens for the PC every 1, 2 or 5 minutes, so WAKE brings it back without anyone touching the phone. Refused and left while armed. The phone asks once for notifications, alarms and reminders and locking the screen; the guide lists them.

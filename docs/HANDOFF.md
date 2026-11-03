@@ -4,9 +4,13 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.28)
+## Where things stand (2026-11-03, 1.0.29)
 
-- **Unreleased, phone app pc.22 (built, SHA pinned, NOT published) and the PC side for 1.0.29:** the sleep check's
+- **Released:** DRAUPNE Link **1.0.29** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.22**: the 1.0.29 bullets
+  below (the sleep check's hello, the phone's hold-to-wake and mode line, the quiet notification, the folding sleep
+  buttons, the guide's sleep text, the tour's fourth round, the glyph video buttons, the two flickers, the boot
+  animation's D). The sleep path has still not run on a phone.
+- **1.0.29, phone app pc.22 and the PC side:** the sleep check's
   "still here": in each window the phone sends `SleepHello 0x6F` (battery %, charging, next check, mV) to the PC it
   last flew with (`Udp.lastPcIp/lastPcPort`, kept across the socket's close; `DDService.powerHello`), the PC answers
   `SleepAnswer 0x70` 0/1 at once (`ControlLink.onSleepHello`, before the link's liveness mark: a hello is not the link)
@@ -15,19 +19,19 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   the PC sets the modes; the phone has a MODE line and one HOLD TO WAKE button (2 s hold); the permissions are asked
   through the yellow status lines (the guide says so). On the PC the two sleep buttons fold away (`Fold`) while the
   FC reports armed and unfold on disarm. The guide's connect step and the tour's LINK card step explain the modes.
-- **Unreleased, the boot animation's D:** on the PC the mark's "D" (the two bars and the X between them) comes apart
+- **1.0.29, the boot animation's D:** on the PC the mark's "D" (the two bars and the X between them) comes apart
   too: the bars fly to the video's two glyph buttons on the right and end their size, the two diagonals swing level
   and stretch into the outlines of CALIBRATE and RC CHECK at the bottom (`BootReveal.paintD`; MainWindow hands the
   targets' bounds over with `boundsInPane`; without targets the D folds away as before, which the frame tests use).
   On the phone (`BootRevealView.drawD`) the bars become the two halves of the CONNECT button, the diagonals the LOCK
   SCREEN button's outline, and the crosshair flies to the status pill and shrinks to its height. Checked off screen
   on the PC (build/shot/BootShot); the phone's needs a look on a real phone.
-- **Unreleased, two flickers:** the boot cover (`BootReveal`) is the root pane's glass pane, which the root layout
+- **1.0.29, two flickers:** the boot cover (`BootReveal`) is the root pane's glass pane, which the root layout
   sizes before any paint - on the layered pane it got its size a frame after the window grew to maximized, and the
   UI showed in that frame. A menu's opening picture (`TacticalCombo.Ghost`) now shows the real menu first and goes
   two frames later (it went first, and the window showed through for a frame); `SlideMenu` re-lays out the header
   only when its width changed (the slide's last frame did it once more for nothing).
-- **Unreleased (pilot's fourth round):** the phone's running notification is on a new quiet channel
+- **1.0.29 (pilot's fourth round):** the phone's running notification is on a new quiet channel
   (`DDService.QUIET_CHANNEL_ID`, IMPORTANCE_LOW, silent, only-alert-once): deep sleep changes its text at every
   check and the old high channel would sound or light the screen each time. Tour: NEXT is 124 px wide (PRESS IT was
   cut), the dim sits in MODAL_LAYER so menus and the rows that fly as they close show over it, the live area (the
@@ -35,7 +39,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   three made-up pins (`MapView.showExamplePins`, never saved) until the tour ends. Deep sleep and the phone's own
   power: the app can't switch on Battery Saver or airplane mode (Android keeps both from apps), it releases its wake
   lock and lets the phone doze; the pilot can turn Battery Saver on by hand.
-- **Unreleased, for 1.0.29's notes:** the video's POP OUT / FULL SCREEN are two 30 px drawn buttons (`GlyphButton`:
+- **1.0.29:** the video's POP OUT / FULL SCREEN are two 30 px drawn buttons (`GlyphButton`:
   a window with an arrow out, the arrow back in once popped out, the four brackets for full screen) in a 38 px strip
   at the right edge of the picture; the names stay as the buttons' text for the tour and the tooltips.
 
