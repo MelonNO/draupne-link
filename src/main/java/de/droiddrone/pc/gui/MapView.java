@@ -2,6 +2,7 @@ package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.map.FlightTrack;
+import de.droiddrone.pc.map.MapGraphics;
 import de.droiddrone.pc.map.Mercator;
 import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
@@ -88,6 +89,28 @@ class MapView extends JComponent {
 
     private FlightTrack track;
     private Pins pins;
+
+    // ---- MAP TOOLS (1.0.35): what the pilot draws
+    enum Tool { NONE, RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX }
+
+    private MapGraphics graphics;
+    private Tool tool = Tool.NONE;
+    /** The points of the line, arrow or measurement being drawn (a rectangle's corners are selectStart / selectEnd). */
+    private final List<MapGraphics.LatLon> drawing = new java.util.ArrayList<>();
+    private Point mouseAt;
+    /** The last measurement: shown with its legs until the next one, or kept as a graphic (KEEP). */
+    private MapGraphics.Item measurement;
+    private int drawColor = 0xe31b23, drawWidth = 4;
+    private boolean drawFilled;
+    private MapGraphics.UnitType symbolUnit = MapGraphics.UnitType.INFANTRY;
+    private MapGraphics.Affiliation symbolAffiliation = MapGraphics.Affiliation.FRIEND;
+    private MapGraphics.Echelon symbolEchelon = MapGraphics.Echelon.PLATOON;
+    private Runnable onToolChanged;
+    private Consumer<MapGraphics.Item> onMeasurement;
+    private Consumer<double[]> onExportArea;
+    private final Runnable graphicsChanged = () -> SwingUtilities.invokeLater(this::repaint);
+    /** Painting for a picture (EXPORT): no zoom buttons, no NO POSITION text. */
+    private boolean forPicture;
     private FcTelemetry.Gps gps;
     /** The + and - buttons, drawn on the map (top right); set while painting. */
     private Rectangle zoomInButton = new Rectangle(), zoomOutButton = new Rectangle();
@@ -105,6 +128,10 @@ class MapView extends JComponent {
             @Override
             public void mousePressed(MouseEvent e) {
                 if (SwingUtilities.isRightMouseButton(e)) {
+                    if (tool != Tool.NONE) { // a step back in the tool, or out of it
+                        undoToolPoint();
+                        return;
+                    }
                     if (selectNext) { // the pilot changed their mind: no box
                         endSelectMode();
                         return;
@@ -113,6 +140,10 @@ class MapView extends JComponent {
                     return;
                 }
                 dragged = false;
+                if ((tool == Tool.AREA || tool == Tool.EXPORT_BOX) && SwingUtilities.isLeftMouseButton(e)) {
+                    selectStart = selectEnd = e.getPoint(); // the rectangle to draw, or the box to export
+                    return;
+                }
                 if ((e.isAltDown() || selectNext) && SwingUtilities.isLeftMouseButton(e) && onAreaSelected != null) {
                     selectStart = selectEnd = e.getPoint(); // a box to download, not a pan
                     selectingByRequest = selectNext;
@@ -149,6 +180,10 @@ class MapView extends JComponent {
                 Rectangle box = selection();
                 selectStart = selectEnd = null;
                 repaint();
+                if (tool == Tool.AREA || tool == Tool.EXPORT_BOX) {
+                    boxToolDone(box);
+                    return;
+                }
                 // SELECT WITH CURSOR ends either way: a box drawn, or a plain click that meant to call it off
                 if (selectingByRequest) endSelectMode();
                 selectingByRequest = false;
@@ -158,6 +193,10 @@ class MapView extends JComponent {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (!SwingUtilities.isLeftMouseButton(e) || dragged) return;
+                if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW || tool == Tool.SYMBOL) {
+                    toolClick(e);
+                    return;
+                }
                 if (zoomInButton.contains(e.getPoint())) zoomBy(1);
                 else if (zoomOutButton.contains(e.getPoint())) zoomBy(-1);
                 else if (e.getClickCount() == 2) fitTrack();
@@ -166,6 +205,8 @@ class MapView extends JComponent {
             @Override
             public void mouseMoved(MouseEvent e) {
                 tellCursor(e);
+                mouseAt = e.getPoint();
+                if (tool != Tool.NONE) repaint(); // the rubber band to the cursor
             }
 
             @Override
@@ -545,6 +586,23 @@ class MapView extends JComponent {
     private JPopupMenu menu(int x, int y) {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
+        MapGraphics.Item item = itemAt(x, y);
+        if (item != null) {
+            JMenuItem rename = new JMenuItem("Rename " + item.name() + "...");
+            rename.addActionListener(e -> renameItem(item));
+            menu.add(rename);
+            if (item.kind() == MapGraphics.Kind.MEASUREMENT) {
+                JMenuItem profile = new JMenuItem("Elevation profile of " + item.name());
+                profile.addActionListener(e -> {
+                    if (onMeasurement != null) onMeasurement.accept(item);
+                });
+                menu.add(profile);
+            }
+            JMenuItem remove = new JMenuItem("Remove " + item.name());
+            remove.addActionListener(e -> graphics.remove(item));
+            menu.add(remove);
+            menu.addSeparator();
+        }
         if (pins != null) {
             Pins.Pin hit = pinAt(x, y);
             if (hit != null) {
@@ -585,6 +643,370 @@ class MapView extends JComponent {
         return menu;
     }
 
+    // ------------------------------------------------------------------ MAP TOOLS (1.0.35)
+
+    /** The drawings shared with the map window and the minimap: both repaint when it changes. */
+    void setGraphics(MapGraphics g) {
+        graphics = g;
+        if (g != null) g.onChange(graphicsChanged);
+        repaint();
+    }
+
+    MapGraphics graphics() {
+        return graphics;
+    }
+
+    /** The tool on the map; NONE ends it. The same tool again ends it too (the panel's button is a toggle). */
+    void setTool(Tool t) {
+        if (tool == t) {
+            cancelTool();
+            return;
+        }
+        if (tool != Tool.NONE) cancelTool();
+        tool = t;
+        drawing.clear();
+        if (t == Tool.RULER && measurement != null) {
+            measurement = null; // the next measurement takes the place of the last
+            if (onMeasurement != null) onMeasurement.accept(null);
+        }
+        setCursor(t == Tool.NONE ? java.awt.Cursor.getDefaultCursor() : java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.CROSSHAIR_CURSOR));
+        repaint();
+        toolChanged();
+    }
+
+    Tool tool() {
+        return tool;
+    }
+
+    /** Esc: the tool ends, what it was drawing is dropped. */
+    void cancelTool() {
+        tool = Tool.NONE;
+        drawing.clear();
+        selectStart = selectEnd = null;
+        setCursor(java.awt.Cursor.getDefaultCursor());
+        repaint();
+        toolChanged();
+    }
+
+    /** Enter: the line, arrow or measurement ends at its last point. */
+    void finishTool() {
+        if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW) finishDrawing(false);
+        else cancelTool();
+    }
+
+    void setDrawStyle(int colorRgb, int widthPx, boolean filled) {
+        drawColor = colorRgb;
+        drawWidth = widthPx;
+        drawFilled = filled;
+    }
+
+    void setSymbolStyle(MapGraphics.UnitType unit, MapGraphics.Affiliation affiliation, MapGraphics.Echelon echelon) {
+        symbolUnit = unit;
+        symbolAffiliation = affiliation;
+        symbolEchelon = echelon;
+        if (tool == Tool.SYMBOL) repaint();
+    }
+
+    /** Called when a tool starts or ends, or the measurement comes or goes (the panel lights its buttons). */
+    void setOnToolChanged(Runnable listener) {
+        onToolChanged = listener;
+    }
+
+    /** Gets the measurement to show the elevation profile of; null when it went. */
+    void setOnMeasurement(Consumer<MapGraphics.Item> listener) {
+        onMeasurement = listener;
+    }
+
+    /** Gets the box drawn with the EXPORT tool as {minLat, maxLat, minLon, maxLon}. */
+    void setOnExportArea(Consumer<double[]> listener) {
+        onExportArea = listener;
+    }
+
+    MapGraphics.Item currentMeasurement() {
+        return measurement;
+    }
+
+    /** KEEP: the measurement becomes a graphic (named Measurement n), kept between sessions. */
+    void keepMeasurement() {
+        if (measurement == null || graphics == null) return;
+        MapGraphics.Item kept = graphics.add(measurement.withName(graphics.nextName(MapGraphics.Kind.MEASUREMENT, null)));
+        measurement = null;
+        if (onMeasurement != null) onMeasurement.accept(kept);
+        toolChanged();
+        repaint();
+    }
+
+    void clearMeasurement() {
+        if (measurement == null) return;
+        measurement = null;
+        if (onMeasurement != null) onMeasurement.accept(null);
+        toolChanged();
+        repaint();
+    }
+
+    private void toolChanged() {
+        if (onToolChanged != null) onToolChanged.run();
+    }
+
+    /** A left click with a point tool: the symbol placed, or a point added; a double-click or the first point again ends. */
+    private void toolClick(MouseEvent e) {
+        double[] ll = toLatLon(e.getX(), e.getY());
+        MapGraphics.LatLon at = new MapGraphics.LatLon(ll[0], ll[1]);
+        if (tool == Tool.SYMBOL) {
+            if (graphics != null) {
+                graphics.add(MapGraphics.Item.symbol(graphics.nextName(MapGraphics.Kind.SYMBOL, symbolUnit), at, symbolUnit, symbolAffiliation, symbolEchelon));
+            }
+            endTool();
+            return;
+        }
+        if (e.getClickCount() >= 2) { // the double-click's first click added the point already
+            finishDrawing(false);
+            return;
+        }
+        if (tool == Tool.RULER && drawing.size() >= 3) {
+            Point2D first = screenOf(drawing.get(0));
+            if (first.distance(e.getPoint()) <= 10) { // back at the first point: the loop closes, the area counts
+                finishDrawing(true);
+                return;
+            }
+        }
+        drawing.add(at);
+        repaint();
+    }
+
+    /** A right click while a tool is on: the last point taken back; nothing left, or a box or symbol tool: the tool ends. */
+    private void undoToolPoint() {
+        if (!drawing.isEmpty()) {
+            drawing.remove(drawing.size() - 1);
+            if (drawing.isEmpty()) cancelTool();
+            else repaint();
+            return;
+        }
+        cancelTool();
+    }
+
+    private void finishDrawing(boolean closed) {
+        List<MapGraphics.LatLon> pts = new java.util.ArrayList<>(drawing);
+        if (pts.size() < 2) {
+            cancelTool();
+            return;
+        }
+        switch (tool) {
+            case RULER -> {
+                measurement = MapGraphics.Item.measurement("Measurement", pts, closed);
+                if (onMeasurement != null) onMeasurement.accept(measurement);
+            }
+            case LINE -> {
+                if (graphics != null) graphics.add(MapGraphics.Item.line(graphics.nextName(MapGraphics.Kind.LINE, null), pts, drawColor, drawWidth));
+            }
+            case ARROW -> {
+                if (graphics != null) graphics.add(MapGraphics.Item.arrow(graphics.nextName(MapGraphics.Kind.ARROW, null), pts, drawColor, drawWidth));
+            }
+            default -> {
+            }
+        }
+        endTool();
+    }
+
+    /** The rectangle drawn, or the box to export. */
+    private void boxToolDone(Rectangle box) {
+        if (box.width < 8 || box.height < 8) {
+            cancelTool();
+            return;
+        }
+        if (tool == Tool.AREA && graphics != null) {
+            double[] nw = toLatLon(box.x, box.y), se = toLatLon(box.x + box.width, box.y + box.height);
+            List<MapGraphics.LatLon> corners = List.of(new MapGraphics.LatLon(nw[0], nw[1]), new MapGraphics.LatLon(nw[0], se[1]),
+                    new MapGraphics.LatLon(se[0], se[1]), new MapGraphics.LatLon(se[0], nw[1]));
+            graphics.add(MapGraphics.Item.area(graphics.nextName(MapGraphics.Kind.AREA, null), corners, drawColor, drawWidth, drawFilled));
+        } else if (tool == Tool.EXPORT_BOX && onExportArea != null) {
+            onExportArea.accept(area(box));
+        }
+        endTool();
+    }
+
+    private void endTool() {
+        tool = Tool.NONE;
+        drawing.clear();
+        setCursor(java.awt.Cursor.getDefaultCursor());
+        repaint();
+        toolChanged();
+    }
+
+    private void renameItem(MapGraphics.Item item) {
+        String name = (String) javax.swing.JOptionPane.showInputDialog(this, "New name", "Rename " + item.name(),
+                javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, item.name());
+        if (name == null || name.isBlank() || graphics == null) return;
+        graphics.rename(item, name);
+    }
+
+    /** The view's numbers for the current zoom and centre: {zi, scale, wcx, wcy}. */
+    private double[] view() {
+        TileSource src = effectiveSource();
+        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
+        double scale = Math.pow(2, zoom - zi);
+        return new double[]{zi, scale, Mercator.x(centerLon, zi), Mercator.y(centerLat, zi)};
+    }
+
+    private Point2D screenOf(MapGraphics.LatLon p) {
+        double[] v = view();
+        return toScreen(p.lat(), p.lon(), (int) v[0], v[1], v[2], v[3], getWidth(), getHeight());
+    }
+
+    /** The drawing or symbol under a pixel (symbols first, then lines within 6 px of a leg), or null. */
+    MapGraphics.Item itemAt(int x, int y) {
+        if (graphics == null) return null;
+        List<MapGraphics.Item> items = graphics.list();
+        if (measurement != null) items.add(measurement);
+        double[] v = view();
+        int zi = (int) v[0];
+        for (MapGraphics.Item it : items) {
+            if (it.kind() != MapGraphics.Kind.SYMBOL) continue;
+            Point2D c = toScreen(it.points().get(0).lat(), it.points().get(0).lon(), zi, v[1], v[2], v[3], getWidth(), getHeight());
+            if (UnitSymbol.bounds((int) c.getX(), (int) c.getY(), it.affiliation()).contains(x, y)) return it;
+        }
+        for (MapGraphics.Item it : items) {
+            if (it.kind() == MapGraphics.Kind.SYMBOL) continue;
+            List<MapGraphics.LatLon> pts = it.points();
+            boolean around = it.closed() || it.kind() == MapGraphics.Kind.AREA;
+            int legs = around ? pts.size() : pts.size() - 1;
+            for (int i = 0; i < legs; i++) {
+                MapGraphics.LatLon a = pts.get(i), b = pts.get((i + 1) % pts.size());
+                Point2D sa = toScreen(a.lat(), a.lon(), zi, v[1], v[2], v[3], getWidth(), getHeight());
+                Point2D sb = toScreen(b.lat(), b.lon(), zi, v[1], v[2], v[3], getWidth(), getHeight());
+                if (java.awt.geom.Line2D.ptSegDist(sa.getX(), sa.getY(), sb.getX(), sb.getY(), x, y) <= 6) return it;
+            }
+        }
+        return null;
+    }
+
+    // ---- painting the tools
+
+    private void paintGraphics(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+        if (graphics != null) for (MapGraphics.Item it : graphics.list()) paintItem(g, it, false, zi, scale, wcx, wcy, w, h);
+        if (measurement != null) paintItem(g, measurement, false, zi, scale, wcx, wcy, w, h);
+        if (tool == Tool.NONE || forPicture) return;
+        // what is being drawn, with the rubber band to the cursor
+        if (tool == Tool.SYMBOL && mouseAt != null) {
+            java.awt.Composite saved = g.getComposite();
+            g.setComposite(AlphaComposite.SrcOver.derive(0.7f));
+            UnitSymbol.paint(g, mouseAt.x, mouseAt.y, symbolUnit, symbolAffiliation, symbolEchelon, null);
+            g.setComposite(saved);
+            return;
+        }
+        if (drawing.isEmpty()) return;
+        List<MapGraphics.LatLon> pts = new java.util.ArrayList<>(drawing);
+        if (mouseAt != null) {
+            double[] ll = toLatLon(mouseAt.x, mouseAt.y);
+            pts.add(new MapGraphics.LatLon(ll[0], ll[1]));
+        }
+        MapGraphics.Item live = switch (tool) {
+            case RULER -> MapGraphics.Item.measurement("", pts, false);
+            case ARROW -> MapGraphics.Item.arrow("", pts, drawColor, drawWidth);
+            default -> MapGraphics.Item.line("", pts, drawColor, drawWidth);
+        };
+        paintItem(g, live, true, zi, scale, wcx, wcy, w, h);
+    }
+
+    private void paintItem(Graphics2D g, MapGraphics.Item it, boolean live, int zi, double scale, double wcx, double wcy, int w, int h) {
+        List<MapGraphics.LatLon> pts = it.points();
+        if (pts.isEmpty()) return;
+        Point2D[] sp = new Point2D[pts.size()];
+        boolean anyNear = false;
+        for (int i = 0; i < pts.size(); i++) {
+            sp[i] = toScreen(pts.get(i).lat(), pts.get(i).lon(), zi, scale, wcx, wcy, w, h);
+            if (sp[i].getX() > -2000 && sp[i].getX() < w + 2000 && sp[i].getY() > -2000 && sp[i].getY() < h + 2000) anyNear = true;
+        }
+        if (!anyNear) return;
+        if (it.kind() == MapGraphics.Kind.SYMBOL) {
+            UnitSymbol.paint(g, (int) Math.round(sp[0].getX()), (int) Math.round(sp[0].getY()), it.unit(), it.affiliation(), it.echelon(), it.name());
+            return;
+        }
+        boolean around = it.closed() || it.kind() == MapGraphics.Kind.AREA;
+        Path2D path = new Path2D.Double();
+        path.moveTo(sp[0].getX(), sp[0].getY());
+        for (int i = 1; i < sp.length; i++) path.lineTo(sp[i].getX(), sp[i].getY());
+        if (around && sp.length > 2) path.closePath();
+        boolean measure = it.kind() == MapGraphics.Kind.MEASUREMENT;
+        Color colour = measure ? Theme.ACCENT : new Color(it.colorRgb());
+        float width = measure ? 2.5f : it.widthPx();
+        if (it.kind() == MapGraphics.Kind.AREA && it.filled() && sp.length > 2) {
+            g.setColor(Theme.alpha(colour, 70));
+            g.fill(path);
+        }
+        g.setColor(new Color(0, 0, 0, 150));
+        g.setStroke(new BasicStroke(width + 3, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(path);
+        g.setColor(colour);
+        g.setStroke(measure ? new BasicStroke(width, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{8f, 5f}, 0f)
+                : new BasicStroke(width, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(path);
+        if (it.kind() == MapGraphics.Kind.ARROW && sp.length >= 2) arrowHead(g, sp[sp.length - 2], sp[sp.length - 1], colour, width);
+        if (measure) {
+            for (Point2D p : sp) {
+                g.setColor(Color.BLACK);
+                g.fillOval((int) p.getX() - 5, (int) p.getY() - 5, 10, 10);
+                g.setColor(Color.WHITE);
+                g.fillOval((int) p.getX() - 3, (int) p.getY() - 3, 6, 6);
+            }
+            double[] legs = it.legsM();
+            g.setFont(Theme.headingFont(10.5f));
+            for (int i = 0; i < legs.length; i++) {
+                MapGraphics.LatLon a = pts.get(i), b = pts.get((i + 1) % pts.size());
+                Point2D sa = sp[i], sb = sp[(i + 1) % sp.length];
+                if (sa.distance(sb) < 40) continue; // too short for a label of its own
+                String text = distanceText(legs[i]) + "  " + Mercator.bearingDeg(a.lat(), a.lon(), b.lat(), b.lon()) + "\u00b0";
+                label(g, text, (int) ((sa.getX() + sb.getX()) / 2), (int) ((sa.getY() + sb.getY()) / 2) - 9, Theme.TEXT);
+            }
+            String total = (live ? "" : "TOTAL ") + distanceText(it.lengthM()) + (around ? "   AREA " + MapGraphics.areaText(it.areaM2()) : "");
+            Point2D end = around ? centre(sp) : sp[sp.length - 1];
+            g.setFont(Theme.headingFont(12f));
+            label(g, total, (int) end.getX(), (int) end.getY() + (around ? 24 : 18), Theme.WARN); // under the centre: clear of a leg's label
+            if (!live && !it.name().isEmpty() && !it.name().equals("Measurement")) {
+                g.setFont(Theme.headingFont(10.5f));
+                label(g, it.name().toUpperCase(Locale.ROOT), (int) sp[0].getX(), (int) sp[0].getY() - 14, Theme.MUTED);
+            }
+        } else if (!live && !it.name().isEmpty()) {
+            g.setFont(Theme.headingFont(10.5f));
+            Point2D at = around ? centre(sp) : sp[0];
+            label(g, it.name().toUpperCase(Locale.ROOT), (int) at.getX(), (int) at.getY() - (around ? 0 : 14), new Color(it.colorRgb()));
+        }
+    }
+
+    private static Point2D centre(Point2D[] sp) {
+        double x = 0, y = 0;
+        for (Point2D p : sp) {
+            x += p.getX();
+            y += p.getY();
+        }
+        return new Point2D.Double(x / sp.length, y / sp.length);
+    }
+
+    private static void arrowHead(Graphics2D g, Point2D from, Point2D to, Color colour, float width) {
+        double angle = Math.atan2(to.getY() - from.getY(), to.getX() - from.getX());
+        double size = 9 + width * 2;
+        Path2D head = new Path2D.Double();
+        head.moveTo(to.getX(), to.getY());
+        head.lineTo(to.getX() - size * Math.cos(angle - 0.5), to.getY() - size * Math.sin(angle - 0.5));
+        head.lineTo(to.getX() - size * Math.cos(angle + 0.5), to.getY() - size * Math.sin(angle + 0.5));
+        head.closePath();
+        g.setColor(new Color(0, 0, 0, 150));
+        g.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(head);
+        g.setColor(colour);
+        g.fill(head);
+    }
+
+    /** A short text in a dark box, centred on x, with its baseline at y. */
+    private static void label(Graphics2D g, String text, int x, int y, Color colour) {
+        FontMetrics fm = g.getFontMetrics();
+        int tw = fm.stringWidth(text) + 10;
+        g.setColor(BOX);
+        g.fillRect(x - tw / 2, y - fm.getAscent() - 2, tw, fm.getHeight() + 4);
+        g.setColor(colour);
+        g.drawString(text, x - tw / 2 + 5, y);
+    }
+
     // ------------------------------------------------------------------ painting
 
     private Point2D toScreen(double lat, double lon, int zi, double scale, double wcx, double wcy, int w, int h) {
@@ -612,12 +1034,13 @@ class MapView extends JComponent {
             if (home != null) paintHome(g, home, zi, scale, wcx, wcy, w, h);
             FlightTrack.Point last = pts.isEmpty() ? null : pts.get(pts.size() - 1);
             if (pins != null) paintPins(g, last, home, zi, scale, wcx, wcy, w, h);
+            paintGraphics(g, zi, scale, wcx, wcy, w, h);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
-            else paintNoPosition(g, w, h);
+            else if (!forPicture) paintNoPosition(g, w, h);
 
             paintScale(g, h);
             paintAttribution(g, src, w, h);
-            paintZoomButtons(g, w);
+            if (!forPicture) paintZoomButtons(g, w);
             if (selectStart != null) paintSelection(g);
             g.setColor(Theme.LINE);
             g.drawRect(0, 0, w - 1, h - 1);
@@ -638,7 +1061,7 @@ class MapView extends JComponent {
         double[] a = area(box);
         double midLat = (a[0] + a[1]) / 2;
         String text = distanceText(Mercator.distanceM(midLat, a[2], midLat, a[3])) + " x " + distanceText(Mercator.distanceM(a[0], a[2], a[1], a[2]))
-                + "   DOWNLOAD";
+                + (tool == Tool.AREA ? "   RECTANGLE" : tool == Tool.EXPORT_BOX ? "   EXPORT" : "   DOWNLOAD");
         g.setFont(Theme.headingFont(11f));
         FontMetrics fm = g.getFontMetrics();
         int tw = fm.stringWidth(text);
@@ -973,6 +1396,16 @@ class MapView extends JComponent {
     }
 
     /** For tests: the map as painted at this size. */
+    /** The map as a picture for EXPORT: like a snapshot, without the zoom buttons and the NO POSITION text. */
+    BufferedImage picture(int w, int h) {
+        forPicture = true;
+        try {
+            return snapshot(w, h);
+        } finally {
+            forPicture = false;
+        }
+    }
+
     BufferedImage snapshot(int w, int h) {
         setSize(w, h);
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);

@@ -151,6 +151,8 @@ public class MainWindow extends JFrame {
     private de.droiddrone.pc.map.Pins pins;
     /** In flight the LINK card changes: the connection fields and detail figures fold away, the minimap unfolds. */
     private final MapView miniMap = new MapView(tileCache);
+    /** The pilot's drawings on the map (Documents\DRAUPNE Link\graphics.kml), shared by the map window and the minimap. */
+    private de.droiddrone.pc.map.MapGraphics graphics;
     private Fold fieldsFold, detailsFold, miniFold;
     /** Where videoView normally lives; it moves to fullScreen and back. */
     private JPanel videoHolder;
@@ -277,6 +279,18 @@ public class MainWindow extends JFrame {
             } else {
                 window.save(Map.of(Tour.OFFERED_KEY, "true"));
             }
+        } else {
+            // the tour was had before an update brought new parts: a tour of just those, offered once, after the boot animation
+            java.util.List<String> fresh = Tour.unseen(config);
+            if (!fresh.isEmpty() && "true".equalsIgnoreCase(config.getString(SetupWizard.DONE_KEY))) {
+                javax.swing.Timer later = new javax.swing.Timer(500, e -> {
+                    if (BootReveal.isShowingOn(window)) return;
+                    ((javax.swing.Timer) e.getSource()).stop();
+                    if (window.isShowing()) Tour.offerNew(window, fresh);
+                });
+                later.setInitialDelay(1000);
+                later.start();
+            }
         }
     }
 
@@ -324,7 +338,13 @@ public class MainWindow extends JFrame {
         } catch (IOException e) {
             pins = new de.droiddrone.pc.map.Pins(null);
         }
+        try {
+            graphics = new de.droiddrone.pc.map.MapGraphics(de.droiddrone.pc.map.MapGraphics.defaultFile());
+        } catch (IOException e) {
+            graphics = new de.droiddrone.pc.map.MapGraphics(null);
+        }
         miniMap.setPins(pins);
+        miniMap.setGraphics(graphics);
         miniMap.setSource(mapSource);
         miniMap.setOnSourceChosen(this::setMapSource); // the minimap's right-click choice is saved and shared too
         // bound on the video view, not the window, so the keys also work while it is in the full-screen window
@@ -1257,7 +1277,7 @@ public class MainWindow extends JFrame {
 
     MapWindow mapWindow() {
         if (mapWindow == null) {
-            mapWindow = new MapWindow(this, tileCache, elevation, pins, mapSource, coordinateFormat, config.getString(MapWindow.BOUNDS_KEY), this::save,
+            mapWindow = new MapWindow(this, tileCache, elevation, pins, graphics, mapSource, coordinateFormat, config.getString(MapWindow.BOUNDS_KEY), this::save,
                     this::setMapSource, this::setCoordinateFormat, this::openFindDrone);
             mapWindow.setPreferPhone(preferPhone);
             mapWindow.setOnShownChanged(this::updateFlightLayout);

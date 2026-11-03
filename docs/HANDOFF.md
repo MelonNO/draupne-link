@@ -6,6 +6,33 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.35)
 
+- **1.0.35 map tools - built, PC tests green, not released:** the pilot's list (ruler with an elevation profile, lines,
+  rectangles, arrows, NATO symbols, a MAP TOOLS slide-out, export / import, tour steps, an update-specific tour).
+  `map/MapGraphics` (the items: MEASUREMENT, LINE, AREA, ARROW, SYMBOL with `LatLon` points, colour, width, fill,
+  closed, unit / affiliation / echelon; `legsM`, `lengthM`, `areaM2` (shoelace on a flat local projection),
+  `inside`; kept in Documents\DRAUPNE Link\graphics.kml) and `map/Kml` (writer and reader; DRAUPNE's details in
+  ExtendedData, so Google Earth and ATAK read the file and a foreign file comes in as lines, areas and pins);
+  `Elevation.profile` (the path sampled every 20 m, at most 80 points, looked up one by one on the lookup thread,
+  partial results every 8). `MapView`: `Tool` (RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX; `setTool` toggles),
+  the mouse (a left click adds a point, a double-click or Enter ends, Esc cancels, a right-click takes the last
+  point back; the ruler closes on its first point; AREA and EXPORT_BOX are drags like the download box), the
+  transient `measurement` (KEEP makes it a graphic), `itemAt` (symbols by `UnitSymbol.bounds`, lines within 6 px
+  of a leg), the right-click menu's rename / remove / elevation profile, `paintGraphics` / `paintItem` (dashed red
+  measurement with leg labels, total and area; halo + colour for lines; arrowheads; `UnitSymbol.paint`), `picture`
+  (a snapshot without the zoom buttons, for EXPORT). `gui/UnitSymbol` (APP-6 frames by affiliation, icons by
+  type, echelon marks). `gui/MapToolsPanel` (the tab, a sliding body, the buttons the window wires), `gui/
+  ElevationProfileView` (height over distance, NaN gaps). `MapWindow`: the panel west of the map, the profile card
+  under it (`showProfile`), `exportArea` (KML of the items, pins and the shown track in the box; a PNG from an
+  off-screen `MapView` at the current zoom, at most 4096 px a side; Documents\DRAUPNE Link\Exports, a Save-as
+  dialog), `importKml`, Esc / Enter keys, the tour anchors; PINS, GO TO and DOWNLOAD AREA moved into the panel.
+  Tests: `MapGraphicsTest` (lengths, areas, the KML round trip, a foreign KML, the file), `MapToolsTest` (the
+  tools by mouse events: the ruler closing and kept, a line by double-click, an arrow by Enter, a rectangle by
+  drag, a symbol placed and painted, the export box, right-click undo; every symbol type paints). *Tour:* steps
+  MAP TOOLS (press), RULER, DRAW, SYMBOLS, EXPORT (explained) tagged `FEATURE_MAP_TOOLS`, the CONNECT step
+  `FEATURE_NAMES`; `Tour.SEEN_KEY` (tour.seen) lists the features offered; a PC with `tour.offered` and unseen
+  features is offered `Tour.offerNew` once after the boot animation (`MainWindow.open`), a tour of those steps
+  only; the whole tour marks every feature seen. *Not done:* a measurement's points can't be dragged after the
+  fact (draw again); symbols have no label text beyond their name. *Untried on the real window.*
 - **1.0.35 (names), phone app 2.3.0-pc.28 - built, PC tests green, not released, nothing tried on hardware:** the
   pilot's ask: "each phone is MobileAlpha, MobileBravo ..., each PC PCAlpha ...; the user only picks the phone's name
   and connects; remove the Direct connection option on both ends; a name map in the settings". *The names:*

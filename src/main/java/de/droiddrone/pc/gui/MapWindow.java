@@ -3,6 +3,8 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.map.Coordinates;
 import de.droiddrone.pc.map.Elevation;
+import de.droiddrone.pc.map.MapGraphics;
+import de.droiddrone.pc.map.Kml;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.Mercator;
 import de.droiddrone.pc.map.Pins;
@@ -30,6 +32,8 @@ import java.awt.Rectangle;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.util.Locale;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 
@@ -51,11 +55,18 @@ final class MapWindow extends JFrame {
     private final MapView map;
     private final TileCache cache;
     private final Elevation elevation;
+    private final MapGraphics graphics;
+    private final Pins pins;
+    /** MAP TOOLS (1.0.35): the slide-out beside the map, and the elevation profile card under it. */
+    private final MapToolsPanel tools;
+    private final ElevationProfileView profile = new ElevationProfileView();
+    private final JPanel profileCard = Theme.card(new BorderLayout(0, 6));
+    private final JLabel profileTitle = Theme.label("ELEVATION PROFILE", Theme.headingFont(11f), Theme.MUTED);
+    private final JButton profileFold = Theme.secondaryButton("Hide");
+    private boolean profileShown = true;
     private final Consumer<Map<String, String>> saver;
     private final JButton followButton = Theme.secondaryButton("Follow: on");
-    private final JButton pinsButton = Theme.secondaryButton("Pins");
     private final JButton tracksButton = Theme.secondaryButton("Tracks");
-    private final JButton downloadButton = Theme.secondaryButton("Download area");
     /** A hidden download's progress, in the toolbar; a click brings its window back. */
     private final JLabel downloadLine = Theme.label("", Theme.headingFont(12f), Theme.ACCENT);
     private JPanel cursorCell, terrainCell, droneCell;
@@ -73,11 +84,13 @@ final class MapWindow extends JFrame {
     private final Timer saveBounds = new Timer(800, e -> saveBounds());
     private boolean settingCombos;
 
-    MapWindow(JFrame owner, TileCache cache, Elevation elevation, Pins pins, TileSource source, Coordinates.Format format, String savedBounds,
+    MapWindow(JFrame owner, TileCache cache, Elevation elevation, Pins pins, MapGraphics graphics, TileSource source, Coordinates.Format format, String savedBounds,
               Consumer<Map<String, String>> saver, Consumer<TileSource> onSource, Consumer<Coordinates.Format> onFormat, Runnable findDrone) {
         super("DRAUPNE Link map");
         this.cache = cache;
         this.elevation = elevation;
+        this.graphics = graphics;
+        this.pins = pins;
         this.saver = saver;
         this.format = format;
         setIconImages(owner.getIconImages());
@@ -92,6 +105,8 @@ final class MapWindow extends JFrame {
 
         map = new MapView(cache);
         map.setPins(pins);
+        map.setGraphics(graphics);
+        tools = new MapToolsPanel(map);
         map.setSource(source);
         map.setOnSourceChosen(s -> {
             onSource.accept(s);
@@ -116,25 +131,40 @@ final class MapWindow extends JFrame {
         });
         left.add(followButton);
         // the whole flight: a double-click on the map; the launch point: the Home key (End: the drone)
-        JButton goTo = Theme.secondaryButton("Go to");
-        goTo.setToolTipText("Centre the map on a position typed or pasted: MGRS, UTM, or latitude, longitude");
-        goTo.addActionListener(e -> goToPosition());
-        left.add(goTo);
         tracksButton.setToolTipText("An earlier flight's track on the map, from the Tracks folder");
         tracksButton.addActionListener(e -> TacticalCombo.show(tracksMenu(), tracksButton, 0, tracksButton.getHeight() + 4));
         left.add(tracksButton);
-        pinsButton.setToolTipText("Every pin: go to, rename, remove, add at the drone or the launch point");
-        pinsButton.addActionListener(e -> {
+        // MAP TOOLS (1.0.35): GO TO, PINS and DOWNLOAD AREA live in the slide-out, with the ruler, the drawings and the symbols
+        tools.goTo.setToolTipText("Centre the map on a position typed or pasted: MGRS, UTM, or latitude, longitude");
+        tools.goTo.addActionListener(e -> goToPosition());
+        tools.pins.setToolTipText("Every pin: go to, rename, remove, add at the drone or the launch point");
+        tools.pins.addActionListener(e -> {
             if (pinManager == null || !pinManager.isDisplayable()) {
                 pinManager = new PinManagerDialog(this, pins, map, () -> this.format, () -> track);
             }
             pinManager.setVisible(true);
             pinManager.toFront();
         });
-        left.add(pinsButton);
-        downloadButton.setToolTipText("Save the map for offline use: this view, or a box drawn on the map (SELECT WITH CURSOR, or Alt + drag)");
-        downloadButton.addActionListener(e -> downloadArea(map.visibleArea()));
-        left.add(downloadButton);
+        tools.download.setToolTipText("Save the map for offline use: this view, or a box drawn on the map (SELECT WITH CURSOR, or Alt + drag)");
+        tools.download.addActionListener(e -> downloadArea(map.visibleArea()));
+        tools.ruler.addActionListener(e -> map.setTool(MapView.Tool.RULER));
+        tools.line.addActionListener(e -> map.setTool(MapView.Tool.LINE));
+        tools.rectangle.addActionListener(e -> map.setTool(MapView.Tool.AREA));
+        tools.arrow.addActionListener(e -> map.setTool(MapView.Tool.ARROW));
+        tools.symbol.addActionListener(e -> map.setTool(MapView.Tool.SYMBOL));
+        tools.keep.addActionListener(e -> map.keepMeasurement());
+        tools.clearMeasure.addActionListener(e -> map.clearMeasurement());
+        tools.export.addActionListener(e -> map.setTool(MapView.Tool.EXPORT_BOX));
+        tools.importButton.addActionListener(e -> importKml());
+        tools.clearAll.addActionListener(e -> {
+            if (graphics.isEmpty()) return;
+            int answer = javax.swing.JOptionPane.showConfirmDialog(this, "Take every drawing and symbol off the map? The pins stay.",
+                    "Clear all", javax.swing.JOptionPane.OK_CANCEL_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE);
+            if (answer == javax.swing.JOptionPane.OK_OPTION) graphics.clear();
+        });
+        map.setOnToolChanged(() -> SwingUtilities.invokeLater(tools::syncTools));
+        map.setOnMeasurement(m -> SwingUtilities.invokeLater(() -> showProfile(m)));
+        map.setOnExportArea(this::exportArea);
         JButton find = Theme.primaryButton("Find drone");
         find.setToolTipText("The last known position, with the coordinates to copy and map links");
         find.addActionListener(e -> findDrone.run());
@@ -177,7 +207,36 @@ final class MapWindow extends JFrame {
         bar.add(right, BorderLayout.EAST);
         root.add(bar, BorderLayout.NORTH);
 
-        root.add(map, BorderLayout.CENTER);
+        JPanel centre = new JPanel(new BorderLayout(0, 12));
+        centre.setOpaque(false);
+        JPanel mapRow = new JPanel(new BorderLayout(6, 0));
+        mapRow.setOpaque(false);
+        mapRow.add(tools, BorderLayout.WEST);
+        mapRow.add(map, BorderLayout.CENTER);
+        centre.add(mapRow, BorderLayout.CENTER);
+        JPanel profileHead = new JPanel(new BorderLayout(10, 0));
+        profileHead.setOpaque(false);
+        profileHead.add(profileTitle, BorderLayout.CENTER);
+        JPanel profileButtons = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.RIGHT, 6, 0));
+        profileButtons.setOpaque(false);
+        profileFold.setFont(Theme.headingFont(11f));
+        profileFold.addActionListener(e -> {
+            profileShown = !profileShown;
+            profile.setVisible(profileShown);
+            profileFold.setText(profileShown ? "Hide" : "Show");
+            profileCard.revalidate();
+        });
+        profileButtons.add(profileFold);
+        JButton profileClose = Theme.secondaryButton("Close");
+        profileClose.setFont(Theme.headingFont(11f));
+        profileClose.addActionListener(e -> showProfile(null));
+        profileButtons.add(profileClose);
+        profileHead.add(profileButtons, BorderLayout.EAST);
+        profileCard.add(profileHead, BorderLayout.NORTH);
+        profileCard.add(profile, BorderLayout.CENTER);
+        profileCard.setVisible(false);
+        centre.add(profileCard, BorderLayout.SOUTH);
+        root.add(centre, BorderLayout.CENTER);
 
         // ---- the figures
         JPanel stats = Theme.card(new GridLayout(1, 6, 14, 0));
@@ -235,6 +294,155 @@ final class MapWindow extends JFrame {
             map.centreOnDrone();
             syncFollow();
         });
+        // MAP TOOLS: Esc ends the tool (or clears the measurement), Enter ends the line at its last point
+        bindKey(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), () -> {
+            if (map.tool() != MapView.Tool.NONE) map.cancelTool();
+            else map.clearMeasurement();
+        });
+        bindKey(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ENTER, 0), map::finishTool);
+    }
+
+    /** The elevation profile of a measurement under the map; null hides it. The terrain is looked up as the card shows. */
+    private void showProfile(MapGraphics.Item m) {
+        if (m == null) {
+            profileCard.setVisible(false);
+            profile.set(null, null);
+            return;
+        }
+        String name = m.name().isEmpty() || m.name().equals("Measurement") ? "MEASUREMENT" : m.name().toUpperCase(java.util.Locale.ROOT);
+        profileTitle.setText("ELEVATION PROFILE   " + name + "   " + MapGraphics.distanceText(m.lengthM())
+                + (m.areaM2() > 0 ? "   AREA " + MapGraphics.areaText(m.areaM2()) : ""));
+        List<double[]> path = new ArrayList<>();
+        for (MapGraphics.LatLon p : m.points()) path.add(new double[]{p.lat(), p.lon()});
+        if (m.closed() && !m.points().isEmpty()) path.add(new double[]{m.points().get(0).lat(), m.points().get(0).lon()});
+        profile.set(new double[0], new double[0]);
+        profileCard.setVisible(true);
+        profileCard.revalidate();
+        elevation.profile(path, 20, 80, data -> SwingUtilities.invokeLater(() -> {
+            if (profileCard.isVisible()) profile.set(data[0], data[1]);
+        }));
+    }
+
+    /**
+     * EXPORT: the box drawn with the tool as a picture (PNG, the current map type at the current zoom, with the
+     * graphics, pins and track on it and the scale bar) and as KML (every drawing, symbol and pin with a point in the
+     * box, and the shown track as a line), both under Documents\\DRAUPNE Link\\Exports, named as the pilot says.
+     */
+    private void exportArea(double[] area) {
+        java.nio.file.Path dir;
+        try {
+            dir = java.nio.file.Files.createDirectories(java.nio.file.Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports"));
+        } catch (java.io.IOException e) {
+            javax.swing.JOptionPane.showMessageDialog(this, "No Exports folder: " + e.getMessage(), "Export", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm"));
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(dir.toFile());
+        chooser.setDialogTitle("Export the box as a picture and KML");
+        chooser.setSelectedFile(dir.resolve("map-" + stamp + ".kml").toFile());
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("KML (a PNG with the same name goes with it)", "kml"));
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+        java.nio.file.Path kml = chooser.getSelectedFile().toPath();
+        if (!kml.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".kml")) kml = kml.resolveSibling(kml.getFileName() + ".kml");
+        java.nio.file.Path png = kml.resolveSibling(kml.getFileName().toString().replaceAll("(?i)\\.kml$", "") + ".png");
+        double south = area[0], north = area[1], west = area[2], east = area[3];
+        List<MapGraphics.Item> items = graphics.inside(south, north, west, east);
+        List<Pins.Pin> inBox = new ArrayList<>();
+        for (Pins.Pin p : pins.list()) if (p.lat() >= south && p.lat() <= north && p.lon() >= west && p.lon() <= east) inBox.add(p);
+        List<FlightTrack.Point> pts = track == null ? List.of() : track.points();
+        List<MapGraphics.LatLon> trackPts = new ArrayList<>();
+        for (FlightTrack.Point p : pts) if (p.lat() >= south && p.lat() <= north && p.lon() >= west && p.lon() <= east) trackPts.add(new MapGraphics.LatLon(p.lat(), p.lon()));
+        if (trackPts.size() >= 2) items = new ArrayList<>(items) {{ add(MapGraphics.Item.line("Flight track", trackPts, 0xffffff, 2)); }};
+        try {
+            MapGraphics.writeKml(kml, Kml.write(items, inBox, "DRAUPNE Link export " + stamp));
+            // the picture: the box at this zoom, at most 4096 px a side
+            double zoom = map.zoom();
+            int w = (int) Math.round(de.droiddrone.pc.map.Mercator.x(east, zoom) - de.droiddrone.pc.map.Mercator.x(west, zoom));
+            int h = (int) Math.round(de.droiddrone.pc.map.Mercator.y(south, zoom) - de.droiddrone.pc.map.Mercator.y(north, zoom));
+            double shrink = Math.max(1, Math.max(w, h) / 4096.0);
+            if (shrink > 1) {
+                zoom -= Math.log(shrink) / Math.log(2);
+                w = (int) Math.round(w / shrink);
+                h = (int) Math.round(h / shrink);
+            }
+            MapView shot = new MapView(cache);
+            shot.setPins(pins);
+            shot.setGraphics(graphics);
+            shot.setSource(map.source());
+            shot.setFollow(false);
+            if (track != null) shot.update(track, null, -1, false, false);
+            shot.centreOn((south + north) / 2, (west + east) / 2, zoom);
+            javax.imageio.ImageIO.write(shot.picture(Math.max(64, w), Math.max(64, h)), "png", png.toFile());
+            String line = "Exported " + items.size() + " drawings and " + inBox.size() + " pins: " + kml + " and " + png.getFileName();
+            javax.swing.JOptionPane.showMessageDialog(this, "<html>Saved:<br>" + kml + "<br>" + png + "</html>", "Export", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+            System.out.println(line);
+        } catch (java.io.IOException | RuntimeException e) {
+            javax.swing.JOptionPane.showMessageDialog(this, "Export failed: " + e.getMessage(), "Export", javax.swing.JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    /** IMPORT: a KML file's lines, areas, arrows, symbols and points (as pins) onto the map; the map goes to them. */
+    private void importKml() {
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(java.nio.file.Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports").toFile());
+        chooser.setDialogTitle("Import a KML file");
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("KML", "kml"));
+        if (chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+        try {
+            Kml.Parsed parsed = Kml.read(java.nio.file.Files.readString(chooser.getSelectedFile().toPath(), java.nio.charset.StandardCharsets.UTF_8));
+            graphics.addAll(parsed.items());
+            for (Pins.Pin p : parsed.pins()) pins.add(p.name(), p.lat(), p.lon());
+            double s = 90, n = -90, w = 180, e = -180;
+            int points = 0;
+            for (MapGraphics.Item it : parsed.items()) {
+                double[] b = it.bounds();
+                s = Math.min(s, b[0]);
+                n = Math.max(n, b[1]);
+                w = Math.min(w, b[2]);
+                e = Math.max(e, b[3]);
+                points++;
+            }
+            for (Pins.Pin p : parsed.pins()) {
+                s = Math.min(s, p.lat());
+                n = Math.max(n, p.lat());
+                w = Math.min(w, p.lon());
+                e = Math.max(e, p.lon());
+                points++;
+            }
+            if (points > 0) {
+                map.setFollow(false);
+                map.centreOn((s + n) / 2, (w + e) / 2, Math.max(map.zoom(), 12));
+                syncFollow();
+            }
+            javax.swing.JOptionPane.showMessageDialog(this, parsed.items().size() + " drawings and symbols, " + parsed.pins().size() + " pins imported.",
+                    "Import", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+        } catch (java.io.IOException | RuntimeException e) {
+            javax.swing.JOptionPane.showMessageDialog(this, "Import failed: " + e.getMessage(), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    /** The tour's MAP TOOLS tab (opens the tools), and the tools inside it. */
+    javax.swing.JComponent tourTools() {
+        return tools.tabButton();
+    }
+
+    void openTools(boolean open) {
+        tools.setOpen(open, true);
+    }
+
+    javax.swing.JComponent tourRuler() {
+        return tools.ruler;
+    }
+
+    javax.swing.JComponent tourDraw() {
+        return tools.line;
+    }
+
+    javax.swing.JComponent tourSymbol() {
+        return tools.symbol;
+    }
+
+    javax.swing.JComponent tourExport() {
+        return tools.export;
     }
 
     /** Called when the window is minimized or brought back (the LINK card's minimap depends on it); set by the owner. */
@@ -267,11 +475,11 @@ final class MapWindow extends JFrame {
     }
 
     javax.swing.JComponent tourPins() {
-        return pinsButton;
+        return tools.pins;
     }
 
     javax.swing.JComponent tourDownload() {
-        return downloadButton;
+        return tools.download;
     }
 
     javax.swing.JComponent tourTerrain() {

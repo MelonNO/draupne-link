@@ -83,7 +83,7 @@ Betaflight 4.4 is **not required**, only recommended:
 
 ![The map window: a flight over Kartverket's topo map, pins, launch rings](docs/images/map-topo.png)
 
-**POP OUT MAP** on the LINK card (or **F3**) opens the map in a window of its own, for a second screen: where the drone is and has been, over **Kartverket's** topo or printed map, **satellite** pictures or **OpenStreetMap** (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE and PINS buttons; + and -, the wheel and dragging move it. Under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in **MGRS** (default), UTM, decimal degrees or degrees-minutes-seconds.
+**POP OUT MAP** on the LINK card (or **F3**) opens the map in a window of its own, for a second screen. **MAP TOOLS** (the tab at its left edge) slide out a ruler (legs, total, area, and the terrain's elevation profile), lines, rectangles and arrows, NATO unit symbols, pins, offline maps, and EXPORT / IMPORT of a box as a picture and KML. The map shows: where the drone is and has been, over **Kartverket's** topo or printed map, **satellite** pictures or **OpenStreetMap** (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE and PINS buttons; + and -, the wheel and dragging move it. Under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in **MGRS** (default), UTM, decimal degrees or degrees-minutes-seconds.
 
 ![The same flight over satellite pictures](docs/images/map-satellite.png)
 

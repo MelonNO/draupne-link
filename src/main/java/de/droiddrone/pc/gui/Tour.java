@@ -39,29 +39,42 @@ final class Tour {
      * @param press  the pilot must press the control before NEXT works (a button or a choice); false for a plain
      *               area, and for UPDATE, whose press would start the update
      * @param tip    a muted line under the text: good to know, not the step itself; null for none
+     * @param feature the feature the step came with (FEATURE_*), for the tour of what is new after an update; null
+     *                for the steps every tour has had
      */
     private record Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press,
-                        Supplier<JComponent> live, Supplier<JComponent> extra, Runnable after, String tip) {
+                        Supplier<JComponent> live, Supplier<JComponent> extra, Runnable after, String tip, String feature) {
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before) {
-            this(title, text, anchor, before, true, null, null, null, null);
+            this(title, text, anchor, before, true, null, null, null, null, null);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press) {
-            this(title, text, anchor, before, press, null, null, null, null);
+            this(title, text, anchor, before, press, null, null, null, null, null);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live) {
-            this(title, text, anchor, before, press, live, null, null, null);
+            this(title, text, anchor, before, press, live, null, null, null, null);
         }
 
         Step(String title, String text, String tip, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live) {
-            this(title, text, anchor, before, press, live, null, null, tip);
+            this(title, text, anchor, before, press, live, null, null, tip, null);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live, Supplier<JComponent> extra) {
-            this(title, text, anchor, before, press, live, extra, null, null);
+            this(title, text, anchor, before, press, live, extra, null, null, null);
+        }
+
+        /** The same step, marked as part of a feature. */
+        Step of(String feature) {
+            return new Step(title, text, anchor, before, press, live, extra, after, tip, feature);
         }
     }
+
+    /** The features whose steps came after the first tour: a PC that had the tour before them is offered them alone. */
+    static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools";
+    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS);
+    /** The features the pilot has been offered a tour of, comma-separated. */
+    static final String SEEN_KEY = "tour.seen";
 
     /** A control not on screen after this many tries (150 ms apart) is skipped: the step would wait forever. */
     private static final int MAX_TRIES = 7;
@@ -74,8 +87,18 @@ final class Tour {
     private final Timer retry = new Timer(150, e -> show());
 
     private Tour(MainWindow main) {
+        this(main, null);
+    }
+
+    /** @param only the features to show the steps of (the tour of what is new); null for the whole tour */
+    private Tour(MainWindow main, java.util.Collection<String> only) {
         this.main = main;
         retry.setRepeats(false);
+        buildSteps();
+        if (only != null) steps.removeIf(s -> s.feature() == null || !only.contains(s.feature()));
+    }
+
+    private void buildSteps() {
         Runnable openMenu = main::tourOpenMenu;
         Supplier<JComponent> header = main::tourHeader; // the menu steps: the header stays clear, so the slide-out and the menus show in front
         steps.add(new Step("MENU", "Everything lives here. Press it and SETUP, VIDEO, LINK and TOOLS slide out - as now.",
@@ -98,19 +121,36 @@ final class Tour {
         steps.add(new Step("CONNECT", "Pick the phone by its name - MobileAlpha, MobileBravo ... - every phone with DRAUPNE Flight open on "
                 + "your Tailscale network is in the list. CONNECT opens the link (WATCH joins a pilot PC's flight as a spectator). "
                 + "In flight the minimap takes this card's place, with POP OUT MAP under it. F3 opens the map window any time.",
-                main::tourLinkCard, null, false));
+                main::tourLinkCard, null, false).of(FEATURE_NAMES));
         // the sleep buttons only show while connected: the step puts them on the card as a demo that answers presses
         steps.add(new Step("SLEEP BUTTONS", "While connected, these are here. STANDBY stops the phone's camera and dims its "
                 + "screen; DEEP SLEEP locks the phone and lets it sleep, checking for this PC every CHECK EVERY minutes; WAKE brings "
                 + "it back. They fold away while the drone is armed. This is a demo: press one and read the line under them.",
-                main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null));
+                main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null, null));
         // on the map steps the map itself stays live under the dimming: panning, the wheel, pins and the cursor figures work
         Supplier<JComponent> map = () -> main.mapWindow().map();
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
                 + "drone in the middle; Home jumps to the launch point, End to the drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow, true, map));
+        // MAP TOOLS (1.0.35): the slide-out at the map's left edge; PINS and DOWNLOAD AREA live in it now
+        Runnable mapAndTools = () -> {
+            main.showMapWindow();
+            main.mapWindow().openTools(true);
+        };
+        steps.add(new Step("MAP TOOLS", "The tools slide out from this tab: the ruler, lines, rectangles, arrows, NATO symbols, pins, "
+                + "offline maps, export and import. Press it.", () -> main.mapWindow().tourTools(), main::showMapWindow, true, map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("RULER", "Click points on the map: each leg shows its length and bearing, the total at the end. Click the first "
+                + "point again to close a square and get its area; the terrain's elevation profile shows under the map. KEEP keeps it as a "
+                + "graphic, Esc clears it. Try it after the tour.", () -> main.mapWindow().tourRuler(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("DRAW", "LINE through the points you click (double-click ends), RECTANGLE by dragging a box, ARROW with its head at the "
+                + "last point. Pick the colour, the width and outline or fill first. Right-click a drawing to rename or remove it.",
+                () -> main.mapWindow().tourDraw(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("SYMBOLS", "A NATO unit symbol where you click: the type (infantry, armour, artillery ...), then the colour - "
+                + "friend, hostile, neutral, unknown - then the size, the echelon. Every drawing is kept for the next flight.",
+                () -> main.mapWindow().tourSymbol(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
         steps.add(new Step("PINS", "Right-click the map to drop a pin (Alpha, Bravo ...), or to rename or remove one. PINS lists "
                 + "them all: press it. Each pin shows its distance and bearing from the drone. The three here are examples; they go when the tour ends.",
                 () -> main.mapWindow().tourPins(), () -> {
+                    mapAndTools.run();
                     main.mapWindow().map().showExamplePins(true);
                     examplePins = true;
                 }, true, map));
@@ -123,9 +163,12 @@ final class Tour {
                 + "what you have looked at is kept for flying without internet.", () -> main.mapWindow().tourMapType(), null));
         steps.add(new Step("COORDINATES", "The coordinate system for the cursor, the drone and the pins: degrees, UTM or MGRS. "
                 + "Change it here.", () -> main.mapWindow().tourFormat(), null));
+        steps.add(new Step("EXPORT", "Drag a box on the map: its picture (PNG) and everything drawn in it (KML) go to Documents, DRAUPNE Link, "
+                + "Exports. IMPORT brings a KML back - DRAUPNE's own, Google Earth's or ATAK's. Not now: after the tour.",
+                () -> main.mapWindow().tourExport(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
         steps.add(new Step("OFFLINE MAPS", "DOWNLOAD AREA saves the map for flying without internet: this view, or a box you draw "
                 + "with SELECT WITH CURSOR (or Alt + drag). Every map type and zoom level, one START. Not now: after the tour.",
-                () -> main.mapWindow().tourDownload(), null, false)); // explained, not pressed: a download is for later
+                () -> main.mapWindow().tourDownload(), mapAndTools, false)); // explained, not pressed: a download is for later
         // the last step is back in the main window: it comes to the front over the map window by itself
         Runnable backToMain = () -> {
             main.toFront();
@@ -139,9 +182,31 @@ final class Tour {
     /** Set once the tour has been offered on this PC: after the first-time setup, or on the first start after an update brought it. */
     static final String OFFERED_KEY = "tour.offered";
 
-    /** Asks first; the tour runs on yes. */
+    /** The features whose steps the pilot has not been offered yet (the tour of what is new after an update). */
+    static List<String> unseen(de.droiddrone.pc.PcConfig config) {
+        List<String> seen = java.util.Arrays.asList(config.getString(SEEN_KEY).split(","));
+        List<String> out = new ArrayList<>();
+        for (String f : FEATURES) if (!seen.contains(f)) out.add(f);
+        return out;
+    }
+
+    /**
+     * An update brought steps the pilot's tour didn't have: offered once, as a short tour of just those. Declining
+     * counts as seen too (SETUP > Tour has everything any time).
+     */
+    static void offerNew(MainWindow main, List<String> features) {
+        main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
+        List<String> what = new ArrayList<>();
+        for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "the phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "the map tools" : f);
+        Object[] options = {"Yes", "Not now"};
+        int answer = JOptionPane.showOptionDialog(main, "New in this version: " + String.join(" and ", what)
+                        + ".\nA short tour of just the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+        if (answer == JOptionPane.YES_OPTION) new Tour(main, features).next();
+    }
+
+    /** Asks first; the tour runs on yes. The whole tour counts every feature as seen. */
     static void offer(MainWindow main) {
-        main.save(java.util.Map.of(OFFERED_KEY, "true"));
+        main.save(java.util.Map.of(OFFERED_KEY, "true", SEEN_KEY, String.join(",", FEATURES)));
         Object[] options = {"Yes", "Not now"};
         int answer = JOptionPane.showOptionDialog(main, "Take a short tour of the window?\nMENU, the video, the map and the offline maps, one by one.",
                 "Tour", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
@@ -149,6 +214,7 @@ final class Tour {
     }
 
     static void start(MainWindow main) {
+        main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         new Tour(main).next();
     }
 

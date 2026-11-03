@@ -79,6 +79,71 @@ public final class Elevation {
         });
     }
 
+    /**
+     * The terrain along a path (1.0.35, the ruler's elevation profile): the path sampled every stepM metres (at most
+     * maxSamples points, the vertices always among them), each sample's height looked up in turn on the lookup thread.
+     * result gets {distances along the path in m, heights in m (NaN = not known yet or unknown)} after every few
+     * answers and once at the end, so a chart fills in as the answers come; cancelled by a newer profile request.
+     * @param path points as {lat, lon}
+     */
+    public void profile(java.util.List<double[]> path, double stepM, int maxSamples, Consumer<double[][]> result) {
+        java.util.List<double[]> samples = sample(path, stepM, maxSamples);
+        double[] dist = new double[samples.size()], height = new double[samples.size()];
+        java.util.Arrays.fill(height, Double.NaN);
+        for (int i = 0; i < samples.size(); i++) dist[i] = samples.get(i)[2];
+        long serial = ++profileSerial;
+        result.accept(new double[][]{dist.clone(), height.clone()});
+        pool.execute(() -> {
+            int since = 0;
+            for (int i = 0; i < samples.size(); i++) {
+                if (profileSerial != serial) return; // a newer profile was asked for
+                double[] s = samples.get(i);
+                long key = key(s[0], s[1]);
+                Double z;
+                synchronized (this) {
+                    z = known.get(key);
+                }
+                if (z == null) {
+                    z = fetch(s[0], s[1]);
+                    if (z != null) {
+                        synchronized (this) {
+                            known.put(key, z);
+                        }
+                    }
+                }
+                height[i] = z == null ? Double.NaN : z;
+                if (++since >= 8 || i == samples.size() - 1) {
+                    since = 0;
+                    if (profileSerial == serial) result.accept(new double[][]{dist.clone(), height.clone()});
+                }
+            }
+        });
+    }
+
+    private volatile long profileSerial;
+
+    /** The path's points and, between them, a point every stepM (stretched so at most maxSamples come): {lat, lon, m along}. */
+    static java.util.List<double[]> sample(java.util.List<double[]> path, double stepM, int maxSamples) {
+        java.util.List<double[]> out = new java.util.ArrayList<>();
+        if (path.isEmpty()) return out;
+        double total = 0;
+        for (int i = 1; i < path.size(); i++) total += Mercator.distanceM(path.get(i - 1)[0], path.get(i - 1)[1], path.get(i)[0], path.get(i)[1]);
+        double step = Math.max(stepM, total / Math.max(1, maxSamples - path.size()));
+        double along = 0;
+        out.add(new double[]{path.get(0)[0], path.get(0)[1], 0});
+        for (int i = 1; i < path.size(); i++) {
+            double[] a = path.get(i - 1), b = path.get(i);
+            double leg = Mercator.distanceM(a[0], a[1], b[0], b[1]);
+            for (double d = step; d < leg - step / 2; d += step) {
+                double f = d / leg;
+                out.add(new double[]{a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, along + d});
+            }
+            along += leg;
+            out.add(new double[]{b[0], b[1], along});
+        }
+        return out;
+    }
+
     static String url(double lat, double lon) {
         return TileSource.inNorway(lat, lon) ? kartverketUrl(lat, lon) : worldUrl(lat, lon);
     }
