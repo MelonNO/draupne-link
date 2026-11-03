@@ -363,6 +363,30 @@ class ControlLinkTest {
         assertEquals(phone.keyFrameRequests.get(), link.getKeyFrameRequests());
     }
 
+    /** DEEP SLEEP: the mode reaches the phone; while the PC is dormant no Connect goes out; WAKE brings the link back. */
+    @Test
+    void powerModeReachesThePhoneAndADormantLinkSendsNoConnect() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        link.sendPowerMode(ControlLink.POWER_DEEP_SLEEP, 2);
+        waitFor(() -> !phone.powerModes.isEmpty(), 2000, "the power mode at the phone");
+        assertArrayEquals(new int[]{ControlLink.POWER_DEEP_SLEEP, 2}, phone.powerModes.get(0));
+        // the phone sleeps (silent); this PC, told so, keeps quiet: a Connect in a listening window would wake it
+        link.setDormant(true);
+        phone.silent = true;
+        waitFor(() -> !link.isConnected(), 4000, "link lost");
+        int before = phone.connects.get();
+        Thread.sleep(1500);
+        assertEquals(before, phone.connects.get(), "no Connect while dormant");
+        // WAKE: the Connects resume, and the phone, listening again, takes one
+        link.setDormant(false);
+        phone.silent = false;
+        waitFor(() -> phone.connects.get() > before, 2000, "a Connect after WAKE");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link back");
+    }
+
     /** A weak link (the phone's bitrate setting low for 5 s): bad coverage mode, 640x360; the sticks keep going. */
     @Test
     void aWeakLinkSwitchesToBadCoverageMode() throws Exception {
@@ -481,6 +505,9 @@ class ControlLinkTest {
         final List<Integer> rcSeqs = new CopyOnWriteArrayList<>();
         /** Key frame requests received (pc.13 on). */
         final AtomicInteger keyFrameRequests = new AtomicInteger();
+        /** PowerMode packets as {mode, checkIntervalMin}, and every Connect that reached the socket. */
+        final List<int[]> powerModes = new CopyOnWriteArrayList<>();
+        final AtomicInteger connects = new AtomicInteger();
         /** The last video profile received (pc.15 on): -1 = none yet, else its flags (bit 0: key frames twice). */
         volatile int videoProfile = -1;
         /** Every config received, in order (a resolution switch sends a new one). */
@@ -565,6 +592,7 @@ class ControlLinkTest {
                 while (running) {
                     try {
                         socket.receive(packet);
+                        if (packet.getLength() > 0 && packet.getData()[0] == UdpCommon.Connect) connects.incrementAndGet();
                         if (silent) continue;
                         // like DRAUPNE Flight's Udp.receiverRun in direct mode: once a PC is connected, nothing from
                         // another one gets in; a second PC asking is told where the first one is
@@ -665,6 +693,7 @@ class ControlLinkTest {
                     udpSender.sendPong(toEndPoint, time, (byte) -1);
                 }
                 case ControlLink.KEY_FRAME_REQUEST -> keyFrameRequests.incrementAndGet();
+                case ControlLink.POWER_MODE -> powerModes.add(new int[]{r.readByte(), r.readByte()});
                 case ControlLink.VIDEO_PROFILE -> videoProfile = r.readByte();
                 case UdpCommon.RcFrame -> {
                     int count = r.readByte();

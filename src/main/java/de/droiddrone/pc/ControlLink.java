@@ -487,6 +487,8 @@ public class ControlLink {
                 wasConnected = connected;
                 if (versionMismatch) {
                     Thread.sleep(1000);
+                } else if (!connected && dormant) {
+                    Thread.sleep(250); // the phone sleeps on purpose: a Connect in its listening window would wake it
                 } else if (!connected) {
                     udpSender.sendConnect(1, key, SettingsCommon.versionCompatibleCode);
                     boolean phoneHoldsOldSession = System.currentTimeMillis() - ownSessionNamedAt < RECENT_SESSION_MS;
@@ -601,6 +603,40 @@ public class ControlLink {
         UdpPacketData packetData = new UdpPacketData(UdpCommon.StartVideo);
         packetData.daos.writeBoolean(videoHevc);
         udpSender.sendPacket(packetData.getData());
+    }
+
+    /**
+     * The phone's power mode (phone app pc.21 on; older apps drop the packet): [0x6E][mode u8][checkIntervalMin u8].
+     * Mode 0 = normal, 1 = STANDBY (no video, GPS and telemetry slowed, screen dimmed; the link stays), 2 = DEEP
+     * SLEEP (the phone drops the link, sleeps, and listens for this PC's Connect for 20 s every checkIntervalMin
+     * minutes). The phone answers with its PHONE_POWER record; the caller repeats this until it does.
+     */
+    public static final byte POWER_MODE = 0x6E;
+    public static final int POWER_NORMAL = 0, POWER_STANDBY = 1, POWER_DEEP_SLEEP = 2;
+
+    public void sendPowerMode(int mode, int checkIntervalMin) {
+        if (!running || !isConnected() || spectator != null) return;
+        udpSender.sendPacket(new byte[]{POWER_MODE, (byte) mode, (byte) checkIntervalMin});
+    }
+
+    /**
+     * Dormant: the phone is in deep sleep and must not be woken - no Connect goes out while the link is down. WAKE
+     * clears it, and the Connects resume at once (the phone takes one in its next listening window).
+     */
+    private volatile boolean dormant;
+
+    public void setDormant(boolean dormant) {
+        this.dormant = dormant;
+        if (dormant) log("The phone is in deep sleep: this PC stays quiet until WAKE.");
+    }
+
+    public boolean isDormant() {
+        return dormant;
+    }
+
+    /** After STANDBY: the phone stopped its stream, so StartVideo goes out again as if the stream never started. */
+    public void restartVideo() {
+        videoConfigReceived = false;
     }
 
     /** Asks the phone's encoder for a lower or higher bitrate (upstream steps through a fixed list of rates). */

@@ -197,6 +197,37 @@ class FcTelemetryTest {
     }
 
     @Test
+    void readsThePhonesPowerMode() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream o = new DataOutputStream(bytes);
+        o.writeShort(FcTelemetry.PHONE_POWER);
+        o.writeByte(2); o.writeByte(5); o.writeShort(3); o.writeByte(0b11);
+        o.write(betaflightPacket(0, 0)); // what follows is still read
+        FcTelemetry t = new FcTelemetry();
+        assertNull(t.getPhonePower(), "an app older than pc.21 never sends one");
+        long before = System.currentTimeMillis();
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        FcTelemetry.PhonePower p = t.getPhonePower();
+        assertNotNull(p);
+        assertEquals(2, p.mode(), "deep sleep");
+        assertEquals(5, p.checkIntervalMin());
+        assertEquals(3, p.sleepInS());
+        assertTrue(p.canLockScreen());
+        assertTrue(p.exactAlarmsAllowed());
+        assertTrue(p.receivedAt() >= before);
+        assertNotNull(t.getStatus(), "the record after it was read");
+        assertEquals(0, t.getUnknownCodes());
+        bytes.reset();
+        o.writeShort(FcTelemetry.PHONE_POWER);
+        o.writeByte(0); o.writeByte(1); o.writeShort(0); o.writeByte(0);
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        p = t.getPhonePower();
+        assertEquals(0, p.mode());
+        assertFalse(p.canLockScreen());
+        assertFalse(p.exactAlarmsAllowed());
+    }
+
+    @Test
     void thePhoneAppsBuildNumberIsReadFromItsVersion() throws Exception {
         assertEquals(18, FcTelemetry.pcBuild("2.3.0-pc.18"));
         assertEquals(19, FcTelemetry.pcBuild("2.3.0-pc.19"));

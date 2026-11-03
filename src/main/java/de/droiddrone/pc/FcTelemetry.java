@@ -94,6 +94,31 @@ public class FcTelemetry {
      * number of the last stick frame it wrote to the FC (-1 = none yet); rcWriteAgeMs how long ago that write was,
      * rcInToOutMs how long that frame took from arriving at the phone to its USB write (-1 = unknown).
      */
+    /** The phone's power mode report (record {@link #PHONE_POWER}, phone app pc.21): STANDBY / DEEP SLEEP, see ControlLink.POWER_MODE. */
+    static final short PHONE_POWER = 0x40F5;
+
+    /**
+     * What the phone says about its power mode: mode 0 normal, 1 standby, 2 deep sleep; checkIntervalMin how often
+     * it wakes to look for the PC in deep sleep; sleepInS seconds until it goes to sleep (0 = not about to); caps bit 0
+     * = it may lock its own screen (device admin), bit 1 = exact alarms allowed.
+     */
+    public record PhonePower(int mode, int checkIntervalMin, int sleepInS, int caps, long receivedAt) {
+        public boolean canLockScreen() {
+            return (caps & 1) != 0;
+        }
+
+        public boolean exactAlarmsAllowed() {
+            return (caps & 2) != 0;
+        }
+    }
+
+    private volatile PhonePower phonePower;
+
+    /** The phone's latest power mode report, or null before the first (an app older than pc.21 never sends one). */
+    public PhonePower getPhonePower() {
+        return phonePower;
+    }
+
     public record PhoneState(int flags, int lastRcSeq, int rcWriteAgeMs, int rcInToOutMs, long receivedAt) {
         static final int FLAG_CHANNEL_MAP = 1, FLAG_USB_PENDING = 2, FLAG_USB_DENIED = 4, FLAG_CAMERA_OPEN = 8;
 
@@ -353,6 +378,13 @@ public class FcTelemetry {
                 int inToOut = b.readShort() & 0xffff;
                 phoneState = new PhoneState(flags, seq == 255 ? -1 : seq, age == 65535 ? -1 : age,
                         inToOut == 65535 ? -1 : inToOut, System.currentTimeMillis());
+            }
+            case PHONE_POWER -> {
+                int mode = b.readUnsignedByteAsInt();
+                int interval = b.readUnsignedByteAsInt();
+                int sleepIn = b.readShort() & 0xffff;
+                int caps = b.readUnsignedByteAsInt();
+                phonePower = new PhonePower(mode, interval, sleepIn, caps, System.currentTimeMillis());
             }
             case PHONE_ENCODER -> {
                 phoneTargetBitRate = b.readInt();

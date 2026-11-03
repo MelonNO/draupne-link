@@ -55,6 +55,7 @@ import java.nio.file.Path;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -105,6 +106,22 @@ public class MainWindow extends JFrame {
     /** The last time the FC reported armed; LOST DRONE shows when the link drops within a few minutes of it. */
     private long lastArmedAt;
     private final JButton lostDroneButton = Theme.primaryButton("Lost drone");
+    // ---- STANDBY / DEEP SLEEP: the phone saves power before take-off and this PC wakes it (phone app pc.21 on)
+    private final JButton standbyButton = Theme.secondaryButton("Standby");
+    private final JButton deepSleepButton = Theme.secondaryButton("Deep sleep");
+    private final JButton wakeButton = Theme.primaryButton("Wake");
+    private final JComboBox<String> checkIntervalCombo = new JComboBox<>(new String[]{"1 min", "2 min", "5 min"});
+    private final JLabel powerStatus = Theme.label(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
+    private JPanel powerRow;
+    /** The mode this PC asked for (ControlLink.POWER_*); the phone's PHONE_POWER record says what it is in. */
+    private int powerWanted = ControlLink.POWER_NORMAL;
+    private long powerSentAt, powerAskedAt;
+    /** The phone said DEEP SLEEP and the link dropped: it sleeps, and this PC keeps quiet (ControlLink.setDormant). */
+    private boolean phoneAsleep;
+    /** When the phone went to sleep: its listening windows come every check interval from then on. */
+    private long sleepStartAt;
+    private int checkIntervalMin = 5;
+    private static final String CHECK_INTERVAL_KEY = "phone.sleepCheckMin";
     private long mapIdleUpdatedAt;
     static final String MAIN_BOUNDS_KEY = "mainWindow";
     private final MapWindow.Bounds mainBounds = new MapWindow.Bounds(this);
@@ -583,6 +600,7 @@ public class MainWindow extends JFrame {
             if (connection == null) connect(); else disconnect();
         });
         link.add(connectButton, c);
+        link.add(powerPanel(), c);
         // the link dropped while the drone was armed: one click opens FIND DRONE and copies the MGRS to send on
         lostDroneButton.setBackground(Theme.BAD);
         lostDroneButton.setToolTipText("The link dropped while armed: the last known position in FIND DRONE, its MGRS copied to the clipboard");
@@ -1023,7 +1041,10 @@ public class MainWindow extends JFrame {
         }
         session = new RcSession(connection.getLink(), mapper, msg -> SwingUtilities.invokeLater(() -> logLine(msg)),
                 ArmSwitch.parse(config.getString(ArmSwitch.KEY)));
-        service.setInputListener(session::onInput);
+        RcSession s = session;
+        service.setInputListener(state -> s.onInput(sticksPaused() ? null : state)); // STANDBY: as if the radio were gone
+        powerWanted = ControlLink.POWER_NORMAL;
+        phoneAsleep = false;
         lastState = null;
         lastStateText = null;
         lastSpectators = 0;
@@ -1053,6 +1074,9 @@ public class MainWindow extends JFrame {
 
     private void disconnect() {
         service.setInputListener(null);
+        powerWanted = ControlLink.POWER_NORMAL;
+        phoneAsleep = false;
+        if (powerRow != null) powerRow.setVisible(false);
         sampleLinkLog();
         linkLogTimer.stop();
         if (liveTrack != null) liveTrack.close(pins.list()); // stays for FIND DRONE and the map
@@ -1619,6 +1643,7 @@ public class MainWindow extends JFrame {
                 : (int) Math.min(65_534, ps.rcWriteAgeMs() + (now - ps.receivedAt()));
         RcSession.Banner resume = s == null ? null : s.lastResumeBanner();
         String liveBanner = resume != null && now - resume.at() < RESUME_BANNER_MS ? resume.text() : null;
+        if (liveBanner == null && !spectator && powerWanted == ControlLink.POWER_STANDBY) liveBanner = "STANDBY - PRESS WAKE";
         return new OsdRenderer.Data(true, ready, l.getPing(), spectator || (s != null && s.isRcEnabled()),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
                 osdLinkHint(), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
@@ -1687,10 +1712,169 @@ public class MainWindow extends JFrame {
         return mapper == null || snap.state() == null ? null : mapper.map(snap.state().axes(), snap.state().buttons());
     }
 
+    // ---------------------------------------------------------------- STANDBY / DEEP SLEEP
+
+    /**
+     * The power row of the LINK card, shown while connected: STANDBY (video, GPS and telemetry slowed on the phone,
+     * the link stays, back in two seconds), DEEP SLEEP (the phone drops the link, locks its screen and sleeps,
+     * listening for this PC for 20 s every CHECK EVERY minutes), WAKE. Neither sleep while the drone is armed.
+     */
+    private JPanel powerPanel() {
+        powerRow = new JPanel(new GridBagLayout());
+        powerRow.setOpaque(false);
+        GridBagConstraints c = new GridBagConstraints();
+        c.gridx = 0;
+        c.fill = GridBagConstraints.HORIZONTAL;
+        c.weightx = 1;
+        c.insets = new Insets(0, 0, 6, 0);
+        JPanel buttons = new JPanel(new GridLayout(1, 3, 6, 0));
+        buttons.setOpaque(false);
+        standbyButton.setToolTipText("Before take-off: the phone stops its camera, slows its GPS and telemetry and dims its screen; the link stays. WAKE brings the picture back in about two seconds");
+        standbyButton.addActionListener(e -> askPower(ControlLink.POWER_STANDBY));
+        deepSleepButton.setToolTipText("The phone drops the link, locks its screen and sleeps; every CHECK EVERY minutes it listens 20 s for this PC. WAKE brings it back at its next check, with nobody touching the phone");
+        deepSleepButton.addActionListener(e -> askPower(ControlLink.POWER_DEEP_SLEEP));
+        wakeButton.setToolTipText("Back to normal: the camera, the GPS and the sticks");
+        wakeButton.addActionListener(e -> wakePhone());
+        buttons.add(standbyButton);
+        buttons.add(deepSleepButton);
+        buttons.add(wakeButton);
+        powerRow.add(buttons, c);
+        JPanel interval = new JPanel(new BorderLayout(8, 0));
+        interval.setOpaque(false);
+        interval.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
+        TacticalCombo.install(checkIntervalCombo);
+        checkIntervalCombo.setToolTipText("How often the sleeping phone wakes to listen for this PC: more often costs a little more power");
+        try {
+            checkIntervalMin = Integer.parseInt(config.getString(CHECK_INTERVAL_KEY));
+        } catch (NumberFormatException ignored) {
+            checkIntervalMin = 5;
+        }
+        checkIntervalCombo.setSelectedIndex(checkIntervalMin == 1 ? 0 : checkIntervalMin == 2 ? 1 : 2);
+        checkIntervalCombo.addActionListener(e -> {
+            checkIntervalMin = new int[]{1, 2, 5}[Math.max(0, checkIntervalCombo.getSelectedIndex())];
+            save(Map.of(CHECK_INTERVAL_KEY, Integer.toString(checkIntervalMin)));
+        });
+        interval.add(checkIntervalCombo, BorderLayout.CENTER);
+        powerRow.add(interval, c);
+        powerRow.add(powerStatus, c);
+        powerRow.setVisible(false);
+        return powerRow;
+    }
+
+    /** The FC reported armed within the last two seconds. */
+    private boolean fcArmedNow() {
+        if (connection == null) return false;
+        FcTelemetry.Status st = connection.getLink().getTelemetry().getStatus();
+        return st != null && st.armed() && System.currentTimeMillis() - st.receivedAt() < 2000;
+    }
+
+    private void askPower(int mode) {
+        if (connection == null) return;
+        if (fcArmedNow()) {
+            new LockedNotice(mode == ControlLink.POWER_STANDBY ? standbyButton : deepSleepButton, videoView, "ARMED",
+                    "No sleep while the drone is armed: disarm first.").pop();
+            return;
+        }
+        powerWanted = mode;
+        powerAskedAt = System.currentTimeMillis();
+        powerSentAt = 0;
+        logLine(mode == ControlLink.POWER_STANDBY ? "STANDBY asked: the phone stops its camera and slows down; WAKE brings it back."
+                : "DEEP SLEEP asked: the phone drops the link and sleeps, listening for this PC every " + checkIntervalMin + " min.");
+    }
+
+    private void wakePhone() {
+        powerWanted = ControlLink.POWER_NORMAL;
+        powerAskedAt = System.currentTimeMillis();
+        powerSentAt = 0;
+        if (connection != null && phoneAsleep) {
+            connection.getLink().setDormant(false);
+            logLine("WAKE: the phone takes it at its next check (up to " + checkIntervalMin + " min), then its camera starts.");
+        } else {
+            logLine("WAKE asked.");
+        }
+    }
+
+    /** Once a refresh while connected: keeps asking until the phone is in the mode wanted, and says where things are. */
+    private void refreshPower(ControlLink link) {
+        long now = System.currentTimeMillis();
+        FcTelemetry.PhonePower pp = link.getTelemetry().getPhonePower();
+        int reported = pp == null ? -1 : pp.mode();
+        boolean ready = link.getState() == ControlLink.State.READY;
+        if (!powerRow.isVisible()) powerRow.setVisible(true);
+        if (powerWanted != ControlLink.POWER_NORMAL && fcArmedNow()) {
+            powerWanted = ControlLink.POWER_NORMAL;
+            powerSentAt = 0;
+            logLine("The drone is armed: sleep ended, the phone is woken.");
+        }
+        // the phone said DEEP SLEEP, then the link went: it sleeps now, and this PC must not wake it until WAKE
+        if (powerWanted == ControlLink.POWER_DEEP_SLEEP && reported == ControlLink.POWER_DEEP_SLEEP && !phoneAsleep && !link.isConnected()) {
+            phoneAsleep = true;
+            sleepStartAt = pp.receivedAt() + pp.sleepInS() * 1000L;
+            link.setDormant(true);
+            logLine("The phone is in deep sleep. It listens for this PC for 20 s every " + checkIntervalMin + " min; press WAKE to bring it back.");
+        }
+        if (phoneAsleep) {
+            if (link.isConnected()) {
+                phoneAsleep = false;
+                powerWanted = ControlLink.POWER_NORMAL;
+                powerSentAt = 0;
+                link.setDormant(false);
+                link.restartVideo();
+                logLine("The phone is awake again.");
+            } else {
+                long interval = Math.max(1, checkIntervalMin) * 60_000L;
+                long next = sleepStartAt + interval;
+                while (next < now) next += interval;
+                long left = (next - now) / 1000;
+                String in = String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
+                powerStatus.setText(link.isDormant()
+                        ? "<html>DEEP SLEEP - the phone listens for this PC every " + checkIntervalMin + " min; next check in " + in + ". WAKE brings it back.</html>"
+                        : "<html>WAKE sent - the phone takes it at its next check, in " + in + ", then its camera starts.</html>");
+                standbyButton.setEnabled(false);
+                deepSleepButton.setEnabled(false);
+                wakeButton.setEnabled(link.isDormant());
+                checkIntervalCombo.setEnabled(false);
+            }
+            return;
+        }
+        if (ready && powerWanted != reported) {
+            if (now - powerSentAt >= 200) {
+                link.sendPowerMode(powerWanted, checkIntervalMin);
+                powerSentAt = now;
+            }
+            if (pp == null && powerAskedAt != 0 && now - powerAskedAt > 10_000) {
+                powerStatus.setText("<html>The phone app doesn't answer: STANDBY and DEEP SLEEP need DRAUPNE Flight 2.3.0-pc.21 or newer (tap its Update available line).</html>");
+            } else if (powerWanted != ControlLink.POWER_NORMAL || reported > 0) {
+                powerStatus.setText("Asking the phone...");
+            } else {
+                powerStatus.setText(" ");
+            }
+        } else if (!ready) {
+            powerStatus.setText(" ");
+        } else if (reported == ControlLink.POWER_STANDBY) {
+            powerStatus.setText("<html>STANDBY - the phone's camera is off, its GPS and telemetry slowed, its screen dimmed. No sticks are sent. Press WAKE.</html>");
+        } else if (reported == ControlLink.POWER_DEEP_SLEEP) {
+            powerStatus.setText("Going to deep sleep in " + pp.sleepInS() + " s...");
+        } else {
+            powerStatus.setText("<html>Before take-off: STANDBY saves power and is back in 2 s; DEEP SLEEP saves more and is back at the phone's next check.</html>");
+        }
+        boolean idle = ready && powerWanted == ControlLink.POWER_NORMAL && reported <= 0;
+        standbyButton.setEnabled(idle && !fcArmedNow());
+        deepSleepButton.setEnabled(idle && !fcArmedNow());
+        wakeButton.setEnabled(powerWanted != ControlLink.POWER_NORMAL || reported > 0);
+        checkIntervalCombo.setEnabled(idle);
+    }
+
+    /** In STANDBY no sticks go out: the session sees "no radio" and, on waking, waits for a low throttle again. */
+    private boolean sticksPaused() {
+        return powerWanted != ControlLink.POWER_NORMAL || phoneAsleep;
+    }
+
     private void refreshLink() {
         refreshPhone();
         if (connection == null) {
             videoView.setIdleText("Not connected");
+            if (powerRow != null && powerRow.isVisible()) powerRow.setVisible(false);
             setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
             pingValue.setText("-");
             fcValue.setText("-");
@@ -1707,6 +1891,7 @@ public class MainWindow extends JFrame {
             lastState = state;
             lastStateText = stateText;
         }
+        if (!link.isSpectator()) refreshPower(link);
         if (video != null && link.isSpectator()) video.setDrawEveryFrame(true); // watching: smooth, not least delay
         if (link.isSpectator() && !link.isWatchOnly() && !toldNotFlying) {
             toldNotFlying = true;
@@ -1723,8 +1908,12 @@ public class MainWindow extends JFrame {
             videoView.setIdleText("Spectator: waiting for the pilot PC...");
         } else if (state == ControlLink.State.SPECTATING && !video.hasStream()) {
             videoView.setIdleText("Spectator: waiting for the pilot's video...");
+        } else if (phoneAsleep) {
+            videoView.setIdleText(link.isDormant() ? "DEEP SLEEP - the phone sleeps; press WAKE" : "Waking the phone at its next check...");
         } else if (state != ControlLink.State.READY && state != ControlLink.State.SPECTATING) {
             videoView.setIdleText("Waiting for the link...");
+        } else if (powerWanted == ControlLink.POWER_STANDBY) {
+            videoView.setIdleText("STANDBY - the phone's camera is off; press WAKE");
         } else if (!video.hasStream()) {
             videoView.setIdleText("Starting the phone's camera...");
         } else {
