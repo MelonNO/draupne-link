@@ -6,7 +6,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.35)
 
-- **1.0.35, the pilot's second map round - built, tests green, not released:** more symbols (`UnitType` ISR_FIXED,
+- **Released:** DRAUPNE Link **1.0.35** with phone app **DRAUPNE Flight 2.3.0-pc.28** (release
+  `flight-2.3.0-pc.28`, APK SHA-256 `4a2c346e…`, pinned in `ApkShare`). Nothing of it has flown or been tried on the
+  phone; the names, the simplified phone app and the map tools are all untried on hardware.
+- **1.0.35, the pilot's second map round - released 2026-11-03:** more symbols (`UnitType` ISR_FIXED,
   ATTACK_FIXED, ISR_ROTOR, ATTACK_ROTOR with `UnitSymbol.role` - an eye for ISR, an arrowhead for attack - and
   UTILITY, SUPPLY, MEDIC); moving (`MapView.pickUpAt` on a double-click at a point or symbol while no tool is on,
   `movingLive` painted instead of the item, a click `dropMoving` -> `MapGraphics.replace`, a right click or Esc
@@ -23,7 +26,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   (`ConnectivityManager.getRestrictBackgroundStatus`) always, `tvRadios` (Wi-Fi on, Bluetooth on, Battery Saver
   off) once a PC is connected; a tap opens the matching setting (`openSetting`); BLUETOOTH permission up to API 30.
   Tests: `MapToolsTest.pointsMoveByDoubleClickTheEraserErasesAndPlaceAtPlaces`, the symbol loop covers the new types.
-- **1.0.35 map tools - built, PC tests green, not released:** the pilot's list (ruler with an elevation profile, lines,
+- **1.0.35 map tools:** the pilot's list (ruler with an elevation profile, lines,
   rectangles, arrows, NATO symbols, a MAP TOOLS slide-out, export / import, tour steps, an update-specific tour).
   `map/MapGraphics` (the items: MEASUREMENT, LINE, AREA, ARROW, SYMBOL with `LatLon` points, colour, width, fill,
   closed, unit / affiliation / echelon; `legsM`, `lengthM`, `areaM2` (shoelace on a flat local projection),
@@ -50,7 +53,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   features is offered `Tour.offerNew` once after the boot animation (`MainWindow.open`), a tour of those steps
   only; the whole tour marks every feature seen. *Not done:* a measurement's points can't be dragged after the
   fact (draw again); symbols have no label text beyond their name. *Untried on the real window.*
-- **1.0.35 (names), phone app 2.3.0-pc.28 - built, PC tests green, not released, nothing tried on hardware:** the
+- **1.0.35 (names), phone app 2.3.0-pc.28:** the
   pilot's ask: "each phone is MobileAlpha, MobileBravo ..., each PC PCAlpha ...; the user only picks the phone's name
   and connects; remove the Direct connection option on both ends; a name map in the settings". *The names:*
   `Names` (the map: `name.<Name>=kind|ip|device|host|version|lastSeen` in the settings; letters; the packets
