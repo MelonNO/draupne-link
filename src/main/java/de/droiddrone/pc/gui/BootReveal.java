@@ -29,6 +29,12 @@ final class BootReveal extends JComponent {
     private static final double CORNER_SIZE = 150;
 
     private final Supplier<Rectangle> videoBounds;
+    /**
+     * Where the mark's "D" goes as it comes apart: its two bars to the two controls on the right (the video's pop-out
+     * and full-screen buttons), its two diagonals to the two at the bottom (CALIBRATE and RC CHECK), each ending the
+     * size and shape of the control it becomes; null = the D folds away in the middle as before.
+     */
+    private final Supplier<Rectangle[]> rightTargets, bottomTargets;
     private final Timer timer = new Timer(15, e -> tick());
     private long startedAt; // 0 = not started: all black
     private long fixedNow = -1; // tests: the clock stands still at this time
@@ -39,7 +45,13 @@ final class BootReveal extends JComponent {
     }
 
     private BootReveal(Supplier<Rectangle> videoBounds) {
+        this(videoBounds, null, null);
+    }
+
+    private BootReveal(Supplier<Rectangle> videoBounds, Supplier<Rectangle[]> rightTargets, Supplier<Rectangle[]> bottomTargets) {
         this.videoBounds = videoBounds;
+        this.rightTargets = rightTargets;
+        this.bottomTargets = bottomTargets;
         setOpaque(false);
         addMouseListener(new MouseAdapter() {
             @Override
@@ -58,7 +70,12 @@ final class BootReveal extends JComponent {
      *                    null for the window's middle
      */
     static void onOpen(JFrame window, Supplier<Rectangle> videoBounds) {
-        BootReveal reveal = new BootReveal(videoBounds);
+        onOpen(window, videoBounds, null, null);
+    }
+
+    /** @param rightTargets  two controls on the right the D's bars become; bottomTargets two at the bottom for its diagonals */
+    static void onOpen(JFrame window, Supplier<Rectangle> videoBounds, Supplier<Rectangle[]> rightTargets, Supplier<Rectangle[]> bottomTargets) {
+        BootReveal reveal = new BootReveal(videoBounds, rightTargets, bottomTargets);
         // the cover is the root pane's glass pane: the root pane's own layout sizes it with the window on every
         // layout, before any paint - a component on the layered pane got its size a frame after a resize (the window
         // opens maximized: it grows right after it shows), and in that frame the UI showed before the black
@@ -141,9 +158,16 @@ final class BootReveal extends JComponent {
             g.fillRect(0, 0, w, h);
             g.setComposite(AlphaComposite.SrcOver);
 
-            // the link between the bars folds into the middle and goes
-            double linkSize = size * (1 - fly);
-            if (linkSize > 2) Logo.paintLink(g, (w - linkSize) / 2, (h - linkSize) / 2, linkSize, (float) ((1 - fly) * pieceAlpha));
+            // the D comes apart: its bars to the controls on the right, its diagonals to the ones at the bottom -
+            // or, without targets, the link between the bars folds into the middle and goes
+            Rectangle[] right = rightTargets == null ? null : rightTargets.get();
+            Rectangle[] bottom = bottomTargets == null ? null : bottomTargets.get();
+            if (right != null && bottom != null && right.length >= 2 && bottom.length >= 2) {
+                paintD(g, lx, ly, size, fly, pieceAlpha, right, bottom);
+            } else {
+                double linkSize = size * (1 - fly);
+                if (linkSize > 2) Logo.paintLink(g, (w - linkSize) / 2, (h - linkSize) / 2, linkSize, (float) ((1 - fly) * pieceAlpha));
+            }
 
             // the brackets to the window's corners
             double cs = size + (CORNER_SIZE - size) * fly;
@@ -179,6 +203,56 @@ final class BootReveal extends JComponent {
 
     private static double lerp(double a, double b, double t) {
         return a + (b - a) * t;
+    }
+
+    /**
+     * The D of the mark coming apart. Its two bars (42 x 236 in the mark's 512 box, at x 137 and 333) fly to the two
+     * controls on the right and shrink to their size, filled red to the end, then fade over the real buttons. Its two
+     * diagonals (the X between the bars, clipped to the bars' box: from (158,138) to (354,374) and its mirror) swing
+     * level and stretch into the outlines of the two controls at the bottom: filled at first, an outline on arrival.
+     */
+    private void paintD(Graphics2D g, double lx, double ly, double size, double fly, float pieceAlpha, Rectangle[] right, Rectangle[] bottom) {
+        double s = size / Logo.BOX;
+        double travel = ease(Math.min(1, fly / 0.85));
+        double[][] bars = {{137, 138, 42, 236}, {333, 138, 42, 236}};
+        for (int i = 0; i < 2; i++) {
+            Rectangle to = right[i];
+            double x = lerp(lx + bars[i][0] * s, to.x, travel), y = lerp(ly + bars[i][1] * s, to.y, travel);
+            double bw = lerp(bars[i][2] * s, to.width, travel), bh = lerp(bars[i][3] * s, to.height, travel);
+            Graphics2D c = (Graphics2D) g.create();
+            try {
+                c.setComposite(AlphaComposite.SrcOver.derive(pieceAlpha));
+                c.setColor(Logo.RED);
+                double arc = 6 * travel;
+                c.fill(new java.awt.geom.RoundRectangle2D.Double(x, y, bw, bh, arc, arc));
+            } finally {
+                c.dispose();
+            }
+        }
+        double[][] diagonals = {{158, 138, 354, 374}, {158, 374, 354, 138}};
+        double morph = ease(Math.max(0, (fly - 0.1) / 0.9));
+        for (int i = 0; i < 2; i++) {
+            double x1 = lx + diagonals[i][0] * s, y1 = ly + diagonals[i][1] * s, x2 = lx + diagonals[i][2] * s, y2 = ly + diagonals[i][3] * s;
+            double length0 = Math.hypot(x2 - x1, y2 - y1), angle0 = Math.atan2(y2 - y1, x2 - x1);
+            Rectangle to = bottom[i];
+            double cx = lerp((x1 + x2) / 2, to.getCenterX(), morph), cy = lerp((y1 + y2) / 2, to.getCenterY(), morph);
+            double length = lerp(length0, to.width, morph), thick = lerp(42 * s, to.height, morph);
+            double angle = angle0 * (1 - morph); // level on arrival
+            Graphics2D c = (Graphics2D) g.create();
+            try {
+                c.translate(cx, cy);
+                c.rotate(angle);
+                java.awt.geom.RoundRectangle2D shape = new java.awt.geom.RoundRectangle2D.Double(-length / 2, -thick / 2, length, thick, 4 * morph, 4 * morph);
+                c.setColor(Logo.RED);
+                c.setComposite(AlphaComposite.SrcOver.derive((float) ((1 - morph) * pieceAlpha)));
+                c.fill(shape); // solid while it is still the mark's stroke
+                c.setComposite(AlphaComposite.SrcOver.derive((float) (morph * pieceAlpha)));
+                c.setStroke(new java.awt.BasicStroke(1.5f));
+                c.draw(shape); // the button's outline as it arrives
+            } finally {
+                c.dispose();
+            }
+        }
     }
 
     /**

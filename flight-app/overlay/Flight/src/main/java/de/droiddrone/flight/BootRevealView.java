@@ -23,6 +23,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Path;
 import android.os.SystemClock;
 import android.view.MotionEvent;
@@ -47,6 +48,10 @@ final class BootRevealView extends View {
     private final Path path = new Path();
     private final float density;
     private boolean done;
+    /** What the mark's pieces become: the D's bars the CONNECT button, its diagonals the LOCK SCREEN button's outline, the crosshair the pill. */
+    private View connect, lock, pill;
+    private final int[] where = new int[2], here = new int[2];
+    private final RectF rect = new RectF();
 
     private BootRevealView(Context context) {
         super(context);
@@ -59,6 +64,9 @@ final class BootRevealView extends View {
         ViewGroup content = activity.findViewById(android.R.id.content);
         if (content == null) return;
         BootRevealView v = new BootRevealView(activity);
+        v.connect = activity.findViewById(R.id.startStopService);
+        v.lock = activity.findViewById(R.id.lockScreen);
+        v.pill = activity.findViewById(R.id.tvPill);
         content.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         v.bringToFront();
     }
@@ -108,9 +116,12 @@ final class BootRevealView extends View {
             float pieceAlpha = 1 - out;
             // the black lifts as the pieces fly
             canvas.drawColor(Color.argb(Math.round(255 * (1 - fly)), 0, 0, 0));
-            // the link between the bars folds into the middle and goes
-            float linkSize = size * (1 - fly);
-            if (linkSize > 2) drawLink(canvas, (w - linkSize) / 2, (h - linkSize) / 2, linkSize, (1 - fly) * pieceAlpha);
+            // the D comes apart: its bars become the CONNECT button, its diagonals the LOCK SCREEN button's outline;
+            // without those on screen yet, the link between the bars folds into the middle and goes
+            if (!drawD(canvas, lx, ly, size, fly, pieceAlpha)) {
+                float linkSize = size * (1 - fly);
+                if (linkSize > 2) drawLink(canvas, (w - linkSize) / 2, (h - linkSize) / 2, linkSize, (1 - fly) * pieceAlpha);
+            }
             // the brackets to the screen's corners, the size of the cards' brackets
             float cornerSize = 150 * density * 0.6f;
             float cs = lerp(size, cornerSize, fly);
@@ -120,11 +131,74 @@ final class BootRevealView extends View {
                 float tx = right ? w - cs - inset : inset, ty = bottom ? h - cs - inset : inset;
                 drawBracket(canvas, corner, lerp(lx, tx, fly), lerp(ly, ty, fly), cs, pieceAlpha);
             }
-            // the crosshair stays in the middle, shrinking out
-            float chSize = size * (1 - fly * 0.7f);
-            drawCrosshair(canvas, (w - chSize) / 2, (h - chSize) / 2, chSize, pieceAlpha * (1 - fly));
+            // the crosshair flies to the status pill and shrinks to its height, where it fades; no pill yet: it
+            // stays in the middle, shrinking out
+            float travel = ease(Math.min(1f, fly / 0.85f));
+            if (rectOf(pill)) {
+                float chSize = lerp(size, rect.height() * 512 / 88f, travel); // the disc (88 of 512) ends the pill's height
+                float cx = lerp(w / 2f, rect.centerX(), travel), cy = lerp(h / 2f, rect.centerY(), travel);
+                drawCrosshair(canvas, cx - chSize / 2, cy - chSize / 2, chSize, pieceAlpha * (1 - 0.6f * travel));
+            } else {
+                float chSize = size * (1 - fly * 0.7f);
+                drawCrosshair(canvas, (w - chSize) / 2, (h - chSize) / 2, chSize, pieceAlpha * (1 - fly));
+            }
         }
         postInvalidateOnAnimation();
+    }
+
+    /** A view's bounds in this view's coordinates into {@link #rect}; false when it has none yet. */
+    private boolean rectOf(View v) {
+        if (v == null || v.getWidth() == 0 || v.getHeight() == 0 || !v.isShown()) return false;
+        v.getLocationInWindow(where);
+        getLocationInWindow(here);
+        rect.set(where[0] - here[0], where[1] - here[1], where[0] - here[0] + v.getWidth(), where[1] - here[1] + v.getHeight());
+        return true;
+    }
+
+    /**
+     * The D of the mark coming apart: its two bars (42 x 236 in the 512 box, at x 137 and 333) fly to the left and
+     * right halves of the CONNECT button and fill it red (the button is red: it is there when they fade); its two
+     * diagonals (the X clipped to the bars' box: (158,138)-(354,374) and its mirror) swing level and stretch into the
+     * LOCK SCREEN button's outline. false when those buttons aren't laid out yet.
+     */
+    private boolean drawD(Canvas c, float lx, float ly, float size, float fly, float pieceAlpha) {
+        if (!rectOf(connect)) return false;
+        float cl = rect.left, ct = rect.top, cw = rect.width(), ch = rect.height();
+        if (!rectOf(lock)) return false;
+        float ll = rect.left, lt = rect.top, lw = rect.width(), lh = rect.height();
+        float s = size / BOX;
+        float travel = ease(Math.min(1f, fly / 0.85f));
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(red(pieceAlpha));
+        float[][] bars = {{137, 138, 42, 236}, {333, 138, 42, 236}};
+        for (int i = 0; i < 2; i++) {
+            float tx = i == 0 ? cl : cl + cw / 2, tw = cw / 2;
+            float x = lerp(lx + bars[i][0] * s, tx, travel), y = lerp(ly + bars[i][1] * s, ct, travel);
+            float bw = lerp(bars[i][2] * s, tw, travel), bh = lerp(bars[i][3] * s, ch, travel);
+            rect.set(x, y, x + bw, y + bh);
+            c.drawRoundRect(rect, 4 * density * travel, 4 * density * travel, paint);
+        }
+        float[][] diagonals = {{158, 138, 354, 374}, {158, 374, 354, 138}};
+        float morph = ease(Math.max(0, (fly - 0.1f) / 0.9f));
+        for (int i = 0; i < 2; i++) {
+            float x1 = lx + diagonals[i][0] * s, y1 = ly + diagonals[i][1] * s, x2 = lx + diagonals[i][2] * s, y2 = ly + diagonals[i][3] * s;
+            float length0 = (float) Math.hypot(x2 - x1, y2 - y1), angle0 = (float) Math.toDegrees(Math.atan2(y2 - y1, x2 - x1));
+            float cx = lerp((x1 + x2) / 2, ll + lw / 2, morph), cy = lerp((y1 + y2) / 2, lt + lh / 2, morph);
+            float length = lerp(length0, lw, morph), thick = lerp(42 * s, lh, morph);
+            c.save();
+            c.translate(cx, cy);
+            c.rotate(angle0 * (1 - morph)); // level on arrival
+            rect.set(-length / 2, -thick / 2, length / 2, thick / 2);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(red((1 - morph) * pieceAlpha));
+            c.drawRoundRect(rect, 4 * density * morph, 4 * density * morph, paint); // solid while it is the mark's stroke
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(1.5f * density);
+            paint.setColor(red(morph * pieceAlpha));
+            c.drawRoundRect(rect, 4 * density * morph, 4 * density * morph, paint); // the button's outline as it arrives
+            c.restore();
+        }
+        return true;
     }
 
     private void drawAll(Canvas c, float x, float y, float size, float alpha) {

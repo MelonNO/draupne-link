@@ -228,6 +228,8 @@ public class MainWindow extends JFrame {
 
     private final JComboBox<Joystick.Info> joystickCombo = new JComboBox<>();
     private final JButton calibrateButton = Theme.secondaryButton("Calibrate");
+    /** RC CHECK on the controller card; the boot animation flies a piece of the mark to it. */
+    private JButton rcCheckButton;
     private final JLabel calibrationLabel = Theme.label(" ", Theme.font(Font.BOLD, 12.5f), Theme.MUTED);
     private final JLabel rcStateLabel = Theme.label(" ", Theme.headingFont(13f), Theme.MUTED);
     private final JLabel fcStateLabel = Theme.label(" ", Theme.headingFont(13f), Theme.MUTED);
@@ -245,7 +247,9 @@ public class MainWindow extends JFrame {
         boolean firstStart = !java.nio.file.Files.exists(configFile); // nothing has saved settings yet
         MainWindow window = new MainWindow(config, configFile, service);
         BootReveal.onOpen(window, () -> window.videoView.getParent() == null ? null
-                : SwingUtilities.convertRectangle(window.videoView.getParent(), window.videoView.getBounds(), window.getRootPane().getLayeredPane()));
+                : SwingUtilities.convertRectangle(window.videoView.getParent(), window.videoView.getBounds(), window.getRootPane().getLayeredPane()),
+                () -> window.boundsInPane(window.popOutButton, window.fullScreenButton),   // the D's bars: the video's two buttons
+                () -> window.boundsInPane(window.calibrateButton, window.rcCheckButton)); // its diagonals: CALIBRATE and RC CHECK
         window.setVisible(true);
         SwingUtilities.invokeLater(window::reportLastUpdate);
         if (firstStart) {
@@ -800,7 +804,7 @@ public class MainWindow extends JFrame {
         });
         topLeft.add(calibrateButton);
         topLeft.add(Box.createHorizontalStrut(8));
-        JButton rcCheckButton = Theme.secondaryButton("RC check");
+        rcCheckButton = Theme.secondaryButton("RC check");
         rcCheckButton.setToolTipText("Compare what this PC sends with what Betaflight reports");
         rcCheckButton.addActionListener(e -> RcCheckDialog.open(this));
         topLeft.add(rcCheckButton);
@@ -2070,6 +2074,17 @@ public class MainWindow extends JFrame {
 
     JComponent tourHeader() {
         return headerPanel;
+    }
+
+    /** The controls' bounds in the layered pane, for the boot animation; null while any has no parent yet. */
+    private java.awt.Rectangle[] boundsInPane(JComponent... controls) {
+        java.awt.Rectangle[] r = new java.awt.Rectangle[controls.length];
+        for (int i = 0; i < controls.length; i++) {
+            JComponent c = controls[i];
+            if (c == null || c.getParent() == null || !c.isShowing()) return null;
+            r[i] = SwingUtilities.convertRectangle(c.getParent(), c.getBounds(), getRootPane().getLayeredPane());
+        }
+        return r;
     }
 
     /** Slides the header menu out, so SETUP, VIDEO, LINK and TOOLS are in sight; nothing when it is out already. */

@@ -15,6 +15,13 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   the PC sets the modes; the phone has a MODE line and one HOLD TO WAKE button (2 s hold); the permissions are asked
   through the yellow status lines (the guide says so). On the PC the two sleep buttons fold away (`Fold`) while the
   FC reports armed and unfold on disarm. The guide's connect step and the tour's LINK card step explain the modes.
+- **Unreleased, the boot animation's D:** on the PC the mark's "D" (the two bars and the X between them) comes apart
+  too: the bars fly to the video's two glyph buttons on the right and end their size, the two diagonals swing level
+  and stretch into the outlines of CALIBRATE and RC CHECK at the bottom (`BootReveal.paintD`; MainWindow hands the
+  targets' bounds over with `boundsInPane`; without targets the D folds away as before, which the frame tests use).
+  On the phone (`BootRevealView.drawD`) the bars become the two halves of the CONNECT button, the diagonals the LOCK
+  SCREEN button's outline, and the crosshair flies to the status pill and shrinks to its height. Checked off screen
+  on the PC (build/shot/BootShot); the phone's needs a look on a real phone.
 - **Unreleased, two flickers:** the boot cover (`BootReveal`) is the root pane's glass pane, which the root layout
   sizes before any paint - on the layered pane it got its size a frame after the window grew to maximized, and the
   UI showed in that frame. A menu's opening picture (`TacticalCombo.Ghost`) now shows the real menu first and goes
