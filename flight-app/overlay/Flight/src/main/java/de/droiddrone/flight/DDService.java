@@ -16,7 +16,10 @@
  *
  *  Modified for DRAUPNE Link: stops quietly when Android restarts it without the app's settings; one start only
  *  (a second CONNECT tap is ignored); holds a partial wake lock while running; takes the location foreground type
- *  when the pilot allows location later; re-probes the USB when the flight controller is plugged in.
+ *  when the pilot allows location later; re-probes the USB when the flight controller is plugged in. pc.21: the
+ *  power modes' hands (PowerMode decides, this does): standby slows the GPS and the FC polling and stops the video;
+ *  deep sleep lets go of the port, the GPS, the socket and the wake lock and locks the screen; a check opens the
+ *  socket; waking brings it all back and lights the screen with a full-screen intent.
  */
 
 package de.droiddrone.flight;
@@ -28,6 +31,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.app.admin.DevicePolicyManager;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
@@ -70,6 +74,11 @@ public class DDService extends Service {
     private PowerManager.WakeLock wakeLock;
     private Notification notification;
     private boolean locationType;
+    /** pc.21: the channel of the wake notification, whose full-screen intent lights the screen after a sleep check. */
+    public static final String WAKE_CHANNEL_ID = "DDWakeChannel";
+    private static final int NOTIFICATION_ID = 1;
+    private static final int WAKE_NOTIFICATION_ID = 2;
+    private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
 
 
     public DDService() {
@@ -102,15 +111,7 @@ public class DDService extends Service {
         connectionMode = MainActivity.config.getConnectionMode();
 
         createNotificationChannel();
-        Intent notificationIntent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
-        notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle(getResources().getString(R.string.app_name))
-                .setContentText("DRAUPNE Flight is running")
-                .setSmallIcon(R.drawable.baseline_rocket_launch_24)
-                .setContentIntent(pendingIntent)
-                .setOngoing(true)
-                .build();
+        notification = buildNotification(getString(R.string.dd_notification_running));
         goForeground(true);
         acquireWakeLock();
         running = this;
@@ -135,6 +136,7 @@ public class DDService extends Service {
         udp = new Udp(destIp, port, key, connectionMode, streamEncoder, mp4Recorder, cameraManager, msp, mavlink, phoneTelemetry, MainActivity.config, serial, mavlinkUdpBridge);
         mavlinkUdpBridge.setUdp(udp);
         mavlink.setUdp(udp);
+        PowerMode.start(this);
         Thread t1 = new Thread(() -> {
             if (!udp.initialize()){
                 log("UDP initialize error.");
@@ -215,15 +217,173 @@ public class DDService extends Service {
     @Override
     public void onDestroy() {
         running = null;
+        PowerMode.stop(); // no alarm left behind; the mode is normal for the next start
         PhoneLocation.stop();
         closeAll();
         releaseWakeLock();
+        mainHandler.removeCallbacksAndMessages(null);
     }
 
     private void createNotificationChannel() {
         NotificationChannel serviceChannel = new NotificationChannel(CHANNEL_ID, "DD", NotificationManager.IMPORTANCE_HIGH);
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(serviceChannel);
+        // pc.21: a high-importance channel of its own for the wake notification, or its full-screen intent is ignored
+        NotificationChannel wakeChannel = new NotificationChannel(WAKE_CHANNEL_ID, getString(R.string.dd_wake_channel), NotificationManager.IMPORTANCE_HIGH);
+        wakeChannel.setDescription(getString(R.string.dd_wake_channel_why));
+        manager.createNotificationChannel(wakeChannel);
+    }
+
+    /** The running notification with the given text; a tap opens the app (which wakes a sleeping phone). */
+    private Notification buildNotification(String text) {
+        Intent notificationIntent = new Intent(this, MainActivity.class);
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
+        return new NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle(getResources().getString(R.string.app_name))
+                .setContentText(text)
+                .setSmallIcon(R.drawable.baseline_rocket_launch_24)
+                .setContentIntent(pendingIntent)
+                .setOngoing(true)
+                .build();
+    }
+
+    private void updateNotification(String text) {
+        try {
+            notification = buildNotification(text);
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) manager.notify(NOTIFICATION_ID, notification);
+        } catch (Exception e) {
+            log("Notification update error: " + e);
+        }
+    }
+
+    // ---- pc.21: what PowerMode asks of the service (on its worker thread) ----
+
+    /** Whether the flight controller reports armed (MSP; a MAVLink FC isn't read for this). */
+    boolean isFcArmed() {
+        Msp m = msp;
+        return m != null && m.isArmed();
+    }
+
+    /** Whether a PC has connected (a keyed Connect taken), as the check window asks. */
+    boolean isPcConnected() {
+        Udp u = udp;
+        return u != null && u.isConnected();
+    }
+
+    /** Standby on: no video, the GPS every 30 s, the FC once a second. Off: the rates back (the PC restarts video). */
+    void powerStandby(boolean on) {
+        if (on) udp.stopVideo();
+        msp.setSlowPoll(on);
+        PhoneLocation.setInterval(on ? PhoneLocation.STANDBY_INTERVAL_MS : PhoneLocation.NORMAL_INTERVAL_MS);
+        updateNotification(on ? getString(R.string.dd_notification_standby) : getString(R.string.dd_notification_running));
+    }
+
+    /**
+     * Deep sleep: everything let go of, in this order - the video, the flight controller's port, the GPS, the
+     * socket (the link drops), the wake lock; then the screen, when the app may lock it. The service stays in the
+     * foreground with its types: Android would end it otherwise, and the wake needs them back anyway.
+     */
+    void powerSleep(long nextCheckAt) {
+        udp.stopVideo();
+        fcInfo = null;
+        serial.close();
+        PhoneLocation.stop();
+        udp.close();
+        powerSleepOn(nextCheckAt);
+        releaseWakeLock();
+        lockScreen();
+    }
+
+    /** Between checks: the notification says when the next one is. */
+    void powerSleepOn(long nextCheckAt) {
+        updateNotification(getString(R.string.dd_notification_sleep, PowerMode.time(this, nextCheckAt)));
+    }
+
+    /** A check window: the socket open and listening (new receive, buffer and stats threads). */
+    void powerListen() {
+        if (!udp.initialize()) log("Sleep check: the socket could not be opened");
+        updateNotification(getString(R.string.dd_notification_checking));
+    }
+
+    /** The check window closed without the PC: the socket shut again. */
+    void powerListenEnd() {
+        udp.close();
+    }
+
+    /**
+     * Awake: the wake lock, the flight controller's port (the USB permission was given with "always allow"; a
+     * replug prompt goes the usual way, the status card says what to do), the GPS, the notification; after a real
+     * sleep also the screen, lit over the lock screen.
+     */
+    void powerWake(boolean fromSleep) {
+        acquireWakeLock();
+        msp.setSlowPoll(false);
+        PhoneLocation.setInterval(PhoneLocation.NORMAL_INTERVAL_MS);
+        if (serial.getStatus() == Serial.STATUS_NOT_INITIALIZED) {
+            fcInfo = null;
+            serial.initialize(msp, mavlink);
+        }
+        if (locationType) PhoneLocation.start(getApplicationContext()); // the foreground type was kept all along
+        updateNotification(getString(R.string.dd_notification_running));
+        if (fromSleep) wakeScreen();
+    }
+
+    /** The screen off now, when the pilot made the app a device admin; else it times out by itself. */
+    private void lockScreen() {
+        try {
+            DevicePolicyManager dpm = (DevicePolicyManager) getSystemService(DEVICE_POLICY_SERVICE);
+            if (dpm == null || !dpm.isAdminActive(PowerMode.adminComponent(this))) {
+                log("Deep sleep: not a device admin, the screen times out on its own");
+                return;
+            }
+            dpm.lockNow();
+            log("Deep sleep: screen locked");
+        } catch (Exception e) {
+            log("Deep sleep: lockNow error: " + e);
+        }
+    }
+
+    /**
+     * The screen on and the app in front of the lock screen: a notification with a full-screen intent to
+     * MainActivity (the sanctioned way to start an activity from the background), and a bright wake lock as a
+     * second way to light the screen on phones that hold the full-screen intent back. The notification goes
+     * after 15 s; the activity stays.
+     */
+    private void wakeScreen() {
+        try {
+            Intent intent = new Intent(this, MainActivity.class).setAction(MainActivity.ACTION_WAKE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            PendingIntent full = PendingIntent.getActivity(this, 1, intent, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+            Notification wake = new NotificationCompat.Builder(this, WAKE_CHANNEL_ID)
+                    .setContentTitle(getString(R.string.app_name))
+                    .setContentText(getString(R.string.dd_wake_text))
+                    .setSmallIcon(R.drawable.baseline_rocket_launch_24)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setCategory(NotificationCompat.CATEGORY_ALARM)
+                    .setContentIntent(full)
+                    .setFullScreenIntent(full, true)
+                    .setAutoCancel(true)
+                    .build();
+            NotificationManager manager = getSystemService(NotificationManager.class);
+            if (manager != null) {
+                manager.notify(WAKE_NOTIFICATION_ID, wake);
+                mainHandler.postDelayed(() -> manager.cancel(WAKE_NOTIFICATION_ID), 15000);
+            }
+        } catch (Exception e) {
+            log("Wake notification error: " + e);
+        }
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                @SuppressWarnings("deprecation")
+                PowerManager.WakeLock bright = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK
+                        | PowerManager.ACQUIRE_CAUSES_WAKEUP | PowerManager.ON_AFTER_RELEASE, "DRAUPNE:wakeScreen");
+                bright.acquire(5000);
+            }
+        } catch (Exception e) {
+            log("Screen wake lock error: " + e);
+        }
     }
 
     public static int getSerialPortStatus(){
@@ -251,7 +411,12 @@ public class DDService extends Service {
                     mainTimer.cancel();
                     return;
                 }
+                if (PowerMode.isAsleep()) { // pc.21: the socket and the port are closed on purpose; nothing to tend
+                    isConnected = false;
+                    return;
+                }
                 isConnected = udp.isConnected();
+                if (isFcArmed()) PowerMode.fcArmed(); // standby ends by itself
                 if (isConnected){
                     if (MainActivity.config.getMavlinkUdpBridge() != SettingsCommon.MavlinkUdpBridge.disabled
                             && MainActivity.config.getMavlinkUdpBridge() != SettingsCommon.MavlinkUdpBridge.redirectFromControlDevice) {

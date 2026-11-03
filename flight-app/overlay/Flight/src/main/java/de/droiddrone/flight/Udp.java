@@ -20,7 +20,8 @@
  *  is connected is told which PC flies, so it can watch through that PC (DRAUPNE Link's Spectate.java).
  *  pc.19: stick frames go to the flight controller straight from the receive thread (handleRcFrame), with the
  *  PC's sequence byte keeping a late frame from going out after a newer one; a PC that restarts gets its session
- *  back at once (receiverRun).
+ *  back at once (receiverRun). pc.21: the PC's PowerMode packet and the PHONE_POWER record (PowerMode); no sticks
+ *  and no StartVideo in standby or deep sleep; the socket closes and opens again for deep sleep's checks.
  */
 
 package de.droiddrone.flight;
@@ -95,6 +96,8 @@ public class Udp {
     static volatile String wrongKeyFrom;
     static volatile long wrongKeyAt;
     private boolean isCameraRestarting;
+    /** A StartVideo refused in standby or deep sleep was logged (once, not every 2.5 s). */
+    private boolean videoRefusedSaid;
     // spectator mode (DRAUPNE Link Spectate.java): codes clear of upstream's packet names
     private static final byte SPECTATE_PILOT_QUERY = 0x60;
     private static final byte SPECTATE_PILOT_AT = 0x61;
@@ -215,7 +218,18 @@ public class Udp {
     }
 
     public void sendConnect(){
-        udpSender.sendConnect(0, key, SettingsCommon.versionCompatibleCode);
+        UdpSender sender = udpSender;
+        if (sender == null) return; // the socket is closed (deep sleep)
+        sender.sendConnect(0, key, SettingsCommon.versionCompatibleCode);
+    }
+
+    /**
+     * DRAUPNE Link: standby and deep sleep stop the camera and the encoder (on the videoStarter thread, like a
+     * Disconnect). The PC's next StartVideo, in normal mode, starts them again as after a Disconnect.
+     */
+    public void stopVideo(){
+        videoInitialFrame = null;
+        videoStarter.execute(this::stopAudioVideo);
     }
 
     public void disconnect(){
@@ -274,7 +288,8 @@ public class Udp {
                     // polling thread and a hand-over (the frame is unnumbered and never acknowledged, so the buffer
                     // had nothing to do with it). The session stays alive on the PC's pings (20 a second)
                     if (d[0] == UdpCommon.RcFrame) {
-                        if (buffer.isConnected()) handleRcFrame(d, len);
+                        // pc.21: none in standby or deep sleep - the PC sends none, and a stray one must not fly
+                        if (buffer.isConnected() && !PowerMode.dropSticks()) handleRcFrame(d, len);
                         continue;
                     }
                     buffer.addPacket(receiverPacket);
@@ -389,6 +404,9 @@ public class Udp {
                             if (l != null) PcLinkStats.writePhonePositionTo(stats.daos, l);
                         }
                         if (statsSent % 10 == 3) PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), lastRcSeq); // pc.19, once a second
+                        // pc.21, once a second and three times when the mode changes; always the last record: a
+                        // pc.20 PC stops reading at it
+                        if (statsSent % 10 == 7 || PowerMode.burstDue(now)) PowerMode.writeRecordTo(stats.daos);
                         udpSender.sendPacket(stats.getData());
                     }
                     Thread.sleep(10);
@@ -575,6 +593,14 @@ public class Udp {
             case UdpCommon.StartVideo:
             {
                 boolean isHevc = buffer.readBoolean();
+                if (PowerMode.mode() != PowerMode.NORMAL) {
+                    // pc.21: no camera in standby or during a sleep check; the PC asks again every 2.5 s, and the
+                    // first StartVideo after mode 0 starts it
+                    if (!videoRefusedSaid) log("StartVideo in " + PowerMode.name(PowerMode.mode()) + ": not started");
+                    videoRefusedSaid = true;
+                    break;
+                }
+                videoRefusedSaid = false;
                 videoStarter.execute(() -> {
                     startVideoStream(isHevc);
                     if (config.isSendAudioStream()) startAudioStream();
@@ -603,6 +629,15 @@ public class Udp {
             {
                 boolean increase = buffer.readBoolean();
                 streamEncoder.changeBitRate(increase);
+                break;
+            }
+            case PowerMode.PACKET:
+            {
+                // pc.21: [0x6E][mode u8][checkIntervalMin u8]; the PC sends it again until the mode comes back
+                if (buffer.getRemaining() < 1) break;
+                int mode = buffer.readUnsignedByteAsInt();
+                int intervalMin = buffer.getRemaining() > 0 ? buffer.readUnsignedByteAsInt() : 0;
+                PowerMode.request(mode, intervalMin, "the PC");
                 break;
             }
             case UdpCommon.Ping:

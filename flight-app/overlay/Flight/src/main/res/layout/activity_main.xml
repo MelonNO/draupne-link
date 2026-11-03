@@ -153,6 +153,49 @@
                 android:textSize="14sp"
                 android:visibility="gone" />
 
+            <!-- pc.21: the power modes' last event, and what to set up for deep sleep (gone once done) -->
+            <TextView
+                android:id="@+id/tvPowerEvent"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:textColor="@color/dd_muted"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvPowerAdmin"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="@string/dd_power_admin_line"
+                android:textColor="@color/dd_warn"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvPowerExact"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="@string/dd_power_exact_line"
+                android:textColor="@color/dd_warn"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/tvPowerBattery"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="@string/dd_power_battery_line"
+                android:textColor="@color/dd_warn"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/tvPhoneGps"
                 android:layout_width="wrap_content"
@@ -285,6 +328,48 @@
                     android:buttonTint="@color/dd_accent"
                     android:text="@string/connect_on_startup"
                     android:textColor="@color/dd_text" />
+
+                <!-- pc.21: the power modes, while connected (PowerMode); the PC asks for the same over the link -->
+                <LinearLayout
+                    android:id="@+id/llPowerRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone">
+
+                    <TextView style="@style/DD.Label" android:text="@string/dd_label_power" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <Button
+                            android:id="@+id/powerStandby"
+                            style="@style/DD.PowerButton"
+                            android:layout_marginEnd="8dp"
+                            android:text="@string/dd_power_standby" />
+
+                        <Button
+                            android:id="@+id/powerDeepSleep"
+                            style="@style/DD.PowerButton"
+                            android:layout_marginEnd="8dp"
+                            android:text="@string/dd_power_deep_sleep" />
+
+                        <Button
+                            android:id="@+id/powerWake"
+                            style="@style/DD.PowerButton"
+                            android:text="@string/dd_power_wake" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/dd_power_hint"
+                        android:textColor="@color/dd_muted"
+                        android:textSize="12sp" />
+                </LinearLayout>
             </LinearLayout>
         </ScrollView>
     </LinearLayout>

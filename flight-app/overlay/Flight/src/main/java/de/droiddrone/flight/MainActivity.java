@@ -17,7 +17,10 @@
  *  Modified for DRAUPNE Link: the Windows app's look (cards, status pill, status colours for a dark
  *  background), removing an earlier DroidDrone Flight, installing a newer build from inside the app, a touch lock
  *  for flying, and portrait as well as landscape, and Direct connection as the first-start connection mode.
- *  The connection logic is unchanged.
+ *  The connection logic is unchanged. pc.21: the power modes (PowerMode) on the screen - STANDBY / DEEP SLEEP /
+ *  WAKE buttons, the mode on the status card and the pill, the screen dimmed and allowed to go off in them, the
+ *  device admin / exact alarm / battery optimisation lines, and the app shown over the lock screen when the PC
+ *  wakes the phone (ACTION_WAKE).
  */
 
 package de.droiddrone.flight;
@@ -97,6 +100,15 @@ public class MainActivity extends Activity {
     private final Runnable unlockAfterHold = this::unlockTouches;
     private static final long UNLOCK_HOLD_MS = 2000;
     private static final String LOCKED_STATE = "touchLocked";
+    /** pc.21: the service's wake notification opens the app with this over the lock screen, screen on. */
+    public static final String ACTION_WAKE = "de.droiddrone.flight.pc.WAKE";
+    /** The screen is dimmed and may go off (standby, deep sleep); set once per change, not every second. */
+    private boolean powerLookLow;
+    /** DEEP SLEEP tapped, a prompt (device admin, exact alarms) in between: the sleep follows when it returns. */
+    private boolean sleepWhenBack;
+    private View llPowerRow;
+    private Button bStandby, bDeepSleep, bWake;
+    private TextView tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery;
 
     @Override
     protected void onCreate(Bundle savedInstanceState){
@@ -140,6 +152,21 @@ public class MainActivity extends Activity {
         tvUpdate = findViewById(R.id.tvUpdate);
         findViewById(R.id.lockScreen).setOnClickListener(v -> lockTouches());
         if (savedInstanceState != null && savedInstanceState.getBoolean(LOCKED_STATE)) lockTouches();
+        llPowerRow = findViewById(R.id.llPowerRow);
+        bStandby = findViewById(R.id.powerStandby);
+        bDeepSleep = findViewById(R.id.powerDeepSleep);
+        bWake = findViewById(R.id.powerWake);
+        bStandby.setOnClickListener(v -> PowerMode.request(PowerMode.STANDBY, 0, "the phone's STANDBY button"));
+        bDeepSleep.setOnClickListener(v -> deepSleepTapped());
+        bWake.setOnClickListener(v -> PowerMode.request(PowerMode.NORMAL, 0, "the phone's WAKE button"));
+        tvPowerEvent = findViewById(R.id.tvPowerEvent);
+        tvPowerAdmin = findViewById(R.id.tvPowerAdmin);
+        tvPowerAdmin.setOnClickListener(v -> askDeviceAdmin());
+        tvPowerExact = findViewById(R.id.tvPowerExact);
+        tvPowerExact.setOnClickListener(v -> askExactAlarms());
+        tvPowerBattery = findViewById(R.id.tvPowerBattery);
+        tvPowerBattery.setOnClickListener(v -> askNoBatteryOptimisation());
+        showOverLockScreen(getIntent());
         showOldDownloadsOnce();
         if (!updateChecked) {
             updateChecked = true;
@@ -211,6 +238,128 @@ public class MainActivity extends Activity {
         tvPill.setText(text);
         tvPill.setBackgroundColor(background);
         tvPill.setTextColor(foreground);
+    }
+
+    // ---- pc.21: the power modes on the screen ----
+
+    /**
+     * The mode on the status card (the network line, since the link is what the mode is about) and the pill, the
+     * buttons, the last event, and the three set-up lines. Called from updateUi every second.
+     */
+    private void updatePower(){
+        int mode = PowerMode.mode();
+        applyPowerLook(mode != PowerMode.NORMAL);
+        boolean running = DDService.isRunning;
+        llPowerRow.setVisibility(running ? View.VISIBLE : View.GONE);
+        bStandby.setEnabled(running && mode != PowerMode.STANDBY);
+        bDeepSleep.setEnabled(running && mode != PowerMode.DEEP_SLEEP);
+        bWake.setEnabled(running && mode != PowerMode.NORMAL);
+        String event = PowerMode.lastEvent();
+        tvPowerEvent.setVisibility(running && !event.isEmpty() ? View.VISIBLE : View.GONE);
+        tvPowerEvent.setText(event);
+        if (running) {
+            switch (mode) {
+                case PowerMode.STANDBY:
+                    tvNetworkStatus.setText(R.string.dd_status_standby);
+                    tvNetworkStatus.setTextColor(colorWarn);
+                    setPill(R.string.dd_pill_standby, getColor(R.color.dd_panel_2), colorWarn);
+                    break;
+                case PowerMode.DEEP_SLEEP:
+                    long next = PowerMode.nextCheckAt();
+                    if (PowerMode.isChecking()) {
+                        tvNetworkStatus.setText(R.string.dd_status_checking);
+                        setPill(R.string.dd_pill_checking, getColor(R.color.dd_panel_2), colorWarn);
+                    } else if (next != 0) {
+                        tvNetworkStatus.setText(getString(R.string.dd_status_sleeping, PowerMode.time(this, next)));
+                        setPill(R.string.dd_pill_sleeping, getColor(R.color.dd_panel_2), colorMuted);
+                    } else {
+                        tvNetworkStatus.setText(R.string.dd_status_sleep_soon);
+                        setPill(R.string.dd_pill_sleeping, getColor(R.color.dd_panel_2), colorMuted);
+                    }
+                    tvNetworkStatus.setTextColor(colorWarn);
+                    break;
+            }
+        }
+        boolean admin = PowerMode.isDeviceAdmin(this);
+        tvPowerAdmin.setVisibility(admin ? View.GONE : View.VISIBLE);
+        tvPowerExact.setVisibility(PowerMode.canExactAlarms(this) ? View.GONE : View.VISIBLE);
+        tvPowerBattery.setVisibility(PowerMode.ignoresBatteryOptimisation(this) ? View.GONE : View.VISIBLE);
+    }
+
+    /**
+     * In standby and deep sleep the screen is at its dimmest (the phone's battery is the drone's radio's) and may
+     * go off by itself; normal mode has it on and at the system's brightness - or the touch lock's.
+     */
+    private void applyPowerLook(boolean low){
+        if (low == powerLookLow) return;
+        powerLookLow = low;
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        lp.screenBrightness = low ? 0.01f : touchLock != null ? 0.05f : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        getWindow().setAttributes(lp);
+        main.setKeepScreenOn(!low);
+    }
+
+    /**
+     * DEEP SLEEP on the phone: the first time, the device admin prompt (so the screen can lock itself) and, on
+     * Android 12 and up, the exact alarm permission come first; the sleep follows when the app is back.
+     */
+    private void deepSleepTapped(){
+        android.content.SharedPreferences preferences = androidx.preference.PreferenceManager.getDefaultSharedPreferences(this);
+        if (!PowerMode.isDeviceAdmin(this) && !preferences.getBoolean(PowerMode.PREF_ADMIN_ASKED, false)) {
+            preferences.edit().putBoolean(PowerMode.PREF_ADMIN_ASKED, true).apply();
+            sleepWhenBack = true;
+            askDeviceAdmin();
+            return;
+        }
+        if (!PowerMode.canExactAlarms(this) && !preferences.getBoolean(PowerMode.PREF_EXACT_ALARM_ASKED, false)) {
+            preferences.edit().putBoolean(PowerMode.PREF_EXACT_ALARM_ASKED, true).apply();
+            sleepWhenBack = true;
+            askExactAlarms();
+            return;
+        }
+        PowerMode.request(PowerMode.DEEP_SLEEP, 0, "the phone's DEEP SLEEP button");
+    }
+
+    private void askDeviceAdmin(){
+        try {
+            startActivity(PowerMode.addDeviceAdminIntent(this));
+        } catch (Exception e) {
+            log("Cannot open the device admin prompt: " + e);
+            sleepWhenBack = false;
+        }
+    }
+
+    private void askExactAlarms(){
+        if (Build.VERSION.SDK_INT < 31) return;
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:" + getPackageName())));
+        } catch (Exception e) {
+            log("Cannot open the exact alarm setting: " + e);
+            sleepWhenBack = false;
+        }
+    }
+
+    private void askNoBatteryOptimisation(){
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName())));
+        } catch (Exception e) {
+            log("Cannot open the battery optimisation prompt: " + e);
+        }
+    }
+
+    /**
+     * Opened by the service's wake notification after a sleep check: over the lock screen, with the screen turned
+     * on - the pilot sees the phone is back without touching it. Only then: a plain start stays behind the lock.
+     */
+    private void showOverLockScreen(Intent intent){
+        if (intent == null || !ACTION_WAKE.equals(intent.getAction())) return;
+        log("Opened to wake the phone: over the lock screen");
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        } else {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+        }
     }
 
     /**
@@ -365,6 +514,7 @@ public class MainActivity extends Activity {
             etKey.setEnabled(true);
             cbConnectOnStartup.setEnabled(true);
         }
+        updatePower(); // after the lines above: the mode overwrites the network line and the pill
     }
 
     /**
@@ -616,6 +766,14 @@ public class MainActivity extends Activity {
         if (System.currentTimeMillis() - serviceSwitchedAt > 5000) serviceWantedRunning = DDService.isRunning;
         isPaused = false;
         main.setKeepScreenOn(true);
+        powerLookLow = false; // the line above undid it; updateUi dims again if the mode wants
+        if (sleepWhenBack) { // back from the device admin or exact alarm prompt after a DEEP SLEEP tap
+            sleepWhenBack = false;
+            deepSleepTapped();
+        } else if (PowerMode.isAsleep() || PowerMode.isChecking()) {
+            // the app opened (its notification tapped, or from the launcher) while the phone sleeps: that is a wake
+            PowerMode.request(PowerMode.NORMAL, 0, "the app was opened");
+        }
         updateUi();
         uiTimer = new Timer();
         TimerTask tt = new TimerTask() {
@@ -674,7 +832,7 @@ public class MainActivity extends Activity {
         });
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LOCKED); // a banking drone doesn't turn the screen
         WindowManager.LayoutParams lp = getWindow().getAttributes();
-        lp.screenBrightness = 0.05f;
+        lp.screenBrightness = powerLookLow ? 0.01f : 0.05f; // standby's dimmer setting stays
         getWindow().setAttributes(lp);
         touchLock.setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
@@ -696,7 +854,7 @@ public class MainActivity extends Activity {
         touchLock = null;
         unlockHold = null;
         WindowManager.LayoutParams lp = getWindow().getAttributes();
-        lp.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
+        lp.screenBrightness = powerLookLow ? 0.01f : WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE;
         getWindow().setAttributes(lp);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
         main.setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
@@ -781,6 +939,7 @@ public class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         handleUsbAttached(intent);
+        showOverLockScreen(intent);
     }
 
     private void handleUsbAttached(Intent intent) {
