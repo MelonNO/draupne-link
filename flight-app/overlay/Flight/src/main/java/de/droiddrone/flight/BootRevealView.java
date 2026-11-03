@@ -22,6 +22,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Path;
@@ -38,7 +39,7 @@ import android.widget.FrameLayout;
  * drawn from its SVG (a 512 x 512 design) in the icon's red.
  */
 final class BootRevealView extends View {
-    private static final long FADE_IN_MS = 560, HOLD_MS = 320, FLY_MS = 1560, OUT_MS = 560;
+    private static final long FADE_IN_MS = 560, HOLD_MS = 500, FLY_MS = 2400, OUT_MS = 560; // 4 s: the flight unhurried
     private static final long TOTAL_MS = FADE_IN_MS + HOLD_MS + FLY_MS + OUT_MS;
     private static final int RED = 0xFFFB1921, DARK = 0xFF121212, BLACK = 0xFF000000;
     private static final float BOX = 512f;
@@ -48,8 +49,8 @@ final class BootRevealView extends View {
     private final Path path = new Path();
     private final float density;
     private boolean done;
-    /** What the mark's pieces become: the D's bars the CONNECT button, its diagonals the LOCK SCREEN button's outline, the crosshair the pill. */
-    private View connect, lock, pill;
+    /** What the mark's pieces morph into: the D's bars the status and connection cards, its diagonals the CONNECT button; the crosshair flies to the pill. */
+    private View statusCard, connectionCard, connect, pill;
     private final int[] where = new int[2], here = new int[2];
     private final RectF rect = new RectF();
 
@@ -64,8 +65,9 @@ final class BootRevealView extends View {
         ViewGroup content = activity.findViewById(android.R.id.content);
         if (content == null) return;
         BootRevealView v = new BootRevealView(activity);
+        v.statusCard = activity.findViewById(R.id.cardStatus);
+        v.connectionCard = activity.findViewById(R.id.cardConnection);
         v.connect = activity.findViewById(R.id.startStopService);
-        v.lock = activity.findViewById(R.id.lockScreen);
         v.pill = activity.findViewById(R.id.tvPill);
         content.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         v.bringToFront();
@@ -116,8 +118,8 @@ final class BootRevealView extends View {
             float pieceAlpha = 1 - out;
             // the black lifts as the pieces fly
             canvas.drawColor(Color.argb(Math.round(255 * (1 - fly)), 0, 0, 0));
-            // the D comes apart: its bars become the CONNECT button, its diagonals the LOCK SCREEN button's outline;
-            // without those on screen yet, the link between the bars folds into the middle and goes
+            // the D morphs: its bars into the two cards, its diagonals into the CONNECT button; without those on
+            // screen yet, the link between the bars folds into the middle and goes
             if (!drawD(canvas, lx, ly, size, fly, pieceAlpha)) {
                 float linkSize = size * (1 - fly);
                 if (linkSize > 2) drawLink(canvas, (w - linkSize) / 2, (h - linkSize) / 2, linkSize, (1 - fly) * pieceAlpha);
@@ -156,49 +158,66 @@ final class BootRevealView extends View {
     }
 
     /**
-     * The D of the mark coming apart: its two bars (42 x 236 in the 512 box, at x 137 and 333) fly to the left and
-     * right halves of the CONNECT button and fill it red (the button is red: it is there when they fade); its two
-     * diagonals (the X clipped to the bars' box: (158,138)-(354,374) and its mirror) swing level and stretch into the
-     * LOCK SCREEN button's outline. false when those buttons aren't laid out yet.
+     * The D of the mark morphing into the big parts of the screen. Each of its four pieces is one shape all the way:
+     * a thick line cut by a box. In the mark a bar is a 42-wide line down its middle cut by the bar's own bounds, a
+     * diagonal is a 42-wide line of the X cut by the bars' box (exactly what drawLink draws, so the first frame is the
+     * mark itself); a card is a line across its middle as thick as the card, cut by the card's bounds. The line, its
+     * thickness and the cut slide from the one to the other, so the bars grow into the status and connection cards
+     * and the diagonals swing level and grow into the CONNECT button, and from a third of the way the solid piece
+     * opens up from the inside until only the card's thin outline is left: no new corners, no cut. false when the
+     * cards aren't laid out yet.
      */
     private boolean drawD(Canvas c, float lx, float ly, float size, float fly, float pieceAlpha) {
+        if (!rectOf(statusCard)) return false;
+        RectF status = new RectF(rect);
+        if (!rectOf(connectionCard)) return false;
+        RectF connection = new RectF(rect);
         if (!rectOf(connect)) return false;
-        float cl = rect.left, ct = rect.top, cw = rect.width(), ch = rect.height();
-        if (!rectOf(lock)) return false;
-        float ll = rect.left, lt = rect.top, lw = rect.width(), lh = rect.height();
+        RectF button = new RectF(rect);
         float s = size / BOX;
-        float travel = ease(Math.min(1f, fly / 0.85f));
+        float[][] from = { // x1, y1, x2, y2 of the line and the cut box, in the mark's units
+                {158, 138, 158, 374, 137, 138, 179, 374}, {354, 138, 354, 374, 333, 138, 375, 374},
+                {106.888f, 76.457f, 405.112f, 435.543f, 137, 138, 375, 374}, {106.888f, 435.543f, 405.112f, 76.457f, 137, 138, 375, 374}};
+        RectF[] targets = {status, connection, button, button};
+        float hollow = ease(Math.max(0, (fly - 0.3f) / 0.7f));
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(red(pieceAlpha));
-        float[][] bars = {{137, 138, 42, 236}, {333, 138, 42, 236}};
-        for (int i = 0; i < 2; i++) {
-            float tx = i == 0 ? cl : cl + cw / 2, tw = cw / 2;
-            float x = lerp(lx + bars[i][0] * s, tx, travel), y = lerp(ly + bars[i][1] * s, ct, travel);
-            float bw = lerp(bars[i][2] * s, tw, travel), bh = lerp(bars[i][3] * s, ch, travel);
-            rect.set(x, y, x + bw, y + bh);
-            c.drawRoundRect(rect, 4 * density * travel, 4 * density * travel, paint);
-        }
-        float[][] diagonals = {{158, 138, 354, 374}, {158, 374, 354, 138}};
-        float morph = ease(Math.max(0, (fly - 0.1f) / 0.9f));
-        for (int i = 0; i < 2; i++) {
-            float x1 = lx + diagonals[i][0] * s, y1 = ly + diagonals[i][1] * s, x2 = lx + diagonals[i][2] * s, y2 = ly + diagonals[i][3] * s;
-            float length0 = (float) Math.hypot(x2 - x1, y2 - y1), angle0 = (float) Math.toDegrees(Math.atan2(y2 - y1, x2 - x1));
-            float cx = lerp((x1 + x2) / 2, ll + lw / 2, morph), cy = lerp((y1 + y2) / 2, lt + lh / 2, morph);
-            float length = lerp(length0, lw, morph), thick = lerp(42 * s, lh, morph);
-            c.save();
-            c.translate(cx, cy);
-            c.rotate(angle0 * (1 - morph)); // level on arrival
-            rect.set(-length / 2, -thick / 2, length / 2, thick / 2);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(red((1 - morph) * pieceAlpha));
-            c.drawRoundRect(rect, 4 * density * morph, 4 * density * morph, paint); // solid while it is the mark's stroke
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(1.5f * density);
-            paint.setColor(red(morph * pieceAlpha));
-            c.drawRoundRect(rect, 4 * density * morph, 4 * density * morph, paint); // the button's outline as it arrives
-            c.restore();
+        for (int i = 0; i < 4; i++) {
+            RectF to = targets[i];
+            boolean bar = i < 2; // a bar stays upright: its line runs top to bottom of the card; a diagonal levels out
+            float[] f = from[i];
+            float x1 = lerp(lx + f[0] * s, bar ? to.centerX() : to.left, fly);
+            float y1 = lerp(ly + f[1] * s, bar ? to.top : to.centerY(), fly);
+            float x2 = lerp(lx + f[2] * s, bar ? to.centerX() : to.right, fly);
+            float y2 = lerp(ly + f[3] * s, bar ? to.bottom : to.centerY(), fly);
+            float width = lerp(42 * s, bar ? to.width() : to.height(), fly);
+            RectF cut = new RectF(lerp(lx + f[4] * s, to.left, fly), lerp(ly + f[5] * s, to.top, fly),
+                    lerp(lx + f[6] * s, to.right, fly), lerp(ly + f[7] * s, to.bottom, fly));
+            float wall = lerp(width / 2 + 1, 1.5f * density, hollow); // solid until it starts to open
+            Path piece = thick(x1, y1, x2, y2, width, cut);
+            if (width - 2 * wall > 0.5f) {
+                RectF in = new RectF(cut);
+                in.inset(wall, wall);
+                piece.op(thick(x1, y1, x2, y2, width - 2 * wall, in), Path.Op.DIFFERENCE);
+            }
+            c.drawPath(piece, paint);
         }
         return true;
+    }
+
+    /** A line this thick, cut by a box: the one shape every piece of the D is, in the mark and as a card. */
+    private static Path thick(float x1, float y1, float x2, float y2, float width, RectF cut) {
+        float len = (float) Math.hypot(x2 - x1, y2 - y1);
+        Path p = new Path();
+        p.addRect(-len / 2, -width / 2, len / 2, width / 2, Path.Direction.CW);
+        Matrix m = new Matrix();
+        m.postRotate((float) Math.toDegrees(Math.atan2(y2 - y1, x2 - x1)));
+        m.postTranslate((x1 + x2) / 2, (y1 + y2) / 2);
+        p.transform(m);
+        Path box = new Path();
+        box.addRect(cut, Path.Direction.CW);
+        p.op(box, Path.Op.INTERSECT);
+        return p;
     }
 
     private void drawAll(Canvas c, float x, float y, float size, float alpha) {

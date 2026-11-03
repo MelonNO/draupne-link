@@ -167,6 +167,8 @@ public class MainWindow extends JFrame {
     private JComponent linkCard;
     /** The header with MENU and its slide-out: the tour keeps it clear while it walks the menu. */
     private JComponent headerPanel;
+    /** The LOG card: the boot animation grows a piece of the mark into it. */
+    private JComponent logCard;
     /** The controller card's height while it folds or unfolds (MINIMIZE / EXPAND); -1 = its own. */
     private int controllerAnimHeight = -1;
     /** What the pilot chose; the sticks stay visible while the card folds, so their visibility doesn't say. */
@@ -248,14 +250,28 @@ public class MainWindow extends JFrame {
         MainWindow window = new MainWindow(config, configFile, service);
         BootReveal.onOpen(window, () -> window.videoView.getParent() == null ? null
                 : SwingUtilities.convertRectangle(window.videoView.getParent(), window.videoView.getBounds(), window.getRootPane().getLayeredPane()),
-                () -> window.boundsInPane(window.popOutButton, window.fullScreenButton),   // the D's bars: the video's two buttons
-                () -> window.boundsInPane(window.calibrateButton, window.rcCheckButton)); // its diagonals: CALIBRATE and RC CHECK
+                () -> window.boundsInPane(window.linkCard, window.logCard),       // the D's bars grow into the LINK and LOG cards
+                () -> window.boundsInPane(window.controllerCard));                // its diagonals into the controller card
         window.setVisible(true);
         SwingUtilities.invokeLater(window::reportLastUpdate);
         if (firstStart) {
             // the very first start only: walk through the whole setup; after that it opens from SETUP
             window.save(Map.of(SetupWizard.OFFERED_KEY, "true"));
             SwingUtilities.invokeLater(() -> SetupWizard.open(window));
+        } else if (!"true".equalsIgnoreCase(config.getString(Tour.OFFERED_KEY))) {
+            // a PC set up before there was a tour (an update brought it): offered once, after the boot animation;
+            // a PC still in its first-time setup gets the offer when that finishes
+            if ("true".equalsIgnoreCase(config.getString(SetupWizard.DONE_KEY))) {
+                javax.swing.Timer later = new javax.swing.Timer(500, e -> {
+                    if (BootReveal.isShowingOn(window)) return; // not over the animation: again in half a second
+                    ((javax.swing.Timer) e.getSource()).stop();
+                    if (window.isShowing()) Tour.offer(window);
+                });
+                later.setInitialDelay(1000);
+                later.start();
+            } else {
+                window.save(Map.of(Tour.OFFERED_KEY, "true"));
+            }
         }
     }
 
@@ -319,13 +335,13 @@ public class MainWindow extends JFrame {
         });
         new Timer(33, e -> refresh()).start();
         phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, java.util.concurrent.TimeUnit.SECONDS);
-        // at once on opening, then every 6 hours; its own thread, so a slow GitHub never holds up the phone check
+        // at once on opening, then every 15 minutes; its own thread, so a slow GitHub never holds up the phone check
         java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "updateCheck");
             t.setDaemon(true);
             t.setPriority(Thread.MIN_PRIORITY);
             return t;
-        }).scheduleWithFixedDelay(this::checkForUpdate, 0, 6 * 3600, java.util.concurrent.TimeUnit.SECONDS);
+        }).scheduleWithFixedDelay(this::checkForUpdate, 0, 15 * 60, java.util.concurrent.TimeUnit.SECONDS); // a release made while the app runs shows within a quarter of an hour
         setMinimumSize(new Dimension(1100, 760));
         // where it was last time (screen, size, maximized); the first time maximized, the size below is what un-maximizing gives
         if (!mainBounds.restore(config.getString(MAIN_BOUNDS_KEY))) {
@@ -671,6 +687,7 @@ public class MainWindow extends JFrame {
         scroll.setBorder(BorderFactory.createEmptyBorder());
         logCard.add(scroll, BorderLayout.CENTER);
         column.add(logCard, BorderLayout.CENTER);
+        this.logCard = logCard; // the boot animation grows a piece of the mark into it
         return column;
     }
 

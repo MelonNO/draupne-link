@@ -28,7 +28,7 @@ import java.util.function.Supplier;
  * The tour of the window, offered once the first-time setup is finished and under SETUP any time: one control at a
  * time is lit while the rest dims (and is dead to the mouse), with a notice in the style of the locked-button notices
  * saying what it does (NEXT / EXIT TOUR). It walks the main window (MENU and each of its slide-out buttons, the
- * controller card's fold, the map's place), then opens the map window for the map itself: pins, what the cursor
+ * controller card's fold, pop-out video, full screen, the map's place), then opens the map window for the map itself: pins, what the cursor
  * shows, the drone, the map picture and coordinate format, DOWNLOAD AREA. The pilot learns by doing: a step at a
  * button or a choice keeps NEXT locked ("Press it") until that control was pressed. A step whose control isn't on
  * screen (UPDATE with no update known) is skipped; a window closed under the tour ends it.
@@ -79,6 +79,12 @@ final class Tour {
                 main::tourUpdateButton, openMenu, false, header));
         steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card away for more video, and brings it back. The sticks "
                 + "and switches keep working either way. Press it.", main::tourMinimizeButton, null));
+        // the two video buttons are explained, not pressed: pop-out moves the picture to a window of its own and
+        // full screen covers the window, both over the tour
+        steps.add(new Step("POP OUT VIDEO", "The picture in a window of its own, for a second screen; the same button (VIDEO BACK) "
+                + "puts it back. A double-click on the video shows it alone. Try it after the tour.", main::tourPopOutButton, null, false));
+        steps.add(new Step("FULL SCREEN", "The picture fills the whole screen (F11 too). Esc or a double-click brings the window back. "
+                + "Try it after the tour.", main::tourFullScreenButton, null, false));
         steps.add(new Step("THE LINK CARD", "CONNECT, and while connected STANDBY, DEEP SLEEP and WAKE: the phone saves its battery "
                 + "before take-off and the PC wakes it. In flight the minimap takes this place, with POP OUT MAP under it. F3 opens "
                 + "the map window any time - as now.", main::tourLinkCard, null, false));
@@ -87,7 +93,7 @@ final class Tour {
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
                 + "drone in the middle; Home jumps to the launch point, End to the drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow, true, map));
         steps.add(new Step("PINS", "Right-click the map to drop a pin (Alpha, Bravo ...), or to rename or remove one. PINS lists "
-                + "them all. Each pin shows its distance and bearing from the drone. The three here are examples; they go when the tour ends.",
+                + "them all: press it. Each pin shows its distance and bearing from the drone. The three here are examples; they go when the tour ends.",
                 () -> main.mapWindow().tourPins(), () -> {
                     main.mapWindow().map().showExamplePins(true);
                     examplePins = true;
@@ -102,7 +108,8 @@ final class Tour {
         steps.add(new Step("COORDINATES", "The coordinate system for the cursor, the drone and the pins: degrees, UTM or MGRS. "
                 + "Change it here.", () -> main.mapWindow().tourFormat(), null));
         steps.add(new Step("OFFLINE MAPS", "DOWNLOAD AREA saves the map for flying without internet: this view, or a box you draw "
-                + "with SELECT WITH CURSOR (or Alt + drag). Every map type and zoom level, one START.", () -> main.mapWindow().tourDownload(), null));
+                + "with SELECT WITH CURSOR (or Alt + drag). Every map type and zoom level, one START. Not now: after the tour.",
+                () -> main.mapWindow().tourDownload(), null, false)); // explained, not pressed: a download is for later
         // the last step is back in the main window: it comes to the front over the map window by itself
         Runnable backToMain = () -> {
             main.toFront();
@@ -113,8 +120,12 @@ final class Tour {
                 + "the phone are ready.", main::tourMenuButton, backToMain, false));
     }
 
+    /** Set once the tour has been offered on this PC: after the first-time setup, or on the first start after an update brought it. */
+    static final String OFFERED_KEY = "tour.offered";
+
     /** Asks first; the tour runs on yes. */
     static void offer(MainWindow main) {
+        main.save(java.util.Map.of(OFFERED_KEY, "true"));
         Object[] options = {"Yes", "Not now"};
         int answer = JOptionPane.showOptionDialog(main, "Take a short tour of the window?\nMENU, the video, the map and the offline maps, one by one.",
                 "Tour", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);

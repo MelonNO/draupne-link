@@ -179,7 +179,7 @@ DRAUPNE Link replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s *
 
 ### The phone app
 
-The setup installs **DRAUPNE Flight** (2.3.0-pc.22): upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
+The setup installs **DRAUPNE Flight** (2.3.0-pc.23): upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
 - **Every flight controller:** its USB list covers any flight controller with native USB (STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip it can drive (CH340/CH341, CP210x, FTDI, PL2303). Android can then remember the USB permission, and the phone reconnects to the flight controller without asking. Upstream only lists a few IDs, so AT32 boards, for example, needed a tap after every reconnect.
 - **Sticks reach the flight controller on time:** upstream reads from the flight controller in a way that, on many phones, holds every USB write for up to 0.1 s, which makes Betaflight flag RXLOSS and block arming; this build reads asynchronously. The newest sticks also always go first, never queued behind a slow request; after a USB glitch it reconnects at once; and the phone reports what it sees into the PC's link log.
 - **Video that survives weak 4G:** a steady 30 fps, packets paced instead of sent in bursts, key frames every 2 s and whenever the PC asks, the PC deciding the bitrate, and the bad coverage mode (640x360, key frames twice, a parity packet after every frame). The video runs on a thread of its own, so camera trouble can never hold up the sticks.

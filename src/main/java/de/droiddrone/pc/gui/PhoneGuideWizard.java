@@ -43,7 +43,8 @@ final class PhoneGuideWizard {
                 new PhoneTailscalePage(main),
                 new FlightAppPage(main),
                 new PhoneSettingsPage(main),
-                new ConnectPage(main));
+                new ConnectPage(main),
+                new SleepPage());
     }
 
     static void open(MainWindow main) {
@@ -376,6 +377,141 @@ final class PhoneGuideWizard {
     }
 
     /**
+     * The sleep buttons, shown and tried: a working copy of the LINK card's STANDBY / DEEP SLEEP / WAKE row, which
+     * answers each press the way the real one does (the status line, the countdown to the sleeping phone's next
+     * check) without sending anything to the phone. After the connect step, so the pilot has seen the real card.
+     */
+    static final class SleepPage extends Page {
+        private static final int STANDBY = 1, DEEP_SLEEP = 2;
+
+        private final javax.swing.JButton standby = Theme.secondaryButton("Standby");
+        private final javax.swing.JButton deepSleep = Theme.secondaryButton("Deep sleep");
+        private final javax.swing.JButton wake = Theme.primaryButton("Wake");
+        private final JComboBox<String> checkEvery = new JComboBox<>(new String[]{"1 min", "2 min", "5 min"});
+        private final WrappingText status = WrappingText.fitting(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
+        /** What the pretend phone is in: 0 awake, STANDBY or DEEP_SLEEP; wakeSent while WAKE is on its way. */
+        private int mode;
+        private boolean wakeSent;
+        /** When the pretend phone next listens (deep sleep) or has its picture back (standby). */
+        private long nextAt;
+
+        @Override
+        String title() {
+            return "Sleep before take-off";
+        }
+
+        @Override
+        String hint() {
+            return "Waiting with the drone ready drains the phone. The LINK card has three buttons for that; "
+                    + "this is a working copy of them. Press each and watch the line under them. Nothing reaches the phone from here.";
+        }
+
+        @Override
+        JComponent build() {
+            JPanel col = WizardDialog.column();
+            // the copy: the same buttons in the same places as on the LINK card
+            JPanel card = Theme.card(new java.awt.GridBagLayout());
+            java.awt.GridBagConstraints c = new java.awt.GridBagConstraints();
+            c.gridx = 0;
+            c.fill = java.awt.GridBagConstraints.HORIZONTAL;
+            c.weightx = 1;
+            c.insets = new java.awt.Insets(0, 0, 6, 0);
+            card.add(Theme.label("PHONE POWER", Theme.headingFont(11f), Theme.MUTED), c);
+            JPanel buttons = new JPanel(new GridLayout(1, 2, 6, 0));
+            buttons.setOpaque(false);
+            buttons.add(standby);
+            buttons.add(deepSleep);
+            card.add(buttons, c);
+            card.add(wake, c);
+            JPanel interval = new JPanel(new BorderLayout(8, 0));
+            interval.setOpaque(false);
+            interval.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
+            TacticalCombo.install(checkEvery);
+            checkEvery.setSelectedIndex(2);
+            interval.add(checkEvery, BorderLayout.CENTER);
+            card.add(interval, c);
+            c.insets = new java.awt.Insets(0, 0, 0, 0);
+            card.add(status, c);
+            JPanel holder = new JPanel(new BorderLayout()) {
+                @Override
+                public java.awt.Dimension getPreferredSize() { // the card's width, and the height its status line needs now
+                    return new java.awt.Dimension(340, card.getPreferredSize().height);
+                }
+            };
+            holder.setOpaque(false);
+            holder.add(card, BorderLayout.CENTER);
+            JPanel left = new JPanel(new BorderLayout()); // the card at its own width, on the left
+            left.setOpaque(false);
+            left.add(holder, BorderLayout.WEST);
+            WizardDialog.addRow(col, left);
+            standby.setToolTipText("The phone stops its camera, slows its GPS and telemetry and dims its screen; the link stays");
+            deepSleep.setToolTipText("The phone drops the link, locks its screen and sleeps; it listens for this PC 20 s every CHECK EVERY minutes");
+            wake.setToolTipText("Back to normal: the camera, the GPS and the sticks");
+            standby.addActionListener(e -> set(STANDBY));
+            deepSleep.addActionListener(e -> set(DEEP_SLEEP));
+            wake.addActionListener(e -> sendWake());
+            checkEvery.addActionListener(e -> {
+                if (mode == DEEP_SLEEP) nextAt = System.currentTimeMillis() + minutes() * 60_000L;
+                refresh();
+            });
+            WizardDialog.addRow(col, WizardDialog.paragraph("<b>STANDBY</b> - the phone stops its camera, slows its GPS and telemetry and dims "
+                    + "its screen; the link stays. <b>WAKE</b> brings the picture back in about two seconds."));
+            WizardDialog.addRow(col, WizardDialog.paragraph("<b>DEEP SLEEP</b> - the phone drops the link, locks its screen and sleeps. Every "
+                    + "<b>CHECK EVERY</b> minutes it listens 20 s for this PC and reports its battery. <b>WAKE</b> reaches it at its next check and "
+                    + "brings it back with nobody touching the phone. On the phone, holding <b>HOLD TO WAKE</b> for two seconds wakes it too."));
+            WizardDialog.addRow(col, WizardDialog.paragraph("Neither works while the drone is armed: the two buttons fold away as it arms and "
+                    + "come back when it is disarmed. The real buttons are on the LINK card while the phone is connected."));
+            set(0);
+            return col;
+        }
+
+        private int minutes() {
+            return new int[]{1, 2, 5}[Math.max(0, checkEvery.getSelectedIndex())];
+        }
+
+        private void set(int newMode) {
+            mode = newMode;
+            wakeSent = false;
+            nextAt = mode == DEEP_SLEEP ? System.currentTimeMillis() + minutes() * 60_000L : 0;
+            refresh();
+        }
+
+        private void sendWake() {
+            if (mode == 0) return;
+            wakeSent = true;
+            if (mode == STANDBY) nextAt = System.currentTimeMillis() + 2000;
+            refresh();
+        }
+
+        @Override
+        void refresh() {
+            long now = System.currentTimeMillis();
+            if (wakeSent && now >= nextAt) set(0); // the pretend phone took the WAKE
+            if (mode == DEEP_SLEEP && !wakeSent && now >= nextAt) nextAt = now + minutes() * 60_000L; // a check went by: it sleeps on
+            standby.setEnabled(mode == 0);
+            deepSleep.setEnabled(mode == 0);
+            wake.setEnabled(mode != 0 && !wakeSent);
+            long left = Math.max(0, (nextAt - now + 999) / 1000);
+            String in = String.format(java.util.Locale.ROOT, "%d:%02d", left / 60, left % 60);
+            String text;
+            if (mode == 0) {
+                text = "AWAKE - the phone's camera, GPS and sticks are running. Press STANDBY or DEEP SLEEP.";
+            } else if (mode == STANDBY) {
+                text = wakeSent ? "WAKE sent - the phone's camera starts; the picture is back in about two seconds."
+                        : "STANDBY - the phone's camera is off and its screen dim; the link stays. WAKE brings the picture back.";
+            } else {
+                text = wakeSent ? "WAKE sent - the phone takes it at its next check, in " + in + ", then its camera starts."
+                        : "DEEP SLEEP - heard 0 s ago, battery 84 %. The phone checks for this PC every " + minutes() + " min; next check in "
+                        + in + ". WAKE brings it back.";
+            }
+            if (!text.equals(status.getText())) {
+                status.setText(text);
+                status.revalidate(); // the card grows or shrinks with the line
+            }
+        }
+    }
+
+    /**
      * The Flight app's settings, with the live link to it right below: the connection is held open while this step is
      * shown, so the pilot sees it turn green the moment CONNECT is tapped on the phone. No stick commands are sent.
      */
@@ -452,10 +588,6 @@ final class PhoneGuideWizard {
                     + "tick <b>Always allow</b> (or <b>Use by default</b>) and tap <b>OK</b>. Then it reconnects by itself if the cable slips."));
             WizardDialog.addRow(col, link);
             WizardDialog.addRow(col, fc);
-            WizardDialog.addRow(col, WizardDialog.paragraph("<b>Waiting for take-off?</b> On the LINK card, <b>STANDBY</b> stops the phone's camera "
-                    + "and dims its screen (back in two seconds with <b>WAKE</b>); <b>DEEP SLEEP</b> locks the phone and lets it sleep, checking "
-                    + "for this PC every few minutes, so WAKE brings it back at its next check with nobody touching the phone. "
-                    + "Neither works while the drone is armed. On the phone, holding <b>HOLD TO WAKE</b> wakes it too."));
             camera.addAction("Flip", this::flip).setToolTipText("Turn the picture 180 degrees: for a phone mounted upside down. Kept as VIDEO > Camera upside down");
             WizardDialog.addRow(col, camera);
             WizardDialog.addRow(col, latency);

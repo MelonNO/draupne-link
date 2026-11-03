@@ -281,11 +281,27 @@ class MapView extends JComponent {
         repaint();
     }
 
-    private List<Pins.Pin> allPins() {
+    /** Every pin drawn: the saved ones and, during the tour, the example pins (the pin manager lists these too). */
+    List<Pins.Pin> allPins() {
         if (examplePins.isEmpty()) return pins.list();
         List<Pins.Pin> all = new java.util.ArrayList<>(pins.list());
         all.addAll(examplePins);
         return all;
+    }
+
+    boolean isExamplePin(Pins.Pin pin) {
+        return examplePins.contains(pin);
+    }
+
+    /** The pin manager renamed or removed an example pin (null name = removed): it goes along, unsaved as ever. */
+    void changeExamplePin(Pins.Pin pin, String name) {
+        List<Pins.Pin> now = new java.util.ArrayList<>(examplePins);
+        int i = now.indexOf(pin);
+        if (i < 0) return;
+        if (name == null) now.remove(i);
+        else now.set(i, new Pins.Pin(name.trim(), pin.lat(), pin.lon()));
+        examplePins = now;
+        repaint();
     }
 
     void setPins(Pins pins) {

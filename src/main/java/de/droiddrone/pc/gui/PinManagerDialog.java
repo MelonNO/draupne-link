@@ -101,7 +101,8 @@ final class PinManagerDialog extends JDialog {
             if (p == null) return;
             String name = (String) JOptionPane.showInputDialog(this, "New name", "Rename " + p.name(), JOptionPane.PLAIN_MESSAGE, null, null, p.name());
             if (name != null && !name.isBlank()) {
-                pins.rename(p, name);
+                if (map.isExamplePin(p)) map.changeExamplePin(p, name);
+                else pins.rename(p, name);
                 refresh();
             }
         });
@@ -110,7 +111,8 @@ final class PinManagerDialog extends JDialog {
         remove.addActionListener(e -> {
             Pins.Pin p = list.getSelectedValue();
             if (p == null) return;
-            pins.remove(p);
+            if (map.isExamplePin(p)) map.changeExamplePin(p, null);
+            else pins.remove(p);
             refresh();
         });
         buttons.add(remove);
@@ -220,7 +222,7 @@ final class PinManagerDialog extends JDialog {
     }
 
     private void refresh() {
-        List<Pins.Pin> now = pins.list();
+        List<Pins.Pin> now = map.allPins(); // the tour's example pins too, while they are on the map
         Pins.Pin selected = list.getSelectedValue();
         if (!now.equals(shown)) {
             shown = now;

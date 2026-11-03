@@ -84,7 +84,9 @@ public class MainActivity extends Activity {
     private TextView tvOldApp;
     private TextView tvUpdate;
     /** Once per app start: is there a newer build on GitHub? */
-    private static boolean updateChecked;
+    /** When GitHub was last asked for a newer app: again on each resume after UPDATE_CHECK_MS, so a release made while the app is open shows. */
+    private static long updateCheckedAt;
+    private static final long UPDATE_CHECK_MS = 10 * 60_000L;
     /** UPDATE is downloading or handing over to Android's installer: a second tap does nothing. */
     private boolean updating;
     private static final String OLD_DOWNLOADS_NOTED = "oldDownloadsNoted";
@@ -186,17 +188,7 @@ public class MainActivity extends Activity {
         tvPowerBattery.setOnClickListener(v -> askNoBatteryOptimisation());
         showOverLockScreen(getIntent());
         showOldDownloadsOnce();
-        if (!updateChecked) {
-            updateChecked = true;
-            String current = versionName;
-            Thread t = new Thread(() -> {
-                AppUpdater.cleanUp(getApplicationContext()); // an update cut short
-                UpdateCheck.Found found = UpdateCheck.newerThan(current);
-                if (found != null) runOnUiThread(() -> showUpdate(found));
-            }, "updateCheck");
-            t.setDaemon(true);
-            t.start();
-        }
+        checkForUpdate();
         llIp = findViewById(R.id.llIp);
         colorOk = getColor(R.color.dd_ok);
         colorWarn = getColor(R.color.dd_warn);
@@ -540,6 +532,21 @@ public class MainActivity extends Activity {
     }
 
     /** A newer build is on GitHub: say so; a tap installs it from inside the app ({@link AppUpdater}). */
+    /** Asks GitHub for a newer app, at most every UPDATE_CHECK_MS; the yellow line shows when there is one. */
+    private void checkForUpdate(){
+        long now = System.currentTimeMillis();
+        if (updateCheckedAt != 0 && now - updateCheckedAt < UPDATE_CHECK_MS) return;
+        updateCheckedAt = now;
+        String current = versionName;
+        Thread t = new Thread(() -> {
+            AppUpdater.cleanUp(getApplicationContext()); // an update cut short
+            UpdateCheck.Found found = UpdateCheck.newerThan(current);
+            if (found != null) runOnUiThread(() -> showUpdate(found));
+        }, "updateCheck");
+        t.setDaemon(true);
+        t.start();
+    }
+
     private void showUpdate(UpdateCheck.Found found){
         tvUpdate.setText(getString(R.string.dd_update, found.version));
         tvUpdate.setVisibility(View.VISIBLE);
@@ -766,6 +773,7 @@ public class MainActivity extends Activity {
     protected void onResume(){
         super.onResume();
         checkOldApp();
+        checkForUpdate();
         if (System.currentTimeMillis() - serviceSwitchedAt > 5000) serviceWantedRunning = DDService.isRunning;
         isPaused = false;
         main.setKeepScreenOn(true);

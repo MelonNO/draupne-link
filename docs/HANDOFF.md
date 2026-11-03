@@ -4,7 +4,35 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.29)
+## Where things stand (2026-11-03, 1.0.30)
+
+- **1.0.30 (pilot's fifth round), phone app pc.23:** the boot animation is a morph. `BootReveal.paintD` /
+  `BootRevealView.drawD`: each of the D's four pieces is a thick line cut by a box, in the mark (a bar: a 42-wide
+  line down its middle cut by its bounds; a diagonal: the X's line cut by the bars' box, exactly what `Logo.paintLink`
+  / `drawLink` draws, so the first fly frame is the mark) and as a card (a line across the card's middle as thick
+  as the card, cut by the card's bounds); line, thickness and cut lerp, and from fly 0.3 the piece is hollowed (an
+  inner line cut by the inset box subtracted: `Area.subtract` / `Path.op DIFFERENCE`) down to a 1.5 px wall. Targets:
+  PC LINK + LOG cards (bars) and the controller card (both diagonals); phone the status + connection cards and the
+  CONNECT button. 4 s in all (fly 2.4 s). The PC's `bottomTargets` may be one card (the `>= 1` check: it was `>= 2`,
+  which silently fell back to the old fold - the first cards version never ran). Checked off screen (build/shot/BootShot).
+- **1.0.30:** update checks every 15 min on the PC (`MainWindow`, `scheduleWithFixedDelay`) and every 10 min on
+  the phone (`MainActivity.checkForUpdate` from onCreate and onResume, `updateCheckedAt`) - the pilot saw no update
+  because the PC asked every 6 h and the phone once per process.
+- **1.0.30, guide:** the connect step talks about connecting only; `PhoneGuideWizard.SleepPage` ("Sleep before
+  take-off", section CONNECT, last in both Phone setup and the first-time setup) is a working copy of the LINK
+  card's power row (the same `Theme` buttons, CHECK EVERY combo, status line) whose `refresh()` (twice a second
+  from `WizardDialog`) plays STANDBY / DEEP SLEEP / WAKE: the status text and a countdown to the pretend phone's
+  next check; nothing is sent. Painted off screen (build/shot/SleepPageShot).
+- **1.0.30, tour:** POP OUT VIDEO and FULL SCREEN steps are back after MINIMIZE / EXPAND, `press=false` (pressing
+  would pop the video out or cover the window over the tour); DOWNLOAD AREA `press=false`; `MapView.allPins` is
+  what `PinManagerDialog.refresh` lists, so the example pins are in PINS too (`isExamplePin` / `changeExamplePin`
+  for rename and remove there; never saved). `TacticalCombo.Ghost` is added to POPUP_LAYER at position 0 (it was
+  DRAG_LAYER, below the tour notice in the same layer: the wipe played behind the notice and the real menu, in
+  POPUP_LAYER, then jumped in front). `Tour.OFFERED_KEY` ("tour.offered"): `Tour.offer` sets it; `MainWindow.open`
+  offers the tour once, after the boot animation, on a PC with `setup.done` but no `tour.offered` (a PC set up
+  before 1.0.26 had the tour; a PC still without setup gets it from the wizard's finish and the key is just set).
+- **Not committed by the repo:** two stray files in the repo root, `droiddrone-pc.properties` (a copy of the
+  defaults from 2026-11-02) and `never-written.properties` (2026-11-03): not from this work, left alone, not added.
 
 - **Released:** DRAUPNE Link **1.0.29** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.22**: the 1.0.29 bullets
   below (the sleep check's hello, the phone's hold-to-wake and mode line, the quiet notification, the folding sleep

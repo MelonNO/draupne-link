@@ -23,16 +23,16 @@ import java.util.function.Supplier;
  * 3 s; a click or key skips it. Drawn on the window's layered pane over everything, taking the mouse meanwhile.
  */
 final class BootReveal extends JComponent {
-    private static final long FADE_IN_MS = 560, HOLD_MS = 320, FLY_MS = 1560, OUT_MS = 560; // 3 s in all
+    private static final long FADE_IN_MS = 560, HOLD_MS = 500, FLY_MS = 2400, OUT_MS = 560; // 4 s in all: the flight unhurried
     private static final long TOTAL_MS = FADE_IN_MS + HOLD_MS + FLY_MS + OUT_MS;
     /** The brackets' size on arrival (the card borders' brackets are about this big). */
     private static final double CORNER_SIZE = 150;
 
     private final Supplier<Rectangle> videoBounds;
     /**
-     * Where the mark's "D" goes as it comes apart: its two bars to the two controls on the right (the video's pop-out
-     * and full-screen buttons), its two diagonals to the two at the bottom (CALIBRATE and RC CHECK), each ending the
-     * size and shape of the control it becomes; null = the D folds away in the middle as before.
+     * What the mark's "D" morphs into: its two bars the two big cards on the left (LINK and LOG), its two diagonals
+     * the card at the bottom (the controller), each piece growing into the card's outline; null = the D folds away
+     * in the middle as before.
      */
     private final Supplier<Rectangle[]> rightTargets, bottomTargets;
     private final Timer timer = new Timer(15, e -> tick());
@@ -73,7 +73,7 @@ final class BootReveal extends JComponent {
         onOpen(window, videoBounds, null, null);
     }
 
-    /** @param rightTargets  two controls on the right the D's bars become; bottomTargets two at the bottom for its diagonals */
+    /** @param rightTargets  the two cards on the left the D's bars become; bottomTargets the card(s) at the bottom for its diagonals */
     static void onOpen(JFrame window, Supplier<Rectangle> videoBounds, Supplier<Rectangle[]> rightTargets, Supplier<Rectangle[]> bottomTargets) {
         BootReveal reveal = new BootReveal(videoBounds, rightTargets, bottomTargets);
         // the cover is the root pane's glass pane: the root pane's own layout sizes it with the window on every
@@ -158,11 +158,11 @@ final class BootReveal extends JComponent {
             g.fillRect(0, 0, w, h);
             g.setComposite(AlphaComposite.SrcOver);
 
-            // the D comes apart: its bars to the controls on the right, its diagonals to the ones at the bottom -
+            // the D comes apart: its bars to the big cards on the left, its diagonals to the one at the bottom -
             // or, without targets, the link between the bars folds into the middle and goes
             Rectangle[] right = rightTargets == null ? null : rightTargets.get();
             Rectangle[] bottom = bottomTargets == null ? null : bottomTargets.get();
-            if (right != null && bottom != null && right.length >= 2 && bottom.length >= 2) {
+            if (right != null && bottom != null && right.length >= 2 && bottom.length >= 1) {
                 paintD(g, lx, ly, size, fly, pieceAlpha, right, bottom);
             } else {
                 double linkSize = size * (1 - fly);
@@ -206,53 +206,57 @@ final class BootReveal extends JComponent {
     }
 
     /**
-     * The D of the mark coming apart. Its two bars (42 x 236 in the mark's 512 box, at x 137 and 333) fly to the two
-     * controls on the right and shrink to their size, filled red to the end, then fade over the real buttons. Its two
-     * diagonals (the X between the bars, clipped to the bars' box: from (158,138) to (354,374) and its mirror) swing
-     * level and stretch into the outlines of the two controls at the bottom: filled at first, an outline on arrival.
+     * The D of the mark morphing into the big parts of the window. Each of its four pieces is one shape all the way:
+     * a thick line cut by a box. In the mark a bar is a 42-wide line down its middle cut by the bar's own bounds, a
+     * diagonal is a 42-wide line of the X cut by the bars' box (exactly what Logo.paintLink draws, so the first frame
+     * is the mark itself); a card is a line across its middle as thick as the card, cut by the card's bounds. The line,
+     * its thickness and the cut slide from the one to the other, so the bars grow leftwards into the LINK and LOG
+     * cards and the diagonals swing level and grow into the controller card, and from a third of the way the solid
+     * piece opens up from the inside until only the card's thin outline is left: no new corners, no cut.
      */
-    private void paintD(Graphics2D g, double lx, double ly, double size, double fly, float pieceAlpha, Rectangle[] right, Rectangle[] bottom) {
+    private void paintD(Graphics2D g, double lx, double ly, double size, double fly, float pieceAlpha, Rectangle[] left, Rectangle[] bottom) {
         double s = size / Logo.BOX;
-        double travel = ease(Math.min(1, fly / 0.85));
-        double[][] bars = {{137, 138, 42, 236}, {333, 138, 42, 236}};
-        for (int i = 0; i < 2; i++) {
-            Rectangle to = right[i];
-            double x = lerp(lx + bars[i][0] * s, to.x, travel), y = lerp(ly + bars[i][1] * s, to.y, travel);
-            double bw = lerp(bars[i][2] * s, to.width, travel), bh = lerp(bars[i][3] * s, to.height, travel);
-            Graphics2D c = (Graphics2D) g.create();
-            try {
-                c.setComposite(AlphaComposite.SrcOver.derive(pieceAlpha));
-                c.setColor(Logo.RED);
-                double arc = 6 * travel;
-                c.fill(new java.awt.geom.RoundRectangle2D.Double(x, y, bw, bh, arc, arc));
-            } finally {
-                c.dispose();
+        double[][] from = { // x1, y1, x2, y2 of the line and the cut box, in the mark's units
+                {158, 138, 158, 374, 137, 138, 179, 374}, {354, 138, 354, 374, 333, 138, 375, 374},
+                {106.888, 76.457, 405.112, 435.543, 137, 138, 375, 374}, {106.888, 435.543, 405.112, 76.457, 137, 138, 375, 374}};
+        Rectangle[] targets = {left[0], left[1], bottom[0], bottom.length > 1 ? bottom[1] : bottom[0]};
+        double hollow = ease(Math.max(0, (fly - 0.3) / 0.7));
+        Graphics2D c = (Graphics2D) g.create();
+        try {
+            c.setColor(Logo.RED);
+            c.setComposite(AlphaComposite.SrcOver.derive(pieceAlpha));
+            for (int i = 0; i < 4; i++) {
+                Rectangle to = targets[i];
+                boolean bar = i < 2; // a bar stays upright: its line runs top to bottom of the card; a diagonal levels out
+                double[] f = from[i];
+                double x1 = lerp(lx + f[0] * s, bar ? to.getCenterX() : to.getMinX(), fly);
+                double y1 = lerp(ly + f[1] * s, bar ? to.getMinY() : to.getCenterY(), fly);
+                double x2 = lerp(lx + f[2] * s, bar ? to.getCenterX() : to.getMaxX(), fly);
+                double y2 = lerp(ly + f[3] * s, bar ? to.getMaxY() : to.getCenterY(), fly);
+                double width = lerp(42 * s, bar ? to.width : to.height, fly);
+                java.awt.geom.Rectangle2D cut = new java.awt.geom.Rectangle2D.Double(
+                        lerp(lx + f[4] * s, to.getMinX(), fly), lerp(ly + f[5] * s, to.getMinY(), fly),
+                        lerp((f[6] - f[4]) * s, to.width, fly), lerp((f[7] - f[5]) * s, to.height, fly));
+                double wall = lerp(width / 2 + 1, 1.5, hollow); // solid until it starts to open
+                java.awt.geom.Area piece = thick(x1, y1, x2, y2, width, cut);
+                if (width - 2 * wall > 0.5) {
+                    java.awt.geom.Rectangle2D in = new java.awt.geom.Rectangle2D.Double(
+                            cut.getX() + wall, cut.getY() + wall, cut.getWidth() - 2 * wall, cut.getHeight() - 2 * wall);
+                    piece.subtract(thick(x1, y1, x2, y2, width - 2 * wall, in));
+                }
+                c.fill(piece);
             }
+        } finally {
+            c.dispose();
         }
-        double[][] diagonals = {{158, 138, 354, 374}, {158, 374, 354, 138}};
-        double morph = ease(Math.max(0, (fly - 0.1) / 0.9));
-        for (int i = 0; i < 2; i++) {
-            double x1 = lx + diagonals[i][0] * s, y1 = ly + diagonals[i][1] * s, x2 = lx + diagonals[i][2] * s, y2 = ly + diagonals[i][3] * s;
-            double length0 = Math.hypot(x2 - x1, y2 - y1), angle0 = Math.atan2(y2 - y1, x2 - x1);
-            Rectangle to = bottom[i];
-            double cx = lerp((x1 + x2) / 2, to.getCenterX(), morph), cy = lerp((y1 + y2) / 2, to.getCenterY(), morph);
-            double length = lerp(length0, to.width, morph), thick = lerp(42 * s, to.height, morph);
-            double angle = angle0 * (1 - morph); // level on arrival
-            Graphics2D c = (Graphics2D) g.create();
-            try {
-                c.translate(cx, cy);
-                c.rotate(angle);
-                java.awt.geom.RoundRectangle2D shape = new java.awt.geom.RoundRectangle2D.Double(-length / 2, -thick / 2, length, thick, 4 * morph, 4 * morph);
-                c.setColor(Logo.RED);
-                c.setComposite(AlphaComposite.SrcOver.derive((float) ((1 - morph) * pieceAlpha)));
-                c.fill(shape); // solid while it is still the mark's stroke
-                c.setComposite(AlphaComposite.SrcOver.derive((float) (morph * pieceAlpha)));
-                c.setStroke(new java.awt.BasicStroke(1.5f));
-                c.draw(shape); // the button's outline as it arrives
-            } finally {
-                c.dispose();
-            }
-        }
+    }
+
+    /** A line this thick, cut by a box: the one shape every piece of the D is, in the mark and as a card. */
+    private static java.awt.geom.Area thick(double x1, double y1, double x2, double y2, double width, java.awt.geom.Rectangle2D cut) {
+        java.awt.geom.Area a = new java.awt.geom.Area(new java.awt.BasicStroke((float) width, java.awt.BasicStroke.CAP_BUTT, java.awt.BasicStroke.JOIN_MITER)
+                .createStrokedShape(new java.awt.geom.Line2D.Double(x1, y1, x2, y2)));
+        a.intersect(new java.awt.geom.Area(cut));
+        return a;
     }
 
     /**

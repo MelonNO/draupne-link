@@ -206,7 +206,9 @@ final class TacticalCombo {
                          java.awt.Rectangle[] rows, boolean opening, Runnable done) {
             Ghost ghost = new Ghost(picture, rows, opening, done);
             ghost.setBounds(bounds);
-            layer.add(ghost, javax.swing.JLayeredPane.DRAG_LAYER);
+            // the popup layer, on top of it: in front of everything else on the layered pane (the tour's dimming and
+            // its notice included), where the real menu then shows as well
+            layer.add(ghost, javax.swing.JLayeredPane.POPUP_LAYER, 0);
             ghost.timer.start();
         }
 

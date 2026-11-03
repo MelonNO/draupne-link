@@ -38,9 +38,10 @@ class SetupWizardTest {
         WizardDialog.Page radio = new PcSetupWizard.RadioPage(null);
         WizardDialog.Page shortcuts = new PcSetupWizard.ShortcutsPage(null);
         WizardDialog.Page connect = new PhoneGuideWizard.ConnectPage(null);
+        WizardDialog.Page sleep = new PhoneGuideWizard.SleepPage();
         List<WizardDialog.Page> pc = List.of(new Stub("connection"), new Stub("tailscale"), radio, new Stub("latency"), shortcuts);
         List<WizardDialog.Page> drone = List.of(new Stub("betaflight"));
-        List<WizardDialog.Page> phone = List.of(new Stub("tailscale on the phone"), new Stub("flight app"), connect);
+        List<WizardDialog.Page> phone = List.of(new Stub("tailscale on the phone"), new Stub("flight app"), connect, sleep);
         WizardDialog.Page welcome = new Stub("welcome");
 
         List<WizardDialog.Page> all = SetupWizard.firstTimePages(pc, drone, phone, welcome);
@@ -50,7 +51,9 @@ class SetupWizardTest {
         }
         assertEquals(pc.size() + drone.size() + phone.size() + 1, all.size(), "nothing twice");
         assertSame(welcome, all.get(0));
-        assertSame(connect, all.get(all.size() - 1), "the first connection is the last step: no delay or ready page after it");
+        assertSame(connect, all.get(all.size() - 2), "the first connection, then only the sleep buttons: no delay or ready page after them");
+        assertSame(sleep, all.get(all.size() - 1));
+        assertEquals("CONNECT", sleep.section);
         assertEquals("THIS PC", shortcuts.section, "the shortcuts with the other PC steps");
         assertTrue(all.indexOf(shortcuts) < all.indexOf(drone.get(0)), "this PC's steps together, then the drone");
         assertTrue(all.indexOf(drone.get(0)) < all.indexOf(radio), "the radio after the drone: it names the switches");
