@@ -463,6 +463,22 @@ class ControlLinkTest {
         assertEquals(4_000_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[link.maxBitrateStep()]);
     }
 
+    /**
+     * The phone keeps its video profile across sessions (pc.26 never clears it): a phone left in bad coverage mode by
+     * the session before would send key frames twice, parity and H.264 to a PC that takes it for normal. So the profile
+     * goes out with the first config of every session, the normal one too (1.0.34).
+     */
+    @Test
+    void theVideoProfileGoesOutWithTheFirstConfigOfEverySession() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.videoProfile = 1 | 2 | 4; // left in bad coverage mode by the session before
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> phone.videoProfile == 0, 2000, "the normal profile, with the first config");
+        assertFalse(phone.configs.isEmpty());
+    }
+
     /** Bad coverage mode not enough (the bitrate at the bottom for 5 s more): the survival tier, 480x270 at 15 fps. */
     @Test
     void aLinkThatCantCarryBadCoverageModeGetsTheSurvivalTier() throws Exception {

@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.34
+
+- Video: the PC sends its video profile with the first config of every session, the normal one too. The phone keeps the profile of the session before, so a phone left in bad coverage mode kept sending key frames twice, parity and H.264 to a PC that took it for normal.
+- Tour: a tip on the first step that every button can be pressed twice; EXIT TOUR is a small cross top right of the notice, and NEXT spans the box.
+- Guide: the connect step no longer scrolls to the bottom by itself (every check line that changed scrolled the page to itself); the *Sleep before take-off* step is gone - the tour's SLEEP BUTTONS step covers it.
+- Phone app unchanged (2.3.0-pc.26).
+
 ## 1.0.33
 
 - **Weak reception** (PC and phone app 2.3.0-pc.26): the sticks and pings keep going through a link loss; a loss keeps the flight controller's state and the video config, and the stream is only asked for again when it really stopped; Connect every 150 ms after a loss, the Config the moment the phone answers; the phone takes the pilot's own re-Connect at once; another PC takes over after 10 s of silence (was 1 s), never while armed; 16-bit stick sequence.

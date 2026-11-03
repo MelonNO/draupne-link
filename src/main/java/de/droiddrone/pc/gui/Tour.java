@@ -27,7 +27,7 @@ import java.util.function.Supplier;
 /**
  * The tour of the window, offered once the first-time setup is finished and under SETUP any time: one control at a
  * time is lit while the rest dims (and is dead to the mouse), with a notice in the style of the locked-button notices
- * saying what it does (NEXT / EXIT TOUR). It walks the main window (MENU and each of its slide-out buttons, the
+ * saying what it does (NEXT, and a cross top right that exits the tour). It walks the main window (MENU and each of its slide-out buttons, the
  * controller card's fold, pop-out video, full screen, the map's place), then opens the map window for the map itself: pins, what the cursor
  * shows, the drone, the map picture and coordinate format, DOWNLOAD AREA. The pilot learns by doing: a step at a
  * button or a choice keeps NEXT locked ("Press it") until that control was pressed. A step whose control isn't on
@@ -38,23 +38,28 @@ final class Tour {
      * @param before done as the step comes up (opens the menu, the map window); null for nothing
      * @param press  the pilot must press the control before NEXT works (a button or a choice); false for a plain
      *               area, and for UPDATE, whose press would start the update
+     * @param tip    a muted line under the text: good to know, not the step itself; null for none
      */
     private record Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press,
-                        Supplier<JComponent> live, Supplier<JComponent> extra, Runnable after) {
+                        Supplier<JComponent> live, Supplier<JComponent> extra, Runnable after, String tip) {
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before) {
-            this(title, text, anchor, before, true, null, null, null);
+            this(title, text, anchor, before, true, null, null, null, null);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press) {
-            this(title, text, anchor, before, press, null, null, null);
+            this(title, text, anchor, before, press, null, null, null, null);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live) {
-            this(title, text, anchor, before, press, live, null, null);
+            this(title, text, anchor, before, press, live, null, null, null);
+        }
+
+        Step(String title, String text, String tip, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live) {
+            this(title, text, anchor, before, press, live, null, null, tip);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live, Supplier<JComponent> extra) {
-            this(title, text, anchor, before, press, live, extra, null);
+            this(title, text, anchor, before, press, live, extra, null, null);
         }
     }
 
@@ -74,7 +79,8 @@ final class Tour {
         Runnable openMenu = main::tourOpenMenu;
         Supplier<JComponent> header = main::tourHeader; // the menu steps: the header stays clear, so the slide-out and the menus show in front
         steps.add(new Step("MENU", "Everything lives here. Press it and SETUP, VIDEO, LINK and TOOLS slide out - as now.",
-                main::tourMenuButton, openMenu, true, header));
+                "Tip: every button in this tour can be pressed twice - the second press closes or undoes what the first did. "
+                        + "NEXT stays unlocked.", main::tourMenuButton, openMenu, true, header));
         steps.add(new Step("SETUP", "The guides: first-time setup, PC, drone and phone setup, and this tour.", main::tourSetupButton, openMenu, true, header));
         steps.add(new Step("VIDEO", "The picture, the OSD and recording.", main::tourVideoButton, openMenu, true, header));
         steps.add(new Step("LINK", "The link's sounds, and who may watch as a spectator.", main::tourLinkButton, openMenu, true, header));
@@ -96,7 +102,7 @@ final class Tour {
         steps.add(new Step("SLEEP BUTTONS", "While connected, these are here. STANDBY stops the phone's camera and dims its "
                 + "screen; DEEP SLEEP locks the phone and lets it sleep, checking for this PC every CHECK EVERY minutes; WAKE brings "
                 + "it back. They fold away while the drone is armed. This is a demo: press one and read the line under them.",
-                main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false)));
+                main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null));
         // on the map steps the map itself stays live under the dimming: panning, the wheel, pins and the cursor figures work
         Supplier<JComponent> map = () -> main.mapWindow().map();
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
@@ -216,7 +222,7 @@ final class Tour {
             retry.restart();
             return;
         }
-        notice = new TourNotice(anchor, s.title(), s.text(), index + 1, steps.size(), this::next, this::end);
+        notice = new TourNotice(anchor, s.title(), s.text(), s.tip(), index + 1, steps.size(), this::next, this::end);
         notice.requirePress(s.press());
         if (s.live() != null) {
             try {
@@ -235,12 +241,14 @@ final class Tour {
         if (!notice.pop()) retry.restart();
     }
 
-    /** The notice: pointer at the control, the text, STEP i OF n, NEXT and EXIT TOUR; the rest of the window dims. */
+    /** The notice: pointer at the control, the text, STEP i OF n, NEXT across the bottom and a cross top right that exits the tour; the rest of the window dims. */
     private static final class TourNotice extends JComponent {
         private static final int WIDTH = 460;
         private static final int PAD = 12;
         private static final int POINTER = 8;
         private static final int GAP = 6;
+        /** The exit cross's box, top right. */
+        private static final int CLOSE = 24;
         private static final long IN_MS = 180;
         /** The control hidden this long (a card folded): the step moves on. */
         private static final long HIDDEN_MS = 2500;
@@ -250,9 +258,11 @@ final class Tour {
         private final JComponent anchor;
         private final String title;
         private final List<String> lines;
+        /** The tip under the text, wrapped; empty for none. */
+        private final List<String> tipLines;
         private final String counter;
         private final JButton next = Theme.primaryButton("Next");
-        private final JButton exit = Theme.secondaryButton("Exit tour");
+        private final JButton exit = new CloseButton();
         private final Runnable onEnd;
         private final Dim dim = new Dim();
         private final Timer timer = new Timer(33, e -> tick());
@@ -269,7 +279,7 @@ final class Tour {
             if (c == anchor || SwingUtilities.isDescendingFrom(c, anchor)) pressed();
         }
 
-        TourNotice(JComponent anchor, String title, String text, int step, int of, Runnable onNext, Runnable onEnd) {
+        TourNotice(JComponent anchor, String title, String text, String tip, int step, int of, Runnable onNext, Runnable onEnd) {
             this.anchor = anchor;
             this.title = title;
             this.onEnd = onEnd;
@@ -277,6 +287,7 @@ final class Tour {
             setOpaque(false);
             setLayout(null);
             lines = wrap(text, getFontMetrics(textFont()), WIDTH - 2 * PAD);
+            tipLines = tip == null || tip.isBlank() ? List.of() : wrap(tip, getFontMetrics(tipFont()), WIDTH - 2 * PAD);
             next.setText(step == of ? "Done" : "Next");
             next.addActionListener(e -> onNext.run());
             exit.addActionListener(e -> onEnd.run());
@@ -371,7 +382,7 @@ final class Tour {
         }
 
         private int height() {
-            return POINTER + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + 12 + 34 + 4;
+            return POINTER + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + 12 + 34 + 4;
         }
 
         /** Under the control, or above it when there is no room below; inside the window. */
@@ -387,9 +398,9 @@ final class Tour {
             Rectangle r = new Rectangle(x, Math.max(0, Math.min(y, layer.getHeight() - h)), WIDTH, h);
             if (!r.equals(getBounds())) setBounds(r);
             int top = above ? 0 : POINTER;
-            int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + 8 - PAD;
-            next.setBounds(WIDTH - PAD - 124, by, 124, 30); // room for PRESS IT as well as NEXT
-            exit.setBounds(PAD, by, 130, 30);
+            int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + 8 - PAD;
+            next.setBounds(PAD, by, WIDTH - 2 * PAD, 30); // across the box: the exit is the cross top right
+            exit.setBounds(WIDTH - PAD - CLOSE + 6, top + PAD - 6, CLOSE, CLOSE);
             return true;
         }
 
@@ -445,7 +456,7 @@ final class Tour {
                 g.setFont(Theme.headingFont(11f));
                 FontMetrics fm = g.getFontMetrics();
                 g.setColor(Theme.MUTED);
-                g.drawString(counter, w - PAD - fm.stringWidth(counter), y + fm.getAscent());
+                g.drawString(counter, w - PAD - CLOSE - 2 - fm.stringWidth(counter), y + fm.getAscent()); // left of the cross
                 g.setFont(Theme.headingFont(14f));
                 fm = g.getFontMetrics();
                 g.setColor(Theme.ACCENT);
@@ -457,6 +468,16 @@ final class Tour {
                 for (String line : lines) {
                     g.drawString(line, PAD + 2, y + fm.getAscent());
                     y += lineHeight();
+                }
+                if (!tipLines.isEmpty()) {
+                    y += 4;
+                    g.setFont(tipFont());
+                    fm = g.getFontMetrics();
+                    g.setColor(Theme.MUTED);
+                    for (String line : tipLines) {
+                        g.drawString(line, PAD + 2, y + fm.getAscent());
+                        y += tipLineHeight();
+                    }
                 }
             } finally {
                 g.dispose();
@@ -473,6 +494,47 @@ final class Tour {
 
         private int lineHeight() {
             return getFontMetrics(textFont()).getHeight();
+        }
+
+        private static Font tipFont() {
+            return Theme.font(Font.ITALIC, 12f);
+        }
+
+        private int tipLineHeight() {
+            return getFontMetrics(tipFont()).getHeight();
+        }
+
+        /** The tip's lines and the gap above them; 0 without a tip. */
+        private int tipHeight() {
+            return tipLines.isEmpty() ? 0 : 4 + tipLines.size() * tipLineHeight();
+        }
+
+        /** EXIT TOUR as a small cross in the notice's top right corner: muted, red under the mouse. */
+        private static final class CloseButton extends JButton {
+            CloseButton() {
+                setToolTipText("Exit tour");
+                setContentAreaFilled(false);
+                setBorderPainted(false);
+                setFocusPainted(false);
+                setOpaque(false);
+                setRolloverEnabled(true);
+                setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+            }
+
+            @Override
+            protected void paintComponent(Graphics graphics) {
+                Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
+                try {
+                    boolean hot = getModel().isRollover() || getModel().isPressed();
+                    g.setColor(hot ? Theme.ACCENT : Theme.MUTED);
+                    g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    int cx = getWidth() / 2, cy = getHeight() / 2, r = 5;
+                    g.drawLine(cx - r, cy - r, cx + r, cy + r);
+                    g.drawLine(cx + r, cy - r, cx - r, cy + r);
+                } finally {
+                    g.dispose();
+                }
+            }
         }
 
         private static List<String> wrap(String text, FontMetrics fm, int width) {

@@ -12,6 +12,10 @@ class WrappingText extends JEditorPane {
         setFont(font);
         setForeground(color);
         setEditable(false);
+        // new words must not scroll the page this is on: the caret follows every setText to the end of the text and
+        // asks the scroll pane for it (scrollRectToVisible), so a check row that changed four times a second kept
+        // scrolling the connect step down to itself
+        if (getCaret() instanceof javax.swing.text.DefaultCaret c) c.setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
         setFocusable(false);
         setOpaque(false);
         setBorder(null);

@@ -609,6 +609,7 @@ public class ControlLink {
                 } else if (!configReceived) {
                     if (now - lastConfig >= CONFIG_RETRY_MS) {
                         decideForcedTier(now); // ROBUST set: the first config already carries the small size
+                        sendProfile(); // the phone keeps its profile across sessions (pc.26): told every time, normal too
                         sendConfig();
                         lastConfig = now;
                     }
@@ -1083,7 +1084,8 @@ public class ControlLink {
     /**
      * SETTINGS > Video is ROBUST: decided before the first config goes out, so it already carries the small size.
      * Before 1.0.33 the first config said 1280x720 and the small size came while the phone's camera was still
-     * opening - which the phone took as done; every ROBUST session then ran at the full size.
+     * opening - which the phone took as done; every ROBUST session then ran at the full size. The caller sends the
+     * profile for the tier right after this, before the config.
      */
     private void decideForcedTier(long now) {
         VideoMode mode = videoMode();
@@ -1096,11 +1098,9 @@ public class ControlLink {
             nextProfileSend = now + 700;
             verifyFrom = videoListener == null ? -1 : now + VERIFY_AFTER_MS;
             verifyTries = 0;
-            sendProfile();
         } else if (mode == VideoMode.SHARP && tier != Tier.NORMAL) {
             tier = Tier.NORMAL;
             tierSince = now;
-            sendProfile();
         }
     }
 
@@ -1119,7 +1119,9 @@ public class ControlLink {
 
     /**
      * The phone's video profile (phone app 2.3.0-pc.15 on; older ones drop it): in bad coverage mode and under, key
-     * frames twice, a parity per group of packets and H.264 (pc.26; older apps read bit 0 only).
+     * frames twice, a parity per group of packets and H.264 (pc.26; older apps read bit 0 only). Sent with the first config
+     * of every session, the normal profile too (1.0.34): the phone keeps the flags of the session before, so a phone left
+     * in bad coverage mode would send key frames twice, parity and H.264 to a PC that takes it for normal.
      */
     private void sendProfile() {
         try {

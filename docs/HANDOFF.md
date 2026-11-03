@@ -4,8 +4,27 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.33)
+## Where things stand (2026-11-03, 1.0.34)
 
+- **1.0.34 (pilot's eighth round), phone app unchanged (pc.26) - built and tested, not released:** the pilot's
+  list after a day on 1.0.33. *"The video quality switch does not work, it is always in robust mode":* the day's
+  link logs on the pilot's PC (1.0.33, pc.26) show every session at 1280x720, H.265, `robust` 0, direct path, and
+  no mode change logged at all, so nothing on the PC side was in bad coverage mode; ask what showed "robust" (the
+  title bar's version, the VIDEO menu's lit segment, the OSD's video line or the picture) before looking further.
+  What was found and fixed is the one way the two sides can disagree: the phone keeps its profile flags (key frames
+  twice, group parity, H.264) across sessions and the PC sent the profile only on a tier change, so a phone left in
+  bad coverage mode by the session before stayed in it under a PC that thought it normal. The profile now goes out
+  with the first config of every session (`sessionRun`, before `sendConfig`; `decideForcedTier` no longer sends it
+  itself). Test: `ControlLinkTest.theVideoProfileGoesOutWithTheFirstConfigOfEverySession`. *Tour:* `Step.tip`, a
+  muted italic line under the text; the MENU step's says every button can be pressed twice. EXIT TOUR is
+  `TourNotice.CloseButton`, a cross top right of the notice (hidden on the last step as the button was), the STEP
+  counter sits left of it, NEXT spans the box. *The connect step scrolled down by itself:* every `WrappingText.setHtml`
+  moved the caret to the end of the new text, and `DefaultCaret` asks the scroll pane for the caret
+  (`scrollRectToVisible`), so each check row that changed (four times a second) scrolled the page to itself; the
+  caret's update policy is NEVER_UPDATE now (test: `WrappingTextTest`). *"Remove step 9":* on the pilot's PC the
+  guide's step 9 is "Sleep before take-off" (the done PC steps are skipped), and it is all in the tour's SLEEP
+  BUTTONS step: `PhoneGuideWizard.SleepPage` is gone, the connect step is the last step of Phone setup and the
+  first-time guide (`SetupWizardTest`).
 - **Released:** DRAUPNE Link **1.0.33** with phone app **DRAUPNE Flight 2.3.0-pc.26** (release
   `flight-2.3.0-pc.26`, APK SHA-256 `b2a46c33…`, pinned in `ApkShare`). Nothing of it has flown yet.
 - **1.0.33 (weak reception), phone app pc.26 - tested on the PC, not flown:** the pilot asked

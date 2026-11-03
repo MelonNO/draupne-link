@@ -51,7 +51,7 @@ final class SetupWizard {
         }
         for (Page p : drone) pages.add(p.in("DRONE"));
         pages.addAll(radio);
-        for (Page p : phone) pages.add(p.in(p instanceof PhoneGuideWizard.ConnectPage || p instanceof PhoneGuideWizard.SleepPage ? "CONNECT" : "PHONE"));
+        for (Page p : phone) pages.add(p.in(p instanceof PhoneGuideWizard.ConnectPage ? "CONNECT" : "PHONE"));
         return pages;
     }
 
