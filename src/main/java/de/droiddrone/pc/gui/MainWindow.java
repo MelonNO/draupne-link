@@ -111,8 +111,18 @@ public class MainWindow extends JFrame {
     private final JButton deepSleepButton = Theme.secondaryButton("Deep sleep");
     private final JButton wakeButton = Theme.primaryButton("Wake");
     private final JComboBox<String> checkIntervalCombo = new JComboBox<>(new String[]{"1 min", "2 min", "5 min"});
-    private final JLabel powerStatus = Theme.label(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
+    /** What the modes are doing; wraps to the card (a label would cut the line). */
+    private final WrappingText powerStatusText = WrappingText.fitting(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
+    private final PowerStatus powerStatus = new PowerStatus();
     private JPanel powerRow;
+
+    /** setText on the wrapping text, with the html wrapper the old label calls used. */
+    private final class PowerStatus {
+        void setText(String html) {
+            String h = html == null ? "" : html.replace("<html>", "").replace("</html>", "");
+            powerStatusText.setHtml(h.isBlank() ? "&nbsp;" : h);
+        }
+    }
     /** The mode this PC asked for (ControlLink.POWER_*); the phone's PHONE_POWER record says what it is in. */
     private int powerWanted = ControlLink.POWER_NORMAL;
     private long powerSentAt, powerAskedAt;
@@ -1727,7 +1737,7 @@ public class MainWindow extends JFrame {
         c.fill = GridBagConstraints.HORIZONTAL;
         c.weightx = 1;
         c.insets = new Insets(0, 0, 6, 0);
-        JPanel buttons = new JPanel(new GridLayout(1, 3, 6, 0));
+        JPanel buttons = new JPanel(new GridLayout(1, 2, 6, 0)); // STANDBY and DEEP SLEEP side by side, WAKE under them
         buttons.setOpaque(false);
         standbyButton.setToolTipText("Before take-off: the phone stops its camera, slows its GPS and telemetry and dims its screen; the link stays. WAKE brings the picture back in about two seconds");
         standbyButton.addActionListener(e -> askPower(ControlLink.POWER_STANDBY));
@@ -1737,8 +1747,8 @@ public class MainWindow extends JFrame {
         wakeButton.addActionListener(e -> wakePhone());
         buttons.add(standbyButton);
         buttons.add(deepSleepButton);
-        buttons.add(wakeButton);
         powerRow.add(buttons, c);
+        powerRow.add(wakeButton, c);
         JPanel interval = new JPanel(new BorderLayout(8, 0));
         interval.setOpaque(false);
         interval.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
@@ -1756,7 +1766,7 @@ public class MainWindow extends JFrame {
         });
         interval.add(checkIntervalCombo, BorderLayout.CENTER);
         powerRow.add(interval, c);
-        powerRow.add(powerStatus, c);
+        powerRow.add(powerStatusText, c);
         powerRow.setVisible(false);
         return powerRow;
     }
