@@ -353,8 +353,8 @@ final class PhoneGuideWizard {
             WizardDialog.addRow(col, setting("otg", "OTG switched on (some phones)",
                     "OPPO, realme, OnePlus, vivo and some others have an <b>OTG</b> switch: search Settings for OTG and switch it "
                             + "on just before plugging in (it turns off by itself after some minutes). No such switch: nothing to do."));
-            WizardDialog.addRow(col, setting("wifi", "Wi-Fi off before flying",
-                    "So the phone stays on 4G instead of a Wi-Fi it then walks out of."));
+            WizardDialog.addRow(col, setting("wifi", "Before flying: Wi-Fi off, Bluetooth off, Battery Saver on",
+                    "All three in the phone's quick settings: 4G only, and the battery lasts through the wait."));
             // the three the phone asks for itself (pc.21): say yes to each, once
             WizardDialog.addRow(col, setting("notifications", "Notifications: Allow",
                     "DRAUPNE Flight asks when it starts. Tap <b>Allow</b>."));
