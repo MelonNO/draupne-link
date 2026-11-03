@@ -34,10 +34,9 @@ import android.widget.FrameLayout;
 
 /**
  * The start, as on the PC: a black screen, the DRAUPNE mark fades in fast in the middle, then comes apart - the
- * four brackets fly to the screen's corners (the cards' bracket corners), the link between the bars folds away, the
- * crosshair flies to the pill - over black all the while; then the black lifts and the app fades in. About 4 s; a
- * tap skips it. The mark is
- * drawn from its SVG (a 512 x 512 design) in the icon's red.
+ * four brackets fly to the screen's corners (the cards' bracket corners), the D morphs into the cards and the
+ * CONNECT button, the crosshair shrinks away in the middle - over black all the while; then the black lifts and the
+ * app fades in. About 4 s; a tap skips it. The mark is drawn from its SVG (a 512 x 512 design) in the icon's red.
  */
 final class BootRevealView extends View {
     private static final long FADE_IN_MS = 560, HOLD_MS = 500, FLY_MS = 2400, OUT_MS = 700; // 4.2 s: the flight unhurried
@@ -50,8 +49,8 @@ final class BootRevealView extends View {
     private final Path path = new Path();
     private final float density;
     private boolean done;
-    /** What the mark's pieces morph into: the D's bars the status and connection cards, its diagonals the CONNECT button; the crosshair flies to the pill. */
-    private View statusCard, connectionCard, connect, pill;
+    /** What the mark's pieces morph into: the D's bars the status and connection cards, its diagonals the CONNECT button. */
+    private View statusCard, connectionCard, connect;
     private final int[] where = new int[2], here = new int[2];
     private final RectF rect = new RectF();
 
@@ -69,7 +68,6 @@ final class BootRevealView extends View {
         v.statusCard = activity.findViewById(R.id.cardStatus);
         v.connectionCard = activity.findViewById(R.id.cardConnection);
         v.connect = activity.findViewById(R.id.startStopService);
-        v.pill = activity.findViewById(R.id.tvPill);
         content.addView(v, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         v.bringToFront();
     }
@@ -112,7 +110,15 @@ final class BootRevealView extends View {
         if (t < FADE_IN_MS + HOLD_MS) {
             canvas.drawColor(BLACK);
             float alpha = Math.min(1f, t / (float) FADE_IN_MS);
-            drawAll(canvas, lx, ly, size, alpha);
+            if (alpha >= 1) {
+                drawAll(canvas, lx, ly, size, 1f);
+            } else {
+                // the whole mark at one alpha, through a layer: piece by piece at that alpha, the X showed through
+                // the bars' ends and the disc until the fade was over, so the mark came in as parts
+                int layer = canvas.saveLayerAlpha(0, 0, w, h, Math.round(255 * alpha));
+                drawAll(canvas, lx, ly, size, 1f);
+                canvas.restoreToCount(layer);
+            }
         } else {
             float fly = ease((t - FADE_IN_MS - HOLD_MS) / (float) FLY_MS);
             float out = t < FADE_IN_MS + HOLD_MS + FLY_MS ? 0 : Math.min(1f, (t - FADE_IN_MS - HOLD_MS - FLY_MS) / (float) OUT_MS);
@@ -134,17 +140,11 @@ final class BootRevealView extends View {
                 float tx = right ? w - cs - inset : inset, ty = bottom ? h - cs - inset : inset;
                 drawBracket(canvas, corner, lerp(lx, tx, fly), lerp(ly, ty, fly), cs, pieceAlpha);
             }
-            // the crosshair flies to the status pill and shrinks to its height, where it fades; no pill yet: it
-            // stays in the middle, shrinking out
-            float travel = ease(Math.min(1f, fly / 0.85f));
-            if (rectOf(pill)) {
-                float chSize = lerp(size, rect.height() * 512 / 88f, travel); // the disc (88 of 512) ends the pill's height
-                float cx = lerp(w / 2f, rect.centerX(), travel), cy = lerp(h / 2f, rect.centerY(), travel);
-                drawCrosshair(canvas, cx - chSize / 2, cy - chSize / 2, chSize, pieceAlpha * (1 - 0.6f * travel));
-            } else {
-                float chSize = size * (1 - fly * 0.7f);
-                drawCrosshair(canvas, (w - chSize) / 2, (h - chSize) / 2, chSize, pieceAlpha * (1 - fly));
-            }
+            // the crosshair has nowhere to go on the phone (the PC's becomes the OSD's): it stays where it is and
+            // shrinks away as the D leaves it, gone by the time the cards' outlines form
+            float gone = ease(Math.min(1f, fly / 0.6f));
+            float chSize = size * (1 - 0.7f * gone);
+            drawCrosshair(canvas, (w - chSize) / 2, (h - chSize) / 2, chSize, pieceAlpha * (1 - gone));
         }
         postInvalidateOnAnimation();
     }

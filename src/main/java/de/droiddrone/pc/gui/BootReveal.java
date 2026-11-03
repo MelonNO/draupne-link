@@ -146,7 +146,8 @@ final class BootReveal extends JComponent {
                 g.setColor(Theme.BG);
                 g.fillRect(0, 0, w, h);
                 float alpha = (float) Math.min(1, t / (double) FADE_IN_MS);
-                Logo.paint(g, lx, ly, size, alpha);
+                if (alpha >= 1) Logo.paint(g, lx, ly, size, 1f);
+                else paintMarkFading(g, lx, ly, size, alpha);
                 return;
             }
             double fly = ease((t - FADE_IN_MS - HOLD_MS) / (double) FLY_MS);
@@ -204,6 +205,39 @@ final class BootReveal extends JComponent {
 
     private static double lerp(double a, double b, double t) {
         return a + (b - a) * t;
+    }
+
+    private java.awt.image.BufferedImage markImage; // the mark painted solid, for the fade-in
+    private double markImageSize, markImageDx, markImageDy;
+
+    /**
+     * The whole mark at one alpha: painted solid into an image once, and the image drawn translucent. Painted
+     * piece by piece at that alpha, the X showed through the bars' ends and the disc through to the X until the
+     * fade was over, so the mark came in as parts, not as one thing.
+     */
+    private void paintMarkFading(Graphics2D g, double lx, double ly, double size, float alpha) {
+        int ix = (int) Math.floor(lx), iy = (int) Math.floor(ly);
+        double dx = lx - ix, dy = ly - iy; // the mark's place to the pixel, as the direct painting has it
+        if (markImage == null || markImageSize != size || markImageDx != dx || markImageDy != dy) {
+            int side = (int) Math.ceil(size) + 2;
+            markImage = new java.awt.image.BufferedImage(side, side, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+            Graphics2D m = Theme.smooth(markImage.createGraphics());
+            try {
+                Logo.paint(m, dx, dy, size, 1f);
+            } finally {
+                m.dispose();
+            }
+            markImageSize = size;
+            markImageDx = dx;
+            markImageDy = dy;
+        }
+        Graphics2D c = (Graphics2D) g.create();
+        try {
+            c.setComposite(AlphaComposite.SrcOver.derive(Math.max(0f, Math.min(1f, alpha))));
+            c.drawImage(markImage, ix, iy, null);
+        } finally {
+            c.dispose();
+        }
     }
 
     /**

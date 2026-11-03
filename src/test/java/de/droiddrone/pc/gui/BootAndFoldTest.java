@@ -46,6 +46,25 @@ class BootAndFoldTest {
         assertTrue(count(end, Logo.RED.getRGB() & 0xffffff, 200) < 50, "the pieces have faded");
     }
 
+    /**
+     * Half-way through the fade-in the mark is one shape at half strength: where the X runs under a bar's end the
+     * red is no stronger than on the bar alone, and the dark disc in the middle hides the X's crossing. Piece by
+     * piece, each at half alpha, both showed through.
+     */
+    @Test
+    void theMarkFadesInAsOneShape() {
+        int w = 800, h = 500;
+        BufferedImage half = BootReveal.frame(280, w, h, new Rectangle(300, 80, 500, 300)); // 560 ms fade: alpha 0.5
+        double size = Math.min(w, h) * 0.42, s = size / Logo.BOX, lx = (w - size) / 2, ly = (h - size) / 2;
+        int overlap = half.getRGB((int) Math.round(lx + 170 * s), (int) Math.round(ly + 160 * s)); // in the left bar and the diagonal
+        int bar = half.getRGB((int) Math.round(lx + 158 * s), (int) Math.round(ly + 300 * s)); // the left bar alone
+        int redOverlap = (overlap >> 16) & 0xff, redBar = (bar >> 16) & 0xff;
+        assertTrue(redBar > 90 && redBar < 160, "the bar at half strength: " + redBar);
+        assertTrue(Math.abs(redOverlap - redBar) <= 12, "the X under the bar no stronger than the bar: " + redOverlap + " vs " + redBar);
+        int centre = half.getRGB(w / 2, h / 2);
+        assertTrue(((centre >> 16) & 0xff) < 40, "the disc hides the X's crossing: " + Integer.toHexString(centre));
+    }
+
     @Test
     void aFoldHidesItsContentsHeight() {
         JPanel content = new JPanel();

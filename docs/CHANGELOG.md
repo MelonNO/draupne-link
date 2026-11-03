@@ -2,6 +2,11 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.32
+
+- Boot animation (PC and phone app 2.3.0-pc.25): the mark fades in as one solid shape, not as parts.
+- Phone app pc.25: the crosshair shrinks away in the middle instead of flying to the status pill.
+
 ## 1.0.31
 
 - Boot animation (PC and phone app 2.3.0-pc.24): black until the mark has morphed into the cards' outlines, then the UI fades in.

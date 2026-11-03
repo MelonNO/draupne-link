@@ -4,7 +4,17 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.31)
+## Where things stand (2026-11-03, 1.0.32)
+
+- **1.0.32 (pilot's seventh round), phone app pc.25 - not yet released:** the pilot saw the mark fade in as parts
+  on the PC. `Logo.paint` painted each piece with its own alpha, so where the X runs under a bar's end the red
+  doubled and the dark disc let the X's crossing through until alpha reached 1. Now `BootReveal.paintMarkFading`
+  paints the mark solid into an image once (at the mark's sub-pixel place) and draws the image with the fade's
+  alpha; at alpha 1 the direct painting takes over, pixel for pixel. The phone (`BootRevealView.onDraw`) does the
+  same through `Canvas.saveLayerAlpha`. Test: `BootAndFoldTest.theMarkFadesInAsOneShape` (189 vs 126 red without
+  the fix). The phone's crosshair no longer flies to the status pill ("goes to a random button and fades away"):
+  it stays in the middle and shrinks out over the first 60 % of the fly, as the D leaves it. The `pill` target is
+  gone from `BootRevealView`. The PC frames were checked off screen; the phone's not run on a phone.
 
 - **1.0.31 (pilot's sixth round), phone app pc.24:** the boot cover stays opaque through the morph (`BootReveal`:
   the black's alpha is `1 - out`, not `1 - fly`; `BootRevealView` the same; OUT_MS 700, 4.2 s in all), so nothing
