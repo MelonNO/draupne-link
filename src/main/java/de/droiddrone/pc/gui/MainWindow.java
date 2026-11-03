@@ -876,6 +876,7 @@ public class MainWindow extends JFrame {
 
     /** Shows the saved settings again (the setup wizards change them). */
     void reloadSettings() {
+        channelBars.setPurposes(de.droiddrone.pc.setup.ModeSwitch.purposes(config)); // AUX rows named after Drone setup's switches
         if (connection == null) {
             modeCombo.setSelectedItem(config.getLinkMode());
             addressField.setText(config.getIp());
@@ -953,6 +954,7 @@ public class MainWindow extends JFrame {
         if (save(result)) {
             save(Map.of(DroneSetup.RADIO_REDO_KEY, "false")); // the switches Drone setup wrote are now the right ones
             rebuildMapper();
+            channelBars.setPurposes(de.droiddrone.pc.setup.ModeSwitch.purposes(config));
             logLine("Calibration saved: " + mappingSummary());
             return true;
         }

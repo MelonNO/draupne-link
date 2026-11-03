@@ -54,6 +54,7 @@ final class RcCheckDialog extends JDialog {
         super(main, "RC check", ModalityType.MODELESS);
         this.main = main;
         PcConfig config = main.config();
+        bars.setPurposes(de.droiddrone.pc.setup.ModeSwitch.purposes(config));
         armSwitch = de.droiddrone.pc.ArmSwitch.parse(config.getString(de.droiddrone.pc.ArmSwitch.KEY));
         int chosenAux = de.droiddrone.pc.setup.ModeSwitch.parseArmAux(config.getString(de.droiddrone.pc.setup.ModeSwitch.ARM_KEY));
         armChannel = armSwitch != null ? armSwitch.channel() : 3 + (chosenAux > 0 ? chosenAux : de.droiddrone.pc.setup.ModeSwitch.DEFAULT_ARM_AUX);

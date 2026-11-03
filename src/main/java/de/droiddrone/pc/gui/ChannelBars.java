@@ -18,10 +18,30 @@ class ChannelBars extends JComponent {
 
     private short[] values;
     private int rows = 8;
+    /** What Drone setup put on each AUX ("ARM", "flight modes"), index 0 = AUX1; null entries are plain AUX. */
+    private de.droiddrone.pc.setup.ModeSwitch.Purpose[] purposes = new de.droiddrone.pc.setup.ModeSwitch.Purpose[0];
+    private int labelWidth = LABEL_WIDTH;
 
     ChannelBars() {
         setOpaque(false);
         updateSize();
+    }
+
+    /** Names the AUX rows after their purpose ("AUX1 ARM"), so the pilot sees which switch does what. */
+    void setPurposes(de.droiddrone.pc.setup.ModeSwitch.Purpose[] purposes) {
+        this.purposes = purposes == null ? new de.droiddrone.pc.setup.ModeSwitch.Purpose[0] : purposes;
+        int widest = LABEL_WIDTH;
+        java.awt.FontMetrics fm = getFontMetrics(Theme.headingFont(11.5f));
+        for (int i = 0; i < rows; i++) widest = Math.max(widest, fm.stringWidth(label(i)) + 8);
+        labelWidth = widest;
+        repaint();
+    }
+
+    private String label(int row) {
+        String name = PcConfig.CHANNEL_NAMES[row].toUpperCase();
+        int aux = row - 4;
+        if (aux >= 0 && aux < purposes.length && purposes[aux] != null) return name + " " + purposes[aux].title().toUpperCase();
+        return name;
     }
 
     /** @param values channel values in AETR+AUX order, or null when nothing is mapped */
@@ -43,13 +63,13 @@ class ChannelBars extends JComponent {
     @Override
     protected void paintComponent(Graphics graphics) {
         Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
-        int trackX = LABEL_WIDTH;
-        int trackW = getWidth() - LABEL_WIDTH - VALUE_WIDTH - 8;
+        int trackX = labelWidth;
+        int trackW = getWidth() - labelWidth - VALUE_WIDTH - 8;
         for (int i = 0; i < rows; i++) {
             int y = i * ROW;
             g.setFont(Theme.headingFont(11.5f));
             g.setColor(Theme.MUTED);
-            g.drawString(PcConfig.CHANNEL_NAMES[i].toUpperCase(), 0, y + 16);
+            g.drawString(label(i), 0, y + 16);
 
             g.setColor(Theme.PANEL_2);
             g.fillRect(trackX, y + 6, trackW, 12);
