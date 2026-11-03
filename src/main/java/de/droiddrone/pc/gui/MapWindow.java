@@ -58,7 +58,7 @@ final class MapWindow extends JFrame {
     private final JButton downloadButton = Theme.secondaryButton("Download area");
     /** A hidden download's progress, in the toolbar; a click brings its window back. */
     private final JLabel downloadLine = Theme.label("", Theme.headingFont(12f), Theme.ACCENT);
-    private JPanel cursorCell, droneCell;
+    private JPanel cursorCell, terrainCell, droneCell;
     private final JComboBox<String> pictureCombo = new JComboBox<>(PICTURES);
     private final JComboBox<String> formatCombo = new JComboBox<>();
     private final JLabel cursorValue = value(), terrainValue = value(), droneValue = value(), altitudeValue = value(),
@@ -189,7 +189,7 @@ final class MapWindow extends JFrame {
                 if (SwingUtilities.isRightMouseButton(e)) TacticalCombo.show(cursorMenu(), cursorCell, e.getX(), e.getY());
             }
         });
-        stat(stats, "TERRAIN HEIGHT", terrainValue);
+        terrainCell = stat(stats, "TERRAIN HEIGHT", terrainValue);
         droneCell = stat(stats, "DRONE", droneValue);
         stat(stats, "ALTITUDE (GPS)", altitudeValue);
         stat(stats, "LAUNCH", homeValue);
@@ -272,6 +272,10 @@ final class MapWindow extends JFrame {
 
     javax.swing.JComponent tourDownload() {
         return downloadButton;
+    }
+
+    javax.swing.JComponent tourTerrain() {
+        return terrainCell;
     }
 
     javax.swing.JComponent tourCursor() {

@@ -11,7 +11,21 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   off" with Open Tailscale / Connect anyway / Cancel, and the network line says "Waiting for the PC - Tailscale is
   off on this phone" while it runs that way. Release order as always: push, `gh release create flight-2.3.0-pc.20`
   (not Latest) with build/flight/DRAUPNE-Flight-2.3.0-pc.20.apk, download and check the SHA, then tag v1.0.28.
-- **Unreleased, STANDBY / DEEP SLEEP (PC side done; phone pc.21 in work):** the LINK card's power row
+- **Unreleased, phone app pc.21 (built from the merged tree, SHA pinned in ApkShare, NOT published; pc.20 was never
+  published and is folded into it):** `PowerMode` (one worker thread) owns the modes; `DDService` hooks do the work,
+  `Udp` drops sticks and StartVideo outside mode 0 and re-`initialize()`s its socket for the 20 s check window,
+  `Msp.setSlowPoll` / `PhoneLocation.setInterval` are the standby rates. Deep sleep keeps the foreground service; the
+  alarm receiver (`PowerAlarmReceiver`, `setExactAndAllowWhileIdle`) takes a wake lock before handing to the worker;
+  `PowerAdminReceiver` + `res/xml/device_admin.xml` for `lockNow()`. The activity dims via `applyPowerLook`, shows over
+  the lock screen only on `ACTION_WAKE` (full-screen-intent notification), and treats an onResume while asleep as a
+  wake. The phone asks once for notifications, exact alarms, device admin and battery optimisation off; the PC's
+  first deep-sleep request doesn't pop the admin prompt (the phone's own DEEP SLEEP button and a status line do).
+  The guide's "Settings on the phone" step lists the three answers to give. Untried on a phone: doze with the screen
+  locked, the alarm firing on time and the socket getting network in the window, lockNow with a PIN, the full-screen
+  intent lighting the screen (some makers need "display over other apps"), the USB port reopening after sleep.
+- **Unreleased, tour:** the UNDER THE CURSOR step lights the CURSOR and TERRAIN HEIGHT cells together
+  (`TourNotice.setExtra`, the union of both).
+- **Unreleased, STANDBY / DEEP SLEEP (PC side):** the LINK card's power row
   (`MainWindow.powerPanel/refreshPower`): STANDBY, DEEP SLEEP, WAKE, CHECK EVERY 1/2/5 min (`phone.sleepCheckMin`).
   `ControlLink.sendPowerMode` (0x6E), `setDormant` (no Connect while the phone sleeps), `restartVideo`;
   `FcTelemetry.getPhonePower` (0x40F5). In standby the stick listener feeds the session null (as if the radio were

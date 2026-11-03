@@ -40,13 +40,17 @@ final class Tour {
      *               area, and for UPDATE, whose press would start the update
      */
     private record Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press,
-                        Supplier<JComponent> live) {
+                        Supplier<JComponent> live, Supplier<JComponent> extra) {
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before) {
-            this(title, text, anchor, before, true, null);
+            this(title, text, anchor, before, true, null, null);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press) {
-            this(title, text, anchor, before, press, null);
+            this(title, text, anchor, before, press, null, null);
+        }
+
+        Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live) {
+            this(title, text, anchor, before, press, live, null);
         }
     }
 
@@ -83,7 +87,8 @@ final class Tour {
         steps.add(new Step("PINS", "Right-click the map to drop a pin (Alpha, Bravo ...), or to rename or remove one. PINS lists "
                 + "them all. Each pin shows its distance and bearing from the drone.", () -> main.mapWindow().tourPins(), null, true, map));
         steps.add(new Step("UNDER THE CURSOR", "Move the mouse over the map: the position, in the format chosen top right, and the "
-                + "terrain height there show here. DRONE, ALTITUDE and LAUNCH are live.", () -> main.mapWindow().tourCursor(), null, false, map));
+                + "terrain height there show here. DRONE, ALTITUDE and LAUNCH are live.", () -> main.mapWindow().tourCursor(), null, false, map,
+                () -> main.mapWindow().tourTerrain()));
         steps.add(new Step("THE DRONE", "The arrow is the drone, pointing where it heads, with its track behind it. The ring marked "
                 + "L is the launch point. LAST KNOWN on the arrow means its position is old.", () -> main.mapWindow().tourDrone(), null, false, map));
         steps.add(new Step("MAP TYPE", "The map picture: topo, paper map, satellite or OpenStreetMap. Change it here any time; "
@@ -165,6 +170,13 @@ final class Tour {
                 // no live area then
             }
         }
+        if (s.extra() != null) {
+            try {
+                notice.setExtra(s.extra().get());
+            } catch (RuntimeException e) {
+                // the one control then
+            }
+        }
         if (!notice.pop()) retry.restart();
     }
 
@@ -220,9 +232,15 @@ final class Tour {
 
         /** An area the mouse still works over while this step shows (the map under the map steps); null = none. */
         private JComponent live;
+        /** A second control lit with the first (CURSOR and TERRAIN HEIGHT together); null = just the one. */
+        private JComponent extra;
 
         void setLive(JComponent live) {
             this.live = live;
+        }
+
+        void setExtra(JComponent extra) {
+            this.extra = extra;
         }
 
         /** The pilot learns by doing: NEXT says "Press it" and waits until the control was pressed. */
@@ -319,10 +337,16 @@ final class Tour {
             return true;
         }
 
+        /** The lit area: the control, and the second one with it when there is one (their union). */
         private Rectangle anchorBounds() {
             Component layer = getParent();
             if (layer == null || anchor.getParent() == null) return null;
-            return SwingUtilities.convertRectangle(anchor.getParent(), anchor.getBounds(), layer);
+            Rectangle r = SwingUtilities.convertRectangle(anchor.getParent(), anchor.getBounds(), layer);
+            JComponent e = extra;
+            if (e != null && e.isShowing() && e.getParent() != null) {
+                r = r.union(SwingUtilities.convertRectangle(e.getParent(), e.getBounds(), layer));
+            }
+            return r;
         }
 
         @Override

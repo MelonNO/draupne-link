@@ -332,7 +332,7 @@ final class PhoneGuideWizard {
         @Override
         String hint() {
             return "Android pauses apps in the background; in the air that means a failsafe. Set these, tick each one here. "
-                    + "The names differ from phone to phone.";
+                    + "The names differ from phone to phone. The last three the phone asks for by itself: say yes.";
         }
 
         /**
@@ -355,6 +355,15 @@ final class PhoneGuideWizard {
                             + "on just before plugging in (it turns off by itself after some minutes). No such switch: nothing to do."));
             WizardDialog.addRow(col, setting("wifi", "Wi-Fi off before flying",
                     "So the phone stays on 4G instead of a Wi-Fi it then walks out of."));
+            // the three the phone asks for itself (pc.21): say yes to each, once
+            WizardDialog.addRow(col, setting("notifications", "Notifications: Allow",
+                    "DRAUPNE Flight asks when it starts. Tap <b>Allow</b>."));
+            WizardDialog.addRow(col, setting("alarms", "Alarms &amp; reminders: Allow",
+                    "Tap <b>DEEP SLEEP</b> on the phone once: Android asks. Tap <b>Allow</b>. Without it the sleeping phone cannot "
+                            + "wake up to look for this PC."));
+            WizardDialog.addRow(col, setting("admin", "Lock the screen: Activate",
+                    "The same tap asks to let DRAUPNE Flight lock the screen (\"device admin\"). Tap <b>Activate</b>. Without it the "
+                            + "screen only dims in deep sleep."));
             return col;
         }
 
