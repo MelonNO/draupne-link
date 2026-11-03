@@ -90,14 +90,7 @@ final class UnitSymbol {
         }
         g.setFont(Theme.headingFont(11f));
         FontMetrics fm = g.getFontMetrics();
-        if (echelon != null) {
-            String mark = echelon.mark;
-            int tw = fm.stringWidth(mark);
-            g.setColor(Color.WHITE);
-            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) g.drawString(mark, cx - tw / 2 + dx, b.y - 3 + dy);
-            g.setColor(Color.BLACK);
-            g.drawString(mark, cx - tw / 2, b.y - 3);
-        }
+        if (echelon != null) echelonMark(g, cx, b.y - 8, echelon);
         if (name != null && !name.isEmpty()) {
             String text = name.toUpperCase(Locale.ROOT);
             int tw = fm.stringWidth(text) + 10;
@@ -106,6 +99,42 @@ final class UnitSymbol {
             g.fillRect(x, y, tw, fm.getHeight() + 2);
             g.setColor(Theme.TEXT);
             g.drawString(text, x + 5, y + 1 + fm.getAscent());
+        }
+    }
+
+    /**
+     * The echelon above the frame, drawn (the fonts have no dot glyph): team a slashed circle, squad / section /
+     * platoon one to three dots, company / battalion / regiment one to three bars, brigade / division one or two crosses.
+     */
+    private static void echelonMark(Graphics2D g, int cx, int cy, MapGraphics.Echelon echelon) {
+        int n = switch (echelon) {
+            case TEAM -> 1;
+            case SQUAD, COMPANY, BRIGADE -> 1;
+            case SECTION, BATTALION, DIVISION -> 2;
+            case PLATOON, REGIMENT -> 3;
+        };
+        int step = 8, x0 = cx - (n - 1) * step / 2;
+        for (int pass = 0; pass < 2; pass++) { // a white halo, then black
+            g.setColor(pass == 0 ? Color.WHITE : Color.BLACK);
+            g.setStroke(new BasicStroke(pass == 0 ? 3.5f : 1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            for (int i = 0; i < n; i++) {
+                int x = x0 + i * step;
+                switch (echelon) {
+                    case TEAM -> {
+                        g.draw(new Ellipse2D.Double(x - 4, cy - 4, 8, 8));
+                        g.drawLine(x - 5, cy + 5, x + 5, cy - 5);
+                    }
+                    case SQUAD, SECTION, PLATOON -> {
+                        if (pass == 0) g.draw(new Ellipse2D.Double(x - 2.5, cy - 2.5, 5, 5));
+                        else g.fill(new Ellipse2D.Double(x - 2.5, cy - 2.5, 5, 5));
+                    }
+                    case COMPANY, BATTALION, REGIMENT -> g.drawLine(x, cy - 5, x, cy + 5);
+                    case BRIGADE, DIVISION -> {
+                        g.drawLine(x - 4, cy - 4, x + 4, cy + 4);
+                        g.drawLine(x - 4, cy + 4, x + 4, cy - 4);
+                    }
+                }
+            }
         }
     }
 
