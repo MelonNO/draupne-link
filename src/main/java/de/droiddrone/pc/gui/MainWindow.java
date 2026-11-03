@@ -152,8 +152,9 @@ public class MainWindow extends JFrame {
     private JFrame fullScreen;
     /** The video in its own window (POP OUT VIDEO), or null while it sits in this one. */
     private JFrame popOut;
-    private final JButton popOutButton = Theme.secondaryButton("Pop out video");
-    private final JButton fullScreenButton = Theme.secondaryButton("Full screen");
+    /** Two small drawn buttons at the edge of the picture: the video keeps nearly all the room. */
+    private final GlyphButton popOutButton = new GlyphButton(GlyphButton.Glyph.POP_OUT, "Pop out video");
+    private final GlyphButton fullScreenButton = new GlyphButton(GlyphButton.Glyph.FULL_SCREEN, "Full screen");
     private final JLabel poppedOutNote = Theme.label("VIDEO IS IN ITS OWN WINDOW", Theme.headingFont(16f), Theme.MUTED);
     private de.droiddrone.pc.video.LatencyMeter latencyMeter;
     private JComponent linkColumn;
@@ -699,25 +700,18 @@ public class MainWindow extends JFrame {
         video.setBackground(Color.BLACK);
         video.add(videoView, BorderLayout.CENTER);
         videoHolder = video;
-        // a thin bar over the picture: where the video is shown, always in sight (the tour points at these)
-        // the two video buttons stand at the side of the picture, one under the other (the pilot's wish: not over it)
+        // a narrow strip at the right edge of the picture with two small drawn buttons, one under the other: in
+        // sight (the tour points at them, and they sit where the eye goes for window controls), the video keeps the room
         JPanel videoBar = new JPanel();
         videoBar.setLayout(new BoxLayout(videoBar, BoxLayout.Y_AXIS));
-        videoBar.setBackground(Theme.PANEL);
-        videoBar.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 1, 0, 0, Theme.LINE),
-                BorderFactory.createEmptyBorder(6, 6, 6, 6)));
-        popOutButton.setToolTipText("The video in a window of its own, e.g. on a second screen; again to put it back");
-        fullScreenButton.setToolTipText("The video over the whole screen (F11); Esc or a double-click ends it");
+        videoBar.setBackground(Color.BLACK);
+        videoBar.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        popOutButton.setToolTipText("Pop out video: the picture in a window of its own, e.g. on a second screen; again to put it back");
+        fullScreenButton.setToolTipText("Full screen: the picture over the whole screen (F11); Esc or a double-click ends it");
         fullScreenButton.addActionListener(e -> toggleFullScreen());
-        Dimension same = new Dimension(Math.max(popOutButton.getPreferredSize().width, fullScreenButton.getPreferredSize().width),
-                Math.max(popOutButton.getPreferredSize().height, fullScreenButton.getPreferredSize().height));
-        for (JButton b : new JButton[]{popOutButton, fullScreenButton}) {
-            b.setPreferredSize(same);
-            b.setMaximumSize(same);
-            b.setAlignmentX(CENTER_ALIGNMENT);
-        }
+        for (JButton b : new JButton[]{popOutButton, fullScreenButton}) b.setAlignmentX(CENTER_ALIGNMENT);
         videoBar.add(popOutButton);
-        videoBar.add(Box.createVerticalStrut(6));
+        videoBar.add(Box.createVerticalStrut(4));
         videoBar.add(fullScreenButton);
         videoBar.add(Box.createVerticalGlue());
         video.add(videoBar, BorderLayout.EAST);
@@ -2193,7 +2187,8 @@ public class MainWindow extends JFrame {
                 videoHolder.add(videoView, BorderLayout.CENTER);
                 videoHolder.revalidate();
                 videoHolder.repaint();
-                popOutButton.setText("POP OUT VIDEO");
+                popOutButton.setText("Pop out video");
+                popOutButton.setGlyph(GlyphButton.Glyph.POP_OUT);
                 logLine("Video back in the main window.");
             }
         });
@@ -2203,7 +2198,8 @@ public class MainWindow extends JFrame {
         frame.setVisible(true);
         videoHolder.revalidate();
         videoHolder.repaint();
-        popOutButton.setText("VIDEO BACK");
+        popOutButton.setText("Video back");
+        popOutButton.setGlyph(GlyphButton.Glyph.VIDEO_BACK);
         logLine("Video in its own window. Close it (or VIDEO BACK) to put it back.");
     }
 
