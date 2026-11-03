@@ -4,9 +4,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.33 in the tree)
+## Where things stand (2026-11-03, 1.0.33)
 
-- **1.0.33 (weak reception), phone app pc.26 - built, tested on the PC, not released, not flown:** the pilot asked
+- **Released:** DRAUPNE Link **1.0.33** with phone app **DRAUPNE Flight 2.3.0-pc.26** (release
+  `flight-2.3.0-pc.26`, APK SHA-256 `b2a46c33…`, pinned in `ApkShare`). Nothing of it has flown yet.
+- **1.0.33 (weak reception), phone app pc.26 - tested on the PC, not flown:** the pilot asked
   for a review of the weak-reception handling and then for every finding to be fixed. Both apps changed, and the
   protocol grew (PROTOCOL.md: the Transport, RC and Video sections). The PC build compiles upstream's
   `UdpSender` and `ReceiverBuffer` from `flight-app/overlay/Common` now (the resend timer that died after the
