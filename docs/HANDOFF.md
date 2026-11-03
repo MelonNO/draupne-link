@@ -11,6 +11,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   off" with Open Tailscale / Connect anyway / Cancel, and the network line says "Waiting for the PC - Tailscale is
   off on this phone" while it runs that way. Release order as always: push, `gh release create flight-2.3.0-pc.20`
   (not Latest) with build/flight/DRAUPNE-Flight-2.3.0-pc.20.apk, download and check the SHA, then tag v1.0.28.
+- **Unreleased, tour (pilot's third round):** no POP OUT VIDEO / FULL SCREEN steps; a step at a button or a choice
+  keeps NEXT locked as "Press it" until that control was pressed (`TourNotice.requirePress`: an AWT mouse-released
+  watch on the control and its children, plus the button's action; UPDATE, the LINK card, the CURSOR and DRONE cells
+  and the last step don't require it); on the map steps the map itself stays live under the dimming
+  (`Step.live`, `Dim.contains`), so the CURSOR figures, panning, the wheel and pins work during the tour; the last
+  step brings the main window to the front over the map window.
 - **Unreleased, for 1.0.28's notes:** UPDATE made visible end to end after the pilot's "it downloads, closes, and
   nothing opens": the helper script (`SelfUpdate.script`) writes every step to `%TEMP%\DraupneLink-update\update.log`,
   waits up to 30 s for a locked installer and 2 min for the app, and whatever fails it starts the app again and
