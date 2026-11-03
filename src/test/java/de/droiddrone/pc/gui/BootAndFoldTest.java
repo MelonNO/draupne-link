@@ -37,8 +37,11 @@ class BootAndFoldTest {
         assertTrue(dark(shown.getRGB(5, 5)), "still black round it: " + Integer.toHexString(shown.getRGB(5, 5)));
         BufferedImage flying = BootReveal.frame(2800, 800, 500, video);
         int alphaCorner = flying.getRGB(5, 5) >>> 24;
-        assertTrue(alphaCorner < 200, "the black lifts while the pieces fly: " + alphaCorner);
-        BufferedImage end = BootReveal.frame(4010, 800, 500, video);
+        assertTrue(alphaCorner > 240, "black stays while the pieces fly: " + alphaCorner);
+        BufferedImage fading = BootReveal.frame(3800, 800, 500, video);
+        int alphaFading = fading.getRGB(5, 5) >>> 24;
+        assertTrue(alphaFading > 20 && alphaFading < 235, "the UI fades in after the morph: " + alphaFading);
+        BufferedImage end = BootReveal.frame(4170, 800, 500, video);
         assertTrue((end.getRGB(400, 250) >>> 24) < 20, "see-through at the end");
         assertTrue(count(end, Logo.RED.getRGB() & 0xffffff, 200) < 50, "the pieces have faded");
     }

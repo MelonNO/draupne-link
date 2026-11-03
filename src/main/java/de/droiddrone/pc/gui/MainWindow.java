@@ -1802,6 +1802,7 @@ public class MainWindow extends JFrame {
     }
 
     private void askPower(int mode) {
+        if (demoPower(mode)) return;
         if (connection == null) return;
         if (fcArmedNow()) {
             new LockedNotice(mode == ControlLink.POWER_STANDBY ? standbyButton : deepSleepButton, videoView, "ARMED",
@@ -1816,6 +1817,7 @@ public class MainWindow extends JFrame {
     }
 
     private void wakePhone() {
+        if (demoPower(ControlLink.POWER_NORMAL)) return;
         powerWanted = ControlLink.POWER_NORMAL;
         powerAskedAt = System.currentTimeMillis();
         powerSentAt = 0;
@@ -1923,7 +1925,7 @@ public class MainWindow extends JFrame {
         refreshPhone();
         if (connection == null) {
             videoView.setIdleText("Not connected");
-            if (powerRow != null && powerRow.isVisible()) powerRow.setVisible(false);
+            if (powerRow != null && powerRow.isVisible() && !tourPowerDemo) powerRow.setVisible(false);
             setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
             pingValue.setText("-");
             fcValue.setText("-");
@@ -2087,6 +2089,53 @@ public class MainWindow extends JFrame {
 
     JComponent tourLinkCard() {
         return linkCard;
+    }
+
+    /** The tour's SLEEP BUTTONS step: the power row is shown while nothing is connected, answering presses as a demo. */
+    private boolean tourPowerDemo;
+
+    JComponent tourPowerRow() {
+        return powerRow;
+    }
+
+    void tourPowerDemo(boolean on) {
+        if (connection != null) { // connected: the real row is there and answers for real
+            tourPowerDemo = false;
+            return;
+        }
+        tourPowerDemo = on;
+        powerRow.setVisible(on);
+        if (on) {
+            sleepFold.setShown(true, false);
+            standbyButton.setEnabled(true);
+            deepSleepButton.setEnabled(true);
+            wakeButton.setEnabled(false);
+            powerStatus.setText("A demo while nothing is connected: press STANDBY, DEEP SLEEP or WAKE to read what the phone would do.");
+        } else {
+            standbyButton.setEnabled(true);
+            deepSleepButton.setEnabled(true);
+            wakeButton.setEnabled(true);
+            powerStatus.setText(" ");
+        }
+        linkCard.revalidate();
+        linkCard.repaint();
+    }
+
+    /** The demo's answer to a sleep button, instead of the phone's; false when the row is real. */
+    private boolean demoPower(int mode) {
+        if (!tourPowerDemo || connection != null) return false;
+        standbyButton.setEnabled(mode == ControlLink.POWER_NORMAL);
+        deepSleepButton.setEnabled(mode == ControlLink.POWER_NORMAL);
+        wakeButton.setEnabled(mode != ControlLink.POWER_NORMAL);
+        powerStatus.setText(switch (mode) {
+            case ControlLink.POWER_STANDBY -> "<html>STANDBY - the phone would stop its camera, slow its GPS and telemetry and dim its "
+                    + "screen; the link stays. WAKE brings the picture back in about two seconds.</html>";
+            case ControlLink.POWER_DEEP_SLEEP -> "<html>DEEP SLEEP - the phone would drop the link, lock its screen and sleep, listening "
+                    + "for this PC 20 s every " + checkIntervalMin + " min and reporting its battery. WAKE reaches it at its next check.</html>";
+            default -> "<html>WAKE - the phone would be back to normal: the camera, the GPS and the sticks. Press STANDBY or DEEP SLEEP "
+                    + "again, or NEXT.</html>";
+        });
+        return true;
     }
 
     JComponent tourHeader() {

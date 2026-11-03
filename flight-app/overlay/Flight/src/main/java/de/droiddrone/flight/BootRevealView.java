@@ -35,11 +35,12 @@ import android.widget.FrameLayout;
 /**
  * The start, as on the PC: a black screen, the DRAUPNE mark fades in fast in the middle, then comes apart - the
  * four brackets fly to the screen's corners (the cards' bracket corners), the link between the bars folds away, the
- * crosshair shrinks out - as the black lifts and the app shows through. About 3 s; a tap skips it. The mark is
+ * crosshair flies to the pill - over black all the while; then the black lifts and the app fades in. About 4 s; a
+ * tap skips it. The mark is
  * drawn from its SVG (a 512 x 512 design) in the icon's red.
  */
 final class BootRevealView extends View {
-    private static final long FADE_IN_MS = 560, HOLD_MS = 500, FLY_MS = 2400, OUT_MS = 560; // 4 s: the flight unhurried
+    private static final long FADE_IN_MS = 560, HOLD_MS = 500, FLY_MS = 2400, OUT_MS = 700; // 4.2 s: the flight unhurried
     private static final long TOTAL_MS = FADE_IN_MS + HOLD_MS + FLY_MS + OUT_MS;
     private static final int RED = 0xFFFB1921, DARK = 0xFF121212, BLACK = 0xFF000000;
     private static final float BOX = 512f;
@@ -114,10 +115,10 @@ final class BootRevealView extends View {
             drawAll(canvas, lx, ly, size, alpha);
         } else {
             float fly = ease((t - FADE_IN_MS - HOLD_MS) / (float) FLY_MS);
-            float out = t < FADE_IN_MS + HOLD_MS + FLY_MS ? 0 : (t - FADE_IN_MS - HOLD_MS - FLY_MS) / (float) OUT_MS;
+            float out = t < FADE_IN_MS + HOLD_MS + FLY_MS ? 0 : Math.min(1f, (t - FADE_IN_MS - HOLD_MS - FLY_MS) / (float) OUT_MS);
             float pieceAlpha = 1 - out;
-            // the black lifts as the pieces fly
-            canvas.drawColor(Color.argb(Math.round(255 * (1 - fly)), 0, 0, 0));
+            // the black stays while the pieces fly: the app fades in only once the mark has become its outlines
+            canvas.drawColor(Color.argb(Math.round(255 * (1 - out)), 0, 0, 0));
             // the D morphs: its bars into the two cards, its diagonals into the CONNECT button; without those on
             // screen yet, the link between the bars folds into the middle and goes
             if (!drawD(canvas, lx, ly, size, fly, pieceAlpha)) {

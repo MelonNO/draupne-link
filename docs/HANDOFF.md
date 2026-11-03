@@ -4,7 +4,20 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.30)
+## Where things stand (2026-11-03, 1.0.31)
+
+- **1.0.31 (pilot's sixth round), phone app pc.24:** the boot cover stays opaque through the morph (`BootReveal`:
+  the black's alpha is `1 - out`, not `1 - fly`; `BootRevealView` the same; OUT_MS 700, 4.2 s in all), so nothing
+  of the UI shows before the mark has become its outlines, and the UI fades in as the outlines fade out. Tour: the
+  LINK card's step is two - CONNECT (`tourLinkCard`, no press) and SLEEP BUTTONS (`tourPowerRow`, press): the step's
+  `before` calls `MainWindow.tourPowerDemo(true)`, which shows the power row while nothing is connected and makes
+  STANDBY / DEEP SLEEP / WAKE answer in the status line (`demoPower`) instead of asking a phone; the new `Step.after`
+  (run by `Tour.next` / `end` for the step that is over) hides it again; `refreshLink` leaves the row alone while
+  the demo is on. The pilot reported the menu wipe still behind the tour notice and the connect step still one
+  step after the 1.0.30 release: both are 1.0.30 changes, so the running copy was most likely still 1.0.29 (its
+  update check ran every 6 h); 1.0.31 adds nothing to the wipe's layering (`TacticalCombo.Ghost` is in
+  POPUP_LAYER at position 0 since 1.0.30) - if it is still behind on 1.0.31, look at where the notice's window
+  differs from the menu's (both should be the main window's layered pane).
 
 - **Released:** DRAUPNE Link **1.0.30** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.23** (release
   `flight-2.3.0-pc.23`, APK SHA-256 `0173711c…`, pinned in `ApkShare`): the 1.0.30 bullets below. Nothing of the

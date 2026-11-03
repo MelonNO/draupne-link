@@ -19,11 +19,12 @@ import java.util.function.Supplier;
 /**
  * The start: a black window, the mark fades in fast in the middle, then comes apart - the four brackets fly to the
  * window's corners (where the cards' bracket borders are), the crosshair to the middle of the video, the link
- * between the bars folds away - as the black lifts and the UI shows through; the pieces fade out on arrival. About
- * 3 s; a click or key skips it. Drawn on the window's layered pane over everything, taking the mouse meanwhile.
+ * between the bars morphs into the big cards' outlines - over black all the while; then the black lifts and the UI
+ * fades in where the pieces are, as they fade out. About 4 s; a click or key skips it. The window's glass pane,
+ * taking the mouse meanwhile.
  */
 final class BootReveal extends JComponent {
-    private static final long FADE_IN_MS = 560, HOLD_MS = 500, FLY_MS = 2400, OUT_MS = 560; // 4 s in all: the flight unhurried
+    private static final long FADE_IN_MS = 560, HOLD_MS = 500, FLY_MS = 2400, OUT_MS = 700; // 4.2 s in all: the flight unhurried
     private static final long TOTAL_MS = FADE_IN_MS + HOLD_MS + FLY_MS + OUT_MS;
     /** The brackets' size on arrival (the card borders' brackets are about this big). */
     private static final double CORNER_SIZE = 150;
@@ -149,11 +150,11 @@ final class BootReveal extends JComponent {
                 return;
             }
             double fly = ease((t - FADE_IN_MS - HOLD_MS) / (double) FLY_MS);
-            double out = t < FADE_IN_MS + HOLD_MS + FLY_MS ? 0 : (t - FADE_IN_MS - HOLD_MS - FLY_MS) / (double) OUT_MS;
+            double out = t < FADE_IN_MS + HOLD_MS + FLY_MS ? 0 : Math.min(1, (t - FADE_IN_MS - HOLD_MS - FLY_MS) / (double) OUT_MS);
             float pieceAlpha = (float) (1 - out);
 
-            // the black lifts as the pieces fly
-            g.setComposite(AlphaComposite.SrcOver.derive((float) (1 - fly)));
+            // the black stays while the pieces fly: the UI fades in only once the mark has become its outlines
+            g.setComposite(AlphaComposite.SrcOver.derive((float) (1 - out)));
             g.setColor(Theme.BG);
             g.fillRect(0, 0, w, h);
             g.setComposite(AlphaComposite.SrcOver);

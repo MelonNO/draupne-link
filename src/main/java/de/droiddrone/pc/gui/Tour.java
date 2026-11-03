@@ -40,17 +40,21 @@ final class Tour {
      *               area, and for UPDATE, whose press would start the update
      */
     private record Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press,
-                        Supplier<JComponent> live, Supplier<JComponent> extra) {
+                        Supplier<JComponent> live, Supplier<JComponent> extra, Runnable after) {
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before) {
-            this(title, text, anchor, before, true, null, null);
+            this(title, text, anchor, before, true, null, null, null);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press) {
-            this(title, text, anchor, before, press, null, null);
+            this(title, text, anchor, before, press, null, null, null);
         }
 
         Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live) {
-            this(title, text, anchor, before, press, live, null);
+            this(title, text, anchor, before, press, live, null, null);
+        }
+
+        Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live, Supplier<JComponent> extra) {
+            this(title, text, anchor, before, press, live, extra, null);
         }
     }
 
@@ -85,9 +89,14 @@ final class Tour {
                 + "puts it back. A double-click on the video shows it alone. Try it after the tour.", main::tourPopOutButton, null, false));
         steps.add(new Step("FULL SCREEN", "The picture fills the whole screen (F11 too). Esc or a double-click brings the window back. "
                 + "Try it after the tour.", main::tourFullScreenButton, null, false));
-        steps.add(new Step("THE LINK CARD", "CONNECT, and while connected STANDBY, DEEP SLEEP and WAKE: the phone saves its battery "
-                + "before take-off and the PC wakes it. In flight the minimap takes this place, with POP OUT MAP under it. F3 opens "
-                + "the map window any time - as now.", main::tourLinkCard, null, false));
+        steps.add(new Step("CONNECT", "CONNECT opens the link to the phone (WATCH joins another PC's flight as a spectator). "
+                + "In flight the minimap takes this card's place, with POP OUT MAP under it. F3 opens the map window any time.",
+                main::tourLinkCard, null, false));
+        // the sleep buttons only show while connected: the step puts them on the card as a demo that answers presses
+        steps.add(new Step("SLEEP BUTTONS", "While connected, these are here. STANDBY stops the phone's camera and dims its "
+                + "screen; DEEP SLEEP locks the phone and lets it sleep, checking for this PC every CHECK EVERY minutes; WAKE brings "
+                + "it back. They fold away while the drone is armed. This is a demo: press one and read the line under them.",
+                main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false)));
         // on the map steps the map itself stays live under the dimming: panning, the wheel, pins and the cursor figures work
         Supplier<JComponent> map = () -> main.mapWindow().map();
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
@@ -139,6 +148,7 @@ final class Tour {
     private void next() {
         if (notice != null) notice.dismiss();
         notice = null;
+        after();
         index++;
         tries = 0;
         if (index >= steps.size()) {
@@ -160,8 +170,19 @@ final class Tour {
     private void end() {
         if (notice != null) notice.dismiss();
         notice = null;
+        after();
         index = steps.size();
         clearExamplePins();
+    }
+
+    /** The step that is over undoes what it set up (the sleep buttons' demo). */
+    private void after() {
+        if (index < 0 || index >= steps.size() || steps.get(index).after() == null) return;
+        try {
+            steps.get(index).after().run();
+        } catch (RuntimeException e) {
+            main.logLine("Tour: step " + (index + 1) + " could not clean up: " + e);
+        }
     }
 
     /** The tour's made-up pins on the map: shown by the PINS step, gone when the tour is over. */

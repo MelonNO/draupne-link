@@ -2,6 +2,11 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.31
+
+- Boot animation (PC and phone app 2.3.0-pc.24): black until the mark has morphed into the cards' outlines, then the UI fades in.
+- Tour: the LINK card as two steps - CONNECT, then SLEEP BUTTONS with the sleep buttons on the card as a demo that answers presses.
+
 ## 1.0.30
 
 - **Boot animation as a morph** (PC and phone app 2.3.0-pc.23): each piece of the mark's D is one shape that slides, turns and grows into a big card's outline (PC: LINK, LOG, the controller card; phone: the status and connection cards, CONNECT) and opens from the inside; the first frame is the mark, 4 s in all.

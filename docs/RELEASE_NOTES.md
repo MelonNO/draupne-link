@@ -1,11 +1,10 @@
 <!-- The release page text: only the version being released. Older versions are in CHANGELOG.md. -->
-## New in 1.0.30
+## New in 1.0.31
 
-Phone app **DRAUPNE Flight 2.3.0-pc.23** goes with it: update the phone (tap its yellow *Update available* line).
+Phone app **DRAUPNE Flight 2.3.0-pc.24** goes with it: update the phone (tap its yellow *Update available* line).
 
-- **Boot animation, PC and phone:** the mark's D no longer comes apart into pieces that fly to small buttons. Each of its four pieces is one shape all the way: it slides, turns and grows into the outline of a big part of the window - on the PC the two bars into the LINK and LOG cards and the two diagonals into the controller card at the bottom; on the phone the bars into the status and connection cards and the diagonals into the CONNECT button - and opens up from the inside until only the card's outline is left. The first frame is the mark itself, so there is no cut, and the flight takes 2.4 s instead of 1.6 (4 s in all).
-- **Updates show sooner:** the PC asks for a newer version every 15 minutes (it was every 6 hours), the phone app every 10 minutes when it comes to the front (it was once per start). A release made while the app is open shows within that time, or at once on a restart.
-- **Guide:** the connect step is about connecting only. A new step after it, *Sleep before take-off*, shows a working copy of the LINK card's STANDBY, DEEP SLEEP and WAKE buttons with CHECK EVERY: press them and the line under them answers as the real card does (the countdown to the sleeping phone's next check included); nothing reaches the phone from there.
-- **Tour:** the POP OUT VIDEO and FULL SCREEN steps are back (explained, not pressed - try them after the tour); DOWNLOAD AREA is explained, not pressed; PINS lists the three example pins too, and they can be renamed or removed there; a menu's opening animation plays in front of the tour's dimming and notice, not behind the notice with the menu jumping in front afterwards. A PC that was set up before there was a tour is offered it once, after the boot animation of its first start on this version.
-- **Deep sleep does nothing it needn't.** Between checks the phone app now also stops its telemetry thread (camera, battery and network state once a second), the microphone and the service's own timer; only the alarm for the next check is left. Opened while asleep, the app does not ask GitHub for updates and refreshes its screen every 5 seconds instead of every second. All of it comes back on WAKE.
-- Phone app pc.23: the boot animation above, the update check every 10 minutes, the quieter deep sleep.
+- **Boot animation, PC and phone:** the window stays black while the mark morphs into the cards' outlines; only then does the UI fade in where the outlines are, as they fade out. Nothing of the UI shows before the mark has become it.
+- **Tour:** the LINK card has two steps now. CONNECT, about connecting; then SLEEP BUTTONS, which puts STANDBY, DEEP SLEEP and WAKE on the card as a demo while nothing is connected (they are only there for real while connected): press one and the line under them says what the phone would do. The demo goes with the step.
+- Phone app pc.24: the boot animation above.
+
+If a menu's opening animation still plays behind the tour's notice, the running copy is older than 1.0.30: the title bar shows the version, and MENU > UPDATE installs the newer one.
