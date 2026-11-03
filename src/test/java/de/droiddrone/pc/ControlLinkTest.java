@@ -371,7 +371,8 @@ class ControlLinkTest {
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         link.sendPowerMode(ControlLink.POWER_DEEP_SLEEP, 2);
-        waitFor(() -> !phone.powerModes.isEmpty(), 2000, "the power mode at the phone");
+        // the waits are long: the release runner is slow and a thread may get no turn for a second or more
+        waitFor(() -> !phone.powerModes.isEmpty(), 8000, "the power mode at the phone");
         assertArrayEquals(new int[]{ControlLink.POWER_DEEP_SLEEP, 2}, phone.powerModes.get(0));
         // the phone sleeps (silent); this PC, told so, keeps quiet: a Connect in a listening window would wake it
         link.setDormant(true);
@@ -382,7 +383,7 @@ class ControlLinkTest {
         assertEquals(before, phone.connects.get(), "no Connect while dormant");
         // the phone's check window: "still here" with its battery; the dormant PC says sleep on
         phone.sendSleepHello(67, true, 5);
-        waitFor(() -> !phone.sleepAnswers.isEmpty(), 2000, "the PC's answer to the hello");
+        waitFor(() -> !phone.sleepAnswers.isEmpty(), 8000, "the PC's answer to the hello");
         assertEquals(0, phone.sleepAnswers.get(0), "dormant: sleep on");
         ControlLink.SleepHello hello = link.getSleepHello();
         assertNotNull(hello);
@@ -394,10 +395,10 @@ class ControlLinkTest {
         // WAKE: the next hello is answered with 1, the Connects resume, and the phone, listening again, takes one
         link.setDormant(false);
         phone.sendSleepHello(66, false, 5);
-        waitFor(() -> phone.sleepAnswers.size() >= 2, 2000, "the second answer");
+        waitFor(() -> phone.sleepAnswers.size() >= 2, 8000, "the second answer");
         assertEquals(1, phone.sleepAnswers.get(1), "after WAKE: wake");
         phone.silent = false;
-        waitFor(() -> phone.connects.get() > before, 2000, "a Connect after WAKE");
+        waitFor(() -> phone.connects.get() > before, 8000, "a Connect after WAKE");
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link back");
     }
 

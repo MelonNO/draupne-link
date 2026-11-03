@@ -6,7 +6,17 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.32)
 
-- **1.0.32 (pilot's seventh round), phone app pc.25 - not yet released:** the pilot saw the mark fade in as parts
+- **Released:** DRAUPNE Link **1.0.32** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.25** (release
+  `flight-2.3.0-pc.25`, APK SHA-256 `05ffec7f…`, pinned in `ApkShare`): the 1.0.32 bullet below. The tag's release
+  run failed twice on `ControlLinkTest.powerModeReachesThePhoneAndADormantLinkSendsNoConnect` ("Timed out waiting
+  for a Connect after WAKE", 2 s), both times about 8 s into the test task, and passed on the third rerun of the
+  same job; the push build of the same commit had passed the whole suite. Cause not found: the fake phone counts
+  every Connect at its socket before any other check, `UdpSender.sendConnect` sends from a thread of its own, and
+  the PC's `isConnected()` is the buffer's flag plus 2 s of silence - none of it explains a Connect that never
+  comes. The test's event waits are 8 s now (a wait ends as soon as the event comes, so a pass costs nothing). If
+  it fails again on the runner, that is a pattern, not the runner: `gh run rerun --failed` is the way out
+  meanwhile (a failed tag run makes no release, so the tag can be rerun).
+- **1.0.32 (pilot's seventh round), phone app pc.25:** the pilot saw the mark fade in as parts
   on the PC. `Logo.paint` painted each piece with its own alpha, so where the X runs under a bar's end the red
   doubled and the dark disc let the X's crossing through until alpha reached 1. Now `BootReveal.paintMarkFading`
   paints the mark solid into an image once (at the mark's sub-pixel place) and draws the image with the fade's
@@ -14,7 +24,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   same through `Canvas.saveLayerAlpha`. Test: `BootAndFoldTest.theMarkFadesInAsOneShape` (189 vs 126 red without
   the fix). The phone's crosshair no longer flies to the status pill ("goes to a random button and fades away"):
   it stays in the middle and shrinks out over the first 60 % of the fly, as the D leaves it. The `pill` target is
-  gone from `BootRevealView`. The PC frames were checked off screen; the phone's not run on a phone.
+  gone from `BootRevealView`. The PC frames were checked off screen and the pilot saw the PC's fade-in from the
+  dev window; the phone's not run on a phone.
 
 - **1.0.31 (pilot's sixth round), phone app pc.24:** the boot cover stays opaque through the morph (`BootReveal`:
   the black's alpha is `1 - out`, not `1 - fly`; `BootRevealView` the same; OUT_MS 700, 4.2 s in all), so nothing
