@@ -392,16 +392,18 @@ public class MainWindow extends JFrame {
     private JPopupMenu videoMenu() {
         JPopupMenu menu = styledMenu();
         ControlLink.VideoMode videoMode = ControlLink.VideoMode.parse(config.getString(ControlLink.VIDEO_MODE_KEY));
-        menu.add(new MenuRows.ChoiceRow("Video", "Bad coverage mode: 640x360, up to 1 Mbit/s, sturdier. Auto switches by itself",
+        menu.add(new MenuRows.ChoiceRow("Video", "SHARP: " + config.getSharpWidth() + "x" + config.getSharpHeight() + ", up to "
+                + config.getSharpBitrateLimitMbps() + " Mbit/s. ROBUST: a small picture, up to 1 Mbit/s, sturdier. AUTO switches by itself",
                 new String[]{"AUTO", "SHARP", "ROBUST"}, videoMode.ordinal(), i -> {
                     ControlLink.VideoMode m = ControlLink.VideoMode.values()[i];
                     save(Map.of(ControlLink.VIDEO_MODE_KEY, m.name().toLowerCase(java.util.Locale.ROOT)));
                     Connection c = connection;
                     if (c != null) c.getLink().setVideoMode(m);
                     logLine(switch (m) {
-                        case AUTO -> "Video: bad coverage mode comes on by itself when the link is weak.";
-                        case SHARP -> "Video: always the full picture (no bad coverage mode).";
-                        case ROBUST -> "Video: bad coverage mode always - 640x360, up to 1 Mbit/s, key frames sent twice.";
+                        case AUTO -> "Video: the sharp picture after 20 s of calm at the top bitrate, bad coverage mode when the link is weak - by itself.";
+                        case SHARP -> "Video: always the sharp picture - " + config.getSharpWidth() + "x" + config.getSharpHeight() + ", up to "
+                                + config.getSharpBitrateLimitMbps() + " Mbit/s, whatever the link.";
+                        case ROBUST -> "Video: bad coverage mode always - a small picture, up to 1 Mbit/s, key frames sent twice.";
                     });
                 }));
         menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;; the OSD stays upright. No delay",

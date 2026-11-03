@@ -388,23 +388,11 @@ public class InternalCamera implements Camera{
                     if (s != null && (sizes == null || s.length > sizes.length)) sizes = s;
                 }
             }
-            // DRAUPNE Link: the nearest size of the same shape (16:9 for 16:9), else the nearest of any. Upstream took the
-            // nearest of any: 1024x768 (4:3) for 960x540 on a test phone - a squashed picture, hardly fewer pixels
-            int minDiff = -1;
-            if (sizes != null) {
-                double aspect = (double) targetResolution.getWidth() / Math.max(1, targetResolution.getHeight());
-                for (int pass = 0; pass < 2 && minDiff == -1; pass++) {
-                    for (Size size : sizes) {
-                        boolean sameShape = Math.abs((double) size.getWidth() / Math.max(1, size.getHeight()) - aspect) < 0.03;
-                        if (pass == 0 && !sameShape) continue;
-                        int diff = Math.abs(size.getWidth() - targetResolution.getWidth()) + Math.abs(size.getHeight() - targetResolution.getHeight());
-                        if (diff < minDiff || minDiff == -1) {
-                            minDiff = diff;
-                            width = size.getWidth();
-                            height = size.getHeight();
-                        }
-                    }
-                }
+            // DRAUPNE Link: the size for the one asked for (pickSize); upstream took the nearest of any shape
+            Size picked = pickSize(sizes, targetResolution);
+            if (picked != null) {
+                width = picked.getWidth();
+                height = picked.getHeight();
             }
             // DRAUPNE Link: upstream took the camera's fastest range here, whatever was asked for - and this branch runs
             // for every camera that isn't high-speed, so the camera ran at 60 when the PC asked for 30. The range asked
@@ -418,6 +406,42 @@ public class InternalCamera implements Camera{
         cameraResolution = new Size(width, height);
         log("cameraResolution - Width: " + cameraResolution.getWidth() + ", Height: " + cameraResolution.getHeight());
         return true;
+    }
+
+    /**
+     * DRAUPNE Link: the size to open the camera at for the one asked for. The nearest of the same shape (16:9 for
+     * 16:9) when it is at most 1.5 times as wide as asked; else the smallest size of any shape with at least the
+     * asked pixels; else the nearest of any. A phone that lists 16:9 only at 1280x720 and 1920x1080 took 1280x720
+     * for the PC's 640x360 and 480x270 (pc.26: the nearest 16:9), so bad coverage mode and the survival tier never
+     * shrank the picture - 1280x720 at 250 kbit/s. Now they get 640x480 (pc.27); the PC letterboxes it. Upstream
+     * took the nearest of any shape: 1024x768 for 960x540, a squashed picture with hardly fewer pixels.
+     */
+    static Size pickSize(Size[] sizes, Size target) {
+        if (sizes == null || sizes.length == 0) return null;
+        double aspect = (double) target.getWidth() / Math.max(1, target.getHeight());
+        Size sameShape = null, any = null;
+        int sameDiff = -1, anyDiff = -1;
+        for (Size size : sizes) {
+            int diff = Math.abs(size.getWidth() - target.getWidth()) + Math.abs(size.getHeight() - target.getHeight());
+            if (anyDiff == -1 || diff < anyDiff) {
+                anyDiff = diff;
+                any = size;
+            }
+            boolean shape = Math.abs((double) size.getWidth() / Math.max(1, size.getHeight()) - aspect) < 0.03;
+            if (shape && (sameDiff == -1 || diff < sameDiff)) {
+                sameDiff = diff;
+                sameShape = size;
+            }
+        }
+        if (sameShape != null && sameShape.getWidth() <= target.getWidth() * 3 / 2) return sameShape;
+        long wanted = (long) target.getWidth() * target.getHeight();
+        Size smallest = null;
+        for (Size size : sizes) {
+            long pixels = (long) size.getWidth() * size.getHeight();
+            if (pixels < wanted) continue;
+            if (smallest == null || pixels < (long) smallest.getWidth() * smallest.getHeight()) smallest = size;
+        }
+        return smallest != null ? smallest : any;
     }
 
     /**

@@ -509,9 +509,9 @@ class VideoTest {
         b.onPhoneTarget(6_000_000);
         assertEquals(6, b.step());
         b.onPhoneTarget(20_000_000);
-        assertEquals(6, b.step(), "above the table: the top");
+        assertEquals(7, b.step(), "above the table: the top (8 Mbit/s, the sharp tier's, 1.0.34)");
         b.onPhoneTarget(-1);
-        assertEquals(6, b.step(), "no report: unchanged");
+        assertEquals(7, b.step(), "no report: unchanged");
     }
 
     /** The step outright to the floor (SET_BITRATE) when the queue fills; the relative command for the rest. */
@@ -530,6 +530,7 @@ class VideoTest {
             }
         });
         b.onPhoneTarget(6_000_000);
+        b.setMaxStep(6); // the set limit, 6 Mbit/s: the calm below raises no further
         long t = 0;
         for (; t < 20_000; t += 33) b.onFrame(false, t, 30, 80);
         sent.clear();

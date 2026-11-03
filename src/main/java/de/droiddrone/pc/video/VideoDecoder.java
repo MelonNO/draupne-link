@@ -172,7 +172,9 @@ public final class VideoDecoder implements AutoCloseable {
         av_opt_set_int(sws, "dstw", width, 0);
         av_opt_set_int(sws, "dsth", height, 0);
         av_opt_set_int(sws, "dst_format", AV_PIX_FMT_BGRA, 0);
-        av_opt_set_int(sws, "sws_flags", SWS_FAST_BILINEAR, 0);
+        // up-scaling (a 720p picture on a 1080p screen) bicubic: visibly sharper edges for 0.4 ms more a frame (720p to
+        // 1080p: 2.6 ms fast bilinear, 3.0 ms bicubic on an i7-14700); 1:1 and down-scaling fast bilinear as before
+        av_opt_set_int(sws, "sws_flags", width > src.width() ? SWS_BICUBIC : SWS_FAST_BILINEAR, 0);
         av_opt_set_int(sws, "threads", SCALE_THREADS, 0);
         if (sws_init_context(sws, null, null) < 0) {
             sws_freeContext(sws);

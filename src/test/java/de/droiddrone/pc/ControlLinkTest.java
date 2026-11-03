@@ -458,9 +458,48 @@ class ControlLinkTest {
         assertEquals(640, phone.configs.get(0).cameraWidth, "the very first config already carries the small size (1.0.33)");
         assertEquals(4, PcConfig.defaults().getBitrateLimitMbps());
         link.setVideoMode(ControlLink.VideoMode.SHARP);
-        waitFor(() -> phone.config.cameraWidth == 1280 && phone.videoProfile == 0, 3000, "back to the full picture");
+        waitFor(() -> phone.config.cameraWidth == 1920 && phone.videoProfile == 0, 3000, "the sharp picture (1.0.34)");
+        assertEquals(ControlLink.Tier.SHARP, link.getTier());
+        assertEquals(7, link.maxBitrateStep(), "the sharp 8 Mbit/s");
+        assertEquals(8_000_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[link.maxBitrateStep()]);
+        assertFalse(link.isRobust());
+    }
+
+    /**
+     * AUTO earns the sharp tier (1.0.34): calm at the normal top bitrate, no stall, for SHARP_AFTER_MS - then the
+     * sharp size and limit go out. A stall ends it at once: back to the normal picture, from where bad coverage mode
+     * is judged as before.
+     */
+    @Test
+    void autoGoesSharpWhenTheLinkIsCalmAndBackAtAStall() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.encoderBitRate = 4_000_000; // the phone sits at the normal top
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.setSharpAfterMsForTest(1500);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        assertEquals(1280, phone.configs.get(0).cameraWidth, "a session starts on the normal picture");
+        waitFor(() -> link.getTier() == ControlLink.Tier.SHARP && phone.config.cameraWidth == 1920, 5000, "sharp after the calm");
+        assertEquals(7, link.maxBitrateStep(), "up to 8 Mbit/s");
+        assertEquals(0, phone.videoProfile, "no bad coverage flags in the sharp tier");
+        phone.silent = true; // a stall: no pong for STALL_EVENT_MS, well under a link loss
+        Thread.sleep(ControlLink.STALL_EVENT_MS + 400);
+        phone.silent = false;
+        waitFor(() -> link.getTier() == ControlLink.Tier.NORMAL && phone.config.cameraWidth == 1280, 3000, "the normal picture after the stall");
         assertEquals(5, link.maxBitrateStep(), "the set 4 Mbit/s");
-        assertEquals(4_000_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[link.maxBitrateStep()]);
+    }
+
+    /** A phone that reports no bitrate setting (older than pc.13) is never judged calm at the top: no sharp tier. */
+    @Test
+    void aPhoneThatReportsNoBitrateNeverGoesSharp() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.setSharpAfterMsForTest(500);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        Thread.sleep(2500);
+        assertEquals(ControlLink.Tier.NORMAL, link.getTier());
+        assertTrue(phone.configs.stream().allMatch(c -> c.cameraWidth == 1280));
     }
 
     /**
@@ -493,7 +532,7 @@ class ControlLinkTest {
         assertEquals(250_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[link.maxBitrateStep()], "up to 250 kbit/s");
         assertTrue(link.isRobust());
         link.setVideoMode(ControlLink.VideoMode.SHARP);
-        waitFor(() -> link.getTier() == ControlLink.Tier.NORMAL && phone.config.cameraWidth == 1280 && phone.config.cameraFpsMax == 30, 3000, "SHARP: everything back");
+        waitFor(() -> link.getTier() == ControlLink.Tier.SHARP && phone.config.cameraWidth == 1920 && phone.config.cameraFpsMax == 30, 3000, "SHARP: the sharp picture at 30 fps");
     }
 
     /**

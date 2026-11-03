@@ -27,7 +27,8 @@
  *  only after 10 s of silence and never while armed; the stick sequence is 16 bits wide and starts over after
  *  300 ms without a frame; a video watchdog restarts the camera and encoder when they give nothing for 2 s; key
  *  frames leave at twice the bitrate, not in a burst; a parity packet per group of 8 packets (VIDEO_PARITY_GROUP);
- *  H.264 on request (profile bit 2); SET_BITRATE sets the step outright; the telemetry goes out in one datagram
+ *  H.264 on request (profile bit 2); SET_BITRATE sets the step outright; the telemetry goes out in one datagram;
+ *  pc.27: the emergency brake counts the socket's time only, not the pacing's, and the queue check waits out a key frame
  *  per 30 ms and the PHONE_STATE record ten times a second; the frame counter wraps to 2, so frame 1 always means
  *  a restarted stream; the camera part of a config change runs on the video starter thread, like StartVideo.
  */
@@ -1131,9 +1132,12 @@ public class Udp {
                             sendVideoFrame(buf.data);
                             break;
                     }
-                    // a queue behind a key frame is the key frame's own doing (paced over a few frame times): judged
-                    // after the next frame; a queue behind a plain frame means the uplink can't keep up
-                    if (!keyFrame && streamEncoder.videoStreamOutputBuffer.size() > Math.round(5 * cameraManager.getCamera().getCurrentFps() / 30f)){
+                    // a queue behind a key frame is the key frame's own doing (paced over a few frame times), and so is
+                    // the queue the plain frames behind it drain for a few frame times more (pc.27: it was judged after
+                    // the very next frame, and with the two copies of bad coverage mode always found 6 queued - a step
+                    // down at every key frame); a queue behind a plain frame after that means the uplink can't keep up
+                    if (!keyFrame && System.nanoTime() >= queueJudgeAfterNs
+                            && streamEncoder.videoStreamOutputBuffer.size() > Math.round(5 * cameraManager.getCamera().getCurrentFps() / 30f)){
                         streamEncoder.changeBitRate(false);
                     }
                 } catch (Exception e) {
@@ -1550,27 +1554,35 @@ public class Udp {
         videoFrameNum++;
     }
 
+    /** The sender loop judges its queue only from then on (after a key frame's paced send and the drain behind it). */
+    private volatile long queueJudgeAfterNs;
+
     private void sendKeyFrame(byte[] buf) {
         if (socket == null || socket.isClosed()) return;
         nextFrameNum();
-        int size = buf.length;
-        long start = System.nanoTime();
         // DRAUPNE Link: in bad coverage mode the whole key frame goes twice: a packet the 4G uplink dropped from the
         // first copy usually comes in the second (the PC waits for it)
-        for (int copy = 0; copy < (keyFramesTwice ? 2 : 1); copy++) {
-            sendFragments(UdpCommon.KeyFrame, buf, true, copy == 0 && keyFramesTwice);
+        int copies = keyFramesTwice ? 2 : 1;
+        long socketNs = 0;
+        for (int copy = 0; copy < copies; copy++) {
+            socketNs += sendFragments(UdpCommon.KeyFrame, buf, true, copy == 0 && keyFramesTwice);
         }
-        long timeMs = (System.nanoTime() - start) / 1000000;
-        processFrameSendTime(timeMs);
+        // the plain frames queued behind this key frame drain at four times the bitrate: the sender loop's queue
+        // check waits for that (twice the time the key frame was spread over)
+        long frameNs = 1_000_000_000L / Math.max(1, cameraManager.getCamera().getCurrentFps());
+        queueJudgeAfterNs = System.nanoTime() + 2L * KEY_FRAME_TIMES * copies * frameNs;
+        processFrameSendTime(socketNs / 1_000_000);
     }
 
     /**
      * A frame's packets, paced (packetGapNs), with its parity (bad coverage mode: one packet per PARITY_GROUP
      * packets, pc.26, or one for the whole frame for a PC that asked for that only).
+     * @return the time the socket itself took, ns (the pacing's waits not counted): the emergency brake's measure
      */
-    private void sendFragments(byte packetName, byte[] buf, boolean keyFrame, boolean withParity) {
+    private long sendFragments(byte packetName, byte[] buf, boolean keyFrame, boolean withParity) {
         int size = buf.length;
         long gapNs = packetGapNs(size, keyFrame);
+        long socketNs = 0;
         int offset = 0;
         int packet = 0;
         byte[] parity = withParity ? new byte[UdpCommon.packetLength - 9] : null;
@@ -1599,7 +1611,9 @@ public class Udp {
                         addParity(parity, buf, segment, offset - segment);
                         parityUsed = true;
                     }
+                    long t0 = System.nanoTime();
                     udpSender.sendPacket(packetData.getData());
+                    socketNs += System.nanoTime() - t0;
                     packet++;
                     if (parity != null && groupParity && (packet % PARITY_GROUP == 0 || offset >= size)) {
                         sendGroupParity((short) videoFrameNum, size, keyFrame, (packet - 1) / PARITY_GROUP, parity);
@@ -1620,11 +1634,16 @@ public class Udp {
                 log("sendParity error: " + e);
             }
         }
+        return socketNs;
     }
 
     /**
-     * DRAUPNE Link: the PC decides the bitrate. Here only an emergency brake: a key frame that took over three frame
-     * times to leave (pacing spreads it over half a frame time on purpose) means the uplink can't keep up at all.
+     * DRAUPNE Link: the PC decides the bitrate. Here only an emergency brake: a key frame whose packets took over
+     * three frame times in the socket itself means the uplink can't keep up at all. The pacing's waits are not
+     * counted (pc.27): pc.26 spread a key frame over up to three frame times - the brake's own threshold - and
+     * over six with the two copies of bad coverage mode, so the brake fired at every key frame and the bitrate
+     * spiralled to 150 kbit/s on a perfect link, raises locked (seen 2026-11-03, 12 minutes at 45 ms ping).
+     * @param timeMs the socket's time for the key frame, ms
      */
     private void processFrameSendTime(long timeMs){
         int frameTimeMs = 1000 / Math.max(1, cameraManager.getCamera().getCurrentFps());

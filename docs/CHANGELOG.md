@@ -4,10 +4,13 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 
 ## 1.0.34
 
+- **Video quality** (PC and phone app 2.3.0-pc.27): the phone's own emergency brakes counted the time its packet pacing takes on purpose (a key frame is spread over up to three frame times, six with the two copies of bad coverage mode), so they fired at nearly every key frame at 2 Mbit/s and under, the bitrate spiralled to 150 kbit/s and the raise lock kept it there - on a perfect link (12 minutes at 45 ms ping). They now count the socket's own time, and the queue check waits out a key frame.
+- **The sharp tier:** 1920x1080 at up to 8 Mbit/s (settings sharpWidth / sharpHeight / sharpBitrateLimitMbps). SHARP is always there; AUTO goes there after 20 s calm at the top bitrate and back to the normal picture at the first stall, a relay or 5 s under the top. The bitrate control has the 8 Mbit/s step.
+- Bad coverage mode and the survival tier on a phone without a small 16:9 size (phone app pc.27): the smallest size with enough pixels (640x480) instead of 1280x720 again; the PC letterboxes it.
+- A 720p picture on a 1080p screen is up-scaled bicubic: sharper edges, 0.4 ms more a frame.
 - Video: the PC sends its video profile with the first config of every session, the normal one too. The phone keeps the profile of the session before, so a phone left in bad coverage mode kept sending key frames twice, parity and H.264 to a PC that took it for normal.
 - Tour: a tip on the first step that every button can be pressed twice; EXIT TOUR is a small cross top right of the notice, and NEXT spans the box.
 - Guide: the connect step no longer scrolls to the bottom by itself (every check line that changed scrolled the page to itself); the *Sleep before take-off* step is gone - the tour's SLEEP BUTTONS step covers it.
-- Phone app unchanged (2.3.0-pc.26).
 
 ## 1.0.33
 

@@ -6,25 +6,43 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.34)
 
-- **1.0.34 (pilot's eighth round), phone app unchanged (pc.26) - built and tested, not released:** the pilot's
-  list after a day on 1.0.33. *"The video quality switch does not work, it is always in robust mode":* the day's
-  link logs on the pilot's PC (1.0.33, pc.26) show every session at 1280x720, H.265, `robust` 0, direct path, and
-  no mode change logged at all, so nothing on the PC side was in bad coverage mode; ask what showed "robust" (the
-  title bar's version, the VIDEO menu's lit segment, the OSD's video line or the picture) before looking further.
-  What was found and fixed is the one way the two sides can disagree: the phone keeps its profile flags (key frames
-  twice, group parity, H.264) across sessions and the PC sent the profile only on a tier change, so a phone left in
-  bad coverage mode by the session before stayed in it under a PC that thought it normal. The profile now goes out
-  with the first config of every session (`sessionRun`, before `sendConfig`; `decideForcedTier` no longer sends it
-  itself). Test: `ControlLinkTest.theVideoProfileGoesOutWithTheFirstConfigOfEverySession`. *Tour:* `Step.tip`, a
-  muted italic line under the text; the MENU step's says every button can be pressed twice. EXIT TOUR is
-  `TourNotice.CloseButton`, a cross top right of the notice (hidden on the last step as the button was), the STEP
-  counter sits left of it, NEXT spans the box. *The connect step scrolled down by itself:* every `WrappingText.setHtml`
-  moved the caret to the end of the new text, and `DefaultCaret` asks the scroll pane for the caret
-  (`scrollRectToVisible`), so each check row that changed (four times a second) scrolled the page to itself; the
-  caret's update policy is NEVER_UPDATE now (test: `WrappingTextTest`). *"Remove step 9":* on the pilot's PC the
-  guide's step 9 is "Sleep before take-off" (the done PC steps are skipped), and it is all in the tour's SLEEP
-  BUTTONS step: `PhoneGuideWizard.SleepPage` is gone, the connect step is the last step of Phone setup and the
-  first-time guide (`SetupWizardTest`).
+- **1.0.34 (pilot's eighth round), phone app 2.3.0-pc.27 - built and tested on the PC, not released, nothing
+  flown:** the pilot's list after a day on 1.0.33, then "the video quality is very bad, SHARP is exactly the same".
+  *Why the picture was bad - from the day's link log (18:36-18:54, 45 ms ping, direct path, no damaged frames):*
+  the phone's bitrate fell to 150-250 kbit/s within six minutes and stayed there twelve; AUTO then went to bad
+  coverage mode and the survival tier (15 fps) on the phone's own low bitrate, and the phone never took the small
+  sizes ("the phone didn't change the picture size (still 1280 wide)" at every switch). Two causes, both on the
+  phone: (1) its emergency brakes (`Udp.processFrameSendTime`: a key frame over 3 frame times to send; the sender
+  loop's queue check, `videoStreamOutputBuffer.size() > 5`) counted the time 1.0.33's own pacing takes
+  (`packetGapNs`: a key frame over up to KEY_FRAME_TIMES = 3 frame times, twice that with the two copies of bad
+  coverage mode), so they fired at nearly every key frame at 2 Mbit/s and under, each a step down plus a 2 s
+  raise lock (`StreamEncoder.emergencyDown`, `lockIncreaseBitrate`): the PC's raises never landed. pc.27:
+  `sendFragments` returns the socket's own time and the brake judges that; `queueJudgeAfterNs` holds the queue
+  check for twice the key frame's spread. (2) `InternalCamera` took the nearest 16:9 size for 640x360 and 480x270,
+  which on the pilot's phone is 1280x720 itself: `pickSize` takes the same shape only within 1.5x the asked width,
+  else the smallest size of any shape with at least the asked pixels (640x480 there); `VideoView.fit` letterboxes.
+  *The sharp tier (the pilot's ask):* `Tier.SHARP` above NORMAL (the enum is best-first; `isRobust` is
+  ordinal >= ROBUST, `wantHevc` / `profileFlags` follow it); `sharpWidth` / `sharpHeight` / `sharpBitrateLimitMbps`
+  in the settings (1920x1080, 8; the template has them, old files get the defaults); `cameraWidth/Height`,
+  `maxBitrateStep` and the Config's bitrate-limit byte (`bitrateLimitMbps()`) follow the tier; `BitrateControl`
+  has the 8 Mbit/s step (TOP_STEP 7; the phone's table has it). AUTO (`adjustResolution`): NORMAL -> SHARP after
+  `sharpHoldMs` (SHARP_AFTER_MS 20 s; doubled when a sharp spell ended within a minute, back to 20 s after one that
+  lasted) calm with the phone's reported bitrate at the normal top (a phone that reports none never goes sharp);
+  SHARP -> NORMAL at a stall, a relay, or SHARP_DROP_MS 5 s under the normal top; bad coverage mode is judged from
+  NORMAL as before. SHARP in the settings forces the tier (`decideForcedTier`: the first config carries 1080p); a
+  new AUTO session starts on NORMAL. Measured on the pilot's PC (i7-14700KF): 1080p H.264 software decode 1.9 ms
+  + 0.7 ms convert; 720p -> 1080p up-scaling 2.6 ms fast bilinear, 3.0 ms bicubic - `VideoDecoder` scales up
+  bicubic now. Latency: the sharp tier adds about 2 ms of decoding and bigger frames at the same pacing; AUTO
+  leaves it at the first stall. Tests: `ControlLinkTest.autoGoesSharpWhenTheLinkIsCalmAndBackAtAStall`,
+  `aPhoneThatReportsNoBitrateNeverGoesSharp`, the SHARP ends of `videoRobustAndSharpAreObeyedAtOnce` and the
+  survival test (`setSharpAfterMsForTest`). The phone's changes have no test (no phone unit tests): read
+  `pickSize` and the brake with care. *The rest of the round:* the video profile with the first config
+  (`theVideoProfileGoesOutWithTheFirstConfigOfEverySession`: the phone keeps the flags of the session before),
+  the tour's tip (`Step.tip`), EXIT TOUR as `TourNotice.CloseButton` with NEXT across the box, the connect step's
+  scroll (`WrappingText`'s caret NEVER_UPDATE; `WrappingTextTest`), "step 9" = `PhoneGuideWizard.SleepPage`
+  removed (the tour's SLEEP BUTTONS step has it). *Untried on hardware: all of it.* First flight: AUTO, the far
+  phone on 4G, link logs kept; the log should say "Video: sharp (calm at 4 Mbit/s for 20 s)" and the phone's
+  bitrate must no longer sink under the PC's 1 Mbit/s floor on a calm link.
 - **Released:** DRAUPNE Link **1.0.33** with phone app **DRAUPNE Flight 2.3.0-pc.26** (release
   `flight-2.3.0-pc.26`, APK SHA-256 `b2a46c33…`, pinned in `ApkShare`). Nothing of it has flown yet.
 - **1.0.33 (weak reception), phone app pc.26 - tested on the PC, not flown:** the pilot asked

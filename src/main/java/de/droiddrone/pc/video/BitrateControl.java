@@ -43,7 +43,7 @@ public class BitrateControl {
     /** The phone's steps; it starts on 2 Mbit/s (step 4). The PC doesn't lower below step 3, 1 Mbit/s. */
     static final int START_STEP = 4;
     static final int FLOOR_STEP = 3;
-    private static final int TOP_STEP = 6;
+    private static final int TOP_STEP = 7;
     /**
      * A filling uplink queue (2026-11-01: the ping went to 3 s, then 7.7 s, at 6 Mbit/s): ping SPIKE_MS over the usual
      * (the median of the last second) for SPIKE_HOLD_MS, or no pong at all for a while, goes to the floor at once
@@ -226,8 +226,8 @@ public class BitrateControl {
         }
     }
 
-    /** The phone's steps, bit/s (150 kbit/s from phone app pc.26; an older phone stops at 250). */
-    public static final int[] STEPS_BPS = {150_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000};
+    /** The phone's steps, bit/s (150 kbit/s from phone app pc.26; an older phone stops at 250; 8 Mbit/s is the sharp tier's top, 1.0.34). */
+    public static final int[] STEPS_BPS = {150_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000, 8_000_000};
 
     /**
      * The phone's own report of its bitrate setting (phone app 2.3.0-pc.13 on): the PC's count of the steps follows it,
@@ -241,7 +241,7 @@ public class BitrateControl {
         step = s;
     }
 
-    /** The step the PC thinks the phone is on: 0-5 for 0.25-6 Mbit/s (tests, and the link log). */
+    /** The step the PC thinks the phone is on: 0-7 for 0.15-8 Mbit/s (tests, and the link log). */
     public synchronized int step() {
         return step;
     }

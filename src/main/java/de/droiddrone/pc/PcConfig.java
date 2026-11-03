@@ -193,6 +193,10 @@ public class PcConfig {
     public int getCameraWidth() { return getInt("cameraWidth"); }
     public int getCameraHeight() { return getInt("cameraHeight"); }
     public int getBitrateLimitMbps() { return getInt("bitrateLimitMbps"); }
+    /** The sharp tier's picture size and top bitrate (1.0.34); equal to the normal ones = no sharp tier. */
+    public int getSharpWidth() { return getInt("sharpWidth"); }
+    public int getSharpHeight() { return getInt("sharpHeight"); }
+    public int getSharpBitrateLimitMbps() { return getInt("sharpBitrateLimitMbps"); }
 
     /** Channel source specs in AETR+AUX order; null where a channel is not configured. */
     public String[] getChannelSpecs() {
