@@ -6,8 +6,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.34)
 
-- **1.0.34 (pilot's eighth round), phone app 2.3.0-pc.27 - built and tested on the PC, not released, nothing
-  flown:** the pilot's list after a day on 1.0.33, then "the video quality is very bad, SHARP is exactly the same".
+- **Released:** DRAUPNE Link **1.0.34** with phone app **DRAUPNE Flight 2.3.0-pc.27** (release
+  `flight-2.3.0-pc.27`, APK SHA-256 `034a424c…`, pinned in `ApkShare`). Nothing of it has flown yet.
+- **1.0.34 (pilot's eighth round), phone app 2.3.0-pc.27 - released 2026-11-03, nothing flown:** the pilot's list after a day on 1.0.33, then "the video quality is very bad, SHARP is exactly the same".
   *Why the picture was bad - from the day's link log (18:36-18:54, 45 ms ping, direct path, no damaged frames):*
   the phone's bitrate fell to 150-250 kbit/s within six minutes and stayed there twelve; AUTO then went to bad
   coverage mode and the survival tier (15 fps) on the phone's own low bitrate, and the phone never took the small
