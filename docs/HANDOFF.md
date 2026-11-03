@@ -6,6 +6,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-03, 1.0.27)
 
+- **Unreleased, for 1.0.28's notes:** the channel bars (RC check and the controller card) name each AUX after what
+  Drone setup put on it ("AUX1 ARM", `ChannelBars.setPurposes`), the last item of the review left open. Still open
+  from the review, by choice: per-window double buffering for the popped-out video (unmeasurable here; the comment
+  in `VideoView` says what the setting does), and the OSD outline drawing (measured: the nine-pass drawString is
+  4-6x cheaper than stroked glyphs, so it stays).
+
 - **Released:** DRAUPNE Link **1.0.27** (Latest) with phone app **DRAUPNE Flight 2.3.0-pc.19**: a full code review
   (five areas, read-only, then five parallel workers in git worktrees) with every finding fixed and every suggested
   feature built, plus the pilot's second SETUP feedback round. **None of it has flown**: first a bench test, props off.
