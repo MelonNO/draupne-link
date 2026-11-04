@@ -6,17 +6,18 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-04, 1.0.37)
 
-- **Released:** DRAUPNE Link **1.0.36** (Latest, 2026-11-04, tag run 41790044072 green first try) with the unchanged
-  phone app **DRAUPNE Flight 2.3.0-pc.28** attached; before it 1.0.35 with that phone app (release
+- **Released:** DRAUPNE Link **1.0.37** (Latest, 2026-11-04, tag run 41794606908 green first try) with phone app
+  **DRAUPNE Flight 2.3.0-pc.29** (release `flight-2.3.0-pc.29`, APK SHA-256 `10a57f20…`, pinned in `ApkShare`);
+  before it 1.0.36 with pc.28, and 1.0.35 with that phone app (release
   `flight-2.3.0-pc.28`, APK SHA-256 `4a2c346e…`, pinned in `ApkShare`). Nothing of it has flown or been tried on the
   phone; the names, the simplified phone app and the map tools are all untried on hardware.
-- **1.0.37 CLEAR ALL + RENAME - built, tests green, not released:** the pilot: "Clear all should also remove pins and
+- **1.0.37 CLEAR ALL + RENAME - released 2026-11-04:** the pilot: "Clear all should also remove pins and
   rulers" - `MapWindow`'s CLEAR ALL clears `graphics`, `pins` (`Pins.clear`) and the live measurement
   (`MapView.hasMeasurement` / `clearMeasurement`). "Make it possible to rename the names of phones in the name map" -
   `NameMapDialog.renameSelected` (RENAME button, phones only, online only): a free Mobile name from a combo,
   `Names.rename(from, to)` (the entry moves, old key cleared, new key written), `NameService.assign(ip, name)` sends
   NAME_ASSIGN from an ephemeral socket and scans; the LINK card's `phoneName` follows. Test: `NamesTest.renameMovesAPhone...`.
-- **1.0.37 PREARM - built, tests green, not released:** the pilot: "Add the possibility for prearm ... controller
+- **1.0.37 PREARM - released 2026-11-04:** the pilot: "Add the possibility for prearm ... controller
   calibration defaults aux 3 to prearm and ... the betaflight setup sets it to betaflight mode as well". `ModeSwitch`:
   `PREARM_KEY` drone.prearmAux (default 3, off = leave), `MODE_PREARM` 36 (msp_box.c permanent id), `PREARM_RANGE` up,
   `parsePrearmAux`, `prearmAuxes`, a 7-arg `plan(..., armAux, prearmAux)` (the 6-arg one leaves PREARM) with
@@ -28,7 +29,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   `ModeSwitchTest.prearm*`. *Untried on a flight controller.* Open question for the pilot: with a PREARM mode set
   Betaflight blocks arming (NOPREARM in RC CHECK's blockers) until the switch is up - pilots with no third switch
   should pick *Leave as it is*.
-- **1.0.37, phone app pc.29 - built, PC tests green, not released:** the pilot: "Remove the phone name and [IP] in the
+- **1.0.37, phone app pc.29 - released 2026-11-04:** the pilot: "Remove the phone name and [IP] in the
   app, the app should only show the name". `MainActivity.updatePhoneInfo` sets THIS PHONE to `phoneName()` alone (or
   the "No name yet" hint); it still scans the interfaces for the colour (green with a Tailscale address, yellow
   without) and `phoneInfoAddress` (the long press's copy). The unused `phoneNameLine` and the strings
