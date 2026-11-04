@@ -94,15 +94,11 @@ final class BootReveal extends JComponent {
         });
     }
 
-    private void follow() {
-        Component layer = getParent();
-        if (layer == null) return;
-        Rectangle r = new Rectangle(0, 0, layer.getWidth(), layer.getHeight());
-        if (!r.equals(getBounds())) setBounds(r);
-    }
-
+    // No sizing of its own: the root pane's layout sizes the glass pane (the layered pane's size, inside the root
+    // pane's insets) on every layout. A follow() here that set it to the root pane's full size fought that layout:
+    // the height flipped by the insets (23 px) on every frame, and with it the mark and the brackets - the jitter
+    // the pilot saw at every start (1.0.38).
     private void tick() {
-        follow();
         if (System.currentTimeMillis() - startedAt >= TOTAL_MS) {
             finish();
             return;

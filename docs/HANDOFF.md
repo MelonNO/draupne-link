@@ -4,13 +4,20 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-04, 1.0.37)
+## Where things stand (2026-11-04, 1.0.38)
 
 - **Released:** DRAUPNE Link **1.0.37** (Latest, 2026-11-04, tag run 41794606908 green first try) with phone app
   **DRAUPNE Flight 2.3.0-pc.29** (release `flight-2.3.0-pc.29`, APK SHA-256 `10a57f20…`, pinned in `ApkShare`);
   before it 1.0.36 with pc.28, and 1.0.35 with that phone app (release
   `flight-2.3.0-pc.28`, APK SHA-256 `4a2c346e…`, pinned in `ApkShare`). Nothing of it has flown or been tried on the
   phone; the names, the simplified phone app and the map tools are all untried on hardware.
+- **1.0.38 boot jitter - built, tests green, not released:** the pilot: "the boot animation on pc still jitters" after
+  1.0.36's combo-width fix. Measured with a throwaway print in `BootReveal.paintComponent` (the targets and the glass
+  pane's size on every change): the cards never moved; the glass pane's height flipped 1032 <-> 1009 on every frame.
+  `BootReveal.follow()` (from the earlier layered-pane version) set the glass pane to the root pane's full size on
+  every tick, and `JRootPane`'s layout set it back to the layered pane's size inside the root pane's 23 px insets.
+  Everything painted from the height (the mark at h/2, the brackets at h) jumped 11 px every other frame. `follow()`
+  is gone; the layout owns the size (as `onOpen`'s comment already said). Measured again: one size, no flips.
 - **1.0.37 CLEAR ALL + RENAME - released 2026-11-04:** the pilot: "Clear all should also remove pins and
   rulers" - `MapWindow`'s CLEAR ALL clears `graphics`, `pins` (`Pins.clear`) and the live measurement
   (`MapView.hasMeasurement` / `clearMeasurement`). "Make it possible to rename the names of phones in the name map" -

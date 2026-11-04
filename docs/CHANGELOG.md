@@ -2,6 +2,10 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.38
+
+- **Boot animation, no more jitter:** the animation's canvas fought the window's layout over its height on every frame (23 px, the root pane's insets), so the mark and the brackets jumped up and down for the whole flight. It now takes the size the layout gives it. (1.0.36's fixed phone-list width was a real fix for a smaller shift, but not this one.)
+
 ## 1.0.37
 
 - **CLEAR ALL** on the map tools takes the pins and the measurement off too, not just the drawings and symbols.
