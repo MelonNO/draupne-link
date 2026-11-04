@@ -2,6 +2,10 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.37
+
+- **Phone app pc.29:** THIS PHONE on the status card shows the phone's DRAUPNE name alone ("MobileCharlie"); the device name and the addresses are gone from it. A tap still picks a name, a long press still copies the Tailscale address, and the line is yellow while Tailscale is off.
+
 ## 1.0.36
 
 - **Symbols to the standard:** the unit symbols are now MIL-STD-2525D / APP-6D geometry - the standard's frames (land units a rectangle, diamond, square or quatrefoil; the drones the air frames, open at the bottom), its icons fitted to each frame (the infantry cross, the armour track, the artillery dot, the reconnaissance slash, the anti-tank chevron, the engineer E, the air-defence dome, the supply line, the medical cross across the frame, the headquarters line and staff), the drones as the standard's unmanned-aircraft icons (the fixed-wing UAV chevron, the vertical-take-off UAV) with the role letter above them (R reconnaissance, A attack, U utility), and the echelon amplifiers in the standard's place and size above the frame. A little larger than before (a friendly land frame is 45 x 30 px).

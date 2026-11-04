@@ -787,34 +787,12 @@ public class MainActivity extends Activity {
             // no interfaces to look at
         }
         phoneInfoAddress = tailscale != null ? tailscale : others.length() > 0 ? others.toString().split(", ")[0] : null;
+        // pc.29: the name alone (the pilot: the app should only show "MobileCharlie"); the device name and the addresses
+        // are gone from the card. The colour still says whether Tailscale is up, a long press still copies the address.
         String ddName = phoneName();
-        StringBuilder text = new StringBuilder(ddName.isEmpty() ? getString(R.string.dd_phone_no_name) : ddName);
-        text.append('\n').append(deviceName());
-        text.append('\n').append(tailscale != null ? getString(R.string.dd_phone_tailscale, tailscale) : getString(R.string.dd_phone_tailscale_off));
-        if (others.length() > 0) text.append('\n').append(getString(R.string.dd_phone_other_ip, others));
-        String s = text.toString();
+        String s = ddName.isEmpty() ? getString(R.string.dd_phone_no_name) : ddName;
         if (!s.contentEquals(tvPhoneInfo.getText())) tvPhoneInfo.setText(s);
         tvPhoneInfo.setTextColor(tailscale != null ? colorOk : colorWarn);
-    }
-
-    private String phoneNameLine() {
-        String model = (Build.MANUFACTURER == null ? "" : Build.MANUFACTURER + " ") + (Build.MODEL == null ? "" : Build.MODEL);
-        String name = null;
-        if (Build.VERSION.SDK_INT >= 25) {
-            try {
-                name = android.provider.Settings.Global.getString(getContentResolver(), android.provider.Settings.Global.DEVICE_NAME);
-            } catch (RuntimeException ignored) {
-            }
-        }
-        if (name == null || name.trim().isEmpty()) {
-            try {
-                name = android.provider.Settings.Secure.getString(getContentResolver(), "bluetooth_name");
-            } catch (RuntimeException ignored) {
-            }
-        }
-        model = model.trim();
-        if (name == null || name.trim().isEmpty() || name.trim().equalsIgnoreCase(model)) return model.isEmpty() ? "Android phone" : model;
-        return name.trim() + (model.isEmpty() ? "" : "  (" + model + ")");
     }
 
     /** A tap on THIS PHONE: pick the name by hand (the master PC gives one otherwise; a pick overrides it). */

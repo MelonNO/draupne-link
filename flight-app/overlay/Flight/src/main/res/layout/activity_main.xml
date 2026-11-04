@@ -112,7 +112,7 @@
                 style="@style/DD.Value"
                 android:text="@string/status_disconnected" />
 
-            <!-- pc.28: what this phone is called and where it is on the network (the address the PC connects to); a tap copies the address -->
+            <!-- pc.29: this phone's DRAUPNE name (MobileAlpha ...), nothing else; a tap picks one, a long press copies the address -->
             <TextView style="@style/DD.Label" android:text="@string/dd_label_this_phone" />
 
             <TextView
