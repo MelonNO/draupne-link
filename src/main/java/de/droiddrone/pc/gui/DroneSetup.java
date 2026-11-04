@@ -91,6 +91,8 @@ final class DroneSetup {
          * @param board      the board's name and the craft's, for the USB row ("" if none)
          * @param battery    the battery as Betaflight sees it, or null if it couldn't be asked
          * @param receiverNow the receiver(s) on before any change, for the log and the list of changes
+         * @param prearmTarget the PREARM switch chosen (AUX number, 0 = leave as it is)
+         * @param prearmAuxes every AUX PREARM is on in Betaflight
          */
         private record Read(String port, String version, boolean msp, int rate, int target, int cells, int cellTarget,
                             boolean applied, String error, ArmSwitch arm, java.nio.file.Path backup, List<String> ports,
@@ -98,12 +100,13 @@ final class DroneSetup {
                             int rescueTarget, String failsafe, ModeSwitch.Failsafe failsafeTarget, boolean rescueFitted,
                             String failsafeProblem, String failsafeNote, int armTarget, String refused,
                             List<BetaflightPlan.Change> plan, List<String> replaced, String board,
-                            BetaflightUsb.BatteryState battery, Set<Integer> armAuxes, String receiverNow, boolean cellsConfirmed) {
+                            BetaflightUsb.BatteryState battery, Set<Integer> armAuxes, String receiverNow, boolean cellsConfirmed,
+                            int prearmTarget, Set<Integer> prearmAuxes) {
             Read(String port, String error, int cellTarget, ModeSwitch modeTarget, int rescueTarget,
-                 ModeSwitch.Failsafe failsafeTarget, int armTarget, List<String> ports) {
+                 ModeSwitch.Failsafe failsafeTarget, int armTarget, int prearmTarget, List<String> ports) {
                 this(port, "", false, -1, 0, -1, cellTarget, false, error, null, null, ports, modeTarget, null, null, null,
                         rescueTarget, null, failsafeTarget, false, null, null, armTarget, null, List.of(), List.of(), "", null,
-                        Set.of(), "", false);
+                        Set.of(), "", false, prearmTarget, Set.of());
             }
 
             /** A switch (ARM, flight modes, GPS rescue) was written this round: the radio calibration may be off. */
@@ -129,6 +132,7 @@ final class DroneSetup {
         private final Part battery = settings.part("Battery");
         private final Combined switches = new Combined("Switches");
         private final Part armRow = switches.part("Arm");
+        private final Part prearmRow = switches.part("Prearm");
         private final Part modeRow = switches.part("Flight modes");
         private final Part rescueRow = switches.part("GPS rescue");
         private final CheckRow motors = new CheckRow("Motors and props");
@@ -139,6 +143,9 @@ final class DroneSetup {
         /** The ARM switch (AUX number, 0 = leave ARM as it is in Betaflight); AUX1 by default. */
         private volatile int armAux;
         private javax.swing.JComboBox<String> armChoice;
+        /** The PREARM switch (AUX number, 0 = leave PREARM as it is in Betaflight); AUX3 by default. */
+        private volatile int prearmAux;
+        private javax.swing.JComboBox<String> prearmChoice;
         private final CheckRow failsafeRow = new CheckRow("Failsafe (signal lost)");
         /** The pilot's failsafe choice: left as it is by default. */
         private volatile ModeSwitch.Failsafe failsafeChoice = ModeSwitch.Failsafe.KEEP;
@@ -345,6 +352,8 @@ final class DroneSetup {
             ArmSwitch known = ArmSwitch.parse(main.config().getString(ArmSwitch.KEY));
             armRow.set(State.PENDING, armAux > 0 ? "<b>AUX" + armAux + "</b> - written when the flight controller is found."
                     : known == null ? "Read from Betaflight when the flight controller is found." : describe(known));
+            prearmRow.set(State.PENDING, prearmAux > 0 ? "<b>AUX" + prearmAux + "</b> - written when the flight controller is found."
+                    : "Left as set in Betaflight.");
             showModeChoice();
             showRescueChoice();
             showFailsafeChoice();
@@ -417,6 +426,16 @@ final class DroneSetup {
             armChoice.addActionListener(e -> armChoiceChanged());
             row.add(armChoice);
             row.add(javax.swing.Box.createHorizontalStrut(10));
+            prearmAux = ModeSwitch.parsePrearmAux(main.config().getString(ModeSwitch.PREARM_KEY));
+            row.add(Theme.label("PREARM", Theme.headingFont(12f), Theme.MUTED));
+            prearmChoice = new javax.swing.JComboBox<>(armSwitches.clone());
+            prearmChoice.setToolTipText("A second switch that must be on (up) before ARM arms: a knocked ARM switch alone does nothing. "
+                    + "PREARM on any other switch is taken off.");
+            prearmChoice.setSelectedIndex(prearmAux);
+            TacticalCombo.install(prearmChoice);
+            prearmChoice.addActionListener(e -> prearmChoiceChanged());
+            row.add(prearmChoice);
+            row.add(javax.swing.Box.createHorizontalStrut(10));
             row.add(Theme.label("GPS RESCUE", Theme.headingFont(12f), Theme.MUTED));
             String[] switches = new String[ModeSwitch.MAX_AUX + 1];
             switches[0] = "None";
@@ -444,6 +463,20 @@ final class DroneSetup {
             armAux = aux;
             main.save(Map.of(ModeSwitch.ARM_KEY, aux == 0 ? ModeSwitch.OFF : Integer.toString(aux)));
             armRow.set(State.PENDING, aux == 0 ? "Left as set in Betaflight." : "<b>AUX" + aux + "</b> - written when the flight controller is found.");
+            switchChanged();
+            showManual();
+            if (!found || failed) return;
+            done = false;
+            applies = 0;
+            nextTry = 0;
+        }
+
+        private void prearmChoiceChanged() {
+            int aux = prearmChoice.getSelectedIndex();
+            if (aux == prearmAux) return;
+            prearmAux = aux;
+            main.save(Map.of(ModeSwitch.PREARM_KEY, aux == 0 ? ModeSwitch.OFF : Integer.toString(aux)));
+            prearmRow.set(State.PENDING, aux == 0 ? "Left as set in Betaflight." : "<b>AUX" + aux + "</b> - written when the flight controller is found.");
             switchChanged();
             showManual();
             if (!found || failed) return;
@@ -653,11 +686,13 @@ final class DroneSetup {
             ModeSwitch m = modeSwitch;
             int rescue = rescueAux;
             int arm = armAux;
+            int prearm = prearmAux;
             manualHtml = ("Can't plug the drone into this PC? Make the same settings in Betaflight Configurator: "
                     + "<b>Receiver</b> tab > Receiver Mode <b>MSP RX input</b> > Save. "
                     + "<b>CLI</b> tab > <b>set serial_update_rate_hz = 2000</b> (1000 on F411 boards), "
                     + "<b>set force_battery_cell_count = " + cells + "</b> > <b>save</b>."
                     + (arm == 0 ? "" : " <b>Modes</b> tab: <b>ARM</b> on AUX" + arm + " 1700-2100.")
+                    + (prearm == 0 ? "" : " <b>Modes</b> tab: <b>PREARM</b> on AUX" + prearm + " 1700-2100.")
                     + (m == null ? "" : " <b>Modes</b> tab: on AUX" + m.aux() + ", " + modeRanges(m) + " > Save.")
                     + (failsafeChoice == ModeSwitch.Failsafe.KEEP ? "" : " <b>Failsafe</b> tab: Stage 2 procedure <b>"
                     + failsafeChoice.title + "</b>.")
@@ -719,12 +754,13 @@ final class DroneSetup {
             int rescueTarget = rescueAux;
             ModeSwitch.Failsafe failsafeTarget = failsafeChoice;
             int armTarget = armAux;
-            background(() -> work(mayApply, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget), this::show);
+            int prearmTarget = prearmAux;
+            background(() -> work(mayApply, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget), this::show);
         }
 
         /** One round: find the FC, read the settings, and change them in the same CLI session if needed. */
         private Read work(boolean mayApply, int cellTarget, boolean cellsOk, ModeSwitch modeTarget, int rescueTarget,
-                          ModeSwitch.Failsafe failsafeTarget, int armTarget) {
+                          ModeSwitch.Failsafe failsafeTarget, int armTarget, int prearmTarget) {
             List<BetaflightUsb.Port> all = BetaflightUsb.findFlightControllers();
             if (all.isEmpty()) return null;
             List<String> names = all.stream().map(BetaflightUsb.Port::systemName).toList();
@@ -732,7 +768,7 @@ final class DroneSetup {
             List<BetaflightUsb.Port> ports = chosen == null ? all : all.stream().filter(p -> p.systemName().equals(chosen)).toList();
             if (ports.isEmpty()) {
                 return new Read(chosen, chosen + " isn't plugged in - pick another port, or Automatic.", cellTarget, modeTarget,
-                        rescueTarget, failsafeTarget, armTarget, names);
+                        rescueTarget, failsafeTarget, armTarget, prearmTarget, names);
             }
             // each port that looks like one, not just the first: a GPS or ESC adapter may come first. Asked over MSP
             // first (no restart, nothing written); only Betaflight gets the CLI
@@ -745,16 +781,16 @@ final class DroneSetup {
                                 + "Betaflight: flash it with Betaflight Configurator. Nothing was changed.";
                         continue;
                     }
-                    return work(fc, port, mayApply, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, names);
+                    return work(fc, port, mayApply, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, names);
                 } catch (IOException e) {
                     why = port.systemName() + ": " + e.getMessage();
                 }
             }
-            return new Read(ports.get(0).systemName(), why, cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, names);
+            return new Read(ports.get(0).systemName(), why, cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, names);
         }
 
         private Read work(BetaflightUsb fc, BetaflightUsb.Port port, boolean mayApply, int cellTarget, boolean cellsOk, ModeSwitch modeTarget,
-                          int rescueTarget, ModeSwitch.Failsafe failsafeTarget, int armTarget, List<String> ports) {
+                          int rescueTarget, ModeSwitch.Failsafe failsafeTarget, int armTarget, int prearmTarget, List<String> ports) {
             try {
                 java.util.Set<Integer> modesOffered = null; // over MSP, before the CLI: which modes this board has
                 try {
@@ -851,14 +887,15 @@ final class DroneSetup {
                     if (rescueFailsafe) failsafeNote = rule;
                     else rescueNote = "With GPS rescue on a switch, " + Character.toLowerCase(rule.charAt(0)) + rule.substring(1);
                 }
-                ModeSwitch.Plan modes = modeTarget == null && rescueOn == 0 && armTarget == 0 ? null
-                        : ModeSwitch.plan(aux, modesOffered, blocked, modeTarget, rescueOn, armTarget);
+                ModeSwitch.Plan modes = modeTarget == null && rescueOn == 0 && armTarget == 0 && prearmTarget == 0 ? null
+                        : ModeSwitch.plan(aux, modesOffered, blocked, modeTarget, rescueOn, armTarget, prearmTarget);
                 List<String> replaced = modes == null ? List.of() : modes.replaced();
                 if (modes != null && !modes.commands().isEmpty()) {
                     List<String> what = new java.util.ArrayList<>();
                     if (modeTarget != null && modes.problem() == null) what.add("flight modes on AUX" + modeTarget.aux() + ": " + modeTarget.describe());
                     if (rescueOn > 0 && modes.rescueProblem() == null) what.add("GPS rescue up on AUX" + rescueOn);
                     if (armTarget > 0 && modes.armProblem() == null) what.add("ARM on AUX" + armTarget);
+                    if (prearmTarget > 0 && modes.prearmProblem() == null) what.add("PREARM on AUX" + prearmTarget);
                     plan.add(new BetaflightPlan.Change("Modes: " + String.join("; ", what) + "." + takenOff(replaced), modes.commands()));
                 }
                 boolean apply = mayApply && !plan.isEmpty() && version.startsWith("Betaflight"); // never INAV & co.
@@ -894,15 +931,15 @@ final class DroneSetup {
                             BetaflightPlan.targetSerialRate(version), BetaflightPlan.forcedCells(forced), cellTarget, apply, null, arm, backup, ports,
                             modeTarget, modes, gpsFound, rescueNote, rescueTarget, failsafe, failsafeTarget, rescueFailsafe,
                             failsafeProblem, failsafeNote, armTarget, refused, List.copyOf(plan), replaced, board, batteryNow,
-                            ModeSwitch.armAuxes(aux), receiverNow, cellsOk);
+                            ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux));
                 }
                 return new Read(port.systemName(), version, mspRx, BetaflightPlan.serialRate(rate),
                         BetaflightPlan.targetSerialRate(version), BetaflightPlan.forcedCells(forced), cellTarget, false, null, arm, null, ports,
                         modeTarget, modes, gpsFound, rescueNote, rescueTarget, failsafe, failsafeTarget, rescueFailsafe,
                         failsafeProblem, failsafeNote, armTarget, null, List.copyOf(plan), replaced, board, batteryNow,
-                        ModeSwitch.armAuxes(aux), receiverNow, cellsOk);
+                        ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux));
             } catch (IOException e) {
-                return new Read(port.systemName(), e.getMessage(), cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, ports);
+                return new Read(port.systemName(), e.getMessage(), cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, ports);
             }
         }
 
@@ -1046,7 +1083,8 @@ final class DroneSetup {
                 return;
             }
             if (r.cellTarget() != cells || r.cellsConfirmed() != cellsConfirmed || !java.util.Objects.equals(r.modeTarget(), modeSwitch)
-                    || r.rescueTarget() != rescueAux || r.failsafeTarget() != failsafeChoice || r.armTarget() != armAux) {
+                    || r.rescueTarget() != rescueAux || r.failsafeTarget() != failsafeChoice || r.armTarget() != armAux
+                    || r.prearmTarget() != prearmAux) {
                 // changed meanwhile: write it
                 applies = 0;
                 nextTry = 0;
@@ -1071,6 +1109,23 @@ final class DroneSetup {
                         : "ARM is on no switch in Betaflight - the drone can't be armed. Choose a switch under ARM above (AUX1 is usual).");
             } else {
                 armRow.set(State.OK, armText);
+            }
+            boolean prearmOnIt = r.prearmAuxes().contains(r.prearmTarget());
+            if (r.prearmTarget() > 0 && armPlan != null && armPlan.prearmProblem() != null) {
+                prearmRow.set(State.WARN, armPlan.prearmProblem());
+            } else if (r.prearmTarget() > 0 && !prearmOnIt) {
+                prearmRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite
+                        ? "<b>AUX" + r.prearmTarget() + "</b> - written with <b>Write</b>."
+                        : "Could not put PREARM on AUX" + r.prearmTarget() + " - set it in the Modes tab (see <b>By hand</b>).");
+            } else if (r.prearmTarget() > 0) {
+                prearmRow.set(State.OK, "PREARM on AUX" + r.prearmTarget() + " (up = prearm; Betaflight arms only while it is on)."
+                        + (r.prearmAuxes().size() > 1 ? " PREARM is on more than one switch in Betaflight - set it on one." : ""));
+            } else if (r.prearmAuxes().isEmpty()) {
+                prearmRow.set(State.INFO, "No PREARM switch in Betaflight: ARM alone arms. Choose a switch under PREARM above for a second one.");
+            } else {
+                List<String> on = new java.util.ArrayList<>();
+                for (int a : r.prearmAuxes()) on.add("AUX" + a);
+                prearmRow.set(State.OK, "PREARM on " + String.join(", ", on) + " (left as it is).");
             }
             receiver.set(r.msp() ? State.OK : pendingWrite ? State.TODO : State.BAD, r.msp() ? "MSP RX input."
                     : pendingWrite ? "MSP RX input - now " + r.receiverNow() + ". Written with <b>Write</b>."

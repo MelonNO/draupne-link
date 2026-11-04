@@ -287,4 +287,38 @@ class ModeSwitchTest {
         assertEquals("GPS RESCUE", ModeSwitch.Mode.GPS_RESCUE.configuratorName);
         assertEquals("ANGLE", ModeSwitch.Mode.ANGLE.configuratorName);
     }
+
+    @Test
+    void prearmSwitchDefaultsToAux3() throws Exception {
+        assertEquals(3, ModeSwitch.parsePrearmAux(""));
+        assertEquals(0, ModeSwitch.parsePrearmAux("off"));
+        assertEquals(5, ModeSwitch.parsePrearmAux("5"));
+        assertEquals("PREARM", ModeSwitch.purposes(de.droiddrone.pc.PcConfig.defaults())[2].title(), "the calibration names AUX3 after it");
+    }
+
+    @Test
+    void prearmIsPutOnItsSwitchUpAndTakenOffOthers() {
+        // ARM on AUX1 already; PREARM (36) on AUX5 before: moved to AUX3, up, so there is one prearm switch
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 4 36 4 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 3);
+        assertNull(p.armProblem());
+        assertNull(p.prearmProblem());
+        assertEquals(List.of("aux 4 0 0 900 900 0 0", "aux 1 36 2 1700 2100 0 0"), p.commands(), "the old one cleared, the new PREARM in the lowest free slot");
+        assertEquals(List.of("PREARM on AUX5"), p.replaced());
+        // none before: written into a free slot; already there: nothing to do
+        assertEquals(List.of("aux 1 36 2 1700 2100 0 0"), ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 3).commands());
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 2 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 3).commands().isEmpty());
+        // left as it is (0): PREARM elsewhere stays
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 4 36 4 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0).commands().isEmpty());
+        assertEquals(Set.of(5), ModeSwitch.prearmAuxes(aux("aux 4 36 4 1700 2100 0 0")));
+    }
+
+    @Test
+    void prearmOnTheArmModeOrRescueSwitchIsRefused() {
+        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), null, 0, 1, 1).prearmProblem().contains("ARM is on AUX1"));
+        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 0, 1, 2).prearmProblem().contains("flight mode switch"));
+        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), null, 4, 1, 4).prearmProblem().contains("GPS rescue switch"));
+        // the flight modes and ARM are written all the same
+        ModeSwitch.Plan p = ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 0, 1, 2);
+        assertEquals(List.of("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 11 1 1700 2100 0 0"), p.commands());
+    }
 }

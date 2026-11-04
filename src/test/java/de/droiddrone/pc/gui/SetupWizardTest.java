@@ -79,6 +79,8 @@ class SetupWizardTest {
         // one switch only
         config.set(de.droiddrone.pc.setup.ModeSwitch.KEY, "off");
         config.set(de.droiddrone.pc.setup.ModeSwitch.RESCUE_KEY, "off");
+        assertEquals("Calibrate the radio again so AUX1 (ARM) and AUX3 (PREARM) are the right switches.", DroneSetup.radioRedoText(config));
+        config.set(de.droiddrone.pc.setup.ModeSwitch.PREARM_KEY, "off");
         assertEquals("Calibrate the radio again so AUX1 (ARM) is the right switch.", DroneSetup.radioRedoText(config));
     }
 

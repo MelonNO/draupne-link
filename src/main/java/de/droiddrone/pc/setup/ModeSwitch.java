@@ -26,6 +26,8 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
     static final int[][] RANGES = {{900, 1300}, {1300, 1700}, {1700, 2100}};
     static final String[] POSITIONS = {"low", "middle", "high"};
     private static final int MODE_ARM = 0;
+    /** Betaflight's permanent id for PREARM (msp_box.c). */
+    private static final int MODE_PREARM = 36;
 
     /**
      * GPS rescue from Betaflight 4.4 (where it was rewritten, with its landing phase and sanity checks; earlier ones
@@ -120,8 +122,17 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
 
     /** The AUX numbers (1 = AUX1) ARM is on in the CLI's "aux" output: none, one, or - not covered - several. */
     public static Set<Integer> armAuxes(String auxOutput) {
+        return auxesOf(auxOutput, MODE_ARM);
+    }
+
+    /** The AUX numbers PREARM is on in the CLI's "aux" output. */
+    public static Set<Integer> prearmAuxes(String auxOutput) {
+        return auxesOf(auxOutput, MODE_PREARM);
+    }
+
+    private static Set<Integer> auxesOf(String auxOutput, int mode) {
         Set<Integer> auxes = new java.util.TreeSet<>();
-        for (Slot s : slots(auxOutput)) if (s.used() && s.mode() == MODE_ARM) auxes.add(s.channel() + 1);
+        for (Slot s : slots(auxOutput)) if (s.used() && s.mode() == mode) auxes.add(s.channel() + 1);
         return auxes;
     }
 
@@ -187,6 +198,20 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         return parseAux(saved, DEFAULT_ARM_AUX);
     }
 
+    /**
+     * The PREARM switch Drone setup puts in Betaflight's Modes (1.0.37): its AUX number, default AUX3, up = prearm; "off" =
+     * leave PREARM as it is. With a PREARM mode set, Betaflight arms only while it is on - a second switch before the
+     * ARM one, so a knocked ARM switch alone does nothing. One prearm switch: PREARM on any other is taken off.
+     */
+    public static final String PREARM_KEY = "drone.prearmAux";
+    public static final int DEFAULT_PREARM_AUX = 3;
+    static final int[] PREARM_RANGE = {1700, 2100};
+
+    /** The saved PREARM switch: its AUX number, 0 for "leave as it is"; the default when missing or broken. */
+    public static int parsePrearmAux(String saved) {
+        return parseAux(saved, DEFAULT_PREARM_AUX);
+    }
+
     private static int parseAux(String saved, int fallback) {
         if (saved == null || saved.isBlank()) return fallback;
         if (saved.trim().equalsIgnoreCase(OFF)) return 0;
@@ -230,6 +255,10 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         if (rescue > 0 && fitted && p[rescue - 1] == null) {
             p[rescue - 1] = new Purpose("GPS rescue", "Flip the GPS rescue switch up (rescue on).");
         }
+        int prearm = parsePrearmAux(config.getString(PREARM_KEY));
+        if (prearm > 0 && p[prearm - 1] == null) {
+            p[prearm - 1] = new Purpose("PREARM", "Flip the PREARM switch up (prearm on). Betaflight arms only while it is on: flip it before ARM.");
+        }
         return p;
     }
 
@@ -267,9 +296,11 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
      * @param elsewhere     the same modes on other switches, left as they are
      * @param replaced      what was on the switches before and is taken off
      * @param armProblem    why the ARM switch can't be written, or null
+     * @param prearmProblem why the PREARM switch can't be written, or null
      */
     public record Plan(List<String> commands, String problem, String rescueProblem, List<Mode> missing,
-                       java.util.Map<Mode, String> blocked, List<String> elsewhere, List<String> replaced, String armProblem) {
+                       java.util.Map<Mode, String> blocked, List<String> elsewhere, List<String> replaced, String armProblem,
+                       String prearmProblem) {
         public boolean isSet() {
             return problem == null && commands.isEmpty();
         }
@@ -294,14 +325,21 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         return plan(auxOutput, available, blocked, modes, rescueAux, 0);
     }
 
+    /** As below, PREARM left as it is. */
+    public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
+                            int rescueAux, int armAux) {
+        return plan(auxOutput, available, blocked, modes, rescueAux, armAux, 0);
+    }
+
     /**
      * The switches together (they share Betaflight's mode slots).
      * @param modes     the flight mode switch, or null to leave it
      * @param rescueAux GPS rescue up on this AUX too (0 = no): for when Betaflight's failsafe is GPS rescue
      * @param armAux    ARM on this AUX, up (0 = leave ARM as it is). ARM on any other switch is taken off: one arm switch.
+     * @param prearmAux PREARM on this AUX, up (0 = leave PREARM as it is). PREARM on any other switch is taken off.
      */
     public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
-                            int rescueAux, int armAux) {
+                            int rescueAux, int armAux, int prearmAux) {
         blocked = java.util.Map.copyOf(blocked);
         List<Slot> slots = slots(auxOutput);
         String armProblem = null;
@@ -319,6 +357,19 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         Set<Integer> armChannels = new HashSet<>();
         if (armChannel >= 0) armChannels.add(armChannel);
         else for (Slot s : slots) if (s.used() && s.mode() == MODE_ARM) armChannels.add(s.channel());
+        String prearmProblem = null;
+        int prearmChannel = -1;
+        if (prearmAux > 0) {
+            if (modes != null && modes.aux == prearmAux) {
+                prearmProblem = "AUX" + prearmAux + " is the flight mode switch - pick another switch for PREARM.";
+            } else if (rescueAux == prearmAux) {
+                prearmProblem = "AUX" + prearmAux + " is the GPS rescue switch - pick another switch for PREARM.";
+            } else if (armChannels.contains(prearmAux - 1)) {
+                prearmProblem = "ARM is on AUX" + prearmAux + " - pick another switch for PREARM.";
+            } else {
+                prearmChannel = prearmAux - 1;
+            }
+        }
         List<Mode> missing = new ArrayList<>();
         String problem = null, rescueProblem = null;
         java.util.Map<Integer, List<int[]>> wanted = new java.util.LinkedHashMap<>(); // channel -> {mode, start, end}
@@ -359,7 +410,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         List<String> elsewhere = new ArrayList<>();
         List<Slot> onSwitches = new ArrayList<>();
         for (Slot s : slots) {
-            if (!s.used() || s.mode() == MODE_ARM) continue;
+            if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
             if (wanted.containsKey(s.channel())) {
                 onSwitches.add(s);
             } else if (managed.contains(s.mode())) {
@@ -402,13 +453,28 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             }
             if (!armThere) place.add(0, new int[]{armChannel, MODE_ARM, ARM_RANGE[0], ARM_RANGE[1]});
         }
+        if (prearmChannel >= 0) {
+            boolean prearmThere = false;
+            for (Slot s : slots) {
+                if (!s.used() || s.mode() != MODE_PREARM) continue;
+                if (s.channel() == prearmChannel) {
+                    prearmThere = true; // its own range stays, like ARM's
+                    continue;
+                }
+                commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
+                free.add(s.index());
+                String line = "PREARM on AUX" + (s.channel() + 1);
+                if (!replaced.contains(line)) replaced.add(line);
+            }
+            if (!prearmThere) place.add(new int[]{prearmChannel, MODE_PREARM, PREARM_RANGE[0], PREARM_RANGE[1]});
+        }
         for (Slot s : slots) {
             if (!s.used()) free.add(s.index());
         }
         free.sort(null);
         if (free.size() < place.size()) {
             return new Plan(List.of(), "Betaflight's Modes are full - free a few in Betaflight Configurator.", rescueProblem,
-                    missing, blocked, elsewhere, List.of(), armProblem);
+                    missing, blocked, elsewhere, List.of(), armProblem, prearmProblem);
         }
         for (int i = 0; i < place.size(); i++) {
             int[] w = place.get(i);
@@ -421,7 +487,8 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             boolean refilled = c.contains(" 900 900") && commands.stream().anyMatch(o -> o != c && o.split(" ")[1].equals(slot));
             if (!refilled) result.add(c);
         }
-        return new Plan(List.copyOf(result), problem, rescueProblem, missing, blocked, elsewhere, List.copyOf(replaced), armProblem);
+        return new Plan(List.copyOf(result), problem, rescueProblem, missing, blocked, elsewhere, List.copyOf(replaced), armProblem,
+                prearmProblem);
     }
 
     private static String key(int channel, int mode, int start, int end) {
@@ -446,6 +513,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             case 3 -> "ALT HOLD";
             case 13 -> "BEEPER";
             case 35 -> "TURTLE";
+            case 36 -> "PREARM";
             default -> "Betaflight mode " + id;
         };
     }

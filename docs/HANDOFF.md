@@ -10,6 +10,18 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   phone app **DRAUPNE Flight 2.3.0-pc.28** attached; before it 1.0.35 with that phone app (release
   `flight-2.3.0-pc.28`, APK SHA-256 `4a2c346e…`, pinned in `ApkShare`). Nothing of it has flown or been tried on the
   phone; the names, the simplified phone app and the map tools are all untried on hardware.
+- **1.0.37 PREARM - built, tests green, not released:** the pilot: "Add the possibility for prearm ... controller
+  calibration defaults aux 3 to prearm and ... the betaflight setup sets it to betaflight mode as well". `ModeSwitch`:
+  `PREARM_KEY` drone.prearmAux (default 3, off = leave), `MODE_PREARM` 36 (msp_box.c permanent id), `PREARM_RANGE` up,
+  `parsePrearmAux`, `prearmAuxes`, a 7-arg `plan(..., armAux, prearmAux)` (the 6-arg one leaves PREARM) with
+  `Plan.prearmProblem` (refused on the ARM, flight-mode or rescue switch - lowest priority, so the others are written
+  as before); PREARM already on the chosen switch keeps its range like ARM, PREARM elsewhere is taken off (one prearm
+  switch); `purposes` names the AUX "PREARM" (after ARM / modes / rescue, first come first). `DroneSetup`: `prearmRow`
+  under Switches, a PREARM combo beside ARM (`prearmChoiceChanged`), `prearmTarget` / `prearmAuxes` in `Read`, the
+  round passes it through, *By hand* lists it. Example properties: drone.armAux / drone.prearmAux. Tests:
+  `ModeSwitchTest.prearm*`. *Untried on a flight controller.* Open question for the pilot: with a PREARM mode set
+  Betaflight blocks arming (NOPREARM in RC CHECK's blockers) until the switch is up - pilots with no third switch
+  should pick *Leave as it is*.
 - **1.0.37, phone app pc.29 - built, PC tests green, not released:** the pilot: "Remove the phone name and [IP] in the
   app, the app should only show the name". `MainActivity.updatePhoneInfo` sets THIS PHONE to `phoneName()` alone (or
   the "No name yet" hint); it still scans the interfaces for the colour (green with a Tailscale address, yellow
