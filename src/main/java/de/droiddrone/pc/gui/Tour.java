@@ -401,7 +401,9 @@ final class Tour {
             JLayeredPane layer = root.getLayeredPane();
             // the dim sits under the popup layer: a menu that opens, and the rows that fly as it closes, show over it
             layer.add(dim, JLayeredPane.MODAL_LAYER);
-            layer.add(this, JLayeredPane.DRAG_LAYER);
+            // 1.0.38: above every animation in the window - a window's fade-in (DRAG_LAYER), the menu's rows as they fly
+            // (POPUP_LAYER) - so the notice never goes behind one and pops out when it ends (the pilot)
+            layer.add(this, Integer.valueOf(JLayeredPane.POPUP_LAYER + 10));
             dim.setBounds(0, 0, layer.getWidth(), layer.getHeight());
             if (!place()) {
                 dismiss();

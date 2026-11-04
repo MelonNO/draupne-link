@@ -1,12 +1,29 @@
 <p align="center"><img src="docs/images/logo.png" width="70%" alt="DRAUPNE Link"></p>
 
-**Fly your Betaflight drone over 4G from a Windows PC.**
+**Fly your Betaflight drone over 4G from a Windows PC - with a tactical map, NATO symbols and a phone that only needs a name.**
 Named after Draupne (Old Norse *Draupnir*), Odin's ring. Based on [DroidDrone](https://github.com/DroidDrone/DroidDrone)
 and called DroidDrone PC up to version 1.0.15.
 
-Your radio plugs into the PC; an Android phone on the drone carries the sticks, the live video and the telemetry over the mobile network. A map shows where the drone is and has been, works without internet once you've saved the area, and a second PC can watch your flight.
+Your radio plugs into the PC; an Android phone on the drone carries the sticks, the live video and the telemetry over the mobile network. The PC shows the picture with a full OSD, a map of where the drone is and has been, and a set of map tools for planning the flight. The map works without internet once you have saved the area, and a second PC can watch the flight.
 
 ![OSD over the live video](docs/images/osd.png)
+
+## What it looks like
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/map-tools.png" alt="MAP TOOLS: NATO symbols, an axis of advance, an objective, a route"><br><b>Map tools.</b> Standard unit symbols (MIL-STD-2525D / APP-6D), lines, rectangles, arrows and a ruler with an elevation profile. Export a box as a picture and KML; import KML from Google Earth or ATAK.</td>
+<td width="50%"><img src="docs/images/boot-animation.png" alt="The boot animation: the mark comes apart into the window"><br><b>The start.</b> The mark comes apart: its brackets fly to the window's corners, its crosshair into the video, its bars become the cards. Four seconds, a click skips it.</td>
+</tr>
+<tr>
+<td><img src="docs/images/map-topo.png" alt="A flight over Kartverket's topo map, pins and launch rings"><br><b>The map.</b> Kartverket topo and printed maps, satellite pictures or OpenStreetMap, MGRS / UTM / degrees, pins with distance and bearing, every flight saved as GPX, whole areas saved for flying offline.</td>
+<td><img src="docs/images/tour.png" alt="The tour: a box pointing at MENU"><br><b>The tour.</b> After setup, a guided walk through the window, button by button. After an update, a short tour of just what is new.</td>
+</tr>
+</table>
+
+![Every unit symbol in every affiliation](docs/images/symbols.png)
+
+**Symbols to the standard:** infantry, mechanised infantry, armour, artillery, reconnaissance, anti-tank, engineer, air defence, ISR and attack drones (fixed-wing and multirotor), utility drone, supply, medical, headquarters and a plain unit, each as friend, hostile, neutral or unknown, with echelon marks from team to division.
 
 ## Get started in 3 steps
 
@@ -38,18 +55,22 @@ Betaflight 4.4 is **not required**, only recommended:
 |---|---|---|
 | **This PC** | The **installer** installs **Tailscale** (private network between PC and phone), adds the firewall rules and switches to the High performance power plan. The wizard opens Tailscale's sign-in page and skips every step that is already done | Sign in to Tailscale |
 | **Drone** | Over USB, with nothing else to click: backs up Betaflight's settings first, then sets the receiver to **MSP**, the **stick delay setting**, the battery's **cell count** (`force_battery_cell_count`, 6 unless you change it), your **switches** (ARM on AUX1, a 3-position flight mode switch on AUX2: acro / angle / GPS position hold, PREARM on AUX3 - a second switch that must be on before ARM arms) and the **failsafe** (leave as it is, drop, or GPS rescue, with a rescue switch on AUX4). Each can be changed or left alone; nothing else on the drone is touched | Check the cell count, plug it in. No USB cable? **By hand** shows the same settings for Betaflight Configurator |
-| **Radio** | Detects it (pick one if several are plugged in), then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)); the switches are named after what Drone setup put on them | Plug it in and pick *USB Joystick (HID)* on the radio |
-| **Phone** | Downloads [this project's DRAUPNE Flight](#the-phone-app), checks it, and serves it to your phone by **QR code**. Spots the phone joining Tailscale and saves its address | Scan two QR codes, set four phone settings from a short list |
-| **Connect** | Lists the phone by its name (MobileAlpha ...) the moment DRAUPNE Flight is open on it, and holds the link open: it turns green by itself, then measures the path (direct or relayed) and the round-trip time and gives you a verdict. Can run the latency test right after setup | Type in the values, tap CONNECT, plug the phone into the flight controller |
+| **Radio** | Detects it (pick one if several are plugged in), then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)); the switches are named after what Drone setup put on them (ARM, flight modes, PREARM, GPS rescue) | Plug it in and pick *USB Joystick (HID)* on the radio |
+| **Phone** | Downloads [this project's DRAUPNE Flight](#the-phone-app), checks it, and serves it to your phone by **QR code**. The step turns green by itself the moment the app is open on the phone and answers by name | Scan two QR codes, allow what the phone app asks for; it points out the rest in yellow |
+| **Connect** | Lists the phone by its name (MobileAlpha ...) the moment DRAUPNE Flight is open on it, and holds the link open: it turns green by itself, then measures the path (direct or relayed) and the round-trip time and gives you a verdict. Can run the latency test right after setup | Pick the phone, press CONNECT, plug the phone into the flight controller |
 
 <p>
 <img src="docs/images/setup-welcome.png" width="49%" alt="Setup wizard: welcome">
 <img src="docs/images/setup-betaflight.png" width="49%" alt="Setup wizard: drone">
 </p>
 
-## Flying
+## Names, not addresses
 
-![Main window](docs/images/main-window.png)
+Every phone running DRAUPNE Flight on your Tailscale network is **MobileAlpha, MobileBravo ...** and every PC running DRAUPNE Link is **PCAlpha, PCBravo ...** Nobody types an address: the PC asks every device on the network who it is, the pilot PC with the highest letter online gives each new phone the first free name, and the phone keeps it. On the LINK card you pick the phone by name and press CONNECT; a spectator picks the pilot PC the same way.
+
+**MENU > LINK > Name map** lists every phone and PC the PC has seen: name, address, device, Tailscale machine name, when it was last seen. **RENAME** gives a phone another name (the phone is told and keeps it), **REMOVE** forgets a device, and *THIS PC IS* changes this PC's own letter. The phone shows its name on its status card; a tap there picks one by hand.
+
+## Flying
 
 - Press **CONNECT** (as **Pilot**; **Spectator**, next to it, only watches another PC's flight, see [below](#watching-from-a-second-pc)). The status turns **LINK READY** and the phone's camera appears with the **OSD**: horizon and pitch ladder, heading tape with home marker, battery (voltage per cell, big, with the cell count - corrected when Betaflight counted wrong), the phone's battery, 4G signal and ping, GPS, flight timer, the flight controller's core temperature, flight mode (ACRO / AIR / ANGLE / HORIZON / ACRO TRAINER / ALT HOLD / POS HOLD / GPS RESCUE / TURTLE ...) and warnings.
 - RC is only sent once the throttle has been seen at the bottom and the arm switch off (**RC OUTPUT: LIVE**; until then the OSD says *RC OFF - THROTTLE DOWN* or *ARM SWITCH OFF*).
@@ -58,6 +79,8 @@ Betaflight 4.4 is **not required**, only recommended:
 - **MENU** slides out everything else: **SETUP**, **VIDEO**, **LINK**, **TOOLS**, and **UPDATE** when there is one.
 - **Double-click** the video for a full-window picture. **F11** puts the video in true full screen, which can save up to one screen refresh of delay. **F2** turns the OSD on or off, **F3** opens the map window.
 - **RC CHECK** shows what Betaflight actually sees: whether the sticks arrive, throttle low, the arm switch, active modes, and every reason it refuses to arm, with the fix for each.
+- **STANDBY and DEEP SLEEP** on the LINK card save the phone's battery before take-off. STANDBY stops the camera, slows the GPS and telemetry and dims the screen; WAKE brings the picture back in about two seconds. DEEP SLEEP drops the link, locks the phone's screen and lets it sleep; every CHECK EVERY minutes (1, 2 or 5) it listens for the PC for 20 s, says *still here* with its battery, and WAKE brings it back at its next check with nobody touching the phone. Neither works while the drone is armed, and both end by themselves when it arms.
+- **LOST DRONE** appears on the LINK card when the link drops while the drone is armed: one press opens FIND DRONE with the MGRS on the clipboard.
 
 **MENU > VIDEO**
 - **Video: AUTO / SHARP / ROBUST.** The normal picture is 1280x720 at up to 4 Mbit/s. **SHARP** is 1920x1080 at up to 8 Mbit/s (the sizes and limits are in the settings file). **ROBUST** trades sharpness for a picture that holds on a weak link: a small picture (640x360, or the nearest size the phone has), at most 1 Mbit/s, key frames sent twice, and a small parity packet per group of packets from which the PC rebuilds any one lost packet, so a single lost packet no longer leaves a grey or green band. **AUTO** (the default) goes sharp after 20 s of calm at the top bitrate and back to the normal picture at the first stall; it switches to bad coverage mode by itself after 5 s at the lowest bitrate or 3 stalls within 30 s, and back after 20 s of calm. SHARP is always the sharp picture; ROBUST always bad coverage mode.
@@ -70,9 +93,10 @@ Betaflight 4.4 is **not required**, only recommended:
 **MENU > LINK**
 - **Warning sounds:** a short beep when the sticks stop reaching the drone (LINK LOST, LINK STALL, FAILSAFE, NO FLIGHT CONTROLLER), on by default.
 - **Allow spectators:** off by default, see [below](#watching-from-a-second-pc).
+- **Name map:** see [Names, not addresses](#names-not-addresses).
 
 **MENU > TOOLS**
-- **Find drone:** the drone's last known position with the coordinates to copy and map links, to go and get it after a crash.
+- **Find drone:** the drone's last known position with the coordinates to copy and map links, to go and get it after a crash. It refreshes live, falls back to the last track file after a restart, and shows a phone fix's accuracy.
 - **Position from: DRONE / PHONE.** The map can follow the phone's own GPS instead of the drone's (location allowed on the phone). It stays after a crash that killed the flight controller; the other source fills in when the chosen one has nothing.
 - **Tracks folder:** every flight's path as a GPX file, see [The map](#the-map).
 - **Latency test:** point the drone's camera at the code on the screen, and the app shows the real camera-to-screen delay (Esc stops it). The setup guide offers it too, right after setup.
@@ -83,27 +107,37 @@ Betaflight 4.4 is **not required**, only recommended:
 
 ![The map window: a flight over Kartverket's topo map, pins, launch rings](docs/images/map-topo.png)
 
-**POP OUT MAP** on the LINK card (or **F3**) opens the map in a window of its own, for a second screen. **MAP TOOLS** (the tab at its left edge) slide out a ruler (legs, total, area, and the terrain's elevation profile), lines, rectangles and arrows, NATO unit symbols, pins, offline maps, and EXPORT / IMPORT of a box as a picture and KML. The map shows: where the drone is and has been, over **Kartverket's** topo or printed map, **satellite** pictures or **OpenStreetMap** (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH, FIND DRONE and PINS buttons; + and -, the wheel and dragging move it. Under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in **MGRS** (default), UTM, decimal degrees or degrees-minutes-seconds.
+**POP OUT MAP** on the LINK card (or **F3**) opens the map in a window of its own, for a second screen. The map shows where the drone is and has been, over **Kartverket's** topo or printed map, **satellite** pictures or **OpenStreetMap** (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH and FIND DRONE buttons; + and -, the wheel and dragging move it. Under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in **MGRS** (default), UTM, decimal degrees or degrees-minutes-seconds. Keys: **+ / -** zoom, **Home** the launch point, **End** the drone, **F3** closes the window.
 
 ![The same flight over satellite pictures](docs/images/map-satellite.png)
 
-- **GO TO** takes a pasted position (MGRS, UTM, decimal degrees or degrees-minutes-seconds) and centres the map there, or drops a pin. **TRACKS** draws earlier flights from the Tracks folder in a muted colour. **PINS > EXPORT GPX** saves the pins for other map apps; a right-click on the CURSOR figure drops a pin at the cursor. Keys: **+ / -** zoom, **Home** the launch point, **End** the drone, **F3** closes the window. Pin labels give distance and bearing from the drone and from the launch point.
-- **STANDBY and DEEP SLEEP** on the LINK card save the phone's battery before take-off. STANDBY stops the camera, slows the GPS and telemetry and dims the screen; WAKE brings the picture back in about two seconds. DEEP SLEEP drops the link, locks the phone's screen and lets it sleep; every CHECK EVERY minutes (1, 2 or 5) it listens for the PC, so WAKE brings it back at its next check with nobody touching the phone. Neither works while the drone is armed, and both end by themselves when it arms. The phone asks once for three permissions (notifications, alarms and reminders, locking the screen): say yes to each; the setup guide lists them.
-- **LOST DRONE** appears on the LINK card when the link drops while the drone is armed: one press opens FIND DRONE with the MGRS on the clipboard. FIND DRONE refreshes live, falls back to the last track file after a restart, and shows a phone fix's accuracy.
+### MAP TOOLS
 
-- **Pins:** right-click on the map drops one (Alpha, Bravo ... Zulu); each shows distance and bearing from the drone. Right-click a pin to rename or remove it; **PINS** lists them all. Kept between sessions and written into the flight's GPX file.
-- **Every flight's path is saved as it comes** to `Documents\DRAUPNE Link\Tracks\track-<date>.gpx` (opens in any map program), with `last-position.txt` beside it: the drone's last known position with MGRS and map links.
-- **Works without internet** for every place looked at before: map tiles are kept for good. **DOWNLOAD AREA** saves a whole area before you leave, like Mission Planner's prefetch: press the button, draw a box on the map (SELECT WITH CURSOR, or **Alt + drag**), or right-click > *Download this view*. One START fetches every tile of the area for all four map types and every zoom level (or one type, fewer levels); it shows the count, rough size and time first, warns when it is a lot, HIDE puts the window away while the rest of the map is used, and CANCEL keeps what is saved. OpenStreetMap comes one tile at a time with a pause, by its policy: keep its areas small.
+The tab at the map's left edge slides out the tools:
+
+- **RULER:** click point after point; each leg shows its length and bearing, the total adds up, and clicking the first point again closes the loop and gives the **area**. The terrain's **elevation profile** along the line appears under the map, with the highest and lowest point. KEEP turns a measurement into a graphic that stays; CLEAR takes it off.
+
+  ![The elevation profile along a measured line](docs/images/elevation-profile.png)
+
+- **LINE, RECTANGLE, ARROW:** in a colour and width of your choice; a rectangle as an outline or a see-through fill. Every graphic has a name you can edit.
+- **SYMBOL:** a unit symbol to **MIL-STD-2525D / APP-6D** where you click: the type, the affiliation (friend, hostile, neutral, unknown) and the echelon (team ... division). The drones are the standard's unmanned-aircraft symbols with their role letter.
+- **PLACE AT:** a point of the drawing, or a symbol, at a typed position (MGRS, UTM or latitude, longitude); the map centres there.
+- **Move anything** by double-clicking a point of it: it follows the mouse, a click drops it, Esc puts it back. **ERASER** removes what you click.
+- **PINS:** right-click on the map drops one (Alpha, Bravo ... Zulu); each shows distance and bearing from the drone and from the launch point. Right-click a pin to rename or remove it; **PINS** lists them all, with GO TO, and exports them as GPX. **GO TO** takes a pasted position and centres the map there, or drops a pin.
+- **EXPORT:** drag a box; its picture (PNG) and everything drawn in it (KML) go to `Documents\DRAUPNE Link\Exports`. **IMPORT** brings a KML back - DRAUPNE's own, Google Earth's or ATAK's: lines, areas and placemarks become graphics and pins. **CLEAR ALL** takes every drawing, symbol, pin and measurement off the map.
+- **DOWNLOAD AREA** saves a whole area for flying without internet, like Mission Planner's prefetch: press the button, draw a box on the map (SELECT WITH CURSOR, or **Alt + drag**), or right-click > *Download this view*. One START fetches every tile of the area for all four map types and every zoom level (or one type, fewer levels); it shows the count, rough size and time first, warns when it is a lot, HIDE puts the window away while the rest of the map is used, and CANCEL keeps what is saved. OpenStreetMap comes one tile at a time with a pause, by its policy: keep its areas small. Everything looked at before is kept too: map tiles are never thrown away.
 
 <p>
 <img src="docs/images/map-download-area.png" width="69%" alt="A box drawn on the map is the area to download">
 <img src="docs/images/map-download-dialog.png" width="23%" alt="DOWNLOAD AREA: map types, levels, tile count and size">
 </p>
-- **The phone's own position** (MENU > TOOLS > *Position from*): the phone asks the GPS, the network and the fused position, so it has one indoors too, and its screen says what the GPS is doing (not allowed - tap to allow; no position yet; or the provider, accuracy and age of the position it sends).
+
+- **Every flight's path is saved as it comes** to `Documents\DRAUPNE Link\Tracks\track-<date>.gpx` (opens in any map program), with `last-position.txt` beside it: the drone's last known position with MGRS and map links. **TRACKS** draws earlier flights in a muted colour. The graphics live in `Documents\DRAUPNE Link\graphics.kml`, the pins in `pins.txt` next to it.
+- **The phone's own position** (MENU > TOOLS > *Position from*): the phone asks the GPS, the network and the fused position, so it has one indoors too, and its screen says what the GPS is doing.
 
 ## Watching from a second PC
 
-**MENU > LINK > Allow spectators** on the pilot's PC. A second PC running DRAUPNE Link that connects with **Connect as: Spectator** shows the pilot's video and OSD a little behind (600 ms), can record, and never sends sticks. It finds the pilot's PC through the phone and watches through it: the phone sends nothing extra, so the pilot's link is unchanged. It uses the pilot's upload (about one video stream each, at most 2 spectators) and pauses by itself when the link to the drone slows down. A spectator never takes the drone over, also when the pilot disconnects. A PC that connects as pilot while another flies becomes a spectator and is told so loudly. Needs direct phone mode (Tailscale).
+**MENU > LINK > Allow spectators** on the pilot's PC. A second PC running DRAUPNE Link that connects with **Connect as: Spectator** and picks the pilot PC by name (PCAlpha ...) shows the pilot's video and OSD a little behind (600 ms), can record, and never sends sticks. It follows that PC whatever phone it flies. It uses the pilot's upload (about one video stream each, at most 2 spectators) and pauses by itself when the link to the drone slows down. A spectator never takes the drone over, also when the pilot disconnects. A PC that connects as pilot while another flies becomes a spectator and is told so loudly.
 
 ## Latency
 
@@ -140,25 +174,27 @@ For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold t
 
 | What you see | What it means / what to do |
 |---|---|
-| Phone app: **FC disconnected** | Tap **Connect** in the Flight app first. Then use a USB-A data cable (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
-| The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DRAUPNE Flight when … is connected**, then OK. No tick box? You have the original Flight app: install this project's build (see [The phone app](#the-phone-app)). Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
+| The phone isn't in the PHONE list | Open DRAUPNE Flight on the phone (it listens by itself) and check the phone is on Tailscale with mobile data. MENU > LINK > *Name map* > *Ask again* asks every device now |
+| The phone asks for **USB permission** every time the flight controller is plugged in | In that Android dialog, tick **Always open DRAUPNE Flight when … is connected**, then OK. Android then lets the Flight app reconnect by itself, without asking, e.g. after a loose cable drops out. Still: a cable that drops out means your sticks don't reach the drone - fix it before flying |
+| Phone app: **FC disconnected** | Use a USB-A data cable (many flight controllers ignore USB-C to USB-C), check the phone's **OTG** setting, and tap **Allow** on the USB pop-up |
 | **RXLOSS** / **RC SIGNAL GAP** flickers, but nothing happens | The sticks paused for 0.1-0.3 s on their way to Betaflight. Betaflight then flags RXLOSS but keeps your last sticks; it shows the flag for 0.5 s more. Only a pause over 0.3 s matters in the air (sticks centred, throttle to minimum), and over 1.5 s it fails safe and disarms. The [link log](#logs) shows where the pauses come from: the 4G link (ping and telemetry gaps jump), or the flight controller (Betaflight's `serial_update_rate_hz` left at 100 can't keep up - run MENU > SETUP > *Drone setup*) |
 | **LINK STALL** | The phone app stopped answering for 0.3 s while the link was up: the 4G link stalled, or the phone is busy. Short ones pass; frequent ones mean poor coverage |
 | **Grey or green bands** in the picture, or it breaks up | A weak uplink drops the end of big frames. AUTO video switches to the bad coverage mode by itself after a few stalls; MENU > VIDEO > *Video: ROBUST* keeps it there for the whole flight |
 | Landed and still armed, the drone **leans, tilts forward or twitches** | A stick isn't sending 1500 at rest: the controller panel shows ROLL / PIT / YAW values; with your hands off they should read 1500. If not, check the radio's trims and press CALIBRATE again, hands off at the centre step. Even when centred, Betaflight (with Air mode) keeps correcting on the ground, so disarm right after landing |
 | **NO FLIGHT CONTROLLER** comes and goes while the link is good | The phone gets nothing from the flight controller: check the USB cable to the flight controller, and run MENU > SETUP > *Drone setup* (a `serial_update_rate_hz` left at 100 also causes it) |
 | OSD says **ARMING BLOCKED: ANGLE** | The drone isn't level, or the accelerometer isn't calibrated. Calibrate it in Betaflight Configurator's **Setup** tab, drone level |
+| OSD says **ARMING BLOCKED: NOPREARM** | A PREARM switch is set in Betaflight and isn't on. Flip it (AUX3 by default) before ARM, or set PREARM to *Leave as it is* in Drone setup if you have no switch for it |
 | Flight app shows the Betaflight version in **yellow** | Betaflight is older than 4.4. It still flies; update when convenient ([which version?](#which-betaflight-version)) |
 | Betaflight ignores the **arm switch** | DRAUPNE Link sends your arm switch on AUX1. Drone setup puts ARM there; otherwise, in Betaflight Configurator's **Modes** tab, put ARM on AUX 1. **RC CHECK** shows what Betaflight sees |
 | OSD says **ARMING BLOCKED: MSP** | Betaflight Configurator disabled arming and was unplugged without *Disconnect*. Power-cycle the flight controller. Drone setup also clears it |
 | **Video is black** | It's what the camera sees: is the lens covered, or is it dark? Point it at something bright. To use another lens, set `cameraId` in the settings (often `2` or `3` is the wide-angle) |
-| **PHONE ON TAILSCALE: OFFLINE** in the link card | The phone isn't connected to Tailscale: on the phone, open Tailscale and switch it on, and check it has mobile data. *NOT FOUND* means the phone address isn't on your Tailscale network: run MENU > SETUP > *Phone setup* to find the phone again |
-| Setup says the path is **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Press *Check again* after a minute. If it stays relayed, choose *Host the relay on this PC* in MENU > SETUP > *PC setup* |
-| Phone app says **Phone GPS: not allowed**, or *Position from: PHONE* shows nothing | Tap that line on the phone and allow location *While using the app*. Needs phone app 2.3.0-pc.18 or newer for a position indoors |
+| **PHONE ON TAILSCALE: OFFLINE** in the link card | The phone isn't connected to Tailscale: on the phone, open Tailscale and switch it on, and check it has mobile data. The phone app shows a yellow line for Data Saver, and once a PC is connected for Wi-Fi, Bluetooth and Battery Saver; a tap opens the setting |
+| Setup says the path is **relayed** | Tailscale couldn't go direct through your mobile network, which adds latency. Press *Check again* after a minute; the OSD shows RELAY while it stays that way |
+| Phone app says **Phone GPS: not allowed**, or *Position from: PHONE* shows nothing | Tap that line on the phone and allow location *While using the app* |
 | The map is **blank** out in the field | No internet and nothing saved for that place. Before leaving, open the map at home and use **DOWNLOAD AREA** |
 | Channels look wrong | **CALIBRATE**, then **RC CHECK** |
 
-**Versions and updates:** DRAUPNE Link's version is in its window title and at the bottom of MENU > TOOLS (with the phone app version it installs); the phone app shows its version at the bottom right of its screen. Both check GitHub for a newer release (DRAUPNE Link at start and every 6 hours, the phone app when it starts) and say so: an **UPDATE** button in the MENU bar, an *Update available* line in the phone app. Pressing UPDATE downloads the new installer, checks it against GitHub's checksum, closes DRAUPNE Link, installs it (one Windows permission prompt) and starts it again. Tapping the phone's line downloads the new app, checks it and installs it from inside the app, leaving nothing in Downloads (the first time, Android asks you to allow it to install apps). Neither updates while connected to the drone, and nothing is installed without you pressing it.
+**Versions and updates:** DRAUPNE Link's version is in its window title and at the bottom of MENU > TOOLS (with the phone app version it installs); the phone app shows its version at the bottom right of its screen. Both check GitHub for a newer release (DRAUPNE Link at start and every 6 hours, the phone app when it starts) and say so: an **UPDATE** button in the MENU bar, an *Update available* line in the phone app. Pressing UPDATE downloads the new installer, checks it against GitHub's checksum, closes DRAUPNE Link, installs it (one Windows permission prompt) and starts it again. Tapping the phone's line downloads the new app, checks it and installs it from inside the app, leaving nothing in Downloads (the first time, Android asks you to allow it to install apps). Neither updates while connected to the drone, and nothing is installed without you pressing it. After an update that brought new parts, DRAUPNE Link offers a short tour of just those, once.
 
 Settings live in `%APPDATA%\DraupneLink\draupne-link.properties`.
 
@@ -179,17 +215,20 @@ DRAUPNE Link replaces [DroidDrone](https://github.com/DroidDrone/DroidDrone)'s *
 
 ### The phone app
 
-The setup installs **DRAUPNE Flight** (2.3.0-pc.24): upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
+The setup installs **DRAUPNE Flight** (2.3.0-pc.30): upstream's Flight 2.3.0 with these changes, source in [`flight-app/`](flight-app):
+- **A name, not an address:** the phone listens for the PC by itself as soon as the app is open, gets its name from the PC and shows it on its status card (a tap picks one by hand, a long press copies its Tailscale address). The button is START / STOP; port and key sit under *Advanced*.
+- **Says what is wrong in yellow:** Data Saver, and once a PC is connected, Wi-Fi on, Bluetooth on, Battery Saver off; a tap opens the setting.
 - **Every flight controller:** its USB list covers any flight controller with native USB (STM32, AT32, APM32, GD32, RP2040; Betaflight, INAV, ArduPilot, PX4) and every USB-serial bridge chip it can drive (CH340/CH341, CP210x, FTDI, PL2303). Android can then remember the USB permission, and the phone reconnects to the flight controller without asking. Upstream only lists a few IDs, so AT32 boards, for example, needed a tap after every reconnect.
 - **Sticks reach the flight controller on time:** upstream reads from the flight controller in a way that, on many phones, holds every USB write for up to 0.1 s, which makes Betaflight flag RXLOSS and block arming; this build reads asynchronously. The newest sticks also always go first, never queued behind a slow request; after a USB glitch it reconnects at once; and the phone reports what it sees into the PC's link log.
-- **Video that survives weak 4G:** a steady 30 fps, packets paced instead of sent in bursts, key frames every 2 s and whenever the PC asks, the PC deciding the bitrate, and the bad coverage mode (a small picture, key frames twice, a parity packet per group of packets). The video runs on a thread of its own, so camera trouble can never hold up the sticks.
+- **Video that survives weak 4G:** a steady 30 fps, packets paced instead of sent in bursts, key frames every 2 s and whenever the PC asks, the PC deciding the bitrate, a sharp 1080p tier when the link is calm, and the bad coverage mode (a small picture, key frames twice, a parity packet per group of packets). The video runs on a thread of its own, so camera trouble can never hold up the sticks.
+- **Standby and deep sleep:** the PC can rest the phone before take-off; in deep sleep the phone wakes every few minutes, says *still here* with its battery for the whole check window, and comes back when the PC calls.
 - **Its own position:** the phone's GPS, network and fused position go to the PC for the map, and the screen says what the GPS is doing.
 - **Touch lock for flying:** a yellow **LOCK SCREEN** button covers the screen so stray touches do nothing (hold the box for two seconds to unlock); the screen dims and the link keeps running. Portrait as well as landscape.
-- **The PC app's look:** black and red, status at a glance (OFFLINE / WAITING / LINK READY), the same boot animation. *Direct connection* is the default on a fresh install.
+- **The PC app's look:** black and red, status at a glance (OFFLINE / WAITING / LINK READY), the same boot animation.
 - **Says its version** once a second, so DRAUPNE Link can warn when the phone runs an older app than it brings, and **updates itself** from the *Update available* line. Tells a second PC which PC flies (spectator mode).
 - **Replaces any earlier DroidDrone Flight:** it has its own package name (`de.droiddrone.flight.pc`), so it installs next to the original, and when it opens it asks Android to remove the earlier one: one tap on OK.
 
-The protocol is unchanged, so the original Flight 2.3.0 also still works (without the map's phone position, the video modes and spectators). Every DRAUPNE Link release includes the phone app as `DRAUPNE-Flight-<version>.apk`, the exact build that version installs.
+Every DRAUPNE Link release includes the phone app as `DRAUPNE-Flight-<version>.apk`, the exact build that version installs.
 
 ## For developers
 
@@ -198,7 +237,7 @@ Picking up the work (state, rules, build environment, release steps): [docs/HAND
 ```powershell
 git clone --recurse-submodules https://github.com/MelonNO/draupne-link
 cd draupne-link
-.\gradlew.bat test               # 226 tests: protocol, video, telemetry, calibration, Betaflight CLI, setup, spectators, map
+.\gradlew.bat test               # 320+ tests: protocol, video, telemetry, calibration, Betaflight CLI, setup, names, spectators, map, map tools
 .\gradlew.bat installDist        # build\install\draupne-link\bin\draupne-link.bat
 .\gradlew.bat releaseZip         # portable zip (app + Java runtime)
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3
@@ -207,11 +246,11 @@ Needs JDK 21. To release, set `version` in `build.gradle`, put that version's ch
 
 | Package | What's in it |
 |---|---|
-| `de.droiddrone.pc` | Link (`ControlLink`), connection modes, joystick, calibration, RC mapping, telemetry (`FcTelemetry`), link log, spectator mode, app log |
-| `de.droiddrone.pc.video` | Frame reassembly, parity recovery, FFmpeg decoder, bitrate control, low-latency pipeline |
-| `de.droiddrone.pc.map` | Web Mercator, tile sources and the tile cache (offline, DOWNLOAD AREA), MGRS / UTM, terrain height, GPX tracks, pins |
-| `de.droiddrone.pc.setup` | Tailscale, firewall, power plan, shortcuts, Betaflight over USB (CLI, switches, failsafe), Flight app download/serving, updates |
-| `de.droiddrone.pc.gui` | Main window, MENU, OSD, map window, setup wizard, calibration, RC check, motor test, boot animation |
+| `de.droiddrone.pc` | Link (`ControlLink`), DRAUPNE names (`Names`, `NameService`), joystick, calibration, RC mapping, telemetry (`FcTelemetry`), link log, spectator mode, app log |
+| `de.droiddrone.pc.video` | Frame reassembly, parity recovery, FFmpeg decoder, bitrate control and the video tiers, low-latency pipeline |
+| `de.droiddrone.pc.map` | Web Mercator, tile sources and the tile cache (offline, DOWNLOAD AREA), MGRS / UTM, terrain height and elevation profiles, GPX tracks, pins, graphics and KML |
+| `de.droiddrone.pc.setup` | Tailscale, firewall, power plan, shortcuts, Betaflight over USB (CLI, switches, PREARM, failsafe), Flight app download/serving, updates |
+| `de.droiddrone.pc.gui` | Main window, MENU, OSD, map window and map tools, unit symbols, setup wizard, calibration, RC check, motor test, name map, tour, boot animation |
 
 More: [protocol notes](docs/PROTOCOL.md) and [roadmap](docs/ROADMAP.md).
 

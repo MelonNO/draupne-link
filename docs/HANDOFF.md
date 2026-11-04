@@ -11,6 +11,17 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   before it 1.0.36 with pc.28, and 1.0.35 with that phone app (release
   `flight-2.3.0-pc.28`, APK SHA-256 `4a2c346e…`, pinned in `ApkShare`). Nothing of it has flown or been tried on the
   phone; the names, the simplified phone app and the map tools are all untried on hardware.
+- **1.0.38 deep sleep hellos (phone pc.30), tour box on top, README - built, tests green, not released:** the pilot:
+  "When the phone is in deep sleep mode it does not report its alive and battery % every time it wakes up."
+  `PowerMode.openWindow` sent three hellos at 200 / 700 / 1200 ms; now `helloPending` repeats `powerHello` every
+  `HELLO_GAP_MS` 1.5 s from `HELLO_FIRST_MS` for the whole window (cancelled by `cancelPending`); the PC's SLEEP_ANSWER
+  still ends the window. Reasoning: the phone's Tailscale tunnel sleeps with the phone and drops the first packets
+  after a wake; no PC-side change (`ControlLink.onSleepHello` was fine). APK built `build/flight/DRAUPNE-Flight-2.3.0-pc.30.apk`
+  (versionCode 2030030, signer d910997f…), SHA pinned in `ApkShare` - *publish that very file*. "The animation bug with the
+  tour ... It should be always in front": `TourNotice.pop` adds the notice at layer POPUP_LAYER + 10 (was DRAG_LAYER,
+  the same layer as `WindowReveal`, added later = under it). README rewritten round the new features, with rendered
+  pictures in docs/images (boot-animation, map-tools, symbols, elevation-profile, tour - from throwaway tests, no
+  screen captures: a screen capture here caught the pilot's live session once and was deleted unseen by anyone).
 - **1.0.38 boot jitter - built, tests green, not released:** the pilot: "the boot animation on pc still jitters" after
   1.0.36's combo-width fix. Measured with a throwaway print in `BootReveal.paintComponent` (the targets and the glass
   pane's size on every change): the cards never moved; the glass pane's height flipped 1032 <-> 1009 on every frame.

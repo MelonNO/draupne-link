@@ -57,8 +57,12 @@ final class PowerMode {
     static final byte PACKET = 0x6E;
     /** pc.22: the sleep check's "still here" to the PC, and the PC's answer (0 = sleep on, 1 = wake). */
     static final byte SLEEP_HELLO = 0x6F, SLEEP_ANSWER = 0x70;
-    static final int HELLO_COUNT = 3;
-    static final long HELLO_GAP_MS = 500;
+    /**
+     * The "still here" goes out this soon after the window opens and then this often for the whole window (pc.30:
+     * three in the first second often went nowhere - a Tailscale tunnel that slept with the phone drops the first
+     * packets after a wake - and the PC heard nothing of that check).
+     */
+    static final long HELLO_FIRST_MS = 200, HELLO_GAP_MS = 1500;
     static final int DEFAULT_CHECK_MIN = 5;
     /** How long the socket listens for the PC's Connect after an alarm. */
     static final long CHECK_WINDOW_MS = 20_000;
@@ -100,6 +104,8 @@ final class PowerMode {
     private long nextBurstAt;
     /** The countdown, or the window's poll: whichever is scheduled. Worker thread only. */
     private ScheduledFuture<?> pending;
+    /** The hellos through the window; cancelled with the poll. */
+    private ScheduledFuture<?> helloPending;
     /** Keeps the CPU up through a check window: the alarm's own grace is only about 10 s. */
     private PowerManager.WakeLock windowLock;
 
@@ -323,12 +329,11 @@ final class PowerMode {
         event("Sleep check: listening for the PC for " + CHECK_WINDOW_MS / 1000 + " s");
         cancelPending();
         pending = worker.scheduleAtFixedRate(this::pollWindow, WINDOW_POLL_MS, WINDOW_POLL_MS, TimeUnit.MILLISECONDS);
-        // "still here" to the PC, three times: its answer ends the window early (sleep on) or wakes the phone
-        for (int i = 0; i < HELLO_COUNT; i++) {
-            worker.schedule(() -> {
-                if (checking) service.powerHello(checkIntervalMin);
-            }, 200 + i * HELLO_GAP_MS, TimeUnit.MILLISECONDS);
-        }
+        // "still here" to the PC, again and again through the window: its answer ends the window early (sleep on)
+        // or wakes the phone
+        helloPending = worker.scheduleAtFixedRate(() -> {
+            if (checking) service.powerHello(checkIntervalMin);
+        }, HELLO_FIRST_MS, HELLO_GAP_MS, TimeUnit.MILLISECONDS);
     }
 
     /** The PC answered the hello: sleep on (the window closes now) or wake. */
@@ -372,6 +377,8 @@ final class PowerMode {
     private void cancelPending() {
         if (pending != null) pending.cancel(false);
         pending = null;
+        if (helloPending != null) helloPending.cancel(false);
+        helloPending = null;
     }
 
     private synchronized void acquireWindowLock(Context context) {
