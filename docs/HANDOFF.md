@@ -6,10 +6,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-04, 1.0.36)
 
-- **Released:** DRAUPNE Link **1.0.35** with phone app **DRAUPNE Flight 2.3.0-pc.28** (release
+- **Released:** DRAUPNE Link **1.0.36** (Latest, 2026-11-04, tag run 41790044072 green first try) with the unchanged
+  phone app **DRAUPNE Flight 2.3.0-pc.28** attached; before it 1.0.35 with that phone app (release
   `flight-2.3.0-pc.28`, APK SHA-256 `4a2c346e…`, pinned in `ApkShare`). Nothing of it has flown or been tried on the
   phone; the names, the simplified phone app and the map tools are all untried on hardware.
-- **1.0.36 - built, tests green, not released:** *symbols to the standard* (the pilot: "The symbols need to follow the
+- **1.0.36 - released 2026-11-04:** *symbols to the standard* (the pilot: "The symbols need to follow the
   standard"): `gui/UnitSymbol` rewritten on MIL-STD-2525D / APP-6D geometry in the standard's 200 x 200 symbol space
   (the paths as spatialillusions' milsymbol, MIT, writes them), scaled by `UnitSymbol.SCALE` 0.3 px per unit. A small
   SVG path parser (`UnitSymbol.path`: M/L/H/V/C/Z, absolute and relative, implicit repeats, cached). Land frames per
