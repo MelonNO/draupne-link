@@ -2,6 +2,11 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.36
+
+- **Symbols to the standard:** the unit symbols are now MIL-STD-2525D / APP-6D geometry - the standard's frames (land units a rectangle, diamond, square or quatrefoil; the drones the air frames, open at the bottom), its icons fitted to each frame (the infantry cross, the armour track, the artillery dot, the reconnaissance slash, the anti-tank chevron, the engineer E, the air-defence dome, the supply line, the medical cross across the frame, the headquarters line and staff), the drones as the standard's unmanned-aircraft icons (the fixed-wing UAV chevron, the vertical-take-off UAV) with the role letter above them (R reconnaissance, A attack, U utility), and the echelon amplifiers in the standard's place and size above the frame. A little larger than before (a friendly land frame is 45 x 30 px).
+- The boot animation no longer jumps: the LINK card's phone list has a fixed width (its items change as the name service hears answers during the animation, and the card moved with them).
+
 ## 1.0.35
 
 - **Names instead of addresses** (PC and phone app 2.3.0-pc.28): every phone is MobileAlpha, MobileBravo ..., every PC PCAlpha, PCBravo ... The PC asks every device on its Tailscale network who it is (NAME_QUERY on the link port), a PC names itself with the first free PC letter, and the pilot PC with the highest letter online names each phone that has none. The LINK card's address field is a PHONE list (as a spectator: the PILOT PC list); MENU > LINK > Name map shows every device seen with its address, this PC's name, the port and the key.

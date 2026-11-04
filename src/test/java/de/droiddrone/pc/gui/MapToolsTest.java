@@ -230,7 +230,7 @@ class MapToolsTest {
                 UnitSymbol.paint(g, 30, 30, t, a, MapGraphics.Echelon.PLATOON, "X");
                 g.dispose();
                 assertTrue(count(img, a.fillRgb) > 40, t + " " + a + " shows its frame");
-                assertTrue(UnitSymbol.bounds(30, 30, a).contains(30, 30));
+                assertTrue(UnitSymbol.bounds(30, 30, t, a).contains(30, 30));
             }
         }
         assertEquals(List.of(), List.of()); // keeps the import used when the lists above change

@@ -4,11 +4,29 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-03, 1.0.35)
+## Where things stand (2026-11-04, 1.0.36)
 
 - **Released:** DRAUPNE Link **1.0.35** with phone app **DRAUPNE Flight 2.3.0-pc.28** (release
   `flight-2.3.0-pc.28`, APK SHA-256 `4a2c346e…`, pinned in `ApkShare`). Nothing of it has flown or been tried on the
   phone; the names, the simplified phone app and the map tools are all untried on hardware.
+- **1.0.36 - built, tests green, not released:** *symbols to the standard* (the pilot: "The symbols need to follow the
+  standard"): `gui/UnitSymbol` rewritten on MIL-STD-2525D / APP-6D geometry in the standard's 200 x 200 symbol space
+  (the paths as spatialillusions' milsymbol, MIT, writes them), scaled by `UnitSymbol.SCALE` 0.3 px per unit. A small
+  SVG path parser (`UnitSymbol.path`: M/L/H/V/C/Z, absolute and relative, implicit repeats, cached). Land frames per
+  affiliation; `isAir` (ISR_FIXED, ATTACK_FIXED, ISR_ROTOR, ATTACK_ROTOR, UTILITY) takes the air frames (friend and
+  unknown open at the bottom: the fill closes, the stroke does not). Land icons are the standard's per-affiliation
+  variants (`byAffiliation`), medical a cross across the frame's tight box, HQ the line at y=80 and a 60-unit staff down
+  from the frame's left bottom corner. Drones: the fixed-wing ones the UAV main icon (the filled chevron bar), the
+  multirotors the vertical-take-off UAV icon, the role as the standard's sector-1 text amplifier (textm1: y 71, size 28,
+  bold Arial): R reconnaissance, A attack, U utility - *UTILITY is a utility drone now* (an air symbol); if the pilot
+  meant a land unit, give it a land frame and an icon. Echelons (`echelon`) from the frame's top as milsymbol places
+  them (team ring r15 at y1-20 with the slash, dots r7.5 at y1-20 at 85/115 or 70/100/130, bars 25 long from y1-10 at
+  90/110 or 80/100/120, crosses 25 wide from 87.5 or 70/105), a white halo under them for the dark map.
+  `UnitSymbol.bounds(cx, cy, unit, affiliation)` is the frame's tight box (Java 21's `Path2D.getBounds2D` is tight)
+  - `MapView.itemAt` / the eraser use it. `MapGraphics.Echelon.mark` is still the text in the tools panel's combo.
+  *Boot animation jumped* (the pilot): `phoneCombo.setPrototypeDisplayValue` in `MainWindow` - the combo's width
+  followed its items, which the name service changes about a second after the start, so the LINK card (the
+  animation's target) moved. Tests: `MapToolsTest.symbolsPaintEveryTypeAndAffiliation` (fill count, bounds).
 - **1.0.35, the pilot's second map round - released 2026-11-03:** more symbols (`UnitType` ISR_FIXED,
   ATTACK_FIXED, ISR_ROTOR, ATTACK_ROTOR with `UnitSymbol.role` - an eye for ISR, an arrowhead for attack - and
   UTILITY, SUPPLY, MEDIC); moving (`MapView.pickUpAt` on a double-click at a point or symbol while no tool is on,
@@ -39,7 +57,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   transient `measurement` (KEEP makes it a graphic), `itemAt` (symbols by `UnitSymbol.bounds`, lines within 6 px
   of a leg), the right-click menu's rename / remove / elevation profile, `paintGraphics` / `paintItem` (dashed red
   measurement with leg labels, total and area; halo + colour for lines; arrowheads; `UnitSymbol.paint`), `picture`
-  (a snapshot without the zoom buttons, for EXPORT). `gui/UnitSymbol` (APP-6 frames by affiliation, icons by
+  (a snapshot without the zoom buttons, for EXPORT). `gui/UnitSymbol` (1.0.36: 2525D geometry, see above; before: APP-6-like frames by affiliation, icons by
   type, echelon marks). `gui/MapToolsPanel` (the tab, a sliding body, the buttons the window wires), `gui/
   ElevationProfileView` (height over distance, NaN gaps). `MapWindow`: the panel west of the map, the profile card
   under it (`showProfile`), `exportArea` (KML of the items, pins and the shown track in the box; a PNG from an

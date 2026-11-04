@@ -630,6 +630,10 @@ public class MainWindow extends JFrame {
         fields.setOpaque(false);
         fields.add(phoneLabel, c);
         TacticalCombo.install(phoneCombo);
+        // a fixed width: the list's items change as the name service hears answers (the first about a second after the
+        // start, during the boot animation), and a width that followed them moved the LINK card - and with it the
+        // animation's targets - up and down
+        phoneCombo.setPrototypeDisplayValue("MobileWhiskey   seen 59 min ago");
         phoneCombo.setToolTipText("The phone to fly, by its DRAUPNE name (MobileAlpha ...): every phone with DRAUPNE Flight open on your Tailscale network is here");
         phoneCombo.addActionListener(e -> {
             if (!fillingPhones) choosePhone();

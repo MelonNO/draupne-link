@@ -881,7 +881,7 @@ class MapView extends JComponent {
         for (MapGraphics.Item it : items) {
             if (it.kind() != MapGraphics.Kind.SYMBOL) continue;
             Point2D c = toScreen(it.points().get(0).lat(), it.points().get(0).lon(), zi, v[1], v[2], v[3], getWidth(), getHeight());
-            if (UnitSymbol.bounds((int) c.getX(), (int) c.getY(), it.affiliation()).contains(x, y)) return it;
+            if (UnitSymbol.bounds((int) c.getX(), (int) c.getY(), it.unit(), it.affiliation()).contains(x, y)) return it;
         }
         for (MapGraphics.Item it : items) {
             if (it.kind() == MapGraphics.Kind.SYMBOL) continue;
@@ -921,7 +921,7 @@ class MapView extends JComponent {
             for (int i = 0; i < pts.size(); i++) {
                 Point2D c = toScreen(pts.get(i).lat(), pts.get(i).lon(), (int) v[0], v[1], v[2], v[3], getWidth(), getHeight());
                 boolean hit = it.kind() == MapGraphics.Kind.SYMBOL
-                        ? UnitSymbol.bounds((int) c.getX(), (int) c.getY(), it.affiliation()).contains(x, y)
+                        ? UnitSymbol.bounds((int) c.getX(), (int) c.getY(), it.unit(), it.affiliation()).contains(x, y)
                         : c.distance(x, y) <= 8;
                 if (hit) {
                     moving = it;
