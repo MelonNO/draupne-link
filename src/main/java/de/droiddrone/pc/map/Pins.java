@@ -81,6 +81,13 @@ public final class Pins {
         if (pins.remove(pin)) save();
     }
 
+    /** Every pin off (the map tools' CLEAR ALL). */
+    public synchronized void clear() {
+        if (pins.isEmpty()) return;
+        pins.clear();
+        save();
+    }
+
     public synchronized List<Pin> list() {
         return new ArrayList<>(pins);
     }

@@ -201,4 +201,20 @@ class NamesTest {
             socket.close();
         }
     }
+
+    @Test
+    void renameMovesAPhoneToAnotherName() {
+        java.util.Map<String, String> saved = new java.util.HashMap<>();
+        Names names = new Names(null, saved::putAll);
+        names.seen(new Names.Reply(Names.Kind.PHONE, "MobileAlpha", "Pixel 8", "2.3.0-pc.29"), "100.64.0.9", "pixel-8");
+        names.seen(new Names.Reply(Names.Kind.PHONE, "MobileBravo", "Pixel 7", "2.3.0-pc.29"), "100.64.0.10", "pixel-7");
+        org.junit.jupiter.api.Assertions.assertFalse(names.rename("MobileAlpha", "MobileBravo"), "taken");
+        org.junit.jupiter.api.Assertions.assertFalse(names.rename("MobileAlpha", "PCCharlie"), "not a phone name");
+        org.junit.jupiter.api.Assertions.assertFalse(names.rename("MobileZulu", "MobileCharlie"), "unknown");
+        org.junit.jupiter.api.Assertions.assertTrue(names.rename("MobileAlpha", "MobileCharlie"));
+        org.junit.jupiter.api.Assertions.assertNull(names.get("MobileAlpha"));
+        org.junit.jupiter.api.Assertions.assertEquals("100.64.0.9", names.ipOf("MobileCharlie"));
+        org.junit.jupiter.api.Assertions.assertEquals("", saved.get("name.MobileAlpha"), "the old key cleared");
+        org.junit.jupiter.api.Assertions.assertTrue(saved.get("name.MobileCharlie").startsWith("PHONE|100.64.0.9|Pixel 8|"), saved.toString());
+    }
 }

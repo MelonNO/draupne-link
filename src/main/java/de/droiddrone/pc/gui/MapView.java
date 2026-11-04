@@ -754,6 +754,10 @@ class MapView extends JComponent {
         repaint();
     }
 
+    boolean hasMeasurement() {
+        return measurement != null;
+    }
+
     void clearMeasurement() {
         if (measurement == null) return;
         measurement = null;

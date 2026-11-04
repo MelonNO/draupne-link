@@ -194,6 +194,21 @@ public final class Names {
         return new ArrayList<>(entries.values());
     }
 
+    /**
+     * A phone given another name (the name map's RENAME, 1.0.37): its entry moves to the new name, which must be a free
+     * name of the same kind. The phone itself is told with NAME_ASSIGN ({@link NameService#assign}).
+     * @return false when the old name is unknown or the new one is taken or not a name of that kind
+     */
+    public synchronized boolean rename(String from, String to) {
+        Entry e = get(from);
+        if (e == null || to == null || kindOf(to) != e.kind() || get(to) != null) return false;
+        entries.remove(from.toLowerCase(Locale.ROOT));
+        Entry moved = new Entry(to, e.kind(), e.ip(), e.device(), e.host(), e.version(), e.lastSeen(), e.online());
+        entries.put(to.toLowerCase(Locale.ROOT), moved);
+        if (saver != null) saver.accept(Map.of(PREFIX + e.name(), "", PREFIX + moved.name(), format(moved)));
+        return true;
+    }
+
     public synchronized void remove(String name) {
         if (name == null) return;
         Entry e = entries.remove(name.toLowerCase(Locale.ROOT));

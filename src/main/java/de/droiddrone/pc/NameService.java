@@ -100,6 +100,21 @@ public final class NameService {
         if (t != null) t.interrupt();
     }
 
+    /**
+     * The pilot renamed a phone in the name map: NAME_ASSIGN to it (a phone keeps its name itself, so it must be
+     * online), then a scan, which files its answer under the new name.
+     */
+    public void assign(String ip, String name) {
+        byte[] assign = Names.assign(config.getKey(), name);
+        try (DatagramSocket socket = new DatagramSocket()) {
+            socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), port));
+            log.accept("Names: the phone at " + ip + " is " + name + " now (renamed).");
+        } catch (IOException e) {
+            log.accept("Names: could not rename the phone at " + ip + ": " + e);
+        }
+        scanSoon();
+    }
+
     /** The link is about to open on the link port: the answering socket lets go of it. */
     public void pause() {
         paused = true;

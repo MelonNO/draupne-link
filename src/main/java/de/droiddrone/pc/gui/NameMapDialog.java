@@ -71,7 +71,7 @@ final class NameMapDialog extends JDialog {
         head.add(Theme.label("NAME MAP", Theme.headingFont(14f), Theme.ACCENT), BorderLayout.NORTH);
         WrappingText intro = new WrappingText("Every phone and PC seen on your Tailscale network. Phones are MobileAlpha, MobileBravo ...; "
                 + "the pilot PC with the highest letter online names the phones that have none. A name stays with its device; "
-                + "remove a line to forget a device.", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
+                + "RENAME gives a phone another name, REMOVE forgets a device.", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
         head.add(intro, BorderLayout.CENTER);
         root.add(head, BorderLayout.NORTH);
 
@@ -126,6 +126,10 @@ final class NameMapDialog extends JDialog {
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         buttons.setOpaque(false);
+        JButton rename = Theme.secondaryButton("Rename");
+        rename.setToolTipText("Give the selected phone another Mobile name (it must be online: a phone keeps its name itself)");
+        rename.addActionListener(e -> renameSelected());
+        buttons.add(rename);
         JButton remove = Theme.secondaryButton("Remove");
         remove.setToolTipText("Forget the selected device (it comes back when it answers again)");
         remove.addActionListener(e -> {
@@ -158,6 +162,44 @@ final class NameMapDialog extends JDialog {
     public void dispose() {
         refresh.stop();
         super.dispose();
+    }
+
+    /** RENAME (1.0.37): the selected phone gets a free Mobile name; the phone is told, the map and the LINK card follow. */
+    private void renameSelected() {
+        int row = table.getSelectedRow();
+        if (row < 0 || row >= shown.size()) return;
+        Names.Entry e = shown.get(row);
+        if (e.kind() != Names.Kind.PHONE) {
+            JOptionPane.showMessageDialog(this, "Only phones are renamed here. This PC's name is the THIS PC IS choice; other PCs name themselves.",
+                    "Rename", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (!e.online() || e.ip() == null || e.ip().isEmpty()) {
+            JOptionPane.showMessageDialog(this, e.name() + " is offline. A phone keeps its name itself, so it must be online to be renamed.",
+                    "Rename", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        java.util.List<String> free = new java.util.ArrayList<>();
+        for (int i = 0; i < Names.LETTERS.length; i++) {
+            String n = Names.Kind.PHONE.name(i);
+            if (names.get(n) == null) free.add(n);
+        }
+        if (free.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Every Mobile name is taken - remove a device first.", "Rename", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        JComboBox<String> pick = new JComboBox<>(free.toArray(new String[0]));
+        TacticalCombo.install(pick);
+        String detail = e.detail();
+        int answer = JOptionPane.showConfirmDialog(this, new Object[]{"New name for " + e.name() + (detail.isEmpty() ? "" : " (" + detail + ")") + ":", pick},
+                "Rename", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (answer != JOptionPane.OK_OPTION) return;
+        String to = (String) pick.getSelectedItem();
+        if (to == null || !names.rename(e.name(), to)) return;
+        if (e.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) saver.accept(Map.of(Names.PHONE_NAME_KEY, to));
+        service.assign(e.ip(), to);
+        fill();
+        onChanged.run();
     }
 
     private void applyAdvanced() {

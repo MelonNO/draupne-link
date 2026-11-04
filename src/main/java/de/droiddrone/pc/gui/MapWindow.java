@@ -158,11 +158,15 @@ final class MapWindow extends JFrame {
         tools.clearMeasure.addActionListener(e -> map.clearMeasurement());
         tools.export.addActionListener(e -> map.setTool(MapView.Tool.EXPORT_BOX));
         tools.importButton.addActionListener(e -> importKml());
-        tools.clearAll.addActionListener(e -> {
-            if (graphics.isEmpty()) return;
-            int answer = javax.swing.JOptionPane.showConfirmDialog(this, "Take every drawing and symbol off the map? The pins stay.",
+        tools.clearAll.addActionListener(e -> { // 1.0.37: the pins and the measurement go too (the pilot)
+            if (graphics.isEmpty() && pins.list().isEmpty() && !map.hasMeasurement()) return;
+            int answer = javax.swing.JOptionPane.showConfirmDialog(this, "Take every drawing, symbol, pin and measurement off the map?",
                     "Clear all", javax.swing.JOptionPane.OK_CANCEL_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE);
-            if (answer == javax.swing.JOptionPane.OK_OPTION) graphics.clear();
+            if (answer != javax.swing.JOptionPane.OK_OPTION) return;
+            graphics.clear();
+            pins.clear();
+            map.clearMeasurement();
+            map.repaint();
         });
         map.setOnToolChanged(() -> SwingUtilities.invokeLater(tools::syncTools));
         map.setOnMeasurement(m -> SwingUtilities.invokeLater(() -> showProfile(m)));

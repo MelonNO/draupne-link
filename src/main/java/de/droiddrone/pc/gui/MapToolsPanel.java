@@ -210,7 +210,7 @@ final class MapToolsPanel extends JPanel {
         row(download);
         export.setToolTipText("Drag a box on the map: its picture (PNG) and everything drawn in it (KML) go to Documents\\DRAUPNE Link\\Exports");
         importButton.setToolTipText("A KML file's lines, areas, symbols and points onto the map (DRAUPNE's own, Google Earth's, ATAK's)");
-        clearAll.setToolTipText("Every drawing and symbol off the map (the pins stay)");
+        clearAll.setToolTipText("Every drawing, symbol, pin and measurement off the map");
         row(export);
         row(importButton);
         row(clearAll);

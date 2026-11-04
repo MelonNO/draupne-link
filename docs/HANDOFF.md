@@ -10,6 +10,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   phone app **DRAUPNE Flight 2.3.0-pc.28** attached; before it 1.0.35 with that phone app (release
   `flight-2.3.0-pc.28`, APK SHA-256 `4a2c346e…`, pinned in `ApkShare`). Nothing of it has flown or been tried on the
   phone; the names, the simplified phone app and the map tools are all untried on hardware.
+- **1.0.37 CLEAR ALL + RENAME - built, tests green, not released:** the pilot: "Clear all should also remove pins and
+  rulers" - `MapWindow`'s CLEAR ALL clears `graphics`, `pins` (`Pins.clear`) and the live measurement
+  (`MapView.hasMeasurement` / `clearMeasurement`). "Make it possible to rename the names of phones in the name map" -
+  `NameMapDialog.renameSelected` (RENAME button, phones only, online only): a free Mobile name from a combo,
+  `Names.rename(from, to)` (the entry moves, old key cleared, new key written), `NameService.assign(ip, name)` sends
+  NAME_ASSIGN from an ephemeral socket and scans; the LINK card's `phoneName` follows. Test: `NamesTest.renameMovesAPhone...`.
 - **1.0.37 PREARM - built, tests green, not released:** the pilot: "Add the possibility for prearm ... controller
   calibration defaults aux 3 to prearm and ... the betaflight setup sets it to betaflight mode as well". `ModeSwitch`:
   `PREARM_KEY` drone.prearmAux (default 3, off = leave), `MODE_PREARM` 36 (msp_box.c permanent id), `PREARM_RANGE` up,
