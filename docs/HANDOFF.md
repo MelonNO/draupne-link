@@ -22,8 +22,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   notification). Usable from the release after the one that ships pc.32 (the PC must pin a newer APK than the phone).
 
 - **1.0.41 second round, phone app 2.3.0-pc.32 (2026-11-05 night, built, NOT released, untried on hardware; pc.32 APK built
-  locally from a dirty tree, SHA 719c3e2e..., NOT published - rebuild from the clean HEAD at release, publish, pin in
-  ApkShare; the release workflow refuses until then):** the pilot's list. *Upside down per phone:* `upsideDownFor`,
+  from the clean HEAD 28e9eab, published as flight-2.3.0-pc.32, SHA-256 b645bdf6..., signer d910997f...2eb9, pinned in
+  ApkShare):** the pilot's list. *Upside down per phone:* `upsideDownFor`,
   `videoUpsideDown.<phone>` (unset: the old PC-wide key), applied on choosing a phone and on connect; a spectator takes
   PILOT_VIEW's flip (flags bit 6), saves nothing. *Spectator info:* PILOT_VIEW carries the pilot's phone (UTF at the end,
   read if present); BYE [0x67][1] = the pilot disconnected on purpose (`SpectatorHost.close`); `SpectatorClient.pilotLeft`
