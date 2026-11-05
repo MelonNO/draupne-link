@@ -64,6 +64,29 @@ public final class WindowsTuning {
         return applied;
     }
 
+    private static final int ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x1, ES_DISPLAY_REQUIRED = 0x2;
+
+    /**
+     * Keeps Windows and the screen awake while a link is up (on = true), or lets them sleep again. A radio's joystick
+     * input doesn't count as activity to Windows: in a long flight without a mouse or key the display would blank
+     * (no video) or the laptop sleep (no sticks; the drone fails safe). SetThreadExecutionState holds for the calling
+     * thread, so call both from the same long-lived thread (the Swing thread). Best effort: false if it failed.
+     */
+    public static synchronized boolean keepAwake(boolean on) {
+        if (!System.getProperty("os.name", "").startsWith("Windows")) return false;
+        try {
+            long fn = Kernel32.getLibrary().getFunctionAddress("SetThreadExecutionState");
+            if (fn == 0) return false;
+            int flags = on ? ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED : ES_CONTINUOUS;
+            boolean ok = JNI.callI(flags, fn) != 0; // the state before, 0 = failed
+            if (!ok) log("Keep awake: SetThreadExecutionState failed");
+            return ok;
+        } catch (Throwable t) {
+            log("Keep awake: " + t);
+            return false;
+        }
+    }
+
     private static boolean call(SharedLibrary library, String function, LongToIntFunction invoke) {
         long fn = library.getFunctionAddress(function);
         if (fn == 0) return false; // older Windows without this function

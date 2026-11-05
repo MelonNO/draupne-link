@@ -47,7 +47,23 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
      */
     static final long CONFIG_WAIT_MS = 1000;
 
-    private record Config(int width, int height, boolean hevc, boolean front, byte[] codecConfig) {}
+    private record Config(int width, int height, boolean hevc, boolean front, byte[] codecConfig) {
+        boolean sameAs(Config o) {
+            return width == o.width && height == o.height && hevc == o.hevc && front == o.front
+                    && java.util.Arrays.equals(codecConfig, o.codecConfig);
+        }
+    }
+
+    /**
+     * The same config as the one in hand came this long before a stream start: it was that stream's, come first
+     * (see onVideoConfig) - the start is not held for another.
+     */
+    static final long SAME_CONFIG_MS = 2000;
+    /**
+     * The oldest frame waiting for the decoder came this long ago: the decoder is behind (slower than the frames
+     * come) - the queue is cut back as when it is full. Frames counted alone let the picture drift 1 s late at 30 fps.
+     */
+    static final long MAX_BACKLOG_AGE_MS = 200;
 
     private static final int MAX_BACKLOG = 30;
     private static final Object STOP = new Object();
@@ -94,6 +110,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
      */
     private int startsAhead;
     private long awaitingSince;
+    /** When the config in hand came again (guarded by this), 0 = not since the last stream start. */
+    private long sameConfigAt;
+    /** Backlogs cut back because the decoder fell behind (receive thread); and when that was last logged. */
+    private volatile long ageDrops;
+    private long ageDropLoggedAt;
 
     // recording: frames go to their own thread through a queue, so the receive thread never waits for the disk
     private record RecFrame(byte[] data, boolean keyFrame, long arrivedMs) {}
@@ -197,6 +218,25 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     public void onVideoConfig(int width, int height, boolean hevc, boolean frontCamera, byte[] codecConfig) {
         Config config = new Config(width, height, hevc, frontCamera, codecConfig);
         Config before = currentConfig;
+        if (before != null && before.sameAs(config)) {
+            // the config in hand once more (GetVideoConfig's cached copy after a late original, or a restarted stream
+            // with the same parameter sets): the decoder can go on as it is. Before, it was rebuilt and the picture
+            // froze until the next key frame, and startsAhead went to -1 (a later restart's frames then queued
+            // under the old config - the freeze at a size change that startsAhead is there to prevent)
+            synchronized (this) {
+                if (startsAhead > 0) { // a restarted stream waits for this: it goes on to the decoder now
+                    startsAhead = 0;
+                    earlyFrames.forEach(queue::offer);
+                    earlyFrames.clear();
+                    synchronized (assembler) {
+                        assembler.startedAfresh();
+                    }
+                } else {
+                    sameConfigAt = System.currentTimeMillis(); // perhaps a restart's own, come first: see accept
+                }
+            }
+            return;
+        }
         if (before != null && (before.width() != width || before.height() != height) && lastPresentedAt != 0) {
             resizeFrom = lastPresentedAt; // measured when the first picture at the new size is drawn
         }
@@ -226,6 +266,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             earlyFrames.clear();
         }
         if (recordDir != null) recordQueue.offer(REC_NEW_FILE); // a (re)started stream: a file of its own
+        FrameTap t = tap;
+        if (t != null) t.onConfig(width, height, hevc, codecConfig);
         log("Video: " + (hevc ? "H.265" : "H.264") + " " + width + "x" + height);
     }
 
@@ -274,6 +316,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (recordDir != null && !recordQueue.offer(new RecFrame(frame.data(), frame.keyFrame(), now))) {
             log("Recording: the disk is too slow, a frame was left out");
         }
+        FrameTap t = tap;
+        if (t != null) t.onFrame(frame.data(), frame.keyFrame(), now);
         windowFrames++;
         // a damaged or lost frame breaks the pictures after it until a key frame: ask for one (phone app pc.13 on;
         // the link limits how often) rather than wait for the next one - they come every 2-10 s now
@@ -294,7 +338,13 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (frame.damaged()) bitrate.onBadFrame(frame.keyFrame());
         bitrate.onFrame(frame.keyFrame(), now, Math.max(receivedFps, 30), ping.getAsInt());
         synchronized (this) {
-            if (frame.streamStart() && currentConfig != null) {
+            if (frame.streamStart() && currentConfig != null && sameConfigAt != 0 && now - sameConfigAt < SAME_CONFIG_MS) {
+                sameConfigAt = 0; // its config came first and is the one in hand: nothing to wait for
+                synchronized (assembler) {
+                    assembler.startedAfresh(); // it saw this start: only its flag goes
+                }
+            } else if (frame.streamStart() && currentConfig != null) {
+                sameConfigAt = 0;
                 startsAhead = Math.min(1, startsAhead + 1);
                 if (startsAhead > 0) { // its config hasn't come: hold the new stream for it (see startsAhead)
                     awaitingSince = now;
@@ -315,10 +365,51 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 if (earlyFrames.size() >= MAX_BACKLOG) earlyFrames.remove(earlyFrames.get(0).keyFrame() && earlyFrames.size() > 1 ? 1 : 0);
                 earlyFrames.add(frame);
             } else {
-                if (queue.size() >= MAX_BACKLOG) dropBacklog();
+                if (queue.size() >= MAX_BACKLOG) {
+                    dropBacklog();
+                } else if (decoderBehind(oldestQueuedAge(now))) {
+                    ageDrops++;
+                    if (now - ageDropLoggedAt > 5000) {
+                        ageDropLoggedAt = now;
+                        log("Video: the decoder is " + oldestQueuedAge(now) + " ms behind (" + String.format("%.1f", decodeMs)
+                                + " ms a frame) - cut back to the newest key frame");
+                    }
+                    dropBacklog();
+                }
                 queue.offer(frame);
             }
         }
+    }
+
+    /**
+     * The decoder is behind for good: the oldest waiting frame is MAX_BACKLOG_AGE_MS old and decoding takes about as
+     * long as the frames come apart (it won't catch up) - or it is a whole second old, whatever the cause. A short
+     * hold-up of a decoder that keeps up easily is caught up in a few frames: not cut (that would wait for a key frame).
+     */
+    private boolean decoderBehind(long ageMs) {
+        return ageMs > MAX_BACKLOG_AGE_MS && (decodeLoad() > 0.8 || ageMs > 1000);
+    }
+
+    /** How long ago the oldest frame waiting for the decoder came, ms (0 without one, or without arrival times). */
+    private long oldestQueuedAge(long now) {
+        for (Object o : queue) {
+            if (o instanceof FrameAssembler.Frame f) return f.arrivedMs() > 0 ? now - f.arrivedMs() : 0;
+        }
+        return 0;
+    }
+
+    /**
+     * The decoder's time per frame over the time between frames (1 = just keeps up; above it the decoder falls behind
+     * and the backlog is cut back to key frames - a smaller picture or another tier is the way out). 0 without a stream.
+     */
+    public double decodeLoad() {
+        int fps = receivedFps;
+        return fps <= 0 ? 0 : decodeMs * fps / 1000.0;
+    }
+
+    /** Backlogs cut back because the decoder fell MAX_BACKLOG_AGE_MS behind. */
+    public long decoderBehindDrops() {
+        return ageDrops;
     }
 
     /**
@@ -370,6 +461,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     private void decodeLoop() {
         VideoDecoder decoder = null;
+        Config decoderConfig = null; // the last config the decoder was made for
         boolean waitingForKey = true;
         boolean mirror = false;
         int shown = 0;
@@ -402,14 +494,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     }
                     if (item instanceof Config c) {
                         if (decoder != null) decoder.close();
-                        decoder = null;
-                        try {
-                            decoder = new VideoDecoder(c.hevc(), c.codecConfig(), hardwareDecode && !hardwareFailed);
-                            error = null;
-                        } catch (Throwable e) { // also a missing native library: the HUD says so
-                            error = e.getMessage() == null ? e.toString() : e.getMessage();
-                            log("Video decoder: " + e);
-                        }
+                        decoder = makeDecoder(c);
+                        decoderConfig = c;
                         mirror = c.front();
                         sink.videoStarted(c.width(), c.height(), mirror);
                         waitingForKey = true;
@@ -417,6 +503,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         continue;
                     }
                     FrameAssembler.Frame frame = (FrameAssembler.Frame) item;
+                    // no decoder (it could not be made at the config): tried again at each key frame, in software
+                    // after a GPU failure - before, nothing was shown until the next config
+                    if (decoder == null && frame.keyFrame() && decoderConfig != null) decoder = makeDecoder(decoderConfig);
                     if (decoder == null || (waitingForKey && !frame.keyFrame())) {
                         requestKeyFrame(); // a fresh decoder (stream start, or after an error) needs one
                         continue;
@@ -478,13 +567,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         }
                         decoder = null;
                         Config c = currentConfig;
-                        if (c != null) {
-                            try {
-                                decoder = new VideoDecoder(c.hevc(), c.codecConfig(), hardwareDecode && !hardwareFailed);
-                            } catch (Throwable again) {
-                                log("Video decoder: " + again);
-                            }
-                        }
+                        if (c != null) decoder = makeDecoder(c); // else at the next key frame (above)
                         waitingForKey = true;
                         requestKeyFrame();
                     }
@@ -496,6 +579,44 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         } finally {
             if (decoder != null) decoder.close();
         }
+    }
+
+    /**
+     * A decoder for this config (decode thread), on the GPU if wanted and it hasn't failed; a GPU decoder that can't be
+     * made marks the GPU failed and software is tried at once. Null if none can be made (the HUD shows why).
+     */
+    private VideoDecoder makeDecoder(Config c) {
+        boolean gpu = hardwareDecode && !hardwareFailed;
+        try {
+            VideoDecoder d = decoderFactory.make(c.hevc(), c.codecConfig(), gpu);
+            error = null;
+            return d;
+        } catch (Throwable e) { // also a missing native library: the HUD says so
+            error = e.getMessage() == null ? e.toString() : e.getMessage();
+            log("Video decoder" + (gpu ? " (on the GPU; software from now on)" : "") + ": " + e);
+            if (!gpu) return null;
+            hardwareFailed = true;
+            try {
+                VideoDecoder d = decoderFactory.make(c.hevc(), c.codecConfig(), false);
+                error = null;
+                return d;
+            } catch (Throwable again) {
+                log("Video decoder: " + again);
+                return null;
+            }
+        }
+    }
+
+    /** Makes decoders: FFmpeg's, or a test's that fails. */
+    interface DecoderFactory {
+        VideoDecoder make(boolean hevc, byte[] codecConfig, boolean hardware);
+    }
+
+    private volatile DecoderFactory decoderFactory = VideoDecoder::new;
+
+    /** Tests: decoders from here instead. */
+    void setDecoderFactory(DecoderFactory factory) {
+        decoderFactory = factory;
     }
 
     private static double smooth(double avg, double sample) {
@@ -591,6 +712,36 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     /** Tests: where requests for the stream's config go instead of the link. */
     void setConfigRequester(Runnable requester) {
         configRequester = requester;
+    }
+
+    // ------------------------------------------------------------------ the STANAG 4609 stream
+
+    /**
+     * Gets every stream config and finished frame as it comes, on the receive thread (1.0.39, the STANAG 4609 stream):
+     * it must return at once - hand the frame to a thread of its own, or leave it out.
+     */
+    public interface FrameTap {
+        void onConfig(int width, int height, boolean hevc, byte[] codecConfig);
+
+        void onFrame(byte[] data, boolean keyFrame, long arrivedMs);
+    }
+
+    private volatile FrameTap tap;
+
+    /** Sets (null: takes away) the tap; a new one gets the config in hand and a key frame is asked for, to start from. */
+    public void setFrameTap(FrameTap t) {
+        tap = t;
+        Config c = currentConfig;
+        if (t != null && c != null) {
+            t.onConfig(c.width(), c.height(), c.hevc(), c.codecConfig());
+            requestKeyFrame();
+        }
+    }
+
+    /** The picture size in hand, {width, height}, or null before the first config. */
+    public int[] pictureSize() {
+        Config c = currentConfig;
+        return c == null ? null : new int[]{c.width(), c.height()};
     }
 
     // ------------------------------------------------------------------ recording

@@ -78,6 +78,20 @@ final class PcLinkStats {
         out.writeByte(caps);
     }
 
+    /**
+     * pc.31, once a second to a PC whose stick frames carry their send time: u16 how late the last stick frame came
+     * against the best the link did lately (ms, 65535 unknown), u16 the most over the last second (65535 unknown),
+     * u16 frames dropped as too late this session. Last in its packet.
+     */
+    static final short PHONE_RC_LAG_CODE = 0x40F6;
+
+    static void writeRcLagTo(DataOutputStream out, int lagMs, int maxLagMs, int dropped) throws IOException {
+        out.writeShort(PHONE_RC_LAG_CODE);
+        out.writeShort(lagMs < 0 ? 65535 : Math.min(65534, lagMs));
+        out.writeShort(maxLagMs < 0 ? 65535 : Math.min(65534, maxLagMs));
+        out.writeShort(Math.max(0, Math.min(65535, dropped)));
+    }
+
     static void writePhonePositionTo(DataOutputStream out, android.location.Location l) throws IOException {
         out.writeShort(PHONE_POSITION_CODE);
         out.writeInt((int) Math.round(l.getLatitude() * 1e7));

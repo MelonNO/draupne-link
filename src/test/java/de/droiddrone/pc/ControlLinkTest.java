@@ -442,6 +442,28 @@ class ControlLinkTest {
         assertEquals(7, link.maxBitrateStep(), "the sharp 8 Mbit/s");
         assertEquals(8_000_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[link.maxBitrateStep()]);
         assertFalse(link.isRobust());
+        // the pilot (1.0.39): ROBUST did nothing while the sharp tier was on - every choice takes at once, from any tier
+        link.setVideoMode(ControlLink.VideoMode.ROBUST);
+        waitFor(() -> phone.config.cameraWidth == 640 && (phone.videoProfile & 1) == 1, 3000, "ROBUST straight from the sharp tier");
+        assertEquals(ControlLink.Tier.ROBUST, link.getTier());
+        link.setVideoMode(ControlLink.VideoMode.SURVIVAL);
+        waitFor(() -> phone.config.cameraWidth == 480 && phone.config.cameraFpsMax == 15, 3000, "SURVIVAL: 480x270 at 15 fps");
+        assertEquals(ControlLink.SURVIVAL_MAX_STEP, link.maxBitrateStep());
+        link.setVideoMode(ControlLink.VideoMode.NORMAL);
+        waitFor(() -> phone.config.cameraWidth == 1280 && phone.config.cameraFpsMax == 30 && phone.videoProfile == 0, 3000, "NORMAL: 1280x720");
+        assertEquals(ControlLink.Tier.NORMAL, link.getTier());
+        assertEquals(5, link.maxBitrateStep(), "the set 4 Mbit/s");
+    }
+
+    @Test
+    void everyVideoChoiceHoldsItsTier() {
+        assertNull(ControlLink.VideoMode.AUTO.forced());
+        for (ControlLink.VideoMode m : ControlLink.VideoMode.values()) {
+            if (m != ControlLink.VideoMode.AUTO) assertEquals(m.name(), m.forced().name(), "a button for every tier AUTO can pick");
+        }
+        assertEquals(ControlLink.Tier.values().length + 1, ControlLink.VideoMode.values().length);
+        assertEquals(ControlLink.VideoMode.ROBUST, ControlLink.VideoMode.parse("robust"), "the saved settings still read");
+        assertEquals(ControlLink.VideoMode.AUTO, ControlLink.VideoMode.parse(null));
     }
 
     /**

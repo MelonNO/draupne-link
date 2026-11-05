@@ -132,7 +132,7 @@ final class OsdRenderer {
             this.layout = layout == null ? OsdLayout.defaults() : layout;
             boundsOut = bounds;
             unit = h / 720f; // everything scales with the picture
-            long now = System.currentTimeMillis();
+            long now = de.droiddrone.pc.MonoClock.ms();
             FcTelemetry t = d.telemetry();
             FcTelemetry.Attitude att = t == null ? null : t.getAttitude();
             boolean attFresh = att != null && now - att.receivedAt() < STALE_MS;

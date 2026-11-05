@@ -235,4 +235,153 @@ class MapToolsTest {
         }
         assertEquals(List.of(), List.of()); // keeps the import used when the lists above change
     }
+
+    @Test
+    void theRadioHorizonsMastIsPlacedMovedAndGoesWithTheTool(@TempDir Path dir) {
+        MapView map = map(dir, new MapGraphics(null));
+        java.util.List<MapGraphics.LatLon> told = new java.util.ArrayList<>();
+        map.setOnHorizonMast(told::add);
+        map.setTool(MapView.Tool.HORIZON);
+        click(map, 200, 150);
+        assertEquals(1, told.size());
+        double[] centre = map.toLatLon(200, 150);
+        assertEquals(centre[0], told.get(0).lat(), 1e-9);
+        assertEquals(MapView.Tool.HORIZON, map.tool(), "the tool stays: a new click moves the mast");
+        click(map, 100, 100);
+        assertEquals(2, told.size(), "one mast at a time: moved");
+        // what it reaches, painted green round the mast
+        MapGraphics.LatLon mast = told.get(1);
+        de.droiddrone.pc.map.RadioHorizon.Result r = de.droiddrone.pc.map.RadioHorizon.compute(mast.lat(), mast.lon(),
+                new de.droiddrone.pc.map.RadioHorizon.Settings(10, 120, 15, 2400), (lat, lon) -> 0, (lat, lon) -> de.droiddrone.pc.map.RadioHorizon.OPEN);
+        BufferedImage before = map.snapshot(400, 300);
+        map.setHorizon(r, "RADIO HORIZON  up to 30.0 km");
+        assertSame(r, map.horizon());
+        BufferedImage after = map.snapshot(400, 300);
+        assertNotEquals(before.getRGB(300, 250), after.getRGB(300, 250), "the ground round the mast is tinted");
+        map.cancelTool(); // Esc ends the tool: the result stays
+        assertNotNull(map.horizonMast(), "it stays when the tool ends");
+        assertSame(r, map.horizon());
+        assertNotNull(told.get(told.size() - 1));
+        map.paint(new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB).createGraphics()); // where its cross is
+        java.awt.Rectangle cross = map.horizonCross();
+        assertNotNull(cross, "a cross on its label");
+        // TOOLS put away: hidden, not gone, and its cross takes no click
+        map.setToolOverlaysShown(false);
+        map.paint(new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB).createGraphics());
+        assertNull(map.horizonCross(), "hidden with TOOLS");
+        click(map, cross.x + cross.width / 2, cross.y + cross.height / 2);
+        assertNotNull(map.horizonMast(), "hidden is not crossed out");
+        map.setToolOverlaysShown(true);
+        map.paint(new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB).createGraphics());
+        assertEquals(cross, map.horizonCross(), "TOOLS out again: back where it was");
+        click(map, cross.x + cross.width / 2, cross.y + cross.height / 2);
+        assertNull(map.horizonMast(), "crossed out: gone");
+        assertNull(map.horizon());
+        assertNull(told.get(told.size() - 1), "the window is told it went (the loading stops)");
+        assertEquals(MapView.Tool.NONE, map.tool(), "the click on the cross did nothing else");
+    }
+
+    @Test
+    void theToolsFoldOutInThreeGroups(@TempDir Path dir) {
+        MapView map = map(dir, new MapGraphics(null));
+        MapToolsPanel tools = new MapToolsPanel(map);
+        assertFalse(tools.isOpen());
+        assertNull(tools.group());
+        tools.showGroup(MapToolsPanel.Group.TOOLS, false);
+        assertTrue(tools.isOpen(), "a group brings MAP TOOLS out with it");
+        assertEquals(MapToolsPanel.Group.TOOLS, tools.group());
+        assertTrue(inView(tools.horizon, tools), "RADIO HORIZON is in TOOLS");
+        assertTrue(tools.toolsShown(), "TOOLS out: the radio horizon and the search show");
+        assertFalse(inView(tools.pins, tools), "PINS is not in TOOLS");
+        assertTrue(tools.getPreferredSize().width >= MapToolsPanel.STRIP_WIDTH + MapToolsPanel.BODY_WIDTH, "the strip and the list are out");
+        tools.showGroup(MapToolsPanel.Group.DATA, false);
+        assertTrue(inView(tools.export, tools), "DATA's list in view");
+        assertFalse(inView(tools.horizon, tools), "TOOLS' list put away");
+        tools.showGroup(null, false);
+        assertTrue(tools.isOpen(), "folding the list leaves the strip");
+        int stripOnly = tools.getPreferredSize().width;
+        assertTrue(stripOnly < MapToolsPanel.STRIP_WIDTH + 40, "only the strip beside the tab: " + stripOnly);
+        tools.showGroup(MapToolsPanel.Group.DRAW, false);
+        assertTrue(inView(tools.pins, tools), "PINS is in DRAW (the pilot)");
+        assertFalse(tools.toolsShown(), "another list out: the tools' overlays hide");
+        int[] told = {0};
+        tools.onGroupChanged(() -> told[0]++);
+        tools.setOpen(false, false);
+        assertEquals(1, told[0], "MAP TOOLS in: told");
+        assertNull(tools.group(), "MAP TOOLS in: the list folds with it");
+        assertEquals(26, tools.getPreferredSize().width, "only the MAP TOOLS tab");
+        // the radio horizon's heights
+        tools.mastM.setValue(12);
+        tools.aircraftM.setValue(80);
+        tools.treeM.setValue(0);
+        tools.frequencyMHz.setValue(800);
+        assertEquals(new de.droiddrone.pc.map.RadioHorizon.Settings(12, 80, 0, 800), tools.horizonSettings());
+    }
+
+    @Test
+    void theGcsSearchBoxIsDrawnReplacedAndGoesWithTheTool(@TempDir Path dir) {
+        MapView map = map(dir, new MapGraphics(null));
+        java.util.List<double[]> told = new java.util.ArrayList<>();
+        map.setOnSearchArea(told::add);
+        map.setTool(MapView.Tool.SEARCH);
+        drag(map, 150, 100, 250, 200);
+        assertEquals(1, told.size());
+        double[] a = told.get(0), nw = map.toLatLon(150, 100), se = map.toLatLon(250, 200);
+        assertEquals(se[0], a[0], 1e-9);
+        assertEquals(nw[0], a[1], 1e-9);
+        assertEquals(nw[1], a[2], 1e-9);
+        assertEquals(se[1], a[3], 1e-9);
+        assertEquals(MapView.Tool.SEARCH, map.tool(), "the tool stays: a new box replaces the area");
+        drag(map, 100, 100, 104, 103); // too small: nothing
+        assertEquals(1, told.size());
+        // the heat map, painted
+        de.droiddrone.pc.map.RadioHorizon.Search r = de.droiddrone.pc.map.RadioHorizon.search(a[0], a[1], a[2], a[3],
+                new de.droiddrone.pc.map.RadioHorizon.Settings(10, 120, 0, 2400), (lat, lon) -> 0, (lat, lon) -> de.droiddrone.pc.map.RadioHorizon.OPEN, null, null);
+        BufferedImage before = new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB);
+        map.paint(before.createGraphics());
+        map.setSearch(r, "GCS SEARCH  best 100 %");
+        BufferedImage after = new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB);
+        map.paint(after.createGraphics());
+        assertNotEquals(before.getRGB(30, 280), after.getRGB(30, 280), "the heat map tints the map");
+        map.cancelTool();
+        assertNotNull(map.searchArea(), "it stays when the tool ends");
+        map.paint(new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB).createGraphics());
+        java.awt.Rectangle cross = map.searchCross();
+        assertNotNull(cross);
+        int areas = told.size();
+        click(map, cross.x + cross.width / 2, cross.y + cross.height / 2);
+        assertNull(map.searchArea(), "crossed out: gone");
+        assertNull(map.search());
+        assertEquals(areas + 1, told.size());
+        assertNull(told.get(told.size() - 1), "the window is told it went");
+    }
+
+    @Test
+    void theFieldsSlideOutUnderTheButtonPressed(@TempDir Path dir) {
+        MapView map = map(dir, new MapGraphics(null));
+        MapToolsPanel tools = new MapToolsPanel(map);
+        map.setOnToolChanged(tools::syncTools);
+        assertEquals(0, tools.horizonFields.getPreferredSize().height, "folded in at first");
+        map.setTool(MapView.Tool.HORIZON);
+        assertTrue(tools.horizonFields.isOpen());
+        assertFalse(tools.searchFields.isOpen());
+        tools.horizonFields.finish();
+        int open = tools.horizonFields.getPreferredSize().height;
+        assertTrue(open > 80, "four fields and the status line: " + open);
+        map.setTool(MapView.Tool.SEARCH);
+        assertFalse(tools.horizonFields.isOpen(), "the other tool's fields go back in");
+        assertTrue(tools.searchFields.isOpen());
+        tools.horizonFields.finish();
+        tools.searchFields.finish();
+        assertEquals(0, tools.horizonFields.getPreferredSize().height);
+        assertEquals(open, tools.searchFields.getPreferredSize().height, 2);
+        map.cancelTool();
+        assertFalse(tools.searchFields.isOpen());
+    }
+
+    /** The component is in the panel's tree: in the strip, or in the one list in view (the others are out of it). */
+    private static boolean inView(java.awt.Component c, java.awt.Container root) {
+        for (java.awt.Container p = c.getParent(); p != null; p = p.getParent()) if (p == root) return true;
+        return false;
+    }
 }

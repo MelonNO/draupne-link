@@ -4,8 +4,216 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-04, 1.0.38)
+## Where things stand (2026-11-04, 1.0.39 built)
 
+- **1.0.39 STANAG 4609 (2026-11-05, built, 389 tests green, untried with a real TAK / player):** the pilot asked for the camera's view on the map and "a stream that can be connected with anything that follows the STANAG". `video/Klv` encodes MISB ST 0601 (0601.17 items: 2 time, 3 mission, 5-7 + 90/91 attitude, 10-12 names, 13-15 sensor, 16/17 FOV, 18-20 camera relative angles, 21 slant range, 23-25 frame centre, 26-33 offset + 82-89 full corners, 48 = ST 0102 security (UNCLASSIFIED, ISO-3166 three letter, object country UTF-16), 56 speed, 65 version 17, 1 checksum) - checked against jMISB's checksum and decoded with the Python `klvdata` library. `video/StanagStream`: FFmpeg's mpegts muxer, video copied (parameter sets put before key frames that lack them) + an AV_CODEC_ID_SMPTE_KLV data stream (async KLV, stream type 0x06 'KLVA'), `resend_headers`, `flush_packets`, `av_write_frame` (not interleaved: the sparse KLV would hold video back), UDP `pkt_size=1316` (multicast `ttl=8`); KLV at most every 100 ms; its own thread at MIN_PRIORITY and a 90-frame queue - full = frames left out until the next key frame, the receive thread never waits. `VideoPipeline.FrameTap` (`setFrameTap`) is the only change on the video path. `map/CameraFootprint`: rays through the picture's edge (8 per side) turned by the camera tilt, roll, pitch, heading (Betaflight's pitch is nose down positive: flipped; `osdInvertPitch` honoured), marched over the Terrarium terrain (z12, 5 km round the drone, reloaded after 2 km; `CameraFootprint.Terrain`) to 3 km, flat ground at the launch height where the terrain isn't in. `CameraView` (pc): height = terrain at launch + baro (else GPS MSL), the KLV per frame. UI: MENU > LINK > STANAG 4609 stream / settings (`StanagDialog`: `stanag.target` default 127.0.0.1:15000, `stanag.missionId`, `stanag.country` NOR, `camera.hfovDeg` 70, `camera.tiltDeg` 0), MENU > VIDEO > Camera view on the map (`camera.viewOnMap`), drawn by `MapView.paintCameraView` under the drone. *Not done:* the phone doesn't send its camera's real FOV (Camera2 has focal length + sensor size: a phone-protocol item); synchronous KLV (ST 1402 metadata AU cells) and a CoT feed; never tried in ATAK / WinTAK / QGIS - first test: VLC `udp://@:15000` on this PC, then a TAK device's Tailscale address.
+
+- **1.0.39 robustness round, phone app 2.3.0-pc.31 (2026-11-05, built, 365 tests green, untried on hardware, APK
+  not built):** the pilot asked for a review of the link's weak spots, then "implement everything". *Phone* (overlay):
+  `FcArmedState` (DISARMED / ARMED / UNKNOWN; `Msp.armedState`: UNKNOWN when not initialised, box ids unknown, or no
+  status for 2.5 s; MAVLink from DD_MAVLINK_MODE; the status poll has its own writer slot, never skipped by
+  `slowUntil`) - every guard acts only on DISARMED; the not-connected branch of `Udp`'s receiver takes nothing but a
+  keyed Connect, and from another address only with the FC DISARMED and the pilot silent `PILOT_ALIVE_MS` (before: any
+  keyed PC after the 4 s timeout, armed or not); `PowerMode.fallAsleep` re-checks, `fcArmed` cancels a deep-sleep
+  countdown; an FC-port Config change is deferred until disarmed (`applyDeferredFcConfig`); `Serial` init / open /
+  close under `portLock` with a generation per thread; the DDService timer in try/catch; request writes 20 ms;
+  `answerName` off the receive thread; the 16-bit sequence reset takes only newer frames for 1 s; StartVideo ignored
+  while a start / camera open / watchdog restart runs (`videoStartBusy`), one camera thread, callbacks by generation;
+  weak-tier key frames paced at ~1.25 x target; frame numbers per sender (`nextFrameNum(senderId)`); encoder flags as
+  bits; telemetry queues drained every tick, split over datagrams. *Stick lag* (PROTOCOL: RcFrame pc.31, record
+  0x40F6): the PC's `ControlLink.rcFrame(frame, seq, sentMs, maxLagMs)` (`RC_LAG_MIN_PC_BUILD` 31); the phone's
+  baseline = min over two 10 s windows; `rc.maxLagMs` (default 0 = never drop: a lasting slower path would mean a
+  failsafe), OSD STICKS x.x S LATE over 300 ms, link log `stick_lag_max_ms` / `sticks_dropped_late`. *Common*:
+  `ReceiverBuffer` uses `isConnected()`, waits 1.5 x ping (>= 30 ms, >= 4 packets) before skipping a gap, finds the
+  next packet across the wrap, acknowledges true duplicates only, one lock; `UdpSender` doesn't timer-resend Connect,
+  tries once, logs every 2 s; the phone ignores a repeat Connect from the pilot within 1 s of a session's start (the
+  PC still takes every answer: pc.30 phones start a session per Connect, `TransportTest`). *PC:* `MainWindow.
+  confirmEndWhileArmed` (DISCONNECT, window close; also while the link is down within the lost-drone window), the
+  CONNECT button not focusable, `WindowsTuning.keepAwake` (SetThreadExecutionState, Swing thread, connect ->
+  disconnect), RADIO FROZEN / STICKS LATE in `stickWarning` (the alert sound), `RcSession.onPaused` (STANDBY is not a
+  radio blip), buttons count as input, `setFrozenStopMs` (`radio.frozenStopS`, default 0: a still hover on a
+  jitter-free radio would be cut), `JoystickService` reads by `readSame`, `MonoClock.ms()` for the link's timeouts
+  and freshness (ping stays on the wall clock, UdpSender stamps it), `FcTelemetry.isArmedNow` wants two armed reports
+  in a row, the FcInfo refresh asked again until answered, the video watchdog waits while the phone restarts its
+  camera, AUTO leaves SHARP on `decodeLoad() > 1` for 5 s. *Video* (`video/`): an identical config is ignored, the
+  backlog cut by age (200 ms with the decoder near its limit, 1 s always), key frame 1 a restart only if it differs
+  from the last one, the order forgotten after 3 s without a frame, a decoder that couldn't be made tried again
+  (software), `VideoDecoder.freeBeforeOpen`. Tests: `StickLagTest`, `TransportRobustnessTest`, RcSessionTest /
+  FcTelemetryTest additions, the video tests. *Not done:* the second key-frame copy still goes straight after the
+  first; packets have no session id. At release: bump nothing more (pc.31 is in the overlay's build.gradle), build
+  the APK from a clean HEAD, publish `flight-2.3.0-pc.31`, pin it in `ApkShare`.
+
+- **1.0.39 second round (same release):** *boot animation mismatched* (the pilot: "the frames are mismatched, the
+  crosshair is too low"): a throwaway test (real `MainWindow` off screen, targets every 15 ms) showed the cards never
+  move, but FlatLaf's glass pane sits under the title bar (y 30) while the targets were measured in the layered pane
+  (y 0): everything landed 30 px low. `MainWindow.open` / `boundsInPane` now convert into the glass pane. The
+  aircraft's altitude in RADIO HORIZON is above the ground under it ("above ground from the point of the aircraft"):
+  `compute`'s target = ground + `aircraftM` per sample (GCS SEARCH already had it so). The horizon is blue
+  (`HORIZON_SEEN`) and painted over the heat map, to read both at once. The tools' status lines are short, 13 px,
+  narrower (room for the scrollbar; the long one was cut off). The radio horizon, the search and the ruler's measurement (with its profile) show only while
+  TOOLS is out (`MapToolsPanel.toolsShown` / `onGroupChanged` -> `MapView.setToolOverlaysShown`; hidden, not cleared;
+  their tool ends). PINS moved to DRAW.
+  *World topo* (the pilot: "implement a topo map for the rest of the world as well"): `TileSource.WORLD_TOPO` =
+  OpenTopoMap (tile.opentopomap.org, CC-BY-SA, z17, volunteer server so `prefetchAllowed` false like OSM).
+  `forPosition` gives it outside Norway (was OSM); `TileSource.at` makes a chosen TOPO a topo map everywhere
+  (`MapView.effectiveSource`). MAP TYPE gains WORLD TOPO; DOWNLOAD AREA's "all" takes it outside Norway only.
+  RadioHorizon's forest outside Norway still reads OSM's colours (OpenTopoMap's forest colour not measured).
+  *3D radio in the calibration* (the pilot: "a 3d render of a FPV controller to illustrate what the user is supposed
+  to do during calibration"): `gui/ControllerRender` - a software renderer (superellipsoid parts, perspective, depth
+  buffer, per-vertex key / fill / rim light, 2x2 supersampled, ~30 fps while shown), `Show` per step, the asked-for
+  stick cap / switch ball lit red, arrows projected onto the face. Camera per step, gliding: nearly square on for the
+  sticks (from higher up a stick pushed forward points at the eye and reads as a ball - checked on rendered sheets),
+  above and from the side, zoomed, for a switch (its flip is forward / back). `CalibrationDialog`: between the two
+  live gimbals, shown on every step; SUMMARY follows the real channels. Tests: `ControllerRenderTest`.
+  Second round (the pilot): modelled on the RadioMaster TX16S MK3 (body, grips, big screen with buttons and roller,
+  gimbals wide and low, six buttons between them, trims, two top knobs, four toggles per shoulder, handle, antenna -
+  from its layout, not CAD). `slotFor`: flight modes on the second toggle from the left end, PREARM the right end,
+  ARM the left end, GPS rescue second from the right, spares inside. The centre step is all four centred (the
+  render and the texts); `CalibrationWizard.RANGE_RESERVE_MS` 2 s after all four axes are swept the range step goes
+  on by itself. Throttle: `AxisCalibration.toThrottle` maps the step-2 centre to 1500 like roll / pitch / yaw (the
+  pilot: "make the centered location in step 2 be the centered location sent to the flight controller"), only when
+  that centre is inside 25-75 % of the range: old calibrations took it at throttle down and would idle at 1500.
+  Throttle down stays 1000, so the motors' start rule (throttle down) is unchanged.
+  Third round (the pilot: "does not at all look like the TX 16 ... in a realistic style"): `ControllerRender`
+  rewritten. The body is one slab from the TX16S's front outline (`HALF`, Catmull-Rom, mirrored; `slab` sets the
+  outline in for rounded front / back edges, faces ear-clipped), the screen frame, keys and trims rounded-rect slabs,
+  rings tori; the screen and the printed name are textures (uv). Renderer: a G-buffer pass (triangle + perspective-
+  correct barycentrics per sub-pixel), a shadow map from the key light (640 x 640, 3 x 3 soft), per-pixel shading
+  (key / fill / rim, hemisphere ambient, Blinn-Phong, a studio sky + softbox in the reflection, Fresnel, metals
+  tinted), knurl and boot ribs as normal bumps round the part's axis, ACES tone mapping. The model is built once
+  (static) and shared. Checked on rendered sheets (scratchpad ControllerShotTest), not against a photo.
+  Fourth round (the pilot: "find a model online and use that instead"): no free full-body model with a clear licence
+  was found (Sketchfab's scan is CC BY-NC-SA); the pilot downloaded a GrabCAD CAD model (TX16S MKII, YahyaELone,
+  STEP from Inventor). Tessellated with OpenCASCADE (`uv run --with cadquery-ocp==7.7.2`, 0.25 mm deflection; 8.x
+  lacks TDF_LabelSequence) into `model/tx16s-mkii.bin.gz` ('TXM1': per part name, CAD colour, xyz mm, int8 normals,
+  triangles; 47 parts, 62k triangles, 573 kB); the scripts are in the scratchpad, not the repo. `ControllerRender.load`:
+  mm to cm centred on the body, materials by part name, the sticks GL + G1 about the Part1Gimble frame's centre, the
+  levers ("SD3 L*") about their nearest bushing ("SD3:"), slots by x from each end (shoulder row and top row
+  together), the antenna folded back 72 degrees. Licence: the maintainer confirmed permission to redistribute (2026-11-05), see THIRD-PARTY.md. (The real TX16S: gimbals at the top, the screen below - the made-up models had
+  it the other way round.)
+  *Main window round* (the pilot): `MainWindow` - the controller card's three status labels (11 px, tooltips with the
+  whole line) moved into its top row (BorderLayout CENTER beside the name and buttons), `channelBars` straight in the
+  card's CENTER, so minimized the card is the top row only. `linkFields` (PHONE list, CONNECT AS) hidden by
+  `setLinkEditable` while connected. `fitMiniMap`: under MINI_MIN the log gives way to LOG_FLOOR 110 before the minimap
+  shrinks, gone only under MINI_FLOOR 64 ("the minimap sometimes disappears": it went at the first squeeze). VIDEO menu:
+  one-line details, the tiers' sizes in the Video row's tooltip ("takes up half the screen").
+  *3D radio, fifth round* (the pilot: "the animation is lagging", "the switch ... just moves", which switch is which):
+  slots by row and side (`TOP_*` the shoulder row standing up, `FRONT_*` the row pointing out of the face; outer =
+  further from the middle). Flight modes TOP_LEFT_OUTER, PREARM FRONT_LEFT_OUTER, ARM FRONT_RIGHT_OUTER, GPS rescue
+  TOP_RIGHT_OUTER. A lever turns about where it leaves its bushing (the bushing's face along the axis its tip points
+  to), +-16 degrees about that axis (`leverRest`: the CAD's angle, its OFF side), a 140 ms snap with a small overshoot;
+  it turned 48 degrees about the bushing's middle before, so its base slid. Speed: ~21 ms a frame at 440 x 300
+  (`ControllerShotTest` timing): the passes run in row bands on all cores, a pixel inside one triangle is lit once
+  (edges 4 times), tone mapping from a table, no rim highlight, the camera's sway and the glow's pulse gone so an
+  unchanged pose reuses the last picture (`pose`), the timer at 33 ms.
+  Sixth round (the pilot, with RadioMaster's layout drawing: "SF2 is arm, SH MOM is Prearm, SA3 is mode, SC3 is
+  AUX4/GPS rescue"; "it still clips outside its base ... actually confirm it"; "increase the size ... beside the
+  values"): slots are the switch names `SA`..`SH` (front of the shoulders SA SB | SC SD by how far out, the shoulders
+  SE SG in front, SF SH behind); `slotFor` ARM SF, PREARM SH (momentary: held 0.8 s, let go), flight modes SA, GPS
+  rescue SC. Clipping: the CAD's lever runs right through its bushing and that part swung out through the sides;
+  `cutAtBushing` keeps a lever from `LEVER_KEEP` 1.2 mm under the bushing's face. Confirmed by
+  `ControllerRenderTest.noLeverEverComesOutThroughItsBushing` (every lever, OFF / ON and the snap's overshoot: 0
+  points under the face outside the bushing; without the cut it fails, "SA at 16 degrees: 38 points through the
+  bushing") and on close-up renders of all eight. `CalibrationDialog`: the radio 500 x 560 in the card's WEST, the
+  stick views (a row, hidden when not used) and the values beside it; the dialog up to 1320 wide.
+  Seventh round: `CalibrationWizard.FULL_RANGE` 1.0 (was 1.5: a radio at 80 % never got past step 1; its own min /
+  max are saved and mapped to 1000 / 2000), the range step's 2 s wait restarts while a limit still grows (`GROWTH`).
+  Sticks: `smoothTravel` (the sum of steps under `SMOOTH_STEP` 0.25) tells a sweeping stick from a jumping switch;
+  `isFullySwept` needs `SMOOTH_MIN` 1.5 of it; leaving the range step locks `stickAxes` (the four smoothest); ASSIGN
+  only picks among them, SWITCH never (`detectAxis(.., sticks)`); back into the range step finds them again. Tests
+  sweep smoothly (`CalibrationWizardTest.sweep`). The final check's radio moves its toggles from the AUX channels
+  (`ControllerRender.setLiveSwitch`, by `slotFor`). Its screen: the DRAUPNE mark, an artificial horizon, LQ / RSSI /
+  battery (`screenTexture`, 480 x 248 like the CAD screen's 108 x 56 mm); the badge plain carbon.
+  *Clipping, confirmed* (the pilot: "there is still some clipping in on the controller"): `tools/model/check_clipping.py`
+  poses the model as `ControllerRender` does and counts points of every moving part inside any other part (closed
+  parts: trimesh; the shell is not closed: 3-ray parity, majority) - both sticks in 8 directions at half and full
+  deflection, every lever at both ends and the snap's overshoot. Found and fixed: the stick (GL) reached the gimbal's
+  floor, so any tilt pushed its foot through - `clip` now slices it 1 mm under the inner plate's top (and the levers
+  1.2 mm under their bushing's face, exactly, not whole triangles); the inner plate (G1) tilting with the stick came
+  up through the frame and sliding went into it - it stays put; the sticks hit the slot's rim from 24 degrees -
+  `MAX_TILT` 20; the shoulder levers (SE SF SG SH) stand in wells and touch the rims from 6 degrees - 5 for them,
+  the front ones 16 (`leverThrow`); each lever throws about its CAD direction (the CAD has them in the middle, the
+  shoulder bushings leaning back). Result: 0 of 64 poses. Run: `uv run --no-project --python 3.12 --with trimesh
+  --with numpy --with scipy --with rtree --with shapely --with networkx --with mapbox-earcut python
+  tools/model/check_clipping.py <mesh.bin.gz> 10,20` (the mesh: `src/main/resources/model/tx16s-mkii.bin.gz`);
+  `tools/model/export_step.py` makes it from the STEP (`uv run --with cadquery-ocp==7.7.2`, 0.25 mm).
+  Eighth round: the 2D stick squares (`GimbalView`) are gone from `CalibrationDialog` - the radio (560 x 600) is
+  the only picture; the final check's switches snap over to a new place (`liveFrom` / `liveTo` / `liveStart`) instead
+  of jumping. The radio's screen: Red ops (`redOpsScreen`: black and red, the DRAUPNE mark large, the flight state,
+  ARMED) - the pilot picked it of ten screens tried in the app (HUD, EdgeTX, night vision, map, telemetry, radar,
+  synthwave, blueprint, minimal; Minimal's large mark went into it), then had the picker and the rest removed ("make
+  nr 2 be the skin, remove the selector and other skins"). The badge between the gimbals plain carbon; the radio its own
+  colours (a try at body colours was dropped: "keep the original colour on the controller"). A STYLE picker over the radio in `CalibrationDialog` tries them live and saves the choice
+  (`calibrationRadioStyle`, via MainWindow.save); default HUD.
+  *Front toggles hinge again* (the pilot: they "no longer hinge like how they are supposed to"): hinged at the
+  bushing's face about their CAD direction, their base wandered. A front lever (SA SB SC SD) now hinges where its centre
+  line (`centreLine`, the covariance's main axis) meets its bushing's axis - 1.5 mm inside the bushing - and throws
+  from its CAD end (15 degrees short ones, 27 long ones) through straight out to the mirror, at most `FRONT_MAX_TILT`
+  22 (the long ones touch the face from 24). The shoulder ones are as before (their line meets the axis above the
+  bushing: those bushings lean). `check_clipping.py` mirrors it: 0 of 64 poses.
+  *Menu wipe behind the tour's notice* (the pilot's recording, tour step SETUP: "the animation happens behind the
+  pop up and then jumps in front after it is finished ... should always be on top"): 1.0.38 put the notice at
+  POPUP_LAYER + 10, over the menu's wipe (`TacticalCombo.Ghost`, POPUP_LAYER), but the real menu is a heavyweight
+  popup, over everything. The wipe is now at `TacticalCombo.GHOST_LAYER` (POPUP_LAYER + 20, over `Tour.NOTICE_LAYER`)
+  and `TacticalCombo.menu()` forces heavyweight, so wipe and menu are both always in front. Frames read off the mp4
+  with OpenCV (`uv run --with opencv-python-headless`; no ffmpeg on this PC).
+  *Video quality buttons* (the pilot: "the video quality buttons do not seem to work ... include buttons for all the
+  video adjustments that the program may change it to"): in `ControlLink.adjustResolution` the sharp tier's branch
+  never looked at the mode, so ROBUST (and AUTO) did nothing while sharp was on. `VideoMode` is now AUTO, SHARP,
+  NORMAL, ROBUST, SURVIVAL; `forced()` gives the held tier and is decided first, from any tier (`decideForcedTier`
+  too, before the first config). ROBUST now holds bad coverage mode (before it could still drop to survival: that
+  is the SURVIVAL button now). `MenuRows.ChoiceRow` segments widen for the longest label.
+- **1.0.39 radio horizon, GCS search, three tool groups, symbols, minimap - built, tests green, not released:** the pilot: "create a new
+  tool, called radio horizon check ... aircraft altitude, antenna mast ... places the mast ... a radius showing the
+  radio horizon ... no signal goes beyond 30km"; answers: terrain-aware, forest vs open fields counted, both heights
+  above the ground at the mast (later: "the altitude is above ground from the point of the aircraft" - `compute`'s
+  target is the ground under each sample + `aircraftM`), live only and one mast at a time; "the forest coverage has to be calculated based on
+  colours of maps, due to all online sources being wrong" and "from one of the closest levels". `map/RadioHorizon`:
+  per degree of bearing, 20 m steps to `MAX_RANGE_M` 30 km, a straight line over a 4/3 earth (`EFFECTIVE_EARTH_M`)
+  must clear the terrain (a hill blocks outright) and the aircraft must be above the ground where it is; the aircraft
+  keeps a fixed altitude, so a hill ends a bearing for good. Trees (the pilot: "penetration ... dependent on the
+  frequency"): the samples where the line runs under the treetops (`treeM`) count as canopy depth (forest looked at
+  every 10 m, `FOREST_LOOKS`), `foliageLossDb` = FITU-R in leaf 0.39 f^0.39 d^0.25 (f in MHz) at the `frequencyMHz`
+  field, out of sight past `MAX_FOLIAGE_LOSS_DB` 20 (`forestDepthM`: 9 m at 5.8 GHz, 37 m at 2.4 GHz, 204 m at 800 MHz).
+  Weissberger (45 m at 5.8 GHz) came first; the pilot: "45m of forest on 5,8Ghz seems too generous". `Sweep`: one
+  bearing's ground / treetops / canopy metres, then per sample the hill test (steepest ground slope so far) and the
+  canopy sum as a Fenwick tree over the treetops' slopes from the source (a canopy sample catches every flatter line),
+  O(n log n); `RadioHorizonTest.theQuickForestCountIsTheSameAsCountingEveryTree` checks it against counting.
+  **GCS SEARCH** (the pilot: "selects a area ... heat map 30km around the center ... what areas are good to place a
+  antenna"): `RadioHorizon.search` - 5 x 5 points over the box, the aircraft `aircraftM` above the ground at each,
+  a `Sweep` from each point with the mast (`mastM` on the ground there) as the target at every sample (line of
+  sight works both ways), each 100 m cell of the 30 km circle round the box's centre takes its nearest sample (sweeps every 0.25 deg, `SEARCH_BEARINGS`);
+  score = share of points that see it, best = highest, nearest the centre. Data loaded 30 km + half the box's
+  diagonal round the centre (`searchRadiusM`). ~1 s per search on the Nordmarka data (25 points in parallel).
+  `MapView` Tool.SEARCH (drag a box; the tool stays), the heat map one ARGB picture (a pixel per cell, drawn over its corners, nearest
+  neighbour; red - yellow - green, alpha 110). Both results stay when the tool ends (the pilot: "an exit button ...
+  it does not disappear ... unless crossed out"): `labelWithCross` puts a cross on each label, a click on it (`clearHorizon`
+  / `clearSearch`) takes the result off and tells the window (null), the box, the 30 km ring, the best place ringed. `MapWindow.searchArea`
+  computes after the terrain and again when the forest is in. Fields: `MapToolsPanel` shares four
+  `SpinnerNumberModel`s between the two tools' field sets, each in a `SlideOut` under its button (220 ms, the bottom
+  edge leading; opened by `syncTools` while its tool is on). **Minimap:** always on the LINK card under the figures
+  with POP OUT MAP; the fields and figures no longer fold (the pilot: "Make the minimap not replace anything anymore").
+  The log stays in the main window (the pilot: "keep it in the main menu" - the taller card had pushed it out):
+  `MainWindow.fitMiniMap` on every layout of the link column gives the log `LOG_MIN` 180 px first, the minimap the
+  rest up to `MINI_MAX` 190, and hides it under `MINI_MIN` 90 (POP OUT MAP stays). The first try,
+  trees as a solid wall, gave a 10 m mast in Nordmarka 0.4-0.6 km all round (live run: 4 min, 8 042 forest tiles,
+  ~390 MB the first time; compute 0.2 s). Terrain: Terrarium tiles
+  (AWS, zoom 12) via `TileCache.fetchNow` (disk cache id `terrarium`, not kept in memory). Forest: `isForest` on the
+  map pictures - Kartverket topo zoom 15 in Norway (forest #d2e096 and its hill-shade darker shades: green over red,
+  far over blue; fields #f1ecb1 and bare mountain #e8d7aa have red on top), OSM zoom 13 elsewhere (#add19e; one tile
+  at a time, its policy); each tile kept as a 128 x 128 bitmap, 2 of 4 pixels = forest so contour lines and names
+  through a wood stay wood. Measured over the same wood near Oslo: 77 % forest at zoom 11, 81 % at 13, 85 % at 14, 90 % at
+  15 - why 15 (about 7 600 tiles / 300 MB for a full 30 km circle the first time, nearest first, 4 at a time; cached).
+  ESA WorldCover and Terrascope were looked at and dropped (the pilot: online land cover is wrong). `MapWindow`:
+  `horizonMast` loads (one thread), `recomputeHorizon` (another, newest only) after the terrain and every 3 s while the
+  forest comes in, and on a height change; `MapView` Tool.HORIZON (click places / moves, `cancelTool` clears it and
+  tells the window, map hidden ends it), painted as quads in zoom-0 world pixels through a transform, dashed rings for
+  30 km and the smooth-earth horizon. `MapToolsPanel`: MAP TOOLS slides out a strip of three flat tabs
+  (`Group` DRAW / TOOLS / DATA), each slides its list out full height (one at a time). Symbols: `MORTAR`,
+  `ROCKET_ARTILLERY` (artillery dot + the MRL amplifier in sector 1), `UTILITY` is now *Recovery / maintenance*, a land
+  unit with the maintenance icon (the enum name stays for saved graphics.kml). Tour: DRAW, TOOLS, DATA and RADIO
+  HORIZON steps, `FEATURE_RADIO_HORIZON`. Tests: `RadioHorizonTest`, `MapToolsTest` (horizon tool, groups). *Untried
+  in the real window and against the pilot's area.*
 - **Released:** DRAUPNE Link **1.0.38** (Latest, 2026-11-04, tag run 41801724895 green first try) with phone app
   **DRAUPNE Flight 2.3.0-pc.30** (release `flight-2.3.0-pc.30`, APK SHA-256 `83fe29a9…`, pinned in `ApkShare`);
   before it 1.0.37 with pc.29 (release `flight-2.3.0-pc.29`, APK SHA-256 `10a57f20…`);
@@ -496,8 +704,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
     window can cover them. `TacticalCombo.show` therefore wipes in a *picture* of the menu (`Ghost`, row by row with
     the scan bar, frame and all) and shows the real menu only afterwards; closing wipes a picture out, bottom row
     first. Dropdowns (JComboBox) open through Swing itself and keep the old cell reveal; they close with the ghost.
-  - **In flight:** `MainWindow.updateFlightLayout` - the LINK card's fields and detail figures fold (`gui/Fold`) and
-    the minimap + POP OUT MAP unfold; the map popped out (or disconnect) brings everything back. The controller card
+  - **In flight:** up to 1.0.38 the LINK card's fields and detail figures folded (`gui/Fold`) and the minimap + POP OUT
+    MAP unfolded; since 1.0.39 the minimap and POP OUT MAP are always on the card under the figures and nothing folds
+    (`updateFlightLayout` only sets the minimap following). The controller card
     starts folded (`controllerMinimized=true` in the template).
   - **Boot:** `gui/BootReveal` over the layered pane (3 s: fade in 560, hold 320, fly 1560, out 560 ms; click or key
     skips): brackets to the window corners, the link folds, the crosshair flies to the video's middle, splits into

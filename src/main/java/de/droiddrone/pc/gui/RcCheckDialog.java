@@ -155,7 +155,7 @@ final class RcCheckDialog extends JDialog {
                 : "OFF - pull the throttle fully down to start sending.");
 
         FcTelemetry.Status s = link.getTelemetry().getStatus();
-        if (s == null || System.currentTimeMillis() - s.receivedAt() > STALE_MS) {
+        if (s == null || de.droiddrone.pc.MonoClock.ms() - s.receivedAt() > STALE_MS) {
             String why = link.getState() != ControlLink.State.READY ? "Waiting for the link..."
                     : link.getFcInfo() == null ? "The phone isn't talking to the flight controller yet."
                     : "Waiting for status from the flight controller...";

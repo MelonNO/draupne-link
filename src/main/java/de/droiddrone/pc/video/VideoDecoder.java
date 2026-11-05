@@ -52,7 +52,10 @@ public final class VideoDecoder implements AutoCloseable {
     /** @param hardware decode on the GPU (D3D11VA) if this PC can; software otherwise */
     public VideoDecoder(boolean hevc, byte[] codecConfig, boolean hardware) {
         AVCodec codec = avcodec_find_decoder(hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
-        if (codec == null || codec.isNull()) throw new IllegalStateException("No " + (hevc ? "H.265" : "H.264") + " decoder");
+        if (codec == null || codec.isNull()) {
+            freeBeforeOpen();
+            throw new IllegalStateException("No " + (hevc ? "H.265" : "H.264") + " decoder");
+        }
         ctx = avcodec_alloc_context3(codec);
         // OUTPUT_CORRUPT + SHOW_ALL: after a lost fragment keep showing (concealed) pictures instead of freezing until
         // the next key frame - in the air a smeared live picture beats a frozen one (upstream's Android decoder does too)
@@ -80,11 +83,22 @@ public final class VideoDecoder implements AutoCloseable {
         if (r < 0) {
             if (hwDevice != null) av_buffer_unref(hwDevice);
             avcodec_free_context(ctx);
+            freeBeforeOpen();
             throw new IllegalStateException("Could not open the decoder (" + r + ")");
         }
         packet = av_packet_alloc();
         frame = av_frame_alloc();
         spare = av_frame_alloc();
+    }
+
+    /**
+     * A decoder that could not be made: what the field initialisers allocated goes (it leaked at every failed try -
+     * and the pipeline now tries again at every key frame).
+     */
+    private void freeBeforeOpen() {
+        av_frame_free(copied);
+        dstData.close();
+        dstStride.close();
     }
 
     /**

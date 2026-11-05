@@ -272,10 +272,21 @@ public class DDService extends Service {
 
     // ---- pc.21: what PowerMode asks of the service (on its worker thread) ----
 
-    /** Whether the flight controller reports armed (MSP; a MAVLink FC isn't read for this). */
+    /**
+     * Whether the flight controller may be armed, as a guard asks (pc.31): armed, or not known to be disarmed - a
+     * stale status, an FC coming back after a USB glitch, a MAVLink FC without a fresh heartbeat (FcArmedState).
+     */
     boolean isFcArmed() {
-        Msp m = msp;
-        return m != null && m.isArmed();
+        return fcArmedState() != FcArmedState.DISARMED;
+    }
+
+    /** Whether the flight controller reports armed now (standby ends by itself on it; unknown doesn't end it). */
+    boolean isFcArmedNow() {
+        return fcArmedState() == FcArmedState.ARMED;
+    }
+
+    int fcArmedState() {
+        return FcArmedState.of(msp, mavlink);
     }
 
     /** Whether a PC has connected (a keyed Connect taken), as the check window asks. */
@@ -465,6 +476,16 @@ public class DDService extends Service {
         TimerTask tt = new TimerTask() {
             @Override
             public void run() {
+                // pc.31: one uncaught exception ended java.util.Timer's thread for good - and with it the FC port's
+                // reopening after an error and standby's end on arming
+                try {
+                    tick();
+                } catch (Throwable e) {
+                    log("Main timer error: " + e);
+                }
+            }
+
+            private void tick() {
                 if (!isRunning){
                     mainTimer.cancel();
                     return;
@@ -474,7 +495,9 @@ public class DDService extends Service {
                     return;
                 }
                 isConnected = udp.isConnected();
-                if (isFcArmed()) PowerMode.fcArmed(); // standby ends by itself
+                int armed = fcArmedState(); // pc.31: every tick - FcArmedState remembers an FC seen armed
+                if (armed == FcArmedState.ARMED) PowerMode.fcArmed(); // standby (or a deep sleep countdown) ends by itself
+                if (armed == FcArmedState.DISARMED) udp.applyDeferredFcConfig(); // pc.31: held back while not disarmed
                 if (isConnected){
                     if (MainActivity.config.getMavlinkUdpBridge() != SettingsCommon.MavlinkUdpBridge.disabled
                             && MainActivity.config.getMavlinkUdpBridge() != SettingsCommon.MavlinkUdpBridge.redirectFromControlDevice) {

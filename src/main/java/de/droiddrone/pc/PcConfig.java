@@ -191,6 +191,33 @@ public class PcConfig {
         }
         return rate;
     }
+    /**
+     * radio.frozenStopS: armed and the radio's input unchanged for this many seconds, the sticks stop so Betaflight's
+     * failsafe takes over (RcSession.setFrozenStopMs). 0 or missing = never (the default).
+     */
+    public int getRadioFrozenStopS() {
+        return optionalInt("radio.frozenStopS", 0, 0, 600);
+    }
+
+    /**
+     * rc.maxLagMs: a stick frame that reaches the phone this much later than the link's usual (phone app pc.31 on) is
+     * dropped instead of flown - Betaflight fails safe rather than flying seconds behind. 0 or missing = never drop
+     * (the default; the OSD still says STICKS LATE). At most 2550 (the frame carries it in 10 ms steps).
+     */
+    public int getMaxStickLagMs() {
+        return optionalInt("rc.maxLagMs", 0, 0, 2550);
+    }
+
+    private int optionalInt(String key, int fallback, int min, int max) {
+        String value = getString(key);
+        if (value.isEmpty()) return fallback;
+        try {
+            return Math.max(min, Math.min(max, Integer.parseInt(value)));
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
+    }
+
     public int getTelemetryRate() { return getInt("telemetryRate"); }
     public int getSerialBaudRate() { return getInt("serialBaudRate"); }
     public String getCameraId() { return getString("cameraId"); }

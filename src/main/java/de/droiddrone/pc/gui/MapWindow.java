@@ -8,6 +8,7 @@ import de.droiddrone.pc.map.Kml;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.Mercator;
 import de.droiddrone.pc.map.Pins;
+import de.droiddrone.pc.map.RadioHorizon;
 import de.droiddrone.pc.map.TileCache;
 import de.droiddrone.pc.map.TileSource;
 
@@ -49,8 +50,8 @@ import java.util.function.Consumer;
  */
 final class MapWindow extends JFrame {
     static final String BOUNDS_KEY = "mapWindow";
-    private static final String[] PICTURES = {"AUTO", "TOPO", "PAPER", "SATELLITE", "OSM"};
-    private static final TileSource[] SOURCES = {null, TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_RASTER, TileSource.SATELLITE, TileSource.OSM};
+    private static final String[] PICTURES = {"AUTO", "TOPO", "WORLD TOPO", "PAPER", "SATELLITE", "OSM"};
+    private static final TileSource[] SOURCES = {null, TileSource.KARTVERKET_TOPO, TileSource.WORLD_TOPO, TileSource.KARTVERKET_RASTER, TileSource.SATELLITE, TileSource.OSM};
 
     private final MapView map;
     private final TileCache cache;
@@ -157,6 +158,32 @@ final class MapWindow extends JFrame {
         tools.keep.addActionListener(e -> map.keepMeasurement());
         tools.clearMeasure.addActionListener(e -> map.clearMeasurement());
         tools.export.addActionListener(e -> map.setTool(MapView.Tool.EXPORT_BOX));
+        tools.horizon.addActionListener(e -> map.setTool(MapView.Tool.HORIZON));
+        tools.gcsSearch.addActionListener(e -> map.setTool(MapView.Tool.SEARCH));
+        horizonSettings = tools.horizonSettings();
+        tools.onHorizonSettings(() -> {
+            horizonSettings = tools.horizonSettings();
+            recomputeHorizon();
+            recomputeSearch();
+        });
+        map.setOnHorizonMast(this::horizonMast);
+        map.setOnSearchArea(this::searchArea);
+        // the pilot: the tools' overlays (radio horizon, search, measurement) show only while TOOLS is out; closed, they hide (still there until crossed out)
+        // and their tool ends, so a click cannot move a mast that is not on screen
+        tools.onGroupChanged(() -> {
+            boolean shown = tools.toolsShown();
+            map.setToolOverlaysShown(shown);
+            MapView.Tool t = map.tool();
+            if (!shown && (t == MapView.Tool.HORIZON || t == MapView.Tool.SEARCH || t == MapView.Tool.RULER)) map.cancelTool();
+            profileCard.setVisible(shown && map.hasMeasurement()); // the measurement's elevation profile with it
+        });
+        map.setToolOverlaysShown(tools.toolsShown());
+        addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentHidden(ComponentEvent e) { // the tool ends; the radio horizon and the search stay until crossed out
+                if (map.tool() == MapView.Tool.HORIZON || map.tool() == MapView.Tool.SEARCH) map.cancelTool();
+            }
+        });
         tools.importButton.addActionListener(e -> importKml());
         tools.clearAll.addActionListener(e -> { // 1.0.37: the pins and the measurement go too (the pilot)
             if (graphics.isEmpty() && pins.list().isEmpty() && !map.hasMeasurement()) return;
@@ -193,7 +220,7 @@ final class MapWindow extends JFrame {
         });
         right.add(downloadLine);
         TacticalCombo.install(pictureCombo);
-        pictureCombo.setToolTipText("The map picture. Auto: Kartverket's topo map in Norway, OpenStreetMap elsewhere. Satellite from Esri");
+        pictureCombo.setToolTipText("The map picture. Auto and TOPO: Kartverket's topo map in Norway, the world topo map (OpenTopoMap) elsewhere. WORLD TOPO: OpenTopoMap everywhere. Satellite from Esri");
         pictureCombo.addActionListener(e -> {
             if (settingCombos) return;
             TileSource s = SOURCES[pictureCombo.getSelectedIndex()];
@@ -440,9 +467,192 @@ final class MapWindow extends JFrame {
         syncFollow();
     }
 
+    // ---- RADIO HORIZON (1.0.39): the data round the mast loads on one thread, the sums run on another
+
+    private final java.util.concurrent.atomic.AtomicInteger horizonRun = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger horizonSum = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.ExecutorService horizonLoad = java.util.concurrent.Executors.newSingleThreadExecutor(r -> daemon(r, "radioHorizonLoad"));
+    private final java.util.concurrent.ExecutorService horizonMath = java.util.concurrent.Executors.newSingleThreadExecutor(r -> daemon(r, "radioHorizonMath"));
+    private volatile RadioHorizon.Data horizonData;
+    private volatile RadioHorizon.Settings horizonSettings;
+    private volatile String horizonLoading; // "forest map n / m" while it comes in
+
+    private static Thread daemon(Runnable r, String name) {
+        Thread t = new Thread(r, name);
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        return t;
+    }
+
+    /** A mast placed (or moved): its terrain and forest load, the horizon is drawn as soon as the terrain is in. Null: it went. */
+    private void horizonMast(MapGraphics.LatLon mast) {
+        int run = horizonRun.incrementAndGet();
+        horizonData = null;
+        horizonLoading = null;
+        if (mast == null) {
+            tools.horizonStatus.setText(" ");
+            return;
+        }
+        tools.horizonStatus.setText(status("Loading the terrain..."));
+        horizonLoad.execute(() -> {
+            if (horizonRun.get() != run) return;
+            long[] last = {0};
+            RadioHorizon.load(cache, mast.lat(), mast.lon(), (data, terrainDone, terrainTotal, forestDone, forestTotal) -> {
+                if (horizonRun.get() != run) return;
+                horizonData = data;
+                horizonLoading = forestDone < forestTotal ? "forest map " + forestDone + " / " + forestTotal : null;
+                long now = System.currentTimeMillis();
+                if (forestDone == 0 || forestDone == forestTotal || now - last[0] >= 3000) { // redrawn as the forest fills in
+                    last[0] = now;
+                    recomputeHorizon();
+                }
+            }, () -> horizonRun.get() != run);
+        });
+    }
+
+    /** The horizon again with the data so far and the heights as set; only the newest asked-for sum runs. */
+    private void recomputeHorizon() {
+        RadioHorizon.Data data = horizonData;
+        if (data == null) return;
+        int run = horizonRun.get(), sum = horizonSum.incrementAndGet();
+        horizonMath.execute(() -> {
+            if (horizonSum.get() != sum || horizonRun.get() != run) return;
+            RadioHorizon.Result r = RadioHorizon.compute(data.lat(), data.lon(), horizonSettings, data, data);
+            String loading = horizonLoading;
+            SwingUtilities.invokeLater(() -> {
+                if (horizonRun.get() != run) return;
+                map.setHorizon(r, horizonMapLine(r, loading));
+                tools.horizonStatus.setText(status(horizonPanelText(r, loading)));
+            });
+        });
+    }
+
+    // ---- GCS SEARCH (1.0.39): the same two threads; a run stands for one wanted area
+
+    private final java.util.concurrent.atomic.AtomicInteger searchRun = new java.util.concurrent.atomic.AtomicInteger();
+    private final java.util.concurrent.atomic.AtomicInteger searchSum = new java.util.concurrent.atomic.AtomicInteger();
+    private volatile RadioHorizon.Data searchData;
+    private volatile double[] searchAreaWanted;
+    private volatile String searchLoading;
+
+    /** A wanted area drawn: the data round it loads, the heat map is worked out once the terrain is in and again when the forest is. */
+    private void searchArea(double[] area) {
+        int run = searchRun.incrementAndGet();
+        searchData = null;
+        searchLoading = null;
+        searchAreaWanted = area;
+        if (area == null) {
+            tools.searchStatus.setText(" ");
+            return;
+        }
+        tools.searchStatus.setText(status("Loading the terrain..."));
+        double cLat = (area[0] + area[1]) / 2, cLon = (area[2] + area[3]) / 2;
+        double radius = RadioHorizon.searchRadiusM(area[0], area[1], area[2], area[3]);
+        horizonLoad.execute(() -> {
+            if (searchRun.get() != run) return;
+            RadioHorizon.load(cache, cLat, cLon, radius, (data, terrainDone, terrainTotal, forestDone, forestTotal) -> {
+                if (searchRun.get() != run) return;
+                searchData = data;
+                searchLoading = forestDone < forestTotal ? "forest map " + forestDone + " / " + forestTotal : null;
+                if (forestDone == 0 || forestDone == forestTotal) recomputeSearch(); // a first look on the terrain, then the real one
+                else SwingUtilities.invokeLater(() -> {
+                    if (searchRun.get() == run && map.search() == null) map.setSearch(null, "Loading the " + searchLoading + "...");
+                });
+            }, () -> searchRun.get() != run);
+        });
+    }
+
+    /** The heat map again with the data so far and the settings as set; a newer request stops an older sum. */
+    private void recomputeSearch() {
+        RadioHorizon.Data data = searchData;
+        double[] area = searchAreaWanted;
+        if (data == null || area == null) return;
+        int run = searchRun.get(), sum = searchSum.incrementAndGet();
+        horizonMath.execute(() -> {
+            if (searchSum.get() != sum || searchRun.get() != run) return;
+            String loading = searchLoading;
+            int points = RadioHorizon.SEARCH_POINTS * RadioHorizon.SEARCH_POINTS;
+            RadioHorizon.Search r = RadioHorizon.search(area[0], area[1], area[2], area[3], horizonSettings, data, data,
+                    done -> SwingUtilities.invokeLater(() -> {
+                        if (searchRun.get() == run && searchSum.get() == sum) {
+                            String line = "Working it out: " + done + " / " + points + " points";
+                            map.setSearch(map.search(), line);
+                            tools.searchStatus.setText(status(line));
+                        }
+                    }),
+                    () -> searchSum.get() != sum || searchRun.get() != run);
+            if (searchSum.get() != sum || searchRun.get() != run) return;
+            SwingUtilities.invokeLater(() -> {
+                if (searchRun.get() != run) return;
+                map.setSearch(r, searchMapLine(r, loading));
+                tools.searchStatus.setText(status(searchPanelText(r, loading)));
+            });
+        });
+    }
+
+    static String searchMapLine(RadioHorizon.Search r, String loading) {
+        return "GCS SEARCH  best " + Math.round(r.bestScore() * 100) + " %" + (loading != null ? "  -  " + loading : "");
+    }
+
+    /** Short lines for the narrow tools panel (the pilot: the long text was cut off and too small); the colours are in the tooltip. */
+    static String searchPanelText(RadioHorizon.Search r, String loading) {
+        StringBuilder sb = new StringBuilder();
+        double dist = Mercator.distanceM(r.lat(), r.lon(), r.bestLat(), r.bestLon());
+        sb.append(String.format(Locale.ROOT, "Best: %d %% of the area<br>%s from its centre, %03d°",
+                Math.round(r.bestScore() * 100), km(dist), Mercator.bearingDeg(r.lat(), r.lon(), r.bestLat(), r.bestLon())));
+        if (r.settings().treeM() > 0) sb.append(String.format(Locale.ROOT, "<br>Through %.0f m of forest", r.forestDepthM()));
+        if (loading != null) sb.append("<br>Terrain only, loading the ").append(loading);
+        else if (r.forestUnknownPct() > 0) sb.append("<br>No forest map: ").append(r.forestUnknownPct()).append(" %");
+        if (r.terrainMissing()) sb.append("<br>Some terrain missing");
+        return sb.toString();
+    }
+
+    private static double furthestM(RadioHorizon.Result r) {
+        double far = 0;
+        for (int b = 0; b < RadioHorizon.BEARINGS; b++) far = Math.max(far, r.reachM(b));
+        return far;
+    }
+
+    private static String km(double m) {
+        return String.format(Locale.ROOT, "%.1f km", m / 1000);
+    }
+
+    static String horizonMapLine(RadioHorizon.Result r, String loading) {
+        return "RADIO HORIZON  up to " + km(furthestM(r)) + (loading != null ? "  -  " + loading : "");
+    }
+
+    static String horizonPanelText(RadioHorizon.Result r, String loading) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format(Locale.ROOT, "Seen up to %s<br>Ground at the mast %.0f m", km(furthestM(r)), r.groundM()));
+        if (r.settings().treeM() > 0) sb.append(String.format(Locale.ROOT, "<br>Through %.0f m of forest", r.forestDepthM()));
+        if (loading != null) sb.append("<br>Loading the ").append(loading);
+        else if (r.forestUnknownPct() > 0) sb.append("<br>No forest map: ").append(r.forestUnknownPct()).append(" %");
+        if (r.terrainMissing()) sb.append("<br>Some terrain missing");
+        return sb.toString();
+    }
+
+    private static String status(String text) {
+        return "<html><div style='width:" + (MapToolsPanel.BODY_WIDTH - 60) + "px'>" + text + "</div></html>"; // room for the scrollbar
+    }
+
     /** The tour's MAP TOOLS tab (opens the tools), and the tools inside it. */
     javax.swing.JComponent tourTools() {
         return tools.tabButton();
+    }
+
+    /** The tour's DRAW / TOOLS / DATA tabs. */
+    javax.swing.JComponent tourGroups() {
+        return tools.groupButton(MapToolsPanel.Group.TOOLS);
+    }
+
+    javax.swing.JComponent tourHorizon() {
+        tools.showGroup(MapToolsPanel.Group.TOOLS, false);
+        return tools.horizon;
+    }
+
+    javax.swing.JComponent tourSearch() {
+        tools.showGroup(MapToolsPanel.Group.TOOLS, false);
+        return tools.gcsSearch;
     }
 
     void openTools(boolean open) {
@@ -450,18 +660,22 @@ final class MapWindow extends JFrame {
     }
 
     javax.swing.JComponent tourRuler() {
+        tools.showGroup(MapToolsPanel.Group.TOOLS, false);
         return tools.ruler;
     }
 
     javax.swing.JComponent tourDraw() {
+        tools.showGroup(MapToolsPanel.Group.DRAW, false);
         return tools.line;
     }
 
     javax.swing.JComponent tourSymbol() {
+        tools.showGroup(MapToolsPanel.Group.DRAW, false);
         return tools.symbol;
     }
 
     javax.swing.JComponent tourExport() {
+        tools.showGroup(MapToolsPanel.Group.DATA, false);
         return tools.export;
     }
 
@@ -495,10 +709,12 @@ final class MapWindow extends JFrame {
     }
 
     javax.swing.JComponent tourPins() {
+        tools.showGroup(MapToolsPanel.Group.DRAW, false);
         return tools.pins;
     }
 
     javax.swing.JComponent tourDownload() {
+        tools.showGroup(MapToolsPanel.Group.DATA, false);
         return tools.download;
     }
 
@@ -574,6 +790,11 @@ final class MapWindow extends JFrame {
     }
 
     private FlightTrack track;
+
+    /** The camera's view on the ground (1.0.39), or null: drawn with the next update. */
+    void setCameraView(de.droiddrone.pc.map.CameraFootprint.View view) {
+        map.setCameraView(view);
+    }
 
     void update(FlightTrack track, FcTelemetry.Gps gps, int headingDeg, boolean fcLost, boolean connected) {
         this.track = track;

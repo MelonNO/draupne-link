@@ -87,7 +87,8 @@ public class RcMapper {
                         if (cal == null) {
                             value = axisToChannel(raw);
                         } else {
-                            value = i < PcConfig.THROTTLE_INDEX ? cal.toCentered(raw) : cal.toLinear(raw);
+                            value = i < PcConfig.THROTTLE_INDEX ? cal.toCentered(raw)
+                                    : i == PcConfig.THROTTLE_INDEX ? cal.toThrottle(raw) : cal.toLinear(raw);
                         }
                         if (src.invert()) value = MIN_CHANNEL_LEVEL + MAX_CHANNEL_LEVEL - value;
                     }

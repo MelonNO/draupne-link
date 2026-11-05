@@ -4,8 +4,9 @@ import java.util.Locale;
 
 /**
  * Where the map tiles come from. Kartverket's open cache (CC BY 4.0, no key, caching allowed) is the best map of
- * Norway there is; outside it OpenStreetMap, within its tile policy: a User-Agent that names the app, tiles cached,
- * nothing fetched the pilot isn't looking at. Satellite pictures from Esri. The pilot picks in SETTINGS or on the map.
+ * Norway there is; outside it OpenTopoMap, the open topo map of the whole world (OpenStreetMap's data with SRTM
+ * contours and hill shade), and OpenStreetMap - both within their tile policies: a User-Agent that names the app,
+ * tiles cached, nothing fetched the pilot isn't looking at. Satellite pictures from Esri. The pilot picks in SETTINGS or on the map.
  */
 public enum TileSource {
     KARTVERKET_TOPO("kartverket", "Kartverket topo",
@@ -14,6 +15,14 @@ public enum TileSource {
     KARTVERKET_RASTER("kartverket-raster", "Kartverket paper map",
             "https://cache.kartverket.no/v1/wmts/1.0.0/toporaster/default/webmercator/{z}/{y}/{x}.png",
             "© Kartverket", 18, true, true),
+    /**
+     * The topo map for the rest of the world (1.0.39, the pilot: "a topo map for the rest of the world as well"):
+     * contours every 10 - 20 m, forest, open land, paths; to zoom 17. A volunteer server: like OSM, nothing fetched
+     * ahead, an asked-for area one tile at a time.
+     */
+    WORLD_TOPO("opentopomap", "World topo (OpenTopoMap)",
+            "https://tile.opentopomap.org/{z}/{x}/{y}.png",
+            "© OpenStreetMap contributors, SRTM | © OpenTopoMap (CC-BY-SA)", 17, false, false),
     /** Esri's world imagery, the satellite layer most web maps use; Norway's own aerial photos have no open service. */
     SATELLITE("satellite", "Satellite",
             "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
@@ -58,9 +67,14 @@ public enum TileSource {
         return null;
     }
 
-    /** Auto: Kartverket over Norway (mainland, Svalbard, Jan Mayen), OpenStreetMap anywhere else. */
+    /** Auto: Kartverket's topo over Norway (mainland, Svalbard, Jan Mayen), the world topo map anywhere else. */
     public static TileSource forPosition(double latDeg, double lonDeg) {
-        return inNorway(latDeg, lonDeg) ? KARTVERKET_TOPO : OSM;
+        return inNorway(latDeg, lonDeg) ? KARTVERKET_TOPO : WORLD_TOPO;
+    }
+
+    /** What this choice shows at a place: TOPO is a topo map everywhere (Kartverket's ends at the border, the world one takes over). */
+    public TileSource at(double latDeg, double lonDeg) {
+        return this == KARTVERKET_TOPO && !inNorway(latDeg, lonDeg) ? WORLD_TOPO : this;
     }
 
     /** The mainland's outline, roughly (lat, lon), clockwise from the south-west: Sweden and Finland stay outside. */

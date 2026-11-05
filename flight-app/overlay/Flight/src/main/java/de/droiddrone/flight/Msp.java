@@ -61,7 +61,7 @@ public class Msp {
     private int fcVersionMinor;
     private int fcVersionPatchLevel;
     private int threadsId;
-    private boolean isInitialized;
+    private volatile boolean isInitialized; // pc.31: volatile - the guards read it on other threads (FcArmedState)
     private FcInfo fcInfo;
     private boolean runFcInit;
     private boolean runGetBoxNames;
@@ -82,7 +82,7 @@ public class Msp {
     /** DRAUPNE Link: a reply cut by the end of a USB read, waiting for the rest (parsePackets). */
     private byte[] carry = null;
     private static final int MAX_CARRY = 4096;
-    private int[] boxIds = null;
+    private volatile int[] boxIds = null;
     private int[] modeFlagsInav = null;
     private byte[] modeFlagsBtfl = null;
     private byte[] osdConfig = null;
@@ -91,7 +91,14 @@ public class Msp {
     private long rcLastFrame;
     private int platformType;
     private FcCommon.GpsFixTypes fixType = FcCommon.GpsFixTypes.GPS_NO_FIX;
-    boolean isArmed = false;
+    volatile boolean isArmed = false;
+    /** pc.31: when the last status reply (its mode flags) came; the armed state is only as fresh as that. */
+    private volatile long statusAtMs;
+    /**
+     * pc.31: a status reply older than this: armed UNKNOWN. The status is asked for every few telemetry ticks, once
+     * a second in standby (slowPoll): 2.5 s lets one reply go missing there.
+     */
+    static final long STATUS_FRESH_MS = 2500;
     /**
      * DRAUPNE Link (pc.21): standby polls the flight controller once a second instead of telemetryRefreshRate times
      * - the FC's answers are of no use to a PC that shows no picture, and the USB traffic costs battery.
@@ -150,6 +157,18 @@ public class Msp {
     /** DRAUPNE Link: whether the flight controller reports ARM on (its mode flags, read every half second). */
     public boolean isArmed(){
         return isInitialized && isArmed;
+    }
+
+    /**
+     * pc.31: ARMED, DISARMED or UNKNOWN (FcArmedState): UNKNOWN while the FC isn't initialised, its mode ids aren't
+     * known (the ARM flag can't be read without them), it is neither Betaflight nor INAV (no status polled), or its
+     * last status reply is older than STATUS_FRESH_MS.
+     */
+    int armedState(long now){
+        if (!isInitialized || boxIds == null) return FcArmedState.UNKNOWN;
+        if (fcVariant != FcInfo.FC_VARIANT_BETAFLIGHT && fcVariant != FcInfo.FC_VARIANT_INAV) return FcArmedState.UNKNOWN;
+        if (now - statusAtMs > STATUS_FRESH_MS) return FcArmedState.UNKNOWN;
+        return isArmed ? FcArmedState.ARMED : FcArmedState.DISARMED;
     }
 
     /**
@@ -220,6 +239,13 @@ public class Msp {
         fcInfo = null;
         rxMap = null; // DRAUPNE Link: a reconnected (maybe another) flight controller: read its channel map again
         carry = null;
+        // pc.31: and its mode ids and status too (another FC has its modes on other bits; armed is UNKNOWN until then)
+        boxIds = null;
+        bfBoxIdsPage = 0;
+        modeFlagsBtfl = null;
+        modeFlagsInav = null;
+        statusAtMs = 0;
+        isArmed = false;
     }
 
     private final Runnable mspRun = new Runnable() {
@@ -254,13 +280,16 @@ public class Msp {
                                 getStatus();
                                 break;
                         }
-                        checkModeFlags();
+                        // pc.31: checkModeFlags runs on the status reply itself (one caller: the camera switch's edge)
                         processOnTimeFlyTime();
                         getAltitude();
                     }
 
                     if (timerDiv % 10 == 0) {
                         timerDiv = 0;
+                        // pc.31: the mode ids by themselves, not only when the PC asks - without them the ARM flag
+                        // can't be read, and every armed guard counts the FC as armed (FcArmedState)
+                        if (boxIds == null && (fcVariant == FcInfo.FC_VARIANT_BETAFLIGHT || fcVariant == FcInfo.FC_VARIANT_INAV)) runGetBoxIds = true;
                         if (runGetBoxNames || runGetBoxIds) {
                             switch (fcVariant){
                                 case FcInfo.FC_VARIANT_INAV:
@@ -621,6 +650,8 @@ public class Msp {
                             }
                         }
                         this.modeFlagsInav = modeFlags;
+                        statusAtMs = System.currentTimeMillis();
+                        checkModeFlags(); // pc.31: the ARM flag from this reply, now - not at the next poll
                         telemetryOutputBuffer.offer(new TelemetryData(packet.code, buffer.getData()));
                         break;
                     }
@@ -649,6 +680,8 @@ public class Msp {
                                         modeFlags[i] = buffer.readByte();
                                     }
                                     this.modeFlagsBtfl = modeFlags;
+                                    statusAtMs = System.currentTimeMillis();
+                                    checkModeFlags(); // pc.31: the ARM flag from this reply, now - not at the next poll
                                 }
                                 telemetryOutputBuffer.offer(new TelemetryData(packet.code, buffer.getData()));
                                 break;
@@ -802,8 +835,9 @@ public class Msp {
         serial.writeDataMspUrgent(getMspRequest(FcCommon.MSP_RX_MAP));
     }
 
+    /** pc.31: the status through its own slot, never skipped by the writer's slow-link backoff - it says armed. */
     public void getInavStatus(){
-        serial.writeDataMsp(getMspRequest(FcCommon.MSP2_INAV_STATUS), true);
+        serial.writeDataMspStatus(getMspRequest(FcCommon.MSP2_INAV_STATUS));
     }
 
     public void getInavAnalog(){
@@ -853,7 +887,7 @@ public class Msp {
     }
 
     public void getStatus(){
-        serial.writeDataMsp(getMspRequest(FcCommon.MSP_STATUS), true);
+        serial.writeDataMspStatus(getMspRequest(FcCommon.MSP_STATUS));
     }
 
     public void getRawGps(){

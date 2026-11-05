@@ -21,8 +21,13 @@ public class CalibrationWizard {
     /** @param channel AETR+AUX channel index this step assigns, or -1 */
     public record Step(StepKind kind, int channel, Direction direction, String title, String hint) {}
 
-    /** An axis counts as fully swept once max - min reaches this (nominal full range is 2.0). */
-    public static final float FULL_RANGE = 1.5f;
+    /**
+     * An axis counts as swept once max - min reaches this (nominal full range is 2.0): half of it, so a radio set to
+     * send less (1800 at most, say) still gets through - however far a stick goes is its end, saved and sent as
+     * 1000 / 2000 (1.0.39, the pilot: "if the user does not use 2000 but only 1800 that is then max"). Up to 1.0.38 it
+     * took 1.5, and such a radio never got past the first step.
+     */
+    public static final float FULL_RANGE = 1.0f;
     public static final int STICK_AXES = 4;
     /** How far (in raw units) a stick or switch must move from rest to be detected. */
     public static final float MOVE_THRESHOLD = 0.5f;
@@ -40,6 +45,14 @@ public class CalibrationWizard {
     static final float STILL_TOLERANCE = 0.01f;
     /** A roll / pitch / yaw centre this far (in us of the channel) from the middle of its range gets a warning. */
     public static final int OFF_CENTER_US = 10;
+    /**
+     * The range step goes on by itself this long after all four stick axes are swept and their limits stopped growing
+     * (1.0.39, the pilot): a little time to push into the last corners, then the centre step - no Next needed. Any
+     * limit still moving out starts the wait again, so it never goes on before the sticks' real ends are in.
+     */
+    public static final long RANGE_RESERVE_MS = 2000;
+    /** A limit growing by more than this (raw) counts as still moving out (noise stays under it). */
+    private static final float GROWTH = 0.01f;
     /** Ranges smaller than this are not trusted as a calibration; the nominal -1..1 is saved instead. */
     private static final float MIN_CALIBRATED_RANGE = 1.0f;
 
@@ -59,6 +72,17 @@ public class CalibrationWizard {
     private final String[] specs = new String[PcConfig.CHANNEL_NAMES.length];
     private int index;
     private Joystick.State last;
+    /** Range step: since when all four stick axes have reached their limits (-1: not yet). */
+    private long sweptSince = -1;
+    /**
+     * Range step: each axis's smooth travel - the sum of its small steps. A stick sweeping round goes through every value
+     * on the way; a switch flipped meanwhile jumps, and adds next to nothing (1.0.39, the pilot: "detect only four
+     * channels as the joysticks ... so no other channel can use it").
+     */
+    private final float[] smoothTravel;
+    private float[] previousAxes;
+    /** The four stick axes, fixed when the range step ends; null before. Only they can be throttle, yaw, pitch, roll. */
+    private int[] stickAxes;
     private String candidate;
     private long candidateSince;
 
@@ -79,12 +103,14 @@ public class CalibrationWizard {
         this.buttonCount = buttonCount;
         min = new float[axisCount];
         max = new float[axisCount];
+        smoothTravel = new float[axisCount];
         Arrays.fill(min, Float.MAX_VALUE);
         Arrays.fill(max, -Float.MAX_VALUE);
         steps.add(new Step(StepKind.RANGE, -1, Direction.NONE, "Move all sticks to their limits",
-                "Rotate both sticks in full circles a few times, pushing firmly into every corner."));
+                "Rotate both sticks in full circles a few times, pushing firmly into every corner. However far they go is their end (1000 / 2000)."));
         steps.add(new Step(StepKind.CENTER, -1, Direction.NONE, "Center the sticks",
-                "Let roll, pitch and yaw rest in the center and pull the throttle fully DOWN. Then press Next."));
+                "Put all four sticks in the center - the throttle too - and take your thumbs off. This center is what the "
+                        + "flight controller gets as the middle (1500). Then press Next."));
         steps.add(new Step(StepKind.ASSIGN, 3, Direction.UP, "Throttle up",
                 "Push the THROTTLE stick fully UP and hold it there."));
         steps.add(new Step(StepKind.ASSIGN, 2, Direction.RIGHT, "Yaw right",
@@ -123,14 +149,33 @@ public class CalibrationWizard {
         }
         last = state;
         float[] axes = state.axes();
+        boolean grew = false;
         for (int i = 0; i < Math.min(axisCount, axes.length); i++) {
+            if (axes[i] < min[i] - GROWTH || axes[i] > max[i] + GROWTH) grew = min[i] != Float.MAX_VALUE;
             min[i] = Math.min(min[i], axes[i]);
             max[i] = Math.max(max[i], axes[i]);
         }
         Step step = getStep();
+        if (step.kind() == StepKind.RANGE) {
+            if (previousAxes != null) {
+                for (int i = 0; i < Math.min(axisCount, Math.min(axes.length, previousAxes.length)); i++) {
+                    float d = Math.abs(axes[i] - previousAxes[i]);
+                    if (d < SMOOTH_STEP) smoothTravel[i] += d;
+                }
+            }
+            previousAxes = Arrays.copyOf(axes, axes.length);
+            if (getFullySweptAxisCount() < STICK_AXES) {
+                sweptSince = -1;
+            } else if (sweptSince < 0 || grew) { // a limit still moving out: wait from now
+                sweptSince = nowMs;
+            } else if (nowMs - sweptSince >= RANGE_RESERVE_MS) {
+                advance(); // on to centring, by itself
+                return;
+            }
+        }
         if (step.kind() == StepKind.CENTER) trackStillness(axes, nowMs);
         String detected = switch (step.kind()) {
-            case ASSIGN -> detectAxis(axes, center);
+            case ASSIGN -> detectAxis(axes, center, true);
             case SWITCH -> detectSwitch(state);
             default -> null;
         };
@@ -171,6 +216,12 @@ public class CalibrationWizard {
         centerReady = false;
     }
 
+    /** Range step: ms until it goes on by itself, or -1 while not every stick axis has reached its limits. */
+    public long rangeAutoNextInMs(long nowMs) {
+        if (getStep().kind() != StepKind.RANGE || sweptSince < 0) return -1;
+        return Math.max(0, RANGE_RESERVE_MS - (nowMs - sweptSince));
+    }
+
     /** Centre step: the sticks have rested long enough for Next. */
     public boolean isCenterReady() {
         return centerReady;
@@ -196,11 +247,13 @@ public class CalibrationWizard {
         return off;
     }
 
-    private String detectAxis(float[] axes, float[] reference) {
+    /** @param sticks the stick steps: only the four stick axes; the switch steps: anything but them */
+    private String detectAxis(float[] axes, float[] reference, boolean sticks) {
         int best = -1;
         float bestDelta = 0;
         for (int i = 0; i < Math.min(axisCount, axes.length); i++) {
             if (isAxisAssigned(i)) continue;
+            if (stickAxes != null && isStickAxis(i) != sticks) continue;
             float delta = axes[i] - reference[i];
             if (Math.abs(delta) > Math.abs(bestDelta)) {
                 best = i;
@@ -213,7 +266,7 @@ public class CalibrationWizard {
     }
 
     private String detectSwitch(Joystick.State state) {
-        String axis = detectAxis(state.axes(), baseAxes);
+        String axis = detectAxis(state.axes(), baseAxes, false);
         if (axis != null) return axis;
         boolean[] buttons = state.buttons();
         for (int i = 0; i < Math.min(buttonCount, buttons.length); i++) {
@@ -224,8 +277,10 @@ public class CalibrationWizard {
     }
 
     private void advance() {
+        if (getStep().kind() == StepKind.RANGE) stickAxes = pickStickAxes(); // locked from here on
         index = Math.min(index + 1, steps.size() - 1);
         candidate = null;
+        sweptSince = -1;
         resetStillness();
         if (getStep().kind() == StepKind.SWITCH) captureSwitchBaseline();
     }
@@ -264,6 +319,8 @@ public class CalibrationWizard {
         if (index == 0) return;
         index--;
         resetStillness();
+        sweptSince = -1;
+        if (getStep().kind() == StepKind.RANGE) stickAxes = null; // found again when it ends
         for (int i = index; i < steps.size(); i++) {
             if (steps.get(i).channel() >= 0) specs[steps.get(i).channel()] = null;
         }
@@ -317,14 +374,46 @@ public class CalibrationWizard {
         return center;
     }
 
+    /** A step this small counts as a stick moving smoothly (raw); a switch's flip is one big jump. */
+    static final float SMOOTH_STEP = 0.25f;
+    /** Smooth travel a stick has done in the range step at the least: one sweep from end to end and back. */
+    static final float SMOOTH_MIN = 1.5f;
+
+    /** Swept as a stick: its range there, and got there smoothly (not a switch flipped meanwhile). */
     public boolean isFullySwept(int axis) {
-        return max[axis] - min[axis] >= FULL_RANGE;
+        return max[axis] - min[axis] >= FULL_RANGE && smoothTravel[axis] >= SMOOTH_MIN;
     }
 
+    /** The stick axes found so far, at most four (the range step's "n of 4"). */
     public int getFullySweptAxisCount() {
         int count = 0;
         for (int i = 0; i < axisCount; i++) if (isFullySwept(i)) count++;
-        return count;
+        return Math.min(STICK_AXES, count);
+    }
+
+    /** The four that swept smoothest are the sticks (more than four: a slider moved too - the most travel wins). */
+    private int[] pickStickAxes() {
+        Integer[] order = new Integer[axisCount];
+        for (int i = 0; i < axisCount; i++) order[i] = i;
+        Arrays.sort(order, (a, b) -> Float.compare(smoothTravel[b], smoothTravel[a]));
+        List<Integer> picked = new ArrayList<>();
+        for (Integer i : order) if (picked.size() < STICK_AXES && isFullySwept(i)) picked.add(i);
+        int[] out = new int[picked.size()];
+        for (int i = 0; i < out.length; i++) out[i] = picked.get(i);
+        Arrays.sort(out);
+        return out;
+    }
+
+    /** One of the four sticks (only after the range step). */
+    public boolean isStickAxis(int axis) {
+        if (stickAxes == null) return false;
+        for (int a : stickAxes) if (a == axis) return true;
+        return false;
+    }
+
+    /** The four stick axes, locked when the range step ended; null before. */
+    public int[] getStickAxes() {
+        return stickAxes == null ? null : stickAxes.clone();
     }
 
     /** @return the channel name an axis is assigned to (e.g. "throttle"), or null */

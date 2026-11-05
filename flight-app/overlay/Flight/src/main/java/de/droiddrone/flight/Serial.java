@@ -18,6 +18,10 @@
  *  (newest only) go first with a short timeout, never behind other requests, which back off while the link is slow;
  *  reads wait asynchronously, so they never hold up a write. The USB permission's answer is listened for (Deny
  *  shows, a replug asks again).
+ *  pc.31: the port is opened and closed under one lock, each init thread (and its reader and writer) carries its
+ *  generation, so two inits can't open the port at once and close each other's; requests time out after 20 ms (100
+ *  before; sticks wait behind one in flight); the status request has a slot of its own that the slow-link backoff
+ *  never skips.
  */
 
 package de.droiddrone.flight;
@@ -65,6 +69,9 @@ public class Serial {
     private static final int serialPortReadWriteTimeoutMs = 100;
     // DRAUPNE Link: stick writes give up quickly and go again with the newest sticks
     private static final int rcWriteTimeoutMs = 50;
+    // pc.31: a request (telemetry, the channel map, the status) gives up after this: sticks wait behind one in
+    // flight, and 100 ms behind a stuck request was close to Betaflight's RXLOSS (requests are asked again anyway)
+    private static final int requestWriteTimeoutMs = 20;
     // a write slower than this means the flight controller's USB is busy: skip other requests for a moment
     private static final int slowWriteMs = 15;
     private static final int slowBackoffMs = 250;
@@ -83,8 +90,11 @@ public class Serial {
     private final UsbManager manager;
     private Msp msp;
     private Mavlink mavlink;
-    private UsbSerialPort port;
-    private UsbDeviceConnection connection;
+    // pc.31: volatile, and opened / closed only under portLock - an init thread, the reader (a lost device), the
+    // service's timer and the power worker all start a new init, and two of them once opened the port at once
+    private volatile UsbSerialPort port;
+    private volatile UsbDeviceConnection connection;
+    private final Object portLock = new Object();
     private UsbSerialDriver driver;
     // DRAUPNE Link: volatile - read by the reader, writer and init threads
     private volatile int threadsId;
@@ -96,6 +106,8 @@ public class Serial {
     private final AtomicReference<byte[]> pendingRc = new AtomicReference<>();
     /** DRAUPNE Link: a request that goes after the sticks but before everything else, and never skipped (MSP_RX_MAP). */
     private final AtomicReference<byte[]> pendingUrgent = new AtomicReference<>();
+    /** pc.31: the status request (the ARM flag): its own slot after the urgent one, never skipped either. */
+    private final AtomicReference<byte[]> pendingStatus = new AtomicReference<>();
     /** DRAUPNE Link: every other MSP request, in order. */
     private final LinkedBlockingQueue<byte[]> pendingMsp = new LinkedBlockingQueue<>(64);
     /** DRAUPNE Link: when the USB permission was asked for; no answer in PERMISSION_WAIT_MS counts as Deny. */
@@ -141,15 +153,19 @@ public class Serial {
     }
 
     public void initialize(Msp msp, Mavlink mavlink) {
-        this.msp = msp;
-        this.mavlink = mavlink;
-        isMavlink = false;
-        msp.close();
-        mavlink.close();
-        threadsId++;
-        closePort(); // DRAUPNE Link: the old connection, or each re-init leaked one (and its reader stayed blocked)
+        final int id;
+        synchronized (portLock) {
+            this.msp = msp;
+            this.mavlink = mavlink;
+            isMavlink = false;
+            msp.close();
+            mavlink.close();
+            id = ++threadsId;
+            closePort(); // DRAUPNE Link: the old connection, or each re-init leaked one (and its reader stayed blocked)
+        }
         registerPermissionReceiver();
-        Thread initThread = new Thread(initRun);
+        // pc.31: the init thread, its reader and its writer carry this generation, not threadsId read when they start
+        Thread initThread = new Thread(() -> initLoop(id));
         initThread.setDaemon(false);
         initThread.setName("serialInitThread");
         initThread.start();
@@ -220,43 +236,41 @@ public class Serial {
         }
     }
 
-    private final Runnable initRun = new Runnable() {
-        public void run() {
-            final int id = threadsId;
-            log("Start serial init thread - OK");
-            status = STATUS_DEVICE_NOT_CONNECTED;
-            while (id == threadsId) {
-                try {
-                    restart = false;
-                    if (config.isUseNativeSerialPort()){
-                        if (openNativeSerialPort()) {
-                            log("Native serial port is opened");
-                            return;
-                        }
-                    }else {
-                        checkPermissionState();
-                        if (findDevice()) {
-                            if (checkPermission()) {
-                                if (openUsbSerialPort()) {
-                                    log("USB Serial port is opened");
-                                    return;
-                                }
+    private void initLoop(final int id) {
+        log("Start serial init thread - OK");
+        if (id == threadsId) status = STATUS_DEVICE_NOT_CONNECTED;
+        while (id == threadsId) {
+            try {
+                restart = false;
+                if (config.isUseNativeSerialPort()){
+                    if (openNativeSerialPort(id)) {
+                        log("Native serial port is opened");
+                        return;
+                    }
+                }else {
+                    checkPermissionState();
+                    if (findDevice()) {
+                        if (checkPermission()) {
+                            if (openUsbSerialPort(id)) {
+                                log("USB Serial port is opened");
+                                return;
                             }
                         }
                     }
-                    synchronized (initSignal) {
-                        initSignal.wait(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
-                    }
-                } catch (Exception e) {
-                    log("Serial init thread error: " + e);
-                    try {
-                        Thread.sleep(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
-                    } catch (InterruptedException ignored) {
-                    }
+                }
+                synchronized (initSignal) {
+                    if (id != threadsId) return;
+                    initSignal.wait(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
+                }
+            } catch (Exception e) {
+                log("Serial init thread error: " + e);
+                try {
+                    Thread.sleep(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
+                } catch (InterruptedException ignored) {
                 }
             }
         }
-    };
+    }
 
     private boolean findDevice(){
         if (status != STATUS_DEVICE_NOT_CONNECTED && driver != null) return true;
@@ -333,7 +347,14 @@ public class Serial {
         return false;
     }
 
-    private boolean openNativeSerialPort(){
+    private boolean openNativeSerialPort(int id){
+        synchronized (portLock) {
+            if (id != threadsId) return false; // a newer init took over: it opens the port, this one stops
+            return openNativeSerialPortLocked(id);
+        }
+    }
+
+    private boolean openNativeSerialPortLocked(int id){
         if (status == STATUS_SERIAL_PORT_OPENED) return true;
         setFcProtocol(null, null);
         if (serialHelper != null) serialHelper.close();
@@ -370,7 +391,7 @@ public class Serial {
             serialHelper.setParity(nativeSerialParityNone);
             serialHelper.setFlowCon(nativeSerialFlowControlNone);
             serialHelper.open();
-            startWriter();
+            startWriter(id);
             if (isMavlink){
                 if (!mavlink.isInitialized()) mavlink.initialize();
             } else {
@@ -385,7 +406,14 @@ public class Serial {
         return true;
     }
 
-    private boolean openUsbSerialPort(){
+    private boolean openUsbSerialPort(int id){
+        synchronized (portLock) {
+            if (id != threadsId) return false; // a newer init took over: it opens the port, this one stops
+            return openUsbSerialPortLocked(id);
+        }
+    }
+
+    private boolean openUsbSerialPortLocked(final int id){
         if (status == STATUS_SERIAL_PORT_OPENED) return true;
         if (driver == null){
             status = STATUS_DEVICE_NOT_CONNECTED;
@@ -412,12 +440,13 @@ public class Serial {
             closePort(); // DRAUPNE Link: the connection too, or every failed open leaked one
             return false;
         }
-        Thread readerThread = new Thread(readerRun);
+        final UsbSerialPort opened = port;
+        Thread readerThread = new Thread(() -> readerLoop(id, opened));
         readerThread.setDaemon(false);
         readerThread.setName("readerThread");
         readerThread.setPriority(Thread.MAX_PRIORITY);
         readerThread.start();
-        startWriter();
+        startWriter(id);
         if (isMavlink){
             if (!mavlink.isInitialized()) mavlink.initialize();
         } else {
@@ -426,49 +455,47 @@ public class Serial {
         return true;
     }
 
-    private final Runnable readerRun = new Runnable() {
-        public void run() {
-            final int id = threadsId;
-            int serialErrors = 0;
-            byte[] buf = new byte[serialMaxBufferSize];
-            status = STATUS_SERIAL_PORT_OPENED;
-            log("Start USB serial reader thread - OK");
-            while (id == threadsId) {
+    /** pc.31: the port it reads is the one opened with it (the field may already hold a newer generation's). */
+    private void readerLoop(final int id, final UsbSerialPort readPort) {
+        int serialErrors = 0;
+        byte[] buf = new byte[serialMaxBufferSize];
+        if (id == threadsId) status = STATUS_SERIAL_PORT_OPENED;
+        log("Start USB serial reader thread - OK");
+        while (id == threadsId) {
+            try {
+                // DRAUPNE Link: timeout 0 = an asynchronous UsbRequest, waiting for data without blocking writes.
+                // A read with a timeout is a synchronous bulkTransfer that, on many phones, holds every write on
+                // this connection until data comes or the timeout (100 ms) runs out: sticks then reached the
+                // flight controller ~100 ms late, enough for Betaflight to flag RXLOSS and block arming.
+                int size = readPort.read(buf, 0);
+                if (restart || id != threadsId) continue;
+                if (size > 0){
+                    serialErrors = 0;
+                    status = STATUS_SERIAL_PORT_OPENED;
+                    if (isMavlink){
+                        mavlink.addData(buf, size);
+                    } else {
+                        msp.addData(buf, size);
+                    }
+                }
+            } catch (Exception e) {
+                if (id != threadsId) return; // closed on purpose
+                serialErrors++;
+                log("Serial reader thread error: " + e);
+                // DRAUPNE Link: the device gone (unplugged), or reads keep failing: reconnect now, not after 10
+                // errors (~1 s) plus the service's next check (up to 1 s) plus a 2 s retry
+                if (!deviceAttached() || serialErrors > 3) {
+                    lostDevice(id, e.toString());
+                    return;
+                }
                 try {
-                    // DRAUPNE Link: timeout 0 = an asynchronous UsbRequest, waiting for data without blocking writes.
-                    // A read with a timeout is a synchronous bulkTransfer that, on many phones, holds every write on
-                    // this connection until data comes or the timeout (100 ms) runs out: sticks then reached the
-                    // flight controller ~100 ms late, enough for Betaflight to flag RXLOSS and block arming.
-                    int size = port.read(buf, 0);
-                    if (restart) continue;
-                    if (size > 0){
-                        serialErrors = 0;
-                        status = STATUS_SERIAL_PORT_OPENED;
-                        if (isMavlink){
-                            mavlink.addData(buf, size);
-                        } else {
-                            msp.addData(buf, size);
-                        }
-                    }
-                } catch (Exception e) {
-                    if (id != threadsId) return; // closed on purpose
-                    serialErrors++;
-                    log("Serial reader thread error: " + e);
-                    // DRAUPNE Link: the device gone (unplugged), or reads keep failing: reconnect now, not after 10
-                    // errors (~1 s) plus the service's next check (up to 1 s) plus a 2 s retry
-                    if (!deviceAttached() || serialErrors > 3) {
-                        lostDevice(e.toString());
-                        return;
-                    }
-                    try {
-                        Thread.sleep(serialPortReadWriteTimeoutMs);
-                    } catch (InterruptedException ex) {
-                        //
-                    }
+                    Thread.sleep(serialPortReadWriteTimeoutMs);
+                } catch (InterruptedException ex) {
+                    //
                 }
             }
         }
-    };
+    }
 
     /** DRAUPNE Link: is the flight controller's USB device still there? */
     private boolean deviceAttached() {
@@ -478,7 +505,8 @@ public class Serial {
     }
 
     /** DRAUPNE Link: its USB link went: start again at once, and look for it often for a few seconds. */
-    private void lostDevice(String why) {
+    private void lostDevice(int id, String why) {
+        if (id != threadsId) return; // pc.31: a newer init is already under way
         log("Flight controller USB link lost (" + why + "): reconnecting");
         fastRetryUntil = System.currentTimeMillis() + FAST_RETRY_FOR_MS;
         if (msp != null && mavlink != null) initialize(msp, mavlink);
@@ -502,6 +530,16 @@ public class Serial {
         signalWriter();
     }
 
+    /**
+     * pc.31: the status request - how the app knows the FC is armed (FcArmedState). Its own slot after the urgent
+     * one, and not skipped while the link is slow: the skips once froze the armed state at "disarmed".
+     */
+    public void writeDataMspStatus(byte[] data){
+        if (status != STATUS_SERIAL_PORT_OPENED || data == null || !isMspCompatible()) return;
+        pendingStatus.set(data);
+        signalWriter();
+    }
+
     /** DRAUPNE Link: a stick packet. Replaces one not written yet, and goes before every other request. */
     public void writeRcMsp(byte[] data){
         if (status != STATUS_SERIAL_PORT_OPENED || data == null || !isMspCompatible()) return;
@@ -520,11 +558,12 @@ public class Serial {
         }
     }
 
-    private void startWriter(){
+    private void startWriter(final int id){
         pendingRc.set(null);
         pendingUrgent.set(null);
+        pendingStatus.set(null);
         pendingMsp.clear();
-        Thread writerThread = new Thread(writerRun);
+        Thread writerThread = new Thread(() -> writerLoop(id));
         writerThread.setDaemon(true);
         writerThread.setName("serialWriterThread");
         writerThread.setPriority(Thread.MAX_PRIORITY);
@@ -536,41 +575,44 @@ public class Serial {
      * behind other requests: the newest sticks always go first, other requests one at a time in between, and while
      * the USB link is slow those are skipped (the app asks for them again).
      */
-    private final Runnable writerRun = new Runnable() {
-        public void run() {
-            final int id = threadsId;
-            while (id == threadsId) {
-                try {
-                    byte[] rc = pendingRc.getAndSet(null);
-                    if (rc != null) {
-                        write(rc, rcWriteTimeoutMs, true);
-                        continue;
-                    }
-                    byte[] urgent = pendingUrgent.getAndSet(null);
-                    if (urgent != null) {
-                        write(urgent, serialPortReadWriteTimeoutMs, false);
-                        continue;
-                    }
-                    byte[] other = pendingMsp.poll();
-                    if (other != null) {
-                        if (System.currentTimeMillis() < slowUntil) {
-                            PcLinkStats.skipped();
-                        } else {
-                            write(other, serialPortReadWriteTimeoutMs, false);
-                        }
-                        continue;
-                    }
-                    synchronized (writeSignal) {
-                        if (pendingRc.get() == null && pendingUrgent.get() == null && pendingMsp.isEmpty()) writeSignal.wait(20);
-                    }
-                } catch (InterruptedException e) {
-                    return;
-                } catch (Exception e) {
-                    log("Serial writer error: " + e);
+    private void writerLoop(final int id) {
+        while (id == threadsId) {
+            try {
+                byte[] rc = pendingRc.getAndSet(null);
+                if (rc != null) {
+                    write(rc, rcWriteTimeoutMs, true);
+                    continue;
                 }
+                byte[] urgent = pendingUrgent.getAndSet(null);
+                if (urgent != null) {
+                    write(urgent, requestWriteTimeoutMs, false);
+                    continue;
+                }
+                byte[] statusRequest = pendingStatus.getAndSet(null);
+                if (statusRequest != null) {
+                    write(statusRequest, requestWriteTimeoutMs, false);
+                    continue;
+                }
+                byte[] other = pendingMsp.poll();
+                if (other != null) {
+                    if (System.currentTimeMillis() < slowUntil) {
+                        PcLinkStats.skipped();
+                    } else {
+                        write(other, requestWriteTimeoutMs, false);
+                    }
+                    continue;
+                }
+                synchronized (writeSignal) {
+                    if (pendingRc.get() == null && pendingUrgent.get() == null && pendingStatus.get() == null
+                            && pendingMsp.isEmpty()) writeSignal.wait(20);
+                }
+            } catch (InterruptedException e) {
+                return;
+            } catch (Exception e) {
+                log("Serial writer error: " + e);
             }
         }
-    };
+    }
 
     private void write(byte[] data, int timeoutMs, boolean isRc){
         long start = System.nanoTime();
@@ -583,8 +625,9 @@ public class Serial {
                     written = true;
                 }
             }else{
-                if (port != null && port.isOpen()) {
-                    port.write(data, timeoutMs);
+                UsbSerialPort p = port; // pc.31: once - the field may be cleared by a close in between
+                if (p != null && p.isOpen()) {
+                    p.write(data, timeoutMs);
                     written = true;
                 }
             }
@@ -617,17 +660,19 @@ public class Serial {
     }
 
     public void close(){
-        threadsId++;
-        signalWriter();
-        wakeInit();
-        unregisterPermissionReceiver();
-        if (msp != null) msp.close();
-        if (mavlink != null) mavlink.close();
-        closePort();
-        status = STATUS_NOT_INITIALIZED;
+        synchronized (portLock) {
+            threadsId++;
+            signalWriter();
+            wakeInit();
+            unregisterPermissionReceiver();
+            if (msp != null) msp.close();
+            if (mavlink != null) mavlink.close();
+            closePort();
+            status = STATUS_NOT_INITIALIZED;
+        }
     }
 
-    /** The port and its USB connection (or the native serial port), if open. */
+    /** The port and its USB connection (or the native serial port), if open. Under portLock. */
     private void closePort() {
         signalWriter();
         PcLinkStats.rcPortClosed();

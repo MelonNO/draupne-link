@@ -81,6 +81,8 @@ final class TacticalCombo {
      */
     static JPopupMenu menu() {
         JPopupMenu menu = new JPopupMenu();
+        // always a window of its own, so always in front of the tour's notice - as its wipe-in is (GHOST_LAYER)
+        menu.setLightWeightPopupEnabled(false);
         menu.addPopupMenuListener(new PopupMenuListener() {
             @Override
             public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
@@ -174,6 +176,9 @@ final class TacticalCombo {
         });
     }
 
+    /** Above the tour's notice (POPUP_LAYER + 10): a menu's wipe in and out is always on top. */
+    static final Integer GHOST_LAYER = javax.swing.JLayeredPane.POPUP_LAYER + 20;
+
     /** The windows in which a menu is wiping in right now. */
     private static final java.util.Set<javax.swing.JLayeredPane> OPENING = new java.util.HashSet<>();
 
@@ -206,9 +211,10 @@ final class TacticalCombo {
                          java.awt.Rectangle[] rows, boolean opening, Runnable done) {
             Ghost ghost = new Ghost(picture, rows, opening, done);
             ghost.setBounds(bounds);
-            // the popup layer, on top of it: in front of everything else on the layered pane (the tour's dimming and
-            // its notice included), where the real menu then shows as well
-            layer.add(ghost, javax.swing.JLayeredPane.POPUP_LAYER, 0);
+            // in front of everything on the layered pane, the tour's notice too: the real menu (a window of its own)
+            // shows in front of it, so the wipe does as well - under the notice it went behind it and then jumped out
+            // in front when the menu took over (the pilot, 1.0.39: "the animation should always be on top")
+            layer.add(ghost, GHOST_LAYER, 0);
             ghost.timer.start();
         }
 

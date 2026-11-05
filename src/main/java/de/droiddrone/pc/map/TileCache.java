@@ -113,6 +113,38 @@ public final class TileCache {
         return dir.resolve(source.id).resolve(Integer.toString(z)).resolve(Integer.toString(x)).resolve(y + ".png");
     }
 
+    /**
+     * A tile now, on the caller's thread: memory, disk, else the server (kept on disk under id like the map's own).
+     * For the radio horizon, which needs the terrain and the map pictures round a point before it can work. Null
+     * when it can't be had (offline, or the server said no). Not kept in memory: thousands of them would push the
+     * map's own tiles out; the caller keeps what it needs of each.
+     */
+    public BufferedImage fetchNow(String id, String url, int z, int x, int y) {
+        synchronized (this) {
+            BufferedImage img = memory.get(id + "/" + z + "/" + x + "/" + y);
+            if (img != null) return img;
+        }
+        BufferedImage img = null;
+        Path file = dir.resolve(id).resolve(Integer.toString(z)).resolve(Integer.toString(x)).resolve(y + ".png");
+        try {
+            if (Files.isRegularFile(file)) img = read(file);
+            if (img == null) {
+                byte[] data = fetch(url);
+                if (data != null) {
+                    img = ImageIO.read(new java.io.ByteArrayInputStream(data));
+                    if (img != null) write(file, data);
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+        return img;
+    }
+
+    public BufferedImage fetchNow(TileSource source, int z, int x, int y) {
+        return fetchNow(source.id, source.url(z, x, y), z, x, y);
+    }
+
     private void load(String key, TileSource source, int z, int x, int y, Runnable onReady) {
         BufferedImage img = null;
         try {

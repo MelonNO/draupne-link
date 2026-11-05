@@ -27,6 +27,8 @@ public class JoystickService {
      * Another device only by choosing it (select).
      */
     private volatile Joystick.Info locked;
+    /** While the radio is missing the device list is read this often (else once a second). */
+    static final long LOST_REFRESH_MS = 50;
     private final String initialFilter;
     private final int pollHz;
     private volatile Consumer<Joystick.State> inputListener;
@@ -56,7 +58,10 @@ public class JoystickService {
                 nextListRefresh = now + 1000;
             }
             Joystick.Info selected = resolve(joysticks);
-            Joystick.State state = selected == null ? null : Joystick.read(selected.id());
+            // by identity, not by the id of the last list: GLFW hands a freed id to the next device plugged in, and a
+            // radio back from a USB blip under a new id is found at once instead of at the next refresh
+            Joystick.State state = selected == null ? null : Joystick.readSame(selected);
+            if (state == null) nextListRefresh = Math.min(nextListRefresh, now + LOST_REFRESH_MS);
             snapshot = new Snapshot(joysticks, selected, state);
             Consumer<Joystick.State> listener = inputListener;
             if (listener != null) {

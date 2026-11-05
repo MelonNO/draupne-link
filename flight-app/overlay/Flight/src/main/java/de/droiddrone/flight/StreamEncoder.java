@@ -18,6 +18,7 @@
  *  pc.26: a 150 kbit/s step under the 250 (the survival tier); the PC can set the step outright (setBitRateIndex);
  *  a full output queue is cut back to its newest key frame instead of losing its oldest frame (which was the key
  *  frame everything after it needs).
+ *  pc.31: the queue's cut reads the buffer flags as bits.
  */
 
 package de.droiddrone.flight;
@@ -470,7 +471,9 @@ public class StreamEncoder {
         videoStreamOutputBuffer.drainTo(queued);
         int start = -1;
         for (int i = 0; i < queued.size(); i++) {
-            if (queued.get(i).flags == MediaCodec.BUFFER_FLAG_KEY_FRAME || queued.get(i).flags == MediaCodec.BUFFER_FLAG_CODEC_CONFIG) start = i;
+            // pc.31: the flags as bits - a key frame may come with another flag set (PARTIAL_FRAME, ...)
+            int flags = queued.get(i).flags;
+            if ((flags & (MediaCodec.BUFFER_FLAG_KEY_FRAME | MediaCodec.BUFFER_FLAG_CODEC_CONFIG)) != 0) start = i;
         }
         if (start < 0) {
             requestKeyFrame();

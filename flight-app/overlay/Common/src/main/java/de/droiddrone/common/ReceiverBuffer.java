@@ -20,6 +20,14 @@
  *  the old session as up: the far side has started a new session, and this side starts over with it. Upstream
  *  dropped that answer, and the two sides then disagreed on the packet numbers (the new session's Config never
  *  taken) until the old session's 4 s timer ran out - seconds without sticks after a short blackout.
+ *  pc.31 / DRAUPNE Link 1.0.39: a timed-out session is not brought back by a stray packet (addPacket tested the
+ *  field, not isConnected(): any packet, keyless, revived it); a gap is waited for (1.5 x ping, asked for meanwhile)
+ *  before it is skipped, the buffer is at least MIN_BUFFER_SIZE (it settled at 1 on sparse traffic, so every gap
+ *  was skipped at once and RequestPackets never went); only true duplicates are acknowledged, never a packet that
+ *  was skipped over (the sender then stopped resending a packet nobody took); the nearest packet after a gap is
+ *  found across the number wrap; one lock for the receive and buffer threads. (The Connects in flight after a loss
+ *  each restarted the numbering: a pc.31 phone answers only the first, see its Udp.receiverRun - this side still
+ *  takes every answer, as an older phone starts a new session on each.)
  */
 
 package de.droiddrone.common;
@@ -41,16 +49,31 @@ public class ReceiverBuffer {
     private final ConcurrentLinkedQueue<SavedPacket> unnumberedBuffer = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<SavedPacket> rejectedPackets = new ConcurrentLinkedQueue<>();
     private final ConcurrentHashMap<Short, Long> lastRequestedPackets = new ConcurrentHashMap<>();
-    private short nextPacketNum;
-    private int bufferSize, packetCount, packetTimer, pingTimer;
+    /** pc.31: the receive thread (addPacket) and the buffer thread (getNextPacket, the timer) share the numbering. */
+    private final Object lock = new Object();
+    private volatile short nextPacketNum;
+    private volatile int bufferSize;
+    private int packetCount, packetTimer, pingTimer;
     private final ArrayList<Integer> bufferSizes = new ArrayList<>();
     private final ArrayList<Integer> pings = new ArrayList<>();
-    private int pingMs;
-    private int lastPacketTimer;
-    private boolean isActive;
-    private boolean isConnected;
+    private volatile int pingMs;
+    private volatile int lastPacketTimer;
+    private volatile boolean isActive;
+    private volatile boolean isConnected;
     private int recoverCounter;
     private final long createdTimestamp;
+    /** pc.31: the buffer never counts fewer packets than this (on sparse traffic it settled at 1: no gap waited for). */
+    static final int MIN_BUFFER_SIZE = 4;
+    /** pc.31: a gap is waited for at least this long (and 1.5 x ping) before it is skipped. */
+    static final int MIN_GAP_WAIT_MS = 30;
+    private static final int MAX_PACKET_NUM_DIFF = 1000;
+    /** Numbers skipped over (never delivered): a late copy is not acknowledged as if it had been taken. */
+    private final java.util.LinkedHashMap<Short, Boolean> skipped = new java.util.LinkedHashMap<Short, Boolean>() {
+        @Override
+        protected boolean removeEldestEntry(java.util.Map.Entry<Short, Boolean> eldest) {
+            return size() > 256;
+        }
+    };
 
     public ReceiverBuffer(UdpSender udpSender, boolean isServer, String controlKey, String viewerKey){
         this.udpSender = udpSender;
@@ -85,92 +108,127 @@ public class ReceiverBuffer {
         System.arraycopy(tmp, 0, data, 0, packetSize);
         DataReader buffer = new DataReader(data, true);
         byte packetName = buffer.readByte();
-        if (UdpCommon.isPacketNumbered(packetName)){
-            short num = buffer.readShort();
-            if (num < -1) return;
-            if (packetName == UdpCommon.Connect){
-                if (isConnected() && isServer) return; // a client's Connect answered: a new session (see the header)
-                byte clientType = buffer.readByte();
-                String key = buffer.readUTF();
-                if (key == null) return;
-                if ((clientType == 0 || clientType == 1) && key.equals(controlKey) || clientType == 2 && key.equals(viewerKey)){
-                    restart();
-                    udpSender.connect(ip, port);
-                    isConnected = true;
-                }else{
-                    return;
+        synchronized (lock) {
+            if (UdpCommon.isPacketNumbered(packetName)){
+                short num = buffer.readShort();
+                if (num < -1) return;
+                if (packetName == UdpCommon.Connect){
+                    if (isConnected() && isServer) return; // a client's Connect answered: a new session (see the header)
+                    byte clientType = buffer.readByte();
+                    String key = buffer.readUTF();
+                    if (key == null) return;
+                    if ((clientType == 0 || clientType == 1) && key.equals(controlKey) || clientType == 2 && key.equals(viewerKey)){
+                        // every answer is taken (an older phone starts a new session on each Connect); a pc.31 phone
+                        // answers only the first of the Connects in flight after a loss (Udp.receiverRun)
+                        restart();
+                        udpSender.connect(ip, port);
+                        isConnected = true;
+                        lastPacketTimer = disconnectTimeMs;
+                    }else{
+                        return;
+                    }
                 }
-            }
-            if (!isConnected) return;
-            lastPacketTimer = disconnectTimeMs;
-            int maxPacketNumDiff = 1000;
-            if (num >= nextPacketNum && num < nextPacketNum + maxPacketNumDiff || num < nextPacketNum - Short.MAX_VALUE + maxPacketNumDiff){
-                numberedBuffer.put(num, new SavedPacket(packetName, num, data, ip, port));
-                packetCount++;
-                recoverCounter = 0;
-            }else{
-                rejectedPackets.add(new SavedPacket(packetName, num, data, ip, port));
-                recoverCounter++;
-                if (recoverCounter > bufferSize * 2){
-                    restart();
+                if (!isConnected()) return; // pc.31: not the field - a timed-out session stays down until a Connect
+                lastPacketTimer = disconnectTimeMs;
+                if (ahead(num) < MAX_PACKET_NUM_DIFF){
                     numberedBuffer.put(num, new SavedPacket(packetName, num, data, ip, port));
-                    nextPacketNum = num;
+                    packetCount++;
+                    recoverCounter = 0;
+                }else{
+                    // taken before (its acknowledgement lost): acknowledged again; skipped over: not (it never was)
+                    if (isDuplicate(num)) rejectedPackets.add(new SavedPacket(packetName, num, data, ip, port));
+                    // every packet outside the window counts, as upstream: the two sides' numbering apart (a restart
+                    // on one side only) mends itself
+                    recoverCounter++;
+                    if (recoverCounter > bufferSize * 2){
+                        restart();
+                        numberedBuffer.put(num, new SavedPacket(packetName, num, data, ip, port));
+                        nextPacketNum = num;
+                    }
                 }
+            }else{
+                if (!isConnected()) return;
+                lastPacketTimer = disconnectTimeMs;
+                unnumberedBuffer.add(new SavedPacket(packetName, (short) -1, data, ip, port));
             }
-        }else{
-            if (!isConnected) return;
-            lastPacketTimer = disconnectTimeMs;
-            unnumberedBuffer.add(new SavedPacket(packetName, (short) -1, data, ip, port));
         }
     }
 
+    /** How far num is ahead of the next number to deliver, across the wrap (0..32767). */
+    private int ahead(short num) {
+        if (nextPacketNum == -1) return num + 1; // after a restart: the Connect (-1), then 0, 1, ...
+        if (num < 0) return Integer.MAX_VALUE;
+        return (num - nextPacketNum + 32768) % 32768;
+    }
+
+    /** A number delivered already: just behind the next one, and not skipped over. */
+    private boolean isDuplicate(short num) {
+        if (num < 0 || nextPacketNum < 0) return false;
+        int behind = (nextPacketNum - num + 32768) % 32768;
+        return behind >= 1 && behind <= MAX_PACKET_NUM_DIFF && !skipped.containsKey(num);
+    }
+
+    private void advance() {
+        nextPacketNum = nextPacketNum == Short.MAX_VALUE ? 0 : (short) (nextPacketNum + 1);
+    }
+
     public SavedPacket getNextPacket(){
-        if (!isActive) return null;
-        SavedPacket packet = unnumberedBuffer.poll();
-        if (packet != null){
-            if (checkPacket(packet)) {
-                return packet;
-            }else{
-                return getNextPacket();
-            }
+        // pc.31: a loop, not recursion, and the packets' handling (pongs, resends, the echo) outside the lock
+        while (isActive) {
+            SavedPacket packet = unnumberedBuffer.poll();
+            if (packet == null) packet = nextNumbered();
+            if (packet == null) return null;
+            if (checkPacket(packet)) return packet;
         }
-        packet = numberedBuffer.remove(nextPacketNum);
-        if (packet == null){
-            if (numberedBuffer.isEmpty()) return null;
-            if (numberedBuffer.size() >= bufferSize){
-                short minNum = -1;
-                for (ConcurrentHashMap.Entry<Short, SavedPacket> entry : numberedBuffer.entrySet()) {
-                    short key = entry.getKey();
-                    if (key < minNum || minNum == -1) minNum = key;
-                }
-                if (minNum != -1){
-                    nextPacketNum = minNum;
-                    return getNextPacket();
-                }
+        return null;
+    }
+
+    /** The next numbered packet in order, or null: a gap is asked for, and skipped only after it was waited for. */
+    private SavedPacket nextNumbered() {
+        ArrayList<Integer> requestedPackets = null;
+        synchronized (lock) {
+            SavedPacket packet = numberedBuffer.remove(nextPacketNum);
+            if (packet != null) {
+                advance();
+                return packet;
             }
-            ArrayList<Integer> requestedPackets = new ArrayList<>();
+            if (numberedBuffer.isEmpty()) return null;
+            long now = System.currentTimeMillis();
+            short first = -1;
+            int nearest = Integer.MAX_VALUE;
+            long oldest = Long.MAX_VALUE; // the gap is as old as the oldest packet waiting behind it
+            for (SavedPacket waiting : numberedBuffer.values()) {
+                int a = ahead(waiting.packetNum);
+                if (a < nearest) {
+                    nearest = a;
+                    first = waiting.packetNum;
+                }
+                oldest = Math.min(oldest, waiting.timestampCreated);
+            }
+            int waitMs = Math.max(MIN_GAP_WAIT_MS, Math.round(pingMs * 1.5f));
+            if (nearest != Integer.MAX_VALUE && (numberedBuffer.size() >= bufferSize || now - oldest >= waitMs)) {
+                for (int i = 0; i < nearest && i < 256 && nextPacketNum >= 0; i++) {
+                    skipped.put(nextPacketNum, Boolean.TRUE);
+                    advance();
+                }
+                nextPacketNum = first;
+                packet = numberedBuffer.remove(first);
+                if (packet != null) advance();
+                return packet;
+            }
+            requestedPackets = new ArrayList<>();
             int num;
             for (int i = 0; i < 10; i++) {
                 num = nextPacketNum + i;
                 if (num > Short.MAX_VALUE) num = num - Short.MAX_VALUE - 1;
+                if (num < 0) continue;
                 if (numberedBuffer.containsKey((short)num)) break;
                 if (lastRequestedPackets.containsKey((short)num)) continue;
                 requestedPackets.add(num);
-                lastRequestedPackets.put((short)num, System.currentTimeMillis() + pingMs + 20);
-            }
-            if (!requestedPackets.isEmpty()) udpSender.requestPacket(requestedPackets);
-        }else{
-            if (nextPacketNum == Short.MAX_VALUE){
-                nextPacketNum = 0;
-            }else{
-                nextPacketNum++;
-            }
-            if (checkPacket(packet)) {
-                return packet;
-            }else{
-                return getNextPacket();
+                lastRequestedPackets.put((short)num, now + pingMs + 20);
             }
         }
+        if (!requestedPackets.isEmpty()) udpSender.requestPacket(requestedPackets);
         return null;
     }
 
@@ -285,7 +343,7 @@ public class ReceiverBuffer {
                 for (int c : bufferSizes) avgSize += c;
                 avgSize = avgSize / bufferSizes.size();
                 bufferSizes.remove(0);
-                bufferSize = avgSize;
+                bufferSize = Math.max(MIN_BUFFER_SIZE, avgSize);
             }
         }
     }
@@ -320,9 +378,11 @@ public class ReceiverBuffer {
         return (isActive && isConnected && lastPacketTimer > 0);
     }
 
+    /** Under the lock (addPacket). */
     private void restart(){
         nextPacketNum = -1;
         recoverCounter = 0;
+        skipped.clear();
         numberedBuffer.clear();
         unnumberedBuffer.clear();
         rejectedPackets.clear();
@@ -330,12 +390,14 @@ public class ReceiverBuffer {
     }
 
     public void close(){
-        isActive = false;
-        isConnected = false;
-        lastPacketTimer = 0;
-        numberedBuffer.clear();
-        unnumberedBuffer.clear();
-        rejectedPackets.clear();
-        lastRequestedPackets.clear();
+        synchronized (lock) {
+            isActive = false;
+            isConnected = false;
+            lastPacketTimer = 0;
+            numberedBuffer.clear();
+            unnumberedBuffer.clear();
+            rejectedPackets.clear();
+            lastRequestedPackets.clear();
+        }
     }
 }

@@ -71,8 +71,8 @@ final class Tour {
     }
 
     /** The features whose steps came after the first tour: a PC that had the tour before them is offered them alone. */
-    static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools";
-    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS);
+    static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon";
+    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON);
     /** The features the pilot has been offered a tour of, comma-separated. */
     static final String SEEN_KEY = "tour.seen";
 
@@ -120,7 +120,7 @@ final class Tour {
                 + "Try it after the tour.", main::tourFullScreenButton, null, false));
         steps.add(new Step("CONNECT", "Pick the phone by its name - MobileAlpha, MobileBravo ... - every phone with DRAUPNE Flight open on "
                 + "your Tailscale network is in the list. CONNECT opens the link (WATCH joins a pilot PC's flight as a spectator). "
-                + "In flight the minimap takes this card's place, with POP OUT MAP under it. F3 opens the map window any time.",
+                + "The minimap under the figures shows where the drone is, with POP OUT MAP under it; F3 opens the map window any time.",
                 main::tourLinkCard, null, false).of(FEATURE_NAMES));
         // the sleep buttons only show while connected: the step puts them on the card as a demo that answers presses
         steps.add(new Step("SLEEP BUTTONS", "While connected, these are here. STANDBY stops the phone's camera and dims its "
@@ -136,11 +136,21 @@ final class Tour {
             main.showMapWindow();
             main.mapWindow().openTools(true);
         };
-        steps.add(new Step("MAP TOOLS", "The tools slide out from this tab: the ruler, lines, rectangles, arrows, NATO symbols, pins, "
-                + "offline maps, export and import. Press it.", () -> main.mapWindow().tourTools(), main::showMapWindow, true, map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("MAP TOOLS", "The tools slide out from this tab in three groups: DRAW (lines, rectangles, arrows, NATO symbols), "
+                + "TOOLS (the ruler, the radio horizon, the GCS search - their results on the map only while TOOLS is open) and DATA (export, import, offline maps). Press it.",
+                () -> main.mapWindow().tourTools(), main::showMapWindow, true, map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("DRAW, TOOLS, DATA", "Each of these tabs slides its own list out beside it; press it again and it folds back. "
+                + "Press TOOLS.", () -> main.mapWindow().tourGroups(), mapAndTools, true, map).of(FEATURE_RADIO_HORIZON));
         steps.add(new Step("RULER", "Click points on the map: each leg shows its length and bearing, the total at the end. Click the first "
                 + "point again to close a square and get its area; the terrain's elevation profile shows under the map. KEEP keeps it as a "
                 + "graphic, Esc clears it. Try it after the tour.", () -> main.mapWindow().tourRuler(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("RADIO HORIZON", "Set the mast's height and the aircraft's altitude (the mast above its ground, the aircraft above the ground under it) and the "
+                + "trees' height and the link's frequency, press RADIO HORIZON and click the map: blue is where the aircraft sees the mast "
+                + "over the terrain and through the forest the map shows (the higher the frequency, the less forest it gets through) - 30 km at most. A new click moves the mast; it stays on the map until you click the cross on its label. Try it after the tour.",
+                () -> main.mapWindow().tourHorizon(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
+        steps.add(new Step("GCS SEARCH", "Where to put the ground station: with the same fields, drag a box round the area you want good "
+                + "reception in. A heat map 30 km round it shows where an antenna sees all of the area (green) or none of it (red); the best "
+                + "place is ringed; the cross on its label takes it off. Try it after the tour.", () -> main.mapWindow().tourSearch(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
         steps.add(new Step("DRAW", "LINE through the points you click (double-click ends), RECTANGLE by dragging a box, ARROW with its head at the "
                 + "last point. Pick the colour, the width and outline or fill first. Right-click a drawing to rename or remove it.",
                 () -> main.mapWindow().tourDraw(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
@@ -159,7 +169,7 @@ final class Tour {
                 () -> main.mapWindow().tourTerrain()));
         steps.add(new Step("THE DRONE", "The arrow is the drone, pointing where it heads, with its track behind it. The ring marked "
                 + "L is the launch point. LAST KNOWN on the arrow means its position is old.", () -> main.mapWindow().tourDrone(), null, false, map));
-        steps.add(new Step("MAP TYPE", "The map picture: topo, paper map, satellite or OpenStreetMap. Change it here any time; "
+        steps.add(new Step("MAP TYPE", "The map picture: topo (Kartverket's in Norway, the world topo map elsewhere), paper map, satellite or OpenStreetMap. Change it here any time; "
                 + "what you have looked at is kept for flying without internet.", () -> main.mapWindow().tourMapType(), null));
         steps.add(new Step("COORDINATES", "The coordinate system for the cursor, the drone and the pins: degrees, UTM or MGRS. "
                 + "Change it here.", () -> main.mapWindow().tourFormat(), null));
@@ -181,6 +191,8 @@ final class Tour {
 
     /** Set once the tour has been offered on this PC: after the first-time setup, or on the first start after an update brought it. */
     static final String OFFERED_KEY = "tour.offered";
+    /** The notice's layer: over the window's animations, under a menu's wipe (TacticalCombo.GHOST_LAYER). */
+    static final Integer NOTICE_LAYER = JLayeredPane.POPUP_LAYER + 10;
 
     /** The features whose steps the pilot has not been offered yet (the tour of what is new after an update). */
     static List<String> unseen(de.droiddrone.pc.PcConfig config) {
@@ -197,7 +209,7 @@ final class Tour {
     static void offerNew(MainWindow main, List<String> features) {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         List<String> what = new ArrayList<>();
-        for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "the phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "the map tools" : f);
+        for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "the phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "the map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "the radio horizon, the GCS search and the map tools' three groups" : f);
         Object[] options = {"Yes", "Not now"};
         int answer = JOptionPane.showOptionDialog(main, "New in this version: " + String.join(" and ", what)
                         + ".\nA short tour of just the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
@@ -401,9 +413,9 @@ final class Tour {
             JLayeredPane layer = root.getLayeredPane();
             // the dim sits under the popup layer: a menu that opens, and the rows that fly as it closes, show over it
             layer.add(dim, JLayeredPane.MODAL_LAYER);
-            // 1.0.38: above every animation in the window - a window's fade-in (DRAG_LAYER), the menu's rows as they fly
-            // (POPUP_LAYER) - so the notice never goes behind one and pops out when it ends (the pilot)
-            layer.add(this, Integer.valueOf(JLayeredPane.POPUP_LAYER + 10));
+            // 1.0.38: above the window's own animations, so the notice never goes behind one and pops out when it ends
+            // (the pilot); but under a menu's wipe (TacticalCombo.GHOST_LAYER), since the menu itself ends in front
+            layer.add(this, NOTICE_LAYER);
             dim.setBounds(0, 0, layer.getWidth(), layer.getHeight());
             if (!place()) {
                 dismiss();

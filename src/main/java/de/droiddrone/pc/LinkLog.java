@@ -33,7 +33,10 @@ public final class LinkLog implements AutoCloseable {
             // channel map known, 1 USB permission pending, 2 denied, 3 camera open); pc_to_fc_ms = half the ping +
             // phone_rc_in_to_out_ms, the stick's way from this PC to the flight controller; glfw_poll_max_ms = the
             // slowest GLFW event pump on the RC thread (a USB plug event re-reads the devices and can hold a tick up)
-            + "phone_rc_write_age_ms,phone_rc_in_to_out_ms,phone_rc_seq,phone_flags,pc_to_fc_ms,glfw_poll_max_ms,event";
+            + "phone_rc_write_age_ms,phone_rc_in_to_out_ms,phone_rc_seq,phone_flags,pc_to_fc_ms,glfw_poll_max_ms,"
+            // record 0x40F6 (phone app pc.31): the worst lateness of the sticks over the link's usual in the last
+            // second, and how many frames the phone dropped as too late (rc.maxLagMs) this session
+            + "stick_lag_max_ms,sticks_dropped_late,event";
     /** A phone state older than this is not shown: the phone has stopped reporting. */
     static final long PHONE_STATE_FRESH_MS = 2500;
 
@@ -93,9 +96,11 @@ public final class LinkLog implements AutoCloseable {
     /** @param glfwPollMaxMs the slowest GLFW event pump lately ({@link JoystickService#getPollMaxMs}), -1 = not measured */
     public synchronized void sample(ControlLink link, boolean radio, boolean rcOutput, int videoFps, short[] channels,
                                     String path, de.droiddrone.pc.video.VideoPipeline.Stats video, long glfwPollMaxMs) throws IOException {
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         FcTelemetry.PhoneState ps = link.getTelemetry().getPhoneState();
         if (ps != null && now - ps.receivedAt() > PHONE_STATE_FRESH_MS) ps = null;
+        FcTelemetry.PhoneRcLag lag = link.getTelemetry().getPhoneRcLag();
+        if (lag != null && now - lag.receivedAt() > PHONE_STATE_FRESH_MS) lag = null;
         int ping = link.getPing();
         long rc = link.getRcFramesSent();
         long telemetry = link.getTelemetryPacketsReceived();
@@ -142,7 +147,8 @@ public final class LinkLog implements AutoCloseable {
                 ps == null || ps.rcWriteAgeMs() < 0 ? "" : ps.rcWriteAgeMs(), ps == null || ps.rcInToOutMs() < 0 ? "" : ps.rcInToOutMs(),
                 ps == null || ps.lastRcSeq() < 0 ? "" : ps.lastRcSeq(), ps == null ? "" : ps.flags(),
                 ps == null || ps.rcInToOutMs() < 0 || ping < 0 ? "" : ping / 2 + ps.rcInToOutMs(),
-                glfwPollMaxMs < 0 ? "" : glfwPollMaxMs, "");
+                glfwPollMaxMs < 0 ? "" : glfwPollMaxMs,
+                lag == null || lag.maxLagMs() < 0 ? "" : lag.maxLagMs(), lag == null ? "" : lag.dropped(), "");
         if (video != null) lastRecovered = video.recovered();
         lastKeyRequests = link.getKeyFrameRequests();
         if (video != null) {

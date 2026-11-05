@@ -87,6 +87,11 @@ public class MainWindow extends JFrame {
     /** The map in its own window (MENU > MAP > Map window, F3), for a second screen: where the drone is and has been. */
     private final de.droiddrone.pc.map.TileCache tileCache = new de.droiddrone.pc.map.TileCache(de.droiddrone.pc.map.TileCache.defaultDir());
     private final de.droiddrone.pc.map.Elevation elevation = new de.droiddrone.pc.map.Elevation();
+    /** Where the camera looks (1.0.39): drawn on the maps, and the STANAG 4609 stream's frame centre and corners. */
+    private final de.droiddrone.pc.CameraView cameraView = new de.droiddrone.pc.CameraView(tileCache);
+    private boolean cameraOnMap;
+    /** The STANAG 4609 stream while it is on and the video runs; null otherwise. */
+    private de.droiddrone.pc.video.StanagStream stanag;
     private MapWindow mapWindow;
     static final String MAP_SOURCE_KEY = "mapSource";
     static final String COORDINATES_KEY = "coordinateFormat";
@@ -127,10 +132,10 @@ public class MainWindow extends JFrame {
         }
     }
     /** The mode this PC asked for (ControlLink.POWER_*); the phone's PHONE_POWER record says what it is in. */
-    private int powerWanted = ControlLink.POWER_NORMAL;
+    private volatile int powerWanted = ControlLink.POWER_NORMAL; // read on the stick thread (sticksPaused)
     private long powerSentAt, powerAskedAt;
     /** The phone said DEEP SLEEP and the link dropped: it sleeps, and this PC keeps quiet (ControlLink.setDormant). */
-    private boolean phoneAsleep;
+    private volatile boolean phoneAsleep;
     /** When the phone went to sleep: its listening windows come every check interval from then on. */
     private long sleepStartAt;
     private int checkIntervalMin = 5;
@@ -149,11 +154,10 @@ public class MainWindow extends JFrame {
     private final JButton toolsButton = Theme.secondaryButton("Tools");
     /** The pilot's pins on the map (Documents\DRAUPNE Link\pins.txt). */
     private de.droiddrone.pc.map.Pins pins;
-    /** In flight the LINK card changes: the connection fields and detail figures fold away, the minimap unfolds. */
+    /** The minimap on the LINK card, under the figures (1.0.39: always there; it no longer takes the fields' place). */
     private final MapView miniMap = new MapView(tileCache);
     /** The pilot's drawings on the map (Documents\DRAUPNE Link\graphics.kml), shared by the map window and the minimap. */
     private de.droiddrone.pc.map.MapGraphics graphics;
-    private Fold fieldsFold, detailsFold, miniFold;
     /** Where videoView normally lives; it moves to fullScreen and back. */
     private JPanel videoHolder;
     private JFrame fullScreen;
@@ -238,9 +242,10 @@ public class MainWindow extends JFrame {
     private final JButton calibrateButton = Theme.secondaryButton("Calibrate");
     /** RC CHECK on the controller card; the boot animation flies a piece of the mark to it. */
     private JButton rcCheckButton;
-    private final JLabel calibrationLabel = Theme.label(" ", Theme.font(Font.BOLD, 12.5f), Theme.MUTED);
-    private final JLabel rcStateLabel = Theme.label(" ", Theme.headingFont(13f), Theme.MUTED);
-    private final JLabel fcStateLabel = Theme.label(" ", Theme.headingFont(13f), Theme.MUTED);
+    // the controller's status lines, beside its name in the card's top row (1.0.39, the pilot): folded, the card is that one row
+    private final JLabel calibrationLabel = Theme.label(" ", Theme.font(Font.BOLD, 11f), Theme.MUTED);
+    private final JLabel rcStateLabel = Theme.label(" ", Theme.headingFont(11f), Theme.MUTED);
+    private final JLabel fcStateLabel = Theme.label(" ", Theme.headingFont(11f), Theme.MUTED);
     private final GimbalView leftGimbal = new GimbalView("Throttle / Yaw", "YAW", "THR");
     private final GimbalView rightGimbal = new GimbalView("Pitch / Roll", "ROLL", "PIT");
     private final ChannelBars channelBars = new ChannelBars();
@@ -254,8 +259,10 @@ public class MainWindow extends JFrame {
         Theme.install();
         boolean firstStart = !java.nio.file.Files.exists(configFile); // nothing has saved settings yet
         MainWindow window = new MainWindow(config, configFile, service);
+        // all in the glass pane's own coordinates, where the animation paints: FlatLaf's glass pane starts under the
+        // title bar (30 px below the layered pane), and measured in the layered pane every piece landed that much too low
         BootReveal.onOpen(window, () -> window.videoView.getParent() == null ? null
-                : SwingUtilities.convertRectangle(window.videoView.getParent(), window.videoView.getBounds(), window.getRootPane().getLayeredPane()),
+                : SwingUtilities.convertRectangle(window.videoView.getParent(), window.videoView.getBounds(), window.getRootPane().getGlassPane()),
                 () -> window.boundsInPane(window.linkCard, window.logCard),       // the D's bars grow into the LINK and LOG cards
                 () -> window.boundsInPane(window.controllerCard));                // its diagonals into the controller card
         window.setVisible(true);
@@ -299,12 +306,15 @@ public class MainWindow extends JFrame {
         this.config = config;
         this.configFile = configFile;
         this.service = service;
+        cameraView.configure(config);
+        cameraOnMap = !"false".equalsIgnoreCase(config.getString(de.droiddrone.pc.CameraView.SHOW_KEY));
         names = new Names(config, this::save);
         nameService = new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
+                if (!confirmEndWhileArmed("Close DRAUPNE Link")) return;
                 shutdown();
             }
         });
@@ -418,23 +428,37 @@ public class MainWindow extends JFrame {
     private JPopupMenu videoMenu() {
         JPopupMenu menu = styledMenu();
         ControlLink.VideoMode videoMode = ControlLink.VideoMode.parse(config.getString(ControlLink.VIDEO_MODE_KEY));
-        menu.add(new MenuRows.ChoiceRow("Video", "SHARP: " + config.getSharpWidth() + "x" + config.getSharpHeight() + ", up to "
-                + config.getSharpBitrateLimitMbps() + " Mbit/s. ROBUST: a small picture, up to 1 Mbit/s, sturdier. AUTO switches by itself",
-                new String[]{"AUTO", "SHARP", "ROBUST"}, videoMode.ordinal(), i -> {
+        // every picture AUTO can switch to is a button of its own too (1.0.39, the pilot), and it takes at once
+        String sharp = config.getSharpWidth() + "x" + config.getSharpHeight() + ", up to " + config.getSharpBitrateLimitMbps() + " Mbit/s";
+        String normal = config.getCameraWidth() + "x" + config.getCameraHeight() + ", up to " + config.getBitrateLimitMbps() + " Mbit/s";
+        // a short line (the long one made the menu half the screen wide, the pilot); what each one is, in the tooltip
+        MenuRows.ChoiceRow videoRow = new MenuRows.ChoiceRow("Video", "AUTO picks by the link",
+                new String[]{"AUTO", "SHARP", "NORMAL", "ROBUST", "SURVIVAL"}, videoMode.ordinal(), i -> {
                     ControlLink.VideoMode m = ControlLink.VideoMode.values()[i];
                     save(Map.of(ControlLink.VIDEO_MODE_KEY, m.name().toLowerCase(java.util.Locale.ROOT)));
                     Connection c = connection;
                     if (c != null) c.getLink().setVideoMode(m);
+                    String when = c == null ? " From the next connection." : "";
                     logLine(switch (m) {
-                        case AUTO -> "Video: the sharp picture after 20 s of calm at the top bitrate, bad coverage mode when the link is weak - by itself.";
-                        case SHARP -> "Video: always the sharp picture - " + config.getSharpWidth() + "x" + config.getSharpHeight() + ", up to "
-                                + config.getSharpBitrateLimitMbps() + " Mbit/s, whatever the link.";
-                        case ROBUST -> "Video: bad coverage mode always - a small picture, up to 1 Mbit/s, key frames sent twice.";
-                    });
-                }));
-        menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;; the OSD stays upright. No delay",
+                        case AUTO -> "Video: AUTO - the sharp picture after 20 s of calm at the top bitrate, bad coverage mode and the survival tier when the link is weak, by itself.";
+                        case SHARP -> "Video: always the sharp picture - " + sharp + ", whatever the link.";
+                        case NORMAL -> "Video: always the normal picture - " + normal + ", whatever the link.";
+                        case ROBUST -> "Video: bad coverage mode always - 640x360, up to 1 Mbit/s, key frames sent twice.";
+                        case SURVIVAL -> "Video: the survival tier always - 480x270 at 15 fps, up to 250 kbit/s.";
+                    } + when);
+                });
+        videoRow.setToolTipText("<html>AUTO switches by itself, by the link.<br>SHARP " + sharp + "<br>NORMAL " + normal
+                + "<br>ROBUST 640x360, up to 1 Mbit/s, key frames twice<br>SURVIVAL 480x270, 15 fps, up to 250 kbit/s<br>A choice takes at once.</html>");
+        menu.add(videoRow);
+        menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;",
                 videoView.isUpsideDown(), this::setUpsideDown));
-        menu.add(new MenuRows.SwitchRow("Record video", "Every flight to Videos\\DRAUPNE Link, as it comes: no extra delay",
+        menu.add(new MenuRows.SwitchRow("Camera view on the map", "The ground the camera sees, on the map and the minimap",
+                cameraOnMap, on -> {
+                    cameraOnMap = on;
+                    save(Map.of(de.droiddrone.pc.CameraView.SHOW_KEY, Boolean.toString(on)));
+                    refreshMap();
+                }));
+        menu.add(new MenuRows.SwitchRow("Record video", "Every flight, to Videos\\DRAUPNE Link",
                 recordVideo, on -> {
                     recordVideo = on;
                     save(Map.of(RECORD_KEY, Boolean.toString(on)));
@@ -448,7 +472,7 @@ public class MainWindow extends JFrame {
                         logLine("Recording stopped.");
                     }
                 }));
-        menu.add(new MenuRows.SwitchRow("Hardware video decoding", "GPU (D3D11VA), next connection. Only for big pictures: slower at 720p",
+        menu.add(new MenuRows.SwitchRow("Hardware video decoding", "GPU, from the next connection",
                 hardwareDecode, on -> {
                     hardwareDecode = on;
                     save(Map.of(HW_DECODE_KEY, Boolean.toString(on)));
@@ -456,11 +480,11 @@ public class MainWindow extends JFrame {
                             : "Software video decoding from the next connection.");
                 }));
         menu.addSeparator();
-        menu.add(new MenuRows.SwitchRow("OSD", "The HUD over the video. F2 switches", videoView.isOsdEnabled(), on -> {
+        menu.add(new MenuRows.SwitchRow("OSD", "The HUD over the video (F2)", videoView.isOsdEnabled(), on -> {
             videoView.setOsdEnabled(on);
             save(Map.of("osd", Boolean.toString(on)));
         }));
-        menu.add(new MenuRows.WindowRow("OSD layout", "Choose the OSD elements and place them, like Betaflight",
+        menu.add(new MenuRows.WindowRow("OSD layout", "Choose and place its elements",
                 () -> OsdSettingsDialog.open(this, this)));
         return menu; // POP OUT VIDEO and FULL SCREEN are buttons on the video card, always in sight
     }
@@ -483,6 +507,21 @@ public class MainWindow extends JFrame {
                 }));
         menu.add(new MenuRows.WindowRow("Name map", "Every phone and PC seen on your Tailscale network: names and addresses, this PC's name, the port and key",
                 this::openNameMap));
+        menu.addSeparator();
+        menu.add(new MenuRows.SwitchRow("STANAG 4609 stream", "Off by default. The video with MISB metadata over UDP, for ATAK, QGIS, VLC ... (the address: settings below)",
+                stanagEnabled(), on -> {
+                    save(Map.of(StanagDialog.ENABLED_KEY, Boolean.toString(on)));
+                    if (!on) {
+                        stopStanag();
+                        logLine("STANAG 4609 stream off.");
+                    } else if (video == null) {
+                        logLine("STANAG 4609 stream: from the next connection, to " + StanagDialog.target(config) + ".");
+                    } else {
+                        startStanag();
+                    }
+                }));
+        menu.add(new MenuRows.WindowRow("STANAG 4609 settings", "Where the stream goes, mission id, country, the camera's angles",
+                this::openStanagSettings));
         return menu;
     }
 
@@ -598,8 +637,22 @@ public class MainWindow extends JFrame {
         return header;
     }
 
+    /**
+     * The log keeps at least LOG_MIN of the link column and the minimap takes what is left, up to MINI_MAX. Short of
+     * room the log gives way, down to LOG_FLOOR, before the minimap shrinks under MINI_MIN; it goes only when even
+     * that does not fit (it went far too soon before, the pilot: "the minimap sometimes disappears").
+     */
+    private static final int LOG_MIN = 180, LOG_FLOOR = 110, MINI_MAX = 190, MINI_MIN = 90, MINI_FLOOR = 64;
+    private int miniHeight = MINI_MAX;
+
     private JComponent buildLinkColumn() {
-        JPanel column = new JPanel(new BorderLayout(0, 14));
+        JPanel column = new JPanel(new BorderLayout(0, 14)) {
+            @Override
+            public void doLayout() {
+                fitMiniMap(getHeight());
+                super.doLayout();
+            }
+        };
         column.setOpaque(false);
         column.setPreferredSize(new Dimension(340, 100));
 
@@ -612,20 +665,6 @@ public class MainWindow extends JFrame {
         c.weightx = 1;
         c.insets = new Insets(0, 0, 6, 0);
         link.add(Theme.sectionTitle("Link"), c);
-        // in flight: the minimap (and the way to the map window) where the connection fields were
-        JPanel mini = new JPanel(new BorderLayout(0, 8));
-        mini.setOpaque(false);
-        miniMap.setPreferredSize(new Dimension(300, 210));
-        miniMap.setToolTipText("Where the drone is. Wheel zooms; right-click adds a pin; POP OUT MAP for the whole map");
-        mini.add(miniMap, BorderLayout.CENTER);
-        JButton popMap = Theme.primaryButton("Pop out map");
-        popMap.setToolTipText("The map in a window of its own, for a second screen (F3)");
-        popMap.addActionListener(e -> toggleMapWindow());
-        mini.add(popMap, BorderLayout.SOUTH);
-        mini.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
-        miniFold = new Fold(mini, false);
-        link.add(miniFold, c);
-
         JPanel fields = new JPanel(new GridBagLayout());
         fields.setOpaque(false);
         fields.add(phoneLabel, c);
@@ -657,13 +696,15 @@ public class MainWindow extends JFrame {
             updatePhoneList(); // phones to fly, or PCs to watch
         });
         fields.add(roleCombo, c);
-        fieldsFold = new Fold(fields, true);
         c.insets = new Insets(0, 0, 0, 0);
-        link.add(fieldsFold, c);
+        link.add(fields, c);
+        linkFields = fields;
         c.insets = new Insets(4, 0, 14, 0);
         connectButton.addActionListener(e -> {
-            if (connection == null) connect(); else disconnect();
+            if (connection == null) connect();
+            else if (confirmEndWhileArmed("Disconnect")) disconnect();
         });
+        connectButton.setFocusable(false); // SPACE on a focused DISCONNECT must never end a flight
         link.add(connectButton, c);
         link.add(powerPanel(), c);
         // the link dropped while the drone was armed: one click opens FIND DRONE and copies the MGRS to send on
@@ -688,9 +729,20 @@ public class MainWindow extends JFrame {
         addStat(details, "PHONE APP", phoneAppValue);
         addStat(details, "TELEMETRY PACKETS", telemetryValue);
         addStat(details, "RC FRAMES SENT", rcSentValue);
-        detailsFold = new Fold(details, true);
         c.insets = new Insets(0, 0, 0, 0);
-        link.add(detailsFold, c);
+        link.add(details, c);
+        // the minimap and the way to the map window, always: connected or not, nothing folds away for it
+        JPanel mini = new JPanel(new BorderLayout(0, 8));
+        mini.setOpaque(false);
+        miniMap.setPreferredSize(new Dimension(300, MINI_MAX));
+        miniMap.setToolTipText("Where the drone is. Wheel zooms; right-click adds a pin; POP OUT MAP for the whole map");
+        mini.add(miniMap, BorderLayout.CENTER);
+        JButton popMap = Theme.primaryButton("Pop out map");
+        popMap.setToolTipText("The map in a window of its own, for a second screen (F3)");
+        popMap.addActionListener(e -> toggleMapWindow());
+        mini.add(popMap, BorderLayout.SOUTH);
+        c.insets = new Insets(10, 0, 0, 0);
+        link.add(mini, c);
         phoneWarning.setVisible(false);
         c.insets = new Insets(8, 0, 0, 0);
         link.add(phoneWarning, c);
@@ -853,6 +905,13 @@ public class MainWindow extends JFrame {
         rcCheckButton.addActionListener(e -> RcCheckDialog.open(this));
         topLeft.add(rcCheckButton);
         top.add(topLeft, BorderLayout.WEST);
+        JPanel states = new JPanel(new GridLayout(3, 1, 0, 0));
+        states.setOpaque(false);
+        states.setBorder(BorderFactory.createEmptyBorder(0, 16, 0, 0));
+        states.add(calibrationLabel);
+        states.add(rcStateLabel);
+        states.add(fcStateLabel);
+        top.add(states, BorderLayout.CENTER);
         minimizeButton.addActionListener(e -> {
             setControllerMinimized(!controllerMinimized, true); // also mid-fold: turns it round
             save(Map.of(MINIMIZED_KEY, Boolean.toString(controllerMinimized)));
@@ -867,22 +926,13 @@ public class MainWindow extends JFrame {
         gimbals.setPreferredSize(new Dimension(440, 262));
         controller.add(gimbals, BorderLayout.WEST);
         gimbalPanel = gimbals;
-        JPanel bars = new JPanel(new BorderLayout(0, 10));
-        bars.setOpaque(false);
-        bars.add(channelBars, BorderLayout.NORTH);
-        JPanel states = new JPanel(new GridLayout(3, 1, 0, 4));
-        states.setOpaque(false);
-        states.add(calibrationLabel);
-        states.add(rcStateLabel);
-        states.add(fcStateLabel);
-        bars.add(states, BorderLayout.SOUTH);
-        controller.add(bars, BorderLayout.CENTER);
+        controller.add(channelBars, BorderLayout.CENTER); // folded away with the sticks: no gap is left for it
         column.add(controller, BorderLayout.SOUTH);
         setControllerMinimized("true".equalsIgnoreCase(config.getString(MINIMIZED_KEY)), false);
         return column;
     }
 
-    /** Minimized: only the controller's name and the status lines stay; the video grows into the space. */
+    /** Minimized: only the top row stays - the controller's name, its buttons and the status lines; the video grows into the space. */
     /**
      * @param animate fold or unfold over CONTROLLER_ANIM_MS (easing out), the video growing or shrinking with it;
      *                the stick boxes shrink or grow with the card, the channel bars are away meanwhile. The video
@@ -1129,6 +1179,7 @@ public class MainWindow extends JFrame {
             if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
             if (video != null && recordVideo) startRecording(video);
+            if (video != null && stanagEnabled()) startStanag();
             videoView.setStatsSource(video == null ? null : video::stats);
         } catch (IOException | RuntimeException e) {
             connection = null;
@@ -1142,7 +1193,13 @@ public class MainWindow extends JFrame {
         session = new RcSession(connection.getLink(), mapper, msg -> SwingUtilities.invokeLater(() -> logLine(msg)),
                 ArmSwitch.parse(config.getString(ArmSwitch.KEY)));
         RcSession s = session;
-        service.setInputListener(state -> s.onInput(sticksPaused() ? null : state)); // STANDBY: as if the radio were gone
+        s.setFrozenStopMs(config.getRadioFrozenStopS() * 1000L);
+        connection.getLink().setMaxStickLagMs(config.getMaxStickLagMs());
+        // STANDBY / DEEP SLEEP: no sticks, and a WAKE starts with the throttle-low rule (not a radio blip's quick resume)
+        service.setInputListener(state -> {
+            if (sticksPaused()) s.onPaused(state); else s.onInput(state);
+        });
+        if (!watch && de.droiddrone.pc.WindowsTuning.keepAwake(true)) logLine("Windows and the screen stay awake while connected.");
         powerWanted = ControlLink.POWER_NORMAL;
         phoneAsleep = false;
         lastState = null;
@@ -1174,6 +1231,7 @@ public class MainWindow extends JFrame {
 
     private void disconnect() {
         service.setInputListener(null);
+        de.droiddrone.pc.WindowsTuning.keepAwake(false);
         powerWanted = ControlLink.POWER_NORMAL;
         phoneAsleep = false;
         if (powerRow != null) powerRow.setVisible(false);
@@ -1186,6 +1244,7 @@ public class MainWindow extends JFrame {
         nameService.resume();
         updateFlightLayout();
         session = null;
+        stopStanag();
         if (video != null) video.close();
         video = null;
         videoView.setStatsSource(null);
@@ -1235,10 +1294,10 @@ public class MainWindow extends JFrame {
     /** The map window and the minimap get the latest position and heading; idle (no link) only once a second. */
     private void refreshMap() {
         MapWindow w = mapWindow != null && mapWindow.isShown() ? mapWindow : null;
-        boolean mini = miniFold != null && miniFold.isShown();
+        boolean mini = miniMap.isShowing();
         if (w == null && !mini) return;
         Connection c = connection;
-        long now = System.currentTimeMillis();
+        long now = de.droiddrone.pc.MonoClock.ms();
         de.droiddrone.pc.FcTelemetry.Gps gps = null;
         int heading = -1;
         boolean fcLost = false, connected = false;
@@ -1255,23 +1314,47 @@ public class MainWindow extends JFrame {
             ControlLink.State state = link.getState();
             connected = state == ControlLink.State.READY || state == ControlLink.State.SPECTATING;
         }
+        de.droiddrone.pc.map.CameraFootprint.View view = null;
+        if (c != null && cameraOnMap && !fcLost) {
+            VideoPipeline v = video;
+            int[] size = v == null ? null : v.pictureSize();
+            if (size != null) cameraView.setPictureSize(size[0], size[1]);
+            view = cameraView.compute(c.getLink().getTelemetry(), track);
+        }
+        if (w != null) w.setCameraView(view);
+        miniMap.setCameraView(view);
         if (w != null) w.update(track, gps, heading, fcLost, connected);
         if (mini) miniMap.update(track, gps, heading, fcLost, connected);
     }
 
     /**
-     * Connected, with the map not popped out: the connection fields and the detail figures fold away and the minimap
-     * unfolds. With the map in its own window (or disconnected) the card has its fields and figures back.
+     * Connected, with the map not popped out: the minimap follows the drone. (Up to 1.0.38 the connection fields and
+     * the detail figures folded away for it; the minimap now has its own place on the LINK card.)
      */
     private void updateFlightLayout() {
-        boolean mini = connection != null && !(mapWindow != null && mapWindow.isShown()); // minimized to the taskbar: not shown
-        fieldsFold.setShown(!mini, true);
-        detailsFold.setShown(!mini, true);
-        miniFold.setShown(mini, true);
-        if (mini) {
+        boolean flying = connection != null && !(mapWindow != null && mapWindow.isShown()); // minimized to the taskbar: not shown
+        if (flying) {
             miniMap.setFollow(true);
             mapIdleUpdatedAt = 0;
         }
+    }
+
+    /**
+     * The minimap's height for a link column this tall: the LINK card's other rows, the gap and the log's LOG_MIN come
+     * first. Too little left and the minimap goes (POP OUT MAP stays) - the log was pushed out of the window otherwise.
+     */
+    private void fitMiniMap(int columnHeight) {
+        if (linkCard == null || columnHeight <= 0) return;
+        int others = linkCard.getPreferredSize().height - (miniMap.isVisible() ? miniHeight : 0);
+        int room = columnHeight - 14 - LOG_MIN - others;
+        int h = Math.min(MINI_MAX, room);
+        if (h < MINI_MIN) h = Math.min(MINI_MIN, columnHeight - 14 - LOG_FLOOR - others); // the log gives way first
+        if (h < MINI_FLOOR) h = 0;
+        if (h == miniHeight && miniMap.isVisible() == (h > 0)) return;
+        miniHeight = h;
+        miniMap.setPreferredSize(new Dimension(300, Math.max(1, h)));
+        miniMap.setVisible(h > 0);
+        linkCard.invalidate();
     }
 
     MapWindow mapWindow() {
@@ -1281,7 +1364,7 @@ public class MainWindow extends JFrame {
             mapWindow.setPreferPhone(preferPhone);
             mapWindow.setOnShownChanged(this::updateFlightLayout);
             mapWindow.bindKey(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_F3, 0), this::toggleMapWindow); // F3 there too
-            // popped out: the LINK card gets its fields and figures back; closed again in flight: the minimap returns
+            // popped out or back: the minimap follows the drone again
             mapWindow.addComponentListener(new java.awt.event.ComponentAdapter() {
                 @Override
                 public void componentShown(java.awt.event.ComponentEvent e) {
@@ -1349,7 +1432,7 @@ public class MainWindow extends JFrame {
 
     /** The link dropped (or the FC went) within a few minutes of the drone being armed: LOST DRONE comes up. */
     private void refreshLostDrone(ControlLink link, ControlLink.State state) {
-        long now = System.currentTimeMillis();
+        long now = de.droiddrone.pc.MonoClock.ms();
         FcTelemetry.Status st = link.getTelemetry().getStatus();
         if (st != null && st.armed() && now - st.receivedAt() < 2000) lastArmedAt = now;
         boolean dropped = !link.isSpectator() && (state != ControlLink.State.READY || link.isFcLost() || link.isLinkStalled());
@@ -1364,7 +1447,14 @@ public class MainWindow extends JFrame {
     /** How long after the last armed report a dropped link still counts as a lost drone. */
     private static final long LOST_DRONE_WINDOW_MS = 10 * 60_000;
 
+    /** The phone list and CONNECT AS: only while not connected (1.0.39, the pilot) - the room goes to the minimap. */
+    private JComponent linkFields;
+
     private void setLinkEditable(boolean editable) {
+        if (linkFields != null && linkFields.isVisible() != editable) {
+            linkFields.setVisible(editable);
+            linkFields.revalidate();
+        }
         phoneCombo.setEnabled(editable);
         roleCombo.setEnabled(editable);
         joystickCombo.setEnabled(editable);
@@ -1372,6 +1462,49 @@ public class MainWindow extends JFrame {
         calibrateButton.setToolTipText(editable ? null : "Locked while connected - disconnect first: RC output must stop while calibrating");
         connectButton.setText(editable ? (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()) ? "WATCH" : "CONNECT") : "DISCONNECT");
         connectButton.setBackground(editable ? Theme.ACCENT : Theme.BAD);
+    }
+
+    private boolean stanagEnabled() {
+        return "true".equalsIgnoreCase(config.getString(StanagDialog.ENABLED_KEY));
+    }
+
+    /**
+     * The STANAG 4609 stream from the video in hand (1.0.39): its own thread, the frames handed over from the video's
+     * receive thread; the KLV built there from the latest telemetry and the camera's view.
+     */
+    private void startStanag() {
+        stopStanag();
+        VideoPipeline v = video;
+        Connection c = connection;
+        if (v == null || c == null) return;
+        ControlLink link = c.getLink();
+        String mission = config.getString(StanagDialog.MISSION_KEY).trim(), country = StanagDialog.country(config);
+        de.droiddrone.pc.video.StanagStream s = new de.droiddrone.pc.video.StanagStream(StanagDialog.target(config),
+                ms -> cameraView.klv(ms, link.getTelemetry(), track, mission, country),
+                msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
+        stanag = s;
+        v.setFrameTap(s);
+        logLine("STANAG 4609 stream on: " + s.url() + ".");
+    }
+
+    private void stopStanag() {
+        de.droiddrone.pc.video.StanagStream s = stanag;
+        if (s == null) return;
+        stanag = null;
+        VideoPipeline v = video;
+        if (v != null) v.setFrameTap(null);
+        s.close();
+    }
+
+    private void openStanagSettings() {
+        new StanagDialog(this, config, m -> {
+            if (!save(m)) return;
+            cameraView.configure(config);
+            logLine("STANAG 4609: " + StanagDialog.target(config) + ", camera " + m.get(de.droiddrone.pc.CameraView.HFOV_KEY)
+                    + " deg across, tilted up " + m.get(de.droiddrone.pc.CameraView.TILT_KEY) + " deg.");
+            if (stanag != null) startStanag(); // the new address / names from now
+            refreshMap();
+        }).setVisible(true);
     }
 
     boolean save(Map<String, String> updates) {
@@ -1527,7 +1660,7 @@ public class MainWindow extends JFrame {
         FcTelemetry.Status fc = connection == null ? null : connection.getLink().getTelemetry().getStatus();
         if (connection != null && connection.getLink().isFcLost()) {
             setLabel(fcStateLabel, "FC: NOT CONNECTED TO THE PHONE - CHECK THE USB DATA CABLE", Theme.BAD);
-        } else if (fc == null || System.currentTimeMillis() - fc.receivedAt() > 3000) {
+        } else if (fc == null || de.droiddrone.pc.MonoClock.ms() - fc.receivedAt() > 3000) {
             setLabel(fcStateLabel, connection == null ? " " : "FC: NO STATUS YET", Theme.MUTED);
         } else if (fc.armed()) {
             setLabel(fcStateLabel, "FC: ARMED" + (fc.activeModes().size() > 1 ? "  ·  " + String.join(" ", fc.activeModes()) : ""), Theme.BAD);
@@ -1737,17 +1870,22 @@ public class MainWindow extends JFrame {
         boolean videoFrozen = v != null && v.hasStream() && sincePicture > VIDEO_FROZEN_MS
                 && (sinceStreamStart < 0 || sinceStreamStart > VIDEO_RESTART_GRACE_MS || sincePicture < sinceStreamStart);
         FcTelemetry.Status st = l.getTelemetry().getStatus();
-        boolean armed = st != null && st.armed() && System.currentTimeMillis() - st.receivedAt() < 2000;
+        boolean armed = st != null && st.armed() && de.droiddrone.pc.MonoClock.ms() - st.receivedAt() < 2000;
         boolean radioFrozen = armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS;
         String banner = !spectator ? null : l.isWatchOnly() ? "SPECTATOR" : "NOT FLYING - SPECTATOR";
         // the phone's own word on the sticks (pc.19+): how long ago its last stick frame reached the FC
         FcTelemetry.PhoneState ps = l.getTelemetry().getPhoneState();
-        long now = System.currentTimeMillis();
+        long now = de.droiddrone.pc.MonoClock.ms();
         int sticksAge = ps == null || now - ps.receivedAt() > 2500 || ps.rcWriteAgeMs() < 0 ? -1
                 : (int) Math.min(65_534, ps.rcWriteAgeMs() + (now - ps.receivedAt()));
         RcSession.Banner resume = s == null ? null : s.lastResumeBanner();
         String liveBanner = resume != null && now - resume.at() < RESUME_BANNER_MS ? resume.text() : null;
         if (liveBanner == null && !spectator && powerWanted == ControlLink.POWER_STANDBY) liveBanner = "STANDBY - PRESS WAKE";
+        if (liveBanner == null && s != null && s.isFrozenStopped()) liveBanner = "RADIO FROZEN - STICKS STOPPED";
+        int lagMs = spectator ? -1 : stickLagMs(l);
+        if (liveBanner == null && lagMs > STICKS_LATE_MS) {
+            liveBanner = String.format(java.util.Locale.ROOT, "STICKS %.1f S LATE", lagMs / 1000.0);
+        }
         return new OsdRenderer.Data(true, ready, l.getPing(), spectator || (s != null && s.isRcEnabled()),
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
                 osdLinkHint(s), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
@@ -1766,6 +1904,15 @@ public class MainWindow extends JFrame {
     private static final long VIDEO_FROZEN_MS = 700;
     /** Armed and not a single bit of the radio's input changed for this long: RADIO FROZEN? */
     private static final long RADIO_FROZEN_MS = 5000;
+    /** The sticks reach the phone this much later than the link's usual (phone app pc.31): STICKS LATE. */
+    private static final int STICKS_LATE_MS = 300;
+
+    /** The worst stick lateness the phone saw in the last second, in a fresh report; -1 = unknown. */
+    private static int stickLagMs(ControlLink link) {
+        FcTelemetry.PhoneRcLag lag = link.getTelemetry().getPhoneRcLag();
+        if (lag == null || de.droiddrone.pc.MonoClock.ms() - lag.receivedAt() > 2500) return -1;
+        return lag.maxLagMs();
+    }
 
     private void startRecording(VideoPipeline v) {
         try {
@@ -1787,8 +1934,13 @@ public class MainWindow extends JFrame {
         if (l.isLinkStalled()) return "LINK STALL";
         if (l.isFcLost()) return "NO FLIGHT CONTROLLER";
         FcTelemetry.Status st = l.getTelemetry().getStatus();
-        if (st != null && System.currentTimeMillis() - st.receivedAt() < 2000
+        if (st != null && de.droiddrone.pc.MonoClock.ms() - st.receivedAt() < 2000
                 && st.blockers().stream().anyMatch(b -> b.osdName().equals("FAILSAFE"))) return "FAILSAFE";
+        // a hung radio that still reports itself: the OSD alone is easy to miss with eyes on the picture
+        RcSession s = session;
+        boolean armed = st != null && st.armed() && de.droiddrone.pc.MonoClock.ms() - st.receivedAt() < 2000;
+        if (armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS) return "RADIO FROZEN";
+        if (stickLagMs(l) > STICKS_LATE_MS) return "STICKS LATE";
         return null;
     }
 
@@ -1872,11 +2024,37 @@ public class MainWindow extends JFrame {
         return powerRow;
     }
 
+    /**
+     * Ending the link stops the sticks, and an armed drone then fails safe: while the FC says armed (or the link is
+     * down right after it did - the drone may still be in the air), ask first, with "keep flying" as the default.
+     * @return true to go on
+     */
+    private boolean confirmEndWhileArmed(String action) {
+        if (connection == null || connection.getLink().isSpectator()) return true;
+        boolean armed = fcArmedNow();
+        // no fresh word from the FC (link down), and it was armed within the lost-drone window: it may still fly
+        FcTelemetry.Status st = connection.getLink().getTelemetry().getStatus();
+        long now = de.droiddrone.pc.MonoClock.ms();
+        boolean fresh = st != null && now - st.receivedAt() < 2000;
+        boolean maybeFlying = !fresh && lastArmedAt != 0 && now - lastArmedAt < LOST_DRONE_WINDOW_MS;
+        if (!armed && !maybeFlying) return true;
+        String[] options = {"Keep flying", action};
+        int choice = JOptionPane.showOptionDialog(this,
+                (armed ? "The drone is ARMED." : "The drone was armed moments ago and may still be in the air.")
+                        + "\n" + action + " stops the sticks: Betaflight's failsafe takes over (GPS rescue, landing or a drop, as set).",
+                action + " while armed?", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
+        if (choice == 1) {
+            logLine(action + " while " + (armed ? "armed" : "possibly flying") + ": confirmed.");
+            return true;
+        }
+        return false;
+    }
+
     /** The FC reported armed within the last two seconds. */
     private boolean fcArmedNow() {
         if (connection == null) return false;
         FcTelemetry.Status st = connection.getLink().getTelemetry().getStatus();
-        return st != null && st.armed() && System.currentTimeMillis() - st.receivedAt() < 2000;
+        return st != null && st.armed() && de.droiddrone.pc.MonoClock.ms() - st.receivedAt() < 2000;
     }
 
     private void askPower(int mode) {
@@ -1888,7 +2066,7 @@ public class MainWindow extends JFrame {
             return;
         }
         powerWanted = mode;
-        powerAskedAt = System.currentTimeMillis();
+        powerAskedAt = de.droiddrone.pc.MonoClock.ms();
         powerSentAt = 0;
         logLine(mode == ControlLink.POWER_STANDBY ? "STANDBY asked: the phone stops its camera and slows down; WAKE brings it back."
                 : "DEEP SLEEP asked: the phone drops the link and sleeps, listening for this PC every " + checkIntervalMin + " min.");
@@ -1897,7 +2075,7 @@ public class MainWindow extends JFrame {
     private void wakePhone() {
         if (demoPower(ControlLink.POWER_NORMAL)) return;
         powerWanted = ControlLink.POWER_NORMAL;
-        powerAskedAt = System.currentTimeMillis();
+        powerAskedAt = de.droiddrone.pc.MonoClock.ms();
         powerSentAt = 0;
         if (connection != null && phoneAsleep) {
             connection.getLink().setDormant(false);
@@ -1909,7 +2087,7 @@ public class MainWindow extends JFrame {
 
     /** Once a refresh while connected: keeps asking until the phone is in the mode wanted, and says where things are. */
     private void refreshPower(ControlLink link) {
-        long now = System.currentTimeMillis();
+        long now = de.droiddrone.pc.MonoClock.ms();
         FcTelemetry.PhonePower pp = link.getTelemetry().getPhonePower();
         int reported = pp == null ? -1 : pp.mode();
         boolean ready = link.getState() == ControlLink.State.READY;
@@ -2096,7 +2274,7 @@ public class MainWindow extends JFrame {
         String newest = de.droiddrone.pc.setup.ApkShare.VERSION;
         String version = t == null ? null : t.getPhoneAppVersion();
         boolean old = t != null && (version != null ? de.droiddrone.pc.setup.UpdateCheck.isNewer(newest, version)
-                : t.phoneAppSilent(System.currentTimeMillis()));
+                : t.phoneAppSilent(de.droiddrone.pc.MonoClock.ms()));
         if (t == null) {
             setLabel(phoneAppValue, "-", Theme.MUTED);
             phoneAppWarned = false;
@@ -2220,13 +2398,13 @@ public class MainWindow extends JFrame {
         return headerPanel;
     }
 
-    /** The controls' bounds in the layered pane, for the boot animation; null while any has no parent yet. */
+    /** The controls' bounds in the glass pane (where the boot animation paints); null while any has no parent yet. */
     private java.awt.Rectangle[] boundsInPane(JComponent... controls) {
         java.awt.Rectangle[] r = new java.awt.Rectangle[controls.length];
         for (int i = 0; i < controls.length; i++) {
             JComponent c = controls[i];
             if (c == null || c.getParent() == null || !c.isShowing()) return null;
-            r[i] = SwingUtilities.convertRectangle(c.getParent(), c.getBounds(), getRootPane().getLayeredPane());
+            r[i] = SwingUtilities.convertRectangle(c.getParent(), c.getBounds(), getRootPane().getGlassPane());
         }
         return r;
     }
@@ -2406,7 +2584,10 @@ public class MainWindow extends JFrame {
     }
 
     private static void setLabel(JLabel label, String text, Color color) {
-        if (!text.equals(label.getText())) label.setText(text);
+        if (!text.equals(label.getText())) {
+            label.setText(text);
+            label.setToolTipText(text.isBlank() ? null : text); // the whole line, when a narrow window cuts it short
+        }
         label.setForeground(color);
     }
 

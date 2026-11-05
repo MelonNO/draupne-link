@@ -34,7 +34,7 @@ public class RcSession {
     /** What the OSD shows for a moment when the sticks went live on an armed drone (see {@link #lastResumeBanner}). */
     public static final String ARMED_RESUME_BANNER = "LINK BACK - ARMED - STICKS LIVE";
 
-    /** A line for the OSD and when it was set (this session's clock: System.currentTimeMillis in the app). */
+    /** A line for the OSD and when it was set (this session's clock: MonoClock.ms in the app). */
     public record Banner(String text, long at) {}
 
     private final ControlLink link;
@@ -50,16 +50,21 @@ public class RcSession {
     private volatile short[] lastChannels;
     /** A joystick state came with the last tick (its mapping may still be incomplete: lastChannels null then). */
     private volatile boolean radioPresent;
-    /** The radio's raw axes last tick, and when they last changed: a live radio always jitters a little. */
+    /** The radio's raw axes and buttons last tick, and when they last changed: a live radio always jitters a little. */
     private float[] lastAxes;
+    private boolean[] lastButtons;
     private volatile long inputChangedAt;
+    /** Armed and the radio's input bit for bit the same this long: stop sending (0 = never, the default). */
+    private volatile long frozenStopMs;
+    /** The sticks are held back because the radio looks frozen (see {@link #setFrozenStopMs}). */
+    private volatile boolean frozenStopped;
     /** When the radio vanished while RC was live; 0 when it didn't (or the window has passed). */
     private long lostAt;
     private volatile Banner banner;
 
     public RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, ArmSwitch armSwitch) {
-        this(link, mapper, events, System::currentTimeMillis, link::sticksWanted,
-                () -> link.getTelemetry().isArmedNow(System.currentTimeMillis(), FC_ARMED_FRESH_MS), armSwitch);
+        this(link, mapper, events, MonoClock::ms, link::sticksWanted,
+                () -> link.getTelemetry().isArmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS), armSwitch);
     }
 
     RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp) {
@@ -82,6 +87,44 @@ public class RcSession {
         this.armSwitch = armSwitch;
     }
 
+    /**
+     * A radio that hangs while it still reports itself sends the same sticks forever, and Betaflight never sees a
+     * loss. With a limit set, an armed drone whose radio input hasn't changed by a single bit for that long gets no
+     * more frames: Betaflight's failsafe (GPS rescue, landing) takes over, and the sticks go out again the moment the
+     * input moves. Off by default: a pilot holding position with the sticks untouched, on a radio without gimbal
+     * jitter, would be cut off.
+     */
+    public void setFrozenStopMs(long ms) {
+        frozenStopMs = Math.max(0, ms);
+    }
+
+    /** The sticks are being held back because the radio looks frozen. */
+    public boolean isFrozenStopped() {
+        return frozenStopped;
+    }
+
+    /**
+     * STANDBY or DEEP SLEEP: no sticks, as asked. Not a lost radio - a WAKE afterwards starts with the throttle-low
+     * (and arm-off) rule like a new link, never with the quick resume a USB blip gets.
+     */
+    public void onPaused(Joystick.State state) {
+        short[] channels = state == null ? null : mapper.map(state.axes(), state.buttons());
+        lastChannels = channels;
+        radioPresent = state != null;
+        noteInput(state, clock.getAsLong());
+        if (rcEnabled) events.accept("Sticks paused (the phone rests) - RC output stops until WAKE and the throttle is low.");
+        rcEnabled = false;
+        frozenStopped = false;
+        lostAt = 0;
+    }
+
+    private void noteInput(Joystick.State state, long now) {
+        if (state == null || lastAxes == null || !java.util.Arrays.equals(state.axes(), lastAxes)
+                || !java.util.Arrays.equals(state.buttons(), lastButtons)) inputChangedAt = now;
+        lastAxes = state == null ? null : state.axes();
+        lastButtons = state == null ? null : state.buttons();
+    }
+
     /** Called on every input tick (the RC rate); sends immediately. state is null when the joystick is gone. */
     public void onInput(Joystick.State state) {
         // judged as the flight controller will see it: channels the radio doesn't carry are padded (see ArmSwitch.on)
@@ -89,8 +132,7 @@ public class RcSession {
         lastChannels = channels;
         radioPresent = state != null;
         long now = clock.getAsLong();
-        if (state == null || lastAxes == null || !java.util.Arrays.equals(state.axes(), lastAxes)) inputChangedAt = now;
-        lastAxes = state == null ? null : state.axes();
+        noteInput(state, now);
         if (!linkUp.getAsBoolean()) {
             if (rcEnabled) events.accept("Link given up - RC output stopped until it is back and the throttle is low.");
             rcEnabled = false;
@@ -120,7 +162,21 @@ public class RcSession {
             }
             if (rcEnabled || !blip) lostAt = 0;
         }
+        if (rcEnabled && frozenHolds(now)) return;
         if (rcEnabled) link.sendRc(channels);
+    }
+
+    /** Whether the frozen-radio limit holds this frame back; says so once each way. */
+    private boolean frozenHolds(long now) {
+        long limit = frozenStopMs;
+        boolean frozen = limit > 0 && inputChangedAt != 0 && now - inputChangedAt > limit && fcArmedNow.getAsBoolean();
+        if (frozen && !frozenStopped) {
+            events.accept("RADIO FROZEN for " + limit / 1000 + " s while armed - sticks stopped, Betaflight's failsafe takes over until the radio moves.");
+        } else if (!frozen && frozenStopped) {
+            events.accept("The radio moves again - sticks sent again.");
+        }
+        frozenStopped = frozen;
+        return frozen;
     }
 
     /**

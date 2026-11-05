@@ -191,12 +191,17 @@ final class PowerMode {
         p.worker.execute(() -> p.apply(mode, intervalMin, from));
     }
 
-    /** The service's timer, once a second while the flight controller reports armed: standby ends by itself. */
+    /**
+     * The service's timer, once a second while the flight controller reports armed: standby ends by itself, and so
+     * does a deep sleep's countdown (pc.31; it went on to close the FC's port).
+     */
     static void fcArmed() {
         PowerMode p = current;
-        if (p == null || p.mode != STANDBY) return;
+        if (p == null || p.mode == NORMAL) return;
         p.worker.execute(() -> {
-            if (p.mode == STANDBY) p.apply(NORMAL, 0, "the flight controller armed");
+            if (p.mode == STANDBY || p.mode == DEEP_SLEEP && p.sleepAt != 0 && !p.asleep && !p.checking) {
+                p.apply(NORMAL, 0, "the flight controller armed");
+            }
         });
     }
 
@@ -248,9 +253,10 @@ final class PowerMode {
 
     private void apply(int wanted, int intervalMin, String from) {
         if (intervalMin > 0) checkIntervalMin = Math.min(255, intervalMin);
+        // pc.31: refused unless the FC is known to be disarmed (FcArmedState: unknown counts as armed)
         if (wanted != NORMAL && service.isFcArmed()) {
             if (mode == NORMAL) {
-                event(name(wanted) + " refused (" + from + "): the flight controller is armed");
+                event(name(wanted) + " refused (" + from + "): the flight controller is " + FcArmedState.name(service.fcArmedState()));
                 burst(); // the PC asks again until it hears the mode back: mode 0 it is
                 return;
             }
@@ -308,6 +314,14 @@ final class PowerMode {
 
     private void fallAsleep() {
         if (mode != DEEP_SLEEP) return;
+        // pc.31: asked again at the end of the countdown - it was only checked when deep sleep was asked for, and the
+        // flight controller's port closes here
+        int armed = service.fcArmedState();
+        if (armed != FcArmedState.DISARMED) {
+            event("Deep sleep refused at the end of its countdown: the flight controller is " + FcArmedState.name(armed));
+            wake("the flight controller is " + FcArmedState.name(armed)); // mode 0 goes back to the PC, as a refusal does
+            return;
+        }
         sleepAt = 0;
         asleep = true;
         nextCheckAt = System.currentTimeMillis() + checkIntervalMin * 60_000L;

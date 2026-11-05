@@ -67,14 +67,14 @@ final class BootReveal extends JComponent {
 
     /**
      * Covers the window before it shows and plays once it is on screen.
-     * @param videoBounds where the video is, in the layered pane's coordinates (the crosshair flies to its middle);
+     * @param videoBounds where the video is, in the glass pane's coordinates (the crosshair flies to its middle);
      *                    null for the window's middle
      */
     static void onOpen(JFrame window, Supplier<Rectangle> videoBounds) {
         onOpen(window, videoBounds, null, null);
     }
 
-    /** @param rightTargets  the two cards on the left the D's bars become; bottomTargets the card(s) at the bottom for its diagonals */
+    /** @param rightTargets  the two cards on the left the D's bars become; bottomTargets the card(s) at the bottom for its diagonals (glass pane coordinates too) */
     static void onOpen(JFrame window, Supplier<Rectangle> videoBounds, Supplier<Rectangle[]> rightTargets, Supplier<Rectangle[]> bottomTargets) {
         BootReveal reveal = new BootReveal(videoBounds, rightTargets, bottomTargets);
         // the cover is the root pane's glass pane: the root pane's own layout sizes it with the window on every

@@ -92,7 +92,7 @@ final class MapDownloadDialog extends JDialog {
         picture.addItem(ALL);
         for (TileSource s : TileSource.values()) picture.addItem(s.title);
         TacticalCombo.install(picture);
-        picture.setToolTipText("Which map types to save: all four, one after another, or one. OpenStreetMap is fetched one tile at a time: keep its areas small");
+        picture.setToolTipText("Which map types to save: all of them, one after another, or one. OpenStreetMap and the world topo map are fetched one tile at a time: keep their areas small");
         picture.addActionListener(e -> {
             if (!settingUp) count();
         });
@@ -199,13 +199,13 @@ final class MapDownloadDialog extends JDialog {
                 || TileSource.inNorway((a[0] + a[1]) / 2, (a[2] + a[3]) / 2);
     }
 
-    /** The map types chosen: all four (without Kartverket outside Norway), or the one. */
+    /** The map types chosen: all (Kartverket in Norway, the world topo map outside it), or the one. */
     private List<TileSource> sources() {
         int i = picture.getSelectedIndex();
         if (i > 0) return List.of(TileSource.values()[i - 1]);
         List<TileSource> all = new ArrayList<>();
         boolean norway = touchesNorway(area);
-        for (TileSource s : TileSource.values()) if (norway || !s.norwayOnly) all.add(s);
+        for (TileSource s : TileSource.values()) if (norway ? s != TileSource.WORLD_TOPO : !s.norwayOnly) all.add(s);
         return all;
     }
 
@@ -220,7 +220,7 @@ final class MapDownloadDialog extends JDialog {
         }
         List<TileSource> sources = sources();
         long n = TileCache.count(sources, from, to, area[0], area[1], area[2], area[3]);
-        boolean kartverketOut = picture.getSelectedIndex() == 0 && sources.size() < TileSource.values().length;
+        boolean kartverketOut = picture.getSelectedIndex() == 0 && !touchesNorway(area);
         tilesValue.setText(String.format(Locale.ROOT, "%,d  (ABOUT %s, %s)%s", n, sizeText(n * KB_PER_TILE), timeText(n), kartverketOut ? "   NO KARTVERKET" : ""));
         boolean aLot = n > TileCache.MAX_DOWNLOAD;
         tilesValue.setForeground(aLot ? Theme.WARN : Theme.TEXT);

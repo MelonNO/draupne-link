@@ -162,7 +162,7 @@ class FcTelemetryTest {
         o.write(betaflightPacket(0, 0)); // what follows is still read
         FcTelemetry t = new FcTelemetry();
         assertNull(t.getPhoneState());
-        long before = System.currentTimeMillis();
+        long before = MonoClock.ms(); // the clock receivedAt is stamped with
         t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
         FcTelemetry.PhoneState s = t.getPhoneState();
         assertNotNull(s);
@@ -205,7 +205,7 @@ class FcTelemetryTest {
         o.write(betaflightPacket(0, 0)); // what follows is still read
         FcTelemetry t = new FcTelemetry();
         assertNull(t.getPhonePower(), "an app older than pc.21 never sends one");
-        long before = System.currentTimeMillis();
+        long before = MonoClock.ms(); // the clock receivedAt is stamped with
         t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
         FcTelemetry.PhonePower p = t.getPhonePower();
         assertNotNull(p);
@@ -256,8 +256,13 @@ class FcTelemetryTest {
         t.parse(new DataReader(betaflightPacket(0, 0b10), true), BETAFLIGHT);
         assertFalse(t.isArmedNow(System.currentTimeMillis(), 2000), "disarmed");
         t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
+        assertFalse(t.isArmedNow(System.currentTimeMillis(), 2000), "one report alone: it may be an old one let go late");
+        t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
         assertTrue(t.isArmedNow(System.currentTimeMillis(), 2000));
         assertFalse(t.isArmedNow(System.currentTimeMillis() + 2001, 2000), "too old to say: the link may have been down since");
+        t.parse(new DataReader(betaflightPacket(0, 0b10), true), BETAFLIGHT);
+        t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
+        assertFalse(t.isArmedNow(System.currentTimeMillis(), 2000), "a disarm in between starts the count over");
     }
 
     @Test

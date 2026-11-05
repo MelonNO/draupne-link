@@ -104,9 +104,10 @@ class ElevationAndPrefetchTest {
     void oneDownloadTakesEveryPictureToItsOwnDeepestLevel(@TempDir Path dir) throws Exception {
         double minLat = 59.910, maxLat = 59.918, minLon = 10.745, maxLon = 10.760;
         List<TileSource> all = List.of(TileSource.values());
+        long each17 = TileCache.count(2, 17, minLat, maxLat, minLon, maxLon);
         long each18 = TileCache.count(2, 18, minLat, maxLat, minLon, maxLon), each19 = TileCache.count(2, 19, minLat, maxLat, minLon, maxLon);
-        assertEquals(2 * each18 + 2 * each19, TileCache.count(all, 2, 19, minLat, maxLat, minLon, maxLon),
-                "Kartverket's two pictures stop at 18, satellite and OpenStreetMap go to 19");
+        assertEquals(each17 + 2 * each18 + 2 * each19, TileCache.count(all, 2, 19, minLat, maxLat, minLon, maxLon),
+                "the world topo map stops at 17, Kartverket's two pictures at 18, satellite and OpenStreetMap go to 19");
         assertTrue(each19 > each18);
 
         // the saved tile of one picture doesn't count for another

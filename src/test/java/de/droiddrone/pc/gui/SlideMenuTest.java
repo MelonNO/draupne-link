@@ -33,4 +33,11 @@ class SlideMenuTest {
         assertTrue(menu.itemX(b) > menu.itemX(a) && menu.itemX(b) + b.getWidth() <= main.getX(), "in order, left of MENU");
         assertTrue(menu.isOpen());
     }
+
+    @Test
+    void aMenusWipeIsInFrontOfTheToursNoticeLikeTheMenuItself() {
+        // the pilot (1.0.39): the wipe went behind the tour's notice and jumped in front when the menu took over
+        assertTrue(TacticalCombo.GHOST_LAYER > Tour.NOTICE_LAYER, "the wipe over the notice");
+        assertFalse(TacticalCombo.menu().isLightWeightPopupEnabled(), "the menu a window of its own: over the notice too");
+    }
 }

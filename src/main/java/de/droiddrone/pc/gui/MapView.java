@@ -1,9 +1,11 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.FcTelemetry;
+import de.droiddrone.pc.map.CameraFootprint;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.MapGraphics;
 import de.droiddrone.pc.map.Mercator;
+import de.droiddrone.pc.map.RadioHorizon;
 import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
 import de.droiddrone.pc.map.TileSource;
@@ -91,7 +93,25 @@ class MapView extends JComponent {
     private Pins pins;
 
     // ---- MAP TOOLS (1.0.35): what the pilot draws
-    enum Tool { NONE, RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX, ERASER }
+    enum Tool { NONE, RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX, ERASER, HORIZON, SEARCH }
+
+    /**
+     * RADIO HORIZON (1.0.39): the one mast placed with the tool, what it reaches (null while loading), and a status line.
+     * It stays on the map when the tool ends, until the cross on its label is clicked (the GCS SEARCH too).
+     */
+    private MapGraphics.LatLon horizonMast;
+    private RadioHorizon.Result horizon;
+    private Path2D horizonShape; // the seen stretches in zoom-0 world pixels, made once per result
+    private String horizonStatus;
+    private Consumer<MapGraphics.LatLon> onHorizonMast;
+    /** GCS SEARCH (1.0.39): the wanted area {minLat, maxLat, minLon, maxLon}, the heat map over it (null while working). */
+    private double[] searchArea;
+    private RadioHorizon.Search search;
+    private BufferedImage searchImage; // one pixel per cell, made once per result
+    /** The crosses on the two labels (where they were last painted): a click there takes the result off the map. */
+    private Rectangle horizonCross, searchCross;
+    private String searchStatus;
+    private Consumer<double[]> onSearchArea;
 
     private MapGraphics graphics;
     private Tool tool = Tool.NONE;
@@ -118,6 +138,8 @@ class MapView extends JComponent {
     /** The + and - buttons, drawn on the map (top right); set while painting. */
     private Rectangle zoomInButton = new Rectangle(), zoomOutButton = new Rectangle();
     private int headingDeg = -1;
+    /** What the camera sees of the ground (1.0.39), drawn under the drone; null for none. */
+    private CameraFootprint.View cameraView;
     private boolean fcLost;
     private boolean connected;
 
@@ -130,6 +152,12 @@ class MapView extends JComponent {
         MouseAdapter mouse = new MouseAdapter() {
             @Override
             public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isLeftMouseButton(e) && crossAt(e.getPoint())) {
+                    crossPressed = true;
+                    dragged = false; // a box dragged just before must not swallow the click
+                    return;
+                }
+                crossPressed = false;
                 if (SwingUtilities.isRightMouseButton(e)) {
                     if (moving != null) { // the point goes back where it was
                         cancelMoving();
@@ -147,7 +175,7 @@ class MapView extends JComponent {
                     return;
                 }
                 dragged = false;
-                if ((tool == Tool.AREA || tool == Tool.EXPORT_BOX) && SwingUtilities.isLeftMouseButton(e)) {
+                if ((tool == Tool.AREA || tool == Tool.EXPORT_BOX || tool == Tool.SEARCH) && SwingUtilities.isLeftMouseButton(e)) {
                     selectStart = selectEnd = e.getPoint(); // the rectangle to draw, or the box to export
                     return;
                 }
@@ -182,12 +210,13 @@ class MapView extends JComponent {
 
             @Override
             public void mouseReleased(MouseEvent e) {
+                if (crossPressed) return;
                 dragStart = null;
                 if (selectStart == null) return;
                 Rectangle box = selection();
                 selectStart = selectEnd = null;
                 repaint();
-                if (tool == Tool.AREA || tool == Tool.EXPORT_BOX) {
+                if (tool == Tool.AREA || tool == Tool.EXPORT_BOX || tool == Tool.SEARCH) {
                     boxToolDone(box);
                     return;
                 }
@@ -200,12 +229,26 @@ class MapView extends JComponent {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (!SwingUtilities.isLeftMouseButton(e) || dragged) return;
+                if (crossPressed) { // the cross was pressed: that result goes, nothing else happens
+                    crossPressed = false;
+                    if (horizonCross != null && horizonCross.contains(e.getPoint())) clearHorizon();
+                    else if (searchCross != null && searchCross.contains(e.getPoint())) clearSearch();
+                    repaint();
+                    return;
+                }
                 if (moving != null) { // the point picked up is dropped here
                     dropMoving();
                     return;
                 }
                 if (tool == Tool.ERASER) {
                     eraseAt(e.getX(), e.getY());
+                    return;
+                }
+                if (tool == Tool.HORIZON) { // the mast goes here; a second click moves it (one at a time)
+                    double[] ll = toLatLon(e.getX(), e.getY());
+                    horizonMast = new MapGraphics.LatLon(ll[0], ll[1]);
+                    setHorizon(null, "Loading the terrain...");
+                    if (onHorizonMast != null) onHorizonMast.accept(horizonMast);
                     return;
                 }
                 if (tool == Tool.RULER || tool == Tool.LINE || tool == Tool.ARROW || tool == Tool.SYMBOL) {
@@ -452,9 +495,9 @@ class MapView extends JComponent {
     }
 
     TileSource effectiveSource() {
-        if (chosen != null) return chosen;
         FlightTrack.Point p = track == null ? null : track.last();
-        return p != null ? TileSource.forPosition(p.lat(), p.lon()) : TileSource.forPosition(centerLat, centerLon);
+        double lat = p != null ? p.lat() : centerLat, lon = p != null ? p.lon() : centerLon;
+        return chosen != null ? chosen.at(lat, lon) : TileSource.forPosition(lat, lon);
     }
 
     double zoom() {
@@ -725,6 +768,156 @@ class MapView extends JComponent {
         if (tool == Tool.SYMBOL) repaint();
     }
 
+    /** Told where the RADIO HORIZON's mast was put, and null when it went with the tool. */
+    void setOnHorizonMast(Consumer<MapGraphics.LatLon> listener) {
+        onHorizonMast = listener;
+    }
+
+    MapGraphics.LatLon horizonMast() {
+        return horizonMast;
+    }
+
+    RadioHorizon.Result horizon() {
+        return horizon;
+    }
+
+    /** What the mast reaches (null: not yet), and the line shown under the mast (null: none). */
+    void setHorizon(RadioHorizon.Result result, String status) {
+        horizonStatus = status;
+        if (result != horizon) {
+            horizon = result;
+            horizonShape = result == null ? null : horizonShape(result);
+        }
+        repaint();
+    }
+
+    private boolean crossPressed;
+    /** The radio horizon, the GCS search and the ruler's measurement on the map: only while MAP TOOLS' TOOLS list is out (hidden, not cleared). */
+    private boolean toolOverlaysShown = true;
+
+    void setToolOverlaysShown(boolean shown) {
+        if (toolOverlaysShown == shown) return;
+        toolOverlaysShown = shown;
+        if (!shown) { // not painted: their crosses take no clicks
+            horizonCross = null;
+            searchCross = null;
+        }
+        repaint();
+    }
+
+    boolean toolOverlaysShown() {
+        return toolOverlaysShown;
+    }
+
+    private boolean crossAt(Point p) {
+        return (horizonCross != null && horizonCross.contains(p)) || (searchCross != null && searchCross.contains(p));
+    }
+
+    /** Where the crosses are (null: not shown), for tests. */
+    Rectangle horizonCross() {
+        return horizonCross;
+    }
+
+    Rectangle searchCross() {
+        return searchCross;
+    }
+
+    /** The cross on the radio horizon's label: the mast and what it reaches go, and the window is told (null). */
+    void clearHorizon() {
+        boolean had = horizonMast != null;
+        horizonMast = null;
+        horizon = null;
+        horizonShape = null;
+        horizonStatus = null;
+        horizonCross = null;
+        repaint();
+        if (had && onHorizonMast != null) onHorizonMast.accept(null);
+    }
+
+    /** Told the GCS SEARCH's wanted area {minLat, maxLat, minLon, maxLon}, and null when it went with the tool. */
+    void setOnSearchArea(Consumer<double[]> listener) {
+        onSearchArea = listener;
+    }
+
+    double[] searchArea() {
+        return searchArea;
+    }
+
+    RadioHorizon.Search search() {
+        return search;
+    }
+
+    /** The heat map (null: not yet) and the line shown over the wanted area (null: none). */
+    void setSearch(RadioHorizon.Search result, String status) {
+        searchStatus = status;
+        if (result != search) {
+            search = result;
+            searchImage = result == null ? null : searchImage(result);
+        }
+        repaint();
+    }
+
+    /** The cross on the GCS SEARCH's label: the heat map and the area go, and the window is told (null). */
+    void clearSearch() {
+        boolean had = searchArea != null;
+        searchArea = null;
+        search = null;
+        searchImage = null;
+        searchStatus = null;
+        searchCross = null;
+        repaint();
+        if (had && onSearchArea != null) onSearchArea.accept(null);
+    }
+
+    static final int SEARCH_BUCKETS = 11; // 0 %, 10 % ... 100 %
+
+    /** The heat map as a picture, a pixel per cell (row 0 north), see-through outside the 30 km circle. */
+    private static BufferedImage searchImage(RadioHorizon.Search r) {
+        BufferedImage img = new BufferedImage(r.size(), r.size(), BufferedImage.TYPE_INT_ARGB);
+        int[] colours = new int[SEARCH_BUCKETS];
+        for (int i = 0; i < SEARCH_BUCKETS; i++) colours[i] = searchColour(i / (double) (SEARCH_BUCKETS - 1)).getRGB();
+        for (int cy = 0; cy < r.size(); cy++) {
+            for (int cx = 0; cx < r.size(); cx++) {
+                float v = r.at(cx, cy);
+                if (!Float.isNaN(v)) img.setRGB(cx, cy, colours[Math.round(v * (SEARCH_BUCKETS - 1))]);
+            }
+        }
+        return img;
+    }
+
+    /** Red (no point of the area sees a mast there) through yellow to green (every point does). */
+    static Color searchColour(double v) {
+        Color bad = new Color(227, 27, 35), mid = new Color(252, 212, 5), good = new Color(46, 204, 64);
+        Color a = v < 0.5 ? bad : mid, b = v < 0.5 ? mid : good;
+        double t = v < 0.5 ? v * 2 : (v - 0.5) * 2;
+        return new Color((int) Math.round(a.getRed() + (b.getRed() - a.getRed()) * t), (int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * t),
+                (int) Math.round(a.getBlue() + (b.getBlue() - a.getBlue()) * t), 110);
+    }
+
+    /** One quad per seen stretch, a degree wide, in zoom-0 world pixels (painted through a transform at any zoom). */
+    private static Path2D horizonShape(RadioHorizon.Result r) {
+        Path2D path = new Path2D.Double(Path2D.WIND_NON_ZERO);
+        for (int b = 0; b < r.spans().length; b++) {
+            float[] s = r.spans()[b];
+            for (int i = 0; i + 1 < s.length; i += 2) {
+                double[] a = worldAt(r, b - 0.5, s[i]), c = worldAt(r, b + 0.5, s[i]);
+                double[] d = worldAt(r, b + 0.5, s[i + 1]), e = worldAt(r, b - 0.5, s[i + 1]);
+                path.moveTo(a[0], a[1]);
+                path.lineTo(c[0], c[1]);
+                path.lineTo(d[0], d[1]);
+                path.lineTo(e[0], e[1]);
+                path.closePath();
+            }
+        }
+        return path;
+    }
+
+    /** The zoom-0 world pixel distM from the mast on a bearing. */
+    private static double[] worldAt(RadioHorizon.Result r, double bearingDeg, double distM) {
+        double[] ll = RadioHorizon.destination(r.lat(), r.lon(), bearingDeg, distM);
+        return new double[]{Mercator.x(ll[1], 0), Mercator.y(ll[0], 0)};
+    }
+
     /** Called when a tool starts or ends, or the measurement comes or goes (the panel lights its buttons). */
     void setOnToolChanged(Runnable listener) {
         onToolChanged = listener;
@@ -832,6 +1025,13 @@ class MapView extends JComponent {
 
     /** The rectangle drawn, or the box to export. */
     private void boxToolDone(Rectangle box) {
+        if (tool == Tool.SEARCH) { // the wanted area: the heat map is worked out round it; a new box replaces it, the tool stays
+            if (box.width < 8 || box.height < 8) return;
+            searchArea = area(box);
+            setSearch(null, "Loading the terrain...");
+            if (onSearchArea != null) onSearchArea.accept(searchArea);
+            return;
+        }
         if (box.width < 8 || box.height < 8) {
             cancelTool();
             return;
@@ -879,7 +1079,7 @@ class MapView extends JComponent {
     MapGraphics.Item itemAt(int x, int y) {
         if (graphics == null) return null;
         List<MapGraphics.Item> items = graphics.list();
-        if (measurement != null) items.add(measurement);
+        if (measurement != null && toolOverlaysShown) items.add(measurement); // hidden with TOOLS: not picked either
         double[] v = view();
         int zi = (int) v[0];
         for (MapGraphics.Item it : items) {
@@ -918,7 +1118,7 @@ class MapView extends JComponent {
     private boolean pickUpAt(int x, int y) {
         if (graphics == null) return false;
         List<MapGraphics.Item> items = graphics.list();
-        if (measurement != null) items.add(measurement);
+        if (measurement != null && toolOverlaysShown) items.add(measurement); // hidden with TOOLS: not picked either
         double[] v = view();
         for (MapGraphics.Item it : items) {
             List<MapGraphics.LatLon> pts = it.points();
@@ -992,6 +1192,131 @@ class MapView extends JComponent {
 
     // ---- painting the tools
 
+    /** Blue, not green: it reads over the GCS SEARCH's red - yellow - green heat map (the pilot: both at the same time). */
+    private static final Color HORIZON_SEEN = new Color(30, 144, 255, 120);
+
+    /** GCS SEARCH: the heat map, the 30 km circle round the area's centre, the area's box, the best place. */
+    private void paintSearch(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            if (searchImage != null) { // the grid's outer corners on screen; cells stay sharp (nearest neighbour)
+                double half = search.size() / 2.0 * RadioHorizon.SEARCH_CELL_M;
+                double dLat = half / 111_320.0, dLon = half / (111_320.0 * Math.cos(Math.toRadians(search.lat())));
+                Point2D tl = toScreen(search.lat() + dLat, search.lon() - dLon, zi, scale, wcx, wcy, w, h);
+                Point2D br = toScreen(search.lat() - dLat, search.lon() + dLon, zi, scale, wcx, wcy, w, h);
+                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                g.drawImage(searchImage, (int) Math.round(tl.getX()), (int) Math.round(tl.getY()), (int) Math.round(br.getX()),
+                        (int) Math.round(br.getY()), 0, 0, searchImage.getWidth(), searchImage.getHeight(), null);
+            }
+            double cLat = (searchArea[0] + searchArea[1]) / 2, cLon = (searchArea[2] + searchArea[3]) / 2;
+            Point2D c = toScreen(cLat, cLon, zi, scale, wcx, wcy, w, h);
+            double pxPerM = scale / Mercator.metersPerPixel(cLat, zi);
+            double r = RadioHorizon.MAX_RANGE_M * pxPerM;
+            g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 10f, new float[]{8f, 6f}, 0f));
+            g.setColor(Theme.ACCENT);
+            g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
+            Point2D nw = toScreen(searchArea[1], searchArea[2], zi, scale, wcx, wcy, w, h);
+            Point2D se = toScreen(searchArea[0], searchArea[3], zi, scale, wcx, wcy, w, h);
+            g.setStroke(new BasicStroke(2f));
+            g.setColor(Color.WHITE);
+            g.draw(new Rectangle((int) Math.round(nw.getX()), (int) Math.round(nw.getY()),
+                    (int) Math.round(se.getX() - nw.getX()), (int) Math.round(se.getY() - nw.getY())));
+            int labelY = (int) Math.round(se.getY()) + 4;
+            if (search != null) { // the best place: a ring and its share
+                Point2D b = toScreen(search.bestLat(), search.bestLon(), zi, scale, wcx, wcy, w, h);
+                int bx = (int) Math.round(b.getX()), by = (int) Math.round(b.getY());
+                g.setStroke(new BasicStroke(3f));
+                g.setColor(Color.BLACK);
+                g.drawOval(bx - 9, by - 9, 18, 18);
+                g.setStroke(new BasicStroke(2f));
+                g.setColor(Color.WHITE);
+                g.drawOval(bx - 9, by - 9, 18, 18);
+                g.drawLine(bx - 13, by, bx - 5, by);
+                g.drawLine(bx + 5, by, bx + 13, by);
+                g.drawLine(bx, by - 13, bx, by - 5);
+                g.drawLine(bx, by + 5, bx, by + 13);
+                label(g, "BEST " + Math.round(search.bestScore() * 100) + " %", bx, by + 16);
+            }
+            searchCross = labelWithCross(g, searchStatus != null ? searchStatus : "GCS SEARCH", (int) Math.round((nw.getX() + se.getX()) / 2), labelY);
+        } finally {
+            g.dispose();
+        }
+    }
+
+    /** A line of text on a dark box, centred on x, from y down. */
+    private static void label(Graphics2D g, String text, int x, int y) {
+        g.setFont(Theme.headingFont(11f));
+        FontMetrics fm = g.getFontMetrics();
+        int tw = fm.stringWidth(text) + 10;
+        g.setColor(new Color(10, 10, 10, 215));
+        g.fillRect(x - tw / 2, y, tw, fm.getHeight() + 2);
+        g.setColor(Theme.TEXT);
+        g.drawString(text, x - tw / 2 + 5, y + 1 + fm.getAscent());
+    }
+
+    /** The label with a cross at its right end (in the accent colour, like the tour's EXIT); the cross's box. */
+    private static Rectangle labelWithCross(Graphics2D g, String text, int x, int y) {
+        g.setFont(Theme.headingFont(11f));
+        FontMetrics fm = g.getFontMetrics();
+        int bh = fm.getHeight() + 2, tw = fm.stringWidth(text) + 10, all = tw + bh;
+        int x0 = x - all / 2;
+        g.setColor(new Color(10, 10, 10, 215));
+        g.fillRect(x0, y, all, bh);
+        g.setColor(Theme.TEXT);
+        g.drawString(text, x0 + 5, y + 1 + fm.getAscent());
+        Rectangle cross = new Rectangle(x0 + tw, y, bh, bh);
+        g.setColor(Theme.ACCENT);
+        g.fillRect(cross.x, cross.y, cross.width, cross.height);
+        g.setColor(Color.WHITE);
+        g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        int m = 5;
+        g.drawLine(cross.x + m, cross.y + m, cross.x + cross.width - m, cross.y + cross.height - m);
+        g.drawLine(cross.x + cross.width - m, cross.y + m, cross.x + m, cross.y + cross.height - m);
+        return cross;
+    }
+
+    /** RADIO HORIZON: the seen ground blue, the 30 km limit and the smooth-earth horizon as dashed rings, the mast. */
+    private void paintHorizon(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            if (horizonShape != null) {
+                double k = Math.pow(2, zi) * scale;
+                AffineTransform t = new AffineTransform();
+                t.translate(w / 2.0 - wcx * scale, h / 2.0 - wcy * scale);
+                t.scale(k, k);
+                // no antialiasing: the quads' shared edges would show as seams
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
+                g.setColor(HORIZON_SEEN);
+                g.fill(t.createTransformedShape(horizonShape));
+                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            }
+            Point2D c = toScreen(horizonMast.lat(), horizonMast.lon(), zi, scale, wcx, wcy, w, h);
+            double pxPerM = scale / Mercator.metersPerPixel(horizonMast.lat(), zi);
+            g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 10f, new float[]{8f, 6f}, 0f));
+            g.setColor(Theme.ACCENT);
+            double r = RadioHorizon.MAX_RANGE_M * pxPerM;
+            g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
+            if (horizon != null && horizon.smoothEarthM() < RadioHorizon.MAX_RANGE_M) {
+                double rs = horizon.smoothEarthM() * pxPerM;
+                g.setColor(Theme.TEXT);
+                g.draw(new Ellipse2D.Double(c.getX() - rs, c.getY() - rs, 2 * rs, 2 * rs));
+            }
+            // the mast: a tower with its waves
+            int x = (int) Math.round(c.getX()), y = (int) Math.round(c.getY());
+            g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(Color.BLACK);
+            g.fillOval(x - 4, y - 4, 8, 8);
+            g.setColor(Theme.ACCENT);
+            g.drawLine(x, y, x - 6, y + 12);
+            g.drawLine(x, y, x + 6, y + 12);
+            g.drawLine(x, y - 14, x, y);
+            g.drawArc(x - 7, y - 21, 14, 14, -30, 240);
+            horizonCross = labelWithCross(g, horizonStatus != null ? horizonStatus : "RADIO HORIZON", x, y + 16);
+        } finally {
+            g.dispose();
+        }
+    }
+
     private void paintGraphics(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
         if (graphics != null) {
             for (MapGraphics.Item it : graphics.list()) {
@@ -999,7 +1324,7 @@ class MapView extends JComponent {
                 paintItem(g, it, false, zi, scale, wcx, wcy, w, h);
             }
         }
-        if (measurement != null && measurement != moving) paintItem(g, measurement, false, zi, scale, wcx, wcy, w, h);
+        if (measurement != null && measurement != moving && toolOverlaysShown) paintItem(g, measurement, false, zi, scale, wcx, wcy, w, h);
         if (movingLive != null) paintItem(g, movingLive, false, zi, scale, wcx, wcy, w, h);
         if (tool == Tool.NONE || forPicture) return;
         // what is being drawn, with the rubber band to the cursor
@@ -1141,6 +1466,8 @@ class MapView extends JComponent {
             double scale = Math.pow(2, zoom - zi);
             double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
             paintTiles(g, src, zi, scale, wcx, wcy, w, h);
+            if (searchArea != null && !forPicture && toolOverlaysShown) paintSearch(g, zi, scale, wcx, wcy, w, h);
+            if (horizonMast != null && !forPicture && toolOverlaysShown) paintHorizon(g, zi, scale, wcx, wcy, w, h); // over the heat map
 
             List<FlightTrack.Point> pts = track == null ? List.of() : track.points();
             FlightTrack.Point home = track == null ? null : track.home();
@@ -1151,6 +1478,7 @@ class MapView extends JComponent {
             FlightTrack.Point last = pts.isEmpty() ? null : pts.get(pts.size() - 1);
             if (pins != null) paintPins(g, last, home, zi, scale, wcx, wcy, w, h);
             paintGraphics(g, zi, scale, wcx, wcy, w, h);
+            if (cameraView != null && !forPicture && connected) paintCameraView(g, zi, scale, wcx, wcy, w, h);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
             else if (!forPicture) paintNoPosition(g, w, h);
 
@@ -1370,6 +1698,45 @@ class MapView extends JComponent {
         g.setStroke(new BasicStroke(1.2f));
         g.setColor(new Color(255, 255, 255, 150));
         g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
+    }
+
+    /** The camera's view on the map (null takes it away): the next repaint shows it. */
+    void setCameraView(CameraFootprint.View view) {
+        cameraView = view;
+    }
+
+    /**
+     * The camera's view: the ground it sees, pale over the map, its edge, and a line from the drone to where the
+     * picture's centre lands (a cross there). Ground out of the camera's reach ends at CameraFootprint.MAX_RANGE_M.
+     */
+    private void paintCameraView(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+        CameraFootprint.View v = cameraView;
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            Path2D shape = new Path2D.Double();
+            for (double[] ll : v.outline()) {
+                Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                if (shape.getCurrentPoint() == null) shape.moveTo(p.getX(), p.getY());
+                else shape.lineTo(p.getX(), p.getY());
+            }
+            shape.closePath();
+            g.setColor(new Color(255, 236, 160, 46));
+            g.fill(shape);
+            g.setColor(new Color(255, 236, 160, 200));
+            g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.draw(shape);
+            if (v.centre() != null) {
+                Point2D d = toScreen(v.pose().lat(), v.pose().lon(), zi, scale, wcx, wcy, w, h);
+                Point2D c = toScreen(v.centre()[0], v.centre()[1], zi, scale, wcx, wcy, w, h);
+                g.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1, new float[]{5, 4}, 0));
+                g.draw(new java.awt.geom.Line2D.Double(d, c));
+                g.setStroke(new BasicStroke(2f));
+                g.draw(new java.awt.geom.Line2D.Double(c.getX() - 6, c.getY(), c.getX() + 6, c.getY()));
+                g.draw(new java.awt.geom.Line2D.Double(c.getX(), c.getY() - 6, c.getX(), c.getY() + 6));
+            }
+        } finally {
+            g.dispose();
+        }
     }
 
     private void paintDrone(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {

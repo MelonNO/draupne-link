@@ -12,18 +12,18 @@ Your radio plugs into the PC; an Android phone on the drone carries the sticks, 
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/map-tools.png" alt="MAP TOOLS: NATO symbols, an axis of advance, an objective, a route"><br><b>Map tools.</b> Standard unit symbols (MIL-STD-2525D / APP-6D), lines, rectangles, arrows and a ruler with an elevation profile. Export a box as a picture and KML; import KML from Google Earth or ATAK.</td>
+<td width="50%"><img src="docs/images/map-tools.png" alt="MAP TOOLS: NATO symbols, an axis of advance, an objective, a route"><br><b>Map tools.</b> Standard unit symbols (MIL-STD-2525D / APP-6D), lines, rectangles, arrows, a ruler with an elevation profile, a radio horizon over terrain and forest, and a heat map of where to put the ground station. Export a box as a picture and KML; import KML from Google Earth or ATAK.</td>
 <td width="50%"><img src="docs/images/boot-animation.png" alt="The boot animation: the mark comes apart into the window"><br><b>The start.</b> The mark comes apart: its brackets fly to the window's corners, its crosshair into the video, its bars become the cards. Four seconds, a click skips it.</td>
 </tr>
 <tr>
-<td><img src="docs/images/map-topo.png" alt="A flight over Kartverket's topo map, pins and launch rings"><br><b>The map.</b> Kartverket topo and printed maps, satellite pictures or OpenStreetMap, MGRS / UTM / degrees, pins with distance and bearing, every flight saved as GPX, whole areas saved for flying offline.</td>
+<td><img src="docs/images/map-topo.png" alt="A flight over Kartverket's topo map, pins and launch rings"><br><b>The map.</b> Kartverket topo and printed maps, a topo map of the whole world, satellite pictures or OpenStreetMap, MGRS / UTM / degrees, pins with distance and bearing, every flight saved as GPX, whole areas saved for flying offline.</td>
 <td><img src="docs/images/tour.png" alt="The tour: a box pointing at MENU"><br><b>The tour.</b> After setup, a guided walk through the window, button by button. After an update, a short tour of just what is new.</td>
 </tr>
 </table>
 
 ![Every unit symbol in every affiliation](docs/images/symbols.png)
 
-**Symbols to the standard:** infantry, mechanised infantry, armour, artillery, reconnaissance, anti-tank, engineer, air defence, ISR and attack drones (fixed-wing and multirotor), utility drone, supply, medical, headquarters and a plain unit, each as friend, hostile, neutral or unknown, with echelon marks from team to division.
+**Symbols to the standard:** infantry, mechanised infantry, armour, artillery, reconnaissance, anti-tank, engineer, air defence, mortar, rocket artillery, ISR and attack drones (fixed-wing and multirotor), recovery / maintenance, supply, medical, headquarters and a plain unit, each as friend, hostile, neutral or unknown, with echelon marks from team to division.
 
 ## Get started in 3 steps
 
@@ -55,7 +55,7 @@ Betaflight 4.4 is **not required**, only recommended:
 |---|---|---|
 | **This PC** | The **installer** installs **Tailscale** (private network between PC and phone), adds the firewall rules and switches to the High performance power plan. The wizard opens Tailscale's sign-in page and skips every step that is already done | Sign in to Tailscale |
 | **Drone** | Over USB, with nothing else to click: backs up Betaflight's settings first, then sets the receiver to **MSP**, the **stick delay setting**, the battery's **cell count** (`force_battery_cell_count`, 6 unless you change it), your **switches** (ARM on AUX1, a 3-position flight mode switch on AUX2: acro / angle / GPS position hold, PREARM on AUX3 - a second switch that must be on before ARM arms) and the **failsafe** (leave as it is, drop, or GPS rescue, with a rescue switch on AUX4). Each can be changed or left alone; nothing else on the drone is touched | Check the cell count, plug it in. No USB cable? **By hand** shows the same settings for Betaflight Configurator |
-| **Radio** | Detects it (pick one if several are plugged in), then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)); the switches are named after what Drone setup put on them (ARM, flight modes, PREARM, GPS rescue) | Plug it in and pick *USB Joystick (HID)* on the radio |
+| **Radio** | Detects it (pick one if several are plugged in), then calibrates every stick and switch by having you move them ([like a flight sim](docs/images/setup-radio.png)) - a 3D radio shows each move; the switches are named after what Drone setup put on them (ARM, flight modes, PREARM, GPS rescue) | Plug it in and pick *USB Joystick (HID)* on the radio |
 | **Phone** | Downloads [this project's DRAUPNE Flight](#the-phone-app), checks it, and serves it to your phone by **QR code**. The step turns green by itself the moment the app is open on the phone and answers by name | Scan two QR codes, allow what the phone app asks for; it points out the rest in yellow |
 | **Connect** | Lists the phone by its name (MobileAlpha ...) the moment DRAUPNE Flight is open on it, and holds the link open: it turns green by itself, then measures the path (direct or relayed) and the round-trip time and gives you a verdict. Can run the latency test right after setup | Pick the phone, press CONNECT, plug the phone into the flight controller |
 
@@ -75,7 +75,7 @@ Every phone running DRAUPNE Flight on your Tailscale network is **MobileAlpha, M
 - Press **CONNECT** (as **Pilot**; **Spectator**, next to it, only watches another PC's flight, see [below](#watching-from-a-second-pc)). The status turns **LINK READY** and the phone's camera appears with the **OSD**: horizon and pitch ladder, heading tape with home marker, battery (voltage per cell, big, with the cell count - corrected when Betaflight counted wrong), the phone's battery, 4G signal and ping, GPS, flight timer, the flight controller's core temperature, flight mode (ACRO / AIR / ANGLE / HORIZON / ACRO TRAINER / ALT HOLD / POS HOLD / GPS RESCUE / TURTLE ...) and warnings.
 - RC is only sent once the throttle has been seen at the bottom and the arm switch off (**RC OUTPUT: LIVE**; until then the OSD says *RC OFF - THROTTLE DOWN* or *ARM SWITCH OFF*).
 - A **red frame** round the picture means your sticks aren't reaching the drone: **LINK LOST** (PC to phone), **LINK STALL** (the phone stopped answering) or **NO FLIGHT CONTROLLER** (the phone lost its USB link to the flight controller; the battery and GPS values turn grey because they're frozen). **RADIO FROZEN?** means the radio's input hasn't changed a bit for 5 s while armed, **VIDEO FROZEN** that no new picture came for 0.7 s.
-- **In flight the LINK card folds away** and a **minimap** takes its place, with **POP OUT MAP** for the whole [map](#the-map).
+- A **minimap** sits on the LINK card under the figures, always, with **POP OUT MAP** for the whole [map](#the-map).
 - **MENU** slides out everything else: **SETUP**, **VIDEO**, **LINK**, **TOOLS**, and **UPDATE** when there is one.
 - **Double-click** the video for a full-window picture. **F11** puts the video in true full screen, which can save up to one screen refresh of delay. **F2** turns the OSD on or off, **F3** opens the map window.
 - **RC CHECK** shows what Betaflight actually sees: whether the sticks arrive, throttle low, the arm switch, active modes, and every reason it refuses to arm, with the fix for each.
@@ -83,7 +83,7 @@ Every phone running DRAUPNE Flight on your Tailscale network is **MobileAlpha, M
 - **LOST DRONE** appears on the LINK card when the link drops while the drone is armed: one press opens FIND DRONE with the MGRS on the clipboard.
 
 **MENU > VIDEO**
-- **Video: AUTO / SHARP / ROBUST.** The normal picture is 1280x720 at up to 4 Mbit/s. **SHARP** is 1920x1080 at up to 8 Mbit/s (the sizes and limits are in the settings file). **ROBUST** trades sharpness for a picture that holds on a weak link: a small picture (640x360, or the nearest size the phone has), at most 1 Mbit/s, key frames sent twice, and a small parity packet per group of packets from which the PC rebuilds any one lost packet, so a single lost packet no longer leaves a grey or green band. **AUTO** (the default) goes sharp after 20 s of calm at the top bitrate and back to the normal picture at the first stall; it switches to bad coverage mode by itself after 5 s at the lowest bitrate or 3 stalls within 30 s, and back after 20 s of calm. SHARP is always the sharp picture; ROBUST always bad coverage mode.
+- **Video: AUTO / SHARP / NORMAL / ROBUST / SURVIVAL.** **NORMAL** is 1280x720 at up to 4 Mbit/s. **SHARP** is 1920x1080 at up to 8 Mbit/s (the sizes and limits are in the settings file). **ROBUST** trades sharpness for a picture that holds on a weak link: a small picture (640x360, or the nearest size the phone has), at most 1 Mbit/s, key frames sent twice, and a small parity packet per group of packets from which the PC rebuilds any one lost packet, so a single lost packet no longer leaves a grey or green band. **AUTO** (the default) goes sharp after 20 s of calm at the top bitrate and back to the normal picture at the first stall; it switches to bad coverage mode by itself after 5 s at the lowest bitrate or 3 stalls within 30 s, and back after 20 s of calm; when even that can't carry it, **SURVIVAL**: 480x270 at 15 fps, up to 250 kbit/s, some picture rather than none. Every one of them can be chosen and held instead of AUTO, and a choice takes at once.
 - **Camera upside down** turns the picture; the OSD stays the right way up.
 - **Record video** saves every flight's video to `Videos\DRAUPNE Link`, exactly as it comes from the phone (MKV, no extra delay). A red **REC** shows on the OSD while it records.
 - **Hardware video decoding** (off by default) decodes on the GPU. Only worth trying with big pictures or a slow CPU: at 720p it's slower.
@@ -107,13 +107,13 @@ Every phone running DRAUPNE Flight on your Tailscale network is **MobileAlpha, M
 
 ![The map window: a flight over Kartverket's topo map, pins, launch rings](docs/images/map-topo.png)
 
-**POP OUT MAP** on the LINK card (or **F3**) opens the map in a window of its own, for a second screen. The map shows where the drone is and has been, over **Kartverket's** topo or printed map, **satellite** pictures or **OpenStreetMap** (AUTO picks Kartverket in Norway). FOLLOW, WHOLE FLIGHT, LAUNCH and FIND DRONE buttons; + and -, the wheel and dragging move it. Under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in **MGRS** (default), UTM, decimal degrees or degrees-minutes-seconds. Keys: **+ / -** zoom, **Home** the launch point, **End** the drone, **F3** closes the window.
+**POP OUT MAP** on the LINK card (or **F3**) opens the map in a window of its own, for a second screen. The map shows where the drone is and has been, over **Kartverket's** topo or printed map, **satellite** pictures, the **world topo map** (OpenTopoMap: contours and forest everywhere) or **OpenStreetMap** (AUTO and TOPO pick Kartverket in Norway and the world topo map elsewhere). FOLLOW, WHOLE FLIGHT, LAUNCH and FIND DRONE buttons; + and -, the wheel and dragging move it. Under the map: the place under the mouse and the terrain height there in metres and feet, the drone's position, altitude, distance and bearing from the launch point. Coordinates in **MGRS** (default), UTM, decimal degrees or degrees-minutes-seconds. Keys: **+ / -** zoom, **Home** the launch point, **End** the drone, **F3** closes the window.
 
 ![The same flight over satellite pictures](docs/images/map-satellite.png)
 
 ### MAP TOOLS
 
-The tab at the map's left edge slides out the tools:
+The tab at the map's left edge slides out three flat tabs - **DRAW**, **TOOLS** and **DATA** - and each of them slides out its own list:
 
 - **RULER:** click point after point; each leg shows its length and bearing, the total adds up, and clicking the first point again closes the loop and gives the **area**. The terrain's **elevation profile** along the line appears under the map, with the highest and lowest point. KEEP turns a measurement into a graphic that stays; CLEAR takes it off.
 
@@ -123,6 +123,8 @@ The tab at the map's left edge slides out the tools:
 - **SYMBOL:** a unit symbol to **MIL-STD-2525D / APP-6D** where you click: the type, the affiliation (friend, hostile, neutral, unknown) and the echelon (team ... division). The drones are the standard's unmanned-aircraft symbols with their role letter.
 - **PLACE AT:** a point of the drawing, or a symbol, at a typed position (MGRS, UTM or latitude, longitude); the map centres there.
 - **Move anything** by double-clicking a point of it: it follows the mouse, a click drops it, Esc puts it back. **ERASER** removes what you click.
+- **RADIO HORIZON** (TOOLS): the mast's height and the aircraft's altitude above the ground under it (it follows the terrain), the trees' height and the link's frequency; click the map to put the mast there. Blue (so it reads over a GCS SEARCH heat map) is where the aircraft can see the mast over the terrain and through the forest, **30 km at most**: a hill blocks, trees cost signal by their depth in the line and the frequency (FITU-R; past 20 dB, out of sight: about 9 m of trees at 5.8 GHz, 37 m at 2.4 GHz, 200 m at 800 MHz).
+- **GCS SEARCH** (TOOLS): where to put the ground station. The same fields; drag a box round the area you want good reception in, and a heat map 30 km round it shows how much of that area an antenna would see from each place - green all of it, red none - with the best place ringed, every 100 m; it too stays until crossed out. The fields of both tools slide out under their button. The forest is read off the map's own colours close in (Kartverket's topo at zoom 15 in Norway, OpenStreetMap at zoom 13 elsewhere); the first time an area takes a while to load (it draws as the forest map comes in, nearest first), after that it is instant. One mast at a time; it stays on the map until the cross on its label takes it off.
 - **PINS:** right-click on the map drops one (Alpha, Bravo ... Zulu); each shows distance and bearing from the drone and from the launch point. Right-click a pin to rename or remove it; **PINS** lists them all, with GO TO, and exports them as GPX. **GO TO** takes a pasted position and centres the map there, or drops a pin.
 - **EXPORT:** drag a box; its picture (PNG) and everything drawn in it (KML) go to `Documents\DRAUPNE Link\Exports`. **IMPORT** brings a KML back - DRAUPNE's own, Google Earth's or ATAK's: lines, areas and placemarks become graphics and pins. **CLEAR ALL** takes every drawing, symbol, pin and measurement off the map.
 - **DOWNLOAD AREA** saves a whole area for flying without internet, like Mission Planner's prefetch: press the button, draw a box on the map (SELECT WITH CURSOR, or **Alt + drag**), or right-click > *Download this view*. One START fetches every tile of the area for all four map types and every zoom level (or one type, fewer levels); it shows the count, rough size and time first, warns when it is a lot, HIDE puts the window away while the rest of the map is used, and CANCEL keeps what is saved. OpenStreetMap comes one tile at a time with a pause, by its policy: keep its areas small. Everything looked at before is kept too: map tiles are never thrown away.
@@ -138,6 +140,14 @@ The tab at the map's left edge slides out the tools:
 ## Watching from a second PC
 
 **MENU > LINK > Allow spectators** on the pilot's PC. A second PC running DRAUPNE Link that connects with **Connect as: Spectator** and picks the pilot PC by name (PCAlpha ...) shows the pilot's video and OSD a little behind (600 ms), can record, and never sends sticks. It follows that PC whatever phone it flies. It uses the pilot's upload (about one video stream each, at most 2 spectators) and pauses by itself when the link to the drone slows down. A spectator never takes the drone over, also when the pilot disconnects. A PC that connects as pilot while another flies becomes a spectator and is told so loudly.
+
+## STANAG 4609 stream
+
+MENU > LINK > **STANAG 4609 stream** (off by default) sends the flight to any player or ground station that follows NATO's motion imagery standard: the video exactly as the phone sends it, in an MPEG transport stream, with **MISB ST 0601** metadata beside it - the time, the drone's position, height, heading, pitch and roll, the camera's angles, and where the picture's centre and corners land on the ground (with an ST 0102 security marking, UNCLASSIFIED). It goes over UDP to the address in **STANAG 4609 settings**: `127.0.0.1:15000` (a player on this PC; in VLC open `udp://@:15000`), a TAK device's Tailscale address, or a multicast address (`239.x.x.x`) for every listener on the local network. ATAK / WinTAK, QGIS's FMV plugin and NATO ground stations show the camera's view on their own map.
+
+The settings also hold the camera's **angle across the picture** (a phone's main camera: about 70 degrees) and its **tilt up** on the frame: the ground the camera sees is worked out from them, the drone's attitude and the terrain. MENU > VIDEO > **Camera view on the map** shows that ground on the map and the minimap, out to 3 km, with a cross where the picture's centre lands.
+
+The stream copies the video (no second encode) on a thread of its own, so the picture on your screen never waits for it. It does use this PC's upload: on a weak one it can delay the sticks - keep it off then, or send it on the local network.
 
 ## Latency
 

@@ -15,7 +15,9 @@ import java.util.Map;
  * frame that lost its <b>last</b> packet was dropped without a word and the frames after it decoded on top of the old
  * picture - measured worse than the damaged key frame (VideoTest). One without its beginning is lost. Fragments of a frame older than (or the same as) the last one
  * released are dropped: on 4G packets can come reordered or twice, and a frame decoded out of turn smears the picture.
- * The phone numbers a restarted stream from 1, and its first frame is a key frame: key frame 1 starts afresh.
+ * The phone numbers a restarted stream from 1, and its first frame is a key frame: key frame 1 starts afresh (but not
+ * a late or doubled fragment of the key frame 1 just released, and after ORDER_RESET_MS without a frame the order is
+ * forgotten).
  * <p>
  * Each fragment is copied once, straight into the frame-sized array the frame is handed over in (the offset-0 fragment
  * carries the size; the rare fragment that comes before it goes into a provisional array that grows). What came is
@@ -57,6 +59,18 @@ public class FrameAssembler {
     private long lostFrames;
     /** The newest frame released, or null; nothing at or before it is put together again. */
     private Short lastReleased;
+    /**
+     * No frame released for this long: the order is forgotten (lastReleased goes). After a long blackout the phone's
+     * counter may stand anywhere, and a new frame that looks up to ORDER_WINDOW behind the last one was dropped for good.
+     */
+    static final long ORDER_RESET_MS = 3000;
+    /** When lastReleased was set (the put's time; 0 = not known, tests without times). */
+    private long lastReleasedAt;
+    /**
+     * The key frame 1 released last (the stream's start), for telling a late or doubled fragment of it from a new
+     * stream's key frame 1: the same bytes (or a gap the released frame was zero-filled at) are the old frame's.
+     */
+    private byte[] frameOne;
     /** Key frame 1 has come since the last {@link #startedAfresh()}: a new stream is under way. */
     private boolean streamRestarted;
     /** The time of the last put, handed to the frames released by it (also the older ones flushed). */
@@ -224,10 +238,12 @@ public class FrameAssembler {
         this.now = now;
         if (offset < 0 || length < 0 || (offset == 0 && (frameSize <= 0 || frameSize > MAX_FRAME_BYTES))) return null;
         if (offset > MAX_FRAME_BYTES) return null;
-        boolean start = isStreamStart(keyFrame, frameNum);
+        forgetOldOrder();
+        boolean start = isStreamStart(keyFrame, frameNum) && !isFrameOneAgain(offset, frameSize, buf, dataOffset, length);
         if (start && lastReleased != null && lastReleased != 1) {
             pending.clear(); // the phone restarted its stream: the old one's leftovers are useless
             lastReleased = null;
+            frameOne = null;
             streamRestarted = true;
         }
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
@@ -236,7 +252,7 @@ public class FrameAssembler {
             System.arraycopy(buf, dataOffset, data, 0, length);
             retireOlder(frameNum, keyFrame);
             completedFrames++;
-            lastReleased = frameNum;
+            released(frameNum, keyFrame, data);
             return new Frame(data, keyFrame, frameNum, false, start, now);
         }
         Pending frame = pending(frameNum, keyFrame, start);
@@ -256,6 +272,7 @@ public class FrameAssembler {
     public Frame putParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length, long now) {
         this.now = now;
         if (frameSize <= 0 || frameSize > MAX_FRAME_BYTES || length <= 0) return null;
+        forgetOldOrder();
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
         Pending frame = pending(frameNum, keyFrame, isStreamStart(keyFrame, frameNum));
         if (frame.size <= 0) frame.setSize(frameSize);
@@ -272,6 +289,7 @@ public class FrameAssembler {
     public Frame putParityGroup(boolean keyFrame, short frameNum, int frameSize, int group, byte[] buf, int dataOffset, int length, long now) {
         this.now = now;
         if (frameSize <= 0 || frameSize > MAX_FRAME_BYTES || length <= 0 || group < 0 || group > 255) return null;
+        forgetOldOrder();
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
         Pending frame = pending(frameNum, keyFrame, isStreamStart(keyFrame, frameNum));
         if (frame.size <= 0) frame.setSize(frameSize);
@@ -303,6 +321,42 @@ public class FrameAssembler {
                 && (lastReleased == null || !isOlder(lastReleased, (short) 1));
     }
 
+    /**
+     * A fragment of the key frame 1 released a few frames ago, come late or twice (4G reorders and doubles): not a
+     * restart. Before, it cleared what was pending and released frame 1 again after frame N - decoded out of turn, the
+     * pictures after it smeared until the next key frame, unmarked. Told apart by what was released: the same bytes
+     * at the same place (and at offset 0 the same size), or a gap the released frame was zero-filled at. A new stream's
+     * key frame 1 differs there (two key frames are never the same bytes: the picture, and the slice header's id).
+     */
+    private boolean isFrameOneAgain(int offset, int frameSize, byte[] buf, int dataOffset, int length) {
+        byte[] one = frameOne;
+        if (one == null || lastReleased == null || !isOlder((short) 1, lastReleased)) return false;
+        if (offset == 0 && frameSize != one.length) return false;
+        if (offset + length > one.length) return false;
+        boolean same = true, zero = true;
+        for (int i = 0; i < length && (same || zero); i++) {
+            byte b = one[offset + i];
+            if (b != buf[dataOffset + i]) same = false;
+            if (b != 0) zero = false;
+        }
+        return same || zero;
+    }
+
+    /** No frame released for ORDER_RESET_MS: nothing counts as older any more (see ORDER_RESET_MS). */
+    private void forgetOldOrder() {
+        if (lastReleased != null && now > 0 && lastReleasedAt > 0 && now - lastReleasedAt > ORDER_RESET_MS) {
+            lastReleased = null;
+            frameOne = null;
+        }
+    }
+
+    /** The newest frame released (and when; a key frame 1 is kept, see frameOne). */
+    private void released(short frameNum, boolean keyFrame, byte[] data) {
+        lastReleased = frameNum;
+        lastReleasedAt = now;
+        if (keyFrame && frameNum == 1) frameOne = data;
+    }
+
     private Frame finish(short frameNum, Pending frame, boolean keyFrame) {
         if (!frame.complete() && (frame.parity != null || frame.groupParity != null) && frame.recover()) recoveredFrames++;
         if (!frame.complete() && !(frame.startReceived && frame.endReceived)) return null;
@@ -313,8 +367,9 @@ public class FrameAssembler {
         retireOlder(frameNum, keyFrame);
         boolean damaged = !frame.complete();
         if (damaged) damagedFrames++; else completedFrames++;
-        lastReleased = frameNum;
-        return release(frame, frameNum, damaged);
+        Frame out = release(frame, frameNum, damaged);
+        released(frameNum, frame.keyFrame, out.data());
+        return out;
     }
 
     private Frame release(Pending frame, short frameNum, boolean damaged) {
@@ -336,8 +391,9 @@ public class FrameAssembler {
             Pending p = pending.remove(n);
             if (!keyFrame && p.startReceived && p.size > 0) {
                 damagedFrames++;
-                lastReleased = n;
-                flushed.add(release(p, n, true));
+                Frame out = release(p, n, true);
+                released(n, p.keyFrame, out.data());
+                flushed.add(out);
             } else {
                 lostFrames++;
             }
@@ -377,6 +433,7 @@ public class FrameAssembler {
         pending.clear();
         flushed.clear();
         lastReleased = null;
+        frameOne = null;
         streamRestarted = false;
     }
 

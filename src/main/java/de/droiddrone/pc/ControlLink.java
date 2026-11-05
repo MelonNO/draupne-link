@@ -71,6 +71,11 @@ public class ControlLink {
          */
         default void onVideoParityGroup(boolean keyFrame, short frameNum, int frameSize, int group, byte[] buf, int dataOffset, int length) {
         }
+
+        /** The decoder's time per frame over the time between frames; above 1 it falls behind (0 = unknown). */
+        default double decodeLoad() {
+            return 0;
+        }
     }
 
     /**
@@ -107,14 +112,27 @@ public class ControlLink {
      * uplink. Under it (1.0.33) the survival tier: 480x270 at 15 fps, up to 250 kbit/s, for a link that can't even
      * carry bad coverage mode - some picture rather than none. Above the normal picture (1.0.34) the sharp tier: the
      * sharp size and bitrate limit from the settings (1920x1080, up to 8 Mbit/s), for a link that carries them.
-     * SETTINGS > Video: AUTO goes sharp after SHARP_AFTER_MS calm at the normal top bitrate and leaves it at the
-     * first stall, and goes to bad coverage mode and under when it must; SHARP is always the sharp tier; ROBUST
-     * always bad coverage mode (or the survival tier).
+     * VIDEO > Video: AUTO goes sharp after SHARP_AFTER_MS calm at the normal top bitrate and leaves it at the
+     * first stall, and goes to bad coverage mode and under when it must. Every tier AUTO can pick is a choice of its
+     * own too (1.0.39, the pilot: "include buttons for all the video adjustments that the program may change it to"):
+     * SHARP, NORMAL, ROBUST (bad coverage mode) and SURVIVAL hold that tier, whatever the link, from the moment they
+     * are chosen - from any tier (up to 1.0.38 ROBUST did nothing while the sharp tier was on).
      */
-    public enum VideoMode { AUTO, SHARP, ROBUST;
+    public enum VideoMode { AUTO, SHARP, NORMAL, ROBUST, SURVIVAL;
         public static VideoMode parse(String s) {
             for (VideoMode m : values()) if (m.name().equalsIgnoreCase(s == null ? "" : s.trim())) return m;
             return AUTO;
+        }
+
+        /** The tier this choice holds; null for AUTO. */
+        public Tier forced() {
+            return switch (this) {
+                case AUTO -> null;
+                case SHARP -> Tier.SHARP;
+                case NORMAL -> Tier.NORMAL;
+                case ROBUST -> Tier.ROBUST;
+                case SURVIVAL -> Tier.SURVIVAL;
+            };
         }
     }
     /** How much of the picture the link gets, best first: the sharp tier, the normal picture, bad coverage mode, the survival tier (see VideoMode). */
@@ -195,12 +213,18 @@ public class ControlLink {
     private volatile long readyAt;
     /** The link has been READY once: from then on the sticks and pings go out whether or not the phone is heard. */
     private volatile boolean everReady;
-    /** When the link was last lost (System.currentTimeMillis); 0 = never. */
+    /** When the link was last lost (MonoClock.ms); 0 = never. */
     private volatile long lostAt;
     /** When the link last came back after a loss; 0 = never. */
     private volatile long reconnectedAt;
     /** Ask the phone for FcInfo and the mode names once more (the link came back: kept meanwhile, refreshed now). */
     private boolean refreshFc;
+    /**
+     * When that refresh was asked and not answered yet (0 = none open): asked again every FC_REFRESH_RETRY_MS. The
+     * transport's acknowledgement doesn't promise the answer was used (a skipped gap is acknowledged too).
+     */
+    private volatile long fcRefreshAskedAt;
+    static final long FC_REFRESH_RETRY_MS = 1500;
     /** When to look whether the video came back with the link (0 = not due). */
     private long videoCheckAt;
     /** The video watchdog is quiet until then (a switch was sent). */
@@ -214,7 +238,7 @@ public class ControlLink {
     private volatile FcInfo fcInfo;
     private volatile int pingMs;
     private volatile long lastPingTimestamp;
-    /** When anything last arrived from the phone (System.currentTimeMillis); 0 = nothing yet. */
+    /** When anything last arrived from the phone (MonoClock.ms); 0 = nothing yet. */
     private volatile long lastReceivedAt;
     private long lastRcErrorLog;
     private final AtomicLong rcFramesSent = new AtomicLong();
@@ -243,6 +267,8 @@ public class ControlLink {
     private long sharpHoldMs = SHARP_AFTER_MS;
     /** Since when the phone's bitrate has been under the normal top (-1: it isn't), for the sharp tier's end. */
     private long belowTopSince = -1;
+    /** Since when this PC's decoder hasn't kept up with the sharp picture (decodeLoad over 1); -1 = it keeps up. */
+    private long decodeSlowSince = -1;
     private int profileSends;
     private long nextProfileSend;
     private int configResends;
@@ -388,7 +414,7 @@ public class ControlLink {
                     onSleepHello(d, packet.getLength());               // not a sign of the link, which is down on purpose
                     continue;
                 }
-                lastReceivedAt = System.currentTimeMillis();
+                lastReceivedAt = MonoClock.ms();
                 if (handleVideoFragment(packet)) continue;
                 if (packet.getLength() > 0 && (d[0] == Spectate.PILOT_AT || d[0] == Spectate.NO_PILOT)) {
                     onPhoneSpectateAnswer(d, packet.getLength());
@@ -442,7 +468,7 @@ public class ControlLink {
             // the phone still holds this PC's previous session (seen 2026-11-02 after a link loss: it named this
             // very PC as the pilot, and this PC sat as a spectator of itself, never asking to connect again). Not
             // a pilot to watch: keep asking, a little faster, until the phone lets go
-            long now = System.currentTimeMillis();
+            long now = MonoClock.ms();
             if (now - ownSessionNamedLog >= 2000) {
                 ownSessionNamedLog = now;
                 events.accept("The phone still thinks this PC's previous session is the pilot - connecting again.");
@@ -480,7 +506,7 @@ public class ControlLink {
      */
     boolean isThisPc(Spectate.Address pilot) {
         boolean ownPort = pilot.port() == localPort
-                || pilot.port() == lastClosedPort && System.currentTimeMillis() - lastClosedAt <= RECENT_SESSION_MS;
+                || pilot.port() == lastClosedPort && MonoClock.ms() - lastClosedAt <= RECENT_SESSION_MS;
         return ownPort && ownAddresses().contains(pilot.ip());
     }
 
@@ -508,7 +534,7 @@ public class ControlLink {
             return;
         }
         if (d[0] == UdpCommon.TelemetryData) telemetryPacketsReceived.incrementAndGet();
-        lastReceivedAt = System.currentTimeMillis();
+        lastReceivedAt = MonoClock.ms();
         processData(d);
     }
 
@@ -524,7 +550,7 @@ public class ControlLink {
         // shown whenever the stream's config is known: before 1.0.33 the fragments were thrown away while the link
         // counted as lost (2 s of silence), so a picture that was arriving again stayed black until the handshake
         if (!isConnected() && !videoConfigReceived) return true;
-        lastVideoFragmentAt = System.currentTimeMillis();
+        lastVideoFragmentAt = MonoClock.ms();
         deliverVideoFragment(d, len);
         SpectatorHost h = host;
         if (h != null) h.forward(d, len); // after our own picture: a copy into a queue, nothing without spectators
@@ -609,7 +635,7 @@ public class ControlLink {
                     Thread.sleep(250);
                     continue;
                 }
-                long now = System.currentTimeMillis();
+                long now = MonoClock.ms();
                 boolean connected = isConnected();
                 if (wasConnected && !connected) {
                     log("Link lost, reconnecting..." + (everReady ? " The sticks keep going." : ""));
@@ -653,8 +679,10 @@ public class ControlLink {
                     }
                     Thread.sleep(SESSION_TICK_MS);
                 } else {
-                    if (refreshFc) { // the same FC, most likely: its state was kept, and is asked for once more
+                    boolean refreshUnanswered = fcRefreshAskedAt > 0 && now - fcRefreshAskedAt >= FC_REFRESH_RETRY_MS;
+                    if (refreshFc || refreshUnanswered) { // the same FC, most likely: its state was kept, and is asked for once more
                         refreshFc = false;
+                        fcRefreshAskedAt = now;
                         sendRequest(UdpCommon.FcInfo);
                         sendRequest(UdpCommon.BoxNames);
                         lastFcInfoRequest = lastModesRequest = now;
@@ -668,8 +696,12 @@ public class ControlLink {
                             }
                         }
                         boolean telemetryFlows = now - lastTelemetryAt < 1000;
+                        // the phone's own watchdog is reopening its camera (1.5-2.6 s): a StartVideo now would only
+                        // restart that open, so this one waits for it
+                        FcTelemetry.PhoneState ps = telemetry.getPhoneState();
+                        boolean phoneRestarting = ps != null && now - ps.receivedAt() < 1000 && ps.videoRestarting();
                         boolean videoDead = videoConfigReceived && telemetryFlows && now - lastVideoFragmentAt > VIDEO_DEAD_MS
-                                && now >= videoQuietUntil;
+                                && now >= videoQuietUntil && !phoneRestarting;
                         if (!videoConfigReceived && now - lastStartVideo >= START_VIDEO_RETRY_MS) {
                             sendStartVideo();
                             lastStartVideo = now;
@@ -721,13 +753,13 @@ public class ControlLink {
                 boolean toEndPoint = buffer.readBoolean();
                 long time = buffer.readLong();
                 if (toEndPoint) {
-                    pingMs = (int) (System.currentTimeMillis() - time);
-                    lastPingTimestamp = System.currentTimeMillis();
+                    pingMs = (int) (System.currentTimeMillis() - time); // UdpSender stamps pings with the wall clock
+                    lastPingTimestamp = MonoClock.ms();
                     maxPingMs.accumulateAndGet(pingMs, Math::max);
                 }
             }
             case UdpCommon.ConfigReceived -> {
-                if (!configReceived) readyAt = System.currentTimeMillis();
+                if (!configReceived) readyAt = MonoClock.ms();
                 configReceived = true;
                 everReady = true;
             }
@@ -736,6 +768,7 @@ public class ControlLink {
                 versionMismatch = true;
             }
             case UdpCommon.FcInfo -> {
+                fcRefreshAskedAt = 0;
                 fcInfo = new FcInfo(buffer.readByte(), buffer.readByte(), buffer.readByte(),
                         buffer.readByte(), buffer.readByte(), buffer.readByte(), buffer.readByte(), buffer.readByte());
                 SpectatorHost h = host;
@@ -749,7 +782,7 @@ public class ControlLink {
                 long now = System.nanoTime();
                 if (lastTelemetryNs != 0) maxTelemetryGapNs.accumulateAndGet(now - lastTelemetryNs, Math::max);
                 lastTelemetryNs = now;
-                lastTelemetryAt = System.currentTimeMillis();
+                lastTelemetryAt = MonoClock.ms();
                 boolean hadNames = telemetry.hasBoxNames();
                 boolean hadIds = telemetry.hasBoxIds();
                 telemetry.parse(buffer, fcInfo);
@@ -804,7 +837,7 @@ public class ControlLink {
      * At most once a second; not while watching.
      */
     public void requestVideoConfig() {
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         if (!running || spectator != null || !isConnected() || now - lastVideoConfigRequest < 1000) return;
         lastVideoConfigRequest = now;
         try {
@@ -880,7 +913,7 @@ public class ControlLink {
     private void onSleepHello(byte[] d, int len) {
         if (len < 6) return;
         int pct = d[1] & 0xff;
-        sleepHello = new SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff, ((d[4] & 0xff) << 8) | (d[5] & 0xff), System.currentTimeMillis());
+        sleepHello = new SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff, ((d[4] & 0xff) << 8) | (d[5] & 0xff), MonoClock.ms());
         udpSender.sendPacket(new byte[]{SLEEP_ANSWER, (byte) (dormant ? 0 : 1)});
     }
 
@@ -1086,23 +1119,28 @@ public class ControlLink {
         belowTopSince = bps > 0 && bps < normalTopBps ? (belowTopSince < 0 ? now : belowTopSince) : -1;
         Tier want;
         String why;
-        if (mode == VideoMode.SHARP) {
-            want = Tier.SHARP;
-            why = "SETTINGS > Video is SHARP";
+        Tier forced = mode.forced();
+        if (forced != null) { // a tier chosen: held, whatever the link
+            want = forced;
+            why = "VIDEO is " + mode.name();
         } else if (tier == Tier.SHARP) {
             // the sharp tier holds while the link carries it: a stall, a relay, or the bitrate under the normal top for
             // SHARP_DROP_MS (the bitrate control had to step down) ends it - back to the normal picture first
             boolean cantCarry = belowTopSince >= 0 && now - belowTopSince >= SHARP_DROP_MS;
-            want = !stalls.isEmpty() || relayed || cantCarry ? Tier.NORMAL : Tier.SHARP;
+            // or this PC can't decode 1080p in real time (software decoding): the picture would drift late
+            VideoListener v = videoListener;
+            boolean slow = v != null && v.decodeLoad() > 1.0;
+            if (!slow) decodeSlowSince = -1;
+            else if (decodeSlowSince < 0) decodeSlowSince = now;
+            boolean cantDecode = decodeSlowSince >= 0 && now - decodeSlowSince >= SHARP_DROP_MS;
+            want = !stalls.isEmpty() || relayed || cantCarry || cantDecode ? Tier.NORMAL : Tier.SHARP;
             why = !stalls.isEmpty() ? "a stall" : relayed ? "the way to the phone is a relay"
+                    : cantDecode ? "this PC's decoder can't keep up with the sharp picture"
                     : "the bitrate stayed under " + normalTopBps / 1_000_000 + " Mbit/s for " + SHARP_DROP_MS / 1000 + " s";
         } else if (tier == Tier.NORMAL) {
             boolean lowRate = lowRateSince >= 0 && now - lowRateSince >= LOW_RES_AFTER_MS;
             boolean stalls3 = stalls.size() >= STALLS_FOR_ROBUST;
-            if (mode == VideoMode.ROBUST) {
-                want = Tier.ROBUST;
-                why = "SETTINGS > Video is ROBUST";
-            } else if (lowRate || stalls3 || relayed) {
+            if (lowRate || stalls3 || relayed) {
                 want = Tier.ROBUST;
                 why = lowRate ? "the bitrate stayed at " + bps / 1000 + " kbit/s"
                         : stalls3 ? stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s" : "the way to the phone is a relay";
@@ -1126,9 +1164,9 @@ public class ControlLink {
                 want = Tier.SURVIVAL;
                 why = lowRate ? "the bitrate stayed at " + bps / 1000 + " kbit/s in bad coverage mode" : stalls.size() + " stalls in bad coverage mode";
                 if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2);
-            } else if (mode == VideoMode.ROBUST || relayed) {
+            } else if (relayed) {
                 want = Tier.ROBUST;
-                why = mode == VideoMode.ROBUST ? "SETTINGS > Video is ROBUST" : "the way to the phone is a relay";
+                why = "the way to the phone is a relay";
             } else {
                 // calm long enough in bad coverage mode: no stall, and the bitrate not struggling under its 1 Mbit/s
                 boolean calm = now - tierSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs
@@ -1149,13 +1187,19 @@ public class ControlLink {
         belowTopSince = -1;
         if (want.ordinal() > was.ordinal()) { // down
             stalls.clear();
-            if (was == Tier.SHARP) { // left within a minute: the next sharp spell waits longer; a spell that lasted: the usual wait
+            if (was == Tier.SHARP && forced == null) { // left within a minute: the next sharp spell waits longer; a spell that lasted: the usual wait
                 sharpHoldMs = held < 60_000 ? Math.min(MAX_ROBUST_HOLD_MS, sharpHoldMs * 2) : SHARP_AFTER_MS;
             }
         } else if (was.ordinal() >= Tier.ROBUST.ordinal()) {
             leftRobustAt = now;
         }
-        events.accept(switch (want) {
+        events.accept(tierMessage(want, was, why));
+        sendTier(now);
+    }
+
+    /** What the log says when the tier changes. */
+    private String tierMessage(Tier want, Tier was, String why) {
+        return switch (want) {
             case SHARP -> "Video: sharp (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", up to "
                     + config.getSharpBitrateLimitMbps() + " Mbit/s.";
             case ROBUST -> was.ordinal() < Tier.ROBUST.ordinal()
@@ -1168,35 +1212,30 @@ public class ControlLink {
                     ? "Video: the normal picture (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", up to "
                             + config.getBitrateLimitMbps() + " Mbit/s."
                     : "Video: normal mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
-        });
-        sendTier(now);
+        };
     }
 
     /**
-     * SETTINGS > Video is ROBUST or SHARP: decided before the first config goes out, so it already carries the size.
+     * VIDEO is a tier of its own (SHARP, NORMAL, ROBUST, SURVIVAL): decided before the first config goes out, so it already carries the size.
      * Before 1.0.33 the first config said 1280x720 and the small size came while the phone's camera was still
      * opening - which the phone took as done; every ROBUST session then ran at the full size. The caller sends the
      * profile for the tier right after this, before the config.
      */
     private void decideForcedTier(long now) {
         VideoMode mode = videoMode();
-        if (mode == VideoMode.ROBUST && tier.ordinal() < Tier.ROBUST.ordinal()) {
-            tier = Tier.ROBUST;
+        Tier forced = mode.forced();
+        if (forced != null && tier != forced) {
+            Tier was = tier;
+            tier = forced;
             tierSince = now;
-            events.accept("Video: bad coverage mode (SETTINGS > Video is ROBUST): " + cameraWidth() + "x" + cameraHeight()
-                    + ", up to 1 Mbit/s, key frames sent twice - softer, but it holds.");
-            profileSends = 2;
-            nextProfileSend = now + 700;
+            events.accept(tierMessage(forced, was, "VIDEO is " + mode.name()));
+            if (isRobust()) { // its profile (key frames twice, parity) with the first config
+                profileSends = 2;
+                nextProfileSend = now + 700;
+            }
             verifyFrom = videoListener == null ? -1 : now + VERIFY_AFTER_MS;
             verifyTries = 0;
-        } else if (mode == VideoMode.SHARP && tier != Tier.SHARP) {
-            tier = Tier.SHARP;
-            tierSince = now;
-            events.accept("Video: sharp (SETTINGS > Video is SHARP): " + cameraWidth() + "x" + cameraHeight() + ", up to "
-                    + config.getSharpBitrateLimitMbps() + " Mbit/s.");
-            verifyFrom = videoListener == null ? -1 : now + VERIFY_AFTER_MS;
-            verifyTries = 0;
-        } else if (mode == VideoMode.AUTO && tier == Tier.SHARP) {
+        } else if (forced == null && tier == Tier.SHARP) {
             tier = Tier.NORMAL; // a new session starts on the normal picture and earns the sharp tier again
             tierSince = now;
         }
@@ -1248,7 +1287,7 @@ public class ControlLink {
      * damaged or lost, a recording or a spectator starts. At most every KEY_FRAME_REQUEST_MS; not while watching.
      */
     public void requestKeyFrame() {
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         if (!running || spectator != null || !isConnected() || now - lastKeyFrameRequest < KEY_FRAME_REQUEST_MS) return;
         lastKeyFrameRequest = now;
         try {
@@ -1286,7 +1325,8 @@ public class ControlLink {
         short[] frame = padForRxMap(channels);
         try {
             int build = telemetry.getPhonePcBuild();
-            byte[] data = rcFrame(frame, build >= RC_SEQ_MIN_PC_BUILD ? rcSeq : -1, build >= PC26_BUILD);
+            byte[] data = build >= RC_LAG_MIN_PC_BUILD ? rcFrame(frame, rcSeq, (int) MonoClock.ms(), maxStickLagMs)
+                    : rcFrame(frame, build >= RC_SEQ_MIN_PC_BUILD ? rcSeq : -1, build >= PC26_BUILD);
             rcSeq = (rcSeq + 1) & 0xffff;
             // straight out, once: upstream's sendPacket retries ten times and swallows the error, so a dead adapter
             // looked like frames sent - and a frame late is a frame wrong
@@ -1297,7 +1337,7 @@ public class ControlLink {
             lastRcNs = now;
             return true;
         } catch (IOException e) {
-            long now = System.currentTimeMillis();
+            long now = MonoClock.ms();
             if (now - lastRcErrorLog >= 1000) { // 250 a second otherwise
                 lastRcErrorLog = now;
                 log("sendRc error: " + e);
@@ -1325,6 +1365,32 @@ public class ControlLink {
 
     static byte[] rcFrame(short[] frame, int seq) throws IOException {
         return rcFrame(frame, seq, false);
+    }
+
+    /**
+     * Phone app pc.31 on: the 16-bit sequence frame plus [sentMs u16][maxLagCs u8] - this PC's monotonic ms (low 16
+     * bits) when the frame left, and the lateness past which the phone drops it, in 10 ms steps (0 = never). The phone
+     * measures each frame's delay over the quickest of the last few seconds (the clocks needn't agree: only the
+     * difference counts) and reports it (FcTelemetry.PHONE_RC_LAG). A frame seconds late is a command for a drone
+     * that has moved on; with a limit set, Betaflight's failsafe takes over instead.
+     */
+    static byte[] rcFrame(short[] frame, int seq, int sentMs, int maxLagMs) throws IOException {
+        UdpPacketData packetData = new UdpPacketData(UdpCommon.RcFrame);
+        packetData.daos.writeByte(frame.length);
+        for (short channel : frame) packetData.daos.writeShort(channel);
+        packetData.daos.writeShort(seq);
+        packetData.daos.writeShort(sentMs & 0xffff);
+        packetData.daos.writeByte(Math.max(0, Math.min(255, (maxLagMs + 9) / 10)));
+        return packetData.getData();
+    }
+
+    /** The first phone app build that takes the stick frame's send time and lateness limit. */
+    static final int RC_LAG_MIN_PC_BUILD = 31;
+    /** rc.maxLagMs (PcConfig.getMaxStickLagMs): 0 = the phone never drops a late frame. */
+    private volatile int maxStickLagMs;
+
+    public void setMaxStickLagMs(int ms) {
+        maxStickLagMs = Math.max(0, Math.min(2550, ms));
     }
 
     /** The first phone app build that reads the stick frame's sequence byte. */
@@ -1367,7 +1433,7 @@ public class ControlLink {
     public boolean isConnected() {
         if (receiverBuffer == null || !receiverBuffer.isConnected()) return false;
         long last = lastReceivedAt;
-        return last == 0 || System.currentTimeMillis() - last <= LINK_LOST_MS;
+        return last == 0 || MonoClock.ms() - last <= LINK_LOST_MS;
     }
 
     /**
@@ -1376,7 +1442,7 @@ public class ControlLink {
      */
     public boolean isFcLost() {
         if (getState() != State.READY || isLinkStalled()) return false; // a stalled link explains the silence itself
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         return now - readyAt > FC_GRACE_MS && telemetry.msSinceFcData(now) > FC_SILENCE_MS;
     }
 
@@ -1392,7 +1458,7 @@ public class ControlLink {
 
     /** @return round-trip time to the Flight phone in ms, or -1 if no recent pong */
     public int getPing() {
-        return System.currentTimeMillis() - lastPingTimestamp > PING_STALE_MS ? -1 : pingMs;
+        return MonoClock.ms() - lastPingTimestamp > PING_STALE_MS ? -1 : pingMs;
     }
 
     /**
@@ -1402,7 +1468,7 @@ public class ControlLink {
     public boolean isLinkStalled() {
         long last = lastReceivedAt;
         if (getState() != State.READY) return false;
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         if (last != 0 && now - last > STALL_MS) return true;
         // the phone app stuck while its telemetry keeps coming (2.3.0-pc.13 on a test phone): pings go unanswered,
         // and the sticks - handled by the same part of the app - don't reach the flight controller either. Only once
@@ -1474,7 +1540,7 @@ public class ControlLink {
     /** How long ago the last pong came back (pings go out 20 times a second), in ms; -1 before the first. */
     public long msSinceLastPong() {
         long last = lastPingTimestamp;
-        return last == 0 ? -1 : System.currentTimeMillis() - last;
+        return last == 0 ? -1 : MonoClock.ms() - last;
     }
 
     /** Longest pause between two telemetry packets received since the last call, in ms. */
@@ -1495,7 +1561,7 @@ public class ControlLink {
         }
         running = false;
         lastClosedPort = localPort;
-        lastClosedAt = System.currentTimeMillis();
+        lastClosedAt = MonoClock.ms();
         SpectatorClient c = spectator;
         if (c != null) c.close();
         SpectatorHost h = host;

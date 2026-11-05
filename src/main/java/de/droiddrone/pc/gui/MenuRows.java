@@ -57,7 +57,9 @@ final class MenuRows {
 
     /** One of a few values: segments at the right edge, the chosen one lit; a click picks one, the menu stays open. */
     static final class ChoiceRow extends JMenuItem {
-        private static final int SEG_W = 58, SEG_H = 22;
+        private static final int SEG_H = 22;
+        /** A segment's width: 58, or wider for the longest label (SURVIVAL) with room on both sides. */
+        private final int segW;
         private final String[] options;
         private final Consumer<Integer> changed;
         private int selected;
@@ -67,17 +69,21 @@ final class MenuRows {
             this.options = options;
             this.selected = selected;
             this.changed = changed;
-            style(this, 14 + options.length * SEG_W + 8);
+            java.awt.FontMetrics fm = getFontMetrics(Theme.headingFont(10.5f));
+            int widest = 0;
+            for (String o : options) widest = Math.max(widest, fm.stringWidth(o));
+            segW = Math.max(58, widest + 16);
+            style(this, 14 + options.length * segW + 8);
         }
 
         private int left() {
-            return getWidth() - 14 - options.length * SEG_W;
+            return getWidth() - 14 - options.length * segW;
         }
 
         @Override
         protected void processMouseEvent(MouseEvent e) {
             if (e.getID() == MouseEvent.MOUSE_RELEASED && isEnabled() && contains(e.getPoint())) {
-                int i = (e.getX() - left()) / SEG_W;
+                int i = (e.getX() - left()) / segW;
                 if (e.getX() >= left() && i >= 0 && i < options.length && i != selected) {
                     selected = i;
                     repaint();
@@ -96,17 +102,17 @@ final class MenuRows {
             try {
                 int x0 = left(), y = (getHeight() - SEG_H) / 2;
                 g.setColor(Theme.LINE);
-                g.fillRoundRect(x0, y, options.length * SEG_W, SEG_H, 8, 8);
+                g.fillRoundRect(x0, y, options.length * segW, SEG_H, 8, 8);
                 g.setFont(Theme.headingFont(10.5f));
                 for (int i = 0; i < options.length; i++) {
-                    int x = x0 + i * SEG_W;
+                    int x = x0 + i * segW;
                     if (i == selected) {
                         g.setColor(Theme.ACCENT);
-                        g.fillRoundRect(x + 2, y + 2, SEG_W - 4, SEG_H - 4, 6, 6);
+                        g.fillRoundRect(x + 2, y + 2, segW - 4, SEG_H - 4, 6, 6);
                     }
                     g.setColor(i == selected ? Color.WHITE : Theme.MUTED);
                     int w = g.getFontMetrics().stringWidth(options[i]);
-                    g.drawString(options[i], x + (SEG_W - w) / 2, y + SEG_H / 2 + 4);
+                    g.drawString(options[i], x + (segW - w) / 2, y + SEG_H / 2 + 4);
                 }
             } finally {
                 g.dispose();

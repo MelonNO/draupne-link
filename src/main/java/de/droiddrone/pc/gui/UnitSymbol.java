@@ -79,6 +79,7 @@ final class UnitSymbol {
     }
 
     private static final String ARMOUR = "M125,80 C150,80 150,120 125,120 L75,120 C50,120 50,80 75,80 Z";
+    private static final String ARTILLERY_DOT = "M100,85 c8.3,0 15,6.7 15,15 0,8.3 -6.7,15 -15,15 -8.3,0 -15,-6.7 -15,-15 0,-8.3 6.7,-15 15,-15 z";
     private static final String UAV = "m 60,84 40,20 40,-20 0,8 -40,25 -40,-25 z";
     private static final String VT_UAV = "m 70,84 30,14 30,-14 V 81 L 100,91 70,81 Z  m 0,9 30,15 30,-15 v 25 l -30,-10 -30,10 z";
 
@@ -88,7 +89,7 @@ final class UnitSymbol {
     /** Drones are air-domain symbols: the air frames and icons. */
     static boolean isAir(UnitType unit) {
         return switch (unit) {
-            case ISR_FIXED, ATTACK_FIXED, ISR_ROTOR, ATTACK_ROTOR, UTILITY -> true;
+            case ISR_FIXED, ATTACK_FIXED, ISR_ROTOR, ATTACK_ROTOR -> true;
             default -> false;
         };
     }
@@ -173,7 +174,13 @@ final class UnitSymbol {
                 parts.add(Part.outline(ARMOUR));
             }
             case ARMOUR -> parts.add(Part.outline(ARMOUR));
-            case ARTILLERY -> parts.add(Part.path("M100,85 c8.3,0 15,6.7 15,15 0,8.3 -6.7,15 -15,15 -8.3,0 -15,-6.7 -15,-15 0,-8.3 6.7,-15 15,-15 z"));
+            case ARTILLERY -> parts.add(Part.path(ARTILLERY_DOT));
+            case MORTAR -> parts.add(Part.outline( // the standard's mortar: a tube up from its base plate
+                    "M100,110 c2.8,0 5,2.2 5,5 0,2.8 -2.2,5 -5,5 -2.8,0 -5,-2.2 -5,-5 0,-2.8 2.2,-5 5,-5 z M100,110 l0,-29 M90,90 l10,-10 10,10"));
+            case ROCKET_ARTILLERY -> { // field artillery with the multiple rocket launcher amplifier in sector 1
+                parts.add(Part.path(ARTILLERY_DOT));
+                parts.add(Part.outline("M85,75 l15,-15 15,15 M85,67 l15,-15 15,15"));
+            }
             case RECON -> parts.add(Part.outline(byAffiliation(aff, "M25,150L175,50", "M60,130L140,70", "M45,155L155,45", "M50,135L150,65")));
             case ANTI_TANK -> parts.add(Part.outline(byAffiliation(aff,
                     "M25,150 L100,52 175,150", "M60,132 L100,30 140,132", "M45,150 L100,47 155,150", "M55,135 L100,33 145,135")));
@@ -196,10 +203,7 @@ final class UnitSymbol {
                 parts.add(Part.path(VT_UAV));
                 parts.add(Part.sector1("A"));
             }
-            case UTILITY -> {
-                parts.add(Part.solid(UAV));
-                parts.add(Part.sector1("U"));
-            }
+            case UTILITY -> parts.add(Part.outline("M70,90 c10,0 10,20 0,20 m10,-10 l40,0 m10,-10 c-10,0 -10,20 0,20")); // maintenance
             case SUPPLY -> parts.add(Part.outline(byAffiliation(aff, "M25,120 l150,0", "M50,120 l100,0", "M45,120 l110,0", "M35,120 l130,0")));
             case MEDIC -> parts.add(Part.outline(String.format(Locale.ROOT, "M100,%s L100,%s M%s,100 L%s,100",
                     box.getY(), box.getMaxY(), box.getX(), box.getMaxX())));

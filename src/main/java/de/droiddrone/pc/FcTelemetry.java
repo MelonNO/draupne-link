@@ -120,6 +120,23 @@ public class FcTelemetry {
         return phonePower;
     }
 
+    /**
+     * How late the sticks reach the phone (record PHONE_RC_LAG, phone app pc.31, only while this PC's frames carry
+     * their send time): lagMs is the last frame's delay over the link's usual (the quickest of the last 4 s), -1 =
+     * unknown; maxLagMs the worst in the last second; dropped how many frames the phone threw away as too late
+     * (rc.maxLagMs) this session. Always the last record of its packet.
+     */
+    static final short PHONE_RC_LAG = 0x40F6;
+
+    public record PhoneRcLag(int lagMs, int maxLagMs, int dropped, long receivedAt) {}
+
+    private volatile PhoneRcLag phoneRcLag;
+
+    /** The phone's latest word on how late the sticks arrive, or null (none yet, or a phone app before pc.31). */
+    public PhoneRcLag getPhoneRcLag() {
+        return phoneRcLag;
+    }
+
     public record PhoneState(int flags, int lastRcSeq, int rcWriteAgeMs, int rcInToOutMs, long receivedAt) {
         static final int FLAG_CHANNEL_MAP = 1, FLAG_USB_PENDING = 2, FLAG_USB_DENIED = 4, FLAG_CAMERA_OPEN = 8, FLAG_VIDEO_RESTARTING = 16;
 
@@ -255,8 +272,8 @@ public class FcTelemetry {
                     unknownCodes++;
                     return;
                 }
-                if (code < FcCommon.DD_TIMERS || code == FcCommon.DD_MAVLINK_ATTITUDE) lastFcDataAt = System.currentTimeMillis();
-                if (firstRecordAt == 0) firstRecordAt = System.currentTimeMillis();
+                if (code < FcCommon.DD_TIMERS || code == FcCommon.DD_MAVLINK_ATTITUDE) lastFcDataAt = MonoClock.ms();
+                if (firstRecordAt == 0) firstRecordAt = MonoClock.ms();
             }
         } catch (RuntimeException e) {
             // truncated packet: keep what was parsed
@@ -270,7 +287,7 @@ public class FcTelemetry {
                 double roll = b.readShort() / 10.0;  // decidegrees
                 double pitch = b.readShort() / 10.0;
                 int yaw = b.readShort();            // degrees
-                attitude = new Attitude(roll, pitch, Math.floorMod(yaw, 360), System.currentTimeMillis());
+                attitude = new Attitude(roll, pitch, Math.floorMod(yaw, 360), MonoClock.ms());
             }
             case FcCommon.MSP_ALTITUDE -> {
                 int cm = b.readInt();
@@ -332,7 +349,7 @@ public class FcTelemetry {
                 int travelled = b.readInt(); // the Flight app's own count, in m
                 Gps old = gps;
                 gps = new Gps(fix, sats, kmh, altM, old == null ? -1 : old.distanceHomeM(), old == null ? 0 : old.directionHomeDeg(),
-                        lat, lon, travelled, course, hdop, System.currentTimeMillis());
+                        lat, lon, travelled, course, hdop, MonoClock.ms());
             }
             case FcCommon.MSP_COMP_GPS -> {
                 int dist = b.readShort();
@@ -383,14 +400,20 @@ public class FcTelemetry {
                 int age = b.readShort() & 0xffff;
                 int inToOut = b.readShort() & 0xffff;
                 phoneState = new PhoneState(flags, seq == 255 ? -1 : seq, age == 65535 ? -1 : age,
-                        inToOut == 65535 ? -1 : inToOut, System.currentTimeMillis());
+                        inToOut == 65535 ? -1 : inToOut, MonoClock.ms());
             }
             case PHONE_POWER -> {
                 int mode = b.readUnsignedByteAsInt();
                 int interval = b.readUnsignedByteAsInt();
                 int sleepIn = b.readShort() & 0xffff;
                 int caps = b.readUnsignedByteAsInt();
-                phonePower = new PhonePower(mode, interval, sleepIn, caps, System.currentTimeMillis());
+                phonePower = new PhonePower(mode, interval, sleepIn, caps, MonoClock.ms());
+            }
+            case PHONE_RC_LAG -> {
+                int lag = b.readShort() & 0xffff;
+                int max = b.readShort() & 0xffff;
+                int dropped = b.readShort() & 0xffff;
+                phoneRcLag = new PhoneRcLag(lag == 65535 ? -1 : lag, max == 65535 ? -1 : max, dropped, MonoClock.ms());
             }
             case PHONE_ENCODER -> {
                 phoneTargetBitRate = b.readInt();
@@ -403,7 +426,7 @@ public class FcTelemetry {
                 double kmh = (b.readShort() & 0xffff) / 10.0;
                 int course = b.readShort() & 0xffff;
                 int age = b.readShort() & 0xffff;
-                phonePosition = new PhonePosition(lat, lon, alt, accuracy, kmh, course, age, System.currentTimeMillis());
+                phonePosition = new PhonePosition(lat, lon, alt, accuracy, kmh, course, age, MonoClock.ms());
             }
             default -> {
                 return false;
@@ -452,8 +475,12 @@ public class FcTelemetry {
      */
     public boolean isArmedNow(long nowMs, long maxAgeMs) {
         Status s = status;
-        return s != null && s.armed() && nowMs - s.receivedAt() <= maxAgeMs;
+        // two reports in a row: one "armed" held up in a 4G burst and let go after a disarm must not count alone
+        return s != null && s.armed() && armedStreak >= 2 && nowMs - s.receivedAt() <= maxAgeMs;
     }
+
+    /** How many status reports in a row said armed (0 after one that said disarmed). */
+    private volatile int armedStreak;
 
     /** The phone has sent telemetry for a while but no version: its app is older than 2.3.0-pc.5. */
     public boolean phoneAppSilent(long nowMs) {
@@ -477,8 +504,9 @@ public class FcTelemetry {
         }
         List<Blocker> blockers = blockersFor(arming);
         boolean armed = modes.contains("ARM");
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         if (!names.isEmpty()) trackArmed(armed, now); // without the names, ARM can't be found among the bits
+        armedStreak = armed ? Math.min(armedStreak + 1, 1000) : 0;
         status = new Status(armed, List.copyOf(modes), List.copyOf(blockers), load, coreTemp, now);
     }
 
@@ -618,7 +646,7 @@ public class FcTelemetry {
     private Battery battery(double volts, int fcCells, int mah, double amps) {
         BatteryLimits lim = batteryLimits;
         double maxCell = lim != null && lim.maxCell() > 0 ? lim.maxCell() : 4.3;
-        return new Battery(volts, cellCount.resolve(volts, fcCells, maxCell, System.currentTimeMillis()), mah, amps, fcCells);
+        return new Battery(volts, cellCount.resolve(volts, fcCells, maxCell, MonoClock.ms()), mah, amps, fcCells);
     }
 
     public Battery getBattery() {

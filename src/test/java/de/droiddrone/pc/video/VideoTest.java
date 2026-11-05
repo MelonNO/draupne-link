@@ -168,6 +168,46 @@ class VideoTest {
         assertNotNull(a.put(false, (short) 2, 0, 50, whole, 0, 50));
     }
 
+    /**
+     * A fragment of key frame 1 that comes again a few frames later (4G doubles and reorders): not a restart - before,
+     * it threw away what was pending (frame 6's first half here) and released frame 1 once more after frame 5.
+     */
+    @Test
+    void aLateFragmentOfKeyFrameOneIsNoRestart() {
+        FrameAssembler a = new FrameAssembler();
+        byte[] key = bytes(7, 300);
+        assertNull(a.put(true, (short) 1, 0, 300, key, 0, 100, 1000));
+        assertNull(a.put(true, (short) 1, 100, 0, key, 100, 100, 1000));
+        assertNotNull(a.put(true, (short) 1, 200, 0, key, 200, 100, 1000));
+        for (short n = 2; n <= 5; n++) assertNotNull(a.put(false, n, 0, 10, bytes(n, 10), 0, 10, 1000 + n * 33));
+        byte[] six = bytes(6, 200);
+        assertNull(a.put(false, (short) 6, 0, 200, six, 0, 100, 1200));
+        assertNull(a.put(true, (short) 1, 100, 0, key, 100, 100, 1210), "the middle again");
+        assertNull(a.put(true, (short) 1, 0, 300, key, 0, 100, 1215), "the start again");
+        FrameAssembler.Frame f = a.put(false, (short) 6, 100, 0, six, 100, 100, 1220);
+        assertNotNull(f, "frame 6's first half was kept");
+        assertFalse(f.damaged());
+        assertFalse(a.startedAfresh(), "no restart was seen");
+        // a real restart is still one: a new key frame 1 of another size
+        FrameAssembler.Frame restart = a.put(true, (short) 1, 0, 120, bytes(9, 120), 0, 120, 1300);
+        assertNotNull(restart);
+        assertTrue(restart.streamStart());
+    }
+
+    /**
+     * After a long blackout the phone's counter may stand anywhere: a frame that looks up to ORDER_WINDOW behind the
+     * last one released is taken once nothing has been released for ORDER_RESET_MS (before: dropped for good).
+     */
+    @Test
+    void theOrderIsForgottenAfterALongGap() {
+        FrameAssembler a = new FrameAssembler();
+        assertNotNull(a.put(true, (short) 800, 0, 10, bytes(0, 10), 0, 10, 1000));
+        assertNull(a.put(false, (short) 300, 0, 10, bytes(0, 10), 0, 10, 1500), "half a second later: an old frame");
+        assertNotNull(a.put(false, (short) 300, 0, 10, bytes(0, 10), 0, 10, 1000 + FrameAssembler.ORDER_RESET_MS + 1),
+                "after the gap: the stream goes on from here");
+        assertNotNull(a.put(false, (short) 301, 0, 10, bytes(0, 10), 0, 10, 1000 + FrameAssembler.ORDER_RESET_MS + 34));
+    }
+
     @Test
     void absurdFrameSizesAreNotAllocated() {
         assertNull(new FrameAssembler().put(true, (short) 1, 0, Integer.MAX_VALUE, new byte[10], 0, 10));

@@ -1,7 +1,6 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.CalibrationWizard;
-import de.droiddrone.pc.CalibrationWizard.Direction;
 import de.droiddrone.pc.CalibrationWizard.Step;
 import de.droiddrone.pc.CalibrationWizard.StepKind;
 import de.droiddrone.pc.Joystick;
@@ -26,7 +25,6 @@ import java.awt.CardLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.GridLayout;
 import java.awt.Window;
 import java.awt.event.KeyEvent;
 import java.util.Map;
@@ -43,6 +41,7 @@ class CalibrationDialog extends JDialog {
     private final JoystickService service;
     private final int joystickId;
     private final CalibrationWizard wizard;
+    private final de.droiddrone.pc.setup.ModeSwitch.Purpose[] purposes;
     private Map<String, String> result;
     private int shownStep = -1;
 
@@ -51,9 +50,8 @@ class CalibrationDialog extends JDialog {
     private final JLabel title = Theme.label("", Theme.headingFont(34f), Theme.TEXT);
     private final JLabel hint = Theme.label("", Theme.font(Font.PLAIN, 16f), Theme.MUTED);
     private final JLabel status = Theme.label(" ", Theme.font(Font.BOLD, 14f), Theme.MUTED);
-    private final GimbalView leftGimbal = new GimbalView("Throttle / Yaw", "YAW", "THR");
-    private final GimbalView rightGimbal = new GimbalView("Pitch / Roll", "ROLL", "PIT");
-    private final JPanel gimbalRow = new JPanel(new GridLayout(1, 2, 40, 0));
+    /** The 3D radio acting out the step, big, beside the values: the only picture of what to do (1.0.39, the pilot). */
+    private final ControllerRender radio = new ControllerRender();
     private final RawAxesView rawAxes = new RawAxesView();
     private final ChannelBars channelBars = new ChannelBars();
     private final JCheckBox[] invertBoxes;
@@ -78,6 +76,7 @@ class CalibrationDialog extends JDialog {
         this.service = service;
         this.joystickId = joystick.id();
         this.wizard = new CalibrationWizard(state.axes().length, state.buttons().length, purposes);
+        this.purposes = purposes;
         summaryChannels = PcConfig.THROTTLE_INDEX + 1 + wizard.switchCount();
         invertBoxes = new JCheckBox[summaryChannels];
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
@@ -105,12 +104,7 @@ class CalibrationDialog extends JDialog {
         Theme.transparent(header, headerTop, titles);
         root.add(header, BorderLayout.NORTH);
 
-        Dimension gimbalSize = new Dimension(170, 212);
-        leftGimbal.setPreferredSize(gimbalSize);
-        rightGimbal.setPreferredSize(gimbalSize);
-        gimbalRow.add(leftGimbal);
-        gimbalRow.add(rightGimbal);
-        gimbalRow.setBorder(BorderFactory.createEmptyBorder(0, 120, 12, 120));
+        radio.setPreferredSize(new Dimension(560, 600));
         JPanel summary = new JPanel(new BorderLayout(0, 14));
         summary.add(channelBars, BorderLayout.CENTER);
         JPanel invertRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 14, 0));
@@ -127,14 +121,14 @@ class CalibrationDialog extends JDialog {
         cardPanel.add(rawAxes, "raw");
         cardPanel.add(summary, "summary");
         JPanel center = new JPanel(new BorderLayout());
-        center.add(gimbalRow, BorderLayout.NORTH);
         JScrollPane scroll = new JScrollPane(new WidthTrackingPanel(cardPanel));
         scroll.setBorder(BorderFactory.createEmptyBorder());
         scroll.getViewport().setOpaque(false);
         scroll.getVerticalScrollBar().setUnitIncrement(16);
         center.add(scroll, BorderLayout.CENTER);
-        Theme.transparent(gimbalRow, summary, invertRow, cardPanel, center, scroll);
-        JPanel centerCard = Theme.card(new BorderLayout());
+        Theme.transparent(summary, invertRow, cardPanel, center, scroll);
+        JPanel centerCard = Theme.card(new BorderLayout(24, 0));
+        centerCard.add(radio, BorderLayout.WEST); // the radio the full height, the values beside it
         centerCard.add(center, BorderLayout.CENTER);
         root.add(centerCard, BorderLayout.CENTER);
 
@@ -161,9 +155,10 @@ class CalibrationDialog extends JDialog {
 
         timer = new Timer(16, e -> tick());
         timer.start();
-        setMinimumSize(new Dimension(900, 700));
+        setMinimumSize(new Dimension(1100, 740));
         int screenHeight = getGraphicsConfiguration().getBounds().height;
-        setSize(1000, Math.max(700, Math.min(920, screenHeight - 80)));
+        int screenWidth = getGraphicsConfiguration().getBounds().width;
+        setSize(Math.max(1100, Math.min(1320, screenWidth - 60)), Math.max(700, Math.min(920, screenHeight - 80)));
         setLocationRelativeTo(owner);
         WindowReveal.onOpen(this);
     }
@@ -207,23 +202,29 @@ class CalibrationDialog extends JDialog {
         stepCounter.setText("STEP " + (shownStep + 1) + " OF " + wizard.getStepCount());
         title.setText(step.title().toUpperCase());
         hint.setText("<html>" + step.hint() + "</html>");
-        boolean gimbals = step.kind() == StepKind.ASSIGN || step.kind() == StepKind.SUMMARY;
-        gimbalRow.setVisible(gimbals);
+        if (step.kind() == StepKind.SWITCH) {
+            // the toggle its purpose lives on (the pilot): flight modes the second on the left, PREARM the right end
+            int aux = step.channel() - 4;
+            String purpose = aux < purposes.length && purposes[aux] != null ? purposes[aux].title() : null;
+            radio.showSwitch(ControllerRender.slotFor(purpose, aux), "AUX" + (aux + 1) + (purpose == null ? "" : " - " + purpose.toUpperCase(java.util.Locale.ROOT)));
+        } else {
+            radio.show(switch (step.kind()) {
+                case RANGE -> ControllerRender.Show.SWEEP;
+                case CENTER -> ControllerRender.Show.REST;
+                case ASSIGN -> switch (step.channel()) {
+                    case 0 -> ControllerRender.Show.ROLL_RIGHT;
+                    case 1 -> ControllerRender.Show.PITCH_UP;
+                    case 2 -> ControllerRender.Show.YAW_RIGHT;
+                    default -> ControllerRender.Show.THROTTLE_UP;
+                };
+                default -> ControllerRender.Show.LIVE;
+            });
+        }
         cards.show(cardPanel, step.kind() == StepKind.SUMMARY ? "summary" : "raw");
         skipButton.setVisible(wizard.canSkip());
         nextButton.setVisible(step.kind() == StepKind.RANGE || step.kind() == StepKind.CENTER || step.kind() == StepKind.SUMMARY);
         nextButton.setText(step.kind() == StepKind.SUMMARY ? "FINISH" : "NEXT");
 
-        Direction leftArrow = Direction.NONE;
-        Direction rightArrow = Direction.NONE;
-        if (step.kind() == StepKind.ASSIGN) {
-            boolean leftStick = step.channel() == 2 || step.channel() == PcConfig.THROTTLE_INDEX;
-            if (leftStick) leftArrow = step.direction(); else rightArrow = step.direction();
-        }
-        leftGimbal.setArrow(leftArrow);
-        rightGimbal.setArrow(rightArrow);
-        leftGimbal.setValues(null, null);
-        rightGimbal.setValues(null, null);
         if (step.kind() == StepKind.SUMMARY) {
             for (int i = 0; i < summaryChannels; i++) {
                 invertBoxes[i].setEnabled(wizard.getSpec(i) != null);
@@ -238,11 +239,14 @@ class CalibrationDialog extends JDialog {
         switch (step.kind()) {
             case RANGE -> {
                 int swept = wizard.getFullySweptAxisCount();
-                setStatus("Full range reached on " + swept + " of " + CalibrationWizard.STICK_AXES + " stick axes",
-                        swept >= CalibrationWizard.STICK_AXES ? Theme.OK : Theme.MUTED);
+                long in = wizard.rangeAutoNextInMs(now);
+                setStatus(in >= 0 ? "Full range on all " + CalibrationWizard.STICK_AXES + " stick axes - keep going into the corners, "
+                                + "centring next in " + (in + 999) / 1000 + " s"
+                                : "Full range reached on " + swept + " of " + CalibrationWizard.STICK_AXES + " stick axes",
+                        in >= 0 ? Theme.OK : Theme.MUTED);
             }
             case CENTER -> setStatus(wizard.isCenterReady() ? "Sticks at rest - press Next."
-                    : "Hands off the sticks, throttle down - waiting for them to rest...", wizard.isCenterReady() ? Theme.OK : Theme.MUTED);
+                    : "All four sticks centred, thumbs off - waiting for them to rest...", wizard.isCenterReady() ? Theme.OK : Theme.MUTED);
             case ASSIGN, SWITCH -> {
                 String candidate = wizard.getCandidate();
                 if (candidate == null) {
@@ -272,8 +276,13 @@ class CalibrationDialog extends JDialog {
             short[] ch = preview.map(state.axes(), state.buttons());
             channelBars.setValues(ch, summaryChannels);
             if (ch != null) {
-                leftGimbal.setValues((int) ch[2], (int) ch[PcConfig.THROTTLE_INDEX]);
-                rightGimbal.setValues((int) ch[0], (int) ch[1]);
+                radio.setLive((ch[2] - 1500) / 500f, (ch[PcConfig.THROTTLE_INDEX] - 1500) / 500f, (ch[0] - 1500) / 500f, (ch[1] - 1500) / 500f);
+                // the switches too, each on its own toggle (ARM on SF, the flight modes on SA ...)
+                for (int aux = 0; aux < wizard.switchCount() && PcConfig.THROTTLE_INDEX + 1 + aux < ch.length; aux++) {
+                    String purpose = aux < purposes.length && purposes[aux] != null ? purposes[aux].title() : null;
+                    boolean mapped = wizard.getSpec(PcConfig.THROTTLE_INDEX + 1 + aux) != null;
+                    radio.setLiveSwitch(ControllerRender.slotFor(purpose, aux), mapped ? (ch[PcConfig.THROTTLE_INDEX + 1 + aux] - 1500) / 500.0 : Double.NaN);
+                }
             }
             return;
         }

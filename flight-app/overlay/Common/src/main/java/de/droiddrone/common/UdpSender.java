@@ -18,6 +18,11 @@
  *  when the next session starts (see connect). Upstream's timer task cancelled the `timer` field, which by then was
  *  the NEW session's timer: from the first reconnect on, no acknowledged packet (Config, StartVideo, the video
  *  config, FcInfo...) was ever resent on either side, and a timer thread was left running per Connect.
+ *  pc.31 / DRAUPNE Link 1.0.39: a Connect is not kept for resending (both apps send it on their own schedule and
+ *  each one is answered: the resends doubled the Connects in flight after a loss, and each answer restarted the
+ *  numbering); one try per packet, not ten in a row on a dead network, and the error logged at most every 2 s; a
+ *  packet's number and its saved copy are taken under the same lock as the reset in connect, so a packet of the
+ *  old session can't be saved under the new numbering.
  */
 
 package de.droiddrone.common;
@@ -27,8 +32,6 @@ import static de.droiddrone.common.Log.log;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -39,12 +42,16 @@ public class UdpSender {
     private final Object packetNumberLock = new Object();
     private short nextPacketNumber;
     private final ConcurrentHashMap<Short, SavedPacket> savedPackets = new ConcurrentHashMap<>();
-    private Timer timer;
-    private InetAddress ip;
-    private int port;
-    private boolean active;
-    private int pingMs;
-    private int timerId;
+    private volatile Timer timer;
+    private volatile InetAddress ip;
+    private volatile int port;
+    private volatile boolean active;
+    private volatile int pingMs;
+    private volatile int timerId;
+    /** pc.31: send errors are logged at most every ERROR_LOG_GAP_MS, with the count since the last line. */
+    private static final long ERROR_LOG_GAP_MS = 2000;
+    private long lastErrorLogMs;
+    private int errorsSinceLog;
 
     public UdpSender(DatagramSocket socket) {
         this.socket = socket;
@@ -65,8 +72,8 @@ public class UdpSender {
         setAddress(ip, port);
         synchronized (packetNumberLock) {
             nextPacketNumber = -1;
+            savedPackets.clear(); // pc.31: under the lock that numbers and saves a packet (sendPacket)
         }
-        savedPackets.clear();
         active = true;
         timerId++;
         Timer old = timer;
@@ -120,27 +127,37 @@ public class UdpSender {
         int size = data.length;
         if (size == 0) return;
         byte packetName = data[0];
-        short num = -1;
         boolean isNumbered = UdpCommon.isPacketNumbered(packetName);
-        if (isNumbered && packetName != UdpCommon.Connect){
+        if (isNumbered) {
             if (size < 3) return;
-            num = getNextPacketNumber();
-        }
-        for (int i = 0; i < 10; i++) {
-            try {
-                if (isNumbered) {
-                    byte[] numBytes = ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort(num).array();
-                    data[1] = numBytes[0];
-                    data[2] = numBytes[1];
-                    savedPackets.put(num, new SavedPacket(packetName, num, data, ip, port));
-                }
-                DatagramPacket pak = new DatagramPacket(data, size, ip, port);
-                socket.send(pak);
-                break;
-            }catch (Exception e){
-                e.printStackTrace();
-                log("sendPacket error: " + e);
+            short num = -1;
+            synchronized (packetNumberLock) {
+                // a Connect keeps -1 and isn't saved: the apps send it again themselves, and the far side answers
+                // each (pc.31; the resend timer sent every Connect three or four times more on a slow link)
+                if (packetName != UdpCommon.Connect) num = getNextPacketNumber();
+                data[1] = (byte) (num >> 8);
+                data[2] = (byte) num;
+                if (packetName != UdpCommon.Connect) savedPackets.put(num, new SavedPacket(packetName, num, data, ip, port));
             }
+        }
+        try {
+            // pc.31: one try - upstream tried ten times in a row with a stack trace each, a flood on a dead network
+            socket.send(new DatagramPacket(data, size, ip, port));
+        }catch (Exception e){
+            sendError("sendPacket", e);
+        }
+    }
+
+    /** A send error, logged at most every ERROR_LOG_GAP_MS (a dead network fails every packet). */
+    private void sendError(String what, Exception e) {
+        long now = System.currentTimeMillis();
+        synchronized (packetNumberLock) {
+            errorsSinceLog++;
+            if (now - lastErrorLogMs < ERROR_LOG_GAP_MS) return;
+            lastErrorLogMs = now;
+            int n = errorsSinceLog;
+            errorsSinceLog = 0;
+            log(what + " error: " + e + (n > 1 ? " (" + n + " send errors in the last " + ERROR_LOG_GAP_MS / 1000 + " s)" : ""));
         }
     }
 
@@ -167,8 +184,7 @@ public class UdpSender {
             DatagramPacket pak = new DatagramPacket(data, data.length, ip, port);
             socket.send(pak);
         } catch (Exception e) {
-            e.printStackTrace();
-            log("resendPacket error: " + e);
+            sendError("resendPacket", e);
         }
     }
 

@@ -223,4 +223,50 @@ class RcSessionTest {
                 new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
         assertFalse(known.isArmSwitchUnknown());
     }
+
+    /** STANDBY isn't a radio blip: a quick WAKE must not skip the throttle-low rule. */
+    @Test
+    void aWakeRightAfterStandbyStillNeedsTheThrottleLow() {
+        session.onInput(sticks(-1f));
+        session.onInput(sticks(0.4f));
+        assertTrue(session.isRcEnabled());
+        session.onPaused(sticks(0.4f)); // STANDBY
+        assertFalse(session.isRcEnabled());
+        now[0] += 300; // well inside the blip window
+        session.onInput(sticks(0.4f)); // WAKE, throttle still up
+        assertFalse(session.isRcEnabled(), "a pause is no blip: throttle-low first");
+        session.onInput(sticks(-1f));
+        assertTrue(session.isRcEnabled());
+    }
+
+    @Test
+    void aButtonChangeCountsAsTheRadioMoving() {
+        session.onInput(new Joystick.State(new float[]{0, 0, 0, -1f}, new boolean[]{false}));
+        now[0] += 6000;
+        session.onInput(new Joystick.State(new float[]{0, 0, 0, -1f}, new boolean[]{true}));
+        assertEquals(0, session.msSinceInputChanged(), "a switch flipped: the radio is alive");
+    }
+
+    /** With radio.frozenStopS set, an armed drone on a hung radio is left to Betaflight's failsafe; off by default. */
+    @Test
+    void aFrozenRadioStopsTheSticksOnlyWhenAskedAndOnlyWhileArmed() {
+        boolean[] fcArmed = {true};
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true, () -> fcArmed[0], null);
+        s.onInput(sticks(-1f));
+        now[0] += 60_000;
+        s.onInput(sticks(-1f));
+        assertFalse(s.isFrozenStopped(), "no limit set: never");
+        s.setFrozenStopMs(10_000);
+        s.onInput(sticks(-1f));
+        assertTrue(s.isFrozenStopped(), "armed, unchanged for a minute, limit 10 s");
+        assertTrue(events.get(events.size() - 1).startsWith("RADIO FROZEN"));
+        assertTrue(s.isRcEnabled(), "still live: it goes on the moment the radio moves");
+        s.onInput(sticks(-0.99f));
+        assertFalse(s.isFrozenStopped());
+        assertEquals("The radio moves again - sticks sent again.", events.get(events.size() - 1));
+        now[0] += 60_000;
+        fcArmed[0] = false;
+        s.onInput(sticks(-0.99f));
+        assertFalse(s.isFrozenStopped(), "disarmed: nothing to hand to the failsafe");
+    }
 }

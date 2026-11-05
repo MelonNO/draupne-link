@@ -48,17 +48,23 @@ class MapTest {
         assertEquals("https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/10/297/542.png",
                 TileSource.KARTVERKET_TOPO.url(10, 542, 297));
         assertEquals("https://tile.openstreetmap.org/10/542/297.png", TileSource.OSM.url(10, 542, 297));
+        assertEquals("https://tile.opentopomap.org/10/542/297.png", TileSource.WORLD_TOPO.url(10, 542, 297));
+        // TOPO is a topo map everywhere: Kartverket's in Norway, the world one past the border; the others stay
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_TOPO.at(OSLO_LAT, OSLO_LON));
+        assertEquals(TileSource.WORLD_TOPO, TileSource.KARTVERKET_TOPO.at(52.52, 13.40));
+        assertEquals(TileSource.SATELLITE, TileSource.SATELLITE.at(52.52, 13.40));
+        assertEquals(TileSource.WORLD_TOPO, TileSource.WORLD_TOPO.at(OSLO_LAT, OSLO_LON));
     }
 
     @Test
     void autoPicksKartverketInNorwayAndOpenStreetMapElsewhere() {
         assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(OSLO_LAT, OSLO_LON));
         assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(78.22, 15.63), "Longyearbyen");
-        assertEquals(TileSource.OSM, TileSource.forPosition(52.52, 13.40), "Berlin");
-        assertEquals(TileSource.OSM, TileSource.forPosition(59.33, 18.07), "Stockholm");
-        assertEquals(TileSource.OSM, TileSource.forPosition(67.86, 20.23), "Kiruna");
-        assertEquals(TileSource.OSM, TileSource.forPosition(57.71, 11.97), "Gothenburg");
-        assertEquals(TileSource.OSM, TileSource.forPosition(68.91, 27.03), "Inari, Finland");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(52.52, 13.40), "Berlin");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(59.33, 18.07), "Stockholm");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(67.86, 20.23), "Kiruna");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(57.71, 11.97), "Gothenburg");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(68.91, 27.03), "Inari, Finland");
         assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(69.65, 18.96), "Tromso");
         assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(60.39, 5.32), "Bergen");
         assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(70.66, 23.68), "Hammerfest");

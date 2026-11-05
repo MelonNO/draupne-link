@@ -17,6 +17,8 @@
  *  Modified for DRAUPNE Link: the frame-rate range asked for is kept (upstream took the fastest when the size
  *  wasn't exact) and matched to one the camera lists (supportedRange); sizes keep the picture's shape; a session can
  *  be stopped without closing the camera (stopSession).
+ *  pc.31: one camera thread, kept across opens (each open started one and none was quit); a device's callbacks for
+ *  an earlier open (or one after close) only close that device, never the current camera's state.
  */
 
 package de.droiddrone.flight;
@@ -147,11 +149,14 @@ public class InternalCamera implements Camera{
             //
         }
         try{
-            handlerThread = new HandlerThread("CameraThread");
-            handlerThread.start();
+            // pc.31: one camera thread, kept - every open started a new one and none was ever quit
+            if (handlerThread == null || !handlerThread.isAlive()) {
+                handlerThread = new HandlerThread("CameraThread");
+                handlerThread.start();
+            }
             final Handler handler = new Handler(handlerThread.getLooper());
             isOpening = true;
-            cameraManager.openCamera(config.getCameraId(), cameraStateCallback, handler);
+            cameraManager.openCamera(config.getCameraId(), stateCallback(++openGeneration), handler);
         }catch (Exception e){
             isOpening = false;
             log("openCamera error: "+ e);
@@ -165,9 +170,22 @@ public class InternalCamera implements Camera{
         return isOpening;
     }
 
-    private final CameraDevice.StateCallback cameraStateCallback = new CameraDevice.StateCallback(){
+    /**
+     * pc.31: which openCamera (or close) is the newest: a device's callbacks for an earlier one only close that
+     * device - before, a late onDisconnected or onError of an evicted device cleared the state of the camera that
+     * had just been opened, and a late onOpened after close() started a preview on a camera nobody wanted.
+     */
+    private volatile int openGeneration;
+
+    private CameraDevice.StateCallback stateCallback(final int generation) {
+        return new CameraDevice.StateCallback(){
         @Override
         public void onOpened(@NonNull CameraDevice cameraDevice){
+            if (generation != openGeneration) {
+                log("Camera device opened for an earlier start: closed");
+                closeQuietly(cameraDevice);
+                return;
+            }
             camera = cameraDevice;
             isOpened = true;
             isOpening = false;
@@ -190,6 +208,10 @@ public class InternalCamera implements Camera{
         }
 
         private void lost(CameraDevice cameraDevice) {
+            if (generation != openGeneration) { // an earlier open's device: the current state isn't its
+                closeQuietly(cameraDevice);
+                return;
+            }
             isOpened = false;
             isOpening = false;
             isStarted = false;
@@ -200,7 +222,15 @@ public class InternalCamera implements Camera{
             } catch (Exception ignored) {
             }
         }
-    };
+        };
+    }
+
+    private static void closeQuietly(CameraDevice cameraDevice) {
+        try {
+            cameraDevice.close();
+        } catch (Exception ignored) {
+        }
+    }
 
     @Override
     public void startPreview() {
@@ -561,7 +591,9 @@ public class InternalCamera implements Camera{
 
     @Override
     public void close(){
+        openGeneration++; // pc.31: an open still under way closes its device when it comes (stateCallback)
         isOpened = false;
+        isOpening = false;
         isStarted = false;
         if (camera != null){
             camera.close();
@@ -569,6 +601,7 @@ public class InternalCamera implements Camera{
         }
         if (handlerThread != null){
             handlerThread.quitSafely();
+            handlerThread = null; // the next open starts a new one
         }
     }
 }
