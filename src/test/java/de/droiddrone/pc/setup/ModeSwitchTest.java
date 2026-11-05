@@ -78,10 +78,30 @@ class ModeSwitchTest {
     }
 
     @Test
-    void sameModesOnOtherSwitchesAreReportedNotTouched() {
+    void sameModesOnOtherSwitchesAreTakenOff() {
+        // GPS RESCUE on AUX4 besides the chosen AUX2 (which gets it as POS HOLD's neighbour, not rescue): one place each
         ModeSwitch.Plan p = ModeSwitch.DEFAULT.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 46 3 1700 2100 0 0"), ALL);
-        assertEquals(List.of("GPS RESCUE on AUX4"), p.elsewhere());
-        assertFalse(p.commands().stream().anyMatch(c -> c.startsWith("aux 1 ")));
+        assertTrue(p.elsewhere().isEmpty());
+        assertEquals(List.of("GPS RESCUE on AUX4"), p.replaced());
+        // its slot is rewritten (cleared, and filled again with the switch's own modes: one command)
+        assertTrue(p.commands().stream().anyMatch(c -> c.startsWith("aux 1 ") && !c.contains(" 46 ")), p.commands().toString());
+        // the pilot's case: ANGLE on AUX5 as well as on the chosen AUX2 - AUX5 is cleared
+        ModeSwitch.Plan q = ModeSwitch.DEFAULT.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0",
+                "aux 2 11 1 1700 2100 0 0", "aux 3 1 4 1300 1700 0 0"), ALL);
+        assertEquals(List.of("aux 3 0 0 900 900 0 0"), q.commands());
+        assertEquals(List.of("ANGLE on AUX5"), q.replaced());
+        assertEquals(List.of("ANGLE on AUX2, AUX5"), q.doubled(), "as read, before the write");
+    }
+
+    @Test
+    void aSwitchLeftAsItIsKeepsThemAndDoublesAreReported() {
+        String aux = aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 3 1 4 1300 1700 0 0");
+        ModeSwitch.Plan p = ModeSwitch.plan(aux, ALL, java.util.Map.of(), null, 0, 1, 0);
+        assertTrue(p.commands().isEmpty(), "ARM is where it should be, the modes are the pilot's own");
+        assertEquals(List.of("ANGLE on AUX2", "ANGLE on AUX5"), p.elsewhere());
+        assertEquals(List.of("ANGLE on AUX2, AUX5"), p.doubled());
+        assertTrue(ModeSwitch.doubled("aux 0 0 0 1700 2100 0 0\naux 1 13 1 1700 2100 0 0\naux 2 13 4 1700 2100 0 0").isEmpty(),
+                "BEEPER on two switches is the pilot's business");
     }
 
     @Test

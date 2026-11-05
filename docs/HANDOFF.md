@@ -14,9 +14,19 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   choices...)` - label 104 px, same-width AUX combos (`auxCombo`, prototype "Leave as it is"), the part's state in its own
   `Part.cell` (a `WrappingText.fitting` in the line's CENTER, coloured by state via Theme.*_HEX) instead of the row's
   text; `CheckRow.set` hides the detail text when empty; `WrappingText.fitting` measures by its own width (and insets)
-  once laid out. `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Written with Write.", a problem), never
+  once laid out. Third round (the pilot: "first put all the settings, then click confirm and it sets it on the FC ... if
+  all the settings are set and confirmed the checks turn green"): one CONFIRM button on the settings row (`confirmNow`;
+  the cell count's own Confirm gone, CONFIRM confirms it); `writeArmed` (this session's press: the rounds write) and
+  `confirmed` (`drone.confirmed`, saved once a round after the press finds nothing left to write: the rows may be green);
+  `okState()` = OK when confirmed else TODO, `setText()` = "Set." when confirmed else "" (the ring alone); every user
+  change calls `choiceChanged()` (both off, CONFIRM back). Fourth round (the pilot: "verify that no channel is mapped
+  to the same ... one drone was mapped to aux5 and aux 2 after the setup guide"): `ModeSwitch.plan` takes the MANAGED
+  modes (ANGLE, HORIZON, POS HOLD, GPS RESCUE) off every other switch when the flight mode switch (or the rescue switch
+  for GPS RESCUE) is chosen and has no problem (`offElsewhere` -> cleared, listed in `replaced`); `elsewhere` only remains
+  for a switch left as it is; `Plan.doubled` / `ModeSwitch.doubled(aux)` = managed modes on more than one AUX as read
+  ("ANGLE on AUX2, AUX5"), shown as WARN on the flight-modes line when nothing in the plan takes it off. `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
   the choice beside it; `Combined` gained `footer` (plain line: what WRITE does / "Still not set" list after a failed
-  write) and `Part.hidden` (GPS rescue without a GPS); the WRITE button sits on the **Betaflight settings** row (`changes`
+  write) and `Part.hidden` (GPS rescue without a GPS); the CONFIRM button sits on the **Betaflight settings** row (`changes`
   row gone). GPS: `gps` row with `gpsChoice` No / Yes, `gpsFold` (a `Fold`) with COMPASS, UART (`uartItems`: UART1-6
   until `GpsSetup.uarts(serial)` says what the board has) and CALIBRATE COMPASS; `rescueFold` under the ARM / PREARM row;
   `setGps` folds both, hides the part, `offerGpsModes` / `offerGpsFailsafe` rebuild the lists (a GPS mode without a GPS

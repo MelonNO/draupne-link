@@ -12,8 +12,9 @@ import java.util.Set;
  * command, by Betaflight's permanent mode ids (msp_box.c): ANGLE 1, POS HOLD 11, GPS RESCUE 46. Acro is no mode of
  * its own - it is what flies when none is on.
  *
- * Only that switch is touched: anything else on it is replaced, ARM on it is refused (pick another switch), and modes
- * on other switches stay as they are (reported, as ANGLE elsewhere would turn acro into angle).
+ * Anything else on that switch is replaced, ARM on it is refused (pick another switch), and the modes this setup
+ * manages (ANGLE, HORIZON, POS HOLD, GPS RESCUE) are taken off every other switch, so each is in one place - a switch
+ * left as it is keeps them, reported, and a mode on two switches is reported as doubled.
  */
 public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
     public static final String KEY = "drone.modeSwitch";
@@ -297,10 +298,11 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
      * @param replaced      what was on the switches before and is taken off
      * @param armProblem    why the ARM switch can't be written, or null
      * @param prearmProblem why the PREARM switch can't be written, or null
+     * @param doubled       managed modes Betaflight has on more than one switch ("ANGLE on AUX2, AUX5"), as read
      */
     public record Plan(List<String> commands, String problem, String rescueProblem, List<Mode> missing,
                        java.util.Map<Mode, String> blocked, List<String> elsewhere, List<String> replaced, String armProblem,
-                       String prearmProblem) {
+                       String prearmProblem, List<String> doubled) {
         public boolean isSet() {
             return problem == null && commands.isEmpty();
         }
@@ -406,16 +408,20 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
                 wanted.put(channel, List.<int[]>of(new int[]{Mode.GPS_RESCUE.id, RESCUE_RANGE[0], RESCUE_RANGE[1]}));
             }
         }
-        Set<Integer> managed = Set.of(Mode.ANGLE.id, 2 /* HORIZON */, Mode.POS_HOLD.id, Mode.GPS_RESCUE.id);
+        List<String> doubled = doubled(slots);
         List<String> elsewhere = new ArrayList<>();
         List<Slot> onSwitches = new ArrayList<>();
+        List<Slot> offElsewhere = new ArrayList<>(); // managed modes on other switches: taken off, each in one place
         for (Slot s : slots) {
             if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
             if (wanted.containsKey(s.channel())) {
                 onSwitches.add(s);
-            } else if (managed.contains(s.mode())) {
+            } else if (MANAGED.contains(s.mode())) {
+                boolean ours = s.mode() == Mode.GPS_RESCUE.id ? (rescueAux > 0 && rescueProblem == null) || (modes != null && problem == null)
+                        : modes != null && problem == null;
                 String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
-                if (!elsewhere.contains(line)) elsewhere.add(line);
+                if (ours) offElsewhere.add(s);
+                else if (!elsewhere.contains(line)) elsewhere.add(line);
             }
         }
         List<String> toPlace = new ArrayList<>();
@@ -432,6 +438,12 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         List<Integer> free = new ArrayList<>();
         for (Slot s : onSwitches) {
             if (toPlace.remove(key(s.channel(), s.mode(), s.start(), s.end()))) continue; // already right: kept
+            commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
+            free.add(s.index());
+            String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
+            if (!replaced.contains(line)) replaced.add(line);
+        }
+        for (Slot s : offElsewhere) {
             commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
             free.add(s.index());
             String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
@@ -474,7 +486,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         free.sort(null);
         if (free.size() < place.size()) {
             return new Plan(List.of(), "Betaflight's Modes are full - free a few in Betaflight Configurator.", rescueProblem,
-                    missing, blocked, elsewhere, List.of(), armProblem, prearmProblem);
+                    missing, blocked, elsewhere, List.of(), armProblem, prearmProblem, doubled);
         }
         for (int i = 0; i < place.size(); i++) {
             int[] w = place.get(i);
@@ -488,7 +500,30 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             if (!refilled) result.add(c);
         }
         return new Plan(List.copyOf(result), problem, rescueProblem, missing, blocked, elsewhere, List.copyOf(replaced), armProblem,
-                prearmProblem);
+                prearmProblem, doubled);
+    }
+
+    /** The flight modes this setup manages: each belongs in one place. */
+    static final Set<Integer> MANAGED = Set.of(Mode.ANGLE.id, 2 /* HORIZON */, Mode.POS_HOLD.id, Mode.GPS_RESCUE.id);
+
+    /** The managed modes on more than one switch in the CLI's "aux" output: "ANGLE on AUX2, AUX5". */
+    public static List<String> doubled(String auxOutput) {
+        return doubled(slots(auxOutput));
+    }
+
+    static List<String> doubled(List<Slot> slots) {
+        java.util.Map<Integer, java.util.TreeSet<Integer>> channels = new java.util.TreeMap<>();
+        for (Slot s : slots) {
+            if (s.used() && MANAGED.contains(s.mode())) channels.computeIfAbsent(s.mode(), k -> new java.util.TreeSet<>()).add(s.channel() + 1);
+        }
+        List<String> out = new ArrayList<>();
+        for (var e : channels.entrySet()) {
+            if (e.getValue().size() < 2) continue;
+            List<String> auxes = new ArrayList<>();
+            for (int c : e.getValue()) auxes.add("AUX" + c);
+            out.add(modeName(e.getKey()) + " on " + String.join(", ", auxes));
+        }
+        return out;
     }
 
     private static String key(int channel, int mode, int start, int end) {
