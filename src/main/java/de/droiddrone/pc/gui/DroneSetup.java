@@ -306,6 +306,12 @@ final class DroneSetup {
                 footerText.setVisible(!html.isEmpty());
             }
 
+            /**
+             * Shown instead of the worst part, on the row's light and every section's: red while CONFIRM hasn't been
+             * pressed (the pilot: not confirmed is red, not orange), busy while its write runs; null = the parts' own.
+             */
+            State override = State.BAD;
+
             void refresh() {
                 State worst = State.INFO;
                 for (Part p : parts) {
@@ -315,7 +321,7 @@ final class DroneSetup {
                     s.refresh();
                     if (!s.note.isEmpty() && rank(State.WARN) > rank(worst)) worst = State.WARN;
                 }
-                row.set(worst, "");
+                row.set(override != null ? override : worst, "");
             }
         }
 
@@ -354,7 +360,7 @@ final class DroneSetup {
                     if (!p.hidden && rank(p.state) > rank(worst)) worst = p.state;
                 }
                 if (!note.isEmpty() && rank(State.WARN) > rank(worst)) worst = State.WARN;
-                dot.state = worst;
+                dot.state = owner.override != null ? owner.override : worst;
                 dot.repaint();
             }
 
@@ -447,6 +453,10 @@ final class DroneSetup {
                         case PENDING, INFO -> Theme.MUTED_HEX;
                     };
                     cell.setHtml(text.isEmpty() ? "" : "<span style='color:" + color + "'>" + text + "</span>");
+                    if (cell.isVisible() == text.isEmpty()) { // nothing to say: no empty line (under the flight modes)
+                        cell.setVisible(!text.isEmpty());
+                        if (cell.getParent() instanceof JComponent parent) parent.revalidate();
+                    }
                 }
                 owner.refresh();
                 return this;
@@ -598,6 +608,7 @@ final class DroneSetup {
             boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(MOTORS_CHECKED_KEY));
             motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore ? "Checked."
                     : "Not sure? <b>Check now</b> opens the motor test (props off).");
+            showConfirmState();
             return col;
         }
 
@@ -1054,6 +1065,7 @@ final class DroneSetup {
                 main.save(Map.of(CELLS_KEY, Integer.toString(cells), CELLS_CONFIRMED_KEY, "true"));
             }
             settings.footer("Writing...");
+            showConfirmState();
             done = false;
             applies = 0;
             nextTry = 0;
@@ -1118,6 +1130,13 @@ final class DroneSetup {
             writeArmed = false;
             main.save(Map.of(CONFIRMED_KEY, "false"));
             if (confirmButton != null) confirmButton.setVisible(true);
+            showConfirmState();
+        }
+
+        /** The settings' lights: red until CONFIRM, busy while its write runs, then the settings' own (green when all is set). */
+        private void showConfirmState() {
+            settings.override = confirmed ? null : writeArmed ? State.PENDING : State.BAD;
+            settings.refresh();
         }
 
         /** OK once the page is confirmed; until then a setting that is right still shows as to do. */
@@ -1586,6 +1605,7 @@ final class DroneSetup {
                 confirmed = true;
                 main.save(Map.of(CONFIRMED_KEY, "true"));
             }
+            showConfirmState();
             boolean pendingWrite = !writeArmed;
             showChanges(r, pendingWrite);
             ModeSwitch.Plan armPlan = r.modes();

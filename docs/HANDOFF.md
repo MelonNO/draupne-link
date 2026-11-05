@@ -46,7 +46,17 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   write. SPIN DIRECTION row under the picture (As is / Normal / Reversed per motor; DShot only, battery in). PROPS IN /
   OUT asks, then writes; `connected` sets the picture to Betaflight's. *Not verified on hardware:* any of it - MSP2
   ids and payloads are from Betaflight's source (4.3 on) and Configurator's motor wizards; the window wasn't rendered
-  off screen (its worker opens the USB port). `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
+  off screen (its worker opens the USB port).
+  *Toggles round* (the pilot: the front switches "only move as if they are still switched in the down position ... the
+  flat part of the switch should hinge at the cylindrical part ... now both hinge"): every CAD lever part (`SD3 L*`)
+  is a 6.5 mm collar on the bushing's axis (front row: z from the face to 12.0 mm; shoulders: y 12.5 mm above the
+  bushing) with the flat paddle on its top. `load` finds the collar's top along the axis (the highest point on the
+  collar's wall, 0.97-1.03 of the foot ring's radius), `splitCollar` cuts the lever there: the collar a BODY part
+  (chrome, PLAIN), the paddle the switch group; pivot on the axis at the collar's top; rest = the paddle's centre line
+  off the axis; throw = |rest| (CAD end to mirror, at most `LEVER_MAX_THROW` 40), both rows (SHOULDER_TILT 5 and
+  FRONT_MAX_TILT 22 and the LEVER_KEEP cut are gone). Checked on rendered sheets (scratchpad `SwitchShotTest`, SA
+  SD SF, off / halfway / on); `noLeverEverComesOutThroughItsBushing` still 0. Not checked: the paddle against the
+  shell's wells at the shoulders' new 28-degree throw (trimesh tool not run). `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
   the choice beside it; `Combined` gained `footer` (plain line: what WRITE does / "Still not set" list after a failed
   write) and `Part.hidden` (GPS rescue without a GPS); the CONFIRM button sits on the **Betaflight settings** row (`changes`
   row gone). GPS: `gps` row with `gpsChoice` No / Yes, `gpsFold` (a `Fold`) with COMPASS, UART (`uartItems`: UART1-6

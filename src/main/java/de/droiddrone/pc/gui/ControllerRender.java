@@ -32,7 +32,7 @@ import java.util.zip.GZIPInputStream;
  * tessellated with OpenCASCADE into /model/tx16s-mkii.bin.gz: 47 named parts, ~62k triangles, see THIRD-PARTY.md),
  * made more real here: matte grained plastic, carbon-fibre backs, chrome toggles and pins, dark anodised stick ends,
  * the EdgeTX picture on the screen, the antenna folded back. What moves: each stick (GL) with its gimbal's inner piece
- * (G1) about the gimbal frame's centre, each toggle's lever about its bushing. The renderer, pure Java2D:
+ * (G1) about the gimbal frame's centre, each toggle's paddle about its collar's top (the collar stays). The renderer, pure Java2D:
  * perspective, a depth buffer, per-pixel light (a studio key, fill and rim, a soft sky and floor), shadows from the
  * key light (a shadow map, softened), Fresnel reflections, filmic tone mapping, 2 x 2 supersampled. The stick or
  * switch the step wants glows red and moves, an arrow on the radio's face shows the way.
@@ -49,12 +49,14 @@ final class ControllerRender extends JComponent {
      */
     private static final double MAX_TILT = Math.toRadians(20);
     /**
-     * How far a shoulder toggle (SE SF SG SH) throws either side of its middle: they stand in wells in the shell whose
-     * rims they touch from 6 degrees, so 5 (checked with trimesh at every end and the snap's overshoot). The front ones
-     * throw as far as the CAD draws them, mirrored about their bushing's axis (`leverThrow`): the short ones 15 degrees;
-     * the long ones are drawn at 27 and touch the face at the mirrored end from 24, so at most 22.
+     * A toggle as the CAD builds it: a round collar standing on its bushing's axis (out of the face for the front row,
+     * up for the shoulders) and the flat paddle on the collar's top. The collar stays; the paddle hinges where it meets
+     * the collar's top (the pilot: "the flat part of the switch should hinge at the cylindrical part ... now both
+     * hinge") and throws from where the CAD draws it (one end) to the mirror of that about the axis - at most this.
      */
-    private static final double SHOULDER_TILT = Math.toRadians(5), FRONT_MAX_TILT = Math.toRadians(22);
+    private static final double LEVER_MAX_THROW = Math.toRadians(40);
+    /** A vertex this far (cm) above the collar's top belongs to the paddle. */
+    private static final double COLLAR_EPS = 0.004;
     /**
      * The camera per step, gliding from one to the next: for the sticks nearly square on to the face, so up on the
      * stick is up on screen (from higher up, a stick pushed forward points at the eye and reads as a ball); for a
@@ -348,6 +350,7 @@ final class ControllerRender extends JComponent {
         java.util.Map<Raw, Integer> slotOf = new java.util.HashMap<>();
         java.util.Map<Raw, double[]> leverInfo = new java.util.HashMap<>(); // pivot x y z, angle off the axis, the axis
         java.util.Map<Raw, double[]> bushingOf = new java.util.HashMap<>();
+        java.util.Map<Raw, double[]> collarOf = new java.util.HashMap<>(); // axis point, axis, the collar's top along it
         List<Raw> topLeft = new ArrayList<>(), frontLeft = new ArrayList<>(), topRight = new ArrayList<>(), frontRight = new ArrayList<>();
         for (Raw l : levers) {
             double[] c = centre(l.box());
@@ -374,26 +377,30 @@ final class ControllerRender extends JComponent {
                 }
             }
             boolean front = Math.abs(fz) > Math.abs(fy); // out of the face: the front row
-            double[] pivot;
-            double axisAngle, rest; // in the y-z plane, from +y towards +z
-            if (front) {
-                // a front toggle hinges inside its bushing, on its axis (straight out of the face), where the lever's
-                // centre line meets it - 1.5 mm under the face; the CAD has it at one end of its throw, 15 - 27 degrees
-                // off the axis, and it throws through straight out to the mirror of that (the pilot: hinged at the
-                // bushing's face they "no longer hinge like how they are supposed to")
-                double[] line = centreLine(p, new double[]{fx + bc[0], fy + bc[1], fz + bc[2]});
-                double t = Math.abs(line[4]) > 1e-6 ? (bc[1] - line[1]) / line[4] : 0;
-                pivot = new double[]{bc[0], bc[1], Math.max(bb[2], Math.min(bb[5], line[2] + t * line[5]))};
-                axisAngle = Math.PI / 2 * Math.signum(line[5]);
-                rest = Math.atan2(line[5], line[4]) - axisAngle;
-            } else {
-                // a shoulder one: the CAD has it in its middle, its bushing leaning back with it (the lever's line meets
-                // the bushing's axis above the bushing); it throws either side of its own direction, about the bushing's top
-                axisAngle = Math.atan2(fz, fy);
-                rest = 0;
-                pivot = new double[]{bc[0], fy > 0 ? bb[4] : bb[1], bc[2]};
+            // the bushing's axis (straight out of the face, or up), and along it the collar: from its foot (the lowest
+            // ring) to its top, the highest point on the collar's wall (the paddle's own points are nearer the axis)
+            double[] a = front ? new double[]{0, 0, Math.signum(fz)} : new double[]{0, Math.signum(fy), 0};
+            double foot = Double.MAX_VALUE;
+            for (int i = 0; i < p.length; i += 3) foot = Math.min(foot, along(p, i, bc, a));
+            double radius = 0;
+            for (int i = 0; i < p.length; i += 3) if (along(p, i, bc, a) < foot + 0.02) radius = Math.max(radius, across(p, i, bc, a));
+            double top = foot;
+            for (int i = 0; i < p.length; i += 3) {
+                double r = across(p, i, bc, a), alongI = along(p, i, bc, a);
+                if (r > 0.97 * radius && r < 1.03 * radius && alongI < foot + 2.0) top = Math.max(top, alongI);
             }
+            List<Float> paddle = new ArrayList<>();
+            for (int i = 0; i < p.length; i += 3) {
+                if (along(p, i, bc, a) > top + COLLAR_EPS) for (int k = 0; k < 3; k++) paddle.add(p[i + k]);
+            }
+            float[] pp = new float[paddle.size()];
+            for (int i = 0; i < pp.length; i++) pp[i] = paddle.get(i);
+            double[] line = centreLine(pp.length >= 9 ? pp : p, new double[]{fx + bc[0], fy + bc[1], fz + bc[2]});
+            double[] pivot = {bc[0] + a[0] * top, bc[1] + a[1] * top, bc[2] + a[2] * top};
+            double axisAngle = Math.atan2(a[2], a[1]); // in the y-z plane, from +y towards +z
+            double rest = Math.IEEEremainder(Math.atan2(line[5], line[4]) - axisAngle, 2 * Math.PI);
             leverInfo.put(l, new double[]{pivot[0], pivot[1], pivot[2], rest, axisAngle, front ? 1 : 0});
+            collarOf.put(l, new double[]{bc[0], bc[1], bc[2], a[0], a[1], a[2], top});
             bushingOf.put(l, bb);
             boolean leftSide = c[0] < 0;
             (front ? (leftSide ? frontLeft : frontRight) : (leftSide ? topLeft : topRight)).add(l);
@@ -412,7 +419,7 @@ final class ControllerRender extends JComponent {
                 double[] info = leverInfo.get(row.get(i));
                 md.switchPivot[slot] = new double[]{info[0], info[1], info[2]};
                 md.leverRest[slot] = info[3];
-                md.leverThrow[slot] = info[5] == 0 ? SHOULDER_TILT : Math.min(FRONT_MAX_TILT, Math.abs(info[3])); // a front one: its CAD end and the mirror
+                md.leverThrow[slot] = Math.min(LEVER_MAX_THROW, Math.abs(info[3])); // its CAD end and the mirror
                 md.switchAxis[slot] = info[4];
                 md.bushingBox[slot] = bushingOf.get(row.get(i));
             }
@@ -469,13 +476,13 @@ final class ControllerRender extends JComponent {
             }
             float[] p = r.p(), n = r.n();
             int[] tris = r.t();
-            if (slotOf.containsKey(r)) { // a lever: from just under its bushing's face up
-                double[] pv = md.switchPivot[slotOf.get(r)];
-                double ax = md.switchAxis[slotOf.get(r)];
-                Object[] cut = clip(p, n, tris, pv, new double[]{0, Math.cos(ax), Math.sin(ax)}, LEVER_KEEP);
-                p = (float[]) cut[0];
-                n = (float[]) cut[1];
-                tris = (int[]) cut[2];
+            Object[] collar = null;
+            if (slotOf.containsKey(r)) { // a lever: the paddle moves, its collar stays with the radio
+                Object[][] split = splitCollar(p, n, tris, collarOf.get(r));
+                collar = split[0];
+                p = (float[]) split[1][0];
+                n = (float[]) split[1][1];
+                tris = (int[]) split[1][2];
             } else if (nm.startsWith("GL")) { // a stick: from just under its inner plate's top up (it reached the gimbal's floor)
                 double top = 0;
                 for (Raw q : raws) if (q.name().startsWith("G1") && (centre(q.box())[0] < 0) == leftSide) top = q.box()[5];
@@ -511,6 +518,16 @@ final class ControllerRender extends JComponent {
             }
             if (slotOf.containsKey(r)) md.leverPart[slotOf.get(r)] = md.parts.size();
             md.parts.add(new Part(nm, p, n, uv, tris, groupId, kind, lin((rgb >> 16) & 255), lin((rgb >> 8) & 255), lin(rgb & 255), role));
+            if (collar != null && ((int[]) collar[2]).length > 0) {
+                float[] cp = (float[]) collar[0];
+                float[] cuv = new float[cp.length / 3 * 2];
+                for (int i = 0, j = 0; i < cp.length; i += 3, j += 2) {
+                    cuv[j] = cp[i] * 5;
+                    cuv[j + 1] = cp[i + 1] * 5;
+                }
+                md.parts.add(new Part(nm + " collar", cp, (float[]) collar[1], cuv, (int[]) collar[2], BODY, CHROME,
+                        lin(0xd2), lin(0xd5), lin(0xda), PLAIN));
+            }
         }
         int v = 0, t = 0;
         md.base = new int[md.parts.size()];
@@ -538,12 +555,52 @@ final class ControllerRender extends JComponent {
         return md;
     }
 
+    /** How far along the axis (from the axis point) vertex i of p is. */
+    private static double along(float[] p, int i, double[] o, double[] a) {
+        return (p[i] - o[0]) * a[0] + (p[i + 1] - o[1]) * a[1] + (p[i + 2] - o[2]) * a[2];
+    }
+
+    /** How far from the axis vertex i of p is. */
+    private static double across(float[] p, int i, double[] o, double[] a) {
+        double dx = p[i] - o[0], dy = p[i + 1] - o[1], dz = p[i + 2] - o[2];
+        double s = dx * a[0] + dy * a[1] + dz * a[2];
+        dx -= s * a[0];
+        dy -= s * a[1];
+        dz -= s * a[2];
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
     /**
-     * How deep under the bushing's face a lever is kept (cm). The CAD's lever runs right through its bushing; tilted
-     * about the face, that inside part swung out through the bushing's sides (the pilot: "it still clips outside its
-     * base"). On the real switch it is inside the radio, so it goes: only this much stays, in the bushing's hole.
+     * A lever split at its collar's top: {collar, paddle}, each {positions, normals, triangles}. A triangle with every
+     * corner up to the collar's top is the collar's; one with any corner above it, the paddle's.
+     * @param c axis point x y z, axis x y z, the collar's top along it
      */
-    static final double LEVER_KEEP = 0.12;
+    private static Object[][] splitCollar(float[] p, float[] n, int[] t, double[] c) {
+        double[] o = {c[0], c[1], c[2]}, a = {c[3], c[4], c[5]};
+        double top = c[6] + COLLAR_EPS;
+        List<Integer> low = new ArrayList<>(), high = new ArrayList<>();
+        for (int i = 0; i < t.length; i += 3) {
+            boolean up = along(p, t[i] * 3, o, a) > top || along(p, t[i + 1] * 3, o, a) > top || along(p, t[i + 2] * 3, o, a) > top;
+            List<Integer> to = up ? high : low;
+            to.add(t[i]);
+            to.add(t[i + 1]);
+            to.add(t[i + 2]);
+        }
+        return new Object[][]{subMesh(p, n, low), subMesh(p, n, high)};
+    }
+
+    /** The vertices these triangles use, renumbered: {positions, normals, triangles}. */
+    private static Object[] subMesh(float[] p, float[] n, List<Integer> tris) {
+        java.util.Map<Integer, Integer> map = new java.util.LinkedHashMap<>();
+        int[] nt = new int[tris.size()];
+        for (int i = 0; i < nt.length; i++) nt[i] = map.computeIfAbsent(tris.get(i), k -> map.size());
+        float[] np = new float[map.size() * 3], nn = new float[map.size() * 3];
+        for (var e : map.entrySet()) {
+            System.arraycopy(p, e.getKey() * 3, np, e.getValue() * 3, 3);
+            System.arraycopy(n, e.getKey() * 3, nn, e.getValue() * 3, 3);
+        }
+        return new Object[]{np, nn, nt};
+    }
 
     /**
      * How deep under its inner plate's top a stick is kept (cm): the CAD's stick reaches down to the gimbal's floor, 1 mm
