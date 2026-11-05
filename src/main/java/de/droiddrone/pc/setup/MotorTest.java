@@ -22,9 +22,22 @@ public final class MotorTest implements AutoCloseable {
     static final int MSP_MOTOR = 104;
     static final int MSP_SET_MOTOR = 214;
     static final int FEATURE_3D = 1 << 12;
+    static final int MSP_SET_MIXER_CONFIG = 43, MSP_ADVANCED_CONFIG = 90, MSP_REBOOT = 68, MSP_EEPROM_WRITE = 250;
+    /** Betaflight's own MSP v2 commands (msp_protocol_v2_betaflight.h), as Configurator's motor wizards use them. */
+    static final int MSP2_MOTOR_OUTPUT_REORDERING = 0x3001, MSP2_SET_MOTOR_OUTPUT_REORDERING = 0x3002,
+            MSP2_SEND_DSHOT_COMMAND = 0x3003;
+    /** DShot commands to the ESC: spin direction (absolute, kept by the ESC once saved) and save. */
+    static final int DSHOT_SPIN_NORMAL = 20, DSHOT_SPIN_REVERSED = 21, DSHOT_SAVE_SETTINGS = 12;
+    /** MSP2_SEND_DSHOT_COMMAND's type: blocking - Betaflight stops the motors while it sends. */
+    static final int DSHOT_CMD_TYPE_BLOCKING = 1;
+    /** Betaflight's motor protocols that take DShot commands: DSHOT150, 300, 600 and PROSHOT1000. */
+    static final int PROTOCOL_DSHOT150 = 5, PROTOCOL_PROSHOT1000 = 8;
 
-    /** What the flight controller is: Betaflight version, mixer, motor direction setting and how many motors. */
-    public record Info(String port, String version, int mixer, boolean reversed, int motorCount) {
+    /**
+     * What the flight controller is: Betaflight version, mixer, motor direction setting (props out), how many motors,
+     * and whether the motors run DShot (only then can the ESCs be told a spin direction).
+     */
+    public record Info(String port, String version, int mixer, boolean reversed, int motorCount, boolean dshot) {
         public boolean quadX() {
             return mixer == MIXER_QUADX;
         }
@@ -69,8 +82,14 @@ public final class MotorTest implements AutoCloseable {
             byte[] mixer = fc.msp(FcCommon.MSP_MIXER_CONFIG, null);
             int count = motorCount(fc.msp(MSP_MOTOR, null));
             if (armed(fc.msp(FcCommon.MSP_STATUS, null))) throw new IOException("The drone is armed. Disarm it first.");
+            boolean dshot = false;
+            try {
+                dshot = isDshot(fc.msp(MSP_ADVANCED_CONFIG, null));
+            } catch (IOException e) {
+                // not known: no DShot commands offered
+            }
             MotorTest test = new MotorTest(fc, new Info(port.systemName(), version, mixer.length > 0 ? mixer[0] & 0xff : 0,
-                    mixer.length > 1 && mixer[1] != 0, count));
+                    mixer.length > 1 && mixer[1] != 0, count, dshot));
             test.set(new int[0]);
             Runtime.getRuntime().addShutdownHook(test.stopOnExit);
             return test;
@@ -102,6 +121,63 @@ public final class MotorTest implements AutoCloseable {
         }
         boolean armed = armed(fc.msp(FcCommon.MSP_STATUS, null));
         return new Live(Arrays.copyOf(motors, info.motorCount()), volts, cells, armed);
+    }
+
+    public synchronized boolean isClosed() {
+        return closed;
+    }
+
+    /** Betaflight's motor output order: for each motor number (index 0 = motor 1), the output it drives. */
+    public synchronized int[] outputOrder() throws IOException {
+        if (closed) throw new IOException("The motor test is closed");
+        return parseOrder(fc.msp2(MSP2_MOTOR_OUTPUT_REORDERING, null));
+    }
+
+    /**
+     * A new motor output order: stopped first, written, saved, and Betaflight restarts (the order is only taken at
+     * start-up). The motor test is closed after it; open a new one once the flight controller is back.
+     */
+    public synchronized void setOutputOrderAndRestart(int[] order) throws IOException {
+        if (closed) throw new IOException("The motor test is closed");
+        fc.msp(MSP_SET_MOTOR, setMotorPayload(new int[0]));
+        fc.msp2(MSP2_SET_MOTOR_OUTPUT_REORDERING, orderPayload(order));
+        saveAndRestart();
+    }
+
+    /** Props out (Betaflight's yaw_motors_reversed) on or off: written with the mixer kept, saved, Betaflight restarts. */
+    public synchronized void setPropsOutAndRestart(boolean out) throws IOException {
+        if (closed) throw new IOException("The motor test is closed");
+        fc.msp(MSP_SET_MOTOR, setMotorPayload(new int[0]));
+        fc.msp(MSP_SET_MIXER_CONFIG, new byte[]{(byte) info.mixer(), (byte) (out ? 1 : 0)});
+        saveAndRestart();
+    }
+
+    /**
+     * Tells one ESC its spin direction (motor 1 first) and to save it: DShot commands, blocking, so Betaflight holds
+     * the motors stopped while it sends. Needs DShot and the battery in (the ESCs powered).
+     */
+    public synchronized void setDirection(int motor, boolean reversed) throws IOException {
+        if (closed) throw new IOException("The motor test is closed");
+        if (!info.dshot()) throw new IOException("The motors don't run DShot: the ESCs can't be told a direction this way.");
+        fc.msp(MSP_SET_MOTOR, setMotorPayload(new int[0]));
+        fc.msp2(MSP2_SEND_DSHOT_COMMAND, dshotPayload(motor - 1, reversed ? DSHOT_SPIN_REVERSED : DSHOT_SPIN_NORMAL, DSHOT_SAVE_SETTINGS));
+    }
+
+    /** EEPROM write, then a restart; the port goes away, so the connection is let go of without the usual STOP. */
+    private void saveAndRestart() throws IOException {
+        fc.msp(MSP_EEPROM_WRITE, null);
+        try {
+            fc.msp(MSP_REBOOT, null);
+        } catch (IOException ignored) {
+            // it may restart before it answers
+        }
+        closed = true; // the motors were stopped before the write
+        fc.close();
+        try {
+            Runtime.getRuntime().removeShutdownHook(stopOnExit);
+        } catch (IllegalStateException ignored) {
+            // already shutting down
+        }
     }
 
     /** Every motor to STOP, trying a few times; never throws. */
@@ -165,6 +241,58 @@ public final class MotorTest implements AutoCloseable {
     static double volts(byte[] analog) {
         if (analog.length >= 9) return ((analog[7] & 0xff) | (analog[8] & 0xff) << 8) / 100.0;
         return analog.length > 0 ? (analog[0] & 0xff) / 10.0 : 0;
+    }
+
+    /** MSP_ADVANCED_CONFIG: gyro denom, pid denom, unsynced PWM, then the motor protocol (DSHOT150 5 ... PROSHOT1000 8). */
+    static boolean isDshot(byte[] advanced) {
+        if (advanced.length < 4) return false;
+        int protocol = advanced[3] & 0xff;
+        return protocol >= PROTOCOL_DSHOT150 && protocol <= PROTOCOL_PROSHOT1000;
+    }
+
+    /** MSP2_MOTOR_OUTPUT_REORDERING: a count, then the output for each motor number. */
+    static int[] parseOrder(byte[] p) throws IOException {
+        if (p.length < 1 || p.length < 1 + (p[0] & 0xff)) throw new IOException("Short motor order answer");
+        int[] order = new int[p[0] & 0xff];
+        for (int i = 0; i < order.length; i++) order[i] = p[1 + i] & 0xff;
+        return order;
+    }
+
+    static byte[] orderPayload(int[] order) {
+        byte[] p = new byte[1 + order.length];
+        p[0] = (byte) order.length;
+        for (int i = 0; i < order.length; i++) p[1 + i] = (byte) order[i];
+        return p;
+    }
+
+    /** MSP2_SEND_DSHOT_COMMAND: type, motor index (0 first; 255 = all), how many commands, the commands. */
+    static byte[] dshotPayload(int motorIndex, int... commands) {
+        byte[] p = new byte[3 + commands.length];
+        p[0] = DSHOT_CMD_TYPE_BLOCKING;
+        p[1] = (byte) motorIndex;
+        p[2] = (byte) commands.length;
+        for (int i = 0; i < commands.length; i++) p[3 + i] = (byte) commands[i];
+        return p;
+    }
+
+    /**
+     * The new output order from the reorder wizard: motor k (1 first) was spun and seen at the place that belongs to
+     * motor positions[k-1]. That place's motor number must drive the output that spun, so new[positions[k-1]-1] =
+     * current[k-1]; outputs past the motors keep theirs.
+     * @throws IllegalArgumentException when the places aren't each motor number once
+     */
+    public static int[] reordered(int[] current, int[] positions) {
+        int n = positions.length;
+        if (current.length < n) throw new IllegalArgumentException("More places than motors in the order");
+        boolean[] seen = new boolean[n];
+        int[] next = current.clone();
+        for (int k = 0; k < n; k++) {
+            int p = positions[k];
+            if (p < 1 || p > n || seen[p - 1]) throw new IllegalArgumentException("Each place must be picked once");
+            seen[p - 1] = true;
+            next[p - 1] = current[k];
+        }
+        return next;
     }
 
     static boolean is3d(byte[] features) {

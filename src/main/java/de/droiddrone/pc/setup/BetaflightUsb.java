@@ -182,6 +182,101 @@ public final class BetaflightUsb implements AutoCloseable {
         return f;
     }
 
+    /**
+     * One MSP v2 request and its answer's payload ("$X<" out, "$X>" back): for the commands that only exist in v2, such
+     * as Betaflight's motor output order and DShot commands to the ESCs. Only while the CLI is not open.
+     */
+    public byte[] msp2(int command, byte[] payload) throws IOException {
+        write(msp2Frame(command, payload));
+        Msp2Parser parser = new Msp2Parser();
+        byte[] buf = new byte[256];
+        long end = System.currentTimeMillis() + 1500;
+        while (System.currentTimeMillis() < end) {
+            int n = wire.read(buf);
+            if (n < 0) throw new IOException("The flight controller disconnected");
+            for (int i = 0; i < n; i++) {
+                MspParser.Frame f = parser.feed(buf[i]);
+                if (f == null || f.command() != command) continue;
+                if (f.error()) throw new IOException("The flight controller refused MSP2 command 0x" + Integer.toHexString(command));
+                return f.payload();
+            }
+        }
+        throw new IOException("No answer from the flight controller to an MSP2 request - it may be too old a Betaflight");
+    }
+
+    /** "$X<", flag 0, command u16, size u16, payload, CRC-8/DVB-S2 over flag to payload. */
+    static byte[] msp2Frame(int command, byte[] payload) {
+        int size = payload == null ? 0 : payload.length;
+        if (command < 0 || command > 0xffff || size > 0xffff) throw new IllegalArgumentException("Not an MSP v2 request");
+        byte[] f = new byte[9 + size];
+        f[0] = '$';
+        f[1] = 'X';
+        f[2] = '<';
+        f[3] = 0;
+        f[4] = (byte) command;
+        f[5] = (byte) (command >> 8);
+        f[6] = (byte) size;
+        f[7] = (byte) (size >> 8);
+        if (size > 0) System.arraycopy(payload, 0, f, 8, size);
+        int crc = 0;
+        for (int i = 3; i < 8 + size; i++) crc = crc8DvbS2(crc, f[i]);
+        f[8 + size] = (byte) crc;
+        return f;
+    }
+
+    /** MSP v2's checksum: CRC-8 with polynomial 0xD5 (DVB-S2), from 0, no reflection. */
+    static int crc8DvbS2(int crc, byte b) {
+        crc ^= b & 0xff;
+        for (int i = 0; i < 8; i++) crc = (crc & 0x80) != 0 ? ((crc << 1) ^ 0xd5) & 0xff : (crc << 1) & 0xff;
+        return crc;
+    }
+
+    /** Puts MSP v2 answers back together ("$X>" / "$X!"); drops anything with a bad checksum. */
+    static final class Msp2Parser {
+        private int state, flag, command, size, index, crc;
+        private boolean error;
+        private byte[] payload;
+
+        MspParser.Frame feed(byte b) {
+            int v = b & 0xff;
+            switch (state) {
+                case 0 -> state = v == '$' ? 1 : 0;
+                case 1 -> state = v == 'X' ? 2 : 0;
+                case 2 -> {
+                    if (v == '>' || v == '!') {
+                        error = v == '!';
+                        crc = 0;
+                        state = 3;
+                    } else {
+                        state = 0;
+                    }
+                }
+                case 3 -> { flag = v; crc = crc8DvbS2(crc, b); state = 4; }
+                case 4 -> { command = v; crc = crc8DvbS2(crc, b); state = 5; }
+                case 5 -> { command |= v << 8; crc = crc8DvbS2(crc, b); state = 6; }
+                case 6 -> { size = v; crc = crc8DvbS2(crc, b); state = 7; }
+                case 7 -> {
+                    size |= v << 8;
+                    crc = crc8DvbS2(crc, b);
+                    payload = new byte[size];
+                    index = 0;
+                    state = size == 0 ? 9 : 8;
+                }
+                case 8 -> {
+                    payload[index++] = b;
+                    crc = crc8DvbS2(crc, b);
+                    if (index == size) state = 9;
+                }
+                case 9 -> {
+                    state = 0;
+                    if (v == crc) return new MspParser.Frame(command, payload, error);
+                }
+                default -> state = 0;
+            }
+            return null;
+        }
+    }
+
     /** Puts MSP v1 answers back together from bytes as they arrive; drops anything with a bad checksum. */
     static final class MspParser {
         record Frame(int command, byte[] payload, boolean error) {}

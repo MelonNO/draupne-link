@@ -92,6 +92,23 @@ final class MotorTestDialog extends JFrame {
         if (flipProgress() >= 1) ((Timer) e.getSource()).stop();
     });
     private Thread worker;
+    /** Settings to change on the flight controller, run by the motor thread (it owns the USB port) between its sends. */
+    private interface Job {
+        void run(MotorTest test) throws IOException;
+    }
+    private final java.util.concurrent.LinkedBlockingQueue<Job> jobs = new java.util.concurrent.LinkedBlockingQueue<>();
+    /** Betaflight saves and restarts after a settings change: its port is gone for a few seconds, not lost. */
+    private static final long RESTART_MS = 6000;
+    private volatile long restartUntil;
+    /** REORDER MOTORS: 0 = off; k = motor k spins and the pilot clicks the place where it is. */
+    private int reorderStep;
+    private int[] reorderCurrent;
+    private int[] reorderPlaces;
+    private final JButton reorderButton = Theme.secondaryButton("Reorder motors");
+    /** SPIN DIRECTION: a choice per motor (As is / Normal / Reversed), sent to its ESC as DShot commands. */
+    private final JPanel directionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+    private final List<javax.swing.JComboBox<String>> directionChoices = new java.util.ArrayList<>();
+    private boolean revertingDirection;
 
     private MotorTestDialog(Window owner, MainWindow main) {
         super("Motor test - DRAUPNE Link"); // a window of its own: Windows' minimise, maximise and close
@@ -120,9 +137,19 @@ final class MotorTestDialog extends JFrame {
         JPanel diagramHead = new JPanel(new BorderLayout());
         diagramHead.setOpaque(false);
         diagramHead.add(Theme.sectionTitle("Seen from above"), BorderLayout.WEST);
-        diagramHead.add(directionSwitch, BorderLayout.EAST);
+        JPanel headTools = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        headTools.setOpaque(false);
+        reorderButton.setToolTipText("Spin each motor in turn and click where it is: Betaflight's motor order is set to match (Quad X, box ticked, battery in, props off)");
+        reorderButton.setFocusable(false); // SPACE stops the motors
+        reorderButton.setEnabled(false);
+        reorderButton.addActionListener(e -> reorderPressed());
+        headTools.add(reorderButton);
+        headTools.add(directionSwitch);
+        diagramHead.add(headTools, BorderLayout.EAST);
         diagramCard.add(diagramHead, BorderLayout.NORTH);
         diagramCard.add(diagram, BorderLayout.CENTER);
+        directionRow.setOpaque(false);
+        diagramCard.add(directionRow, BorderLayout.SOUTH);
         centre.add(diagramCard, BorderLayout.CENTER);
         centre.add(testCard(), BorderLayout.SOUTH);
         root.add(centre, BorderLayout.CENTER);
@@ -236,12 +263,12 @@ final class MotorTestDialog extends JFrame {
         // scrolls when the status rows above need more room (a long warning)
         javax.swing.JScrollPane stepsScroll = new javax.swing.JScrollPane(new WrappingText("<ol style='margin-left:16px'>"
                 + "<li><b>Props off.</b> Battery in, then the flight controller's USB into this PC.</li>"
-                + "<li>Pick <b>props in</b> or <b>props out</b> above the picture, as the drone is built. Tick the box, "
-                + "raise <b>one</b> motor a little.</li>"
+                + "<li>Set <b>props in</b> or <b>props out</b> above the picture, as the drone is built: Betaflight is set "
+                + "to match. Tick the box, raise <b>one</b> motor a little.</li>"
                 + "<li>The motor that spins must sit where the picture shows its number and turn the way its arrow points "
                 + "(tape on the bell helps).</li>"
-                + "<li><b>Wrong motor:</b> motor wiring or Betaflight's motor order. <b>Wrong way:</b> reverse it in ESC "
-                + "Configurator / BLHeli, or swap two of its wires.</li>"
+                + "<li><b>Wrong place:</b> <b>Reorder motors</b> spins each in turn; click where it is. <b>Wrong way:</b> "
+                + "<b>Spin direction</b> under the picture (DShot ESCs), or swap two of its wires.</li>"
                 + "<li><b>Props on, battery out:</b> each prop's raised leading edge must go first in its arrow's direction, "
                 + "or the drone flips on take-off.</li></ol>",
                 Theme.font(Font.PLAIN, 13f), Theme.TEXT));
@@ -309,6 +336,9 @@ final class MotorTestDialog extends JFrame {
         understood.setEnabled(connected);
         if (!connected) understood.setSelected(false);
         enableSliders();
+        MotorTest.Info i = info;
+        reorderButton.setEnabled(connected && i != null && i.quadX() && i.motorCount() == 4);
+        showDirections(connected ? i : null);
         sliderRow.revalidate();
         sliderRow.repaint();
     }
@@ -330,6 +360,11 @@ final class MotorTestDialog extends JFrame {
 
     /** Everything to STOP, at once; the motor thread sends it on its next round (within 20 ms). */
     private void stopAll() {
+        if (reorderStep > 0) {
+            reorderStep = 0;
+            reorderButton.setText("Reorder motors");
+            note.setHtml("Reorder stopped - nothing was changed.");
+        }
         wanted = new int[0];
         for (Slider s : sliders) s.value = MotorTest.STOP;
         master.value = MotorTest.STOP;
@@ -394,6 +429,135 @@ final class MotorTestDialog extends JFrame {
         t.start();
     }
 
+    // ------------------------------------------------------------------ reorder, spin direction
+
+    /** REORDER MOTORS, or CANCEL while it runs. */
+    private void reorderPressed() {
+        if (reorderStep > 0) {
+            stopAll(); // cancels it
+            return;
+        }
+        MotorTest.Info i = info;
+        if (i == null || !i.quadX() || i.motorCount() != 4 || !readyToSpin()) return;
+        stopAll();
+        reorderButton.setEnabled(false);
+        note.setHtml("Reading Betaflight's motor order...");
+        jobs.add(t -> {
+            int[] order;
+            try {
+                order = t.outputOrder();
+            } catch (IOException e) {
+                ui(() -> {
+                    reorderButton.setEnabled(true);
+                    note.setHtml("This Betaflight can't reorder motors here (it came in 4.3): " + e.getMessage());
+                });
+                return;
+            }
+            ui(() -> beginReorder(order));
+        });
+    }
+
+    private void beginReorder(int[] order) {
+        reorderButton.setEnabled(true);
+        if (order.length < 4 || !understood.isSelected()) {
+            note.setHtml(order.length < 4 ? "Betaflight gave no motor order for four motors." : "Tick the box first.");
+            return;
+        }
+        reorderCurrent = order;
+        reorderPlaces = new int[4];
+        reorderStep = 1;
+        reorderButton.setText("Cancel reorder");
+        spinReorderMotor();
+    }
+
+    /** The motor the wizard is at runs slowly, the others are stopped; the picture asks where it is. */
+    private void spinReorderMotor() {
+        for (Slider s : sliders) s.value = MotorTest.STOP;
+        sliders.get(reorderStep - 1).set(PULSE);
+        note.setHtml("<b>Motor " + reorderStep + " of 4 is spinning.</b> Click the place in the picture where it is.");
+        diagram.repaint();
+    }
+
+    /** A click on a place while reordering: that is where the spinning motor sits. */
+    private void placeReorder(int place) {
+        for (int k = 0; k < reorderStep - 1; k++) {
+            if (reorderPlaces[k] == place) {
+                note.setHtml("That place is taken already - click where motor " + reorderStep + " is spinning.");
+                return;
+            }
+        }
+        reorderPlaces[reorderStep - 1] = place;
+        if (reorderStep < 4) {
+            reorderStep++;
+            spinReorderMotor();
+            return;
+        }
+        int[] current = reorderCurrent;
+        int[] places = reorderPlaces.clone();
+        reorderStep = 0;
+        reorderButton.setText("Reorder motors");
+        stopAll();
+        int[] next = MotorTest.reordered(current, places);
+        if (java.util.Arrays.equals(next, current)) {
+            note.setHtml("Every motor is where it should be: nothing to change.");
+            return;
+        }
+        int answer = JOptionPane.showConfirmDialog(this, "Save the new motor order to Betaflight?\nIt restarts (a few seconds); "
+                + "then check each motor again.", "Reorder motors", JOptionPane.YES_NO_OPTION);
+        if (answer != JOptionPane.YES_OPTION) {
+            note.setHtml("Motor order not changed.");
+            return;
+        }
+        jobs.add(t -> t.setOutputOrderAndRestart(next));
+        main.logLine("Motor test: motor order set to " + java.util.Arrays.toString(next) + " (was " + java.util.Arrays.toString(current) + ").");
+    }
+
+    /** SPIN DIRECTION under the picture: a choice per motor while connected with DShot; a line saying why not otherwise. */
+    private void showDirections(MotorTest.Info i) {
+        directionRow.removeAll();
+        directionChoices.clear();
+        if (i != null) {
+            directionRow.add(Theme.label("SPIN DIRECTION", Theme.headingFont(12f), Theme.MUTED));
+            if (!i.dshot()) {
+                directionRow.add(Theme.label("needs DShot ESCs - otherwise swap two of the motor's wires", Theme.font(Font.PLAIN, 13f), Theme.MUTED));
+            } else {
+                for (int m = 1; m <= i.motorCount(); m++) {
+                    int motor = m;
+                    directionRow.add(Theme.label(Integer.toString(m), Theme.headingFont(14f), Theme.TEXT));
+                    javax.swing.JComboBox<String> c = new javax.swing.JComboBox<>(new String[]{"As is", "Normal", "Reversed"});
+                    c.setToolTipText("Motor " + m + "'s spin direction, saved in its ESC (DShot). Pick the other one if it turns the wrong way. Battery in.");
+                    c.setFocusable(false); // SPACE stops the motors
+                    TacticalCombo.install(c);
+                    c.addActionListener(e -> directionChosen(motor, c));
+                    directionChoices.add(c);
+                    directionRow.add(c);
+                }
+            }
+        }
+        directionRow.revalidate();
+        directionRow.repaint();
+    }
+
+    private void directionChosen(int motor, javax.swing.JComboBox<String> choice) {
+        if (revertingDirection || choice.getSelectedIndex() <= 0) return;
+        boolean reversed = choice.getSelectedIndex() == 2;
+        if (info == null || volts >= 0 && !batteryIn) {
+            revertingDirection = true;
+            choice.setSelectedIndex(0);
+            revertingDirection = false;
+            note.setHtml("Plug in the battery first: the ESCs need power to take a direction (props off).");
+            return;
+        }
+        stopAll();
+        note.setHtml("Motor " + motor + ": sending " + (reversed ? "reversed" : "normal") + " to its ESC...");
+        jobs.add(t -> {
+            t.setDirection(motor, reversed);
+            ui(() -> note.setHtml("Motor " + motor + " set to <b>" + (reversed ? "reversed" : "normal")
+                    + "</b> and saved in its ESC. Spin it to check."));
+        });
+        main.logLine("Motor test: motor " + motor + " spin direction " + (reversed ? "reversed" : "normal") + ".");
+    }
+
     private void slidersChanged() {
         note.setHtml("");
         int[] v = new int[sliders.size()];
@@ -412,6 +576,10 @@ final class MotorTestDialog extends JFrame {
             while (running) {
                 try {
                     if (test == null) {
+                        if (System.currentTimeMillis() < restartUntil) { // saved: its port comes back in a few seconds
+                            Thread.sleep(300);
+                            continue;
+                        }
                         List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
                         if (ports.isEmpty()) {
                             ui(() -> usb.set(State.WARN, "Not found yet. Plug it into this PC with a data USB cable."));
@@ -430,6 +598,28 @@ final class MotorTestDialog extends JFrame {
                         main.logLine("Motor test: " + i.port() + ", Betaflight " + i.version() + ", " + i.motorCount() + " motors.");
                     }
                     long now = System.currentTimeMillis();
+                    Job job = jobs.poll();
+                    if (job != null) {
+                        try {
+                            job.run(test);
+                        } catch (IOException e) {
+                            String msg = e.getMessage();
+                            ui(() -> note.setHtml(msg));
+                            main.logLine("Motor test: " + msg);
+                        }
+                        if (test.isClosed()) { // saved and restarting
+                            test = null;
+                            info = null;
+                            jobs.clear();
+                            restartUntil = System.currentTimeMillis() + RESTART_MS;
+                            ui(() -> {
+                                showMotors(4, false);
+                                usb.set(State.PENDING, "Saved - Betaflight restarts...");
+                            });
+                            continue;
+                        }
+                        sent = null;
+                    }
                     int[] want = wanted;
                     if (!Arrays.equals(want, sent) || now - lastSend >= 250) {
                         test.set(want);
@@ -487,6 +677,11 @@ final class MotorTestDialog extends JFrame {
     }
 
     private void connected(MotorTest.Info i) {
+        if (i.quadX() && i.reversed() != propsOut) { // the picture shows what Betaflight has
+            propsOut = i.reversed();
+            main.save(java.util.Map.of(PROPS_OUT_KEY, Boolean.toString(propsOut)));
+            directionSwitch.repaint();
+        }
         usb.set(State.OK, "<b>" + i.port() + "</b> - Betaflight " + i.version());
         showMixer();
         showMotors(i.motorCount(), true);
@@ -500,17 +695,23 @@ final class MotorTestDialog extends JFrame {
         if (!i.quadX()) {
             mixer.set(State.WARN, "Not Quad X (mixer " + i.mixer() + "): the picture doesn't apply. Compare with the mixer picture in "
                     + "Betaflight Configurator's Motors tab.");
-        } else if (i.reversed() == propsOut) {
-            mixer.set(State.OK, "Quad X, <b>" + (propsOut ? "props out" : "props in") + "</b> - Betaflight is set the same way.");
         } else {
-            mixer.set(State.WARN, "Betaflight is set to <b>" + (i.reversed() ? "props out" : "props in") + "</b>, the picture to <b>"
-                    + (propsOut ? "props out" : "props in") + "</b>. Make them match: Betaflight Configurator, Motors tab, "
-                    + "<i>Motor direction is reversed</i> " + (propsOut ? "on" : "off") + ". Otherwise yaw turns the wrong way.");
+            mixer.set(State.OK, "Quad X, <b>" + (i.reversed() ? "props out" : "props in") + "</b>.");
         }
     }
 
+    /** PROPS IN / OUT: with the flight controller there, Betaflight is set to it (saved, it restarts); else the picture only. */
     private void setPropsOut(boolean out) {
         if (out == propsOut) return;
+        MotorTest.Info i = info;
+        if (i != null && i.quadX() && i.reversed() != out) {
+            stopAll();
+            int answer = JOptionPane.showConfirmDialog(this, "Set Betaflight to " + (out ? "props out" : "props in")
+                            + "?\nIt saves and restarts (a few seconds).", "Props in / out", JOptionPane.YES_NO_OPTION);
+            if (answer != JOptionPane.YES_OPTION) return;
+            jobs.add(t -> t.setPropsOutAndRestart(out));
+            main.logLine("Motor test: Betaflight set to " + (out ? "props out" : "props in") + ".");
+        }
         propsOut = out;
         main.save(java.util.Map.of(PROPS_OUT_KEY, Boolean.toString(out)));
         showMixer();
@@ -766,7 +967,9 @@ final class MotorTestDialog extends JFrame {
                 @Override
                 public void mousePressed(MouseEvent e) {
                     int m = motorAt(e);
-                    if (m > 0 && MotorTestDialog.this.isActive()) pulse(m);
+                    if (m <= 0 || !MotorTestDialog.this.isActive()) return;
+                    if (reorderStep > 0) placeReorder(m);
+                    else pulse(m);
                 }
             };
             addMouseListener(mouse);
@@ -845,6 +1048,12 @@ final class MotorTestDialog extends JFrame {
                 up.closePath();
                 g.fill(up);
                 for (int m = 1; m <= 4; m++) motor(g, m, cx, cy, span, prop, reversed, i != null);
+                if (reorderStep > 0) {
+                    g.setFont(Theme.headingFont(14f));
+                    g.setColor(Theme.WARN);
+                    String s = "MOTOR " + reorderStep + " SPINS - CLICK WHERE IT IS";
+                    g.drawString(s, (DW - g.getFontMetrics().stringWidth(s)) / 2f, DH - 2);
+                }
                 if (i == null) {
                     g.setFont(Theme.headingFont(12f));
                     g.setColor(Theme.MUTED);
@@ -860,9 +1069,12 @@ final class MotorTestDialog extends JFrame {
             int[] pos = MotorTest.quadXPosition(m);
             float mx = cx + pos[0] * span, my = cy + pos[1] * span;
             boolean cw = MotorTest.clockwise(m, reversed);
-            boolean spinning = m - 1 < sliders.size() && sliders.get(m - 1).value > MotorTest.STOP;
-            boolean lit = spinning || hover == m || hover == 0;
-            Color tone = lit ? Theme.ACCENT : known ? Theme.TEXT : Theme.MUTED;
+            // while reordering a running slider says nothing about where its motor is: no place turns, the picked ones go green
+            boolean placed = false;
+            for (int k = 0; reorderStep > 0 && k < reorderStep - 1; k++) placed |= reorderPlaces[k] == m;
+            boolean spinning = reorderStep == 0 && m - 1 < sliders.size() && sliders.get(m - 1).value > MotorTest.STOP;
+            boolean lit = spinning || hover == m || hover == 0 && reorderStep == 0;
+            Color tone = placed ? Theme.OK : lit ? Theme.ACCENT : known ? Theme.TEXT : Theme.MUTED;
             // prop disc
             g.setColor(Theme.alpha(tone, spinning ? 60 : 22));
             g.fillOval(Math.round(mx - prop), Math.round(my - prop), Math.round(2 * prop), Math.round(2 * prop));

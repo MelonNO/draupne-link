@@ -100,7 +100,7 @@ Every phone running DRAUPNE Flight on your Tailscale network is **MobileAlpha, M
 - **Position from: DRONE / PHONE.** The map can follow the phone's own GPS instead of the drone's (location allowed on the phone). It stays after a crash that killed the flight controller; the other source fills in when the chosen one has nothing.
 - **Tracks folder:** every flight's path as a GPX file, see [The map](#the-map).
 - **Latency test:** point the drone's camera at the code on the screen, and the app shows the real camera-to-screen delay (Esc stops it). The setup guide offers it too, right after setup.
-- **Motor test:** like Betaflight's Motors tab, over USB with the drone on the bench and **props off**: spin each motor and check it's where its number says and turns the way its arrow points, then fit the props so their leading edges follow the arrows.
+- **Motor test:** like Betaflight's Motors tab, over USB with the drone on the bench and **props off**: spin each motor and check it's where its number says and turns the way its arrow points, then fit the props so their leading edges follow the arrows. A motor in the wrong place: **Reorder motors** spins each in turn, you click where it is, and Betaflight's motor order is set to match. One turning the wrong way: **Spin direction** tells its ESC Normal or Reversed (DShot ESCs). **Props in / props out** sets Betaflight's motor direction too.
 - The versions of DRAUPNE Link and the phone app it brings.
 
 ## The map

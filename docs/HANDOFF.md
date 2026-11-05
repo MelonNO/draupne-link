@@ -33,7 +33,20 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   GPS-fix arming warning, always allow arming without a fix): `switchChanged` only saves RADIO_REDO_KEY (the radio page
   no longer warns either, `shown` unchanged); `Section.note` unused; with GPS Yes the plan adds `set
   gps_rescue_allow_arming_without_fix = ON` when OFF (rescueNote / failsafeNote always null now); `elsewhere` and an
-  uncalibrated compass no longer WARN. `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
+  uncalibrated compass no longer WARN.
+  *Motor test round* (the pilot: "make it possible to reorder the motor number and direction ... change from props out to
+  props in"): `BetaflightUsb.msp2` (MSP v2: `$X<`, flag, u16 command, u16 size, CRC-8/DVB-S2; `Msp2Parser`). `MotorTest`:
+  `Info.dshot` (MSP_ADVANCED_CONFIG byte 3 = protocol 5..8), `outputOrder` (MSP2 0x3001), `setOutputOrderAndRestart`
+  (0x3002 + MSP_EEPROM_WRITE 250 + MSP_REBOOT 68, the test closed), `setPropsOutAndRestart` (MSP_SET_MIXER_CONFIG 43
+  with the mixer kept), `setDirection` (MSP2_SEND_DSHOT_COMMAND 0x3003, blocking, [20 normal | 21 reversed, 12 save]),
+  `reordered(current, places)` = new[place-1] = current[k]. `MotorTestDialog`: a `Job` queue run by the motor thread
+  (it owns the port) between sends; after a save `restartUntil` 6 s, then it reconnects. REORDER MOTORS (Quad X, 4
+  motors, box ticked, battery): reads the order, spins motor k at PULSE, the diagram's click = its place (picked ones
+  green, no place spins in the picture meanwhile), STOP ALL / untick / leaving the window cancels, a confirm before the
+  write. SPIN DIRECTION row under the picture (As is / Normal / Reversed per motor; DShot only, battery in). PROPS IN /
+  OUT asks, then writes; `connected` sets the picture to Betaflight's. *Not verified on hardware:* any of it - MSP2
+  ids and payloads are from Betaflight's source (4.3 on) and Configurator's motor wizards; the window wasn't rendered
+  off screen (its worker opens the USB port). `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
   the choice beside it; `Combined` gained `footer` (plain line: what WRITE does / "Still not set" list after a failed
   write) and `Part.hidden` (GPS rescue without a GPS); the CONFIRM button sits on the **Betaflight settings** row (`changes`
   row gone). GPS: `gps` row with `gpsChoice` No / Yes, `gpsFold` (a `Fold`) with COMPASS, UART (`uartItems`: UART1-6

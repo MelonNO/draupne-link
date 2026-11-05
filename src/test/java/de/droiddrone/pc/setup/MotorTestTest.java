@@ -82,4 +82,69 @@ class MotorTestTest {
         assertArrayEquals(new int[]{-1, 1}, MotorTest.quadXPosition(3), "rear left");
         assertArrayEquals(new int[]{-1, -1}, MotorTest.quadXPosition(4), "front left");
     }
+
+    @Test
+    void msp2ChecksumIsCrc8DvbS2() {
+        // the published check value of CRC-8/DVB-S2 for "123456789"
+        int crc = 0;
+        for (byte b : "123456789".getBytes(java.nio.charset.StandardCharsets.US_ASCII)) crc = BetaflightUsb.crc8DvbS2(crc, b);
+        assertEquals(0xBC, crc);
+    }
+
+    @Test
+    void msp2RequestsAreFramedAndAnswersFound() {
+        byte[] f = BetaflightUsb.msp2Frame(0x3002, new byte[]{4, 1, 0, 3, 2});
+        assertArrayEquals(new byte[]{'$', 'X', '<', 0, 0x02, 0x30, 5, 0, 4, 1, 0, 3, 2}, java.util.Arrays.copyOf(f, 13));
+        int crc = 0;
+        for (int i = 3; i < 13; i++) crc = BetaflightUsb.crc8DvbS2(crc, f[i]);
+        assertEquals((byte) crc, f[13]);
+        // an answer: the same frame shape with '>' - found among noise, a bad checksum dropped
+        byte[] answer = BetaflightUsb.msp2Frame(0x3001, new byte[]{4, 0, 1, 2, 3});
+        answer[2] = '>';
+        BetaflightUsb.Msp2Parser parser = new BetaflightUsb.Msp2Parser();
+        for (byte b : new byte[]{'#', '$', 'M', '>'}) assertNull(parser.feed(b));
+        BetaflightUsb.MspParser.Frame frame = null;
+        for (byte b : answer) frame = parser.feed(b);
+        assertNotNull(frame);
+        assertEquals(0x3001, frame.command());
+        assertFalse(frame.error());
+        assertArrayEquals(new byte[]{4, 0, 1, 2, 3}, frame.payload());
+        answer[answer.length - 1] ^= 1;
+        frame = null;
+        for (byte b : answer) frame = parser.feed(b);
+        assertNull(frame, "checksum wrong");
+    }
+
+    @Test
+    void motorOrderIsReadAndWritten() throws Exception {
+        assertArrayEquals(new int[]{0, 1, 2, 3, 4, 5, 6, 7}, MotorTest.parseOrder(new byte[]{8, 0, 1, 2, 3, 4, 5, 6, 7}));
+        assertThrows(java.io.IOException.class, () -> MotorTest.parseOrder(new byte[]{8, 0, 1}));
+        assertArrayEquals(new byte[]{4, 1, 0, 3, 2}, MotorTest.orderPayload(new int[]{1, 0, 3, 2}));
+    }
+
+    @Test
+    void reorderPutsEachPlacesNumberOnTheOutputThatSpunThere() {
+        int[] identity = {0, 1, 2, 3, 4, 5, 6, 7};
+        // all where they belong: nothing changes
+        assertArrayEquals(identity, MotorTest.reordered(identity, new int[]{1, 2, 3, 4}));
+        // motor 1 spun at motor 2's place and motor 2 at motor 1's: 1 and 2 swap; outputs 5-8 keep theirs
+        assertArrayEquals(new int[]{1, 0, 2, 3, 4, 5, 6, 7}, MotorTest.reordered(identity, new int[]{2, 1, 3, 4}));
+        // from an order that was already changed: the outputs follow, not the numbers
+        int[] swapped = {1, 0, 2, 3};
+        assertArrayEquals(new int[]{2, 0, 1, 3}, MotorTest.reordered(swapped, new int[]{3, 2, 1, 4}));
+        assertThrows(IllegalArgumentException.class, () -> MotorTest.reordered(identity, new int[]{1, 1, 3, 4}), "a place twice");
+        assertThrows(IllegalArgumentException.class, () -> MotorTest.reordered(identity, new int[]{1, 2, 3, 5}));
+    }
+
+    @Test
+    void dshotCommandsAndProtocol() {
+        // blocking, motor 3 (index 2), two commands: reversed, then save
+        assertArrayEquals(new byte[]{1, 2, 2, 21, 12}, MotorTest.dshotPayload(2, MotorTest.DSHOT_SPIN_REVERSED, MotorTest.DSHOT_SAVE_SETTINGS));
+        // MSP_ADVANCED_CONFIG's fourth byte is the motor protocol
+        assertTrue(MotorTest.isDshot(new byte[]{1, 1, 0, 7}), "DSHOT600");
+        assertTrue(MotorTest.isDshot(new byte[]{1, 1, 0, 5}), "DSHOT150");
+        assertTrue(MotorTest.isDshot(new byte[]{1, 1, 0, 8}), "PROSHOT1000");
+        assertFalse(MotorTest.isDshot(new byte[]{1, 1, 0, 3}), "MULTISHOT");
+        assertFalse(MotorTest.isDshot(new byte[]{1, 1, 0}), "short");
+    }
 }
