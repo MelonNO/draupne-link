@@ -4,9 +4,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-05, 1.0.40 released, phone app pc.31; 1.0.41 built)
+## Where things stand (2026-11-05, 1.0.41 + phone app pc.32 released)
 
-- **1.0.41 remote update (2026-11-05 night, built, NOT released, untried on a phone):** the pilot: "add a remote update for
+- **Released 2026-11-05 late:** v1.0.41 (Latest; installer, zip, pc.32 APK) and flight-2.3.0-pc.32 (SHA-256 b645bdf6..., signer d910997f...2eb9, pinned in `ApkShare`); release run 42123657288 green first try. Nothing of 1.0.41 has been tried on hardware: next is the spectator relay with the pilot PC on a weak upload, the mirrored OSD, WAKE after DISCONNECT with a real sleeping phone, the map's drones from pc.32 phones, and - from the next phone app on - the remote update.
+
+- **1.0.41 remote update (2026-11-05 night, released, untried on a phone):** the pilot: "add a remote update for
   connected phones". PC: `ControlLink.sendRemoteUpdate` [0x77][version UTF][url UTF][sha256 UTF] (ApkShare's pinned
   APK), repeated each second until the phone answers (10 s, then "older than pc.32"); `FcTelemetry.PhoneUpdate` from
   record 0x40F7 [state u8][percent u8][text UTF]; `MainWindow.askRemoteUpdate` (disarmed - LockedNotice otherwise; the
@@ -21,7 +23,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   first self-update), and the reopening after it (the full-screen intent; phones that hold it back need a tap on the
   notification). Usable from the release after the one that ships pc.32 (the PC must pin a newer APK than the phone).
 
-- **1.0.41 second round, phone app 2.3.0-pc.32 (2026-11-05 night, built, NOT released, untried on hardware; pc.32 APK built
+- **1.0.41 second round, phone app 2.3.0-pc.32 (2026-11-05 night, released, untried on hardware; pc.32 APK built
   from the clean HEAD 28e9eab, published as flight-2.3.0-pc.32, SHA-256 b645bdf6..., signer d910997f...2eb9, pinned in
   ApkShare):** the pilot's list. *Upside down per phone:* `upsideDownFor`,
   `videoUpsideDown.<phone>` (unset: the old PC-wide key), applied on choosing a phone and on connect; a spectator takes
@@ -41,7 +43,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   (`connectFromMap`, the role and the PHONE / PILOT PC chosen for you). Tests: NamesTest position reply,
   SpectatorTest.aPilotThatDisconnectsIsNotALinkLoss, the PILOT_VIEW round trip with phone + flip.
 
-- **1.0.41 spectator and deep-sleep round (2026-11-05 night, built, NOT released, untried on hardware):** the pilot,
+- **1.0.41 spectator and deep-sleep round (2026-11-05 night, released, untried on hardware):** the pilot,
   spectating a close-by drone: "major connection issues". The link logs: the pilot PC (with a spectator, AUTO on the sharp
   tier at 8 Mbit/s) went from ~50 ms ping to 300-700 ms within 7 s; its spectator pause (3 s on a timer, the usual = the
   lowest of the last 10 s) went on with the ping still high and paused again a second later - the spectator got 1 s of
