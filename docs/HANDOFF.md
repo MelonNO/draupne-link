@@ -4,9 +4,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-05, 1.0.39 + phone app pc.31 released; 1.0.40 built)
+## Where things stand (2026-11-05, 1.0.40 released, phone app pc.31)
 
-- **1.0.40 Drone setup round (2026-11-05, built, untried on hardware, NOT released):** the pilot: "remove as much text
+- **Released 2026-11-05:** v1.0.40 (Latest; installer, zip and the pinned pc.31 APK), release run 42113772169 green first try. PC only: the phone app is unchanged. Nothing of 1.0.40 has been tried on hardware: next is Drone setup on the real board (CONFIRM, GPS on its UART, a doubled mode taken off), the motor test's REORDER / SPIN DIRECTION / PROPS IN-OUT, the compass calibration, and the calibration with the pilot's TX16S (a momentary button, the 3D toggles).
+
+- **1.0.40 Drone setup round (2026-11-05, released, untried on hardware):** the pilot: "remove as much text
   as possible without losing much meaning ... stuff that is implied via the selectable menus", combine *What will change*
   with *Betaflight settings for DRAUPNE Link*, a GPS question above the switches (Yes slides out compass + UART, default
   UART3; nothing GPS shown on the switches or failsafe without it, animated in with Yes), and a compass calibration.
