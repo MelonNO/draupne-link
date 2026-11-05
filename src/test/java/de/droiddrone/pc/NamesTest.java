@@ -217,4 +217,45 @@ class NamesTest {
         org.junit.jupiter.api.Assertions.assertEquals("", saved.get("name.MobileAlpha"), "the old key cleared");
         org.junit.jupiter.api.Assertions.assertTrue(saved.get("name.MobileCharlie").startsWith("PHONE|100.64.0.9|Pixel 8|"), saved.toString());
     }
+
+    /**
+     * A phone put to deep sleep checks in every few minutes at this PC's link port; with no link open the name
+     * service holds the port, and before 1.0.41 nothing answered there: a DISCONNECT left no way to wake it.
+     */
+    @Test
+    void aSleepingPhonesCheckInIsAnsweredWhileNoLinkIsOpen() throws Exception {
+        int port;
+        try (java.net.DatagramSocket probe = new java.net.DatagramSocket(0)) {
+            port = probe.getLocalPort();
+        }
+        PcConfig config = PcConfig.defaults();
+        Names names = new Names(config, m -> m.forEach(config::set));
+        Tailscale.Status status = new Tailscale.Status(true, true, "Running", "", "127.0.0.2", "this-pc", List.of());
+        NameService svc = new NameService(config, names, () -> status, port, true, m -> m.forEach(config::set), s -> { });
+        List<String> asked = new CopyOnWriteArrayList<>();
+        svc.setSleepHandler((ip, d) -> {
+            asked.add(ip + " " + (d[1] & 0xff) + " %");
+            return false;
+        });
+        svc.start();
+        try (java.net.DatagramSocket phoneSocket = new java.net.DatagramSocket(0, java.net.InetAddress.getLoopbackAddress())) {
+            byte[] hello = {ControlLink.SLEEP_HELLO, 80, 0, 5, 0x0F, (byte) 0xA0}; // 80 %, not charging, next check in 5 min
+            java.net.DatagramPacket in = new java.net.DatagramPacket(new byte[16], 16);
+            boolean answered = false;
+            for (int i = 0; i < 12 && !answered; i++) { // the service takes the port within a round
+                phoneSocket.send(new java.net.DatagramPacket(hello, hello.length, java.net.InetAddress.getLoopbackAddress(), port));
+                phoneSocket.setSoTimeout(500);
+                try {
+                    phoneSocket.receive(in);
+                    answered = in.getData()[0] == ControlLink.SLEEP_ANSWER;
+                } catch (java.net.SocketTimeoutException ignored) {
+                }
+            }
+            assertTrue(answered, "the check-in is answered");
+            assertEquals(0, in.getData()[1], "sleep on (WAKE connects, and the link answers the next one 'wake')");
+            assertEquals("127.0.0.1 80 %", asked.get(0));
+        } finally {
+            svc.stop();
+        }
+    }
 }

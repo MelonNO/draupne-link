@@ -4,7 +4,31 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-05, 1.0.40 released, phone app pc.31)
+## Where things stand (2026-11-05, 1.0.40 released, phone app pc.31; 1.0.41 built)
+
+- **1.0.41 spectator and deep-sleep round (2026-11-05 night, built, NOT released, untried on hardware):** the pilot,
+  spectating a close-by drone: "major connection issues". The link logs: the pilot PC (with a spectator, AUTO on the sharp
+  tier at 8 Mbit/s) went from ~50 ms ping to 300-700 ms within 7 s; its spectator pause (3 s on a timer, the usual = the
+  lowest of the last 10 s) went on with the ping still high and paused again a second later - the spectator got 1 s of
+  picture in 4, and twice gave up (PILOT_GONE_MS 3 s) and rejoined for 5-10 s. Fixes: `ControlLink.watched()` keeps AUTO
+  off SHARP while anyone watches (`setWatchersForTest`; a forced SHARP stays); `RelayGate` (pause after 1 s at usual + 80,
+  on again after usual + 40 for 3 s and the pause's minimum, the minimum doubling for a pause within 30 s of the last
+  one, 3 - 30 s; usual = lowest per 5 s slot over 60 s) used by `SpectatorHost.sendLoop`; `SpectatorClient`
+  `PILOT_GONE_PAUSED_MS` 15 s while a pause was announced. The pilot also: "in spectator mode the warnings are going
+  based off the local pc" - `ControlLink.PilotView` (link ready, RC live, radio frozen, arm switch unknown, relayed,
+  stalled, rcWaiting, banner, linkHint, channels) sent by the pilot's `MainWindow.sharePilotView` (5 a second) as
+  `Spectate.PILOT_VIEW` 0x76 from the stream port every 250 ms (`SpectatorHost.setPilotView`, through a pause too); the
+  spectator's `osdData` takes it over its own values (`ControlLink.getPilotView`, 2 s fresh; an older pilot: as before).
+  And: "if a pilot sets a phone to deep sleep then disconnects there is no way to remotely wake it up" - after a
+  DISCONNECT the name service owns port 6286 and ignored the phone's SLEEP_HELLO; `NameService.setSleepHandler` answers
+  it now (`MainWindow.onSleepCheck`: false = sleep on); `MainWindow.Asleep` (name, ip, since, interval; `phone.asleep`)
+  is remembered on DISCONNECT while `phoneAsleep`, shown by `refreshAsleep` (power row: DEEP SLEEP, heard, battery,
+  next check, WAKE); WAKE with no link = `wakeAsleep` (pilot role, that phone, `connect` with `wakeOnConnect`: the link
+  not dormant, it answers the next check "wake"); a plain CONNECT to it sets the link dormant (as before the
+  disconnect); cleared when the phone connects, or when it answers name queries and hasn't checked in for a minute.
+  Tests: `RelayGateTest` (3, the log's ping), `ControlLinkTest.autoStaysOffTheSharpTierWhileSomeoneWatches`,
+  `SpectatorTest.theSpectatorGetsThePilotsOwnWarnings` + the packet round trip, `NamesTest.aSleepingPhonesCheckInIs
+  AnsweredWhileNoLinkIsOpen`. *Not tested:* the WAKE path with a real sleeping phone; the spectator OSD in the window.
 
 - **Released 2026-11-05:** v1.0.40 (Latest; installer, zip and the pinned pc.31 APK), release run 42113772169 green first try. PC only: the phone app is unchanged. Nothing of 1.0.40 has been tried on hardware: next is Drone setup on the real board (CONFIRM, GPS on its UART, a doubled mode taken off), the motor test's REORDER / SPIN DIRECTION / PROPS IN-OUT, the compass calibration, and the calibration with the pilot's TX16S (a momentary button, the 3D toggles).
 

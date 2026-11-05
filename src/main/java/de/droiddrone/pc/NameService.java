@@ -115,6 +115,18 @@ public final class NameService {
         scanSoon();
     }
 
+    /**
+     * A sleeping phone's check-in (SLEEP_HELLO, phone app pc.22 on) reaching this PC while no link holds the port: the
+     * handler gets the sender's address and the packet, and says whether the phone is to wake (true), sleep on
+     * (false), or gets no answer (null). Before 1.0.41 nothing answered here, so a phone put to deep sleep before a
+     * DISCONNECT had nothing to wake it but a CONNECT that happened to land in one of its 20 s windows.
+     */
+    public void setSleepHandler(java.util.function.BiFunction<String, byte[], Boolean> handler) {
+        sleepHandler = handler;
+    }
+
+    private volatile java.util.function.BiFunction<String, byte[], Boolean> sleepHandler;
+
     /** The link is about to open on the link port: the answering socket lets go of it. */
     public void pause() {
         paused = true;
@@ -273,7 +285,23 @@ public final class NameService {
             } catch (IOException e) {
                 return;
             }
+            if (packet.getLength() >= 6 && packet.getData()[0] == ControlLink.SLEEP_HELLO) {
+                answerSleepCheck(s, packet);
+                continue;
+            }
             answer(s, packet, config.getKey(), this::replyPacket);
+        }
+    }
+
+    private void answerSleepCheck(DatagramSocket s, DatagramPacket packet) {
+        java.util.function.BiFunction<String, byte[], Boolean> h = sleepHandler;
+        if (h == null) return;
+        Boolean wake = h.apply(packet.getAddress().getHostAddress(), java.util.Arrays.copyOf(packet.getData(), packet.getLength()));
+        if (wake == null) return;
+        byte[] answer = {ControlLink.SLEEP_ANSWER, (byte) (wake ? 1 : 0)};
+        try {
+            s.send(new DatagramPacket(answer, answer.length, packet.getAddress(), packet.getPort()));
+        } catch (IOException ignored) {
         }
     }
 

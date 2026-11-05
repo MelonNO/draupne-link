@@ -1,6 +1,7 @@
 package de.droiddrone.pc;
 
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.net.InetAddress;
@@ -26,8 +27,13 @@ import java.nio.charset.StandardCharsets;
  * either way           BYE         [0x67]
  * spectator -> pilot   KEEP        [0x68][flags u8][n u8][missing seq i32 x n]   to the stream port, 4 a second
  * pilot -> spectator   PAUSE       [0x6D][paused u8]                 the stream is held (pilot link slow); 0 = on again
+ * pilot -> spectator   PILOT_VIEW  [0x76][version u8 = 1][flags u8][rcWaiting UTF][banner UTF][linkHint UTF]
+ *                                  [channels u8][channel u16 x n]     what the pilot PC's own OSD warns of, 4 a second
  * </pre>
- * 0x6A-0x6C are the PC-to-phone video packets (ControlLink), so PAUSE skips to 0x6D. An older spectator drops it.
+ * 0x6A-0x6C are the PC-to-phone video packets (ControlLink), so PAUSE skips to 0x6D; 0x6E-0x75 are the power and name
+ * packets, so PILOT_VIEW is 0x76 (1.0.41). An older spectator drops both. PILOT_VIEW flags: bit 0 the pilot's link is
+ * ready, 1 its sticks are live, 2 its radio looks frozen, 3 its arm switch isn't read, 4 its way to the phone is a relay,
+ * 5 its link stalls.
  */
 final class Spectate {
     static final byte PILOT_QUERY = 0x60;
@@ -41,6 +47,7 @@ final class Spectate {
     static final byte KEEP = 0x68;
     static final byte SNAPSHOT = 0x69;
     static final byte PAUSE = 0x6D;
+    static final byte PILOT_VIEW = 0x76;
 
     static final byte REFUSED_NOT_FLYING = 1;
     static final byte REFUSED_FULL = 2;
@@ -56,7 +63,45 @@ final class Spectate {
     }
 
     static boolean isSpectatePacket(byte code) {
-        return code >= PILOT_QUERY && code <= SNAPSHOT || code == PAUSE;
+        return code >= PILOT_QUERY && code <= SNAPSHOT || code == PAUSE || code == PILOT_VIEW;
+    }
+
+    static byte[] pilotView(ControlLink.PilotView v) {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(bytes);
+            out.writeByte(PILOT_VIEW);
+            out.writeByte(1);
+            out.writeByte((v.linkReady() ? 1 : 0) | (v.rcLive() ? 2 : 0) | (v.radioFrozen() ? 4 : 0) | (v.armSwitchUnknown() ? 8 : 0)
+                    | (v.relayed() ? 16 : 0) | (v.linkStalled() ? 32 : 0));
+            out.writeUTF(v.rcWaiting() == null ? "" : v.rcWaiting());
+            out.writeUTF(v.banner() == null ? "" : v.banner());
+            out.writeUTF(v.linkHint() == null ? "" : v.linkHint());
+            short[] ch = v.channels() == null ? new short[0] : v.channels();
+            int n = Math.min(32, ch.length);
+            out.writeByte(n);
+            for (int i = 0; i < n; i++) out.writeShort(ch[i]);
+            return bytes.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** A PILOT_VIEW back; null if it is broken or a version this PC doesn't know. Empty texts read as null. */
+    static ControlLink.PilotView readPilotView(byte[] d, int len) {
+        try {
+            DataInputStream in = new DataInputStream(new java.io.ByteArrayInputStream(d, 0, len));
+            if (in.readByte() != PILOT_VIEW || in.readByte() != 1) return null;
+            int f = in.readByte() & 0xff;
+            String rcWaiting = in.readUTF(), banner = in.readUTF(), hint = in.readUTF();
+            short[] ch = new short[in.readByte() & 0xff];
+            for (int i = 0; i < ch.length; i++) ch[i] = in.readShort();
+            return new ControlLink.PilotView((f & 1) != 0, (f & 2) != 0, (f & 4) != 0, (f & 8) != 0, (f & 16) != 0, (f & 32) != 0,
+                    rcWaiting.isEmpty() ? null : rcWaiting, banner.isEmpty() ? null : banner, hint.isEmpty() ? null : hint,
+                    ch.length == 0 ? null : ch);
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
     }
 
     static byte[] keyed(byte code, String key) {

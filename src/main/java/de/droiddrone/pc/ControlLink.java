@@ -1133,8 +1133,10 @@ public class ControlLink {
             if (!slow) decodeSlowSince = -1;
             else if (decodeSlowSince < 0) decodeSlowSince = now;
             boolean cantDecode = decodeSlowSince >= 0 && now - decodeSlowSince >= SHARP_DROP_MS;
-            want = !stalls.isEmpty() || relayed || cantCarry || cantDecode ? Tier.NORMAL : Tier.SHARP;
+            boolean watched = watched();
+            want = !stalls.isEmpty() || relayed || cantCarry || cantDecode || watched ? Tier.NORMAL : Tier.SHARP;
             why = !stalls.isEmpty() ? "a stall" : relayed ? "the way to the phone is a relay"
+                    : watched ? "a spectator watches through this PC: its upload carries the picture again"
                     : cantDecode ? "this PC's decoder can't keep up with the sharp picture"
                     : "the bitrate stayed under " + normalTopBps / 1_000_000 + " Mbit/s for " + SHARP_DROP_MS / 1000 + " s";
         } else if (tier == Tier.NORMAL) {
@@ -1152,7 +1154,7 @@ public class ControlLink {
                 // reports no bitrate setting never gets there)
                 boolean atTop = bps >= normalTopBps;
                 boolean calm = now - tierSince >= sharpHoldMs && now - lastCalmEnd >= sharpHoldMs && stalls.isEmpty();
-                want = sharpAvailable() && atTop && calm ? Tier.SHARP : Tier.NORMAL;
+                want = sharpAvailable() && atTop && calm && !watched() ? Tier.SHARP : Tier.NORMAL;
                 why = "calm at " + normalTopBps / 1_000_000 + " Mbit/s for " + sharpHoldMs / 1000 + " s";
             }
         } else if (tier == Tier.ROBUST) {
@@ -1503,10 +1505,49 @@ public class ControlLink {
         };
     }
 
+    /**
+     * What a PC's own OSD warns of, for its spectators to show the same (1.0.41; the pilot: "it should just be a mirror
+     * of the pilot pc" - a pilot without a radio showed RC OFF - NO RADIO, its spectator nothing).
+     * @param rcWaiting what the sticks wait for (NO RADIO, THROTTLE DOWN ...) while not live, or null
+     * @param banner    the pilot's live banner (STANDBY, STICKS LATE, LINK BACK ...), or null
+     * @param linkHint  under LINK LOST: why, or null
+     * @param channels  the sticks the pilot sends (the OSD's stick boxes), or null
+     */
+    public record PilotView(boolean linkReady, boolean rcLive, boolean radioFrozen, boolean armSwitchUnknown, boolean relayed,
+                            boolean linkStalled, String rcWaiting, String banner, String linkHint, short[] channels) {}
+
+    /** Flying with spectators: what this PC's OSD warns of now, passed on to them. */
+    public void setPilotView(PilotView v) {
+        SpectatorHost h = host;
+        if (h != null && v != null) h.setPilotView(Spectate.pilotView(v));
+    }
+
+    /** While watching: what the pilot PC's own OSD warns of, or null (none yet, lapsed, or a pilot older than 1.0.41). */
+    public PilotView getPilotView() {
+        SpectatorClient c = spectator;
+        return c == null ? null : c.pilotView();
+    }
+
     /** While watching: the pilot PC holds its stream because its own link to the drone is slow (PAUSED on the OSD). */
     public boolean isSpectatorPaused() {
         SpectatorClient c = spectator;
         return c != null && c.isPaused();
+    }
+
+    /**
+     * Someone watches through this PC: AUTO stays off the sharp tier (a SHARP chosen in VIDEO stays). The relay sends the
+     * picture out again through this PC's upload; at 8 Mbit/s that clogged it and the ping to the drone - the sticks -
+     * went from 50 ms to 300 - 700 ms (2026-11-05).
+     */
+    private boolean watched() {
+        return getSpectatorCount() + watchersForTest > 0;
+    }
+
+    private volatile int watchersForTest;
+
+    /** For tests: as if this many spectators watched. */
+    void setWatchersForTest(int n) {
+        watchersForTest = n;
     }
 
     /** How many PCs watch through this one. */

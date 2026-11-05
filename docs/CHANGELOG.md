@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.41
+
+- **Spectators no longer slow the pilot down:** while anyone watches, AUTO stays off the sharp tier (a chosen SHARP stays) - relaying 8 Mbit/s through the pilot PC's upload took its ping to the drone from ~50 to 300-700 ms.
+- **The spectators' pause lasts until the pilot's link has recovered** (`RelayGate`: back to the usual for 3 s; a pause soon after another at least doubles, 3 to 30 s; the usual over a minute, not 10 s) - before, 3 s on a timer and paused again a second later. A spectator waits through a pause it was told about (15 s) instead of rejoining after 3 s.
+- **The spectator's OSD mirrors the pilot PC's own warnings** (`PILOT_VIEW` 0x76, 4 a second): RC OFF and why, RADIO FROZEN, ARM SWITCH NOT READ, the live banners, RELAY, LINK STALL, LINK LOST and why, the stick boxes.
+- **A phone left in deep sleep after DISCONNECT keeps its WAKE:** the LINK card shows it asleep (last heard, battery, next check) with WAKE; its check-ins are answered "sleep on" by the name service until WAKE connects; remembered across restarts (`phone.asleep`).
+
 ## 1.0.40
 
 - **Drone setup, one card:** **Betaflight settings** holds everything - the receiver, stick delay and battery lines, then **GPS**, **SWITCHES** and **FAILSAFE** as sub-points with a small light each, CONFIRM at the bottom; the motors stay their own point. The rows no longer repeat what the choices beside them say; each switch is one line - its choice, and beside it its state in colour (*Set.*, *Set on Confirm.*, or what is wrong) - in aligned columns; *What will change* and *Betaflight settings for DRAUPNE Link* are one row, **Betaflight settings**; a row with nothing to say has no empty line under its title. **Set everything, then CONFIRM:** one CONFIRM button (the cell count's own is gone) writes every setting on the page; until then the rows show empty rings (*Set on Confirm.* where Betaflight differs), green once everything is there and confirmed; a change afterwards brings CONFIRM back; red until CONFIRM (`Combined.override`). **One place per mode:** the managed modes (Angle, Horizon, GPS position hold, GPS rescue) are taken off every other switch when the flight mode switch is written (a drone came out with a mode on AUX2 and AUX5); left as it is, a mode on two switches is reported (`ModeSwitch.doubled`).

@@ -23,7 +23,8 @@ import static de.droiddrone.common.Log.log;
  * thread only copies each packet into a queue ({@link #forward}, nothing at all with no spectator); sending, resending
  * and the spectators' packets run on two threads of their own, below the link's priority, from a socket of their own
  * with default (not low-delay) traffic class. And when this PC's link to the phone slows down for a second (its ping
- * well over the usual), the spectators' stream pauses for a few seconds, in case it is what clogs this PC's upload.
+ * well over the usual), the spectators' stream pauses until it has recovered (RelayGate), in case it is what clogs this
+ * PC's upload.
  */
 final class SpectatorHost implements AutoCloseable {
     static final int MAX_SPECTATORS = 2;
@@ -31,10 +32,8 @@ final class SpectatorHost implements AutoCloseable {
     static final long TIMEOUT_MS = 3000;
     /** Packets kept for resending: about 5 s of a 5 Mbit/s stream. */
     static final int RING = 4096;
-    /** Ping this much over the lowest of the last 10 s, for CONGESTION_HOLD_MS: pause the spectators. */
-    static final int CONGESTION_MS = 80;
-    static final long CONGESTION_HOLD_MS = 1000;
-    static final long PAUSE_MS = 3000;
+    /** When the stream may run: paused while this PC's link to the drone is slow, until it has recovered. */
+    private final RelayGate gate = new RelayGate();
     /** While paused the spectators are told so this often (PAUSE packet), so they can say why the picture stands. */
     static final long PAUSE_NOTICE_MS = 500;
     /** At most this many resends a second per spectator. */
@@ -72,6 +71,9 @@ final class SpectatorHost implements AutoCloseable {
     private final ArrayBlockingQueue<byte[]> outgoing = new ArrayBlockingQueue<>(1024);
     private volatile Viewer[] viewers = new Viewer[0];
     private volatile boolean paused;
+    /** The pilot's own OSD warnings (PILOT_VIEW), sent to the spectators every PILOT_VIEW_MS, paused or not. */
+    private volatile byte[] pilotView;
+    static final long PILOT_VIEW_MS = 250;
     /**
      * Packets numbered before this are never resent: a pause throws away what was queued but not sent, and the
      * sequence stands still while it lasts (forward takes no number), so the spectators' only gap is those thrown
@@ -151,6 +153,11 @@ final class SpectatorHost implements AutoCloseable {
     }
 
     /** Kept for spectators joining later: what the phone sends once per stream or connection. */
+    /** What the pilot PC's OSD warns of now, for the spectators' OSD. */
+    void setPilotView(byte[] packet) {
+        pilotView = packet;
+    }
+
     void rememberVideoConfig(byte[] packet) {
         videoConfig = packet;
     }
@@ -213,13 +220,8 @@ final class SpectatorHost implements AutoCloseable {
 
     private void sendLoop() {
         long nextCheck = 0;
-        long[] lowest = new long[10];
-        int slot = 0;
-        long slotStart = System.currentTimeMillis();
-        java.util.Arrays.fill(lowest, Long.MAX_VALUE);
-        long highSince = 0;
-        long pausedUntil = 0;
         long nextPauseNotice = 0;
+        long nextView = 0;
         while (running) {
             try {
                 byte[] p = outgoing.poll(100, TimeUnit.MILLISECONDS);
@@ -230,30 +232,26 @@ final class SpectatorHost implements AutoCloseable {
                 if (now < nextCheck) continue;
                 nextCheck = now + 100;
                 dropSilentViewers(now);
-                // ping watch: the lowest ping per second over the last 10 s is "the usual"
+                // ping watch (RelayGate): paused while the link to the drone is slow, on again once it has recovered
                 int pingMs = ping.getAsInt();
-                if (now - slotStart >= 1000) {
-                    slot = (slot + 1) % lowest.length;
-                    lowest[slot] = Long.MAX_VALUE;
-                    slotStart = now;
-                }
-                if (pingMs >= 0) lowest[slot] = Math.min(lowest[slot], pingMs);
-                long usual = Long.MAX_VALUE;
-                for (long l : lowest) usual = Math.min(usual, l);
-                boolean high = pingMs >= 0 && usual != Long.MAX_VALUE && pingMs > usual + CONGESTION_MS;
-                highSince = high ? (highSince == 0 ? now : highSince) : 0;
-                if (!paused && viewers.length > 0 && highSince != 0 && now - highSince >= CONGESTION_HOLD_MS) {
+                RelayGate.Change change = gate.update(now, pingMs, viewers.length > 0);
+                if (change == RelayGate.Change.PAUSED) {
                     paused = true;
-                    pausedUntil = now + PAUSE_MS;
                     outgoing.clear();
                     resendFrom = seq.get(); // what was queued is gone for good; the stream goes on from here
                     nextPauseNotice = 0;
-                    events.accept("Spectator video paused for " + PAUSE_MS / 1000 + " s: the link to the drone slowed down"
-                            + " (ping " + pingMs + " ms, usually " + usual + ").");
-                } else if (paused && now >= pausedUntil) {
+                    events.accept("Spectator video paused: the link to the drone slowed down (ping " + pingMs + " ms, usually "
+                            + gate.usual() + "). It goes on once the ping has been back to normal for "
+                            + RelayGate.RECOVER_HOLD_MS / 1000 + " s, after " + gate.minPauseMs() / 1000 + " s at least.");
+                } else if (change == RelayGate.Change.RESUMED) {
                     paused = false;
-                    highSince = 0;
                     for (Viewer v : viewers) send(new byte[]{Spectate.PAUSE, 0}, v);
+                    if (viewers.length > 0) events.accept("Spectator video on again: the link to the drone is back to normal (ping " + pingMs + " ms).");
+                }
+                byte[] view = pilotView;
+                if (view != null && now >= nextView) { // a few dozen bytes: sent through a pause too, the warnings stay true
+                    nextView = now + PILOT_VIEW_MS;
+                    for (Viewer v : viewers) send(view, v);
                 }
                 if (paused && now >= nextPauseNotice) {
                     nextPauseNotice = now + PAUSE_NOTICE_MS;

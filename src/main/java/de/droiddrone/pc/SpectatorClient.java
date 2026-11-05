@@ -33,6 +33,11 @@ final class SpectatorClient implements AutoCloseable {
     static final int DEFAULT_DELAY_MS = 600;
     /** Nothing from the pilot PC for this long: it has gone. */
     static final long PILOT_GONE_MS = 3000;
+    /**
+     * ...but this long while it has said its stream is paused: its upload is clogged then, and even its pause notices
+     * come late. Giving up at 3 s turned a pause into a 5 - 10 s rejoin (2026-11-05).
+     */
+    static final long PILOT_GONE_PAUSED_MS = 15_000;
     static final long HELLO_MS = 500;
     static final long KEEP_MS = 250;
     static final long QUERY_MS = 1000;
@@ -67,6 +72,11 @@ final class SpectatorClient implements AutoCloseable {
     private volatile boolean haveSnapshot;
     /** When the pilot PC last said its stream is paused (its link to the drone is slow); 0 = it isn't. */
     private volatile long pausedAt;
+    /** The pilot PC's own OSD warnings, and when they came; older than PILOT_VIEW_FRESH_MS they have lapsed. */
+    private volatile ControlLink.PilotView pilotView;
+    private volatile long pilotViewAt;
+    static final long PILOT_VIEW_FRESH_MS = 2000;
+
     /** A pause notice older than this (the pilot sends one every 500 ms) has lapsed. */
     static final long PAUSE_NOTICE_FRESH_MS = 1500;
 
@@ -126,6 +136,12 @@ final class SpectatorClient implements AutoCloseable {
         synchronized (lock) {
             return lost;
         }
+    }
+
+    /** What the pilot PC's own OSD warns of (a pilot PC from 1.0.41 on), or null: none yet, lapsed, or an older pilot. */
+    ControlLink.PilotView pilotView() {
+        ControlLink.PilotView v = pilotView;
+        return v != null && System.currentTimeMillis() - pilotViewAt <= PILOT_VIEW_FRESH_MS ? v : null;
     }
 
     /** The pilot PC holds its stream because its own link to the drone is slow: "PAUSED (pilot link slow)". */
@@ -225,6 +241,14 @@ final class SpectatorClient implements AutoCloseable {
                 lastFromPilot = now;
                 pausedAt = d[1] != 0 ? now : 0;
             }
+            case Spectate.PILOT_VIEW -> {
+                if (packet.getPort() != streamPort) return;
+                ControlLink.PilotView v = Spectate.readPilotView(d, len);
+                if (v == null) return;
+                lastFromPilot = now;
+                pilotView = v;
+                pilotViewAt = now;
+            }
             default -> {
             }
         }
@@ -259,7 +283,7 @@ final class SpectatorClient implements AutoCloseable {
             try {
                 long now = System.currentTimeMillis();
                 Spectate.Address p = pilot;
-                if (streamPort >= 0 && now - lastFromPilot > PILOT_GONE_MS) {
+                if (streamPort >= 0 && now - lastFromPilot > (pausedAt != 0 ? PILOT_GONE_PAUSED_MS : PILOT_GONE_MS)) {
                     log("Spectator: the pilot PC stopped sending");
                     pilotGone();
                 }

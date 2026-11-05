@@ -335,15 +335,15 @@ class SpectatorTest {
                 Thread.sleep(1200); // one full second of ping 20: "the usual"
                 ping[0] = 200;
                 long high = System.currentTimeMillis();
-                waitFor(host::isPaused, (int) SpectatorHost.CONGESTION_HOLD_MS + 1000, "paused");
-                assertTrue(System.currentTimeMillis() - high >= SpectatorHost.CONGESTION_HOLD_MS - 100, "not before the hold time");
+                waitFor(host::isPaused, (int) RelayGate.CONGESTION_HOLD_MS + 1000, "paused");
+                assertTrue(System.currentTimeMillis() - high >= RelayGate.CONGESTION_HOLD_MS - 100, "not before the hold time");
                 assertTrue(events.get(events.size() - 1).startsWith("Spectator video paused"));
                 host.forward(packet, packet.length); // during the pause: dropped, and no number used up
                 viewer.receive(in);
                 assertEquals(Spectate.PAUSE, in.getData()[0], "told: paused");
                 assertEquals(1, in.getData()[1]);
                 ping[0] = 20;
-                waitFor(() -> !host.isPaused(), (int) SpectatorHost.PAUSE_MS + 1000, "on again");
+                waitFor(() -> !host.isPaused(), (int) (RelayGate.MIN_PAUSE_MS + RelayGate.RECOVER_HOLD_MS) + 1000, "on again");
                 boolean onAgain = false;
                 long end = System.currentTimeMillis() + 2000;
                 while (!onAgain && System.currentTimeMillis() < end) {
@@ -508,5 +508,56 @@ class SpectatorTest {
                 client.close();
             }
         }
+    }
+
+    /**
+     * The spectator's OSD mirrors the pilot PC's own warnings (1.0.41; the pilot: a pilot PC without a radio showed
+     * RC OFF - NO RADIO, its spectator nothing): what the pilot's OSD shows reaches the spectator.
+     */
+    @Test
+    void theSpectatorGetsThePilotsOwnWarnings() throws Exception {
+        phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        pilotFlying(true);
+        spectator = link(SPECTATOR_PORT, true, 300);
+        spectator.watchOnly();
+        spectator.start();
+        waitFor(() -> spectator.getState() == ControlLink.State.SPECTATING, 5000, "watching");
+        pilot.setPilotView(new ControlLink.PilotView(true, false, false, true, false, false, "NO RADIO", "STANDBY - PRESS WAKE",
+                null, new short[]{1500, 1500, 1500, 1000}));
+        waitFor(() -> spectator.getPilotView() != null, 3000, "the pilot's warnings passed on");
+        ControlLink.PilotView v = spectator.getPilotView();
+        assertTrue(v.linkReady());
+        assertFalse(v.rcLive(), "the pilot's sticks aren't live");
+        assertEquals("NO RADIO", v.rcWaiting());
+        assertEquals("STANDBY - PRESS WAKE", v.banner());
+        assertTrue(v.armSwitchUnknown());
+        assertNull(v.linkHint());
+        assertEquals(1000, v.channels()[3], "the pilot's sticks for the OSD's stick boxes");
+        // the radio plugged in on the pilot PC: the spectator follows
+        pilot.setPilotView(new ControlLink.PilotView(true, true, false, false, false, false, null, null, null, null));
+        waitFor(() -> spectator.getPilotView() != null && spectator.getPilotView().rcLive(), 3000, "live there, live here");
+        assertNull(spectator.getPilotView().rcWaiting());
+    }
+
+    @Test
+    void thePilotViewPacketReadsBackAsItWasWritten() {
+        ControlLink.PilotView v = new ControlLink.PilotView(false, true, true, false, true, true, "MAPPING INCOMPLETE",
+                "STICKS 0.4 S LATE", "Tailscale on the phone is off", new short[]{988, 2012, 1500, 1000, 1800});
+        byte[] p = Spectate.pilotView(v);
+        assertEquals(Spectate.PILOT_VIEW, p[0]);
+        ControlLink.PilotView back = Spectate.readPilotView(p, p.length);
+        assertNotNull(back);
+        assertEquals(v.linkReady(), back.linkReady());
+        assertEquals(v.rcLive(), back.rcLive());
+        assertEquals(v.radioFrozen(), back.radioFrozen());
+        assertEquals(v.relayed(), back.relayed());
+        assertEquals(v.linkStalled(), back.linkStalled());
+        assertEquals(v.rcWaiting(), back.rcWaiting());
+        assertEquals(v.banner(), back.banner());
+        assertEquals(v.linkHint(), back.linkHint());
+        assertArrayEquals(v.channels(), back.channels());
+        assertNull(Spectate.readPilotView(p, 5), "cut off: nothing");
+        p[1] = 2;
+        assertNull(Spectate.readPilotView(p, p.length), "a version this PC doesn't know: nothing");
     }
 }

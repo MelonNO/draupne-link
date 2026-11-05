@@ -142,6 +142,20 @@ public class MainWindow extends JFrame {
     private static final String CHECK_INTERVAL_KEY = "phone.sleepCheckMin";
     /** The last "still here" from the sleeping phone that went to the log (one line per check). */
     private long lastHelloLogged;
+    /**
+     * A phone left in deep sleep when this PC disconnected, or heard checking in while no link was open (1.0.41; the
+     * pilot: "if a pilot sets a phone to deep sleep then disconnects there is no way to remotely wake it up"). It stays
+     * on the LINK card with WAKE; its check-ins are answered "sleep on" (NameService) until WAKE connects, and the link
+     * then answers the next one "wake". Kept in the settings, so it outlives a restart. Wall-clock times.
+     */
+    private record Asleep(String name, String ip, long since, int intervalMin) {}
+    private volatile Asleep asleep;
+    /** Its last check-in while no link was open (receivedAt: wall clock). */
+    private volatile ControlLink.SleepHello asleepHello;
+    private static final String ASLEEP_KEY = "phone.asleep";
+    /** WAKE pressed while disconnected: the connect that follows wakes the phone instead of keeping quiet. */
+    private boolean wakeOnConnect;
+    private long pilotViewSentAt;
     private long mapIdleUpdatedAt;
     static final String MAIN_BOUNDS_KEY = "mainWindow";
     private final MapWindow.Bounds mainBounds = new MapWindow.Bounds(this);
@@ -310,6 +324,8 @@ public class MainWindow extends JFrame {
         cameraOnMap = !"false".equalsIgnoreCase(config.getString(de.droiddrone.pc.CameraView.SHOW_KEY));
         names = new Names(config, this::save);
         nameService = new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
+        nameService.setSleepHandler(this::onSleepCheck);
+        asleep = parseAsleep(config.getString(ASLEEP_KEY));
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             @Override
@@ -1206,6 +1222,24 @@ public class MainWindow extends JFrame {
         lastStateText = null;
         lastSpectators = 0;
         toldNotFlying = false;
+        Asleep sleeping = asleep;
+        ControlLink.SleepHello lastCheck = asleepHello;
+        if (sleeping != null && target.online() && (lastCheck == null || System.currentTimeMillis() - lastCheck.receivedAt() > 60_000)
+                && System.currentTimeMillis() - sleeping.since() > 60_000) {
+            clearAsleep(); // it answers name queries and hasn't checked in for a minute: woken on the phone
+            sleeping = null;
+        }
+        if (!watch && sleeping != null && sleeping.ip().equals(target.ip())) {
+            // the phone sleeps: quiet until WAKE (a Connect in its listening window would wake it), or woken now
+            phoneAsleep = true;
+            sleepStartAt = de.droiddrone.pc.MonoClock.ms() - (System.currentTimeMillis() - sleeping.since());
+            if (wakeOnConnect) {
+                logLine("WAKE: " + sleeping.name() + " takes it at its next check (up to " + sleeping.intervalMin() + " min), then its camera starts.");
+            } else {
+                connection.getLink().setDormant(true);
+                logLine(sleeping.name() + " is in deep sleep: this PC stays quiet until WAKE.");
+            }
+        }
         try {
             linkLog = LinkLog.open(de.droiddrone.pc.AppPaths.dataDir().resolve("logs"));
             logLine("Link log: " + shortPath(linkLog.file()));
@@ -1230,6 +1264,14 @@ public class MainWindow extends JFrame {
     }
 
     private void disconnect() {
+        if (phoneAsleep && connection != null && !connection.getLink().isSpectator()) {
+            String name = config.getString(Names.PHONE_NAME_KEY), ip = config.getString("ip");
+            if (!ip.isEmpty()) {
+                long since = System.currentTimeMillis() - (de.droiddrone.pc.MonoClock.ms() - sleepStartAt);
+                rememberAsleep(new Asleep(name, ip, since, checkIntervalMin));
+                logLine(name + " sleeps on. This PC still answers its checks; WAKE on the LINK card brings it back.");
+            }
+        }
         service.setInputListener(null);
         de.droiddrone.pc.WindowsTuning.keepAwake(false);
         powerWanted = ControlLink.POWER_NORMAL;
@@ -1886,11 +1928,29 @@ public class MainWindow extends JFrame {
         if (liveBanner == null && lagMs > STICKS_LATE_MS) {
             liveBanner = String.format(java.util.Locale.ROOT, "STICKS %.1f S LATE", lagMs / 1000.0);
         }
-        return new OsdRenderer.Data(true, ready, l.getPing(), spectator || (s != null && s.isRcEnabled()),
+        boolean linkReady = ready, rcLive = spectator || (s != null && s.isRcEnabled());
+        boolean stalled = l.isLinkStalled(), relayed = l.isRelayed(), armUnknown = s != null && s.isArmSwitchUnknown();
+        String rcWaiting = s == null ? null : s.waitingFor(), hint = osdLinkHint(s);
+        short[] channels = s == null ? null : s.getLastChannels();
+        // watching: the pilot PC's own warnings, as its OSD shows them (1.0.41: RC OFF - NO RADIO there, nothing here)
+        ControlLink.PilotView pv = spectator ? l.getPilotView() : null;
+        if (pv != null) {
+            linkReady = ready && pv.linkReady();
+            rcLive = pv.rcLive();
+            rcWaiting = pv.rcWaiting();
+            radioFrozen = pv.radioFrozen();
+            armUnknown = pv.armSwitchUnknown();
+            relayed = pv.relayed();
+            stalled = pv.linkStalled();
+            if (pv.banner() != null) liveBanner = pv.banner();
+            if (!pv.linkReady()) hint = pv.linkHint();
+            channels = pv.channels();
+        }
+        return new OsdRenderer.Data(true, linkReady, l.getPing(), rcLive,
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
-                osdLinkHint(s), s == null ? null : s.getLastChannels(), false, l.isLinkStalled(), videoFrozen, radioFrozen,
-                s == null ? null : s.waitingFor(), v != null && v.recordingFile() != null, banner, spectator && !l.isWatchOnly(),
-                sticksAge, s != null && s.isArmSwitchUnknown(), liveBanner, spectator && l.isSpectatorPaused(), l.isRelayed(),
+                hint, channels, false, stalled, videoFrozen, radioFrozen,
+                rcWaiting, v != null && v.recordingFile() != null, banner, spectator && !l.isWatchOnly(),
+                sticksAge, armUnknown, liveBanner, spectator && l.isSpectatorPaused(), relayed,
                 ps != null && now - ps.receivedAt() <= 2500 && ps.rcWriteAgeMs() > OsdRenderer.STICKS_LOST_ALARM_MS);
     }
 
@@ -2072,8 +2132,124 @@ public class MainWindow extends JFrame {
                 : "DEEP SLEEP asked: the phone drops the link and sleeps, listening for this PC every " + checkIntervalMin + " min.");
     }
 
+    // ------------------------------------------------------------------ a phone asleep while no link is open
+
+    /** The saved "name|ip|since|interval", or null. */
+    private static Asleep parseAsleep(String saved) {
+        if (saved == null || saved.isBlank()) return null;
+        String[] p = saved.split("\\|");
+        try {
+            return p.length == 4 && !p[1].isBlank() ? new Asleep(p[0], p[1], Long.parseLong(p[2]), Integer.parseInt(p[3])) : null;
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private void rememberAsleep(Asleep a) {
+        asleep = a;
+        SwingUtilities.invokeLater(() -> save(Map.of(ASLEEP_KEY, a.name() + "|" + a.ip() + "|" + a.since() + "|" + a.intervalMin())));
+    }
+
+    private void clearAsleep() {
+        if (asleep == null) return;
+        asleep = null;
+        asleepHello = null;
+        SwingUtilities.invokeLater(() -> save(Map.of(ASLEEP_KEY, "")));
+    }
+
+    /**
+     * A sleeping phone's check-in while no link is open (the name service's thread): remembered for the LINK card, and
+     * answered "sleep on" - WAKE connects, and the link answers the next one "wake". A phone not known to be asleep is
+     * taken as asleep when it is one of ours (it went to sleep under an older version, or before a restart).
+     * @return false (sleep on), or null for a phone that isn't ours (no answer)
+     */
+    private Boolean onSleepCheck(String ip, byte[] d) {
+        Asleep a = asleep;
+        if (a == null) {
+            String name = names.nameAt(ip);
+            if (name == null || Names.kindOf(name) != Names.Kind.PHONE) return null;
+            a = new Asleep(name, ip, System.currentTimeMillis(), Math.max(1, d[3] & 0xff));
+            rememberAsleep(a);
+        } else if (!a.ip().equals(ip)) {
+            return null;
+        }
+        int pct = d[1] & 0xff;
+        ControlLink.SleepHello h = new ControlLink.SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff,
+                ((d[4] & 0xff) << 8) | (d[5] & 0xff), System.currentTimeMillis());
+        ControlLink.SleepHello before = asleepHello;
+        asleepHello = h;
+        if (before == null || h.receivedAt() - before.receivedAt() > 20_000) { // one line per check window
+            String line = a.name() + " asleep, still here: battery " + (h.batteryPercent() >= 0 ? h.batteryPercent() + " %" : "unknown")
+                    + (h.charging() ? ", charging" : "") + ", next check in " + h.nextCheckMin() + " min. WAKE on the LINK card brings it back.";
+            SwingUtilities.invokeLater(() -> logLine(line));
+        }
+        return false;
+    }
+
+    /** Not connected, a phone asleep: the power row stays, with when it checks next and WAKE. */
+    private void refreshAsleep() {
+        Asleep a = asleep;
+        if (powerRow == null || a == null) return;
+        long now = System.currentTimeMillis();
+        ControlLink.SleepHello h = asleepHello;
+        // it answers the name service's queries, and hasn't checked in for a minute: it is awake (woken on the phone)
+        Names.Entry e = names.get(a.name());
+        if (e != null && e.online() && (h == null || now - h.receivedAt() > 60_000) && now - a.since() > 60_000) {
+            logLine(a.name() + " is awake: it answers this PC again.");
+            clearAsleep();
+            return;
+        }
+        if (!powerRow.isVisible()) powerRow.setVisible(true);
+        standbyButton.setEnabled(false);
+        deepSleepButton.setEnabled(false);
+        checkIntervalCombo.setEnabled(false);
+        wakeButton.setEnabled(true);
+        long interval = Math.max(1, a.intervalMin()) * 60_000L;
+        long next = a.since() + interval;
+        String alive = "";
+        if (h != null) {
+            if (h.nextCheckMin() > 0) next = h.receivedAt() + h.nextCheckMin() * 60_000L;
+            long ago = (now - h.receivedAt()) / 1000;
+            alive = "Heard " + (ago < 60 ? ago + " s" : ago / 60 + " min") + " ago"
+                    + (h.batteryPercent() >= 0 ? ", battery " + h.batteryPercent() + " %" : "") + (h.charging() ? " (charging)" : "") + ". ";
+        }
+        while (next < now) next += interval;
+        long left = (next - now) / 1000;
+        powerStatus.setText("<html>" + a.name() + " is in DEEP SLEEP. " + alive + "Next check in "
+                + String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60) + ". WAKE connects and brings it back then.</html>");
+    }
+
+    /** WAKE with no link: connect to the sleeping phone as its pilot; the link answers its next check "wake". */
+    private void wakeAsleep() {
+        Asleep a = asleep;
+        if (a == null) return;
+        if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) roleCombo.setSelectedItem(ROLE_PILOT);
+        save(Map.of(Names.PHONE_NAME_KEY, a.name()));
+        wakeOnConnect = true;
+        try {
+            connect();
+        } finally {
+            wakeOnConnect = false;
+        }
+    }
+
+    /** Flying with spectators: this PC's OSD warnings, for theirs (4 a second at most). */
+    private void sharePilotView(ControlLink link) {
+        long now = de.droiddrone.pc.MonoClock.ms();
+        if (now - pilotViewSentAt < 200) return;
+        pilotViewSentAt = now;
+        OsdRenderer.Data d = osdData();
+        if (d == null) return;
+        link.setPilotView(new ControlLink.PilotView(d.linkReady(), d.rcLive(), d.radioFrozen(), d.armSwitchUnknown(), d.relayed(),
+                d.linkStalled(), d.rcWaiting(), d.banner(), d.linkHint(), d.channels()));
+    }
+
     private void wakePhone() {
         if (demoPower(ControlLink.POWER_NORMAL)) return;
+        if (connection == null && asleep != null) {
+            wakeAsleep();
+            return;
+        }
         powerWanted = ControlLink.POWER_NORMAL;
         powerAskedAt = de.droiddrone.pc.MonoClock.ms();
         powerSentAt = 0;
@@ -2113,6 +2289,7 @@ public class MainWindow extends JFrame {
                 link.setDormant(false);
                 link.restartVideo();
                 logLine("The phone is awake again.");
+                clearAsleep();
             } else {
                 long interval = Math.max(1, checkIntervalMin) * 60_000L;
                 long next = sleepStartAt + interval;
@@ -2181,7 +2358,8 @@ public class MainWindow extends JFrame {
         refreshPhone();
         if (connection == null) {
             videoView.setIdleText("Not connected");
-            if (powerRow != null && powerRow.isVisible() && !tourPowerDemo) powerRow.setVisible(false);
+            if (asleep != null && !tourPowerDemo) refreshAsleep();
+            else if (powerRow != null && powerRow.isVisible() && !tourPowerDemo) powerRow.setVisible(false);
             setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
             pingValue.setText("-");
             fcValue.setText("-");
@@ -2199,6 +2377,7 @@ public class MainWindow extends JFrame {
             lastStateText = stateText;
         }
         if (!link.isSpectator()) refreshPower(link);
+        if (!link.isSpectator() && link.getSpectatorCount() > 0) sharePilotView(link);
         if (video != null && link.isSpectator()) video.setDrawEveryFrame(true); // watching: smooth, not least delay
         if (link.isSpectator() && !link.isWatchOnly() && !toldNotFlying) {
             toldNotFlying = true;

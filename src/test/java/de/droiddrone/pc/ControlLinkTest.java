@@ -490,6 +490,27 @@ class ControlLinkTest {
         assertEquals(5, link.maxBitrateStep(), "the set 4 Mbit/s");
     }
 
+    /**
+     * With a spectator watching, AUTO stays on the normal picture and leaves the sharp one: the relay sends the picture
+     * out again through this PC's upload, and at 8 Mbit/s the ping to the drone went from 50 to 300 - 700 ms (2026-11-05).
+     */
+    @Test
+    void autoStaysOffTheSharpTierWhileSomeoneWatches() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.encoderBitRate = 4_000_000;
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.setSharpAfterMsForTest(1500);
+        link.setWatchersForTest(1);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        Thread.sleep(3500); // well past the calm that earns the sharp tier
+        assertEquals(ControlLink.Tier.NORMAL, link.getTier(), "no sharp tier while watched");
+        link.setWatchersForTest(0);
+        waitFor(() -> link.getTier() == ControlLink.Tier.SHARP && phone.config.cameraWidth == 1920, 5000, "sharp once nobody watches");
+        link.setWatchersForTest(1);
+        waitFor(() -> link.getTier() == ControlLink.Tier.NORMAL && phone.config.cameraWidth == 1280, 3000, "back to the normal picture when someone watches");
+    }
+
     /** A phone that reports no bitrate setting (older than pc.13) is never judged calm at the top: no sharp tier. */
     @Test
     void aPhoneThatReportsNoBitrateNeverGoesSharp() throws Exception {
