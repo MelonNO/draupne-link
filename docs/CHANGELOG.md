@@ -2,6 +2,12 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.40
+
+- **Drone setup, less to read:** the rows no longer repeat what the choices beside them say (a switch line says *Set.*, *Written with Write.* or what is wrong); *What will change* and *Betaflight settings for DRAUPNE Link* are one row, **Betaflight settings**, with the WRITE button on it.
+- **GPS, asked first:** a **GPS** row (No / Yes) above the switches. *Yes* slides out COMPASS (No / Yes), the GPS's UART (UART3 by default; the board's own list once read) and CALIBRATE COMPASS, and the GPS RESCUE switch under the switches; GPS modes and the GPS rescue failsafe appear in their lists. *No* shows and writes nothing GPS (a GPS choice from before becomes Angle / Leave as it is). Unanswered, the page takes Betaflight's answer on reading the drone. WRITE turns the GPS on, puts it on the UART chosen (off any other port), turns on `gps_auto_baud`, and sets `mag_hardware` AUTO / NONE for the compass; the row says *GPS found* (or what to check), whether a compass is seen and whether it is calibrated.
+- **Compass calibration:** CALIBRATE COMPASS opens a window like the motor test's: START, turn the drone round every axis for 30 s while two discs fill with dots where the compass has pointed, the offsets read back and kept at the end.
+
 ## 1.0.39
 
 - **Safer when the link is weak (phone app 2.3.0-pc.31):** no takeover by another PC after a 4 s fade while the drone may be armed ("not sure" counts as armed on the phone); DISCONNECT and closing the window ask first while armed; Windows and the screen stay awake while connected; RADIO FROZEN sounds the alarm; STICKS x.x S LATE on the OSD (stick frames carry their send time; link log `stick_lag_max_ms`, `sticks_dropped_late`); optional cuts `rc.maxLagMs` and `radio.frozenStopS` (off by default). Phone: deep sleep re-checks armed, a port-restarting setting waits for disarm, the USB reconnect race and the main timer fixed, telemetry no longer falls behind. Link: no revived dead sessions, lost must-arrive packets asked for again, no reconnect echoes, no log floods, timeouts on a monotonic clock, the radio followed by device. Video: key frames paced to the weak tiers, no camera restarts over each other, a repeated config keeps the decoder, the backlog cut by age, AUTO leaves SHARP on a slow decoder, a failed decoder retried.

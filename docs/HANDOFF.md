@@ -4,7 +4,33 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-05, 1.0.39 + phone app pc.31 released)
+## Where things stand (2026-11-05, 1.0.39 + phone app pc.31 released; 1.0.40 built)
+
+- **1.0.40 Drone setup round (2026-11-05, built, untried on hardware, NOT released):** the pilot: "remove as much text
+  as possible without losing much meaning ... stuff that is implied via the selectable menus", combine *What will change*
+  with *Betaflight settings for DRAUPNE Link*, a GPS question above the switches (Yes slides out compass + UART, default
+  UART3; nothing GPS shown on the switches or failsafe without it, animated in with Yes), and a compass calibration.
+  `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Written with Write.", a problem), never
+  the choice beside it; `Combined` gained `footer` (plain line: what WRITE does / "Still not set" list after a failed
+  write) and `Part.hidden` (GPS rescue without a GPS); the WRITE button sits on the **Betaflight settings** row (`changes`
+  row gone). GPS: `gps` row with `gpsChoice` No / Yes, `gpsFold` (a `Fold`) with COMPASS, UART (`uartItems`: UART1-6
+  until `GpsSetup.uarts(serial)` says what the board has) and CALIBRATE COMPASS; `rescueFold` under the ARM / PREARM row;
+  `setGps` folds both, hides the part, `offerGpsModes` / `offerGpsFailsafe` rebuild the lists (a GPS mode without a GPS
+  becomes ANGLE, a GPS rescue failsafe KEEP). Keys `drone.gps` (yes / no; unset = not asked: the first read takes
+  Betaflight's feature GPS as the answer, before that the evidence of a GPS rescue failsafe shows Yes), `drone.gpsUart`,
+  `drone.compass`. `setup/GpsSetup`: `ports` / `uarts` / `gpsUart` from the CLI's `serial`, `gpsPlan` (feature GPS, `serial
+  <id> 2 <baud fields kept>` with GPS taken off other ports and the chosen port's other functions named, `set gps_auto_baud
+  = ON` only when the setting exists), `compassPlan` (`mag_hardware` AUTO / NONE, a named chip kept), `magInStatus` /
+  `gpsInStatus` (MSP_STATUS sensor bits), `magFromRawImu`, `calibrated` (`get mag_calibration` not all zero). The round
+  reads `serial`, `get gps_auto_baud`, `get mag_hardware`, `get mag_calibration` only with GPS Yes; `waitForGps` only
+  with Yes and the feature on. `gui/CompassCalibrationDialog` (a JFrame like the motor test, APPLICATION_EXCLUDE): opens
+  the chosen (or first Betaflight) port, MSP_STATUS for the compass, START = MSP_MAG_CALIBRATION (206), 30 s + 2 s
+  settle polling MSP_RAW_IMU's mag for two dot discs (from above x/y, from the side x/z), then the CLI: `get
+  mag_calibration` and `save` (Betaflight saves by itself at the end; a second save is harmless) or `exit`. The page
+  stays off the port while it is open (`compassCalOpen`, `isOpen()`). Tests: `GpsSetupTest` (9). *Not verified:* the
+  compass calibration against a real board (MSP 206's 30 s and the auto-save are from Betaflight's source, 4.x); the
+  Fold animations in the real window. *Left alone:* the other setup pages' texts (the pilot's examples were all the
+  Betaflight page).
 
 - **Released 2026-11-05:** v1.0.39 (Latest) and flight-2.3.0-pc.31 (APK SHA-256 a39772e2..., signer d910997f...2eb9, pinned in `ApkShare`); release workflow green. Nothing of 1.0.39 has been tried on hardware: next is the pilot's bench test (far phone on 4G, link logs) and the STANAG stream in VLC (`udp://@:15000`), then ATAK / WinTAK / QGIS.
 
