@@ -46,7 +46,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   write. SPIN DIRECTION row under the picture (As is / Normal / Reversed per motor; DShot only, battery in). PROPS IN /
   OUT asks, then writes; `connected` sets the picture to Betaflight's. *Not verified on hardware:* any of it - MSP2
   ids and payloads are from Betaflight's source (4.3 on) and Configurator's motor wizards; the window wasn't rendered
-  off screen (its worker opens the USB port).
+  off screen (its worker opens the USB port). Layout round: no header row over the picture; `toolColumn` left (title, PROPS
+  switch, MOTOR ORDER button) and the SPIN DIRECTION column right, both `TOOL_W` 210; the drawing 410 x 348 with the
+  drone at `DRONE_CY`; the window opens up to 1440 x 1000. Checked painted off screen (scratchpad `MotorTestShotTest`,
+  only when no flight controller is plugged in).
   *Toggles round* (the pilot: the front switches "only move as if they are still switched in the down position ... the
   flat part of the switch should hinge at the cylindrical part ... now both hinge"): every CAD lever part (`SD3 L*`)
   is a 6.5 mm collar on the bushing's axis (front row: z from the face to 12.0 mm; shoulders: y 12.5 mm above the

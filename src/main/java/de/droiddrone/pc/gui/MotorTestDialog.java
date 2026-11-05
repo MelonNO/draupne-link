@@ -106,7 +106,9 @@ final class MotorTestDialog extends JFrame {
     private int[] reorderPlaces;
     private final JButton reorderButton = Theme.secondaryButton("Reorder motors");
     /** SPIN DIRECTION: a choice per motor (As is / Normal / Reversed), sent to its ESC as DShot commands. */
-    private final JPanel directionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+    private final JPanel directionRow = new JPanel();
+    /** The tool columns beside the picture, the same width each side so the drone stays in the middle. */
+    private static final int TOOL_W = 210;
     private final List<javax.swing.JComboBox<String>> directionChoices = new java.util.ArrayList<>();
     private boolean revertingDirection;
 
@@ -133,23 +135,37 @@ final class MotorTestDialog extends JFrame {
 
         JPanel centre = new JPanel(new BorderLayout(0, 14));
         centre.setOpaque(false);
-        JPanel diagramCard = Theme.card(new BorderLayout(0, 8));
-        JPanel diagramHead = new JPanel(new BorderLayout());
-        diagramHead.setOpaque(false);
-        diagramHead.add(Theme.sectionTitle("Seen from above"), BorderLayout.WEST);
-        JPanel headTools = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        headTools.setOpaque(false);
+        JPanel diagramCard = Theme.card(new BorderLayout(14, 0));
+        // left of the drone: what it is and how it is built (props in / out, the motor order); right: each motor's direction
+        JPanel leftTools = toolColumn();
+        leftTools.add(left(Theme.sectionTitle("Seen from above")));
+        leftTools.add(left(gap(14)));
+        leftTools.add(left(Theme.label("PROPS", Theme.headingFont(12f), Theme.MUTED)));
+        leftTools.add(left(gap(4)));
+        JPanel switchHolder = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0)) { // its own height, not the column's
+            @Override
+            public Dimension getMaximumSize() {
+                return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+            }
+        };
+        switchHolder.setOpaque(false);
+        switchHolder.add(directionSwitch);
+        switchHolder.setAlignmentX(LEFT_ALIGNMENT);
+        leftTools.add(switchHolder);
+        leftTools.add(left(gap(18)));
+        leftTools.add(left(Theme.label("MOTOR ORDER", Theme.headingFont(12f), Theme.MUTED)));
+        leftTools.add(left(gap(4)));
         reorderButton.setToolTipText("Spin each motor in turn and click where it is: Betaflight's motor order is set to match (Quad X, box ticked, battery in, props off)");
         reorderButton.setFocusable(false); // SPACE stops the motors
         reorderButton.setEnabled(false);
         reorderButton.addActionListener(e -> reorderPressed());
-        headTools.add(reorderButton);
-        headTools.add(directionSwitch);
-        diagramHead.add(headTools, BorderLayout.EAST);
-        diagramCard.add(diagramHead, BorderLayout.NORTH);
+        leftTools.add(left(reorderButton));
+        diagramCard.add(leftTools, BorderLayout.WEST);
         diagramCard.add(diagram, BorderLayout.CENTER);
         directionRow.setOpaque(false);
-        diagramCard.add(directionRow, BorderLayout.SOUTH);
+        directionRow.setLayout(new BoxLayout(directionRow, BoxLayout.Y_AXIS));
+        directionRow.setPreferredSize(new Dimension(TOOL_W, 10));
+        diagramCard.add(directionRow, BorderLayout.EAST);
         centre.add(diagramCard, BorderLayout.CENTER);
         centre.add(testCard(), BorderLayout.SOUTH);
         root.add(centre, BorderLayout.CENTER);
@@ -174,7 +190,9 @@ final class MotorTestDialog extends JFrame {
         battery.set(State.PENDING, "");
         showMotors(4, false);
         setMinimumSize(new Dimension(1100, 720));
-        setSize(1180, 800);
+        java.awt.Rectangle screen = (owner != null ? owner.getGraphicsConfiguration() : getGraphicsConfiguration()).getBounds();
+        setSize(Math.max(1100, Math.min(1440, screen.width - 80)), Math.max(720, Math.min(1000, screen.height - 60))); // the drone big
+
         setLocationRelativeTo(owner);
         WindowReveal.onOpen(this);
         worker = new Thread(this::run, "motor-test");
@@ -263,12 +281,12 @@ final class MotorTestDialog extends JFrame {
         // scrolls when the status rows above need more room (a long warning)
         javax.swing.JScrollPane stepsScroll = new javax.swing.JScrollPane(new WrappingText("<ol style='margin-left:16px'>"
                 + "<li><b>Props off.</b> Battery in, then the flight controller's USB into this PC.</li>"
-                + "<li>Set <b>props in</b> or <b>props out</b> above the picture, as the drone is built: Betaflight is set "
+                + "<li>Set <b>props in</b> or <b>props out</b> left of the picture, as the drone is built: Betaflight is set "
                 + "to match. Tick the box, raise <b>one</b> motor a little.</li>"
                 + "<li>The motor that spins must sit where the picture shows its number and turn the way its arrow points "
                 + "(tape on the bell helps).</li>"
                 + "<li><b>Wrong place:</b> <b>Reorder motors</b> spins each in turn; click where it is. <b>Wrong way:</b> "
-                + "<b>Spin direction</b> under the picture (DShot ESCs), or swap two of its wires.</li>"
+                + "<b>Spin direction</b> right of the picture (DShot ESCs), or swap two of its wires.</li>"
                 + "<li><b>Props on, battery out:</b> each prop's raised leading edge must go first in its arrow's direction, "
                 + "or the drone flips on take-off.</li></ol>",
                 Theme.font(Font.PLAIN, 13f), Theme.TEXT));
@@ -516,26 +534,42 @@ final class MotorTestDialog extends JFrame {
     private void showDirections(MotorTest.Info i) {
         directionRow.removeAll();
         directionChoices.clear();
-        if (i != null) {
-            directionRow.add(Theme.label("SPIN DIRECTION", Theme.headingFont(12f), Theme.MUTED));
-            if (!i.dshot()) {
-                directionRow.add(Theme.label("needs DShot ESCs - otherwise swap two of the motor's wires", Theme.font(Font.PLAIN, 13f), Theme.MUTED));
-            } else {
-                for (int m = 1; m <= i.motorCount(); m++) {
-                    int motor = m;
-                    directionRow.add(Theme.label(Integer.toString(m), Theme.headingFont(14f), Theme.TEXT));
-                    javax.swing.JComboBox<String> c = new javax.swing.JComboBox<>(new String[]{"As is", "Normal", "Reversed"});
-                    c.setToolTipText("Motor " + m + "'s spin direction, saved in its ESC (DShot). Pick the other one if it turns the wrong way. Battery in.");
-                    c.setFocusable(false); // SPACE stops the motors
-                    TacticalCombo.install(c);
-                    c.addActionListener(e -> directionChosen(motor, c));
-                    directionChoices.add(c);
-                    directionRow.add(c);
-                }
+        directionRow.add(left(Theme.label("SPIN DIRECTION", Theme.headingFont(12f), Theme.MUTED)));
+        directionRow.add(left(gap(6)));
+        if (i == null) {
+            directionRow.add(left(new WrappingText("Each motor's direction, once the flight controller is found.", Theme.font(Font.PLAIN, 13f), Theme.MUTED)));
+        } else if (!i.dshot()) {
+            directionRow.add(left(new WrappingText("Needs DShot ESCs. Otherwise swap two of the motor's wires.", Theme.font(Font.PLAIN, 13f), Theme.MUTED)));
+        } else {
+            for (int m = 1; m <= i.motorCount(); m++) {
+                int motor = m;
+                JPanel line = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
+                line.setOpaque(false);
+                javax.swing.JLabel n = Theme.label("MOTOR " + m, Theme.headingFont(13f), Theme.TEXT);
+                n.setPreferredSize(new Dimension(70, n.getPreferredSize().height));
+                line.add(n);
+                javax.swing.JComboBox<String> c = new javax.swing.JComboBox<>(new String[]{"As is", "Normal", "Reversed"});
+                c.setPrototypeDisplayValue("Reversed  ");
+                c.setToolTipText("Motor " + m + "'s spin direction, saved in its ESC (DShot). Pick the other one if it turns the wrong way. Battery in.");
+                c.setFocusable(false); // SPACE stops the motors
+                TacticalCombo.install(c);
+                c.addActionListener(e -> directionChosen(motor, c));
+                directionChoices.add(c);
+                line.add(c);
+                directionRow.add(left(line));
             }
         }
         directionRow.revalidate();
         directionRow.repaint();
+    }
+
+    /** A column of tools beside the picture: stacked from the top, TOOL_W wide. */
+    private static JPanel toolColumn() {
+        JPanel c = new JPanel();
+        c.setLayout(new BoxLayout(c, BoxLayout.Y_AXIS));
+        c.setOpaque(false);
+        c.setPreferredSize(new Dimension(TOOL_W, 10));
+        return c;
     }
 
     private void directionChosen(int motor, javax.swing.JComboBox<String> choice) {
@@ -935,7 +969,8 @@ final class MotorTestDialog extends JFrame {
      * lights up and its prop turns the way it should, to compare with the real one.
      */
     private final class Diagram extends JComponent {
-        private static final int DW = 460, DH = 330;
+        private static final int DW = 410, DH = 348; // the drone, its arrows and CW / CCW, a line under it for what to do
+        private static final float DRONE_CY = 171; // its middle: the FRONT mark above it, the line under it clear
         int hover = -1;
         private double angle;
         final Timer animation = new Timer(30, e -> {
@@ -983,7 +1018,7 @@ final class MotorTestDialog extends JFrame {
             int w = getWidth(), h = getHeight();
             double k = Math.min(w / (double) DW, h / (double) DH);
             double x = (e.getX() - (w - DW * k) / 2) / k, y = (e.getY() - (h - DH * k) / 2) / k;
-            float cx = DW / 2f, cy = DH / 2f + 6, span = 92, prop = 58;
+            float cx = DW / 2f, cy = DRONE_CY, span = 92, prop = 58;
             for (int m = 1; m <= 4; m++) {
                 int[] pos = MotorTest.quadXPosition(m);
                 if (Math.hypot(x - (cx + pos[0] * span), y - (cy + pos[1] * span)) <= prop + 9) return m;
@@ -1019,7 +1054,7 @@ final class MotorTestDialog extends JFrame {
                 double k = Math.min(w / (double) DW, h / (double) DH);
                 g.translate((w - DW * k) / 2, (h - DH * k) / 2);
                 g.scale(k, k);
-                float cx = DW / 2f, cy = DH / 2f + 6, span = 92, prop = 58;
+                float cx = DW / 2f, cy = DRONE_CY, span = 92, prop = 58;
                 // arms and body
                 g.setStroke(new BasicStroke(10f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                 g.setColor(new Color(0x2a2a26));
