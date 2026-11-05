@@ -461,6 +461,11 @@ final class DroneSetup {
          * when it is a long one).
          */
         private static JComponent line(Part part, String label, JComponent... choices) {
+            return line(part, label, false, choices);
+        }
+
+        /** @param below the state under the choices, across the width, for a line whose choices fill it (the flight modes) */
+        private static JComponent line(Part part, String label, boolean below, JComponent... choices) {
             JPanel line = new JPanel(new java.awt.BorderLayout(10, 0));
             line.setOpaque(false);
             JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
@@ -469,10 +474,16 @@ final class DroneSetup {
             l.setPreferredSize(new java.awt.Dimension(LINE_LABEL_W, l.getPreferredSize().height));
             left.add(l);
             for (JComponent c : choices) left.add(c);
-            line.add(left, java.awt.BorderLayout.WEST);
             part.cell = WrappingText.fitting("", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
-            part.cell.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
-            line.add(part.cell, java.awt.BorderLayout.CENTER);
+            if (below) {
+                line.add(left, java.awt.BorderLayout.NORTH);
+                part.cell.setBorder(javax.swing.BorderFactory.createEmptyBorder(2, LINE_LABEL_W + 16, 4, 0)); // under the lists
+                line.add(part.cell, java.awt.BorderLayout.SOUTH);
+            } else {
+                line.add(left, java.awt.BorderLayout.WEST);
+                part.cell.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
+                line.add(part.cell, java.awt.BorderLayout.CENTER);
+            }
             return line;
         }
 
@@ -530,7 +541,7 @@ final class DroneSetup {
             card.add(javax.swing.Box.createVerticalStrut(8));
             rescueFold = new Fold(line(rescueRow, "GPS RESCUE", rescueChoices()), gpsYes);
             rescueRow.hidden = !gpsYes;
-            card.add(switches.build(line(modeRow, "FLIGHT MODES", modeChoices()), line(armRow, "ARM", armChoices()),
+            card.add(switches.build(line(modeRow, "FLIGHT MODES", true, modeChoices()), line(armRow, "ARM", armChoices()),
                     line(prearmRow, "PREARM", prearmChoices()), rescueFold));
             card.add(javax.swing.Box.createVerticalStrut(8));
             card.add(failsafeSection.build(line(failsafeRow, "SIGNAL LOST", failsafeChoices())));
@@ -1803,7 +1814,11 @@ final class DroneSetup {
             boolean partly = !p.blocked().isEmpty() || !p.missing().isEmpty();
             StringBuilder text = new StringBuilder(partly ? "Partly set." : setText());
             text.append(takenOff(lastReplaced));
-            for (var b : p.blocked().entrySet()) text.append("<br><b>").append(b.getKey().title).append(":</b> ").append(b.getValue());
+            for (var b : p.blocked().entrySet()) { // the reason names the mode itself when it is "too old": not twice
+                text.append("<br>");
+                if (!b.getValue().startsWith(b.getKey().title)) text.append("<b>").append(b.getKey().title).append(":</b> ");
+                text.append(b.getValue());
+            }
             if (r.rescueNote() != null) text.append("<br>").append(r.rescueNote());
             for (ModeSwitch.Mode missing : p.missing()) {
                 text.append("<br><b>").append(missing.title).append("</b> isn't offered by this Betaflight (")
