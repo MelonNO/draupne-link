@@ -12,6 +12,7 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 - **Earlier flights stay on the map** until taken off by hand (right-click on a line, or all at once), after a restart too (`map.keptFlights`).
 - **Sleeping phones in the PHONE list** with the time to their next check; any number of them; another phone's check-in while flying is answered "sleep on".
 - **Every drone on the network on the map** (phone app pc.32: the NAME_REPLY carries the drone's position, armed, flown and the pilot PC), and **right-click to connect or watch**.
+- **Update phone app** on the LINK card: a remote update over the link (REMOTE_UPDATE 0x77; the phone downloads, checks the SHA-256, installs - disarmed only - and opens again by itself; progress in PHONE_UPDATE 0x40F7). Phone apps from pc.32 on.
 - **A phone left in deep sleep after DISCONNECT keeps its WAKE:** the LINK card shows it asleep (last heard, battery, next check) with WAKE; its check-ins are answered "sleep on" by the name service until WAKE connects; remembered across restarts (`phone.asleep`).
 
 ## 1.0.40

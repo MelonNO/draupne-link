@@ -67,6 +67,14 @@
         <receiver
             android:name=".AppUpdateReceiver"
             android:exported="false" />
+        <!-- DRAUPNE Link (pc.32): after an update the PC asked for, the app opens again by itself -->
+        <receiver
+            android:name=".AppReplacedReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <!-- DRAUPNE Link (pc.21): deep sleep's check alarm, and the device admin that may lock the screen -->
         <receiver
             android:name=".PowerAlarmReceiver"

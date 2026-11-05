@@ -132,6 +132,22 @@ public class FcTelemetry {
 
     private volatile PhoneRcLag phoneRcLag;
 
+    /**
+     * A remote update on the phone (record PHONE_UPDATE, phone app pc.32, twice a second while one runs): state 1
+     * downloading, 2 installing, 3 a tap needed on the phone, 4 failed, 5 refused (not disarmed), 6 already that
+     * version; percent; text (the version, or why). Last in its packet.
+     */
+    static final short PHONE_UPDATE = 0x40F7;
+
+    public record PhoneUpdate(int state, int percent, String text, long receivedAt) {}
+
+    private volatile PhoneUpdate phoneUpdate;
+
+    /** The phone's latest word on a remote update, or null. */
+    public PhoneUpdate getPhoneUpdate() {
+        return phoneUpdate;
+    }
+
     /** The phone's latest word on how late the sticks arrive, or null (none yet, or a phone app before pc.31). */
     public PhoneRcLag getPhoneRcLag() {
         return phoneRcLag;
@@ -408,6 +424,12 @@ public class FcTelemetry {
                 int sleepIn = b.readShort() & 0xffff;
                 int caps = b.readUnsignedByteAsInt();
                 phonePower = new PhonePower(mode, interval, sleepIn, caps, MonoClock.ms());
+            }
+            case PHONE_UPDATE -> {
+                int state = b.readUnsignedByteAsInt();
+                int percent = b.readUnsignedByteAsInt();
+                String text = b.readUTF();
+                phoneUpdate = new PhoneUpdate(state, percent, text == null ? "" : text, MonoClock.ms());
             }
             case PHONE_RC_LAG -> {
                 int lag = b.readShort() & 0xffff;

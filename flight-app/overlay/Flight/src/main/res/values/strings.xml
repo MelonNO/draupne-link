@@ -95,6 +95,7 @@ TO UNLOCK</string>
     <string name="dd_wake_channel">Wake-up</string>
     <string name="dd_wake_channel_why">Turns the screen on when the PC wakes the phone from deep sleep.</string>
     <string name="dd_wake_text">Awake - the PC called</string>
+    <string name="dd_updated_text">Updated by the PC - opening again</string>
     <string name="dd_power_admin_line">Allow the app to lock the screen (deep sleep turns it off by itself). Tap to set it up.</string>
     <string name="dd_power_admin_why">So the screen can go off by itself in deep sleep.</string>
     <string name="dd_power_exact_line">Exact alarms not allowed: deep sleep\'s checks for the PC may come late. Tap to allow them.</string>

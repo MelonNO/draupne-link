@@ -74,16 +74,38 @@ final class AppUpdater {
         if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room for the download");
         File apk = new File(d, "update.apk");
         try {
-            download(found, apk, progress);
+            download(found, apk, progress, null);
             if (DDService.isRunning) throw new IOException(c.getString(R.string.dd_update_connected)); // connected while it downloaded
             progress.update(c.getString(R.string.dd_update_installing));
-            install(c, apk);
+            install(c, apk, false);
         } finally {
             if (apk.exists() && !apk.delete()) log("Could not delete " + apk);
         }
     }
 
-    private static void download(UpdateCheck.Found found, File apk, Progress progress) throws IOException {
+    /**
+     * pc.32, the PC's REMOTE_UPDATE ({@link RemoteUpdate}): the same, while connected - the PC asked, and the flight
+     * controller is checked disarmed again just before the install, which ends this app and the link with it.
+     * Android 12 on: no tap needed when this app installed its own last update.
+     */
+    static void downloadAndInstallRemote(Context c, UpdateCheck.Found found, java.util.function.IntConsumer percent,
+                                         java.util.function.BooleanSupplier disarmed) throws IOException {
+        if (found.sha256 == null) throw new IOException(c.getString(R.string.dd_update_no_digest));
+        File d = dir(c);
+        cleanUp(c);
+        if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room for the download");
+        File apk = new File(d, "update.apk");
+        try {
+            download(found, apk, text -> { }, percent);
+            if (!disarmed.getAsBoolean()) throw new IOException("the flight controller isn't known to be disarmed now - not installed");
+            RemoteUpdate.pending(c, true); // opens again by itself once updated
+            install(c, apk, true);
+        } finally {
+            if (apk.exists() && !apk.delete()) log("Could not delete " + apk);
+        }
+    }
+
+    private static void download(UpdateCheck.Found found, File apk, Progress progress, java.util.function.IntConsumer percentOut) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(found.url).openConnection();
         conn.setInstanceFollowRedirects(true); // GitHub sends the file from another https host
         conn.setConnectTimeout(15000);
@@ -108,6 +130,7 @@ final class AppUpdater {
                 int percent = total > 0 ? (int) (done * 100 / total) : -1;
                 if (percent / 5 != shown / 5) {
                     shown = percent;
+                    if (percentOut != null) percentOut.accept(Math.max(0, percent));
                     progress.update(percent < 0 ? "Downloading the update..." : "Downloading the update... " + percent + "%");
                 }
             }
@@ -118,10 +141,15 @@ final class AppUpdater {
         }
     }
 
-    private static void install(Context c, File apk) throws IOException {
+    /** Extra on the installer's answer: the PC asked for this update. */
+    static final String EXTRA_REMOTE = "de.droiddrone.flight.pc.REMOTE";
+
+    private static void install(Context c, File apk, boolean remote) throws IOException {
         PackageInstaller installer = c.getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         params.setAppPackageName(c.getPackageName());
+        // Android 12 on: no "update this app?" when this app installed its own last update (else Android asks anyway)
+        if (Build.VERSION.SDK_INT >= 31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
         int id = installer.createSession(params);
         try (PackageInstaller.Session session = installer.openSession(id)) {
             try (InputStream in = new FileInputStream(apk); OutputStream out = session.openWrite("update.apk", 0, apk.length())) {
@@ -130,7 +158,7 @@ final class AppUpdater {
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 session.fsync(out);
             }
-            Intent status = new Intent(ACTION_STATUS).setClass(c, AppUpdateReceiver.class);
+            Intent status = new Intent(ACTION_STATUS).setClass(c, AppUpdateReceiver.class).putExtra(EXTRA_REMOTE, remote);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
             session.commit(PendingIntent.getBroadcast(c, id, status, flags).getIntentSender());
         } catch (IOException | RuntimeException e) {

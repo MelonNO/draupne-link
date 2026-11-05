@@ -887,6 +887,28 @@ public class ControlLink {
     public static final byte POWER_MODE = 0x6E;
     public static final int POWER_NORMAL = 0, POWER_STANDBY = 1, POWER_DEEP_SLEEP = 2;
 
+    /**
+     * A remote update of the phone app (phone app pc.32 on; an older one drops it): [0x77][version UTF][APK url UTF]
+     * [its SHA-256 UTF], unnumbered; the caller repeats it until the phone's PHONE_UPDATE record answers. The phone
+     * takes it only for a newer version and with the flight controller known to be disarmed.
+     */
+    public static final byte REMOTE_UPDATE = 0x77;
+
+    public void sendRemoteUpdate(String version, String url, String sha256) {
+        if (!running || !isConnected() || spectator != null) return;
+        try {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+            out.writeByte(REMOTE_UPDATE);
+            out.writeUTF(version);
+            out.writeUTF(url);
+            out.writeUTF(sha256);
+            udpSender.sendPacket(bytes.toByteArray());
+        } catch (IOException e) {
+            log("sendRemoteUpdate error: " + e);
+        }
+    }
+
     public void sendPowerMode(int mode, int checkIntervalMin) {
         if (!running || !isConnected() || spectator != null) return;
         udpSender.sendPacket(new byte[]{POWER_MODE, (byte) mode, (byte) checkIntervalMin});

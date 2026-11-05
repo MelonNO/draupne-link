@@ -250,6 +250,14 @@ public class MainWindow extends JFrame {
     private final JLabel phoneBatteryValue = statValue();
     /** The phone app is older than the one this PC brings: what to do about it. */
     private final WrappingText phoneAppWarning = new WrappingText("", Theme.font(Font.BOLD, 12.5f), Theme.WARN);
+    /** Connected to a phone with an older app: UPDATE PHONE APP (phone app pc.32 on: over the link, 1.0.41). */
+    private final JButton updatePhoneButton = Theme.secondaryButton("Update phone app");
+    /** The remote update asked for: when, and the version; 0 = none. */
+    private long remoteUpdateAskedAt, remoteUpdateSentAt;
+    private String remoteUpdateVersion;
+    private FcTelemetry.PhoneUpdate lastPhoneUpdate;
+    /** Phone apps from this one on take a remote update. */
+    static final String REMOTE_UPDATE_MIN_PHONE = "2.3.0-pc.32";
     private boolean phoneAppWarned;
     private final WrappingText phoneWarning = new WrappingText("", Theme.font(Font.BOLD, 12.5f), Theme.BAD);
     /** Tailscale's view of the phone, checked every few seconds; null when not using Tailscale or no address yet. */
@@ -779,6 +787,12 @@ public class MainWindow extends JFrame {
         link.add(phoneWarning, c);
         phoneAppWarning.setVisible(false);
         link.add(phoneAppWarning, c);
+        updatePhoneButton.setToolTipText("The phone downloads the new phone app, checks it and installs it, over its own internet - only while the drone is disarmed. The link drops for a moment and comes back");
+        updatePhoneButton.setFocusable(false);
+        updatePhoneButton.setVisible(false);
+        updatePhoneButton.addActionListener(e -> askRemoteUpdate());
+        c.insets = new Insets(6, 0, 0, 0);
+        link.add(updatePhoneButton, c);
         column.add(link, BorderLayout.NORTH);
 
         JPanel logCard = Theme.card(new BorderLayout(0, 8));
@@ -1303,6 +1317,9 @@ public class MainWindow extends JFrame {
             }
         }
         service.setInputListener(null);
+        remoteUpdateAskedAt = 0; // a remote update in flight: the phone goes on with it, this PC stops following it
+        updatePhoneButton.setText("Update phone app");
+        updatePhoneButton.setEnabled(true);
         de.droiddrone.pc.WindowsTuning.keepAwake(false);
         powerWanted = ControlLink.POWER_NORMAL;
         phoneAsleep = false;
@@ -2714,6 +2731,100 @@ public class MainWindow extends JFrame {
         if (phoneAppWarning.isVisible() != old) {
             phoneAppWarning.setVisible(old);
             phoneAppWarning.getParent().revalidate();
+        }
+        boolean pilot = connection != null && !connection.getLink().isSpectator();
+        boolean offer = (old && pilot) || remoteUpdateAskedAt != 0;
+        if (updatePhoneButton.isVisible() != offer) {
+            updatePhoneButton.setVisible(offer);
+            updatePhoneButton.getParent().revalidate();
+        }
+        if (t != null && pilot) refreshRemoteUpdate(t, version);
+    }
+
+    // ------------------------------------------------------------------ remote update of the phone app (1.0.41)
+
+    /** UPDATE PHONE APP: disarmed, a phone app that takes it, and a yes - then the request goes out until the phone answers. */
+    private void askRemoteUpdate() {
+        if (connection == null || connection.getLink().isSpectator()) return;
+        FcTelemetry t = connection.getLink().getTelemetry();
+        String version = t.getPhoneAppVersion();
+        String newest = de.droiddrone.pc.setup.ApkShare.VERSION;
+        if (fcArmedNow()) {
+            new LockedNotice(updatePhoneButton, videoView, "ARMED", "No update while the drone is armed: it restarts the phone app, and the sticks with it.").pop();
+            return;
+        }
+        if (version == null || de.droiddrone.pc.setup.UpdateCheck.isNewer(REMOTE_UPDATE_MIN_PHONE, version)) {
+            JOptionPane.showMessageDialog(this, "The phone runs " + (version == null ? "an old phone app" : version) + ", which can't be updated from here.\n"
+                    + "Update it once on the phone (SETUP > Phone setup, or the update line in the phone app):\n"
+                    + "from " + REMOTE_UPDATE_MIN_PHONE + " on, UPDATE PHONE APP does it from this PC.", "Update phone app", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (!de.droiddrone.pc.setup.UpdateCheck.isNewer(newest, version)) {
+            JOptionPane.showMessageDialog(this, "The phone runs " + version + " already - this PC brings that one.", "Update phone app", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        int answer = JOptionPane.showConfirmDialog(this, "Update the phone to DRAUPNE Flight " + newest + "?\n\n"
+                + "The phone downloads it over its own internet (about 23 MB), checks it, and installs it.\n"
+                + "The phone app restarts: the link drops for a moment and comes back by itself.\n"
+                + "Only while the drone is disarmed - keep it on the ground.", "Update phone app", JOptionPane.YES_NO_OPTION);
+        if (answer != JOptionPane.YES_OPTION) return;
+        remoteUpdateAskedAt = de.droiddrone.pc.MonoClock.ms();
+        remoteUpdateSentAt = 0;
+        remoteUpdateVersion = newest;
+        lastPhoneUpdate = null;
+        logLine("Phone app update to " + newest + " asked: the phone downloads and installs it.");
+    }
+
+    /** While a remote update runs: the request again until the phone answers, and its progress on the card. */
+    private void refreshRemoteUpdate(FcTelemetry t, String phoneVersion) {
+        if (remoteUpdateAskedAt == 0) return;
+        long now = de.droiddrone.pc.MonoClock.ms();
+        String want = remoteUpdateVersion;
+        if (phoneVersion != null && want != null && !de.droiddrone.pc.setup.UpdateCheck.isNewer(want, phoneVersion)) {
+            logLine("The phone app is " + phoneVersion + " now: updated.");
+            remoteUpdateAskedAt = 0;
+            updatePhoneButton.setText("Update phone app");
+            updatePhoneButton.setEnabled(true);
+            return;
+        }
+        FcTelemetry.PhoneUpdate u = t.getPhoneUpdate();
+        boolean answered = u != null && u.receivedAt() >= remoteUpdateAskedAt;
+        if (!answered && now - remoteUpdateSentAt >= 1000 && now - remoteUpdateAskedAt < 10_000) {
+            connection.getLink().sendRemoteUpdate(want, de.droiddrone.pc.setup.ApkShare.APK_URL, de.droiddrone.pc.setup.ApkShare.APK_SHA256);
+            remoteUpdateSentAt = now;
+        }
+        String text;
+        boolean over = false;
+        if (!answered) {
+            text = now - remoteUpdateAskedAt < 10_000 ? "Asking the phone..." : "The phone doesn't answer the update.";
+            over = now - remoteUpdateAskedAt >= 10_000;
+        } else {
+            text = switch (u.state()) {
+                case 1 -> "Phone: downloading " + want + "... " + u.percent() + " %";
+                case 2 -> "Phone: installing - the app restarts, the link comes back by itself.";
+                case 3 -> "Phone: tap Update on the phone's screen (Android asks once; from then on it updates without a tap).";
+                case 4 -> "Phone: the update failed - " + u.text();
+                case 5 -> "Phone: not updated - " + u.text() + ". Disarm first.";
+                case 6 -> "Phone: it runs " + u.text() + " already.";
+                default -> "Phone: " + u.text();
+            };
+            over = u.state() >= 4;
+        }
+        if (lastPhoneUpdate == null || u != null && (u.state() != lastPhoneUpdate.state())) {
+            if (u != null && answered) logLine(text);
+            lastPhoneUpdate = answered ? u : null;
+        }
+        updatePhoneButton.setText(over ? "Update phone app" : text.length() > 34 ? "Updating the phone..." : text);
+        updatePhoneButton.setToolTipText(text);
+        updatePhoneButton.setEnabled(over);
+        phoneAppWarning.setHtml(text);
+        if (!phoneAppWarning.isVisible()) {
+            phoneAppWarning.setVisible(true);
+            phoneAppWarning.getParent().revalidate();
+        }
+        if (over) {
+            if (!answered) logLine("The phone app doesn't answer the update request: it is older than " + REMOTE_UPDATE_MIN_PHONE + ".");
+            remoteUpdateAskedAt = 0;
         }
     }
 

@@ -6,6 +6,21 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-05, 1.0.40 released, phone app pc.31; 1.0.41 built)
 
+- **1.0.41 remote update (2026-11-05 night, built, NOT released, untried on a phone):** the pilot: "add a remote update for
+  connected phones". PC: `ControlLink.sendRemoteUpdate` [0x77][version UTF][url UTF][sha256 UTF] (ApkShare's pinned
+  APK), repeated each second until the phone answers (10 s, then "older than pc.32"); `FcTelemetry.PhoneUpdate` from
+  record 0x40F7 [state u8][percent u8][text UTF]; `MainWindow.askRemoteUpdate` (disarmed - LockedNotice otherwise; the
+  phone app >= `REMOTE_UPDATE_MIN_PHONE` pc.32; confirm) and `refreshRemoteUpdate` (the button and the warning line
+  show the progress; done when the reconnected phone reports the new version). Phone: `RemoteUpdate` (newer only,
+  `FcArmedState` DISARMED, a thread), `AppUpdater.downloadAndInstallRemote` (SHA-256 checked, disarmed checked again
+  before the install, `setRequireUserAction(USER_ACTION_NOT_REQUIRED)` on API 31+ for every install), the installer's
+  answer with `EXTRA_REMOTE` (a prompt shown while connected only for a remote one; TAP_NEEDED reported),
+  `AppReplacedReceiver` (MY_PACKAGE_REPLACED + the pending flag: the full-screen notification + bright wake lock open
+  MainActivity, which listens; the PC reconnects), the record twice a second while one runs (statsSent % 5 == 4).
+  *Not tried on a phone:* the no-tap install (Android's rule: the app is its own installer of record - true after its
+  first self-update), and the reopening after it (the full-screen intent; phones that hold it back need a tap on the
+  notification). Usable from the release after the one that ships pc.32 (the PC must pin a newer APK than the phone).
+
 - **1.0.41 second round, phone app 2.3.0-pc.32 (2026-11-05 night, built, NOT released, untried on hardware; pc.32 APK built
   locally from a dirty tree, SHA 719c3e2e..., NOT published - rebuild from the clean HEAD at release, publish, pin in
   ApkShare; the release workflow refuses until then):** the pilot's list. *Upside down per phone:* `upsideDownFor`,

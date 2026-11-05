@@ -85,6 +85,20 @@ final class PcLinkStats {
      */
     static final short PHONE_RC_LAG_CODE = 0x40F6;
 
+    /**
+     * pc.32, twice a second while a remote update runs or lately ran ({@link RemoteUpdate}): u8 the state (1
+     * downloading, 2 installing, 3 a tap needed on the phone, 4 failed, 5 refused - not disarmed, 6 already this
+     * version), u8 percent, UTF a word on it (the version, or why). Last in its packet.
+     */
+    static final short PHONE_UPDATE_CODE = 0x40F7;
+
+    static void writeRemoteUpdateTo(DataOutputStream out, int state, int percent, String text) throws IOException {
+        out.writeShort(PHONE_UPDATE_CODE);
+        out.writeByte(state);
+        out.writeByte(percent);
+        out.writeUTF(text.length() > 120 ? text.substring(0, 120) : text);
+    }
+
     static void writeRcLagTo(DataOutputStream out, int lagMs, int maxLagMs, int dropped) throws IOException {
         out.writeShort(PHONE_RC_LAG_CODE);
         out.writeShort(lagMs < 0 ? 65535 : Math.min(65534, lagMs));

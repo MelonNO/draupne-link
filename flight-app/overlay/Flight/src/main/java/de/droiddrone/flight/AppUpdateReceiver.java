@@ -24,10 +24,12 @@ public class AppUpdateReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
         int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+        boolean remote = intent.getBooleanExtra(AppUpdater.EXTRA_REMOTE, false);
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
             if (confirm == null) return;
-            if (DDService.isRunning) {
+            if (remote) RemoteUpdate.set(RemoteUpdate.TAP_NEEDED, 100, "tap Update on the phone's screen");
+            if (DDService.isRunning && !remote) { // the PC asked, disarmed: the prompt goes up while connected
                 // connected since the tap: an update now would end the app and the sticks with it
                 log("Update not offered: connected.");
                 Toast.makeText(context, R.string.dd_update_connected, Toast.LENGTH_LONG).show();
@@ -45,6 +47,11 @@ public class AppUpdateReceiver extends BroadcastReceiver {
         if (status != PackageInstaller.STATUS_SUCCESS) {
             String why = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
             log("Update not installed: " + status + " " + why);
+            if (remote) {
+                RemoteUpdate.set(RemoteUpdate.FAILED, 0, status == PackageInstaller.STATUS_FAILURE_ABORTED ? "cancelled on the phone"
+                        : why == null ? "the installer said no (" + status + ")" : why);
+                RemoteUpdate.pending(context, false);
+            }
             if (status != PackageInstaller.STATUS_FAILURE_ABORTED) {
                 Toast.makeText(context, context.getString(R.string.dd_update_failed, why == null ? "" : why), Toast.LENGTH_LONG).show();
             }

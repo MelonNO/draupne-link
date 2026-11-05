@@ -227,6 +227,26 @@ class FcTelemetryTest {
         assertFalse(p.exactAlarmsAllowed());
     }
 
+    /** A remote update's progress from the phone (record PHONE_UPDATE, phone app pc.32). */
+    @Test
+    void readsTheRemoteUpdatesProgress() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        DataOutputStream o = new DataOutputStream(bytes);
+        o.writeShort(FcTelemetry.PHONE_UPDATE);
+        o.writeByte(1); o.writeByte(45); o.writeUTF("2.3.0-pc.33");
+        o.write(betaflightPacket(0, 0)); // what follows is still read
+        FcTelemetry t = new FcTelemetry();
+        assertNull(t.getPhoneUpdate());
+        t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+        FcTelemetry.PhoneUpdate u = t.getPhoneUpdate();
+        assertNotNull(u);
+        assertEquals(1, u.state(), "downloading");
+        assertEquals(45, u.percent());
+        assertEquals("2.3.0-pc.33", u.text());
+        assertNotNull(t.getStatus(), "the record after it was read");
+        assertEquals(0, t.getUnknownCodes());
+    }
+
     @Test
     void thePhoneAppsBuildNumberIsReadFromItsVersion() throws Exception {
         assertEquals(18, FcTelemetry.pcBuild("2.3.0-pc.18"));

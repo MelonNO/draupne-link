@@ -71,6 +71,11 @@ public class DDService extends Service {
     /** DRAUPNE Link: the pilot allowed location after the service started (MainActivity): take the foreground type now. */
     public static final String ACTION_LOCATION_GRANTED = "de.droiddrone.flight.pc.LOCATION_GRANTED";
     private static volatile DDService running;
+
+    /** The service while it runs, else null (pc.32: the remote update's context). */
+    static DDService instance() {
+        return running;
+    }
     /** DRAUPNE Link: keeps the CPU up while the drone flies on this phone - the screen may be off or locked. */
     private PowerManager.WakeLock wakeLock;
     private Notification notification;

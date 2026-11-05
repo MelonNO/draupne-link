@@ -720,6 +720,8 @@ public class Udp {
                             rcLagMaxMs = -1; // the most over the last second
                             PcLinkStats.writeRcLagTo(stats.daos, rcLagMs, maxLag, rcLagDropped);
                         }
+                        // pc.32, twice a second while a remote update runs: in packets with no other last record
+                        if (statsSent % 5 == 4 && RemoteUpdate.reportDue()) RemoteUpdate.writeRecordTo(stats.daos);
                         udpSender.sendPacket(stats.getData());
                     }
                     Thread.sleep(10);
@@ -1060,6 +1062,14 @@ public class Udp {
             {
                 boolean increase = buffer.readBoolean();
                 streamEncoder.changeBitRate(increase);
+                break;
+            }
+            case RemoteUpdate.PACKET:
+            {
+                // pc.32: [0x77][version UTF][APK url UTF][SHA-256 UTF]; the PC sends it again until PHONE_UPDATE answers
+                String version = buffer.readUTF(), url = buffer.readUTF(), sha = buffer.readUTF();
+                DDService s = DDService.instance();
+                RemoteUpdate.request(s == null ? null : s.getApplicationContext(), version, url, sha, msp, mavlink);
                 break;
             }
             case PowerMode.PACKET:
