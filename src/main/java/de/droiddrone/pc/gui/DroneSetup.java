@@ -161,7 +161,8 @@ final class DroneSetup {
         private final Part stickDelay = settings.part("Stick delay");
         private final Part battery = settings.part("Battery");
         /** GPS [No / Yes]; with Yes the compass, the UART and CALIBRATE COMPASS slide out under it. */
-        private final CheckRow gps = new CheckRow("GPS");
+        private final Section gpsSection = settings.section("GPS");
+        private final Part gps = gpsSection.part("GPS");
         private javax.swing.JComboBox<String> gpsChoice;
         private javax.swing.JComboBox<String> compassChoice;
         private javax.swing.JComboBox<String> uartChoice;
@@ -174,7 +175,7 @@ final class DroneSetup {
         private volatile int gpsUart = GpsSetup.DEFAULT_UART;
         /** The compass calibration has the flight controller's USB port: this page leaves it alone meanwhile. */
         private boolean compassCalOpen;
-        private final Combined switches = new Combined("Switches");
+        private final Section switches = settings.section("SWITCHES");
         private final Part armRow = switches.part("Arm");
         private final Part prearmRow = switches.part("Prearm");
         private final Part modeRow = switches.part("Flight modes");
@@ -191,7 +192,8 @@ final class DroneSetup {
         /** The PREARM switch (AUX number, 0 = leave PREARM as it is in Betaflight); AUX3 by default. */
         private volatile int prearmAux;
         private javax.swing.JComboBox<String> prearmChoice;
-        private final CheckRow failsafeRow = new CheckRow("Failsafe (signal lost)");
+        private final Section failsafeSection = settings.section("FAILSAFE");
+        private final Part failsafeRow = failsafeSection.part("Failsafe");
         /** The pilot's failsafe choice: left as it is by default. */
         private volatile ModeSwitch.Failsafe failsafeChoice = ModeSwitch.Failsafe.KEEP;
         private javax.swing.JComboBox<ModeSwitch.Failsafe> failsafeCombo;
@@ -271,17 +273,20 @@ final class DroneSetup {
             };
         }
 
-        /** Several settings on one row: one light (the worst of them) and a line each. */
+        /**
+         * Every Betaflight setting on one row: one light (the worst of them), a line per setting beside its choice, the
+         * lines in sections (GPS, SWITCHES, FAILSAFE) with a small light each, and CONFIRM at the bottom.
+         */
         private static final class Combined {
             final CheckRow row;
             final List<Part> parts = new java.util.ArrayList<>();
-            /** A warning under the parts (the radio calibration to redo); "" for none. */
-            String note = "";
-            /** A plain line under the parts (what WRITE does); "" for none. */
-            String footer = "";
+            final List<Section> sections = new java.util.ArrayList<>();
+            /** At the bottom, beside CONFIRM: what it does; what is still not set after a failed write. */
+            final WrappingText footerText = WrappingText.fitting("", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
 
             Combined(String title) {
                 row = new CheckRow(title);
+                footerText.setVisible(false);
             }
 
             Part part(String label) {
@@ -290,29 +295,125 @@ final class DroneSetup {
                 return p;
             }
 
-            void note(String html) {
-                note = html;
-                refresh();
+            Section section(String title) {
+                Section s = new Section(this, title);
+                sections.add(s);
+                return s;
             }
 
             void footer(String html) {
-                footer = html;
-                refresh();
+                footerText.setHtml(html);
+                footerText.setVisible(!html.isEmpty());
             }
 
             void refresh() {
-                State worst = note.isEmpty() ? State.INFO : State.WARN;
-                StringBuilder html = new StringBuilder();
+                State worst = State.INFO;
                 for (Part p : parts) {
-                    if (p.hidden) continue;
-                    if (rank(p.state) > rank(worst)) worst = p.state;
-                    if (p.cell != null || p.text.isEmpty()) continue; // its own cell beside its choice, or nothing to say yet
-                    if (html.length() > 0) html.append("<br>");
-                    html.append("<b>").append(p.label).append(":</b> ").append(p.text);
+                    if (!p.hidden && rank(p.state) > rank(worst)) worst = p.state;
                 }
-                if (!note.isEmpty()) html.append(html.length() > 0 ? "<br>" : "").append("<b>").append(note).append("</b>");
-                if (!footer.isEmpty()) html.append(html.length() > 0 ? "<br>" : "").append(footer);
-                row.set(worst, html.toString());
+                for (Section s : sections) {
+                    s.refresh();
+                    if (!s.note.isEmpty() && rank(State.WARN) > rank(worst)) worst = State.WARN;
+                }
+                row.set(worst, "");
+            }
+        }
+
+        /** A group of lines under a small heading with its own light: GPS, SWITCHES, FAILSAFE. */
+        private static final class Section {
+            final Combined owner;
+            final String title;
+            final List<Part> parts = new java.util.ArrayList<>();
+            final Dot dot = new Dot();
+            /** A warning under the lines (the radio calibration to redo); "" for none. */
+            String note = "";
+            final WrappingText noteText = WrappingText.fitting("", Theme.font(Font.PLAIN, 13f), Theme.WARN);
+
+            Section(Combined owner, String title) {
+                this.owner = owner;
+                this.title = title;
+                noteText.setVisible(false);
+            }
+
+            Part part(String label) {
+                Part p = owner.part(label);
+                parts.add(p);
+                return p;
+            }
+
+            void note(String html) {
+                note = html;
+                noteText.setHtml(html.isEmpty() ? "" : "<b>" + html + "</b>");
+                noteText.setVisible(!html.isEmpty());
+                owner.refresh();
+            }
+
+            void refresh() {
+                State worst = State.INFO;
+                for (Part p : parts) {
+                    if (!p.hidden && rank(p.state) > rank(worst)) worst = p.state;
+                }
+                if (!note.isEmpty() && rank(State.WARN) > rank(worst)) worst = State.WARN;
+                dot.state = worst;
+                dot.repaint();
+            }
+
+            /** The heading with its light, the lines under it set in from the left, the note last. */
+            JComponent build(JComponent... lines) {
+                JPanel panel = new JPanel();
+                panel.setLayout(new javax.swing.BoxLayout(panel, javax.swing.BoxLayout.Y_AXIS));
+                panel.setOpaque(false);
+                JPanel head = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+                head.setOpaque(false);
+                head.add(dot);
+                head.add(Theme.label(title, Theme.headingFont(13f), Theme.TEXT));
+                panel.add(head);
+                JPanel body = new JPanel();
+                body.setLayout(new javax.swing.BoxLayout(body, javax.swing.BoxLayout.Y_AXIS));
+                body.setOpaque(false);
+                body.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, SECTION_INSET, 0, 0));
+                for (JComponent l : lines) body.add(l);
+                body.add(noteText);
+                for (java.awt.Component c : body.getComponents()) {
+                    if (c instanceof JComponent j) j.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
+                }
+                panel.add(body);
+                for (java.awt.Component c : panel.getComponents()) {
+                    if (c instanceof JComponent j) j.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
+                }
+                return panel;
+            }
+        }
+
+        /** The lines of a section sit this far in from its heading's light. */
+        private static final int SECTION_INSET = 18;
+
+        /** A section's light: a small disc (a ring while still to confirm) in the state's colour. */
+        private static final class Dot extends JComponent {
+            State state = State.PENDING;
+
+            Dot() {
+                setPreferredSize(new java.awt.Dimension(12, 12));
+            }
+
+            @Override
+            protected void paintComponent(java.awt.Graphics graphics) {
+                java.awt.Graphics2D g = Theme.smooth((java.awt.Graphics2D) graphics.create());
+                java.awt.Color c = switch (state) {
+                    case OK -> Theme.OK;
+                    case WARN -> Theme.WARN;
+                    case BAD -> Theme.BAD;
+                    case INFO, TODO -> Theme.MUTED;
+                    case PENDING -> Theme.LINE;
+                };
+                g.setColor(c);
+                if (state == State.TODO) {
+                    g.setStroke(new java.awt.BasicStroke(1.8f));
+                    g.drawOval(1, 1, getWidth() - 3, getHeight() - 3);
+                } else {
+                    g.fillOval(0, 0, getWidth() - 1, getHeight() - 1);
+                }
+                g.dispose();
             }
         }
 
@@ -395,33 +496,58 @@ final class DroneSetup {
             ((JSpinner.DefaultEditor) cellSpinner.getEditor()).getTextField().setColumns(2);
             cellSpinner.addChangeListener(e -> cellsChanged((Integer) cellSpinner.getValue()));
             cellSpinner.setToolTipText("The packs this drone flies on: Betaflight then always uses this count");
-            settings.row.addComponent(Theme.label("BATTERY", Theme.headingFont(12f), Theme.MUTED));
-            settings.row.addComponent(cellSpinner);
-            settings.row.addComponent(Theme.label("S", Theme.headingFont(16f), Theme.TEXT));
-            measuredCells = settings.row.addAction("Use measured", () -> cellSpinner.setValue(measured));
+            measuredCells = Theme.secondaryButton("Use measured");
+            measuredCells.addActionListener(e -> cellSpinner.setValue(measured));
             measuredCells.setToolTipText("The cell count Betaflight sees on the battery plugged in now");
             measuredCells.setVisible(false);
             confirmed = "true".equalsIgnoreCase(main.config().getString(CONFIRMED_KEY));
-            confirmButton = settings.row.addPrimaryAction("Confirm", this::confirmNow);
+            confirmButton = Theme.primaryButton("Confirm");
+            confirmButton.setFont(Theme.headingFont(12.5f));
+            confirmButton.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 16, 8, 16));
+            confirmButton.addActionListener(e -> confirmNow());
             confirmButton.setToolTipText("Every setting on this page is right: write them to the flight controller (its settings are backed up first)");
             confirmButton.setVisible(!confirmed);
             confirmButton.setEnabled(false);
-            gps.addComponent(gpsChoices());
-            gps.addBelow(gpsDetails());
-            JPanel switchChoices = new JPanel();
-            switchChoices.setLayout(new javax.swing.BoxLayout(switchChoices, javax.swing.BoxLayout.Y_AXIS));
-            switchChoices.setOpaque(false);
-            switchChoices.add(line(modeRow, "FLIGHT MODES", modeChoices()));
-            switchChoices.add(line(armRow, "ARM", armChoices()));
-            switchChoices.add(line(prearmRow, "PREARM", prearmChoices()));
-            rescueFold = new Fold(line(rescueRow, "GPS RESCUE", rescueChoices()), gpsYes);
-            rescueRow.hidden = !gpsYes;
-            switchChoices.add(rescueFold);
-            for (java.awt.Component c : switchChoices.getComponents()) { // all at the left edge, like the lines above them
+            // the card: the link's settings, then GPS, SWITCHES and FAILSAFE as sections, CONFIRM at the bottom
+            JPanel card = new JPanel();
+            card.setLayout(new javax.swing.BoxLayout(card, javax.swing.BoxLayout.Y_AXIS));
+            card.setOpaque(false);
+            JPanel link = new JPanel(); // the link's own settings, set in like the sections' lines so every label lines up
+            link.setLayout(new javax.swing.BoxLayout(link, javax.swing.BoxLayout.Y_AXIS));
+            link.setOpaque(false);
+            link.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, SECTION_INSET, 0, 0));
+            link.add(line(receiver, "RECEIVER"));
+            link.add(line(stickDelay, "STICK DELAY"));
+            link.add(line(battery, "BATTERY", cellSpinner, Theme.label("S", Theme.headingFont(14f), Theme.TEXT), measuredCells));
+            for (java.awt.Component c : link.getComponents()) {
                 if (c instanceof JComponent j) j.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
             }
-            switches.row.addBelow(switchChoices);
-            failsafeRow.addComponent(failsafeChoices());
+            card.add(link);
+            card.add(javax.swing.Box.createVerticalStrut(8));
+            JComponent gpsLine = line(gps, "FITTED", gpsChoices());
+            JComponent gpsDetails = gpsDetails();
+            card.add(gpsSection.build(gpsLine, gpsDetails));
+            card.add(javax.swing.Box.createVerticalStrut(8));
+            rescueFold = new Fold(line(rescueRow, "GPS RESCUE", rescueChoices()), gpsYes);
+            rescueRow.hidden = !gpsYes;
+            card.add(switches.build(line(modeRow, "FLIGHT MODES", modeChoices()), line(armRow, "ARM", armChoices()),
+                    line(prearmRow, "PREARM", prearmChoices()), rescueFold));
+            card.add(javax.swing.Box.createVerticalStrut(8));
+            card.add(failsafeSection.build(line(failsafeRow, "SIGNAL LOST", failsafeChoices())));
+            card.add(javax.swing.Box.createVerticalStrut(10));
+            JPanel bottom = new JPanel(new java.awt.BorderLayout(14, 0));
+            bottom.setOpaque(false);
+            settings.footerText.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
+            bottom.add(settings.footerText, java.awt.BorderLayout.CENTER);
+            JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+            buttons.setOpaque(false);
+            buttons.add(confirmButton);
+            bottom.add(buttons, java.awt.BorderLayout.EAST);
+            card.add(bottom);
+            for (java.awt.Component c : card.getComponents()) { // all at the left edge
+                if (c instanceof JComponent j) j.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
+            }
+            settings.row.addBelow(card);
             portChoice.setToolTipText("Which USB port the flight controller is on, if more than one is found");
             portChoice.addActionListener(e -> {
                 Object c = portChoice.getSelectedItem();
@@ -442,9 +568,6 @@ final class DroneSetup {
             disconnect.setToolTipText("Let go of the USB port, e.g. for Betaflight Configurator; RECONNECT carries on");
             WizardDialog.addRow(col, usb);
             WizardDialog.addRow(col, settings.row);
-            WizardDialog.addRow(col, gps);
-            WizardDialog.addRow(col, switches.row);
-            WizardDialog.addRow(col, failsafeRow);
             motors.addAction("Already checked", this::motorsAlreadyChecked);
             motors.addPrimaryAction("Check now", this::checkMotorsNow);
             motors.setToolTipText("Each motor in the right place, turning the right way, the props on the right way round");
@@ -519,6 +642,7 @@ final class DroneSetup {
             calibrateCompass.setVisible(compassYes);
             calibrateCompass.setEnabled(false);
             row.add(calibrateCompass);
+            row.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, LINE_LABEL_W + 8, 0, 0)); // under the FITTED choice
             gpsFold = new Fold(row, gpsYes);
             return gpsFold;
         }
@@ -564,7 +688,7 @@ final class DroneSetup {
             gpsFold.setShown(yes, animate);
             rescueFold.setShown(yes, animate);
             rescueRow.hidden = !yes;
-            switches.refresh();
+            settings.refresh();
             calibrateCompass.setVisible(yes && compassYes);
             offerGpsModes(yes);
             offerGpsFailsafe(yes);
@@ -675,7 +799,7 @@ final class DroneSetup {
             }
             compassCalOpen = true;
             gps.set(State.PENDING, "The compass calibration is open. Close it when you're done.");
-            CompassCalibrationDialog.open(javax.swing.SwingUtilities.getWindowAncestor(gps), main, chosenPort, () -> {
+            CompassCalibrationDialog.open(javax.swing.SwingUtilities.getWindowAncestor(usb), main, chosenPort, () -> {
                 compassCalOpen = false;
                 nextTry = System.currentTimeMillis() + 1500; // the calibration lets go of the port first
                 done = false;

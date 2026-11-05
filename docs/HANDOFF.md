@@ -24,7 +24,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   modes (ANGLE, HORIZON, POS HOLD, GPS RESCUE) off every other switch when the flight mode switch (or the rescue switch
   for GPS RESCUE) is chosen and has no problem (`offElsewhere` -> cleared, listed in `replaced`); `elsewhere` only remains
   for a switch left as it is; `Plan.doubled` / `ModeSwitch.doubled(aux)` = managed modes on more than one AUX as read
-  ("ANGLE on AUX2, AUX5"), shown as WARN on the flight-modes line when nothing in the plan takes it off. `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
+  ("ANGLE on AUX2, AUX5"), shown as WARN on the flight-modes line when nothing in the plan takes it off. Fifth round (the pilot: "the overall
+  point Betaflight settings, underpoints GPS, Switches, Failsafe, the confirm button at the bottom, the motor check its
+  own thing"): one `Combined` row holds every `Part`; `Section` (title, `Dot` light = worst of its parts, a note line
+  for the radio redo, `build(lines...)` with the lines set in by `SECTION_INSET`); the GPS and failsafe rows became
+  parts with cells (lines FITTED / SIGNAL LOST); the link's three lines sit in the same inset; CONFIRM and the footer
+  text in a bottom row of the card. `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
   the choice beside it; `Combined` gained `footer` (plain line: what WRITE does / "Still not set" list after a failed
   write) and `Part.hidden` (GPS rescue without a GPS); the CONFIRM button sits on the **Betaflight settings** row (`changes`
   row gone). GPS: `gps` row with `gpsChoice` No / Yes, `gpsFold` (a `Fold`) with COMPASS, UART (`uartItems`: UART1-6
