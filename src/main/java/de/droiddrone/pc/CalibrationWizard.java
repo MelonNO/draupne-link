@@ -85,6 +85,15 @@ public class CalibrationWizard {
     private int[] stickAxes;
     private String candidate;
     private long candidateSince;
+    /**
+     * Switch steps: the controls that moved while the step before caught its switch - a momentary button still held,
+     * or anything the radio reports along with it. They count for nothing in this step until they are back where they
+     * were before (then that is their rest here), so letting go of a button is never the next AUX's switch (the pilot:
+     * a button pressed for one AUX "gets assigned to the next aux channel when it is released"). NaN / false: not held.
+     */
+    private float[] heldAxisRest;
+    private boolean[] heldButton;
+    private boolean[] heldButtonRest;
 
     public CalibrationWizard(int axisCount, int buttonCount) {
         this(axisCount, buttonCount, new de.droiddrone.pc.setup.ModeSwitch.Purpose[0]);
@@ -254,6 +263,7 @@ public class CalibrationWizard {
         for (int i = 0; i < Math.min(axisCount, axes.length); i++) {
             if (isAxisAssigned(i)) continue;
             if (stickAxes != null && isStickAxis(i) != sticks) continue;
+            if (!sticks && isAxisHeld(i)) continue; // still held from the step before
             float delta = axes[i] - reference[i];
             if (Math.abs(delta) > Math.abs(bestDelta)) {
                 best = i;
@@ -266,18 +276,69 @@ public class CalibrationWizard {
     }
 
     private String detectSwitch(Joystick.State state) {
+        releaseHeld(state);
         String axis = detectAxis(state.axes(), baseAxes, false);
         if (axis != null) return axis;
         boolean[] buttons = state.buttons();
         for (int i = 0; i < Math.min(buttonCount, buttons.length); i++) {
-            if (isButtonAssigned(i) || buttons[i] == baseButtons[i]) continue;
+            if (isButtonAssigned(i) || isButtonHeld(i) || buttons[i] == baseButtons[i]) continue;
             return (buttons[i] ? "" : "-") + "button" + i;
         }
         return null;
     }
 
+    /** A held control back where it was before the last step caught its switch: free again, at rest there. */
+    private void releaseHeld(Joystick.State state) {
+        float[] axes = state.axes();
+        for (int i = 0; heldAxisRest != null && i < Math.min(heldAxisRest.length, axes.length); i++) {
+            if (!Float.isNaN(heldAxisRest[i]) && Math.abs(axes[i] - heldAxisRest[i]) < MOVE_THRESHOLD / 2) {
+                heldAxisRest[i] = Float.NaN;
+                baseAxes[i] = axes[i];
+            }
+        }
+        boolean[] buttons = state.buttons();
+        for (int i = 0; heldButton != null && i < Math.min(heldButton.length, buttons.length); i++) {
+            if (heldButton[i] && buttons[i] == heldButtonRest[i]) {
+                heldButton[i] = false;
+                baseButtons[i] = buttons[i];
+            }
+        }
+    }
+
+    private boolean isAxisHeld(int axis) {
+        return heldAxisRest != null && axis < heldAxisRest.length && !Float.isNaN(heldAxisRest[axis]);
+    }
+
+    private boolean isButtonHeld(int button) {
+        return heldButton != null && button < heldButton.length && heldButton[button];
+    }
+
+    /**
+     * Leaving a switch step: what moved from its start to now is held for the next one (see heldAxisRest); leaving any
+     * other step, nothing is.
+     */
+    private void holdWhatMoved(boolean fromSwitchStep) {
+        heldAxisRest = new float[axisCount];
+        Arrays.fill(heldAxisRest, Float.NaN);
+        heldButton = new boolean[buttonCount];
+        heldButtonRest = new boolean[buttonCount];
+        if (!fromSwitchStep || last == null || baseAxes == null) return;
+        float[] axes = last.axes();
+        for (int i = 0; i < Math.min(axisCount, axes.length); i++) {
+            if (Math.abs(axes[i] - baseAxes[i]) >= MOVE_THRESHOLD / 2) heldAxisRest[i] = baseAxes[i];
+        }
+        boolean[] buttons = last.buttons();
+        for (int i = 0; i < Math.min(buttonCount, buttons.length); i++) {
+            if (buttons[i] != baseButtons[i]) {
+                heldButton[i] = true;
+                heldButtonRest[i] = baseButtons[i];
+            }
+        }
+    }
+
     private void advance() {
         if (getStep().kind() == StepKind.RANGE) stickAxes = pickStickAxes(); // locked from here on
+        holdWhatMoved(getStep().kind() == StepKind.SWITCH);
         index = Math.min(index + 1, steps.size() - 1);
         candidate = null;
         sweptSince = -1;
@@ -325,6 +386,7 @@ public class CalibrationWizard {
             if (steps.get(i).channel() >= 0) specs[steps.get(i).channel()] = null;
         }
         candidate = null;
+        holdWhatMoved(false); // nothing held when going back
         if (getStep().kind() == StepKind.SWITCH) captureSwitchBaseline();
     }
 

@@ -349,4 +349,39 @@ class CalibrationWizardTest {
         p[5] = new de.droiddrone.pc.setup.ModeSwitch.Purpose("GPS rescue", "on AUX6");
         assertEquals(6, new CalibrationWizard(8, 4, p).switchCount(), "a chosen switch above AUX4 is asked for too");
     }
+
+    @Test
+    void aButtonLetGoAfterItsStepIsNotTheNextSwitch() {
+        // the pilot: a button pressed for one AUX "gets assigned to the next aux channel when it is released"
+        CalibrationWizard w = sweepAndCenter();
+        assignSticks(w);
+        w.update(rest(), now++);
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, -1f, false, true));      // AUX1: button 1 pressed and held
+        assertEquals("button1", w.getSpec(4));
+        int aux2 = w.getStep().channel();
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, -1f, false, true));      // still held, long after the step moved on
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, -1f));                    // let go
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, -1f));
+        assertNull(w.getSpec(aux2), "letting go is not AUX2's switch");
+        assertEquals(aux2, w.getStep().channel());
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, 1f));                     // a real flip: AUX2
+        assertEquals("axis4", w.getSpec(aux2));
+    }
+
+    @Test
+    void whateverTheRadioReportsWithAButtonIsHeldWithItToo() {
+        // a radio that reports the press on an axis and a button at once: AUX1 takes the axis, and the button's
+        // release (with the axis's) is not AUX2's
+        CalibrationWizard w = sweepAndCenter();
+        assignSticks(w);
+        w.update(rest(), now++);
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, 1f, false, false, false, true));
+        assertEquals("axis4", w.getSpec(4));
+        int aux2 = w.getStep().channel();
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, -1f));                    // both let go
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, -1f));
+        assertNull(w.getSpec(aux2));
+        hold(w, state(0.02f, -0.01f, -0.9f, 0.03f, -1f, false, false, false, true)); // pressed again, for AUX2: it is free now
+        assertEquals("button3", w.getSpec(aux2));
+    }
 }

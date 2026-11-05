@@ -50,6 +50,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   switch, MOTOR ORDER button) and the SPIN DIRECTION column right, both `TOOL_W` 210; the drawing 410 x 348 with the
   drone at `DRONE_CY`; the window opens up to 1440 x 1000. Checked painted off screen (scratchpad `MotorTestShotTest`,
   only when no flight controller is plugged in).
+  *Calibration round* (the pilot: a button pressed for one AUX "gets assigned to the next aux channel when it is
+  released"): `CalibrationWizard.holdWhatMoved` on leaving a switch step marks every axis / button that differs from
+  that step's baseline as held (`heldAxisRest`, `heldButton`); `detectSwitch` ignores held inputs until they are back
+  at that rest (`releaseHeld`, then re-baselined). Assigned inputs were already excluded, so a pure button was fine; the
+  failing case (`whateverTheRadioReportsWithAButtonIsHeldWithItToo`, red on the old code) is a press reported on two
+  inputs: the first went to the AUX, the other's release to the next.
   *Toggles round* (the pilot: the front switches "only move as if they are still switched in the down position ... the
   flat part of the switch should hinge at the cylindrical part ... now both hinge"): every CAD lever part (`SD3 L*`)
   is a 6.5 mm collar on the bushing's axis (front row: z from the face to 12.0 mm; shoulders: y 12.5 mm above the
