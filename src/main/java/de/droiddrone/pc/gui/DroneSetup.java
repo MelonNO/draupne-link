@@ -304,16 +304,20 @@ final class DroneSetup {
                 for (Part p : parts) {
                     if (p.hidden) continue;
                     if (rank(p.state) > rank(worst)) worst = p.state;
+                    if (p.cell != null || p.text.isEmpty()) continue; // its own cell beside its choice, or nothing to say yet
                     if (html.length() > 0) html.append("<br>");
-                    html.append("<b>").append(p.label).append(":</b> ").append(p.text.isEmpty() ? "..." : p.text);
+                    html.append("<b>").append(p.label).append(":</b> ").append(p.text);
                 }
-                if (!note.isEmpty()) html.append("<br><b>").append(note).append("</b>");
-                if (!footer.isEmpty()) html.append("<br>").append(footer);
+                if (!note.isEmpty()) html.append(html.length() > 0 ? "<br>" : "").append("<b>").append(note).append("</b>");
+                if (!footer.isEmpty()) html.append(html.length() > 0 ? "<br>" : "").append(footer);
                 row.set(worst, html.toString());
             }
         }
 
-        /** One setting's line in a combined row; set like a row of its own. */
+        /**
+         * One setting's line in a combined row; set like a row of its own. With a cell, its text shows there (beside
+         * its choice, coloured by its state) instead of in the row's text.
+         */
         private static final class Part {
             final Combined owner;
             final String label;
@@ -321,6 +325,7 @@ final class DroneSetup {
             String text = "";
             /** Not shown, and not counted (GPS rescue without a GPS). */
             boolean hidden;
+            WrappingText cell;
 
             Part(Combined owner, String label) {
                 this.owner = owner;
@@ -330,9 +335,52 @@ final class DroneSetup {
             Part set(State state, String text) {
                 this.state = state;
                 this.text = text;
+                if (cell != null) {
+                    String color = switch (state) {
+                        case BAD -> Theme.BAD_HEX;
+                        case WARN -> Theme.WARN_HEX;
+                        case OK -> Theme.OK_HEX;
+                        case TODO -> Theme.TEXT_HEX;
+                        case PENDING, INFO -> Theme.MUTED_HEX;
+                    };
+                    cell.setHtml(text.isEmpty() ? "" : "<span style='color:" + color + "'>" + text + "</span>");
+                }
                 owner.refresh();
                 return this;
             }
+        }
+
+        /** Label width of a switch line, so the choices line up in columns. */
+        private static final int LINE_LABEL_W = 104;
+
+        /**
+         * A switch's line: its label and choices on the left, its state beside them in the rest of the width (wrapping
+         * when it is a long one).
+         */
+        private static JComponent line(Part part, String label, JComponent... choices) {
+            JPanel line = new JPanel(new java.awt.BorderLayout(10, 0));
+            line.setOpaque(false);
+            JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+            left.setOpaque(false);
+            javax.swing.JLabel l = Theme.label(label, Theme.headingFont(12f), Theme.MUTED);
+            l.setPreferredSize(new java.awt.Dimension(LINE_LABEL_W, l.getPreferredSize().height));
+            left.add(l);
+            for (JComponent c : choices) left.add(c);
+            line.add(left, java.awt.BorderLayout.WEST);
+            part.cell = WrappingText.fitting("", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
+            part.cell.setBorder(javax.swing.BorderFactory.createEmptyBorder(6, 0, 0, 0));
+            line.add(part.cell, java.awt.BorderLayout.CENTER);
+            return line;
+        }
+
+        /** An AUX choice: "Leave as it is" / "None", AUX1 ... AUX8, all the same width. */
+        private static javax.swing.JComboBox<String> auxCombo(String none) {
+            String[] items = new String[ModeSwitch.MAX_AUX + 1];
+            items[0] = none;
+            for (int i = 1; i <= ModeSwitch.MAX_AUX; i++) items[i] = "AUX" + i;
+            javax.swing.JComboBox<String> c = new javax.swing.JComboBox<>(items);
+            c.setPrototypeDisplayValue(MODES_OFF);
+            return c;
         }
 
         @Override
@@ -362,15 +410,12 @@ final class DroneSetup {
             JPanel switchChoices = new JPanel();
             switchChoices.setLayout(new javax.swing.BoxLayout(switchChoices, javax.swing.BoxLayout.Y_AXIS));
             switchChoices.setOpaque(false);
-            switchChoices.add(modeChoices());
-            switchChoices.add(javax.swing.Box.createVerticalStrut(6));
-            switchChoices.add(armChoices());
-            rescueFold = new Fold(rescueChoices(), gpsYes);
+            switchChoices.add(line(modeRow, "FLIGHT MODES", modeChoices()));
+            switchChoices.add(line(armRow, "ARM", armChoices()));
+            switchChoices.add(line(prearmRow, "PREARM", prearmChoices()));
+            rescueFold = new Fold(line(rescueRow, "GPS RESCUE", rescueChoices()), gpsYes);
             rescueRow.hidden = !gpsYes;
             switchChoices.add(rescueFold);
-            switchChoices.add(javax.swing.Box.createVerticalStrut(8));
-            switchChoices.add(WrappingText.fitting("Which switch is which AUX is chosen in the radio step.",
-                    Theme.font(Font.PLAIN, 13f), Theme.MUTED));
             for (java.awt.Component c : switchChoices.getComponents()) { // all at the left edge, like the lines above them
                 if (c instanceof JComponent j) j.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
             }
@@ -631,17 +676,14 @@ final class DroneSetup {
             });
         }
 
-        /** FLIGHT MODES [AUX2] LOW [Acro] MIDDLE [Angle] HIGH [GPS position hold]: saved, and written like the rest. */
+        /** [AUX2] LOW [Acro] MIDDLE [Angle] HIGH [GPS position hold]: saved, and written like the rest. */
         private JComponent modeChoices() {
             modeSwitch = ModeSwitch.parse(main.config().getString(ModeSwitch.KEY));
             JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
             row.setOpaque(false);
-            row.add(Theme.label("FLIGHT MODES", Theme.headingFont(12f), Theme.MUTED));
-            String[] switches = new String[ModeSwitch.MAX_AUX + 1];
-            switches[0] = MODES_OFF;
-            for (int i = 1; i <= ModeSwitch.MAX_AUX; i++) switches[i] = "AUX" + i;
-            auxChoice = new javax.swing.JComboBox<>(switches);
-            auxChoice.setToolTipText("The 3-position switch on your radio for the flight modes (AUX2 = the radio's channel 6 by default)");
+            auxChoice = auxCombo(MODES_OFF);
+            auxChoice.setToolTipText("The 3-position switch on your radio for the flight modes (AUX2 = the radio's channel 6 by default). "
+                    + "Which switch is which AUX is chosen in the radio step.");
             auxChoice.setSelectedIndex(modeSwitch == null ? 0 : modeSwitch.aux());
             TacticalCombo.install(auxChoice);
             row.add(auxChoice);
@@ -650,6 +692,7 @@ final class DroneSetup {
             for (int i = 0; i < 3; i++) {
                 row.add(Theme.label(names[i], Theme.headingFont(12f), Theme.MUTED));
                 javax.swing.JComboBox<ModeSwitch.Mode> c = new javax.swing.JComboBox<>(ModeSwitch.Mode.values());
+                c.setPrototypeDisplayValue(ModeSwitch.Mode.POS_HOLD);
                 c.setSelectedItem(shown.positions()[i]);
                 c.setToolTipText("What the switch in this position does");
                 TacticalCombo.install(c);
@@ -675,51 +718,39 @@ final class DroneSetup {
             return failsafeCombo;
         }
 
-        /** ARM [AUX1]  PREARM [AUX3]. */
+        /** [AUX1]: the arm switch. */
         private JComponent armChoices() {
-            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-            row.setOpaque(false);
             armAux = ModeSwitch.parseArmAux(main.config().getString(ModeSwitch.ARM_KEY));
-            row.add(Theme.label("ARM", Theme.headingFont(12f), Theme.MUTED));
-            String[] armSwitches = new String[ModeSwitch.MAX_AUX + 1];
-            armSwitches[0] = MODES_OFF;
-            for (int i = 1; i <= ModeSwitch.MAX_AUX; i++) armSwitches[i] = "AUX" + i;
-            armChoice = new javax.swing.JComboBox<>(armSwitches);
+            armChoice = auxCombo(MODES_OFF);
             armChoice.setToolTipText("The switch that arms the drone (up = armed; an ARM already on that switch keeps its own range). "
                     + "ARM on any other switch is taken off.");
             armChoice.setSelectedIndex(armAux);
             TacticalCombo.install(armChoice);
             armChoice.addActionListener(e -> armChoiceChanged());
-            row.add(armChoice);
-            row.add(javax.swing.Box.createHorizontalStrut(10));
+            return armChoice;
+        }
+
+        /** [AUX3]: the prearm switch. */
+        private JComponent prearmChoices() {
             prearmAux = ModeSwitch.parsePrearmAux(main.config().getString(ModeSwitch.PREARM_KEY));
-            row.add(Theme.label("PREARM", Theme.headingFont(12f), Theme.MUTED));
-            prearmChoice = new javax.swing.JComboBox<>(armSwitches.clone());
+            prearmChoice = auxCombo(MODES_OFF);
             prearmChoice.setToolTipText("A second switch that must be on (up) before ARM arms: a knocked ARM switch alone does nothing. "
                     + "PREARM on any other switch is taken off.");
             prearmChoice.setSelectedIndex(prearmAux);
             TacticalCombo.install(prearmChoice);
             prearmChoice.addActionListener(e -> prearmChoiceChanged());
-            row.add(prearmChoice);
-            return row;
+            return prearmChoice;
         }
 
-        /** GPS RESCUE [AUX4]: up = GPS rescue, as the failsafe does - only when Betaflight's failsafe is GPS rescue. */
+        /** [AUX4]: up = GPS rescue, as the failsafe does - only when Betaflight's failsafe is GPS rescue. */
         private JComponent rescueChoices() {
             rescueAux = ModeSwitch.parseRescueAux(main.config().getString(ModeSwitch.RESCUE_KEY));
-            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
-            row.setOpaque(false);
-            row.add(Theme.label("GPS RESCUE", Theme.headingFont(12f), Theme.MUTED));
-            String[] switches = new String[ModeSwitch.MAX_AUX + 1];
-            switches[0] = "None";
-            for (int i = 1; i <= ModeSwitch.MAX_AUX; i++) switches[i] = "AUX" + i;
-            rescueChoice = new javax.swing.JComboBox<>(switches);
+            rescueChoice = auxCombo("None");
             rescueChoice.setToolTipText("A switch to call GPS rescue yourself (up = rescue); fitted when Betaflight's failsafe is GPS rescue");
             rescueChoice.setSelectedIndex(rescueAux);
             TacticalCombo.install(rescueChoice);
             rescueChoice.addActionListener(e -> rescueChoiceChanged());
-            row.add(rescueChoice);
-            return row;
+            return rescueChoice;
         }
 
         /** A switch choice changed: an older radio calibration may have any switch on that AUX (see RADIO_REDO_KEY). */

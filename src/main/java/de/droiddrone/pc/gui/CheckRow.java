@@ -43,6 +43,11 @@ class CheckRow extends JPanel {
     CheckRow set(State state, String text) {
         this.state = state;
         detail.setHtml(text);
+        boolean some = text != null && !text.isEmpty();
+        if (detail.isVisible() != some) { // nothing to say: no empty line under the title
+            detail.setVisible(some);
+            revalidate();
+        }
         light.repaint();
         return this;
     }

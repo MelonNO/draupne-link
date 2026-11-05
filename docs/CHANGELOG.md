@@ -4,7 +4,7 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 
 ## 1.0.40
 
-- **Drone setup, less to read:** the rows no longer repeat what the choices beside them say (a switch line says *Set.*, *Written with Write.* or what is wrong); *What will change* and *Betaflight settings for DRAUPNE Link* are one row, **Betaflight settings**, with the WRITE button on it.
+- **Drone setup, less to read and tidier:** the rows no longer repeat what the choices beside them say; each switch is one line - its choice, and beside it its state in colour (*Set.*, *Written with Write.*, or what is wrong) - in aligned columns; *What will change* and *Betaflight settings for DRAUPNE Link* are one row, **Betaflight settings**, with the WRITE button on it; a row with nothing to say has no empty line under its title.
 - **GPS, asked first:** a **GPS** row (No / Yes) above the switches. *Yes* slides out COMPASS (No / Yes), the GPS's UART (UART3 by default; the board's own list once read) and CALIBRATE COMPASS, and the GPS RESCUE switch under the switches; GPS modes and the GPS rescue failsafe appear in their lists. *No* shows and writes nothing GPS (a GPS choice from before becomes Angle / Leave as it is). Unanswered, the page takes Betaflight's answer on reading the drone. WRITE turns the GPS on, puts it on the UART chosen (off any other port), turns on `gps_auto_baud`, and sets `mag_hardware` AUTO / NONE for the compass; the row says *GPS found* (or what to check), whether a compass is seen and whether it is calibrated.
 - **Compass calibration:** CALIBRATE COMPASS opens a window like the motor test's: START, turn the drone round every axis for 30 s while two discs fill with dots where the compass has pointed, the offsets read back and kept at the end.
 

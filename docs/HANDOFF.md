@@ -10,7 +10,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   as possible without losing much meaning ... stuff that is implied via the selectable menus", combine *What will change*
   with *Betaflight settings for DRAUPNE Link*, a GPS question above the switches (Yes slides out compass + UART, default
   UART3; nothing GPS shown on the switches or failsafe without it, animated in with Yes), and a compass calibration.
-  `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Written with Write.", a problem), never
+  Second round (the pilot: "very messy, give it a cleaner and more compact look"): each switch is a `line(part, label,
+  choices...)` - label 104 px, same-width AUX combos (`auxCombo`, prototype "Leave as it is"), the part's state in its own
+  `Part.cell` (a `WrappingText.fitting` in the line's CENTER, coloured by state via Theme.*_HEX) instead of the row's
+  text; `CheckRow.set` hides the detail text when empty; `WrappingText.fitting` measures by its own width (and insets)
+  once laid out. `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Written with Write.", a problem), never
   the choice beside it; `Combined` gained `footer` (plain line: what WRITE does / "Still not set" list after a failed
   write) and `Part.hidden` (GPS rescue without a GPS); the WRITE button sits on the **Betaflight settings** row (`changes`
   row gone). GPS: `gps` row with `gpsChoice` No / Yes, `gpsFold` (a `Fold`) with COMPASS, UART (`uartItems`: UART1-6

@@ -32,14 +32,16 @@ class WrappingText extends JEditorPane {
 
             @Override
             public java.awt.Dimension getPreferredSize() {
-                int width = 0;
+                int width = getWidth(); // its own width once laid out (a cell beside other things), else the ancestor's
                 for (java.awt.Container c = getParent(); c != null && width <= 0; c = c.getParent()) {
                     width = c.getWidth() - c.getInsets().left - c.getInsets().right;
                 }
                 if (width <= 0) return super.getPreferredSize();
+                width -= getInsets().left + getInsets().right;
                 javax.swing.text.View v = getUI().getRootView(this);
                 v.setSize(width, 0);
-                return new java.awt.Dimension(width, (int) Math.ceil(v.getPreferredSpan(javax.swing.text.View.Y_AXIS)));
+                return new java.awt.Dimension(width + getInsets().left + getInsets().right,
+                        (int) Math.ceil(v.getPreferredSpan(javax.swing.text.View.Y_AXIS)) + getInsets().top + getInsets().bottom);
             }
 
             @Override

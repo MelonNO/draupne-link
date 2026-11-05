@@ -42,6 +42,9 @@ final class Theme {
     static final Color BAD = new Color(0xff5a4e);  // lighter than the accent, so errors stand out
     /** For HTML text. */
     static final String MUTED_HEX = "#8c8c7e";
+    static final String TEXT_HEX = "#e6e6e0";
+    static final String OK_HEX = "#2ec45a";
+    static final String WARN_HEX = "#fcd405";
     static final String BAD_HEX = "#ff5a4e";
     static final String ACCENT_HEX = "#e31b23";
 
