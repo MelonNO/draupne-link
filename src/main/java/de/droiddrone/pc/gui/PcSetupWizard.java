@@ -463,8 +463,6 @@ final class PcSetupWizard {
             radioChoice.setEnabled(!main.isLinkActive());
             if (changedController) {
                 calibration.set(State.WARN, "Another controller: press Calibrate for its sticks and switches.");
-            } else if (main.isCalibrated() && DroneSetup.radioNeedsRedo(main.config())) {
-                calibration.set(State.WARN, DroneSetup.radioRedoText(main.config()) + " Drone setup changed the switches.");
             } else {
                 calibration.set(main.isCalibrated() ? State.OK : State.WARN, main.isCalibrated()
                         ? "Done."
@@ -492,7 +490,6 @@ final class PcSetupWizard {
         @Override
         String status() {
             if (changedController) return "Calibrate the controller you picked.";
-            if (main.isCalibrated() && DroneSetup.radioNeedsRedo(main.config())) return "Calibrate the radio again: Drone setup changed the switches.";
             return main.isCalibrated() ? "Radio ready." : "Calibrate the radio before flying.";
         }
     }

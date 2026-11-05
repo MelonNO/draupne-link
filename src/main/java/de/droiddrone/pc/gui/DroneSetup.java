@@ -584,7 +584,6 @@ final class DroneSetup {
             showModeChoice();
             showRescueChoice();
             showFailsafeChoice();
-            if (radioNeedsRedo(main.config())) switches.note(radioRedoText(main.config()));
             boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(MOTORS_CHECKED_KEY));
             motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore ? "Checked."
                     : "Not sure? <b>Check now</b> opens the motor test (props off).");
@@ -807,7 +806,21 @@ final class DroneSetup {
             });
         }
 
-        /** [AUX2] LOW [Acro] MIDDLE [Angle] HIGH [GPS position hold]: saved, and written like the rest. */
+        /** A small heading over a choice, the two left-aligned: for the flight mode positions side by side. */
+        private static JComponent stacked(String heading, JComponent choice) {
+            JPanel stack = new JPanel();
+            stack.setLayout(new javax.swing.BoxLayout(stack, javax.swing.BoxLayout.Y_AXIS));
+            stack.setOpaque(false);
+            javax.swing.JLabel l = Theme.label(heading, Theme.headingFont(11f), Theme.MUTED);
+            l.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
+            choice.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
+            stack.add(l);
+            stack.add(javax.swing.Box.createVerticalStrut(2));
+            stack.add(choice);
+            return stack;
+        }
+
+        /** SWITCH [AUX2] LOW [Acro] MIDDLE [Angle] HIGH [GPS position hold], each name over its list: saved, written like the rest. */
         private JComponent modeChoices() {
             modeSwitch = ModeSwitch.parse(main.config().getString(ModeSwitch.KEY));
             JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -817,11 +830,10 @@ final class DroneSetup {
                     + "Which switch is which AUX is chosen in the radio step.");
             auxChoice.setSelectedIndex(modeSwitch == null ? 0 : modeSwitch.aux());
             TacticalCombo.install(auxChoice);
-            row.add(auxChoice);
+            row.add(stacked("SWITCH", auxChoice));
             ModeSwitch shown = modeSwitch == null ? ModeSwitch.DEFAULT : modeSwitch;
             String[] names = {"LOW", "MIDDLE", "HIGH"};
-            for (int i = 0; i < 3; i++) {
-                row.add(Theme.label(names[i], Theme.headingFont(12f), Theme.MUTED));
+            for (int i = 0; i < 3; i++) { // the position's name over its list: LOW, MIDDLE, HIGH side by side
                 javax.swing.JComboBox<ModeSwitch.Mode> c = new javax.swing.JComboBox<>(ModeSwitch.Mode.values());
                 c.setPrototypeDisplayValue(ModeSwitch.Mode.POS_HOLD);
                 c.setSelectedItem(shown.positions()[i]);
@@ -829,7 +841,7 @@ final class DroneSetup {
                 TacticalCombo.install(c);
                 c.addActionListener(e -> modeChoiceChanged());
                 positionChoices.add(c);
-                row.add(c);
+                row.add(stacked(names[i], c));
             }
             auxChoice.addActionListener(e -> modeChoiceChanged());
             enablePositions();
@@ -884,10 +896,12 @@ final class DroneSetup {
             return rescueChoice;
         }
 
-        /** A switch choice changed: an older radio calibration may have any switch on that AUX (see RADIO_REDO_KEY). */
+        /**
+         * A switch choice changed: an older radio calibration may have any switch on that AUX (see RADIO_REDO_KEY), so
+         * the first-time setup shows the radio step again. No warning here: the pilot asked for none.
+         */
         private void switchChanged() {
             main.save(Map.of(RADIO_REDO_KEY, "true"));
-            switches.note(radioRedoText(main.config()));
         }
 
         private void armChoiceChanged() {
@@ -1339,14 +1353,11 @@ final class DroneSetup {
                     plan.add(new BetaflightPlan.Change("Failsafe: drop", List.of("set failsafe_procedure = DROP")));
                 }
                 int rescueOn = rescueFailsafe ? rescueTarget : 0;
-                // GPS rescue anywhere in Betaflight (failsafe or switch): it then arms only with a GPS fix
-                boolean rescueUsed = rescueFailsafe || (modeTarget != null && modeTarget.gpsModes().contains(ModeSwitch.Mode.GPS_RESCUE)
-                        && !blocked.containsKey(ModeSwitch.Mode.GPS_RESCUE));
-                if (rescueUsed && !fc.command("get gps_rescue_allow_arming_without_fix").replace(" ", "").contains("=ON")) {
-                    String rule = "Betaflight then won't arm until the GPS has a fix (arming blocked: RESC) - indoors too. "
-                            + "Betaflight's gps_rescue_allow_arming_without_fix changes that.";
-                    if (rescueFailsafe) failsafeNote = rule;
-                    else rescueNote = "With GPS rescue on a switch, " + Character.toLowerCase(rule.charAt(0)) + rule.substring(1);
+                // with a GPS, GPS rescue (failsafe or switch) would block arming until the GPS has a fix - indoors too:
+                // always allowed (the pilot's rule), written with the rest
+                if (gpsWanted.wanted() && !fc.command("get gps_rescue_allow_arming_without_fix").replace(" ", "").contains("=ON")) {
+                    plan.add(new BetaflightPlan.Change("Arming without a GPS fix allowed (gps_rescue_allow_arming_without_fix)",
+                            List.of("set gps_rescue_allow_arming_without_fix = ON")));
                 }
                 ModeSwitch.Plan modes = modeTarget == null && rescueOn == 0 && armTarget == 0 && prearmTarget == 0 ? null
                         : ModeSwitch.plan(aux, modesOffered, blocked, modeTarget, rescueOn, armTarget, prearmTarget);
@@ -1710,8 +1721,7 @@ final class DroneSetup {
                 } else if (g.calibrated()) {
                     lines.add("Compass found and calibrated.");
                 } else {
-                    lines.add("Compass found - <b>Calibrate compass</b> before flying with GPS rescue.");
-                    if (rank(State.WARN) > rank(worst)) worst = State.WARN;
+                    lines.add("Compass found. <b>Calibrate compass</b> once, before flying with GPS rescue.");
                 }
             }
             gps.set(worst, String.join("<br>", lines));
@@ -1808,7 +1818,7 @@ final class DroneSetup {
                 text.append("<br>On more than one switch in Betaflight: ").append(String.join("; ", p.doubled()))
                         .append(" - set each on one (choose a switch above, or the Modes tab).");
             }
-            boolean warn = !p.missing().isEmpty() || !p.elsewhere().isEmpty() || !p.blocked().isEmpty() || r.rescueNote() != null || doubled;
+            boolean warn = !p.missing().isEmpty() || !p.blocked().isEmpty() || doubled;
             modeRow.set(warn ? State.WARN : okState(), text.toString());
             return false;
         }

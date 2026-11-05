@@ -29,7 +29,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   own thing"): one `Combined` row holds every `Part`; `Section` (title, `Dot` light = worst of its parts, a note line
   for the radio redo, `build(lines...)` with the lines set in by `SECTION_INSET`); the GPS and failsafe rows became
   parts with cells (lines FITTED / SIGNAL LOST); the link's three lines sit in the same inset; CONFIRM and the footer
-  text in a bottom row of the card. `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
+  text in a bottom row of the card. Sixth round (the pilot: no radio-recalibrate warning, green when set, no
+  GPS-fix arming warning, always allow arming without a fix): `switchChanged` only saves RADIO_REDO_KEY (the radio page
+  no longer warns either, `shown` unchanged); `Section.note` unused; with GPS Yes the plan adds `set
+  gps_rescue_allow_arming_without_fix = ON` when OFF (rescueNote / failsafeNote always null now); `elsewhere` and an
+  uncalibrated compass no longer WARN. `DroneSetup.BetaflightPage`: every row line is a state (`Set.`, `WITH_WRITE` = "Set on Confirm.", a problem), never
   the choice beside it; `Combined` gained `footer` (plain line: what WRITE does / "Still not set" list after a failed
   write) and `Part.hidden` (GPS rescue without a GPS); the CONFIRM button sits on the **Betaflight settings** row (`changes`
   row gone). GPS: `gps` row with `gpsChoice` No / Yes, `gpsFold` (a `Fold`) with COMPASS, UART (`uartItems`: UART1-6

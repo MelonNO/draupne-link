@@ -178,7 +178,7 @@ Nothing in the chain invents stick values: the PC sends the radio's stick positi
 | 0.3-1.5 s | sticks centred, throttle to minimum: the drone sinks until the sticks return |
 | over 1.5 s | real failsafe: drops and disarms (OSD: *FAILSAFE*) |
 
-For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold the last throttle instead of minimum during the 0.3-1.5 s stage, so a short gap doesn't make the drone sink) and **GPS Rescue** as the failsafe procedure (it flies home instead of dropping). Both change how your drone behaves when the link fails, so test them on the bench first. Drone setup offers GPS rescue as the failsafe and sets it only once the GPS answers; with it, Betaflight arms only with a GPS fix.
+For flying where reception is poor, consider in Betaflight: `rxfail 3 h` (hold the last throttle instead of minimum during the 0.3-1.5 s stage, so a short gap doesn't make the drone sink) and **GPS Rescue** as the failsafe procedure (it flies home instead of dropping). Both change how your drone behaves when the link fails, so test them on the bench first. Drone setup offers GPS rescue as the failsafe and sets it only once the GPS answers; with a GPS it also allows arming without a GPS fix (`gps_rescue_allow_arming_without_fix`), so the drone arms indoors too.
 
 ## Troubleshooting
 
