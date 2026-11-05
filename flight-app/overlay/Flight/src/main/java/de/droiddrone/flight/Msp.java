@@ -38,6 +38,10 @@ import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.TelemetryData;
 
 public class Msp {
+    /** pc.32: the flight controller's last 2D/3D GPS fix (1e-7 degrees) and when (elapsedRealtime), 0 = none yet. */
+    volatile int gpsLatE7, gpsLonE7;
+    volatile long gpsFixAt;
+
     private static final byte MSP_HEADER_START = 0x24;//$
     private static final byte MSP_HEADER_V1 = 0x4D;//M
     private static final byte MSP_HEADER_V2 = 0x58;//X
@@ -695,6 +699,12 @@ public class Msp {
                         int lat = buffer.readInt();
                         int lon = buffer.readInt();
                         short altGps = buffer.readShort();
+                        // pc.32: kept for the PCs' map (the name reply says where this drone is)
+                        if (fixType >= 2 && (lat != 0 || lon != 0)) {
+                            gpsLatE7 = lat;
+                            gpsLonE7 = lon;
+                            gpsFixAt = android.os.SystemClock.elapsedRealtime();
+                        }
                         short groundSpeed = buffer.readShort();
                         short groundCourse = buffer.readShort();
                         short hdop = buffer.readShort();

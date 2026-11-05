@@ -435,8 +435,26 @@ public class ControlLink {
     }
 
     /** Not from the phone: a spectator asking this PC, (when this PC watches) the pilot PC, or a PC asking who this is. */
+    /** Another phone's sleep check-in while this link holds the port: the handler's answer (MainWindow: sleep on). */
+    private volatile java.util.function.BiFunction<String, byte[], Boolean> foreignSleepHandler;
+
+    public void setForeignSleepHandler(java.util.function.BiFunction<String, byte[], Boolean> handler) {
+        foreignSleepHandler = handler;
+    }
+
     private void onForeignPacket(DatagramPacket packet) {
         if (packet.getLength() < 1) return;
+        if (packet.getLength() >= 6 && packet.getData()[0] == SLEEP_HELLO) {
+            java.util.function.BiFunction<String, byte[], Boolean> h = foreignSleepHandler;
+            Boolean wake = h == null ? null : h.apply(packet.getAddress().getHostAddress(), java.util.Arrays.copyOf(packet.getData(), packet.getLength()));
+            if (wake != null) {
+                try {
+                    socket.send(new DatagramPacket(new byte[]{SLEEP_ANSWER, (byte) (wake ? 1 : 0)}, 2, packet.getAddress(), packet.getPort()));
+                } catch (IOException ignored) {
+                }
+            }
+            return;
+        }
         if (packet.getData()[0] == Names.NAME_QUERY) {
             java.util.function.Supplier<byte[]> r = nameReply;
             if (r != null) NameService.answer(socket, packet, config.getKey(), r);
@@ -1493,8 +1511,19 @@ public class ControlLink {
         if (c == null) return null;
         Spectate.Address p = c.pilot();
         String who = p == null ? "the pilot PC" : "the pilot PC (" + p.ip().getHostAddress() + ")";
+        String phone = c.pilotPhone();
+        String left = c.pilotLeft();
+        PilotView view = c.pilotView();
+        if (left != null) {
+            return "SPECTATOR: the pilot PC disconnected" + (left.isEmpty() ? "" : " from " + left) + " on purpose - not a link loss. "
+                    + (watchOnly ? "Waiting for a pilot to connect." : "Nobody flies it now: DISCONNECT and CONNECT again to fly it from here.");
+        }
+        if (c.phase() == SpectatorClient.Phase.WATCHING && view != null && !view.linkReady()) {
+            return "SPECTATOR: " + who + " lost its link to " + (phone == null ? "the drone" : phone) + " - LINK LOST there, it tries to get it back.";
+        }
         return switch (c.phase()) {
-            case WATCHING -> "SPECTATOR: watching " + who + ", " + c.delayMs() + " ms behind it. This PC sends no sticks.";
+            case WATCHING -> "SPECTATOR: watching " + who + (phone == null ? "" : " fly " + phone) + ", " + c.delayMs()
+                    + " ms behind it. This PC sends no sticks.";
             case JOINING -> p == null ? "SPECTATOR: asking the phone which PC flies..."
                     : "SPECTATOR: another PC flies the drone - joining " + who + "...";
             case REFUSED_NOT_FLYING -> "SPECTATOR: " + who + " is not flying yet - waiting.";
@@ -1514,7 +1543,26 @@ public class ControlLink {
      * @param channels  the sticks the pilot sends (the OSD's stick boxes), or null
      */
     public record PilotView(boolean linkReady, boolean rcLive, boolean radioFrozen, boolean armSwitchUnknown, boolean relayed,
-                            boolean linkStalled, String rcWaiting, String banner, String linkHint, short[] channels) {}
+                            boolean linkStalled, String rcWaiting, String banner, String linkHint, short[] channels,
+                            String phoneName, boolean upsideDown) {
+        /** Without the phone and the flip. */
+        public PilotView(boolean linkReady, boolean rcLive, boolean radioFrozen, boolean armSwitchUnknown, boolean relayed,
+                         boolean linkStalled, String rcWaiting, String banner, String linkHint, short[] channels) {
+            this(linkReady, rcLive, radioFrozen, armSwitchUnknown, relayed, linkStalled, rcWaiting, banner, linkHint, channels, null, false);
+        }
+    }
+
+    /** While watching: the pilot disconnected on purpose (not a link loss) and no pilot since - the phone it flew ("" unknown); else null. */
+    public String getPilotLeft() {
+        SpectatorClient c = spectator;
+        return c == null ? null : c.pilotLeft();
+    }
+
+    /** While watching: the phone the pilot flies (or last flew), or null. */
+    public String getPilotPhone() {
+        SpectatorClient c = spectator;
+        return c == null ? null : c.pilotPhone();
+    }
 
     /** Flying with spectators: what this PC's OSD warns of now, passed on to them. */
     public void setPilotView(PilotView v) {

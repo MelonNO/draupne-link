@@ -7,6 +7,11 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 - **Spectators no longer slow the pilot down:** while anyone watches, AUTO stays off the sharp tier (a chosen SHARP stays) - relaying 8 Mbit/s through the pilot PC's upload took its ping to the drone from ~50 to 300-700 ms.
 - **The spectators' pause lasts until the pilot's link has recovered** (`RelayGate`: back to the usual for 3 s; a pause soon after another at least doubles, 3 to 30 s; the usual over a minute, not 10 s) - before, 3 s on a timer and paused again a second later. A spectator waits through a pause it was told about (15 s) instead of rejoining after 3 s.
 - **The spectator's OSD mirrors the pilot PC's own warnings** (`PILOT_VIEW` 0x76, 4 a second): RC OFF and why, RADIO FROZEN, ARM SWITCH NOT READ, the live banners, RELAY, LINK STALL, LINK LOST and why, the stick boxes.
+- **The camera's way up per phone** (`videoUpsideDown.<phone>`; a spectator follows the pilot's, PILOT_VIEW bit 6).
+- **A spectator sees the pilot's phone and whether the pilot disconnected or lost its link** (PILOT_VIEW's phone, BYE with a reason; OSD PILOT DISCONNECTED / PILOT LINK LOST).
+- **Earlier flights stay on the map** until taken off by hand (right-click on a line, or all at once), after a restart too (`map.keptFlights`).
+- **Sleeping phones in the PHONE list** with the time to their next check; any number of them; another phone's check-in while flying is answered "sleep on".
+- **Every drone on the network on the map** (phone app pc.32: the NAME_REPLY carries the drone's position, armed, flown and the pilot PC), and **right-click to connect or watch**.
 - **A phone left in deep sleep after DISCONNECT keeps its WAKE:** the LINK card shows it asleep (last heard, battery, next check) with WAKE; its check-ins are answered "sleep on" by the name service until WAKE connects; remembered across restarts (`phone.asleep`).
 
 ## 1.0.40

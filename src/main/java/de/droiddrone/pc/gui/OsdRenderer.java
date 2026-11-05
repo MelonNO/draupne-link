@@ -49,7 +49,18 @@ final class OsdRenderer {
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
                 boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
                 String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
-                boolean relayed, boolean sticksLost) {
+                boolean relayed, boolean sticksLost, String lostText) {
+        /** Up to 1.0.40: LINK LOST says only that. */
+        Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
+             VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
+             boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
+             String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
+             boolean relayed, boolean sticksLost) {
+            this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview, linkStalled,
+                    videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown, banner,
+                    spectatorPaused, relayed, sticksLost, null);
+        }
+
         /** The fields up to 1.0.26: the new ones unknown / off. */
         Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
              VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -96,7 +107,8 @@ final class OsdRenderer {
 
     /** Warnings that aren't (yet) a loss of control: yellow; the rest red. */
     private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "RC OFF - NO RADIO",
-            "RC OFF - MAPPING INCOMPLETE", "PHONE BATTERY LOW", "RADIO FROZEN?", "VIDEO FROZEN", "RELAY - MORE DELAY");
+            "RC OFF - MAPPING INCOMPLETE", "PHONE BATTERY LOW", "RADIO FROZEN?", "VIDEO FROZEN", "RELAY - MORE DELAY",
+            "PILOT DISCONNECTED");
 
     private interface Element {
         void paint(float x, float y, OsdLayout.Align align);
@@ -619,7 +631,8 @@ final class OsdRenderer {
 
     private void warnings(float x, float y, OsdLayout.Align a, Data d, FcTelemetry.Status s, FcTelemetry t, long now) {
         List<String> big = new ArrayList<>();
-        if (!d.linkReady()) big.add("LINK LOST");
+        // a spectator says what kind of loss: the pilot's own link, or the pilot gone on purpose (1.0.41)
+        if (!d.linkReady()) big.add(d.lostText() != null ? d.lostText() : "LINK LOST");
         else if (d.linkStalled()) big.add("LINK STALL");
         if (d.fcLost()) big.add("NO FLIGHT CONTROLLER");
         // Betaflight's real failsafe (stage 2: drop / land / disarm). RXLOSS alone is a pause of 100 ms or more in the

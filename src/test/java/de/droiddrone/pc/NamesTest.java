@@ -258,4 +258,41 @@ class NamesTest {
             svc.stop();
         }
     }
+
+    /** A phone's name reply says where its drone is (phone app pc.32), and an older reply still reads (no position). */
+    @Test
+    void aPhonesReplyCarriesWhereItsDroneIs() throws Exception {
+        byte[] old = Names.reply("DD", Names.Kind.PHONE, "MobileAlpha", "Pixel 8", "2.3.0-pc.31");
+        Names.Reply r = Names.parseReply(old, old.length, "DD");
+        assertEquals("MobileAlpha", r.name());
+        assertNull(r.position(), "pc.31 says nothing of it");
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        bytes.write(Names.reply("DD", Names.Kind.PHONE, "MobileBravo", "XR", "2.3.0-pc.32"));
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+        out.writeByte(1);       // block version
+        out.writeByte(1);       // the FC's GPS
+        out.writeInt(599_123_456);
+        out.writeInt(107_654_321);
+        out.writeShort(3);      // 3 s old
+        out.writeByte(1);       // armed
+        out.writeByte(1);       // flown
+        out.writeByte(4);
+        out.write(new byte[]{127, 0, 0, 7});
+        byte[] p = bytes.toByteArray();
+        Names.Reply n = Names.parseReply(p, p.length, "DD");
+        assertEquals("2.3.0-pc.32", n.version());
+        Names.Position pos = n.position();
+        assertNotNull(pos);
+        assertTrue(pos.fromFc());
+        assertEquals(59.9123456, pos.lat(), 1e-7);
+        assertEquals(10.7654321, pos.lon(), 1e-7);
+        assertEquals(3, pos.ageS());
+        assertEquals(Boolean.TRUE, pos.armed());
+        assertTrue(pos.flown());
+        assertEquals("127.0.0.7", pos.pilotIp());
+        // no fix: nothing to put on the map
+        byte[] none = java.util.Arrays.copyOf(old, old.length + 18);
+        none[old.length] = 1; // version 1, source 0, the rest zero
+        assertNull(Names.parseReply(none, none.length, "DD").position());
+    }
 }

@@ -342,7 +342,7 @@ final class SpectatorHost implements AutoCloseable {
     @Override
     public void close() {
         running = false;
-        for (Viewer v : viewers) send(new byte[]{Spectate.BYE}, v);
+        for (Viewer v : viewers) send(new byte[]{Spectate.BYE, Spectate.BYE_PILOT_DISCONNECTED}, v); // an older spectator reads the first byte only
         viewers = new Viewer[0];
         socket.close();
     }

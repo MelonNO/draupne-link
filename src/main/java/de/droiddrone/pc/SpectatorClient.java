@@ -72,6 +72,15 @@ final class SpectatorClient implements AutoCloseable {
     private volatile boolean haveSnapshot;
     /** When the pilot PC last said its stream is paused (its link to the drone is slow); 0 = it isn't. */
     private volatile long pausedAt;
+    /**
+     * When the pilot PC said it disconnected on purpose (BYE with its reason), and from which phone: not a link loss
+     * (1.0.41, the pilot: "differentiate link lost and that the pilot just disconnected"). 0 = it didn't.
+     */
+    private volatile long pilotLeftAt;
+    private volatile String pilotLeftPhone;
+    /** The phone the pilot flew, as its last PILOT_VIEW said; kept through a gap. */
+    private volatile String lastPilotPhone;
+
     /** The pilot PC's own OSD warnings, and when they came; older than PILOT_VIEW_FRESH_MS they have lapsed. */
     private volatile ControlLink.PilotView pilotView;
     private volatile long pilotViewAt;
@@ -138,6 +147,18 @@ final class SpectatorClient implements AutoCloseable {
         }
     }
 
+    /** The pilot disconnected on purpose and no pilot has come since: the phone it flew ("" if not known); else null. */
+    String pilotLeft() {
+        if (pilotLeftAt == 0 || phase == Phase.WATCHING) return null;
+        String p = pilotLeftPhone;
+        return p == null ? "" : p;
+    }
+
+    /** The phone the pilot flies (or last flew), from its PILOT_VIEW; null before one came. */
+    String pilotPhone() {
+        return lastPilotPhone;
+    }
+
     /** What the pilot PC's own OSD warns of (a pilot PC from 1.0.41 on), or null: none yet, lapsed, or an older pilot. */
     ControlLink.PilotView pilotView() {
         ControlLink.PilotView v = pilotView;
@@ -185,6 +206,7 @@ final class SpectatorClient implements AutoCloseable {
                     sendKeep(); // straight away: opens this PC's firewall to the stream
                 }
                 if (phase != Phase.WATCHING) phase = Phase.WATCHING;
+                pilotLeftAt = 0; // a pilot again
             }
             case Spectate.REFUSED -> {
                 if (len < 2) return;
@@ -196,7 +218,13 @@ final class SpectatorClient implements AutoCloseable {
                     default -> Phase.REFUSED_NOT_FLYING;
                 };
             }
-            case Spectate.BYE -> pilotGone();
+            case Spectate.BYE -> {
+                if (len >= 2 && d[1] == Spectate.BYE_PILOT_DISCONNECTED) {
+                    pilotLeftAt = now;
+                    pilotLeftPhone = lastPilotPhone;
+                }
+                pilotGone();
+            }
             case Spectate.STREAM -> {
                 if (len <= Spectate.STREAM_HEADER || packet.getPort() != streamPort) return;
                 lastFromPilot = now;
@@ -248,6 +276,7 @@ final class SpectatorClient implements AutoCloseable {
                 lastFromPilot = now;
                 pilotView = v;
                 pilotViewAt = now;
+                if (v.phoneName() != null) lastPilotPhone = v.phoneName();
             }
             default -> {
             }

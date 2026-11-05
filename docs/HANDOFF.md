@@ -6,6 +6,26 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-05, 1.0.40 released, phone app pc.31; 1.0.41 built)
 
+- **1.0.41 second round, phone app 2.3.0-pc.32 (2026-11-05 night, built, NOT released, untried on hardware; pc.32 APK built
+  locally from a dirty tree, SHA 719c3e2e..., NOT published - rebuild from the clean HEAD at release, publish, pin in
+  ApkShare; the release workflow refuses until then):** the pilot's list. *Upside down per phone:* `upsideDownFor`,
+  `videoUpsideDown.<phone>` (unset: the old PC-wide key), applied on choosing a phone and on connect; a spectator takes
+  PILOT_VIEW's flip (flags bit 6), saves nothing. *Spectator info:* PILOT_VIEW carries the pilot's phone (UTF at the end,
+  read if present); BYE [0x67][1] = the pilot disconnected on purpose (`SpectatorHost.close`); `SpectatorClient.pilotLeft`
+  / `pilotPhone`; `ControlLink.spectatorStatus` names the phone and says disconnected (not a link loss) / lost its link;
+  OSD `Data.lostText` PILOT DISCONNECTED (yellow) / PILOT LINK LOST. *Kept flights:* `MainWindow.KeptFlight`, kept at
+  DISCONNECT and at the next connect (`keepFlight`), a spectator's when the pilot's phone changes (`followWatchedPhone`),
+  `map.keptFlights` = name>gpx|... read back with `FlightTrack.read`; `MapView.Kept` drawn in six colours with names,
+  right-click to remove one or all (files kept). *Sleeping phones:* `asleepPhones` / `asleepHellos` by address (was one),
+  `phone.asleep` = entries;...; the PHONE list item "DEEP SLEEP m:ss" and the hint, refreshed each second while the list
+  is closed (`refreshNetwork`); `ControlLink.setForeignSleepHandler`: another phone's check-in while connected is answered
+  sleep on (before: none). *Drones on the map:* phone `Msp` keeps the FC's last 2D/3D fix, `Udp.writePosition` appends
+  [1][source][lat][lon][age s][armed][flown][pilot ip] to NAME_REPLY; `Names.Position` / `readPosition`, `NameService.
+  dronePositions` (every 5 s scan); `MapView.NetDrone` diamonds (blue idle, yellow flown, grey stale or asleep) with
+  name and state, all but the drone this PC flies; right-click: connect and fly / watch through the pilot PC
+  (`connectFromMap`, the role and the PHONE / PILOT PC chosen for you). Tests: NamesTest position reply,
+  SpectatorTest.aPilotThatDisconnectsIsNotALinkLoss, the PILOT_VIEW round trip with phone + flip.
+
 - **1.0.41 spectator and deep-sleep round (2026-11-05 night, built, NOT released, untried on hardware):** the pilot,
   spectating a close-by drone: "major connection issues". The link logs: the pilot PC (with a spectator, AUTO on the sharp
   tier at 8 Mbit/s) went from ~50 ms ping to 300-700 ms within 7 s; its spectator pause (3 s on a timer, the usual = the

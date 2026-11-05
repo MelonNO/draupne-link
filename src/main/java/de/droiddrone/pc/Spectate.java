@@ -28,12 +28,14 @@ import java.nio.charset.StandardCharsets;
  * spectator -> pilot   KEEP        [0x68][flags u8][n u8][missing seq i32 x n]   to the stream port, 4 a second
  * pilot -> spectator   PAUSE       [0x6D][paused u8]                 the stream is held (pilot link slow); 0 = on again
  * pilot -> spectator   PILOT_VIEW  [0x76][version u8 = 1][flags u8][rcWaiting UTF][banner UTF][linkHint UTF]
- *                                  [channels u8][channel u16 x n]     what the pilot PC's own OSD warns of, 4 a second
+ *                                  [channels u8][channel u16 x n][phone UTF]   the pilot PC's own OSD warnings and the
+ *                                  phone it flies, 4 a second
+ * pilot -> spectator   BYE         [0x67][reason u8]                 1 = the pilot disconnected (its DISCONNECT or quit)
  * </pre>
  * 0x6A-0x6C are the PC-to-phone video packets (ControlLink), so PAUSE skips to 0x6D; 0x6E-0x75 are the power and name
  * packets, so PILOT_VIEW is 0x76 (1.0.41). An older spectator drops both. PILOT_VIEW flags: bit 0 the pilot's link is
  * ready, 1 its sticks are live, 2 its radio looks frozen, 3 its arm switch isn't read, 4 its way to the phone is a relay,
- * 5 its link stalls.
+ * 5 its link stalls, 6 its picture is turned upside down (the spectator turns its own the same way).
  */
 final class Spectate {
     static final byte PILOT_QUERY = 0x60;
@@ -48,6 +50,9 @@ final class Spectate {
     static final byte SNAPSHOT = 0x69;
     static final byte PAUSE = 0x6D;
     static final byte PILOT_VIEW = 0x76;
+
+    /** BYE's reason: the pilot ended its link on purpose (DISCONNECT, or the program closed). */
+    static final byte BYE_PILOT_DISCONNECTED = 1;
 
     static final byte REFUSED_NOT_FLYING = 1;
     static final byte REFUSED_FULL = 2;
@@ -73,7 +78,7 @@ final class Spectate {
             out.writeByte(PILOT_VIEW);
             out.writeByte(1);
             out.writeByte((v.linkReady() ? 1 : 0) | (v.rcLive() ? 2 : 0) | (v.radioFrozen() ? 4 : 0) | (v.armSwitchUnknown() ? 8 : 0)
-                    | (v.relayed() ? 16 : 0) | (v.linkStalled() ? 32 : 0));
+                    | (v.relayed() ? 16 : 0) | (v.linkStalled() ? 32 : 0) | (v.upsideDown() ? 64 : 0));
             out.writeUTF(v.rcWaiting() == null ? "" : v.rcWaiting());
             out.writeUTF(v.banner() == null ? "" : v.banner());
             out.writeUTF(v.linkHint() == null ? "" : v.linkHint());
@@ -81,6 +86,7 @@ final class Spectate {
             int n = Math.min(32, ch.length);
             out.writeByte(n);
             for (int i = 0; i < n; i++) out.writeShort(ch[i]);
+            out.writeUTF(v.phoneName() == null ? "" : v.phoneName());
             return bytes.toByteArray();
         } catch (IOException e) {
             throw new IllegalStateException(e);
@@ -96,9 +102,10 @@ final class Spectate {
             String rcWaiting = in.readUTF(), banner = in.readUTF(), hint = in.readUTF();
             short[] ch = new short[in.readByte() & 0xff];
             for (int i = 0; i < ch.length; i++) ch[i] = in.readShort();
+            String phone = in.available() > 0 ? in.readUTF() : "";
             return new ControlLink.PilotView((f & 1) != 0, (f & 2) != 0, (f & 4) != 0, (f & 8) != 0, (f & 16) != 0, (f & 32) != 0,
                     rcWaiting.isEmpty() ? null : rcWaiting, banner.isEmpty() ? null : banner, hint.isEmpty() ? null : hint,
-                    ch.length == 0 ? null : ch);
+                    ch.length == 0 ? null : ch, phone.isEmpty() ? null : phone, (f & 64) != 0);
         } catch (IOException | RuntimeException e) {
             return null;
         }

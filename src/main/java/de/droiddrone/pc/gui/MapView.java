@@ -75,6 +75,76 @@ class MapView extends JComponent {
     private static final int FOLLOW_PREFETCH_MS = 5000;
     private final Timer followPrefetch = new Timer(FOLLOW_PREFETCH_MS, e -> prefetchAroundDrone());
     private boolean movedSincePrefetch;
+    /**
+     * Earlier flights kept on the map until removed by hand (1.0.41, the pilot: "if one drone flight has happened and
+     * then the pilot connects to another have both routes be saved in the map ... must be manually reset or deleted"):
+     * each in a colour of its own, under the live one, its name at its end.
+     */
+    record Kept(String name, List<FlightTrack.Point> points) {}
+
+    private List<Kept> kept = List.of();
+    private java.util.function.IntConsumer onRemoveKept;
+    private Runnable onClearKept;
+    private static final Color[] KEPT_COLOURS = {new Color(0x4fc3f7), new Color(0xba68c8), new Color(0x81c784),
+            new Color(0xffb74d), new Color(0xf06292), new Color(0x90a4ae)};
+
+    /**
+     * Every other drone on the network, where its phone says it is (phone app pc.32; 1.0.41, the pilot: "the location
+     * of all drones on the network shown in the MAP ... connect to a drone from the map by right clicking it").
+     * @param state  what to write under the name: IDLE, FLOWN BY PCBravo, ARMED, DEEP SLEEP ...
+     * @param stale  not heard from for a while: drawn grey
+     * @param pilot  the PC that flies it (to watch through), or null
+     */
+    record NetDrone(String name, double lat, double lon, String state, boolean stale, boolean flown, String pilot) {}
+
+    private List<NetDrone> netDrones = List.of();
+    /** Right-click on a drone: its name, and true to watch it (through its pilot PC), false to connect and fly. */
+    private java.util.function.BiConsumer<String, Boolean> onDroneConnect;
+
+    void setKept(List<Kept> flights, java.util.function.IntConsumer onRemove, Runnable onClear) {
+        kept = flights == null ? List.of() : List.copyOf(flights);
+        onRemoveKept = onRemove;
+        onClearKept = onClear;
+        repaint();
+    }
+
+    void setNetDrones(List<NetDrone> drones, java.util.function.BiConsumer<String, Boolean> onConnect) {
+        netDrones = drones == null ? List.of() : List.copyOf(drones);
+        onDroneConnect = onConnect;
+        repaint();
+    }
+
+    /** The kept flight whose line passes within 7 px of (x, y), or -1. */
+    private int keptAt(int x, int y) {
+        TileSource src = effectiveSource();
+        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
+        double scale = Math.pow(2, zoom - zi);
+        double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
+        int w = getWidth(), h = getHeight();
+        for (int i = kept.size() - 1; i >= 0; i--) {
+            Point2D prev = null;
+            for (FlightTrack.Point p : kept.get(i).points()) {
+                Point2D s = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
+                if (prev != null && java.awt.geom.Line2D.ptSegDist(prev.getX(), prev.getY(), s.getX(), s.getY(), x, y) <= 7) return i;
+                prev = s;
+            }
+        }
+        return -1;
+    }
+
+    /** The other drone drawn within 14 px of (x, y), or null. */
+    private NetDrone netDroneAt(int x, int y) {
+        TileSource src = effectiveSource();
+        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
+        double scale = Math.pow(2, zoom - zi);
+        double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
+        for (NetDrone d : netDrones) {
+            Point2D s = toScreen(d.lat(), d.lon(), zi, scale, wcx, wcy, getWidth(), getHeight());
+            if (s.distance(x, y) <= 14) return d;
+        }
+        return null;
+    }
+
     /** An earlier flight's track (TRACKS in the map window), drawn muted under the live one; null for none. */
     private List<FlightTrack.Point> oldTrack;
     private String oldTrackName;
@@ -646,6 +716,33 @@ class MapView extends JComponent {
     private JPopupMenu menu(int x, int y) {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
+        NetDrone drone = netDroneAt(x, y);
+        if (drone != null && onDroneConnect != null) {
+            if (drone.flown()) {
+                JMenuItem watch = new JMenuItem(drone.pilot() != null ? "Watch " + drone.name() + " (" + drone.pilot() + " flies it)"
+                        : "Watch " + drone.name() + " (its pilot PC isn't known yet)");
+                watch.setEnabled(drone.pilot() != null);
+                watch.addActionListener(e -> onDroneConnect.accept(drone.name(), true));
+                menu.add(watch);
+            }
+            JMenuItem fly = new JMenuItem(drone.flown() ? "Connect to " + drone.name() + " - another PC flies it, so this one watches"
+                    : "Connect to " + drone.name() + " and fly it");
+            fly.addActionListener(e -> onDroneConnect.accept(drone.name(), false));
+            menu.add(fly);
+            menu.addSeparator();
+        }
+        int flight = keptAt(x, y);
+        if (flight >= 0 && onRemoveKept != null) {
+            JMenuItem remove = new JMenuItem("Remove the flight " + kept.get(flight).name() + " from the map");
+            remove.addActionListener(e -> onRemoveKept.accept(flight));
+            menu.add(remove);
+        }
+        if (!kept.isEmpty() && onClearKept != null) {
+            JMenuItem clear = new JMenuItem("Remove all " + kept.size() + " earlier flight" + (kept.size() == 1 ? "" : "s") + " from the map...");
+            clear.addActionListener(e -> onClearKept.run());
+            menu.add(clear);
+            menu.addSeparator();
+        }
         MapGraphics.Item item = itemAt(x, y);
         if (item != null) {
             JMenuItem rename = new JMenuItem("Rename " + item.name() + "...");
@@ -1473,12 +1570,14 @@ class MapView extends JComponent {
             FlightTrack.Point home = track == null ? null : track.home();
             if (home != null) paintRings(g, home, zi, scale, wcx, wcy, w, h);
             if (oldTrack != null) paintOldTrack(g, zi, scale, wcx, wcy, w, h);
+            paintKept(g, zi, scale, wcx, wcy, w, h);
             paintTrack(g, pts, zi, scale, wcx, wcy, w, h);
             if (home != null) paintHome(g, home, zi, scale, wcx, wcy, w, h);
             FlightTrack.Point last = pts.isEmpty() ? null : pts.get(pts.size() - 1);
             if (pins != null) paintPins(g, last, home, zi, scale, wcx, wcy, w, h);
             paintGraphics(g, zi, scale, wcx, wcy, w, h);
             if (cameraView != null && !forPicture && connected) paintCameraView(g, zi, scale, wcx, wcy, w, h);
+            paintNetDrones(g, zi, scale, wcx, wcy, w, h);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
             else if (!forPicture) paintNoPosition(g, w, h);
 
@@ -1542,6 +1641,76 @@ class MapView extends JComponent {
                     g.setColor(Theme.LINE);
                     g.drawRect(sx0, sy0, sx1 - sx0, sy1 - sy0);
                 }
+            }
+        }
+    }
+
+    /** The kept flights: each a line in its own colour, its name at its end. */
+    private void paintKept(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+        for (int i = 0; i < kept.size(); i++) {
+            List<FlightTrack.Point> pts = kept.get(i).points();
+            if (pts.size() < 2) continue;
+            Path2D path = new Path2D.Double();
+            Point2D end = null;
+            for (FlightTrack.Point p : pts) {
+                end = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
+                if (path.getCurrentPoint() == null) path.moveTo(end.getX(), end.getY()); else path.lineTo(end.getX(), end.getY());
+            }
+            Color c = KEPT_COLOURS[i % KEPT_COLOURS.length];
+            g.setStroke(new BasicStroke(4.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(new Color(0, 0, 0, 110));
+            g.draw(path);
+            g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(Theme.alpha(c, 220));
+            g.draw(path);
+            String name = kept.get(i).name();
+            if (name != null && end != null) {
+                g.setFont(Theme.headingFont(10.5f));
+                FontMetrics fm = g.getFontMetrics();
+                int tw = fm.stringWidth(name) + 10;
+                int lx = (int) end.getX() + 8;
+                if (lx + tw > w - 4) lx = (int) end.getX() - 8 - tw; // near the right edge: the label on the left
+                g.setColor(BOX);
+                g.fillRect(lx, (int) end.getY() - fm.getHeight() / 2, tw, fm.getHeight() + 2);
+                g.setColor(c);
+                g.drawString(name, lx + 5, (int) end.getY() + fm.getAscent() / 2 - 1);
+            }
+        }
+    }
+
+    /** The other drones on the network: a diamond each (grey when not heard from for a while), its name and state. */
+    private void paintNetDrones(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+        for (NetDrone d : netDrones) {
+            Point2D s = toScreen(d.lat(), d.lon(), zi, scale, wcx, wcy, w, h);
+            if (s.getX() < -40 || s.getY() < -40 || s.getX() > w + 40 || s.getY() > h + 40) continue;
+            Color c = d.stale() ? Theme.MUTED : d.flown() ? Theme.WARN : new Color(0x4fc3f7);
+            Path2D diamond = new Path2D.Double();
+            diamond.moveTo(s.getX(), s.getY() - 9);
+            diamond.lineTo(s.getX() + 9, s.getY());
+            diamond.lineTo(s.getX(), s.getY() + 9);
+            diamond.lineTo(s.getX() - 9, s.getY());
+            diamond.closePath();
+            g.setStroke(new BasicStroke(3f));
+            g.setColor(new Color(0, 0, 0, 150));
+            g.draw(diamond);
+            g.setColor(Theme.alpha(c, 200));
+            g.fill(diamond);
+            g.setColor(Color.WHITE);
+            g.setStroke(new BasicStroke(1.2f));
+            g.draw(diamond);
+            g.setFont(Theme.headingFont(11f));
+            FontMetrics fm = g.getFontMetrics();
+            String line1 = d.name(), line2 = d.state();
+            int tw = Math.max(fm.stringWidth(line1), line2 == null ? 0 : fm.stringWidth(line2)) + 10;
+            int bx = (int) s.getX() + 13, by = (int) s.getY() - fm.getHeight();
+            if (bx + tw > w - 4) bx = (int) s.getX() - 13 - tw; // near the right edge: the label on the left
+            g.setColor(BOX);
+            g.fillRect(bx, by, tw, (line2 == null ? 1 : 2) * fm.getHeight() + 2);
+            g.setColor(c);
+            g.drawString(line1, bx + 5, by + fm.getAscent());
+            if (line2 != null) {
+                g.setColor(Theme.MUTED);
+                g.drawString(line2, bx + 5, by + fm.getHeight() + fm.getAscent());
             }
         }
     }

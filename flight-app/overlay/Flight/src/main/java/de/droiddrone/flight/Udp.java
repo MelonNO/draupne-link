@@ -173,6 +173,11 @@ public class Udp {
      * [0x74][key UTF][0 = phone][name UTF][device UTF][version UTF] (the name "" while this phone has none);
      * NAME_ASSIGN [0x75][key UTF][name UTF] from the master PC gives this phone its name (kept), answered the same.
      * Another key: dropped without a word.
+     *
+     * pc.32 (DRAUPNE Link 1.0.41, the PCs' map of every drone on the network): the reply goes on with
+     * [block version u8 = 1][source u8: 0 none, 1 the FC's GPS, 2 the phone's][lat i32][lon i32, 1e-7 degrees]
+     * [age s u16][armed u8: 0 no, 1 yes, 2 unknown][flown u8: a PC flies it][n u8][the pilot PC's address n bytes].
+     * An older PC stops reading after the version and never sees it.
      */
     static final byte NAME_QUERY = 0x73, NAME_REPLY = 0x74, NAME_ASSIGN = 0x75;
 
@@ -196,6 +201,7 @@ public class Udp {
             out.writeUTF(MainActivity.phoneName());
             out.writeUTF(MainActivity.deviceName());
             out.writeUTF(MainActivity.versionName == null ? "" : MainActivity.versionName);
+            writePosition(out);
             byte[] r = bytes.toByteArray();
             // pc.31: from the answer thread - this is the receive thread, and a full send buffer (video) held the sticks
             final DatagramPacket reply = new DatagramPacket(r, r.length, packet.getAddress(), packet.getPort());
@@ -211,6 +217,44 @@ public class Udp {
             log("answerName error: " + e);
         }
     }
+    /** The FC's GPS fix younger than this is where the drone is; else the phone's own position, younger than PHONE_FIX_MS. */
+    private static final long FC_FIX_MS = 10_000, PHONE_FIX_MS = 120_000;
+
+    /** pc.32: where this drone is, for the PCs' map (see answerName). */
+    private void writePosition(java.io.DataOutputStream out) throws java.io.IOException {
+        out.writeByte(1);
+        long now = android.os.SystemClock.elapsedRealtime();
+        int source = 0, lat = 0, lon = 0;
+        long ageMs = 0;
+        if (msp != null && msp.gpsFixAt != 0 && now - msp.gpsFixAt < FC_FIX_MS) {
+            source = 1;
+            lat = msp.gpsLatE7;
+            lon = msp.gpsLonE7;
+            ageMs = now - msp.gpsFixAt;
+        } else {
+            android.location.Location l = PhoneLocation.last();
+            if (l != null && PhoneLocation.ageMs(l) < PHONE_FIX_MS) {
+                source = 2;
+                lat = (int) Math.round(l.getLatitude() * 1e7);
+                lon = (int) Math.round(l.getLongitude() * 1e7);
+                ageMs = PhoneLocation.ageMs(l);
+            }
+        }
+        out.writeByte(source);
+        out.writeInt(lat);
+        out.writeInt(lon);
+        out.writeShort((int) Math.min(65_535, Math.max(0, ageMs / 1000)));
+        int armed = FcArmedState.of(msp, mavlink);
+        out.writeByte(armed == FcArmedState.ARMED ? 1 : armed == FcArmedState.DISARMED ? 0 : 2);
+        ReceiverBuffer buffer = receiverBuffer;
+        boolean flown = buffer != null && buffer.isConnected();
+        out.writeByte(flown ? 1 : 0);
+        InetAddress pilot = flown ? udpSender.getIp() : null;
+        byte[] a = pilot == null ? new byte[0] : pilot.getAddress();
+        out.writeByte(a.length);
+        out.write(a);
+    }
+
     private static final byte SPECTATE_PILOT_AT = 0x61;
     private static final byte SPECTATE_NO_PILOT = 0x62;
     /**

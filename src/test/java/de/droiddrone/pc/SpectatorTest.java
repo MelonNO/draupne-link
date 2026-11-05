@@ -187,7 +187,9 @@ class SpectatorTest {
         waitFor(() -> spectator.getState() == ControlLink.State.SPECTATOR_WAITING, 2000, "spectator sees the pilot go");
         // 4000 ticks of a 1 ms sleep: ~4 s on a phone, up to ~7 s on a PC
         waitFor(() -> !phone.receiverBuffer.isConnected(), 10_000, "phone free");
-        waitFor(() -> spectator.spectatorStatus().contains("nobody flies"), 4000, "spectator told nobody flies");
+        // 1.0.41: told the pilot left on purpose, and that nobody flies it now
+        waitFor(() -> spectator.spectatorStatus().toLowerCase(java.util.Locale.ROOT).contains("nobody flies"), 4000, "spectator told nobody flies");
+        assertTrue(spectator.spectatorStatus().contains("not a link loss"), spectator.spectatorStatus());
         Thread.sleep(1500);
         assertFalse(phone.receiverBuffer.isConnected(), "the spectator didn't connect to the phone");
         assertTrue(spectator.isSpectator());
@@ -542,7 +544,7 @@ class SpectatorTest {
     @Test
     void thePilotViewPacketReadsBackAsItWasWritten() {
         ControlLink.PilotView v = new ControlLink.PilotView(false, true, true, false, true, true, "MAPPING INCOMPLETE",
-                "STICKS 0.4 S LATE", "Tailscale on the phone is off", new short[]{988, 2012, 1500, 1000, 1800});
+                "STICKS 0.4 S LATE", "Tailscale on the phone is off", new short[]{988, 2012, 1500, 1000, 1800}, "MobileAlpha", true);
         byte[] p = Spectate.pilotView(v);
         assertEquals(Spectate.PILOT_VIEW, p[0]);
         ControlLink.PilotView back = Spectate.readPilotView(p, p.length);
@@ -556,8 +558,36 @@ class SpectatorTest {
         assertEquals(v.banner(), back.banner());
         assertEquals(v.linkHint(), back.linkHint());
         assertArrayEquals(v.channels(), back.channels());
+        assertEquals("MobileAlpha", back.phoneName());
+        assertTrue(back.upsideDown(), "the pilot's phone's way up");
         assertNull(Spectate.readPilotView(p, 5), "cut off: nothing");
         p[1] = 2;
         assertNull(Spectate.readPilotView(p, p.length), "a version this PC doesn't know: nothing");
+    }
+
+    /**
+     * The pilot disconnecting on purpose is said as that, not as a link loss (1.0.41, the pilot: "differentiate link
+     * lost and that the pilot just disconnected"), with the phone it flew.
+     */
+    @Test
+    void aPilotThatDisconnectsIsNotALinkLoss() throws Exception {
+        phone = new ControlLinkTest.FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        pilotFlying(true);
+        spectator = link(SPECTATOR_PORT, true, 300);
+        spectator.watchOnly();
+        spectator.start();
+        waitFor(() -> spectator.getState() == ControlLink.State.SPECTATING, 5000, "watching");
+        pilot.setPilotView(new ControlLink.PilotView(true, true, false, false, false, false, null, null, null, null, "MobileAlpha", false));
+        waitFor(() -> "MobileAlpha".equals(spectator.getPilotPhone()), 3000, "the phone the pilot flies");
+        assertTrue(spectator.spectatorStatus().contains("fly MobileAlpha"), spectator.spectatorStatus());
+        assertNull(spectator.getPilotLeft(), "nobody left");
+        // the pilot's own link lost: said as that
+        pilot.setPilotView(new ControlLink.PilotView(false, true, false, false, false, false, null, null, null, null, "MobileAlpha", false));
+        waitFor(() -> spectator.spectatorStatus().contains("lost its link to MobileAlpha"), 3000, "the pilot's link lost");
+        pilot.close(); // DISCONNECT on the pilot PC
+        waitFor(() -> spectator.getPilotLeft() != null, 3000, "told the pilot left");
+        assertEquals("MobileAlpha", spectator.getPilotLeft());
+        assertTrue(spectator.spectatorStatus().contains("disconnected from MobileAlpha on purpose - not a link loss"), spectator.spectatorStatus());
+        pilot = null;
     }
 }

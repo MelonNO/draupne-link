@@ -206,4 +206,46 @@ class MapViewTest {
         assertNull(got[0]);
         assertNotEquals(before, map.toLatLon(200, 150)[0], "panned");
     }
+
+    private static int near(BufferedImage img, int rgb, int tol) {
+        int n = 0;
+        for (int y = 0; y < img.getHeight(); y++) {
+            for (int x = 0; x < img.getWidth(); x++) {
+                int c = img.getRGB(x, y);
+                if (Math.abs(((c >> 16) & 255) - ((rgb >> 16) & 255)) <= tol && Math.abs(((c >> 8) & 255) - ((rgb >> 8) & 255)) <= tol
+                        && Math.abs((c & 255) - (rgb & 255)) <= tol) n++;
+            }
+        }
+        return n;
+    }
+
+    /** 1.0.41: an earlier flight stays on the map in its own colour, and the other drones on the network are drawn. */
+    @Test
+    void earlierFlightsAndTheOtherDronesAreDrawn(@TempDir Path dir) {
+        MapView map = new MapView(new TileCache(dir, "test", false));
+        long now = System.currentTimeMillis();
+        FlightTrack live = new FlightTrack(null);
+        live.sample(fix(59.9139, 10.7522, now - 2000), true);
+        live.sample(fix(59.9149, 10.7542, now - 1000), true);
+        live.sample(fix(59.9159, 10.7562, now), true);
+        map.update(live, fix(59.9159, 10.7562, now), 45, false, true);
+        BufferedImage before = map.snapshot(400, 300);
+        FlightTrack earlier = new FlightTrack(null);
+        earlier.sample(fix(59.9140, 10.7535, now - 9000), true);
+        earlier.sample(fix(59.9150, 10.7540, now - 8000), true);
+        earlier.sample(fix(59.9160, 10.7538, now - 7000), true);
+        map.setKept(java.util.List.of(new MapView.Kept("MobileAlpha 22:41", earlier.points())), i -> { }, () -> { });
+        map.setNetDrones(java.util.List.of(new MapView.NetDrone("MobileBravo", 59.9163, 10.7580, "FLOWN BY PCBravo", false, true, "PCBravo")),
+                (name, watch) -> { });
+        BufferedImage img = map.snapshot(400, 300);
+        if (Boolean.getBoolean("shot")) {
+            try {
+                javax.imageio.ImageIO.write(img, "png", Path.of("map-net.png").toFile());
+            } catch (java.io.IOException ignored) {
+            }
+        }
+        int blue = near(img, 0x4fc3f7, 40), yellow = near(img, Theme.WARN.getRGB() & 0xffffff, 40);
+        assertTrue(blue > near(before, 0x4fc3f7, 40) + 30, "the earlier flight's line: " + blue);
+        assertTrue(yellow > near(before, Theme.WARN.getRGB() & 0xffffff, 40) + 40, "the flown drone's diamond and its name: " + yellow);
+    }
 }

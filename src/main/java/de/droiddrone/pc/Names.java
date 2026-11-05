@@ -68,7 +68,20 @@ public final class Names {
     }
 
     /** What a NAME_REPLY said. */
-    public record Reply(Kind kind, String name, String device, String version) {}
+    /**
+     * @param position where the phone's drone is, from its reply (phone app pc.32 on), or null
+     */
+    public record Reply(Kind kind, String name, String device, String version, Position position) {
+        public Reply(Kind kind, String name, String device, String version) {
+            this(kind, name, device, version, null);
+        }
+    }
+
+    /**
+     * A phone's word on where its drone is (phone app pc.32 on, in its NAME_REPLY): from the FC's GPS or the phone's,
+     * how old, armed (null = unknown), whether a PC flies it and which (its address, or "").
+     */
+    public record Position(boolean fromFc, double lat, double lon, int ageS, Boolean armed, boolean flown, String pilotIp) {}
 
     private final Map<String, Entry> entries = new LinkedHashMap<>();
     private final Consumer<Map<String, String>> saver;
@@ -279,7 +292,31 @@ public final class Names {
         try (DataInputStream in = new DataInputStream(new java.io.ByteArrayInputStream(d, 1, len - 1))) {
             in.readUTF();
             int kind = in.readUnsignedByte();
-            return new Reply(kind == 0 ? Kind.PHONE : Kind.PC, in.readUTF(), in.readUTF(), in.readUTF());
+            String name = in.readUTF(), device = in.readUTF(), version = in.readUTF();
+            return new Reply(kind == 0 ? Kind.PHONE : Kind.PC, name, device, version, readPosition(in));
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    /** The position block after the version (phone app pc.32), or null: none, no fix, or a version unknown here. */
+    static Position readPosition(DataInputStream in) {
+        try {
+            if (in.available() < 1 || in.readUnsignedByte() != 1) return null;
+            int source = in.readUnsignedByte();
+            int lat = in.readInt(), lon = in.readInt();
+            int age = in.readUnsignedShort();
+            int armed = in.readUnsignedByte();
+            boolean flown = in.readUnsignedByte() != 0;
+            int n = in.readUnsignedByte();
+            String pilot = "";
+            if (n == 4 || n == 16) {
+                byte[] a = new byte[n];
+                in.readFully(a);
+                pilot = java.net.InetAddress.getByAddress(a).getHostAddress();
+            }
+            if (source == 0) return null;
+            return new Position(source == 1, lat / 1e7, lon / 1e7, age, armed == 2 ? null : armed == 1, flown, pilot);
         } catch (IOException e) {
             return null;
         }

@@ -127,6 +127,19 @@ public final class NameService {
 
     private volatile java.util.function.BiFunction<String, byte[], Boolean> sleepHandler;
 
+    /**
+     * Where each phone's drone is (phone app pc.32 on: its NAME_REPLY says), by the phone's name, as of the last scan
+     * that heard it; for the map's view of every drone on the network. at = when it was heard (wall clock).
+     */
+    public record DronePosition(String name, Names.Position position, long at) {}
+
+    private final java.util.Map<String, DronePosition> positions = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Every phone's last word on where its drone is; kept after it falls silent (the map shows how old). */
+    public java.util.List<DronePosition> dronePositions() {
+        return new ArrayList<>(positions.values());
+    }
+
     /** The link is about to open on the link port: the answering socket lets go of it. */
     public void pause() {
         paused = true;
@@ -220,6 +233,9 @@ public final class NameService {
                     continue;
                 }
                 if (reply.kind() == Names.Kind.PC) onlinePcNames.add(reply.name());
+                if (reply.kind() == Names.Kind.PHONE && reply.position() != null) {
+                    positions.put(reply.name(), new DronePosition(reply.name(), reply.position(), System.currentTimeMillis()));
+                }
                 String moved = names.seen(reply, ip, host);
                 if (moved != null) log.accept("Names: " + reply.name() + " answers from " + ip + " now (it was " + moved + ").");
             }

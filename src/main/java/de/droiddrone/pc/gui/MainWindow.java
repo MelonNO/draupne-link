@@ -149,9 +149,22 @@ public class MainWindow extends JFrame {
      * then answers the next one "wake". Kept in the settings, so it outlives a restart. Wall-clock times.
      */
     private record Asleep(String name, String ip, long since, int intervalMin) {}
-    private volatile Asleep asleep;
-    /** Its last check-in while no link was open (receivedAt: wall clock). */
-    private volatile ControlLink.SleepHello asleepHello;
+    /** Every phone known to be asleep, by address; and its last check-in heard (receivedAt: wall clock). */
+    private final Map<String, Asleep> asleepPhones = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, ControlLink.SleepHello> asleepHellos = new java.util.concurrent.ConcurrentHashMap<>();
+    /**
+     * Earlier flights kept on the map until removed (1.0.41): when this PC connects again, the flight before stays; a
+     * spectator's flight ends when the pilot moves to another phone. Saved (name>file|...), read back at the start.
+     */
+    private record KeptFlight(String name, java.nio.file.Path file, java.util.List<de.droiddrone.pc.map.FlightTrack.Point> points) {}
+    private final java.util.List<KeptFlight> keptFlights = new java.util.ArrayList<>();
+    private static final String KEPT_FLIGHTS_KEY = "map.keptFlights";
+    /** The live flight's name on the map ("MobileAlpha 22:41"). */
+    private String liveTrackName;
+    /** Watching: the phone the pilot flew at the last look (a new one: a new flight). */
+    private String watchedPhone;
+    /** The other drones on the network, for the map (1 s). */
+    private final Timer networkTimer = new Timer(1000, e -> refreshNetwork());
     private static final String ASLEEP_KEY = "phone.asleep";
     /** WAKE pressed while disconnected: the connect that follows wakes the phone instead of keeping quiet. */
     private boolean wakeOnConnect;
@@ -325,7 +338,8 @@ public class MainWindow extends JFrame {
         names = new Names(config, this::save);
         nameService = new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
         nameService.setSleepHandler(this::onSleepCheck);
-        asleep = parseAsleep(config.getString(ASLEEP_KEY));
+        for (Asleep a : parseAsleep(config.getString(ASLEEP_KEY))) asleepPhones.put(a.ip(), a);
+        loadKeptFlights();
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             @Override
@@ -354,7 +368,7 @@ public class MainWindow extends JFrame {
         recordVideo = "true".equalsIgnoreCase(config.getString(RECORD_KEY));
         hardwareDecode = "true".equalsIgnoreCase(config.getString(HW_DECODE_KEY));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
-        videoView.setUpsideDown("true".equalsIgnoreCase(config.getString(UPSIDE_DOWN_KEY)));
+        videoView.setUpsideDown(upsideDownFor(config.getString(Names.PHONE_NAME_KEY))); // the chosen phone's (1.0.41)
         mapSource = de.droiddrone.pc.map.TileSource.parse(config.getString(MAP_SOURCE_KEY));
         coordinateFormat = de.droiddrone.pc.map.Coordinates.Format.parse(config.getString(COORDINATES_KEY));
         preferPhone = "phone".equalsIgnoreCase(config.getString(GPS_SOURCE_KEY));
@@ -384,6 +398,7 @@ public class MainWindow extends JFrame {
             else exitFullScreen();
         });
         new Timer(33, e -> refresh()).start();
+        networkTimer.start();
         phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, java.util.concurrent.TimeUnit.SECONDS);
         nameService.onChange(() -> SwingUtilities.invokeLater(this::updatePhoneList)); // the PHONE list follows the network
         nameService.start();
@@ -1034,7 +1049,11 @@ public class MainWindow extends JFrame {
         try {
             phoneList = list;
             phoneCombo.removeAllItems();
-            for (Names.Entry e : list) phoneCombo.addItem(e.name() + (e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
+            for (Names.Entry e : list) {
+                Asleep sleeping = e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
+                phoneCombo.addItem(e.name() + (sleeping != null ? "   DEEP SLEEP " + clock(nextCheck(sleeping, now) - now)
+                        : e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
+            }
             if (list.isEmpty()) phoneCombo.addItem(kind == Names.Kind.PHONE ? "No phone seen yet" : "No pilot PC seen yet");
             phoneCombo.setSelectedIndex(Math.max(0, at));
         } finally {
@@ -1045,7 +1064,10 @@ public class MainWindow extends JFrame {
             return;
         }
         Names.Entry e = at < 0 ? null : list.get(at);
-        String hint = e == null
+        Asleep chosenAsleep = e == null || e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
+        String hint = chosenAsleep != null
+                ? e.name() + " is in deep sleep: it checks for this PC in " + clock(nextCheck(chosenAsleep, now) - now) + ". WAKE below brings it back then."
+                : e == null
                 ? (kind == Names.Kind.PHONE ? "Open DRAUPNE Flight on the phone, on Tailscale: it shows up here by itself."
                         : "A PC running DRAUPNE Link on your Tailscale network shows up here by itself.")
                 : e.online() ? e.detail() + "  -  " + e.ip()
@@ -1060,6 +1082,7 @@ public class MainWindow extends JFrame {
         Names.Entry e = phoneList.get(i);
         if (!e.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) || !String.valueOf(e.ip()).equals(config.getIp())) {
             save(Map.of(Names.PHONE_NAME_KEY, e.name(), "ip", e.ip() == null ? "" : e.ip()));
+            if (connection == null && e.kind() == Names.Kind.PHONE) videoView.setUpsideDown(upsideDownFor(e.name()));
         }
         updatePhoneList();
     }
@@ -1222,11 +1245,17 @@ public class MainWindow extends JFrame {
         lastStateText = null;
         lastSpectators = 0;
         toldNotFlying = false;
-        Asleep sleeping = asleep;
-        ControlLink.SleepHello lastCheck = asleepHello;
+        connection.getLink().setForeignSleepHandler(this::onSleepCheck); // another phone's check-in: sleep on
+        // the flight before stays on the map; this one is the live one
+        keepFlight(track, liveTrackName);
+        liveTrackName = flightName(watch ? null : target.name());
+        watchedPhone = null;
+        if (!watch) videoView.setUpsideDown(upsideDownFor(target.name())); // the phone's own way up (1.0.41)
+        Asleep sleeping = target.ip() == null ? null : asleepPhones.get(target.ip());
+        ControlLink.SleepHello lastCheck = sleeping == null ? null : asleepHellos.get(sleeping.ip());
         if (sleeping != null && target.online() && (lastCheck == null || System.currentTimeMillis() - lastCheck.receivedAt() > 60_000)
                 && System.currentTimeMillis() - sleeping.since() > 60_000) {
-            clearAsleep(); // it answers name queries and hasn't checked in for a minute: woken on the phone
+            clearAsleep(sleeping.ip()); // it answers name queries and hasn't checked in for a minute: woken on the phone
             sleeping = null;
         }
         if (!watch && sleeping != null && sleeping.ip().equals(target.ip())) {
@@ -1254,7 +1283,8 @@ public class MainWindow extends JFrame {
             liveTrack = new de.droiddrone.pc.map.FlightTrack(null);
             logLine("No track file: " + e.getMessage());
         }
-        if (track == null || track.isEmpty()) track = liveTrack; // else the last flight stays shown until a fix comes
+        track = liveTrack; // the flight before is a kept one now (1.0.41)
+        pushKept();
         positionFromPhone = null;
         lastArmedAt = 0;
         linkLogTimer.start();
@@ -1280,6 +1310,7 @@ public class MainWindow extends JFrame {
         sampleLinkLog();
         linkLogTimer.stop();
         if (liveTrack != null) liveTrack.close(pins.list()); // stays for FIND DRONE and the map
+        keepFlight(liveTrack, liveTrackName); // remembered; shown as the live one until the next connection
         lostDroneButton.setVisible(false);
         if (connection != null) connection.close();
         connection = null;
@@ -1405,6 +1436,8 @@ public class MainWindow extends JFrame {
                     this::setMapSource, this::setCoordinateFormat, this::openFindDrone);
             mapWindow.setPreferPhone(preferPhone);
             mapWindow.setOnShownChanged(this::updateFlightLayout);
+            pushKept();
+            refreshNetwork();
             mapWindow.bindKey(javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_F3, 0), this::toggleMapWindow); // F3 there too
             // popped out or back: the minimap follows the drone again
             mapWindow.addComponentListener(new java.awt.event.ComponentAdapter() {
@@ -1946,12 +1979,22 @@ public class MainWindow extends JFrame {
             if (!pv.linkReady()) hint = pv.linkHint();
             channels = pv.channels();
         }
+        // watching: say what kind of loss - the pilot gone on purpose, or its own link to the drone lost (1.0.41)
+        String lostText = null;
+        String left = spectator ? l.getPilotLeft() : null;
+        if (left != null) {
+            linkReady = false;
+            lostText = "PILOT DISCONNECTED";
+            hint = "THE PILOT ENDED ITS LINK" + (left.isEmpty() ? "" : " TO " + left.toUpperCase(Locale.ROOT)) + " - NOT A LINK LOSS";
+        } else if (pv != null && !pv.linkReady()) {
+            lostText = "PILOT LINK LOST";
+        }
         return new OsdRenderer.Data(true, linkReady, l.getPing(), rcLive,
                 l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString("osdInvertPitch")),
                 hint, channels, false, stalled, videoFrozen, radioFrozen,
                 rcWaiting, v != null && v.recordingFile() != null, banner, spectator && !l.isWatchOnly(),
                 sticksAge, armUnknown, liveBanner, spectator && l.isSpectatorPaused(), relayed,
-                ps != null && now - ps.receivedAt() <= 2500 && ps.rcWriteAgeMs() > OsdRenderer.STICKS_LOST_ALARM_MS);
+                ps != null && now - ps.receivedAt() <= 2500 && ps.rcWriteAgeMs() > OsdRenderer.STICKS_LOST_ALARM_MS, lostText);
     }
 
     /** A stream (re)start may take this long to show its first picture before VIDEO FROZEN says so. */
@@ -2132,52 +2175,84 @@ public class MainWindow extends JFrame {
                 : "DEEP SLEEP asked: the phone drops the link and sleeps, listening for this PC every " + checkIntervalMin + " min.");
     }
 
-    // ------------------------------------------------------------------ a phone asleep while no link is open
+    // ------------------------------------------------------------------ phones asleep while no link is open
 
-    /** The saved "name|ip|since|interval", or null. */
-    private static Asleep parseAsleep(String saved) {
-        if (saved == null || saved.isBlank()) return null;
-        String[] p = saved.split("\\|");
-        try {
-            return p.length == 4 && !p[1].isBlank() ? new Asleep(p[0], p[1], Long.parseLong(p[2]), Integer.parseInt(p[3])) : null;
-        } catch (NumberFormatException e) {
-            return null;
+    /** The saved "name|ip|since|interval;...". */
+    private static java.util.List<Asleep> parseAsleep(String saved) {
+        java.util.List<Asleep> out = new java.util.ArrayList<>();
+        if (saved == null || saved.isBlank()) return out;
+        for (String one : saved.split(";")) {
+            String[] p = one.split("\\|");
+            try {
+                if (p.length == 4 && !p[1].isBlank()) out.add(new Asleep(p[0], p[1], Long.parseLong(p[2]), Integer.parseInt(p[3])));
+            } catch (NumberFormatException ignored) {
+                // a broken entry: left out
+            }
         }
+        return out;
+    }
+
+    private void saveAsleep() {
+        StringBuilder b = new StringBuilder();
+        for (Asleep a : asleepPhones.values()) {
+            if (b.length() > 0) b.append(';');
+            b.append(a.name()).append('|').append(a.ip()).append('|').append(a.since()).append('|').append(a.intervalMin());
+        }
+        String v = b.toString();
+        SwingUtilities.invokeLater(() -> save(Map.of(ASLEEP_KEY, v)));
     }
 
     private void rememberAsleep(Asleep a) {
-        asleep = a;
-        SwingUtilities.invokeLater(() -> save(Map.of(ASLEEP_KEY, a.name() + "|" + a.ip() + "|" + a.since() + "|" + a.intervalMin())));
+        asleepPhones.put(a.ip(), a);
+        saveAsleep();
     }
 
-    private void clearAsleep() {
-        if (asleep == null) return;
-        asleep = null;
-        asleepHello = null;
-        SwingUtilities.invokeLater(() -> save(Map.of(ASLEEP_KEY, "")));
+    private void clearAsleep(String ip) {
+        if (ip == null || asleepPhones.remove(ip) == null) return;
+        asleepHellos.remove(ip);
+        saveAsleep();
+    }
+
+    /** The phone chosen in the PHONE list, if it is asleep; null otherwise (or as a spectator). */
+    private Asleep asleepChosen() {
+        if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) return null;
+        String ip = config.getString("ip");
+        return ip.isEmpty() ? null : asleepPhones.get(ip);
+    }
+
+    /** When this sleeping phone checks for this PC next (wall clock). */
+    private long nextCheck(Asleep a, long now) {
+        ControlLink.SleepHello h = asleepHellos.get(a.ip());
+        long interval = Math.max(1, a.intervalMin()) * 60_000L;
+        long next = h != null && h.nextCheckMin() > 0 ? h.receivedAt() + h.nextCheckMin() * 60_000L : a.since() + interval;
+        while (next < now) next += interval;
+        return next;
+    }
+
+    private static String clock(long ms) {
+        long left = Math.max(0, ms) / 1000;
+        return String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
     }
 
     /**
-     * A sleeping phone's check-in while no link is open (the name service's thread): remembered for the LINK card, and
-     * answered "sleep on" - WAKE connects, and the link answers the next one "wake". A phone not known to be asleep is
-     * taken as asleep when it is one of ours (it went to sleep under an older version, or before a restart).
+     * A sleeping phone's check-in that isn't this PC's link's own phone (the name service's thread with no link open,
+     * or the link's for another phone): remembered for the LINK card and the PHONE list, and answered "sleep on" - WAKE
+     * connects, and the link answers the next one "wake". A phone not known to be asleep is taken as asleep when it is
+     * one of ours (it went to sleep under an older version, or before a restart).
      * @return false (sleep on), or null for a phone that isn't ours (no answer)
      */
     private Boolean onSleepCheck(String ip, byte[] d) {
-        Asleep a = asleep;
+        Asleep a = asleepPhones.get(ip);
         if (a == null) {
             String name = names.nameAt(ip);
             if (name == null || Names.kindOf(name) != Names.Kind.PHONE) return null;
             a = new Asleep(name, ip, System.currentTimeMillis(), Math.max(1, d[3] & 0xff));
             rememberAsleep(a);
-        } else if (!a.ip().equals(ip)) {
-            return null;
         }
         int pct = d[1] & 0xff;
         ControlLink.SleepHello h = new ControlLink.SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff,
                 ((d[4] & 0xff) << 8) | (d[5] & 0xff), System.currentTimeMillis());
-        ControlLink.SleepHello before = asleepHello;
-        asleepHello = h;
+        ControlLink.SleepHello before = asleepHellos.put(ip, h);
         if (before == null || h.receivedAt() - before.receivedAt() > 20_000) { // one line per check window
             String line = a.name() + " asleep, still here: battery " + (h.batteryPercent() >= 0 ? h.batteryPercent() + " %" : "unknown")
                     + (h.charging() ? ", charging" : "") + ", next check in " + h.nextCheckMin() + " min. WAKE on the LINK card brings it back.";
@@ -2186,17 +2261,17 @@ public class MainWindow extends JFrame {
         return false;
     }
 
-    /** Not connected, a phone asleep: the power row stays, with when it checks next and WAKE. */
+    /** Not connected, the chosen phone asleep: the power row stays, with when it checks next and WAKE. */
     private void refreshAsleep() {
-        Asleep a = asleep;
+        Asleep a = asleepChosen();
         if (powerRow == null || a == null) return;
         long now = System.currentTimeMillis();
-        ControlLink.SleepHello h = asleepHello;
+        ControlLink.SleepHello h = asleepHellos.get(a.ip());
         // it answers the name service's queries, and hasn't checked in for a minute: it is awake (woken on the phone)
         Names.Entry e = names.get(a.name());
         if (e != null && e.online() && (h == null || now - h.receivedAt() > 60_000) && now - a.since() > 60_000) {
             logLine(a.name() + " is awake: it answers this PC again.");
-            clearAsleep();
+            clearAsleep(a.ip());
             return;
         }
         if (!powerRow.isVisible()) powerRow.setVisible(true);
@@ -2204,24 +2279,19 @@ public class MainWindow extends JFrame {
         deepSleepButton.setEnabled(false);
         checkIntervalCombo.setEnabled(false);
         wakeButton.setEnabled(true);
-        long interval = Math.max(1, a.intervalMin()) * 60_000L;
-        long next = a.since() + interval;
         String alive = "";
         if (h != null) {
-            if (h.nextCheckMin() > 0) next = h.receivedAt() + h.nextCheckMin() * 60_000L;
             long ago = (now - h.receivedAt()) / 1000;
             alive = "Heard " + (ago < 60 ? ago + " s" : ago / 60 + " min") + " ago"
                     + (h.batteryPercent() >= 0 ? ", battery " + h.batteryPercent() + " %" : "") + (h.charging() ? " (charging)" : "") + ". ";
         }
-        while (next < now) next += interval;
-        long left = (next - now) / 1000;
-        powerStatus.setText("<html>" + a.name() + " is in DEEP SLEEP. " + alive + "Next check in "
-                + String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60) + ". WAKE connects and brings it back then.</html>");
+        powerStatus.setText("<html>" + a.name() + " is in DEEP SLEEP. " + alive + "Next check in " + clock(nextCheck(a, now) - now)
+                + ". WAKE connects and brings it back then.</html>");
     }
 
     /** WAKE with no link: connect to the sleeping phone as its pilot; the link answers its next check "wake". */
     private void wakeAsleep() {
-        Asleep a = asleep;
+        Asleep a = asleepChosen();
         if (a == null) return;
         if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) roleCombo.setSelectedItem(ROLE_PILOT);
         save(Map.of(Names.PHONE_NAME_KEY, a.name()));
@@ -2233,6 +2303,163 @@ public class MainWindow extends JFrame {
         }
     }
 
+    // ------------------------------------------------------------------ the camera's way up, per phone (1.0.41)
+
+    private static String upsideDownKey(String phone) {
+        return UPSIDE_DOWN_KEY + "." + phone;
+    }
+
+    /** The phone's own setting; one never set takes the old PC-wide one (up to 1.0.40). */
+    private boolean upsideDownFor(String phone) {
+        String v = phone == null || phone.isEmpty() ? "" : config.getString(upsideDownKey(phone));
+        if (v.isEmpty()) v = config.getString(UPSIDE_DOWN_KEY);
+        return "true".equalsIgnoreCase(v);
+    }
+
+    // ------------------------------------------------------------------ kept flights (1.0.41)
+
+    private void loadKeptFlights() {
+        String saved = config.getString(KEPT_FLIGHTS_KEY);
+        if (saved == null || saved.isBlank()) return;
+        for (String one : saved.split("\\|")) {
+            int at = one.indexOf('>');
+            if (at <= 0) continue;
+            java.nio.file.Path file = java.nio.file.Path.of(one.substring(at + 1));
+            try {
+                de.droiddrone.pc.map.FlightTrack t = de.droiddrone.pc.map.FlightTrack.read(file);
+                if (!t.isEmpty()) keptFlights.add(new KeptFlight(one.substring(0, at), file, t.points()));
+            } catch (IOException | RuntimeException e) {
+                // the file is gone: the flight with it
+            }
+        }
+    }
+
+    private void saveKeptFlights() {
+        StringBuilder b = new StringBuilder();
+        for (KeptFlight k : keptFlights) {
+            if (k.file() == null) continue;
+            if (b.length() > 0) b.append('|');
+            b.append(k.name().replace("|", " ").replace(">", " ")).append('>').append(k.file());
+        }
+        save(Map.of(KEPT_FLIGHTS_KEY, b.toString()));
+    }
+
+    /** A flight ended (a new connection, the pilot on another phone, DISCONNECT): it stays on the map. */
+    private void keepFlight(de.droiddrone.pc.map.FlightTrack t, String name) {
+        if (t == null || t.isEmpty()) return;
+        java.nio.file.Path file = t.file();
+        for (KeptFlight k : keptFlights) if (file != null && file.equals(k.file())) return; // kept already
+        keptFlights.add(new KeptFlight(name == null ? "Flight " + (keptFlights.size() + 1) : name, file, t.points()));
+        saveKeptFlights();
+        pushKept();
+    }
+
+    /** The map views get the kept flights, but the one shown live (the flight just ended stays the live one until the next). */
+    private void pushKept() {
+        java.nio.file.Path live = track == null ? null : track.file();
+        java.util.List<MapView.Kept> list = new java.util.ArrayList<>();
+        java.util.List<Integer> index = new java.util.ArrayList<>();
+        for (int i = 0; i < keptFlights.size(); i++) {
+            KeptFlight k = keptFlights.get(i);
+            if (live != null && live.equals(k.file())) continue;
+            list.add(new MapView.Kept(k.name(), k.points()));
+            index.add(i);
+        }
+        java.util.function.IntConsumer remove = shown -> {
+            if (shown < 0 || shown >= index.size()) return;
+            KeptFlight k = keptFlights.remove((int) index.get(shown));
+            saveKeptFlights();
+            logLine("Flight " + k.name() + " taken off the map (its file stays in the Tracks folder).");
+            pushKept();
+        };
+        Runnable clear = () -> {
+            int n = list.size();
+            if (JOptionPane.showConfirmDialog(this, "Take all " + n + " earlier flight" + (n == 1 ? "" : "s") + " off the map?\n"
+                    + "Their files stay in the Tracks folder.", "Earlier flights", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
+            keptFlights.removeIf(k -> live == null || !live.equals(k.file()));
+            saveKeptFlights();
+            logLine(n + " earlier flight" + (n == 1 ? "" : "s") + " taken off the map.");
+            pushKept();
+        };
+        miniMap.setKept(list, remove, clear);
+        if (mapWindow != null) mapWindow.map().setKept(list, remove, clear);
+    }
+
+    private static String flightName(String who) {
+        return (who == null || who.isEmpty() ? "Flight" : who) + " " + java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+    }
+
+    /** Watching, and the pilot flies another phone now: the flight so far is kept, a new one starts. */
+    private void followWatchedPhone(ControlLink link) {
+        String phone = link.getPilotPhone();
+        if (phone == null) return;
+        if (watchedPhone != null && !phone.equals(watchedPhone)) {
+            keepFlight(liveTrack, liveTrackName);
+            if (liveTrack != null) liveTrack.close(pins.list());
+            try {
+                liveTrack = new de.droiddrone.pc.map.FlightTrack(de.droiddrone.pc.map.FlightTrack.defaultDir());
+            } catch (IOException e) {
+                liveTrack = new de.droiddrone.pc.map.FlightTrack(null);
+            }
+            track = liveTrack;
+            logLine("The pilot flies " + phone + " now (it flew " + watchedPhone + "): that flight stays on the map, a new one starts.");
+            pushKept();
+        }
+        if (!phone.equals(watchedPhone)) liveTrackName = flightName(phone);
+        watchedPhone = phone;
+    }
+
+    // ------------------------------------------------------------------ every drone on the network (1.0.41)
+
+    /**
+     * Once a second: the other drones on the map (where their phones say they are, phone app pc.32), and the PHONE
+     * list's sleep countdowns.
+     */
+    private void refreshNetwork() {
+        long now = System.currentTimeMillis();
+        String flying = connection == null ? null : connection.getLink().isSpectator() ? connection.getLink().getPilotPhone()
+                : config.getString(Names.PHONE_NAME_KEY);
+        java.util.List<MapView.NetDrone> drones = new java.util.ArrayList<>();
+        for (NameService.DronePosition d : nameService.dronePositions()) {
+            if (d.name().equalsIgnoreCase(flying)) continue; // shown live already
+            Names.Position p = d.position();
+            long age = now - d.at() + p.ageS() * 1000L;
+            String ip = names.ipOf(d.name());
+            Asleep sleeping = ip == null ? null : asleepPhones.get(ip);
+            String pilot = p.pilotIp().isEmpty() ? null : names.nameAt(p.pilotIp());
+            String state = sleeping != null ? "DEEP SLEEP - check in " + clock(nextCheck(sleeping, now) - now)
+                    : (Boolean.TRUE.equals(p.armed()) ? "ARMED - " : "") + (p.flown() ? "FLOWN" + (pilot == null ? "" : " BY " + pilot) : "IDLE")
+                    + (age > 30_000 ? " - " + Names.agoText(now - age, now) : "");
+            drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, age > 30_000 || sleeping != null, p.flown(), pilot));
+        }
+        miniMap.setNetDrones(drones, this::connectFromMap);
+        if (mapWindow != null) mapWindow.map().setNetDrones(drones, this::connectFromMap);
+        if (!asleepPhones.isEmpty() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
+    }
+
+    /** Right-click on a drone on the map: fly it (as pilot), or watch it through the PC that flies it. */
+    private void connectFromMap(String phone, boolean watch) {
+        if (connection != null) {
+            JOptionPane.showMessageDialog(this, "This PC is connected now. Press DISCONNECT first, then connect to " + phone + " from the map.",
+                    "Connected", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        String target = phone;
+        if (watch) {
+            NameService.DronePosition d = nameService.dronePositions().stream().filter(x -> x.name().equals(phone)).findFirst().orElse(null);
+            target = d == null || d.position().pilotIp().isEmpty() ? null : names.nameAt(d.position().pilotIp());
+            if (target == null) {
+                JOptionPane.showMessageDialog(this, "The PC that flies " + phone + " isn't in the name map yet.", "Watch", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+        }
+        roleCombo.setSelectedItem(watch ? ROLE_SPECTATOR : ROLE_PILOT);
+        save(Map.of(Names.PHONE_NAME_KEY, target));
+        updatePhoneList();
+        logLine("From the map: " + (watch ? "watching " + phone + " through " + target : "connecting to " + phone) + ".");
+        connect();
+    }
+
     /** Flying with spectators: this PC's OSD warnings, for theirs (4 a second at most). */
     private void sharePilotView(ControlLink link) {
         long now = de.droiddrone.pc.MonoClock.ms();
@@ -2241,12 +2468,13 @@ public class MainWindow extends JFrame {
         OsdRenderer.Data d = osdData();
         if (d == null) return;
         link.setPilotView(new ControlLink.PilotView(d.linkReady(), d.rcLive(), d.radioFrozen(), d.armSwitchUnknown(), d.relayed(),
-                d.linkStalled(), d.rcWaiting(), d.banner(), d.linkHint(), d.channels()));
+                d.linkStalled(), d.rcWaiting(), d.banner(), d.linkHint(), d.channels(), config.getString(Names.PHONE_NAME_KEY),
+                videoView.isUpsideDown()));
     }
 
     private void wakePhone() {
         if (demoPower(ControlLink.POWER_NORMAL)) return;
-        if (connection == null && asleep != null) {
+        if (connection == null && asleepChosen() != null) {
             wakeAsleep();
             return;
         }
@@ -2289,7 +2517,7 @@ public class MainWindow extends JFrame {
                 link.setDormant(false);
                 link.restartVideo();
                 logLine("The phone is awake again.");
-                clearAsleep();
+                clearAsleep(config.getString("ip"));
             } else {
                 long interval = Math.max(1, checkIntervalMin) * 60_000L;
                 long next = sleepStartAt + interval;
@@ -2358,7 +2586,7 @@ public class MainWindow extends JFrame {
         refreshPhone();
         if (connection == null) {
             videoView.setIdleText("Not connected");
-            if (asleep != null && !tourPowerDemo) refreshAsleep();
+            if (asleepChosen() != null && !tourPowerDemo) refreshAsleep();
             else if (powerRow != null && powerRow.isVisible() && !tourPowerDemo) powerRow.setVisible(false);
             setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
             pingValue.setText("-");
@@ -2378,6 +2606,11 @@ public class MainWindow extends JFrame {
         }
         if (!link.isSpectator()) refreshPower(link);
         if (!link.isSpectator() && link.getSpectatorCount() > 0) sharePilotView(link);
+        if (link.isSpectator()) {
+            followWatchedPhone(link);
+            ControlLink.PilotView pv = link.getPilotView();
+            if (pv != null && pv.upsideDown() != videoView.isUpsideDown()) videoView.setUpsideDown(pv.upsideDown()); // the pilot's phone's way up
+        }
         if (video != null && link.isSpectator()) video.setDrawEveryFrame(true); // watching: smooth, not least delay
         if (link.isSpectator() && !link.isWatchOnly() && !toldNotFlying) {
             toldNotFlying = true;
@@ -2633,7 +2866,12 @@ public class MainWindow extends JFrame {
     /** VIDEO > Camera upside down, also from the setup guide's camera check. */
     void setUpsideDown(boolean on) {
         videoView.setUpsideDown(on);
-        save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
+        // the phone's own (1.0.41, the pilot: "make the upside down setting follow the phone not the computer");
+        // watching, the pilot's phone decides (PILOT_VIEW), so nothing is saved
+        boolean watching = connection != null ? connection.getLink().isSpectator() : ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
+        String phone = config.getString(Names.PHONE_NAME_KEY);
+        if (!watching && !phone.isEmpty()) save(Map.of(upsideDownKey(phone), Boolean.toString(on)));
+        else if (!watching) save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
         logLine(on ? "Picture turned upside down." : "Picture the right way up.");
     }
 
