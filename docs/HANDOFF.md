@@ -4,7 +4,17 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-06, 1.0.42 released, phone app still pc.32)
+## Where things stand (2026-11-07, 1.0.43, phone app still pc.32)
+
+- **1.0.43 (2026-11-07):** the pilot: "change the model for the fc check" to their FPV drone model (OBJ + textures;
+  cleared for use by the maintainer, see THIRD-PARTY.md). `DroneModelView` now loads `model/fpv-drone.bin.gz`
+  ('DRM1': per vertex xyz in the drone's axes + uv + a flag byte - texture 0/1/none, front prop; uint16 triangles) and
+  `fpv-drone-0/1.jpg` (AO baked in), made by `tools/model/export_fpv_drone.py` from the unzipped OBJ folder (OBJ x
+  left, y up, z forward; centred on the four `engine` objects; scaled to ARM 0.08). Software raster like
+  `ControllerRender` but forward-shaded: 2 x 2 sub-pixels, perspective-correct uv, flat face light, back faces culled
+  (the mesh is closed; checked nose up, on its side, upside down), front props half red. ~8 ms a frame on 4 cores
+  (10 without culling). `rotation()`, the grid, the label and the API the dialog uses are unchanged. Checked off screen
+  only (rendered on a Linux PC); not yet seen in the real window.
 
 - **1.0.42 (2026-11-06):** the pilot: "when recording is turned on one of the video files include OSD" and "a check of
   fc orientation with a 3d render of a drone following the actual movements". Why: an iFlight Blitz F722 (Betaflight

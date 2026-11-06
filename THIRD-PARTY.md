@@ -13,6 +13,7 @@ DRAUPNE Link is licensed under the GPL-3.0 (see [LICENSE](LICENSE)). The release
 | [jSerialComm](https://fazecast.github.io/jSerialComm/) | Talking to Betaflight over USB | Apache-2.0 / LGPL-3.0 |
 | [Eclipse Temurin](https://adoptium.net) Java runtime (bundled by jpackage) | Runtime | GPL-2.0 with Classpath Exception |
 | RadioMaster TX16S MKII CAD model by YahyaELone (GrabCAD, STEP from Autodesk Inventor), tessellated into `src/main/resources/model/tx16s-mkii.bin.gz` | The 3D radio in the calibration | Redistributed with permission (confirmed by the maintainer, 2026-11-05) |
+| FPV drone 3D model (OBJ + textures), converted into `src/main/resources/model/fpv-drone.bin.gz` and `fpv-drone-0.jpg` / `fpv-drone-1.jpg` by `tools/model/export_fpv_drone.py` | The 3D drone in Drone setup > Orientation | Redistributed with permission (confirmed by the maintainer, 2026-11-07) |
 
 The installer installs [Tailscale](https://tailscale.com) from Tailscale's own signed package, and the setup wizard downloads this project's build of DRAUPNE Flight (upstream DroidDrone Flight 2.3.0, GPL-3.0, with the changes in [`flight-app/`](flight-app)) from this project's GitHub releases. Neither is bundled.
 FFmpeg's source is available from ffmpeg.org; the exact build used comes from the JavaCPP Presets project.

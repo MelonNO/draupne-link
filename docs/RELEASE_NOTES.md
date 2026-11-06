@@ -1,7 +1,6 @@
 <!-- The release page text: only the version being released. Older versions are in CHANGELOG.md. -->
-## New in 1.0.42
+## New in 1.0.43
 
 The phone app stays **DRAUPNE Flight 2.3.0-pc.32**; only the PC app is new.
 
-- **Recordings come with the OSD:** with recording on, a second file is written next to the video as it came - `flight-...-osd.mkv`, the video with the OSD drawn in, as the pilot saw it (the same figures and layout as the screen, the picture turned the same way; also with the OSD hidden on screen with F2). Pictures smaller than 720 lines are scaled up so the OSD's text stays readable. It runs on a thread of its own at the lowest priority, with its own decoder: the live picture and its latency are not touched; a PC that can't keep up leaves pictures out of this file only, never out of the raw one. `recordOsd=false` in the settings file turns it off.
-- **Drone setup > Orientation:** a drone in 3D that moves as Betaflight sees the real one (red props at the front), and a check before the first flight: stand behind the drone, put it flat, lift the nose, put it flat again, lower the right side. Betaflight must see each move the right way round - a flight controller turned on the frame (its arrow not to the front) and not set in Betaflight's board alignment corrects the wrong way and flips the drone over on takeoff. The check says how it is turned (180, 90 or 270 degrees, or upside down); **Fix it** saves a backup of Betaflight's settings, turns the board alignment by that much, saves, and checks again once Betaflight is back. Over this PC's USB, props off, no battery needed.
+- **Drone setup > Orientation shows a real FPV drone:** the 3D drone that follows Betaflight's attitude is now a detailed, textured model (frame, motors, battery, camera) instead of the simple quad. Its front props are still red, and it moves exactly as before. It is drawn only while the Orientation window is open; the live picture and the sticks are not touched.

@@ -2,6 +2,10 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.43
+
+- **Drone setup > Orientation draws a textured FPV drone model** (`DroneModelView`): the mesh in `model/fpv-drone.bin.gz` (47k vertices, 59k triangles, 'DRM1', made from the OBJ by `tools/model/export_fpv_drone.py`: the drone's axes, centred on the motors, scaled to the old quad's motor spacing) with two 1024 textures (ambient occlusion multiplied in), rasterised in software with a depth buffer at 2 x 2 sub-pixels in row bands on all cores, back faces culled; the front props tinted red; the shadow is the hull of every 8th vertex. About 8 ms a frame on 4 cores. Test: `DroneModelViewTest` (red props at the front, nose down moves them down).
+
 ## 1.0.42
 
 - **A recording also writes `flight-...-osd.mkv`, the video with the OSD drawn in** (`OsdRecorder`, a `VideoPipeline.RecordingTap` on the record thread): its own one-thread software decoder (`VideoDecoder.oneThread`), the OSD painted with the figures the screen painted last (`VideoView.lastOsdData`, also with the HUD hidden), OpenH264 on the same thread at the lowest priority (`OsdVideoWriter`, MPEG-4 without it), at least 720 lines high; behind, pictures are left out of this file only. `recordOsd=false` turns it off.
