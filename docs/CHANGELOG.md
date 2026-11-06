@@ -2,6 +2,11 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.42
+
+- **A recording also writes `flight-...-osd.mkv`, the video with the OSD drawn in** (`OsdRecorder`, a `VideoPipeline.RecordingTap` on the record thread): its own one-thread software decoder (`VideoDecoder.oneThread`), the OSD painted with the figures the screen painted last (`VideoView.lastOsdData`, also with the HUD hidden), OpenH264 on the same thread at the lowest priority (`OsdVideoWriter`, MPEG-4 without it), at least 720 lines high; behind, pictures are left out of this file only. `recordOsd=false` turns it off.
+- **Drone setup > Orientation** (`OrientationCheckDialog`, `DroneModelView`, `setup.Orientation`): a 3D quad following Betaflight's MSP_ATTITUDE, and the check flat - nose up - flat - right side down; the board's turn from the two tilts (0/90/180/270, or on its back while flat) and **Fix it** (`align_board_yaw`, or `align_board_roll` + 180, after a `diff all` backup; saved; checked again). Found from a flight log of 2026-11-06: an F722 with no board alignment flipped backwards on takeoff while Betaflight reported the nose going down.
+
 ## 1.0.41
 
 - **Spectators no longer slow the pilot down:** while anyone watches, AUTO stays off the sharp tier (a chosen SHARP stays) - relaying 8 Mbit/s through the pilot PC's upload took its ping to the drone from ~50 to 300-700 ms.

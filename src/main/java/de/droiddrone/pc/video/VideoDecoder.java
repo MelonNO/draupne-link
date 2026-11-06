@@ -51,6 +51,22 @@ public final class VideoDecoder implements AutoCloseable {
 
     /** @param hardware decode on the GPU (D3D11VA) if this PC can; software otherwise */
     public VideoDecoder(boolean hevc, byte[] codecConfig, boolean hardware) {
+        this(hevc, codecConfig, hardware, false);
+    }
+
+    /**
+     * A second decoder that must never compete with the live one (1.0.42: the recording with the OSD drawn in): in
+     * software, one thread for decoding and scaling, so all of its work runs on the caller's (low priority) thread.
+     */
+    public static VideoDecoder oneThread(boolean hevc, byte[] codecConfig) {
+        return new VideoDecoder(hevc, codecConfig, false, true);
+    }
+
+    /** One thread only: FFmpeg's own threads would run at normal priority, beside the live video's. */
+    private final boolean oneThread;
+
+    private VideoDecoder(boolean hevc, byte[] codecConfig, boolean hardware, boolean oneThread) {
+        this.oneThread = oneThread;
         AVCodec codec = avcodec_find_decoder(hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264);
         if (codec == null || codec.isNull()) {
             freeBeforeOpen();
@@ -62,7 +78,7 @@ public final class VideoDecoder implements AutoCloseable {
         ctx.flags(ctx.flags() | AV_CODEC_FLAG_LOW_DELAY | AV_CODEC_FLAG_OUTPUT_CORRUPT);
         ctx.flags2(ctx.flags2() | AV_CODEC_FLAG2_FAST | AV_CODEC_FLAG2_SHOW_ALL);
         ctx.thread_type(AVCodecContext.FF_THREAD_SLICE);
-        ctx.thread_count(0);
+        ctx.thread_count(oneThread ? 1 : 0);
         if (codecConfig != null && codecConfig.length > 0) {
             // freed by avcodec_free_context
             BytePointer extra = new BytePointer(av_mallocz(codecConfig.length + AV_INPUT_BUFFER_PADDING_SIZE))
@@ -189,7 +205,7 @@ public final class VideoDecoder implements AutoCloseable {
         // up-scaling (a 720p picture on a 1080p screen) bicubic: visibly sharper edges for 0.4 ms more a frame (720p to
         // 1080p: 2.6 ms fast bilinear, 3.0 ms bicubic on an i7-14700); 1:1 and down-scaling fast bilinear as before
         av_opt_set_int(sws, "sws_flags", width > src.width() ? SWS_BICUBIC : SWS_FAST_BILINEAR, 0);
-        av_opt_set_int(sws, "threads", SCALE_THREADS, 0);
+        av_opt_set_int(sws, "threads", oneThread ? 1 : SCALE_THREADS, 0);
         if (sws_init_context(sws, null, null) < 0) {
             sws_freeContext(sws);
             sws = null;

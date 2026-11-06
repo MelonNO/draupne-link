@@ -2034,11 +2034,17 @@ public class MainWindow extends JFrame {
         return lag.maxLagMs();
     }
 
+    /** The second file of a recording, with the OSD drawn in (1.0.42); one for the window, used by each connection. */
+    private OsdRecorder osdRecorder;
+
     private void startRecording(VideoPipeline v) {
         try {
             java.nio.file.Path dir = de.droiddrone.pc.AppPaths.videosDir();
+            boolean withOsd = !"false".equalsIgnoreCase(config.getString("recordOsd"));
+            if (withOsd && osdRecorder == null) osdRecorder = new OsdRecorder(OsdRecorder.Source.of(videoView), this::logLine);
+            v.setRecordingTap(withOsd ? osdRecorder : null);
             v.startRecording(dir);
-            logLine("Recording the video to " + dir + " (from the next key frame).");
+            logLine("Recording the video to " + dir + " (from the next key frame)" + (withOsd ? ", and a copy with the OSD drawn in." : "."));
         } catch (IOException e) {
             logLine("Could not record the video: " + e.getMessage());
         }

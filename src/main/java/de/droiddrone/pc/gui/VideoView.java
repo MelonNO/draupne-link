@@ -223,7 +223,10 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             }
             drawPicture(g, img, x, y, pw, ph);
         }
-        OsdRenderer.Data data = osdEnabled ? osdData.get() : null;
+        // the recording with the OSD (1.0.42) takes the figures painted last - also with the HUD hidden here
+        OsdRenderer.Data fresh = osdEnabled || osdRecording ? osdData.get() : null;
+        lastOsd = fresh;
+        OsdRenderer.Data data = osdEnabled ? fresh : null;
         if (img == null) {
             paintSkeleton(g, w, h, data != null && data.connected());
             if (!skeletonTimer.isRunning()) skeletonTimer.start();
@@ -303,6 +306,29 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
 
     boolean isUpsideDown() {
         return upsideDown;
+    }
+
+    /** The stream is from the front camera: shown mirrored. */
+    boolean isMirror() {
+        return mirror;
+    }
+
+    /** The view's measured time from a picture handed over to painted. */
+    double displayMs() {
+        return displayMs;
+    }
+
+    /** A recording with the OSD runs: the OSD's figures are taken at each paint, even with the HUD hidden. */
+    private volatile boolean osdRecording;
+    private volatile OsdRenderer.Data lastOsd;
+
+    void setOsdRecording(boolean on) {
+        osdRecording = on;
+    }
+
+    /** The OSD's figures as last painted (the Swing thread), or null; for the recording with the OSD. */
+    OsdRenderer.Data lastOsdData() {
+        return lastOsd;
     }
 
     /**

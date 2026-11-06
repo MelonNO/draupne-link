@@ -182,6 +182,10 @@ final class DroneSetup {
         private final Part rescueRow = switches.part("GPS rescue");
         private Fold rescueFold;
         private final CheckRow motors = new CheckRow("Motors and props");
+        /** 1.0.42: Betaflight sees the moves the right way round (a turned board flips the drone on takeoff). */
+        private final CheckRow orientation = new CheckRow("Orientation");
+        /** The orientation check has the flight controller's USB port: this page leaves it alone meanwhile. */
+        private boolean orientationOpen;
         /** The pilot's choice; null = leave Betaflight's modes as they are. Read by the background round. */
         private volatile ModeSwitch modeSwitch;
         /** GPS rescue's own switch (AUX number, 0 = none), fitted when Betaflight's failsafe is GPS rescue. */
@@ -593,6 +597,9 @@ final class DroneSetup {
             motors.addPrimaryAction("Check now", this::checkMotorsNow);
             motors.setToolTipText("Each motor in the right place, turning the right way, the props on the right way round");
             WizardDialog.addRow(col, motors);
+            orientation.addPrimaryAction("Check now", this::checkOrientationNow);
+            orientation.setToolTipText("A drone on screen that moves as Betaflight sees the real one: lift the nose, lower the right side, and see it does the same");
+            WizardDialog.addRow(col, orientation);
             showManual();
             usb.set(State.PENDING, "Looking for it...");
             receiver.set(State.PENDING, "");
@@ -608,6 +615,7 @@ final class DroneSetup {
             boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(MOTORS_CHECKED_KEY));
             motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore ? "Checked."
                     : "Not sure? <b>Check now</b> opens the motor test (props off).");
+            orientation.set(State.INFO, "Check each drone once: <b>Check now</b> (USB, props off).");
             showConfirmState();
             return col;
         }
@@ -1096,6 +1104,27 @@ final class DroneSetup {
             });
         }
 
+        /** CHECK NOW: the orientation check takes the USB port; the page reads again once it is closed. */
+        private void checkOrientationNow() {
+            if (main.isLinkActive()) {
+                orientation.set(State.WARN, "Disconnect from the drone first: the check runs over this PC's USB, with the drone on the bench.");
+                return;
+            }
+            orientationOpen = true;
+            orientation.set(State.PENDING, "The orientation check is open. Close it when you're done.");
+            boolean[] passed = {false};
+            OrientationCheckDialog.open(javax.swing.SwingUtilities.getWindowAncestor(orientation), main, chosenPort, () -> {
+                passed[0] = true;
+                orientation.set(State.OK, "Checked: Betaflight sees it the right way round.");
+            }, () -> {
+                orientationOpen = false;
+                nextTry = System.currentTimeMillis() + 1500; // the check lets go of the port first
+                done = false; // it may have changed the board alignment: read again
+                applies = 0;
+                if (!passed[0]) orientation.set(State.WARN, "Not checked to the end. <b>Check now</b> again before flying.");
+            });
+        }
+
         private int savedCells() {
             try {
                 int n = Integer.parseInt(main.config().getString(CELLS_KEY));
@@ -1225,6 +1254,7 @@ final class DroneSetup {
         void refresh() {
             // the motor test or the compass calibration may have the port, however it was opened (Check now or SETTINGS)
             if (paused || motorTestOpen || MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen()
+                    || orientationOpen || OrientationCheckDialog.isOpen()
                     || busy || done || System.currentTimeMillis() < nextTry) return;
             busy = true;
             boolean mayApply = writeArmed && applies < MAX_APPLIES;

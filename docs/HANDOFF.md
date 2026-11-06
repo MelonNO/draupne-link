@@ -4,7 +4,26 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-05, 1.0.41 + phone app pc.32 released)
+## Where things stand (2026-11-06, 1.0.42 released, phone app still pc.32)
+
+- **1.0.42 (2026-11-06):** the pilot: "when recording is turned on one of the video files include OSD" and "a check of
+  fc orientation with a 3d render of a drone following the actual movements". Why: an iFlight Blitz F722 (Betaflight
+  2025.12.2, no board alignment set) flipped backwards on takeoff; its flight log + video showed the nose rising while
+  Betaflight reported pitch +12, +42 (nose down) - the board turned 180 on the frame. *OSD recording:* `OsdRecorder`
+  (gui) is the pipeline's `RecordingTap`: its own queue (90) and thread (MIN_PRIORITY), `VideoDecoder.oneThread`
+  (thread_count 1, sws threads 1 - FFmpeg's own threads would run at normal priority beside the live decoder),
+  pictures decoded always but drawn + encoded only while <= 6 frames wait, the OSD from `VideoView.lastOsdData()`
+  (taken at each paint while recording, even with F2's HUD off), `OsdVideoWriter` (libopenh264, 1 thread, MKV, ms
+  timestamps from the raw file's first key frame). Checked on the 10:50 flight's MKV: 689 of 692 pictures at
+  960x720. *Orientation:* `Orientation.boardTurn` (nose up reads {s,-c}, right down {c,s} in (roll, pitch) for a
+  board turned by psi; cosine >= 0.8 for both), `DroneModelView` (flat-shaded painter's 3D, camera behind/above,
+  decals biased forward), `OrientationCheckDialog` (MSP_ATTITUDE at 30 Hz; flat = still 1.2 s; moves >= 30 deg;
+  Fix it: backup, `get`/`set align_board_yaw|roll`, save, re-check after 6 s). *Unsure:* the sign of Betaflight's
+  align_board_yaw for 90/270 (a wrong one shows as 180 left on the re-check, which Fix it then turns). Neither tried
+  in the app or on a drone yet. *Also found, not fixed:* the GPS UART choice writes `serial N 2` (GPS only) to the
+  port - it took VTX Tramp off UART1 and the ESC sensor off UART6 of that F722 while the pilot tried ports; the motor
+  test doesn't log its reorder / direction / props writes.
+
 
 - **Released 2026-11-05 late:** v1.0.41 (Latest; installer, zip, pc.32 APK) and flight-2.3.0-pc.32 (SHA-256 b645bdf6..., signer d910997f...2eb9, pinned in `ApkShare`); release run 42123657288 green first try. Nothing of 1.0.41 has been tried on hardware: next is the spectator relay with the pilot PC on a weak upload, the mirrored OSD, WAKE after DISCONNECT with a real sleeping phone, the map's drones from pc.32 phones, and - from the next phone app on - the remote update.
 

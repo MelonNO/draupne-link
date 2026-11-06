@@ -124,6 +124,44 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile java.nio.file.Path recordDir; // null = not recording
     private volatile java.nio.file.Path recordFile;
     private Thread recordThread;
+
+    /**
+     * Gets every recorded frame as well, on the record thread (1.0.42: the second file, with the OSD drawn in). Must
+     * hand the work on and return at once; whatever it throws is logged and never stops the recording itself.
+     */
+    public interface RecordingTap {
+        /** A new raw file was started at this key frame; frames follow. */
+        void fileStarted(java.nio.file.Path rawFile, boolean hevc, int width, int height, byte[] codecConfig);
+
+        void frame(byte[] data, boolean keyFrame, long arrivedMs);
+
+        /** The raw file was closed (recording stopped, or a new file for a restarted stream). */
+        void fileEnded();
+    }
+
+    private volatile RecordingTap recordingTap;
+
+    public void setRecordingTap(RecordingTap tap) {
+        recordingTap = tap;
+    }
+
+    private boolean tapOpen; // record thread only
+
+    private void tap(java.util.function.Consumer<RecordingTap> call) {
+        RecordingTap t = recordingTap;
+        if (t == null) return;
+        try {
+            call.accept(t);
+        } catch (RuntimeException e) {
+            log("Recording with OSD: " + e);
+        }
+    }
+
+    private void tapEnded() {
+        if (!tapOpen) return;
+        tapOpen = false;
+        tap(RecordingTap::fileEnded);
+    }
     /**
      * Watching as a spectator: every frame is drawn (frames come paced, a fixed time behind the pilot), instead of only
      * the newest when two are waiting - the pilot's way, least delay. Smoother motion for the spectator.
@@ -814,6 +852,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 if (item == REC_NEW_FILE) {
                     if (recorder != null) recorder.close();
                     recorder = null;
+                    tapEnded();
                     continue;
                 }
                 if (item instanceof StreamRecorder.OsdRow row) {
@@ -830,8 +869,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig());
                     recordFile = file;
                     log("Recording to " + file);
+                    tapOpen = true;
+                    tap(t -> t.fileStarted(file, c.hevc(), c.width(), c.height(), c.codecConfig()));
                 }
                 recorder.write(f.data(), f.keyFrame(), f.arrivedMs());
+                if (tapOpen) tap(t -> t.frame(f.data(), f.keyFrame(), f.arrivedMs()));
             }
         } catch (InterruptedException ignored) {
         } catch (java.io.IOException | RuntimeException e) {
@@ -839,6 +881,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             recordDir = null;
         } finally {
             if (recorder != null) recorder.close();
+            tapEnded();
             recordFile = null;
         }
     }
