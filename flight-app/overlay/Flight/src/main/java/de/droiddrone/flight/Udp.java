@@ -1237,31 +1237,37 @@ public class Udp {
      * the recorder's surface is out of the camera's hands when the returned Future is done - only then may it go.
      */
     java.util.concurrent.Future<?> overwatchEventVideo(final boolean on, final android.view.Surface recorder) {
-        return videoStarter.submit(() -> {
-            try {
-                if (overwatchCameraOwner != cameraOwner) return; // pc.38 (M19): the camera is someone else's now
-                Camera camera = cameraManager.getCamera();
-                streamEncoder.close();
-                if (on) {
-                    streamEncoder.setDefaultHevc(false);
-                    streamEncoder.setBitRateIndex(3); // 1 Mbit/s
-                }
-                camera.setExtraTarget(on ? recorder : null);
-                camera.setWatchOnly(!on && camera.canWatchOnly());
-                if (camera instanceof InternalCamera) {
-                    if (recorder == null) {
-                        if (!((InternalCamera) camera).stopSessionAndWait(1500)) log("Overwatch: the camera's session took over 1.5 s to close");
-                    } else {
-                        ((InternalCamera) camera).stopSession();
-                    }
-                }
-                if (camera.isOpened(config.getCameraId())) camera.startPreview();
-                else camera.openCamera();
-                if (on) streamEncoder.startSendFrames();
-            } catch (RuntimeException e) {
-                log("Overwatch event video error: " + e);
+        try {
+            return videoStarter.submit(() -> overwatchEventVideoNow(on, recorder));
+        } catch (java.util.concurrent.RejectedExecutionException e) { // the link is closing: no camera to change
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private void overwatchEventVideoNow(boolean on, android.view.Surface recorder) {
+        try {
+            if (overwatchCameraOwner != cameraOwner) return; // pc.38 (M19): the camera is someone else's now
+            Camera camera = cameraManager.getCamera();
+            streamEncoder.close();
+            if (on) {
+                streamEncoder.setDefaultHevc(false);
+                streamEncoder.setBitRateIndex(3); // 1 Mbit/s
             }
-        });
+            camera.setExtraTarget(on ? recorder : null);
+            camera.setWatchOnly(!on && camera.canWatchOnly());
+            if (camera instanceof InternalCamera) {
+                if (recorder == null) {
+                    if (!((InternalCamera) camera).stopSessionAndWait(1500)) log("Overwatch: the camera's session took over 1.5 s to close");
+                } else {
+                    ((InternalCamera) camera).stopSession();
+                }
+            }
+            if (camera.isOpened(config.getCameraId())) camera.startPreview();
+            else camera.openCamera();
+            if (on) streamEncoder.startSendFrames();
+        } catch (RuntimeException e) {
+            log("Overwatch event video error: " + e);
+        }
     }
 
     /** The PHONE_STATE flags: what the PC needs to say why no sticks reach the drone, or why there is no picture. */
