@@ -282,19 +282,19 @@ final class MapToolsPanel extends JPanel {
         measureRow.setVisible(false);
         row(body, measureRow);
 
-        section(body, "RADIO HORIZON");
+        gap(body); // no heading: the button says it
         horizon.setToolTipText("Click the map to put a mast there: green is where the aircraft at the height set can see it, over the "
                 + "terrain and through the forest on the map (by the frequency), 30 km at most. A new click moves the mast. It stays on the map when the tool ends: the cross on its label takes it off");
         row(body, horizon);
         slideRow(body, horizonFields);
 
-        section(body, "GCS SEARCH");
+        gap(body);
         gcsSearch.setToolTipText("Drag a box round the area you want good reception in: a heat map 30 km round it shows where a ground "
                 + "station's antenna sees all of it (green) or none of it (red), the best place ringed. A new box replaces it. It stays on the map when the tool ends: the cross on its label takes it off");
         row(body, gcsSearch);
         slideRow(body, searchFields);
 
-        section(body, "4G COVERAGE");
+        gap(body);
         coverage.setToolTipText("<html>An ESTIMATE of the 4G signal the drone gets where the map is looked at: green good, yellow fair, orange weak, "
                 + "red none.<br>From where OpenCelliD's open database puts the 4G and 5G cells, and the terrain between them and the drone. "
                 + "Masts show as dots when zoomed in.<br>A guess, not a measurement: the operators' own maps are not open. Press again to turn it off</html>");
@@ -405,6 +405,11 @@ final class MapToolsPanel extends JPanel {
         t.setAlignmentX(LEFT_ALIGNMENT);
         body.add(t);
         body.add(Box.createVerticalStrut(5));
+    }
+
+    /** The space a section heading leaves, without the heading: for a tool whose button already names it. */
+    private static void gap(JPanel body) {
+        if (body.getComponentCount() > 0) body.add(Box.createVerticalStrut(10));
     }
 
     private static void row(JPanel body, JComponent c) {
