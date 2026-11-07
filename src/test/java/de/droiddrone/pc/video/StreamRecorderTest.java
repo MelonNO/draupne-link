@@ -98,6 +98,118 @@ class StreamRecorderTest {
         assertTrue(last < 2000, "the MKV's clock: ms from the first key frame, " + last);
     }
 
+    /** The frames in an MKV file and its picture width. */
+    private static int[] framesAndWidth(Path file) {
+        AVFormatContext in = new AVFormatContext(null);
+        assertEquals(0, avformat_open_input(in, file.toString(), null, (AVDictionary) null), "opens: " + file);
+        assertTrue(avformat_find_stream_info(in, (AVDictionary) null) >= 0);
+        int width = in.streams(0).codecpar().width();
+        AVPacket pkt = av_packet_alloc();
+        int n = 0;
+        while (av_read_frame(in, pkt) >= 0) {
+            n++;
+            av_packet_unref(pkt);
+        }
+        av_packet_free(pkt);
+        avformat_close_input(in);
+        return new int[]{n, width};
+    }
+
+    private static java.util.List<Path> mkvFiles(Path dir) throws java.io.IOException {
+        try (java.util.stream.Stream<Path> files = Files.list(dir)) {
+            // in the order they were started: a second file in the same second is named "-2", which sorts first
+            return files.filter(f -> f.toString().endsWith(".mkv"))
+                    .sorted(java.util.Comparator.comparing((Path f) -> f.getFileName().toString().substring(0, "flight-yyyy-MM-dd_HH-mm-ss".length()))
+                            .thenComparing(f -> f.getFileName().toString().length())
+                            .thenComparing(f -> f.getFileName().toString()))
+                    .toList();
+        }
+    }
+
+    private static void feed(VideoPipeline p, TestStreams.Stream s, int from, int to, int firstNumber) throws InterruptedException {
+        for (int i = from; i < to; i++) {
+            byte[] d = s.packets().get(i).data();
+            p.onVideoFragment(s.packets().get(i).keyFrame(), (short) (firstNumber + i - from), 0, d.length, d, 0, d.length);
+            Thread.sleep(5);
+        }
+    }
+
+    /**
+     * M6: the phone restarts its stream at another size, its key frame 1 before its config (the usual order). The new
+     * stream gets a file of its own from that key frame on; before 1.0.49 the key frame and the frames up to the config
+     * went into the old file (of the old size), and the new file waited for the next key frame (here none comes).
+     */
+    @Test
+    void aRestartedStreamGetsItsOwnFileFromItsFirstKeyFrame(@TempDir Path dir) throws Exception {
+        TestStreams.Stream a = TestStreams.h264(320, 240, 20, 10);
+        TestStreams.Stream b = TestStreams.h264(160, 120, 15, 30); // one key frame, its first
+        VideoPipeline pipeline = new VideoPipeline(new NoScreen(), () -> 40);
+        pipeline.setKeyFrameSender(() -> { });
+        pipeline.setConfigRequester(() -> { });
+        pipeline.startRecording(dir);
+        pipeline.onVideoConfig(320, 240, false, false, a.codecConfig());
+        feed(pipeline, a, 0, 20, 1);
+        feed(pipeline, b, 0, 5, 1); // the restart: key frame 1 and four more before the config
+        pipeline.onVideoConfig(160, 120, false, false, b.codecConfig());
+        feed(pipeline, b, 5, 15, 6);
+        Thread.sleep(300);
+        pipeline.stopRecording();
+        pipeline.close();
+        java.util.List<Path> files = mkvFiles(dir);
+        assertEquals(2, files.size(), "a file per stream: " + files);
+        assertArrayEquals(new int[]{20, 320}, framesAndWidth(files.get(0)), "the first stream, nothing of the second");
+        assertArrayEquals(new int[]{15, 160}, framesAndWidth(files.get(1)), "the second, from its key frame 1");
+    }
+
+    /** A recording tap whose first frame() holds the record thread up to 3 s: a slow disk. */
+    private static final class SlowTap implements VideoPipeline.RecordingTap {
+        final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch inside = new java.util.concurrent.CountDownLatch(1);
+        private final java.util.concurrent.atomic.AtomicBoolean first = new java.util.concurrent.atomic.AtomicBoolean(true);
+
+        public void fileStarted(Path rawFile, boolean hevc, int width, int height, byte[] codecConfig) {}
+
+        public void frame(byte[] data, boolean keyFrame, long arrivedMs) {
+            if (!first.getAndSet(false)) return;
+            inside.countDown();
+            try {
+                release.await(3, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+        }
+
+        public void fileEnded() {}
+    }
+
+    /**
+     * M7: the recording stopped and started again while the old one still writes (its thread held past the stop's
+     * 2 s wait). Before 1.0.49 the new one cleared the shared queue (the old one's stop with it) and the old thread
+     * wrote the new recording's frames into its file: both broke. Now each has its own; the new one waits.
+     */
+    @Test
+    void aRecordingRestartedWhileTheLastStillWritesBreaksNeither(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 20, 10); // key frames 1 and 11
+        VideoPipeline pipeline = new VideoPipeline(new NoScreen(), () -> 40);
+        pipeline.setKeyFrameSender(() -> { });
+        SlowTap tap = new SlowTap();
+        pipeline.setRecordingTap(tap);
+        pipeline.startRecording(dir);
+        pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
+        feed(pipeline, s, 0, 10, 1);
+        assertTrue(tap.inside.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        pipeline.stopRecording(); // waits 2 s: the thread is still held
+        pipeline.startRecording(dir);
+        feed(pipeline, s, 10, 20, 11);
+        tap.release.countDown();
+        Thread.sleep(500);
+        pipeline.stopRecording();
+        pipeline.close();
+        java.util.List<Path> files = mkvFiles(dir);
+        assertEquals(2, files.size(), "two files, not one over the other: " + files);
+        assertEquals(10, framesAndWidth(files.get(0))[0], "the first recording's frames, all of them, only them");
+        assertEquals(10, framesAndWidth(files.get(1))[0], "the second's from its key frame");
+    }
+
     @Test
     void theStreamIsWrittenAsItCameAndPlaysBack(@TempDir Path dir) throws Exception {
         TestStreams.Stream s = TestStreams.h264(320, 240, 30, 10);

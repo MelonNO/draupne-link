@@ -11,6 +11,7 @@ import de.droiddrone.pc.map.RadioHorizon;
 import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
 import de.droiddrone.pc.map.TileSource;
+import de.droiddrone.pc.map.TrackPath;
 
 import javax.swing.JComponent;
 import javax.swing.JMenuItem;
@@ -88,6 +89,8 @@ class MapView extends JComponent {
     record Kept(String name, List<FlightTrack.Point> points) {}
 
     private List<Kept> kept = List.of();
+    /** The kept flights' lines, thinned (TrackPath), made once when they are set. */
+    private List<TrackPath> keptPaths = List.of();
     private java.util.function.IntConsumer onRemoveKept;
     private Runnable onClearKept;
     private static final Color[] KEPT_COLOURS = {new Color(0x4fc3f7), new Color(0xba68c8), new Color(0x81c784),
@@ -108,6 +111,9 @@ class MapView extends JComponent {
 
     void setKept(List<Kept> flights, java.util.function.IntConsumer onRemove, Runnable onClear) {
         kept = flights == null ? List.of() : List.copyOf(flights);
+        List<TrackPath> paths = new java.util.ArrayList<>();
+        for (Kept k : kept) paths.add(TrackPath.of(k.points()));
+        keptPaths = paths;
         onRemoveKept = onRemove;
         onClearKept = onClear;
         repaint();
@@ -152,6 +158,7 @@ class MapView extends JComponent {
 
     /** An earlier flight's track (TRACKS in the map window), drawn muted under the live one; null for none. */
     private List<FlightTrack.Point> oldTrack;
+    private TrackPath oldTrackPath;
     private String oldTrackName;
 
     private double centerLat = 64.5, centerLon = 12.0, zoom = 4.3; // Norway, until a fix comes
@@ -165,6 +172,20 @@ class MapView extends JComponent {
     private boolean dragged;
 
     private FlightTrack track;
+    /**
+     * The live track's line, thinned and taken in as it grows (1.0.49), and the track it is of. With it, what update()
+     * saw last: a repaint only when something changed (it is asked every 33 ms).
+     */
+    private TrackPath trackPath;
+    private FlightTrack trackPathOf;
+    private FlightTrack.Point seenLast;
+    private FcTelemetry.Gps seenGps;
+    private boolean seenDetections;
+    private long repaintAskedAt;
+    /** At least this often while there is a drone: its LAST KNOWN age counts on. */
+    static final long IDLE_REPAINT_MS = 1000;
+    /** While detection marks fade: this often. */
+    static final long FADE_REPAINT_MS = 100;
     private Pins pins;
 
     // ---- MAP TOOLS (1.0.35): what the pilot draws
@@ -498,6 +519,7 @@ class MapView extends JComponent {
     /** An earlier flight's track, drawn muted under the live one; null clears it. */
     void setOldTrack(List<FlightTrack.Point> points, String name) {
         oldTrack = points == null || points.isEmpty() ? null : points;
+        oldTrackPath = oldTrack == null ? null : TrackPath.of(oldTrack);
         oldTrackName = name;
         repaint();
     }
@@ -594,12 +616,24 @@ class MapView extends JComponent {
      * @param headingDeg the drone's heading from its attitude, or -1 to use the GPS course
      */
     void update(FlightTrack track, FcTelemetry.Gps gps, int headingDeg, boolean fcLost, boolean connected) {
+        boolean changed = track != this.track || gps != seenGps || headingDeg != this.headingDeg || fcLost != this.fcLost
+                || connected != this.connected;
         this.track = track;
         this.gps = gps;
+        seenGps = gps;
         this.headingDeg = headingDeg;
         this.fcLost = fcLost;
         this.connected = connected;
+        if (track != trackPathOf) { // another flight: its line afresh
+            trackPathOf = track;
+            trackPath = track == null ? null : new TrackPath();
+        }
+        if (trackPath != null && track.size() > trackPath.taken()) trackPath.add(track.pointsFrom(trackPath.taken()));
         FlightTrack.Point p = track == null ? null : track.last();
+        if (p != seenLast) {
+            seenLast = p;
+            changed = true;
+        }
         if (p != null) {
             if (!everCentred) {
                 everCentred = true;
@@ -614,7 +648,21 @@ class MapView extends JComponent {
                 movedSincePrefetch = true;
             }
         }
-        repaint();
+        // 1.0.49: asked every 33 ms; repainted when something changed, while detection marks fade, and once a second
+        // for the ages shown - not 30 times a second whatever happens (the Swing thread also shows the video)
+        long now = de.droiddrone.pc.MonoClock.ms();
+        boolean fading = !detections.isEmpty();
+        if (fading != seenDetections) changed = true;
+        seenDetections = fading;
+        if (changed || (fading && now - repaintAskedAt >= FADE_REPAINT_MS) || now - repaintAskedAt >= IDLE_REPAINT_MS) {
+            repaintAskedAt = now;
+            repaint();
+        }
+    }
+
+    /** The live track's line as drawn (tests). */
+    TrackPath trackPath() {
+        return trackPath;
     }
 
     /** The follow prefetch runs while the map is on screen only (FIND DRONE makes a map of its own each time). */
@@ -1861,14 +1909,13 @@ class MapView extends JComponent {
             if (searchArea != null && !forPicture && toolOverlaysShown) paintSearch(g, zi, scale, wcx, wcy, w, h);
             if (horizonMast != null && !forPicture && toolOverlaysShown) paintHorizon(g, zi, scale, wcx, wcy, w, h); // over the heat map
 
-            List<FlightTrack.Point> pts = track == null ? List.of() : track.points();
             FlightTrack.Point home = track == null ? null : track.home();
             if (home != null) paintRings(g, home, zi, scale, wcx, wcy, w, h);
             if (oldTrack != null) paintOldTrack(g, zi, scale, wcx, wcy, w, h);
             paintKept(g, zi, scale, wcx, wcy, w, h);
-            paintTrack(g, pts, zi, scale, wcx, wcy, w, h);
+            paintTrack(g, zi, scale, wcx, wcy, w, h);
             if (home != null) paintHome(g, home, zi, scale, wcx, wcy, w, h);
-            FlightTrack.Point last = pts.isEmpty() ? null : pts.get(pts.size() - 1);
+            FlightTrack.Point last = track == null ? null : track.last();
             if (pins != null) paintPins(g, last, home, zi, scale, wcx, wcy, w, h);
             paintGraphics(g, zi, scale, wcx, wcy, w, h);
             if (cameraView != null && !forPicture && connected) paintCameraView(g, zi, scale, wcx, wcy, w, h);
@@ -1945,15 +1992,12 @@ class MapView extends JComponent {
 
     /** The kept flights: each a line in its own colour, its name at its end. */
     private void paintKept(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
-        for (int i = 0; i < kept.size(); i++) {
-            List<FlightTrack.Point> pts = kept.get(i).points();
-            if (pts.size() < 2) continue;
-            Path2D path = new Path2D.Double();
-            Point2D end = null;
-            for (FlightTrack.Point p : pts) {
-                end = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
-                if (path.getCurrentPoint() == null) path.moveTo(end.getX(), end.getY()); else path.lineTo(end.getX(), end.getY());
-            }
+        List<TrackPath> paths = keptPaths;
+        for (int i = 0; i < kept.size() && i < paths.size(); i++) {
+            TrackPath tp = paths.get(i);
+            if (tp.size() < 2) continue;
+            Path2D path = line(tp, zi, scale, wcx, wcy, w, h);
+            Point2D end = path.getCurrentPoint();
             Color c = KEPT_COLOURS[i % KEPT_COLOURS.length];
             g.setStroke(new BasicStroke(4.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.setColor(new Color(0, 0, 0, 110));
@@ -2015,16 +2059,10 @@ class MapView extends JComponent {
 
     /** An earlier flight: a thin muted line with its file's name at its end, under everything live. */
     private void paintOldTrack(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
-        List<FlightTrack.Point> pts = oldTrack;
-        if (pts == null || pts.isEmpty()) return;
-        Path2D path = new Path2D.Double();
-        boolean first = true;
-        Point2D end = null;
-        for (FlightTrack.Point p : pts) {
-            end = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
-            if (first) path.moveTo(end.getX(), end.getY()); else path.lineTo(end.getX(), end.getY());
-            first = false;
-        }
+        TrackPath tp = oldTrackPath;
+        if (tp == null || tp.size() == 0) return;
+        Path2D path = line(tp, zi, scale, wcx, wcy, w, h);
+        Point2D end = path.getCurrentPoint();
         g.setStroke(new BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.setColor(new Color(0, 0, 0, 90));
         g.draw(path);
@@ -2042,28 +2080,36 @@ class MapView extends JComponent {
         }
     }
 
-    private void paintTrack(Graphics2D g, List<FlightTrack.Point> pts, int zi, double scale, double wcx, double wcy, int w, int h) {
-        if (pts.size() < 2) return;
-        Path2D path = new Path2D.Double();
-        boolean first = true;
-        for (FlightTrack.Point p : pts) {
-            Point2D s = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
-            if (first) path.moveTo(s.getX(), s.getY()); else path.lineTo(s.getX(), s.getY());
-            first = false;
-        }
+    private void paintTrack(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+        TrackPath tp = trackPath;
+        if (tp == null || tp.size() < 2) return;
+        Path2D path = line(tp, zi, scale, wcx, wcy, w, h);
         g.setStroke(new BasicStroke(5.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.setColor(new Color(0, 0, 0, 120));
         g.draw(path);
         g.setStroke(new BasicStroke(2.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.setColor(Theme.ACCENT);
         g.draw(path);
-        if (zoom >= 15.5) { // each report as a dot: a gap in them is a gap in the telemetry
+        if (zoom >= 15.5) { // each report as a dot (the newest TrackPath.RECENT): a gap in them is a gap in the telemetry
             g.setColor(new Color(255, 255, 255, 170));
-            for (FlightTrack.Point p : pts) {
-                Point2D s = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
-                g.fill(new Ellipse2D.Double(s.getX() - 1.6, s.getY() - 1.6, 3.2, 3.2));
+            double k = Mercator.worldSize(zi) / Mercator.TILE;
+            for (int i = 0; i < tp.recentSize(); i++) {
+                double x = (tp.recentX(i) * k - wcx) * scale + w / 2.0, y = (tp.recentY(i) * k - wcy) * scale + h / 2.0;
+                if (x < -4 || y < -4 || x > w + 4 || y > h + 4) continue;
+                g.fill(new Ellipse2D.Double(x - 1.6, y - 1.6, 3.2, 3.2));
             }
         }
+    }
+
+    /** A thinned track (zoom-0 map units) as a line on the screen. */
+    private static Path2D line(TrackPath tp, int zi, double scale, double wcx, double wcy, int w, int h) {
+        Path2D path = new Path2D.Double(Path2D.WIND_NON_ZERO, tp.size());
+        double k = Mercator.worldSize(zi) / Mercator.TILE;
+        for (int i = 0; i < tp.size(); i++) {
+            double x = (tp.x(i) * k - wcx) * scale + w / 2.0, y = (tp.y(i) * k - wcy) * scale + h / 2.0;
+            if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+        }
+        return path;
     }
 
     private void paintRings(Graphics2D g, FlightTrack.Point home, int zi, double scale, double wcx, double wcy, int w, int h) {
@@ -2187,6 +2233,7 @@ class MapView extends JComponent {
     void setObserved(List<Observed> marks, java.util.function.IntConsumer onClick) {
         observed = marks == null ? List.of() : marks;
         onObservedClick = onClick;
+        repaint(); // set five times a second while observing (the map no longer repaints every 33 ms whatever happens)
     }
 
     private boolean clickObserved(int x, int y) {
@@ -2252,9 +2299,11 @@ class MapView extends JComponent {
         }
     }
 
-    /** The camera's view on the map (null takes it away): the next repaint shows it. */
+    /** The camera's view on the map (null takes it away), worked out five times a second off the Swing thread. */
     void setCameraView(CameraFootprint.View view) {
+        if (view == cameraView) return;
         cameraView = view;
+        repaint();
     }
 
     /** The motion detection's marks (1.0.46; empty: none): the next repaint shows them. */

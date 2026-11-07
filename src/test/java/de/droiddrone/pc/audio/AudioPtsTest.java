@@ -37,6 +37,44 @@ class AudioPtsTest {
         assertEquals(469, p.next(560));
     }
 
+    /**
+     * A phone whose sound clock runs 0.2 % fast: its frames come a little closer together than they play. The count
+     * crept ahead of the video - 7 s after an hour before 1.0.49; now a frame is left out now and then and it stays near.
+     */
+    @Test
+    void aFastSoundClockIsKeptOnTheVideosClock() {
+        AudioPts p = new AudioPts(FRAME);
+        double arrival = 0;
+        long mostAhead = 0;
+        int leftOut = 0;
+        for (int i = 0; i < 3600 * 1000 / FRAME; i++) { // an hour
+            arrival += FRAME * 0.998;
+            long pts = p.next(Math.round(arrival));
+            if (pts < 0) {
+                leftOut++;
+                continue;
+            }
+            mostAhead = Math.max(mostAhead, pts - Math.round(arrival));
+        }
+        assertTrue(mostAhead < 120, "the sound at most this far ahead of the pictures: " + mostAhead + " ms");
+        assertTrue(leftOut > 0 && leftOut < 500, "a frame now and then: " + leftOut);
+    }
+
+    @Test
+    void jitterAndBunchesLeaveNothingOut() {
+        AudioPts p = new AudioPts(FRAME);
+        java.util.Random r = new java.util.Random(3);
+        for (int i = 0; i < 20_000; i++) {
+            long jittered = Math.round(i * FRAME + r.nextInt(80));
+            assertTrue(p.next(jittered) >= 0, "jitter, frame " + i);
+        }
+        AudioPts q = new AudioPts(FRAME);
+        for (int i = 0; i < 20_000; i++) {
+            long bunched = Math.round((i / 10) * 10 * FRAME) + 200; // ten at a time
+            assertTrue(q.next(bunched) >= 0, "a bunch, frame " + i);
+        }
+    }
+
     @Test
     void alwaysRising() {
         AudioPts p = new AudioPts(0.4); // frames shorter than the ms the muxer counts in

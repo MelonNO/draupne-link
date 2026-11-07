@@ -236,7 +236,101 @@ class VideoTest {
         assertFalse(FrameAssembler.isOlder((short) 6, (short) 6));
     }
 
+    /** A frame lost whole (every packet: a one-packet P-frame) is counted lost once a newer one is released (1.0.49). */
+    @Test
+    void aFrameLostWholeIsCounted() {
+        FrameAssembler a = new FrameAssembler();
+        for (short n = 1; n <= 3; n++) assertNotNull(a.put(n == 1, n, 0, 10, bytes(n, 10), 0, 10));
+        assertNotNull(a.put(false, (short) 5, 0, 10, bytes(5, 10), 0, 10)); // 4 never came
+        assertEquals(1, a.getLostFrames(), "frame 4: before 1.0.49 nothing counted it");
+        assertNull(a.put(false, (short) 4, 0, 10, bytes(4, 10), 0, 10), "4 comes late (reordered): too late, not decoded");
+        assertNotNull(a.put(false, (short) 6, 0, 10, bytes(6, 10), 0, 10));
+        assertEquals(1, a.getLostFrames(), "counted once");
+        // a frame with only some packets in, overtaken: lost once too (not again for the gap)
+        assertNull(a.put(false, (short) 7, 100, 0, new byte[100], 0, 100)); // 7: its end only
+        assertNotNull(a.put(false, (short) 9, 0, 10, bytes(9, 10), 0, 10)); // 8 never came
+        assertEquals(3, a.getLostFrames(), "7 and 8");
+    }
+
+    @Test
+    void lostFramesAcrossTheCounterWrapping() {
+        FrameAssembler a = new FrameAssembler();
+        assertNotNull(a.put(true, (short) 32766, 0, 10, bytes(0, 10), 0, 10));
+        assertNotNull(a.put(false, (short) 32767, 0, 10, bytes(0, 10), 0, 10));
+        assertNotNull(a.put(false, (short) 2, 0, 10, bytes(0, 10), 0, 10)); // pc.26 wraps to 2: 0 and 1 don't exist
+        assertEquals(0, a.getLostFrames());
+        assertNotNull(a.put(false, (short) 4, 0, 10, bytes(0, 10), 0, 10));
+        assertEquals(1, a.getLostFrames());
+        FrameAssembler b = new FrameAssembler();
+        assertNotNull(b.put(true, (short) 32766, 0, 10, bytes(0, 10), 0, 10));
+        assertNotNull(b.put(false, (short) 3, 0, 10, bytes(0, 10), 0, 10)); // 32767 and 2 lost
+        assertEquals(2, b.getLostFrames());
+        assertEquals(0, FrameAssembler.skipped((short) 32767, (short) 1), "older apps wrap to 1");
+    }
+
+    @Test
+    void aRestartOrABlackoutCountsNothingLost() {
+        FrameAssembler a = new FrameAssembler();
+        assertNotNull(a.put(true, (short) 1, 0, 10, bytes(1, 10), 0, 10, 1000));
+        assertNotNull(a.put(false, (short) 2, 0, 10, bytes(2, 10), 0, 10, 1033));
+        assertNotNull(a.put(true, (short) 1, 0, 10, bytes(7, 10), 0, 10, 1066)); // a restart: from 1 again
+        assertNotNull(a.put(false, (short) 2, 0, 10, bytes(8, 10), 0, 10, 1100));
+        assertNotNull(a.put(false, (short) 200, 0, 10, bytes(9, 10), 0, 10, 1100 + FrameAssembler.ORDER_RESET_MS + 1));
+        assertEquals(0, a.getLostFrames(), "after the order was forgotten the gap isn't counted frame by frame");
+    }
+
+    /**
+     * M5: a late frame of the stream before a restart (here the old stream stood at 300; its frame 299 comes after the
+     * new stream's 5) is dropped - before, it was released and every new frame up to 299 counted as older: the picture
+     * froze until ORDER_RESET_MS.
+     */
+    @Test
+    void aLateFrameOfTheOldStreamIsDropped() {
+        FrameAssembler a = new FrameAssembler();
+        long t = 1000;
+        for (short n = 1; n <= 300; n++, t += 33) assertNotNull(a.put(n == 1, n, 0, 10, bytes(n, 10), 0, 10, t));
+        assertNotNull(a.put(true, (short) 1, 0, 12, bytes(50, 12), 0, 12, t)); // restarted
+        for (short n = 2; n <= 5; n++) assertNotNull(a.put(false, n, 0, 10, bytes(n, 10), 0, 10, t += 33));
+        assertNull(a.put(false, (short) 299, 0, 10, bytes(1, 10), 0, 10, t + 5), "the old stream's, late");
+        assertNull(a.put(false, (short) 60, 0, 10, bytes(1, 10), 0, 10, t + 6), "near the old stream's numbers, far ahead");
+        for (short n = 6; n <= 10; n++) assertNotNull(a.put(false, n, 0, 10, bytes(n, 10), 0, 10, t += 33), "the new stream goes on: " + n);
+        assertNull(a.put(false, (short) 5000, 0, 10, bytes(1, 10), 0, 10, t + 5), "anything far ahead");
+        assertNotNull(a.put(false, (short) 40, 0, 10, bytes(1, 10), 0, 10, t + 1000), "a second's loss is no reason to drop");
+    }
+
+    @Test
+    void aBrokenSizeIsNotAllocated() {
+        FrameAssembler a = new FrameAssembler();
+        assertNull(a.put(true, (short) 3, 0, 6 << 20, new byte[100], 0, 100), "6 MB: more than a 1080p picture raw");
+        assertNull(a.put(true, (short) 3, 7 << 20, 0, new byte[100], 0, 100), "an offset beyond that too");
+        for (short n = 10; n < 60; n++) a.put(false, n, 0, FrameAssembler.PLAUSIBLE_FRAME_BYTES, new byte[100], 0, 100);
+        assertTrue(a.pendingBytes() <= FrameAssembler.PENDING_BUDGET, "50 broken sizes hold at most the budget: " + a.pendingBytes());
+    }
+
     // ------------------------------------------------------------------ BitrateControl
+
+    /** A request decided under BitrateControl's lock is sent after it is let go (the Swing thread reads step()). */
+    @Test
+    void bitrateRequestsAreSentOutsideTheLock() {
+        BitrateControl[] b = new BitrateControl[1];
+        List<Boolean> heldLock = new ArrayList<>();
+        b[0] = new BitrateControl(new BitrateControl.Sink() {
+            public void changeBitRate(boolean increase) {
+                heldLock.add(Thread.holdsLock(b[0]));
+            }
+
+            public void setStep(int step, int from) {
+                heldLock.add(Thread.holdsLock(b[0]));
+            }
+        });
+        long t = 0;
+        for (int i = 0; i < 300; i++, t += 17) b[0].onFrame(i % 30 == 0, t, 60, 50); // calm: raised
+        for (int i = 0; i < 7; i++) b[0].onBadFrame(false);
+        b[0].onFrame(false, t += 17, 60, 50); // trouble: lowered
+        for (long end = t + 600; t < end; t += 33) b[0].onFrame(false, t, 30, 1500); // a filling queue: SET_BITRATE
+        assertTrue(heldLock.size() >= 2, "requests were made: " + heldLock);
+        assertFalse(heldLock.contains(true), "none while holding the lock");
+    }
 
     @Test
     void bitrateGoesDownOnTroubleAndUpWhenCalm() {
@@ -762,6 +856,45 @@ class VideoTest {
         return condition.getAsBoolean();
     }
 
+    /**
+     * The count once it has stood still for SETTLE_MS (at most 5 s): the decode thread works on after the frames are
+     * handed over, and a count read while it does is a race in the test, not a fault of the pipeline (T1, 1.0.49).
+     */
+    static int settled(java.util.concurrent.atomic.AtomicInteger count) throws InterruptedException {
+        int last = count.get();
+        long stillSince = System.currentTimeMillis();
+        for (long end = stillSince + 5000; System.currentTimeMillis() < end; Thread.sleep(10)) {
+            int now = count.get();
+            if (now != last) {
+                last = now;
+                stillSince = System.currentTimeMillis();
+            } else if (System.currentTimeMillis() - stillSince >= SETTLE_MS) {
+                break;
+            }
+        }
+        return last;
+    }
+
+    static final long SETTLE_MS = 300;
+
+    /** H8: a one-packet P-frame lost whole: a key frame is asked for with the next frame (before 1.0.49: nothing). */
+    @Test
+    void aLostOnePacketFrameAsksForAKeyFrame() throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 12, 30);
+        FakeScreen screen = new FakeScreen();
+        java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
+        try (VideoPipeline p = new VideoPipeline(screen, () -> 40)) {
+            p.setKeyFrameSender(requests::incrementAndGet);
+            p.onVideoConfig(320, 240, false, false, s.codecConfig());
+            feed(p, s, 0, 6, 1); // frames 1-6, each one packet
+            assertTrue(waitFor(() -> screen.presented.get() >= 1, 2000));
+            assertEquals(0, requests.get(), "a clean stream asks for nothing");
+            feed(p, s, 7, 9, 8); // frame 7 never came
+            assertEquals(1, p.stats().lost());
+            assertTrue(requests.get() >= 1, "asked for a key frame with frame 8");
+        }
+    }
+
     private static void feed(VideoPipeline p, TestStreams.Stream s, int from, int to, int firstNumber) {
         for (int i = from; i < to; i++) {
             byte[] d = s.packets().get(i).data();
@@ -800,7 +933,7 @@ class VideoTest {
             p.onVideoConfig(320, 240, false, false, a.codecConfig());
             feed(p, a, 0, 10, 1);
             assertTrue(waitFor(() -> screen.presented.get() >= 1, 2000));
-            int shown = screen.presented.get();
+            int shown = settled(screen.presented); // the decode thread may still be drawing frames 2-10 (T1)
             feed(p, a, 5, 6, 1); // "restarted": key frame 1 again (the same size, so it decodes under the old config)
             Thread.sleep(VideoPipeline.CONFIG_WAIT_MS + 200);
             assertEquals(shown, screen.presented.get(), "held");

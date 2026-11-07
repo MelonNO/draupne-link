@@ -95,6 +95,60 @@ public final class CameraView {
         return CameraFootprint.compute(p, terrain, groundFallback(t, track, p));
     }
 
+    /**
+     * The view for the map, worked out PERIOD_MS apart on a thread of its own at the lowest priority (1.0.49): its rays
+     * march some 12,000 steps over the terrain, and that ran on the Swing thread every 33 ms - the thread that also
+     * shows the video. The maps take the latest from here when they refresh.
+     */
+    public static final class Live {
+        public static final long PERIOD_MS = 200;
+        private final CameraView view;
+        private volatile FcTelemetry telemetry;
+        private volatile FlightTrack track;
+        private volatile CameraFootprint.View latest;
+        private java.util.concurrent.ScheduledExecutorService worker; // made at the first want (Swing thread)
+
+        public Live(CameraView view) {
+            this.view = view;
+        }
+
+        /** What to work it out from from now on; null telemetry: no view (it goes at once). Swing thread. */
+        public void want(FcTelemetry t, FlightTrack track) {
+            this.track = track;
+            telemetry = t;
+            if (t == null) {
+                latest = null;
+                return;
+            }
+            if (worker == null) {
+                worker = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                    Thread th = new Thread(r, "cameraView");
+                    th.setDaemon(true);
+                    th.setPriority(Thread.MIN_PRIORITY);
+                    return th;
+                });
+                worker.scheduleWithFixedDelay(this::compute, 0, PERIOD_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            }
+        }
+
+        /** The view last worked out, or null. */
+        public CameraFootprint.View latest() {
+            return latest;
+        }
+
+        void compute() {
+            try {
+                FcTelemetry t = telemetry;
+                FlightTrack tr = track;
+                if (t == null) return;
+                CameraFootprint.View v = view.compute(t, tr);
+                if (telemetry == t) latest = v; // not one asked away meanwhile
+            } catch (RuntimeException e) {
+                latest = null; // never ends the thread: the next round tries again
+            }
+        }
+    }
+
     /** Where the terrain isn't known: the ground at launch, else below the drone by its height over launch, else 50 m. */
     private double groundFallback(FcTelemetry t, FlightTrack track, CameraFootprint.Pose p) {
         double ground = groundAtLaunch(track);
