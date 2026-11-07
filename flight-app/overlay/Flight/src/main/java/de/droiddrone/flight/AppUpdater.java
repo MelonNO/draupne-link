@@ -28,6 +28,8 @@ import java.net.URL;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
+import de.droiddrone.common.GuardedCopy;
+
 import static de.droiddrone.common.Logcat.log;
 
 /**
@@ -74,7 +76,8 @@ final class AppUpdater {
         if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room for the download");
         File apk = new File(d, "update.apk");
         try {
-            download(found, apk, progress, null);
+            // pc.38: and stopped as soon as the PC connects (the download would share the link with the sticks)
+            download(found, apk, progress, null, () -> !DDService.isRunning, c.getString(R.string.dd_update_connected));
             if (DDService.isRunning) throw new IOException(c.getString(R.string.dd_update_connected)); // connected while it downloaded
             progress.update(c.getString(R.string.dd_update_installing));
             install(c, apk, false);
@@ -87,17 +90,21 @@ final class AppUpdater {
      * pc.32, the PC's REMOTE_UPDATE ({@link RemoteUpdate}): the same, while connected - the PC asked, and the flight
      * controller is checked disarmed again just before the install, which ends this app and the link with it.
      * Android 12 on: no tap needed when this app installed its own last update.
+     * pc.38 (H9): the flight controller is asked before every 64 KB of the download too, which stops
+     * ({@link GuardedCopy.Stopped}) the moment it isn't known disarmed - 50 MB over 4G must not crowd the sticks.
+     * @param installing told right before the APK goes to Android's installer (the PC refuses to arm from then on)
      */
     static void downloadAndInstallRemote(Context c, UpdateCheck.Found found, java.util.function.IntConsumer percent,
-                                         java.util.function.BooleanSupplier disarmed) throws IOException {
+                                         java.util.function.BooleanSupplier disarmed, Runnable installing) throws IOException {
         if (found.sha256 == null) throw new IOException(c.getString(R.string.dd_update_no_digest));
         File d = dir(c);
         cleanUp(c);
         if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room for the download");
         File apk = new File(d, "update.apk");
         try {
-            download(found, apk, text -> { }, percent);
-            if (!disarmed.getAsBoolean()) throw new IOException("the flight controller isn't known to be disarmed now - not installed");
+            download(found, apk, text -> { }, percent, disarmed, "the flight controller isn't known to be disarmed - the download stopped");
+            if (!disarmed.getAsBoolean()) throw new GuardedCopy.Stopped("the flight controller isn't known to be disarmed now - not installed");
+            installing.run();
             RemoteUpdate.pending(c, true); // opens again by itself once updated
             install(c, apk, true);
         } finally {
@@ -105,7 +112,8 @@ final class AppUpdater {
         }
     }
 
-    private static void download(UpdateCheck.Found found, File apk, Progress progress, java.util.function.IntConsumer percentOut) throws IOException {
+    private static void download(UpdateCheck.Found found, File apk, Progress progress, java.util.function.IntConsumer percentOut,
+                                 java.util.function.BooleanSupplier mayGoOn, String stopped) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(found.url).openConnection();
         conn.setInstanceFollowRedirects(true); // GitHub sends the file from another https host
         conn.setConnectTimeout(15000);
@@ -118,22 +126,13 @@ final class AppUpdater {
         } catch (NoSuchAlgorithmException e) {
             throw new IOException(e);
         }
-        long done = 0;
-        int shown = -1;
         try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(apk)) {
-            byte[] buf = new byte[64 * 1024];
-            int n;
-            while ((n = in.read(buf)) > 0) {
-                out.write(buf, 0, n);
-                sha.update(buf, 0, n);
-                done += n;
-                int percent = total > 0 ? (int) (done * 100 / total) : -1;
-                if (percent / 5 != shown / 5) {
-                    shown = percent;
-                    if (percentOut != null) percentOut.accept(Math.max(0, percent));
-                    progress.update(percent < 0 ? "Downloading the update..." : "Downloading the update... " + percent + "%");
-                }
-            }
+            GuardedCopy.copy(in, out, sha, total, percent -> {
+                if (percentOut != null) percentOut.accept(Math.max(0, percent));
+                progress.update(percent < 0 ? "Downloading the update..." : "Downloading the update... " + percent + "%");
+            }, mayGoOn, stopped);
+        } finally {
+            conn.disconnect(); // pc.38: a stopped download lets go of its connection at once
         }
         String got = hex(sha.digest());
         if (found.sha256 == null || !found.sha256.equalsIgnoreCase(got)) {

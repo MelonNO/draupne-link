@@ -22,24 +22,21 @@ import android.view.Surface;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetSocketAddress;
-import java.security.MessageDigest;
-import java.text.SimpleDateFormat;
-import java.util.ArrayDeque;
-import java.util.Date;
 import java.util.List;
-import java.util.Locale;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import de.droiddrone.common.ClipStore;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MotionDetector;
 import de.droiddrone.common.MotionRecord;
@@ -65,10 +62,58 @@ import static de.droiddrone.common.Logcat.log;
  * ({@link OverwatchProtocol}) go from a socket of its own to the PC's link port, never through the link.
  * Everything of an event runs on one thread at background priority; the analysis thread only makes the JPEGs and
  * hands detections over.
+ * <p>
+ * pc.38: the clips live in {@link ClipStore} - on disk with their facts, recorded in segments, scanned at the app's
+ * start, within a quota, a stuck one given up after its attempts - and are hashed on a thread of their own, so ending
+ * overwatch never waits on a long clip (the review's M19, M20, L3). The recorder's surface leaves the camera's session
+ * before the recorder stops (H10).
  */
 final class Overwatch {
     private static volatile int sensitivity = MotionDetector.NORMAL, flags, token;
     private static volatile Overwatch current;
+    private static ClipStore clips;
+    /** pc.38: clips are hashed (and the folder scanned) here, never on the overwatch thread. */
+    private static final ExecutorService hasher = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(() -> {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+            r.run();
+        }, "overwatchHash");
+        t.setDaemon(true);
+        return t;
+    });
+    private static final AtomicInteger hashing = new AtomicInteger();
+
+    /** pc.38: the clip folder, scanned once (on the hashing thread) the first time it is asked for - at the app's start. */
+    static synchronized ClipStore clips(android.content.Context c) {
+        if (clips == null) {
+            File[] media = c.getExternalMediaDirs();
+            File base = media != null && media.length > 0 && media[0] != null ? media[0] : c.getFilesDir();
+            final ClipStore store = new ClipStore(new File(base, "Overwatch"));
+            clips = store;
+            hashing.incrementAndGet();
+            hasher.execute(() -> {
+                try {
+                    store.scan(line -> log(line));
+                    for (ClipStore.Clip gone : store.enforceQuota(usableSpace(store.dir()))) {
+                        log("Overwatch clips: " + gone.file.getName() + " deleted - over the folder's quota");
+                    }
+                } catch (RuntimeException e) {
+                    log("Overwatch clips: the scan stopped: " + e);
+                } finally {
+                    hashing.decrementAndGet();
+                }
+            });
+        }
+        return clips;
+    }
+
+    /** The room on the storage that holds dir (its nearest folder that exists); 0 when not known. */
+    private static long usableSpace(File dir) {
+        for (File f = dir; f != null; f = f.getParentFile()) {
+            if (f.exists()) return f.getUsableSpace();
+        }
+        return 0;
+    }
 
     /** The PC's OVERWATCH request's settings (POWER_MODE mode 3); the token goes into every overwatch packet. */
     static void configure(int sens, int fl, int tok) {
@@ -153,38 +198,20 @@ final class Overwatch {
     private volatile long previewWantedAt = -1;
     private volatile boolean previewing;
     private OverwatchRecorder recorder;
-    private File recording;
-    private long recordingStartedAt;
+    /** pc.38: the segment being written, and the next one while a cut waits for its key frame. */
+    private ClipStore.Clip recordingClip, nextClip;
     private boolean eventVideo;
     // ---- the motion's end, until the PC has it
     private int endedEvent = -1;
     private long endedAtWall, endedSentAt;
     private boolean endedAcked, endedClip;
     private int endedSends;
-    // ---- clips waiting for the PC, oldest first
-    private static final class Pending {
-        final int event;
-        final File file;
-        final long size, startedAt, durationMs;
-        final byte[] sha256;
-        final boolean sound;
-        final int width, height;
-
-        Pending(int event, File file, byte[] sha256, long startedAt, long durationMs, boolean sound, int width, int height) {
-            this.event = event;
-            this.file = file;
-            this.size = file.length();
-            this.sha256 = sha256;
-            this.startedAt = startedAt;
-            this.durationMs = durationMs;
-            this.sound = sound;
-            this.width = width;
-            this.height = height;
-        }
-    }
-
-    private final ArrayDeque<Pending> pending = new ArrayDeque<>();
-    private long infoSentAt, chunksAskedAt;
+    // ---- clips waiting for the PC (pc.38: on disk, in the store)
+    private final ClipStore store;
+    private volatile long infoSentAt;
+    private long chunksAskedAt;
+    /** pc.38: the clip whose INFO went last - the only one served (a CLIP_GET names the event, not the segment). */
+    private ClipStore.Clip announced;
     private RandomAccessFile serving;
     private File servingFile;
     // ---- the preview's sender
@@ -197,6 +224,7 @@ final class Overwatch {
         this.service = service;
         this.udp = udp;
         this.audioSource = audio;
+        this.store = clips(service);
     }
 
     // ------------------------------------------------------------------ watching
@@ -260,11 +288,25 @@ final class Overwatch {
                 break;
             case STOP_CLIP:
                 log("Overwatch: the clip stops at " + OverwatchEvent.MAX_CLIP_MS / 60_000 + " min; the alert goes on");
+                // pc.38 (H10): the session without the recorder's surface first (waited for), then the recorder stops
+                awaitCamera(udp.overwatchEventVideo(true, null));
                 finishClip();
-                udp.overwatchEventVideo(true, null); // the session without the finished recorder's surface
                 break;
             default:
                 break;
+        }
+        OverwatchRecorder rec = recorder;
+        if (rec != null) { // pc.38 (L3): the recording in segments
+            OverwatchRecorder.Segment seg;
+            while ((seg = rec.pollFinished()) != null) onSegment(seg);
+            if (nextClip == null && now - rec.segmentStartedAt() >= ClipStore.SEGMENT_MS && rec.writing()) cutSegment(rec, now);
+        }
+        ClipStore.Clip unconfirmed = store.tick(now);
+        if (unconfirmed != null) {
+            log("Overwatch: clip " + unconfirmed.file.getName() + " went whole but the PC didn't confirm it (attempt " + unconfirmed.attempts()
+                    + (unconfirmed.givenUp() ? ") - given up, kept on the phone" : ") - the others first"));
+            closeServing();
+            infoSentAt = 0;
         }
         if (event.isActive() && !event.isSilenced(mono) && !alertAcked && now - alertSentAt >= OverwatchProtocol.ALERT_RESEND_MS) sendAlert(now);
         previewing = eventVideo && event.isActive() && !event.isSilenced(mono) && previewWantedAt >= 0
@@ -274,11 +316,14 @@ final class Overwatch {
             endedSentAt = now;
             send(OverwatchProtocol.clipEnded(token, endedEvent, endedAtWall, endedClip));
         }
-        Pending head = pending.peek();
-        if (head != null && now - infoSentAt >= 5000 && now - chunksAskedAt >= 5000) {
+        ClipStore.Clip head = store.head();
+        // pc.38: a new head is announced at once - the PC's asks name the event alone, and an event's segments share it
+        if (head != null && (head != announced || now - infoSentAt >= 5000 && now - chunksAskedAt >= 5000)) {
             infoSentAt = now;
-            send(OverwatchProtocol.clipInfo(new OverwatchProtocol.ClipInfo(token, head.event, head.size, head.sha256, head.durationMs,
-                    head.startedAt, head.sound, head.width, head.height)));
+            announced = head;
+            store.offered(head);
+            send(OverwatchProtocol.clipInfo(new OverwatchProtocol.ClipInfo(token, head.event, head.size(), head.sha256(), head.durationMs(),
+                    head.startedAt, head.sound, head.width, head.height, head.part, head.eventStartedAt)));
         }
         if (statusLeft > 0 && now - statusSentAt >= 1000) {
             statusLeft--;
@@ -286,7 +331,8 @@ final class Overwatch {
             int[] r = service.batteryReadings();
             send(OverwatchProtocol.status(token, OverwatchProtocol.STATE_DROPPED, droppedReason, r[0] < 0 ? 255 : r[0], r[3] == PowerFloor.UNKNOWN ? 0 : r[3]));
         }
-        if (!watching && pending.isEmpty() && (endedEvent < 0 || endedAcked || endedSends >= 120) && statusLeft == 0) closeSocket();
+        if (!watching && recorder == null && hashing.get() == 0 && store.head() == null && (endedEvent < 0 || endedAcked || endedSends >= 120)
+                && statusLeft == 0) closeSocket();
     }
 
     /** The floor: deep sleep now, and the PC told why. */
@@ -396,14 +442,14 @@ final class Overwatch {
         if (camera != null && camera.getWidth() > 0) {
             OverwatchRecorder r = new OverwatchRecorder(camera.getWidth(), camera.getHeight(), camera.getTargetFps(), audioSource);
             surface = r.prepare();
-            String name = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(new Date(now)) + "_" + event.event() + ".mp4";
-            File dir = new File(service.getExternalMediaDirs()[0], "Overwatch");
+            File file = store.newFile(now, event.event(), 1);
             boolean sound = (flags & OverwatchProtocol.MODE_FLAG_SOUND) != 0
                     && service.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED;
-            if (surface != null && r.start(new File(dir, name), sound)) {
+            if (surface != null && r.start(file, sound)) {
                 recorder = r;
-                recording = new File(dir, name);
-                recordingStartedAt = now;
+                long eventStart = alert == null ? now : alert.startedAt; // the first segment is the alert's (the PC links them by it)
+                recordingClip = store.begin(file, event.event(), 1, eventStart, eventStart, r.hasSound(), r.width(), r.height());
+                nextClip = null;
             } else {
                 r.stop();
                 surface = null;
@@ -414,52 +460,115 @@ final class Overwatch {
         eventVideo = true;
     }
 
-    /** The recording ends: the file joins the clips waiting for the PC (its SHA-256 worked out here, once). */
+    /**
+     * The recording ends: its last segment (and any cut just before) joins the clips waiting for the PC, hashed on the
+     * hashing thread. The caller has taken the recorder's surface out of the camera's session first (H10).
+     */
     private void finishClip() {
         OverwatchRecorder r = recorder;
         recorder = null;
         if (r == null) return;
         File f = r.stop();
+        OverwatchRecorder.Segment seg;
+        while ((seg = r.pollFinished()) != null) onSegment(seg); // cut before the stop
+        if (nextClip != null) { // a cut whose key frame never came: no such file
+            store.discard(nextClip);
+            nextClip = null;
+        }
+        ClipStore.Clip c = recordingClip;
+        recordingClip = null;
+        if (c == null) return;
         if (f == null || !f.isFile() || f.length() == 0) {
             log("Overwatch: the clip came out empty");
+            store.discard(c);
             return;
         }
-        byte[] sha = sha256(f);
-        if (sha == null) return;
-        pending.add(new Pending(event.event(), f, sha, alert == null ? recordingStartedAt : alert.startedAt, r.durationMs(), r.hasSound(), r.width(), r.height()));
-        infoSentAt = 0; // announced at the next tick
-        log("Overwatch: clip " + f.getName() + " (" + f.length() / 1024 + " KB) waits for the PC");
+        hashLater(c, r.durationMs());
+    }
+
+    /** pc.38 (L3): the segment is long enough - the recorder goes on in a new file from its next key frame. */
+    private void cutSegment(OverwatchRecorder r, long now) {
+        ClipStore.Clip cur = recordingClip;
+        if (cur == null) return;
+        int part = cur.part + 1;
+        File file = store.newFile(now, cur.event, part);
+        nextClip = store.begin(file, cur.event, part, now, cur.eventStartedAt, r.hasSound(), r.width(), r.height());
+        if (!r.cut(file)) { // nothing written yet (the encoders' formats not in): later
+            store.discard(nextClip);
+            nextClip = null;
+        }
+    }
+
+    /** A cut happened: the closed segment goes to be hashed, the next one is the one being written. */
+    private void onSegment(OverwatchRecorder.Segment seg) {
+        ClipStore.Clip done = recordingClip;
+        recordingClip = nextClip;
+        nextClip = null;
+        if (done == null) return;
+        if (seg.file == null || !seg.file.isFile() || seg.file.length() == 0) {
+            log("Overwatch: a segment came out empty");
+            store.discard(done);
+            return;
+        }
+        hashLater(done, seg.durationMs);
+    }
+
+    /**
+     * pc.38 (M19): the SHA-256 on the hashing thread - a long clip took seconds on the overwatch thread, and ending
+     * overwatch waited on it. The clip is offered once it is in the store; the quota is kept then.
+     */
+    private void hashLater(final ClipStore.Clip c, final long durationMs) {
+        hashing.incrementAndGet();
+        try {
+            hasher.execute(() -> {
+                try {
+                    byte[] sha = ClipStore.sha256(c.file);
+                    store.finish(c, durationMs, sha);
+                    log("Overwatch: clip " + c.file.getName() + " (" + c.size() / 1024 + " KB) waits for the PC");
+                    for (ClipStore.Clip gone : store.enforceQuota(usableSpace(store.dir()))) {
+                        log("Overwatch clips: " + gone.file.getName() + " deleted - over the folder's quota");
+                    }
+                    infoSentAt = 0; // announced at the next tick
+                } catch (IOException | RuntimeException e) {
+                    log("Overwatch: the clip can't be read: " + e);
+                    store.discard(c);
+                } finally {
+                    hashing.decrementAndGet();
+                }
+            });
+        } catch (RuntimeException e) {
+            hashing.decrementAndGet();
+            log("Overwatch: the clip wasn't hashed now (" + e + "); the next start takes it back");
+        }
+    }
+
+    /** pc.38: waits for the camera's session change (H10: the recorder's surface out of it) - 3 s at most. */
+    private static void awaitCamera(Future<?> change) {
+        try {
+            change.get(3, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            log("Overwatch: the camera's session change didn't finish in time: " + e);
+        }
     }
 
     /** MOTION ENDED: the clip finished, back to the analysis picture alone; the PC is told until it acknowledges. */
     private void endEvent() {
         boolean hadRecorder = recorder != null;
-        finishClip();
         if (eventVideo) {
             eventVideo = false;
             previewing = false;
-            if (watching) udp.overwatchEventVideo(false, null);
+            // pc.38 (H10): the recorder's surface out of the session (the old one waited out) before the recorder
+            // stops - also when the watch ends, the camera closing right after
+            awaitCamera(udp.overwatchEventVideo(false, null));
         }
+        finishClip();
         endedEvent = event.event();
         endedAtWall = System.currentTimeMillis();
         endedAcked = false;
-        endedClip = hadRecorder && !pending.isEmpty() && pending.peekLast().event == endedEvent;
+        endedClip = hadRecorder; // its last segment may still be hashing
         endedSends = 0;
         endedSentAt = 0;
         log("Overwatch: the motion ended (event " + endedEvent + ")");
-    }
-
-    private static byte[] sha256(File f) {
-        try (InputStream in = new FileInputStream(f)) {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] buf = new byte[64 * 1024];
-            int n;
-            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
-            return md.digest();
-        } catch (Exception e) {
-            log("Overwatch: the clip can't be read: " + e);
-            return null;
-        }
     }
 
     // ------------------------------------------------------------------ the preview's sender
@@ -564,12 +673,18 @@ final class Overwatch {
                 serveChunks(c);
                 break;
             case OverwatchProtocol.CMD_CLIP_DONE: {
-                Pending head = pending.peek();
-                if (head == null || head.event != c.event || c.offset == 0) break;
-                pending.poll();
-                closeServing();
-                if (head.file.delete()) log("Overwatch: the PC has clip " + head.file.getName() + " (checked): deleted here");
-                else log("Overwatch: the PC has clip " + head.file.getName() + "; it couldn't be deleted here");
+                if (c.offset == 0) break;
+                ClipStore.Clip done;
+                if (c.clipStartedAt != OverwatchProtocol.NO_CLIP_START) {
+                    done = store.find(c.event, c.clipStartedAt); // pc.38: the PC names the segment
+                } else { // a PC before 1.0.49: the event alone - the head, once offered
+                    done = store.head();
+                    if (done != null && (done.event != c.event || !store.wasOffered(done))) done = null;
+                }
+                if (done == null) break;
+                if (done.file.equals(servingFile)) closeServing();
+                if (store.delivered(done)) log("Overwatch: the PC has clip " + done.file.getName() + " (checked): deleted here");
+                else log("Overwatch: the PC has clip " + done.file.getName() + "; it couldn't be deleted here");
                 infoSentAt = 0;
                 break;
             }
@@ -583,9 +698,11 @@ final class Overwatch {
 
     /** The chunks asked for, from the oldest clip waiting - never while the flight controller may be armed. */
     private void serveChunks(OverwatchProtocol.Command c) {
-        chunksAskedAt = System.currentTimeMillis();
-        Pending head = pending.peek();
-        if (head == null || head.event != c.event || service.isFcArmed()) return;
+        long now = System.currentTimeMillis();
+        chunksAskedAt = now;
+        ClipStore.Clip head = store.head();
+        if (head == null || head != announced || head.event != c.event || service.isFcArmed()) return;
+        long size = head.size();
         try {
             if (serving == null || !head.file.equals(servingFile)) {
                 closeServing();
@@ -593,18 +710,23 @@ final class Overwatch {
                 servingFile = head.file;
             }
             byte[] buf = new byte[OverwatchProtocol.FRAGMENT];
+            long end = c.offset;
             for (int i = 0; i < Math.min(c.count, 256); i++) {
                 long off = c.offset + (long) i * OverwatchProtocol.FRAGMENT;
-                if (off >= head.size) break;
-                int n = (int) Math.min(OverwatchProtocol.FRAGMENT, head.size - off);
+                if (off >= size) break;
+                int n = (int) Math.min(OverwatchProtocol.FRAGMENT, size - off);
                 serving.seek(off);
                 serving.readFully(buf, 0, n);
                 send(OverwatchProtocol.clipChunk(token, head.event, off, buf, 0, n));
+                end = off + n;
                 if (i % 8 == 7) SystemClock.sleep(1);
             }
+            store.served(head, c.offset, end, now); // pc.38: the attempts (M20)
         } catch (IOException e) {
-            log("Overwatch: the clip can't be read: " + e);
+            log("Overwatch: clip " + head.file.getName() + " can't be read (" + e + ") - given up, the others go on");
+            store.giveUp(head);
             closeServing();
+            infoSentAt = 0;
         }
     }
 

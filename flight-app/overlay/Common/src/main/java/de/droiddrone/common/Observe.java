@@ -80,7 +80,7 @@ public final class Observe {
             case REFUSED_PILOT: return "a pilot flies it";
             case ENDED_PILOT: return "a pilot connected";
             case REFUSED_FULL: return "it streams to " + MAX_OBSERVERS + " observers already";
-            case REFUSED_POWER: return "it is in standby";
+            case REFUSED_POWER: return "it is in standby, asleep or on overwatch";
             case STOPPED: return "stopped";
             case REFUSED_ARMED: return "its flight controller isn't known to be disarmed";
             default: return "state " + state;

@@ -196,6 +196,8 @@ class OverwatchHubTest {
         sent.clear();
         receive(hub, OverwatchProtocol.clipInfo(new OverwatchProtocol.ClipInfo(TOKEN, 5, clip.length, sha, 40_000, STARTED, true, 1280, 720)));
         assertEquals(List.of(OverwatchProtocol.CMD_CLIP_DONE), commandsSent());
+        // 1.0.49: the DONE names the clip's start - an event's segments share its number
+        assertEquals(STARTED, OverwatchProtocol.readCommand(sent.get(0), sent.get(0).length).clipStartedAt);
     }
 
     @Test
