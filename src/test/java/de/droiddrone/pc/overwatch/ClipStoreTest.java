@@ -130,6 +130,46 @@ class ClipStoreTest {
         }
     }
 
+    /** M10 (1.0.49): a clip that keeps coming damaged is fetched again twice, then given up - not without end. */
+    @Test
+    void aClipThatKeepsComingDamagedIsGivenUpAfterTwoRetries() throws Exception {
+        byte[] c = clip(OverwatchProtocol.FRAGMENT * 2, 6);
+        byte[] wrong = c.clone();
+        wrong[5] ^= 1;
+        try (ClipTransfer t = new ClipTransfer(dir.resolve("f.part"), dir.resolve("f.mp4"), c.length, sha(c))) {
+            for (int i = 1; i <= ClipTransfer.MAX_RETRIES; i++) {
+                serve(t, wrong, t.next(0, false), x -> false);
+                assertEquals(ClipTransfer.Result.MISMATCH, t.finish(), "try " + i);
+            }
+            serve(t, wrong, t.next(0, false), x -> false);
+            assertEquals(ClipTransfer.Result.FAILED, t.finish());
+            assertTrue(t.failed());
+            assertNull(t.next(10_000, false), "nothing more is asked");
+            assertFalse(Files.exists(dir.resolve("f.part")));
+            assertFalse(Files.exists(dir.resolve("f.mp4")));
+        }
+    }
+
+    /** M10: the rename after the check fails (the name held by something): tried again, without hashing it all again. */
+    @Test
+    void aFailedRenameIsTriedAgainWithoutCheckingAgain() throws Exception {
+        byte[] c = clip(OverwatchProtocol.FRAGMENT * 2 + 7, 8);
+        Path done = dir.resolve("g.mp4");
+        Files.createDirectories(done);
+        Files.writeString(done.resolve("in-the-way.txt"), "x"); // a non-empty folder: the rename can't replace it
+        try (ClipTransfer t = new ClipTransfer(dir.resolve("g.part"), done, c.length, sha(c))) {
+            serve(t, c, t.next(0, false), x -> false);
+            assertThrows(IOException.class, t::finish);
+            assertTrue(t.checked());
+            assertNull(t.next(0, false), "complete: nothing asked again");
+            Files.write(dir.resolve("g.part"), new byte[c.length]); // checked once: it isn't read again
+            Files.delete(done.resolve("in-the-way.txt"));
+            Files.delete(done);
+            assertEquals(ClipTransfer.Result.OK, t.finish());
+            assertTrue(Files.isRegularFile(done));
+        }
+    }
+
     @Test
     void chunksOfTheWrongLengthOrPlaceAreDropped() throws Exception {
         byte[] c = clip(OverwatchProtocol.FRAGMENT * 2, 6);

@@ -130,6 +130,33 @@ public final class Names {
         return null;
     }
 
+    /** A device or version text from the network is cut to this many characters. */
+    static final int MAX_TEXT = 64;
+
+    /**
+     * A valid DRAUPNE name of this kind (1.0.49: only these are taken from the network, filed or saved): the kind's
+     * prefix and one of the 26 letters, exactly - MobileAlpha, PCZulu: printable ASCII, at most 16 characters (the
+     * longest is 14); anything else in a NAME_REPLY or NAME_ASSIGN is dropped.
+     */
+    public static boolean isValidName(String name, Kind kind) {
+        return name != null && kind != null && name.length() <= 16 && kindOf(name) == kind && letterOf(name) >= 0
+                && name.chars().allMatch(c -> c > 0x20 && c < 0x7f);
+    }
+
+    /**
+     * A text from the network made safe to show and save: control characters, line breaks and '|' (the map's field
+     * separator) become spaces, trimmed, at most max characters.
+     */
+    static String printable(String s, int max) {
+        if (s == null) return "";
+        StringBuilder out = new StringBuilder(Math.min(s.length(), max));
+        for (int i = 0; i < s.length() && out.length() < max; i++) {
+            char c = s.charAt(i);
+            out.append(Character.isISOControl(c) || c == '|' || c == ' ' || c == ' ' ? ' ' : c);
+        }
+        return out.toString().trim();
+    }
+
     /** The letter's index (Alpha 0 ... Zulu 25) of a name, -1 for a name that isn't one of ours. */
     public static int letterOf(String name) {
         if (name == null) return -1;
@@ -293,7 +320,9 @@ public final class Names {
             in.readUTF();
             int kind = in.readUnsignedByte();
             String name = in.readUTF(), device = in.readUTF(), version = in.readUTF();
-            return new Reply(kind == 0 ? Kind.PHONE : Kind.PC, name, device, version, readPosition(in));
+            Kind k = kind == 0 ? Kind.PHONE : kind == 1 ? Kind.PC : null;
+            if (k == null || !name.isEmpty() && !isValidName(name, k)) return null; // not a DRAUPNE name: never filed
+            return new Reply(k, name, printable(device, MAX_TEXT), printable(version, MAX_TEXT), readPosition(in));
         } catch (IOException e) {
             return null;
         }
@@ -327,7 +356,8 @@ public final class Names {
         if (len < 1 || d[0] != NAME_ASSIGN || !key.equals(keyOf(d, len))) return null;
         try (DataInputStream in = new DataInputStream(new java.io.ByteArrayInputStream(d, 1, len - 1))) {
             in.readUTF();
-            return in.readUTF();
+            String name = in.readUTF();
+            return isValidName(name, Kind.PHONE) ? name : null;
         } catch (IOException e) {
             return null;
         }

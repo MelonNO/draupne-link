@@ -247,6 +247,23 @@ class FcTelemetryTest {
         assertEquals(0, t.getUnknownCodes());
     }
 
+    /** H9 (1.0.49): the phone says it installs (state 2): the PC's sticks may not arm meanwhile, for a while only. */
+    @Test
+    void thePhoneInstallingAnUpdateIsSeen() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        assertFalse(t.isPhoneInstalling(MonoClock.ms()));
+        for (int state : new int[]{1, FcTelemetry.UPDATE_INSTALLING}) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream o = new DataOutputStream(bytes);
+            o.writeShort(FcTelemetry.PHONE_UPDATE);
+            o.writeByte(state); o.writeByte(100); o.writeUTF("2.3.0-pc.38");
+            t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
+            long now = MonoClock.ms();
+            assertEquals(state == FcTelemetry.UPDATE_INSTALLING, t.isPhoneInstalling(now), "state " + state);
+        }
+        assertFalse(t.isPhoneInstalling(MonoClock.ms() + FcTelemetry.INSTALLING_FRESH_MS + 1), "an old word: the app restarted long ago");
+    }
+
     @Test
     void thePhoneAppsBuildNumberIsReadFromItsVersion() throws Exception {
         assertEquals(18, FcTelemetry.pcBuild("2.3.0-pc.18"));

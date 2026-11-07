@@ -231,6 +231,7 @@ public final class NameService {
         Set<String> onlineIps = new HashSet<>();
         Set<String> onlinePcNames = new HashSet<>();
         List<String> unnamedPhones = new ArrayList<>();
+        java.util.Map<String, List<String>> claims = new java.util.LinkedHashMap<>(); // name (lower case) -> the addresses answering with it
         String key = config.getKey();
         try (DatagramSocket socket = new DatagramSocket()) {
             socket.setSoTimeout(100);
@@ -262,6 +263,9 @@ public final class NameService {
                     continue;
                 }
                 if (reply.kind() == Names.Kind.PC) onlinePcNames.add(reply.name());
+                List<String> claimed = claims.computeIfAbsent(reply.name().toLowerCase(java.util.Locale.ROOT), k -> new ArrayList<>());
+                if (!claimed.contains(ip)) claimed.add(ip);
+                if (claimed.size() > 1) continue; // a second device with this name: not filed (M3) - see duplicates()
                 if (reply.kind() == Names.Kind.PHONE && reply.position() != null) {
                     positions.put(reply.name(), new DronePosition(reply.name(), reply.position(), System.currentTimeMillis()));
                 }
@@ -269,6 +273,7 @@ public final class NameService {
                 if (moved != null) log.accept("Names: " + reply.name() + " answers from " + ip + " now (it was " + moved + ").");
             }
             names.onlineOnly(onlineIps);
+            noteDuplicates(claims);
             // this PC's own name: the first PC letter nobody else online has
             String own = ownName();
             if (own.isEmpty() || Names.letterOf(own) < 0 || onlinePcNames.stream().anyMatch(own::equalsIgnoreCase)) {
@@ -299,6 +304,49 @@ public final class NameService {
             log.accept("Names: " + e);
         }
         changed();
+    }
+
+    /**
+     * Names more than one device answered with in the last scan (M3, 1.0.49): two PCs that each thought they were the
+     * master can each have named a phone MobileAlpha. Name (as answered) -> every address that answered with it, the
+     * one filed in the map first. CONNECT refuses such a name until one of them is renamed. A duplicate stays known
+     * for {@link #DUPLICATE_KEEP_MS} after the last scan that heard it: one lost reply doesn't clear it.
+     */
+    private volatile java.util.Map<String, Duplicate> duplicates = java.util.Map.of();
+    static final long DUPLICATE_KEEP_MS = 30_000;
+
+    private record Duplicate(List<String> ips, long at) {}
+
+    /** The addresses answering with this name (more than one), or null when only one device has it. */
+    public List<String> duplicateOf(String name) {
+        Duplicate d = name == null ? null : duplicates.get(name.toLowerCase(java.util.Locale.ROOT));
+        return d == null ? null : d.ips();
+    }
+
+    void noteDuplicates(java.util.Map<String, List<String>> claims) {
+        long now = MonoClock.ms();
+        java.util.Map<String, Duplicate> next = new java.util.LinkedHashMap<>();
+        for (java.util.Map.Entry<String, Duplicate> d : duplicates.entrySet()) {
+            List<String> heard = claims.getOrDefault(d.getKey(), List.of());
+            int others = 0; // the duplicate's addresses heard now with another name: renamed
+            for (String ip : d.getValue().ips()) {
+                for (java.util.Map.Entry<String, List<String>> c : claims.entrySet()) {
+                    if (!c.getKey().equals(d.getKey()) && c.getValue().contains(ip)) others++;
+                }
+            }
+            boolean resolved = heard.size() <= 1 && others >= d.getValue().ips().size() - 1;
+            if (!resolved && now - d.getValue().at() < DUPLICATE_KEEP_MS) next.put(d.getKey(), d.getValue());
+        }
+        for (java.util.Map.Entry<String, List<String>> c : claims.entrySet()) {
+            if (c.getValue().size() < 2) continue;
+            if (!next.containsKey(c.getKey())) {
+                Names.Entry e = names.get(c.getKey());
+                log.accept("Names: " + (e == null ? c.getKey() : e.name()) + " answers from " + String.join(" and ", c.getValue())
+                        + " - two devices with one name. CONNECT to it is refused until one is renamed.");
+            }
+            next.put(c.getKey(), new Duplicate(List.copyOf(c.getValue()), now));
+        }
+        duplicates = java.util.Map.copyOf(next);
     }
 
     private void changed() {

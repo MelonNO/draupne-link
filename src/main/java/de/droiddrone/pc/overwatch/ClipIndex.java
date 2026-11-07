@@ -165,10 +165,18 @@ public final class ClipIndex {
 
     /** The drone's clips, newest first, without the removed ones. */
     public List<Clip> clips(String drone) {
+        return clips(drone, false);
+    }
+
+    /**
+     * The drone's clips, newest first; the removed ones too with withRemoved (1.0.49: the hub looks an event up among
+     * them, so a removed event's clip arriving later doesn't bring it back as a new one).
+     */
+    public List<Clip> clips(String drone, boolean withRemoved) {
         List<Clip> out = new ArrayList<>();
         Path dir = root.resolve(safe(drone));
         if (!Files.isDirectory(dir)) return out;
-        Set<String> hidden = hidden(dir);
+        Set<String> hidden = withRemoved ? Set.of() : hidden(dir);
         try (DirectoryStream<Path> s = Files.newDirectoryStream(dir, "*" + META)) {
             for (Path p : s) {
                 String name = p.getFileName().toString();

@@ -179,9 +179,35 @@ public final class MapGraphics {
         if (file != null && Files.isRegularFile(file)) {
             try {
                 items.addAll(Kml.read(Files.readString(file, StandardCharsets.UTF_8)).items());
-            } catch (IOException | RuntimeException ignored) {
-                // a broken file: start empty; the next change writes a good one
+            } catch (IOException | RuntimeException e) {
+                // a broken file (1.0.49, M12): moved aside whole before anything is written over it, so what it held
+                // can still be had by hand; this session starts empty
+                brokenMovedTo = moveAside(file);
+                keepOff = brokenMovedTo == null; // it couldn't be moved: never written over
             }
+        }
+    }
+
+    private Path brokenMovedTo;
+    private boolean keepOff;
+
+    /** Where a file that couldn't be read was moved at start (name.broken-yyyyMMdd-HHmmss), or null. */
+    public Path brokenMovedTo() {
+        return brokenMovedTo;
+    }
+
+    /**
+     * Moves a file that couldn't be read out of the way: renamed to name.broken-yyyyMMdd-HHmmss beside it (-2, -3 ...
+     * when that is taken). Null when it couldn't be moved - then the caller must not write over it either.
+     */
+    public static Path moveAside(Path file) {
+        String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", java.util.Locale.ROOT));
+        Path target = file.resolveSibling(file.getFileName() + ".broken-" + stamp);
+        for (int n = 2; Files.exists(target); n++) target = file.resolveSibling(file.getFileName() + ".broken-" + stamp + "-" + n);
+        try {
+            return Files.move(file, target);
+        } catch (IOException e) {
+            return null;
         }
     }
 
@@ -292,7 +318,7 @@ public final class MapGraphics {
     }
 
     private void save() {
-        if (file == null) return;
+        if (file == null || keepOff) return;
         try {
             writeKml(file, Kml.write(items, List.of(), "DRAUPNE Link graphics"));
         } catch (IOException ignored) {

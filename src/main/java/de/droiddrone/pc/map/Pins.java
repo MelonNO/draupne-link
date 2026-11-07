@@ -28,18 +28,35 @@ public final class Pins {
     public Pins(Path file) {
         this.file = file;
         if (file != null && Files.isRegularFile(file)) {
+            boolean broken = false;
             try {
                 for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                    if (line.isBlank()) continue;
                     String[] p = line.split("\t");
-                    if (p.length < 3) continue;
                     try {
+                        if (p.length < 3) throw new NumberFormatException(line);
                         pins.add(new Pin(p[0], Double.parseDouble(p[1]), Double.parseDouble(p[2])));
-                    } catch (NumberFormatException ignored) {
+                    } catch (NumberFormatException e) {
+                        broken = true; // a line that isn't a pin: kept below, not lost at the next save
                     }
                 }
-            } catch (IOException ignored) {
+            } catch (IOException e) {
+                broken = true; // not text this app wrote (not UTF-8): nothing read
+            }
+            if (broken) {
+                // 1.0.49 (M12): the file is moved aside whole before the next save writes over it; the pins read stay
+                brokenMovedTo = MapGraphics.moveAside(file);
+                keepOff = brokenMovedTo == null;
             }
         }
+    }
+
+    private Path brokenMovedTo;
+    private boolean keepOff;
+
+    /** Where a file with lines that couldn't be read was moved at start (pins.txt.broken-...), or null. */
+    public Path brokenMovedTo() {
+        return brokenMovedTo;
     }
 
     public static Path defaultFile() throws IOException {
@@ -125,7 +142,7 @@ public final class Pins {
     }
 
     private void save() {
-        if (file == null) return;
+        if (file == null || keepOff) return;
         StringBuilder sb = new StringBuilder();
         for (Pin p : pins) sb.append(p.name().replace('\t', ' ')).append('\t')
                 .append(String.format(Locale.ROOT, "%.7f", p.lat())).append('\t').append(String.format(Locale.ROOT, "%.7f", p.lon())).append('\n');

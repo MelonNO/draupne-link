@@ -315,9 +315,67 @@ public final class OpenCellId {
 
     /** @param network false: disk only (tests) */
     public OpenCellId(Path dir, String userAgent, boolean network) {
+        this(dir, userAgent, network, de.droiddrone.pc.PossiblyFlying::now);
+    }
+
+    /** @param held true while nothing may be fetched (this PC's PossiblyFlying flag) */
+    OpenCellId(Path dir, String userAgent, boolean network, java.util.function.BooleanSupplier held) {
         this.dir = dir;
         this.userAgent = userAgent;
         this.network = network;
+        this.held = held;
+    }
+
+    private final java.util.function.BooleanSupplier held;
+    /** An Answer's code while a drone on this PC may fly (1.0.49): nothing asked, nothing counted. */
+    public static final int HELD = 9;
+
+    // ---- the day's count, kept on disk (1.0.49: a restart forgot it, and the key's 1000 a day were overrun)
+
+    private boolean creditsLoaded;
+
+    private Path creditsFile() {
+        return dir.resolve("credits.txt");
+    }
+
+    /** "2026-11-07 412" or "2026-11-07 412 limited": the UTC day, the requests made that day, the server's no. */
+    private synchronized void loadCredits() {
+        if (creditsLoaded) return;
+        creditsLoaded = true;
+        try {
+            Path f = creditsFile();
+            if (!Files.isRegularFile(f)) return;
+            String[] p = Files.readString(f, StandardCharsets.UTF_8).trim().split("\\s+");
+            if (p.length < 2) return;
+            LocalDate day = LocalDate.parse(p[0]);
+            creditsDay = day;
+            creditsUsed = Math.max(0, Integer.parseInt(p[1]));
+            if (p.length > 2 && "limited".equals(p[2])) limitedOn = day;
+        } catch (IOException | RuntimeException e) {
+            // no count: from nothing, as before
+        }
+    }
+
+    /** One request made today: counted, and the count kept on disk. */
+    synchronized void countRequest() {
+        loadCredits();
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        if (!today.equals(creditsDay)) {
+            creditsDay = today;
+            creditsUsed = 0;
+        }
+        creditsUsed++;
+        saveCredits();
+    }
+
+    private synchronized void saveCredits() {
+        if (creditsDay == null) return;
+        try {
+            write(creditsFile(), (creditsDay + " " + creditsUsed + (creditsDay.equals(limitedOn) ? " limited" : "") + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            // counted in memory still
+        }
     }
 
     public OpenCellId(Path dir) {
@@ -377,6 +435,7 @@ public final class OpenCellId {
 
     /** Requests left today by this app's own count (the server's count is the one that matters; it says so with code 7). */
     public synchronized int creditsLeft() {
+        loadCredits();
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         if (today.equals(limitedOn)) return 0;
         if (!today.equals(creditsDay)) return DAILY_BUDGET;
@@ -410,6 +469,7 @@ public final class OpenCellId {
     }
 
     private Answer request(String url) {
+        if (held.getAsBoolean()) return new Answer(null, HELD, "Paused: a drone here may be flying");
         if (!network) return new Answer(null, 0, "Offline");
         synchronized (this) {
             long wait = lastRequest + GAP_MS - System.currentTimeMillis();
@@ -422,12 +482,7 @@ public final class OpenCellId {
                 }
             }
             lastRequest = System.currentTimeMillis();
-            LocalDate today = LocalDate.now(ZoneOffset.UTC);
-            if (!today.equals(creditsDay)) {
-                creditsDay = today;
-                creditsUsed = 0;
-            }
-            creditsUsed++;
+            countRequest();
         }
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15))
@@ -438,6 +493,11 @@ public final class OpenCellId {
             if (a.errorCode() == 7) {
                 synchronized (this) {
                     limitedOn = LocalDate.now(ZoneOffset.UTC);
+                    if (!limitedOn.equals(creditsDay)) {
+                        creditsDay = limitedOn;
+                        creditsUsed = 0;
+                    }
+                    saveCredits();
                 }
             }
             return a;

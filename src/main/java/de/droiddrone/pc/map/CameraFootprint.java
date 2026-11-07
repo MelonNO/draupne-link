@@ -170,6 +170,10 @@ public final class CameraFootprint {
         });
         private volatile RadioHorizon.Data data;
         private volatile double[] loading; // the point being fetched round, null when idle
+        /** Terrain with tiles missing is loaded again after this long (from disk what came meanwhile, else fetched). */
+        static final long RETRY_MS = 30_000;
+        private volatile boolean incomplete;
+        private volatile long retryAt;
 
         public Terrain(TileCache cache) {
             this.cache = cache;
@@ -179,18 +183,24 @@ public final class CameraFootprint {
         public void around(double lat, double lon) {
             if (cache == null || loading != null) return;
             RadioHorizon.Data d = data;
-            if (d != null && Mercator.distanceM(d.lat(), d.lon(), lat, lon) < RELOAD_M) return;
+            boolean retry = incomplete && System.currentTimeMillis() >= retryAt;
+            if (d != null && Mercator.distanceM(d.lat(), d.lon(), lat, lon) < RELOAD_M && !retry) return;
             double[] at = {lat, lon};
             loading = at;
             pool.execute(() -> {
                 try {
                     RadioHorizon.Data next = new RadioHorizon.Data(lat, lon, true);
+                    boolean missing = false;
                     for (int[] t : RadioHorizon.tilesAround(lat, lon, RadioHorizon.TERRAIN_ZOOM, RADIUS_M)) {
                         String url = RadioHorizon.TERRAIN_URL.replace("{z}", Integer.toString(RadioHorizon.TERRAIN_ZOOM))
                                 .replace("{x}", Integer.toString(t[0])).replace("{y}", Integer.toString(t[1]));
                         BufferedImage img = cache.fetchNow(RadioHorizon.TERRAIN_ID, url, RadioHorizon.TERRAIN_ZOOM, t[0], t[1]);
                         if (img != null) next.putTerrain(t[0], t[1], img);
+                        else missing = true;
                     }
+                    // a tile not had (offline, or not fetched while a drone here may fly - 1.0.49): asked again later
+                    incomplete = missing;
+                    retryAt = System.currentTimeMillis() + RETRY_MS;
                     data = next;
                 } catch (RuntimeException ignored) {
                     // no terrain: the view stays on flat ground

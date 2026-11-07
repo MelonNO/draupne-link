@@ -93,6 +93,51 @@ class NamesTest {
         assertEquals("just now", Names.agoText(1000, 2000));
     }
 
+    /** H5 (1.0.49): only DRAUPNE names come in from the network; device and version texts are made printable. */
+    @Test
+    void onlyValidNamesAreTakenFromTheNetwork() {
+        byte[] bad = Names.reply("DD", Names.Kind.PHONE, "MobileAlpha\nrcRate=1000", "x", "y");
+        assertNull(Names.parseReply(bad, bad.length, "DD"), "a name with a line in it");
+        byte[] other = Names.reply("DD", Names.Kind.PHONE, "Pixel", "x", "y");
+        assertNull(Names.parseReply(other, other.length, "DD"), "not one of the 26");
+        byte[] wrongKind = Names.reply("DD", Names.Kind.PHONE, "PCAlpha", "x", "y");
+        assertNull(Names.parseReply(wrongKind, wrongKind.length, "DD"), "a phone with a PC's name");
+        byte[] ok = Names.reply("DD", Names.Kind.PHONE, "MobileX-ray", "Pixel\n8|evil\u0000" + "x".repeat(200), "2.3.0-pc.38\r\nkey=1");
+        Names.Reply r = Names.parseReply(ok, ok.length, "DD");
+        assertNotNull(r);
+        assertEquals("MobileX-ray", r.name());
+        assertTrue(r.device().startsWith("Pixel 8 evil x"), r.device());
+        assertEquals(Names.MAX_TEXT, r.device().length(), "cut to its length");
+        assertEquals("2.3.0-pc.38  key=1", r.version());
+        byte[] assign = Names.assign("DD", "MobileAlpha=1\nip=6.6.6.6");
+        assertNull(Names.parseAssign(assign, assign.length, "DD"));
+        assertTrue(Names.isValidName("MobileNovember", Names.Kind.PHONE));
+        assertFalse(Names.isValidName("Mobile November", Names.Kind.PHONE));
+    }
+
+    /** M3 (1.0.49): two devices with one name in a scan are found, kept a while, and cleared when one is renamed. */
+    @Test
+    void aDuplicateNameIsFoundAndClearedByARename() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        List<String> log = new CopyOnWriteArrayList<>();
+        NameService svc = new NameService(config, new Names(config, null), () -> null, 1, false, m -> { }, log::add);
+        Map<String, List<String>> claims = new java.util.LinkedHashMap<>();
+        claims.put("mobilealpha", List.of("100.64.0.5", "100.64.0.9"));
+        claims.put("mobilebravo", List.of("100.64.0.7"));
+        svc.noteDuplicates(claims);
+        assertEquals(List.of("100.64.0.5", "100.64.0.9"), svc.duplicateOf("MobileAlpha"));
+        assertNull(svc.duplicateOf("MobileBravo"));
+        assertEquals(1, log.size(), "said once: " + log);
+        svc.noteDuplicates(claims);
+        assertEquals(1, log.size(), "not again while it lasts");
+        // one reply lost: still a duplicate
+        svc.noteDuplicates(Map.of("mobilealpha", List.of("100.64.0.5")));
+        assertNotNull(svc.duplicateOf("MobileAlpha"), "one scan without the other phone's answer proves nothing");
+        // the other phone was renamed: it answers as MobileCharlie now
+        svc.noteDuplicates(Map.of("mobilealpha", List.of("100.64.0.5"), "mobilecharlie", List.of("100.64.0.9")));
+        assertNull(svc.duplicateOf("MobileAlpha"));
+    }
+
     /**
      * The service asks the online devices of a (fake) Tailscale network, files their answers, names this PC with the
      * first free PC letter, is the master when its letter is the highest online, and names the nameless phone.

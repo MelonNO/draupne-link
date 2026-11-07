@@ -448,6 +448,8 @@ public class MainWindow extends JFrame {
         } catch (IOException e) {
             graphics = new de.droiddrone.pc.map.MapGraphics(null);
         }
+        if (pins.brokenMovedTo() != null) logLine("pins.txt had lines that aren't pins: kept as " + pins.brokenMovedTo().getFileName() + " beside it.");
+        if (graphics.brokenMovedTo() != null) logLine("graphics.kml couldn't be read: kept as " + graphics.brokenMovedTo().getFileName() + " beside it; the map starts without graphics.");
         miniMap.setPins(pins);
         miniMap.setGraphics(graphics);
         miniMap.setSource(mapSource);
@@ -1324,6 +1326,7 @@ public class MainWindow extends JFrame {
                     : "Pick the phone first: it shows up in the list once DRAUPNE Flight is open on it, on Tailscale.", "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return;
         }
+        if (refuseDuplicate(target)) return;
         if (!save(Map.of("ip", target.ip()))) return;
         int port = config.getPort();
         nameService.pause(); // the link takes the port, and answers name queries itself meanwhile
@@ -1333,6 +1336,9 @@ public class MainWindow extends JFrame {
         try {
             connection = Connection.open(config, video);
             linkRef[0] = connection.getLink();
+            ControlLink flown = connection.getLink();
+            // this PC's "possibly flying" flag (1.0.49): every background download waits while this drone may fly
+            de.droiddrone.pc.PossiblyFlying.pc().attach(flown, () -> de.droiddrone.pc.PossiblyFlying.of(flown.getTelemetry().getStatus()));
             connection.getLink().setNameReply(nameService::replyPacket);
             connection.getLink().setEvents(this::logLine);
             startLiveAudio(connection.getLink(), video, target.name());
@@ -1342,6 +1348,7 @@ public class MainWindow extends JFrame {
             if (video != null && stanagEnabled()) startStanag();
             videoView.setStatsSource(video == null ? null : video::stats);
         } catch (IOException | RuntimeException e) {
+            if (linkRef[0] != null) de.droiddrone.pc.PossiblyFlying.pc().detach(linkRef[0]);
             connection = null;
             stopLiveAudio();
             nameService.resume();
@@ -1419,6 +1426,37 @@ public class MainWindow extends JFrame {
         setLinkEditable(false);
     }
 
+    /**
+     * M3 (1.0.49): two devices answer with the target's name (two PCs that both acted as the names master can each
+     * have named a phone MobileAlpha). CONNECT could reach the wrong drone, so it is refused, and the pilot is offered
+     * to give the other one a free name (NAME_ASSIGN; a phone must be online to take it).
+     * @return true when refused
+     */
+    private boolean refuseDuplicate(Names.Entry target) {
+        java.util.List<String> ips = nameService.duplicateOf(target.name());
+        if (ips == null) return false;
+        java.util.List<String> others = new java.util.ArrayList<>(ips);
+        others.remove(target.ip());
+        String free = target.kind() == Names.Kind.PHONE ? names.firstFree(Names.Kind.PHONE, java.util.List.of()) : null;
+        logLine("CONNECT refused: " + target.name() + " answers from " + String.join(" and ", ips) + ".");
+        String text = "Two devices answer as " + target.name() + ": " + String.join(" and ", ips) + ".\n"
+                + "CONNECT could reach the wrong drone, so it is refused until one of them has another name.";
+        if (free == null || others.isEmpty()) {
+            JOptionPane.showMessageDialog(this, text + "\nRename one in the name map (the PHONE list's NAME MAP).", "Cannot connect", JOptionPane.WARNING_MESSAGE);
+            return true;
+        }
+        String other = others.get(0);
+        String[] options = {"Rename " + other + " to " + free, "Cancel"};
+        int choice = JOptionPane.showOptionDialog(this, text + "\n\n" + target.name() + " in the name map is " + target.ip()
+                        + (target.detail().isEmpty() ? "" : " (" + target.detail() + ")") + ".\nGive the phone at " + other + " the free name " + free + "?",
+                "Cannot connect", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[1]);
+        if (choice == 0) {
+            nameService.assign(other, free);
+            logLine("The phone at " + other + " is asked to be " + free + "; CONNECT again once the list shows it.");
+        }
+        return true;
+    }
+
     private void disconnect() {
         if (phoneAsleep && connection != null && !connection.getLink().isSpectator()) {
             String name = config.getString(Names.PHONE_NAME_KEY), ip = config.getString("ip");
@@ -1437,14 +1475,16 @@ public class MainWindow extends JFrame {
         powerWanted = ControlLink.POWER_NORMAL;
         phoneAsleep = false;
         phoneOverwatching = false;
-        overwatch.setFlying(false);
         if (powerRow != null) powerRow.setVisible(false);
         sampleLinkLog();
         linkLogTimer.stop();
         if (liveTrack != null) liveTrack.close(pins.list()); // stays for FIND DRONE and the map
         keepFlight(liveTrack, liveTrackName); // remembered; shown as the live one until the next connection
         lostDroneButton.setVisible(false);
-        if (connection != null) connection.close();
+        if (connection != null) {
+            de.droiddrone.pc.PossiblyFlying.pc().detach(connection.getLink()); // armed at the end: the flag stays for the lost-drone window
+            connection.close();
+        }
         connection = null;
         stopLiveAudio();
         nameService.resume();
@@ -1713,6 +1753,21 @@ public class MainWindow extends JFrame {
             lostDroneButton.setVisible(show);
             lostDroneButton.getParent().revalidate();
         }
+    }
+
+    /**
+     * The LINK card says LINK STALLED once the phone has been silent this long (ControlLink.isLinkStalled is true from
+     * 0.3 s; the card waits a little longer so one late packet on 4G doesn't blink it) - when it was first seen silent.
+     */
+    static final long CARD_STALL_MS = 500;
+    private long stallSeenAt;
+
+    /** The LINK card's words for a link that is up: LINK STALLED, FC LOST (red) or LINK READY (green). */
+    static String readyPill(long stalledMs, boolean fcLost, int spectators) {
+        String watching = spectators > 0 ? " +" + spectators + " WATCHING" : "";
+        if (stalledMs >= CARD_STALL_MS) return "LINK STALLED" + watching;
+        if (fcLost) return "FC LOST" + watching;
+        return "LINK READY" + watching;
     }
 
     /** How long after the last armed report a dropped link still counts as a lost drone. */
@@ -2326,6 +2381,7 @@ public class MainWindow extends JFrame {
     private void checkForUpdate() {
         String current = de.droiddrone.pc.AppInfo.version();
         if ("dev".equals(current)) return;
+        if (de.droiddrone.pc.PossiblyFlying.now()) return; // nothing on the network while a drone here may fly: in 15 min again
         try {
             de.droiddrone.pc.setup.UpdateCheck.Release r = de.droiddrone.pc.setup.UpdateCheck.latest();
             if (!de.droiddrone.pc.setup.UpdateCheck.isNewer(r.version(), current)) return;
@@ -2862,8 +2918,9 @@ public class MainWindow extends JFrame {
     }
 
     /**
-     * A drone's overwatch alert (the pilot's rules): only the map window shows it - in front, with a sound - unless this
-     * PC flies (its drone armed): then quietly, nothing raised over the video. With the map window closed, POP OUT MAP
+     * A drone's overwatch alert (the pilot's rules): only the map window shows it - in front, with a sound - unless a
+     * drone on this PC may be flying (PossiblyFlying: armed, or armed within the lost-drone window before its link went
+     * quiet - 1.0.49): then quietly, no sound, nothing raised over the video. With the map window closed, POP OUT MAP
      * says OVERWATCH and nothing pops up.
      */
     private void overwatchNews(String drone) {
@@ -2897,10 +2954,11 @@ public class MainWindow extends JFrame {
         popMapButton.setToolTipText(on ? "A drone in overwatch saw something move: open the map to see it (F3)" : "The map in a window of its own, for a second screen (F3)");
     }
 
-    /** Every refresh: the hub learns whether this PC flies; the map window gets the alerts, or POP OUT MAP its badge. */
+    /**
+     * Every refresh: the map window gets the alerts, or POP OUT MAP its badge. (Whether this PC flies the hub reads
+     * itself, from PossiblyFlying - since 1.0.49 also for the lost-drone window after a quiet link.)
+     */
     private void refreshOverwatch() {
-        Connection c = connection;
-        overwatch.setFlying(c != null && !c.getLink().isSpectator() && fcArmedNow());
         java.util.List<de.droiddrone.pc.overwatch.OverwatchHub.View> views = overwatch.views();
         MapWindow w = mapWindow;
         if (w != null && w.isShown()) {
@@ -2918,21 +2976,27 @@ public class MainWindow extends JFrame {
 
     /** CONNECT on an overwatch card: the phone wakes (told over the overwatch link) and this PC connects to it as its pilot. */
     void overwatchConnect(String drone) {
-        overwatch.connect(drone);
         Connection c = connection;
         String flown = config.getString(Names.PHONE_NAME_KEY);
-        if (c != null && !c.getLink().isSpectator() && drone.equalsIgnoreCase(flown)) {
+        boolean same = c != null && !c.getLink().isSpectator() && drone.equalsIgnoreCase(flown);
+        if (!same && c != null && de.droiddrone.pc.PossiblyFlying.now()) {
+            // armed now or within the lost-drone window: never a click away from cutting this PC's own sticks
+            JOptionPane.showMessageDialog(this, "This PC flies another drone (or did moments ago, and it may still be in the air).\n"
+                    + "Land it and DISCONNECT, then CONNECT to " + drone + ".", "Overwatch", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        // 1.0.49 (H4): a click on an alert card ends what this PC does now, so it asks first
+        String[] options = {"Connect to " + drone, "Cancel"};
+        int choice = JOptionPane.showOptionDialog(this, "Wake " + drone + " and connect to it as its pilot?"
+                        + (same ? "" : c != null ? "\nThis PC's link now (" + (c.getLink().isSpectator() ? "watching " : "") + flown + ") is closed first." : ""),
+                "Overwatch", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[1]);
+        if (choice != 0) return;
+        overwatch.connect(drone);
+        if (same) {
             wakePhone(); // this PC's link to it waits dormant: the Connects go out again now
             return;
         }
-        if (c != null) {
-            if (fcArmedNow()) {
-                JOptionPane.showMessageDialog(this, drone + " is told to wake. This PC flies another drone (armed): land it and DISCONNECT, then connect to "
-                        + drone + ".", "Overwatch", JOptionPane.INFORMATION_MESSAGE);
-                return;
-            }
-            disconnect();
-        }
+        if (c != null) disconnect();
         String ip = names.ipOf(drone);
         if (ip != null && asleepPhones.containsKey(ip)) clearAsleep(ip); // woken now, not at its next check
         connectFromMap(drone, false);
@@ -3559,7 +3623,14 @@ public class MainWindow extends JFrame {
             videoView.setIdleText("Waiting for the first key frame...");
         }
         switch (state) {
-            case READY -> setPill(spectators > 0 ? "LINK READY +" + spectators + " WATCHING" : "LINK READY", Theme.OK, Theme.BG);
+            case READY -> {
+                // M14 (1.0.49): green only while the phone is heard - not for the 2 s before the link counts as lost
+                long now = de.droiddrone.pc.MonoClock.ms();
+                if (!link.isLinkStalled()) stallSeenAt = 0;
+                else if (stallSeenAt == 0) stallSeenAt = now;
+                String text = readyPill(stallSeenAt == 0 ? 0 : now - stallSeenAt, link.isFcLost(), spectators);
+                setPill(text, text.startsWith("LINK READY") ? Theme.OK : Theme.BAD, Theme.BG);
+            }
             case SPECTATING, SPECTATOR_WAITING -> {
                 if (link.isWatchOnly()) {
                     setPill(state == ControlLink.State.SPECTATING ? "SPECTATING" : "SPECTATOR", state == ControlLink.State.SPECTATING
@@ -3652,8 +3723,8 @@ public class MainWindow extends JFrame {
         FcTelemetry t = connection.getLink().getTelemetry();
         String version = t.getPhoneAppVersion();
         String newest = de.droiddrone.pc.setup.ApkShare.VERSION;
-        if (fcArmedNow()) {
-            new LockedNotice(updatePhoneButton, videoView, "ARMED", "No update while the drone is armed: it restarts the phone app, and the sticks with it.").pop();
+        if (de.droiddrone.pc.PossiblyFlying.now()) { // armed, or armed moments before the telemetry went quiet (1.0.49)
+            new LockedNotice(updatePhoneButton, videoView, "ARMED", "No update while the drone may be flying: it restarts the phone app, and the sticks with it.").pop();
             return;
         }
         if (version == null || de.droiddrone.pc.setup.UpdateCheck.isNewer(REMOTE_UPDATE_MIN_PHONE, version)) {
@@ -3692,6 +3763,14 @@ public class MainWindow extends JFrame {
         }
         FcTelemetry.PhoneUpdate u = t.getPhoneUpdate();
         boolean answered = u != null && u.receivedAt() >= remoteUpdateAskedAt;
+        if (!answered && de.droiddrone.pc.PossiblyFlying.now()) {
+            // armed since UPDATE PHONE APP was pressed: the request is not sent (1.0.49) - asked again from the button
+            logLine("Phone app update not asked: the drone may be flying.");
+            remoteUpdateAskedAt = 0;
+            updatePhoneButton.setText("Update phone app");
+            updatePhoneButton.setEnabled(true);
+            return;
+        }
         if (!answered && now - remoteUpdateSentAt >= 1000 && now - remoteUpdateAskedAt < 10_000) {
             connection.getLink().sendRemoteUpdate(want, de.droiddrone.pc.setup.ApkShare.APK_URL, de.droiddrone.pc.setup.ApkShare.APK_SHA256);
             remoteUpdateSentAt = now;

@@ -28,24 +28,46 @@ import java.util.concurrent.atomic.AtomicInteger;
  * map rests on a place, {@link #prefetch} also fetches the levels below it (zooming in later works offline too) on a
  * third, slow thread; not for OpenStreetMap, whose tile policy forbids fetching what isn't being looked at. An area
  * the pilot asks for ({@link #download}, like Mission Planner's prefetch) is fetched whole, for every picture.
- * Thread-safe; the fetches call back when a tile is in.
+ * Thread-safe; the fetches call back when a tile is in. The tiles asked for wait in a bounded queue, the newest
+ * first, and one no map shows any more is dropped (1.0.49). While a drone on this PC may be flying
+ * ({@link de.droiddrone.pc.PossiblyFlying}) nothing is fetched - map, prefetch, area downloads, the terrain - and the
+ * disk alone serves: the 4G uplink and downlink are the sticks' and the picture's.
  */
 public final class TileCache {
     private static final int MEMORY_TILES = 600;
     private static final long RETRY_MS = 60_000;
 
+    /** Tiles waiting to load at most (1.0.49, M13): beyond it the ones asked for longest ago are dropped. */
+    static final int QUEUE_MAX = 256;
+    /**
+     * A waiting tile is dropped when every map that asked for it has since painted for this long without asking for it
+     * again: it is off the screen (panned or zoomed away) - on weak 4G the shown tiles waited behind minutes of those.
+     */
+    static final long STALE_MS = 1500;
+    /** While a drone may fly, a tile not on disk is looked at again this often (it is fetched once the flag drops). */
+    static final long HELD_RETRY_MS = 5000;
+    private static final int LOADERS = 2;
+    /** The asker of a get without a callback: never stale. */
+    private static final Runnable NO_ONE = () -> { };
+
     private final Path dir;
     private final HttpClient http;
     private final String userAgent;
-    private final ExecutorService pool;
+    /** True while a drone on this PC may fly (PossiblyFlying, 1.0.49): nothing is fetched, the disk still serves. */
+    private final java.util.function.BooleanSupplier held;
+    java.util.function.LongSupplier clock = System::currentTimeMillis; // tests set their own
     private final ExecutorService prefetcher;
+    /** The tiles waiting to load, the newest asked for last (taken first); and those loading now. */
+    private final LinkedHashMap<String, Request> queued = new LinkedHashMap<>();
+    private final Map<String, Request> active = new HashMap<>();
+    /** When each map (by its callback) last asked for any tile: how stale its older requests are. */
+    private final Map<Runnable, Long> lastAsk = new java.util.WeakHashMap<>();
     private final Map<String, BufferedImage> memory = new LinkedHashMap<>(256, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, BufferedImage> eldest) {
             return size() > MEMORY_TILES;
         }
     };
-    private final Set<String> loading = new HashSet<>();
     private final Map<String, Long> failedUntil = new HashMap<>();
     private volatile boolean offline; // the last fetch didn't reach the server
     private final boolean network; // false in tests: disk only
@@ -58,12 +80,42 @@ public final class TileCache {
 
     /** @param network false: disk only (tests) */
     public TileCache(Path dir, String userAgent, boolean network) {
+        this(dir, userAgent, network, true, de.droiddrone.pc.PossiblyFlying::now);
+    }
+
+    /**
+     * @param loaders false: no loader threads (tests take the queue with {@link #takeNext})
+     * @param held    true while nothing may be fetched (this PC's PossiblyFlying flag)
+     */
+    TileCache(Path dir, String userAgent, boolean network, boolean loaders, java.util.function.BooleanSupplier held) {
         this.dir = dir;
         this.userAgent = userAgent;
         this.network = network;
+        this.held = held;
         http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).followRedirects(HttpClient.Redirect.NORMAL).build();
-        pool = Executors.newFixedThreadPool(2, r -> thread(r, "mapTiles"));
         prefetcher = Executors.newSingleThreadExecutor(r -> thread(r, "mapPrefetch"));
+        if (loaders) for (int i = 0; i < LOADERS; i++) thread(this::loaderRun, "mapTiles").start();
+    }
+
+    /** Whether fetching waits now: a drone on this PC may be flying (the map says so). */
+    public boolean isHeld() {
+        return held.getAsBoolean();
+    }
+
+    /** One tile waiting or loading, and who asked for it when. */
+    static final class Request {
+        final String key;
+        final TileSource source;
+        final int z, x, y;
+        final Map<Runnable, Long> askers = new HashMap<>();
+
+        Request(String key, TileSource source, int z, int x, int y) {
+            this.key = key;
+            this.source = source;
+            this.z = z;
+            this.x = x;
+            this.y = y;
+        }
     }
 
     private static Thread thread(Runnable r, String name) {
@@ -90,23 +142,85 @@ public final class TileCache {
 
     /**
      * The tile, if it is in memory; else null, and it is loaded (disk, then the server) with onReady called on a
-     * loader thread when it is there. x wraps round the world; a y outside the world is nothing.
+     * loader thread when it is there - every onReady that asked meanwhile. x wraps round the world; a y outside the
+     * world is nothing. The newest asked is loaded first (1.0.49, M13): a map asks for what it shows at every paint,
+     * so what is on the screen now goes before what was minutes ago.
      */
     public BufferedImage get(TileSource source, int z, int x, int y, Runnable onReady) {
         int n = 1 << z;
         if (y < 0 || y >= n || z < 0 || z > source.maxZoom) return null;
         x = Math.floorMod(x, n);
         String key = source.id + "/" + z + "/" + x + "/" + y;
+        Runnable asker = onReady == null ? NO_ONE : onReady;
         synchronized (this) {
+            long now = clock.getAsLong();
+            lastAsk.put(asker, now); // this map paints now: what it asked for before and not now is off its screen
             BufferedImage img = memory.get(key);
             if (img != null) return img;
             Long until = failedUntil.get(key);
-            if (until != null && until > System.currentTimeMillis()) return null;
-            if (!loading.add(key)) return null;
+            if (until != null && until > now) return null;
+            Request loadingNow = active.get(key);
+            if (loadingNow != null) {
+                loadingNow.askers.put(asker, now);
+                return null;
+            }
+            Request r = queued.remove(key); // asked again: the newest again
+            if (r == null) r = new Request(key, source, z, x, y);
+            r.askers.put(asker, now);
+            queued.putLast(key, r);
+            while (queued.size() > QUEUE_MAX) queued.pollFirstEntry(); // the longest ago asked go
+            notifyAll();
         }
-        int fx = x;
-        pool.execute(() -> load(key, source, z, fx, y, onReady));
         return null;
+    }
+
+    /**
+     * The next tile to load, newest first, those off every asker's screen dropped; null when none waits. Taken from
+     * the queue into the loading ones. Package-private: the tests take the queue themselves.
+     */
+    synchronized Request takeNext() {
+        for (Map.Entry<String, Request> e; (e = queued.pollLastEntry()) != null; ) {
+            Request r = e.getValue();
+            if (stale(r)) continue;
+            active.put(r.key, r);
+            return r;
+        }
+        return null;
+    }
+
+    /** Every map that asked for it has painted since without it, for STALE_MS: it is no longer shown. */
+    private boolean stale(Request r) {
+        for (Map.Entry<Runnable, Long> a : r.askers.entrySet()) {
+            Long last = a.getKey() == NO_ONE ? null : lastAsk.get(a.getKey());
+            if (last == null || last - a.getValue() < STALE_MS) return false;
+        }
+        return !r.askers.isEmpty();
+    }
+
+    /** The keys waiting, the next to load first (tests). */
+    synchronized List<String> queuedKeys() {
+        List<String> out = new ArrayList<>(queued.sequencedKeySet().reversed());
+        return out;
+    }
+
+    private void loaderRun() {
+        while (true) {
+            Request r;
+            synchronized (this) {
+                while ((r = takeNext()) == null) {
+                    try {
+                        wait();
+                    } catch (InterruptedException e) {
+                        return;
+                    }
+                }
+            }
+            try {
+                load(r);
+            } catch (RuntimeException ignored) {
+                // load handles its own; never lose the thread
+            }
+        }
     }
 
     private Path file(TileSource source, int z, int x, int y) {
@@ -128,6 +242,7 @@ public final class TileCache {
         Path file = dir.resolve(id).resolve(Integer.toString(z)).resolve(Integer.toString(x)).resolve(y + ".png");
         try {
             if (Files.isRegularFile(file)) img = read(file);
+            if (img == null && held.getAsBoolean()) return null; // a drone here may fly: the disk only
             if (img == null) {
                 byte[] data = fetch(url);
                 if (data != null) {
@@ -145,13 +260,17 @@ public final class TileCache {
         return fetchNow(source.id, source.url(z, x, y), z, x, y);
     }
 
-    private void load(String key, TileSource source, int z, int x, int y, Runnable onReady) {
+    /** A taken tile: from disk, else (unless held) from its server; then everyone who asked for it is called. */
+    void load(Request r) {
         BufferedImage img = null;
+        boolean wasHeld = false;
         try {
-            Path file = file(source, z, x, y);
+            Path file = file(r.source, r.z, r.x, r.y);
             if (Files.isRegularFile(file)) img = read(file);
-            if (img == null) {
-                byte[] data = fetch(source.url(z, x, y));
+            if (img == null && held.getAsBoolean()) {
+                wasHeld = true; // a drone here may fly: not fetched now
+            } else if (img == null) {
+                byte[] data = fetch(r.source.url(r.z, r.x, r.y));
                 if (data != null) {
                     img = ImageIO.read(new java.io.ByteArrayInputStream(data));
                     if (img != null) write(file, data);
@@ -160,18 +279,20 @@ public final class TileCache {
         } catch (IOException | RuntimeException e) {
             // no tile this time; tried again after RETRY_MS
         }
+        List<Runnable> call;
         synchronized (this) {
-            loading.remove(key);
+            active.remove(r.key);
+            call = new ArrayList<>(r.askers.keySet());
             if (img != null) {
-                memory.put(key, img);
-                failedUntil.remove(key);
+                memory.put(r.key, img);
+                failedUntil.remove(r.key);
             } else {
-                long now = System.currentTimeMillis();
+                long now = clock.getAsLong();
                 failedUntil.values().removeIf(until -> until <= now); // a long offline session would otherwise keep every miss
-                failedUntil.put(key, now + RETRY_MS);
+                failedUntil.put(r.key, now + (wasHeld ? HELD_RETRY_MS : RETRY_MS));
             }
         }
-        if (img != null && onReady != null) onReady.run();
+        if (img != null) for (Runnable c : call) if (c != NO_ONE) c.run();
     }
 
     // ------------------------------------------------------------------ prefetching an area
@@ -214,12 +335,20 @@ public final class TileCache {
     public void prefetch(TileSource source, int zFrom, int zMin, int zMax, double minLat, double maxLat, double minLon, double maxLon, int budget) {
         if (!network || !source.prefetchAllowed) return;
         int generation = prefetchGeneration.incrementAndGet();
+        if (held.getAsBoolean()) { // a drone here may fly: no prefetch (the newer call above stops a running one)
+            prefetchLeft.set(0);
+            return;
+        }
         List<Tile> tiles = plan(zFrom, Math.max(0, zMin), Math.min(source.maxZoom, zMax), minLat, maxLat, minLon, maxLon, budget);
         prefetchLeft.set(tiles.size());
         prefetcher.execute(() -> {
             int left = tiles.size();
             for (Tile t : tiles) {
                 if (prefetchGeneration.get() != generation) return; // a newer area
+                if (held.getAsBoolean()) { // armed meanwhile: the rest another time
+                    if (prefetchGeneration.get() == generation) prefetchLeft.set(0);
+                    return;
+                }
                 Path file = file(source, t.z(), t.x(), t.y());
                 if (!Files.isRegularFile(file)) {
                     try {
@@ -382,8 +511,13 @@ public final class TileCache {
         }
 
         /** Waits while paused; false when cancelled meanwhile. */
+        /** Held because a drone on this PC may fly (1.0.49): it goes on by itself once none may. */
+        public boolean isHeldForFlight() {
+            return !finished && !cancelled && held.getAsBoolean();
+        }
+
         private boolean waitWhilePaused() {
-            while (paused && !cancelled) {
+            while ((paused || held.getAsBoolean()) && !cancelled) {
                 try {
                     Thread.sleep(200);
                 } catch (InterruptedException e) {

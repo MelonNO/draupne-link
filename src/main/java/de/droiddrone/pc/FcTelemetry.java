@@ -171,6 +171,17 @@ public class FcTelemetry {
         return phoneUpdate;
     }
 
+    /** PHONE_UPDATE's state while the phone installs (the app restarts, and the sticks with it). */
+    public static final int UPDATE_INSTALLING = 2;
+    /** The phone said "installing" within this long: it still is (it says so twice a second; the restart ends the link). */
+    public static final long INSTALLING_FRESH_MS = 10_000;
+
+    /** The phone says it installs an update now (1.0.49, H9): the sticks may not arm the drone meanwhile. */
+    public boolean isPhoneInstalling(long now) {
+        PhoneUpdate u = phoneUpdate;
+        return u != null && u.state() == UPDATE_INSTALLING && now - u.receivedAt() < INSTALLING_FRESH_MS;
+    }
+
     /** The phone's latest word on how late the sticks arrive, or null (none yet, or a phone app before pc.31). */
     public PhoneRcLag getPhoneRcLag() {
         return phoneRcLag;
