@@ -120,6 +120,13 @@ tasks.register('packageApp', Exec) {
             '--main-class', 'de.droiddrone.pc.Main',
             '--java-options', '-Dfile.encoding=UTF-8',
             '--dest', appImageDir
+    // the virtual fleet's starter next to the exe (zip and installer): "DRAUPNE Link.exe" fleet
+    doLast {
+        copy {
+            from file('src/fleet/Virtual fleet.bat')
+            into new File(appImageDir, 'DRAUPNE Link')
+        }
+    }
 }
 
 tasks.register('releaseZip', Zip) {

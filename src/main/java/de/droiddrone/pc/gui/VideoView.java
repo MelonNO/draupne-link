@@ -242,6 +242,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         } else {
             paintStats(g);
         }
+        if (virtual) paintVirtualTag(g, w);
         notePainted();
     }
 
@@ -285,6 +286,38 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         g.drawImage(img, flipX ? x + w : x, flipY ? y + h : y, flipX ? x : x + w, flipY ? y : y + h,
                 0, 0, img.getWidth(), img.getHeight(), null);
         if (interpolation != null) g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, interpolation);
+    }
+
+    /** The link is to a drone of the virtual fleet: a VIRTUAL DRONE tag over everything, so it is never taken for a real one. */
+    void setVirtual(boolean virtual) {
+        this.virtual = virtual;
+        repaint();
+    }
+
+    boolean isVirtual() {
+        return virtual;
+    }
+
+    private volatile boolean virtual;
+
+    /** The tag at the top of the picture while the drone is virtual. */
+    private void paintVirtualTag(Graphics2D g, int w) {
+        String text = "VIRTUAL DRONE - NOT A REAL FLIGHT";
+        Graphics2D g2 = (Graphics2D) g.create();
+        try {
+            Theme.smooth(g2);
+            g2.setFont(Theme.headingFont(Math.max(12f, Math.min(20f, w / 60f))));
+            java.awt.FontMetrics fm = g2.getFontMetrics();
+            int tw = fm.stringWidth(text) + 24, th = fm.getHeight() + 8;
+            int x = (w - tw) / 2, y = 6;
+            g2.setColor(Theme.alpha(Color.BLACK, 170));
+            g2.fillRect(x, y, tw, th);
+            g2.setColor(Theme.WARN);
+            g2.drawRect(x, y, tw - 1, th - 1);
+            g2.drawString(text, x + 12, y + 4 + fm.getAscent());
+        } finally {
+            g2.dispose();
+        }
     }
 
     /** For a camera mounted upside down. Only the picture turns; the OSD stays the right way up. */

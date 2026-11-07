@@ -57,6 +57,11 @@ public final class Names {
             return new Entry(name, kind, ip, device, host, version, lastSeen, on);
         }
 
+        /** A drone of the virtual fleet on this PC (a loopback address), never a real one. */
+        public boolean isVirtual() {
+            return de.droiddrone.pc.fleet.VirtualFleet.isVirtual(ip);
+        }
+
         /** "Pixel 8 - 2.3.0-pc.28", what is known. */
         public String detail() {
             StringBuilder sb = new StringBuilder();
@@ -190,9 +195,13 @@ public final class Names {
         String key = reply.name().toLowerCase(Locale.ROOT);
         Entry old = entries.get(key);
         String moved = old != null && old.ip() != null && !old.ip().isEmpty() && !old.ip().equals(ip) ? old.ip() : null;
+        // a drone of the virtual fleet (the name service asked it because the fleet announced it)
+        boolean virtual = NameService.VIRTUAL_HOST.equals(host) && de.droiddrone.pc.fleet.VirtualFleet.isVirtual(ip);
+        // a virtual drone never takes over the name of a real one: its claim on a name filed at a real address is dropped
+        if (virtual && old != null && moved != null && !de.droiddrone.pc.fleet.VirtualFleet.isVirtual(old.ip())) return null;
         Entry e = new Entry(reply.name(), reply.kind(), ip, reply.device(), host, reply.version(), System.currentTimeMillis(), true);
         entries.put(key, e);
-        save(e);
+        if (!virtual) save(e); // a virtual drone is known while the fleet runs, never saved to the settings
         return moved;
     }
 

@@ -2420,7 +2420,20 @@ class MapView extends JComponent {
             g.setColor(Color.WHITE);
             g.drawString("PHONE" + (last.accuracyM() > 0 ? "  ± " + last.accuracyM() + " M" : ""), (float) c.getX() + 13, (float) c.getY() + 4);
         }
+        if (virtualDrone) { // the virtual fleet's: never to be taken for a real drone
+            g.setFont(Theme.headingFont(11f));
+            g.setColor(Theme.WARN);
+            g.drawString("VIRTUAL", (float) c.getX() + 13, (float) c.getY() + (last.phone() ? 17 : 4));
+        }
         if (stale) badge(g, "LAST KNOWN  " + ageText(age), (int) c.getX(), (int) c.getY() - 24);
+    }
+
+    private volatile boolean virtualDrone;
+
+    /** The live drone is one of the virtual fleet: VIRTUAL beside it. */
+    void setVirtualDrone(boolean on) {
+        virtualDrone = on;
+        repaint();
     }
 
     /** A red tag above a point: the program's square style with bracket corners. */

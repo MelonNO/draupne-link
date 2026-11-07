@@ -1,0 +1,1688 @@
+package de.droiddrone.pc.fleet;
+
+import de.droiddrone.common.DataReader;
+import de.droiddrone.common.FcCommon;
+import de.droiddrone.common.MotionDetector;
+import de.droiddrone.common.MotionRecord;
+import de.droiddrone.common.Observe;
+import de.droiddrone.common.PcAudio;
+import de.droiddrone.common.ReceiverBuffer;
+import de.droiddrone.common.SavedPacket;
+import de.droiddrone.common.SettingsCommon;
+import de.droiddrone.common.Takeover;
+import de.droiddrone.common.UdpCommon;
+import de.droiddrone.common.UdpPacketData;
+import de.droiddrone.common.UdpSender;
+
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
+import java.util.function.Consumer;
+
+/**
+ * One virtual drone: DRAUPNE Flight's side of the link (overlay Flight Udp, PowerMode, the observation) in front of a
+ * virtual Betaflight ({@link FlightModel}). It speaks the real protocol with the shared Common code - ReceiverBuffer and
+ * UdpSender as the phone app is built with them, Takeover, PcAudio, Observe, MotionDetector, MotionRecord - so DRAUPNE
+ * Link's real link, session, telemetry, video and sound paths run end to end against it. It listens on a loopback
+ * address of its own ({@link VirtualFleet}) and never opens a serial port.
+ * <p>
+ * What it does as the phone does: the session rules (a keyed Connect only, the pilot's own re-Connect, Takeover from
+ * another PC, PILOT_AT / NO_PILOT), the stick frames' sequence and lateness rules, the idle sticks fed to the FC while
+ * it is disarmed and its own ARM ranges say they can't arm, the PC's Config (picture size, frame rate, bitrate limit),
+ * StartVideo, the video profile, SET_BITRATE, key frame requests, GetVideoConfig, AUDIO, DETECTION_SET, the power
+ * modes (STANDBY, DEEP SLEEP with its check windows and hellos, OVERWATCH), OBSERVE, NAME_QUERY / NAME_ASSIGN, and its
+ * telemetry at the phone's rates. What differs is said where it does.
+ */
+public final class VirtualDrone {
+    /** What it says it is: the newest phone app, so the PC uses every packet layout it knows. */
+    public static final String VERSION = "2.3.0-pc.38";
+    public static final String DEVICE = "VIRTUAL DRONE";
+    /** The phone's encoder steps, bit/s (StreamEncoder.baseBitRates). */
+    static final int[] STEPS = {150_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000,
+            15_000_000, 20_000_000};
+    static final byte SPECTATE_PILOT_QUERY = 0x60, SPECTATE_PILOT_AT = 0x61, SPECTATE_NO_PILOT = 0x62;
+    static final byte NAME_QUERY = 0x73, NAME_REPLY = 0x74, NAME_ASSIGN = 0x75;
+    static final byte KEY_FRAME_REQUEST = 0x6A, VIDEO_PROFILE = 0x6B, VIDEO_PARITY_GROUP = 0x71, SET_BITRATE = 0x72;
+    static final byte POWER_MODE = 0x6E, SLEEP_HELLO = 0x6F, SLEEP_ANSWER = 0x70, REMOTE_UPDATE = 0x77, IDLE_STICKS = 0x78,
+            DETECTION_SET = 0x7C;
+    static final short PHONE_UPDATE = 0x40F7;
+    public static final int NORMAL = 0, STANDBY = 1, DEEP_SLEEP = 2, OVERWATCH = 3;
+    /** The phone's own times (overlay Udp, PowerMode). */
+    static final long SAME_SESSION_MS = 1000, RC_SEQ16_FORGET_MS = 1000, IDLE_AFTER_MS = 300, IDLE_EVERY_MS = 50,
+            SLEEP_COUNTDOWN_MS = 1000, CHECK_WINDOW_MS = 20_000, HELLO_FIRST_MS = 200, HELLO_GAP_MS = 1500, DETECTION_KEEP_MS = 5000,
+            RESTART_MS = 3000;
+    private static final int PARITY_GROUP = 8;
+
+    // ------------------------------------------------------------------ who it is
+    private final int slot;
+    private final String key;
+    private final InetAddress address;
+    private volatile int port;
+    private volatile String name;
+    private final Consumer<String> log;
+
+    // ------------------------------------------------------------------ the drone
+    final FlightModel fc;
+    final LinkImpairment link = new LinkImpairment();
+    final Scene scene;
+    final SoundMaker sound;
+    private volatile Recording recording;
+    /** The phone gets nothing from its flight controller (the panel's FC LOST). */
+    private volatile boolean fcLost;
+    private final long startedAt = System.currentTimeMillis();
+
+    // ------------------------------------------------------------------ the link
+    private volatile ImpairedSocket socket;
+    private volatile UdpSender udpSender;
+    private volatile ReceiverBuffer receiverBuffer;
+    private volatile int threadsGen;
+    private volatile boolean running;
+    private volatile long lastPilotPacketMs, sessionStartedMs;
+    private volatile InetAddress lastPcIp;
+    private volatile int lastPcPort;
+    private volatile boolean restarting;
+
+    // the sticks (the receive thread)
+    private int lastRcSeq = -1;
+    private boolean rcSeqValid;
+    private volatile long lastRcTakenMs, lastRcWriteMs;
+    private volatile int lastRcSeqReported = -1;
+    private volatile short[] idleSticks;
+    private volatile boolean idleFeeding;
+    private int rcLagMinNow = -1, rcLagMinBefore = -1;
+    private long rcLagBucketAt;
+    private volatile int rcLagMs = -1, rcLagMaxMs = -1, rcLagDropped;
+    private volatile boolean rcLagFromPc;
+    private volatile long maxRcInGapMs;
+    private final Object rcLock = new Object();
+
+    // what the PC asked for
+    private volatile int cameraWidth = 1280, cameraHeight = 720, cameraFps = 30, bitrateLimitMbps = 4;
+    private volatile int step = 5;
+    private volatile boolean keyFramesTwice, groupParity;
+    private volatile boolean videoWanted;
+    private volatile boolean keyFrameWanted, configResend;
+    private final PcAudio pcAudio = new PcAudio();
+    private volatile int detectionLevel;
+    private volatile long detectionAskedAt;
+    private volatile String updateRefusal;
+    private volatile long updateRefusedAt;
+
+    // observation
+    private final Observe.Observers<String> observers = new Observe.Observers<>(Observe.MAX_OBSERVERS);
+    private final java.util.Map<String, InetSocketAddress> observerAddresses = new java.util.HashMap<>();
+    private volatile InetSocketAddress[] observerTargets = new InetSocketAddress[0];
+    private volatile boolean observing, observeAudio;
+    private volatile Observe.Request observeWant;
+    private long observeKeyFrameAt;
+
+    // power modes (the tick thread, and requests from the buffer thread: under powerLock)
+    private final Object powerLock = new Object();
+    private volatile int mode = NORMAL;
+    private volatile int checkIntervalMin = 5;
+    private long sleepAt, nextCheckAt, windowOpenedAt, nextHelloAt;
+    private volatile boolean asleep, checking;
+    private int burstLeft;
+    private long nextBurstAt;
+    final VirtualOverwatch overwatch;
+
+    // the motion detection (the tick thread)
+    private final MotionDetector detector = new MotionDetector(MotionDetector.NORMAL);
+    private BufferedImage analysis;
+    private long nextAnalysisAt, nextMotionReportAt;
+    private volatile MotionRecord.Report lastMotion;
+    private int lastBoxCount;
+
+    // the streams
+    private volatile Thread videoThread, audioThread;
+    private volatile int videoGen, audioGen;
+    private volatile String videoState = "off";
+    private volatile int sentBitRate;
+    private volatile boolean audioOn, audioHeld;
+    private volatile String lastBeep;
+
+    VirtualDrone(int slot, String name, String key, InetAddress address, double lat, double lon, double headingDeg,
+                 FlightModel.Setup setup, Consumer<String> log) {
+        this.slot = slot;
+        this.key = key;
+        this.address = address;
+        this.name = name == null ? "" : name;
+        this.log = msg -> log.accept((this.name.isEmpty() ? "Virtual drone " + (slot + 1) : this.name) + ": " + msg);
+        this.fc = new FlightModel(setup, lat, lon, headingDeg, System.currentTimeMillis());
+        this.scene = new Scene(this.name.isEmpty() ? "DRONE " + (slot + 1) : this.name, 1000L + slot);
+        this.sound = new SoundMaker(2000L + slot);
+        this.overwatch = new VirtualOverwatch(this, this.log);
+    }
+
+    // ------------------------------------------------------------------ start, stop, restart
+
+    /** Opens its socket on its loopback address (port 0: any free one) and starts its threads. */
+    void start(int wantedPort) throws IOException {
+        running = true;
+        openSocket(wantedPort);
+        Thread tick = new Thread(this::tickRun, "fleetTick" + slot);
+        tick.setDaemon(true);
+        tick.setPriority(Thread.MIN_PRIORITY + 1);
+        tick.start();
+    }
+
+    private void openSocket(int wantedPort) throws IOException {
+        ImpairedSocket s = new ImpairedSocket(new InetSocketAddress(address, wantedPort), link);
+        s.setReceiveBufferSize(256 * 1024);
+        s.setSendBufferSize(UdpCommon.packetLength * 64);
+        port = s.getLocalPort();
+        socket = s;
+        UdpSender sender = new UdpSender(s);
+        udpSender = sender;
+        receiverBuffer = new ReceiverBuffer(sender, true, key, null);
+        int gen = ++threadsGen;
+        startThread(() -> receiveRun(s, gen), "fleetReceive" + slot, Thread.NORM_PRIORITY);
+        startThread(() -> bufferRun(gen), "fleetBuffer" + slot, Thread.MIN_PRIORITY + 1);
+    }
+
+    private void closeSocket() {
+        threadsGen++;
+        ImpairedSocket s = socket;
+        socket = null;
+        UdpSender sender = udpSender;
+        if (sender != null) sender.close();
+        ReceiverBuffer b = receiverBuffer;
+        if (b != null) b.close();
+        if (s != null) s.close();
+    }
+
+    private static void startThread(Runnable r, String name, int priority) {
+        Thread t = new Thread(r, name);
+        t.setDaemon(true);
+        t.setPriority(priority);
+        t.start();
+    }
+
+    /** Everything stops; the socket closes. */
+    void stop() {
+        running = false;
+        stopVideo();
+        stopAudio();
+        overwatch.shutdown();
+        closeSocket();
+        Recording r = recording;
+        recording = null;
+        if (r != null) r.close();
+    }
+
+    /**
+     * The phone app restarts (the panel's PHONE RESTART): everything of the app goes - its session, the idle sticks, the
+     * observers, the power mode, where the PC was - and comes back RESTART_MS later on the same port. The flight
+     * controller runs on and loses its sticks meanwhile: a drone in the air goes to failsafe, as it would.
+     */
+    public void restartApp() {
+        if (restarting || !running) return;
+        restarting = true;
+        log.accept("phone app restarts (back in " + RESTART_MS / 1000 + " s)");
+        stopVideo();
+        stopAudio();
+        overwatch.end("the app restarted");
+        int keep = port;
+        closeSocket();
+        ImpairedSocket.LATER.schedule(() -> {
+            try {
+                if (!running) return;
+                lastPcIp = null;
+                lastPcPort = 0;
+                idleSticks = null;
+                pcAudio.forget();
+                synchronized (observers) {
+                    observers.clear();
+                    observerAddresses.clear();
+                    refreshObserverTargets();
+                }
+                observing = false;
+                synchronized (powerLock) {
+                    mode = NORMAL;
+                    asleep = checking = false;
+                    sleepAt = 0;
+                }
+                videoWanted = false;
+                openSocket(keep);
+                log.accept("phone app started again: a new session from the next Connect");
+            } catch (IOException e) {
+                log.accept("phone app could not open its socket again: " + e.getMessage());
+            } finally {
+                restarting = false;
+            }
+        }, RESTART_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * The handover's address change (no Tailscale): the phone's socket moves to another port, as a phone whose network
+     * changed would be seen from outside. The PC's link, fixed on the old port, loses it.
+     */
+    public void moveToNewPort() {
+        try {
+            closeSocket();
+            openSocket(0);
+            log.accept("now on port " + port + " (a new address, as after a cell change without Tailscale)");
+        } catch (IOException e) {
+            log.accept("could not move to a new port: " + e.getMessage());
+        }
+    }
+
+    // ------------------------------------------------------------------ receiving (the phone's receiverRun)
+
+    private void receiveRun(ImpairedSocket s, int gen) {
+        byte[] buf = new byte[UdpCommon.packetLength + 64];
+        DatagramPacket p = new DatagramPacket(buf, buf.length);
+        while (running && gen == threadsGen && !s.isClosed()) {
+            try {
+                p.setLength(buf.length);
+                s.receive(p);
+                if (p.getLength() < 1) continue;
+                long delay = link.decide(false, System.currentTimeMillis());
+                if (delay < 0) continue;
+                byte[] d = java.util.Arrays.copyOf(p.getData(), p.getLength());
+                InetAddress from = p.getAddress();
+                int fromPort = p.getPort();
+                if (delay == 0) handle(d, from, fromPort);
+                else ImpairedSocket.LATER.schedule(() -> handle(d, from, fromPort), delay, TimeUnit.MILLISECONDS);
+            } catch (IOException e) {
+                if (running && gen == threadsGen && !s.isClosed()) log.accept("receive error: " + e.getMessage());
+            } catch (RuntimeException e) {
+                log.accept("receive error: " + e);
+            }
+        }
+    }
+
+    /** One datagram from the network: the phone's receive thread's rules, in its order. */
+    synchronized void handle(byte[] d, InetAddress from, int fromPort) {
+        if (socket == null) return;
+        int len = d.length;
+        if (d[0] == NAME_QUERY || d[0] == NAME_ASSIGN) {
+            answerName(d, len, from, fromPort);
+            return;
+        }
+        if (d[0] == Observe.OBSERVE || d[0] == Observe.STOP) {
+            onObserve(d, len, from, fromPort);
+            return;
+        }
+        ReceiverBuffer buffer = receiverBuffer;
+        UdpSender sender = udpSender;
+        if (buffer == null || sender == null) return;
+        long now = System.currentTimeMillis();
+        if (buffer.isConnected()) {
+            if (from.equals(sender.getIp()) && fromPort == sender.getPort()) {
+                lastPilotPacketMs = now;
+                lastPcIp = from;
+                lastPcPort = fromPort;
+                if (d[0] == UdpCommon.Connect && keyMatches(d, len, 4)) {
+                    if (now - sessionStartedMs < SAME_SESSION_MS) return;
+                    log.accept("the pilot connects again (its link was lost): a new session");
+                    newSession();
+                    sessionStartedMs = now;
+                    buffer = receiverBuffer;
+                }
+            } else {
+                if (!otherPcWhileConnected(d, len, from, fromPort)) return;
+                buffer = receiverBuffer;
+            }
+        } else {
+            if (d[0] == SPECTATE_PILOT_QUERY) {
+                answerSpectator(d, len, from, fromPort, false);
+                return;
+            }
+            rcSeqValid = false;
+            resetRcLag();
+            if (d[0] == SLEEP_ANSWER) {
+                if (len >= 2 && from.equals(lastPcIp)) sleepAnswer(d[1] != 0);
+                return;
+            }
+            if (d[0] != UdpCommon.Connect) return;
+            if (!keyMatches(d, len, 4)) {
+                log.accept("a PC at " + from.getHostAddress() + " tried to connect with another key");
+                return;
+            }
+            if (lastPcIp != null && !(from.equals(lastPcIp) && fromPort == lastPcPort)) {
+                if (!Takeover.allowed(from.equals(lastPcIp), fcDisarmed(), now - lastPilotPacketMs)) {
+                    answerSpectator(d, len, from, fromPort, true);
+                    return;
+                }
+                if (!from.equals(lastPcIp)) log.accept("new session from " + from.getHostAddress() + " (the pilot is silent, the FC disarmed)");
+            }
+            lastPilotPacketMs = now;
+            sessionStartedMs = now;
+            idleSticks = null;
+        }
+        if (d[0] == IDLE_STICKS) {
+            if (buffer.isConnected()) handleIdleSticks(d, len);
+            return;
+        }
+        if (d[0] == UdpCommon.RcFrame) {
+            if (buffer.isConnected() && mode == NORMAL) handleRcFrame(d, len);
+            return;
+        }
+        buffer.addPacket(new DatagramPacket(d, len, from, fromPort));
+    }
+
+    private boolean otherPcWhileConnected(byte[] d, int len, InetAddress from, int fromPort) {
+        long now = System.currentTimeMillis();
+        long silent = now - lastPilotPacketMs;
+        boolean disarmed = fcDisarmed();
+        boolean pilotAlive = silent < Takeover.PILOT_ALIVE_MS || !disarmed;
+        if (d[0] == UdpCommon.Connect) {
+            if (!keyMatches(d, len, 4)) return false;
+            boolean sameAddress = from.equals(udpSender.getIp());
+            if (Takeover.allowed(sameAddress, disarmed, silent)) {
+                log.accept("new session from " + from.getHostAddress() + ":" + fromPort + (sameAddress ? " (the pilot's address)" : " (the pilot is silent)"));
+                newSession();
+                sessionStartedMs = now;
+                return true;
+            }
+        }
+        answerSpectator(d, len, from, fromPort, pilotAlive);
+        return false;
+    }
+
+    private void newSession() {
+        ReceiverBuffer old = receiverBuffer;
+        receiverBuffer = new ReceiverBuffer(udpSender, true, key, null);
+        if (old != null) old.close();
+        rcSeqValid = false;
+        resetRcLag();
+        idleSticks = null;
+    }
+
+    private boolean keyMatches(byte[] d, int len, int keyAt) {
+        if (len < keyAt + 2) return false;
+        int n = ((d[keyAt] & 0xff) << 8) | (d[keyAt + 1] & 0xff);
+        return keyAt + 2 + n <= len && key.equals(new String(d, keyAt + 2, n, java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private void answerSpectator(byte[] d, int len, InetAddress from, int fromPort, boolean flying) {
+        int keyAt;
+        if (d[0] == SPECTATE_PILOT_QUERY) keyAt = 1;
+        else if (flying && d[0] == UdpCommon.Connect) keyAt = 4;
+        else return;
+        if (!keyMatches(d, len, keyAt)) return;
+        UdpSender sender = udpSender;
+        InetAddress pilot = sender == null ? null : sender.getIp();
+        byte[] answer;
+        if (flying && pilot != null) {
+            byte[] a = pilot.getAddress();
+            answer = new byte[4 + a.length];
+            answer[0] = SPECTATE_PILOT_AT;
+            answer[1] = (byte) a.length;
+            System.arraycopy(a, 0, answer, 2, a.length);
+            answer[2 + a.length] = (byte) (sender.getPort() >> 8);
+            answer[3 + a.length] = (byte) sender.getPort();
+        } else {
+            answer = new byte[]{SPECTATE_NO_PILOT};
+        }
+        sendRaw(answer, new InetSocketAddress(from, fromPort));
+    }
+
+    private void sendRaw(byte[] data, InetSocketAddress to) {
+        ImpairedSocket s = socket;
+        if (s == null || to == null) return;
+        try {
+            s.send(new DatagramPacket(data, data.length, to));
+        } catch (IOException ignored) {
+            // as lost
+        }
+    }
+
+    // ------------------------------------------------------------------ the sticks
+
+    private void handleRcFrame(byte[] d, int len) {
+        if (len < 2) return;
+        int count = d[1] & 0xff;
+        if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
+        int remaining = len - 2;
+        long now = System.currentTimeMillis();
+        if (remaining == count * 2 + 5) {
+            int seq = ((d[len - 5] & 0xff) << 8) | (d[len - 4] & 0xff);
+            int sentMs = ((d[len - 3] & 0xff) << 8) | (d[len - 2] & 0xff);
+            int maxLagMs = (d[len - 1] & 0xff) * 10;
+            rcLagFromPc = true;
+            if (!takeSeq16(seq, now)) return;
+            if (tooLate(sentMs, maxLagMs, now)) return;
+            lastRcSeq = seq;
+            rcSeqValid = true;
+        } else if (remaining == count * 2 + 2) {
+            int seq = ((d[len - 2] & 0xff) << 8) | (d[len - 1] & 0xff);
+            rcLagFromPc = false;
+            if (!takeSeq16(seq, now)) return;
+            lastRcSeq = seq;
+            rcSeqValid = true;
+        } else if (remaining == count * 2) {
+            rcLagFromPc = false;
+            lastRcSeq = -1;
+        } else {
+            return;
+        }
+        short[] frame = new short[count];
+        for (int i = 0, at = 2; i < count; i++, at += 2) frame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
+        if (lastRcTakenMs != 0) maxRcInGapMs = Math.max(maxRcInGapMs, now - lastRcTakenMs);
+        synchronized (rcLock) {
+            lastRcTakenMs = now;
+            if (!fcLost) {
+                fc.sticks(frame, count, now);
+                lastRcWriteMs = now;
+                lastRcSeqReported = lastRcSeq;
+            }
+        }
+    }
+
+    private boolean takeSeq16(int seq, long now) {
+        if (rcSeqValid && now - lastRcTakenMs > RC_SEQ16_FORGET_MS) rcSeqValid = false;
+        return !rcSeqValid || (short) (seq - lastRcSeq) > 0;
+    }
+
+    /** The stick lag (the phone's pc.31 rule): the frame's transit over the best of the last two 10 s buckets. */
+    private boolean tooLate(int sentMs, int maxLagMs, long nowMs) {
+        int transit = (int) ((nowMs - sentMs) & 0xFFFF);
+        if (nowMs - rcLagBucketAt >= 10_000) {
+            rcLagMinBefore = rcLagMinNow;
+            rcLagMinNow = -1;
+            rcLagBucketAt = nowMs;
+        }
+        if (rcLagMinNow < 0 || (short) (transit - rcLagMinNow) < 0) rcLagMinNow = transit;
+        int best = rcLagMinNow;
+        if (rcLagMinBefore >= 0 && (short) (rcLagMinBefore - best) < 0) best = rcLagMinBefore;
+        int lag = Math.max(0, (short) (transit - best));
+        rcLagMs = lag;
+        if (lag > rcLagMaxMs) rcLagMaxMs = lag;
+        if (maxLagMs > 0 && lag > maxLagMs) {
+            rcLagDropped++;
+            return true;
+        }
+        return false;
+    }
+
+    private void resetRcLag() {
+        rcLagMinNow = -1;
+        rcLagMinBefore = -1;
+        rcLagBucketAt = System.currentTimeMillis();
+        rcLagMs = -1;
+        rcLagMaxMs = -1;
+        rcLagDropped = 0;
+    }
+
+    private void handleIdleSticks(byte[] d, int len) {
+        if (len < 2) return;
+        int count = d[1] & 0xff;
+        if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT || len != 2 + count * 2) return;
+        short[] frame = new short[count];
+        for (int i = 0, at = 2; i < count; i++, at += 2) frame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
+        if (idleSticks == null) log.accept("idle sticks from the PC: fed to the FC while it is disarmed and no sticks come");
+        idleSticks = frame;
+    }
+
+    /** The idle sticks to the FC (the phone's idleSticksRun): disarmed, no stick frame for 300 ms, its ARM ranges can't arm. */
+    private void feedIdleSticks(long now) {
+        boolean feed;
+        synchronized (rcLock) {
+            short[] idle = idleSticks;
+            feed = idle != null && !fcLost && mode != DEEP_SLEEP && mode != OVERWATCH && now - lastRcTakenMs >= IDLE_AFTER_MS
+                    && !fc.isArmed() && !fc.frameMayArm(idle, idle.length);
+            if (feed) {
+                fc.sticks(idle, idle.length, now);
+                lastRcWriteMs = now;
+            }
+        }
+        if (feed != idleFeeding) log.accept(feed ? "idle sticks to the FC (disarmed, no sticks from the PC)" : "idle sticks stopped");
+        idleFeeding = feed;
+    }
+
+    /** The FC is known DISARMED (FcArmedState): no FC data counts as not known. */
+    boolean fcDisarmed() {
+        return !fcLost && !fc.isArmed();
+    }
+
+    // ------------------------------------------------------------------ the session's packets (the buffer thread)
+
+    private void bufferRun(int gen) {
+        long lastTick = System.currentTimeMillis();
+        while (running && gen == threadsGen) {
+            try {
+                ReceiverBuffer b = receiverBuffer;
+                if (b == null) {
+                    Thread.sleep(5);
+                    continue;
+                }
+                SavedPacket packet;
+                while ((packet = b.getNextPacket()) != null) processData(packet.data);
+                // the buffer counts its timeouts in calls (one a millisecond on the phone): as many as ms went by
+                long now = System.currentTimeMillis();
+                int ticks = (int) Math.min(50, Math.max(0, now - lastTick));
+                lastTick = now;
+                for (int i = 0; i < ticks; i++) b.processTimer();
+                Thread.sleep(2);
+            } catch (InterruptedException e) {
+                return;
+            } catch (RuntimeException e) {
+                log.accept("buffer error: " + e);
+            }
+        }
+    }
+
+    private void processData(byte[] data) {
+        DataReader buffer = new DataReader(data, true);
+        byte packetName = buffer.readByte();
+        if (UdpCommon.isPacketNumbered(packetName)) buffer.readShort();
+        try {
+            switch (packetName) {
+                case UdpCommon.Ping -> {
+                    boolean toEndPoint = buffer.readBoolean();
+                    long time = buffer.readLong();
+                    byte target = buffer.getRemaining() > 0 ? buffer.readByte() : -1;
+                    udpSender.sendPong(toEndPoint, time, target);
+                }
+                case UdpCommon.Config -> onConfig(buffer);
+                case UdpCommon.StartVideo -> {
+                    if (mode != NORMAL) {
+                        log.accept("StartVideo in " + modeName(mode) + ": not started");
+                        return;
+                    }
+                    videoWanted = true;
+                    if (videoThread == null) startVideo();
+                    else configResend = true; // the stream runs: its config again, then a key frame
+                    keyFrameWanted = true;
+                }
+                case UdpCommon.GetVideoConfig -> configResend = true;
+                case UdpCommon.Disconnect -> {
+                    log.accept("the PC disconnected");
+                    videoWanted = false;
+                    pcAudio.forget();
+                    if (!observing) stopVideo();
+                }
+                case UdpCommon.FcInfo -> {
+                    if (!fcLost) udpSender.sendPacket(TelemetryRecords.fcInfoPacket());
+                }
+                case UdpCommon.BoxNames -> {
+                    if (!fcLost) sendRecords(out -> TelemetryRecords.boxNames(out, FlightModel.BOX_NAMES));
+                }
+                case UdpCommon.BoxIds -> {
+                    if (!fcLost) sendRecords(out -> TelemetryRecords.boxIds(out, FlightModel.BOX_IDS));
+                }
+                case UdpCommon.BatteryConfig -> {
+                    if (!fcLost) sendRecords(out -> TelemetryRecords.batteryConfig(out, 3.3, 4.3, 3.5));
+                }
+                case SET_BITRATE -> {
+                    if (buffer.getRemaining() > 0) setStep(buffer.readUnsignedByteAsInt());
+                }
+                case UdpCommon.ChangeBitRate -> setStep(step + (buffer.readBoolean() ? 1 : -1));
+                case VIDEO_PROFILE -> {
+                    int flags = buffer.getRemaining() > 0 ? buffer.readByte() : 0;
+                    boolean twice = (flags & 1) != 0, groups = (flags & 2) != 0;
+                    if (twice != keyFramesTwice || groups != groupParity) {
+                        log.accept("video profile: key frames " + (twice ? "twice" : "once") + ", parity " + (groups ? "per group" : "off"));
+                    }
+                    keyFramesTwice = twice;
+                    groupParity = groups;
+                }
+                case KEY_FRAME_REQUEST -> keyFrameWanted = true;
+                case PcAudio.PACKET -> {
+                    PcAudio.Request r = PcAudio.decode(data, data.length);
+                    pcAudio.onRequest(r, System.currentTimeMillis());
+                    if (r != null && r.resendConfig) audioConfigResend = true;
+                }
+                case DETECTION_SET -> {
+                    if (buffer.getRemaining() > 0) {
+                        int level = buffer.readUnsignedByteAsInt();
+                        if (level != detectionLevel) log.accept("motion detection " + (level == 0 ? "off" : "sensitivity " + level) + " (the PC)");
+                        detectionLevel = level;
+                        detectionAskedAt = System.currentTimeMillis();
+                    }
+                }
+                case REMOTE_UPDATE -> {
+                    if (updateRefusal == null) log.accept("remote update asked for: a virtual drone takes none");
+                    updateRefusal = "a virtual drone takes no update";
+                    updateRefusedAt = System.currentTimeMillis();
+                }
+                case POWER_MODE -> {
+                    if (buffer.getRemaining() < 1) return;
+                    int m = buffer.readUnsignedByteAsInt();
+                    int interval = buffer.getRemaining() > 0 ? buffer.readUnsignedByteAsInt() : 0;
+                    if (m == OVERWATCH) {
+                        if (buffer.getRemaining() < 6) return;
+                        int sensitivity = buffer.readUnsignedByteAsInt();
+                        int flags = buffer.readUnsignedByteAsInt();
+                        int token = buffer.readInt();
+                        overwatch.configure(sensitivity, flags, token);
+                    }
+                    requestMode(m, interval, "the PC");
+                }
+                default -> {
+                    // OsdConfig, recording on the phone, camera change: nothing a virtual phone has
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            log.accept("packet " + packetName + " error: " + e);
+        }
+    }
+
+    private volatile boolean audioConfigResend;
+
+    /** The PC's Config (upstream Config.processReceivedConfig, the parts that matter here). */
+    private void onConfig(DataReader b) throws IOException {
+        int version = b.readShort();
+        if (version != SettingsCommon.versionCompatibleCode) {
+            udpSender.sendPacket(new UdpPacketData(UdpCommon.VersionMismatch).getData());
+            return;
+        }
+        int w = 0, h = 0, fps = 30;
+        for (int i = 0; i < SettingsCommon.maxCamerasCount; i++) {
+            if (i > 0) b.readBoolean();
+            b.readUTF();
+            int cw = b.readShort(), ch = b.readShort();
+            b.readShort(); // fps min
+            int fpsMax = b.readShort();
+            b.readBoolean();
+            b.readByte();
+            b.readBoolean();
+            if (i == 0) {
+                w = cw;
+                h = ch;
+                fps = fpsMax;
+            }
+        }
+        int limit = b.readUnsignedByteAsInt();
+        udpSender.sendPacket(new UdpPacketData(UdpCommon.ConfigReceived).getData());
+        w = Math.max(160, Math.min(1920, w)) / 2 * 2;
+        h = Math.max(90, Math.min(1080, h)) / 2 * 2;
+        fps = Math.max(5, Math.min(60, fps));
+        if (w != cameraWidth || h != cameraHeight || fps != cameraFps || limit != bitrateLimitMbps) {
+            log.accept("config: " + w + "x" + h + " at " + fps + " fps, up to " + limit + " Mbit/s");
+        }
+        cameraWidth = w;
+        cameraHeight = h;
+        cameraFps = fps;
+        bitrateLimitMbps = limit;
+        if (limit > 0 && STEPS[step] > limit * 1_000_000) setStep(step);
+    }
+
+    private void setStep(int s) {
+        int max = STEPS.length - 1;
+        if (bitrateLimitMbps > 0) while (max > 0 && STEPS[max] > bitrateLimitMbps * 1_000_000) max--;
+        step = Math.max(0, Math.min(max, s));
+    }
+
+    private interface RecordWriter {
+        void write(DataOutputStream out) throws IOException;
+    }
+
+    /** Records in a TelemetryData packet of their own, to the pilot. */
+    private void sendRecords(RecordWriter w) throws IOException {
+        UdpPacketData p = new UdpPacketData(UdpCommon.TelemetryData);
+        w.write(p.daos);
+        UdpSender sender = udpSender;
+        if (sender != null) sender.sendPacket(p.getData());
+    }
+
+    public boolean isConnected() {
+        ReceiverBuffer b = receiverBuffer;
+        return b != null && b.isConnected();
+    }
+
+    // ------------------------------------------------------------------ names
+
+    private void answerName(byte[] d, int len, InetAddress from, int fromPort) {
+        String k = de.droiddrone.pc.Names.keyOf(d, len);
+        if (!key.equals(k)) return;
+        if (d[0] == NAME_ASSIGN) {
+            String assigned = de.droiddrone.pc.Names.parseAssign(d, len, key);
+            if (assigned != null && !assigned.equals(name)) {
+                log.accept("named " + assigned + " by the PC at " + from.getHostAddress());
+                setName(assigned);
+            }
+        }
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            DataOutputStream out = new DataOutputStream(bytes);
+            out.writeByte(NAME_REPLY);
+            out.writeUTF(key);
+            out.writeByte(0);
+            out.writeUTF(name);
+            out.writeUTF(DEVICE);
+            out.writeUTF(VERSION);
+            out.writeByte(1); // where the drone is (pc.32)
+            long now = System.currentTimeMillis();
+            boolean fromFc = !fcLost && fc.gpsFix(now);
+            out.writeByte(fromFc ? 1 : 2);
+            out.writeInt((int) Math.round(fc.latDeg() * 1e7));
+            out.writeInt((int) Math.round(fc.lonDeg() * 1e7));
+            out.writeShort(0);
+            out.writeByte(fcLost ? 2 : fc.isArmed() ? 1 : 0);
+            boolean flown = isConnected();
+            out.writeByte(flown ? 1 : 0);
+            InetAddress pilot = flown ? udpSender.getIp() : null;
+            byte[] a = pilot == null ? new byte[0] : pilot.getAddress();
+            out.writeByte(a.length);
+            out.write(a);
+            sendRaw(bytes.toByteArray(), new InetSocketAddress(from, fromPort));
+        } catch (IOException ignored) {
+        }
+    }
+
+    public void setName(String n) {
+        name = n == null ? "" : n;
+        scene.setName(name.isEmpty() ? "DRONE " + (slot + 1) : name);
+    }
+
+    // ------------------------------------------------------------------ observation (the phone's onObserve / observeTick)
+
+    private void onObserve(byte[] d, int len, InetAddress from, int fromPort) {
+        String k = Observe.keyOf(d, len);
+        if (k == null || !k.equals(key)) return;
+        InetSocketAddress who = new InetSocketAddress(from, fromPort);
+        String id = who.toString();
+        if (d[0] == Observe.STOP) {
+            boolean was;
+            synchronized (observers) {
+                was = observers.remove(id);
+                observerAddresses.remove(id);
+                refreshObserverTargets();
+            }
+            if (was) log.accept("observer " + from.getHostAddress() + " left");
+            answerObserver(who, Observe.STOPPED);
+            return;
+        }
+        Observe.Request r = Observe.decodeRequest(d, len);
+        if (r == null) return;
+        long now = System.currentTimeMillis();
+        int state;
+        boolean pilotNear = isConnected() || now - lastPilotPacketMs < Takeover.PILOT_ALIVE_MS && !from.equals(lastPcIp);
+        if (pilotNear) state = Observe.REFUSED_PILOT;
+        else if (!fcDisarmed()) state = Observe.REFUSED_ARMED;
+        else if (mode != NORMAL || overwatch.isWatching()) state = Observe.REFUSED_POWER;
+        else {
+            boolean added;
+            synchronized (observers) {
+                added = !observerAddresses.containsKey(id);
+                state = observers.onRequest(id, r, now);
+                if (state == Observe.STREAMING) {
+                    observerAddresses.put(id, who);
+                    refreshObserverTargets();
+                } else {
+                    added = false;
+                }
+            }
+            if (added) log.accept("observer " + from.getHostAddress() + " watches (" + r.width + "x" + r.height + ")");
+        }
+        answerObserver(who, state);
+        if (state != Observe.STREAMING) return;
+        if (r.videoConfig()) configResend = true;
+        if (r.audioConfig()) audioConfigResend = true;
+        if (r.videoConfig() && now - observeKeyFrameAt >= 1000) {
+            observeKeyFrameAt = now;
+            keyFrameWanted = true;
+        }
+    }
+
+    private void answerObserver(InetSocketAddress who, int state) {
+        int count;
+        synchronized (observers) {
+            count = observers.size();
+        }
+        sendRaw(Observe.encodeState(state, cameraWidthNow(), cameraHeightNow(), cameraFpsNow(), count), who);
+    }
+
+    private void refreshObserverTargets() {
+        observerTargets = observerAddresses.values().toArray(new InetSocketAddress[0]);
+    }
+
+    /** Every 0.1 s: observers expired or sent away; the picture they want set; the stream started or stopped. */
+    private void observeTick(long now) {
+        InetSocketAddress[] ended = null;
+        int endState = 0;
+        Observe.Request want;
+        synchronized (observers) {
+            for (String gone : observers.expire(now)) {
+                observerAddresses.remove(gone);
+                log.accept("observer " + gone + " went silent");
+            }
+            if (!observers.isEmpty()) {
+                boolean pilot = isConnected();
+                boolean armed = !fcDisarmed();
+                boolean power = mode != NORMAL || overwatch.isWatching();
+                if (pilot || armed || power) {
+                    endState = pilot ? Observe.ENDED_PILOT : armed ? Observe.REFUSED_ARMED : Observe.REFUSED_POWER;
+                    ended = observerAddresses.values().toArray(new InetSocketAddress[0]);
+                    observers.clear();
+                    observerAddresses.clear();
+                }
+            }
+            refreshObserverTargets();
+            want = observers.wanted();
+        }
+        if (ended != null) {
+            log.accept("observation ended: " + Observe.stateName(endState));
+            for (InetSocketAddress who : ended) answerObserver(who, endState);
+        }
+        observeWant = want;
+        if (want == null) {
+            if (observing) {
+                observing = false;
+                observeAudio = false;
+                if (!isConnected() || !videoWanted) stopVideo();
+                log.accept("observation: nobody watches now");
+            }
+            return;
+        }
+        if (!observing) {
+            observing = true;
+            keyFramesTwice = false;
+            groupParity = true;
+            log.accept("observation: streaming to observers");
+        }
+        observeAudio = want.audio();
+        if (videoThread == null) startVideo();
+    }
+
+    private void sendToObservers(byte[] data) {
+        ImpairedSocket s = socket;
+        if (s == null) return;
+        for (InetSocketAddress to : observerTargets) {
+            try {
+                s.send(new DatagramPacket(data, data.length, to));
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    /** The stream's packets: to the pilot's session, or, observed, a copy to each observer. */
+    private void streamOut(byte[] data) {
+        if (observing && !isConnected()) {
+            sendToObservers(data);
+            return;
+        }
+        UdpSender sender = udpSender;
+        if (sender != null) sender.sendPacket(data);
+    }
+
+    private int cameraWidthNow() {
+        Observe.Request w = observeWant;
+        return observing && !isConnected() && w != null ? w.width : cameraWidth;
+    }
+
+    private int cameraHeightNow() {
+        Observe.Request w = observeWant;
+        return observing && !isConnected() && w != null ? w.height : cameraHeight;
+    }
+
+    private int cameraFpsNow() {
+        Observe.Request w = observeWant;
+        return observing && !isConnected() && w != null ? Math.max(1, w.fps) : cameraFps;
+    }
+
+    private int bitRateNow() {
+        Observe.Request w = observeWant;
+        if (observing && !isConnected() && w != null) return STEPS[Observe.stepFor(w.maxKbps)];
+        return STEPS[step];
+    }
+
+    // ------------------------------------------------------------------ the video
+
+    private void startVideo() {
+        int gen = ++videoGen;
+        Thread t = new Thread(() -> videoRun(gen), "fleetVideo" + slot);
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        videoThread = t;
+        t.start();
+    }
+
+    void stopVideo() {
+        videoGen++;
+        videoThread = null;
+        videoState = "off";
+    }
+
+    private void videoRun(int gen) {
+        H264Encoder enc = null;
+        int frameNum = 0;
+        long next = System.nanoTime();
+        BufferedImage img = null;
+        long lastReopen = 0;
+        long bytesWindow = 0, windowStart = System.currentTimeMillis();
+        try {
+            while (gen == videoGen && running) {
+                int w = cameraWidthNow(), h = cameraHeightNow(), fps = cameraFpsNow(), bps = bitRateNow();
+                long nowMs = System.currentTimeMillis();
+                boolean sizeChanged = enc == null || enc.width() != w || enc.height() != h || enc.fps() != fps;
+                boolean rateChanged = enc != null && enc.bitRate() != bps && nowMs - lastReopen >= 1500;
+                if (sizeChanged || rateChanged) {
+                    if (enc != null) enc.close();
+                    enc = new H264Encoder(w, h, fps, bps);
+                    lastReopen = nowMs;
+                    if (sizeChanged) frameNum = 0; // a restarted stream: frame 1 next
+                    img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+                    sendVideoConfig(enc);
+                    keyFrameWanted = true;
+                    videoState = w + "x" + h + " " + fps + " fps " + bps / 1000 + " kbit/s";
+                }
+                if (configResend) {
+                    configResend = false;
+                    sendVideoConfig(enc);
+                }
+                renderPicture(img, nowMs);
+                boolean key = keyFrameWanted;
+                keyFrameWanted = false;
+                for (H264Encoder.Packet p : enc.encode(Scene.pixels(img), key)) {
+                    if (gen != videoGen) break;
+                    if (frameNum >= Short.MAX_VALUE) frameNum = 1;
+                    frameNum++;
+                    if (p.keyFrame() && observing && !isConnected()) sendVideoConfig(enc);
+                    int copies = p.keyFrame() && keyFramesTwice ? 2 : 1;
+                    for (int c = 0; c < copies; c++) {
+                        sendFragments(p.keyFrame() ? UdpCommon.KeyFrame : UdpCommon.VideoFrame, p.data(), p.keyFrame(), frameNum, fps, gen);
+                    }
+                    bytesWindow += p.data().length;
+                }
+                if (nowMs - windowStart >= 1000) {
+                    sentBitRate = (int) (bytesWindow * 8 * 1000 / Math.max(1, nowMs - windowStart));
+                    bytesWindow = 0;
+                    windowStart = nowMs;
+                }
+                next += 1_000_000_000L / fps;
+                long wait = next - System.nanoTime();
+                if (wait > 0) LockSupport.parkNanos(wait);
+                else if (wait < -500_000_000L) next = System.nanoTime(); // fell far behind: no catching up in a burst
+            }
+        } catch (IOException | RuntimeException e) {
+            log.accept("video stopped: " + e.getMessage());
+            videoState = "failed: " + e.getMessage();
+        } finally {
+            if (enc != null) enc.close();
+        }
+    }
+
+    /** The picture: the recording when one plays, else the scene from the drone's state. */
+    private void renderPicture(BufferedImage img, long nowMs) {
+        Recording r = recording;
+        if (r != null && r.picture(Scene.pixels(img), img.getWidth(), img.getHeight(), nowMs)) {
+            scene.burnIn(img, "REPLAY"); // an old flight's picture says VIRTUAL too
+            return;
+        }
+        scene.render(img, view(), nowMs, overlayText(nowMs));
+    }
+
+    Scene.View view() {
+        return new Scene.View(fc.northM(), fc.eastM(), fc.altitudeM(), fc.rollDeg(), fc.pitchDeg(), fc.headingDeg());
+    }
+
+    private String overlayText(long nowMs) {
+        if (fc.isArmed()) return String.format(java.util.Locale.ROOT, "ARMED  %.0f M  %.0f KM/H", fc.altitudeM(), fc.groundSpeedMs() * 3.6);
+        FlightModel.Failsafe f = fc.failsafe();
+        return f == FlightModel.Failsafe.NONE ? "DISARMED" : "FAILSAFE";
+    }
+
+    private void sendVideoConfig(H264Encoder enc) throws IOException {
+        UdpPacketData p = new UdpPacketData(UdpCommon.VideoInitialFrame);
+        p.daos.writeShort(enc.width());
+        p.daos.writeShort(enc.height());
+        p.daos.writeBoolean(false); // H.264: no H.265 encoder here (a phone without one falls back the same way)
+        p.daos.writeBoolean(false); // the back camera
+        p.daos.write(enc.config());
+        streamOut(p.getData());
+    }
+
+    /**
+     * A frame's packets as the phone sends them ([type][frameNum i16][offset i32][size i32 on the first][data]), spread
+     * over at most half a frame time (a key frame over up to three), with a parity packet per group of 8 when the
+     * profile asks.
+     */
+    private void sendFragments(byte type, byte[] buf, boolean keyFrame, int frameNum, int fps, int gen) throws IOException {
+        int size = buf.length;
+        int packets = Math.max(1, (size + UdpCommon.packetLength - 1) / UdpCommon.packetLength);
+        long frameNs = 1_000_000_000L / Math.max(1, fps);
+        long gapNs = packets <= 2 ? 0 : (keyFrame ? 3 * frameNs : frameNs / 2) / packets;
+        byte[] parity = groupParity ? new byte[UdpCommon.packetLength - 9] : null;
+        int offset = 0, packet = 0;
+        while (offset < size && gen == videoGen) {
+            UdpPacketData p = new UdpPacketData(type);
+            p.daos.writeShort(frameNum);
+            p.daos.writeInt(offset);
+            int header = 9;
+            if (offset == 0) {
+                p.daos.writeInt(size);
+                header += 4;
+            }
+            int n = Math.min(UdpCommon.packetLength - header, size - offset);
+            p.daos.write(buf, offset, n);
+            if (parity != null) for (int i = 0; i < n; i++) parity[i] ^= buf[offset + i];
+            offset += n;
+            streamOut(p.getData());
+            packet++;
+            if (parity != null && (packet % PARITY_GROUP == 0 || offset >= size)) {
+                UdpPacketData q = new UdpPacketData(VIDEO_PARITY_GROUP);
+                q.daos.writeShort(frameNum);
+                q.daos.writeInt(size);
+                q.daos.writeByte(keyFrame ? 1 : 0);
+                q.daos.writeByte((packet - 1) / PARITY_GROUP);
+                q.daos.write(parity, 0, parity.length);
+                streamOut(q.getData());
+                java.util.Arrays.fill(parity, (byte) 0);
+            }
+            if (gapNs > 0 && offset < size) LockSupport.parkNanos(Math.min(gapNs, 5_000_000L));
+        }
+    }
+
+    // ------------------------------------------------------------------ the sound
+
+    /** The phone's audio gate: the PC asks (or an observer does), the FC is DISARMED, normal power, a session or observers. */
+    private boolean audioAllowed(long now) {
+        boolean observed = observing && observeAudio && !isConnected();
+        boolean wanted = pcAudio.wanted(now) || observed;
+        boolean disarmed = wanted && fcDisarmed();
+        boolean normal = mode == NORMAL;
+        boolean allow = isConnected() ? pcAudio.allowed(now, disarmed, normal) : observed && disarmed && normal;
+        audioHeld = wanted && !allow;
+        return allow;
+    }
+
+    private void audioTick(long now) {
+        boolean allow = audioAllowed(now);
+        if (allow && audioThread == null) {
+            int gen = ++audioGen;
+            int kbps = isConnected() ? pcAudio.bitRate() / 1000 : PcAudio.DEFAULT_KBPS;
+            Thread t = new Thread(() -> audioRun(gen, kbps), "fleetAudio" + slot);
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY);
+            audioThread = t;
+            t.start();
+            log.accept("live audio to the PC: on");
+        } else if (!allow && audioThread != null) {
+            stopAudio();
+            log.accept("live audio to the PC: off" + (audioHeld && !fcDisarmed() ? " (the FC is not known disarmed)" : ""));
+        }
+    }
+
+    void stopAudio() {
+        audioGen++;
+        audioThread = null;
+        audioOn = false;
+    }
+
+    private void audioRun(int gen, int kbps) {
+        Recording rec = recording;
+        boolean fromRecording = rec != null && rec.hasAudio();
+        try (AacEncoder enc = fromRecording ? null : new AacEncoder(Math.max(16, Math.min(64, kbps)) * 1000)) {
+            byte[] asc = fromRecording ? rec.audioConfig() : enc.config();
+            sendAudioConfig(asc);
+            audioOn = true;
+            long frameNs = 1_000_000_000L * AacEncoder.FRAME / AacEncoder.SAMPLE_RATE;
+            long next = System.nanoTime();
+            while (gen == audioGen && running) {
+                if (audioConfigResend) {
+                    audioConfigResend = false;
+                    sendAudioConfig(asc);
+                }
+                List<byte[]> frames;
+                if (fromRecording) {
+                    frames = rec.audioFrames(System.currentTimeMillis());
+                } else {
+                    frames = enc.encode(sound.next(fc.isArmed() ? fc.throttleOut() : -1));
+                }
+                for (byte[] f : frames) {
+                    byte[] p = new byte[f.length + 1];
+                    p[0] = UdpCommon.AudioFrame;
+                    System.arraycopy(f, 0, p, 1, f.length);
+                    streamOut(p);
+                }
+                next += frameNs;
+                long wait = next - System.nanoTime();
+                if (wait > 0) LockSupport.parkNanos(wait);
+                else if (wait < -500_000_000L) next = System.nanoTime();
+            }
+        } catch (IOException | RuntimeException e) {
+            log.accept("sound stopped: " + e.getMessage());
+        } finally {
+            audioOn = false;
+        }
+    }
+
+    private void sendAudioConfig(byte[] asc) throws IOException {
+        UdpPacketData p = new UdpPacketData(UdpCommon.AudioInitialFrame);
+        p.daos.writeInt(AacEncoder.SAMPLE_RATE);
+        p.daos.writeByte(1);
+        p.daos.writeByte(2); // Android's ENCODING_PCM_16BIT, as the phone says
+        p.daos.write(asc);
+        streamOut(p.getData());
+    }
+
+    // ------------------------------------------------------------------ power modes (PowerMode)
+
+    /** A mode asked for (the PC's POWER_MODE, the panel's buttons). Refused while the FC isn't known disarmed. */
+    public void requestMode(int wanted, int intervalMin, String from) {
+        synchronized (powerLock) {
+            if (intervalMin > 0) checkIntervalMin = Math.min(255, intervalMin);
+            if (wanted < NORMAL || wanted > OVERWATCH) return;
+            if (wanted != NORMAL && !fcDisarmed()) {
+                if (mode == NORMAL) {
+                    log.accept(modeName(wanted) + " refused (" + from + "): the flight controller is not known disarmed");
+                    burst();
+                    return;
+                }
+                wanted = NORMAL;
+                from = "the flight controller is armed";
+            }
+            if (wanted == mode && wanted != NORMAL) return;
+            switch (wanted) {
+                case NORMAL -> wake(from);
+                case STANDBY -> {
+                    if (mode != NORMAL) wake(from);
+                    mode = STANDBY;
+                    stopVideo();
+                    log.accept("standby (" + from + ")");
+                    burst();
+                }
+                default -> { // deep sleep or overwatch: a 1 s countdown, then asleep
+                    if (mode != NORMAL) wake(from);
+                    mode = wanted;
+                    sleepAt = System.currentTimeMillis() + SLEEP_COUNTDOWN_MS;
+                    log.accept(modeName(wanted) + " in 1 s (" + from + "), checks every " + checkIntervalMin + " min");
+                    burst();
+                }
+            }
+        }
+    }
+
+    /** Back to normal from anything: the socket open again if it was closed. Under powerLock. */
+    private void wake(String from) {
+        boolean wasDown = asleep || checking;
+        boolean wasOverwatch = mode == OVERWATCH;
+        boolean changed = mode != NORMAL || wasDown;
+        mode = NORMAL;
+        sleepAt = 0;
+        asleep = false;
+        checking = false;
+        if (wasOverwatch) overwatch.end("woken: " + from);
+        if (wasDown && socket == null) {
+            try {
+                openSocket(port);
+            } catch (IOException e) {
+                log.accept("could not open the socket again: " + e.getMessage());
+            }
+        }
+        if (changed) log.accept((wasDown ? "awake" : "normal mode") + " (" + from + ")");
+        burst();
+    }
+
+    private void burst() {
+        burstLeft = 3;
+        nextBurstAt = 0;
+    }
+
+    /** The PC answered the sleep hello (pc.22): sleep on (the window closes now) or wake. */
+    private void sleepAnswer(boolean wakeUp) {
+        synchronized (powerLock) {
+            if (!checking) return;
+            if (wakeUp) wake("the PC called");
+            else {
+                log.accept("sleep check: the PC says sleep on");
+                closeWindow(System.currentTimeMillis());
+            }
+        }
+    }
+
+    /** The panel's CHECK NOW: the next check window opens now (the phone's alarm, early). */
+    public void checkNow() {
+        synchronized (powerLock) {
+            if (asleep) nextCheckAt = System.currentTimeMillis();
+        }
+    }
+
+    private void powerTick(long now) {
+        synchronized (powerLock) {
+            if (sleepAt != 0 && now >= sleepAt) {
+                sleepAt = 0;
+                if (!fcDisarmed()) {
+                    log.accept("deep sleep refused at the end of its countdown: the flight controller is not known disarmed");
+                    wake("the flight controller is armed");
+                    return;
+                }
+                asleep = true;
+                stopVideo();
+                stopAudio();
+                InetSocketAddress pc = lastPcIp == null ? null : new InetSocketAddress(lastPcIp, lastPcPort);
+                closeSocket(); // the link's socket, the FC's port, the GPS: let go
+                nextCheckAt = now + checkIntervalMin * 60_000L;
+                if (mode == OVERWATCH) overwatch.begin(pc);
+                log.accept(modeName(mode) + ": next check in " + checkIntervalMin + " min");
+            }
+            if (asleep && now >= nextCheckAt) {
+                asleep = false;
+                checking = true;
+                windowOpenedAt = now;
+                nextHelloAt = now + HELLO_FIRST_MS;
+                try {
+                    openSocket(port);
+                } catch (IOException e) {
+                    log.accept("sleep check: no socket: " + e.getMessage());
+                }
+                log.accept("sleep check: listening for the PC for " + CHECK_WINDOW_MS / 1000 + " s");
+            }
+            if (checking) {
+                if (isConnected()) {
+                    wake("the PC called");
+                } else if (now - windowOpenedAt >= CHECK_WINDOW_MS) {
+                    closeWindow(now);
+                } else if (now >= nextHelloAt) {
+                    nextHelloAt = now + HELLO_GAP_MS;
+                    sendSleepHello();
+                }
+            }
+        }
+    }
+
+    /** Under powerLock. */
+    private void closeWindow(long now) {
+        checking = false;
+        asleep = true;
+        closeSocket();
+        nextCheckAt = now + checkIntervalMin * 60_000L;
+        log.accept("sleep check over: next check in " + checkIntervalMin + " min");
+    }
+
+    private void sendSleepHello() {
+        InetAddress ip = lastPcIp;
+        if (ip == null) return;
+        int pct = phoneBatteryPercent();
+        int mv = 3700 + pct * 5;
+        byte[] d = {SLEEP_HELLO, (byte) pct, 0, (byte) Math.min(255, checkIntervalMin), (byte) (mv >> 8), (byte) mv,
+                (byte) overwatch.helloFlags(), 0};
+        sendRaw(d, new InetSocketAddress(ip, lastPcPort));
+    }
+
+    static String modeName(int m) {
+        return switch (m) {
+            case NORMAL -> "NORMAL";
+            case STANDBY -> "STANDBY";
+            case DEEP_SLEEP -> "DEEP SLEEP";
+            case OVERWATCH -> "OVERWATCH";
+            default -> "MODE " + m;
+        };
+    }
+
+    // ------------------------------------------------------------------ the tick: the FC, the telemetry, the rest
+
+    private void tickRun() {
+        long last = System.currentTimeMillis();
+        long nextTelemetry = 0, nextStats = 0, nextObserve = 0, nextAudioGate = 0;
+        int statsSent = 0, telemetryTick = 0;
+        while (running) {
+            try {
+                long now = System.currentTimeMillis();
+                double dt = (now - last) / 1000.0;
+                last = now;
+                Recording rec = recording;
+                if (rec != null && rec.track(now, fc)) {
+                    // a recorded flight's track plays: it sets the state
+                } else {
+                    feedIdleSticks(now);
+                    fc.step(now, dt);
+                }
+                noteBeeping(now);
+                powerTick(now);
+                overwatch.tick(now);
+                if (now >= nextObserve) {
+                    nextObserve = now + 100;
+                    observeTick(now);
+                    motionTick(now);
+                }
+                if (now >= nextAudioGate) {
+                    nextAudioGate = now + 50;
+                    audioTick(now);
+                }
+                boolean connected = isConnected() && !asleep && !checking;
+                long telemetryGap = mode == STANDBY ? 1000 : 30;
+                if (now >= nextTelemetry && connected) {
+                    nextTelemetry = now + telemetryGap;
+                    sendTelemetry(now, telemetryTick++, mode == STANDBY);
+                }
+                if (now >= nextStats && connected) {
+                    nextStats = now + 100;
+                    sendStats(now, statsSent++);
+                }
+                Thread.sleep(20);
+            } catch (InterruptedException e) {
+                return;
+            } catch (IOException | RuntimeException e) {
+                log.accept("tick error: " + e);
+            }
+        }
+    }
+
+    private void noteBeeping(long now) {
+        String b = mode == DEEP_SLEEP || mode == OVERWATCH || fcLost ? null : fc.beeping(now);
+        if (b != null && !b.equals(lastBeep)) log.accept("beeping (" + b + ")");
+        else if (b == null && lastBeep != null) log.accept("beeping stopped");
+        lastBeep = b;
+    }
+
+    /** The flight controller's records, as the phone forwards them: every tick a few, by their rates. */
+    private void sendTelemetry(long now, int tick, boolean slow) throws IOException {
+        if (fcLost) return;
+        UdpPacketData p = new UdpPacketData(UdpCommon.TelemetryData);
+        DataOutputStream out = p.daos;
+        boolean every = slow; // standby: all of them, once a second
+        TelemetryRecords.attitude(out, fc.rollDeg(), fc.pitchDeg(), fc.headingDeg());
+        if (every || tick % 3 == 0) {
+            TelemetryRecords.status(out, TelemetryRecords.SENSOR_ACC | TelemetryRecords.SENSOR_GYRO | TelemetryRecords.SENSOR_GPS,
+                    fc.modeFlags(now), fc.blockers(now), 12, 38);
+            TelemetryRecords.altitude(out, fc.altitudeM(), fc.varioMs());
+        }
+        if (every || tick % 7 == 1) {
+            TelemetryRecords.analog(out, fc.mahDrawn(), link.rssi(now), fc.amps(), fc.volts());
+            TelemetryRecords.rawGps(out, fc.gpsFix(now) ? 2 : 0, fc.satellites(now), fc.latDeg(), fc.lonDeg(), (int) Math.round(fc.altitudeM()),
+                    fc.groundSpeedMs(), fc.courseDeg(), fc.gpsFix(now) ? 0.9 : 9.9, (int) fc.travelledM());
+        }
+        if (every || tick % 17 == 2) {
+            TelemetryRecords.batteryState(out, fc.cells(), fc.capacityMah(), fc.mahDrawn(), fc.amps(), fc.volts());
+            double dist = fc.homeDistanceM();
+            if (dist >= 0) TelemetryRecords.compGps(out, (int) Math.round(dist), (int) Math.round(fc.homeDirectionDeg()));
+        }
+        if (every || tick % 33 == 5) {
+            TelemetryRecords.timers(out, fc.onSeconds(now), fc.armedSeconds(now), fc.armedSeconds(now));
+            TelemetryRecords.phoneBattery(out, phoneBatteryPercent(), false);
+            TelemetryRecords.cameraFps(out, videoThread == null ? 0 : cameraFpsNow());
+            TelemetryRecords.videoBitRate(out, sentBitRate / 1_000_000f);
+            TelemetryRecords.network(out, 4, link.signalPercent(now));
+        }
+        if (every || tick % 167 == 11) TelemetryRecords.batteryConfig(out, 3.3, 4.3, 3.5);
+        UdpSender sender = udpSender;
+        if (sender != null) sender.sendPacket(p.getData());
+    }
+
+    /** The phone's own stats packet, ten times a second (overlay Udp.telemetrySenderRun). */
+    private void sendStats(long now, int n) throws IOException {
+        UdpPacketData p = new UdpPacketData(UdpCommon.TelemetryData);
+        DataOutputStream out = p.daos;
+        long gap = maxRcInGapMs;
+        maxRcInGapMs = 0;
+        TelemetryRecords.linkStats(out, (int) gap, (int) gap, 1);
+        if (n % 10 == 0) TelemetryRecords.version(out, VERSION);
+        if (n % 5 == 1) TelemetryRecords.encoder(out, bitRateNow());
+        if (n % 10 == 5) {
+            TelemetryRecords.phonePosition(out, fc.latDeg(), fc.lonDeg(), (int) Math.round(fc.altitudeM()), 5, fc.groundSpeedMs() * 3.6,
+                    (int) Math.round(fc.courseDeg()), 0);
+        }
+        int flags = (fcLost ? 0 : TelemetryRecords.STATE_RX_MAP_KNOWN) | (videoThread != null ? TelemetryRecords.STATE_CAMERA_OPEN : 0)
+                | (audioOn ? TelemetryRecords.STATE_AUDIO_ON : 0) | (audioHeld ? TelemetryRecords.STATE_AUDIO_HELD : 0);
+        long writeAge = lastRcWriteMs == 0 ? -1 : now - lastRcWriteMs;
+        TelemetryRecords.phoneState(out, flags, lastRcSeqReported, writeAge, lastRcWriteMs == 0 ? -1 : 1);
+        boolean burstNow;
+        int sleepIn;
+        synchronized (powerLock) {
+            burstNow = burstLeft > 0 && now >= nextBurstAt;
+            if (burstNow) {
+                burstLeft--;
+                nextBurstAt = now + 300;
+            }
+            sleepIn = sleepAt == 0 ? 0 : Math.max(1, burstLeft + 1);
+        }
+        boolean last = false;
+        if (n % 10 == 7 || burstNow) {
+            TelemetryRecords.phonePower(out, mode, checkIntervalMin, sleepIn, overwatch.caps());
+            last = true;
+        }
+        if (!last && n % 10 == 3 && rcLagFromPc) {
+            int max = rcLagMaxMs;
+            rcLagMaxMs = -1;
+            TelemetryRecords.rcLag(out, rcLagMs, max, rcLagDropped);
+            last = true;
+        }
+        if (!last && n % 5 == 4 && updateRefusal != null && now - updateRefusedAt < 30_000) {
+            out.writeShort(PHONE_UPDATE);
+            out.writeByte(4); // failed
+            out.writeByte(0);
+            out.writeUTF(updateRefusal);
+        }
+        UdpSender sender = udpSender;
+        if (sender != null) sender.sendPacket(p.getData());
+    }
+
+    int phoneBatteryPercent() {
+        long minutes = (System.currentTimeMillis() - startedAt) / 60_000;
+        return (int) Math.max(15, 92 - minutes / 6);
+    }
+
+    // ------------------------------------------------------------------ the motion detection (MotionWatch's part)
+
+    /** The level asked for now: the pilot's DETECTION_SET within 5 s, an observer's, or overwatch's; 0 none. */
+    private int detectionWanted(long now) {
+        if (overwatch.isWatching()) return overwatch.sensitivity();
+        int level = 0;
+        if (isConnected() && now - detectionAskedAt < DETECTION_KEEP_MS) level = detectionLevel;
+        Observe.Request w = observeWant;
+        if (observing && w != null) level = Math.max(level, w.detection);
+        return level;
+    }
+
+    /** Eight pictures a second through the shared MotionDetector while asked and disarmed; the record to the PC. */
+    private void motionTick(long now) {
+        int level = detectionWanted(now);
+        if (level <= 0) {
+            if (lastMotion != null) detector.reset();
+            lastMotion = null;
+            return;
+        }
+        boolean armed = !fcDisarmed();
+        MotionRecord.Report report;
+        if (armed) {
+            report = new MotionRecord.Report(MotionRecord.FLAG_ARMED, (float) Scene.HFOV_DEG, List.of());
+            detector.reset();
+        } else if (now >= nextAnalysisAt) {
+            nextAnalysisAt = now + 125;
+            if (analysis == null) analysis = new BufferedImage(320, 180, BufferedImage.TYPE_INT_RGB);
+            Recording rec = recording;
+            if (rec == null || !rec.picture(Scene.pixels(analysis), 320, 180, now)) scene.render(analysis, view(), now, null, false);
+            int[] size = new int[2];
+            byte[] y = Scene.luma(Scene.pixels(analysis), 320, 180, 320, size);
+            detector.setSensitivity(level);
+            MotionDetector.Result r = detector.process(y, size[0], size[1], null, null, now);
+            int flags = MotionRecord.FLAG_ACTIVE | (r.night ? MotionRecord.FLAG_NIGHT : 0) | (r.settling ? MotionRecord.FLAG_SETTLING : 0);
+            report = MotionRecord.of(flags, (float) Scene.HFOV_DEG, r);
+            overwatch.onPicture(analysis, report, now);
+        } else {
+            return;
+        }
+        lastMotion = report;
+        int boxes = report.boxes.size();
+        boolean due = now >= nextMotionReportAt || boxes != lastBoxCount;
+        if (!due) return;
+        nextMotionReportAt = now + (boxes > 0 ? 200 : 1000);
+        lastBoxCount = boxes;
+        try {
+            UdpPacketData p = new UdpPacketData(UdpCommon.TelemetryData);
+            MotionRecord.write(p.daos, report);
+            byte[] data = p.getData();
+            if (isConnected()) {
+                UdpSender sender = udpSender;
+                if (sender != null) sender.sendPacket(data);
+            } else if (observing) {
+                sendToObservers(data);
+            }
+        } catch (IOException ignored) {
+        }
+        if (observing && !isConnected()) sendObserverRecord(now);
+    }
+
+    /** The observer record (0x40FE), five times a second while observed. */
+    private long nextObserverRecordAt;
+
+    private void sendObserverRecord(long now) {
+        if (now < nextObserverRecordAt) return;
+        nextObserverRecordAt = now + 200;
+        try {
+            UdpPacketData p = new UdpPacketData(UdpCommon.TelemetryData);
+            int flags = Observe.POS_VALID | Observe.POS_FROM_FC | Observe.FC_COMPASS | (fc.isArmed() ? Observe.ARMED : 0);
+            Observe.writeRecord(p.daos, new Observe.Position(flags, fc.latDeg(), fc.lonDeg(), (int) Math.round(fc.altitudeM()), 0,
+                    fc.headingDeg(), fc.headingDeg(), 3, 5, Scene.HFOV_DEG));
+            sendToObservers(p.getData());
+        } catch (IOException ignored) {
+        }
+    }
+
+    // ------------------------------------------------------------------ for overwatch
+
+    /** Where the PC last flew it from (the link port): overwatch calls there. */
+    InetSocketAddress lastPcAddress() {
+        InetAddress ip = lastPcIp;
+        return ip == null ? null : new InetSocketAddress(ip, lastPcPort);
+    }
+
+    public String name() {
+        return name;
+    }
+
+    public int slot() {
+        return slot;
+    }
+
+    public InetAddress address() {
+        return address;
+    }
+
+    public int port() {
+        return port;
+    }
+
+    public int mode() {
+        return mode;
+    }
+
+    public boolean asleep() {
+        return asleep;
+    }
+
+    // ------------------------------------------------------------------ the panel
+
+    public void setFcLost(boolean lost) {
+        if (lost != fcLost) log.accept(lost ? "FC LOST: the phone gets nothing from its flight controller" : "the flight controller answers again");
+        fcLost = lost;
+    }
+
+    public boolean isFcLost() {
+        return fcLost;
+    }
+
+    /** The video's source: a recorded flight (null: the generated picture). */
+    void setRecording(Recording r) {
+        Recording old = recording;
+        recording = r;
+        if (old != null) old.close();
+        keyFrameWanted = true;
+        if (audioThread != null) stopAudio(); // starts again from the new source
+    }
+
+    Recording recording() {
+        return recording;
+    }
+
+    /** The 4G of this drone (the panel's LINK PROBLEMS). */
+    public LinkImpairment link() {
+        return link;
+    }
+
+    /**
+     * Loops an old flight as the camera (null: the generated picture again).
+     * @param track also play the flight CSV beside it as the telemetry, when there is one
+     * @return a word for the panel: what plays
+     */
+    public String playRecording(java.nio.file.Path file, boolean track) throws IOException {
+        if (file == null) {
+            setRecording(null);
+            log.accept("video: the generated picture");
+            return "generated picture";
+        }
+        Recording r = new Recording(file);
+        r.setPlayTrack(track);
+        setRecording(r);
+        String what = file.getFileName() + (r.hasAudio() ? " with its sound" : "") + (r.playsTrack() ? " and its track" : track ? " (no track beside it)" : "");
+        log.accept("video: " + what);
+        return what;
+    }
+
+    /** Something crossing the picture: "walker", "vehicle" or "light" (the panel's DETECTION buttons). */
+    public void addTarget(String kind) {
+        Scene.Kind k = switch (kind) {
+            case "vehicle" -> Scene.Kind.VEHICLE;
+            case "light" -> Scene.Kind.LIGHT;
+            default -> Scene.Kind.WALKER;
+        };
+        scene.addTarget(k, fc.headingDeg(), System.currentTimeMillis());
+        log.accept("a " + kind + " crosses the picture");
+    }
+
+    public void setNight(boolean night) {
+        scene.setNight(night);
+    }
+
+    public boolean isNight() {
+        return scene.isNight();
+    }
+
+    /** Overwatch: a detection now, as if the detector had seen one (the panel's ALERT NOW). */
+    public void alertNow() {
+        overwatch.alertNow();
+    }
+
+    /** A "voice" on its microphone now (the panel's SPEAK). */
+    public void speakNow() {
+        sound.speakNow();
+    }
+
+    public void setVoices(boolean on) {
+        sound.setVoices(on);
+    }
+
+    /** A fresh pack, on the ground only. */
+    public void newBattery() {
+        fc.newBattery();
+    }
+
+    /** Puts the disarmed drone on the ground somewhere else (a new start place). */
+    public boolean moveTo(double lat, double lon) {
+        double north = (lat - fc.latDeg()) * 111_320.0 + fc.northM();
+        double east = (lon - fc.lonDeg()) * 111_320.0 * Math.cos(Math.toRadians(fc.latDeg())) + fc.eastM();
+        return fc.moveTo(north, east);
+    }
+
+    /** What the panel shows for this drone. */
+    public record Readout(String name, String address, boolean armed, String flightMode, String failsafe, double volts, double altM,
+                   double speedKmh, String link, String pilot, String asked, String power, String extra) {}
+
+    public Readout readout() {
+        long now = System.currentTimeMillis();
+        String flight = fc.failsafe() != FlightModel.Failsafe.NONE ? "FAILSAFE " + fc.failsafe() : fc.angleMode() ? "ANGLE" : "ACRO";
+        UdpSender sender = udpSender;
+        boolean connected = isConnected();
+        String pilot = connected && sender != null && sender.getIp() != null ? sender.getIp().getHostAddress() + ":" + sender.getPort() : "-";
+        int obs;
+        synchronized (observers) {
+            obs = observers.size();
+        }
+        String linkText = restarting ? "APP RESTARTING" : socket == null ? (asleep ? "ASLEEP" : "CLOSED")
+                : link.silent(now) ? "4G LOST " + link.silentForMs(now) / 1000 + " s" : connected ? "SESSION" : obs > 0 ? "OBSERVED x" + obs : "IDLE";
+        if (link.active(now) && !link.silent(now)) {
+            linkText += String.format(java.util.Locale.ROOT, "  (loss %.0f%%, jitter %d ms, bunch %d ms)", link.lossPercent(), link.jitterMs(), link.bunchMs());
+        }
+        String asked = (videoThread == null ? "video off" : "video " + videoState) + ", step " + step + (keyFramesTwice ? ", robust" : "")
+                + (audioOn ? ", sound on" : audioHeld ? ", sound held" : "") + (detectionWanted(now) > 0 ? ", detection " + detectionWanted(now) : "");
+        String power = modeName(mode) + (checking ? " (check window)" : asleep ? " (asleep)" : sleepAt != 0 ? " (countdown)" : "")
+                + overwatch.status();
+        String extra = (fcLost ? "FC LOST  " : "") + (lastBeep != null ? "BEEPING " + lastBeep + "  " : "")
+                + (idleFeeding ? "idle sticks  " : "") + (fc.lastDisarm().isEmpty() ? "" : "last disarm: " + fc.lastDisarm());
+        return new Readout(name.isEmpty() ? "(no name yet)" : name, address.getHostAddress() + ":" + port, fc.isArmed(), flight,
+                fc.failsafe().name(), fc.volts(), fc.altitudeM(), fc.groundSpeedMs() * 3.6, linkText, pilot, asked, power, extra.trim());
+    }
+}

@@ -248,6 +248,16 @@ The setup installs **DRAUPNE Flight** (2.3.0-pc.30): upstream's Flight 2.3.0 wit
 
 Every DRAUPNE Link release includes the phone app as `DRAUPNE-Flight-<version>.apk`, the exact build that version installs.
 
+## Testing without a drone
+
+The **virtual fleet** is a program of its own that plays several drones (phone and flight controller) on this PC, so you can try the window, the map, OBSERVATION, OVERWATCH and the link's bad days without any hardware. Start it next to DRAUPNE Link:
+
+- installed: double-click **Virtual fleet.bat** in DRAUPNE Link's folder (or start `"DRAUPNE Link.exe" fleet`);
+- from the source: `.\gradlew.bat run --args=fleet`.
+
+Its window starts three drones (ADD DRONE adds more), each named with a free letter from MobileZulu down. Start DRAUPNE Link as usual: within a few seconds they are in the PHONE list marked **VIRTUAL**, on the map, in OBSERVATION's CHOOSE DRONES. CONNECT and fly one with your radio: the virtual Betaflight arms on AUX1 with the throttle low, flies in ANGLE on AUX2, drains its 4S pack and fails safe when the sticks stop, as Betaflight does. Its camera is a drawn horizon with its name and a clock (or an old flight of yours: FLIGHT FILE... picks a recording), its microphone wind, motors and now and then a voice. The buttons on each drone play 4G LOSS, a WEAK LINK (loss, jitter, bunching), a HANDOVER, FC LOST and a PHONE RESTART; a WALKER, VEHICLE or LIGHT crossing the picture for the motion detection; ALERT NOW in overwatch, CHECK NOW for a sleeping drone's check-in.
+
+A virtual drone is always marked VIRTUAL - in the PHONE list, a yellow **VIRTUAL DRONE - NOT A REAL FLIGHT** tag on the video, on the map and burned into its picture - and is never saved to the name map. DRAUPNE Link only looks for it while the fleet runs (the fleet writes a small file to `%APPDATA%\DraupneLink` and removes it when it closes); the fleet never opens a serial port and never touches Tailscale. Close its window to end it.
 ## For developers
 
 Picking up the work (state, rules, build environment, release steps): [docs/HANDOFF.md](docs/HANDOFF.md).
@@ -269,6 +279,7 @@ Needs JDK 21. To release, set `version` in `build.gradle`, put that version's ch
 | `de.droiddrone.pc.map` | Web Mercator, tile sources and the tile cache (offline, DOWNLOAD AREA), MGRS / UTM, terrain height and elevation profiles, GPX tracks, pins, graphics and KML |
 | `de.droiddrone.pc.setup` | Tailscale, firewall, power plan, shortcuts, Betaflight over USB (CLI, switches, PREARM, failsafe), Flight app download/serving, updates |
 | `de.droiddrone.pc.gui` | Main window, MENU, OSD, map window and map tools, unit symbols, setup wizard, calibration, RC check, motor test, name map, tour, boot animation |
+| `de.droiddrone.pc.fleet` | The virtual fleet (`gradlew run --args=fleet`): virtual drones speaking the real phone protocol, a Betaflight-like flight model, drawn H.264 video and AAC sound, a 4G impairment layer, overwatch; its window is `gui.FleetPanel` |
 
 More: [protocol notes](docs/PROTOCOL.md) and [roadmap](docs/ROADMAP.md).
 

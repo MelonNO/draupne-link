@@ -1231,6 +1231,37 @@ Lessons from releasing:
 - Installer changes: build with `packageInstaller` and inspect the MSI tables. jpackage's `--temp` keeps the
   intermediate `.msi`. Test with `msiexec /i ... /l*v log`.
 
+### The virtual fleet (testing without hardware)
+
+A separate program: `gradlew.bat run --args=fleet` (or the installed `"DRAUPNE Link.exe" fleet` / `Virtual fleet.bat` next to
+it, copied by `packageApp`). Code in `de.droiddrone.pc.fleet`, its window `gui.FleetPanel`.
+- **How DRAUPNE Link finds it** (`VirtualFleet`): each virtual phone binds a loopback address of its own (127.0.0.11, .12, ...)
+  at an ephemeral port - Windows won't let two programs share the link port, wildcard and specific alike. While it runs the
+  fleet writes `%APPDATA%\DraupneLink\virtual-fleet.txt` (heartbeat every 2 s, stale after 10 s, deleted on exit);
+  `NameService.scan` asks the announced addresses like Tailscale peers, at their ports; `Connection`, the
+  observation's `TileFeed` and NAME_ASSIGN send to `VirtualFleet.portOf(ip, linkPort)` - the link port for any address
+  that isn't loopback, so nothing changes for real phones, and without the file nothing is asked. Only 127.x addresses are
+  ever taken from the file.
+- **Marked VIRTUAL** wherever a loopback drone shows (`Names.Entry.isVirtual`): the PHONE list and its hint, the OBSERVE
+  picker, the map's other drones, a yellow tag on the video (`VideoView.setVirtual`), VIRTUAL by the live drone on both
+  maps, and burned into its picture. Its name map entry is never saved (filed under host "virtual fleet"), and it never
+  takes a name a real address holds. The fleet picks free Mobile letters from Zulu down, never one in the PC's settings.
+- **The phone** (`VirtualDrone`) ports overlay `Udp`'s rules onto the shared Common code (ReceiverBuffer, UdpSender,
+  Takeover, PcAudio, Observe, MotionDetector, MotionRecord, OverwatchProtocol, OverwatchEvent, PreRoll): sessions,
+  re-Connect, takeover, PILOT_AT, the stick sequence and lag, idle sticks against its own MSP_MODE_RANGES, Config,
+  StartVideo, profile, SET_BITRATE, key frame requests, AUDIO, DETECTION_SET, POWER_MODE (standby, deep sleep with
+  check windows and hellos, overwatch), OBSERVE, NAME_QUERY/ASSIGN, and the telemetry at the phone's rates
+  (`TelemetryRecords`, read back through `FcTelemetry` in FleetTelemetryTest). Video: `Scene` draws, OpenH264
+  encodes (reopened on a size or bitrate change), sent as the phone fragments it, parity groups in the robust profile.
+  A recording (`Recording`) is decoded with ClipPlayer and encoded again at the PC's tier; its AAC track is passed on.
+- **The FC** (`FlightModel`): Betaflight's arming rules, RX loss 100 ms / hold 300 ms / stage 1 1.5 s / DROP or LAND,
+  angle and acro, a 4S pack. **The 4G** (`LinkImpairment` + `ImpairedSocket`): loss, jitter, bunching, silence,
+  handover, both ways under the shared transport.
+- Differs from the phone: H.264 only (asked H.265, it answers H.264, as a phone without HEVC does), no OSD/recording
+  packets, overwatch clips one MKV per event without sound (no 60 s segments), no battery or heat floor, the remote
+  update refused, the channel map is the identity. Tests: `FlightModelTest`, `LinkImpairmentTest`,
+  `FleetTelemetryTest`, `VirtualDroneEndToEndTest` (the real ControlLink, VideoPipeline, OverwatchHub on loopback,
+  ephemeral ports), `NamesTest.theVirtualFleetsDronesAreFoundOnlyWhileAnnounced`, `FleetPanelTest`.
 ## How the newer parts work (1.0.17 / 1.0.18)
 
 - **Spectator mode** (`Spectate`, `SpectatorHost`, `SpectatorClient`; phone side in the overlay's `Udp.answerSpectator`).
@@ -1294,5 +1325,6 @@ Lessons from releasing:
 | Video | `video/` (`VideoPipeline`, `VideoDecoder`, `FrameAssembler`, `BitrateControl`, `LatencyMeter`) |
 | Window, OSD, wizards | `gui/` (`MainWindow`, `VideoView`, `OsdRenderer`, `OsdLayout` / `OsdElement` / `OsdSettingsDialog` (SETTINGS > OSD), `SetupWizard`, `PcSetupWizard`, `PhoneGuideWizard`, `DroneSetup`, `Tactical*`) |
 | Setup helpers | `setup/` (`Tailscale`, `BetaflightPlan`, `BetaflightUsb`, `ModeSwitch` (switches, failsafe, GPS rules), `ApkShare`, `MotorTest`, `UpdateCheck`, `SelfUpdate`, `PcPrep`) |
+| Virtual fleet | `fleet/` (`FleetMain`, `Fleet`, `VirtualDrone`, `FlightModel`, `LinkImpairment`, `Scene`, `VirtualOverwatch`), `gui/FleetPanel`; DRAUPNE Link's side `VirtualFleet` |
 | Installer | `src/installer/main.wxs`, `check-running.js` |
 | Phone app | `flight-app/` (overlay on upstream Flight 2.3.0; see its README). Overlay files replace upstream's whole: `Udp` (stats, spectator answer), `InternalCamera` (frame-rate range), `UpdateCheck`, ... |

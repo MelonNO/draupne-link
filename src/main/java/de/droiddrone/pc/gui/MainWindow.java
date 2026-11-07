@@ -1203,7 +1203,7 @@ public class MainWindow extends JFrame {
             phoneCombo.removeAllItems();
             for (Names.Entry e : list) {
                 Asleep sleeping = e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
-                phoneCombo.addItem(e.name() + (sleeping != null ? "   " + sleeping.mode() + " " + clock(nextCheck(sleeping, now) - now)
+                phoneCombo.addItem(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + (sleeping != null ? "   " + sleeping.mode() + " " + clock(nextCheck(sleeping, now) - now)
                         : e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
             }
             if (list.isEmpty()) phoneCombo.addItem(kind == Names.Kind.PHONE ? "No phone seen yet" : "No pilot PC seen yet");
@@ -1222,6 +1222,7 @@ public class MainWindow extends JFrame {
                 : e == null
                 ? (kind == Names.Kind.PHONE ? "Open DRAUPNE Flight on the phone, on Tailscale: it shows up here by itself."
                         : "A PC running DRAUPNE Link on your Tailscale network shows up here by itself.")
+                : e.isVirtual() ? "VIRTUAL DRONE - the virtual fleet on this PC, not a real drone. " + (e.online() ? e.detail() + "  -  " + e.ip() : "Not running now.")
                 : e.online() ? e.detail() + "  -  " + e.ip()
                 : e.name() + " was last seen " + Names.agoText(e.lastSeen(), now) + (kind == Names.Kind.PHONE ? ": open DRAUPNE Flight on it." : ".");
         phoneHint.setText("<html>" + hint + "</html>");
@@ -1419,6 +1420,7 @@ public class MainWindow extends JFrame {
         liveTrackName = flightName(watch ? null : target.name());
         watchedPhone = null;
         if (!watch) videoView.setUpsideDown(upsideDownFor(target.name())); // the phone's own way up (1.0.41)
+        setVirtualShown(!watch && target.isVirtual());
         Asleep sleeping = target.ip() == null ? null : asleepPhones.get(target.ip());
         ControlLink.SleepHello lastCheck = sleeping == null ? null : asleepHellos.get(sleeping.ip());
         if (sleeping != null && target.online() && (lastCheck == null || System.currentTimeMillis() - lastCheck.receivedAt() > 60_000)
@@ -1458,7 +1460,7 @@ public class MainWindow extends JFrame {
         lastArmedAt = 0;
         linkLogTimer.start();
         updateFlightLayout();
-        logLine((watch ? "Watching " : "Connecting to ") + target.name() + " (" + target.ip() + ":" + port + ")" + (target.online() ? "" : " - last seen " + Names.agoText(target.lastSeen(), System.currentTimeMillis())));
+        logLine((watch ? "Watching " : "Connecting to ") + target.name() + (target.isVirtual() ? " (VIRTUAL)" : "") + " (" + target.ip() + ":" + de.droiddrone.pc.fleet.VirtualFleet.portOf(target.ip(), port) + ")" + (target.online() ? "" : " - last seen " + Names.agoText(target.lastSeen(), System.currentTimeMillis())));
         setLinkEditable(false);
     }
 
@@ -1493,6 +1495,13 @@ public class MainWindow extends JFrame {
         return true;
     }
 
+    /** The OSD and the maps say VIRTUAL while the link is to a drone of the virtual fleet. */
+    private void setVirtualShown(boolean on) {
+        videoView.setVirtual(on);
+        miniMap.setVirtualDrone(on);
+        if (mapWindow != null) mapWindow.map().setVirtualDrone(on);
+    }
+
     private void disconnect() {
         if (phoneAsleep && connection != null && !connection.getLink().isSpectator()) {
             String name = config.getString(Names.PHONE_NAME_KEY), ip = config.getString("ip");
@@ -1522,6 +1531,7 @@ public class MainWindow extends JFrame {
             connection.close();
         }
         connection = null;
+        setVirtualShown(false);
         stopLiveAudio();
         nameService.resume();
         updateFlightLayout();
@@ -1709,6 +1719,7 @@ public class MainWindow extends JFrame {
             mapWindow = new MapWindow(this, tileCache, elevation, pins, graphics, mapSource, coordinateFormat, config.getString(MapWindow.BOUNDS_KEY), this::save,
                     this::setMapSource, this::setCoordinateFormat, this::openFindDrone);
             mapWindow.setPreferPhone(preferPhone);
+            mapWindow.map().setVirtualDrone(videoView.isVirtual()); // a virtual drone flown now: its map says so too
             mapWindow.setOnShownChanged(this::updateFlightLayout);
             pushKept();
             refreshNetwork();
@@ -2057,7 +2068,7 @@ public class MainWindow extends JFrame {
                 String phone = set.phones().get(i);
                 Names.Entry e = names.get(phone);
                 de.droiddrone.pc.observe.TileFeed f = new de.droiddrone.pc.observe.TileFeed(phone, java.net.InetAddress.getByName(e.ip()),
-                        config.getPort(), config.getKey(), grid.sink(i), audio, sharp, msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
+                        de.droiddrone.pc.fleet.VirtualFleet.portOf(e.ip(), config.getPort()), config.getKey(), grid.sink(i), audio, sharp, msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
                 feeds.add(f);
                 f.link().setDetection(detectionFor(phone)); // the drone's own setting (1.0.46): boxes on its tile
                 boolean muted = mutedFor(phone);
@@ -3419,9 +3430,9 @@ public class MainWindow extends JFrame {
             String ip = names.ipOf(d.name());
             Asleep sleeping = ip == null ? null : asleepPhones.get(ip);
             String pilot = p.pilotIp().isEmpty() ? null : names.nameAt(p.pilotIp());
-            String state = sleeping != null ? sleeping.mode() + " - check in " + clock(nextCheck(sleeping, now) - now)
+            String state = (de.droiddrone.pc.fleet.VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + (sleeping != null ? sleeping.mode() + " - check in " + clock(nextCheck(sleeping, now) - now)
                     : (Boolean.TRUE.equals(p.armed()) ? "ARMED - " : "") + (p.flown() ? "FLOWN" + (pilot == null ? "" : " BY " + pilot) : "IDLE")
-                    + (age > 30_000 ? " - " + Names.agoText(now - age, now) : "");
+                    + (age > 30_000 ? " - " + Names.agoText(now - age, now) : ""));
             drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, age > 30_000 || sleeping != null, p.flown(), pilot));
         }
         miniMap.setNetDrones(drones, this::connectFromMap);

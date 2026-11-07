@@ -39,6 +39,8 @@ public class Main {
         Path configFile = AppPaths.configFile();
         switch (command) {
             case "gui" -> gui(load(configFile), configFile);
+            // the virtual fleet (a program of its own): virtual drones on this PC for trying the window without hardware
+            case "fleet", "--fleet" -> de.droiddrone.pc.fleet.FleetMain.run(configFile);
             case "list" -> listJoysticks();
             case "monitor" -> monitor(PcConfig.load(configFile));
             case "connect" -> {
@@ -81,6 +83,7 @@ public class Main {
                   list                list connected joysticks
                   monitor             live view of joystick inputs and mapped RC channels (no network)
                   connect [address]   connect using linkMode from the settings and send RC from the joystick
+                  fleet               the virtual fleet: virtual drones on this PC for trying DRAUPNE Link without hardware
                 """.formatted(SettingsCommon.versionCompatibleCode));
     }
 

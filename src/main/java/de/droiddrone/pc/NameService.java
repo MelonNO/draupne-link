@@ -1,5 +1,6 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.pc.fleet.VirtualFleet;
 import de.droiddrone.pc.setup.Tailscale;
 
 import java.io.IOException;
@@ -127,7 +128,7 @@ public final class NameService {
     public void assign(String ip, String name) {
         byte[] assign = Names.assign(config.getKey(), name);
         try (DatagramSocket socket = new DatagramSocket()) {
-            socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), port));
+            socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), VirtualFleet.portOf(ip, port)));
             log.accept("Names: the phone at " + ip + " is " + name + " now (renamed).");
         } catch (IOException e) {
             log.accept("Names: could not rename the phone at " + ip + ": " + e);
@@ -158,6 +159,15 @@ public final class NameService {
     /** Every phone's last word on where its drone is; kept after it falls silent (the map shows how old). */
     public java.util.List<DronePosition> dronePositions() {
         return new ArrayList<>(positions.values());
+    }
+
+    /** The host name the name map files a virtual drone under. */
+    static final String VIRTUAL_HOST = "virtual fleet";
+    /** Where the virtual fleet's drones are (VirtualFleet.announced: none while no fleet runs; a fake in tests). */
+    private volatile Supplier<List<VirtualFleet.Drone>> virtualDrones = VirtualFleet::announced;
+
+    void setVirtualDrones(Supplier<List<VirtualFleet.Drone>> drones) {
+        virtualDrones = drones;
     }
 
     /**
@@ -221,13 +231,22 @@ public final class NameService {
         } catch (RuntimeException e) {
             return;
         }
-        if (s == null || !s.installed() || !s.signedIn()) {
+        // the virtual fleet's drones on this PC's loopback, while the fleet program runs and announces them (empty
+        // otherwise: then nothing here is any different)
+        List<VirtualFleet.Drone> virtual = virtualDrones.get();
+        boolean tailscale = s != null && s.installed() && s.signedIn();
+        if (!tailscale && virtual.isEmpty()) {
             names.onlineOnly(Set.of());
             changed();
             return;
         }
         List<Tailscale.Peer> online = new ArrayList<>();
-        for (Tailscale.Peer p : s.peers()) if (p.online() && p.ip() != null && !p.ip().isEmpty()) online.add(p);
+        if (tailscale) for (Tailscale.Peer p : s.peers()) if (p.online() && p.ip() != null && !p.ip().isEmpty()) online.add(p);
+        java.util.Map<String, Integer> ports = new java.util.HashMap<>();
+        for (VirtualFleet.Drone d : virtual) {
+            online.add(new Tailscale.Peer(VIRTUAL_HOST, "", true, d.ip(), "", ""));
+            ports.put(d.ip(), d.port());
+        }
         Set<String> onlineIps = new HashSet<>();
         Set<String> onlinePcNames = new HashSet<>();
         List<String> unnamedPhones = new ArrayList<>();
@@ -238,7 +257,7 @@ public final class NameService {
             byte[] query = Names.query(key);
             for (Tailscale.Peer p : online) {
                 try {
-                    socket.send(new DatagramPacket(query, query.length, InetAddress.getByName(p.ip()), port));
+                    socket.send(new DatagramPacket(query, query.length, InetAddress.getByName(p.ip()), ports.getOrDefault(p.ip(), port)));
                 } catch (IOException ignored) {
                     // an address that can't be reached: no entry
                 }
@@ -293,7 +312,7 @@ public final class NameService {
                     given.add(name);
                     byte[] assign = Names.assign(key, name);
                     try {
-                        socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), port));
+                        socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), ports.getOrDefault(ip, port)));
                         log.accept("Names: the phone at " + ip + " is " + name + " now.");
                     } catch (IOException ignored) {
                     }

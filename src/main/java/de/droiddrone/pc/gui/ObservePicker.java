@@ -51,7 +51,7 @@ final class ObservePicker {
             String why = refusals.get(e.name());
             String state = why != null ? "  -  " + why : asleep.contains(e.name()) ? "  -  deep sleep: joins at its next check-in"
                     : e.online() ? "  -  online" : "  -  not seen lately";
-            JCheckBox b = new JCheckBox(e.name() + state, why == null && current.contains(e.name()));
+            JCheckBox b = new JCheckBox(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + state, why == null && current.contains(e.name()));
             b.setFont(b.getFont().deriveFont(why == null ? Font.PLAIN : Font.ITALIC));
             b.addActionListener(ev -> limit.run());
             boxes.add(b);

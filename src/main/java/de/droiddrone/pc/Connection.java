@@ -36,7 +36,9 @@ public class Connection {
             throw new IllegalArgumentException(watch && !probe ? "Pick the pilot PC to watch first." : "Pick the phone first.");
         }
         InetAddress remoteIp = InetAddress.getByName(config.getIp());
-        ControlLink link = new ControlLink(config, remoteIp, port, port);
+        // a virtual drone (the virtual fleet on this PC) listens on a port of its own; a real phone on the link port
+        int remotePort = de.droiddrone.pc.fleet.VirtualFleet.portOf(config.getIp(), port);
+        ControlLink link = new ControlLink(config, remoteIp, remotePort, port);
         link.enableSpectators(!probe && spectatorsAllowed(config), spectatorDelay(config));
         // watching: the address is the pilot PC's (its DRAUPNE name, 1.0.35), asked straight for its stream; a probe's
         // is the phone's, asked who flies

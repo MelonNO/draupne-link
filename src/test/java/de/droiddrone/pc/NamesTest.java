@@ -190,6 +190,39 @@ class NamesTest {
         }
     }
 
+    /**
+     * The virtual fleet: its announced drones are asked like Tailscale peers (at their own ports), filed online and marked
+     * virtual, never saved; with nothing announced the scan is what it was (no Tailscale: nothing asked, nobody named).
+     */
+    @Test
+    void theVirtualFleetsDronesAreFoundOnlyWhileAnnounced() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        Map<String, String> saved = new HashMap<>();
+        Names names = new Names(config, saved::putAll);
+        try (de.droiddrone.pc.fleet.Fleet fleet = new de.droiddrone.pc.fleet.Fleet(config, null, s -> { })) {
+            de.droiddrone.pc.fleet.VirtualDrone d = fleet.add("MobileYankee", 52.47, 13.40, 0);
+            List<de.droiddrone.pc.fleet.VirtualFleet.Drone> announced = new CopyOnWriteArrayList<>();
+            service = new NameService(config, names, () -> null, 6286, false, saved::putAll, s -> { });
+            service.setVirtualDrones(() -> announced);
+            service.scan();
+            assertTrue(names.all().isEmpty(), "nothing announced, no Tailscale: nothing asked");
+            assertEquals("", config.getString(Names.PC_NAME_KEY), "and this PC not named either, as before");
+            announced.add(new de.droiddrone.pc.fleet.VirtualFleet.Drone(d.address().getHostAddress(), d.port()));
+            service.scan();
+            Names.Entry e = names.get("MobileYankee");
+            assertNotNull(e, "found at its own port: " + names.all());
+            assertTrue(e.online());
+            assertTrue(e.isVirtual());
+            assertEquals("127.0.0.11", e.ip());
+            assertEquals(de.droiddrone.pc.fleet.VirtualDrone.DEVICE, e.device());
+            assertFalse(saved.keySet().stream().anyMatch(k -> k.startsWith("name.")), "never saved: " + saved);
+            assertTrue(service.dronePositions().stream().anyMatch(p -> p.name().equals("MobileYankee")), "on the map too");
+            announced.clear();
+            service.scan();
+            assertFalse(names.get("MobileYankee").online(), "the fleet gone: offline");
+        }
+    }
+
     private static void waitFor(java.util.function.BooleanSupplier ok, int ms, String what) throws InterruptedException {
         long end = System.currentTimeMillis() + ms;
         while (!ok.getAsBoolean()) {
