@@ -292,7 +292,37 @@ public final class TileCache {
                 failedUntil.put(r.key, now + (wasHeld ? HELD_RETRY_MS : RETRY_MS));
             }
         }
-        if (img != null) for (Runnable c : call) if (c != NO_ONE) c.run();
+        if (img != null) {
+            for (Runnable c : call) if (c != NO_ONE) c.run();
+        } else if (wasHeld) {
+            wakeLater(call);
+        }
+    }
+
+    /**
+     * Maps whose tile was held back (a drone here may fly) are called again after HELD_RETRY_MS, so they paint and ask
+     * again - a map repaints only on a change (1.0.49), and landing changes nothing it sees. Once per wait, whatever
+     * the number of tiles.
+     */
+    private final java.util.Set<Runnable> heldAskers = new java.util.HashSet<>();
+    private boolean wakeScheduled;
+    private static final java.util.concurrent.ScheduledExecutorService WAKER = Executors.newSingleThreadScheduledExecutor(r -> thread(r, "mapTilesWake"));
+
+    private void wakeLater(List<Runnable> askers) {
+        synchronized (this) {
+            for (Runnable a : askers) if (a != NO_ONE) heldAskers.add(a);
+            if (wakeScheduled || heldAskers.isEmpty()) return;
+            wakeScheduled = true;
+        }
+        WAKER.schedule(() -> {
+            List<Runnable> wake;
+            synchronized (this) {
+                wakeScheduled = false;
+                wake = new ArrayList<>(heldAskers);
+                heldAskers.clear();
+            }
+            for (Runnable a : wake) a.run();
+        }, HELD_RETRY_MS + 50, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     // ------------------------------------------------------------------ prefetching an area

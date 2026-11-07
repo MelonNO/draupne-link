@@ -49,7 +49,8 @@ public final class ObserverLink implements AutoCloseable {
     private volatile Quality quality = Quality.GRID;
     private volatile boolean audioWanted = true;
     private volatile int detection;
-    private volatile int askFlags;
+    /** Flags for the next OBSERVE (a key frame / config asked for); atomic - a flag set while one is sent isn't lost. */
+    private final java.util.concurrent.atomic.AtomicInteger askFlags = new java.util.concurrent.atomic.AtomicInteger();
     private volatile long lastAskAt, lastConfigAskAt, lastAudioAskAt;
     private volatile Observe.State state;
     private volatile long stateAt, lastPacketAt;
@@ -140,7 +141,7 @@ public final class ObserverLink implements AutoCloseable {
     }
 
     private void askNow(int flags) {
-        askFlags |= flags;
+        askFlags.getAndUpdate(f -> f | flags);
         Thread s = sender;
         if (s != null) s.interrupt();
     }
@@ -149,7 +150,7 @@ public final class ObserverLink implements AutoCloseable {
         while (running) {
             try {
                 long now = MonoClock.ms();
-                if (now - lastAskAt >= REQUEST_EVERY_MS || askFlags != 0 || lastAskAt == 0) send(now);
+                if (now - lastAskAt >= REQUEST_EVERY_MS || askFlags.get() != 0 || lastAskAt == 0) send(now);
                 Thread.sleep(REQUEST_EVERY_MS);
             } catch (InterruptedException e) {
                 // asked to send now
@@ -159,8 +160,7 @@ public final class ObserverLink implements AutoCloseable {
 
     private synchronized void send(long now) {
         if (!running) return;
-        int flags = askFlags;
-        askFlags = 0;
+        int flags = askFlags.getAndSet(0);
         if (audioWanted) flags |= Observe.FLAG_AUDIO;
         if (!videoConfigured) flags |= Observe.FLAG_VIDEO_CONFIG;
         Quality q = quality;

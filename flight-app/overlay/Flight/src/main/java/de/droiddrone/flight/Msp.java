@@ -31,6 +31,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 
+import de.droiddrone.common.ArmRanges;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DataWriter;
 import de.droiddrone.common.FcInfo;
@@ -104,7 +105,11 @@ public class Msp {
     private int platformType;
     private FcCommon.GpsFixTypes fixType = FcCommon.GpsFixTypes.GPS_NO_FIX;
     volatile boolean isArmed = false;
-    /** pc.31: when the last status reply (its mode flags) came; the armed state is only as fresh as that. */
+    /**
+     * pc.31: when the last status reply (its mode flags) came; the armed state is only as fresh as that. pc.38: on
+     * SystemClock.elapsedRealtime, as every armed-freshness check (FcArmedState) - a network time correction can't
+     * make a stale status look fresh.
+     */
     private volatile long statusAtMs;
     /**
      * pc.33: the statusAtMs of the reply isArmed was last taken from, written after isArmed - so a reader that sees
@@ -121,6 +126,11 @@ public class Msp {
      * - the FC's answers are of no use to a PC that shows no picture, and the USB traffic costs battery.
      */
     private volatile boolean slowPoll;
+    /**
+     * pc.38: the flight controller's own ARM slots (ArmRanges, from MSP_MODE_RANGES, read once a second), null until
+     * read: idle sticks are fed only when these say they can't arm (DRAUPNE Link 1.0.48's H1).
+     */
+    private volatile int[][] armSlots;
     private float groundSpeed; // km/h
     private float latDeg;
     private float lonDeg;
@@ -273,6 +283,7 @@ public class Msp {
         statusAtMs = 0;
         armedFlagStatusMs = 0;
         isArmed = false;
+        armSlots = null; // pc.38: another FC (or this one changed meanwhile): read again before any idle sticks
     }
 
     private final Runnable mspRun = new Runnable() {
@@ -329,6 +340,8 @@ public class Msp {
                                     break;
                             }
                         }
+                        // pc.38: where ARM sits now - idle sticks are checked against it (ARM may have moved)
+                        if (fcVariant == FcInfo.FC_VARIANT_BETAFLIGHT || fcVariant == FcInfo.FC_VARIANT_INAV) getModeRanges();
                         if (runGetOsdConfig) getOsdConfig();
                         if (runGetBatteryConfig) {
                             if (fcVariant == FcInfo.FC_VARIANT_INAV){
@@ -645,6 +658,12 @@ public class Msp {
                         rxMap = map;
                         break;
                     }
+                    case ArmRanges.MSP_MODE_RANGES: {
+                        int[][] slots = ArmRanges.parse(buffer.getData());
+                        if (slots != null && armSlots == null) log("ARM ranges read: " + slots.length + " slot(s) - idle sticks are checked against them");
+                        armSlots = slots;
+                        break;
+                    }
                     case FcCommon.MSP_OSD_CONFIG: {
                         runGetOsdConfig = false;
                         osdConfig = buffer.getData();
@@ -677,7 +696,7 @@ public class Msp {
                             }
                         }
                         this.modeFlagsInav = modeFlags;
-                        statusAtMs = System.currentTimeMillis();
+                        statusAtMs = android.os.SystemClock.elapsedRealtime();
                         checkModeFlags(); // pc.31: the ARM flag from this reply, now - not at the next poll
                         telemetryOutputBuffer.offer(new TelemetryData(packet.code, buffer.getData()));
                         break;
@@ -707,7 +726,7 @@ public class Msp {
                                         modeFlags[i] = buffer.readByte();
                                     }
                                     this.modeFlagsBtfl = modeFlags;
-                                    statusAtMs = System.currentTimeMillis();
+                                    statusAtMs = android.os.SystemClock.elapsedRealtime();
                                     checkModeFlags(); // pc.31: the ARM flag from this reply, now - not at the next poll
                                 }
                                 telemetryOutputBuffer.offer(new TelemetryData(packet.code, buffer.getData()));
@@ -867,6 +886,19 @@ public class Msp {
             payload[at * 2 + 1] = (byte) (rcChannels[i] >> 8 & 0xFF);
         }
         serial.writeRcMsp(getMspRequestWithPayload(FcCommon.MSP_SET_RAW_RC, payload));
+    }
+
+    /**
+     * pc.38: whether this idle-sticks frame could turn the flight controller's ARM mode on by its own ranges - also
+     * while those aren't read (DRAUPNE Link 1.0.48's H1: ARM moved since Drone setup last read it).
+     */
+    boolean idleMayArm(short[] frame){
+        return ArmRanges.mayArm(frame, frame == null ? 0 : frame.length, armSlots);
+    }
+
+    /** pc.38: the ARM slots, asked once a second with the other slow requests (a skipped one comes again). */
+    public void getModeRanges(){
+        serial.writeDataMsp(getMspRequest(ArmRanges.MSP_MODE_RANGES), true);
     }
 
     public void getBatteryState(){

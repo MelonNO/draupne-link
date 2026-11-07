@@ -166,6 +166,7 @@ public final class StreamRecorder implements AutoCloseable {
     public long writeAudio(byte[] data, AudioConfig config, long arrivedMs) throws IOException {
         if (!started || audioStream == null || !audio.sameAs(config)) return -1;
         long ms = audioPts.next(Math.max(0, arrivedMs - firstMs));
+        if (ms < 0) return -1; // the sound ran ahead of the video: this frame left out (AudioPts)
         check(writeAac(oc, pkt, audioStream, data, ms), "write the sound");
         audioFrames++;
         return ms;

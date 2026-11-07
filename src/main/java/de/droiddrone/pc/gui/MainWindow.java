@@ -91,6 +91,7 @@ public class MainWindow extends JFrame {
     private final de.droiddrone.pc.map.Elevation elevation = new de.droiddrone.pc.map.Elevation();
     /** Where the camera looks (1.0.39): drawn on the maps, and the STANAG 4609 stream's frame centre and corners. */
     private final de.droiddrone.pc.CameraView cameraView = new de.droiddrone.pc.CameraView(tileCache);
+    private final de.droiddrone.pc.CameraView.Live cameraLive = new de.droiddrone.pc.CameraView.Live(cameraView);
     private boolean cameraOnMap;
     /** The STANAG 4609 stream while it is on and the video runs; null otherwise. */
     private de.droiddrone.pc.video.StanagStream stanag;
@@ -909,6 +910,30 @@ public class MainWindow extends JFrame {
         return copy;
     }
 
+    static final String BEEPER_TIP = "BEEPER: hold to make the drone beep (buzzer, and the motors while disarmed) - to find it."
+            + " Disarmed only, 10 s at most a press";
+
+    /** The log line for a BEEPER press: it beeps, or why not. */
+    static String beeperPressedText(RcSession s) {
+        if (s.beeperOff() != null) return s.beeperOff() + ".";
+        if (!s.isRcEnabled()) return "BEEPER: no sticks go to the drone now - it can't beep.";
+        return "BEEPER held - the drone beeps (AUX" + de.droiddrone.pc.setup.ModeSwitch.BEEPER_AUX
+                + " up) while Betaflight reads DISARMED, " + RcSession.BEEPER_MAX_MS / 1000 + " s at most.";
+    }
+
+    /** BEEPER let go (the window lost focus): the button's press and the session's both. */
+    private void releaseBeeper() {
+        RcSession s = session;
+        boolean held = s != null && s.isBeeperHeld();
+        javax.swing.ButtonModel m = beeperButton.getModel();
+        if (m.isPressed() || m.isArmed()) {
+            m.setArmed(false);
+            m.setPressed(false);
+        }
+        if (s != null) s.setBeeper(false);
+        if (held) logLine("BEEPER let go: the window lost focus.");
+    }
+
     private static JLabel statValue() {
         JLabel label = Theme.label("-", Theme.font(Font.BOLD, 13f), Theme.TEXT);
         label.setHorizontalAlignment(SwingConstants.RIGHT);
@@ -946,16 +971,23 @@ public class MainWindow extends JFrame {
         videoBar.add(Box.createVerticalStrut(4));
         videoBar.add(fullScreenButton);
         videoBar.add(Box.createVerticalStrut(4));
-        // the only way a drone on the phone beeps (Drone setup silences the rest): AUX12 up while held, Betaflight's
-        // BEEPER mode there beeps the buzzer and, disarmed, the motors - to find the drone in grass
-        beeperButton.setToolTipText("BEEPER: hold to make the drone beep (buzzer, and the motors while disarmed) - to find it");
+        // the only way a drone on the phone beeps (Drone setup silences the rest): AUX14 up while held (1.0.49; was
+        // AUX12), Betaflight's BEEPER mode there beeps the buzzer and, disarmed, the motors - to find the drone in grass
+        beeperButton.setToolTipText(BEEPER_TIP);
         beeperButton.setAlignmentX(CENTER_ALIGNMENT);
         beeperButton.getModel().addChangeListener(e -> {
             boolean held = beeperButton.getModel().isPressed() && beeperButton.getModel().isArmed();
             RcSession s = session;
             if (s == null || s.isBeeperHeld() == held) return;
             s.setBeeper(held);
-            if (held) logLine(s.isRcEnabled() ? "BEEPER held - the drone beeps (AUX12 up)." : "BEEPER: no sticks go to the drone now - it can't beep.");
+            if (held) logLine(beeperPressedText(s));
+        });
+        // a dialog opening (or the pilot clicking elsewhere) while BEEPER is held never sees the release: let go
+        addWindowFocusListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowLostFocus(java.awt.event.WindowEvent e) {
+                releaseBeeper();
+            }
         });
         videoBar.add(beeperButton);
         videoBar.add(Box.createVerticalStrut(4));
@@ -1362,6 +1394,10 @@ public class MainWindow extends JFrame {
                 ArmSwitch.parse(config.getString(ArmSwitch.KEY)));
         RcSession s = session;
         s.setFrozenStopMs(config.getRadioFrozenStopS() * 1000L);
+        // BEEPER only where Drone setup put it, and never on a channel ARM or the radio uses (1.0.49)
+        s.setBeeperSetUp("true".equalsIgnoreCase(config.getString(RcSession.BEEPER_KEY)));
+        beeperButton.setToolTipText(s.beeperOff() == null ? BEEPER_TIP : s.beeperOff());
+        if (!watch && s.beeperOff() != null && !s.beeperOff().equals(RcSession.BEEPER_NOT_SET_UP)) logLine(s.beeperOff() + ".");
         connection.getLink().setMaxStickLagMs(config.getMaxStickLagMs());
         if (!watch) connection.getLink().setDetection(detectionFor(target.name())); // the drone's own (1.0.46)
         // STANDBY / DEEP SLEEP: no sticks, and a WAKE starts with the throttle-low rule (not a radio blip's quick resume)
@@ -1568,7 +1604,9 @@ public class MainWindow extends JFrame {
         VideoPipeline v = video;
         int[] size = v == null ? null : v.pictureSize();
         if (size != null) cameraView.setPictureSize(size[0], size[1]);
-        if (c != null && cameraOnMap && !fcLost) view = cameraView.compute(c.getLink().getTelemetry(), track);
+        // worked out five times a second off this thread (1.0.49: its terrain steps ran here every 33 ms)
+        cameraLive.want(c != null && cameraOnMap && !fcLost ? c.getLink().getTelemetry() : null, track);
+        view = cameraLive.latest();
         if (w != null) w.setCameraView(view);
         miniMap.setCameraView(view);
         List<de.droiddrone.pc.DetectionMarks.Mark> marks = c == null ? detectionMarks.marks(now) : detectionMarks(c.getLink().getTelemetry(), now);
@@ -1876,6 +1914,7 @@ public class MainWindow extends JFrame {
         if (observation != null) stopObservation();
         backToGrid = false;
         if (connection != null) disconnect();
+        if (osdRecorder != null) osdRecorder.finish(3000); // the file with the OSD closed whole, not cut off by the exit
         settingsWriter.shutdown(); // what is queued (the OSD layout, the window's place) reaches the file before the exit
         try {
             settingsWriter.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS);
@@ -2805,6 +2844,9 @@ public class MainWindow extends JFrame {
             new LockedNotice(pressed, videoView, "ARMED", "No sleep while the drone is armed: disarm first.").pop();
             return;
         }
+        // telemetry stale right after an arm: it may still fly, and every power mode stops the sticks - ask, as DISCONNECT does
+        if (!confirmEndWhileArmed(mode == ControlLink.POWER_STANDBY ? "STANDBY"
+                : mode == ControlLink.POWER_OVERWATCH ? "OVERWATCH" : "DEEP SLEEP")) return;
         if (mode == ControlLink.POWER_OVERWATCH && !prepareOverwatch(pressed)) return;
         powerWanted = mode;
         powerAskedAt = de.droiddrone.pc.MonoClock.ms();

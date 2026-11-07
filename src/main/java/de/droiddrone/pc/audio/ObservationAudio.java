@@ -38,6 +38,10 @@ public final class ObservationAudio implements AutoCloseable {
         volatile boolean speaking;
         volatile double levelDb = VoiceActivity.SILENCE_DB;
         volatile long lastFrameNs;
+        /** Taken out of the mix (removeSource): it goes at the thread's next period, whatever the queue dropped. */
+        volatile boolean removed;
+        /** Its decoder was let go while it was silent (SILENT_NS): made again by the next frame. */
+        boolean asleep;
         AudioConfig config;
         AacDecoder decoder;
         final JitterBuffer<byte[]> jitter = new JitterBuffer<>(LiveAudio.TARGET_MS, LiveAudio.MAX_MS);
@@ -66,6 +70,8 @@ public final class ObservationAudio implements AutoCloseable {
     }
 
     public void removeSource(int id) {
+        Source s = sources.get(id);
+        if (s != null) s.removed = true; // 1.0.49: a REMOVE dropped by a full queue left the phone in the mix
         put(id, REMOVE);
     }
 
@@ -75,7 +81,8 @@ public final class ObservationAudio implements AutoCloseable {
 
     public void onFrame(int id, byte[] aac) {
         Source s = sources.get(id);
-        if (s != null) s.lastFrameNs = System.nanoTime();
+        if (s == null || s.removed) return;
+        s.lastFrameNs = System.nanoTime();
         put(id, aac);
     }
 
@@ -130,6 +137,7 @@ public final class ObservationAudio implements AutoCloseable {
                     java.util.Arrays.fill(mix, 0f);
                     boolean any = false;
                     float duckGain = duck.getAsBoolean() ? LiveAudio.DUCK_GAIN : 1f;
+                    dropRemovedAndSilent(System.nanoTime());
                     for (Source s : sources.values()) {
                         fill(s, nowMs);
                         if (s.fifoLength > 0) any = true;
@@ -175,14 +183,51 @@ public final class ObservationAudio implements AutoCloseable {
             s.voice.reset();
             if (s.decoder != null) s.decoder.close();
             s.decoder = null;
+            s.asleep = false;
             try {
                 s.decoder = new AacDecoder(c);
             } catch (IllegalStateException e) {
                 log.accept("Observation sound: " + e.getMessage());
             }
         } else if (o instanceof byte[] f && s.config != null) {
+            if (s.asleep) { // let go while the phone was silent: made again
+                s.asleep = false;
+                try {
+                    s.decoder = new AacDecoder(s.config);
+                } catch (IllegalStateException e) {
+                    log.accept("Observation sound: " + e.getMessage());
+                }
+            }
             s.jitter.offer(f, s.config.frameMs());
         }
+    }
+
+    /** No frame from a phone for this long: its decoder and what it still held go (its next frame makes them again). */
+    static final long SILENT_NS = 30_000_000_000L;
+
+    /** Sources taken out (Source.removed) leave the mix; one silent for SILENT_NS lets its decoder go. */
+    void dropRemovedAndSilent(long nowNs) {
+        for (java.util.Iterator<Source> it = sources.values().iterator(); it.hasNext(); ) {
+            Source s = it.next();
+            if (s.removed) {
+                it.remove();
+                if (s.decoder != null) s.decoder.close();
+                s.decoder = null;
+            } else if (s.decoder != null && s.lastFrameNs != 0 && nowNs - s.lastFrameNs > SILENT_NS) {
+                s.decoder.close();
+                s.decoder = null;
+                s.asleep = true;
+                s.jitter.clear();
+                s.fifoLength = 0;
+                s.voice.reset();
+                s.speaking = false;
+            }
+        }
+    }
+
+    /** Sources in the mix (tests). */
+    int sourceCount() {
+        return sources.size();
     }
 
     /** The source's samples at the mix's rate, a period's worth if its jitter buffer has them; the speaking judged. */

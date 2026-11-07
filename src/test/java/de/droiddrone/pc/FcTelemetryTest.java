@@ -303,6 +303,21 @@ class FcTelemetryTest {
         assertFalse(t.isArmedNow(MonoClock.ms(), 2000), "a disarm in between starts the count over");
     }
 
+    /** The BEEPER waits for this (1.0.49): DISARMED said lately, with the mode names known - never "nothing known". */
+    @Test
+    void disarmedNowOnlyFromAFreshStatusReadWithTheNames() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        assertFalse(t.isDisarmedNow(MonoClock.ms(), 2000), "nothing known");
+        t.parse(new DataReader(betaflightPacket(0, 0b10), true), BETAFLIGHT);
+        assertFalse(t.isDisarmedNow(MonoClock.ms(), 2000), "without the names ARM can't be seen: every status looks disarmed");
+        t.parse(new DataReader(boxNamesPacket("ARM;ANGLE;"), true), BETAFLIGHT);
+        t.parse(new DataReader(betaflightPacket(0, 0b10), true), BETAFLIGHT);
+        assertTrue(t.isDisarmedNow(MonoClock.ms(), 2000));
+        assertFalse(t.isDisarmedNow(MonoClock.ms() + 2001, 2000), "too old to say");
+        t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
+        assertFalse(t.isDisarmedNow(MonoClock.ms(), 2000), "armed");
+    }
+
     @Test
     void modeNamesAreForgottenAfterALinkLoss() throws Exception {
         FcTelemetry t = new FcTelemetry();

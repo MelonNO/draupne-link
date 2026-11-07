@@ -558,6 +558,18 @@ public class FcTelemetry {
 
     /** How many status reports in a row said armed (0 after one that said disarmed). */
     private volatile int armedStreak;
+    /** The last status was read with Betaflight's mode names known: only then does "not ARM" mean disarmed. */
+    private volatile boolean statusHadNames;
+
+    /**
+     * The flight controller said DISARMED in a status no older than maxAgeMs, read with its mode names known (without
+     * them ARM can't be found among the bits, and every status looks disarmed). False when it said armed or nothing
+     * recent is known: what the BEEPER waits for (1.0.49).
+     */
+    public boolean isDisarmedNow(long nowMs, long maxAgeMs) {
+        Status s = status;
+        return s != null && !s.armed() && statusHadNames && nowMs - s.receivedAt() <= maxAgeMs;
+    }
 
     /** The phone has sent telemetry for a while but no version: its app is older than 2.3.0-pc.5. */
     public boolean phoneAppSilent(long nowMs) {
@@ -584,6 +596,7 @@ public class FcTelemetry {
         long now = MonoClock.ms();
         if (!names.isEmpty()) trackArmed(armed, now); // without the names, ARM can't be found among the bits
         armedStreak = armed ? Math.min(armedStreak + 1, 1000) : 0;
+        statusHadNames = !names.isEmpty();
         status = new Status(armed, List.copyOf(modes), List.copyOf(blockers), load, coreTemp, now);
     }
 

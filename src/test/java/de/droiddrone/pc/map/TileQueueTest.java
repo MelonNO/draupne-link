@@ -98,6 +98,20 @@ class TileQueueTest {
         assertFalse(c.isOffline(), "fetchNow (the terrain) asked no server either");
     }
 
+    /** A map repaints only on a change: a tile held back in flight calls its map again later, so it asks again. */
+    @Test
+    void aMapWhoseTileWasHeldIsCalledAgainLater() throws Exception {
+        TileCache c = cache();
+        held[0] = true;
+        java.util.concurrent.CountDownLatch called = new java.util.concurrent.CountDownLatch(1);
+        Runnable map = called::countDown;
+        c.get(TileSource.KARTVERKET_TOPO, 10, 5, 5, map);
+        c.get(TileSource.KARTVERKET_TOPO, 10, 6, 5, map);
+        for (TileCache.Request r; (r = c.takeNext()) != null; ) c.load(r);
+        assertEquals(1, called.getCount(), "not at once");
+        assertTrue(called.await(TileCache.HELD_RETRY_MS + 3000, java.util.concurrent.TimeUnit.MILLISECONDS), "called again to paint and ask");
+    }
+
     @Test
     void anAreaDownloadWaitsWhilePossiblyFlying() throws Exception {
         TileCache c = cache();
