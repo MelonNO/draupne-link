@@ -1360,6 +1360,7 @@ final class DroneSetup {
                 String aux = fc.command("aux");
                 ArmSwitch arm = ArmSwitch.fromCli(aux);
                 if (arm != null) main.save(Map.of(ArmSwitch.KEY, arm.format()));
+                main.save(Map.of(de.droiddrone.pc.RcSession.BEEPER_KEY, Boolean.toString(de.droiddrone.pc.RcSession.beeperSetUp(aux))));
                 String rate = fc.command("get serial_update_rate_hz");
                 String forced = fc.command("get force_battery_cell_count");
                 List<BetaflightPlan.Change> plan = new java.util.ArrayList<>(BetaflightPlan.plan(rate, version, forced, cellTarget, cellsOk));

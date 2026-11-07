@@ -66,6 +66,11 @@ public class RcMapper {
         return channelCount;
     }
 
+    /** The radio drives this channel (index in the frame: 0-3 sticks, 4 = AUX1, ...): an axis, a button or a fixed value. */
+    public boolean isMapped(int channel) {
+        return channel >= 0 && channel < sources.length && sources[channel] != null;
+    }
+
     /**
      * @return channel values, or null if the joystick lacks an axis/button the mapping needs
      *         (fail closed: never send a frame with a guessed channel).

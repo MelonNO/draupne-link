@@ -16,18 +16,27 @@ public record ArmSwitch(int channel, List<int[]> ranges) {
     private static final int FIRST_AUX = 4;
 
     /**
-     * True if this frame would arm (the switch is on). Judged on the frame as the flight controller gets it: a channel
-     * this frame doesn't carry goes out as 1000 when it is one of the first 8 ({@link ControlLink#padForRxMap}), and
-     * Betaflight sets any channel beyond what it receives to 0 (rx_msp.c) - with an inverted range (900-1100 arms)
-     * the padded 1000 is inside it. Betaflight's own check is value &lt; 900 + endStep * 25, the end exclusive; this
-     * one includes the end, erring on the side of "on" (the sticks wait a little longer, never start too early).
+     * True if this frame would arm (the switch is on), or might: judged on the frame as the flight controller gets it.
+     * A channel this frame doesn't carry goes out as 1000 when it is one of the first 8 ({@link ControlLink#padForRxMap});
+     * beyond that, and a channel sent as 0 (1.0.49: the gap before AUX14), it is not sent at all - Betaflight holds such a
+     * channel at its last value or its centre (rx.c), which may well be inside an arm range. That is UNKNOWN, and
+     * unknown counts as on: never taken as low or off. Betaflight's own check is value &lt; 900 + endStep * 25, the end
+     * exclusive; this one includes the end, erring on the side of "on" (the sticks wait a little longer, never start
+     * too early).
      */
     public boolean on(short[] channels) {
         if (channels == null) return false;
-        int v = channel < channels.length ? channels[channel]
-                : channel < ControlLink.RX_MAP_SIZE ? RcMapper.MIN_CHANNEL_LEVEL : 0;
+        if (isUnknown(channels)) return true;
+        int v = channel < channels.length ? channels[channel] : RcMapper.MIN_CHANNEL_LEVEL;
         for (int[] r : ranges) if (v >= r[0] && v <= r[1]) return true;
         return false;
+    }
+
+    /** The arm channel's value in this frame is not known: not sent (beyond the padded 8), or sent as 0. */
+    public boolean isUnknown(short[] channels) {
+        if (channels == null) return true;
+        if (channel >= channels.length) return channel >= ControlLink.RX_MAP_SIZE;
+        return channels[channel] == 0;
     }
 
     /**

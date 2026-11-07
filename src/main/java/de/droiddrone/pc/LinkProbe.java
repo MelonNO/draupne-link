@@ -7,10 +7,16 @@ import java.util.Locale;
 /**
  * `probe <seconds> [auto|sharp|robust]`: connects to the phone without a window or sticks, decodes the video into
  * nothing, and prints the link and video figures once a second (and writes a link log) - for comparing video settings on
- * a real link without anyone at the PC. Never on a drone that flies: no sticks are sent, so it fails safe.
+ * a real link without anyone at the PC. Watch-only (1.0.49): it asks the phone who flies and watches through that PC,
+ * never connecting as the pilot - a probe left running took a session that had just lapsed in a 4G gap.
  */
 final class LinkProbe {
     private LinkProbe() {
+    }
+
+    /** The probe's link: a spectator's, whatever the settings' "connect as" says. */
+    static Connection connect(PcConfig config, ControlLink.VideoListener video) throws java.io.IOException {
+        return Connection.openWatching(config, video);
     }
 
     static void run(PcConfig config, int seconds, String mode) throws Exception {
@@ -40,7 +46,7 @@ final class LinkProbe {
         };
         ControlLink[] linkRef = new ControlLink[1];
         try (VideoPipeline video = new VideoPipeline(sink, () -> linkRef[0] == null ? -1 : linkRef[0].getPing())) {
-            Connection connection = Connection.open(config, video);
+            Connection connection = connect(config, video);
             ControlLink link = connection.getLink();
             linkRef[0] = link;
             link.setEvents(msg -> System.out.println("EVENT " + msg));

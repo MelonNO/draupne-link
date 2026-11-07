@@ -17,16 +17,30 @@ public class Connection {
 
     /** @param video receives the camera stream (requested as H.265 or H.264 per the videoCodec setting); null = no video */
     public static Connection open(PcConfig config, ControlLink.VideoListener video) throws IOException {
+        return open(config, video, false);
+    }
+
+    /**
+     * A probe's link (LinkProbe, 1.0.49): watch-only whatever the settings say - it asks the phone at the address who
+     * flies and watches through that PC, never sends a pilot's Connect, so it can't take a session that just lapsed in
+     * a 4G gap. Nobody flying: it waits for a pilot.
+     */
+    static Connection openWatching(PcConfig config, ControlLink.VideoListener video) throws IOException {
+        return open(config, video, true);
+    }
+
+    private static Connection open(PcConfig config, ControlLink.VideoListener video, boolean probe) throws IOException {
         int port = config.getPort();
+        boolean watch = probe || watchOnly(config);
         if (config.getIp().isEmpty()) {
-            throw new IllegalArgumentException(watchOnly(config) ? "Pick the pilot PC to watch first." : "Pick the phone first.");
+            throw new IllegalArgumentException(watch && !probe ? "Pick the pilot PC to watch first." : "Pick the phone first.");
         }
         InetAddress remoteIp = InetAddress.getByName(config.getIp());
-        boolean watch = watchOnly(config);
         ControlLink link = new ControlLink(config, remoteIp, port, port);
-        link.enableSpectators(spectatorsAllowed(config), spectatorDelay(config));
-        // watching: the address is the pilot PC's (its DRAUPNE name, 1.0.35), asked straight for its stream
-        if (watch) link.watchOnly(Names.kindOf(config.getString(Names.PHONE_NAME_KEY)) != Names.Kind.PHONE);
+        link.enableSpectators(!probe && spectatorsAllowed(config), spectatorDelay(config));
+        // watching: the address is the pilot PC's (its DRAUPNE name, 1.0.35), asked straight for its stream; a probe's
+        // is the phone's, asked who flies
+        if (watch) link.watchOnly(!probe && Names.kindOf(config.getString(Names.PHONE_NAME_KEY)) != Names.Kind.PHONE);
         if (video != null) link.setVideoListener(video, !"avc".equalsIgnoreCase(config.getString("videoCodec")));
         try {
             link.start();

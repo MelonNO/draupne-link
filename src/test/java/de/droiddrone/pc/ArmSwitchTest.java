@@ -35,9 +35,23 @@ class ArmSwitchTest {
         ArmSwitch usual = new ArmSwitch(5, List.of(new int[]{1700, 2100}));
         assertFalse(usual.on(new short[]{1500, 1500, 1500, 1000}), "padded 1000 is below the usual range");
         ArmSwitch beyond = new ArmSwitch(9, List.of(new int[]{900, 1100})); // AUX6: not padded, Betaflight sets it to 0
-        assertFalse(beyond.on(new short[]{1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000}));
         assertTrue(beyond.on(new short[]{1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1000}), "sent as 1000: on");
+        assertFalse(beyond.on(new short[]{1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000, 1000, 1500}), "sent as 1500: off");
         assertFalse(usual.on(null));
+    }
+
+    /** 1.0.49 (M1): not sent, or sent as 0, Betaflight holds the channel at a value nobody knows - never "off". */
+    @Test
+    void aChannelNotSentOrSentAsZeroIsUnknownAndCountsAsOn() {
+        ArmSwitch usual = new ArmSwitch(9, List.of(new int[]{1700, 2100})); // AUX6
+        short[] eight = {1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000};
+        assertTrue(usual.isUnknown(eight));
+        assertTrue(usual.on(eight), "beyond the padded 8: unknown, not off");
+        short[] zero = {1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000, 0, 0, 0, 0};
+        assertTrue(usual.on(zero), "0 is not low");
+        short[] low = {1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000, 0, 1000};
+        assertFalse(usual.isUnknown(low));
+        assertFalse(usual.on(low));
     }
 
     @Test

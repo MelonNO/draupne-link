@@ -118,6 +118,7 @@ final class SpectatorClient implements AutoCloseable {
         this.deliver = deliver;
         thread = new Thread(this::run, "spectator");
         thread.setDaemon(true);
+        thread.setUncaughtExceptionHandler((th, e) -> log("Spectator thread died: " + e)); // 1.0.49: never silently
         thread.setPriority(Thread.NORM_PRIORITY);
         thread.start();
     }
@@ -162,13 +163,13 @@ final class SpectatorClient implements AutoCloseable {
     /** What the pilot PC's own OSD warns of (a pilot PC from 1.0.41 on), or null: none yet, lapsed, or an older pilot. */
     ControlLink.PilotView pilotView() {
         ControlLink.PilotView v = pilotView;
-        return v != null && System.currentTimeMillis() - pilotViewAt <= PILOT_VIEW_FRESH_MS ? v : null;
+        return v != null && MonoClock.ms() - pilotViewAt <= PILOT_VIEW_FRESH_MS ? v : null;
     }
 
     /** The pilot PC holds its stream because its own link to the drone is slow: "PAUSED (pilot link slow)". */
     boolean isPaused() {
         long at = pausedAt;
-        return at != 0 && System.currentTimeMillis() - at <= PAUSE_NOTICE_FRESH_MS;
+        return at != 0 && MonoClock.ms() - at <= PAUSE_NOTICE_FRESH_MS;
     }
 
     // ------------------------------------------------------------------ the link's receive thread
@@ -194,7 +195,7 @@ final class SpectatorClient implements AutoCloseable {
         byte[] d = packet.getData();
         int len = packet.getLength();
         if (len < 1) return;
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         switch (d[0]) {
             case Spectate.WELCOME -> {
                 int port = Spectate.readPort(d, len);
@@ -310,7 +311,7 @@ final class SpectatorClient implements AutoCloseable {
         long nextHello = 0, nextKeep = 0, nextQuery = 0;
         while (running) {
             try {
-                long now = System.currentTimeMillis();
+                long now = MonoClock.ms();
                 Spectate.Address p = pilot;
                 if (streamPort >= 0 && now - lastFromPilot > (pausedAt != 0 ? PILOT_GONE_PAUSED_MS : PILOT_GONE_MS)) {
                     log("Spectator: the pilot PC stopped sending");
