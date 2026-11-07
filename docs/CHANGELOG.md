@@ -22,7 +22,7 @@ With phone app DRAUPNE Flight 2.3.0-pc.39 (sound in the air).
 - **Motion detection: tracks failed with a large clock.** The shared detector kept a track's times as floats of the raw clock, so with the PC's wall clock (the virtual fleet) nothing ever "travelled", and a phone up for days lost precision too. Times are now counted from a recent start. (Shared code: the next phone build carries it.)
 - **Virtual fleet: what moves is drawn into the camera picture, and only the motion detection raises an alarm.** WALKER (a person walking, 10 m out; a torch at night), VEHICLE (a car with turning wheels, 25 m out at 30 km/h; headlights at night) and LIGHT (a person with a lamp) cross in front of the drone where it stands - they crossed in front of its start point, so a flown or placed drone never saw them - over a looped old flight too. The real motion detection, as on the phone, finds them 2-5 s after the press while they still cross: boxes on the video and the direction on the map when connected, an overwatch alert with them in the pictures before it, the preview and the clip. ALERT NOW, which faked a detection, is gone: SOMEONE NOW sends a person across 6 m from the camera instead. The fleet log says whether motion detection is asked for.
 - Virtual fleet: the drones start in the middle of the MGRS square 32V PN (30 m apart); the fleet window shows the start place as MGRS, and START PLACE takes MGRS, UTM or lat lon.
-- Tests: 696, among them a virtual drone against DRAUPNE Link's real link, video pipeline and overwatch hub end to end.
+- Tests: 709, among them a virtual drone against DRAUPNE Link's real link, video pipeline and overwatch hub end to end.
 
 ## 1.0.49
 
