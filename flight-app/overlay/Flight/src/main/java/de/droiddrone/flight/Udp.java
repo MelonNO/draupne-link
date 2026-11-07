@@ -115,8 +115,27 @@ public class Udp {
      */
     private volatile int lastRcSeq = -1; // volatile: the stats thread reports it
     private boolean rcSeqValid;
-    /** When the last stick frame was taken; the sequence rule starts over after RC_SEQ_RESET_MS without one. */
-    private long lastRcTakenMs;
+    /**
+     * When the last stick frame was taken; the sequence rule starts over after RC_SEQ_RESET_MS without one. Volatile:
+     * the idle sticks' thread reads it.
+     */
+    private volatile long lastRcTakenMs;
+    /**
+     * pc.33: the idle sticks from DRAUPNE Link 1.0.44 ([0x78][count u8][count x i16], once a second): throttle low,
+     * sticks centred, the arm switch off, BEEPER low, the other AUX as the pilot's radio has them. Fed to Betaflight
+     * while it is disarmed and no stick frame comes (see idleSticksRun), so a disarmed drone on the phone never sees its
+     * receiver lost: Betaflight 2025.12 beeps for that, disarmed too, and the pilot's rule is a drone that beeps only
+     * when told to (BEEPER) or when the phone's USB is out. Kept while the app runs (the PC sends them again within a
+     * second of every session); static, as the Udp of a deep sleep's wake is a new one.
+     */
+    static final byte IdleSticks = 0x78;
+    private static volatile short[] idleSticks;
+    /** No stick frame for this long and the drone known disarmed since: the idle sticks go to Betaflight. */
+    static final long IDLE_AFTER_MS = 300;
+    /** Their rate: Betaflight counts MSP sticks lost after 100 ms without one (rx.c), so 20 a second leaves room. */
+    static final long IDLE_EVERY_MS = 50;
+    /** A status read this long after the last stick frame: one that frame's arm switch could have changed is past. */
+    static final long IDLE_STATUS_AFTER_MS = 100;
     /**
      * No stick frame taken for this long: the next one is taken whatever its sequence. With the 8-bit sequence a
      * frame 128 or more behind looked newer (a cell handover flushing old packets), and the fresh frames after it
@@ -398,6 +417,10 @@ public class Udp {
             telemetrySenderThread.setDaemon(false);
             telemetrySenderThread.setName("telemetrySenderThread");
             telemetrySenderThread.start();
+            Thread idleThread = new Thread(idleSticksRun);
+            idleThread.setDaemon(true);
+            idleThread.setName("idleSticksThread");
+            idleThread.start();
             // DRAUPNE Link: no rcThread any more - stick frames go to the flight controller from the receive thread
             // (handleRcFrame), which runs at MAX_PRIORITY like the serial writer that takes them
             return true;
@@ -519,6 +542,10 @@ public class Udp {
                     // DRAUPNE Link: sticks straight to the flight controller from here - not through the buffer, a
                     // polling thread and a hand-over (the frame is unnumbered and never acknowledged, so the buffer
                     // had nothing to do with it). The session stays alive on the PC's pings (20 a second)
+                    if (d[0] == IdleSticks) {
+                        if (buffer.isConnected()) handleIdleSticks(d, len);
+                        continue;
+                    }
                     if (d[0] == UdpCommon.RcFrame) {
                         // pc.21: none in standby or deep sleep - the PC sends none, and a stray one must not fly
                         if (buffer.isConnected() && !PowerMode.dropSticks()) handleRcFrame(d, len);
@@ -581,6 +608,48 @@ public class Udp {
         if (msp.isInitialized()) msp.setRawRc(rcFrame, count);
         if (mavlink.isInitialized()) mavlink.setRcChannelsOverride(java.util.Arrays.copyOf(rcFrame, count));
     }
+
+    /** The idle sticks, on the receive thread: kept for idleSticksRun (a new array each time, never written after). */
+    private void handleIdleSticks(byte[] d, int len) {
+        if (len < 2) return;
+        int count = d[1] & 0xff;
+        if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT || len != 2 + count * 2) return;
+        short[] frame = new short[count];
+        for (int i = 0, at = 2; i < count; i++, at += 2) frame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
+        if (idleSticks == null) log("Idle sticks from the PC: fed to the FC while it is disarmed and no sticks come");
+        idleSticks = frame;
+    }
+
+    /**
+     * pc.33: the idle sticks to Betaflight, IDLE_EVERY_MS apart, while all of this holds: there are some, no stick
+     * frame has come for IDLE_AFTER_MS, and Betaflight's last status - read at least IDLE_STATUS_AFTER_MS after that
+     * frame, and fresh - says DISARMED. Never on an armed or unknown drone: a link lost in the air stays Betaflight's
+     * failsafe. Standby too (the drone sits on the ground, the status is read once a second); not in deep sleep, which
+     * lets go of the flight controller's port and closes this Udp.
+     */
+    private final Runnable idleSticksRun = new Runnable() {
+        public void run() {
+            final int id = udpThreadsId;
+            boolean feeding = false;
+            while (id == udpThreadsId) {
+                try {
+                    Thread.sleep(IDLE_EVERY_MS);
+                    short[] idle = idleSticks;
+                    long lastRc = lastRcTakenMs;
+                    long now = System.currentTimeMillis();
+                    boolean feed = idle != null && msp.isInitialized() && now - lastRc >= IDLE_AFTER_MS
+                            && msp.disarmedAfter(lastRc + IDLE_STATUS_AFTER_MS, now);
+                    if (feed) msp.setRawRc(idle, idle.length);
+                    if (feed != feeding) log(feed ? "Idle sticks to the FC (disarmed, no sticks from the PC)" : "Idle sticks stopped");
+                    feeding = feed;
+                } catch (InterruptedException e) {
+                    return;
+                } catch (Exception e) {
+                    log("Idle sticks error: " + e);
+                }
+            }
+        }
+    };
 
     /** The 16-bit sequence rule: newer than the last frame taken, or anything after RC_SEQ16_FORGET_MS without one. */
     private boolean takeSeq16(int seq, long now) {

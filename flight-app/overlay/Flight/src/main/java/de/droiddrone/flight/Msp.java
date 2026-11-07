@@ -99,6 +99,11 @@ public class Msp {
     /** pc.31: when the last status reply (its mode flags) came; the armed state is only as fresh as that. */
     private volatile long statusAtMs;
     /**
+     * pc.33: the statusAtMs of the reply isArmed was last taken from, written after isArmed - so a reader that sees
+     * this stamp sees that reply's isArmed too (statusAtMs is set before checkModeFlags reads the flag).
+     */
+    private volatile long armedFlagStatusMs;
+    /**
      * pc.31: a status reply older than this: armed UNKNOWN. The status is asked for every few telemetry ticks, once
      * a second in standby (slowPoll): 2.5 s lets one reply go missing there.
      */
@@ -176,6 +181,15 @@ public class Msp {
     }
 
     /**
+     * pc.33: Betaflight said DISARMED in a status reply that came at or after {@code since} and is still fresh - what
+     * the idle sticks wait for (Udp.idleSticksRun).
+     */
+    boolean disarmedAfter(long since, long now){
+        long at = armedFlagStatusMs; // first: the isArmed read below is at least as new
+        return at >= since && now - at <= STATUS_FRESH_MS && armedState(now) == FcArmedState.DISARMED;
+    }
+
+    /**
      * DRAUPNE Link: once a second (standby) or at the usual rate. At 1 Hz the loop below counts five ticks per
      * second, so the status (the ARM flag, which ends standby) still comes every second, the rest every other.
      */
@@ -249,6 +263,7 @@ public class Msp {
         modeFlagsBtfl = null;
         modeFlagsInav = null;
         statusAtMs = 0;
+        armedFlagStatusMs = 0;
         isArmed = false;
     }
 
@@ -783,6 +798,7 @@ public class Msp {
             }
         }
         this.isArmed = isArmed;
+        armedFlagStatusMs = statusAtMs;
         if (isArmed){
             if (flyTimestamp == 0) flyTimestamp = System.currentTimeMillis();
         }else{

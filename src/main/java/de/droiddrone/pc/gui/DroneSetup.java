@@ -4,6 +4,7 @@ import de.droiddrone.pc.ArmSwitch;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.gui.CheckRow.State;
 import de.droiddrone.pc.gui.WizardDialog.Page;
+import de.droiddrone.pc.setup.Beepers;
 import de.droiddrone.pc.setup.BetaflightPlan;
 import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.GpsSetup;
@@ -1203,7 +1204,9 @@ final class DroneSetup {
                     + (m == null ? "" : " <b>Modes</b> tab: on AUX" + m.aux() + ", " + modeRanges(m) + " > Save.")
                     + (failsafeChoice == ModeSwitch.Failsafe.KEEP ? "" : " <b>Failsafe</b> tab: Stage 2 procedure <b>"
                     + failsafeChoice.title + "</b>.")
-                    + (rescue == 0 ? "" : " With the failsafe on GPS rescue: <b>GPS RESCUE</b> on AUX" + rescue + " 1700-2100."));
+                    + (rescue == 0 ? "" : " With the failsafe on GPS rescue: <b>GPS RESCUE</b> on AUX" + rescue + " 1700-2100.")
+                    + " <b>Modes</b> tab: <b>BEEPER</b> on AUX" + ModeSwitch.BEEPER_AUX + " 1700-2100 alone (the BEEPER button). <b>CLI</b> tab: "
+                    + "<b>beeper -ALL</b>, then <b>beeper " + String.join("</b>, <b>beeper ", Beepers.KEEP) + "</b>, <b>beacon RX_SET</b> > <b>save</b>.");
         }
 
         /** "ANGLE 1300-1700, POS HOLD 1700-2100" for the manual way, named as Betaflight Configurator's Modes tab does. */
@@ -1372,6 +1375,10 @@ final class DroneSetup {
                 } else {
                     gpsRead = new Gps(gpsWanted.target(), gpsWanted.uart(), gpsWanted.compass(), gpsOnFc, "", List.of(), magFound, false, false, "", false);
                 }
+                // silent unless BEEPER is pressed or the phone is unplugged (Beepers); the button's mode on AUX12 below
+                BetaflightPlan.Change beepers = Beepers.plan(fc.command("beeper list"), fc.command("beeper"), fc.command("beacon"));
+                if (beepers != null) plan.add(beepers);
+                int beeperTarget = modesOffered == null || modesOffered.contains(ModeSwitch.BEEPER_MODE) ? ModeSwitch.BEEPER_AUX : 0;
                 java.util.Map<ModeSwitch.Mode, String> blocked = new java.util.EnumMap<>(ModeSwitch.Mode.class);
                 String rescueNote = null;
                 String failsafeNote = null;
@@ -1419,8 +1426,8 @@ final class DroneSetup {
                     plan.add(new BetaflightPlan.Change("Arming without a GPS fix allowed (gps_rescue_allow_arming_without_fix)",
                             List.of("set gps_rescue_allow_arming_without_fix = ON")));
                 }
-                ModeSwitch.Plan modes = modeTarget == null && rescueOn == 0 && armTarget == 0 && prearmTarget == 0 ? null
-                        : ModeSwitch.plan(aux, modesOffered, blocked, modeTarget, rescueOn, armTarget, prearmTarget);
+                ModeSwitch.Plan modes = modeTarget == null && rescueOn == 0 && armTarget == 0 && prearmTarget == 0 && beeperTarget == 0 ? null
+                        : ModeSwitch.plan(aux, modesOffered, blocked, modeTarget, rescueOn, armTarget, prearmTarget, beeperTarget);
                 List<String> replaced = modes == null ? List.of() : modes.replaced();
                 if (modes != null && !modes.commands().isEmpty()) {
                     List<String> what = new java.util.ArrayList<>();
@@ -1428,6 +1435,9 @@ final class DroneSetup {
                     if (rescueOn > 0 && modes.rescueProblem() == null) what.add("GPS rescue up on AUX" + rescueOn);
                     if (armTarget > 0 && modes.armProblem() == null) what.add("ARM on AUX" + armTarget);
                     if (prearmTarget > 0 && modes.prearmProblem() == null) what.add("PREARM on AUX" + prearmTarget);
+                    if (beeperTarget > 0 && modes.commands().stream().anyMatch(c -> c.matches("aux \\d+ " + ModeSwitch.BEEPER_MODE + " .*"))) {
+                        what.add("BEEPER on AUX" + beeperTarget + " (the app's BEEPER button)");
+                    }
                     plan.add(new BetaflightPlan.Change("Modes: " + String.join("; ", what) + "." + takenOff(replaced), modes.commands()));
                 }
                 boolean apply = mayApply && !plan.isEmpty() && version.startsWith("Betaflight"); // never INAV & co.

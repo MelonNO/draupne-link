@@ -115,4 +115,49 @@ class GpsSetupTest {
         assertTrue(GpsSetup.calibrated("mag_calibration = -123, 45, 6"));
         assertFalse(GpsSetup.calibrated("Invalid name"));
     }
+
+    // Betaflight 2025.12 prints the ports by name: VCP (MSP), UART1 Tramp, UART2 the serial receiver, UART3 the GPS,
+    // UART6 the ESC sensor - and a second GPS left on UART4 from an earlier try
+    static final String SERIAL_2025 = "# serial\nserial VCP 1 115200 57600 0 115200\nserial UART1 8192 115200 57600 0 115200\n"
+            + "serial UART2 64 115200 57600 0 115200\nserial UART3 2 115200 57600 0 115200\n"
+            + "serial UART4 2 115200 57600 0 115200\nserial UART6 1024 115200 57600 0 115200\n";
+
+    @Test
+    void betaflight2025PortNamesAreUnderstood() {
+        List<GpsSetup.Port> ports = GpsSetup.ports(SERIAL_2025);
+        assertEquals(6, ports.size());
+        assertEquals("USB VCP", ports.get(0).name());
+        assertEquals("UART3", ports.get(3).name());
+        assertEquals(3, ports.get(3).uart());
+        assertEquals(List.of(1, 2, 3, 4, 6), GpsSetup.uarts(SERIAL_2025));
+        assertEquals(3, GpsSetup.gpsUart(SERIAL_2025));
+        // 2025.12's own numbers (MSP's) and the other names
+        assertEquals(0, GpsSetup.legacyId("51"));
+        assertEquals(9, GpsSetup.legacyId("60"));
+        assertEquals(2, GpsSetup.legacyId("2"));
+        assertEquals(30, GpsSetup.legacyId("SOFT1"));
+        assertEquals(40, GpsSetup.legacyId("lpuart1"));
+        assertEquals(-1, GpsSetup.legacyId("INVALID"));
+    }
+
+    @Test
+    void theGpsIsOnOneUartOnlyAndOtherPortsKeepWhatTheyHave() {
+        // the pilot picks UART4: both UART3 and UART4 had the GPS - UART3 loses it, nothing else changes
+        List<BetaflightPlan.Change> plan = GpsSetup.gpsPlan(GPS_ON, SERIAL_2025, AUTO_BAUD_ON, 4);
+        assertEquals(1, plan.size());
+        assertEquals(List.of("serial UART3 0 115200 57600 0 115200"), plan.get(0).commands(), "named as the CLI names it");
+        // UART6: the GPS goes on UART6 (the ESC sensor said to go), off UART3 and UART4; UART1's Tramp is never touched
+        plan = GpsSetup.gpsPlan(GPS_ON, SERIAL_2025, AUTO_BAUD_ON, 6);
+        assertEquals(List.of("serial UART3 0 115200 57600 0 115200", "serial UART4 0 115200 57600 0 115200",
+                "serial UART6 2 115200 57600 0 115200"), plan.get(0).commands());
+        assertEquals("GPS on UART6 (ESC sensor taken off it), off UART3, off UART4", plan.get(0).description());
+        assertFalse(plan.get(0).commands().stream().anyMatch(c -> c.startsWith("serial UART1 ") || c.startsWith("serial 0 ")));
+    }
+
+    @Test
+    void aGpsOnAPortThatIsNoUartIsTakenOffToo() {
+        String serial = "serial VCP 1 115200 57600 0 115200\nserial SOFT1 2 115200 57600 0 115200\nserial UART3 0 115200 57600 0 115200\n";
+        List<BetaflightPlan.Change> plan = GpsSetup.gpsPlan(GPS_ON, serial, AUTO_BAUD_ON, 3);
+        assertEquals(List.of("serial SOFT1 0 115200 57600 0 115200", "serial UART3 2 115200 57600 0 115200"), plan.get(0).commands());
+    }
 }

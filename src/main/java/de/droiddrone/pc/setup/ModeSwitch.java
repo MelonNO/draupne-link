@@ -29,6 +29,16 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
     private static final int MODE_ARM = 0;
     /** Betaflight's permanent id for PREARM (msp_box.c). */
     private static final int MODE_PREARM = 36;
+    /** Betaflight's permanent id for BEEPER (BOXBEEPERON, msp_box.c). */
+    public static final int BEEPER_MODE = 13;
+
+    /**
+     * The BEEPER mode's channel (1.0.44): AUX12, which the app drives itself - the BEEPER button - not the radio (a
+     * radio's AUX12 is overridden). Up = beep. Drone setup puts BEEPER there alone: BEEPER on any other switch, and
+     * any other mode on AUX12, is taken off, so nothing but the button can make the drone beep (see Beepers).
+     */
+    public static final int BEEPER_AUX = 12;
+    static final int[] BEEPER_RANGE = {1700, 2100};
 
     /**
      * GPS rescue from Betaflight 4.4 (where it was rewritten, with its landing phase and sanity checks; earlier ones
@@ -333,15 +343,23 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         return plan(auxOutput, available, blocked, modes, rescueAux, armAux, 0);
     }
 
+    /** As below, BEEPER left as it is. */
+    public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
+                            int rescueAux, int armAux, int prearmAux) {
+        return plan(auxOutput, available, blocked, modes, rescueAux, armAux, prearmAux, 0);
+    }
+
     /**
      * The switches together (they share Betaflight's mode slots).
      * @param modes     the flight mode switch, or null to leave it
      * @param rescueAux GPS rescue up on this AUX too (0 = no): for when Betaflight's failsafe is GPS rescue
      * @param armAux    ARM on this AUX, up (0 = leave ARM as it is). ARM on any other switch is taken off: one arm switch.
      * @param prearmAux PREARM on this AUX, up (0 = leave PREARM as it is). PREARM on any other switch is taken off.
+     * @param beeperAux BEEPER alone on this AUX, up ({@link #BEEPER_AUX}; 0 = leave BEEPER as it is). Left out when ARM
+     *                  is there (left as it is).
      */
     public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
-                            int rescueAux, int armAux, int prearmAux) {
+                            int rescueAux, int armAux, int prearmAux, int beeperAux) {
         blocked = java.util.Map.copyOf(blocked);
         List<Slot> slots = slots(auxOutput);
         String armProblem = null;
@@ -372,6 +390,8 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
                 prearmChannel = prearmAux - 1;
             }
         }
+        int beeperChannel = beeperAux > 0 && !armChannels.contains(beeperAux - 1) && prearmChannel != beeperAux - 1
+                && (modes == null || modes.aux != beeperAux) && rescueAux != beeperAux ? beeperAux - 1 : -1;
         List<Mode> missing = new ArrayList<>();
         String problem = null, rescueProblem = null;
         java.util.Map<Integer, List<int[]>> wanted = new java.util.LinkedHashMap<>(); // channel -> {mode, start, end}
@@ -414,6 +434,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         List<Slot> offElsewhere = new ArrayList<>(); // managed modes on other switches: taken off, each in one place
         for (Slot s : slots) {
             if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
+            if (beeperChannel >= 0 && (s.mode() == BEEPER_MODE || s.channel() == beeperChannel)) continue; // below
             if (wanted.containsKey(s.channel())) {
                 onSwitches.add(s);
             } else if (MANAGED.contains(s.mode())) {
@@ -479,6 +500,23 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
                 if (!replaced.contains(line)) replaced.add(line);
             }
             if (!prearmThere) place.add(new int[]{prearmChannel, MODE_PREARM, PREARM_RANGE[0], PREARM_RANGE[1]});
+        }
+        if (beeperChannel >= 0) {
+            boolean beeperThere = false;
+            for (Slot s : slots) {
+                if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
+                if (s.mode() != BEEPER_MODE && s.channel() != beeperChannel) continue;
+                if (!beeperThere && s.mode() == BEEPER_MODE && s.channel() == beeperChannel
+                        && s.start() == BEEPER_RANGE[0] && s.end() == BEEPER_RANGE[1]) {
+                    beeperThere = true; // the button's range exactly: kept
+                    continue;
+                }
+                commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
+                free.add(s.index());
+                String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
+                if (!replaced.contains(line)) replaced.add(line);
+            }
+            if (!beeperThere) place.add(new int[]{beeperChannel, BEEPER_MODE, BEEPER_RANGE[0], BEEPER_RANGE[1]});
         }
         for (Slot s : slots) {
             if (!s.used()) free.add(s.index());

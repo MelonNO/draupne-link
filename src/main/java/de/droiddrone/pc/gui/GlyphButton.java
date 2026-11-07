@@ -13,7 +13,7 @@ import java.awt.geom.Path2D;
  * room from the picture as possible. The text is kept as its name (the tour, the tooltip) and never painted.
  */
 final class GlyphButton extends JButton {
-    enum Glyph { POP_OUT, VIDEO_BACK, FULL_SCREEN }
+    enum Glyph { POP_OUT, VIDEO_BACK, FULL_SCREEN, BEEPER }
 
     private static final int SIZE = 30;
     private Glyph glyph;
@@ -76,6 +76,13 @@ final class GlyphButton extends JButton {
                     g.drawPolyline(new int[]{w - m - l, w - m, w - m}, new int[]{m, m, m + l}, 3);
                     g.drawPolyline(new int[]{m, m, m + l}, new int[]{h - m - l, h - m, h - m}, 3);
                     g.drawPolyline(new int[]{w - m - l, w - m, w - m}, new int[]{h - m, h - m, h - m - l}, 3);
+                }
+                case BEEPER -> {
+                    // a loudspeaker and two sound arcs: the drone's beeper
+                    int cy = h / 2;
+                    g.drawPolygon(new int[]{m - 1, m + 3, m + 8, m + 8, m + 3, m - 1}, new int[]{cy - 3, cy - 3, cy - 7, cy + 7, cy + 3, cy + 3}, 6);
+                    g.drawArc(m + 6, cy - 5, 8, 10, -50, 100);
+                    g.drawArc(m + 6, cy - 9, 14, 18, -50, 100);
                 }
             }
         } finally {

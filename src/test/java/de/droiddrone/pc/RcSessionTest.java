@@ -269,4 +269,43 @@ class RcSessionTest {
         s.onInput(sticks(-0.99f));
         assertFalse(s.isFrozenStopped(), "disarmed: nothing to hand to the failsafe");
     }
+
+    @Test
+    void theBeeperChannelIsAux12UpWhileHeldAndTheFramePaddedToIt() {
+        short[] four = {1500, 1500, 1500, 1000};
+        short[] held = RcSession.withBeeper(four, true);
+        assertEquals(16, held.length);
+        assertEquals(2000, held[15]);
+        assertEquals(1000, held[4], "padded AUX low, as upstream pads");
+        assertEquals(1000, RcSession.withBeeper(four, false)[15]);
+        short[] eighteen = new short[18];
+        java.util.Arrays.fill(eighteen, (short) 1700);
+        short[] out = RcSession.withBeeper(eighteen, false);
+        assertEquals(18, out.length);
+        assertEquals(1000, out[15], "a radio's AUX12 is overridden");
+        assertEquals(1700, out[16]);
+        assertEquals(1700, eighteen[15], "the radio's frame untouched");
+    }
+
+    @Test
+    void idleSticksCanNeverArm() {
+        short[] radio = {1200, 1800, 1300, 1900, 2000, 1500, 2000, 1000};
+        // ARM up on AUX1 (channel 4): idle has it low, throttle low, sticks centred, the other AUX as the radio has them
+        ArmSwitch armUp = new ArmSwitch(4, List.of(new int[]{1700, 2100}));
+        short[] idle = RcSession.idleSticks(radio, armUp);
+        assertNotNull(idle);
+        assertEquals(1000, idle[3]);
+        assertEquals(1500, idle[0]);
+        assertFalse(armUp.on(idle));
+        assertEquals(1500, idle[5]);
+        assertEquals(1000, idle[15], "BEEPER low");
+        // an inverted switch (arms low): idle puts it high
+        ArmSwitch armLow = new ArmSwitch(4, List.of(new int[]{900, 1300}));
+        short[] idleLow = RcSession.idleSticks(radio, armLow);
+        assertEquals(2000, idleLow[4]);
+        assertFalse(armLow.on(idleLow));
+        // ARM not known, or a range over the whole stick: nothing
+        assertNull(RcSession.idleSticks(radio, null));
+        assertNull(RcSession.idleSticks(radio, new ArmSwitch(4, List.of(new int[]{900, 2100}))));
+    }
 }

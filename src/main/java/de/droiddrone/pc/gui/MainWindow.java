@@ -193,6 +193,7 @@ public class MainWindow extends JFrame {
     /** Two small drawn buttons at the edge of the picture: the video keeps nearly all the room. */
     private final GlyphButton popOutButton = new GlyphButton(GlyphButton.Glyph.POP_OUT, "Pop out video");
     private final GlyphButton fullScreenButton = new GlyphButton(GlyphButton.Glyph.FULL_SCREEN, "Full screen");
+    private final GlyphButton beeperButton = new GlyphButton(GlyphButton.Glyph.BEEPER, "Beeper");
     private final JLabel poppedOutNote = Theme.label("VIDEO IS IN ITS OWN WINDOW", Theme.headingFont(16f), Theme.MUTED);
     private de.droiddrone.pc.video.LatencyMeter latencyMeter;
     private JComponent linkColumn;
@@ -865,6 +866,19 @@ public class MainWindow extends JFrame {
         videoBar.add(popOutButton);
         videoBar.add(Box.createVerticalStrut(4));
         videoBar.add(fullScreenButton);
+        videoBar.add(Box.createVerticalStrut(4));
+        // the only way a drone on the phone beeps (Drone setup silences the rest): AUX12 up while held, Betaflight's
+        // BEEPER mode there beeps the buzzer and, disarmed, the motors - to find the drone in grass
+        beeperButton.setToolTipText("BEEPER: hold to make the drone beep (buzzer, and the motors while disarmed) - to find it");
+        beeperButton.setAlignmentX(CENTER_ALIGNMENT);
+        beeperButton.getModel().addChangeListener(e -> {
+            boolean held = beeperButton.getModel().isPressed() && beeperButton.getModel().isArmed();
+            RcSession s = session;
+            if (s == null || s.isBeeperHeld() == held) return;
+            s.setBeeper(held);
+            if (held) logLine(s.isRcEnabled() ? "BEEPER held - the drone beeps (AUX12 up)." : "BEEPER: no sticks go to the drone now - it can't beep.");
+        });
+        videoBar.add(beeperButton);
         videoBar.add(Box.createVerticalGlue());
         video.add(videoBar, BorderLayout.EAST);
         videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off");

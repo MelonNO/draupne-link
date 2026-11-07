@@ -341,4 +341,22 @@ class ModeSwitchTest {
         ModeSwitch.Plan p = ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 0, 1, 2);
         assertEquals(List.of("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 11 1 1700 2100 0 0"), p.commands());
     }
+
+    @Test
+    void beeperGoesAloneOnAux12AndOffEveryOtherSwitch() {
+        // BEEPER (13) on the radio's AUX4 and ANGLE on AUX12 before: both taken off, BEEPER up on AUX12 (channel 11)
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 3 1700 2100 0 0", "aux 2 1 11 900 1300 0 0"),
+                ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX);
+        assertEquals(List.of("aux 2 0 0 900 900 0 0", "aux 1 13 11 1700 2100 0 0"), p.commands(),
+                "the old BEEPER slot refilled with the new one, ANGLE's cleared");
+        assertEquals(List.of("BEEPER on AUX4", "ANGLE on AUX12"), p.replaced());
+        // already so: nothing; with another range on AUX12 it is set to the button's
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 11 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0,
+                ModeSwitch.BEEPER_AUX).commands().isEmpty());
+        assertEquals(List.of("aux 1 13 11 1700 2100 0 0"), ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 11 900 1300 0 0"),
+                ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX).commands());
+        // ARM left as it is on AUX12: BEEPER isn't put there
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 11 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 0, 0, ModeSwitch.BEEPER_AUX)
+                .commands().isEmpty());
+    }
 }

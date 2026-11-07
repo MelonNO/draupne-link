@@ -1426,6 +1426,38 @@ public class ControlLink {
         return packetData.getData();
     }
 
+    /**
+     * The idle sticks (1.0.44, phone app pc.33 on; an older one drops it): [0x78][count u8][count x int16], unnumbered,
+     * again each second (RcSession). The phone keeps the last ones while it runs and feeds them to Betaflight
+     * only while it knows the drone DISARMED, from a status read after its last stick frame from the PC, and no frame
+     * has come for a moment - so a disarmed drone on the phone never sees its receiver lost, and beeps only when the
+     * phone's USB is out. Never while armed: a link lost then is Betaflight's failsafe, as before.
+     */
+    public static final byte IDLE_STICKS = 0x78;
+    /** The first phone app build that takes the idle sticks. */
+    static final int IDLE_STICKS_MIN_PC_BUILD = 33;
+
+    /** @return true if sent (a phone app that takes them, the link up) */
+    public boolean sendIdleSticks(short[] channels) {
+        if (channels.length < 4 || channels.length > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return false;
+        if (!sticksWanted() || !(everReady || configReceived && isConnected())) return false;
+        if (telemetry.getPhonePcBuild() < IDLE_STICKS_MIN_PC_BUILD) return false;
+        try {
+            byte[] data = idleSticksFrame(padForRxMap(channels));
+            socket.send(new DatagramPacket(data, data.length, remoteIp, remotePort));
+            return true;
+        } catch (IOException e) {
+            return false; // the stick frames log a dead adapter already
+        }
+    }
+
+    static byte[] idleSticksFrame(short[] frame) throws IOException {
+        UdpPacketData packetData = new UdpPacketData(IDLE_STICKS);
+        packetData.daos.writeByte(frame.length);
+        for (short channel : frame) packetData.daos.writeShort(channel);
+        return packetData.getData();
+    }
+
     /** The first phone app build that takes the stick frame's send time and lateness limit. */
     static final int RC_LAG_MIN_PC_BUILD = 31;
     /** rc.maxLagMs (PcConfig.getMaxStickLagMs): 0 = the phone never drops a late frame. */

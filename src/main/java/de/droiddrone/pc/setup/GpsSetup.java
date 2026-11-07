@@ -24,8 +24,14 @@ public final class GpsSetup {
 
     /** Betaflight's serial port function bit for the GPS (serialPortFunction_e). */
     public static final int FUNCTION_GPS = 2;
-    /** Betaflight's serial port identifiers: UART1 = 0 ... UART10 = 9, USB VCP 20, SOFTSERIAL1/2 30/31, LPUART1 40. */
-    static final int ID_UART1 = 0, ID_USB = 20, ID_SOFTSERIAL1 = 30, ID_LPUART1 = 40;
+    /**
+     * Betaflight's serial port identifiers up to 4.5: UART1 = 0 ... UART10 = 9, USB VCP 20, SOFTSERIAL1/2 30/31, LPUART1
+     * 40. The ports here always carry these; 2025.12 numbers UART1 ... UART10 51 ... 60 (UART0 50) and its CLI prints
+     * names instead ("serial UART3 2 ..."), see {@link #legacyId}.
+     */
+    static final int ID_UART1 = 0, ID_USB = 20, ID_SOFTSERIAL1 = 30, ID_LPUART1 = 40, ID_UART0 = 50, ID_PIOUART0 = 70;
+    /** 2025.12's identifier of UART1 (io/serial.h); its CLI takes 0 ... 19 as the old numbers (UART1 = 0). */
+    static final int ID_UART1_2025 = 51;
     /** The UARTs offered before Betaflight has said which ports the board has. */
     public static final int UARTS_OFFERED = 6;
 
@@ -50,8 +56,16 @@ public final class GpsSetup {
         }
     }
 
-    /** One line of the CLI's "serial" output: the port's id, its function mask and the baud fields after them. */
-    public record Port(int id, int functions, String rest) {
+    /**
+     * One line of the CLI's "serial" output: the port's id (the old numbering, see {@link #ID_UART1}), its function
+     * mask, the baud fields after them, and the port as the CLI wrote it ("2" up to 4.5, "UART3" from 2025.12) - the
+     * commands name it the same way back.
+     */
+    public record Port(int id, int functions, String rest, String token) {
+        public Port(int id, int functions, String rest) {
+            this(id, functions, rest, Integer.toString(id));
+        }
+
         /** "UART3", "USB VCP", "SOFTSERIAL1", "LPUART1". */
         public String name() {
             return portName(id);
@@ -72,21 +86,54 @@ public final class GpsSetup {
         if (id == ID_USB) return "USB VCP";
         if (id >= ID_SOFTSERIAL1 && id < ID_SOFTSERIAL1 + 2) return "SOFTSERIAL" + (id - ID_SOFTSERIAL1 + 1);
         if (id == ID_LPUART1) return "LPUART1";
+        if (id == ID_UART0) return "UART0";
+        if (id >= ID_PIOUART0 && id < ID_PIOUART0 + 10) return "PIOUART" + (id - ID_PIOUART0);
         return "port " + id;
     }
 
-    /** "serial 2 2 115200 57600 0 115200" lines: the ports as Betaflight has them. */
+    /**
+     * A port as the CLI names it, in the old numbering: a number up to 4.5 ("2" = UART3), a name from 2025.12 ("UART3",
+     * "VCP", "SOFT1", "LPUART1", "PIOUART0"), or 2025.12's own numbers (51 = UART1, as MSP gives them). -1 if unknown.
+     */
+    private static final Pattern PORT_NAME = Pattern.compile("^(UART|USART|SOFT|SOFTSERIAL|LPUART|PIOUART)(\\d+)$");
+
+    static int legacyId(String token) {
+        String t = token.trim().toUpperCase(Locale.ROOT);
+        try {
+            int n = Integer.parseInt(t);
+            if (n >= ID_UART1_2025 && n < ID_UART1_2025 + 10) return n - ID_UART1_2025 + ID_UART1;
+            return n >= 0 ? n : -1;
+        } catch (NumberFormatException notANumber) {
+            // a name
+        }
+        Matcher m = PORT_NAME.matcher(t);
+        if (t.equals("VCP") || t.equals("USB")) return ID_USB;
+        if (!m.find()) return -1;
+        int n = Integer.parseInt(m.group(2));
+        return switch (m.group(1)) {
+            case "UART", "USART" -> n == 0 ? ID_UART0 : n <= 10 ? ID_UART1 + n - 1 : -1;
+            case "SOFT", "SOFTSERIAL" -> n >= 1 && n <= 2 ? ID_SOFTSERIAL1 + n - 1 : -1;
+            case "LPUART" -> n == 1 ? ID_LPUART1 : -1;
+            default -> n < 10 ? ID_PIOUART0 + n : -1;
+        };
+    }
+
+    /**
+     * "serial 2 2 115200 57600 0 115200" (up to 4.5) or "serial UART3 2 115200 57600 0 115200" (2025.12) lines: the
+     * ports as Betaflight has them. A port not understood is left out.
+     */
     public static List<Port> ports(String serialOutput) {
         List<Port> ports = new ArrayList<>();
         for (String line : serialOutput.split("\\R")) {
             String[] p = line.replaceFirst("^#\\s*", "").trim().split("\\s+");
             if (p.length < 3 || !p[0].equals("serial")) continue;
             try {
-                int id = Integer.parseInt(p[1]);
+                int id = legacyId(p[1]);
+                if (id < 0) continue;
                 int functions = Integer.parseInt(p[2]);
                 StringBuilder rest = new StringBuilder();
                 for (int i = 3; i < p.length; i++) rest.append(i > 3 ? " " : "").append(p[i]);
-                ports.add(new Port(id, functions, rest.toString()));
+                ports.add(new Port(id, functions, rest.toString(), p[1]));
             } catch (NumberFormatException ignored) {
                 // not a port line
             }
@@ -148,7 +195,8 @@ public final class GpsSetup {
 
     /**
      * The changes that put the GPS on the UART: feature GPS when off, the port's function (GPS alone on it, the
-     * baud fields kept; GPS taken off any other port), gps_auto_baud on. Empty when all is so already.
+     * baud fields kept; GPS taken off every other port, whatever else those keep), gps_auto_baud on. Empty when all is
+     * so already. Each port is named as the CLI wrote it; one it didn't list gets the old number, which 2025.12 takes too.
      * @param uart the UART wanted (1 = UART1)
      */
     public static List<BetaflightPlan.Change> gpsPlan(int featureMask, String serialOutput, String autoBaudOutput, int uart) {
@@ -163,7 +211,7 @@ public final class GpsSetup {
         List<String> what = new ArrayList<>();
         for (Port p : ports) {
             if (p.hasGps() && p != target) {
-                commands.add("serial " + p.id() + " " + (p.functions() & ~FUNCTION_GPS) + " " + p.rest());
+                commands.add("serial " + p.token() + " " + (p.functions() & ~FUNCTION_GPS) + " " + p.rest());
                 what.add("off " + p.name());
             }
         }
@@ -172,7 +220,7 @@ public final class GpsSetup {
             commands.add("serial " + (ID_UART1 + uart - 1) + " " + FUNCTION_GPS + " 115200 57600 0 115200");
             what.add(0, "GPS on UART" + uart);
         } else if (target.functions() != FUNCTION_GPS) {
-            commands.add("serial " + target.id() + " " + FUNCTION_GPS + " " + target.rest());
+            commands.add("serial " + target.token() + " " + FUNCTION_GPS + " " + target.rest());
             String others = functionNames(target.functions());
             what.add(0, "GPS on " + target.name() + (others.isEmpty() ? "" : " (" + others + " taken off it)"));
         }
