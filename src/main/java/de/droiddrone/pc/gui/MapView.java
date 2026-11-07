@@ -3,6 +3,7 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.map.CameraFootprint;
 import de.droiddrone.pc.map.CellCoverage;
+import de.droiddrone.pc.map.Coordinates;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.MapGraphics;
 import de.droiddrone.pc.map.Mercator;
@@ -187,6 +188,8 @@ class MapView extends JComponent {
     /** While detection marks fade: this often. */
     static final long FADE_REPAINT_MS = 100;
     private Pins pins;
+    /** The position format the pilot chose (the map window's or the main window's), for COPY POSITION. */
+    private java.util.function.Supplier<Coordinates.Format> coordinateFormat = () -> Coordinates.Format.MGRS;
 
     // ---- MAP TOOLS (1.0.35): what the pilot draws
     enum Tool { NONE, RULER, LINE, AREA, ARROW, SYMBOL, EXPORT_BOX, ERASER, HORIZON, SEARCH }
@@ -514,6 +517,17 @@ class MapView extends JComponent {
     void setPins(Pins pins) {
         this.pins = pins;
         repaint();
+    }
+
+    void setCoordinateFormat(java.util.function.Supplier<Coordinates.Format> format) {
+        if (format != null) coordinateFormat = format;
+    }
+
+    /** A pin's position as text in the chosen format, put on the clipboard (to paste into GO TO, a message, another map). */
+    static String copyPosition(Coordinates.Format format, Pins.Pin pin) {
+        String text = Coordinates.format(format, pin.lat(), pin.lon());
+        java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new java.awt.datatransfer.StringSelection(text), null);
+        return text;
     }
 
     /** An earlier flight's track, drawn muted under the live one; null clears it. */
@@ -962,6 +976,10 @@ class MapView extends JComponent {
         if (pins != null) {
             Pins.Pin hit = pinAt(x, y);
             if (hit != null) {
+                String position = Coordinates.format(coordinateFormat.get(), hit.lat(), hit.lon());
+                JMenuItem copy = new JMenuItem("Copy " + hit.name() + "'s position (" + position + ")");
+                copy.addActionListener(e -> copyPosition(coordinateFormat.get(), hit));
+                menu.add(copy);
                 JMenuItem rename = new JMenuItem("Rename " + hit.name() + "...");
                 rename.addActionListener(e -> renamePin(hit));
                 menu.add(rename);

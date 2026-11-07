@@ -11,6 +11,7 @@ PC app only; the phone app stays DRAUPNE Flight 2.3.0-pc.38.
 - Their camera is a drawn horizon with the drone's name and a clock, or an old flight of yours looped (with its track, if the CSV is beside it); their microphone has wind, motors and now and then a voice.
 - The fleet window plays the bad days: 4G loss, a weak link (loss, jitter, bunching), a cell handover, flight controller lost, phone app restart; and overwatch and observation: a walker, vehicle or light crossing the picture for motion detection, an overwatch alert with pre-roll, live preview and clip, standby / deep sleep / wake and check-ins, voices for the speaking highlight.
 - A virtual drone is always marked VIRTUAL (PHONE list, a yellow tag on the video, the maps, its picture) and is never saved to the name map.
+- **Pins: copy a position, add one by grid.** Right-click a pin on either map: *Copy <pin>'s position* puts it on the clipboard in the chosen format (MGRS, UTM, lat lon or deg min sec). In PINS, COPY (or Ctrl+C) copies the selected pin's, and ADD AT GRID asks for a name and a position typed or pasted in any of those formats, puts the pin there and centres the map on it.
 - Tests: 696, among them a virtual drone against DRAUPNE Link's real link, video pipeline and overwatch hub end to end.
 
 ## 1.0.49

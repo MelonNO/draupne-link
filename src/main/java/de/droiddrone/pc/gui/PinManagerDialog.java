@@ -30,7 +30,8 @@ import java.util.function.Supplier;
 
 /**
  * PINS: every pin in a list - name, position in the chosen format, distance and bearing from the drone - with
- * GO TO (the map centres on it), RENAME, REMOVE, ADD AT DRONE, ADD AT LAUNCH and REMOVE ALL. Pins dropped by
+ * GO TO (the map centres on it), COPY (its position to the clipboard, also Ctrl+C), RENAME, REMOVE, ADD AT GRID
+ * (a position typed or pasted in any format GO TO reads), ADD AT DRONE, ADD AT LAUNCH and REMOVE ALL. Pins dropped by
  * right-click on a map show up here too (the list refreshes once a second).
  */
 final class PinManagerDialog extends JDialog {
@@ -40,7 +41,7 @@ final class PinManagerDialog extends JDialog {
     private final Supplier<FlightTrack> track;
     private final DefaultListModel<Pins.Pin> model = new DefaultListModel<>();
     private final JList<Pins.Pin> list = new JList<>(model);
-    private final JLabel none = Theme.label("No pins yet. Right-click on the map, or ADD AT DRONE / ADD AT LAUNCH.", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
+    private final JLabel none = Theme.label("No pins yet. Right-click on the map, or ADD AT GRID / ADD AT DRONE / ADD AT LAUNCH.", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
     private final Timer refresh = new Timer(1000, e -> refresh());
     private List<Pins.Pin> shown = List.of();
 
@@ -95,6 +96,26 @@ final class PinManagerDialog extends JDialog {
         go.setToolTipText("Centre the map on the pin (also a double-click)");
         go.addActionListener(e -> goTo());
         buttons.add(go);
+        JButton copy = Theme.secondaryButton("Copy");
+        copy.setToolTipText("The pin's position, as the list shows it, to the clipboard (also Ctrl+C)");
+        Timer copied = new Timer(1500, e -> copy.setText("Copy"));
+        copied.setRepeats(false);
+        Runnable copySelected = () -> {
+            Pins.Pin p = list.getSelectedValue();
+            if (p == null) return;
+            MapView.copyPosition(format.get(), p);
+            copy.setText("Copied");
+            copied.restart();
+        };
+        copy.addActionListener(e -> copySelected.run());
+        list.getInputMap().put(javax.swing.KeyStroke.getKeyStroke("ctrl C"), "copyPosition");
+        list.getActionMap().put("copyPosition", new javax.swing.AbstractAction() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                copySelected.run();
+            }
+        });
+        buttons.add(copy);
         JButton rename = Theme.secondaryButton("Rename");
         rename.addActionListener(e -> {
             Pins.Pin p = list.getSelectedValue();
@@ -117,6 +138,10 @@ final class PinManagerDialog extends JDialog {
         });
         buttons.add(remove);
         buttons.add(Box.createHorizontalStrut(10));
+        JButton atGrid = Theme.secondaryButton("Add at grid");
+        atGrid.setToolTipText("A pin at a position typed or pasted: MGRS, UTM, or latitude, longitude");
+        atGrid.addActionListener(e -> addAtGrid());
+        buttons.add(atGrid);
         JButton atDrone = Theme.secondaryButton("Add at drone");
         atDrone.setToolTipText("A pin where the drone is (its last known position)");
         atDrone.addActionListener(e -> {
@@ -172,6 +197,47 @@ final class PinManagerDialog extends JDialog {
             }
         });
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+    }
+
+    /** ADD AT GRID: a name and a position in any format the map writes; the pin goes there and the map centres on it. */
+    private void addAtGrid() {
+        javax.swing.JTextField name = new javax.swing.JTextField(pins.nextName(), 16);
+        javax.swing.JTextField position = new javax.swing.JTextField(28);
+        JLabel hint = Theme.label("MGRS (32V NM 97254 42617), UTM (32V 597254 6642617) or 59.9139, 10.7522", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
+        JPanel box = new JPanel(new java.awt.GridLayout(0, 1, 0, 4));
+        box.setOpaque(false);
+        box.add(Theme.label("Name", Theme.font(Font.BOLD, 12f), Theme.TEXT));
+        box.add(name);
+        box.add(Theme.label("Position (grid)", Theme.font(Font.BOLD, 12f), Theme.TEXT));
+        box.add(position);
+        box.add(hint);
+        position.addAncestorListener(new javax.swing.event.AncestorListener() { // the cursor in the position, ready to paste
+            @Override
+            public void ancestorAdded(javax.swing.event.AncestorEvent e) {
+                position.requestFocusInWindow();
+            }
+
+            @Override
+            public void ancestorRemoved(javax.swing.event.AncestorEvent e) {
+            }
+
+            @Override
+            public void ancestorMoved(javax.swing.event.AncestorEvent e) {
+            }
+        });
+        while (true) {
+            if (JOptionPane.showConfirmDialog(this, box, "Add pin at grid", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            double[] ll = Coordinates.parse(position.getText());
+            if (ll == null) {
+                hint.setText("Not a position I can read. MGRS, UTM, or latitude, longitude.");
+                hint.setForeground(Theme.BAD);
+                continue;
+            }
+            pins.add(name.getText().isBlank() ? null : name.getText().trim(), ll[0], ll[1]);
+            map.centreOn(ll[0], ll[1], Math.max(map.zoom(), 15));
+            refresh();
+            return;
+        }
     }
 
     private void goTo() {

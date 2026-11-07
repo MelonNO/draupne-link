@@ -113,6 +113,7 @@ final class MapWindow extends JFrame {
 
         map = new MapView(cache);
         map.setPins(pins);
+        map.setCoordinateFormat(() -> this.format);
         map.setGraphics(graphics);
         tools = new MapToolsPanel(map);
         map.setSource(source);

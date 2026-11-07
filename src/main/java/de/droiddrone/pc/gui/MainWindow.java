@@ -452,6 +452,7 @@ public class MainWindow extends JFrame {
         if (pins.brokenMovedTo() != null) logLine("pins.txt had lines that aren't pins: kept as " + pins.brokenMovedTo().getFileName() + " beside it.");
         if (graphics.brokenMovedTo() != null) logLine("graphics.kml couldn't be read: kept as " + graphics.brokenMovedTo().getFileName() + " beside it; the map starts without graphics.");
         miniMap.setPins(pins);
+        miniMap.setCoordinateFormat(() -> coordinateFormat);
         miniMap.setGraphics(graphics);
         miniMap.setSource(mapSource);
         miniMap.setOnSourceChosen(this::setMapSource); // the minimap's right-click choice is saved and shared too
