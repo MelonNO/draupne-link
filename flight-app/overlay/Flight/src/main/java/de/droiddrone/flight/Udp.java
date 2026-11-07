@@ -42,6 +42,8 @@
  *  name answer goes out from the answer thread.
  *  pc.34: live audio for the PC (PcAudio, AUDIO 0x79): the microphone streams while the PC asks and the FC reads
  *  DISARMED (audioGateRun); PHONE_STATE says whether it is on, held back or failed.
+ *  pc.35: the PC's DETECTION_SET switches the motion detection (MotionWatch) on, checked against the FC's armed state
+ *  every 0.1 s on the telemetry thread; its DETECTION record goes out in a packet of its own.
  */
 
 package de.droiddrone.flight;
@@ -836,6 +838,7 @@ public class Udp {
             log("Start telemetry sender thread - OK");
             long nextStats = 0;
             long nextTelemetry = 0;
+            long nextMotion = 0;
             int statsSent = 0;
             while (id == udpThreadsId) {
                 try {
@@ -843,6 +846,18 @@ public class Udp {
                     if (now >= nextTelemetry) {
                         nextTelemetry = now + TELEMETRY_TICK_MS;
                         sendTelemetryData();
+                    }
+                    if (now >= nextMotion) {
+                        // pc.35: the motion detection runs while asked for, the FC DISARMED and the camera running -
+                        // checked every 0.1 s, connected or not (it stops within that of arming)
+                        nextMotion = now + 100;
+                        MotionWatch.tick(FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, cameraManager.getCamera());
+                        if (isConnected() && MotionWatch.reportDue()) {
+                            // its own packet: a PC that doesn't know the record stops reading there and loses nothing
+                            UdpPacketData motion = new UdpPacketData(UdpCommon.TelemetryData);
+                            MotionWatch.writeRecordTo(motion.daos);
+                            udpSender.sendPacket(motion.getData());
+                        }
                     }
                     if (now >= nextStats && isConnected()) {
                         nextStats = now + 100;
@@ -1228,6 +1243,12 @@ public class Udp {
             {
                 boolean increase = buffer.readBoolean();
                 streamEncoder.changeBitRate(increase);
+                break;
+            }
+            case MotionWatch.PACKET:
+            {
+                // pc.35: [0x7C][sensitivity u8: 0 off, 1 low, 2 normal, 3 high], once a second while the PC wants it
+                if (buffer.getRemaining() > 0) MotionWatch.request(buffer.readUnsignedByteAsInt());
                 break;
             }
             case RemoteUpdate.PACKET:

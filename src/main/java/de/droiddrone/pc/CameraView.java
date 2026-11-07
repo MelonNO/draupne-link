@@ -64,11 +64,19 @@ public final class CameraView {
 
     /** The camera's pose now, or null when the position, attitude or height is missing or stale. */
     public CameraFootprint.Pose pose(FcTelemetry t, FlightTrack track) {
+        return pose(t, track, STALE_MS);
+    }
+
+    /**
+     * The same with the position allowed to be positionStaleMs old: a drone sitting disarmed (the motion detection)
+     * doesn't move, and its track may add no point for a while. The attitude must still be fresh (the heading).
+     */
+    public CameraFootprint.Pose pose(FcTelemetry t, FlightTrack track, long positionStaleMs) {
         if (t == null || track == null) return null;
         FlightTrack.Point last = track.last();
         FcTelemetry.Attitude att = t.getAttitude();
         long now = System.currentTimeMillis();
-        if (last == null || att == null || now - last.timeMs() > STALE_MS || MonoClock.ms() - att.receivedAt() > STALE_MS) return null;
+        if (last == null || att == null || now - last.timeMs() > positionStaleMs || MonoClock.ms() - att.receivedAt() > STALE_MS) return null;
         double ground = groundAtLaunch(track);
         FcTelemetry.Altitude baro = t.getAltitude();
         double alt;
@@ -84,10 +92,33 @@ public final class CameraView {
         CameraFootprint.Pose p = pose(t, track);
         if (p == null) return null;
         if (terrain != null) terrain.around(p.lat(), p.lon());
+        return CameraFootprint.compute(p, terrain, groundFallback(t, track, p));
+    }
+
+    /** Where the terrain isn't known: the ground at launch, else below the drone by its height over launch, else 50 m. */
+    private double groundFallback(FcTelemetry t, FlightTrack track, CameraFootprint.Pose p) {
         double ground = groundAtLaunch(track);
         FcTelemetry.Altitude baro = t.getAltitude();
-        double fallback = !Double.isNaN(ground) ? ground : baro != null ? p.altM() - baro.meters() : p.altM() - 50;
-        return CameraFootprint.compute(p, terrain, fallback);
+        return !Double.isNaN(ground) ? ground : baro != null ? p.altM() - baro.meters() : p.altM() - 50;
+    }
+
+    /** A position this old still places a drone sitting disarmed (DetectionMarks). */
+    public static final long SITTING_STALE_MS = 120_000;
+
+    /**
+     * The ray through picture point (u, v), -1..1 across and down the picture as the screen shows it (1.0.46, the
+     * motion detection's direction on the map), from the camera's pose now; null without one.
+     */
+    public CameraFootprint.Ray ray(FcTelemetry t, FlightTrack track, double u, double v) {
+        CameraFootprint.Pose p = pose(t, track, SITTING_STALE_MS);
+        if (p == null) return null;
+        if (terrain != null) terrain.around(p.lat(), p.lon());
+        return CameraFootprint.ray(p, u, v, terrain, groundFallback(t, track, p));
+    }
+
+    /** The camera's pose for a detection: the drone's position up to SITTING_STALE_MS old. */
+    public CameraFootprint.Pose sittingPose(FcTelemetry t, FlightTrack track) {
+        return pose(t, track, SITTING_STALE_MS);
     }
 
     /**

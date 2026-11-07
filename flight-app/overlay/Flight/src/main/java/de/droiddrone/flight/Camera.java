@@ -17,10 +17,22 @@
 
 package de.droiddrone.flight;
 
-/** DRAUPNE Link (pc.26): isOpening, so a config change can wait for a camera that is still opening. */
+/**
+ * DRAUPNE Link (pc.26): isOpening, so a config change can wait for a camera that is still opening. pc.35: the small
+ * analysis picture for the motion detection ({@link MotionWatch}), on only while it asks.
+ */
 public interface Camera {
     /** openCamera was called and the device hasn't answered yet; false for cameras that open at once. */
     default boolean isOpening() {
+        return false;
+    }
+
+    /** pc.35: pictures to MotionWatch on or off; nothing happens when it is already so. */
+    default void setAnalysis(boolean on) {
+    }
+
+    /** pc.35: this camera can give MotionWatch pictures (the phone took the extra stream, a USB camera is open). */
+    default boolean analysisAvailable() {
         return false;
     }
 

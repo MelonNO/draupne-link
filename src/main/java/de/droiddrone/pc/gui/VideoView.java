@@ -237,6 +237,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             int ow = shown != null ? shown[0] : t[0] > 0 ? t[0] : w;
             int oh = shown != null ? shown[1] : t[1] > 0 ? t[1] : h;
             osd.setDisplayMs(displayMs);
+            osd.setPictureFlip(mirror != upsideDown, upsideDown); // the motion boxes turn with the picture
             osd.paint(g, (w - ow) / 2, (h - oh) / 2, ow, oh, data, osdLayout);
         } else {
             paintStats(g);

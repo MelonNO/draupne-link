@@ -78,11 +78,15 @@ final class GlyphButton extends JButton {
                     g.drawPolyline(new int[]{w - m - l, w - m, w - m}, new int[]{h - m, h - m, h - m - l}, 3);
                 }
                 case BEEPER -> {
-                    // a loudspeaker and two sound arcs: the drone's beeper
-                    int cy = h / 2;
-                    g.drawPolygon(new int[]{m - 1, m + 3, m + 8, m + 8, m + 3, m - 1}, new int[]{cy - 3, cy - 3, cy - 7, cy + 7, cy + 3, cy + 3}, 6);
-                    g.drawArc(m + 6, cy - 5, 8, 10, -50, 100);
-                    g.drawArc(m + 6, cy - 9, 14, 18, -50, 100);
+                    // a bell: the drone's beeper (the loudspeaker is the live sound's MUTE, just below)
+                    int cx = w / 2;
+                    Path2D bell = new Path2D.Float();
+                    bell.moveTo(cx - 7, h - m - 3);
+                    bell.curveTo(cx - 5, h - m - 6, cx - 6, m + 1, cx, m + 1);
+                    bell.curveTo(cx + 6, m + 1, cx + 5, h - m - 6, cx + 7, h - m - 3);
+                    bell.closePath();
+                    g.draw(bell);
+                    g.drawArc(cx - 2, h - m - 3, 4, 4, 180, 180);
                 }
                 case SOUND, MUTED -> {
                     // the live sound (1.0.45): a filled loudspeaker, unlike the beeper's outline one; muted: a cross

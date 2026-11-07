@@ -1040,6 +1040,11 @@ final class MapWindow extends JFrame {
         map.setCameraView(view);
     }
 
+    /** The motion detection's marks (1.0.46): drawn with the next update. */
+    void setDetections(java.util.List<de.droiddrone.pc.DetectionMarks.Mark> marks) {
+        map.setDetections(marks);
+    }
+
     void update(FlightTrack track, FcTelemetry.Gps gps, int headingDeg, boolean fcLost, boolean connected) {
         this.track = track;
         map.update(track, gps, headingDeg, fcLost, connected);

@@ -801,6 +801,7 @@ public class ControlLink {
                     }
                     adjustResolution(now);
                     sendAudioRequest(now);
+                    sendDetectionIfDue(now);
                     if (fcInfo == null && now - lastFcInfoRequest >= 1000) {
                         sendRequest(UdpCommon.FcInfo);
                         lastFcInfoRequest = now;
@@ -1584,6 +1585,45 @@ public class ControlLink {
         packetData.daos.writeByte(frame.length);
         for (short channel : frame) packetData.daos.writeShort(channel);
         return packetData.getData();
+    }
+
+    /**
+     * The phone's motion detection (1.0.46, phone app pc.35 on; an older one drops it): DETECTION_SET [0x7C]
+     * [sensitivity u8: 0 off, 1 low, 2 normal, 3 high], unnumbered, once a second from the session thread - never
+     * from the stick thread. The phone switches it off itself 5 s after the last one, and only ever runs it while the
+     * flight controller reads DISARMED; what it finds comes back as the DETECTION record (FcTelemetry.getMotion).
+     */
+    public static final byte DETECTION_SET = 0x7C;
+    /** The first phone app build with the motion detection. */
+    static final int DETECTION_MIN_PC_BUILD = 35;
+    static final long DETECTION_EVERY_MS = 1000;
+    private volatile int detection;
+    private long detectionSentAt;
+
+    /** 0 off, 1 low, 2 normal, 3 high (MotionDetector's); told to the phone within a second. */
+    public void setDetection(int sensitivity) {
+        detection = Math.max(0, Math.min(3, sensitivity));
+        detectionSentAt = 0;
+    }
+
+    public int getDetection() {
+        return detection;
+    }
+
+    /** The phone app takes DETECTION_SET (a phone of pc.35 or newer). */
+    public boolean detectionSupported() {
+        return telemetry.getPhonePcBuild() >= DETECTION_MIN_PC_BUILD;
+    }
+
+    /** From the session thread while READY: DETECTION_SET once a second to a phone that takes it. */
+    private void sendDetectionIfDue(long now) {
+        if (!detectionSupported() || now - detectionSentAt < DETECTION_EVERY_MS) return;
+        detectionSentAt = now;
+        try {
+            socket.send(new DatagramPacket(new byte[]{DETECTION_SET, (byte) detection}, 2, remoteIp, remotePort));
+        } catch (IOException e) {
+            // again in a second
+        }
     }
 
     /** The first phone app build that takes the stick frame's send time and lateness limit. */
