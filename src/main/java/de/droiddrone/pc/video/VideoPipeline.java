@@ -256,6 +256,18 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         drawEveryFrame = on;
     }
 
+    /**
+     * OBSERVATION (1.0.48): a grid tile's pipeline - FFmpeg on this pipeline's own decode thread alone, at normal
+     * priority (a 640x360 picture at 15 fps is light; six of them must not crowd the PC), and its key frame and config
+     * requests to the observer link instead of a ControlLink. Call before the first packet.
+     */
+    public void observe(Runnable keyFrameRequest, Runnable configRequest) {
+        keyFrameSender = keyFrameRequest;
+        configRequester = configRequest;
+        decoderFactory = (hevc, codecConfig, hardware) -> VideoDecoder.oneThread(hevc, codecConfig);
+        decodeThread.setPriority(Thread.NORM_PRIORITY);
+    }
+
     /** The link to send bitrate requests on. */
     public void attach(ControlLink link) {
         this.link = link;

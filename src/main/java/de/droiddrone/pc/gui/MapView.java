@@ -340,6 +340,7 @@ class MapView extends JComponent {
                     return;
                 }
                 if (tool == Tool.NONE && e.getClickCount() == 2 && pickUpAt(e.getX(), e.getY())) return;
+                if (tool == Tool.NONE && e.getClickCount() == 1 && clickObserved(e.getX(), e.getY())) return;
                 if (zoomInButton.contains(e.getPoint())) zoomBy(1);
                 else if (zoomOutButton.contains(e.getPoint())) zoomBy(-1);
                 else if (e.getClickCount() == 2) fitTrack();
@@ -1737,6 +1738,7 @@ class MapView extends JComponent {
             paintGraphics(g, zi, scale, wcx, wcy, w, h);
             if (cameraView != null && !forPicture && connected) paintCameraView(g, zi, scale, wcx, wcy, w, h);
             if (!forPicture) paintDetections(g, zi, scale, wcx, wcy, w, h);
+            if (!forPicture) paintObserved(g, zi, scale, wcx, wcy, w, h);
             paintNetDrones(g, zi, scale, wcx, wcy, w, h);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
             else if (!forPicture) paintNoPosition(g, w, h);
@@ -2027,6 +2029,91 @@ class MapView extends JComponent {
         g.setStroke(new BasicStroke(1.2f));
         g.setColor(new Color(255, 255, 255, 150));
         g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
+    }
+
+    // ------------------------------------------------------------------ observation (1.0.48)
+
+    /**
+     * An observed phone: its tile's number (from 1) and colour, where it is, which way it looks (NaN: unknown) and
+     * whether that is approximate, its view cone {lat, lon} (empty without a heading), and whether its tile has the
+     * mouse (highlighted) or is selected.
+     */
+    record Observed(int tile, Color colour, double lat, double lon, double headingDeg, boolean approximate,
+                    List<double[]> cone, boolean highlighted, boolean selected) {}
+
+    private volatile List<Observed> observed = List.of();
+    private volatile java.util.function.IntConsumer onObservedClick;
+    /** Where the last paint put each cone and marker, for a click (Swing thread). */
+    private final List<java.awt.Shape> observedShapes = new java.util.ArrayList<>();
+    private final List<Integer> observedTiles = new java.util.ArrayList<>();
+
+    /** The observed phones (empty: none); a click on a cone or its marker selects that tile. */
+    void setObserved(List<Observed> marks, java.util.function.IntConsumer onClick) {
+        observed = marks == null ? List.of() : marks;
+        onObservedClick = onClick;
+    }
+
+    private boolean clickObserved(int x, int y) {
+        java.util.function.IntConsumer c = onObservedClick;
+        if (c == null) return false;
+        for (int i = observedShapes.size() - 1; i >= 0; i--) { // the topmost first
+            if (observedShapes.get(i).contains(x, y)) {
+                c.accept(observedTiles.get(i));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Each observed phone: its cone in its tile's colour (stronger while its tile has the mouse or is selected; dashed
+     * edge when the heading is approximate), a round marker with its number at the phone.
+     */
+    private void paintObserved(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+        List<Observed> marks = observed;
+        observedShapes.clear();
+        observedTiles.clear();
+        if (marks.isEmpty()) return;
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            g.setFont(Theme.headingFont(11f));
+            for (Observed m : marks) {
+                Point2D c = toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, w, h);
+                boolean strong = m.highlighted() || m.selected();
+                if (m.cone().size() >= 3) {
+                    Path2D shape = new Path2D.Double();
+                    shape.moveTo(c.getX(), c.getY());
+                    for (double[] ll : m.cone()) {
+                        Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                        shape.lineTo(p.getX(), p.getY());
+                    }
+                    shape.closePath();
+                    g.setColor(Theme.alpha(m.colour(), strong ? 90 : 38));
+                    g.fill(shape);
+                    g.setColor(Theme.alpha(m.colour(), strong ? 255 : 170));
+                    g.setStroke(m.approximate()
+                            ? new BasicStroke(strong ? 2.4f : 1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1, new float[]{6, 5}, 0)
+                            : new BasicStroke(strong ? 2.4f : 1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.draw(shape);
+                    observedShapes.add(shape);
+                    observedTiles.add(m.tile() - 1);
+                }
+                double r = strong ? 11 : 9;
+                Ellipse2D dot = new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r);
+                g.setColor(new Color(0, 0, 0, 170));
+                g.fill(new Ellipse2D.Double(c.getX() - r - 2, c.getY() - r - 2, 2 * r + 4, 2 * r + 4));
+                g.setColor(m.colour());
+                g.fill(dot);
+                g.setColor(Color.BLACK);
+                String n = String.valueOf(m.tile());
+                FontMetrics fm = g.getFontMetrics();
+                g.drawString(n, (float) (c.getX() - fm.stringWidth(n) / 2.0), (float) (c.getY() + fm.getAscent() / 2.0 - 1));
+                observedShapes.add(dot);
+                observedTiles.add(m.tile() - 1);
+            }
+        } finally {
+            g.dispose();
+        }
     }
 
     /** The camera's view on the map (null takes it away): the next repaint shows it. */

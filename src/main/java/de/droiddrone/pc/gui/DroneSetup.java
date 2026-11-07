@@ -75,6 +75,18 @@ final class DroneSetup {
 
     /** Finds the flight controller on USB, reads the settings, fixes them, and checks they stuck. */
     static final class BetaflightPage extends Page {
+        /**
+         * OBSERVATION (1.0.48): whether the chosen phone's drone has a calibrated compass, as read here - its view cone
+         * on the observation map says "heading approximate" until it has (the phone can't tell).
+         */
+        private void rememberCompass(boolean calibrated) {
+            String phone = main.config().getString(de.droiddrone.pc.Names.PHONE_NAME_KEY);
+            if (phone == null || phone.isBlank()) return;
+            String key = de.droiddrone.pc.observe.HeadingChoice.calibratedKey(phone);
+            if (Boolean.toString(calibrated).equalsIgnoreCase(main.config().getString(key))) return;
+            javax.swing.SwingUtilities.invokeLater(() -> main.save(Map.of(key, Boolean.toString(calibrated))));
+        }
+
         /** Automatic attempts at changing the settings before the page says it couldn't. */
         private static final int MAX_APPLIES = 3; // the GPS: turned on, then its modes once it answers
         /** How long to wait for the GPS to talk to Betaflight after a (re)start: it tries its baud rates first. */
@@ -1370,6 +1382,7 @@ final class DroneSetup {
                     BetaflightPlan.Change compass = GpsSetup.compassPlan(gpsWanted.compass(), magHardware);
                     if (compass != null) plan.add(compass);
                     boolean calibrated = gpsWanted.compass() && magFound && GpsSetup.calibrated(fc.command("get mag_calibration"));
+                    if (gpsWanted.compass() && magFound) rememberCompass(calibrated);
                     gpsRead = new Gps(gpsWanted.target(), gpsWanted.uart(), gpsWanted.compass(), gpsOnFc, GpsSetup.gpsPortName(serial),
                             GpsSetup.uarts(serial), magFound, calibrated, !gpsPlan.isEmpty(), portNote, compass != null);
                 } else {

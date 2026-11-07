@@ -631,7 +631,14 @@ public class ControlLink {
     }
 
     private void deliverVideoFragment(byte[] d, int len) {
-        VideoListener listener = videoListener;
+        deliverVideo(videoListener, d, len);
+    }
+
+    /**
+     * A video packet (fragment or parity) to a listener; the observation's links (1.0.48) read the phone's packets the
+     * same way.
+     */
+    public static void deliverVideo(VideoListener listener, byte[] d, int len) {
         if (listener == null || len < 7) return;
         if (d[0] == VIDEO_PARITY) {
             if (len > 8) listener.onVideoParity(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), readInt(d, 3), d, 8, len - 8);

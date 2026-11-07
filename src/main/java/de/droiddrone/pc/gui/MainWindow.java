@@ -242,9 +242,29 @@ public class MainWindow extends JFrame {
     private boolean fillingPhones;
     private final JButton connectButton = Theme.primaryButton("Connect");
     /** Connect as: pilot (fly) or spectator (watch only). */
-    private final JComboBox<String> roleCombo = new JComboBox<>(new String[]{ROLE_PILOT, ROLE_SPECTATOR});
+    private final JComboBox<String> roleCombo = new JComboBox<>(new String[]{ROLE_PILOT, ROLE_SPECTATOR, ROLE_OBSERVER});
     private static final String ROLE_PILOT = "Pilot - fly the drone";
     private static final String ROLE_SPECTATOR = "Spectator - watch only";
+    /** OBSERVATION (1.0.48): up to six idle drones at once in the video area; CONNECT on a tile flies that one. */
+    private static final String ROLE_OBSERVER = "Observation - watch idle drones";
+    private static final String CONNECT_AS_OBSERVATION = "observation";
+    static final String OBSERVE_VOLUME_KEY = "observe.volume";
+    /** The muted tile asks its phone to stop the sound after this long (as the pilot's MUTE does). */
+    private static final long OBSERVE_MUTED_STOP_MS = 10_000;
+    private final JButton chooseDronesButton = Theme.secondaryButton("Choose drones");
+    private ObservationGrid observationGrid;
+    private volatile de.droiddrone.pc.observe.ObservationSession observation;
+    private de.droiddrone.pc.audio.ObservationAudio observationAudio;
+    /** The grid's feeds, in its order (the session holds the same). */
+    private final java.util.List<de.droiddrone.pc.observe.TileFeed> tileFeeds = new java.util.ArrayList<>();
+    /** The observed phones, for the name service's thread (a sleeping one is woken at its check-in). */
+    private volatile java.util.Set<String> observedNames = java.util.Set.of();
+    /** When each observed phone's tile was muted (MonoClock); absent: not muted. */
+    private final Map<String, Long> observeMutedAt = new java.util.HashMap<>();
+    private int hoveredTile = -1;
+    private long observedMapAt;
+    /** CONNECT from the grid: the pilot connection's DISCONNECT offers the grid again. */
+    private boolean backToGrid;
     /** Wanted to fly, but another PC flies: told once per connection. */
     private boolean toldNotFlying;
     private final JButton setupButton = Theme.secondaryButton("Setup");
@@ -740,6 +760,11 @@ public class MainWindow extends JFrame {
             if (!fillingPhones) choosePhone();
         });
         fields.add(phoneCombo, c);
+        // OBSERVATION: the drones are picked in a list of their own (up to six), in place of the one phone
+        chooseDronesButton.setToolTipText("The drones to observe: up to six idle ones from the name map, remembered");
+        chooseDronesButton.addActionListener(e -> pickDrones());
+        chooseDronesButton.setVisible(false);
+        fields.add(chooseDronesButton, c);
         c.insets = new Insets(0, 0, 8, 0);
         phoneHint.setPreferredSize(new Dimension(300, 36));
         phoneHint.setVerticalAlignment(SwingConstants.TOP);
@@ -748,14 +773,16 @@ public class MainWindow extends JFrame {
         c.gridy = GridBagConstraints.RELATIVE;
         c.insets = new Insets(0, 0, 6, 0);
         fields.add(Theme.label("CONNECT AS", Theme.headingFont(11f), Theme.MUTED), c);
-        roleCombo.setSelectedItem(Connection.watchOnly(config) ? ROLE_SPECTATOR : ROLE_PILOT);
-        roleCombo.setToolTipText("Pilot flies the drone. Spectator only watches another PC's flight (needs Allow spectators on that PC).");
+        roleCombo.setSelectedItem(savedRole());
+        roleCombo.setToolTipText("<html>Pilot flies the drone. Spectator only watches another PC's flight (needs Allow spectators on that PC).<br>"
+                + "Observation watches up to six idle drones at once - pictures, sound, the map - and CONNECT on one flies it.</html>");
         TacticalCombo.install(roleCombo);
         roleCombo.addActionListener(e -> {
             boolean watch = ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
-            save(Map.of(Connection.CONNECT_AS_KEY, watch ? "spectator" : "pilot"));
-            if (connection == null) connectButton.setText(watch ? "WATCH" : "CONNECT");
-            updatePhoneList(); // phones to fly, or PCs to watch
+            boolean observe = observerRole();
+            save(Map.of(Connection.CONNECT_AS_KEY, observe ? CONNECT_AS_OBSERVATION : watch ? "spectator" : "pilot"));
+            if (connection == null && observation == null) connectButton.setText(observe ? "OBSERVE" : watch ? "WATCH" : "CONNECT");
+            updatePhoneList(); // phones to fly, PCs to watch, or the drones to observe
         });
         fields.add(roleCombo, c);
         c.insets = new Insets(0, 0, 0, 0);
@@ -763,7 +790,9 @@ public class MainWindow extends JFrame {
         linkFields = fields;
         c.insets = new Insets(4, 0, 14, 0);
         connectButton.addActionListener(e -> {
-            if (connection == null) connect();
+            if (observation != null) stopObservation();
+            else if (connection == null && observerRole()) startObservation();
+            else if (connection == null) connect();
             else if (confirmEndWhileArmed("Disconnect")) disconnect();
         });
         connectButton.setFocusable(false); // SPACE on a focused DISCONNECT must never end a flight
@@ -1092,6 +1121,13 @@ public class MainWindow extends JFrame {
      * a first device seen is taken as the choice. Called as the name service hears answers.
      */
     private void updatePhoneList() {
+        boolean observe = observerRole();
+        phoneCombo.setVisible(!observe);
+        chooseDronesButton.setVisible(observe);
+        if (observe) {
+            showObserveChoice();
+            return;
+        }
         boolean watch = ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
         Names.Kind kind = watch ? Names.Kind.PC : Names.Kind.PHONE;
         phoneLabel.setText(watch ? "PILOT PC" : "PHONE");
@@ -1160,7 +1196,7 @@ public class MainWindow extends JFrame {
     void reloadSettings() {
         channelBars.setPurposes(de.droiddrone.pc.setup.ModeSwitch.purposes(config)); // AUX rows named after Drone setup's switches
         if (connection == null) {
-            roleCombo.setSelectedItem(Connection.watchOnly(config) ? ROLE_SPECTATOR : ROLE_PILOT);
+            roleCombo.setSelectedItem(savedRole());
             updatePhoneList();
         }
         rebuildMapper();
@@ -1249,6 +1285,7 @@ public class MainWindow extends JFrame {
     }
 
     private void connect() {
+        if (observation != null) return; // CONNECT on a tile stops the observation first
         if (mapper == null) {
             JOptionPane.showMessageDialog(this, "Controller mapping is not usable: " + mapperError + "\nRun Calibrate first.",
                     "Cannot connect", JOptionPane.WARNING_MESSAGE);
@@ -1387,6 +1424,10 @@ public class MainWindow extends JFrame {
         videoView.setStatsSource(null);
         videoView.clear();
         logLine("Disconnected. The Flight phone stops RC to the FC, so Betaflight fails safe.");
+        if (backToGrid) {
+            backToGrid = false;
+            SwingUtilities.invokeLater(this::offerBackToGrid);
+        }
         if (linkLog != null) {
             try {
                 linkLog.close();
@@ -1658,7 +1699,8 @@ public class MainWindow extends JFrame {
         joystickCombo.setEnabled(editable);
         calibrateButton.setEnabled(editable);
         calibrateButton.setToolTipText(editable ? null : "Locked while connected - disconnect first: RC output must stop while calibrating");
-        connectButton.setText(editable ? (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()) ? "WATCH" : "CONNECT") : "DISCONNECT");
+        connectButton.setText(editable ? (observerRole() ? "OBSERVE" : ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()) ? "WATCH" : "CONNECT")
+                : observation != null ? "STOP OBSERVING" : "DISCONNECT");
         connectButton.setBackground(editable ? Theme.ACCENT : Theme.BAD);
     }
 
@@ -1743,6 +1785,8 @@ public class MainWindow extends JFrame {
         phoneWatch.shutdownNow();
         nameService.stop();
         if (popOut != null) popOut.dispose();
+        if (observation != null) stopObservation();
+        backToGrid = false;
         if (connection != null) disconnect();
         settingsWriter.shutdown(); // what is queued (the OSD layout, the window's place) reaches the file before the exit
         try {
@@ -1770,6 +1814,369 @@ public class MainWindow extends JFrame {
         }
     }
 
+    // ---------------------------------------------------------------- OBSERVATION (1.0.48)
+
+    /** CONNECT AS from the settings. */
+    private String savedRole() {
+        if (CONNECT_AS_OBSERVATION.equalsIgnoreCase(config.getString(Connection.CONNECT_AS_KEY))) return ROLE_OBSERVER;
+        return Connection.watchOnly(config) ? ROLE_SPECTATOR : ROLE_PILOT;
+    }
+
+    private boolean observerRole() {
+        return ROLE_OBSERVER.equals(roleCombo.getSelectedItem());
+    }
+
+    /** The drones chosen for observation, under CHOOSE DRONES. */
+    private void showObserveChoice() {
+        phoneLabel.setText("DRONES");
+        de.droiddrone.pc.observe.ObserveSet set = de.droiddrone.pc.observe.ObserveSet.parse(config.getString(de.droiddrone.pc.observe.ObserveSet.KEY));
+        String hint = set.size() == 0 ? "No drone chosen yet: CHOOSE DRONES picks up to " + de.droiddrone.pc.observe.ObserveSet.MAX + " idle ones."
+                : String.join(", ", set.phones()) + "  (" + set.size() + " of " + de.droiddrone.pc.observe.ObserveSet.MAX + ")";
+        phoneHint.setText("<html>" + hint + "</html>");
+    }
+
+    /** Why each phone can't be observed now (idle phones only; app pc.37 on); absent: it can. */
+    private Map<String, String> observeRefusals(java.util.List<Names.Entry> phones) {
+        Map<String, Names.Position> where = new java.util.HashMap<>();
+        long now = System.currentTimeMillis();
+        for (NameService.DronePosition d : nameService.dronePositions()) {
+            if (now - d.at() < 30_000) where.put(d.name().toLowerCase(Locale.ROOT), d.position()); // a fresh word only
+        }
+        Map<String, String> out = new java.util.HashMap<>();
+        for (Names.Entry e : phones) {
+            Names.Position p = where.get(e.name().toLowerCase(Locale.ROOT));
+            String why = de.droiddrone.pc.observe.ObserveSet.refusal(p, e.version());
+            if (why != null && p != null && p.flown() && !p.pilotIp().isEmpty()) {
+                String pilot = names.nameAt(p.pilotIp());
+                if (pilot != null) why = pilot + " flies it";
+            }
+            if (why != null) out.put(e.name(), why);
+        }
+        return out;
+    }
+
+    /** CHOOSE DRONES: the picker; the set is remembered. */
+    private void pickDrones() {
+        de.droiddrone.pc.observe.ObserveSet current = de.droiddrone.pc.observe.ObserveSet.parse(config.getString(de.droiddrone.pc.observe.ObserveSet.KEY));
+        java.util.List<Names.Entry> phones = names.list(Names.Kind.PHONE);
+        java.util.Set<String> asleep = new java.util.HashSet<>();
+        for (Names.Entry e : phones) if (e.ip() != null && asleepPhones.containsKey(e.ip())) asleep.add(e.name());
+        java.util.List<String> chosen = ObservePicker.pick(this, phones, current, observeRefusals(phones), asleep);
+        if (chosen == null) return;
+        de.droiddrone.pc.observe.ObserveSet next = new de.droiddrone.pc.observe.ObserveSet();
+        chosen.forEach(next::add);
+        save(Map.of(de.droiddrone.pc.observe.ObserveSet.KEY, next.encode()));
+        updatePhoneList();
+        logLine(next.size() == 0 ? "Observation: no drone chosen." : "Observation: " + String.join(", ", next.phones()) + " chosen.");
+    }
+
+    private int volumeFor(String phone) {
+        String v = config.getString(OBSERVE_VOLUME_KEY + "." + phone);
+        try {
+            return v.isEmpty() ? 100 : Math.max(0, Math.min(100, Integer.parseInt(v)));
+        } catch (NumberFormatException e) {
+            return 100;
+        }
+    }
+
+    private boolean compassCalibrated(String phone) {
+        return "true".equalsIgnoreCase(config.getString(de.droiddrone.pc.observe.HeadingChoice.calibratedKey(phone)));
+    }
+
+    /**
+     * OBSERVE: the grid takes the video area, one tile per chosen phone that may be observed now (idle, app pc.37 on,
+     * in the name map); a sleeping one is woken at its check-in. Nothing flies: no RcSession, no sticks, no Connect.
+     */
+    private void startObservation() {
+        if (observation != null || connection != null) return;
+        if (fullScreen != null) exitFullScreen();
+        if (popOut != null) { // the picture's window goes first (its listener puts the video back), then the grid
+            popOut.dispose();
+            SwingUtilities.invokeLater(this::startObservation);
+            return;
+        }
+        de.droiddrone.pc.observe.ObserveSet saved = de.droiddrone.pc.observe.ObserveSet.parse(config.getString(de.droiddrone.pc.observe.ObserveSet.KEY));
+        if (saved.size() == 0) {
+            pickDrones();
+            saved = de.droiddrone.pc.observe.ObserveSet.parse(config.getString(de.droiddrone.pc.observe.ObserveSet.KEY));
+            if (saved.size() == 0) return;
+        }
+        Map<String, String> refusals = observeRefusals(names.list(Names.Kind.PHONE));
+        de.droiddrone.pc.observe.ObserveSet set = new de.droiddrone.pc.observe.ObserveSet();
+        for (String p : saved.phones()) {
+            Names.Entry e = names.get(p);
+            String why = refusals.get(e == null ? p : e.name());
+            if (why != null) logLine("Observation: " + p + " left out - " + why + ".");
+            else if (e == null || e.ip() == null || e.ip().isEmpty()) logLine("Observation: " + p + " isn't in the name map - left out.");
+            else set.add(e.name());
+        }
+        if (set.size() == 0) {
+            JOptionPane.showMessageDialog(this, "None of the chosen drones can be observed now (see the log). CHOOSE DRONES picks others.",
+                    "Observation", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        de.droiddrone.pc.audio.ObservationAudio audio = new de.droiddrone.pc.audio.ObservationAudio(AlertSound::isPlaying,
+                msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
+        ObservationGrid grid = new ObservationGrid(gridListener());
+        grid.setPhones(set.phones());
+        // the selected tile's picture: this PC's NORMAL (its camera size at 30 fps, its bitrate limit)
+        de.droiddrone.pc.observe.ObserverLink.Quality sharp = new de.droiddrone.pc.observe.ObserverLink.Quality(config.getCameraWidth(),
+                config.getCameraHeight(), 30, Math.max(1000, config.getBitrateLimitMbps() * 1000));
+        java.util.List<de.droiddrone.pc.observe.TileFeed> feeds = new java.util.ArrayList<>();
+        long now = de.droiddrone.pc.MonoClock.ms();
+        observeMutedAt.clear();
+        try {
+            for (int i = 0; i < set.size(); i++) {
+                String phone = set.phones().get(i);
+                Names.Entry e = names.get(phone);
+                de.droiddrone.pc.observe.TileFeed f = new de.droiddrone.pc.observe.TileFeed(phone, java.net.InetAddress.getByName(e.ip()),
+                        config.getPort(), config.getKey(), grid.sink(i), audio, sharp, msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
+                feeds.add(f);
+                f.link().setDetection(detectionFor(phone)); // the drone's own setting (1.0.46): boxes on its tile
+                boolean muted = mutedFor(phone);
+                audio.setMuted(f.audioId(), muted);
+                audio.setVolume(f.audioId(), volumeFor(phone) / 100f);
+                if (muted) observeMutedAt.put(phone, now - OBSERVE_MUTED_STOP_MS); // asks no sound from the start
+            }
+        } catch (IOException | RuntimeException ex) {
+            for (de.droiddrone.pc.observe.TileFeed f : feeds) {
+                f.stopStream();
+                f.release();
+            }
+            audio.close();
+            logLine("Observation failed: " + ex.getMessage());
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Cannot observe", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        tileFeeds.clear();
+        tileFeeds.addAll(feeds);
+        observationAudio = audio;
+        observationGrid = grid;
+        observation = new de.droiddrone.pc.observe.ObservationSession(set, new java.util.ArrayList<>(feeds), audio::close);
+        observedNames = java.util.Set.copyOf(set.phones());
+        hoveredTile = -1;
+        java.awt.Container home = videoHome();
+        home.remove(videoView);
+        home.add(grid, BorderLayout.CENTER);
+        home.revalidate();
+        home.repaint();
+        setLinkEditable(false);
+        logLine("Observing " + String.join(", ", set.phones()) + ": a small picture and the sound of each (a click on a tile asks for "
+                + "the sharp picture, a double-click enlarges it). This PC flies none of them - CONNECT on a tile does.");
+    }
+
+    private ObservationGrid.Listener gridListener() {
+        return new ObservationGrid.Listener() {
+            @Override
+            public void select(int tile) {
+                de.droiddrone.pc.observe.ObservationSession o = observation;
+                if (o != null) o.select(tile);
+            }
+
+            @Override
+            public void enlarge(int tile) {
+                de.droiddrone.pc.observe.ObservationSession o = observation;
+                if (o != null) o.toggleEnlarged(tile);
+            }
+
+            @Override
+            public void connect(int tile) {
+                connectFromGrid(tile);
+            }
+
+            @Override
+            public void mute(int tile, boolean muted) {
+                if (tile < 0 || tile >= tileFeeds.size() || observationAudio == null) return;
+                de.droiddrone.pc.observe.TileFeed f = tileFeeds.get(tile);
+                observationAudio.setMuted(f.audioId(), muted);
+                if (muted) observeMutedAt.put(f.phone(), de.droiddrone.pc.MonoClock.ms());
+                else observeMutedAt.remove(f.phone());
+                save(Map.of(audioMutedKey(f.phone()), Boolean.toString(muted))); // the phone's own choice, as the pilot's MUTE
+            }
+
+            @Override
+            public void volume(int tile, int volume, boolean done) {
+                if (tile < 0 || tile >= tileFeeds.size() || observationAudio == null) return;
+                de.droiddrone.pc.observe.TileFeed f = tileFeeds.get(tile);
+                observationAudio.setVolume(f.audioId(), volume / 100f);
+                if (done) save(Map.of(OBSERVE_VOLUME_KEY + "." + f.phone(), Integer.toString(volume)));
+            }
+
+            @Override
+            public void hover(int tile) {
+                hoveredTile = tile;
+                observedMapAt = 0; // the cone stands out now, not at the next map refresh
+            }
+        };
+    }
+
+    /** STOP OBSERVING: every stream stopped, the picture area back to the single video. */
+    private void stopObservation() {
+        de.droiddrone.pc.observe.ObservationSession o = observation;
+        if (o == null) return;
+        o.stop();
+        endObservationUi();
+        logLine("Observation stopped.");
+    }
+
+    private void endObservationUi() {
+        observation = null;
+        observedNames = java.util.Set.of();
+        tileFeeds.clear();
+        observationAudio = null;
+        ObservationGrid grid = observationGrid;
+        observationGrid = null;
+        hoveredTile = -1;
+        if (grid != null && grid.getParent() != null) {
+            java.awt.Container parent = grid.getParent();
+            parent.remove(grid);
+            parent.add(videoView, BorderLayout.CENTER);
+            parent.revalidate();
+            parent.repaint();
+        }
+        miniMap.setObserved(java.util.List.of(), null);
+        miniMap.repaint();
+        if (mapWindow != null) {
+            mapWindow.map().setObserved(java.util.List.of(), null);
+            mapWindow.map().repaint();
+        }
+        setLinkEditable(true);
+    }
+
+    /**
+     * CONNECT on a tile: every stream stops at once (latency first), then the usual pilot connection to that phone -
+     * its RcSession's gates (throttle low, the arm switch off) as always. DISCONNECT later offers the grid again.
+     */
+    private void connectFromGrid(int tile) {
+        de.droiddrone.pc.observe.ObservationSession o = observation;
+        if (o == null) return;
+        if (mapper == null) { // the streams stay: nothing could fly yet
+            JOptionPane.showMessageDialog(this, "Controller mapping is not usable: " + mapperError + "\nRun Calibrate first.",
+                    "Cannot connect", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String phone = o.connect(tile); // every stream stops here
+        endObservationUi();
+        if (phone == null) return;
+        backToGrid = true;
+        roleCombo.setSelectedItem(ROLE_PILOT);
+        Names.Entry e = names.get(phone);
+        save(Map.of(Names.PHONE_NAME_KEY, phone, "ip", e == null || e.ip() == null ? "" : e.ip()));
+        updatePhoneList();
+        logLine("From the grid: connecting to " + phone + " as the pilot - the other streams stopped. Throttle low and the arm switch off first, as always.");
+        connect();
+        if (connection == null) backToGrid = false; // nothing opened: the grid is a press of OBSERVE away
+    }
+
+    /** After a flight that began on the grid: the same set again, if the pilot wants. */
+    private void offerBackToGrid() {
+        if (connection != null || observation != null) return;
+        int answer = JOptionPane.showConfirmDialog(this, "Back to the grid? The same drones are observed again.", "Observation",
+                JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+        if (answer != JOptionPane.YES_OPTION) return;
+        roleCombo.setSelectedItem(ROLE_OBSERVER);
+        startObservation();
+    }
+
+    /** Every 33 ms with the rest: the tiles' figures, a phone that got a pilot leaving the grid, the map. */
+    private void refreshObservation() {
+        de.droiddrone.pc.observe.ObservationSession o = observation;
+        ObservationGrid grid = observationGrid;
+        if (o == null || grid == null) return;
+        long now = de.droiddrone.pc.MonoClock.ms();
+        setPill("OBSERVING " + tileFeeds.size(), Theme.PANEL_2, Theme.TEXT);
+        for (int i = tileFeeds.size() - 1; i >= 0; i--) {
+            de.droiddrone.pc.observe.TileFeed f = tileFeeds.get(i);
+            de.droiddrone.common.Observe.State st = f.link().state();
+            if (st != null && st.state == de.droiddrone.common.Observe.ENDED_PILOT) {
+                leaveGrid(i, "a pilot connected to it");
+            }
+        }
+        for (int i = 0; i < tileFeeds.size(); i++) {
+            de.droiddrone.pc.observe.TileFeed f = tileFeeds.get(i);
+            de.droiddrone.pc.observe.ObserverLink l = f.link();
+            String phone = f.phone();
+            de.droiddrone.common.Observe.State st = l.state();
+            long last = l.lastPacketAt();
+            String status;
+            if (st != null && st.state != de.droiddrone.common.Observe.STREAMING && now - l.stateAt() < 3000) {
+                status = "NOT STREAMING: " + de.droiddrone.common.Observe.stateName(st.state);
+            } else if (last == 0) {
+                Names.Entry e = names.get(phone);
+                status = e != null && e.ip() != null && asleepPhones.containsKey(e.ip()) ? "DEEP SLEEP - joins at its next check-in"
+                        : "Asking the phone...";
+            } else if (now - last > de.droiddrone.pc.observe.ObserverLink.SILENT_MS) {
+                status = "NO SIGNAL for " + (now - last) / 1000 + " s";
+            } else {
+                VideoPipeline.Stats vs = f.video().stats();
+                status = vs.width() > 0 ? vs.width() + "x" + vs.height() + "  " + vs.shownFps() + " FPS" : "Waiting for the picture...";
+                if (l.quality() != de.droiddrone.pc.observe.ObserverLink.Quality.GRID) status += "  SHARP";
+            }
+            de.droiddrone.pc.FcTelemetry.Observed ob = l.telemetry().getObserved();
+            de.droiddrone.pc.observe.HeadingChoice.Heading hd = de.droiddrone.pc.observe.HeadingChoice.choose(
+                    ob == null ? null : ob.position(), compassCalibrated(phone));
+            String note = ob == null ? null : hd.source() == de.droiddrone.pc.observe.HeadingChoice.Source.NONE ? "no heading"
+                    : hd.approximate() ? "heading approximate" : null;
+            Long mutedAt = observeMutedAt.get(phone);
+            l.setAudioWanted(mutedAt == null || now - mutedAt < OBSERVE_MUTED_STOP_MS);
+            de.droiddrone.pc.audio.ObservationAudio audio = observationAudio;
+            grid.update(i, new ObservationGrid.TileState(status, audio != null && audio.isSpeaking(f.audioId()), mutedAt != null,
+                    volumeFor(phone), note, l.telemetry().getMotion().shown(now)));
+        }
+        grid.setSelection(o.set().selected(), o.set().enlarged());
+        refreshObservedMap(now);
+    }
+
+    /** A phone leaves the grid (a pilot connected to it): its tile goes, with a line why. It stays in the chosen set. */
+    private void leaveGrid(int tile, String why) {
+        de.droiddrone.pc.observe.ObservationSession o = observation;
+        if (o == null || tile >= tileFeeds.size()) return;
+        de.droiddrone.pc.observe.TileFeed f = tileFeeds.remove(tile);
+        o.remove(f.phone());
+        if (observationGrid != null) observationGrid.removeTile(tile);
+        observedNames = java.util.Set.copyOf(o.set().phones());
+        logLine(f.phone() + " left the grid: " + why + ". It stays chosen and joins again at the next OBSERVE while idle.");
+    }
+
+    /**
+     * The observed phones on the minimap and the map window, five times a second: each one's marker and view cone in
+     * its tile's colour and number, the hovered tile's cone stronger; a click on one selects its tile.
+     */
+    private void refreshObservedMap(long now) {
+        if (now - observedMapAt < 200) return;
+        observedMapAt = now;
+        de.droiddrone.pc.observe.ObservationSession o = observation;
+        if (o == null) return;
+        java.util.List<MapView.Observed> marks = new java.util.ArrayList<>();
+        for (int i = 0; i < tileFeeds.size(); i++) {
+            de.droiddrone.pc.observe.TileFeed f = tileFeeds.get(i);
+            de.droiddrone.pc.FcTelemetry.Observed ob = f.link().telemetry().getObserved();
+            if (ob == null || !ob.position().hasPosition() || now - ob.receivedAt() > 30_000) continue;
+            de.droiddrone.common.Observe.Position p = ob.position();
+            de.droiddrone.pc.observe.HeadingChoice.Heading hd = de.droiddrone.pc.observe.HeadingChoice.choose(p, compassCalibrated(f.phone()));
+            int[] size = f.video().pictureSize();
+            double aspect = size == null || size[1] <= 0 ? 16 / 9.0 : (double) size[0] / size[1];
+            double hfov = p.hfovDeg > 1 ? p.hfovDeg : cameraView.hfovDeg();
+            java.util.List<double[]> cone = cameraOnMap
+                    ? de.droiddrone.pc.observe.ObservedCone.edge(p.lat, p.lon, p.altM, hd.deg(), hfov, cameraView.tiltDeg(), aspect)
+                    : java.util.List.of();
+            boolean selected = i == o.set().selected() || i == o.set().enlarged();
+            marks.add(new MapView.Observed(i + 1, ObservationGrid.colour(i), p.lat, p.lon, hd.deg(), hd.approximate(), cone,
+                    i == hoveredTile, selected));
+        }
+        java.util.function.IntConsumer click = tile -> {
+            de.droiddrone.pc.observe.ObservationSession s = observation;
+            if (s != null && s.set().selected() != tile) s.select(tile);
+        };
+        miniMap.setObserved(marks, click);
+        miniMap.repaint();
+        if (mapWindow != null && mapWindow.isShown()) {
+            mapWindow.map().setObserved(marks, click);
+            mapWindow.map().repaint();
+        }
+    }
+
+
     // ---------------------------------------------------------------- periodic refresh
 
     private void refresh() {
@@ -1779,6 +2186,7 @@ public class MainWindow extends JFrame {
         refreshLink();
         alertSound.update(stickWarning(), System.currentTimeMillis());
         refreshAudio();
+        refreshObservation();
         refreshMap();
         // keeps the HUD (and the latency test's time code) live even when no video frames arrive
         if (connection != null || latencyMeter != null) videoView.repaint();
@@ -2383,6 +2791,14 @@ public class MainWindow extends JFrame {
         ControlLink.SleepHello h = new ControlLink.SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff,
                 ((d[4] & 0xff) << 8) | (d[5] & 0xff), System.currentTimeMillis());
         ControlLink.SleepHello before = asleepHellos.put(ip, h);
+        if (observedNames.contains(a.name())) { // OBSERVATION (1.0.48): it joins the grid at its check-in
+            String name = a.name();
+            SwingUtilities.invokeLater(() -> {
+                clearAsleep(ip);
+                logLine(name + " checked in: woken for the observation.");
+            });
+            return true;
+        }
         if (before == null || h.receivedAt() - before.receivedAt() > 20_000) { // one line per check window
             String line = a.name() + " asleep, still here: battery " + (h.batteryPercent() >= 0 ? h.batteryPercent() + " %" : "unknown")
                     + (h.charging() ? ", charging" : "") + ", next check in " + h.nextCheckMin() + " min. WAKE on the LINK card brings it back.";
@@ -2646,6 +3062,7 @@ public class MainWindow extends JFrame {
         java.util.List<MapView.NetDrone> drones = new java.util.ArrayList<>();
         for (NameService.DronePosition d : nameService.dronePositions()) {
             if (d.name().equalsIgnoreCase(flying)) continue; // shown live already
+            if (observedNames.contains(d.name())) continue; // OBSERVATION draws it, numbered
             Names.Position p = d.position();
             long age = now - d.at() + p.ageS() * 1000L;
             String ip = names.ipOf(d.name());
@@ -2663,6 +3080,11 @@ public class MainWindow extends JFrame {
 
     /** Right-click on a drone on the map: fly it (as pilot), or watch it through the PC that flies it. */
     private void connectFromMap(String phone, boolean watch) {
+        if (observation != null) {
+            JOptionPane.showMessageDialog(this, "This PC observes now. CONNECT on " + phone + "'s tile flies it, or STOP OBSERVING first.",
+                    "Observing", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
         if (connection != null) {
             JOptionPane.showMessageDialog(this, "This PC is connected now. Press DISCONNECT first, then connect to " + phone + " from the map.",
                     "Connected", JOptionPane.INFORMATION_MESSAGE);
@@ -2812,7 +3234,7 @@ public class MainWindow extends JFrame {
             videoView.setIdleText("Not connected");
             if (asleepChosen() != null && !tourPowerDemo) refreshAsleep();
             else if (powerRow != null && powerRow.isVisible() && !tourPowerDemo) powerRow.setVisible(false);
-            setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED);
+            if (observation == null) setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED); // observing: refreshObservation's
             pingValue.setText("-");
             fcValue.setText("-");
             telemetryValue.setText("-");
@@ -3199,6 +3621,10 @@ public class MainWindow extends JFrame {
      * window) drops back to normal.
      */
     private void toggleFullScreen() {
+        if (observationGrid != null) {
+            logLine("Not while observing: the grid stays in the main window.");
+            return;
+        }
         if (fullScreen != null) {
             exitFullScreen();
             return;
@@ -3263,6 +3689,10 @@ public class MainWindow extends JFrame {
     private void togglePopOut() {
         if (popOut != null) {
             popOut.dispose(); // the window listener puts the video back
+            return;
+        }
+        if (observationGrid != null) {
+            logLine("Not while observing: the grid stays in the main window.");
             return;
         }
         if (fullScreen != null) exitFullScreen();

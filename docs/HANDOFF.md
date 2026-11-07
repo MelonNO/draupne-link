@@ -6,6 +6,37 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-07, 1.0.45 built, not released; phone app 2.3.0-pc.34 compiled from source, no APK yet)
 
+- **1.0.48 OBSERVATION + phone pc.37 (2026-11-07, branch feat-observation, not released, never run with real phones;
+  versions left for the merge):** the pilot's agreed spec: a third CONNECT AS, *Observation* - up to six idle drones in a
+  grid in the main window's video area, all their sound mixed, the map with each one's numbered view cone, CONNECT on a
+  tile to fly it. *Shared:* `flight-app/overlay/Common/.../Observe` (Java 11, both apps): `OBSERVE 0x50 [key UTF][w u16]
+  [h u16][fps u8][maxKbps u16][flags u8: 1 sound, 2 video config + key frame, 4 sound config][detection u8]` once a
+  second, `OBSERVE_STATE 0x51 [state][w][h][fps][observers]`, `OBSERVE_STOP 0x52 [key UTF]`, record 0x40FE (position,
+  FC yaw + compass flag, the phone's camera azimuth + accuracy + error, hfov), the phone's observer table (3 at most,
+  3 s expiry, the biggest picture wins), `cameraAzimuthDeg` (the back camera's -Z from the rotation matrix, the top
+  edge when flat). 0x53-0x57 and 0x40FF reserved, unused. *Phone:* `Udp` (`onObserve` on the receive thread before the
+  session rules - never a session, never sticks; `observeTick` every 0.1 s on the telemetry thread: expiry, the end for
+  all at a pilot / not DISARMED / not normal power, `applyObserveVideo` on the video starter thread via the overlaid
+  upstream `Config.setObserveVideo`, the restart when the camera stopped, the bitrate step every 10 s, MotionWatch asked
+  for, the record 5 a second; `streamOut`: the stream's packets to the pilot's session or a copy to each observer; the
+  config ahead of every key frame; the audio gate takes an observer's wish), `PhoneHeading` (TYPE_ROTATION_VECTOR, only
+  while observed), `Msp` keeps the attitude's yaw and the status's sensor bits. *PC:* `observe.ObserverLink` (own
+  socket, OBSERVE every second, video straight to a `VideoPipeline.observe` pipeline - one FFmpeg thread, normal
+  priority), `TileFeed`, `ObservationSession` (CONNECT: the mix, the others, then that one stopped before the pilot
+  connection; decoders released off the Swing thread), `ObserveSet` (the remembered set, idle-only + pc.37 rule,
+  selection -> sharp = this PC's NORMAL), `TileGrid`, `HeadingChoice` (FC compass, else phone; approximate until
+  `compass.calibrated.<phone>` - written by Drone setup when it reads `mag_calibration` with that phone chosen),
+  `ObservedCone` (CameraFootprint.ray across the middle row, 400 m), `audio.ObservationAudio` (per phone AAC + jitter
+  buffer, one mix, one line, MIN_PRIORITY) + `AudioMixer` + `VoiceActivity`; `gui.ObservationGrid`, `ObservePicker`,
+  `MapView.setObserved`, MainWindow (role, CHOOSE DRONES, OBSERVE / STOP OBSERVING, tiles' state, leaving the grid on
+  ENDED_PILOT, back to the grid after DISCONNECT, a sleeping observed phone answered "wake"), a tour step.
+  *Unsure / to check on the real thing:* 3 observers x ~1 Mbit/s on a phone's uplink; the camera restart (~2 s) when a
+  tile is selected (the frame rate changes 15 -> 30); whether `MSP_STATUS`'s sensor bit 2 really marks a compass on
+  Betaflight 2025.12; the phone's camera azimuth with the phone mounted as on the drone (and its accuracy reports);
+  six FFmpeg decoders + one mix on a small PC; a phone that went to deep sleep from another PC can't be woken by this
+  one (its check-in goes to that PC); OVERWATCH SLEEP (the sibling branch) has a TODO in `Udp.onObserve` - a phone in
+  that mode is refused with REFUSED_POWER until its preview is wired in.
+
 - **1.0.45 live audio + phone pc.34 (2026-11-07, not released, untried on a phone - nothing of it has run on real
   hardware or played through a real sound card):** the pilot: "when the drone is disarmed and the user is connected to
   it, the phone's microphone streams audio to the PC, with a MUTE button". *Phone:* `PcAudio` (overlay/Common, in both

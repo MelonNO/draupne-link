@@ -98,6 +98,11 @@ final class MotionWatch {
         hfovDeg = deg;
     }
 
+    /** pc.37: the camera's angle across the picture, degrees (0 = unknown), for the observers' map. */
+    static float fieldOfView() {
+        return hfovDeg;
+    }
+
     /**
      * Every 0.1 s from the telemetry thread: analysing while asked for, the FC DISARMED and the camera running;
      * stops the camera's analysis picture the moment one of them goes.

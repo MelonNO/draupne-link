@@ -154,6 +154,18 @@ public class FcTelemetry {
         return motion;
     }
 
+    /**
+     * OBSERVATION (1.0.48, phone app pc.37): the observed phone's record 0x40FE - where it is, which way the flight
+     * controller and the phone's own sensor say it looks - and when it came (MonoClock); null before the first.
+     */
+    public record Observed(de.droiddrone.common.Observe.Position position, long receivedAt) {}
+
+    private volatile Observed observed;
+
+    public Observed getObserved() {
+        return observed;
+    }
+
     /** The phone's latest word on a remote update, or null. */
     public PhoneUpdate getPhoneUpdate() {
         return phoneUpdate;
@@ -459,6 +471,7 @@ public class FcTelemetry {
                 phoneUpdate = new PhoneUpdate(state, percent, text == null ? "" : text, MonoClock.ms());
             }
             case de.droiddrone.common.MotionRecord.CODE -> motion.update(de.droiddrone.common.MotionRecord.read(b), MonoClock.ms());
+            case de.droiddrone.common.Observe.RECORD -> observed = new Observed(de.droiddrone.common.Observe.readRecord(b), MonoClock.ms());
             case PHONE_RC_LAG -> {
                 int lag = b.readShort() & 0xffff;
                 int max = b.readShort() & 0xffff;
@@ -503,7 +516,7 @@ public class FcTelemetry {
         return phonePcBuild;
     }
 
-    static int pcBuild(String version) {
+    public static int pcBuild(String version) {
         if (version == null) return -1;
         int at = version.indexOf("-pc.");
         if (at < 0) return -1;

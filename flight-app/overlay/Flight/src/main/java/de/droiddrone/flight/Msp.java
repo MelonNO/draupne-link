@@ -41,6 +41,14 @@ public class Msp {
     /** pc.32: the flight controller's last 2D/3D GPS fix (1e-7 degrees) and when (elapsedRealtime), 0 = none yet. */
     volatile int gpsLatE7, gpsLonE7;
     volatile long gpsFixAt;
+    /**
+     * pc.37 (DRAUPNE Link's observation): the FC's heading (MSP_ATTITUDE yaw, degrees) and when it was read, and the
+     * sensors it has (the status's bit mask, -1 unread; bit 2 a magnetometer: then the yaw is a compass heading).
+     */
+    volatile int attitudeYawDeg;
+    volatile long attitudeAt;
+    volatile int sensorStatus = -1;
+    static final int SENSOR_MAG = 4;
 
     private static final byte MSP_HEADER_START = 0x24;//$
     private static final byte MSP_HEADER_V1 = 0x4D;//M
@@ -656,7 +664,7 @@ public class Msp {
                     case FcCommon.MSP2_INAV_STATUS: {
                         buffer.readShort();//cycleTime
                         buffer.readShort();//i2cErrorCount
-                        buffer.readShort();//sensorStatus
+                        sensorStatus = buffer.readShort() & 0xffff; // pc.37: the compass bit, for the observers' heading
                         buffer.readShort();//averageSystemLoad
                         buffer.readByte();//profiles
                         buffer.readInt();//armingFlags
@@ -682,7 +690,7 @@ public class Msp {
                             case FcInfo.FC_VARIANT_BETAFLIGHT: {
                                 buffer.readShort();//cycleTime
                                 buffer.readShort();//i2cErrorCount
-                                buffer.readShort();//sensorStatus
+                                sensorStatus = buffer.readShort() & 0xffff; // pc.37: the compass bit, for the observers' heading
                                 int firstModeFlag = buffer.readInt();
                                 buffer.readByte();//currentPidProfileIndex
                                 buffer.readShort();//averageSystemLoad
@@ -743,7 +751,16 @@ public class Msp {
                         telemetryOutputBuffer.offer(new TelemetryData(packet.code, wBuffer.getData()));
                         break;
                     }
-                    case FcCommon.MSP_ATTITUDE:
+                    case FcCommon.MSP_ATTITUDE: {
+                        // pc.37: the heading kept for the observers (roll, pitch in 0.1 deg, then yaw in deg)
+                        byte[] a = buffer.getData();
+                        if (a != null && a.length >= 6) {
+                            attitudeYawDeg = (short) ((a[4] & 0xff) | (a[5] << 8));
+                            attitudeAt = android.os.SystemClock.elapsedRealtime();
+                        }
+                        telemetryOutputBuffer.offer(new TelemetryData(packet.code, a));
+                        break;
+                    }
                     case FcCommon.MSP_ALTITUDE:
                     case FcCommon.MSP_ANALOG:
                     case FcCommon.MSP_VTX_CONFIG:

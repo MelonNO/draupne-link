@@ -72,8 +72,9 @@ final class Tour {
 
     /** The features whose steps came after the first tour: a PC that had the tour before them is offered them alone. */
     static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon",
-            FEATURE_COVERAGE = "coverage";
-    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE);
+            FEATURE_COVERAGE = "coverage", FEATURE_OBSERVATION = "observation";
+    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE,
+            FEATURE_OBSERVATION);
     /** The features the pilot has been offered a tour of, comma-separated. */
     static final String SEEN_KEY = "tour.seen";
 
@@ -123,6 +124,15 @@ final class Tour {
                 + "your Tailscale network is in the list. CONNECT opens the link (WATCH joins a pilot PC's flight as a spectator). "
                 + "The minimap under the figures shows where the drone is, with POP OUT MAP under it; F3 opens the map window any time.",
                 main::tourLinkCard, null, false).of(FEATURE_NAMES));
+        // OBSERVATION (1.0.48): explained, not pressed - it opens streams to the drones
+        steps.add(new Step("OBSERVATION", "CONNECT AS > Observation watches up to six idle drones at once: CHOOSE DRONES picks them "
+                + "(a drone another PC flies can't be added), OBSERVE fills the video area with their pictures and plays all their "
+                + "sound, each tile with its own MUTE and volume and a green frame while its drone hears something. A click asks a "
+                + "tile for the sharp picture, a double-click enlarges it. CONNECT on a tile stops every stream and flies that drone "
+                + "the usual way; DISCONNECT offers the grid again.",
+                "Tip: on the map each observed drone is a numbered dot with its view cone in its tile's colour; hover a tile to find "
+                        + "its cone, click a cone to select its tile. A dashed cone's heading is approximate.",
+                main::tourLinkCard, null, false, null).of(FEATURE_OBSERVATION));
         // the sleep buttons only show while connected: the step puts them on the card as a demo that answers presses
         steps.add(new Step("SLEEP BUTTONS", "While connected, these are here. STANDBY stops the phone's camera and dims its "
                 + "screen; DEEP SLEEP locks the phone and lets it sleep, checking for this PC every CHECK EVERY minutes; WAKE brings "
@@ -215,7 +225,8 @@ final class Tour {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         List<String> what = new ArrayList<>();
         for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "the phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "the map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "the radio horizon, the GCS search and the map tools' three groups"
-                : f.equals(FEATURE_COVERAGE) ? "the 4G coverage estimate on the map" : f);
+                : f.equals(FEATURE_COVERAGE) ? "the 4G coverage estimate on the map"
+                : f.equals(FEATURE_OBSERVATION) ? "observation - up to six idle drones at once" : f);
         Object[] options = {"Yes", "Not now"};
         int answer = JOptionPane.showOptionDialog(main, "New in this version: " + String.join(" and ", what)
                         + ".\nA short tour of just the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
