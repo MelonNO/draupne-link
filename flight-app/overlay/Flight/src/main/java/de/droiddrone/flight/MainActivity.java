@@ -333,7 +333,8 @@ public class MainActivity extends Activity {
             bWake.setText(R.string.dd_power_wake);
         }
         tvPowerMode.setText(mode == PowerMode.STANDBY ? getString(R.string.dd_power_mode_standby)
-                : mode != PowerMode.DEEP_SLEEP ? getString(R.string.dd_power_mode_normal)
+                : mode == PowerMode.OVERWATCH && PowerMode.nextCheckAt() != 0 && !PowerMode.isChecking() ? getString(R.string.dd_power_mode_overwatch)
+                : !PowerMode.isSleepMode() ? getString(R.string.dd_power_mode_normal)
                 : PowerMode.isChecking() ? getString(R.string.dd_power_mode_checking)
                 : PowerMode.nextCheckAt() != 0 ? getString(R.string.dd_power_mode_sleeping, PowerMode.time(this, PowerMode.nextCheckAt()))
                 : getString(R.string.dd_power_mode_sleep_soon));
@@ -349,6 +350,7 @@ public class MainActivity extends Activity {
                     setPill(R.string.dd_pill_standby, getColor(R.color.dd_panel_2), colorWarn);
                     break;
                 case PowerMode.DEEP_SLEEP:
+                case PowerMode.OVERWATCH: // pc.36: the same checks; the mode line says it watches
                     long next = PowerMode.nextCheckAt();
                     if (PowerMode.isChecking()) {
                         tvNetworkStatus.setText(R.string.dd_status_checking);
@@ -971,7 +973,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume(){
         super.onResume();
-        if (PowerMode.mode() != PowerMode.DEEP_SLEEP) { // pc.23: a sleeping phone does nothing it needn't - no GitHub
+        if (!PowerMode.isSleepMode()) { // pc.23: a sleeping phone does nothing it needn't - no GitHub
             checkOldApp();
             checkForUpdate();
         }
@@ -990,7 +992,7 @@ public class MainActivity extends Activity {
                     uiTimer.cancel();
                     return;
                 }
-                if (PowerMode.mode() == PowerMode.DEEP_SLEEP && ++ticks % 5 != 0) return; // asleep: every 5 s is plenty
+                if (PowerMode.isSleepMode() && ++ticks % 5 != 0) return; // asleep: every 5 s is plenty
                 runOnUiThread(new Runnable() {
                     @Override
                     public void run() {

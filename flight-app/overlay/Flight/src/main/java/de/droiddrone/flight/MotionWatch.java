@@ -42,6 +42,10 @@ import static de.droiddrone.common.Logcat.log;
  * analysing and off within 0.1 s of the FC reading anything but DISARMED (the telemetry thread's {@link #tick}) - so
  * in the air the camera does exactly what it did before. A phone that refuses the extra stream (its session can't be
  * configured with it) goes on without: the record says NO_PICTURE.
+ *
+ * <p>pc.36, overwatch sleep: {@link Overwatch} asks for it itself ({@link #overwatch}), ticks it from its own thread
+ * (the link's telemetry thread is gone then) and takes each analysed picture ({@link Sink}) for the pre-roll and the
+ * alert.
  */
 final class MotionWatch {
     static final byte PACKET = 0x7C;
@@ -91,14 +95,36 @@ final class MotionWatch {
     }
 
     static boolean wanted() {
-        return sensitivity > 0 && System.currentTimeMillis() - requestedAt < REQUEST_FRESH_MS;
+        return overwatch > 0 || sensitivity > 0 && System.currentTimeMillis() - requestedAt < REQUEST_FRESH_MS;
+    }
+
+    /**
+     * pc.36, overwatch sleep: analysing at this sensitivity whatever the PC's DETECTION_SET (there is no link to
+     * carry it); 0 gives it back to DETECTION_SET. Overwatch's thread calls {@link #tick} then.
+     */
+    static void overwatch(int s) {
+        overwatch = Math.max(0, Math.min(3, s));
+    }
+
+    private static volatile int overwatch;
+
+    /** pc.36: what overwatch does with each analysed picture (the pre-roll, the alert); called on the analysis thread. */
+    interface Sink {
+        /** The picture (I420 planes, w x h, reused after this returns) and what the detector made of it. */
+        void onPicture(byte[] y, byte[] u, byte[] v, int w, int h, MotionDetector.Result r, long wallMs);
+    }
+
+    private static volatile Sink sink;
+
+    static void setSink(Sink s) {
+        sink = s;
     }
 
     static void setFieldOfView(float deg) {
         hfovDeg = deg;
     }
 
-    /** pc.37: the camera's angle across the picture, degrees (0 = unknown), for the observers' map. */
+    /** The camera's angle across the picture, degrees (0 = unknown): for overwatch's alert (pc.36) and the observers' map (pc.37). */
     static float fieldOfView() {
         return hfovDeg;
     }
@@ -119,7 +145,7 @@ final class MotionWatch {
             log(run ? "Motion detection on (disarmed, camera running)" : "Motion detection paused" + (disarmed ? "" : " - the FC isn't known to be disarmed"));
             if (run) analysis.execute(detector::reset); // a new start learns the picture again
         }
-        int s = sensitivity;
+        int s = overwatch > 0 ? overwatch : sensitivity;
         if (s > 0 && s != sensitivitySet) {
             sensitivitySet = s;
             analysis.execute(() -> detector.setSensitivity(s));
@@ -213,6 +239,8 @@ final class MotionWatch {
                 MotionDetector.Result r = detector.process(y, width, height, u, v, at);
                 lastResult = r;
                 resultAt = System.currentTimeMillis();
+                Sink k = sink;
+                if (k != null) k.onPicture(y, u, v, width, height, r, now); // pc.36: before the buffers are reused
             } catch (RuntimeException e) {
                 log("Motion detection error: " + e);
             } finally {

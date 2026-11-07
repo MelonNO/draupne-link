@@ -78,6 +78,7 @@ TO UNLOCK</string>
     <string name="dd_power_mode_sleep_soon">MODE: going to deep sleep…</string>
     <string name="dd_power_mode_sleeping">MODE: DEEP SLEEP - next check for the PC at %1$s</string>
     <string name="dd_power_mode_checking">MODE: DEEP SLEEP - listening for the PC now</string>
+    <string name="dd_power_mode_overwatch">MODE: OVERWATCH - the camera watches; something moving calls the PC</string>
     <string name="dd_power_hint">The PC sets the mode (STANDBY, DEEP SLEEP, WAKE on its LINK card). To wake this phone by hand, hold the button for two seconds.</string>
     <string name="dd_pill_standby">STANDBY</string>
     <string name="dd_pill_sleeping">SLEEPING</string>
@@ -90,6 +91,7 @@ TO UNLOCK</string>
     <string name="dd_notification_standby">Standby - the PC wakes this phone</string>
     <string name="dd_notification_sleep">Deep sleep - next check at %1$s</string>
     <string name="dd_notification_checking">Sleep check - listening for the PC</string>
+    <string name="dd_notification_overwatch">Overwatch - the camera watches; next check at %1$s</string>
     <string name="dd_quiet_channel">Running</string>
     <string name="dd_quiet_channel_why">The running notification: changes quietly, never sounds or lights the screen.</string>
     <string name="dd_wake_channel">Wake-up</string>

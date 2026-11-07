@@ -55,6 +55,34 @@ final class AlertSound {
         player.execute(AlertSound::beep);
     }
 
+    /**
+     * An overwatch alert (1.0.47): three rising notes, twice - unlike the falling warning, so it isn't taken for one
+     * about the drone in the air. Once per alert; the caller leaves it out while this PC flies.
+     */
+    void ring() {
+        if (!enabled) return;
+        player.execute(() -> {
+            playing = true;
+            try (SourceDataLine line = AudioSystem.getSourceDataLine(new AudioFormat(RATE, 16, 1, true, false))) {
+                line.open();
+                line.start();
+                for (int round = 0; round < 2; round++) {
+                    for (double hz : new double[]{660, 880, 1100}) {
+                        byte[] pcm = tone(hz, 110);
+                        line.write(pcm, 0, pcm.length);
+                    }
+                    byte[] gap = new byte[RATE / 5 * 2];
+                    line.write(gap, 0, gap.length);
+                }
+                line.drain();
+            } catch (Exception | LinkageError e) {
+                log("Overwatch sound: " + e);
+            } finally {
+                playing = false;
+            }
+        });
+    }
+
     /** 880 Hz then 660 Hz, 120 ms each: short enough not to mask the motors, unlike a Windows sound. */
     private static void beep() {
         playing = true;

@@ -729,10 +729,145 @@ class MapView extends JComponent {
         cache.prefetch(src, zi, zi - PREFETCH_UP, zi + PREFETCH_DOWN, se[0], nw[0], nw[1], se[1], PREFETCH_BUDGET);
     }
 
+    // ------------------------------------------------------------------ overwatch (1.0.47)
+
+    /**
+     * A drone in overwatch on the map: where it stands, the ground its camera sees (view, null when its heading isn't
+     * known), the detection's direction (bearingDeg, NaN: none), alert = an alert is on (the symbol pulses, red), replay
+     * = a clip of it plays (the view as it was, calmer).
+     */
+    record OverwatchMark(String drone, double lat, double lon, CameraFootprint.View view, double bearingDeg, boolean alert,
+                         boolean replay, String label) {}
+
+    private volatile List<OverwatchMark> overwatchMarks = List.of();
+    /** Right-click on a drone: CLIPS of it (the map window's clip list). */
+    private Consumer<String> onClips;
+
+    void setOverwatchMarks(List<OverwatchMark> marks) {
+        List<OverwatchMark> next = marks == null ? List.of() : List.copyOf(marks);
+        if (next.equals(overwatchMarks)) return; // asked every refresh: a repaint only when something changed
+        overwatchMarks = next;
+        repaint();
+    }
+
+    void setOnClips(Consumer<String> onClips) {
+        this.onClips = onClips;
+    }
+
+    /** Whether (lat, lon) is on the map's screen now, with a margin. */
+    boolean shows(double lat, double lon, int margin) {
+        TileSource src = effectiveSource();
+        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
+        double scale = Math.pow(2, zoom - zi);
+        Point2D s = toScreen(lat, lon, zi, scale, Mercator.x(centerLon, zi), Mercator.y(centerLat, zi), getWidth(), getHeight());
+        return s.getX() >= margin && s.getY() >= margin && s.getX() <= getWidth() - margin && s.getY() <= getHeight() - margin;
+    }
+
+    /** Pans to (lat, lon), keeping the zoom (at least 14: close enough to see the ground the camera sees). */
+    void panTo(double lat, double lon) {
+        centreOn(lat, lon, Math.max(zoom, 14));
+    }
+
+    /** The overwatch drone within 16 px of (x, y), or null. */
+    private OverwatchMark overwatchAt(int x, int y) {
+        TileSource src = effectiveSource();
+        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
+        double scale = Math.pow(2, zoom - zi);
+        double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
+        for (OverwatchMark m : overwatchMarks) {
+            if (toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, getWidth(), getHeight()).distance(x, y) <= 16) return m;
+        }
+        return null;
+    }
+
+    /**
+     * The overwatch drones: the camera's view in the alert colour (orange-red, pale) and its edge, the detection's
+     * direction dashed from the drone, rings pulsing out from the drone while its alert is on, and its name. A clip
+     * playing shows its view as it was, in the camera view's own pale yellow.
+     */
+    private void paintOverwatch(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+        List<OverwatchMark> marks = overwatchMarks;
+        if (marks.isEmpty()) return;
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            double phase = (System.currentTimeMillis() % 1400) / 1400.0;
+            for (OverwatchMark m : marks) {
+                Color c = m.replay() ? new Color(255, 236, 160) : ALERT;
+                Point2D d = toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, w, h);
+                if (m.view() != null) {
+                    Path2D shape = new Path2D.Double();
+                    for (double[] ll : m.view().outline()) {
+                        Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                        if (shape.getCurrentPoint() == null) shape.moveTo(p.getX(), p.getY());
+                        else shape.lineTo(p.getX(), p.getY());
+                    }
+                    shape.closePath();
+                    g.setColor(Theme.alpha(c, m.alert() ? 60 : 40));
+                    g.fill(shape);
+                    g.setColor(Theme.alpha(c, 210));
+                    g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.draw(shape);
+                }
+                if (!Double.isNaN(m.bearingDeg())) {
+                    double[] end = RadioHorizon.offset(m.lat(), m.lon(), Math.sin(Math.toRadians(m.bearingDeg())) * DETECTION_LINE_M,
+                            Math.cos(Math.toRadians(m.bearingDeg())) * DETECTION_LINE_M);
+                    Point2D e = toScreen(end[0], end[1], zi, scale, wcx, wcy, w, h);
+                    g.setColor(new Color(0, 0, 0, 130));
+                    g.setStroke(new BasicStroke(3.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.draw(new java.awt.geom.Line2D.Double(d, e));
+                    g.setColor(Theme.alpha(c, 235));
+                    g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1, new float[]{7, 5}, 0));
+                    g.draw(new java.awt.geom.Line2D.Double(d, e));
+                }
+                if (m.alert()) {
+                    for (int i = 0; i < 2; i++) {
+                        double p = (phase + i * 0.5) % 1.0;
+                        double r = 10 + 30 * p;
+                        g.setColor(Theme.alpha(ALERT, (int) Math.round(220 * (1 - p))));
+                        g.setStroke(new BasicStroke(2.5f));
+                        g.draw(new Ellipse2D.Double(d.getX() - r, d.getY() - r, 2 * r, 2 * r));
+                    }
+                }
+                double r = 8;
+                g.setColor(new Color(0, 0, 0, 160));
+                g.fill(new Ellipse2D.Double(d.getX() - r - 1.5, d.getY() - r - 1.5, 2 * r + 3, 2 * r + 3));
+                g.setColor(Theme.alpha(c, 230));
+                g.fill(new Ellipse2D.Double(d.getX() - r, d.getY() - r, 2 * r, 2 * r));
+                g.setColor(Color.WHITE);
+                g.setStroke(new BasicStroke(1.4f));
+                g.draw(new Ellipse2D.Double(d.getX() - 3, d.getY() - 3, 6, 6)); // an eye: it watches
+                if (m.label() != null) {
+                    g.setFont(Theme.headingFont(11f));
+                    FontMetrics fm = g.getFontMetrics();
+                    int tw = fm.stringWidth(m.label()) + 10;
+                    int bx = (int) d.getX() + 14, by = (int) d.getY() + 10;
+                    if (bx + tw > w - 4) bx = (int) d.getX() - 14 - tw;
+                    g.setColor(BOX);
+                    g.fillRect(bx, by, tw, fm.getHeight() + 2);
+                    g.setColor(c);
+                    g.drawString(m.label(), bx + 5, by + fm.getAscent() + 1);
+                }
+            }
+        } finally {
+            g.dispose();
+        }
+    }
+
+    /** The overwatch alert's colour: a red that isn't the map's accent or the warnings' yellow. */
+    static final Color ALERT = new Color(0xff4d3a);
+
     private JPopupMenu menu(int x, int y) {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         NetDrone drone = netDroneAt(x, y);
+        OverwatchMark watching = overwatchAt(x, y);
+        String clipsOf = watching != null ? watching.drone() : drone != null ? drone.name() : null;
+        if (clipsOf != null && onClips != null) { // 1.0.47: the drone's overwatch clips
+            JMenuItem clips = new JMenuItem("Clips of " + clipsOf + " (overwatch)...");
+            clips.addActionListener(e -> onClips.accept(clipsOf));
+            menu.add(clips);
+            if (drone == null) menu.addSeparator();
+        }
         if (drone != null && onDroneConnect != null) {
             if (drone.flown()) {
                 JMenuItem watch = new JMenuItem(drone.pilot() != null ? "Watch " + drone.name() + " (" + drone.pilot() + " flies it)"
@@ -1740,6 +1875,7 @@ class MapView extends JComponent {
             if (!forPicture) paintDetections(g, zi, scale, wcx, wcy, w, h);
             if (!forPicture) paintObserved(g, zi, scale, wcx, wcy, w, h);
             paintNetDrones(g, zi, scale, wcx, wcy, w, h);
+            if (!forPicture) paintOverwatch(g, zi, scale, wcx, wcy, w, h); // over the drone's diamond: its alert (1.0.47)
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
             else if (!forPicture) paintNoPosition(g, w, h);
 

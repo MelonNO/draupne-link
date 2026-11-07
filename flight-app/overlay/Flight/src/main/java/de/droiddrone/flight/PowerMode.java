@@ -44,8 +44,11 @@ import java.util.concurrent.TimeUnit;
  * checkIntervalMin minutes for a {@link #CHECK_WINDOW_MS} window with the socket open: a Connect with the right key
  * (the PC wants it back) wakes it fully; nothing, and it sleeps on until the next alarm. The service stays a
  * foreground service throughout, or Android would end it.</li>
+ * <li>{@link #OVERWATCH} (pc.36): deep sleep with the camera and the motion detection on and the CPU kept up for
+ * them (the service's partial wake lock stays); a detection calls the PC ({@link Overwatch}). The checks for the PC
+ * go on as in deep sleep. Under 20 % battery or hot it becomes deep sleep by itself ({@link #floorDrop}).</li>
  * </ul>
- * Mode 1 and 2 are refused while the flight controller reports armed, and standby ends by itself when it arms.
+ * Mode 1, 2 and 3 are refused while the flight controller reports armed, and standby ends by itself when it arms.
  * Everything here runs on one worker thread; the mode and the flags are volatile for the threads that read them
  * (the receive thread drops stick frames in standby, the stats sender reports, the activity draws).
  */
@@ -53,6 +56,8 @@ final class PowerMode {
     static final int NORMAL = 0;
     static final int STANDBY = 1;
     static final int DEEP_SLEEP = 2;
+    /** pc.36: overwatch sleep (OverwatchProtocol.MODE). */
+    static final int OVERWATCH = de.droiddrone.common.OverwatchProtocol.MODE;
     /** PC to phone, unnumbered like StartVideo: [0x6E][mode u8][checkIntervalMin u8]. */
     static final byte PACKET = 0x6E;
     /** pc.22: the sleep check's "still here" to the PC, and the PC's answer (0 = sleep on, 1 = wake). */
@@ -80,6 +85,8 @@ final class PowerMode {
     static final String PREF_EXACT_ALARM_ASKED = "powerExactAlarmAsked";
 
     private static volatile PowerMode current;
+    /** pc.36: why overwatch last gave way to deep sleep by itself (PowerFloor.REASON_*), for the sleep hello; 0 none. */
+    private static volatile int floorReason;
     /** The last thing that happened here, for the status card (the app has no log view). */
     private static volatile String lastEvent = "";
 
@@ -143,6 +150,41 @@ final class PowerMode {
         return p == null ? NORMAL : p.mode;
     }
 
+    /** Deep sleep or overwatch: the link's socket closed between checks, the checks running (pc.36). */
+    static boolean isSleepMode() {
+        int m = mode();
+        return m == DEEP_SLEEP || m == OVERWATCH;
+    }
+
+    private boolean sleeping() {
+        return mode == DEEP_SLEEP || mode == OVERWATCH;
+    }
+
+    static int floorReason() {
+        return floorReason;
+    }
+
+    /**
+     * pc.36: overwatch's floor (PowerFloor) - deep sleep instead, now, without a countdown (everything but the camera
+     * is let go of already).
+     */
+    static void floorDrop(int reason) {
+        PowerMode p = current;
+        if (p == null) return;
+        p.worker.execute(() -> {
+            if (p.mode != OVERWATCH) return;
+            floorReason = reason;
+            if (p.asleep || p.checking) {
+                p.mode = DEEP_SLEEP;
+                p.service.overwatchToDeepSleep(p.nextCheckAt);
+                event("Overwatch gave way to deep sleep: " + de.droiddrone.common.PowerFloor.describe(reason));
+                p.burst();
+            } else {
+                p.apply(DEEP_SLEEP, 0, "the floor: " + de.droiddrone.common.PowerFloor.describe(reason));
+            }
+        });
+    }
+
     /** Stick frames are dropped in every mode but normal: the PC sends none, and a stray one must not reach the FC. */
     static boolean dropSticks() {
         return mode() != NORMAL;
@@ -184,7 +226,7 @@ final class PowerMode {
             log("Power mode " + name(mode) + " asked for (" + from + ") while the service isn't running: ignored");
             return;
         }
-        if (mode < NORMAL || mode > DEEP_SLEEP) {
+        if (mode < NORMAL || mode > OVERWATCH) {
             log("Power mode " + mode + " asked for (" + from + "): no such mode");
             return;
         }
@@ -199,7 +241,7 @@ final class PowerMode {
         PowerMode p = current;
         if (p == null || p.mode == NORMAL) return;
         p.worker.execute(() -> {
-            if (p.mode == STANDBY || p.mode == DEEP_SLEEP && p.sleepAt != 0 && !p.asleep && !p.checking) {
+            if (p.mode == STANDBY || p.sleeping() && p.sleepAt != 0 && !p.asleep && !p.checking) {
                 p.apply(NORMAL, 0, "the flight controller armed");
             }
         });
@@ -253,6 +295,7 @@ final class PowerMode {
 
     private void apply(int wanted, int intervalMin, String from) {
         if (intervalMin > 0) checkIntervalMin = Math.min(255, intervalMin);
+        if (from.equals("the PC")) floorReason = 0; // the PC chose again
         // pc.31: refused unless the FC is known to be disarmed (FcArmedState: unknown counts as armed)
         if (wanted != NORMAL && service.isFcArmed()) {
             if (mode == NORMAL) {
@@ -277,9 +320,26 @@ final class PowerMode {
                 break;
             case DEEP_SLEEP:
                 if (mode == DEEP_SLEEP) return;
+                if (mode == OVERWATCH && (asleep || checking)) { // pc.36: from overwatch, nothing to count down
+                    mode = DEEP_SLEEP;
+                    service.overwatchToDeepSleep(nextCheckAt);
+                    event("Deep sleep instead of overwatch (" + from + ")");
+                    burst();
+                    break;
+                }
                 mode = DEEP_SLEEP;
                 sleepAt = System.currentTimeMillis() + SLEEP_COUNTDOWN_MS;
                 event("Deep sleep in " + SLEEP_COUNTDOWN_MS / 1000 + " s (" + from + "), checks every " + checkIntervalMin + " min");
+                burst();
+                cancelPending();
+                pending = worker.schedule(this::fallAsleep, SLEEP_COUNTDOWN_MS, TimeUnit.MILLISECONDS);
+                break;
+            case OVERWATCH:
+                if (mode == OVERWATCH) return;
+                if (mode != NORMAL) wake(from); // from standby or deep sleep: everything back first, then down again
+                mode = OVERWATCH;
+                sleepAt = System.currentTimeMillis() + SLEEP_COUNTDOWN_MS;
+                event("Overwatch in " + SLEEP_COUNTDOWN_MS / 1000 + " s (" + from + "), checks every " + checkIntervalMin + " min");
                 burst();
                 cancelPending();
                 pending = worker.schedule(this::fallAsleep, SLEEP_COUNTDOWN_MS, TimeUnit.MILLISECONDS);
@@ -291,11 +351,13 @@ final class PowerMode {
     private void wake(String from) {
         cancelPending();
         boolean wasStandby = mode == STANDBY;
-        boolean wasDeep = mode == DEEP_SLEEP;
+        boolean wasOverwatch = mode == OVERWATCH;
+        boolean wasDeep = mode == DEEP_SLEEP || wasOverwatch;
         boolean wasDown = asleep || checking; // things really let go of, not just the countdown
         mode = NORMAL;
         sleepAt = 0;
         if (wasStandby) service.powerStandby(false);
+        if (wasOverwatch) Overwatch.end("woken: " + from); // its clip so far kept for the PC, the camera closed
         if (wasDeep) {
             cancelAlarm(service);
             if (asleep) service.powerListen(); // the socket open again
@@ -313,7 +375,7 @@ final class PowerMode {
     }
 
     private void fallAsleep() {
-        if (mode != DEEP_SLEEP) return;
+        if (!sleeping()) return;
         // pc.31: asked again at the end of the countdown - it was only checked when deep sleep was asked for, and the
         // flight controller's port closes here
         int armed = service.fcArmedState();
@@ -326,12 +388,17 @@ final class PowerMode {
         asleep = true;
         nextCheckAt = System.currentTimeMillis() + checkIntervalMin * 60_000L;
         scheduleAlarm(service, nextCheckAt); // before the wake lock goes
-        service.powerSleep(nextCheckAt);
-        event("Deep sleep: next check at " + time(service, nextCheckAt));
+        if (mode == OVERWATCH) {
+            service.powerOverwatch(nextCheckAt);
+            event("Overwatch: the camera watches; next check at " + time(service, nextCheckAt));
+        } else {
+            service.powerSleep(nextCheckAt);
+            event("Deep sleep: next check at " + time(service, nextCheckAt));
+        }
     }
 
     private void openWindow() {
-        if (mode != DEEP_SLEEP || !asleep || checking) {
+        if (!sleeping() || !asleep || checking) {
             log("Sleep check alarm in mode " + name(mode) + (checking ? " (a window is open)" : "") + ": ignored");
             releaseWindowLock();
             return;
@@ -355,7 +422,7 @@ final class PowerMode {
         PowerMode p = current;
         if (p == null) return;
         p.worker.execute(() -> {
-            if (p.mode != DEEP_SLEEP || !p.checking) return;
+            if (!p.sleeping() || !p.checking) return;
             if (wake) p.wake("the PC called");
             else {
                 p.event("Sleep check: the PC says sleep on");
@@ -365,7 +432,7 @@ final class PowerMode {
     }
 
     private void pollWindow() {
-        if (mode != DEEP_SLEEP || !checking) {
+        if (!sleeping() || !checking) {
             cancelPending();
             return;
         }
@@ -385,7 +452,7 @@ final class PowerMode {
         scheduleAlarm(service, nextCheckAt);
         service.powerSleepOn(nextCheckAt);
         event("Sleep check: nothing from the PC; next check at " + time(service, nextCheckAt));
-        releaseWindowLock();
+        releaseWindowLock(); // in overwatch the service's own lock keeps the CPU up for the camera
     }
 
     private void cancelPending() {
@@ -427,6 +494,8 @@ final class PowerMode {
                 return "standby";
             case DEEP_SLEEP:
                 return "deep sleep";
+            case OVERWATCH:
+                return "overwatch";
             default:
                 return "normal";
         }
@@ -509,6 +578,9 @@ final class PowerMode {
         if (isDeviceAdmin(context)) caps |= PcLinkStats.CAP_DEVICE_ADMIN;
         if (canExactAlarms(context)) caps |= PcLinkStats.CAP_EXACT_ALARMS;
         if (ignoresBatteryOptimisation(context)) caps |= PcLinkStats.CAP_NO_BATTERY_OPTIMISATION;
+        // pc.36: overwatch can watch - unless the internal camera refused the motion detection's picture
+        Config config = MainActivity.config;
+        if (config != null && (config.isUseUsbCamera() || !InternalCamera.analysisRefused(config.getCameraId()))) caps |= PcLinkStats.CAP_OVERWATCH;
         return caps;
     }
 }

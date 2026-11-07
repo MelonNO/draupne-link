@@ -85,10 +85,30 @@ public final class NameService {
         thread = new Thread(this::run, "names");
         thread.setDaemon(true);
         thread.start();
+        // 1.0.47: the link port's answers on a thread of their own - the scan waits 1.5 s for replies, and an
+        // overwatch phone's preview or clip arriving meanwhile overflowed the socket's buffer
+        answerThread = new Thread(this::answerRun, "linkPortAnswers");
+        answerThread.setDaemon(true);
+        answerThread.start();
+    }
+
+    private Thread answerThread;
+
+    private void answerRun() {
+        while (running) {
+            try {
+                if (!answerOnLinkPort || paused || !answerQueries()) Thread.sleep(200); // no port (the link has it): again shortly
+            } catch (InterruptedException e) {
+                if (!running) return;
+            } catch (RuntimeException e) {
+                log.accept("Names: " + e);
+            }
+        }
     }
 
     public synchronized void stop() {
         running = false;
+        if (answerThread != null) answerThread.interrupt();
         if (thread != null) thread.interrupt();
         closeAnswerSocket();
     }
@@ -140,6 +160,16 @@ public final class NameService {
         return new ArrayList<>(positions.values());
     }
 
+    /**
+     * 1.0.47: a phone's overwatch packets reaching the link port while no link holds it (OverwatchHub.offer). They
+     * can come fast (the live preview, a clip), so the port is read on a thread of its own, with room for a burst.
+     */
+    private volatile ControlLink.OverwatchSink overwatchSink;
+
+    public void setOverwatchSink(ControlLink.OverwatchSink sink) {
+        overwatchSink = sink;
+    }
+
     /** The link is about to open on the link port: the answering socket lets go of it. */
     public void pause() {
         paused = true;
@@ -172,7 +202,6 @@ public final class NameService {
                     nextScan = now + SCAN_MS;
                     scan();
                 }
-                answerQueries();
                 try {
                     Thread.sleep(200);
                 } catch (InterruptedException e) {
@@ -276,37 +305,51 @@ public final class NameService {
         for (Runnable r : listeners) r.run();
     }
 
-    /** Other PCs' queries on the link port, while no link holds it. */
-    private void answerQueries() {
-        if (!answerOnLinkPort || paused) return;
+    /**
+     * Other PCs' queries, sleeping phones' check-ins and (1.0.47) overwatch packets on the link port while no link
+     * holds it: read until 200 ms pass without one. False when the port can't be had.
+     */
+    private boolean answerQueries() {
         DatagramSocket s;
         synchronized (this) {
             if (answerSocket == null) {
                 try {
                     answerSocket = new DatagramSocket(port);
-                    answerSocket.setSoTimeout(50);
+                    answerSocket.setSoTimeout(200);
+                    answerSocket.setReceiveBufferSize(1024 * 1024);
                 } catch (IOException e) {
-                    return; // the link has the port (or something else does): again next round
+                    return false; // the link has the port (or something else does): again shortly
+                }
+                if (paused) { // the link asked for the port while this one was being opened
+                    closeAnswerSocket();
+                    return false;
                 }
             }
             s = answerSocket;
         }
-        byte[] buf = new byte[512];
+        byte[] buf = new byte[1200];
         DatagramPacket packet = new DatagramPacket(buf, buf.length);
-        for (int i = 0; i < 20; i++) {
+        while (running && !paused) {
             try {
+                packet.setLength(buf.length);
                 s.receive(packet);
             } catch (SocketTimeoutException e) {
-                return;
+                return true;
             } catch (IOException e) {
-                return;
+                return true;
             }
             if (packet.getLength() >= 6 && packet.getData()[0] == ControlLink.SLEEP_HELLO) {
                 answerSleepCheck(s, packet);
                 continue;
             }
+            if (de.droiddrone.common.OverwatchProtocol.isFromPhone(packet.getData(), packet.getLength())) {
+                ControlLink.OverwatchSink sink = overwatchSink;
+                if (sink != null) sink.offer(packet.getData(), packet.getLength(), packet.getAddress(), packet.getPort());
+                continue;
+            }
             answer(s, packet, config.getKey(), this::replyPacket);
         }
+        return true;
     }
 
     private void answerSleepCheck(DatagramSocket s, DatagramPacket packet) {

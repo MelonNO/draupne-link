@@ -19,7 +19,8 @@
  *  when the pilot allows location later; re-probes the USB when the flight controller is plugged in. pc.21: the
  *  power modes' hands (PowerMode decides, this does): standby slows the GPS and the FC polling and stops the video;
  *  deep sleep lets go of the port, the GPS, the socket and the wake lock and locks the screen; a check opens the
- *  socket; waking brings it all back and lights the screen with a full-screen intent.
+ *  socket; waking brings it all back and lights the screen with a full-screen intent. pc.36: overwatch sleep - as
+ *  deep sleep, but the wake lock stays and the camera watches (Overwatch); the battery's readings for its floor.
  */
 
 package de.droiddrone.flight;
@@ -223,6 +224,7 @@ public class DDService extends Service {
     @Override
     public void onDestroy() {
         running = null;
+        Overwatch.shutdown(); // pc.36: the camera, the event's recorder, the overwatch socket
         PowerMode.stop(); // no alarm left behind; the mode is normal for the next start
         PhoneLocation.stop();
         closeAll();
@@ -332,7 +334,77 @@ public class DDService extends Service {
 
     /** Between checks: the notification says when the next one is. */
     void powerSleepOn(long nextCheckAt) {
-        updateNotification(getString(R.string.dd_notification_sleep, PowerMode.time(this, nextCheckAt)));
+        updateNotification(getString(PowerMode.mode() == PowerMode.OVERWATCH ? R.string.dd_notification_overwatch : R.string.dd_notification_sleep,
+                PowerMode.time(this, nextCheckAt)));
+    }
+
+    /**
+     * pc.36, overwatch: as deep sleep - the video, the flight controller's port, the GPS, the socket, the telemetry, the
+     * microphone and the timer go, the screen locks - but the partial wake lock stays (the camera and the motion
+     * detection run with the screen off, in this camera-type foreground service) and Overwatch watches. Where the
+     * drone is, is taken first: the GPS is gone after.
+     */
+    void powerOverwatch(long nextCheckAt) {
+        int[] position = udp.positionNow();
+        udp.stopVideo();
+        fcInfo = null;
+        serial.close();
+        PhoneLocation.stop();
+        udp.close();
+        phoneTelemetry.close();
+        audioSource.close();
+        stopMainTimer();
+        isConnected = false;
+        acquireWakeLock(); // held all along; again in case it was let go of
+        Overwatch.begin(this, udp, audioSource, position);
+        powerSleepOn(nextCheckAt);
+        lockScreen();
+    }
+
+    /** pc.36: overwatch becomes deep sleep (the floor, or the PC's DEEP SLEEP): the camera closes, the wake lock goes. */
+    void overwatchToDeepSleep(long nextCheckAt) {
+        Overwatch.end("deep sleep instead");
+        releaseWakeLock();
+        if (nextCheckAt > 0) powerSleepOn(nextCheckAt);
+    }
+
+    /** pc.36: the camera in use (Overwatch's watch and event sessions). */
+    Camera camera() {
+        CameraManager c = cameraManager;
+        return c == null ? null : c.getCamera();
+    }
+
+    StreamEncoder streamEncoder() {
+        return streamEncoder;
+    }
+
+    /**
+     * pc.36, overwatch's floor (PowerFloor): {battery %, charging 1/0, thermal status (API 29 on), battery temperature
+     * in tenths of a degree}; PowerFloor.UNKNOWN where Android doesn't say.
+     */
+    int[] batteryReadings() {
+        int percent = de.droiddrone.common.PowerFloor.UNKNOWN, charging = 0, thermal = de.droiddrone.common.PowerFloor.UNKNOWN,
+                temp = de.droiddrone.common.PowerFloor.UNKNOWN;
+        try {
+            android.os.BatteryManager bm = (android.os.BatteryManager) getSystemService(BATTERY_SERVICE);
+            if (bm != null) {
+                int p = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
+                if (p >= 0 && p <= 100) percent = p;
+            }
+            android.content.Intent b = registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+            if (b != null) {
+                charging = b.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0 ? 1 : 0;
+                int t = b.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, Integer.MIN_VALUE);
+                if (t != Integer.MIN_VALUE) temp = t;
+            }
+            if (Build.VERSION.SDK_INT >= 29) {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                if (pm != null) thermal = pm.getCurrentThermalStatus();
+            }
+        } catch (Exception ignored) {
+            // what is known goes
+        }
+        return new int[]{percent, charging, thermal, temp};
     }
 
     /** A check window: the socket open and listening (new receive, buffer and stats threads). */
@@ -362,7 +434,10 @@ public class DDService extends Service {
         } catch (Exception ignored) {
             // unknown then
         }
-        if (!udp.sendSleepHello(percent < 0 ? 255 : percent, charging, nextCheckMin, mV)) log("Sleep check: no PC address to say hello to");
+        // pc.36: overwatching (and an event running), and why overwatch gave way to deep sleep by itself
+        if (!udp.sendSleepHello(percent < 0 ? 255 : percent, charging, nextCheckMin, mV, Overwatch.helloFlags(), PowerMode.floorReason())) {
+            log("Sleep check: no PC address to say hello to");
+        }
     }
 
     /** The check window closed without the PC: the socket shut again. */
