@@ -33,11 +33,16 @@ class MotionDetectorTest {
     }
 
     static Run run(SyntheticScene scene, MotionDetector d, double fromS, double toS, Run into) {
+        return run(scene, d, fromS, toS, into, 0);
+    }
+
+    /** @param clockMs what the clock the pictures are timed by says at the scene's 0 s */
+    static Run run(SyntheticScene scene, MotionDetector d, double fromS, double toS, Run into, long clockMs) {
         Run r = into == null ? new Run() : into;
         for (long i = Math.round(fromS * FPS); i < Math.round(toS * FPS); i++) {
             double t = i / FPS;
             byte[][] f = scene.frame(t);
-            MotionDetector.Result res = d.process(f[0], W, H, f[1], f[2], Math.round(t * 1000));
+            MotionDetector.Result res = d.process(f[0], W, H, f[1], f[2], clockMs + Math.round(t * 1000));
             if (res.night) r.anyNight = true;
             for (MotionDetector.Detection det : res.detections) {
                 r.ids.add(det.id);
@@ -81,6 +86,20 @@ class MotionDetectorTest {
         MotionDetector d = new MotionDetector(MotionDetector.HIGH);
         Run r = run(scene, d, 0, 5 * 60, null);
         assertEquals(Set.of(), r.ids, "false alarms in 5 minutes of wind on HIGH");
+    }
+
+    /**
+     * 1.0.50: the track's times were kept as floats of the raw clock - with the PC's wall clock (the virtual fleet) or
+     * a phone up for a week, a float can't tell pictures apart and nothing ever travelled.
+     */
+    @Test
+    void aBigClockStillFindsTheWalker() {
+        for (long clock : new long[]{7L * 24 * 3600_000, 1_794_092_657_440L}) {
+            SyntheticScene scene = windyWoods(5);
+            scene.movers.add(new SyntheticScene.Mover(20, 95, 10, 26, 18, 1, 10, 25, 70, 140, 122, true));
+            Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 25, null, clock);
+            assertTrue(r.firstAt >= 10 && r.firstAt <= 13, "clock " + clock + ": found 3 s at most after it appeared: " + r.firstAt);
+        }
     }
 
     @Test

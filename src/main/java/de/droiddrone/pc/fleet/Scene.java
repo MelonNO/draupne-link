@@ -80,19 +80,31 @@ final class Scene {
     }
 
     /**
-     * Sends something through the picture in front of the drone's start heading: a walker 12 m out at walking pace, a
-     * vehicle 40 m out at 40 km/h, a torch 20 m out (shows at night) - crossing from one side to the other.
+     * Sends something through the picture in front of the camera where it is now: a walker 12 m out at walking pace, a
+     * vehicle 40 m out at 40 km/h, a torch 20 m out at a brisk walk (shows at night) - crossing from just outside the
+     * left edge to the other side. (1.0.50: they went in front of the start point, so a drone flown or placed anywhere
+     * else never saw them; and they began well outside the picture, so a light took 7 s to be seen.)
      */
-    void addTarget(Kind kind, double startHeadingDeg, long nowMs) {
+    void addTarget(Kind kind, View from, long nowMs) {
         double dist = kind == Kind.VEHICLE ? 40 : kind == Kind.LIGHT ? 20 : 12;
-        double speed = kind == Kind.VEHICLE ? 11 : 1.4;
-        double half = Math.tan(Math.toRadians(HFOV_DEG / 2)) * dist * 1.3;
-        double h = Math.toRadians(startHeadingDeg);
-        double cn = Math.cos(h) * dist, ce = Math.sin(h) * dist;
+        double speed = kind == Kind.VEHICLE ? 11 : kind == Kind.LIGHT ? 2.5 : 1.4;
+        double half = Math.tan(Math.toRadians(HFOV_DEG / 2)) * dist * 1.08;
+        double h = Math.toRadians(from.headingDeg());
+        double cn = from.north() + Math.cos(h) * dist, ce = from.east() + Math.sin(h) * dist;
         // from the left edge across, perpendicular to the view
         double leftN = cn + Math.cos(h - Math.PI / 2) * half, leftE = ce + Math.sin(h - Math.PI / 2) * half;
         long dur = (long) (2 * half / speed * 1000);
-        targets.add(new Target(kind, leftN, leftE, startHeadingDeg + 90, speed, nowMs, nowMs + dur));
+        targets.add(new Target(kind, leftN, leftE, from.headingDeg() + 90, speed, nowMs, nowMs + dur));
+    }
+
+    /** Something standing in the middle of the picture now and walking off to the right (ALERT NOW: seen at once). */
+    void addTargetInView(Kind kind, View from, long nowMs) {
+        double dist = kind == Kind.VEHICLE ? 40 : kind == Kind.LIGHT ? 20 : 12;
+        double speed = kind == Kind.VEHICLE ? 11 : kind == Kind.LIGHT ? 2.5 : 1.4;
+        double half = Math.tan(Math.toRadians(HFOV_DEG / 2)) * dist * 1.08;
+        double h = Math.toRadians(from.headingDeg());
+        double cn = from.north() + Math.cos(h) * dist, ce = from.east() + Math.sin(h) * dist;
+        targets.add(new Target(kind, cn, ce, from.headingDeg() + 90, speed, nowMs, nowMs + (long) (half / speed * 1000)));
     }
 
     /** The targets still crossing (the finished ones go). */
@@ -199,6 +211,10 @@ final class Scene {
             case WALKER -> {
                 g.setColor(night ? new Color(0x303030) : new Color(0x283a8a));
                 cam.box(g, p[0], p[1], 0.5, 1.8);
+                if (night) { // a head torch: at night the detection sees only what is lit (1.0.50: a walker went unseen)
+                    g.setColor(new Color(0xfffbe0));
+                    cam.box(g, p[0], p[1], 0.4, 1.4, 1.8);
+                }
             }
             case VEHICLE -> {
                 g.setColor(night ? new Color(0x3a3a3a) : new Color(0xb02020));
@@ -319,7 +335,12 @@ final class Scene {
 
         /** An upright box (width, height in m) standing at a ground point, facing the camera. */
         void box(Graphics2D g, double n, double e, double width, double height) {
-            double[] base = cam(n, e, 0), top = cam(n, e, height);
+            box(g, n, e, width, 0, height);
+        }
+
+        /** An upright box from bottom to top (m over the ground). */
+        void box(Graphics2D g, double n, double e, double width, double bottom, double height) {
+            double[] base = cam(n, e, bottom), top = cam(n, e, height);
             if (base[2] < 0.5 || top[2] < 0.5) return;
             double bx = cx + f * base[0] / base[2], by = cy + f * base[1] / base[2];
             double ty = cy + f * top[1] / top[2];

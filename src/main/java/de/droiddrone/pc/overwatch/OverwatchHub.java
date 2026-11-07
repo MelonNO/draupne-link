@@ -55,11 +55,13 @@ public final class OverwatchHub implements AutoCloseable {
 
     /**
      * What the map window shows of one drone, once a refresh. picture: the latest preview picture (or pre-roll
-     * picture), null before one; alertAtWall / endedAtWall: wall-clock times (endedAtWall -1 while it goes on).
+     * picture), null before one; alertAtWall / endedAtWall: wall-clock times (endedAtWall -1 while it goes on);
+     * held: why the live preview and the clip wait, in plain words (a drone here may be flying; 1.0.50), null when they
+     * don't; preRolls: the pictures before the alert that came.
      */
     public record View(String drone, AlertCard.Shown shown, boolean ended, long alertAtWall, long endedAtWall,
                        BufferedImage picture, OverwatchProtocol.Alert alert, CameraFootprint.Pose pose, String clipLine,
-                       boolean live) {}
+                       boolean live, String held, int preRolls) {}
 
     public interface Listener {
         /** A new alert (or the same one again after a dismiss's 10 min): sound it and draw attention, unless flying. */
@@ -86,6 +88,8 @@ public final class OverwatchHub implements AutoCloseable {
     private volatile List<View> views = List.of();
     /** A drone on this PC may be flying (PossiblyFlying, 1.0.49): no clip, no preview, alerts quietly. */
     private volatile java.util.function.BooleanSupplier flying = de.droiddrone.pc.PossiblyFlying::now;
+    /** Why it may be flying, in plain words (PossiblyFlying's reason): the card says so. */
+    private volatile java.util.function.Supplier<String> flyingWhy = de.droiddrone.pc.PossiblyFlying::reasonNow;
     private volatile boolean running;
     private volatile Listener listener;
     private Thread thread;
@@ -151,6 +155,13 @@ public final class OverwatchHub implements AutoCloseable {
     /** Tests: whether a drone on this PC may be flying (else this PC's PossiblyFlying flag). */
     void setFlying(boolean armed) {
         flying = () -> armed;
+        flyingWhy = () -> armed ? "a drone here may be flying" : null;
+    }
+
+    /** Which flag it reads (tests: one of their own; this PC's by default). */
+    public void setFlag(de.droiddrone.pc.PossiblyFlying flag) {
+        flying = flag::holds;
+        flyingWhy = flag::reason;
     }
 
     /**
@@ -159,6 +170,12 @@ public final class OverwatchHub implements AutoCloseable {
      */
     public boolean isFlying() {
         return flying.getAsBoolean();
+    }
+
+    /** Why it may be flying, in plain words. */
+    private String heldWhy() {
+        String why = flyingWhy.get();
+        return why == null || why.isBlank() ? "a drone here may be flying" : why;
     }
 
     /**
@@ -421,7 +438,7 @@ public final class OverwatchHub implements AutoCloseable {
                         m.setProperty("endedAt", Long.toString(e[0]));
                         if (e[1] == 0) m.setProperty("clip", "none");
                     });
-                    log(s.drone() + ": the motion ended" + (e[1] != 0 ? "; its clip comes when no drone here is armed." : "."));
+                    log(s.drone() + ": the motion ended" + (e[1] != 0 ? "; its clip comes " + (isFlying() ? "once no drone here may be flying (" + heldWhy() + ")." : "now.") : "."));
                     Listener l = listener;
                     if (l != null) l.onClips(s.drone());
                 }
@@ -471,7 +488,7 @@ public final class OverwatchHub implements AutoCloseable {
             });
             log(s.drone() + ": its clip" + (part > 1 ? " (part " + part + ")" : "") + " (" + ClipIndex.sizeText(info.size)
                     + (ct.received() > 0 ? ", going on from " + ClipIndex.sizeText(ct.received()) : "")
-                    + ") comes" + (isFlying() ? " once no drone here may be flying." : " now."));
+                    + ") comes" + (isFlying() ? " once no drone here may be flying (" + heldWhy() + ")." : " now."));
         } catch (IOException e) {
             log(s.drone() + ": the clip can't be stored: " + e.getMessage());
         }
@@ -588,17 +605,19 @@ public final class OverwatchHub implements AutoCloseable {
     private void publish() {
         long now = now();
         long wallOffset = System.currentTimeMillis() - now;
+        boolean flies = isFlying();
+        String held = flies ? heldWhy() : null;
         List<View> out = new ArrayList<>();
         for (Session s : sessions.values()) {
             if (s.event < 0) continue;
             String clipLine = null;
             Transfer t = s.transfer;
             if (t != null) {
-                clipLine = "Clip " + (isFlying() ? "paused (a drone here may fly)" : "coming") + ": " + ClipIndex.sizeText(t.clip.received()) + " of " + ClipIndex.sizeText(t.clip.size());
+                clipLine = "Clip " + (flies ? "paused" : "coming") + ": " + ClipIndex.sizeText(t.clip.received()) + " of " + ClipIndex.sizeText(t.clip.size());
             }
             long ended = s.card.endedAt(now);
             out.add(new View(s.drone(), s.card.shown(now), s.card.ended(now), s.card.alertAt() + wallOffset, ended < 0 ? -1 : ended + wallOffset,
-                    s.picture, s.alert, s.watched.pose(), clipLine, s.live));
+                    s.picture, s.alert, s.watched.pose(), clipLine, s.live, held, s.preRollSaved));
         }
         views = List.copyOf(out);
     }

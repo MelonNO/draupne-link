@@ -197,7 +197,7 @@ class VirtualDroneEndToEndTest {
         long t0 = 1_000_000;
         int found = 0;
         for (long t = t0; t < t0 + 20_000; t += 125) {
-            if (t == t0 + 4000) scene.addTarget(Scene.Kind.WALKER, 0, t); // after the background has settled
+            if (t == t0 + 4000) scene.addTarget(Scene.Kind.WALKER, view, t); // after the background has settled
             scene.render(img, view, t, null, false);
             int[] size = new int[2];
             byte[] y = Scene.luma(Scene.pixels(img), 320, 180, 320, size);

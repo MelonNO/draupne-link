@@ -273,7 +273,8 @@ final class MapWindow extends JFrame {
                 () -> new de.droiddrone.pc.map.CameraFootprint.Terrain(cache), () -> this.format,
                 d -> { if (main != null) main.overwatchConnect(d); },
                 d -> { if (main != null) main.overwatchDismiss(d); },
-                d -> { if (main != null) main.overwatch().closeBadge(d); });
+                d -> { if (main != null) main.overwatch().closeBadge(d); },
+                () -> { if (main != null) main.itsDownResume(this); });
         mapRow.add(overwatchPanel, BorderLayout.EAST);
         map.setOnClips(overwatchPanel::openClips);
         tools.clips.addActionListener(e -> {

@@ -2529,6 +2529,10 @@ class MapView extends JComponent {
 
     private void paintAttribution(Graphics2D g, TileSource src, int w, int h) {
         String text = src.attribution + (cache.isOffline() ? "   SAVED TILES ONLY" : "");
+        if (cache.isHeld()) { // 1.0.50: say why nothing new loads (PossiblyFlying)
+            String why = de.droiddrone.pc.PossiblyFlying.reasonNow();
+            text = src.attribution + "   SAVED TILES ONLY - " + (why == null ? "a drone here may be flying" : why);
+        }
         g.setFont(Theme.font(Font.PLAIN, 10f));
         FontMetrics fm = g.getFontMetrics();
         int tw = fm.stringWidth(text) + 10;

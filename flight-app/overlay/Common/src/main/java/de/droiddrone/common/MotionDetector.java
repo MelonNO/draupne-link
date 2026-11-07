@@ -226,6 +226,14 @@ import java.util.List;
     private float[] smallCur, smallMean, hpSmallCur, hpSmallMean, hpCur, hpMean, tmp;
     private boolean started, night, hasChroma;
     private long lastMs, warmUntil;
+    /**
+     * A track's history keeps its times as floats counted from here (DRAUPNE Link 1.0.50): a float holds a clock's
+     * raw milliseconds only to 2^24 - the PC's wall clock (1.8e12) to 131 s, a phone up for a week to 64 ms - and
+     * every track then failed its travel test. Moved up to the present while no track holds a time from before.
+     */
+    private long epoch = Long.MIN_VALUE;
+    /** The epoch moves on after this long (only while there is no track). */
+    static final long REBASE_MS = 3_600_000;
     /** Pictures judged so far (not the ones settling). */
     private long frames;
     private float settledFor;
@@ -289,6 +297,7 @@ import java.util.List;
      * @param timeMs when it was taken (any clock that only goes forward)
      */
     public Result process(byte[] y, int width, int height, byte[] u, byte[] v, long timeMs) {
+        if (epoch == Long.MIN_VALUE || tracks.isEmpty() && timeMs - epoch > REBASE_MS) epoch = timeMs;
         if (width != inWidth || height != inHeight || cur == null) allocate(width, height);
         downsample(y);
         hasChroma = u != null && v != null && u.length >= (width / 2) * (height / 2) && v.length >= (width / 2) * (height / 2);
@@ -810,7 +819,7 @@ import java.util.List;
             Track tr = tracks.get(t);
             float[] last = tr.history.get(tr.history.size() - 1);
             float[] vel = velocity(tr);
-            float ahead = (now - last[0]) / 1000f;
+            float ahead = (rel(now) - last[0]) / 1000f;
             float px = last[1] + vel[0] * ahead, py = last[2] + vel[1] * ahead;
             float size = Math.max(tr.maxX - tr.minX + 1, tr.maxY - tr.minY + 1);
             float gate = Math.max(10, 0.8f * size) + 0.5f * (float) Math.hypot(vel[0], vel[1]) * ahead;
@@ -845,6 +854,11 @@ import java.util.List;
         }
     }
 
+    /** A time as the tracks' history keeps it: ms from the epoch, small enough for a float to hold exactly. */
+    private float rel(long timeMs) {
+        return (float) (timeMs - epoch);
+    }
+
     /** Working pixels a second, from the last half second of the track. */
     private static float[] velocity(Track t) {
         List<float[]> hist = t.history;
@@ -868,8 +882,8 @@ import java.util.List;
         t.maxX = b.maxX;
         t.maxY = b.maxY;
         t.light = night;
-        t.history.add(new float[]{now, b.cx(), b.cy(), b.minX, b.minY, b.maxX, b.maxY});
-        while (t.history.size() > 2 && now - t.history.get(0)[0] > TRAVEL_WINDOW_MS + 1000) t.history.remove(0);
+        t.history.add(new float[]{rel(now), b.cx(), b.cy(), b.minX, b.minY, b.maxX, b.maxY});
+        while (t.history.size() > 2 && rel(now) - t.history.get(0)[0] > TRAVEL_WINDOW_MS + 1000) t.history.remove(0);
         float fromOrigin = (float) Math.hypot(b.cx() - t.ox, b.cy() - t.oy);
         t.maxFromOrigin = Math.max(t.maxFromOrigin, fromOrigin);
         // the blob's look, averaged over the track's life (a third each picture)
@@ -886,7 +900,7 @@ import java.util.List;
         // positions a quarter second apart at least: the jitter of a blob's centre doesn't add to the way gone
         List<float[]> pts = new ArrayList<>();
         for (float[] p : t.history) {
-            if (now - p[0] > TRAVEL_WINDOW_MS) continue;
+            if (rel(now) - p[0] > TRAVEL_WINDOW_MS) continue;
             if (pts.isEmpty() || p[0] - pts.get(pts.size() - 1)[0] >= 250) pts.add(p);
         }
         float[] newest = t.history.get(t.history.size() - 1);
@@ -951,7 +965,7 @@ import java.util.List;
     private boolean leavesChange(Track t, long now) {
         float[] old = null;
         for (float[] p : t.history) {
-            if (now - p[0] < WAKE_AFTER_MS) break;
+            if (rel(now) - p[0] < WAKE_AFTER_MS) break;
             old = p;
         }
         if (old == null) return false;

@@ -1628,8 +1628,11 @@ public final class VirtualDrone {
             case "light" -> Scene.Kind.LIGHT;
             default -> Scene.Kind.WALKER;
         };
-        scene.addTarget(k, fc.headingDeg(), System.currentTimeMillis());
-        log.accept("a " + kind + " crosses the picture");
+        scene.addTarget(k, view(), System.currentTimeMillis()); // in front of the camera where it is now (1.0.50)
+        int level = detectionWanted(System.currentTimeMillis());
+        log.accept("a " + kind + " crosses the picture" + (level > 0 ? " (motion detection " + level + ")"
+                : " - no motion detection asked (the PC's VIDEO > Motion detection, an observation or OVERWATCH asks for it)")
+                + (fc.isArmed() ? " - armed: the detection waits until disarmed" : ""));
     }
 
     public void setNight(boolean night) {

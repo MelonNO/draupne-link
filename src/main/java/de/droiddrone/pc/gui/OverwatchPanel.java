@@ -62,7 +62,7 @@ import java.util.function.Supplier;
  * Documents\DRAUPNE Link\Overwatch.
  */
 final class OverwatchPanel extends JPanel {
-    static final int WIDTH = 340;
+    static final int PANEL_WIDTH = 340;
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss", Locale.ROOT);
     private static final DateTimeFormatter DAY_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd  HH:mm:ss", Locale.ROOT);
 
@@ -75,6 +75,8 @@ final class OverwatchPanel extends JPanel {
     private final Supplier<CameraFootprint.Terrain> newTerrain;
     private final Map<String, CameraFootprint.Terrain> terrains = new HashMap<>();
     private final Consumer<String> onConnect, onDismiss, onCloseBadge;
+    /** IT'S DOWN - RESUME on a card whose preview waits for a lost drone's window (1.0.50). */
+    private final Runnable onResume;
     private final Supplier<Coordinates.Format> format;
     private final JPanel cards = new JPanel();
     private final Map<String, Card> cardByDrone = new LinkedHashMap<>();
@@ -123,8 +125,9 @@ final class OverwatchPanel extends JPanel {
 
     /** @param newTerrain a terrain loader, one per drone (null: flat ground) */
     OverwatchPanel(MapView map, ClipIndex index, Supplier<CameraFootprint.Terrain> newTerrain, Supplier<Coordinates.Format> format,
-                   Consumer<String> onConnect, Consumer<String> onDismiss, Consumer<String> onCloseBadge) {
+                   Consumer<String> onConnect, Consumer<String> onDismiss, Consumer<String> onCloseBadge, Runnable onResume) {
         super(new BorderLayout(0, 10));
+        this.onResume = onResume;
         this.map = map;
         this.index = index;
         this.newTerrain = newTerrain;
@@ -144,7 +147,7 @@ final class OverwatchPanel extends JPanel {
 
     @Override
     public Dimension getPreferredSize() {
-        return new Dimension(WIDTH, super.getPreferredSize().height);
+        return new Dimension(PANEL_WIDTH, super.getPreferredSize().height);
     }
 
     // ------------------------------------------------------------------ the alerts
@@ -249,6 +252,9 @@ final class OverwatchPanel extends JPanel {
         private final JLabel title = Theme.label(" ", Theme.headingFont(13f), MapView.ALERT);
         private final JLabel when = Theme.label(" ", Theme.monoFont(Font.PLAIN, 11.5f), Theme.TEXT);
         private final JLabel info = Theme.label(" ", Theme.font(Font.PLAIN, 11.5f), Theme.MUTED);
+        /** Why the live preview and the clip wait (1.0.50: the card said nothing). */
+        private final JLabel held = Theme.label(" ", Theme.font(Font.PLAIN, 11.5f), Theme.WARN);
+        private final JButton resume = Theme.secondaryButton("It's down - resume");
         private final Picture picture = new Picture();
         private final JPanel full = new JPanel(new BorderLayout(0, 6));
         private final JPanel badge = new JPanel(new BorderLayout(6, 0));
@@ -268,11 +274,22 @@ final class OverwatchPanel extends JPanel {
             head.add(title);
             head.add(when);
             full.add(head, BorderLayout.NORTH);
-            picture.setPreferredSize(new Dimension(WIDTH - 20, (WIDTH - 20) * 9 / 16));
+            picture.setPreferredSize(new Dimension(PANEL_WIDTH - 20, (PANEL_WIDTH - 20) * 9 / 16));
             full.add(picture, BorderLayout.CENTER);
             JPanel foot = new JPanel(new BorderLayout(0, 6));
             foot.setOpaque(false);
-            foot.add(info, BorderLayout.NORTH);
+            JPanel lines = new JPanel(new BorderLayout(0, 4));
+            lines.setOpaque(false);
+            lines.add(info, BorderLayout.NORTH);
+            lines.add(held, BorderLayout.CENTER);
+            resume.setToolTipText("The drone that holds this PC back is on the ground: the preview and the clip come at once (asks first)");
+            resume.addActionListener(e -> {
+                if (onResume != null) onResume.run();
+            });
+            resume.setVisible(false);
+            held.setVisible(false);
+            lines.add(resume, BorderLayout.SOUTH);
+            foot.add(lines, BorderLayout.NORTH);
             JPanel buttons = new JPanel(new GridLayout(1, 3, 6, 0));
             buttons.setOpaque(false);
             JButton connect = Theme.primaryButton("Connect");
@@ -305,7 +322,7 @@ final class OverwatchPanel extends JPanel {
 
         @Override
         public Dimension getMaximumSize() {
-            return new Dimension(WIDTH, getPreferredSize().height);
+            return new Dimension(PANEL_WIDTH, getPreferredSize().height);
         }
 
         /** @return true when the layout changed (card and badge swapped) */
@@ -331,11 +348,25 @@ final class OverwatchPanel extends JPanel {
             StringBuilder line = new StringBuilder();
             if (v.pose() != null && a != null) line.append(String.format(Locale.ROOT, "Bearing %03.0f deg", (v.pose().headingDeg() + a.angleDeg + 360) % 360));
             if (a != null && a.battery <= 100) line.append(line.length() > 0 ? "  -  " : "").append("battery ").append(a.battery).append(" %");
+            if (v.preRolls() > 0) line.append(line.length() > 0 ? "  -  " : "").append(v.preRolls()).append(v.preRolls() == 1 ? " picture" : " pictures").append(" before it");
             if (v.clipLine() != null) line.append(line.length() > 0 ? "  -  " : "").append(v.clipLine());
-            info.setText(line.length() == 0 ? " " : line.toString());
+            info.setText(line.length() == 0 ? " " : wrap(line.toString()));
+            boolean pausedNow = v.held() != null; // a drone here may be flying: say why, and offer the way out
+            held.setText(pausedNow ? wrap((v.ended() ? "CLIP WAITS - " : "LIVE PREVIEW PAUSED - ") + v.held() + ".") : " ");
+            if (resume.isVisible() != pausedNow) {
+                resume.setVisible(pausedNow);
+                held.setVisible(pausedNow);
+                layout = true;
+            }
+            picture.setNote(pausedNow ? "LIVE PREVIEW PAUSED" : "WAITING FOR THE PICTURE");
             picture.setImage(v.picture(), v.ended() ? null : a == null ? null : new float[]{a.x, a.y, a.w, a.h});
             return layout;
         }
+    }
+
+    /** A line wrapped to the card's width. */
+    private static String wrap(String text) {
+        return "<html><div style='width:" + (PANEL_WIDTH - 40) + "px'>" + text.replace("&", "&amp;").replace("<", "&lt;") + "</div></html>";
     }
 
     private static String clock(long wall) {
@@ -352,10 +383,18 @@ final class OverwatchPanel extends JPanel {
     private static final class Picture extends JComponent {
         private volatile BufferedImage image;
         private volatile float[] box;
+        private volatile String note = "WAITING FOR THE PICTURE";
 
         Picture() {
             setOpaque(true);
-            setPreferredSize(new Dimension(WIDTH - 20, (WIDTH - 20) * 9 / 16));
+            setPreferredSize(new Dimension(PANEL_WIDTH - 20, (PANEL_WIDTH - 20) * 9 / 16));
+        }
+
+        /** What it says while it has no picture. */
+        void setNote(String text) {
+            if (text == null || text.equals(note)) return;
+            note = text;
+            repaint();
         }
 
         void setImage(BufferedImage img, float[] box) {
@@ -375,7 +414,7 @@ final class OverwatchPanel extends JPanel {
                 if (img == null) {
                     g.setColor(Theme.MUTED);
                     g.setFont(Theme.headingFont(12f));
-                    g.drawString("WAITING FOR THE PICTURE", 10, getHeight() / 2);
+                    g.drawString(note, 10, getHeight() / 2);
                     return;
                 }
                 double s = Math.min((double) getWidth() / img.getWidth(), (double) getHeight() / img.getHeight());
@@ -425,7 +464,7 @@ final class OverwatchPanel extends JPanel {
         });
         JScrollPane scroll = new JScrollPane(clipList);
         scroll.setBorder(BorderFactory.createLineBorder(Theme.LINE));
-        scroll.setPreferredSize(new Dimension(WIDTH - 20, 220));
+        scroll.setPreferredSize(new Dimension(PANEL_WIDTH - 20, 220));
         body.add(scroll, BorderLayout.CENTER);
         JPanel actions = new JPanel(new GridLayout(1, 3, 6, 0));
         actions.setOpaque(false);

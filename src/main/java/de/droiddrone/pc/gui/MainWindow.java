@@ -115,6 +115,9 @@ public class MainWindow extends JFrame {
     /** The last time the FC reported armed; LOST DRONE shows when the link drops within a few minutes of it. */
     private long lastArmedAt;
     private final JButton lostDroneButton = Theme.primaryButton("Lost drone");
+    /** IT'S DOWN - RESUME (1.0.50) and the reason this PC holds back, while a drone lost armed holds it. */
+    private final JButton itsDownButton = Theme.secondaryButton("It's down - resume");
+    private final JLabel itsDownLine = Theme.label(" ", Theme.font(Font.PLAIN, 11f), Theme.WARN);
     // ---- STANDBY / DEEP SLEEP: the phone saves power before take-off and this PC wakes it (phone app pc.21 on)
     private final JButton standbyButton = Theme.secondaryButton("Standby");
     private final JButton deepSleepButton = Theme.secondaryButton("Deep sleep");
@@ -833,6 +836,14 @@ public class MainWindow extends JFrame {
         lostDroneButton.setVisible(false);
         lostDroneButton.addActionListener(e -> lostDrone());
         link.add(lostDroneButton, c);
+        // 1.0.50: a drone lost armed holds this PC's downloads, previews and clips for 10 min - the pilot who knows it
+        // is down ends that here (never while a link here says armed)
+        itsDownButton.setToolTipText("A drone was lost armed: map tiles, overwatch previews and clips wait for 10 min in case it flies. Press once you know it is down");
+        itsDownButton.setVisible(false);
+        itsDownButton.addActionListener(e -> itsDownResume(this));
+        link.add(itsDownButton, c);
+        itsDownLine.setVisible(false);
+        link.add(itsDownLine, c);
 
         // what matters in flight stays; the rest folds away with the fields
         JPanel stats = new JPanel(new GridLayout(3, 2, 8, 6));
@@ -1372,7 +1383,8 @@ public class MainWindow extends JFrame {
             linkRef[0] = connection.getLink();
             ControlLink flown = connection.getLink();
             // this PC's "possibly flying" flag (1.0.49): every background download waits while this drone may fly
-            de.droiddrone.pc.PossiblyFlying.pc().attach(flown, () -> de.droiddrone.pc.PossiblyFlying.of(flown.getTelemetry().getStatus()));
+            // kept per drone (1.0.50): a reconnect to it that hears DISARMED ends a lost-drone window at once
+            de.droiddrone.pc.PossiblyFlying.pc().attach(flown, target.name(), () ->de.droiddrone.pc.PossiblyFlying.of(flown.getTelemetry().getStatus()));
             connection.getLink().setNameReply(nameService::replyPacket);
             connection.getLink().setEvents(this::logLine);
             startLiveAudio(connection.getLink(), video, target.name());
@@ -1789,6 +1801,51 @@ public class MainWindow extends JFrame {
         } else {
             logLine("LOST DRONE: no position to show yet.");
         }
+    }
+
+    private long itsDownCheckedAt;
+
+    /**
+     * Once a second: while only a drone lost armed holds this PC back (PossiblyFlying, no link here saying armed), the
+     * LINK card says why and offers IT'S DOWN - RESUME.
+     */
+    private void refreshItsDown() {
+        long now = de.droiddrone.pc.MonoClock.ms();
+        if (now - itsDownCheckedAt < 1000) return;
+        itsDownCheckedAt = now;
+        de.droiddrone.pc.PossiblyFlying flag = de.droiddrone.pc.PossiblyFlying.pc();
+        boolean show = flag.resumable();
+        String why = show ? flag.reason() : null;
+        if (why != null) itsDownLine.setText("<html><div style='width:220px'>Downloads, overwatch previews and clips wait: " + why + ".</div></html>");
+        if (itsDownButton.isVisible() != show) {
+            itsDownButton.setVisible(show);
+            itsDownLine.setVisible(show);
+            itsDownButton.getParent().revalidate();
+        }
+    }
+
+    /**
+     * IT'S DOWN - RESUME (the LINK card, an overwatch card): the pilot knows the drone lost armed is on the ground, so
+     * this PC's lost-drone window ends - map tiles, overwatch previews and clips go on. Asks first; never touches a link
+     * here that says armed, nor arming or the sticks.
+     */
+    void itsDownResume(java.awt.Component parent) {
+        de.droiddrone.pc.PossiblyFlying flag = de.droiddrone.pc.PossiblyFlying.pc();
+        String why = flag.reason();
+        if (!flag.resumable()) {
+            if (why != null) JOptionPane.showMessageDialog(parent, why + ".\nA link here says armed: that holds until it says DISARMED.", "It's down - resume", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        String[] options = {"It's down - resume", "Cancel"};
+        int choice = JOptionPane.showOptionDialog(parent, why + ".\n\nIs that drone on the ground (disarmed, or found)?\n"
+                        + "Map tiles, overwatch previews and clips go on at once. Nothing is sent to any drone.",
+                "It's down - resume", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[1]);
+        if (choice != 0) return;
+        java.util.List<String> drones = flag.resume();
+        logLine("IT'S DOWN - RESUME: the pilot says " + (drones.isEmpty() ? "the lost drone" : String.join(", ", drones))
+                + " is down - downloads, overwatch previews and clips go on.");
+        itsDownCheckedAt = 0;
+        refreshItsDown();
     }
 
     /** The link dropped (or the FC went) within a few minutes of the drone being armed: LOST DRONE comes up. */
@@ -2328,6 +2385,7 @@ public class MainWindow extends JFrame {
         refreshObservation();
         refreshMap();
         refreshOverwatch();
+        refreshItsDown();
         // keeps the HUD (and the latency test's time code) live even when no video frames arrive
         if (connection != null || latencyMeter != null) videoView.repaint();
     }
@@ -2979,7 +3037,7 @@ public class MainWindow extends JFrame {
      */
     private void overwatchNews(String drone) {
         boolean flying = overwatch.isFlying();
-        logLine("OVERWATCH: " + drone + " sees something move." + (flying ? " Shown quietly in the map window (this PC flies)."
+        logLine("OVERWATCH: " + drone + " sees something move." + (flying ? " Shown quietly in the map window, its live preview paused: " + java.util.Objects.requireNonNullElse(de.droiddrone.pc.PossiblyFlying.reasonNow(), "a drone here may be flying") + "."
                 : mapWindow != null && mapWindow.isShown() ? " See the map window." : " Open the map (POP OUT MAP) to see it."));
         if (!flying) alertSound.ring();
         MapWindow w = mapWindow;
@@ -3778,7 +3836,9 @@ public class MainWindow extends JFrame {
         String version = t.getPhoneAppVersion();
         String newest = de.droiddrone.pc.setup.ApkShare.VERSION;
         if (de.droiddrone.pc.PossiblyFlying.now()) { // armed, or armed moments before the telemetry went quiet (1.0.49)
-            new LockedNotice(updatePhoneButton, videoView, "ARMED", "No update while the drone may be flying: it restarts the phone app, and the sticks with it.").pop();
+            String why = de.droiddrone.pc.PossiblyFlying.reasonNow();
+            new LockedNotice(updatePhoneButton, videoView, "ARMED", "No update while the drone may be flying: it restarts the phone app, and the sticks with it."
+                    + (why == null ? "" : " (" + why + ".)")).pop();
             return;
         }
         if (version == null || de.droiddrone.pc.setup.UpdateCheck.isNewer(REMOTE_UPDATE_MIN_PHONE, version)) {
