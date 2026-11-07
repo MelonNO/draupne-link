@@ -29,8 +29,11 @@ class AudioRequestTest {
         r.due(0, false);
         r.setMuted(true, 500);
         assertTrue(r.streamWanted(500), "muted: silent here at once, the phone still sends");
-        assertNull(r.due(800, false), "no change, no packet before the second is up");
-        assertTrue(read(r.due(1000, false)).on);
+        PcAudio.Request atMute = read(r.due(800, false)); // 1.0.50: the "in the air too" goes off at once
+        assertTrue(atMute.on);
+        assertFalse(atMute.inFlight);
+        assertNull(r.due(1000, false), "no change, no packet before the second is up");
+        assertTrue(read(r.due(1800, false)).on);
         assertTrue(r.streamWanted(10_499));
         assertFalse(r.streamWanted(10_500), "10 s muted");
         PcAudio.Request stop = read(r.due(10_500, false));
@@ -75,5 +78,18 @@ class AudioRequestTest {
         assertNull(r.due(100, false));
         r.newSession();
         assertNotNull(r.due(100, false));
+    }
+
+    /** 1.0.50: not muted means the pilot wants it in the air too; muted (the arming's own MUTE) never asks for that. */
+    @Test
+    void inTheAirOnlyWhenNotMuted() {
+        AudioRequest r = new AudioRequest();
+        assertTrue(read(r.due(0, false)).inFlight, "unmuted: the sound in the air too");
+        r.setMuted(true, 100);
+        PcAudio.Request muted = read(r.due(100, false));
+        assertTrue(muted.on, "the 10 s after a mute: still sent on the ground");
+        assertFalse(muted.inFlight, "but never armed");
+        r.setMuted(false, 200);
+        assertTrue(read(r.due(200, false)).inFlight, "unmuted in the air: armed too, at once");
     }
 }
