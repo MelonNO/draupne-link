@@ -273,7 +273,18 @@ final class OverwatchPanel extends JPanel {
             head.setOpaque(false);
             head.add(title);
             head.add(when);
-            full.add(head, BorderLayout.NORTH);
+            // a plain close in the corner (1.0.50, the pilot): the same as DISMISS - the card goes until a new alert
+            JButton closeCard = Theme.secondaryButton("X");
+            closeCard.setToolTipText("Close: as DISMISS - the preview stops, and the drone stays silent until the motion ends (10 min at most)");
+            closeCard.addActionListener(e -> onDismiss.accept(drone));
+            JPanel headRow = new JPanel(new BorderLayout(6, 0));
+            headRow.setOpaque(false);
+            headRow.add(head, BorderLayout.CENTER);
+            JPanel closeBox = new JPanel(new BorderLayout());
+            closeBox.setOpaque(false);
+            closeBox.add(closeCard, BorderLayout.NORTH);
+            headRow.add(closeBox, BorderLayout.EAST);
+            full.add(headRow, BorderLayout.NORTH);
             picture.setPreferredSize(new Dimension(PANEL_WIDTH - 20, (PANEL_WIDTH - 20) * 9 / 16));
             full.add(picture, BorderLayout.CENTER);
             JPanel foot = new JPanel(new BorderLayout(0, 6));
