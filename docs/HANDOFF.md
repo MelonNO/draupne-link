@@ -4,7 +4,44 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-07, 1.0.43, phone app still pc.32)
+## Where things stand (2026-11-07, 1.0.44 built, not released; phone app 2.3.0-pc.33 built from source, no APK yet)
+
+- **1.0.44 GPS + beepers + phone pc.33 (2026-11-07, not released, untried on hardware):** the pilot: the GPS must
+  never sit on two UARTs; and "the betaflight setup turns off all beeper sounds even when left disarmed", the only
+  exception the phone's USB out of the drone, else only a beeper button in the UI. *GPS:* Betaflight 2025.12's CLI
+  prints `serial UART3 2 ...` (names; its own ids 51-60 for UART1-10, VCP 20, SOFT1/2 30/31 as before; it takes 0-19
+  as the old numbers on input) - `GpsSetup.ports` parsed none of it, so `gpsPlan` saw no ports: no GPS taken off
+  another, and the fallback `serial 2 2 ...` (2025.12 reads 2 as UART3) put GPS alone on the port. Now `legacyId`
+  reads both, `Port.token` writes the port back as printed. *Beepers:* `Beepers.plan` (`beeper list`, `beeper`,
+  `beacon`): all off but RX_LOST, RX_LOST_LANDING, RX_SET, ON_USB; `beacon RX_SET`. BEEPER (13) alone on AUX12
+  (`ModeSwitch.BEEPER_AUX`, the 8-argument plan; other modes off AUX12, BEEPER off other switches; not when ARM is
+  left on AUX12). `RcSession.withBeeper` pads every frame to 16 channels, AUX12 2000 while the video bar's BEEPER
+  button is held. *Why the phone:* 2025.12's failsafe.c beeps RX_LOST whenever no RX data and no USB is sensed,
+  disarmed and never armed too (4.5 only after the first arm) - a drone on the phone with no PC sticks beeped.
+  `RcSession.idleSticks` (throttle 1000, sticks 1500, ARM outside its ranges - null while `ArmSwitch` is unknown -
+  BEEPER low) goes to pc.33+ phones once a second as `IDLE_STICKS` 0x78; `Udp.idleSticksRun` feeds them every 50 ms
+  after 300 ms without a PC frame, only on `Msp.disarmedAfter` (a fresh DISARMED from a status read >= 100 ms after
+  that frame; `armedFlagStatusMs` is written after `isArmed`). The pilot's choices: armed link loss still beeps
+  (failsafe), the button also beeps the motors. *Not covered:* deep sleep closes the FC port (a board without USB
+  sensing beeps then); the idle sticks are held in memory only (back within a second of a PC session).
+  To release: build the pc.33 APK from a clean HEAD, publish flight-2.3.0-pc.33, pin it in ApkShare.
+
+- **1.0.44 4G COVERAGE (2026-11-07, not released; never run against OpenCelliD with a real key):** the pilot: "a map
+  overlay that gets the reception map from the possible mobile network distributors in that area ... identify where
+  there is poor reception before entering that area". No open coverage map of Norway exists (Nkom: % per
+  municipality only; Telenor / Telia / Ice: private token-gated tiles - not to be used), so the pilot chose a
+  prediction from cell positions. `OpenCellId`: `/cell/getInArea` allows 4 km2 a box, 50 cells an answer, 1,000
+  requests a day per key (checked on wiki.opencellid.org 2026-11-07); fixed boxes of 0.016 deg x n * 0.016 deg (n by
+  latitude, always under 4 km2), LTE then NR, paged, kept as CSV for 30 days (an empty box too), one request at a time
+  300 ms apart, 60 boxes a view, 900 a day by its own count, code 7 stops it for the day. IMPORT... reads the country
+  file (242.csv.gz from the downloads page; its URL with a token is not documented, so no automatic download) and
+  counts its bounding box as known. `CellCoverage`: cells within 60 m (same network) are one site; RSRP = 30 dBm RS
+  EIRP - max(free space, two-ray) - one knife edge (ITU-R P.526, 4/3 earth, terrain every 40 m, 8 - 120 looks) - clutter
+  (20 dB at 2 m, none from 30 m); 800 MHz, 30 m masts; best of the nearest 16 sites within 20 km; good >= -95, fair >=
+  -105, weak >= -115 dBm. Terrain from the radio horizon's Terrarium tiles. Settings `map.coverage.key / operator /
+  heightM` (read through `MainWindow.config()`, no MainWindow change). Tour step `coverage`. To check on the real
+  thing: whether the levels match what the pilot's phone shows (the constants are textbook, not fitted), and the
+  OpenCelliD positions' offset from the masts.
 
 - **1.0.43 (2026-11-07):** the pilot: "change the model for the fc check" to their FPV drone model (OBJ + textures;
   cleared for use by the maintainer, see THIRD-PARTY.md). `DroneModelView` now loads `model/fpv-drone.bin.gz`

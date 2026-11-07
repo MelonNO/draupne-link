@@ -71,8 +71,9 @@ final class Tour {
     }
 
     /** The features whose steps came after the first tour: a PC that had the tour before them is offered them alone. */
-    static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon";
-    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON);
+    static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon",
+            FEATURE_COVERAGE = "coverage";
+    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE);
     /** The features the pilot has been offered a tour of, comma-separated. */
     static final String SEEN_KEY = "tour.seen";
 
@@ -151,6 +152,10 @@ final class Tour {
         steps.add(new Step("GCS SEARCH", "Where to put the ground station: with the same fields, drag a box round the area you want good "
                 + "reception in. A heat map 30 km round it shows where an antenna sees all of the area (green) or none of it (red); the best "
                 + "place is ringed; the cross on its label takes it off. Try it after the tour.", () -> main.mapWindow().tourSearch(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
+        steps.add(new Step("4G COVERAGE", "Where the drone is likely to have good, weak or no 4G before it flies there: an estimate from where "
+                + "the open OpenCelliD database puts the masts, and the terrain between them and the drone. Pick your SIM's network and the "
+                + "drone's height; it needs a free OpenCelliD key (KEY...). A guess, not a measurement. Try it after the tour.",
+                () -> main.mapWindow().tourCoverage(), mapAndTools, false, map).of(FEATURE_COVERAGE));
         steps.add(new Step("DRAW", "LINE through the points you click (double-click ends), RECTANGLE by dragging a box, ARROW with its head at the "
                 + "last point. Pick the colour, the width and outline or fill first. Right-click a drawing to rename or remove it.",
                 () -> main.mapWindow().tourDraw(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
@@ -209,7 +214,8 @@ final class Tour {
     static void offerNew(MainWindow main, List<String> features) {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         List<String> what = new ArrayList<>();
-        for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "the phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "the map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "the radio horizon, the GCS search and the map tools' three groups" : f);
+        for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "the phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "the map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "the radio horizon, the GCS search and the map tools' three groups"
+                : f.equals(FEATURE_COVERAGE) ? "the 4G coverage estimate on the map" : f);
         Object[] options = {"Yes", "Not now"};
         int answer = JOptionPane.showOptionDialog(main, "New in this version: " + String.join(" and ", what)
                         + ".\nA short tour of just the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
