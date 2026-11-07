@@ -40,12 +40,14 @@ import java.util.List;
  * 65535 none][battery u8 %, 255 unknown][name UTF]} - again every {@link #ALERT_RESEND_MS} until the PC's ACK.</li>
  * <li>{@link #COMMAND} PC to phone: {@code [event u16][cmd u8][args]} - {@link #CMD_ACK}, {@link #CMD_PREVIEW} (keep
  * the live preview going; every second), {@link #CMD_DISMISS}, {@link #CMD_CONNECT} (wake fully: the PC connects),
- * {@link #CMD_ENDED_ACK}, {@link #CMD_CLIP_GET} {@code [offset u32][count u16]}, {@link #CMD_CLIP_DONE} {@code [ok u8]},
+ * {@link #CMD_ENDED_ACK}, {@link #CMD_CLIP_GET} {@code [offset u32][count u16]}, {@link #CMD_CLIP_DONE} {@code [ok u8]}
+ * (1.0.49: then {@code [startedAt i64]}, the INFO's - which clip of the event the PC has),
  * {@link #CMD_STATUS_ACK}, {@link #CMD_PREROLL} (the pre-roll again).</li>
  * <li>{@link #PREVIEW} phone to PC: {@code [event u16][unit u16][type u8][total u32][offset u32][bytes]} - one
  * fragment of a unit: a pre-roll JPEG ({@code [capturedAt i64][jpeg]}), the H.264 config, a key frame or a frame.</li>
  * <li>{@link #CLIP} phone to PC: {@code [event u16][type u8]...} - INFO {@code [size u32][sha256 32 bytes][durationMs
- * u32][startedAt i64][flags u8: bit 0 sound][width u16][height u16]}, CHUNK {@code [offset u32][bytes]}, ENDED
+ * u32][startedAt i64][flags u8: bit 0 sound][width u16][height u16]} (pc.38: then {@code [part u16][eventStartedAt
+ * i64]} - an event records in segments, each a clip of its own with its own startedAt), CHUNK {@code [offset u32][bytes]}, ENDED
  * {@code [endedAt i64][clip u8: 1 a clip follows]}, NONE {@code [why UTF]}.</li>
  * <li>{@link #STATUS} phone to PC: {@code [state u8][reason u8][battery u8][tempDeci i16]} - the phone left overwatch
  * by itself for deep sleep (battery or heat, {@link PowerFloor}); five times, or until acknowledged.</li>
@@ -182,13 +184,41 @@ public final class OverwatchProtocol {
         /** CMD_CLIP_GET: the first byte and how many FRAGMENT-sized chunks; CMD_CLIP_DONE: ok in offset (1/0). */
         public final long offset;
         public final int count;
+        /** CMD_CLIP_DONE from 1.0.49: the clip's startedAt (its INFO's); {@link #NO_CLIP_START} from an older PC. */
+        public final long clipStartedAt;
 
         public Command(int token, int event, int cmd, long offset, int count) {
+            this(token, event, cmd, offset, count, NO_CLIP_START);
+        }
+
+        public Command(int token, int event, int cmd, long offset, int count, long clipStartedAt) {
             this.token = token;
             this.event = event & 0xffff;
             this.cmd = cmd;
             this.offset = offset;
             this.count = count;
+            this.clipStartedAt = clipStartedAt;
+        }
+    }
+
+    /** A CMD_CLIP_DONE without the clip's start (a PC before 1.0.49): the event alone names it. */
+    public static final long NO_CLIP_START = Long.MIN_VALUE;
+
+    /**
+     * CMD_CLIP_DONE for one clip (1.0.49): the event and the clip's startedAt from its INFO - an event's segments share
+     * the event number, so a late or repeated DONE can't take another segment of it.
+     */
+    public static byte[] clipDone(int token, int event, boolean ok, long clipStartedAt) {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(24);
+            DataOutputStream out = header(bytes, COMMAND, token);
+            out.writeShort(event);
+            out.writeByte(CMD_CLIP_DONE);
+            out.writeByte(ok ? 1 : 0);
+            out.writeLong(clipStartedAt);
+            return bytes.toByteArray();
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
         }
     }
 
@@ -221,13 +251,15 @@ public final class OverwatchProtocol {
             int event = in.readUnsignedShort(), cmd = in.readUnsignedByte();
             long offset = 0;
             int count = 0;
+            long clipStartedAt = NO_CLIP_START;
             if (cmd == CMD_CLIP_GET) {
                 offset = in.readInt() & 0xffffffffL;
                 count = in.readUnsignedShort();
             } else if (cmd == CMD_CLIP_DONE) {
                 offset = in.readUnsignedByte();
+                if (in.available() >= 8) clipStartedAt = in.readLong();
             }
-            return new Command(token(d), event, cmd, offset, count);
+            return new Command(token(d), event, cmd, offset, count, clipStartedAt);
         } catch (IOException e) {
             return null;
         }
@@ -297,8 +329,18 @@ public final class OverwatchProtocol {
         public final byte[] sha256;
         public final boolean sound;
         public final int width, height;
+        /** pc.38: the segment's number in its event (1 the first; 0 from an older phone) and the event's start. */
+        public final int part;
+        public final long eventStartedAt;
 
         public ClipInfo(int token, int event, long size, byte[] sha256, long durationMs, long startedAt, boolean sound, int width, int height) {
+            this(token, event, size, sha256, durationMs, startedAt, sound, width, height, 0, startedAt);
+        }
+
+        public ClipInfo(int token, int event, long size, byte[] sha256, long durationMs, long startedAt, boolean sound, int width, int height,
+                        int part, long eventStartedAt) {
+            this.part = part & 0xffff;
+            this.eventStartedAt = eventStartedAt;
             this.token = token;
             this.event = event & 0xffff;
             this.size = size;
@@ -324,6 +366,8 @@ public final class OverwatchProtocol {
             out.writeByte(c.sound ? 1 : 0);
             out.writeShort(c.width);
             out.writeShort(c.height);
+            out.writeShort(c.part);
+            out.writeLong(c.eventStartedAt);
             return bytes.toByteArray();
         } catch (IOException e) {
             throw new IllegalStateException(e);
@@ -391,7 +435,10 @@ public final class OverwatchProtocol {
             long started = in.readLong();
             boolean sound = in.readUnsignedByte() != 0;
             int w = in.readUnsignedShort(), h = in.readUnsignedShort();
-            return new ClipInfo(token(d), event, size, sha, duration, started, sound, w, h);
+            if (in.available() < 10) return new ClipInfo(token(d), event, size, sha, duration, started, sound, w, h); // a phone before pc.38
+            int part = in.readUnsignedShort();
+            long eventStarted = in.readLong();
+            return new ClipInfo(token(d), event, size, sha, duration, started, sound, w, h, part, eventStarted);
         } catch (IOException e) {
             return null;
         }

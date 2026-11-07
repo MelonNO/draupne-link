@@ -32,8 +32,24 @@ import static de.droiddrone.common.Logcat.log;
  * <p>
  * The muxer starts once the encoders have said their formats; both tracks' times count from their own first sample
  * (the camera's clock and the microphone's differ), so the sound sits within a frame or two of the picture.
+ * <p>
+ * pc.38 (the review's L3): the event is written in segments - {@link #cut} closes the file at the next key frame and
+ * goes on in a new one, the encoders and the camera's session untouched (no gap, no new surface). An MP4 is unplayable
+ * until it is closed, so the app dying mid-event now loses at most the segment being written.
  */
 final class OverwatchRecorder {
+    /** A segment closed by {@link #cut}: its file (null when it couldn't be closed - deleted), start and length. */
+    static final class Segment {
+        final File file;
+        final long startedAt, durationMs;
+
+        Segment(File file, long startedAt, long durationMs) {
+            this.file = file;
+            this.startedAt = startedAt;
+            this.durationMs = durationMs;
+        }
+    }
+
     private final int width, height, fps, bitrate;
     private final AudioSource audioSource;
     private MediaCodec video, audio;
@@ -44,9 +60,13 @@ final class OverwatchRecorder {
     private boolean muxing, wantAudio;
     private volatile boolean running;
     private long videoFirstUs = -1, audioFirstUs = -1, audioSamples;
-    private long startedAt, stoppedAt;
+    private volatile long startedAt, stoppedAt;
     private Thread audioThread;
     private final Object lock = new Object();
+    // ---- pc.38: segments (under lock)
+    private MediaFormat audioFormat;
+    private File nextFile;
+    private final java.util.ArrayDeque<Segment> finished = new java.util.ArrayDeque<>();
 
     OverwatchRecorder(int width, int height, int fps, AudioSource audioSource) {
         this.width = width & ~1;
@@ -169,7 +189,8 @@ final class OverwatchRecorder {
                 while ((out = audio.dequeueOutputBuffer(info, 0)) != MediaCodec.INFO_TRY_AGAIN_LATER) {
                     if (out == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                         synchronized (lock) {
-                            audioTrack = muxer.addTrack(audio.getOutputFormat());
+                            audioFormat = audio.getOutputFormat(); // pc.38: each segment's file gets the track too
+                            if (muxer != null) audioTrack = muxer.addTrack(audioFormat);
                             startMuxer();
                         }
                     } else if (out >= 0) {
@@ -220,6 +241,10 @@ final class OverwatchRecorder {
     private void write(ByteBuffer data, MediaCodec.BufferInfo info, boolean isVideo) {
         synchronized (lock) {
             if (!muxing || info.size <= 0) return;
+            if (isVideo && nextFile != null && (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0 && videoFirstUs >= 0) {
+                rollOver(); // pc.38: the new segment starts with this key frame
+                if (!muxing) return;
+            }
             long us = info.presentationTimeUs;
             if (isVideo) {
                 if (videoFirstUs < 0 && (info.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) == 0) return; // the file starts at a key frame
@@ -233,6 +258,74 @@ final class OverwatchRecorder {
             MediaCodec.BufferInfo copy = new MediaCodec.BufferInfo();
             copy.set(info.offset, info.size, us, info.flags);
             muxer.writeSampleData(isVideo ? videoTrack : audioTrack, data, copy);
+        }
+    }
+
+    /**
+     * pc.38: the segment ends at the next key frame (asked for now) and the recording goes on in next. The closed one
+     * comes from {@link #pollFinished}. @return false when nothing is being written yet (no cut)
+     */
+    boolean cut(File next) {
+        synchronized (lock) {
+            if (!muxing) return false;
+            nextFile = next;
+        }
+        requestKeyFrame();
+        return true;
+    }
+
+    /** Whether the file is being written (the muxer started). */
+    boolean writing() {
+        synchronized (lock) {
+            return muxing;
+        }
+    }
+
+    /** The next segment closed by a cut, oldest first, or null. */
+    Segment pollFinished() {
+        synchronized (lock) {
+            return finished.poll();
+        }
+    }
+
+    /** Under lock, on a key frame: the file closed (it is whole now), a new one started with the same tracks. */
+    private void rollOver() {
+        long now = System.currentTimeMillis();
+        File done = file;
+        boolean ok = true;
+        try {
+            muxer.stop();
+        } catch (Exception e) {
+            log("Overwatch recording: a segment didn't close cleanly: " + e);
+            ok = false;
+        }
+        try {
+            muxer.release();
+        } catch (Exception ignored) {
+        }
+        muxer = null;
+        muxing = false;
+        if (!ok && done != null && !done.delete()) log("Overwatch recording: a broken segment stays: " + done.getName());
+        finished.add(new Segment(ok ? done : null, startedAt, now - startedAt));
+        file = nextFile;
+        nextFile = null;
+        startedAt = now;
+        videoFirstUs = -1;
+        audioFirstUs = -1;
+        try {
+            muxer = new MediaMuxer(file.getAbsolutePath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
+            videoTrack = muxer.addTrack(videoFormat);
+            audioTrack = wantAudio && audioFormat != null ? muxer.addTrack(audioFormat) : -1;
+            if (wantAudio && audioTrack < 0) wantAudio = false; // no sound format: the picture goes on alone
+            muxer.start();
+            muxing = true;
+        } catch (Exception e) {
+            log("Overwatch recording: the next segment didn't start: " + e);
+            try {
+                if (muxer != null) muxer.release();
+            } catch (Exception ignored) {
+            }
+            muxer = null;
         }
     }
 
@@ -267,8 +360,16 @@ final class OverwatchRecorder {
         return file;
     }
 
+    /** The segment being written: its length so far (or until stop). */
     long durationMs() {
         return Math.max(0, (stoppedAt > 0 ? stoppedAt : System.currentTimeMillis()) - startedAt);
+    }
+
+    /** pc.38: when the segment being written started (wall ms). */
+    long segmentStartedAt() {
+        synchronized (lock) {
+            return startedAt;
+        }
     }
 
     boolean hasSound() {

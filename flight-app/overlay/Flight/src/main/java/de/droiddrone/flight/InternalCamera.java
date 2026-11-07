@@ -178,6 +178,37 @@ public class InternalCamera implements Camera{
         }
     }
 
+    /** pc.38: the session stopSessionAndWait waits on, and its latch (onClosed counts it down). */
+    private volatile CameraCaptureSession closingSession;
+    private volatile java.util.concurrent.CountDownLatch closingLatch;
+
+    /**
+     * pc.38 (the review's H10): stops the capture session and waits until the camera has let go of its surfaces
+     * (onClosed: its last capture done), at most timeoutMs. An overwatch recorder's surface may be released only
+     * then - released while the session still used it, some phones raise a camera error that stops the watch.
+     * @return true when the session is gone (or there was none)
+     */
+    public boolean stopSessionAndWait(long timeoutMs){
+        CameraCaptureSession session = mCameraCaptureSession;
+        if (session == null) {
+            stopSession();
+            return true;
+        }
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        closingLatch = latch;
+        closingSession = session;
+        stopSession();
+        try {
+            return latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } finally {
+            closingLatch = null;
+            closingSession = null;
+        }
+    }
+
     @Override
     public boolean isOpened(String cameraId){
         return isOpened && camera != null && camera.getId().equals(cameraId);
@@ -490,6 +521,12 @@ public class InternalCamera implements Camera{
                     log("Camera - setRepeatingRequest error: "+ e);
                 }
             }
+        }
+
+        @Override
+        public void onClosed(@NonNull CameraCaptureSession cameraCaptureSession){
+            java.util.concurrent.CountDownLatch latch = closingLatch;
+            if (latch != null && cameraCaptureSession == closingSession) latch.countDown(); // pc.38: stopSessionAndWait
         }
 
         @Override

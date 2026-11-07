@@ -94,6 +94,7 @@ public class DDService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        Overwatch.clips(this); // pc.38: overwatch clips a restart left are taken back (scanned on a thread of its own)
     }
 
     @Override

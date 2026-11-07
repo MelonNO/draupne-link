@@ -17,6 +17,8 @@ import android.content.SharedPreferences;
 import java.io.DataOutputStream;
 import java.io.IOException;
 
+import de.droiddrone.common.GuardedCopy;
+
 import static de.droiddrone.common.Logcat.log;
 
 /**
@@ -34,6 +36,12 @@ final class RemoteUpdate {
     static final int IDLE = 0, DOWNLOADING = 1, INSTALLING = 2, TAP_NEEDED = 3, FAILED = 4, REFUSED_ARMED = 5, CURRENT = 6;
     /** A state other than IDLE is reported this long after it last changed (the PC shows the last one). */
     private static final long REPORT_MS = 30_000;
+    /**
+     * pc.38 (H9): INSTALLING and TAP_NEEDED are reported as long as they last (the PC refuses to arm meanwhile: the
+     * install ends this app and the sticks with it), but no longer than this - an installer that never answers mustn't
+     * keep the drone on the ground for good.
+     */
+    private static final long INSTALL_REPORT_MS = 5 * 60_000;
     static final String PREFS = "dd_remote_update", PENDING_KEY = "pending";
 
     private static volatile int state = IDLE, percent;
@@ -71,8 +79,12 @@ final class RemoteUpdate {
             try {
                 AppUpdater.downloadAndInstallRemote(app, new UpdateCheck.Found(version, url, sha256),
                         pct -> set(DOWNLOADING, pct, version),
-                        () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED);
-                set(INSTALLING, 100, version);
+                        () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED,
+                        () -> set(INSTALLING, 100, version)); // pc.38: before the APK goes to the installer, not after
+            } catch (GuardedCopy.Stopped e) { // pc.38 (H9): armed, or not known disarmed, mid-download
+                log("Remote update stopped: " + e.getMessage());
+                set(REFUSED_ARMED, 0, e.getMessage());
+                pending(app, false);
             } catch (IOException | RuntimeException e) {
                 String why = e.getMessage() == null ? e.toString() : e.getMessage();
                 log("Remote update failed: " + why);
@@ -101,7 +113,9 @@ final class RemoteUpdate {
 
     /** Something to tell the PC: a state other than IDLE, changed lately. */
     static boolean reportDue() {
-        return state != IDLE && (busy || System.currentTimeMillis() - changedAt < REPORT_MS);
+        long age = System.currentTimeMillis() - changedAt;
+        boolean installing = state == INSTALLING || state == TAP_NEEDED;
+        return state != IDLE && (busy || age < REPORT_MS || installing && age < INSTALL_REPORT_MS);
     }
 
     /** The PHONE_UPDATE record, last in its packet. */

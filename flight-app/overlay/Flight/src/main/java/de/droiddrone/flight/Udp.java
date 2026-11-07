@@ -326,6 +326,13 @@ public class Udp {
         return t;
     });
     /**
+     * pc.38 (the review's M19): who started the camera last, counted on the videoStarter thread - every video start
+     * (a pilot's StartVideo, a restart, observation) and overwatch's camera on take a new number. Overwatch's camera
+     * off and event video act only while its number is still the last: ending overwatch slowly (a long clip hashed)
+     * once let its off run after the pilot's StartVideo and close the new camera.
+     */
+    private volatile int cameraOwner, overwatchCameraOwner = -1;
+    /**
      * DRAUPNE Link: the PC's video profile, [0x6B][flags]: bit 0 = bad coverage mode - key frames sent twice, and
      * after every frame a parity packet (VIDEO_PARITY) from which the PC rebuilds any one lost packet of it.
      */
@@ -983,6 +990,14 @@ public class Udp {
 
     private void startVideoStreamNow(boolean isHevc) {
         videoSenderThreadId++;
+        // pc.38 (M19): the camera is this stream's now - overwatch's late camera off or event video leaves it alone,
+        // and what overwatch set on it (watch-only, its recorder) goes
+        boolean wasOverwatch = overwatchCameraOwner == cameraOwner;
+        cameraOwner++;
+        if (wasOverwatch) {
+            cameraManager.getCamera().setExtraTarget(null);
+            cameraManager.getCamera().setWatchOnly(false);
+        }
         if (!cameraManager.getCamera().initialize(streamEncoder, mp4Recorder)) {
             log("Camera initialize error.");
             isVideoStarting = false;
@@ -1181,12 +1196,20 @@ public class Udp {
             try {
                 Camera camera = cameraManager.getCamera();
                 if (!on) {
+                    // pc.38 (M19): a late "camera off" (overwatch ending slowly) never closes the camera a pilot's
+                    // StartVideo or an observer opened after it
+                    if (overwatchCameraOwner != cameraOwner) {
+                        log("Overwatch: its camera off came after the camera was started again - left as it is");
+                        return;
+                    }
+                    overwatchCameraOwner = -1;
                     streamEncoder.close();
                     camera.setExtraTarget(null);
                     camera.setWatchOnly(false);
                     camera.close();
                     return;
                 }
+                overwatchCameraOwner = ++cameraOwner;
                 if (!camera.initialize(streamEncoder, mp4Recorder)) {
                     log("Overwatch: the camera can't be started");
                     return;
@@ -1210,26 +1233,41 @@ public class Udp {
      * An overwatch event's video, on the video starter thread: on - the session again with the stream encoder (the
      * PC's live preview, H.264 at 1 Mbit/s) and the event's recorder beside the analysis picture; off - back to the
      * analysis picture alone. The encoder's frames are Overwatch's to send (no video sender runs here).
+     * pc.38 (H10): without a recorder (off, or on without one) the old session is waited out before the new one, so
+     * the recorder's surface is out of the camera's hands when the returned Future is done - only then may it go.
      */
-    void overwatchEventVideo(final boolean on, final android.view.Surface recorder) {
-        videoStarter.execute(() -> {
-            try {
-                Camera camera = cameraManager.getCamera();
-                streamEncoder.close();
-                if (on) {
-                    streamEncoder.setDefaultHevc(false);
-                    streamEncoder.setBitRateIndex(3); // 1 Mbit/s
-                }
-                camera.setExtraTarget(on ? recorder : null);
-                camera.setWatchOnly(!on && camera.canWatchOnly());
-                if (camera instanceof InternalCamera) ((InternalCamera) camera).stopSession();
-                if (camera.isOpened(config.getCameraId())) camera.startPreview();
-                else camera.openCamera();
-                if (on) streamEncoder.startSendFrames();
-            } catch (RuntimeException e) {
-                log("Overwatch event video error: " + e);
+    java.util.concurrent.Future<?> overwatchEventVideo(final boolean on, final android.view.Surface recorder) {
+        try {
+            return videoStarter.submit(() -> overwatchEventVideoNow(on, recorder));
+        } catch (java.util.concurrent.RejectedExecutionException e) { // the link is closing: no camera to change
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private void overwatchEventVideoNow(boolean on, android.view.Surface recorder) {
+        try {
+            if (overwatchCameraOwner != cameraOwner) return; // pc.38 (M19): the camera is someone else's now
+            Camera camera = cameraManager.getCamera();
+            streamEncoder.close();
+            if (on) {
+                streamEncoder.setDefaultHevc(false);
+                streamEncoder.setBitRateIndex(3); // 1 Mbit/s
             }
-        });
+            camera.setExtraTarget(on ? recorder : null);
+            camera.setWatchOnly(!on && camera.canWatchOnly());
+            if (camera instanceof InternalCamera) {
+                if (recorder == null) {
+                    if (!((InternalCamera) camera).stopSessionAndWait(1500)) log("Overwatch: the camera's session took over 1.5 s to close");
+                } else {
+                    ((InternalCamera) camera).stopSession();
+                }
+            }
+            if (camera.isOpened(config.getCameraId())) camera.startPreview();
+            else camera.openCamera();
+            if (on) streamEncoder.startSendFrames();
+        } catch (RuntimeException e) {
+            log("Overwatch event video error: " + e);
+        }
     }
 
     /** The PHONE_STATE flags: what the PC needs to say why no sticks reach the drone, or why there is no picture. */
@@ -2407,8 +2445,9 @@ public class Udp {
         boolean pilotNear = isConnected() || now - lastPilotPacketMs < OBSERVE_AFTER_PILOT_MS && !packet.getAddress().equals(lastPcIp);
         if (pilotNear) state = Observe.REFUSED_PILOT;
         else if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) state = Observe.REFUSED_ARMED;
-        // TODO OVERWATCH SLEEP: a phone in that mode may stream its preview to observers - its own gate goes here
-        else if (PowerMode.mode() != PowerMode.NORMAL) state = Observe.REFUSED_POWER;
+        // pc.38: never an observer source while overwatching - its camera is the watch's (and its event recorder's);
+        // overwatch can still be ending (the camera not yet let go) right after the mode went back to normal
+        else if (PowerMode.mode() != PowerMode.NORMAL || Overwatch.isWatching()) state = Observe.REFUSED_POWER;
         else {
             boolean added;
             synchronized (observers) {
@@ -2508,7 +2547,7 @@ public class Udp {
             if (!observers.isEmpty()) {
                 boolean pilot = isConnected();
                 boolean armed = FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED;
-                boolean power = PowerMode.mode() != PowerMode.NORMAL;
+                boolean power = PowerMode.mode() != PowerMode.NORMAL || Overwatch.isWatching(); // pc.38
                 if (pilot || armed || power) {
                     endState = pilot ? Observe.ENDED_PILOT : armed ? Observe.REFUSED_ARMED : Observe.REFUSED_POWER;
                     ended = observerAddresses.values().toArray(new java.net.InetSocketAddress[0]);

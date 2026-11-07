@@ -438,7 +438,7 @@ public final class OverwatchHub implements AutoCloseable {
             Path dir = index.folder(s.drone());
             Path done = dir.resolve(id + ".mp4");
             if (Files.isRegularFile(done) && Arrays.equals(ClipTransfer.sha256(done), info.sha256)) {
-                send(s, OverwatchProtocol.command(s.token, info.event, OverwatchProtocol.CMD_CLIP_DONE, 1, 0)); // here already
+                send(s, OverwatchProtocol.clipDone(s.token, info.event, true, info.startedAt)); // here already
                 return;
             }
             ClipTransfer ct = new ClipTransfer(dir.resolve(id + ".mp4.part"), done, info.size, info.sha256);
@@ -464,7 +464,7 @@ public final class OverwatchHub implements AutoCloseable {
             if (!t.clip.complete()) return;
             ClipTransfer.Result r = t.clip.finish();
             if (r == ClipTransfer.Result.OK) {
-                send(s, OverwatchProtocol.command(s.token, event, OverwatchProtocol.CMD_CLIP_DONE, 1, 0));
+                send(s, OverwatchProtocol.clipDone(s.token, event, true, t.info.startedAt));
                 t.close();
                 s.transfer = null;
                 updateMeta(s, t.id, m -> m.setProperty("clip", "full"));
