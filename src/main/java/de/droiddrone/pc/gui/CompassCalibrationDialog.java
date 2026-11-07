@@ -54,6 +54,13 @@ final class CompassCalibrationDialog extends JFrame {
     private volatile boolean magFound;
     private volatile boolean calibrating;
     private volatile long startedAt;
+    /**
+     * Betaflight's compass offsets before Start (1.0.49): a calibration counts only when it changed them - old offsets
+     * left as they were aren't one. Read once over the CLI on the first connection (Betaflight restarts after it), then
+     * taken from each calibration's result. Null = no offsets (no compass in this Betaflight).
+     */
+    private volatile int[] offsetsBefore;
+    private volatile boolean offsetsRead;
     /** Unit directions the compass has reported during this calibration, for the discs. */
     private final List<float[]> points = new java.util.concurrent.CopyOnWriteArrayList<>();
     private Thread worker;
@@ -180,6 +187,18 @@ final class CompassCalibrationDialog extends JFrame {
                             retryAt = now + 1500;
                             continue;
                         }
+                        if (!offsetsRead) { // the offsets before Start, over the CLI: its exit restarts Betaflight
+                            fc.enterCli();
+                            String cal = fc.command("get mag_calibration");
+                            offsetsBefore = GpsSetup.magOffsets(cal);
+                            offsetsRead = true;
+                            main.logLine("Compass calibration: before Start " + DroneSetup.BetaflightPage.brief(cal));
+                            fc.exitCli();
+                            fc = null;
+                            retryAt = System.currentTimeMillis() + RESTART_MS;
+                            ui(() -> usb.set(State.PENDING, "Read the compass's offsets - Betaflight restarts..."));
+                            continue;
+                        }
                         magFound = GpsSetup.magInStatus(fc.msp(MSP_STATUS, null));
                         lastStatus = now;
                         boolean mag = magFound;
@@ -214,7 +233,7 @@ final class CompassCalibrationDialog extends JFrame {
                             retryAt = System.currentTimeMillis() + RESTART_MS;
                             ui(() -> {
                                 compass.set(ok ? State.OK : State.WARN, ok ? "Calibrated. You can close this window."
-                                        : "No offsets came out of it. <b>Start</b> again and turn the drone further round every axis, away from metal.");
+                                        : "Betaflight's compass offsets didn't change: it didn't take. <b>Start</b> again and turn the drone further round every axis, away from metal.");
                                 usb.set(State.PENDING, "Betaflight restarts...");
                                 start.setEnabled(false);
                             });
@@ -282,12 +301,13 @@ final class CompassCalibrationDialog extends JFrame {
         return null;
     }
 
-    /** Over the CLI: the offsets Betaflight learnt; saved if it has them in RAM only, else just exit. */
+    /** Over the CLI: the offsets Betaflight learnt, changed from before Start; saved if it has them in RAM only, else just exit. */
     private boolean checkAndKeep(BetaflightUsb fc) throws IOException {
         fc.enterCli();
         String cal = fc.command("get mag_calibration");
-        boolean ok = GpsSetup.calibrated(cal);
-        main.logLine("Compass calibration: " + DroneSetup.BetaflightPage.brief(cal));
+        boolean ok = GpsSetup.calibratedSince(offsetsBefore, cal);
+        main.logLine("Compass calibration: " + DroneSetup.BetaflightPage.brief(cal) + (ok ? "" : " - not changed from before Start: not calibrated"));
+        offsetsBefore = GpsSetup.magOffsets(cal); // the next Start is compared with these
         if (ok) fc.saveAndReboot(); // a save when Betaflight already saved changes nothing
         else fc.exitCli();
         return ok;

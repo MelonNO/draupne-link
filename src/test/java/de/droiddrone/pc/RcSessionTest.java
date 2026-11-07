@@ -273,18 +273,19 @@ class RcSessionTest {
     @Test
     void theBeeperChannelIsAux12UpWhileHeldAndTheFramePaddedToIt() {
         short[] four = {1500, 1500, 1500, 1000};
+        int at = 3 + de.droiddrone.pc.setup.ModeSwitch.BEEPER_AUX; // 1.0.49: AUX14, index 17 (AUX12 before)
         short[] held = RcSession.withBeeper(four, true);
-        assertEquals(16, held.length);
-        assertEquals(2000, held[15]);
+        assertEquals(at + 1, held.length);
+        assertEquals(2000, held[at]);
         assertEquals(1000, held[4], "padded AUX low, as upstream pads");
-        assertEquals(1000, RcSession.withBeeper(four, false)[15]);
+        assertEquals(1000, RcSession.withBeeper(four, false)[at]);
         short[] eighteen = new short[18];
         java.util.Arrays.fill(eighteen, (short) 1700);
         short[] out = RcSession.withBeeper(eighteen, false);
         assertEquals(18, out.length);
-        assertEquals(1000, out[15], "a radio's AUX12 is overridden");
+        assertEquals(1000, out[at], "a radio's BEEPER channel is overridden");
         assertEquals(1700, out[16]);
-        assertEquals(1700, eighteen[15], "the radio's frame untouched");
+        assertEquals(1700, eighteen[at], "the radio's frame untouched");
     }
 
     @Test

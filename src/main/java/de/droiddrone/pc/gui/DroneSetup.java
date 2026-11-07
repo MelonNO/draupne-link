@@ -7,8 +7,10 @@ import de.droiddrone.pc.gui.WizardDialog.Page;
 import de.droiddrone.pc.setup.Beepers;
 import de.droiddrone.pc.setup.BetaflightPlan;
 import de.droiddrone.pc.setup.BetaflightUsb;
+import de.droiddrone.pc.setup.CliWrite;
 import de.droiddrone.pc.setup.GpsSetup;
 import de.droiddrone.pc.setup.ModeSwitch;
+import de.droiddrone.pc.setup.SetupConfirm;
 
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JComponent;
@@ -126,7 +128,9 @@ final class DroneSetup {
          * @param armAuxes   every AUX ARM is on (more than one isn't covered by {@link ArmSwitch})
          * @param backup     where Betaflight's settings were saved before writing, or null
          * @param ports      every port that looked like a flight controller this round
-         * @param refused    CLI commands Betaflight didn't take while writing, with its answers; null if none
+         * @param applied    the plan was written and saved (all of it: a write that stops is never saved)
+         * @param refused    why a write stopped without saving (Betaflight refused a command, its echo differed, or no
+         *                   backup could be made): the board is as it was; null if none
          * @param plan       what needs changing (empty: all set); written when applied
          * @param replaced   what the plan takes off the switches
          * @param board      the board's name and the craft's, for the USB row ("" if none)
@@ -134,6 +138,7 @@ final class DroneSetup {
          * @param receiverNow the receiver(s) on before any change, for the log and the list of changes
          * @param prearmTarget the PREARM switch chosen (AUX number, 0 = leave as it is)
          * @param prearmAuxes every AUX PREARM is on in Betaflight
+         * @param boardId    the flight controller's id (SetupConfirm.boardId), or null if it couldn't be read
          */
         private record Read(String port, String version, boolean msp, int rate, int target, int cells, int cellTarget,
                             boolean applied, String error, ArmSwitch arm, java.nio.file.Path backup, List<String> ports,
@@ -142,12 +147,12 @@ final class DroneSetup {
                             String failsafeProblem, String failsafeNote, int armTarget, String refused,
                             List<BetaflightPlan.Change> plan, List<String> replaced, String board,
                             BetaflightUsb.BatteryState battery, Set<Integer> armAuxes, String receiverNow, boolean cellsConfirmed,
-                            int prearmTarget, Set<Integer> prearmAuxes, Gps gps) {
+                            int prearmTarget, Set<Integer> prearmAuxes, Gps gps, String boardId) {
             Read(String port, String error, int cellTarget, ModeSwitch modeTarget, int rescueTarget,
                  ModeSwitch.Failsafe failsafeTarget, int armTarget, int prearmTarget, List<String> ports, Gps gps) {
                 this(port, "", false, -1, 0, -1, cellTarget, false, error, null, null, ports, modeTarget, null, null, null,
                         rescueTarget, null, failsafeTarget, false, null, null, armTarget, null, List.of(), List.of(), "", null,
-                        Set.of(), "", false, prearmTarget, Set.of(), gps);
+                        Set.of(), "", false, prearmTarget, Set.of(), gps, null);
             }
 
             /** A switch (ARM, flight modes, GPS rescue) was written this round: the radio calibration may be off. */
@@ -155,7 +160,7 @@ final class DroneSetup {
                 return applied && modes != null && !modes.commands().isEmpty();
             }
         }
-        /** What Betaflight refused on the last write, shown with the port until a write goes through cleanly. */
+        /** Why the last write stopped without saving, shown with the port until a write goes through cleanly. */
         private String lastRefused;
         static final String CELLS_KEY = "drone.cellCount";
         /** The pilot has confirmed (or changed) the cell count: only then is it forced in Betaflight. */
@@ -167,9 +172,15 @@ final class DroneSetup {
         /** The settings, and CONFIRM: nothing is written before the press. */
         private final Combined settings = new Combined("Betaflight settings");
         private javax.swing.JButton confirmButton;
-        /** Everything on the page was confirmed and is in Betaflight: the rows may be green. Off on any change. */
+        /**
+         * Everything on the page was confirmed and is in Betaflight: the rows may be green. Off on any change. Saved as
+         * the board's id (1.0.49): another flight controller isn't confirmed by it.
+         */
         static final String CONFIRMED_KEY = "drone.confirmed";
-        private boolean confirmed;
+        /** CONFIRM, and the confirmed state, of one board (SetupConfirm): a drone plugged in afterwards needs its own. */
+        private final SetupConfirm confirm = new SetupConfirm();
+        /** The board the last round read (SetupConfirm.boardId), what CONFIRM is pressed for; null = none read. */
+        private String lastBoardId;
         private final Part receiver = settings.part("Receiver");
         private final Part stickDelay = settings.part("Stick delay");
         private final Part battery = settings.part("Battery");
@@ -251,8 +262,6 @@ final class DroneSetup {
         private boolean done;
         /** Done, and everything is as it should be (the unplug line); otherwise something needs doing by hand. */
         private boolean cleanDone;
-        /** CONFIRM was pressed this session: the rounds write until everything is set. Off again on any change. */
-        private boolean writeArmed;
         /** The page was left (Next, Back, Close, Disconnect) while a round ran: it reads, but writes nothing. */
         private volatile boolean abandoned;
         /** What the last write took off the switches, for the rows after the check that followed. */
@@ -538,13 +547,13 @@ final class DroneSetup {
             measuredCells.addActionListener(e -> cellSpinner.setValue(measured));
             measuredCells.setToolTipText("The cell count Betaflight sees on the battery plugged in now");
             measuredCells.setVisible(false);
-            confirmed = "true".equalsIgnoreCase(main.config().getString(CONFIRMED_KEY));
+            confirm.restore(main.config().getString(CONFIRMED_KEY));
             confirmButton = Theme.primaryButton("Confirm");
             confirmButton.setFont(Theme.headingFont(12.5f));
             confirmButton.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 16, 8, 16));
             confirmButton.addActionListener(e -> confirmNow());
             confirmButton.setToolTipText("Every setting on this page is right: write them to the flight controller (its settings are backed up first)");
-            confirmButton.setVisible(!confirmed);
+            confirmButton.setVisible(!confirm.confirmed());
             confirmButton.setEnabled(false);
             // the card: the link's settings, then GPS, SWITCHES and FAILSAFE as sections, CONFIRM at the bottom
             JPanel card = new JPanel();
@@ -1079,7 +1088,8 @@ final class DroneSetup {
 
         /** CONFIRM: every setting on the page (the cell count too) goes to Betaflight now; the rows go green once it is all there. */
         private void confirmNow() {
-            writeArmed = true;
+            if (lastBoardId == null) return; // no board read (or its id unknown): nothing to confirm for
+            confirm.press(lastBoardId); // this board only: one plugged in afterwards needs its own CONFIRM
             confirmButton.setVisible(false);
             if (!cellsConfirmed) {
                 cellsConfirmed = true;
@@ -1167,23 +1177,22 @@ final class DroneSetup {
 
         /** A choice changed: the page is no longer confirmed - CONFIRM comes back, the rows leave green. */
         private void choiceChanged() {
-            if (!confirmed && !writeArmed) return;
-            confirmed = false;
-            writeArmed = false;
-            main.save(Map.of(CONFIRMED_KEY, "false"));
+            if (!confirm.confirmed() && !confirm.armed()) return;
+            confirm.clear();
+            main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
             if (confirmButton != null) confirmButton.setVisible(true);
             showConfirmState();
         }
 
         /** The settings' lights: red until CONFIRM, busy while its write runs, then the settings' own (green when all is set). */
         private void showConfirmState() {
-            settings.override = confirmed ? null : writeArmed ? State.PENDING : State.BAD;
+            settings.override = confirm.confirmed() ? null : confirm.armed() ? State.PENDING : State.BAD;
             settings.refresh();
         }
 
         /** OK once the page is confirmed; until then a setting that is right still shows as to do. */
         private State okState() {
-            return confirmed ? State.OK : State.TODO;
+            return confirm.confirmed() ? State.OK : State.TODO;
         }
 
         /** The manual way, for a drone without USB to this PC (and for whatever couldn't be set by itself). */
@@ -1272,7 +1281,7 @@ final class DroneSetup {
                     || orientationOpen || OrientationCheckDialog.isOpen()
                     || busy || done || System.currentTimeMillis() < nextTry) return;
             busy = true;
-            boolean mayApply = writeArmed && applies < MAX_APPLIES;
+            String writeFor = applies < MAX_APPLIES ? confirm.armedFor() : null; // the board CONFIRM was pressed for
             int cellTarget = cells;
             boolean cellsOk = cellsConfirmed;
             ModeSwitch modeTarget = modeSwitch;
@@ -1282,11 +1291,14 @@ final class DroneSetup {
             int armTarget = armAux;
             int prearmTarget = prearmAux;
             Gps gpsWanted = Gps.none(gpsTarget, gpsUart, compassYes);
-            background(() -> work(mayApply, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, gpsWanted), this::show);
+            background(() -> work(writeFor, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, gpsWanted), this::show);
         }
 
-        /** One round: find the FC, read the settings, and change them in the same CLI session if needed. */
-        private Read work(boolean mayApply, int cellTarget, boolean cellsOk, ModeSwitch modeTarget, int rescueTarget,
+        /**
+         * One round: find the FC, read the settings, and change them in the same CLI session if needed.
+         * @param writeFor the board CONFIRM was pressed for: only that board is written to; null = read only
+         */
+        private Read work(String writeFor, int cellTarget, boolean cellsOk, ModeSwitch modeTarget, int rescueTarget,
                           ModeSwitch.Failsafe failsafeTarget, int armTarget, int prearmTarget, Gps gpsWanted) {
             List<BetaflightUsb.Port> all = BetaflightUsb.findFlightControllers();
             if (all.isEmpty()) return null;
@@ -1308,7 +1320,7 @@ final class DroneSetup {
                                 + "Betaflight: flash it with Betaflight Configurator. Nothing was changed.";
                         continue;
                     }
-                    return work(fc, port, mayApply, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, names, gpsWanted);
+                    return work(fc, port, writeFor, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, names, gpsWanted);
                 } catch (IOException e) {
                     why = port.systemName() + ": " + e.getMessage();
                 }
@@ -1316,9 +1328,13 @@ final class DroneSetup {
             return new Read(ports.get(0).systemName(), why, cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, names, gpsWanted);
         }
 
-        private Read work(BetaflightUsb fc, BetaflightUsb.Port port, boolean mayApply, int cellTarget, boolean cellsOk, ModeSwitch modeTarget,
+        private Read work(BetaflightUsb fc, BetaflightUsb.Port port, String writeFor, int cellTarget, boolean cellsOk, ModeSwitch modeTarget,
                           int rescueTarget, ModeSwitch.Failsafe failsafeTarget, int armTarget, int prearmTarget, List<String> ports, Gps gpsWanted) {
             try {
+                // which board this is, over MSP before anything else: CONFIRM pressed for another one writes nothing here
+                String boardId = boardId(fc);
+                boolean mayApply = writeFor != null && writeFor.equals(boardId);
+                if (writeFor != null && !mayApply) main.logLine("Betaflight: another flight controller than the one confirmed - nothing written.");
                 java.util.Set<Integer> modesOffered = null; // over MSP, before the CLI: which modes this board has
                 try {
                     modesOffered = fc.boxIds();
@@ -1356,10 +1372,10 @@ final class DroneSetup {
                 fc.enterCli();
                 String version = BetaflightPlan.version(fc.command("version"));
                 String board = boardName(fc);
-                // where the arm switch is: the sticks then also wait for it to be off (RcSession)
+                // where the arm switch is: the sticks then also wait for it to be off (RcSession). Saved below - after a
+                // write, from Betaflight's modes as written, not as they were before ARM moved
                 String aux = fc.command("aux");
                 ArmSwitch arm = ArmSwitch.fromCli(aux);
-                if (arm != null) main.save(Map.of(ArmSwitch.KEY, arm.format()));
                 String rate = fc.command("get serial_update_rate_hz");
                 String forced = fc.command("get force_battery_cell_count");
                 List<BetaflightPlan.Change> plan = new java.util.ArrayList<>(BetaflightPlan.plan(rate, version, forced, cellTarget, cellsOk));
@@ -1388,7 +1404,7 @@ final class DroneSetup {
                 } else {
                     gpsRead = new Gps(gpsWanted.target(), gpsWanted.uart(), gpsWanted.compass(), gpsOnFc, "", List.of(), magFound, false, false, "", false);
                 }
-                // silent unless BEEPER is pressed or the phone is unplugged (Beepers); the button's mode on AUX12 below
+                // silent unless BEEPER is pressed or the phone is unplugged (Beepers); the button's mode on its AUX (BEEPER_AUX) below
                 BetaflightPlan.Change beepers = Beepers.plan(fc.command("beeper list"), fc.command("beeper"), fc.command("beacon"));
                 if (beepers != null) plan.add(beepers);
                 int beeperTarget = modesOffered == null || modesOffered.contains(ModeSwitch.BEEPER_MODE) ? ModeSwitch.BEEPER_AUX : 0;
@@ -1456,43 +1472,55 @@ final class DroneSetup {
                 boolean apply = mayApply && !plan.isEmpty() && version.startsWith("Betaflight"); // never INAV & co.
                 if (apply && abandoned) { // the page was left meanwhile: nothing is written behind the pilot's back
                     fc.exitCli();
+                    saveArm(arm);
                     main.logLine("Betaflight: the page was left while reading - nothing written.");
                 } else {
                     java.nio.file.Path backup = null;
                     String refused = null;
+                    boolean saved = false;
                     if (apply) {
+                        // all or nothing: no backup, no write; a command not taken as sent leaves the CLI without saving
                         String diff = fc.command("diff all", 20_000); // what it was, before anything changes
                         if (switchRx) diff = BetaflightPlan.restoreReceiver(diff, featureMask); // but for the receiver, already switched
-                        backup = backup(diff, version);
-                        List<String> refusals = new java.util.ArrayList<>();
-                        for (BetaflightPlan.Change c : plan) {
-                            for (String cmd : c.commands()) {
-                                String reply = fc.command(cmd);
-                                main.logLine("Betaflight CLI: " + cmd + " -> " + brief(reply));
-                                if (BetaflightPlan.refused(reply)) refusals.add(cmd + " -> " + reply.lines().findFirst().orElse("").trim());
+                        if (!CliWrite.usableBackup(diff)) main.logLine("Betaflight's \"diff all\" didn't come back whole: " + brief(diff));
+                        backup = CliWrite.usableBackup(diff) ? backup(diff, version) : null;
+                        if (backup == null) {
+                            refused = "No backup of Betaflight's settings could be made (see the log), so nothing was written.";
+                        } else {
+                            List<String> commands = new java.util.ArrayList<>();
+                            for (BetaflightPlan.Change c : plan) commands.addAll(c.commands());
+                            CliWrite.Result written = CliWrite.run(fc::command, commands, main::logLine);
+                            if (written.complete()) {
+                                fc.saveAndReboot();
+                                saved = true;
+                                // the ARM switch as written now, for the sticks (RcSession) - not as read before it moved
+                                saveArm(written.auxAfter().isEmpty() ? arm : ArmSwitch.fromCli(written.auxAfter()));
+                                main.logLine("Betaflight: " + plan.stream().map(BetaflightPlan.Change::description).collect(Collectors.joining("; "))
+                                        + ". Its settings before: " + backup);
+                            } else {
+                                refused = written.stopped() + ". Nothing was saved: the flight controller is as it was.";
                             }
                         }
-                        fc.saveAndReboot();
-                        main.logLine("Betaflight: " + plan.stream().map(BetaflightPlan.Change::description).collect(Collectors.joining("; "))
-                                + (backup == null ? "" : ". Its settings before: " + backup));
-                        if (!refusals.isEmpty()) {
-                            refused = String.join("; ", refusals);
-                            main.logLine("Betaflight refused: " + refused);
+                        if (!saved) {
+                            fc.exitCli(); // "exit": Betaflight drops every change since the CLI opened (the receiver's too) and restarts
+                            saveArm(arm);
+                            main.logLine("Betaflight: write stopped, nothing saved - " + refused);
                         }
                     } else {
+                        saveArm(arm);
                         fc.exitCli(); // Betaflight restarts (nothing changed, or the receiver only in RAM) - which also clears a stale "MSP" arming block
                     }
                     return new Read(port.systemName(), version, mspRx, BetaflightPlan.serialRate(rate),
-                            BetaflightPlan.targetSerialRate(version), BetaflightPlan.forcedCells(forced), cellTarget, apply, null, arm, backup, ports,
+                            BetaflightPlan.targetSerialRate(version), BetaflightPlan.forcedCells(forced), cellTarget, saved, null, arm, backup, ports,
                             modeTarget, modes, gpsFound, rescueNote, rescueTarget, failsafe, failsafeTarget, rescueFailsafe,
                             failsafeProblem, failsafeNote, armTarget, refused, List.copyOf(plan), replaced, board, batteryNow,
-                            ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux), gpsRead);
+                            ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux), gpsRead, boardId);
                 }
                 return new Read(port.systemName(), version, mspRx, BetaflightPlan.serialRate(rate),
                         BetaflightPlan.targetSerialRate(version), BetaflightPlan.forcedCells(forced), cellTarget, false, null, arm, null, ports,
                         modeTarget, modes, gpsFound, rescueNote, rescueTarget, failsafe, failsafeTarget, rescueFailsafe,
                         failsafeProblem, failsafeNote, armTarget, null, List.copyOf(plan), replaced, board, batteryNow,
-                        ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux), gpsRead);
+                        ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux), gpsRead, boardId);
             } catch (IOException e) {
                 return new Read(port.systemName(), e.getMessage(), cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, ports, gpsWanted);
             }
@@ -1509,9 +1537,30 @@ final class DroneSetup {
 
         /** A CLI reply's first line, short, for the log; "(ok)" when Betaflight printed nothing. */
         static String brief(String reply) {
-            String line = reply.lines().map(String::trim).filter(l -> !l.isEmpty()).findFirst().orElse("");
-            if (line.isEmpty()) return "(ok)";
-            return line.length() > 80 ? line.substring(0, 77) + "..." : line;
+            return CliWrite.brief(reply);
+        }
+
+        /** Where ARM is, saved for the sticks (they wait for it to be off: RcSession); not covered (null) leaves the last. */
+        private void saveArm(ArmSwitch arm) {
+            if (arm != null) main.save(Map.of(ArmSwitch.KEY, arm.format()));
+        }
+
+        /** The board's id over MSP (MSP_UID, else MSP_BOARD_INFO): what CONFIRM belongs to; null if neither answers. */
+        private static String boardId(BetaflightUsb fc) {
+            byte[] uid = null, info = null;
+            try {
+                uid = fc.msp(160 /* MSP_UID */, null);
+            } catch (IOException e) {
+                // the board info below
+            }
+            if (uid == null || uid.length < 12) {
+                try {
+                    info = fc.msp(4 /* MSP_BOARD_INFO */, null);
+                } catch (IOException e) {
+                    // unknown: nothing is written
+                }
+            }
+            return SetupConfirm.boardId(uid, info);
         }
 
         /** " Taken off: ARM on AUX3, BEEPER on AUX2." or "". */
@@ -1554,7 +1603,7 @@ final class DroneSetup {
 
         /** "Set." once confirmed; before that the ring alone says it is still to confirm. */
         private String setText() {
-            return confirmed ? "Set." : "";
+            return confirm.confirmed() ? "Set." : "";
         }
 
         /** The port list: Automatic plus every port found, keeping the choice. */
@@ -1586,7 +1635,7 @@ final class DroneSetup {
             markByHand(r == null);
             readAgain.setText(r == null || r.error() != null ? "Retry" : "Read again");
             calibrateCompass.setEnabled(found && !failed);
-            confirmButton.setEnabled(found && !failed);
+            confirmButton.setEnabled(found && !failed && r.boardId() != null); // CONFIRM is for a board known by its id
             if (r == null) {
                 nextTry = now + 1500;
                 if (now - restartedAt < RESTART_MS) {
@@ -1614,13 +1663,20 @@ final class DroneSetup {
             sameErrorCount = 0;
             restartedAt = now; // the CLI was open and is closed now: Betaflight restarts
             if (!r.version().isEmpty()) fcVersion = r.version();
-            if (r.applied()) lastRefused = r.refused();
+            lastBoardId = r.boardId();
+            // CONFIRM, and the green rows, belong to the board they were given for: another one plugged in needs its own
+            if (r.boardId() != null && confirm.seen(r.boardId())) main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
+            if (r.applied() || r.refused() != null) lastRefused = r.refused();
+            if (r.refused() != null) { // the write stopped and nothing was saved: the page says why, CONFIRM again
+                confirm.clear();
+                main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
+            }
             if (r.applied() && r.modes() != null) lastReplaced = r.modes().replaced();
             if (r.switchesWritten()) switchChanged();
             String usbText = "<b>" + r.port() + "</b>" + (r.version().isEmpty() ? "" : " - " + BetaflightPlan.shortVersion(r.version()))
                     + (r.board().isEmpty() ? "" : " - " + r.board())
                     + (r.backup() == null ? "" : "<br>Its settings before the change: " + r.backup())
-                    + (lastRefused == null ? "" : "<br>Betaflight refused: " + lastRefused);
+                    + (lastRefused == null ? "" : "<br><b>Nothing written:</b> " + lastRefused);
             usb.set(lastRefused == null ? State.OK : State.WARN, usbText);
             showMeasured(r.battery());
             if (!r.gps().uarts().isEmpty()) showUarts(r.gps().uarts());
@@ -1654,12 +1710,15 @@ final class DroneSetup {
             }
             done = true;
             // nothing is written before CONFIRM: the rows say what it would set. Everything there after it: confirmed
-            if (writeArmed && r.plan().isEmpty() && !confirmed) {
-                confirmed = true;
-                main.save(Map.of(CONFIRMED_KEY, "true"));
+            if (confirm.armed() && r.plan().isEmpty() && !confirm.confirmed()) {
+                confirm.done(confirm.armedFor());
+                main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
+            } else if (!confirm.armed() && confirm.confirmed() && !r.plan().isEmpty()) {
+                confirm.clear(); // changed since (Configurator, a reflash): not as confirmed any more - CONFIRM again
+                main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
             }
             showConfirmState();
-            boolean pendingWrite = !writeArmed;
+            boolean pendingWrite = !confirm.armed();
             showChanges(r, pendingWrite);
             ModeSwitch.Plan armPlan = r.modes();
             if (r.armTarget() > 0 && armPlan != null && armPlan.armProblem() != null) {
@@ -1690,6 +1749,9 @@ final class DroneSetup {
                 for (int a : r.prearmAuxes()) on.add("AUX" + a);
                 prearmRow.set(okState(), "On " + String.join(", ", on) + ", left as it is.");
             }
+            // BEEPER never goes where ARM or PREARM is: the pilot moves that switch first, BEEPER isn't written till then
+            String beeperProblem = armPlan == null ? null : armPlan.beeperProblem();
+            if (beeperProblem != null) (beeperProblem.startsWith("PREARM") ? prearmRow : armRow).set(State.WARN, beeperProblem);
             receiver.set(r.msp() ? okState() : pendingWrite ? State.TODO : State.BAD, r.msp() ? "MSP RX input."
                     : pendingWrite ? "MSP RX input - now " + r.receiverNow() + ". " + WITH_WRITE
                     : "Could not set it - see <b>By hand</b>.");
@@ -1709,15 +1771,17 @@ final class DroneSetup {
             modesWrong |= showFailsafe(r, pendingWrite);
             boolean byHandNeeded = !pendingWrite && (!r.msp() || (r.rate() >= 0 && r.rate() < r.target()) || cellsWrong || gpsWrong || modesWrong);
             markByHand(byHandNeeded);
-            cleanDone = confirmed && r.plan().isEmpty() && !byHandNeeded && lastRefused == null;
+            cleanDone = confirm.confirmed() && r.plan().isEmpty() && !byHandNeeded && lastRefused == null && beeperProblem == null;
             if (cleanDone) usb.set(State.OK, usbText + "<br><b>Done - you can unplug the drone from the PC.</b>");
         }
 
         /** CONFIRM and its line under the settings: before the press; what is left after the last try. */
         private void showChanges(Read r, boolean pendingWrite) {
-            confirmButton.setVisible(pendingWrite && !confirmed);
-            if (confirmed) {
+            confirmButton.setVisible(pendingWrite && !confirm.confirmed());
+            if (confirm.confirmed()) {
                 settings.footer("");
+            } else if (pendingWrite && lastRefused != null) {
+                settings.footer("<b>Nothing was written</b> - " + lastRefused + "<br>Fix it (or change the choice), then <b>Confirm</b> again.");
             } else if (pendingWrite) {
                 settings.footer("Set everything on this page, then <b>Confirm</b> writes it to the flight controller (backed up first).");
             } else if (r.plan().isEmpty()) {
@@ -1917,7 +1981,7 @@ final class DroneSetup {
             if (busy && found) return "Reading Betaflight...";
             if (done) {
                 if (cleanDone) return "Betaflight is set up - you can unplug the drone from the PC.";
-                if (!writeArmed && !confirmed) return "Set everything above, then press Confirm to write it to the flight controller (or Next to leave Betaflight as it is).";
+                if (!confirm.armed() && !confirm.confirmed()) return "Set everything above, then press Confirm to write it to the flight controller (or Next to leave Betaflight as it is).";
                 wizard.setStatusColor(Theme.WARN);
                 return "Some settings could not be set - see By hand";
             }
