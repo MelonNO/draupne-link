@@ -77,8 +77,15 @@ public class MainWindow extends JFrame {
     private final AlertSound alertSound = new AlertSound();
     static final String RECORD_KEY = "recordVideo";
     static final String HW_DECODE_KEY = "hardwareDecode";
-    /** SETTINGS > Hardware video decoding (off by default; software is the tested path). */
+    /** SETTINGS > Hardware video decoding (on by default from 1.0.50, the pilot's choice; software if the GPU can't). */
     private boolean hardwareDecode;
+    /**
+     * TOOLS > Advanced (1.0.50, off by default): shows the settings a pilot rarely needs - PC, phone and drone setup,
+     * motion detection, the camera's view on the map, hardware decoding, the OSD and STANAG 4609. Hidden, each keeps
+     * what it was set to.
+     */
+    static final String ADVANCED_KEY = "advanced";
+    private boolean advanced;
     /** SETTINGS > Record video: every connection records its video (Videos\DRAUPNE Link). */
     private boolean recordVideo;
     /** The connection's timeline (10 rows a second) for finding the cause of failsafes; null when not connected. */
@@ -439,7 +446,8 @@ public class MainWindow extends JFrame {
         videoView.setOsdLayout(OsdLayout.load(config::getString));
         alertSound.setEnabled(!"false".equalsIgnoreCase(config.getString(AlertSound.KEY)));
         recordVideo = "true".equalsIgnoreCase(config.getString(RECORD_KEY));
-        hardwareDecode = "true".equalsIgnoreCase(config.getString(HW_DECODE_KEY));
+        hardwareDecode = !"false".equalsIgnoreCase(config.getString(HW_DECODE_KEY)); // on unless turned off (1.0.50)
+        advanced = "true".equalsIgnoreCase(config.getString(ADVANCED_KEY));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
         videoView.setUpsideDown(upsideDownFor(config.getString(Names.PHONE_NAME_KEY))); // the chosen phone's (1.0.41)
         setAudioMuted(mutedFor(config.getString(Names.PHONE_NAME_KEY)), false); // the chosen phone's (1.0.45)
@@ -520,9 +528,11 @@ public class MainWindow extends JFrame {
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
         addMenuItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, connection", () -> SetupWizard.open(this));
-        addMenuItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
-        addMenuItem(menu, "Phone setup", "The phone on the drone: apps, settings, connection", () -> PhoneGuideWizard.open(this));
-        addMenuItem(menu, "Drone setup", "Betaflight's receiver, stick delay and flight mode switch, set over USB", () -> DroneSetup.open(this));
+        if (advanced) { // TOOLS > Advanced
+            addMenuItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
+            addMenuItem(menu, "Phone setup", "The phone on the drone: apps, settings, connection", () -> PhoneGuideWizard.open(this));
+            addMenuItem(menu, "Drone setup", "Betaflight's receiver, stick delay and flight mode switch, set over USB", () -> DroneSetup.open(this));
+        }
         menu.addSeparator();
         addMenuItem(menu, "Tour", "The window's buttons, the map and the offline maps, one at a time", () -> Tour.start(this));
         return menu;
@@ -569,8 +579,8 @@ public class MainWindow extends JFrame {
         motionRow.setToolTipText("<html>While the drone is disarmed the phone watches the picture and boxes what travels through it"
                 + "<br>(people, cars, animals, birds - not leaves and branches in the wind; lights at night).<br>"
                 + "The direction goes on the map. Per drone; phone app 2.3.0-pc.35 or newer.</html>");
-        menu.add(motionRow);
-        menu.add(new MenuRows.SwitchRow("Camera view on the map", "The ground the camera sees, on the map and the minimap",
+        if (advanced) menu.add(motionRow); // TOOLS > Advanced
+        if (advanced) menu.add(new MenuRows.SwitchRow("Camera view on the map", "The ground the camera sees, on the map and the minimap",
                 cameraOnMap, on -> {
                     cameraOnMap = on;
                     save(Map.of(de.droiddrone.pc.CameraView.SHOW_KEY, Boolean.toString(on)));
@@ -590,6 +600,7 @@ public class MainWindow extends JFrame {
                         logLine("Recording stopped.");
                     }
                 }));
+        if (!advanced) return menu; // the rest: TOOLS > Advanced (POP OUT VIDEO and FULL SCREEN are on the video card)
         menu.add(new MenuRows.SwitchRow("Hardware video decoding", "GPU, from the next connection",
                 hardwareDecode, on -> {
                     hardwareDecode = on;
@@ -625,6 +636,7 @@ public class MainWindow extends JFrame {
                 }));
         menu.add(new MenuRows.WindowRow("Name map", "Every phone and PC seen on your Tailscale network: names and addresses, this PC's name, the port and key",
                 this::openNameMap));
+        if (!advanced) return menu; // STANAG 4609: TOOLS > Advanced
         menu.addSeparator();
         menu.add(new MenuRows.SwitchRow("STANAG 4609 stream", "Off by default. The video with MISB metadata over UDP, for ATAK, QGIS, VLC ... (the address: settings below)",
                 stanagEnabled(), on -> {
@@ -668,6 +680,15 @@ public class MainWindow extends JFrame {
                 : "Spin each motor: right place, right direction?", () -> MotorTestDialog.open(this, this));
         motors.setEnabled(!isLinkActive());
         menu.add(motors);
+        menu.addSeparator();
+        menu.add(new MenuRows.SwitchRow("Advanced", "Off by default. Shows PC, phone and drone setup, motion detection, the camera view,"
+                + " hardware decoding, the OSD and STANAG 4609",
+                advanced, on -> {
+                    advanced = on;
+                    save(Map.of(ADVANCED_KEY, Boolean.toString(on)));
+                    logLine(on ? "Advanced settings shown: SETUP, VIDEO and LINK have them all."
+                            : "Advanced settings hidden (TOOLS > Advanced brings them back); each keeps what it was set to.");
+                }));
         menu.addSeparator();
         JLabel about = Theme.label("PC " + de.droiddrone.pc.AppInfo.version() + "   /   PHONE APP " + de.droiddrone.pc.setup.ApkShare.VERSION,
                 Theme.headingFont(11f), Theme.MUTED);

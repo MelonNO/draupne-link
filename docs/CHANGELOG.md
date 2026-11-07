@@ -6,6 +6,8 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 
 With phone app DRAUPNE Flight 2.3.0-pc.39 (sound in the air).
 
+- **TOOLS > Advanced, off by default:** hides what most pilots never need - PC setup, Phone setup and Drone setup (SETUP), Motion detection, Camera view on the map, Hardware video decoding and the OSD with its layout (VIDEO), and both STANAG 4609 rows (LINK). Hidden, each keeps its setting; turning Advanced on shows them all again.
+- **Hardware video decoding is on by default** (the GPU; software when it can't). Turned off by hand before, it stays off.
 - **Arming mutes the sound by itself; unmute in the air if you want it.** At the arming MUTE goes on (the log says so); M or the loudspeaker brings the phone's microphone back while flying - the phone (pc.39) then sends it armed too, about 60 kbit/s on the uplink. At the disarm the sound comes back unless you changed MUTE yourself in the air. An older phone app stays silent while armed. AUDIO flags bit 1 (PROTOCOL.md).
 
 - **The virtual fleet: try DRAUPNE Link without any hardware.** Start `"DRAUPNE Link.exe" fleet` (or `Virtual fleet.bat` next to the exe; from source `gradlew run --args=fleet`) and several virtual drones appear in DRAUPNE Link's PHONE list, so the window, the map, OBSERVATION and OVERWATCH can be tried on one PC. DRAUPNE Link looks for them only while the fleet runs (it announces itself in `%APPDATA%\DraupneLink\virtual-fleet.txt`, loopback addresses only), so nothing changes for real drones.

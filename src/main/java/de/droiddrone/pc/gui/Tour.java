@@ -106,7 +106,7 @@ final class Tour {
         steps.add(new Step("MENU", "Everything lives here. Press it and SETUP, VIDEO, LINK and TOOLS slide out - as now.",
                 "Tip: every button in this tour can be pressed twice - the second press closes or undoes what the first did. "
                         + "NEXT stays unlocked.", main::tourMenuButton, openMenu, true, header));
-        steps.add(new Step("SETUP", "The guides: first-time setup, PC, drone and phone setup, and this tour.", main::tourSetupButton, openMenu, true, header));
+        steps.add(new Step("SETUP", "The guides: first-time setup and this tour - PC, drone and phone setup too with TOOLS > Advanced on.", main::tourSetupButton, openMenu, true, header));
         steps.add(new Step("VIDEO", "The picture, the OSD and recording.", main::tourVideoButton, openMenu, true, header));
         steps.add(new Step("LINK", "The link's sounds, and who may watch as a spectator.", main::tourLinkButton, openMenu, true, header));
         steps.add(new Step("TOOLS", "Find the drone, the tracks folder and the tests.", main::tourToolsButton, openMenu, true, header));
