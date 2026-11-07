@@ -22,10 +22,18 @@ public final class Fleet implements AutoCloseable {
     /** As many as this: one PC's observation grid holds six, and a few more for the PHONE list. */
     public static final int MAX_DRONES = 12;
     /**
-     * Where the drones stand unless the pilot picks a place: an open public field (Tempelhofer Feld, Berlin) - neutral,
-     * nobody's home. The first drone there, the others 30 m apart to the east.
+     * Where the drones stand unless the pilot picks a place (the pilot's choice, 1.0.50): the middle of the MGRS
+     * 100 km square 32V PN. The first drone there, the others 30 m apart to the east.
      */
-    public static final double DEFAULT_LAT = 52.4732, DEFAULT_LON = 13.4012;
+    public static final String DEFAULT_PLACE = "32V PN 50000 50000";
+    public static final double DEFAULT_LAT, DEFAULT_LON;
+
+    static {
+        double[] at = de.droiddrone.pc.map.Coordinates.parse(DEFAULT_PLACE);
+        // the middle of that metre, so it reads back as 50000 50000 (its corner can come out as 49999)
+        DEFAULT_LAT = at[0] + 0.5 / 111_320.0;
+        DEFAULT_LON = at[1] + 0.5 / (111_320.0 * Math.cos(Math.toRadians(at[0])));
+    }
 
     private final String key;
     private final Path announceFile;

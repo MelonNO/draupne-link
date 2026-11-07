@@ -200,7 +200,7 @@ class NamesTest {
         Map<String, String> saved = new HashMap<>();
         Names names = new Names(config, saved::putAll);
         try (de.droiddrone.pc.fleet.Fleet fleet = new de.droiddrone.pc.fleet.Fleet(config, null, s -> { })) {
-            de.droiddrone.pc.fleet.VirtualDrone d = fleet.add("MobileYankee", 52.47, 13.40, 0);
+            de.droiddrone.pc.fleet.VirtualDrone d = fleet.add("MobileYankee", de.droiddrone.pc.fleet.Fleet.DEFAULT_LAT, de.droiddrone.pc.fleet.Fleet.DEFAULT_LON, 0);
             List<de.droiddrone.pc.fleet.VirtualFleet.Drone> announced = new CopyOnWriteArrayList<>();
             service = new NameService(config, names, () -> null, 6286, false, saved::putAll, s -> { });
             service.setVirtualDrones(() -> announced);

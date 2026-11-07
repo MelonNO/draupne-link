@@ -143,7 +143,7 @@ class OverwatchFleetEndToEndTest {
         PossiblyFlying flag = new PossiblyFlying(MonoClock::ms);
 
         // MobileZulu flown from this PC, then 4G gone while armed; the pilot ends that link
-        VirtualDrone zulu = drone(config, "MobileZulu", 61.1429, 10.6898);
+        VirtualDrone zulu = drone(config, "MobileZulu", Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON);
         ControlLink first = link(config, zulu);
         flag.attach(first, "MobileZulu", () -> PossiblyFlying.of(first.getTelemetry().getStatus()));
         FcTelemetry t = first.getTelemetry();
@@ -162,7 +162,7 @@ class OverwatchFleetEndToEndTest {
         assertTrue(flag.reason().startsWith("MobileZulu was lost armed "), flag.reason());
 
         // meanwhile MobileX-ray, elsewhere, overwatches for this PC: a vehicle crosses in front of it
-        VirtualDrone xray = drone(config, "MobileX-ray", 61.1440, 10.6910);
+        VirtualDrone xray = drone(config, "MobileX-ray", Fleet.DEFAULT_LAT + 0.001, Fleet.DEFAULT_LON);
         moveAway(xray);
         ControlLink watchLink = link(config, xray);
         overwatch(watchLink, xray, "MobileX-ray", 0x5eed0001);
@@ -193,16 +193,23 @@ class OverwatchFleetEndToEndTest {
     }
 
     @Test
-    void alertNowGivesAFullAlertWithSomethingInEveryPicture() throws Exception {
+    void someoneWalkingPastIsFoundByTheDetectorWithSomethingInEveryPicture() throws Exception {
         PcConfig config = PcConfig.defaults();
-        VirtualDrone zulu = drone(config, "MobileZulu", 61.1429, 10.6898);
+        VirtualDrone zulu = drone(config, "MobileZulu", Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON);
         moveAway(zulu);
         ControlLink l = link(config, zulu);
         overwatch(l, zulu, "MobileZulu", 0x5eed0002);
         hub.setFlag(new PossiblyFlying(MonoClock::ms)); // nothing here flies
-        Thread.sleep(1200); // a few pictures before it
-        zulu.alertNow();
-        waitFor(() -> view("MobileZulu") != null, 3000, "the alert");
+        Thread.sleep(5000); // the warm-up and a quiet picture: nothing moves, nothing alerts
+        assertNull(view("MobileZulu"), "no alert while nothing moves");
+        assertFalse(log.stream().anyMatch(s -> s.contains("MOTION")), String.join("\n", log));
+        long sent = System.currentTimeMillis();
+        zulu.someoneNow(); // only a person drawn into the picture - the detector must find it
+        waitFor(() -> view("MobileZulu") != null, 6000, "the alert");
+        assertTrue(System.currentTimeMillis() - sent >= 1000, "the detector needs the walk (a track that travels), not a shortcut");
+        assertTrue(zulu.scene.hasTargets(System.currentTimeMillis()), "while the person still crosses");
+        de.droiddrone.common.OverwatchProtocol.Alert a = view("MobileZulu").alert();
+        assertTrue(a.w > 0.01f && a.h > 0.05f && a.y + a.h > 0.4f, "the detector's box round the person: " + a.x + "," + a.y + " " + a.w + "x" + a.h);
         waitFor(() -> view("MobileZulu").preRolls() > 0, 3000, "the pictures before it");
         List<BufferedImage> pre = preRolls("MobileZulu");
         assertTrue(count(pre.get(pre.size() - 1), OverwatchFleetEndToEndTest::walker) > 15,
@@ -215,7 +222,7 @@ class OverwatchFleetEndToEndTest {
     @Test
     void connectedWithTheDefaultDetectionAWalkerGetsBoxes() throws Exception {
         PcConfig config = PcConfig.defaults();
-        VirtualDrone zulu = drone(config, "MobileZulu", 61.1429, 10.6898);
+        VirtualDrone zulu = drone(config, "MobileZulu", Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON);
         moveAway(zulu);
         ControlLink l = link(config, zulu);
         l.setDetection(2); // MainWindow's default for a drone never set: NORMAL

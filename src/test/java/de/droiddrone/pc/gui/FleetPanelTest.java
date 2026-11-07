@@ -31,6 +31,8 @@ class FleetPanelTest {
             assertTrue(dump.contains("MobileZulu  VIRTUAL"), dump);
             assertTrue(dump.contains("MobileYankee  VIRTUAL"), dump);
             assertTrue(dump.contains("127.0.0.11:"), "its address: " + dump);
+            // the pilot's start place (1.0.50): the middle of 32V PN, shown as MGRS
+            assertTrue(dump.contains("Start place 32V PN 50000 50000"), dump);
             // for a look at the layout: build/test-work/fleet-panel.png (the tests' working folder)
             javax.imageio.ImageIO.write(img, "png", new java.io.File("fleet-panel.png"));
         }

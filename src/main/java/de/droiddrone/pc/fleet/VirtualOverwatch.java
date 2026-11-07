@@ -36,8 +36,6 @@ import java.util.function.Consumer;
  */
 final class VirtualOverwatch {
     static final int PREVIEW_W = 640, PREVIEW_H = 360, PREVIEW_FPS = 15, PREVIEW_BPS = 1_000_000;
-    /** ALERT NOW: a pre-roll picture taken this long after the press has the walker in it (the analysis picture is drawn every 125 ms). */
-    static final long ALERT_NOW_SEEN_MS = 150;
 
     private final VirtualDrone drone;
     private final Consumer<String> log;
@@ -186,44 +184,22 @@ final class VirtualOverwatch {
 
     // ------------------------------------------------------------------ pictures and detections (the drone's tick thread)
 
-    /** The analysis picture and its verdict, eight a second while watching. */
+    /**
+     * The analysis picture and the real MotionDetector's verdict on it, five a second while watching. Only that
+     * verdict raises an alert (1.0.50, the pilot: nothing here may tell the program to warn - something must move in
+     * the picture and the detection find it, as on the phone; ALERT NOW, which faked a detection, is gone).
+     */
     void onPicture(BufferedImage analysis, MotionRecord.Report report, long now) {
         if (!watching) return;
-        boolean kept = false;
         if (preRoll.due(now)) {
             byte[] jpeg = jpeg(analysis);
             if (jpeg != null) preRoll.add(now, jpeg);
-            kept = jpeg != null;
-        }
-        long asked = alertNowAt;
-        if (asked >= 0 && (kept && now >= asked + ALERT_NOW_SEEN_MS || now - asked > PreRoll.EVERY_MS * 3)) {
-            alertNowAt = -1; // a picture with the walker in it is in the pre-roll: the alert, its box where it stands
-            onDetection(new MotionRecord.Box(0, 0.47f, 0.38f, 0.06f, 0.2f, 0, 0.9f, 0.05f, MotionRecord.KIND_MOVING), drone.scene.isNight(),
-                    (float) Scene.HFOV_DEG, now);
-            return;
         }
         if (report == null || report.boxes.isEmpty()) return;
         onDetection(report.boxes.get(0), report.night(), report.hfovDeg, now);
     }
 
-    /**
-     * The panel's ALERT NOW: a walker (a torch at night) steps into the middle of the picture now, and the alert goes
-     * as soon as a picture before it shows it (the next pre-roll picture, half a second at most) - so the pre-roll,
-     * the preview and the clip all have something in them (1.0.50: they showed only sky and ground).
-     */
-    void alertNow() {
-        long now = System.currentTimeMillis();
-        if (!watching) {
-            log.accept("overwatch: ALERT NOW needs the drone in OVERWATCH (the PC puts it there)");
-            return;
-        }
-        drone.scene.addTargetInView(drone.scene.isNight() ? Scene.Kind.LIGHT : Scene.Kind.WALKER, drone.view(), now);
-        alertNowAt = now;
-    }
-
-    /** ALERT NOW pressed at (ms), until its alert goes; -1 none. */
-    private volatile long alertNowAt = -1;
-
+    /** The detector found something that travels: onPicture is the only way here. */
     private void onDetection(MotionRecord.Box box, boolean night, float hfov, long now) {
         synchronized (lock) {
             OverwatchEvent.Action a = event.onDetection(now);

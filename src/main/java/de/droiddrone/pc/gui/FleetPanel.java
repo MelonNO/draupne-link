@@ -38,7 +38,7 @@ import java.util.Locale;
 /**
  * The virtual fleet's window (FleetMain): one card per virtual drone with its live readout and the buttons that play
  * the situations the pilot wants to try - LINK PROBLEMS (4G loss, a weak link, a handover, the flight controller lost,
- * the phone app restarting), OVERWATCH + DETECTION (something crossing the picture, night, an alert now, the sleep
+ * the phone app restarting), OVERWATCH + DETECTION (something crossing the picture, night, someone close now, the sleep
  * check now, the phone's own power buttons) and OBSERVATION (a voice now) - plus ADD DRONE, the start place, the arm
  * switch's channel and the failsafe. DRAUPNE Link's look (Theme). The drones keep running when it is minimised;
  * closing it ends the fleet program.
@@ -94,7 +94,7 @@ public final class FleetPanel {
         JButton add = Theme.primaryButton("Add drone");
         add.addActionListener(e -> addDrone());
         JButton place = Theme.secondaryButton("Start place");
-        place.setToolTipText("Where new drones stand (lat, lon) - and moves the disarmed ones there");
+        place.setToolTipText("Where new drones stand (MGRS, UTM or lat, lon) - and moves the disarmed ones there");
         place.addActionListener(e -> pickPlace());
         JComboBox<String> arm = new JComboBox<>(new String[]{"ARM on AUX1", "ARM on AUX2", "ARM on AUX3", "ARM on AUX4", "ARM on AUX5", "ARM on AUX6"});
         arm.setToolTipText("The virtual Betaflight's ARM switch (1700-2100 us) for drones added from now on; MSP_MODE_RANGES says so to the phone");
@@ -151,14 +151,14 @@ public final class FleetPanel {
     }
 
     private void pickPlace() {
-        String now = String.format(Locale.ROOT, "%.6f, %.6f", startLat, startLon);
-        String s = (String) JOptionPane.showInputDialog(frame, "Where the drones stand, latitude, longitude (decimal degrees):",
+        String now = de.droiddrone.pc.map.Coordinates.format(de.droiddrone.pc.map.Coordinates.Format.MGRS, startLat, startLon);
+        String s = (String) JOptionPane.showInputDialog(frame, "Where the drones stand - MGRS, UTM or latitude, longitude:",
                 "Start place", JOptionPane.QUESTION_MESSAGE, null, null, now);
         if (s == null) return;
-        String[] p = s.split("[,;\\s]+");
+        double[] at = de.droiddrone.pc.map.Coordinates.parse(s);
         try {
-            double lat = Double.parseDouble(p[0].trim()), lon = Double.parseDouble(p[1].trim());
-            if (Math.abs(lat) > 85 || Math.abs(lon) > 180) throw new NumberFormatException();
+            if (at == null || Math.abs(at[0]) > 85) throw new NumberFormatException();
+            double lat = at[0], lon = at[1];
             startLat = lat;
             startLon = lon;
             int i = 0;
@@ -166,8 +166,9 @@ public final class FleetPanel {
                 double east = i++ * 30 / (111_320.0 * Math.cos(Math.toRadians(lat)));
                 if (!d.moveTo(lat, lon + east)) appendLog(d.name() + ": armed - stays where it is");
             }
+            refresh();
         } catch (RuntimeException e) {
-            JOptionPane.showMessageDialog(frame, "Two numbers please, like 52.4732, 13.4012", "Start place", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(frame, "Not a position: MGRS (" + Fleet.DEFAULT_PLACE + "), UTM or latitude, longitude", "Start place", JOptionPane.WARNING_MESSAGE);
         }
     }
 
@@ -182,7 +183,8 @@ public final class FleetPanel {
     void refresh() {
         for (Card c : cardList) c.refresh();
         summary.setText(fleet.drones().size() + " virtual drones up" + (fleet.key().isEmpty() ? ", no link key set" : "")
-                + ". Names from Zulu down, never one in DRAUPNE Link's map.");
+                + ". Names from Zulu down, never one in DRAUPNE Link's map. Start place "
+                + de.droiddrone.pc.map.Coordinates.format(de.droiddrone.pc.map.Coordinates.Format.MGRS, startLat, startLon) + ".");
     }
 
     // ------------------------------------------------------------------ one drone
@@ -257,10 +259,10 @@ public final class FleetPanel {
                         bunch.setValue(0);
                     })));
             actions.add(section("OVERWATCH + DETECTION"));
-            actions.add(row(button("Walker", "Someone walks across the picture (12 m out)", () -> drone.addTarget("walker")),
-                    button("Vehicle", "A vehicle drives across (40 m out)", () -> drone.addTarget("vehicle")),
-                    button("Light", "A torch moves across (shows at NIGHT)", () -> drone.addTarget("light")), night,
-                    button("Alert now", "In OVERWATCH: a detection now (the alert, pre-roll, preview, then the clip)", drone::alertNow)));
+            actions.add(row(button("Walker", "A person walks across the picture, 10 m out (a torch at NIGHT)", () -> drone.addTarget("walker")),
+                    button("Vehicle", "A car drives across, 25 m out at 30 km/h (headlights at NIGHT)", () -> drone.addTarget("vehicle")),
+                    button("Light", "A person with a lamp walks across, 15 m out (for NIGHT)", () -> drone.addTarget("light")), night,
+                    button("Someone now", "Someone walks across 6 m from the camera (a torch at night): the motion detection, connected or in OVERWATCH, must find it", drone::someoneNow)));
             actions.add(row(button("Standby", "The phone's own STANDBY button", () -> drone.requestMode(VirtualDrone.STANDBY, 0, "the phone's button")),
                     button("Deep sleep", "The phone's own DEEP SLEEP button", () -> drone.requestMode(VirtualDrone.DEEP_SLEEP, 0, "the phone's button")),
                     button("Check now", "Asleep: the next sleep check window opens now (hello to the PC)", drone::checkNow),

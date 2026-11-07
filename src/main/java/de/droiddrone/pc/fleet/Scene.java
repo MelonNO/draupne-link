@@ -80,14 +80,21 @@ final class Scene {
     }
 
     /**
-     * Sends something through the picture in front of the camera where it is now: a walker 12 m out at walking pace, a
-     * vehicle 40 m out at 40 km/h, a torch 20 m out at a brisk walk (shows at night) - crossing from just outside the
+     * Sends something through the picture in front of the camera where it is now: a person 10 m out at walking pace, a
+     * car 25 m out at 30 km/h, a person with a lamp 15 m out (for the night) - crossing from just outside the
      * left edge to the other side. (1.0.50: they went in front of the start point, so a drone flown or placed anywhere
      * else never saw them; and they began well outside the picture, so a light took 7 s to be seen.)
      */
     void addTarget(Kind kind, View from, long nowMs) {
-        double dist = kind == Kind.VEHICLE ? 40 : kind == Kind.LIGHT ? 20 : 12;
-        double speed = kind == Kind.VEHICLE ? 11 : kind == Kind.LIGHT ? 2.5 : 1.4;
+        addTarget(kind, from, nowMs, kind == Kind.VEHICLE ? 25 : kind == Kind.LIGHT ? 15 : 10);
+    }
+
+    /** SOMEONE NOW's distance: close, large in the picture. */
+    static final double CLOSE_M = 6;
+
+    /** As addTarget, at dist metres in front. */
+    void addTarget(Kind kind, View from, long nowMs, double dist) {
+        double speed = kind == Kind.VEHICLE ? 8 : kind == Kind.LIGHT ? 2 : 1.4;
         double half = Math.tan(Math.toRadians(HFOV_DEG / 2)) * dist * 1.08;
         double h = Math.toRadians(from.headingDeg());
         double cn = from.north() + Math.cos(h) * dist, ce = from.east() + Math.sin(h) * dist;
@@ -95,16 +102,6 @@ final class Scene {
         double leftN = cn + Math.cos(h - Math.PI / 2) * half, leftE = ce + Math.sin(h - Math.PI / 2) * half;
         long dur = (long) (2 * half / speed * 1000);
         targets.add(new Target(kind, leftN, leftE, from.headingDeg() + 90, speed, nowMs, nowMs + dur));
-    }
-
-    /** Something standing in the middle of the picture now and walking off to the right (ALERT NOW: seen at once). */
-    void addTargetInView(Kind kind, View from, long nowMs) {
-        double dist = kind == Kind.VEHICLE ? 40 : kind == Kind.LIGHT ? 20 : 12;
-        double speed = kind == Kind.VEHICLE ? 11 : kind == Kind.LIGHT ? 2.5 : 1.4;
-        double half = Math.tan(Math.toRadians(HFOV_DEG / 2)) * dist * 1.08;
-        double h = Math.toRadians(from.headingDeg());
-        double cn = from.north() + Math.cos(h) * dist, ce = from.east() + Math.sin(h) * dist;
-        targets.add(new Target(kind, cn, ce, from.headingDeg() + 90, speed, nowMs, nowMs + (long) (half / speed * 1000)));
     }
 
     /** The targets still crossing (the finished ones go). */
@@ -205,29 +202,105 @@ final class Scene {
         if (extra != null && !extra.isEmpty()) outlined(g, extra, fs * 0.6f, h - fs * 0.6f);
     }
 
+    /**
+     * The targets alone, over a picture that is already there (a looped old flight): seen from where the drone is now.
+     * They are part of the picture the motion detection gets, as on the phone - never a detection of their own.
+     */
+    void paintTargets(BufferedImage img, View v, long nowMs) {
+        List<Target> list = targets(nowMs);
+        if (list.isEmpty()) return;
+        Graphics2D g = img.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Camera cam = new Camera(v, img.getWidth(), img.getHeight());
+            for (Target t : list) paintTarget(g, cam, t, nowMs);
+        } finally {
+            g.dispose();
+        }
+    }
+
+    /**
+     * A model of what moves (1.0.50, the pilot: the detection must be tested by something moving in the picture): a
+     * person walking (legs and arms swinging), a car driving (body, cabin, turning wheels; headlights at night), a
+     * person with a lamp. Drawn side on, facing the way it goes.
+     */
     private void paintTarget(Graphics2D g, Camera cam, Target t, long nowMs) {
         double[] p = t.at(nowMs);
+        double[] s = cam.screen(p[0], p[1]);
+        if (s == null) return; // behind the camera
+        double x = s[0], y = s[1], m = s[2]; // where it stands on the picture, pixels a metre there
+        double walked = (nowMs - t.startMs) / 1000.0 * t.speed;
         switch (t.kind) {
-            case WALKER -> {
-                g.setColor(night ? new Color(0x303030) : new Color(0x283a8a));
-                cam.box(g, p[0], p[1], 0.5, 1.8);
-                if (night) { // a head torch: at night the detection sees only what is lit (1.0.50: a walker went unseen)
-                    g.setColor(new Color(0xfffbe0));
-                    cam.box(g, p[0], p[1], 0.4, 1.4, 1.8);
-                }
-            }
-            case VEHICLE -> {
-                g.setColor(night ? new Color(0x3a3a3a) : new Color(0xb02020));
-                cam.box(g, p[0], p[1], 4.5, 1.6);
-                if (night) { // headlights
-                    g.setColor(new Color(0xfff8d0));
-                    cam.box(g, p[0], p[1], 1.2, 0.4);
-                }
-            }
-            case LIGHT -> {
-                g.setColor(night ? new Color(0xffffe0) : new Color(0xe0e0d0));
-                cam.box(g, p[0], p[1], 0.6, 1.4);
-            }
+            case WALKER -> person(g, x, y, m, walked, night ? new Color(0x2a2a2a) : new Color(0x283a8a),
+                    night ? new Color(0x1e1e1e) : new Color(0x30302a), night ? new Color(0xfffbe0) : null); // a torch at night
+            case LIGHT -> person(g, x, y, m, walked, night ? new Color(0x262626) : new Color(0x6a5a3a),
+                    night ? new Color(0x1c1c1c) : new Color(0x3a3020), new Color(0xffffe8));
+            case VEHICLE -> car(g, x, y, m, walked);
+        }
+    }
+
+    /** A person 1.8 m tall walking to the right; lamp: a light held out in front (null: none). */
+    private static void person(Graphics2D g, double x, double y, double m, double walked, Color body, Color legs, Color lamp) {
+        double swing = Math.sin(walked / 0.7 * Math.PI) * 0.28 * m; // a step every 0.7 m
+        double hip = y - 0.9 * m, shoulder = y - 1.45 * m;
+        g.setStroke(new BasicStroke((float) Math.max(1.5, 0.14 * m), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setColor(legs);
+        g.draw(new java.awt.geom.Line2D.Double(x, hip, x + swing, y));
+        g.draw(new java.awt.geom.Line2D.Double(x, hip, x - swing, y));
+        g.setColor(body);
+        g.fill(new java.awt.geom.RoundRectangle2D.Double(x - 0.2 * m, shoulder, 0.4 * m, hip - shoulder + 0.05 * m, 0.15 * m, 0.15 * m));
+        g.setStroke(new BasicStroke((float) Math.max(1.2, 0.1 * m), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(new java.awt.geom.Line2D.Double(x, shoulder + 0.05 * m, x - swing * 0.8, hip));
+        double handX = x + swing * 0.8, handY = hip;
+        if (lamp != null) {
+            handX = x + 0.4 * m;
+            handY = shoulder + 0.25 * m;
+        }
+        g.draw(new java.awt.geom.Line2D.Double(x, shoulder + 0.05 * m, handX, handY));
+        double head = 0.13 * m;
+        g.fill(new java.awt.geom.Ellipse2D.Double(x - head, shoulder - 2.2 * head, 2 * head, 2 * head));
+        if (lamp != null) {
+            double r = Math.max(2, 0.12 * m); // the lamp and its glow
+            g.setColor(new Color(lamp.getRed(), lamp.getGreen(), lamp.getBlue(), 90));
+            g.fill(new java.awt.geom.Ellipse2D.Double(handX - 2.5 * r, handY - 2.5 * r, 5 * r, 5 * r));
+            g.setColor(lamp);
+            g.fill(new java.awt.geom.Ellipse2D.Double(handX - r, handY - r, 2 * r, 2 * r));
+        }
+    }
+
+    /** A car 4.5 m long, side on, driving to the right. */
+    private void car(Graphics2D g, double x, double y, double m, double driven) {
+        double len = 4.5 * m, wheel = 0.33 * m;
+        double left = x - len / 2;
+        g.setColor(night ? new Color(0x3a3a3a) : new Color(0xb02020));
+        g.fill(new java.awt.geom.RoundRectangle2D.Double(left, y - 1.15 * m, len, 0.75 * m, 0.25 * m, 0.25 * m)); // the body
+        Path2D cabin = new Path2D.Double();
+        cabin.moveTo(left + 0.9 * m, y - 1.1 * m);
+        cabin.lineTo(left + 1.5 * m, y - 1.6 * m);
+        cabin.lineTo(left + 3.2 * m, y - 1.6 * m);
+        cabin.lineTo(left + 3.8 * m, y - 1.1 * m);
+        cabin.closePath();
+        g.fill(cabin);
+        g.setColor(night ? new Color(0x101820) : new Color(0x9fc4e0)); // the windows
+        g.fill(new java.awt.geom.Rectangle2D.Double(left + 1.55 * m, y - 1.52 * m, 0.75 * m, 0.38 * m));
+        g.fill(new java.awt.geom.Rectangle2D.Double(left + 2.4 * m, y - 1.52 * m, 0.75 * m, 0.38 * m));
+        for (double at : new double[]{left + 0.95 * m, left + len - 0.95 * m}) {
+            g.setColor(new Color(0x181818));
+            g.fill(new java.awt.geom.Ellipse2D.Double(at - wheel, y - 2 * wheel, 2 * wheel, 2 * wheel));
+            g.setColor(new Color(0x9a9a9a)); // a spoke, turning with the way driven
+            double a = driven / 0.33;
+            g.setStroke(new BasicStroke((float) Math.max(1, 0.05 * m)));
+            g.draw(new java.awt.geom.Line2D.Double(at - Math.cos(a) * wheel * 0.7, y - wheel - Math.sin(a) * wheel * 0.7,
+                    at + Math.cos(a) * wheel * 0.7, y - wheel + Math.sin(a) * wheel * 0.7));
+        }
+        if (night) { // headlights in front, a tail light behind
+            double r = Math.max(2, 0.15 * m);
+            g.setColor(new Color(255, 248, 208, 90));
+            g.fill(new java.awt.geom.Ellipse2D.Double(left + len - r * 1.5, y - 0.85 * m - 2.5 * r, 5 * r, 5 * r));
+            g.setColor(new Color(0xfff8d0));
+            g.fill(new java.awt.geom.Ellipse2D.Double(left + len - r, y - 0.85 * m - r, 2 * r, 2 * r));
+            g.setColor(new Color(0xd02020));
+            g.fill(new java.awt.geom.Ellipse2D.Double(left - r * 0.5, y - 0.85 * m - r * 0.6, r * 1.2, r * 1.2));
         }
     }
 
@@ -334,19 +407,14 @@ final class Scene {
         }
 
         /** An upright box (width, height in m) standing at a ground point, facing the camera. */
-        void box(Graphics2D g, double n, double e, double width, double height) {
-            box(g, n, e, width, 0, height);
-        }
-
-        /** An upright box from bottom to top (m over the ground). */
-        void box(Graphics2D g, double n, double e, double width, double bottom, double height) {
-            double[] base = cam(n, e, bottom), top = cam(n, e, height);
-            if (base[2] < 0.5 || top[2] < 0.5) return;
-            double bx = cx + f * base[0] / base[2], by = cy + f * base[1] / base[2];
-            double ty = cy + f * top[1] / top[2];
-            double half = f * width / 2 / base[2];
-            double hh = Math.max(2, by - ty);
-            g.fill(new java.awt.geom.Rectangle2D.Double(bx - half, by - hh, Math.max(2, 2 * half), hh));
+        /**
+         * A ground point on the picture and the scale there, for a model standing upright on it and facing the camera:
+         * {x, y, pixels a metre}; null when it is behind or too close.
+         */
+        double[] screen(double n, double e) {
+            double[] base = cam(n, e, 0);
+            if (base[2] < 0.5) return null;
+            return new double[]{cx + f * base[0] / base[2], cy + f * base[1] / base[2], f / base[2]};
         }
 
         private static double[] cut(double[] behind, double[] front, double near) {

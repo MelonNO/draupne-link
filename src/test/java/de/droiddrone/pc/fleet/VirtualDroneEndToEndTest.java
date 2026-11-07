@@ -43,7 +43,7 @@ class VirtualDroneEndToEndTest {
 
     private void startDrone(PcConfig config) throws Exception {
         droneStartedAt = System.currentTimeMillis();
-        drone = new VirtualDrone(0, "MobileZulu", config.getKey(), InetAddress.getLoopbackAddress(), 52.4732, 13.4012, 0,
+        drone = new VirtualDrone(0, "MobileZulu", config.getKey(), InetAddress.getLoopbackAddress(), Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON, 0,
                 new FlightModel.Setup(), log::add);
         drone.start(0);
     }
@@ -83,7 +83,7 @@ class VirtualDroneEndToEndTest {
         assertNotNull(link.getFcInfo(), "FcInfo answered");
         assertFalse(t.getStatus().armed());
         waitFor(() -> t.getGps() != null && t.getBattery() != null, 3000, "GPS and battery");
-        assertEquals(52.4732, t.getGps().latDeg(), 1e-3);
+        assertEquals(Fleet.DEFAULT_LAT, t.getGps().latDeg(), 1e-3);
 
         startSticks();
         waitFor(() -> drone.fc.hadSticks(), 2000, "the sticks reach the virtual FC");
@@ -179,8 +179,9 @@ class VirtualDroneEndToEndTest {
             }
             waitFor(() -> drone.asleep() && drone.overwatch.isWatching(), 3000, "overwatching");
             link.setDormant(true);
-            drone.alertNow();
-            waitFor(() -> log.stream().anyMatch(l -> l.contains("the PC has the alert")), 5000, "the hub acknowledged the alert (its token)");
+            Thread.sleep(3500); // the detector's warm-up
+            drone.someoneNow(); // someone walks past: the detector finds it, and that calls the PC
+            waitFor(() -> log.stream().anyMatch(l -> l.contains("the PC has the alert")), 8000, "the hub acknowledged the alert (its token)");
             waitFor(() -> !hub.views().isEmpty(), 2000, "the alert on the PC's map");
             assertEquals("MobileZulu", hub.views().get(0).drone());
         } finally {
@@ -188,23 +189,58 @@ class VirtualDroneEndToEndTest {
         }
     }
 
+    /**
+     * Every drawn model, by day and by night, seen by the real detector within a few seconds while it still crosses -
+     * from a drone off its start point and turned (1.0.50: they crossed in front of the start point), on the wall clock
+     * the virtual drone uses (1.0.50: the detector's float times failed on it).
+     */
     @Test
-    void theRealDetectorSeesTheWalkerCrossTheGeneratedPicture() {
-        Scene scene = new Scene("MobileZulu", 1);
-        de.droiddrone.common.MotionDetector detector = new de.droiddrone.common.MotionDetector(de.droiddrone.common.MotionDetector.NORMAL);
-        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(320, 180, java.awt.image.BufferedImage.TYPE_INT_RGB);
-        Scene.View view = new Scene.View(0, 0, 0, 0, 0, 0);
-        long t0 = 1_000_000;
-        int found = 0;
-        for (long t = t0; t < t0 + 20_000; t += 125) {
-            if (t == t0 + 4000) scene.addTarget(Scene.Kind.WALKER, view, t); // after the background has settled
-            scene.render(img, view, t, null, false);
-            int[] size = new int[2];
-            byte[] y = Scene.luma(Scene.pixels(img), 320, 180, 320, size);
-            de.droiddrone.common.MotionDetector.Result r = detector.process(y, size[0], size[1], null, null, t);
-            if (!r.detections.isEmpty()) found++;
+    void theRealDetectorSeesEveryModelCrossTheGeneratedPicture() {
+        Scene.View view = new Scene.View(130, -75, 0, 0, 0, 220);
+        for (Scene.Kind kind : Scene.Kind.values()) {
+            for (boolean night : new boolean[]{false, true}) {
+                if (kind == Scene.Kind.LIGHT && !night) continue; // a lamp by day: the person carrying it is the WALKER's case
+                Scene scene = new Scene("MobileZulu", 1001);
+                scene.setNight(night);
+                de.droiddrone.common.MotionDetector detector = new de.droiddrone.common.MotionDetector(de.droiddrone.common.MotionDetector.NORMAL);
+                java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(320, 180, java.awt.image.BufferedImage.TYPE_INT_RGB);
+                long t0 = System.currentTimeMillis(), added = t0 + 4000, first = -1, until = 0;
+                for (long t = t0; t < t0 + 16_000; t += 200) { // five pictures a second, as the drone's loop
+                    if (t == added) {
+                        scene.addTarget(kind, view, t); // after the background has settled
+                        until = scene.targets(t).get(0).untilMs;
+                    }
+                    scene.render(img, view, t, null, false);
+                    int[] size = new int[2];
+                    byte[] y = Scene.luma(Scene.pixels(img), 320, 180, 320, size);
+                    de.droiddrone.common.MotionDetector.Result r = detector.process(y, size[0], size[1], null, null, t);
+                    if (!r.detections.isEmpty() && first < 0) first = t;
+                    if (t < added) assertTrue(r.detections.isEmpty(), kind + " night " + night + ": nothing before it");
+                }
+                assertTrue(first > 0 && first - added <= 6000 && first < until, kind + " night " + night + ": seen "
+                        + (first - added) + " ms after it was sent, crossing until " + (until - added));
+            }
         }
-        assertTrue(found > 5, "the walker is seen travelling: " + found + " pictures with a box");
+    }
+
+    /** Nothing in the fleet makes up a detection: only the detector's verdict on a picture reaches an alert or a box. */
+    @Test
+    void noDetectionIsMadeUp() throws Exception {
+        java.nio.file.Path dir = java.nio.file.Path.of("src/main/java/de/droiddrone/pc/fleet");
+        if (!java.nio.file.Files.isDirectory(dir)) dir = java.nio.file.Path.of("../../src/main/java/de/droiddrone/pc/fleet"); // the tests' working folder
+        try (java.util.stream.Stream<java.nio.file.Path> s = java.nio.file.Files.list(dir)) {
+            for (java.nio.file.Path f : s.toList()) {
+                String src = java.nio.file.Files.readString(f);
+                assertFalse(src.contains("new MotionRecord.Box("), f + " makes a detection box of its own");
+                assertFalse(src.contains("new MotionDetector.Detection(") || src.contains("new Detection("), f + " makes a detection of its own");
+            }
+        }
+        String overwatch = java.nio.file.Files.readString(dir.resolve("VirtualOverwatch.java"));
+        long calls = java.util.regex.Pattern.compile("(?<![.\\w])onDetection\\(").matcher(overwatch).results().count(); // not OverwatchEvent's
+        assertEquals(2L, calls, "onDetection: its definition and the one call from onPicture (the detector's report)");
+        String drone = java.nio.file.Files.readString(dir.resolve("VirtualDrone.java"));
+        assertEquals(1, drone.split("overwatch\\.onPicture\\(", -1).length - 1, "the analysis picture's report is the only input");
+        assertTrue(drone.contains("MotionRecord.of(flags, (float) Scene.HFOV_DEG, r)"), "the report is made from the detector's result");
     }
 
     @Test

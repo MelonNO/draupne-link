@@ -1008,6 +1008,7 @@ public final class VirtualDrone {
     private void renderPicture(BufferedImage img, long nowMs) {
         Recording r = recording;
         if (r != null && r.picture(Scene.pixels(img), img.getWidth(), img.getHeight(), nowMs)) {
+            scene.paintTargets(img, view(), nowMs); // a walker, vehicle or light crosses an old flight's picture too
             scene.burnIn(img, "REPLAY"); // an old flight's picture says VIRTUAL too
             return;
         }
@@ -1485,6 +1486,7 @@ public final class VirtualDrone {
             if (analysis == null) analysis = new BufferedImage(320, 180, BufferedImage.TYPE_INT_RGB);
             Recording rec = recording;
             if (rec == null || !rec.picture(Scene.pixels(analysis), 320, 180, now)) scene.render(analysis, view(), now, null, false);
+            else scene.paintTargets(analysis, view(), now); // the same picture the video shows, models and all
             int[] size = new int[2];
             byte[] y = Scene.luma(Scene.pixels(analysis), 320, 180, 320, size);
             detector.setSensitivity(level);
@@ -1643,9 +1645,14 @@ public final class VirtualDrone {
         return scene.isNight();
     }
 
-    /** Overwatch: a detection now, as if the detector had seen one (the panel's ALERT NOW). */
-    public void alertNow() {
-        overwatch.alertNow();
+    /**
+     * The panel's SOMEONE NOW (1.0.50, was ALERT NOW, which faked a detection): someone walks across 6 m in front of
+     * the camera (with a torch at night). Whatever follows - boxes, an overwatch alert - is the real detector's doing.
+     */
+    public void someoneNow() {
+        scene.addTarget(scene.isNight() ? Scene.Kind.LIGHT : Scene.Kind.WALKER, view(), System.currentTimeMillis(), Scene.CLOSE_M);
+        int level = detectionWanted(System.currentTimeMillis());
+        log.accept("someone walks across close to the camera" + (level > 0 ? " (motion detection " + level + ")" : " - no motion detection asked"));
     }
 
     /** A "voice" on its microphone now (the panel's SPEAK). */
