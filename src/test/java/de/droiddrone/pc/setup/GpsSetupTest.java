@@ -116,6 +116,19 @@ class GpsSetupTest {
         assertFalse(GpsSetup.calibrated("Invalid name"));
     }
 
+    @Test
+    void aCalibrationCountsOnlyWhenTheOffsetsChanged() {
+        // 1.0.48 took any old non-zero offsets as "calibrated", also when the calibration never finished
+        int[] before = GpsSetup.magOffsets("mag_calibration = -123,45,6");
+        assertArrayEquals(new int[]{-123, 45, 6}, before);
+        assertFalse(GpsSetup.calibratedSince(before, "mag_calibration = -123, 45, 6"), "the same offsets: it didn't take");
+        assertTrue(GpsSetup.calibratedSince(before, "mag_calibration = -98,51,12"));
+        assertTrue(GpsSetup.calibratedSince(new int[]{0, 0, 0}, "mag_calibration = -98,51,12"), "the first calibration");
+        assertFalse(GpsSetup.calibratedSince(new int[]{5, 5, 5}, "mag_calibration = 0,0,0"));
+        assertFalse(GpsSetup.calibratedSince(null, "mag_calibration = -98,51,12"), "before Start not known: not counted");
+        assertNull(GpsSetup.magOffsets("###ERROR IN get: INVALID NAME: mag_calibration###"));
+    }
+
     // Betaflight 2025.12 prints the ports by name: VCP (MSP), UART1 Tramp, UART2 the serial receiver, UART3 the GPS,
     // UART6 the ESC sensor - and a second GPS left on UART4 from an earlier try
     static final String SERIAL_2025 = "# serial\nserial VCP 1 115200 57600 0 115200\nserial UART1 8192 115200 57600 0 115200\n"

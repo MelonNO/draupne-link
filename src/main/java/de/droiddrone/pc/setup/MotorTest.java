@@ -15,7 +15,8 @@ import java.util.Arrays;
 public final class MotorTest implements AutoCloseable {
     /** Motor output in Betaflight's external range: 1000 stops (DShot "motor stop", or mincommand), 2000 is full. */
     public static final int STOP = 1000;
-    public static final int MAX = 1300; // 30 %
+    /** 10 % (1.0.49; 30 % before, about a 5" quad's hover): enough to see each motor turn and which way. */
+    public static final int MAX = 1100;
     public static final int MAX_MOTORS = 8;
     public static final int MIXER_QUADX = 3;
     static final int MSP_FEATURE_CONFIG = 36;
@@ -273,6 +274,15 @@ public final class MotorTest implements AutoCloseable {
         p[2] = (byte) commands.length;
         for (int i = 0; i < commands.length; i++) p[3 + i] = (byte) commands[i];
         return p;
+    }
+
+    /**
+     * The log line for a write the motor test makes in Betaflight or an ESC (motor order, spin direction, props in /
+     * out), with the value before it - these are saved at once and can't be left unsaved like the CLI's, so the log
+     * is their backup: "Motor test: motor order [1, 2, 3, 4] -> [2, 1, 3, 4] (saved)".
+     */
+    public static String writeLog(String what, String before, String after, String outcome) {
+        return "Motor test: " + what + " " + before + " -> " + after + " (" + outcome + ")";
     }
 
     /**

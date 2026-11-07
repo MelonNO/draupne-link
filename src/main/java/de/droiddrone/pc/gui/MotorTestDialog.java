@@ -44,7 +44,7 @@ import java.util.List;
  * checking, props off, that each motor sits where its number says and turns the right way, and then that the props go
  * on the right way round. Runs over this PC's USB (the drone on the bench), never over the 4G link.
  * The motors stop when the box is unticked, on SPACE or STOP ALL, when this window loses focus or closes, and when
- * the USB link fails; sliders go to 30 % at most.
+ * the USB link fails; sliders go to 10 % at most (MotorTest.MAX).
  */
 final class MotorTestDialog extends JFrame {
     private static final int SLIDER_H = 150;
@@ -75,7 +75,7 @@ final class MotorTestDialog extends JFrame {
     private final WrappingText note = new WrappingText("", Theme.font(Font.PLAIN, 13f), Theme.WARN);
     /** A click on a motor in the picture: it runs this long at PULSE, then stops; one timer per motor. */
     private static final int PULSE_MS = 3000;
-    private static final int PULSE = MotorTest.STOP + (MotorTest.MAX - MotorTest.STOP) * 4 / 10;
+    private static final int PULSE = MotorTest.STOP + (MotorTest.MAX - MotorTest.STOP) * 8 / 10; // 8 %: turns, slowly
     private final java.util.Map<Integer, Timer> pulses = new java.util.HashMap<>();
     /** The risk line shakes when the motors are asked for without the box ticked. */
     private Timer shake;
@@ -306,7 +306,7 @@ final class MotorTestDialog extends JFrame {
         top.add(Theme.sectionTitle("Motor test mode"), BorderLayout.NORTH);
         WrappingText warning = new WrappingText("<b>The motors will spin.</b> Remove all propellers first. Betaflight keeps a "
                 + "motor running at the last value it got: if the USB cable comes out while a motor spins, unplug the battery. "
-                + "The motors stop when you untick the box, press SPACE or STOP ALL, or leave this window. At most 30 %: "
+                + "The motors stop when you untick the box, press SPACE or STOP ALL, or leave this window. At most 10 %: "
                 + "enough to see which way they turn.", Theme.font(Font.PLAIN, 13f), Theme.WARN);
         warning.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(Theme.alpha(Theme.WARN, 140)),
                 BorderFactory.createEmptyBorder(8, 10, 8, 10)));
@@ -526,8 +526,12 @@ final class MotorTestDialog extends JFrame {
             note.setHtml("Motor order not changed.");
             return;
         }
-        jobs.add(t -> t.setOutputOrderAndRestart(next));
-        main.logLine("Motor test: motor order set to " + java.util.Arrays.toString(next) + " (was " + java.util.Arrays.toString(current) + ").");
+        String was = java.util.Arrays.toString(current), now = java.util.Arrays.toString(next);
+        jobs.add(t -> {
+            main.logLine(MotorTest.writeLog("motor order", was, now, "writing"));
+            t.setOutputOrderAndRestart(next);
+            main.logLine(MotorTest.writeLog("motor order", was, now, "saved, Betaflight restarts"));
+        });
     }
 
     /** SPIN DIRECTION under the picture: a choice per motor while connected with DShot; a line saying why not otherwise. */
@@ -584,13 +588,19 @@ final class MotorTestDialog extends JFrame {
         }
         stopAll();
         note.setHtml("Motor " + motor + ": sending " + (reversed ? "reversed" : "normal") + " to its ESC...");
+        // an ESC's direction can't be read back over DShot: the one before is what this window last set, if it did
+        String was = directionSet.getOrDefault(motor, "as the ESC had it (not readable)"), now = reversed ? "reversed" : "normal";
         jobs.add(t -> {
+            main.logLine(MotorTest.writeLog("motor " + motor + " spin direction", was, now, "writing"));
             t.setDirection(motor, reversed);
-            ui(() -> note.setHtml("Motor " + motor + " set to <b>" + (reversed ? "reversed" : "normal")
-                    + "</b> and saved in its ESC. Spin it to check."));
+            directionSet.put(motor, now);
+            main.logLine(MotorTest.writeLog("motor " + motor + " spin direction", was, now, "saved in its ESC"));
+            ui(() -> note.setHtml("Motor " + motor + " set to <b>" + now + "</b> and saved in its ESC. Spin it to check."));
         });
-        main.logLine("Motor test: motor " + motor + " spin direction " + (reversed ? "reversed" : "normal") + ".");
     }
+
+    /** Each motor's spin direction as this window last set it in the ESC (motor number -> "normal" / "reversed"). */
+    private final java.util.Map<Integer, String> directionSet = new java.util.concurrent.ConcurrentHashMap<>();
 
     private void slidersChanged() {
         note.setHtml("");
@@ -743,8 +753,12 @@ final class MotorTestDialog extends JFrame {
             int answer = JOptionPane.showConfirmDialog(this, "Set Betaflight to " + (out ? "props out" : "props in")
                             + "?\nIt saves and restarts (a few seconds).", "Props in / out", JOptionPane.YES_NO_OPTION);
             if (answer != JOptionPane.YES_OPTION) return;
-            jobs.add(t -> t.setPropsOutAndRestart(out));
-            main.logLine("Motor test: Betaflight set to " + (out ? "props out" : "props in") + ".");
+            String was = i.reversed() ? "props out" : "props in", now = out ? "props out" : "props in";
+            jobs.add(t -> {
+                main.logLine(MotorTest.writeLog("Betaflight's motor direction (yaw_motors_reversed)", was, now, "writing"));
+                t.setPropsOutAndRestart(out);
+                main.logLine(MotorTest.writeLog("Betaflight's motor direction (yaw_motors_reversed)", was, now, "saved, Betaflight restarts"));
+            });
         }
         propsOut = out;
         main.save(java.util.Map.of(PROPS_OUT_KEY, Boolean.toString(out)));

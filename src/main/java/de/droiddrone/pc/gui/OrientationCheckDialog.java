@@ -347,7 +347,10 @@ final class OrientationCheckDialog extends JFrame {
         });
     }
 
-    /** Writes the alignment found (a backup of the settings first) and saves; Betaflight restarts. */
+    /**
+     * Writes the alignment found (a backup of the settings first) and saves; Betaflight restarts. All or nothing, as
+     * Drone setup (1.0.49): no backup, or the setting refused, leaves the CLI without saving - the board as it was.
+     */
     private void writeFix(BetaflightUsb fc) throws IOException {
         boolean roll = fixRoll;
         int turn = fixYaw;
@@ -356,7 +359,12 @@ final class OrientationCheckDialog extends JFrame {
         int more = roll ? 180 : turn;
         fc.enterCli();
         String version = fc.command("version");
-        java.nio.file.Path backup = backup(fc.command("diff all", 20_000), version);
+        String diff = fc.command("diff all", 20_000);
+        java.nio.file.Path backup = de.droiddrone.pc.setup.CliWrite.usableBackup(diff) ? backup(diff, version) : null;
+        if (backup == null) {
+            fc.exitCli();
+            throw new IOException("No backup of Betaflight's settings could be made, so nothing was written");
+        }
         Integer current = Orientation.parseSetting(fc.command("get " + name), name);
         if (current == null) {
             fc.exitCli();
@@ -364,11 +372,14 @@ final class OrientationCheckDialog extends JFrame {
         }
         int next = Orientation.turned(current, more);
         String cmd = "set " + name + " = " + next;
-        String reply = fc.command(cmd);
-        main.logLine("Betaflight CLI: " + cmd + " -> " + DroneSetup.BetaflightPage.brief(reply));
+        de.droiddrone.pc.setup.CliWrite.Result written = de.droiddrone.pc.setup.CliWrite.run(fc::command, List.of(cmd), main::logLine);
+        if (!written.complete()) {
+            fc.exitCli();
+            throw new IOException(written.stopped() + ". Nothing was saved");
+        }
         fc.saveAndReboot();
         main.logLine("Betaflight: board alignment " + (roll ? "roll" : "yaw") + " " + current + "° -> " + next + "° (orientation check)."
-                + (backup == null ? "" : " Its settings before: " + backup));
+                + " Its settings before: " + backup);
         ui(() -> result.set(State.PENDING, "Written: " + (roll ? "roll" : "yaw") + " " + current + "° -> " + next + "°. Checking again once Betaflight is back..."));
     }
 

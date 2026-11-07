@@ -269,4 +269,21 @@ public final class GpsSetup {
         if (!m.find()) return false;
         return !(m.group(1).equals("0") && m.group(2).equals("0") && m.group(3).equals("0"));
     }
+
+    /** The three offsets from `get mag_calibration`, or null if not understood. */
+    public static int[] magOffsets(String getOutput) {
+        Matcher m = MAG_CALIBRATION.matcher(getOutput);
+        if (!m.find()) return null;
+        return new int[]{Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)), Integer.parseInt(m.group(3))};
+    }
+
+    /**
+     * A calibration just done took (1.0.49): the offsets aren't all zero and differ from the ones read before Start.
+     * Old offsets left as they were mean Betaflight's calibration didn't finish - not "calibrated".
+     * @param before the offsets read before Start (magOffsets), or null if they couldn't be read
+     */
+    public static boolean calibratedSince(int[] before, String getOutput) {
+        int[] now = magOffsets(getOutput);
+        return now != null && calibrated(getOutput) && before != null && !java.util.Arrays.equals(before, now);
+    }
 }

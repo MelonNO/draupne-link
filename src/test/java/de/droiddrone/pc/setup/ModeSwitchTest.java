@@ -57,9 +57,27 @@ class ModeSwitchTest {
                 "aux 5 1 1 900 1300 0 0"), ALL);
         assertEquals(List.of("aux 3 0 0 900 900 0 0", "aux 5 0 0 900 900 0 0", "aux 1 1 1 1300 1700 0 0",
                 "aux 2 11 1 1700 2100 0 0"), p.commands());
-        // a cleared slot that is filled again is just overwritten
+        // a slot that is filled again is still cleared first (1.0.49): all the clears, then the fills
         ModeSwitch.Plan q = ModeSwitch.DEFAULT.plan(aux("aux 1 2 1 1700 2100 0 0", "aux 2 1 1 900 1300 0 0"), ALL);
-        assertEquals(List.of("aux 2 0 0 900 900 0 0", "aux 0 1 1 1300 1700 0 0", "aux 1 11 1 1700 2100 0 0"), q.commands());
+        assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 2 0 0 900 900 0 0", "aux 0 1 1 1300 1700 0 0", "aux 1 11 1 1700 2100 0 0"),
+                q.commands());
+    }
+
+    @Test
+    void aRefilledSlotIsAlwaysClearedFirst() {
+        // ARM was on AUX2 in slot 0; ARM goes to AUX1 and the flight modes to AUX2. 1.0.48 sent only the fill for a slot
+        // it refilled - a fill Betaflight didn't take left ARM there with the new channel (ARM on the mode switch)
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 1 1700 2100 0 0", "aux 1 0 1 900 1300 0 0"), ALL, java.util.Map.of(),
+                ModeSwitch.DEFAULT, 0, 1);
+        List<String> c = p.commands();
+        for (String fill : c) {
+            if (fill.contains(" 900 900")) continue;
+            String slot = fill.split(" ")[1];
+            int clear = c.indexOf("aux " + slot + " 0 0 900 900 0 0");
+            if (clear < 0) continue; // a free slot: nothing to clear
+            assertTrue(clear < c.indexOf(fill), "the clear before the fill: " + c);
+        }
+        assertTrue(c.contains("aux 0 0 0 900 900 0 0") && c.contains("aux 1 0 0 900 900 0 0"), c.toString());
     }
 
     @Test
@@ -79,12 +97,16 @@ class ModeSwitchTest {
 
     @Test
     void sameModesOnOtherSwitchesAreTakenOff() {
-        // GPS RESCUE on AUX4 besides the chosen AUX2 (which gets it as POS HOLD's neighbour, not rescue): one place each
+        // the pilot's own GPS RESCUE switch on AUX4 stays while GPS rescue isn't chosen here (1.0.48 took it off)
         ModeSwitch.Plan p = ModeSwitch.DEFAULT.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 46 3 1700 2100 0 0"), ALL);
-        assertTrue(p.elsewhere().isEmpty());
-        assertEquals(List.of("GPS RESCUE on AUX4"), p.replaced());
-        // its slot is rewritten (cleared, and filled again with the switch's own modes: one command)
-        assertTrue(p.commands().stream().anyMatch(c -> c.startsWith("aux 1 ") && !c.contains(" 46 ")), p.commands().toString());
+        assertEquals(List.of("GPS RESCUE on AUX4"), p.elsewhere());
+        assertTrue(p.replaced().isEmpty());
+        assertEquals(List.of("aux 2 1 1 1300 1700 0 0", "aux 3 11 1 1700 2100 0 0"), p.commands(), "slot 1 isn't touched");
+        // GPS rescue chosen on the switch's top: then it is this plan's, and the one on AUX4 goes
+        ModeSwitch rescueTop = new ModeSwitch(2, ModeSwitch.Mode.ACRO, ModeSwitch.Mode.ANGLE, ModeSwitch.Mode.GPS_RESCUE);
+        assertEquals(List.of("GPS RESCUE on AUX4"), rescueTop.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 46 3 1700 2100 0 0"), ALL).replaced());
+        // HORIZON is never placed here: left where the pilot has it
+        assertEquals(List.of("HORIZON on AUX5"), ModeSwitch.DEFAULT.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 2 4 1700 2100 0 0"), ALL).elsewhere());
         // the pilot's case: ANGLE on AUX5 as well as on the chosen AUX2 - AUX5 is cleared
         ModeSwitch.Plan q = ModeSwitch.DEFAULT.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0",
                 "aux 2 11 1 1700 2100 0 0", "aux 3 1 4 1300 1700 0 0"), ALL);
@@ -202,7 +224,7 @@ class ModeSwitchTest {
     void rescueAloneWithTheModeSwitchLeftAsItIs() {
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 3 1700 2100 0 0"), ALL,
                 java.util.Map.of(), null, 4);
-        assertEquals(List.of("aux 1 46 3 1700 2100 0 0"), p.commands(), "the beeper on AUX4 makes way");
+        assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 1 46 3 1700 2100 0 0"), p.commands(), "the beeper on AUX4 makes way");
         assertEquals(List.of("BEEPER on AUX4"), p.replaced());
     }
 
@@ -237,7 +259,7 @@ class ModeSwitchTest {
         // ARM on AUX3 before: moved to AUX1 (up), so there is one arm switch
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 2 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1);
         assertNull(p.armProblem());
-        assertEquals(List.of("aux 0 0 0 1700 2100 0 0"), p.commands(), "the old slot reused for the new ARM");
+        assertEquals(List.of("aux 0 0 0 900 900 0 0", "aux 0 0 0 1700 2100 0 0"), p.commands(), "the old slot cleared, then reused for the new ARM");
         assertEquals(List.of("ARM on AUX3"), p.replaced());
     }
 
@@ -254,7 +276,8 @@ class ModeSwitchTest {
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 1 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 0, 1);
         assertNull(p.problem());
         assertNull(p.armProblem());
-        assertEquals(List.of("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 11 1 1700 2100 0 0"), p.commands());
+        assertEquals(List.of("aux 0 0 0 900 900 0 0", "aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 11 1 1700 2100 0 0"),
+                p.commands());
     }
 
     @Test
@@ -343,20 +366,137 @@ class ModeSwitchTest {
     }
 
     @Test
-    void beeperGoesAloneOnAux12AndOffEveryOtherSwitch() {
-        // BEEPER (13) on the radio's AUX4 and ANGLE on AUX12 before: both taken off, BEEPER up on AUX12 (channel 11)
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 3 1700 2100 0 0", "aux 2 1 11 900 1300 0 0"),
+    void beeperGoesAloneOnAux14AndOffEveryOtherSwitch() {
+        assertEquals(14, ModeSwitch.BEEPER_AUX, "the last channel MSP carries, almost never a radio switch (AUX12 before 1.0.49)");
+        // BEEPER (13) on the radio's AUX4 and ANGLE on AUX14 before: both taken off, BEEPER up on AUX14 (channel 13)
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 3 1700 2100 0 0", "aux 2 1 13 900 1300 0 0"),
                 ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX);
-        assertEquals(List.of("aux 2 0 0 900 900 0 0", "aux 1 13 11 1700 2100 0 0"), p.commands(),
-                "the old BEEPER slot refilled with the new one, ANGLE's cleared");
-        assertEquals(List.of("BEEPER on AUX4", "ANGLE on AUX12"), p.replaced());
-        // already so: nothing; with another range on AUX12 it is set to the button's
-        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 11 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0,
+        assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 2 0 0 900 900 0 0", "aux 1 13 13 1700 2100 0 0"), p.commands(),
+                "both cleared, the old BEEPER slot filled again with the new one");
+        assertEquals(List.of("BEEPER on AUX4", "ANGLE on AUX14"), p.replaced());
+        assertNull(p.beeperProblem());
+        // already so: nothing; with another range on AUX14 it is set to the button's
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0,
                 ModeSwitch.BEEPER_AUX).commands().isEmpty());
-        assertEquals(List.of("aux 1 13 11 1700 2100 0 0"), ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 11 900 1300 0 0"),
-                ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX).commands());
-        // ARM left as it is on AUX12: BEEPER isn't put there
-        assertTrue(ModeSwitch.plan(aux("aux 0 0 11 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 0, 0, ModeSwitch.BEEPER_AUX)
-                .commands().isEmpty());
+        assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 1 13 13 1700 2100 0 0"), ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0",
+                "aux 1 13 13 900 1300 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX).commands());
+    }
+
+    @Test
+    void armLeftOnTheBeeperChannelBlocksBeeperAndAsksToMoveArm() {
+        // ARM left as it is (0) on AUX14: BEEPER isn't put there, and the page says why
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 13 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 0, 0, ModeSwitch.BEEPER_AUX);
+        assertTrue(p.commands().isEmpty());
+        assertTrue(p.beeperProblem().startsWith("ARM is on AUX14"), p.beeperProblem());
+        assertTrue(p.beeperProblem().contains("Choose an ARM switch"));
+        // an ARM switch chosen: ARM moves off AUX14 (cleared first), then BEEPER goes there
+        ModeSwitch.Plan moved = ModeSwitch.plan(aux("aux 0 0 13 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX);
+        assertNull(moved.beeperProblem());
+        assertEquals(List.of("aux 0 0 0 900 900 0 0", "aux 0 0 0 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0"), moved.commands());
+        // PREARM left on AUX14: the same
+        ModeSwitch.Plan prearm = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 13 1700 2100 0 0"), ALL, java.util.Map.of(),
+                null, 0, 1, 0, ModeSwitch.BEEPER_AUX);
+        assertTrue(prearm.beeperProblem().startsWith("PREARM is on AUX14"), prearm.beeperProblem());
+        assertTrue(prearm.commands().isEmpty(), "PREARM stays where the pilot has it");
+    }
+
+    @Test
+    void noPlanEverPutsBeeperOrAModeBesideArm() {
+        // every ARM position as read (none, AUX1-AUX14, low or high), every ARM / PREARM choice, with and without the
+        // flight modes: once the commands are taken, BEEPER and every mode written is on a channel without ARM
+        for (int armRead = -1; armRead < 14; armRead++) {
+            for (int[] range : new int[][]{{1700, 2100}, {900, 1300}}) {
+                String read = armRead < 0 ? aux() : aux("aux 0 0 " + armRead + " " + range[0] + " " + range[1] + " 0 0",
+                        "aux 1 13 3 1700 2100 0 0", "aux 2 1 13 1300 1700 0 0");
+                for (int armAux = 0; armAux <= ModeSwitch.MAX_AUX; armAux++) {
+                    for (int prearmAux : new int[]{0, 3}) {
+                        for (ModeSwitch modes : new ModeSwitch[]{null, ModeSwitch.DEFAULT}) {
+                            ModeSwitch.Plan p = ModeSwitch.plan(read, ALL, java.util.Map.of(), modes, 4, armAux, prearmAux, ModeSwitch.BEEPER_AUX);
+                            List<ModeSwitch.Slot> after = ModeSwitch.after(ModeSwitch.slots(read), p.commands());
+                            String where = "ARM read on " + armRead + ", ARM " + armAux + ", PREARM " + prearmAux + ", modes " + modes + ": " + p.commands();
+                            assertNull(ModeSwitch.sharedWithArm(after, p.commands()), where);
+                            for (ModeSwitch.Slot s : after) {
+                                if (!s.used() || s.mode() != ModeSwitch.BEEPER_MODE) continue;
+                                for (ModeSwitch.Slot a : after) {
+                                    assertFalse(a.used() && a.mode() == 0 && a.channel() == s.channel(), "BEEPER beside ARM - " + where);
+                                }
+                            }
+                            if (armAux == 0 && armRead == 13) assertNotNull(p.beeperProblem(), where);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void theLastCheckFindsAModePlacedBesideArm() {
+        List<ModeSwitch.Slot> read = ModeSwitch.slots(aux("aux 0 0 13 1700 2100 0 0"));
+        List<String> beeperThere = List.of("aux 1 13 13 1700 2100 0 0");
+        assertEquals("ARM and BEEPER would share AUX14", ModeSwitch.sharedWithArm(ModeSwitch.after(read, beeperThere), beeperThere));
+        List<String> modeThere = List.of("aux 1 1 13 1300 1700 0 0");
+        assertNotNull(ModeSwitch.sharedWithArm(ModeSwitch.after(read, modeThere), modeThere));
+        List<String> armCleared = List.of("aux 0 0 0 900 900 0 0", "aux 1 13 13 1700 2100 0 0");
+        assertNull(ModeSwitch.sharedWithArm(ModeSwitch.after(read, armCleared), armCleared));
+        // the pilot's own mode beside ARM, untouched, is theirs
+        List<ModeSwitch.Slot> own = ModeSwitch.slots(aux("aux 0 0 0 1700 2100 0 0", "aux 1 35 0 1700 2100 0 0"));
+        assertNull(ModeSwitch.sharedWithArm(own, List.of("aux 2 1 1 1300 1700 0 0")));
+    }
+
+    @Test
+    void prearmLeftAsItIsKeepsItsSwitch() {
+        // PREARM on the flight mode switch, PREARM left as it is: 1.0.48 took it off; now the mode switch is refused
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 1 1700 2100 0 0"), ALL, java.util.Map.of(),
+                ModeSwitch.DEFAULT, 0, 1, 0);
+        assertTrue(p.problem().startsWith("PREARM is on AUX2"), p.problem());
+        assertFalse(p.commands().stream().anyMatch(c -> c.startsWith("aux 1 ")), "PREARM's slot isn't touched: " + p.commands());
+        // on the rescue switch: the same for GPS rescue
+        ModeSwitch.Plan r = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 3 1700 2100 0 0"), ALL, java.util.Map.of(), null, 4, 1, 0);
+        assertTrue(r.rescueProblem().startsWith("PREARM is on AUX4"), r.rescueProblem());
+        assertTrue(r.commands().isEmpty());
+        // a PREARM switch chosen elsewhere: then PREARM moves, and the mode switch is free
+        ModeSwitch.Plan moved = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 1 1700 2100 0 0"), ALL, java.util.Map.of(),
+                ModeSwitch.DEFAULT, 0, 1, 3);
+        assertNull(moved.problem());
+        assertEquals(List.of("PREARM on AUX2"), moved.replaced());
+    }
+
+    // ------------------------------------------------------------------ Betaflight's echo and read-back
+
+    /** Betaflight's answer to an aux command in 4.4, 4.5 and 2025.12 (cliAux: the slot as it is now, seven numbers). */
+    private static final String[] VERSIONS = {"4.4.3", "4.5.2", "2025.12.5"};
+
+    @Test
+    void anEchoAsSentIsFineInEveryVersion() {
+        for (String v : VERSIONS) {
+            assertNull(ModeSwitch.echoProblem("aux 3 1 1 1300 1700 0 0", "aux 3 1 1 1300 1700 0 0"), v);
+            assertNull(ModeSwitch.echoProblem("aux 3 0 0 900 900 0 0", "aux 3 0 0 900 900 0 0"), v + ": a clear");
+            // the typed line left in front of Betaflight's own: its own (the last) counts
+            assertNull(ModeSwitch.echoProblem("aux 3 1 1 1300 1700 0 0", "aux 3 1 1 1300 1700 0 0\r\naux 3 1 1 1300 1700 0 0"), v);
+            // a six-field command (before 4.1) against the seven-field echo
+            assertNull(ModeSwitch.echoProblem("aux 3 1 1 1300 1700 0", "aux 3 1 1 1300 1700 0 0"), v);
+            assertNull(ModeSwitch.echoProblem("set failsafe_procedure = DROP", "failsafe_procedure set to DROP"), v + ": not an aux command");
+            assertNull(ModeSwitch.echoProblem("aux 3 1 1 1300 1700 0 0", ""), v + ": no echo - the read-back checks it");
+        }
+    }
+
+    @Test
+    void anEchoThatKeptTheOldModeIsSeenInEveryVersion() {
+        // a mode id Betaflight doesn't take: it keeps the slot's old mode (ARM) with the new channel and range, no ###ERROR
+        for (String v : VERSIONS) {
+            String problem = ModeSwitch.echoProblem("aux 0 11 1 1700 2100 0 0", "aux 0 0 1 1700 2100 0 0");
+            assertEquals("aux 0: sent GPS POSITION HOLD on AUX2 1700-2100, Betaflight has ARM on AUX2 1700-2100", problem, v);
+            assertNotNull(ModeSwitch.echoProblem("aux 0 1 1 1300 1700 0 0", "aux 0 1 1 1300 1675 0 0"), v + ": another range");
+            assertNotNull(ModeSwitch.echoProblem("aux 0 1 1 1300 1700 0 0", "aux 0 1 2 1300 1700 0 0"), v + ": another channel");
+        }
+    }
+
+    @Test
+    void theReadBackIsComparedSlotBySlot() {
+        List<String> sent = List.of("aux 0 0 0 900 900 0 0", "aux 0 0 0 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0");
+        assertNull(ModeSwitch.readBackProblem(sent, aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0")),
+                "the last command for a slot counts");
+        assertNotNull(ModeSwitch.readBackProblem(sent, aux("aux 0 0 13 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0")));
+        assertNotNull(ModeSwitch.readBackProblem(sent, "# aux\n"), "a slot missing from the list");
     }
 }
