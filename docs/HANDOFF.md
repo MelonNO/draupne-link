@@ -4,7 +4,25 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-07, 1.0.45 built, not released; phone app 2.3.0-pc.34 compiled from source, no APK yet)
+## Where things stand (2026-11-07, 1.0.49 on main, not released; phone app 2.3.0-pc.38; last flown: 1.0.43)
+
+- **1.0.49 + phone pc.38 (2026-11-07, not released, nothing of 1.0.44-1.0.49 run on hardware):** the fix round of the
+  full review of 1.0.48 - every finding (C1, H1-H10, M1-M20, L1-L11, T1); the per-finding notes are in CHANGELOG 1.0.49.
+  Key places: `RcSession` (BEEPER on `ModeSwitch.BEEPER_AUX` = 14 only when `drone.beeperSet`, fresh DISARMED, 10 s;
+  frames padded to 8, AUX14 with 0 between; `armBlocked` while the phone installs), `ArmSwitch` (0 / not sent =
+  unknown), overlay `Common/ArmRanges` + `Msp` MSP_MODE_RANGES (the phone's idle-sticks check), `Common/Takeover`
+  (same-address rule), `setup/CliWrite` (all-or-nothing: backup, echo + read-back compare, exit without save),
+  `setup/SetupConfirm` (CONFIRM tied to MSP_UID), `PossiblyFlying` (pauses every background fetch), `PcConfig`
+  (Properties escaping, tolerant read), `NameService` duplicates, `TileQueue` (newest first, 256), `FrameAssembler`
+  (frame-number gaps = lost; old-stream frames dropped), `map/TrackPath` + `CameraView.Live` (the Swing thread's load),
+  `Common/ClipStore` + `GuardedCopy` (overwatch segments, quota, retries; update download stops when armed), `SelfUpdate`
+  Authenticode check (`SIGNER` null: unsigned accepted). Not done: Betaflight's linked modes (MSP_MODE_RANGES_EXTRA)
+  aren't read by the idle check; `confirmEndWhileArmed` / `askPower` still keep their own `lastArmedAt` instead of
+  `PossiblyFlying`. At release: ApkShare's RELEASE PIN (VERSION + APK_SHA256) to pc.38. Bench plan before flying: the
+  review's "Untested and risky" section (Drone setup on both boards incl. a pulled plug mid-write, GPS UART moves on the
+  F722, the silent drone and BEEPER, idle sticks with ARM moved, the arming gate and a props-off link loss, audio,
+  motion detection, OVERWATCH overnight on each phone, OBSERVATION with three phones, weak 4G). Network tests use fixed
+  UDP ports: don't run two test suites at once.
 
 - **1.0.48 OBSERVATION + phone pc.37 (2026-11-07, branch feat-observation, not released, never run with real phones;
   versions left for the merge):** the pilot's agreed spec: a third CONNECT AS, *Observation* - up to six idle drones in a
