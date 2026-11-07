@@ -74,9 +74,11 @@ public final class ClipIndex {
             return longOf("startedAt", 0);
         }
 
-        /** The full clip's length when known, else the preview's, else from start to end. */
+        /** The full clip's length when known (every part here, added up), else the preview's, else from start to end. */
         public long durationMs() {
-            long d = longOf("clipDurationMs", 0);
+            long d = 0;
+            for (Path p : parts()) d += longOf("clipDurationMs" + partSuffix(partOf(p)), 0);
+            if (d <= 0) d = longOf("clipDurationMs", 0);
             if (d <= 0) d = longOf("previewDurationMs", 0);
             if (d <= 0) {
                 long end = longOf("endedAt", 0);
@@ -115,8 +117,24 @@ public final class ClipIndex {
 
         /** The phone's full-quality clip, when it is here and checked. */
         public Path fullClip() {
-            Path p = folder.resolve(id + ".mp4");
-            return Files.isRegularFile(p) ? p : null;
+            List<Path> p = parts();
+            return p.isEmpty() ? null : p.get(0);
+        }
+
+        /**
+         * The phone's full-quality clip in its parts (pc.38 records an event in 60 s segments: id.mp4, id-part2.mp4 ...),
+         * those here, in order; empty when none came yet.
+         */
+        public List<Path> parts() {
+            List<Path> out = new ArrayList<>();
+            Path first = folder.resolve(id + ".mp4");
+            if (Files.isRegularFile(first)) out.add(first);
+            try (DirectoryStream<Path> s = Files.newDirectoryStream(folder, id + "-part*.mp4")) {
+                for (Path p : s) if (partOf(p) > 1) out.add(p);
+            } catch (IOException ignored) {
+            }
+            out.sort(Comparator.comparingInt(ClipIndex::partOf));
+            return out;
         }
 
         /** The live preview this PC recorded while the clip was on its way, or null. */
@@ -148,6 +166,28 @@ public final class ClipIndex {
             if (Files.isRegularFile(t)) return t;
             List<Path> pre = preRoll();
             return pre.isEmpty() ? null : pre.get(pre.size() - 1);
+        }
+    }
+
+    /** A part's file: the first is id.mp4 (as before segments), later ones id-partN.mp4. */
+    public static String partFile(String id, int part) {
+        return part <= 1 ? id + ".mp4" : id + "-part" + part + ".mp4";
+    }
+
+    /** A part's facts carry this after their key (clipSha256.2 ...); nothing for the first. */
+    public static String partSuffix(int part) {
+        return part <= 1 ? "" : "." + part;
+    }
+
+    /** The part number of a part's file (1 for id.mp4). */
+    static int partOf(Path p) {
+        String n = p.getFileName().toString();
+        int at = n.lastIndexOf("-part");
+        if (at < 0 || !n.endsWith(".mp4")) return 1;
+        try {
+            return Integer.parseInt(n.substring(at + 5, n.length() - 4));
+        } catch (NumberFormatException e) {
+            return 1;
         }
     }
 

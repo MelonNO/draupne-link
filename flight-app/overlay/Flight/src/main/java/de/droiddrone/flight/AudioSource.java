@@ -45,13 +45,24 @@ public class AudioSource {
     private final Context context;
     private final ArrayBlockingQueue<byte[]> mp4Buffer = new ArrayBlockingQueue<>(30);
     private final ArrayBlockingQueue<byte[]> streamBuffer = new ArrayBlockingQueue<>(30);
-    private AudioRecord audioRecord;
+    /**
+     * DRAUPNE Link (pc.38, the review's L4): how long a consumer waits for the microphone's next buffer (about 10 ms
+     * of sound each) - the encoder loops used to ask again at once, a CPU core spinning on an empty queue.
+     */
+    static final long PCM_WAIT_MS = 15;
+    private volatile AudioRecord audioRecord;
     private int bytesToRead;
     private AudioFormat audioFormat;
-    private boolean isInitialized;
-    private boolean usedInMp4;
-    private boolean usedInStream;
+    private volatile boolean isInitialized;
+    private volatile boolean usedInMp4;
+    private volatile boolean usedInStream;
     private int audioSourceId;
+    /**
+     * pc.38 (L4): the reader thread's generation. A quick close and initialize left the old reader running beside the
+     * new one (both saw isInitialized true again, both read the new AudioRecord); each reader now stops as soon as
+     * its generation has passed, and reads only the AudioRecord it was started with.
+     */
+    private volatile int readerGeneration;
 
     public AudioSource(Context context){
         this.context = context;
@@ -61,7 +72,7 @@ public class AudioSource {
         audioSourceId = 0;
     }
 
-    public boolean initialize(int consumerId){
+    public synchronized boolean initialize(int consumerId){
         if (isInitialized){
             setConsumer(consumerId);
             return true;
@@ -77,40 +88,52 @@ public class AudioSource {
         if (!started) return false;
         isInitialized = true;
         setConsumer(consumerId);
-        Thread audioThread = new Thread(audioThreadRunnable);
+        final int generation = ++readerGeneration;
+        final AudioRecord record = audioRecord;
+        final int toRead = bytesToRead;
+        Thread audioThread = new Thread(() -> readLoop(generation, record, toRead));
         audioThread.setDaemon(false);
         audioThread.setName("audioThread");
         audioThread.start();
         return true;
     }
 
-    private final Runnable audioThreadRunnable = new Runnable() {
-        @Override
-        public void run() {
-            ByteBuffer buf = ByteBuffer.allocateDirect(bytesToRead);
-            while (isInitialized){
-                if (audioRecord.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING || audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
-                    try {
-                        Thread.sleep(1);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
+    /** One reader for one AudioRecord, until its generation passes (close, or a new initialize). */
+    private void readLoop(int generation, AudioRecord record, int toRead) {
+        ByteBuffer buf = ByteBuffer.allocateDirect(toRead);
+        while (generation == readerGeneration){
+            try {
+                if (record.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING || record.getState() != AudioRecord.STATE_INITIALIZED) {
+                    Thread.sleep(20); // pc.38: was 1 ms, a thousand wake-ups a second while the microphone starts
                     continue;
                 }
                 buf.position(0);
-                int size = audioRecord.read(buf, bytesToRead, AudioRecord.READ_BLOCKING);
-                if (size <= 0) continue;
+                int size = record.read(buf, toRead, AudioRecord.READ_BLOCKING);
+                if (size <= 0) {
+                    Thread.sleep(20); // an error (the record released under us, a dead microphone): not at full speed
+                    continue;
+                }
+                if (generation != readerGeneration) return; // closed while this read waited: its sound isn't the new one's
                 byte[] data = new byte[size];
                 buf.get(data, 0, size);
                 if (usedInMp4) mp4Buffer.offer(data);
                 if (usedInStream) streamBuffer.offer(data);
+            } catch (InterruptedException e) {
+                return;
+            } catch (RuntimeException e) {
+                return; // the record was released: a newer reader (if any) has its own
             }
         }
-    };
+    }
 
+    /** The next buffer for this consumer, waiting up to {@link #PCM_WAIT_MS} for it (pc.38: no busy loop); null if none. */
     public byte[] getBufferData(int consumerId){
-        if (consumerId == MediaCommon.mp4AudioConsumerId) return mp4Buffer.poll();
-        if (consumerId == MediaCommon.streamAudioConsumerId) return streamBuffer.poll();
+        try {
+            if (consumerId == MediaCommon.mp4AudioConsumerId) return mp4Buffer.poll(PCM_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+            if (consumerId == MediaCommon.streamAudioConsumerId) return streamBuffer.poll(PCM_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         return null;
     }
 
@@ -156,7 +179,7 @@ public class AudioSource {
         if (consumerId == MediaCommon.streamAudioConsumerId) usedInStream = true;
     }
 
-    public void stop(int consumerId){
+    public synchronized void stop(int consumerId){
         if (consumerId == MediaCommon.mp4AudioConsumerId) {
             usedInMp4 = false;
             mp4Buffer.clear();
@@ -168,9 +191,10 @@ public class AudioSource {
         if (!usedInMp4 && !usedInStream) close();
     }
 
-    public void close(){
+    public synchronized void close(){
         if (!isInitialized) return;
         isInitialized = false;
+        readerGeneration++; // pc.38: the reader stops at its next turn, even if an initialize follows at once
         usedInMp4 = false;
         usedInStream = false;
         try {

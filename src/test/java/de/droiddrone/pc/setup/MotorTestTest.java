@@ -44,9 +44,16 @@ class MotorTestTest {
 
     @Test
     void motorValuesNeverGoBelowStopOrAboveTheCap() {
-        int[] sent = MotorTest.motors(MotorTest.setMotorPayload(new int[]{1150, 2000, 0, -5}));
-        assertArrayEquals(new int[]{1150, MotorTest.MAX, 1000, 1000, 1000, 1000, 1000, 1000}, sent);
-        assertEquals(1300, MotorTest.MAX, "30 %: enough to see the direction");
+        int[] sent = MotorTest.motors(MotorTest.setMotorPayload(new int[]{1050, 2000, 0, -5, 1300}));
+        assertArrayEquals(new int[]{1050, MotorTest.MAX, 1000, 1000, MotorTest.MAX, 1000, 1000, 1000}, sent);
+        assertEquals(1100, MotorTest.MAX, "10 %: enough to see the direction, far from a 5\" quad's hover (1.0.48 allowed 1300)");
+    }
+
+    @Test
+    void everyWriteIsLoggedWithTheValueBefore() {
+        assertEquals("Motor test: motor order [1, 2, 3, 4] -> [2, 1, 3, 4] (saved, Betaflight restarts)",
+                MotorTest.writeLog("motor order", java.util.Arrays.toString(new int[]{1, 2, 3, 4}),
+                        java.util.Arrays.toString(new int[]{2, 1, 3, 4}), "saved, Betaflight restarts"));
     }
 
     @Test

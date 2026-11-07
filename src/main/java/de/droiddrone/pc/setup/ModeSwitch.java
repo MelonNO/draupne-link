@@ -33,11 +33,13 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
     public static final int BEEPER_MODE = 13;
 
     /**
-     * The BEEPER mode's channel (1.0.44): AUX12, which the app drives itself - the BEEPER button - not the radio (a
-     * radio's AUX12 is overridden). Up = beep. Drone setup puts BEEPER there alone: BEEPER on any other switch, and
-     * any other mode on AUX12, is taken off, so nothing but the button can make the drone beep (see Beepers).
+     * The BEEPER mode's channel: AUX14 (1.0.49; AUX12 before), the last channel MSP carries and almost never a radio
+     * switch, which the app drives itself - the BEEPER button - not the radio (a radio's AUX14 is overridden). Up = beep.
+     * Drone setup puts BEEPER there alone: BEEPER on any other switch, and any other mode on AUX14, is taken off, so
+     * nothing but the button can make the drone beep (see Beepers). Never beside ARM or PREARM: then the page asks to
+     * move them first, and BEEPER isn't written.
      */
-    public static final int BEEPER_AUX = 12;
+    public static final int BEEPER_AUX = 14;
     static final int[] BEEPER_RANGE = {1700, 2100};
 
     /**
@@ -309,10 +311,11 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
      * @param armProblem    why the ARM switch can't be written, or null
      * @param prearmProblem why the PREARM switch can't be written, or null
      * @param doubled       managed modes Betaflight has on more than one switch ("ANGLE on AUX2, AUX5"), as read
+     * @param beeperProblem why BEEPER can't go on its channel (ARM or PREARM is there: move it first), or null
      */
     public record Plan(List<String> commands, String problem, String rescueProblem, List<Mode> missing,
                        java.util.Map<Mode, String> blocked, List<String> elsewhere, List<String> replaced, String armProblem,
-                       String prearmProblem, List<String> doubled) {
+                       String prearmProblem, List<String> doubled, String beeperProblem) {
         public boolean isSet() {
             return problem == null && commands.isEmpty();
         }
@@ -355,8 +358,13 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
      * @param rescueAux GPS rescue up on this AUX too (0 = no): for when Betaflight's failsafe is GPS rescue
      * @param armAux    ARM on this AUX, up (0 = leave ARM as it is). ARM on any other switch is taken off: one arm switch.
      * @param prearmAux PREARM on this AUX, up (0 = leave PREARM as it is). PREARM on any other switch is taken off.
-     * @param beeperAux BEEPER alone on this AUX, up ({@link #BEEPER_AUX}; 0 = leave BEEPER as it is). Left out when ARM
-     *                  is there (left as it is).
+     * @param beeperAux BEEPER alone on this AUX, up ({@link #BEEPER_AUX}; 0 = leave BEEPER as it is). Never where ARM
+     *                  or PREARM is or stays: then beeperProblem asks to move them, and BEEPER is left as it is.
+     *
+     * Only the modes this plan places are taken off other switches (1.0.49): a pilot's own GPS RESCUE switch stays
+     * while GPS rescue isn't chosen here, and PREARM left as it is keeps its switch - a switch chosen here that PREARM
+     * is on is refused, like ARM. Every slot written is cleared first, even one that is filled again: Betaflight keeps
+     * a slot's old mode when it doesn't take the new one, and the write is checked against its echo (see echoProblem).
      */
     public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
                             int rescueAux, int armAux, int prearmAux, int beeperAux) {
@@ -390,8 +398,25 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
                 prearmChannel = prearmAux - 1;
             }
         }
-        int beeperChannel = beeperAux > 0 && !armChannels.contains(beeperAux - 1) && prearmChannel != beeperAux - 1
-                && (modes == null || modes.aux != beeperAux) && rescueAux != beeperAux ? beeperAux - 1 : -1;
+        // where PREARM will be, the same way: a switch PREARM stays on isn't taken for anything else either
+        Set<Integer> prearmChannels = new HashSet<>();
+        if (prearmChannel >= 0) prearmChannels.add(prearmChannel);
+        else for (Slot s : slots) if (s.used() && s.mode() == MODE_PREARM) prearmChannels.add(s.channel());
+        String beeperProblem = null;
+        int beeperChannel = -1;
+        if (beeperAux > 0) {
+            if (armChannels.contains(beeperAux - 1)) {
+                beeperProblem = "ARM is on AUX" + beeperAux + ", the channel the app's BEEPER button drives: BEEPER would arm the drone. "
+                        + "Choose an ARM switch (AUX1-" + MAX_AUX + ") above - ARM moves there, then BEEPER goes on AUX" + beeperAux + ".";
+            } else if (prearmChannels.contains(beeperAux - 1)) {
+                beeperProblem = "PREARM is on AUX" + beeperAux + ", the channel the app's BEEPER button drives. Choose a PREARM switch "
+                        + "(AUX1-" + MAX_AUX + ") above - PREARM moves there, then BEEPER goes on AUX" + beeperAux + ".";
+            } else if ((modes != null && modes.aux == beeperAux) || rescueAux == beeperAux) {
+                beeperProblem = "AUX" + beeperAux + " is the app's BEEPER channel - pick another switch.";
+            } else {
+                beeperChannel = beeperAux - 1;
+            }
+        }
         List<Mode> missing = new ArrayList<>();
         String problem = null, rescueProblem = null;
         java.util.Map<Integer, List<int[]>> wanted = new java.util.LinkedHashMap<>(); // channel -> {mode, start, end}
@@ -399,6 +424,8 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             int channel = modes.aux - 1;
             if (armChannels.contains(channel)) {
                 problem = "ARM is on AUX" + modes.aux + " - pick another switch for the flight modes.";
+            } else if (prearmChannels.contains(channel)) {
+                problem = "PREARM is on AUX" + modes.aux + " - pick another switch for the flight modes, or a PREARM switch.";
             } else {
                 List<int[]> list = new ArrayList<>();
                 Mode[] m = modes.positions();
@@ -419,6 +446,8 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
                 rescueProblem = "AUX" + rescueAux + " is the flight mode switch - pick another switch for GPS rescue.";
             } else if (armChannels.contains(channel)) {
                 rescueProblem = "ARM is on AUX" + rescueAux + " - pick another switch for GPS rescue.";
+            } else if (prearmChannels.contains(channel)) {
+                rescueProblem = "PREARM is on AUX" + rescueAux + " - pick another switch for GPS rescue, or a PREARM switch.";
             } else if (blocked.containsKey(Mode.GPS_RESCUE)) {
                 rescueProblem = blocked.get(Mode.GPS_RESCUE); // the switch is left as it is meanwhile
             } else if (available != null && !available.contains(Mode.GPS_RESCUE.id)) {
@@ -429,6 +458,8 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             }
         }
         List<String> doubled = doubled(slots);
+        Set<Integer> placing = new HashSet<>(); // the modes this plan puts on a switch: only these are taken off others
+        for (List<int[]> l : wanted.values()) for (int[] w : l) placing.add(w[0]);
         List<String> elsewhere = new ArrayList<>();
         List<Slot> onSwitches = new ArrayList<>();
         List<Slot> offElsewhere = new ArrayList<>(); // managed modes on other switches: taken off, each in one place
@@ -438,8 +469,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             if (wanted.containsKey(s.channel())) {
                 onSwitches.add(s);
             } else if (MANAGED.contains(s.mode())) {
-                boolean ours = s.mode() == Mode.GPS_RESCUE.id ? (rescueAux > 0 && rescueProblem == null) || (modes != null && problem == null)
-                        : modes != null && problem == null;
+                boolean ours = placing.contains(s.mode());
                 String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
                 if (ours) offElsewhere.add(s);
                 else if (!elsewhere.contains(line)) elsewhere.add(line);
@@ -524,21 +554,86 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         free.sort(null);
         if (free.size() < place.size()) {
             return new Plan(List.of(), "Betaflight's Modes are full - free a few in Betaflight Configurator.", rescueProblem,
-                    missing, blocked, elsewhere, List.of(), armProblem, prearmProblem, doubled);
+                    missing, blocked, elsewhere, List.of(), armProblem, prearmProblem, doubled, beeperProblem);
         }
+        // the clears stay, also for a slot filled again below: they all come before the first fill
         for (int i = 0; i < place.size(); i++) {
             int[] w = place.get(i);
             commands.add(auxCommand(free.get(i), w[1], w[0], w[2], w[3], fields));
         }
-        // a cleared slot that is filled again needs only the second command
-        List<String> result = new ArrayList<>();
-        for (String c : commands) {
-            String slot = c.split(" ")[1];
-            boolean refilled = c.contains(" 900 900") && commands.stream().anyMatch(o -> o != c && o.split(" ")[1].equals(slot));
-            if (!refilled) result.add(c);
+        String unsafe = sharedWithArm(after(slots, commands), commands);
+        if (unsafe != null) { // never expected: a last check on the result, so no plan can ever put a mode beside ARM
+            return new Plan(List.of(), unsafe + " - nothing is written; set the Modes tab by hand.", rescueProblem, missing, blocked,
+                    elsewhere, List.of(), armProblem, prearmProblem, doubled, beeperProblem);
         }
-        return new Plan(List.copyOf(result), problem, rescueProblem, missing, blocked, elsewhere, List.copyOf(replaced), armProblem,
-                prearmProblem, doubled);
+        return new Plan(List.copyOf(commands), problem, rescueProblem, missing, blocked, elsewhere, List.copyOf(replaced), armProblem,
+                prearmProblem, doubled, beeperProblem);
+    }
+
+    /** Betaflight's slots as the plan expects them once these "aux" commands are taken: the slots as read, then each command. */
+    static List<Slot> after(List<Slot> before, List<String> commands) {
+        java.util.Map<Integer, Slot> bySlot = new java.util.TreeMap<>();
+        for (Slot s : before) bySlot.put(s.index(), s);
+        for (Slot s : slots(String.join("\n", commands))) bySlot.put(s.index(), s);
+        return new ArrayList<>(bySlot.values());
+    }
+
+    /**
+     * Why these slots are unsafe, or null: a mode the commands place (BEEPER, a flight mode, GPS rescue, PREARM) on a
+     * channel ARM is on once they are taken. The button drives BEEPER's channel and the flight mode switch is flicked in
+     * flight: neither may ever carry ARM. What the pilot had beside ARM and the plan doesn't touch is theirs.
+     */
+    static String sharedWithArm(List<Slot> result, List<String> commands) {
+        Set<Integer> written = new HashSet<>();
+        for (Slot s : slots(String.join("\n", commands))) written.add(s.index());
+        for (Slot s : result) {
+            if (!s.used() || s.mode() == MODE_ARM || !written.contains(s.index())) continue;
+            for (Slot a : result) {
+                if (a.used() && a.mode() == MODE_ARM && a.channel() == s.channel()) {
+                    return "ARM and " + modeName(s.mode()) + " would share AUX" + (s.channel() + 1);
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Betaflight's echo of one "aux" command against the command: it prints the slot as it now is ("aux 3 1 1 1300 1700
+     * 0 0", the same in 4.4, 4.5 and 2025.12). Null when they agree, or when there is no echo to compare (the read-back
+     * after the write checks that slot then); otherwise what differs. A mode id Betaflight doesn't take leaves the
+     * slot's old mode in place with the new channel and range, and no ###ERROR - this is how it is seen.
+     */
+    public static String echoProblem(String command, String reply) {
+        List<Slot> sent = slots(command);
+        if (sent.size() != 1) return null; // not an aux command
+        Slot echo = null;
+        for (Slot s : slots(reply)) if (s.index() == sent.get(0).index()) echo = s; // the last: Betaflight's own line
+        return echo == null ? null : differs(sent.get(0), echo);
+    }
+
+    /** Every slot these "aux" commands wrote against Betaflight's "aux" read back after them: null when all are as sent. */
+    public static String readBackProblem(List<String> commands, String auxOutput) {
+        java.util.Map<Integer, Slot> now = new java.util.HashMap<>();
+        for (Slot s : slots(auxOutput)) now.put(s.index(), s);
+        java.util.Map<Integer, Slot> sent = new java.util.LinkedHashMap<>();
+        for (Slot s : slots(String.join("\n", commands))) sent.put(s.index(), s); // the last command for a slot counts
+        for (Slot s : sent.values()) {
+            Slot n = now.get(s.index());
+            if (n == null) return "aux " + s.index() + " isn't in Betaflight's list after the write";
+            String d = differs(s, n);
+            if (d != null) return d;
+        }
+        return null;
+    }
+
+    /** "aux 3: sent GPS RESCUE on AUX2 1700-2100, Betaflight has ARM on AUX2 1700-2100", or null if the same. */
+    private static String differs(Slot sent, Slot got) {
+        if (sent.mode() == got.mode() && sent.channel() == got.channel() && sent.start() == got.start() && sent.end() == got.end()) return null;
+        return "aux " + sent.index() + ": sent " + describeSlot(sent) + ", Betaflight has " + describeSlot(got);
+    }
+
+    private static String describeSlot(Slot s) {
+        return s.used() ? modeName(s.mode()) + " on AUX" + (s.channel() + 1) + " " + s.start() + "-" + s.end() : "nothing (cleared)";
     }
 
     /** The flight modes this setup manages: each belongs in one place. */

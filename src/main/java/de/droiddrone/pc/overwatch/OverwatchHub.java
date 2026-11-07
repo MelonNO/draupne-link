@@ -445,28 +445,32 @@ public final class OverwatchHub implements AutoCloseable {
         if (t != null) t.close();
         s.transfer = null;
         try {
-            String id = idFor(s, info.event, info.startedAt);
+            // pc.38: an event comes in 60 s segments, all filed under the event (its start), each a part of its own
+            String id = idFor(s, info.event, info.eventStartedAt);
+            int part = Math.max(1, info.part);
+            String sfx = ClipIndex.partSuffix(part);
             Path dir = index.folder(s.drone());
-            Path done = dir.resolve(id + ".mp4");
+            Path done = dir.resolve(ClipIndex.partFile(id, part));
             String hex = hex(info.sha256);
-            if (Files.isRegularFile(done) && hasChecked(s, id, done, info, hex)) {
-                send(s, OverwatchProtocol.command(s.token, info.event, OverwatchProtocol.CMD_CLIP_DONE, 1, 0)); // here already
+            if (Files.isRegularFile(done) && hasChecked(s, id, part, done, info, hex)) {
+                send(s, OverwatchProtocol.clipDone(s.token, info.event, true, info.startedAt)); // here already
                 return;
             }
             ClipIndex.Clip known = index.clip(s.drone(), id);
-            if (known != null && hex.equals(known.meta().getProperty(BAD_SHA))) {
-                send(s, OverwatchProtocol.command(s.token, info.event, OverwatchProtocol.CMD_CLIP_DONE, 0, 0)); // given up on: not again
+            if (known != null && hex.equals(known.meta().getProperty(BAD_SHA + sfx))) {
+                send(s, OverwatchProtocol.clipDone(s.token, info.event, false, info.startedAt)); // given up on: not again
                 return;
             }
-            ClipTransfer ct = new ClipTransfer(dir.resolve(id + ".mp4.part"), done, info.size, info.sha256);
+            ClipTransfer ct = new ClipTransfer(dir.resolve(ClipIndex.partFile(id, part) + ".part"), done, info.size, info.sha256);
             s.transfer = new Transfer(info, id, ct);
             updateMeta(s, id, m -> {
-                m.setProperty("clipSize", Long.toString(info.size));
-                m.setProperty("clipDurationMs", Long.toString(info.durationMs));
+                m.setProperty("clipSize" + sfx, Long.toString(info.size));
+                m.setProperty("clipDurationMs" + sfx, Long.toString(info.durationMs));
                 m.setProperty("clipSound", Boolean.toString(info.sound));
                 m.setProperty("clipSize.wh", info.width + "x" + info.height);
             });
-            log(s.drone() + ": its clip (" + ClipIndex.sizeText(info.size) + (ct.received() > 0 ? ", going on from " + ClipIndex.sizeText(ct.received()) : "")
+            log(s.drone() + ": its clip" + (part > 1 ? " (part " + part + ")" : "") + " (" + ClipIndex.sizeText(info.size)
+                    + (ct.received() > 0 ? ", going on from " + ClipIndex.sizeText(ct.received()) : "")
                     + ") comes" + (isFlying() ? " once no drone here may be flying." : " now."));
         } catch (IOException e) {
             log(s.drone() + ": the clip can't be stored: " + e.getMessage());
@@ -491,6 +495,7 @@ public final class OverwatchHub implements AutoCloseable {
     private void finishClip(Session s, Transfer t, long now) {
         t.renameTriedAt = now;
         int event = t.info.event;
+        String sfx = ClipIndex.partSuffix(Math.max(1, t.info.part));
         ClipTransfer.Result r;
         try {
             r = t.clip.finish();
@@ -501,24 +506,25 @@ public final class OverwatchHub implements AutoCloseable {
         }
         switch (r) {
             case OK -> {
-                send(s, OverwatchProtocol.command(s.token, event, OverwatchProtocol.CMD_CLIP_DONE, 1, 0));
+                send(s, OverwatchProtocol.clipDone(s.token, event, true, t.info.startedAt));
                 t.close();
                 s.transfer = null;
                 updateMeta(s, t.id, m -> {
                     m.setProperty("clip", "full");
-                    m.setProperty(CHECKED_SHA, hex(t.info.sha256)); // the phone may announce it again: no second hashing
+                    m.setProperty(CHECKED_SHA + sfx, hex(t.info.sha256)); // the phone may announce it again: no second hashing
                 });
-                log(s.drone() + ": its full-quality clip is here (" + ClipIndex.sizeText(t.info.size) + ", checked); the phone deletes its copy.");
+                log(s.drone() + ": its full-quality clip" + (t.info.part > 1 ? " (part " + t.info.part + ")" : "") + " is here ("
+                        + ClipIndex.sizeText(t.info.size) + ", checked); the phone deletes its copy.");
                 Listener l = listener;
                 if (l != null) l.onClips(s.drone());
             }
             case MISMATCH -> log(s.drone() + ": the clip came damaged (its SHA-256 differs): fetched again (" + t.clip.mismatches()
                     + " of " + ClipTransfer.MAX_RETRIES + " tries again).");
             case FAILED -> {
-                send(s, OverwatchProtocol.command(s.token, event, OverwatchProtocol.CMD_CLIP_DONE, 0, 0));
+                send(s, OverwatchProtocol.clipDone(s.token, event, false, t.info.startedAt));
                 t.close();
                 s.transfer = null;
-                updateMeta(s, t.id, m -> m.setProperty(BAD_SHA, hex(t.info.sha256)));
+                updateMeta(s, t.id, m -> m.setProperty(BAD_SHA + sfx, hex(t.info.sha256)));
                 log(s.drone() + ": the clip came damaged " + t.clip.mismatches() + " times: given up. The preview recorded here stays as its clip.");
                 Listener l = listener;
                 if (l != null) l.onClips(s.drone());
@@ -526,7 +532,7 @@ public final class OverwatchHub implements AutoCloseable {
         }
     }
 
-    /** The event's facts: the SHA-256 of its clip, checked when it came (1.0.49: no reading 50 MB again at every resend). */
+    /** The event's facts: the SHA-256 of its clip (".2", ".3" ... added for later parts), checked when it came (1.0.49: no reading 50 MB again at every resend). */
     static final String CHECKED_SHA = "clipSha256";
     /** The SHA-256 of a clip given up on after its retries: announced again, it is not fetched again. */
     static final String BAD_SHA = "clipBadSha256";
@@ -537,12 +543,13 @@ public final class OverwatchHub implements AutoCloseable {
      * The clip at done is this one: the hash checked when it came, in the event's facts, says so (and the size
      * agrees); a clip from 1.0.47 / 1.0.48 has none - it is hashed once and the hash kept.
      */
-    private boolean hasChecked(Session s, String id, Path done, OverwatchProtocol.ClipInfo info, String hex) throws IOException {
+    private boolean hasChecked(Session s, String id, int part, Path done, OverwatchProtocol.ClipInfo info, String hex) throws IOException {
+        String key = CHECKED_SHA + ClipIndex.partSuffix(part);
         ClipIndex.Clip c = index.clip(s.drone(), id);
-        String stored = c == null ? null : c.meta().getProperty(CHECKED_SHA);
+        String stored = c == null ? null : c.meta().getProperty(key);
         if (stored != null) return stored.equals(hex) && Files.size(done) == info.size;
         byte[] actual = ClipTransfer.sha256(done);
-        updateMeta(s, id, m -> m.setProperty(CHECKED_SHA, hex(actual)));
+        updateMeta(s, id, m -> m.setProperty(key, hex(actual)));
         return Arrays.equals(actual, info.sha256);
     }
 

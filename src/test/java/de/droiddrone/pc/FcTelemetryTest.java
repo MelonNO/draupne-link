@@ -252,14 +252,15 @@ class FcTelemetryTest {
     void thePhoneInstallingAnUpdateIsSeen() throws Exception {
         FcTelemetry t = new FcTelemetry();
         assertFalse(t.isPhoneInstalling(MonoClock.ms()));
-        for (int state : new int[]{1, FcTelemetry.UPDATE_INSTALLING}) {
+        for (int state : new int[]{1, FcTelemetry.UPDATE_INSTALLING, FcTelemetry.UPDATE_TAP_NEEDED, 4}) {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             DataOutputStream o = new DataOutputStream(bytes);
             o.writeShort(FcTelemetry.PHONE_UPDATE);
             o.writeByte(state); o.writeByte(100); o.writeUTF("2.3.0-pc.38");
             t.parse(new DataReader(bytes.toByteArray(), true), BETAFLIGHT);
             long now = MonoClock.ms();
-            assertEquals(state == FcTelemetry.UPDATE_INSTALLING, t.isPhoneInstalling(now), "state " + state);
+            assertEquals(state == 2 || state == 3, t.isPhoneInstalling(now), "state " + state);
+            if (state == 3) assertFalse(t.isPhoneInstalling(now + FcTelemetry.INSTALLING_FRESH_MS + 1), "an old word: the app restarted long ago");
         }
         assertFalse(t.isPhoneInstalling(MonoClock.ms() + FcTelemetry.INSTALLING_FRESH_MS + 1), "an old word: the app restarted long ago");
     }

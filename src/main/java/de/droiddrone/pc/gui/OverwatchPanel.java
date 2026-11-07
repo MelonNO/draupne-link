@@ -536,8 +536,9 @@ final class OverwatchPanel extends JPanel {
     /** On the list's worker: one row - the clip's files looked at, its picture decoded (kept), its text. */
     private Row row(ClipIndex.Clip c, Coordinates.Format fmt) {
         String when = c.startedAt() > 0 ? DAY_TIME.format(Instant.ofEpochMilli(c.startedAt()).atZone(ZoneId.systemDefault())) : c.id();
-        boolean full = c.fullClip() != null, preview = c.preview() != null;
-        String kind = full ? "full quality" : preview ? "preview (the full clip is on its way)" : "pictures only";
+        int parts = c.parts().size(); // pc.38's 60 s segments: one event, one row
+        boolean full = parts > 0, preview = c.preview() != null;
+        String kind = full ? "full quality" + (parts > 1 ? " (" + parts + " parts)" : "") : preview ? "preview (the full clip is on its way)" : "pictures only";
         if ("none".equals(c.meta().getProperty("clip")) && !full) kind = preview ? "preview (no full clip)" : "pictures only";
         if (c.meta().getProperty("clipBadSha256") != null && !full) kind = preview ? "preview (the full clip came damaged)" : "pictures only";
         String where = c.hasPosition() ? Coordinates.format(fmt, c.lat(), c.lon()) : "position unknown";
@@ -688,7 +689,8 @@ final class OverwatchPanel extends JPanel {
     private void runPlayback(int gen, ClipIndex.Clip c) {
         try {
             List<Path> pre = c.preRoll();
-            Path video = c.video();
+            List<Path> videos = c.parts(); // pc.38: the event's 60 s segments, in order, as one clip
+            if (videos.isEmpty() && c.video() != null) videos = List.of(c.video());
             for (Path p : pre) {
                 if (gen != playGen || seekTo >= 0) break;
                 while (paused && gen == playGen) sleep(50);
@@ -696,12 +698,21 @@ final class OverwatchPanel extends JPanel {
                 if (img != null) post(gen, img, "BEFORE THE ALERT", -1);
                 sleep(500);
             }
-            if (video == null) {
+            if (videos.isEmpty()) {
                 post(gen, null, "No video of this event: only the pictures before the alert", -1);
                 return;
             }
-            try (ClipPlayer player = new ClipPlayer(video)) {
-                durationMs = player.durationMs();
+            // where each part starts on the event's one timeline
+            long[] base = new long[videos.size() + 1];
+            for (int i = 0; i < videos.size(); i++) {
+                try (ClipPlayer probe = new ClipPlayer(videos.get(i))) {
+                    base[i + 1] = base[i] + Math.max(0, probe.durationMs());
+                }
+            }
+            durationMs = base[videos.size()];
+            int k = 0;
+            ClipPlayer player = new ClipPlayer(videos.get(0));
+            try {
                 int w = Math.min(640, Math.max(16, player.width())), h = Math.max(16, Math.round(player.height() * (float) w / Math.max(1, player.width())));
                 int[] pixels = new int[w * h];
                 long wallStart = System.currentTimeMillis();
@@ -710,7 +721,14 @@ final class OverwatchPanel extends JPanel {
                     long to = seekTo;
                     if (to >= 0) {
                         seekTo = -1;
-                        player.seek(to);
+                        int want = 0;
+                        while (want < videos.size() - 1 && to >= base[want + 1]) want++;
+                        if (want != k) {
+                            player.close();
+                            k = want;
+                            player = new ClipPlayer(videos.get(k));
+                        }
+                        player.seek(to - base[k]);
                         pos = to;
                         wallStart = System.currentTimeMillis() - to;
                     }
@@ -720,11 +738,18 @@ final class OverwatchPanel extends JPanel {
                         continue;
                     }
                     long t = player.next(pixels, w, h);
+                    if (t < 0 && k < videos.size() - 1) { // the next part goes on where this one ended
+                        player.close();
+                        k++;
+                        player = new ClipPlayer(videos.get(k));
+                        continue;
+                    }
                     if (t < 0) {
                         post(gen, null, "END", durationMs);
                         while (gen == playGen && seekTo < 0) sleep(100); // the slider can start it again
                         continue;
                     }
+                    t += base[k];
                     pos = t;
                     long wait = wallStart + t - System.currentTimeMillis();
                     if (wait > 0) sleep(Math.min(wait, 1000));
@@ -732,6 +757,8 @@ final class OverwatchPanel extends JPanel {
                     System.arraycopy(pixels, 0, ((DataBufferInt) img.getRaster().getDataBuffer()).getData(), 0, pixels.length);
                     post(gen, img, null, t);
                 }
+            } finally {
+                player.close();
             }
         } catch (IOException | RuntimeException e) {
             post(gen, null, "Can't play: " + e.getMessage(), -1);

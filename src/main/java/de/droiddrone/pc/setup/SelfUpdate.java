@@ -20,13 +20,67 @@ import java.util.HexFormat;
  * UPDATE: downloads the newer installer from the GitHub release, checks it against the SHA-256 GitHub lists for it,
  * and hands over to a small helper that waits for this app to close, runs the installer (Windows asks for permission
  * once; no wizard, just a progress bar) and starts the new version.
+ * <p>
+ * 1.0.49 (the review's L8): the installer's Authenticode signature is checked too, as the Tailscale install does -
+ * after the download and again by the helper right before it runs the file (held open in between, so it can't be
+ * swapped). A signature that is there but doesn't check out (the file changed after signing, an untrusted or broken
+ * certificate) always stops the update. While releases aren't code-signed ({@link #SIGNER} null) an unsigned
+ * installer is still taken on GitHub's checksum alone; once they are, set SIGNER and only that publisher's runs.
  */
 public final class SelfUpdate {
     public interface Progress {
         void update(long done, long total);
     }
 
+    /**
+     * The installer's publisher, a regular expression on its signing certificate's subject (e.g. "O=Example AS"), or
+     * null: releases aren't code-signed yet (README: Windows says "unknown publisher"), so NotSigned is accepted.
+     */
+    static final String SIGNER = null;
+
     private SelfUpdate() {
+    }
+
+    /**
+     * Whether an installer with this Authenticode result may run: null yes, else why not.
+     * @param status Get-AuthenticodeSignature's Status (Valid, NotSigned, HashMismatch, NotTrusted, ...)
+     * @param subject the signing certificate's subject, or null
+     * @param signer {@link #SIGNER}
+     */
+    static String signatureVerdict(String status, String subject, String signer) {
+        String s = status == null ? "" : status.trim();
+        if (signer == null) {
+            if (s.equals("Valid") || s.equals("NotSigned")) return null;
+            return "the installer's signature does not check out (" + (s.isEmpty() ? "unknown" : s) + "); nothing was installed";
+        }
+        if (!s.equals("Valid")) return "the installer is not validly signed (" + (s.isEmpty() ? "unknown" : s) + "); nothing was installed";
+        if (subject == null || !java.util.regex.Pattern.compile(signer).matcher(subject).find()) {
+            return "the installer is signed by someone else (" + subject + "); nothing was installed";
+        }
+        return null;
+    }
+
+    /** The PowerShell lines that stop the helper (via its Finish) unless the held installer's signature passes. */
+    static String signatureCheck(Path installer, String signer) {
+        String bad = signer == null ? "($st -ne 'Valid' -and $st -ne 'NotSigned')"
+                : "($st -ne 'Valid' -or $subj -notmatch '" + signer.replace("'", "''") + "')";
+        return String.join("\n",
+                "$sig = Get-AuthenticodeSignature -LiteralPath " + quote(installer),
+                "$st = [string]$sig.Status; $subj = [string]$sig.SignerCertificate.Subject",
+                "if " + bad + " { $lock.Close(); Finish ('the installer''s signature does not check out (' + $st + ' ' + $subj + '); it was not run') }",
+                "Note ('signature: ' + $st + ' ' + $subj)");
+    }
+
+    /** Checks the downloaded installer's signature now (PowerShell's Get-AuthenticodeSignature); throws when it may not run. */
+    static void checkSignature(Path file) throws IOException {
+        Shell.Result r = Shell.powershell(Duration.ofMinutes(1), "$s = Get-AuthenticodeSignature -LiteralPath " + quote(file) + "\n"
+                + "[string]$s.Status + '|' + [string]$s.SignerCertificate.Subject");
+        String out = r.output() == null ? "" : r.output().trim();
+        String line = out.substring(out.lastIndexOf('\n') + 1).trim(); // the last line: Status|Subject
+        int bar = line.indexOf('|');
+        String status = bar < 0 ? "" : line.substring(0, bar).trim();
+        String why = signatureVerdict(r.ok() ? status : "", bar < 0 ? null : line.substring(bar + 1).trim(), SIGNER);
+        if (why != null) throw new IOException(why);
     }
 
     /**
@@ -77,6 +131,12 @@ public final class SelfUpdate {
         if (done != total || !HexFormat.of().formatHex(sha.digest()).equals(r.installerSha256())) {
             Files.deleteIfExists(file);
             throw new IOException("the download is damaged (size or checksum does not match); nothing was installed");
+        }
+        try {
+            checkSignature(file); // 1.0.49 (L8): and its Authenticode signature
+        } catch (IOException e) {
+            Files.deleteIfExists(file);
+            throw e;
         }
         return file;
     }
@@ -157,7 +217,9 @@ public final class SelfUpdate {
                 "if (-not $lock) { Finish 'the downloaded installer could not be opened (locked by a virus scan?)' }",
                 "$h = (Get-FileHash -InputStream $lock -Algorithm SHA256).Hash",
                 "if ($h -ne '" + sha256.replaceAll("[^0-9a-fA-F]", "") + "') { $lock.Close(); Finish 'the downloaded installer changed since it was checked; it was not run' }",
-                "Note 'checksum ok; running the installer'",
+                "Note 'checksum ok'",
+                signatureCheck(installer, SIGNER),
+                "Note 'running the installer'",
                 "$p = Start-Process -FilePath " + quote(installer) + " -ArgumentList '/passive','/norestart' -Wait -PassThru",
                 "$lock.Close()",
                 "if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) { Finish ('OK installed (installer exit code ' + $p.ExitCode + ')') }",

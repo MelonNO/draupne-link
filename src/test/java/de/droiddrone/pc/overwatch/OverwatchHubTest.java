@@ -196,6 +196,8 @@ class OverwatchHubTest {
         sent.clear();
         receive(hub, OverwatchProtocol.clipInfo(new OverwatchProtocol.ClipInfo(TOKEN, 5, clip.length, sha, 40_000, STARTED, true, 1280, 720)));
         assertEquals(List.of(OverwatchProtocol.CMD_CLIP_DONE), commandsSent());
+        // 1.0.49: the DONE names the clip's start - an event's segments share its number
+        assertEquals(STARTED, OverwatchProtocol.readCommand(sent.get(0), sent.get(0).length).clipStartedAt);
     }
 
     /** H4 (1.0.49): while a drone here may fly, the card asks for no preview - the uplink is the sticks'. */
@@ -322,6 +324,38 @@ class OverwatchHubTest {
             release.countDown();
             hub.close();
         }
+    }
+
+    /** pc.38's 60 s segments: filed under the one event, each part kept and confirmed by its own start, played in order. */
+    @Test
+    void anEventsSegmentsAreOneEventWithItsPartsInOrder() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 12, 0));
+        long t = 30_000;
+        for (int part = 1; part <= 2; part++) {
+            byte[] clip = new byte[OverwatchProtocol.FRAGMENT + 100 * part];
+            new Random(part).nextBytes(clip);
+            long segStart = STARTED + (part - 1) * 60_000L;
+            receive(hub, info(new OverwatchProtocol.ClipInfo(TOKEN, 12, clip.length, MessageDigest.getInstance("SHA-256").digest(clip),
+                    part == 1 ? 60_000 : 20_000, segStart, false, 640, 360, part, STARTED)));
+            sent.clear();
+            for (int round = 0; round < 5 && dones().isEmpty(); round++) t = pull(hub, clip, 12, t);
+            assertEquals(List.of(1), dones(), "part " + part + " checked");
+            OverwatchProtocol.Command done = null;
+            for (byte[] p : sent) {
+                OverwatchProtocol.Command c = OverwatchProtocol.readCommand(p, p.length);
+                if (c != null && c.cmd == OverwatchProtocol.CMD_CLIP_DONE) done = c;
+            }
+            assertEquals(segStart, done.clipStartedAt, "the DONE names the segment, so the phone deletes exactly it");
+        }
+        List<ClipIndex.Clip> clips = hub.index().clips("MobileAlpha");
+        assertEquals(1, clips.size(), "one event on the list, not one per segment");
+        ClipIndex.Clip c = clips.get(0);
+        assertEquals(2, c.parts().size());
+        assertTrue(c.parts().get(1).getFileName().toString().endsWith("-part2.mp4"));
+        assertEquals(80_000, c.durationMs(), "the parts added up");
+        assertEquals(c.parts().get(0), c.fullClip());
     }
 
     private static byte[] info(OverwatchProtocol.ClipInfo info) {
