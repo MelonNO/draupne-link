@@ -86,6 +86,11 @@ final class MapWindow extends JFrame {
     private final Timer terrainLookup = new Timer(250, e -> lookupTerrain());
     private final Timer saveBounds = new Timer(800, e -> saveBounds());
     private boolean settingCombos;
+    private final OverwatchPanel overwatchPanel;
+    /** The overwatch drone's pulse on the map: repaints while an alert is on. */
+    private final javax.swing.Timer pulse = new javax.swing.Timer(40, e -> {
+        if (overwatchPulsing() && isShowing()) map().repaint();
+    });
 
     MapWindow(JFrame owner, TileCache cache, Elevation elevation, Pins pins, MapGraphics graphics, TileSource source, Coordinates.Format format, String savedBounds,
               Consumer<Map<String, String>> saver, Consumer<TileSource> onSource, Consumer<Coordinates.Format> onFormat, Runnable findDrone) {
@@ -260,6 +265,21 @@ final class MapWindow extends JFrame {
         mapRow.setOpaque(false);
         mapRow.add(tools, BorderLayout.WEST);
         mapRow.add(map, BorderLayout.CENTER);
+        // OVERWATCH (1.0.47): the alert cards and the clip list, right of the map
+        MainWindow main = owner instanceof MainWindow m ? m : null;
+        overwatchPanel = new OverwatchPanel(map,
+                main != null ? main.overwatch().index() : new de.droiddrone.pc.overwatch.ClipIndex(de.droiddrone.pc.overwatch.ClipIndex.defaultRoot()),
+                new de.droiddrone.pc.map.CameraFootprint.Terrain(cache), () -> this.format,
+                d -> { if (main != null) main.overwatchConnect(d); },
+                d -> { if (main != null) main.overwatchDismiss(d); },
+                d -> { if (main != null) main.overwatch().closeBadge(d); });
+        mapRow.add(overwatchPanel, BorderLayout.EAST);
+        map.setOnClips(overwatchPanel::openClips);
+        tools.clips.addActionListener(e -> {
+            if (overwatchPanel.libraryOpen()) overwatchPanel.closeLibrary();
+            else overwatchPanel.openClips(null);
+        });
+        pulse.start();
         centre.add(mapRow, BorderLayout.CENTER);
         JPanel profileHead = new JPanel(new BorderLayout(10, 0));
         profileHead.setOpaque(false);
@@ -872,6 +892,45 @@ final class MapWindow extends JFrame {
 
     private static String status(String text) {
         return "<html><div style='width:" + (MapToolsPanel.BODY_WIDTH - 60) + "px'>" + text + "</div></html>"; // room for the scrollbar
+    }
+
+    // ------------------------------------------------------------------ OVERWATCH (1.0.47)
+
+    private boolean overwatchPulsing() {
+        return overwatchPanel != null && overwatchPanel.pulsing();
+    }
+
+    /** The hub's alerts, every refresh while this window shows. */
+    void setOverwatch(java.util.List<de.droiddrone.pc.overwatch.OverwatchHub.View> views) {
+        overwatchPanel.setViews(views);
+    }
+
+    /**
+     * A new alert: the map pans to the drone when it is off the screen; with attention (this PC doesn't fly) the
+     * window comes up in front and its taskbar button asks to be looked at. Flying, it shows quietly.
+     */
+    void overwatchNews(String drone, boolean attention) {
+        overwatchPanel.news(drone);
+        if (!attention) return;
+        if ((getExtendedState() & ICONIFIED) != 0) setExtendedState(getExtendedState() & ~ICONIFIED);
+        toFront();
+        try {
+            if (java.awt.Taskbar.isTaskbarSupported() && java.awt.Taskbar.getTaskbar().isSupported(java.awt.Taskbar.Feature.USER_ATTENTION_WINDOW)) {
+                java.awt.Taskbar.getTaskbar().requestWindowUserAttention(this);
+            }
+        } catch (RuntimeException ignored) {
+            // no taskbar to flash: the window in front and the sound do
+        }
+    }
+
+    void clipsChanged(String drone) {
+        overwatchPanel.clipsChanged(drone);
+    }
+
+    /** The tour: MAP TOOLS > TOOLS > CLIPS. */
+    javax.swing.JComponent tourClips() {
+        tools.showGroup(MapToolsPanel.Group.TOOLS, false);
+        return tools.clips;
     }
 
     /** The tour's MAP TOOLS tab (opens the tools), and the tools inside it. */

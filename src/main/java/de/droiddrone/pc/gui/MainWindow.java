@@ -118,6 +118,20 @@ public class MainWindow extends JFrame {
     private final JButton standbyButton = Theme.secondaryButton("Standby");
     private final JButton deepSleepButton = Theme.secondaryButton("Deep sleep");
     private final JButton wakeButton = Theme.primaryButton("Wake");
+    // ---- OVERWATCH SLEEP (1.0.47, phone app pc.36 on): deep sleep with the camera and the motion detection on; a
+    // detection calls this PC, which shows it in the map window (OverwatchHub, MapWindow's card)
+    private final JButton overwatchButton = Theme.secondaryButton("Overwatch");
+    private final de.droiddrone.pc.overwatch.OverwatchHub overwatch = new de.droiddrone.pc.overwatch.OverwatchHub(
+            new de.droiddrone.pc.overwatch.ClipIndex(de.droiddrone.pc.overwatch.ClipIndex.defaultRoot()));
+    /** The token of the OVERWATCH request being made (the phone's overwatch packets carry it). */
+    private int overwatchToken;
+    /** The phone said OVERWATCH and the link dropped: it watches, and this PC keeps quiet as in deep sleep. */
+    private volatile boolean phoneOverwatching;
+    /** The drones put to overwatch, for the hub after a restart: name|token|pose;... */
+    static final String OVERWATCH_KEY = "overwatch.watched";
+    /** POP OUT MAP: says OVERWATCH while an alert waits and the map window is closed. */
+    private JButton popMapButton;
+    private boolean overwatchBadge;
     private final JComboBox<String> checkIntervalCombo = new JComboBox<>(new String[]{"1 min", "2 min", "5 min"});
     /** What the modes are doing; wraps to the card (a label would cut the line). */
     private final WrappingText powerStatusText = WrappingText.fitting(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
@@ -150,7 +164,16 @@ public class MainWindow extends JFrame {
      * on the LINK card with WAKE; its check-ins are answered "sleep on" (NameService) until WAKE connects, and the link
      * then answers the next one "wake". Kept in the settings, so it outlives a restart. Wall-clock times.
      */
-    private record Asleep(String name, String ip, long since, int intervalMin) {}
+    private record Asleep(String name, String ip, long since, int intervalMin, boolean overwatch) {
+        Asleep(String name, String ip, long since, int intervalMin) {
+            this(name, ip, since, intervalMin, false);
+        }
+
+        /** What it is doing, for the lists: OVERWATCH (1.0.47) or DEEP SLEEP. */
+        String mode() {
+            return overwatch ? "OVERWATCH" : "DEEP SLEEP";
+        }
+    }
     /** Every phone known to be asleep, by address; and its last check-in heard (receivedAt: wall clock). */
     private final Map<String, Asleep> asleepPhones = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, ControlLink.SleepHello> asleepHellos = new java.util.concurrent.ConcurrentHashMap<>();
@@ -358,6 +381,8 @@ public class MainWindow extends JFrame {
         names = new Names(config, this::save);
         nameService = new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
         nameService.setSleepHandler(this::onSleepCheck);
+        nameService.setOverwatchSink(overwatch::offer); // the link port while no link holds it (1.0.47)
+        startOverwatch();
         for (Asleep a : parseAsleep(config.getString(ASLEEP_KEY))) asleepPhones.put(a.ip(), a);
         loadKeptFlights();
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
@@ -800,6 +825,7 @@ public class MainWindow extends JFrame {
         miniMap.setToolTipText("Where the drone is. Wheel zooms; right-click adds a pin; POP OUT MAP for the whole map");
         mini.add(miniMap, BorderLayout.CENTER);
         JButton popMap = Theme.primaryButton("Pop out map");
+        popMapButton = popMap;
         popMap.setToolTipText("The map in a window of its own, for a second screen (F3)");
         popMap.addActionListener(e -> toggleMapWindow());
         mini.add(popMap, BorderLayout.SOUTH);
@@ -1107,7 +1133,7 @@ public class MainWindow extends JFrame {
             phoneCombo.removeAllItems();
             for (Names.Entry e : list) {
                 Asleep sleeping = e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
-                phoneCombo.addItem(e.name() + (sleeping != null ? "   DEEP SLEEP " + clock(nextCheck(sleeping, now) - now)
+                phoneCombo.addItem(e.name() + (sleeping != null ? "   " + sleeping.mode() + " " + clock(nextCheck(sleeping, now) - now)
                         : e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
             }
             if (list.isEmpty()) phoneCombo.addItem(kind == Names.Kind.PHONE ? "No phone seen yet" : "No pilot PC seen yet");
@@ -1122,7 +1148,7 @@ public class MainWindow extends JFrame {
         Names.Entry e = at < 0 ? null : list.get(at);
         Asleep chosenAsleep = e == null || e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
         String hint = chosenAsleep != null
-                ? e.name() + " is in deep sleep: it checks for this PC in " + clock(nextCheck(chosenAsleep, now) - now) + ". WAKE below brings it back then."
+                ? e.name() + (chosenAsleep.overwatch() ? " overwatches" : " is in deep sleep") + ": it checks for this PC in " + clock(nextCheck(chosenAsleep, now) - now) + ". WAKE below brings it back then."
                 : e == null
                 ? (kind == Names.Kind.PHONE ? "Open DRAUPNE Flight on the phone, on Tailscale: it shows up here by itself."
                         : "A PC running DRAUPNE Link on your Tailscale network shows up here by itself.")
@@ -1306,6 +1332,8 @@ public class MainWindow extends JFrame {
         lastSpectators = 0;
         toldNotFlying = false;
         connection.getLink().setForeignSleepHandler(this::onSleepCheck); // another phone's check-in: sleep on
+        connection.getLink().setOverwatchSink(overwatch::offer); // the link holds the link port now (1.0.47)
+        phoneOverwatching = false;
         // the flight before stays on the map; this one is the live one
         keepFlight(track, liveTrackName);
         liveTrackName = flightName(watch ? null : target.name());
@@ -1321,12 +1349,13 @@ public class MainWindow extends JFrame {
         if (!watch && sleeping != null && sleeping.ip().equals(target.ip())) {
             // the phone sleeps: quiet until WAKE (a Connect in its listening window would wake it), or woken now
             phoneAsleep = true;
+            phoneOverwatching = sleeping.overwatch();
             sleepStartAt = de.droiddrone.pc.MonoClock.ms() - (System.currentTimeMillis() - sleeping.since());
             if (wakeOnConnect) {
                 logLine("WAKE: " + sleeping.name() + " takes it at its next check (up to " + sleeping.intervalMin() + " min), then its camera starts.");
             } else {
                 connection.getLink().setDormant(true);
-                logLine(sleeping.name() + " is in deep sleep: this PC stays quiet until WAKE.");
+                logLine(sleeping.name() + (sleeping.overwatch() ? " overwatches" : " is in deep sleep") + ": this PC stays quiet until WAKE.");
             }
         }
         try {
@@ -1358,8 +1387,9 @@ public class MainWindow extends JFrame {
             String name = config.getString(Names.PHONE_NAME_KEY), ip = config.getString("ip");
             if (!ip.isEmpty()) {
                 long since = System.currentTimeMillis() - (de.droiddrone.pc.MonoClock.ms() - sleepStartAt);
-                rememberAsleep(new Asleep(name, ip, since, checkIntervalMin));
-                logLine(name + " sleeps on. This PC still answers its checks; WAKE on the LINK card brings it back.");
+                rememberAsleep(new Asleep(name, ip, since, checkIntervalMin, phoneOverwatching));
+                logLine(name + (phoneOverwatching ? " overwatches on: its alerts still come to this PC's map." : " sleeps on.")
+                        + " This PC still answers its checks; WAKE on the LINK card brings it back.");
             }
         }
         service.setInputListener(null);
@@ -1369,6 +1399,8 @@ public class MainWindow extends JFrame {
         de.droiddrone.pc.WindowsTuning.keepAwake(false);
         powerWanted = ControlLink.POWER_NORMAL;
         phoneAsleep = false;
+        phoneOverwatching = false;
+        overwatch.setFlying(false);
         if (powerRow != null) powerRow.setVisible(false);
         sampleLinkLog();
         linkLogTimer.stop();
@@ -1742,6 +1774,7 @@ public class MainWindow extends JFrame {
     private void shutdown() {
         phoneWatch.shutdownNow();
         nameService.stop();
+        overwatch.close();
         if (popOut != null) popOut.dispose();
         if (connection != null) disconnect();
         settingsWriter.shutdown(); // what is queued (the OSD layout, the window's place) reaches the file before the exit
@@ -1780,6 +1813,7 @@ public class MainWindow extends JFrame {
         alertSound.update(stickWarning(), System.currentTimeMillis());
         refreshAudio();
         refreshMap();
+        refreshOverwatch();
         // keeps the HUD (and the latency test's time code) live even when no video frames arrive
         if (connection != null || latencyMeter != null) videoView.repaint();
     }
@@ -2232,7 +2266,16 @@ public class MainWindow extends JFrame {
         wakeButton.addActionListener(e -> wakePhone());
         buttons.add(standbyButton);
         buttons.add(deepSleepButton);
-        sleepFold = new Fold(buttons, true); // folds away while the drone is armed, and back when it is disarmed
+        // 1.0.47: OVERWATCH under the two, as wide as both
+        overwatchButton.setToolTipText("<html>Sleeps like DEEP SLEEP, but the camera and the motion detection stay on: when something moves "
+                + "the phone calls this PC at once -<br>the map window shows where, a live picture, CONNECT and DISMISS - and records the event in "
+                + "full quality. Disarmed only; about 15-25 h on a 5000 mAh phone</html>");
+        overwatchButton.addActionListener(e -> askPower(ControlLink.POWER_OVERWATCH));
+        JPanel sleepButtons = new JPanel(new GridLayout(2, 1, 0, 6));
+        sleepButtons.setOpaque(false);
+        sleepButtons.add(buttons);
+        sleepButtons.add(overwatchButton);
+        sleepFold = new Fold(sleepButtons, true); // folds away while the drone is armed, and back when it is disarmed
         powerRow.add(sleepFold, c);
         powerRow.add(wakeButton, c);
         JPanel interval = new JPanel(new BorderLayout(8, 0));
@@ -2293,16 +2336,207 @@ public class MainWindow extends JFrame {
     private void askPower(int mode) {
         if (demoPower(mode)) return;
         if (connection == null) return;
+        JButton pressed = mode == ControlLink.POWER_STANDBY ? standbyButton : mode == ControlLink.POWER_OVERWATCH ? overwatchButton : deepSleepButton;
         if (fcArmedNow()) {
-            new LockedNotice(mode == ControlLink.POWER_STANDBY ? standbyButton : deepSleepButton, videoView, "ARMED",
-                    "No sleep while the drone is armed: disarm first.").pop();
+            new LockedNotice(pressed, videoView, "ARMED", "No sleep while the drone is armed: disarm first.").pop();
             return;
         }
+        if (mode == ControlLink.POWER_OVERWATCH && !prepareOverwatch(pressed)) return;
         powerWanted = mode;
         powerAskedAt = de.droiddrone.pc.MonoClock.ms();
         powerSentAt = 0;
         logLine(mode == ControlLink.POWER_STANDBY ? "STANDBY asked: the phone stops its camera and slows down; WAKE brings it back."
+                : mode == ControlLink.POWER_OVERWATCH ? "OVERWATCH asked: the phone sleeps with its camera watching; if something moves it calls this "
+                + "PC (the map window) and records it. It listens for this PC every " + checkIntervalMin + " min."
                 : "DEEP SLEEP asked: the phone drops the link and sleeps, listening for this PC every " + checkIntervalMin + " min.");
+    }
+
+    // ------------------------------------------------------------------ OVERWATCH SLEEP (1.0.47)
+
+    /**
+     * Before the OVERWATCH request: the phone app must know it (pc.36), the camera must give the motion detection a
+     * picture; then a new token, and where the drone stands and looks - remembered, so an alert after a restart of this
+     * PC still draws the camera's view on the map.
+     */
+    private boolean prepareOverwatch(JButton pressed) {
+        ControlLink link = connection.getLink();
+        int build = link.getTelemetry().getPhonePcBuild();
+        if (build >= 0 && build < 36) {
+            new LockedNotice(pressed, videoView, "UPDATE THE PHONE APP", "OVERWATCH needs DRAUPNE Flight " + de.droiddrone.common.OverwatchProtocol.MIN_PHONE_VERSION
+                    + " or newer: UPDATE PHONE APP on the LINK card.").pop();
+            return false;
+        }
+        FcTelemetry.PhonePower pp = link.getTelemetry().getPhonePower();
+        if (pp != null && build >= 36 && (pp.caps() & CAP_OVERWATCH) == 0) {
+            new LockedNotice(pressed, videoView, "NO PICTURE TO WATCH", "This phone's camera gives the motion detection no picture "
+                    + "(it refused the second small stream), so it can't overwatch. DEEP SLEEP saves more power anyway.").pop();
+            return false;
+        }
+        String name = config.getString(Names.PHONE_NAME_KEY);
+        int token;
+        do {
+            token = new java.security.SecureRandom().nextInt();
+        } while (token == 0);
+        overwatchToken = token;
+        de.droiddrone.pc.map.CameraFootprint.Pose pose = cameraView.sittingPose(link.getTelemetry(), track);
+        overwatch.watch(name, token, pose);
+        saveWatched();
+        if (pose == null) logLine("OVERWATCH: no position or heading of the drone now - an alert can't show its camera's view on the map.");
+        return true;
+    }
+
+    /** PHONE_POWER caps bit 3 (pc.36): the camera gives the motion detection its picture - the phone can overwatch. */
+    static final int CAP_OVERWATCH = 8;
+
+    /** The hub's drones into the settings: name|token|lat|lon|alt|heading|pitch|roll|tilt|hfov|vfov;... */
+    private void saveWatched() {
+        StringBuilder b = new StringBuilder();
+        for (de.droiddrone.pc.overwatch.OverwatchHub.Watched w : overwatch.watched()) {
+            if (b.length() > 0) b.append(';');
+            b.append(w.drone().replace("|", "").replace(";", "")).append('|').append(Integer.toHexString(w.token()));
+            de.droiddrone.pc.map.CameraFootprint.Pose p = w.pose();
+            if (p != null) {
+                for (double v : new double[]{p.lat(), p.lon(), p.altM(), p.headingDeg(), p.pitchDeg(), p.rollDeg(), p.tiltDeg(), p.hfovDeg(), p.vfovDeg()}) {
+                    b.append('|').append(v);
+                }
+            }
+        }
+        String v = b.toString();
+        save(Map.of(OVERWATCH_KEY, v));
+    }
+
+    /** At the start: the drones put to overwatch before, the hub's listener, its thread. */
+    private void startOverwatch() {
+        for (String one : config.getString(OVERWATCH_KEY).split(";")) {
+            String[] p = one.split("\\|");
+            if (p.length < 2 || p[0].isBlank()) continue;
+            try {
+                int token = Integer.parseUnsignedInt(p[1], 16);
+                de.droiddrone.pc.map.CameraFootprint.Pose pose = null;
+                if (p.length >= 11) {
+                    double[] v = new double[9];
+                    for (int i = 0; i < 9; i++) v[i] = Double.parseDouble(p[2 + i]);
+                    pose = new de.droiddrone.pc.map.CameraFootprint.Pose(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]);
+                }
+                overwatch.watch(p[0], token, pose);
+            } catch (NumberFormatException ignored) {
+                // a broken entry: left out
+            }
+        }
+        overwatch.setListener(new de.droiddrone.pc.overwatch.OverwatchHub.Listener() {
+            @Override
+            public void onNews(String drone) {
+                SwingUtilities.invokeLater(() -> overwatchNews(drone));
+            }
+
+            @Override
+            public void onDropped(String drone, int reason, int batteryPercent, int tempDeci) {
+                SwingUtilities.invokeLater(() -> overwatchDropped(drone, reason, batteryPercent));
+            }
+
+            @Override
+            public void onClips(String drone) {
+                SwingUtilities.invokeLater(() -> {
+                    if (mapWindow != null) mapWindow.clipsChanged(drone);
+                });
+            }
+
+            @Override
+            public void log(String line) {
+                SwingUtilities.invokeLater(() -> logLine(line));
+            }
+        });
+        try {
+            overwatch.start();
+        } catch (IOException e) {
+            logLine("Overwatch alerts can't be taken: " + e.getMessage());
+        }
+    }
+
+    /**
+     * A drone's overwatch alert (the pilot's rules): only the map window shows it - in front, with a sound - unless this
+     * PC flies (its drone armed): then quietly, nothing raised over the video. With the map window closed, POP OUT MAP
+     * says OVERWATCH and nothing pops up.
+     */
+    private void overwatchNews(String drone) {
+        boolean flying = overwatch.isFlying();
+        logLine("OVERWATCH: " + drone + " sees something move." + (flying ? " Shown quietly in the map window (this PC flies)."
+                : mapWindow != null && mapWindow.isShown() ? " See the map window." : " Open the map (POP OUT MAP) to see it."));
+        if (!flying) alertSound.ring();
+        MapWindow w = mapWindow;
+        if (w != null && w.isShown()) {
+            w.overwatchNews(drone, !flying);
+        } else {
+            setOverwatchBadge(true);
+        }
+    }
+
+    private void overwatchDropped(String drone, int reason, int batteryPercent) {
+        logLine("OVERWATCH: " + drone + " left overwatch for deep sleep by itself - " + de.droiddrone.common.PowerFloor.describe(reason)
+                + (batteryPercent >= 0 && batteryPercent <= 100 ? " (battery " + batteryPercent + " %)" : "") + ". WAKE brings it back.");
+        String ip = names.ipOf(drone);
+        Asleep a = ip == null ? null : asleepPhones.get(ip);
+        if (a != null && a.overwatch()) rememberAsleep(new Asleep(a.name(), a.ip(), a.since(), a.intervalMin(), false));
+        if (connection != null && phoneOverwatching && drone.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) phoneOverwatching = false;
+    }
+
+    /** POP OUT MAP says OVERWATCH while an alert waits and the map window is closed (the pilot: nothing pops up). */
+    private void setOverwatchBadge(boolean on) {
+        if (popMapButton == null || on == overwatchBadge) return;
+        overwatchBadge = on;
+        popMapButton.setText(on ? "Pop out map - OVERWATCH" : "Pop out map");
+        popMapButton.setBackground(on ? Theme.WARN : null);
+        popMapButton.setToolTipText(on ? "A drone in overwatch saw something move: open the map to see it (F3)" : "The map in a window of its own, for a second screen (F3)");
+    }
+
+    /** Every refresh: the hub learns whether this PC flies; the map window gets the alerts, or POP OUT MAP its badge. */
+    private void refreshOverwatch() {
+        Connection c = connection;
+        overwatch.setFlying(c != null && !c.getLink().isSpectator() && fcArmedNow());
+        java.util.List<de.droiddrone.pc.overwatch.OverwatchHub.View> views = overwatch.views();
+        MapWindow w = mapWindow;
+        if (w != null && w.isShown()) {
+            w.setOverwatch(views);
+            setOverwatchBadge(false);
+        } else if (!overwatchBadge) {
+            for (de.droiddrone.pc.overwatch.OverwatchHub.View v : views) {
+                if (v.shown() == de.droiddrone.pc.overwatch.AlertCard.Shown.CARD && !v.ended()) {
+                    setOverwatchBadge(true);
+                    break;
+                }
+            }
+        }
+    }
+
+    /** CONNECT on an overwatch card: the phone wakes (told over the overwatch link) and this PC connects to it as its pilot. */
+    void overwatchConnect(String drone) {
+        overwatch.connect(drone);
+        Connection c = connection;
+        String flown = config.getString(Names.PHONE_NAME_KEY);
+        if (c != null && !c.getLink().isSpectator() && drone.equalsIgnoreCase(flown)) {
+            wakePhone(); // this PC's link to it waits dormant: the Connects go out again now
+            return;
+        }
+        if (c != null) {
+            if (fcArmedNow()) {
+                JOptionPane.showMessageDialog(this, drone + " is told to wake. This PC flies another drone (armed): land it and DISCONNECT, then connect to "
+                        + drone + ".", "Overwatch", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            disconnect();
+        }
+        String ip = names.ipOf(drone);
+        if (ip != null && asleepPhones.containsKey(ip)) clearAsleep(ip); // woken now, not at its next check
+        connectFromMap(drone, false);
+    }
+
+    /** The pilot's DISMISS on a card. */
+    void overwatchDismiss(String drone) {
+        overwatch.dismiss(drone);
+    }
+
+    de.droiddrone.pc.overwatch.OverwatchHub overwatch() {
+        return overwatch;
     }
 
     // ------------------------------------------------------------------ phones asleep while no link is open
@@ -2314,7 +2548,9 @@ public class MainWindow extends JFrame {
         for (String one : saved.split(";")) {
             String[] p = one.split("\\|");
             try {
-                if (p.length == 4 && !p[1].isBlank()) out.add(new Asleep(p[0], p[1], Long.parseLong(p[2]), Integer.parseInt(p[3])));
+                if ((p.length == 4 || p.length == 5) && !p[1].isBlank()) {
+                    out.add(new Asleep(p[0], p[1], Long.parseLong(p[2]), Integer.parseInt(p[3]), p.length == 5 && "ow".equals(p[4])));
+                }
             } catch (NumberFormatException ignored) {
                 // a broken entry: left out
             }
@@ -2327,6 +2563,7 @@ public class MainWindow extends JFrame {
         for (Asleep a : asleepPhones.values()) {
             if (b.length() > 0) b.append(';');
             b.append(a.name()).append('|').append(a.ip()).append('|').append(a.since()).append('|').append(a.intervalMin());
+            if (a.overwatch()) b.append("|ow");
         }
         String v = b.toString();
         SwingUtilities.invokeLater(() -> save(Map.of(ASLEEP_KEY, v)));
@@ -2376,15 +2613,23 @@ public class MainWindow extends JFrame {
         if (a == null) {
             String name = names.nameAt(ip);
             if (name == null || Names.kindOf(name) != Names.Kind.PHONE) return null;
-            a = new Asleep(name, ip, System.currentTimeMillis(), Math.max(1, d[3] & 0xff));
+            a = new Asleep(name, ip, System.currentTimeMillis(), Math.max(1, d[3] & 0xff),
+                    d.length >= 7 && (d[6] & de.droiddrone.common.OverwatchProtocol.HELLO_OVERWATCH) != 0);
             rememberAsleep(a);
         }
-        int pct = d[1] & 0xff;
-        ControlLink.SleepHello h = new ControlLink.SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff,
-                ((d[4] & 0xff) << 8) | (d[5] & 0xff), System.currentTimeMillis());
+        ControlLink.SleepHello h = ControlLink.SleepHello.read(d, d.length, System.currentTimeMillis());
+        if (d.length >= 7 && h.overwatch() != a.overwatch()) { // into overwatch, or out of it by itself (the floor, 1.0.47)
+            Asleep was = a;
+            a = new Asleep(a.name(), a.ip(), a.since(), a.intervalMin(), h.overwatch());
+            rememberAsleep(a);
+            if (was.overwatch()) {
+                String why = h.floorReason() != 0 ? de.droiddrone.common.PowerFloor.describe(h.floorReason()) : "it left overwatch";
+                SwingUtilities.invokeLater(() -> logLine("OVERWATCH ended on " + was.name() + ": " + why + " - it is in deep sleep now."));
+            }
+        }
         ControlLink.SleepHello before = asleepHellos.put(ip, h);
         if (before == null || h.receivedAt() - before.receivedAt() > 20_000) { // one line per check window
-            String line = a.name() + " asleep, still here: battery " + (h.batteryPercent() >= 0 ? h.batteryPercent() + " %" : "unknown")
+            String line = a.name() + (a.overwatch() ? " overwatching" : " asleep") + ", still here: battery " + (h.batteryPercent() >= 0 ? h.batteryPercent() + " %" : "unknown")
                     + (h.charging() ? ", charging" : "") + ", next check in " + h.nextCheckMin() + " min. WAKE on the LINK card brings it back.";
             SwingUtilities.invokeLater(() -> logLine(line));
         }
@@ -2415,7 +2660,7 @@ public class MainWindow extends JFrame {
             alive = "Heard " + (ago < 60 ? ago + " s" : ago / 60 + " min") + " ago"
                     + (h.batteryPercent() >= 0 ? ", battery " + h.batteryPercent() + " %" : "") + (h.charging() ? " (charging)" : "") + ". ";
         }
-        powerStatus.setText("<html>" + a.name() + " is in DEEP SLEEP. " + alive + "Next check in " + clock(nextCheck(a, now) - now)
+        powerStatus.setText("<html>" + a.name() + " is in " + a.mode() + ". " + alive + "Next check in " + clock(nextCheck(a, now) - now)
                 + ". WAKE connects and brings it back then.</html>");
     }
 
@@ -2651,7 +2896,7 @@ public class MainWindow extends JFrame {
             String ip = names.ipOf(d.name());
             Asleep sleeping = ip == null ? null : asleepPhones.get(ip);
             String pilot = p.pilotIp().isEmpty() ? null : names.nameAt(p.pilotIp());
-            String state = sleeping != null ? "DEEP SLEEP - check in " + clock(nextCheck(sleeping, now) - now)
+            String state = sleeping != null ? sleeping.mode() + " - check in " + clock(nextCheck(sleeping, now) - now)
                     : (Boolean.TRUE.equals(p.armed()) ? "ARMED - " : "") + (p.flown() ? "FLOWN" + (pilot == null ? "" : " BY " + pilot) : "IDLE")
                     + (age > 30_000 ? " - " + Names.agoText(now - age, now) : "");
             drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, age > 30_000 || sleeping != null, p.flown(), pilot));
@@ -2726,16 +2971,22 @@ public class MainWindow extends JFrame {
             powerSentAt = 0;
             logLine("The drone is armed: sleep ended, the phone is woken.");
         }
-        // the phone said DEEP SLEEP, then the link went: it sleeps now, and this PC must not wake it until WAKE
-        if (powerWanted == ControlLink.POWER_DEEP_SLEEP && reported == ControlLink.POWER_DEEP_SLEEP && !phoneAsleep && !link.isConnected()) {
+        // the phone said DEEP SLEEP (or OVERWATCH, 1.0.47), then the link went: it sleeps now, and this PC must not wake
+        // it until WAKE
+        boolean sleepMode = powerWanted == ControlLink.POWER_DEEP_SLEEP || powerWanted == ControlLink.POWER_OVERWATCH;
+        if (sleepMode && reported == powerWanted && !phoneAsleep && !link.isConnected()) {
             phoneAsleep = true;
+            phoneOverwatching = powerWanted == ControlLink.POWER_OVERWATCH;
             sleepStartAt = pp.receivedAt() + pp.sleepInS() * 1000L;
             link.setDormant(true);
-            logLine("The phone is in deep sleep. It listens for this PC for 20 s every " + checkIntervalMin + " min; press WAKE to bring it back.");
+            logLine(phoneOverwatching ? "The phone overwatches: its camera watches, the rest sleeps. Something moving shows in the map window; "
+                    + "it listens for this PC every " + checkIntervalMin + " min; press WAKE to bring it back."
+                    : "The phone is in deep sleep. It listens for this PC for 20 s every " + checkIntervalMin + " min; press WAKE to bring it back.");
         }
         if (phoneAsleep) {
             if (link.isConnected()) {
                 phoneAsleep = false;
+                phoneOverwatching = false;
                 powerWanted = ControlLink.POWER_NORMAL;
                 powerSentAt = 0;
                 link.setDormant(false);
@@ -2748,6 +2999,12 @@ public class MainWindow extends JFrame {
                 // the phone's own word from its last check (pc.22): when the next one is, and its battery
                 ControlLink.SleepHello hello = link.getSleepHello();
                 String alive = "";
+                if (hello != null && hello.receivedAt() >= sleepStartAt - 5000 && phoneOverwatching && !hello.overwatch()
+                        && hello.receivedAt() != lastHelloLogged) {
+                    phoneOverwatching = false; // the floor: it left overwatch for deep sleep by itself (1.0.47)
+                    logLine("OVERWATCH ended on the phone: " + (hello.floorReason() != 0 ? de.droiddrone.common.PowerFloor.describe(hello.floorReason())
+                            : "it left overwatch") + " - it is in deep sleep now.");
+                }
                 if (hello != null && hello.receivedAt() >= sleepStartAt - 5000) {
                     if (hello.nextCheckMin() > 0) next = hello.receivedAt() + hello.nextCheckMin() * 60_000L;
                     long ago = (now - hello.receivedAt()) / 1000;
@@ -2764,10 +3021,12 @@ public class MainWindow extends JFrame {
                 long left = (next - now) / 1000;
                 String in = String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
                 powerStatus.setText(link.isDormant()
-                        ? "<html>DEEP SLEEP - " + alive + "The phone checks for this PC every " + checkIntervalMin + " min; next check in " + in + ". WAKE brings it back.</html>"
+                        ? "<html>" + (phoneOverwatching ? "OVERWATCH - its camera watches; an alert shows in the map window. " : "DEEP SLEEP - ") + alive
+                        + "The phone checks for this PC every " + checkIntervalMin + " min; next check in " + in + ". WAKE brings it back.</html>"
                         : "<html>WAKE sent - " + alive + "The phone takes it at its next check, in " + in + ", then its camera starts.</html>");
                 standbyButton.setEnabled(false);
                 deepSleepButton.setEnabled(false);
+                overwatchButton.setEnabled(false);
                 wakeButton.setEnabled(link.isDormant());
                 checkIntervalCombo.setEnabled(false);
             }
@@ -2775,7 +3034,16 @@ public class MainWindow extends JFrame {
         }
         if (ready && powerWanted != reported) {
             if (now - powerSentAt >= 200) {
-                link.sendPowerMode(powerWanted, checkIntervalMin);
+                if (powerWanted == ControlLink.POWER_OVERWATCH) {
+                    // the drone's own motion detection level (OFF counts as NORMAL here: watching is the point), and its
+                    // microphone in the clip unless this PC has the drone's sound muted
+                    int level = detectionFor(config.getString(Names.PHONE_NAME_KEY));
+                    if (level == 0) level = 2;
+                    int flags = mutedFor(config.getString(Names.PHONE_NAME_KEY)) ? 0 : de.droiddrone.common.OverwatchProtocol.MODE_FLAG_SOUND;
+                    link.sendOverwatch(checkIntervalMin, level, flags, overwatchToken);
+                } else {
+                    link.sendPowerMode(powerWanted, checkIntervalMin);
+                }
                 powerSentAt = now;
             }
             if (pp == null && powerAskedAt != 0 && now - powerAskedAt > 10_000) {
@@ -2791,12 +3059,16 @@ public class MainWindow extends JFrame {
             powerStatus.setText("<html>STANDBY - the phone's camera is off, its GPS and telemetry slowed, its screen dimmed. No sticks are sent. Press WAKE.</html>");
         } else if (reported == ControlLink.POWER_DEEP_SLEEP) {
             powerStatus.setText("Going to deep sleep in " + pp.sleepInS() + " s...");
+        } else if (reported == ControlLink.POWER_OVERWATCH) {
+            powerStatus.setText("Going to overwatch in " + pp.sleepInS() + " s...");
         } else {
-            powerStatus.setText("<html>Before take-off: STANDBY saves power and is back in 2 s; DEEP SLEEP saves more and is back at the phone's next check.</html>");
+            powerStatus.setText("<html>Before take-off: STANDBY saves power and is back in 2 s; DEEP SLEEP saves more and is back at the phone's next check; "
+                    + "OVERWATCH sleeps with the camera watching.</html>");
         }
         boolean idle = ready && powerWanted == ControlLink.POWER_NORMAL && reported <= 0;
         standbyButton.setEnabled(idle && !fcArmedNow());
         deepSleepButton.setEnabled(idle && !fcArmedNow());
+        overwatchButton.setEnabled(idle && !fcArmedNow());
         wakeButton.setEnabled(powerWanted != ControlLink.POWER_NORMAL || reported > 0);
         checkIntervalCombo.setEnabled(idle);
     }
@@ -2852,7 +3124,9 @@ public class MainWindow extends JFrame {
         } else if (state == ControlLink.State.SPECTATING && !video.hasStream()) {
             videoView.setIdleText("Spectator: waiting for the pilot's video...");
         } else if (phoneAsleep) {
-            videoView.setIdleText(link.isDormant() ? "DEEP SLEEP - the phone sleeps; press WAKE" : "Waking the phone at its next check...");
+            videoView.setIdleText(!link.isDormant() ? "Waking the phone at its next check..."
+                    : phoneOverwatching ? "OVERWATCH - the phone's camera watches; alerts show in the map window. Press WAKE"
+                    : "DEEP SLEEP - the phone sleeps; press WAKE");
         } else if (state != ControlLink.State.READY && state != ControlLink.State.SPECTATING) {
             videoView.setIdleText("Waiting for the link...");
         } else if (powerWanted == ControlLink.POWER_STANDBY) {
@@ -3084,6 +3358,10 @@ public class MainWindow extends JFrame {
         return powerRow;
     }
 
+    JComponent tourOverwatchButton() {
+        return overwatchButton;
+    }
+
     void tourPowerDemo(boolean on) {
         if (connection != null) { // connected: the real row is there and answers for real
             tourPowerDemo = false;
@@ -3095,11 +3373,13 @@ public class MainWindow extends JFrame {
             sleepFold.setShown(true, false);
             standbyButton.setEnabled(true);
             deepSleepButton.setEnabled(true);
+            overwatchButton.setEnabled(true);
             wakeButton.setEnabled(false);
-            powerStatus.setText("A demo while nothing is connected: press STANDBY, DEEP SLEEP or WAKE to read what the phone would do.");
+            powerStatus.setText("A demo while nothing is connected: press STANDBY, DEEP SLEEP, OVERWATCH or WAKE to read what the phone would do.");
         } else {
             standbyButton.setEnabled(true);
             deepSleepButton.setEnabled(true);
+            overwatchButton.setEnabled(true);
             wakeButton.setEnabled(true);
             powerStatus.setText(" ");
         }
@@ -3112,8 +3392,12 @@ public class MainWindow extends JFrame {
         if (!tourPowerDemo || connection != null) return false;
         standbyButton.setEnabled(mode == ControlLink.POWER_NORMAL);
         deepSleepButton.setEnabled(mode == ControlLink.POWER_NORMAL);
+        overwatchButton.setEnabled(mode == ControlLink.POWER_NORMAL);
         wakeButton.setEnabled(mode != ControlLink.POWER_NORMAL);
         powerStatus.setText(switch (mode) {
+            case ControlLink.POWER_OVERWATCH -> "<html>OVERWATCH - the phone would sleep like DEEP SLEEP but keep its camera and the motion "
+                    + "detection on: when something moves it calls this PC - the map window shows where, a live picture, CONNECT and DISMISS - "
+                    + "and records it in full quality. Under 20 % battery or too hot it goes to deep sleep by itself.</html>";
             case ControlLink.POWER_STANDBY -> "<html>STANDBY - the phone would stop its camera, slow its GPS and telemetry and dim its "
                     + "screen; the link stays. WAKE brings the picture back in about two seconds.</html>";
             case ControlLink.POWER_DEEP_SLEEP -> "<html>DEEP SLEEP - the phone would drop the link, lock its screen and sleep, listening "

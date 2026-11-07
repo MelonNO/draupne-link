@@ -101,6 +101,30 @@ public class InternalCamera implements Camera{
     private volatile List<Surface> sessionTargets;
     /** The repeating request's targets change on three threads (recording, analysis, the session): one at a time. */
     private final Object requestLock = new Object();
+    /** pc.36: overwatch's session - the analysis picture alone. */
+    private volatile boolean watchOnly;
+    /** pc.36: an overwatch event's recorder, in the session and the repeating request beside the encoder. */
+    private volatile Surface extraTarget;
+
+    @Override
+    public void setWatchOnly(boolean on) {
+        watchOnly = on;
+    }
+
+    @Override
+    public boolean canWatchOnly() {
+        return analysisSize != null && !config.getCameraId().equals(analysisRefusedFor);
+    }
+
+    @Override
+    public void setExtraTarget(Surface surface) {
+        extraTarget = surface;
+    }
+
+    /** pc.36 (the PHONE_POWER caps): this camera refused the analysis picture, so it can't overwatch. */
+    static boolean analysisRefused(String cameraId) {
+        return cameraId != null && cameraId.equals(analysisRefusedFor);
+    }
 
     public InternalCamera(Context context, Config config) {
         this.context = context;
@@ -255,16 +279,35 @@ public class InternalCamera implements Camera{
 
     @Override
     public void startPreview() {
+        if (watchOnly) { // pc.36: overwatch - the motion detection's picture and nothing else
+            Surface analysis = analysisSurface();
+            if (analysis == null) {
+                log("Overwatch: this camera gives no analysis picture - nothing to watch with");
+                return;
+            }
+            streamEncoderSurface = null;
+            recorderSurface = null;
+            analysisOn = true; // the session's only output: always in the request
+            sessionTargets = new ArrayList<>();
+            createSession(sessionTargets, analysis);
+            return;
+        }
         if (streamEncoder == null) return;
         Surface streamEncoderSurface = streamEncoder.initializeVideo();
         if (streamEncoderSurface == null) return;
         this.streamEncoderSurface = streamEncoderSurface;
         ArrayList<Surface> targets = new ArrayList<>();
         targets.add(streamEncoderSurface);
-        Surface recorderSurface = mp4Recorder.initialize();
-        if (recorderSurface != null){
-            this.recorderSurface = recorderSurface;
-            targets.add(recorderSurface);
+        Surface extra = extraTarget;
+        if (extra != null) { // pc.36: an overwatch event records itself (upstream's recorder stays out of it)
+            targets.add(extra);
+            this.recorderSurface = null;
+        } else {
+            Surface recorderSurface = mp4Recorder.initialize();
+            if (recorderSurface != null){
+                this.recorderSurface = recorderSurface;
+                targets.add(recorderSurface);
+            }
         }
         sessionTargets = targets;
         createSession(targets, analysisSurface());
@@ -320,7 +363,7 @@ public class InternalCamera implements Camera{
                         outputConfig.addSurface(target);
                     }
                 }
-                outputConfigurations.add(outputConfig);
+                if (outputConfig != null) outputConfigurations.add(outputConfig); // pc.36: none in a watch-only session
                 if (analysis != null) outputConfigurations.add(new OutputConfiguration(analysis));
 
                 final Handler handler = new Handler(handlerThread.getLooper());
@@ -403,6 +446,7 @@ public class InternalCamera implements Camera{
             HandlerThread thread = handlerThread;
             if (request == null || session == null || analysis == null || thread == null) return;
             if (analysisOn) request.addTarget(analysis);
+            else if (watchOnly) return; // pc.36: the watch-only session's only output stays (a request needs one)
             else request.removeTarget(analysis);
             try{
                 session.setRepeatingRequest(request.build(), captureCallback, new Handler(thread.getLooper()));
@@ -432,7 +476,9 @@ public class InternalCamera implements Camera{
                 mCaptureRequest = captureRequest;
                 mCameraCaptureSession = cameraCaptureSession;
                 configureCamera(captureRequest);
-                captureRequest.addTarget(streamEncoderSurface);
+                if (streamEncoderSurface != null && !watchOnly) captureRequest.addTarget(streamEncoderSurface);
+                Surface extra = extraTarget;
+                if (extra != null && !watchOnly && sessionTargets != null && sessionTargets.contains(extra)) captureRequest.addTarget(extra); // pc.36
                 Surface analysis = sessionAnalysis;
                 if (analysis != null && analysisOn) captureRequest.addTarget(analysis); // pc.35: MotionWatch analyses
                 try{

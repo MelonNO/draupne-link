@@ -493,8 +493,27 @@ public class ControlLink {
         foreignSleepHandler = handler;
     }
 
+    /**
+     * 1.0.47: where a phone's overwatch packets go (OverwatchHub.offer: a copy into its queue, nothing more). They come
+     * from the phone's own overwatch socket, never the link's port, so they arrive here as foreign packets.
+     */
+    private volatile OverwatchSink overwatchSink;
+
+    public interface OverwatchSink {
+        void offer(byte[] d, int len, java.net.InetAddress from, int port);
+    }
+
+    public void setOverwatchSink(OverwatchSink sink) {
+        overwatchSink = sink;
+    }
+
     private void onForeignPacket(DatagramPacket packet) {
         if (packet.getLength() < 1) return;
+        if (de.droiddrone.common.OverwatchProtocol.isFromPhone(packet.getData(), packet.getLength())) {
+            OverwatchSink sink = overwatchSink;
+            if (sink != null) sink.offer(packet.getData(), packet.getLength(), packet.getAddress(), packet.getPort());
+            return;
+        }
         if (packet.getLength() >= 6 && packet.getData()[0] == SLEEP_HELLO) {
             java.util.function.BiFunction<String, byte[], Boolean> h = foreignSleepHandler;
             Boolean wake = h == null ? null : h.apply(packet.getAddress().getHostAddress(), java.util.Arrays.copyOf(packet.getData(), packet.getLength()));
@@ -1015,6 +1034,11 @@ public class ControlLink {
      */
     public static final byte POWER_MODE = 0x6E;
     public static final int POWER_NORMAL = 0, POWER_STANDBY = 1, POWER_DEEP_SLEEP = 2;
+    /**
+     * 1.0.47 (phone app pc.36 on): OVERWATCH SLEEP - deep sleep with the camera and the motion detection on; a
+     * detection calls this PC (OverwatchHub). The request carries more: OverwatchProtocol.request.
+     */
+    public static final int POWER_OVERWATCH = de.droiddrone.common.OverwatchProtocol.MODE;
 
     /**
      * A remote update of the phone app (phone app pc.32 on; an older one drops it): [0x77][version UTF][APK url UTF]
@@ -1044,6 +1068,15 @@ public class ControlLink {
     }
 
     /**
+     * OVERWATCH (1.0.47): [0x6E][3][checkIntervalMin u8][sensitivity u8][flags u8][token u32] - only to a phone of
+     * pc.36 or newer (an older one says "no such mode" and stays as it is).
+     */
+    public void sendOverwatch(int checkIntervalMin, int sensitivity, int flags, int token) {
+        if (!running || !isConnected() || spectator != null) return;
+        udpSender.sendPacket(de.droiddrone.common.OverwatchProtocol.request(POWER_MODE, checkIntervalMin, sensitivity, flags, token));
+    }
+
+    /**
      * Dormant: the phone is in deep sleep and must not be woken - no Connect goes out while the link is down. WAKE
      * clears it, and the Connects resume at once (the phone takes one in its next listening window).
      */
@@ -1070,7 +1103,27 @@ public class ControlLink {
      */
     public static final byte SLEEP_HELLO = 0x6F, SLEEP_ANSWER = 0x70;
 
-    public record SleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, long receivedAt) {}
+    /**
+     * owFlags (pc.36 on; 0 before): OverwatchProtocol.HELLO_OVERWATCH - it overwatches, HELLO_EVENT - an event runs;
+     * floorReason: why it left overwatch for deep sleep by itself (PowerFloor.REASON_*, 0 none).
+     */
+    public record SleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, long receivedAt,
+                             int owFlags, int floorReason) {
+        public SleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, long receivedAt) {
+            this(batteryPercent, charging, nextCheckMin, milliVolts, receivedAt, 0, 0);
+        }
+
+        public boolean overwatch() {
+            return (owFlags & de.droiddrone.common.OverwatchProtocol.HELLO_OVERWATCH) != 0;
+        }
+
+        /** The hello's bytes: [0x6F][battery][charging][nextCheckMin][mV u16], then (pc.36) [owFlags][floorReason]. */
+        public static SleepHello read(byte[] d, int len, long receivedAt) {
+            int pct = d[1] & 0xff;
+            return new SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff, ((d[4] & 0xff) << 8) | (d[5] & 0xff), receivedAt,
+                    len >= 7 ? d[6] & 0xff : 0, len >= 8 ? d[7] & 0xff : 0);
+        }
+    }
 
     private volatile SleepHello sleepHello;
 
@@ -1081,8 +1134,7 @@ public class ControlLink {
 
     private void onSleepHello(byte[] d, int len) {
         if (len < 6) return;
-        int pct = d[1] & 0xff;
-        sleepHello = new SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff, ((d[4] & 0xff) << 8) | (d[5] & 0xff), MonoClock.ms());
+        sleepHello = SleepHello.read(d, len, MonoClock.ms());
         udpSender.sendPacket(new byte[]{SLEEP_ANSWER, (byte) (dormant ? 0 : 1)});
     }
 

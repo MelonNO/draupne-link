@@ -75,6 +75,8 @@ final class PcLinkStats {
     static final int CAP_DEVICE_ADMIN = 1;
     static final int CAP_EXACT_ALARMS = 2;
     static final int CAP_NO_BATTERY_OPTIMISATION = 4;
+    /** pc.36: the camera gives the motion detection its picture - the phone can overwatch. */
+    static final int CAP_OVERWATCH = 8;
 
     static void writePhonePowerTo(DataOutputStream out, int mode, int checkIntervalMin, int sleepInS, int caps) throws IOException {
         out.writeShort(PHONE_POWER_CODE);

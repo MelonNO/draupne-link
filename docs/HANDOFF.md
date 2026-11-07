@@ -6,6 +6,36 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-07, 1.0.45 built, not released; phone app 2.3.0-pc.34 compiled from source, no APK yet)
 
+- **1.0.47 OVERWATCH SLEEP + phone pc.36 (2026-11-07, branch feat-overwatch, not released, never run on a phone; versions
+  left for the merge):** the pilot's spec: a third sleep mode where the camera and the motion detection stay on and a
+  detection calls the PC. *Shared (overlay/Common, in both builds, tested on the PC):* `OverwatchProtocol` (every
+  packet), `OverwatchEvent` (the phone's event: 30 s quiet, dismiss capped at 10 min, 15 min clip cap), `PreRoll`
+  (5 s of JPEGs, two a second, 256 KB cap), `PowerFloor` (under 20 % not charging, or thermal >= SEVERE / battery
+  >= 45 C; two readings 30 s apart), `UnitAssembler`. *Phone:* `PowerMode.OVERWATCH` (deep sleep's countdown, alarm,
+  windows and hellos; `floorDrop`; wake calls `Overwatch.end`), `DDService.powerOverwatch` (deep sleep's closing but
+  the wake lock stays; the position taken first), `Overwatch` (own socket to the PC's link port, its worker at
+  background priority: alert resend, pre-roll after the ACK, preview sender draining the stream encoder, clip
+  serving, the floor every 30 s), `OverwatchRecorder` (own H.264 surface encoder at the camera's size + AAC into
+  MP4), `InternalCamera.setWatchOnly` (a session with the analysis reader alone) / `setExtraTarget` (the recorder's
+  surface shared with the encoder's), `Udp.overwatchCamera` / `overwatchEventVideo` (on the video starter thread),
+  `MotionWatch.overwatch` + `Sink`. *PC:* `overwatch.OverwatchHub` (one MIN_PRIORITY thread; ControlLink's foreign
+  packets and NameService's answer thread - now its own thread with a 1 MB buffer - hand datagrams over; tokens per
+  drone in `overwatch.watched`), `AlertCard`, `ClipTransfer`, `ClipIndex` (Documents\DRAUPNE Link\Overwatch,
+  hidden.txt), `ClipPlayer` (FFmpeg demux + `VideoDecoder.oneThread`), `gui.OverwatchPanel` (cards, badges, clip
+  list, player) right of the map, `MapView.OverwatchMark` (pulse, red view, direction), MainWindow's OVERWATCH
+  button / `Asleep.overwatch` / POP OUT MAP badge / `AlertSound.ring`. *Design choices:* the preview is the stream
+  encoder at the camera's size and 1 Mbit/s (not 640x360: the session shares one size between the encoder and the
+  recorder; at the camera's frame rate, not 10-15); the pre-roll is not in the MP4 - the PC keeps the JPEGs and the
+  player shows them before the clip; the bearing on the map is the heading the PC saw when it asked OVERWATCH plus
+  the box's angle (no FC attitude while asleep; an upside-down phone isn't allowed for); the built-in player shows
+  the picture only (the sound is in the file). *Battery estimate (unmeasured):* overwatch ~15-25 h on a 5000 mAh
+  phone, deep sleep 2-7 days. *To check on the real thing:* that phones keep a camera session with only an
+  ImageReader running with the screen off under the camera-type foreground service (and that makers' savers let
+  it), the session switch at an alert (watch-only -> encoder + recorder + reader, ~0.5 s), the alert's time to the PC
+  over a sleeping Tailscale path, the clip transfer's pace over 4G, the phone's heat in a closed box, the SHA over a
+  big clip on the phone's worker. Ids 0x7A, 0x7B, 0x7D-0x7F and 0x40FB-0x40FD were reserved for this branch (the
+  observation-mode branch has the others): check at the merge.
+
 - **1.0.45 live audio + phone pc.34 (2026-11-07, not released, untried on a phone - nothing of it has run on real
   hardware or played through a real sound card):** the pilot: "when the drone is disarmed and the user is connected to
   it, the phone's microphone streams audio to the PC, with a MUTE button". *Phone:* `PcAudio` (overlay/Common, in both

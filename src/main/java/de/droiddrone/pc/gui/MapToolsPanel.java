@@ -85,6 +85,8 @@ final class MapToolsPanel extends JPanel {
     final JButton placeAt = Theme.secondaryButton("Place at...");
     final JButton pins = Theme.secondaryButton("Pins");
     final JButton goTo = Theme.secondaryButton("Go to");
+    /** 1.0.47: the overwatch clips, per drone (the map window's clip list). */
+    final JButton clips = Theme.secondaryButton("Clips");
     final JButton download = Theme.secondaryButton("Download area");
     final JButton export = Theme.secondaryButton("Export...");
     final JButton importButton = Theme.secondaryButton("Import...");
@@ -301,6 +303,10 @@ final class MapToolsPanel extends JPanel {
 
         section(body, "MAP");
         row(body, goTo);
+
+        section(body, "OVERWATCH");
+        clips.setToolTipText("What the drones in overwatch saw: each event's clip, when, how long and where, to play here with the camera's view on the map");
+        row(body, clips);
     }
 
     private void buildData(JPanel body) {

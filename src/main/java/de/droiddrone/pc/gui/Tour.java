@@ -72,8 +72,8 @@ final class Tour {
 
     /** The features whose steps came after the first tour: a PC that had the tour before them is offered them alone. */
     static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon",
-            FEATURE_COVERAGE = "coverage";
-    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE);
+            FEATURE_COVERAGE = "coverage", FEATURE_OVERWATCH = "overwatch";
+    static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE, FEATURE_OVERWATCH);
     /** The features the pilot has been offered a tour of, comma-separated. */
     static final String SEEN_KEY = "tour.seen";
 
@@ -128,6 +128,13 @@ final class Tour {
                 + "screen; DEEP SLEEP locks the phone and lets it sleep, checking for this PC every CHECK EVERY minutes; WAKE brings "
                 + "it back. They fold away while the drone is armed. This is a demo: press one and read the line under them.",
                 main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null, null));
+        // OVERWATCH (1.0.47): the third sleep button, in the same demo
+        steps.add(new Step("OVERWATCH", "Sleeps like DEEP SLEEP, but the camera and the motion detection stay on. When something moves "
+                + "the phone calls this PC at once: in the map window the drone pulses, its camera's view and the direction show in red, and "
+                + "a card has a live picture, CONNECT and DISMISS - with a sound, unless this PC flies. The phone records the event in full "
+                + "quality and sends it here after the motion ends. Disarmed only; under 20 % battery or too hot it goes to deep sleep by "
+                + "itself. About 15-25 h on a 5000 mAh phone (an estimate). Press it in this demo.",
+                main::tourOverwatchButton, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null, null).of(FEATURE_OVERWATCH));
         // on the map steps the map itself stays live under the dimming: panning, the wheel, pins and the cursor figures work
         Supplier<JComponent> map = () -> main.mapWindow().map();
         steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
@@ -156,6 +163,10 @@ final class Tour {
                 + "the open OpenCelliD database puts the masts, and the terrain between them and the drone. Pick your SIM's network and the "
                 + "drone's height; it needs a free OpenCelliD key (KEY...). A guess, not a measurement. Try it after the tour.",
                 () -> main.mapWindow().tourCoverage(), mapAndTools, false, map).of(FEATURE_COVERAGE));
+        steps.add(new Step("CLIPS", "What the drones in overwatch saw: per drone, each event's picture, time, length and place. Play one "
+                + "here, with the camera's view as it was on the map. REMOVE only takes it off the list - the files stay in "
+                + "Documents, DRAUPNE Link, Overwatch (FOLDER opens it there). Right-clicking a drone on the map gives its clips too. Try it after the tour.",
+                () -> main.mapWindow().tourClips(), mapAndTools, false, map).of(FEATURE_OVERWATCH));
         steps.add(new Step("DRAW", "LINE through the points you click (double-click ends), RECTANGLE by dragging a box, ARROW with its head at the "
                 + "last point. Pick the colour, the width and outline or fill first. Right-click a drawing to rename or remove it.",
                 () -> main.mapWindow().tourDraw(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
@@ -215,7 +226,8 @@ final class Tour {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         List<String> what = new ArrayList<>();
         for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "the phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "the map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "the radio horizon, the GCS search and the map tools' three groups"
-                : f.equals(FEATURE_COVERAGE) ? "the 4G coverage estimate on the map" : f);
+                : f.equals(FEATURE_COVERAGE) ? "the 4G coverage estimate on the map"
+                : f.equals(FEATURE_OVERWATCH) ? "OVERWATCH sleep - the drone watches and calls this PC - and its clips on the map" : f);
         Object[] options = {"Yes", "Not now"};
         int answer = JOptionPane.showOptionDialog(main, "New in this version: " + String.join(" and ", what)
                         + ".\nA short tour of just the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);

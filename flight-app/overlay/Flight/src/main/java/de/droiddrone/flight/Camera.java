@@ -36,6 +36,23 @@ public interface Camera {
         return false;
     }
 
+    /**
+     * pc.36, overwatch sleep: the next session is the analysis picture alone (no encoder, no recorder) - the camera
+     * watches for the motion detection and nothing else. False: the normal session. Cameras that can't do it ignore it
+     * (a USB camera runs its usual stream; its frames are dropped while nothing is sent).
+     */
+    default void setWatchOnly(boolean on) {
+    }
+
+    /** pc.36: whether a watch-only session can be had (the internal camera with its analysis picture). */
+    default boolean canWatchOnly() {
+        return false;
+    }
+
+    /** pc.36: an overwatch event's recorder surface in the next session beside the encoder's (null: none). */
+    default void setExtraTarget(android.view.Surface surface) {
+    }
+
     boolean initialize(StreamEncoder streamEncoder, Mp4Recorder mp4Recorder);
     boolean openCamera();
     int getCurrentFps();

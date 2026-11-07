@@ -1100,12 +1100,13 @@ public class Udp {
      * The sleeping phone's "still here" (pc.22): [0x6F][battery % u8][charging u8][nextCheckMin u8][mV u16] to the
      * PC's last address; it answers whether to sleep on or wake. Nothing to send to before the first flight.
      */
-    public boolean sendSleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts) {
+    public boolean sendSleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, int owFlags, int floorReason) {
         InetAddress ip = lastPcIp;
         DatagramSocket s = socket;
         if (ip == null || s == null || s.isClosed()) return false;
+        // pc.36: two bytes more - overwatching / an event runs, and why it left overwatch by itself (an older PC reads six)
         byte[] d = {PowerMode.SLEEP_HELLO, (byte) Math.min(255, Math.max(0, batteryPercent)), (byte) (charging ? 1 : 0),
-                (byte) Math.min(255, nextCheckMin), (byte) (milliVolts >> 8), (byte) milliVolts};
+                (byte) Math.min(255, nextCheckMin), (byte) (milliVolts >> 8), (byte) milliVolts, (byte) owFlags, (byte) floorReason};
         try {
             s.send(new DatagramPacket(d, d.length, ip, lastPcPort));
             return true;
@@ -1118,6 +1119,87 @@ public class Udp {
     public boolean isConnected(){
         ReceiverBuffer buffer = receiverBuffer;
         return (buffer != null && buffer.isConnected());
+    }
+
+    // ---- pc.36: what overwatch sleep (Overwatch) asks of the link and the camera
+
+    /** The PC this phone last flew with (its link port): where overwatch's packets go. Null before the first flight. */
+    java.net.InetSocketAddress lastPcAddress() {
+        InetAddress ip = lastPcIp;
+        return ip == null ? null : new java.net.InetSocketAddress(ip, lastPcPort);
+    }
+
+    /** Where the drone is now, as NAME_REPLY says it: {source 0 none / 1 FC / 2 phone, latE7, lonE7, age s}. */
+    int[] positionNow() {
+        try {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            writePosition(new java.io.DataOutputStream(bytes));
+            java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(bytes.toByteArray()));
+            in.readByte();
+            return new int[]{in.readUnsignedByte(), in.readInt(), in.readInt(), in.readUnsignedShort()};
+        } catch (Exception e) {
+            return new int[]{0, 0, 0, 0};
+        }
+    }
+
+    /**
+     * Overwatch's camera, on the video starter thread (after any stop queued before it): on - the camera opened with
+     * the analysis picture alone (watch-only, InternalCamera); off - closed. The stream to the PC isn't started here.
+     */
+    void overwatchCamera(final boolean on) {
+        videoStarter.execute(() -> {
+            try {
+                Camera camera = cameraManager.getCamera();
+                if (!on) {
+                    streamEncoder.close();
+                    camera.setExtraTarget(null);
+                    camera.setWatchOnly(false);
+                    camera.close();
+                    return;
+                }
+                if (!camera.initialize(streamEncoder, mp4Recorder)) {
+                    log("Overwatch: the camera can't be started");
+                    return;
+                }
+                camera.setWatchOnly(camera.canWatchOnly());
+                streamEncoder.close();
+                streamEncoder.setDefaultHevc(false);
+                if (camera.isOpened(config.getCameraId())) {
+                    if (camera instanceof InternalCamera) ((InternalCamera) camera).stopSession();
+                    camera.startPreview();
+                } else if (!camera.openCamera()) {
+                    log("Overwatch: the camera didn't open");
+                }
+            } catch (RuntimeException e) {
+                log("Overwatch camera error: " + e);
+            }
+        });
+    }
+
+    /**
+     * An overwatch event's video, on the video starter thread: on - the session again with the stream encoder (the
+     * PC's live preview, H.264 at 1 Mbit/s) and the event's recorder beside the analysis picture; off - back to the
+     * analysis picture alone. The encoder's frames are Overwatch's to send (no video sender runs here).
+     */
+    void overwatchEventVideo(final boolean on, final android.view.Surface recorder) {
+        videoStarter.execute(() -> {
+            try {
+                Camera camera = cameraManager.getCamera();
+                streamEncoder.close();
+                if (on) {
+                    streamEncoder.setDefaultHevc(false);
+                    streamEncoder.setBitRateIndex(3); // 1 Mbit/s
+                }
+                camera.setExtraTarget(on ? recorder : null);
+                camera.setWatchOnly(!on && camera.canWatchOnly());
+                if (camera instanceof InternalCamera) ((InternalCamera) camera).stopSession();
+                if (camera.isOpened(config.getCameraId())) camera.startPreview();
+                else camera.openCamera();
+                if (on) streamEncoder.startSendFrames();
+            } catch (RuntimeException e) {
+                log("Overwatch event video error: " + e);
+            }
+        });
     }
 
     /** The PHONE_STATE flags: what the PC needs to say why no sticks reach the drone, or why there is no picture. */
@@ -1265,6 +1347,14 @@ public class Udp {
                 if (buffer.getRemaining() < 1) break;
                 int mode = buffer.readUnsignedByteAsInt();
                 int intervalMin = buffer.getRemaining() > 0 ? buffer.readUnsignedByteAsInt() : 0;
+                if (mode == PowerMode.OVERWATCH) {
+                    // pc.36: [0x6E][3][checkIntervalMin u8][sensitivity u8][flags u8][token u32]
+                    if (buffer.getRemaining() < 6) break;
+                    int sensitivity = buffer.readUnsignedByteAsInt();
+                    int flags = buffer.readUnsignedByteAsInt();
+                    int token = buffer.readInt();
+                    Overwatch.configure(sensitivity, flags, token);
+                }
                 PowerMode.request(mode, intervalMin, "the PC");
                 break;
             }
