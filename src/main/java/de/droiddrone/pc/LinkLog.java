@@ -160,8 +160,51 @@ public final class LinkLog implements AutoCloseable {
         lastRcFrames = rc;
         lastTelemetry = telemetry;
         if (now - lastFlush >= 1000) {
-            out.flush();
             lastFlush = now;
+            writeSoon();
+        }
+    }
+
+    /**
+     * The rows go to the file on a thread of their own (1.0.49, L11): sample() and event() run on the Swing thread,
+     * and a slow disk (a virus scanner, a sleeping USB drive) held it up at every flush. Rows wait in memory until
+     * then; an error there stops the log at the next sample.
+     */
+    private static final java.util.concurrent.ExecutorService WRITER = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "linkLog");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        return t;
+    });
+    private final StringBuilder pending = new StringBuilder();
+    private boolean writeQueued, closed;
+    private volatile IOException writeError;
+    private final Object fileLock = new Object();
+
+    private void writeSoon() throws IOException {
+        IOException e = writeError;
+        if (e != null) throw e;
+        if (writeQueued || pending.length() == 0) return;
+        writeQueued = true;
+        WRITER.execute(this::drain);
+    }
+
+    /** On the writer thread: what waits, written and flushed. */
+    private void drain() {
+        synchronized (fileLock) { // fileLock, then this: as close() takes them, so the rows stay in order
+            String text;
+            synchronized (this) {
+                writeQueued = false;
+                if (closed) return;
+                text = pending.toString();
+                pending.setLength(0);
+            }
+            try {
+                out.write(text);
+                out.flush();
+            } catch (IOException e) {
+                writeError = e;
+            }
         }
     }
 
@@ -179,8 +222,9 @@ public final class LinkLog implements AutoCloseable {
             String s = String.valueOf(v);
             sb.append(',').append(s.contains(",") || s.contains("\"") ? '"' + s.replace("\"", "\"\"") + '"' : s);
         }
-        out.write(sb.toString());
-        out.newLine();
+        IOException e = writeError;
+        if (e != null) throw e;
+        pending.append(sb).append(System.lineSeparator());
     }
 
     private static String flag(boolean b) {
@@ -188,7 +232,17 @@ public final class LinkLog implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() throws IOException {
-        out.close();
+    public void close() throws IOException {
+        synchronized (fileLock) { // after a write already under way: the last rows, then closed
+            String text;
+            synchronized (this) {
+                if (closed) return;
+                closed = true;
+                text = pending.toString();
+                pending.setLength(0);
+            }
+            out.write(text);
+            out.close();
+        }
     }
 }

@@ -68,7 +68,12 @@ final class OverwatchPanel extends JPanel {
 
     private final MapView map;
     private final ClipIndex index;
-    private final CameraFootprint.Terrain terrain;
+    /**
+     * The terrain round each drone, a loader of its own per drone (1.0.49): with one shared, two drones far apart
+     * took turns throwing each other's terrain away, and one loading kept the other waiting.
+     */
+    private final Supplier<CameraFootprint.Terrain> newTerrain;
+    private final Map<String, CameraFootprint.Terrain> terrains = new HashMap<>();
     private final Consumer<String> onConnect, onDismiss, onCloseBadge;
     private final Supplier<Coordinates.Format> format;
     private final JPanel cards = new JPanel();
@@ -81,13 +86,27 @@ final class OverwatchPanel extends JPanel {
     private final JPanel library = Theme.card(new BorderLayout(0, 8));
     private final JComboBox<String> droneCombo = new JComboBox<>();
     private final JLabel folderSize = Theme.label(" ", Theme.font(Font.PLAIN, 11.5f), Theme.MUTED);
-    private final DefaultListModel<ClipIndex.Clip> clipModel = new DefaultListModel<>();
-    private final JList<ClipIndex.Clip> clipList = new JList<>(clipModel);
+    private final DefaultListModel<Row> clipModel = new DefaultListModel<>();
+    private final JList<Row> clipList = new JList<>(clipModel);
+    /**
+     * The clip list's rows are made here (1.0.49, M11): the folder read, each clip's files looked at and its picture
+     * decoded - before, the renderer did all that on the Swing thread at every paint of the list.
+     */
+    private final ExecutorService listWork = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "clipList");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        return t;
+    });
+    private int listGen;
+
+    /** One line of the clip list, made off the Swing thread: the clip, its picture, its text. */
+    record Row(ClipIndex.Clip clip, ImageIcon thumb, String html) {}
     private final Picture player = new Picture();
     private final JButton playButton = Theme.primaryButton("Play");
     private final JSlider seek = new JSlider(0, 1000, 0);
     private final JLabel playTime = Theme.label("-", Theme.monoFont(Font.PLAIN, 11.5f), Theme.MUTED);
-    private final Map<Path, ImageIcon> thumbs = new HashMap<>();
+    private final Map<Path, ImageIcon> thumbs = new java.util.concurrent.ConcurrentHashMap<>(); // the list's worker's
     private final ExecutorService playerThread = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "clipPlayer");
         t.setDaemon(true);
@@ -102,12 +121,13 @@ final class OverwatchPanel extends JPanel {
     private ClipIndex.Clip playing;
     private MapView.OverwatchMark replay;
 
-    OverwatchPanel(MapView map, ClipIndex index, CameraFootprint.Terrain terrain, Supplier<Coordinates.Format> format,
+    /** @param newTerrain a terrain loader, one per drone (null: flat ground) */
+    OverwatchPanel(MapView map, ClipIndex index, Supplier<CameraFootprint.Terrain> newTerrain, Supplier<Coordinates.Format> format,
                    Consumer<String> onConnect, Consumer<String> onDismiss, Consumer<String> onCloseBadge) {
         super(new BorderLayout(0, 10));
         this.map = map;
         this.index = index;
-        this.terrain = terrain;
+        this.newTerrain = newTerrain;
         this.format = format;
         this.onConnect = onConnect;
         this.onDismiss = onDismiss;
@@ -198,7 +218,7 @@ final class OverwatchPanel extends JPanel {
             boolean alert = v.shown() == AlertCard.Shown.CARD && !v.ended();
             OverwatchProtocol.Alert a = v.alert();
             double bearing = v.pose() != null && a != null ? (v.pose().headingDeg() + a.angleDeg + 360) % 360 : Double.NaN;
-            out.add(new MapView.OverwatchMark(v.drone(), at[0], at[1], cone(v.drone(), v.pose()), bearing, alert, false,
+            out.add(new MapView.OverwatchMark(v.drone(), at[0], at[1], cone(v.drone(), v.drone(), v.pose()), bearing, alert, false,
                     "OVERWATCH " + v.drone() + (alert ? " - MOTION" : "")));
         }
         if (replay != null) out.add(replay);
@@ -206,11 +226,12 @@ final class OverwatchPanel extends JPanel {
     }
 
     /** The camera's view from a drone sitting on the ground (its height 2 m over the terrain where that isn't known). */
-    private CameraFootprint.View cone(String key, CameraFootprint.Pose p) {
+    private CameraFootprint.View cone(String drone, String key, CameraFootprint.Pose p) {
         if (p == null) return null;
         Object[] cached = viewCache.get(key);
         long now = System.currentTimeMillis();
         if (cached != null && cached[0].equals(p) && now - (long) cached[2] < 10_000) return (CameraFootprint.View) cached[1];
+        CameraFootprint.Terrain terrain = newTerrain == null ? null : terrains.computeIfAbsent(drone.toLowerCase(Locale.ROOT), k -> newTerrain.get());
         if (terrain != null) terrain.around(p.lat(), p.lon());
         CameraFootprint.View v = CameraFootprint.compute(p, terrain, p.altM() - 2);
         viewCache.put(key, new Object[]{p, v, now});
@@ -483,25 +504,50 @@ final class OverwatchPanel extends JPanel {
         if (library.isVisible() && drone.equalsIgnoreCase(String.valueOf(droneCombo.getSelectedItem()))) fillClips();
     }
 
+    /** The list again, made on the list's worker; the newest request wins. */
     private void fillClips() {
         String drone = (String) droneCombo.getSelectedItem();
-        ClipIndex.Clip selected = clipList.getSelectedValue();
-        clipModel.clear();
+        Row selectedRow = clipList.getSelectedValue();
+        String selected = selectedRow == null ? null : selectedRow.clip().id();
+        int gen = ++listGen;
         if (drone == null) {
+            clipModel.clear();
             folderSize.setText("No clips yet: a drone in OVERWATCH records what it sees move.");
             return;
         }
-        List<ClipIndex.Clip> clips = index.clips(drone);
-        for (ClipIndex.Clip c : clips) clipModel.addElement(c);
-        if (selected != null) {
-            for (int i = 0; i < clipModel.size(); i++) if (clipModel.get(i).id().equals(selected.id())) clipList.setSelectedIndex(i);
-        }
-        folderSize.setText(clips.size() + " clip" + (clips.size() == 1 ? "" : "s") + "  -  the folder holds " + ClipIndex.sizeText(index.folderBytes(drone))
-                + " (removed ones too; nothing is deleted by the app)");
+        Coordinates.Format fmt = format.get();
+        listWork.execute(() -> {
+            List<Row> rows = new ArrayList<>();
+            for (ClipIndex.Clip c : index.clips(drone)) rows.add(row(c, fmt));
+            String size = rows.size() + " clip" + (rows.size() == 1 ? "" : "s") + "  -  the folder holds " + ClipIndex.sizeText(index.folderBytes(drone))
+                    + " (removed ones too; nothing is deleted by the app)";
+            SwingUtilities.invokeLater(() -> {
+                if (gen != listGen) return; // a newer list is on its way
+                clipModel.clear();
+                for (Row r : rows) clipModel.addElement(r);
+                if (selected != null) {
+                    for (int i = 0; i < clipModel.size(); i++) if (clipModel.get(i).clip().id().equals(selected)) clipList.setSelectedIndex(i);
+                }
+                folderSize.setText(size);
+            });
+        });
+    }
+
+    /** On the list's worker: one row - the clip's files looked at, its picture decoded (kept), its text. */
+    private Row row(ClipIndex.Clip c, Coordinates.Format fmt) {
+        String when = c.startedAt() > 0 ? DAY_TIME.format(Instant.ofEpochMilli(c.startedAt()).atZone(ZoneId.systemDefault())) : c.id();
+        int parts = c.parts().size(); // pc.38's 60 s segments: one event, one row
+        boolean full = parts > 0, preview = c.preview() != null;
+        String kind = full ? "full quality" + (parts > 1 ? " (" + parts + " parts)" : "") : preview ? "preview (the full clip is on its way)" : "pictures only";
+        if ("none".equals(c.meta().getProperty("clip")) && !full) kind = preview ? "preview (no full clip)" : "pictures only";
+        if (c.meta().getProperty("clipBadSha256") != null && !full) kind = preview ? "preview (the full clip came damaged)" : "pictures only";
+        String where = c.hasPosition() ? Coordinates.format(fmt, c.lat(), c.lon()) : "position unknown";
+        return new Row(c, thumb(c.thumbnail()), "<html><b>" + when + "</b><br>" + length(c.durationMs()) + "  -  " + kind
+                + "<br><span style='color:#8c8c7e'>" + where + "</span></html>");
     }
 
     private void removeSelected() {
-        ClipIndex.Clip c = clipList.getSelectedValue();
+        ClipIndex.Clip c = selectedClip();
         if (c == null) return;
         if (playing != null && playing.id().equals(c.id())) stopPlaying();
         try {
@@ -514,7 +560,7 @@ final class OverwatchPanel extends JPanel {
     }
 
     private void showInFolder() {
-        ClipIndex.Clip c = clipList.getSelectedValue();
+        ClipIndex.Clip c = selectedClip();
         try {
             Path target = c == null ? null : c.video() != null ? c.video() : c.thumbnail();
             if (target != null) {
@@ -531,7 +577,7 @@ final class OverwatchPanel extends JPanel {
     }
 
     /** One line of the list: the picture before the alert, the time, the length and where. */
-    private final class ClipRenderer implements ListCellRenderer<ClipIndex.Clip> {
+    private final class ClipRenderer implements ListCellRenderer<Row> {
         private final JPanel row = new JPanel(new BorderLayout(8, 0));
         private final JLabel thumb = new JLabel();
         private final JLabel text = new JLabel();
@@ -547,14 +593,10 @@ final class OverwatchPanel extends JPanel {
         }
 
         @Override
-        public Component getListCellRendererComponent(JList<? extends ClipIndex.Clip> list, ClipIndex.Clip c, int i, boolean selected, boolean focus) {
+        public Component getListCellRendererComponent(JList<? extends Row> list, Row r, int i, boolean selected, boolean focus) {
             row.setBackground(selected ? Theme.alpha(MapView.ALERT, 70) : Theme.PANEL);
-            thumb.setIcon(thumb(c.thumbnail()));
-            String when = c.startedAt() > 0 ? DAY_TIME.format(Instant.ofEpochMilli(c.startedAt()).atZone(ZoneId.systemDefault())) : c.id();
-            String kind = c.fullClip() != null ? "full quality" : c.preview() != null ? "preview (the full clip is on its way)" : "pictures only";
-            if ("none".equals(c.meta().getProperty("clip")) && c.fullClip() == null) kind = c.preview() != null ? "preview (no full clip)" : "pictures only";
-            String where = c.hasPosition() ? Coordinates.format(format.get(), c.lat(), c.lon()) : "position unknown";
-            text.setText("<html><b>" + when + "</b><br>" + length(c.durationMs()) + "  -  " + kind + "<br><span style='color:#8c8c7e'>" + where + "</span></html>");
+            thumb.setIcon(r.thumb()); // made on the list's worker: nothing read or decoded here
+            text.setText(r.html());
             text.setForeground(Theme.TEXT);
             return row;
         }
@@ -583,10 +625,10 @@ final class OverwatchPanel extends JPanel {
     // ------------------------------------------------------------------ the player
 
     private void playSelected() {
-        ClipIndex.Clip c = clipList.getSelectedValue();
+        ClipIndex.Clip c = selectedClip();
         if (c == null && !clipModel.isEmpty()) {
             clipList.setSelectedIndex(0);
-            c = clipList.getSelectedValue();
+            c = selectedClip();
         }
         if (c == null) return;
         play(c);
@@ -613,7 +655,7 @@ final class OverwatchPanel extends JPanel {
                 nz(c.doubleOf("pitchDeg")), nz(c.doubleOf("rollDeg")), nz(c.doubleOf("tiltDeg")), def(c.doubleOf("hfovDeg"), 70), def(c.doubleOf("vfovDeg"), 42));
         double angle = c.doubleOf("angleDeg");
         double bearing = p == null || Double.isNaN(angle) ? Double.NaN : (heading + angle + 360) % 360;
-        return new MapView.OverwatchMark(c.drone(), c.lat(), c.lon(), cone("replay:" + c.id(), p), bearing, false, true,
+        return new MapView.OverwatchMark(c.drone(), c.lat(), c.lon(), cone(c.drone(), "replay:" + c.id(), p), bearing, false, true,
                 "CLIP " + c.drone() + " " + clock(c.startedAt()));
     }
 
@@ -647,7 +689,8 @@ final class OverwatchPanel extends JPanel {
     private void runPlayback(int gen, ClipIndex.Clip c) {
         try {
             List<Path> pre = c.preRoll();
-            Path video = c.video();
+            List<Path> videos = c.parts(); // pc.38: the event's 60 s segments, in order, as one clip
+            if (videos.isEmpty() && c.video() != null) videos = List.of(c.video());
             for (Path p : pre) {
                 if (gen != playGen || seekTo >= 0) break;
                 while (paused && gen == playGen) sleep(50);
@@ -655,12 +698,21 @@ final class OverwatchPanel extends JPanel {
                 if (img != null) post(gen, img, "BEFORE THE ALERT", -1);
                 sleep(500);
             }
-            if (video == null) {
+            if (videos.isEmpty()) {
                 post(gen, null, "No video of this event: only the pictures before the alert", -1);
                 return;
             }
-            try (ClipPlayer player = new ClipPlayer(video)) {
-                durationMs = player.durationMs();
+            // where each part starts on the event's one timeline
+            long[] base = new long[videos.size() + 1];
+            for (int i = 0; i < videos.size(); i++) {
+                try (ClipPlayer probe = new ClipPlayer(videos.get(i))) {
+                    base[i + 1] = base[i] + Math.max(0, probe.durationMs());
+                }
+            }
+            durationMs = base[videos.size()];
+            int k = 0;
+            ClipPlayer player = new ClipPlayer(videos.get(0));
+            try {
                 int w = Math.min(640, Math.max(16, player.width())), h = Math.max(16, Math.round(player.height() * (float) w / Math.max(1, player.width())));
                 int[] pixels = new int[w * h];
                 long wallStart = System.currentTimeMillis();
@@ -669,7 +721,14 @@ final class OverwatchPanel extends JPanel {
                     long to = seekTo;
                     if (to >= 0) {
                         seekTo = -1;
-                        player.seek(to);
+                        int want = 0;
+                        while (want < videos.size() - 1 && to >= base[want + 1]) want++;
+                        if (want != k) {
+                            player.close();
+                            k = want;
+                            player = new ClipPlayer(videos.get(k));
+                        }
+                        player.seek(to - base[k]);
                         pos = to;
                         wallStart = System.currentTimeMillis() - to;
                     }
@@ -679,11 +738,18 @@ final class OverwatchPanel extends JPanel {
                         continue;
                     }
                     long t = player.next(pixels, w, h);
+                    if (t < 0 && k < videos.size() - 1) { // the next part goes on where this one ended
+                        player.close();
+                        k++;
+                        player = new ClipPlayer(videos.get(k));
+                        continue;
+                    }
                     if (t < 0) {
                         post(gen, null, "END", durationMs);
                         while (gen == playGen && seekTo < 0) sleep(100); // the slider can start it again
                         continue;
                     }
+                    t += base[k];
                     pos = t;
                     long wait = wallStart + t - System.currentTimeMillis();
                     if (wait > 0) sleep(Math.min(wait, 1000));
@@ -691,6 +757,8 @@ final class OverwatchPanel extends JPanel {
                     System.arraycopy(pixels, 0, ((DataBufferInt) img.getRaster().getDataBuffer()).getData(), 0, pixels.length);
                     post(gen, img, null, t);
                 }
+            } finally {
+                player.close();
             }
         } catch (IOException | RuntimeException e) {
             post(gen, null, "Can't play: " + e.getMessage(), -1);
@@ -724,8 +792,14 @@ final class OverwatchPanel extends JPanel {
         return cards;
     }
 
+    private ClipIndex.Clip selectedClip() {
+        Row r = clipList.getSelectedValue();
+        return r == null ? null : r.clip();
+    }
+
     void dispose() {
         playGen++;
         playerThread.shutdownNow();
+        listWork.shutdownNow();
     }
 }

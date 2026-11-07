@@ -38,11 +38,105 @@ public class PcConfig {
     public static PcConfig load(Path file) throws IOException {
         Properties props = new Properties(loadTemplate());
         if (file != null && Files.exists(file)) {
-            try (Reader reader = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
-                props.load(reader);
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                String[] kv = parseLine(line);
+                if (kv != null) props.setProperty(kv[0], kv[1]);
             }
         }
         return new PcConfig(props);
+    }
+
+    /**
+     * One line of the settings file: {key, value}, or null for a comment or a blank line (1.0.49). This app writes
+     * java.util.Properties' own escaping ({@link #escape}), but before 1.0.49 values were written as they came, so a
+     * saved Windows path reads C:\Users\me - which java.util.Properties turned into "C:Usersme", and a folder whose name starts with u
+     * after the backslash into an exception that stopped the app starting. So a value is decoded only when every backslash in it starts
+     * an escape this app writes ({@link #unescape}); otherwise it is taken as it stands. No line goes on onto the
+     * next (an old path ending in a backslash would have swallowed the line after it).
+     */
+    static String[] parseLine(String raw) {
+        String line = stripLeading(raw);
+        if (line.isEmpty() || line.charAt(0) == '#' || line.charAt(0) == '!') return null;
+        int i = 0;
+        while (i < line.length()) {
+            char c = line.charAt(i);
+            if (c == '\\' && i + 1 < line.length()) {
+                i += 2;
+                continue;
+            }
+            if (c == '=' || c == ':' || isBlank(c)) break;
+            i++;
+        }
+        String key = line.substring(0, i);
+        while (i < line.length() && isBlank(line.charAt(i))) i++;
+        if (i < line.length() && (line.charAt(i) == '=' || line.charAt(i) == ':')) i++;
+        return new String[]{unescape(key), unescape(stripLeading(line.substring(i)))};
+    }
+
+    private static boolean isBlank(char c) {
+        return c == ' ' || c == '\t' || c == '\f';
+    }
+
+    private static String stripLeading(String s) {
+        int i = 0;
+        while (i < s.length() && isBlank(s.charAt(i))) i++;
+        return s.substring(i);
+    }
+
+    /**
+     * The text with java.util.Properties escapes decoded, when it is written in the ones this app writes
+     * (backslash followed by a backslash, ':', '=', '#', '!', a space, or u and four hex digits); any other backslash (\U, \t, \me ...) means a raw value from before
+     * 1.0.49 - a Windows path - and the text is returned as it stands.
+     */
+    static String unescape(String s) {
+        if (s.indexOf('\\') < 0) return s;
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != '\\') {
+                out.append(c);
+                continue;
+            }
+            if (i + 1 >= s.length()) return s; // a lone backslash at the end
+            char n = s.charAt(++i);
+            if (n == '\\' || n == ':' || n == '=' || n == '#' || n == '!' || n == ' ') {
+                out.append(n);
+            } else if (n == 'u' && isHex(s, i + 1)) {
+                out.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16));
+                i += 4;
+            } else {
+                return s;
+            }
+        }
+        return out.toString();
+    }
+
+    private static boolean isHex(String s, int from) {
+        if (from + 4 > s.length()) return false;
+        for (int i = from; i < from + 4; i++) if (Character.digit(s.charAt(i), 16) < 0) return false;
+        return true;
+    }
+
+    /**
+     * A key or a value in java.util.Properties' escaping: backslash, ':', '=', '#' and '!' escaped, a key's spaces
+     * and a value's first one too, and every control character, line break or line separator as a backslash-u escape -
+     * so no value can ever start a line of its own. java.util.Properties reads it back the same.
+     */
+    static String escape(String s, boolean key) {
+        StringBuilder out = new StringBuilder(s.length() + 8);
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '\\' || c == ':' || c == '=' || c == '#' || c == '!') {
+                out.append('\\').append(c);
+            } else if (c == ' ' && (key || i == 0)) {
+                out.append("\\ ");
+            } else if (c < 0x20 || (c >= 0x7f && c <= 0x9f) || c == '\u2028' || c == '\u2029') {
+                out.append(String.format(java.util.Locale.ROOT, "\\u%04X", (int) c));
+            } else {
+                out.append(c);
+            }
+        }
+        return out.toString();
     }
 
     public static PcConfig defaults() throws IOException {
@@ -86,20 +180,27 @@ public class PcConfig {
         }
         Map<String, String> pending = new LinkedHashMap<>(updates);
         for (int i = 0; i < lines.size(); i++) {
-            String line = lines.get(i).trim();
-            if (line.startsWith("#") || !line.contains("=")) continue;
-            String key = line.substring(0, line.indexOf('=')).trim();
-            if (pending.containsKey(key)) lines.set(i, key + "=" + pending.remove(key));
+            String[] kv = parseLine(lines.get(i));
+            if (kv == null) continue;
+            if (pending.containsKey(kv[0])) {
+                lines.set(i, line(kv[0], pending.remove(kv[0])));
+            } else if (lines.get(i).indexOf('\\') >= 0 && !lines.get(i).trim().equals(line(kv[0], kv[1]))) {
+                lines.set(i, line(kv[0], kv[1])); // a raw line from before 1.0.49: escaped now, as it was read
+            }
         }
         if (!pending.isEmpty()) {
             lines.add("");
-            pending.forEach((key, value) -> lines.add(key + "=" + value));
+            pending.forEach((key, value) -> lines.add(line(key, value)));
         }
         // whole, then moved into place: a crash or a power cut mid-write never leaves half a settings file
         Path tmp = file.resolveSibling(file.getFileName() + ".part");
         Files.write(tmp, lines, StandardCharsets.UTF_8);
         Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         updates.forEach(props::setProperty);
+    }
+
+    private static String line(String key, String value) {
+        return escape(key, true) + "=" + escape(value == null ? "" : value, false);
     }
 
     /** Calibrations written by the calibration wizard (axisN.min / axisN.center / axisN.max). */

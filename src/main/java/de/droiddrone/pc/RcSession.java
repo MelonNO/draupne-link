@@ -91,6 +91,18 @@ public class RcSession {
         this(link, mapper, events, MonoClock::ms, link::sticksWanted,
                 () -> link.getTelemetry().isArmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS),
                 () -> link.getTelemetry().isDisarmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS), armSwitch);
+        armBlocked = () -> link.getTelemetry().isPhoneInstalling(MonoClock.ms());
+    }
+
+    /**
+     * 1.0.49 (H9): while this says so - the phone installs an update, and its app restarts any moment - no frame that
+     * could arm the drone goes out: on a disarmed drone the sticks stop while the arm switch is on (or unknown), and
+     * start again only with the usual throttle-low, arm-off rule. An armed drone keeps its sticks.
+     */
+    private volatile BooleanSupplier armBlocked = () -> false;
+
+    void setArmBlocked(BooleanSupplier blocked) {
+        armBlocked = blocked;
     }
 
     RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp) {
@@ -294,12 +306,22 @@ public class RcSession {
             lostAt = 0; // a link that was down long enough to notice: Betaflight has failed safe, no quick resume
             return;
         }
+        // H9: the phone installs an update - nothing that could arm a disarmed drone goes out
+        boolean noArm = channels != null && armBlocked.getAsBoolean() && !fcArmedNow.getAsBoolean()
+                && (armSwitch == null || armSwitch.isUnknown(channels) || armSwitch.on(channels));
+        if (noArm && rcEnabled) {
+            events.accept("The phone installs an update - RC output stopped: no arming until it is back (throttle low, arm switch off).");
+            rcEnabled = false;
+            lostAt = 0;
+        }
         if (channels == null) {
             if (rcEnabled) {
                 events.accept("Joystick lost or mapping incomplete - RC output stopped.");
                 lostAt = now;
             }
             rcEnabled = false;
+        } else if (!rcEnabled && noArm) {
+            // waits: see waitingFor()
         } else if (!rcEnabled) {
             boolean blip = lostAt != 0 && now - lostAt <= RESUME_WINDOW_MS;
             if (blip) {
@@ -357,6 +379,7 @@ public class RcSession {
         if (rcEnabled) return null;
         short[] ch = lastChannels;
         if (ch == null) return radioPresent ? "MAPPING INCOMPLETE" : "NO RADIO";
+        if (armBlocked.getAsBoolean()) return "PHONE UPDATING";
         if (armSwitch != null && armSwitch.isUnknown(ch)) return "ARM SWITCH NOT SENT";
         boolean throttle = ch[PcConfig.THROTTLE_INDEX] > THROTTLE_SAFE_MAX;
         boolean arm = armSwitch != null && armSwitch.on(ch);

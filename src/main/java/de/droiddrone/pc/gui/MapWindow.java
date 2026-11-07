@@ -269,7 +269,7 @@ final class MapWindow extends JFrame {
         MainWindow main = owner instanceof MainWindow m ? m : null;
         overwatchPanel = new OverwatchPanel(map,
                 main != null ? main.overwatch().index() : new de.droiddrone.pc.overwatch.ClipIndex(de.droiddrone.pc.overwatch.ClipIndex.defaultRoot()),
-                new de.droiddrone.pc.map.CameraFootprint.Terrain(cache), () -> this.format,
+                () -> new de.droiddrone.pc.map.CameraFootprint.Terrain(cache), () -> this.format,
                 d -> { if (main != null) main.overwatchConnect(d); },
                 d -> { if (main != null) main.overwatchDismiss(d); },
                 d -> { if (main != null) main.overwatch().closeBadge(d); });
@@ -780,6 +780,7 @@ final class MapWindow extends JFrame {
                     case 2 -> "OpenCelliD does not know the key";
                     case 7 -> "the key's requests for today are used up";
                     case 0 -> "no connection to OpenCelliD: saved cells only";
+                    case OpenCellId.HELD -> "a drone here may be flying: saved cells only until it has landed";
                     default -> "OpenCelliD: " + a.error();
                 };
                 break;

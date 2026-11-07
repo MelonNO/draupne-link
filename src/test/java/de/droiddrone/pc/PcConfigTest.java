@@ -86,6 +86,59 @@ class PcConfigTest {
         assertFalse(PcConfig.load(file).upgrade(file), "once only");
     }
 
+    /** H5 (1.0.49): before, a saved path under C:\Users whose next folder started with u stopped the app starting. */
+    @Test
+    void aWindowsPathRoundTripsAndJavasOwnReaderAgrees() throws Exception {
+        Path file = dir.resolve(PcConfig.FILE_NAME);
+        PcConfig config = PcConfig.load(file);
+        String path = "C:\\Users\\ulrik\\Videos\\DRAUPNE: test #1 = ok!";
+        config.save(file, Map.of("recording.folder", path, "phone name", " lead space"));
+        PcConfig again = PcConfig.load(file);
+        assertEquals(path, again.getString("recording.folder"));
+        java.util.Properties javas = new java.util.Properties();
+        try (java.io.Reader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            javas.load(r); // threw "Malformed \\uxxxx encoding" before
+        }
+        assertEquals(path, javas.getProperty("recording.folder"), "java.util.Properties escaping");
+        assertEquals(" lead space", javas.getProperty("phone name"));
+    }
+
+    @Test
+    void aValueCantInjectALine() throws Exception {
+        Path file = dir.resolve(PcConfig.FILE_NAME);
+        PcConfig config = PcConfig.load(file);
+        config.save(file, Map.of("name.MobileAlpha", "PHONE|1.2.3.4|x\nrcRate=1000\r\nip=6.6.6.6\u2028key=x|h|v|0"));
+        PcConfig again = PcConfig.load(file);
+        assertEquals(250, again.getRcRate(), "no rcRate line was made");
+        assertEquals("", again.getIp(), "no ip line was made");
+        assertEquals("PHONE|1.2.3.4|x\nrcRate=1000\r\nip=6.6.6.6\u2028key=x|h|v|0", again.getString("name.MobileAlpha"), "the value itself kept");
+        assertEquals(1, Files.readAllLines(file).stream().filter(l -> l.startsWith("name.MobileAlpha")).count());
+    }
+
+    @Test
+    void anOldRawSettingsFileStillReadsAndIsEscapedAtTheNextSave() throws Exception {
+        Path file = dir.resolve(PcConfig.FILE_NAME);
+        // as 1.0.48 wrote them: values as they came
+        Files.writeString(file, "# mine\nrecording.folder=C:\\Users\\ulrik\\Videos\\\nip=100.64.0.20\nkept.folder=D:\\temp\\new\n"
+                + "stanag.target=127.0.0.1:15000\n");
+        PcConfig config = PcConfig.load(file); // threw before
+        assertEquals("C:\\Users\\ulrik\\Videos\\", config.getString("recording.folder"), "not C:Usersulrik...");
+        assertEquals("100.64.0.20", config.getIp(), "the line after a path ending in a backslash is its own");
+        assertEquals("D:\\temp\\new", config.getString("kept.folder"), "\\t and \\n in a raw path are not a tab and a line break");
+        assertEquals("127.0.0.1:15000", config.getString("stanag.target"));
+        config.save(file, Map.of("rcRate", "250"));
+        PcConfig again = PcConfig.load(file);
+        assertEquals("C:\\Users\\ulrik\\Videos\\", again.getString("recording.folder"));
+        assertEquals("D:\\temp\\new", again.getString("kept.folder"));
+        assertTrue(Files.readString(file).startsWith("# mine"), "comments kept");
+        java.util.Properties javas = new java.util.Properties();
+        try (java.io.Reader r = Files.newBufferedReader(file, StandardCharsets.UTF_8)) {
+            javas.load(r);
+        }
+        assertEquals("D:\\temp\\new", javas.getProperty("kept.folder"), "the old raw lines were escaped as they were read");
+        assertEquals("100.64.0.20", javas.getProperty("ip"));
+    }
+
     @Test
     void incompleteCalibrationIsIgnored() throws Exception {
         PcConfig config = PcConfig.defaults();

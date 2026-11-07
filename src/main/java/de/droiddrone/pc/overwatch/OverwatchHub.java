@@ -77,9 +77,15 @@ public final class OverwatchHub implements AutoCloseable {
     private final ClipIndex index;
     private final Map<Integer, Watched> byToken = new ConcurrentHashMap<>();
     private final LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<>(QUEUE_MAX);
-    private final Map<String, Session> sessions = new HashMap<>(); // the hub thread's own
+    /**
+     * The pilot's clicks (DISMISS, CONNECT, a badge closed): a queue of their own (1.0.49, M9), never full of a
+     * preview's datagrams, so they never run on the caller's thread - the Swing thread - beside the hub's.
+     */
+    private final LinkedBlockingQueue<Runnable> controls = new LinkedBlockingQueue<>();
+    private final Map<String, Session> sessions = new ConcurrentHashMap<>(); // the hub thread's (tests: the caller's)
     private volatile List<View> views = List.of();
-    private volatile boolean flying;
+    /** A drone on this PC may be flying (PossiblyFlying, 1.0.49): no clip, no preview, alerts quietly. */
+    private volatile java.util.function.BooleanSupplier flying = de.droiddrone.pc.PossiblyFlying::now;
     private volatile boolean running;
     private volatile Listener listener;
     private Thread thread;
@@ -142,13 +148,17 @@ public final class OverwatchHub implements AutoCloseable {
         return new ArrayList<>(byToken.values());
     }
 
-    /** A drone on this PC is armed: no clip is pulled meanwhile, and a new alert comes quietly. */
-    public void setFlying(boolean armed) {
-        flying = armed;
+    /** Tests: whether a drone on this PC may be flying (else this PC's PossiblyFlying flag). */
+    void setFlying(boolean armed) {
+        flying = () -> armed;
     }
 
+    /**
+     * A drone on this PC may be flying (PossiblyFlying): no clip is pulled and no preview asked for meanwhile, and a
+     * new alert comes quietly.
+     */
     public boolean isFlying() {
-        return flying;
+        return flying.getAsBoolean();
     }
 
     /**
@@ -196,7 +206,8 @@ public final class OverwatchHub implements AutoCloseable {
     }
 
     private void task(Runnable r) {
-        if (!running || !queue.offer(r)) r.run(); // never lost: at once when no thread runs (tests) or the queue is full
+        if (running) controls.add(r); // unbounded: the pilot's clicks are few
+        else r.run(); // no thread (tests): at once
     }
 
     // ------------------------------------------------------------------ the hub's thread
@@ -205,9 +216,9 @@ public final class OverwatchHub implements AutoCloseable {
         long nextTick = 0;
         while (running) {
             try {
+                for (Runnable r; (r = controls.poll()) != null; ) r.run(); // the pilot's clicks before the datagrams
                 Object o = queue.poll(TICK_MS, TimeUnit.MILLISECONDS);
                 if (o instanceof In in) handle(in.data(), in.from(), in.port());
-                else if (o instanceof Runnable r) r.run();
                 long now = now();
                 if (now >= nextTick) {
                     nextTick = now + TICK_MS;
@@ -292,7 +303,7 @@ public final class OverwatchHub implements AutoCloseable {
             Listener l = listener;
             if (l != null) l.onNews(s.drone());
         }
-        if (s.card.previewWanted(now)) askPreview(s, now);
+        if (s.card.previewWanted(now) && !isFlying()) askPreview(s, now);
         publish();
     }
 
@@ -434,23 +445,33 @@ public final class OverwatchHub implements AutoCloseable {
         if (t != null) t.close();
         s.transfer = null;
         try {
-            String id = idFor(s, info.event, info.startedAt);
+            // pc.38: an event comes in 60 s segments, all filed under the event (its start), each a part of its own
+            String id = idFor(s, info.event, info.eventStartedAt);
+            int part = Math.max(1, info.part);
+            String sfx = ClipIndex.partSuffix(part);
             Path dir = index.folder(s.drone());
-            Path done = dir.resolve(id + ".mp4");
-            if (Files.isRegularFile(done) && Arrays.equals(ClipTransfer.sha256(done), info.sha256)) {
+            Path done = dir.resolve(ClipIndex.partFile(id, part));
+            String hex = hex(info.sha256);
+            if (Files.isRegularFile(done) && hasChecked(s, id, part, done, info, hex)) {
                 send(s, OverwatchProtocol.clipDone(s.token, info.event, true, info.startedAt)); // here already
                 return;
             }
-            ClipTransfer ct = new ClipTransfer(dir.resolve(id + ".mp4.part"), done, info.size, info.sha256);
+            ClipIndex.Clip known = index.clip(s.drone(), id);
+            if (known != null && hex.equals(known.meta().getProperty(BAD_SHA + sfx))) {
+                send(s, OverwatchProtocol.clipDone(s.token, info.event, false, info.startedAt)); // given up on: not again
+                return;
+            }
+            ClipTransfer ct = new ClipTransfer(dir.resolve(ClipIndex.partFile(id, part) + ".part"), done, info.size, info.sha256);
             s.transfer = new Transfer(info, id, ct);
             updateMeta(s, id, m -> {
-                m.setProperty("clipSize", Long.toString(info.size));
-                m.setProperty("clipDurationMs", Long.toString(info.durationMs));
+                m.setProperty("clipSize" + sfx, Long.toString(info.size));
+                m.setProperty("clipDurationMs" + sfx, Long.toString(info.durationMs));
                 m.setProperty("clipSound", Boolean.toString(info.sound));
                 m.setProperty("clipSize.wh", info.width + "x" + info.height);
             });
-            log(s.drone() + ": its clip (" + ClipIndex.sizeText(info.size) + (ct.received() > 0 ? ", going on from " + ClipIndex.sizeText(ct.received()) : "")
-                    + ") comes" + (flying ? " once no drone here is armed." : " now."));
+            log(s.drone() + ": its clip" + (part > 1 ? " (part " + part + ")" : "") + " (" + ClipIndex.sizeText(info.size)
+                    + (ct.received() > 0 ? ", going on from " + ClipIndex.sizeText(ct.received()) : "")
+                    + ") comes" + (isFlying() ? " once no drone here may be flying." : " now."));
         } catch (IOException e) {
             log(s.drone() + ": the clip can't be stored: " + e.getMessage());
         }
@@ -460,23 +481,82 @@ public final class OverwatchHub implements AutoCloseable {
         Transfer t = s.transfer;
         if (t == null || t.info.event != event) return;
         try {
+            if (t.clip.checked()) return; // in and checked: only its rename is left (the tick tries it)
             t.clip.onChunk(OverwatchProtocol.chunkOffset(d), d, OverwatchProtocol.CHUNK_DATA_AT, d.length - OverwatchProtocol.CHUNK_DATA_AT);
             if (!t.clip.complete()) return;
-            ClipTransfer.Result r = t.clip.finish();
-            if (r == ClipTransfer.Result.OK) {
+        } catch (IOException e) {
+            log(s.drone() + ": the clip can't be written: " + e.getMessage());
+            return;
+        }
+        finishClip(s, t, now());
+    }
+
+    /** All of the clip is in: checked once, then renamed (again every RENAME_RETRY_MS while the rename fails). */
+    private void finishClip(Session s, Transfer t, long now) {
+        t.renameTriedAt = now;
+        int event = t.info.event;
+        String sfx = ClipIndex.partSuffix(Math.max(1, t.info.part));
+        ClipTransfer.Result r;
+        try {
+            r = t.clip.finish();
+        } catch (IOException e) {
+            if (!t.renameFailedSaid) log(s.drone() + ": the clip came and checked, but can't be given its name (" + e.getMessage() + "): tried again.");
+            t.renameFailedSaid = true;
+            return;
+        }
+        switch (r) {
+            case OK -> {
                 send(s, OverwatchProtocol.clipDone(s.token, event, true, t.info.startedAt));
                 t.close();
                 s.transfer = null;
-                updateMeta(s, t.id, m -> m.setProperty("clip", "full"));
-                log(s.drone() + ": its full-quality clip is here (" + ClipIndex.sizeText(t.info.size) + ", checked); the phone deletes its copy.");
+                updateMeta(s, t.id, m -> {
+                    m.setProperty("clip", "full");
+                    m.setProperty(CHECKED_SHA + sfx, hex(t.info.sha256)); // the phone may announce it again: no second hashing
+                });
+                log(s.drone() + ": its full-quality clip" + (t.info.part > 1 ? " (part " + t.info.part + ")" : "") + " is here ("
+                        + ClipIndex.sizeText(t.info.size) + ", checked); the phone deletes its copy.");
                 Listener l = listener;
                 if (l != null) l.onClips(s.drone());
-            } else {
-                log(s.drone() + ": the clip came damaged (its SHA-256 differs): fetched again.");
             }
-        } catch (IOException e) {
-            log(s.drone() + ": the clip can't be written: " + e.getMessage());
+            case MISMATCH -> log(s.drone() + ": the clip came damaged (its SHA-256 differs): fetched again (" + t.clip.mismatches()
+                    + " of " + ClipTransfer.MAX_RETRIES + " tries again).");
+            case FAILED -> {
+                send(s, OverwatchProtocol.clipDone(s.token, event, false, t.info.startedAt));
+                t.close();
+                s.transfer = null;
+                updateMeta(s, t.id, m -> m.setProperty(BAD_SHA + sfx, hex(t.info.sha256)));
+                log(s.drone() + ": the clip came damaged " + t.clip.mismatches() + " times: given up. The preview recorded here stays as its clip.");
+                Listener l = listener;
+                if (l != null) l.onClips(s.drone());
+            }
         }
+    }
+
+    /** The event's facts: the SHA-256 of its clip (".2", ".3" ... added for later parts), checked when it came (1.0.49: no reading 50 MB again at every resend). */
+    static final String CHECKED_SHA = "clipSha256";
+    /** The SHA-256 of a clip given up on after its retries: announced again, it is not fetched again. */
+    static final String BAD_SHA = "clipBadSha256";
+    /** A checked clip whose rename failed is renamed again this often. */
+    static final long RENAME_RETRY_MS = 1000;
+
+    /**
+     * The clip at done is this one: the hash checked when it came, in the event's facts, says so (and the size
+     * agrees); a clip from 1.0.47 / 1.0.48 has none - it is hashed once and the hash kept.
+     */
+    private boolean hasChecked(Session s, String id, int part, Path done, OverwatchProtocol.ClipInfo info, String hex) throws IOException {
+        String key = CHECKED_SHA + ClipIndex.partSuffix(part);
+        ClipIndex.Clip c = index.clip(s.drone(), id);
+        String stored = c == null ? null : c.meta().getProperty(key);
+        if (stored != null) return stored.equals(hex) && Files.size(done) == info.size;
+        byte[] actual = ClipTransfer.sha256(done);
+        updateMeta(s, id, m -> m.setProperty(key, hex(actual)));
+        return Arrays.equals(actual, info.sha256);
+    }
+
+    static String hex(byte[] b) {
+        StringBuilder sb = new StringBuilder(b.length * 2);
+        for (byte x : b) sb.append(Character.forDigit((x >> 4) & 15, 16)).append(Character.forDigit(x & 15, 16));
+        return sb.toString();
     }
 
     private void onStatus(Session s, int[] st) {
@@ -490,12 +570,15 @@ public final class OverwatchHub implements AutoCloseable {
 
     private void tick(long now) {
         for (Session s : sessions.values()) {
-            if (s.card.previewWanted(now) && now - s.previewAskedAt >= 1000) askPreview(s, now);
+            boolean flies = isFlying(); // the uplink is the sticks' and the picture's meanwhile: no preview, no clip
+            if (s.card.previewWanted(now) && now - s.previewAskedAt >= 1000 && !flies) askPreview(s, now);
             if (s.card.ended(now) && (s.recorder != null || s.decoder != null)) s.closeMedia(); // lost: what came is kept
             if (s.live && now - s.liveAt > 3000) s.live = false;
             Transfer t = s.transfer;
-            if (t != null) {
-                long[] ask = t.clip.next(now, flying);
+            if (t != null && t.clip.checked() && now - t.renameTriedAt >= RENAME_RETRY_MS) {
+                finishClip(s, t, now); // in and checked, its rename failed: again (1.0.49; it stuck forever)
+            } else if (t != null) {
+                long[] ask = t.clip.next(now, flies);
                 if (ask != null) send(s, OverwatchProtocol.command(s.token, t.info.event, OverwatchProtocol.CMD_CLIP_GET, ask[0], (int) ask[1]));
             }
         }
@@ -511,7 +594,7 @@ public final class OverwatchHub implements AutoCloseable {
             String clipLine = null;
             Transfer t = s.transfer;
             if (t != null) {
-                clipLine = "Clip " + (flying ? "paused (armed)" : "coming") + ": " + ClipIndex.sizeText(t.clip.received()) + " of " + ClipIndex.sizeText(t.clip.size());
+                clipLine = "Clip " + (isFlying() ? "paused (a drone here may fly)" : "coming") + ": " + ClipIndex.sizeText(t.clip.received()) + " of " + ClipIndex.sizeText(t.clip.size());
             }
             long ended = s.card.endedAt(now);
             out.add(new View(s.drone(), s.card.shown(now), s.card.ended(now), s.card.alertAt() + wallOffset, ended < 0 ? -1 : ended + wallOffset,
@@ -536,7 +619,7 @@ public final class OverwatchHub implements AutoCloseable {
         if (s.id != null && s.event == event && s.alert != null && s.alert.startedAt == startedAt) return s.id;
         String known = s.idsByStart.get(startedAt);
         if (known != null) return known;
-        for (ClipIndex.Clip c : index.clips(s.drone())) {
+        for (ClipIndex.Clip c : index.clips(s.drone(), true)) { // removed ones too: a removed event must not come back
             if (c.longOf("phoneStartedAt", -1) == startedAt) {
                 s.idsByStart.put(startedAt, c.id());
                 return c.id();
@@ -617,7 +700,19 @@ public final class OverwatchHub implements AutoCloseable {
 
     // ------------------------------------------------------------------ per drone
 
-    private record Transfer(OverwatchProtocol.ClipInfo info, String id, ClipTransfer clip) {
+    private static final class Transfer {
+        final OverwatchProtocol.ClipInfo info;
+        final String id;
+        final ClipTransfer clip;
+        long renameTriedAt = Long.MIN_VALUE / 2;
+        boolean renameFailedSaid;
+
+        Transfer(OverwatchProtocol.ClipInfo info, String id, ClipTransfer clip) {
+            this.info = info;
+            this.id = id;
+            this.clip = clip;
+        }
+
         void close() {
             clip.close();
         }

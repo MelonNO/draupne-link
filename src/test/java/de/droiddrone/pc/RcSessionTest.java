@@ -164,6 +164,55 @@ class RcSessionTest {
         assertNull(armed.waitingFor());
     }
 
+    /** H9 (1.0.49): while the phone installs an update, no frame that could arm a disarmed drone goes out. */
+    @Test
+    void noArmingWhileThePhoneInstallsAnUpdate() {
+        boolean[] fcArmed = {false}, installing = {false};
+        RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
+        RcSession s = new RcSession(new NoLink().link, five, events::add, () -> now[0], () -> true, () -> fcArmed[0],
+                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        s.setArmBlocked(() -> installing[0]);
+        Joystick.State idle = new Joystick.State(new float[]{0, 0, 0, -1f, -1f}, new boolean[0]);
+        Joystick.State arm = new Joystick.State(new float[]{0, 0, 0, -1f, 1f}, new boolean[0]);
+        s.onInput(idle);
+        assertTrue(s.isRcEnabled());
+        installing[0] = true;
+        s.onInput(idle);
+        assertTrue(s.isRcEnabled(), "arm switch off: the sticks go on (they can't arm)");
+        s.onInput(arm);
+        assertFalse(s.isRcEnabled(), "the arm switch flipped while the phone installs: stopped");
+        assertTrue(events.get(events.size() - 1).contains("installs an update"));
+        assertEquals("PHONE UPDATING", s.waitingFor());
+        s.onInput(idle);
+        assertTrue(s.isRcEnabled(), "arm off again: sticks again (still no arming)");
+        s.onInput(arm);
+        assertFalse(s.isRcEnabled());
+        installing[0] = false;
+        s.onInput(arm);
+        assertFalse(s.isRcEnabled(), "done installing: the usual arm-off rule, no arming straight from the switch");
+        s.onInput(idle);
+        s.onInput(arm);
+        assertTrue(s.isRcEnabled(), "and then it arms as ever");
+        // an armed drone keeps its sticks whatever the phone says
+        installing[0] = true;
+        fcArmed[0] = true;
+        s.onInput(arm);
+        assertTrue(s.isRcEnabled());
+    }
+
+    /** H9: an unknown arm switch can't be judged - nothing goes out while the phone installs. */
+    @Test
+    void anUnknownArmSwitchSendsNothingWhileThePhoneInstalls() {
+        boolean[] installing = {true};
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true, () -> false, null);
+        s.setArmBlocked(() -> installing[0]);
+        s.onInput(sticks(-1f));
+        assertFalse(s.isRcEnabled());
+        installing[0] = false;
+        s.onInput(sticks(-1f));
+        assertTrue(s.isRcEnabled());
+    }
+
     /** The FC disarmed (or nothing is known): the rule as before - throttle down and the arm switch off. */
     @Test
     void aDisarmedOrUnknownDroneStillNeedsTheThrottleLowAfterALinkLoss() {

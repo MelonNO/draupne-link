@@ -171,6 +171,20 @@ public class FcTelemetry {
         return phoneUpdate;
     }
 
+    /**
+     * PHONE_UPDATE's states while an install is under way or waits for Android's tap (pc.38 reports both for as long
+     * as they last): the app may restart any moment, and the sticks with it.
+     */
+    public static final int UPDATE_INSTALLING = 2, UPDATE_TAP_NEEDED = 3;
+    /** The phone said so within this long: it still is (it says so twice a second; the restart ends the link). */
+    public static final long INSTALLING_FRESH_MS = 10_000;
+
+    /** The phone says it installs an update now, or waits for the tap to (1.0.49, H9): the sticks may not arm meanwhile. */
+    public boolean isPhoneInstalling(long now) {
+        PhoneUpdate u = phoneUpdate;
+        return u != null && (u.state() == UPDATE_INSTALLING || u.state() == UPDATE_TAP_NEEDED) && now - u.receivedAt() < INSTALLING_FRESH_MS;
+    }
+
     /** The phone's latest word on how late the sticks arrive, or null (none yet, or a phone app before pc.31). */
     public PhoneRcLag getPhoneRcLag() {
         return phoneRcLag;

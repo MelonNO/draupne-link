@@ -20,7 +20,7 @@ import java.util.TreeMap;
  * is the sticks' and the picture's). The bytes go to a .part file in order - only the part that has no gap is
  * written, so the file's length is always where to go on from, after a lost window, a pause or a restart of the
  * PC. When the last byte is in, the whole file's SHA-256 must be the phone's; then it gets its name and the phone may
- * delete its copy. A mismatch starts over from nothing.
+ * delete its copy. A mismatch starts over from nothing, twice at most.
  */
 public final class ClipTransfer implements AutoCloseable {
     public static final int WINDOW = 64;
@@ -28,7 +28,10 @@ public final class ClipTransfer implements AutoCloseable {
     public static final long RETRY_MS = 1500;
     static final int CHUNK = OverwatchProtocol.FRAGMENT;
 
-    public enum Result { OK, MISMATCH }
+    /** A clip that came whole but didn't check is fetched again at most this often (1.0.49: before, without end). */
+    public static final int MAX_RETRIES = 2;
+
+    public enum Result { OK, MISMATCH, FAILED }
 
     private final Path part, done;
     private final long size;
@@ -39,6 +42,7 @@ public final class ClipTransfer implements AutoCloseable {
     private long askedEnd;
     private long askedAt = Long.MIN_VALUE / 2;
     private long mismatches;
+    private boolean checked, failed;
 
     /** Goes on from a .part file already there (cut back to whole chunks). */
     public ClipTransfer(Path part, Path done, long size, byte[] sha256) throws IOException {
@@ -60,7 +64,7 @@ public final class ClipTransfer implements AutoCloseable {
      * window asked for is still coming.
      */
     public long[] next(long now, boolean paused) {
-        if (paused || complete()) return null;
+        if (paused || failed || complete()) return null;
         if (confirmed < askedEnd && now - askedAt < RETRY_MS) return null;
         long end = Math.min(size, confirmed + (long) WINDOW * CHUNK);
         askedEnd = end;
@@ -101,17 +105,42 @@ public final class ClipTransfer implements AutoCloseable {
         return mismatches;
     }
 
-    /** All in: the SHA-256 checked; OK renames the .part to its name, MISMATCH empties it to start over. */
+    /**
+     * All in: the SHA-256 checked; OK renames the .part to its name, MISMATCH empties it to start over - at most
+     * {@link #MAX_RETRIES} times (1.0.49), then FAILED: the .part is deleted and nothing more is asked. A rename that
+     * fails (the file held open by a virus scanner, Explorer's preview) throws; the next call tries the rename again
+     * without reading the whole clip again ({@link #checked}).
+     */
     public Result finish() throws IOException {
+        if (failed) return Result.FAILED;
         if (!complete()) throw new IllegalStateException("Not complete");
-        file.close();
-        file = null;
-        if (Arrays.equals(sha256(part), sha256)) {
-            Files.move(part, done, StandardCopyOption.REPLACE_EXISTING);
-            return Result.OK;
+        if (!checked) {
+            if (file != null) file.close();
+            file = null;
+            if (!Arrays.equals(sha256(part), sha256)) return mismatch();
+            checked = true;
         }
+        Files.move(part, done, StandardCopyOption.REPLACE_EXISTING);
+        return Result.OK;
+    }
+
+    /** The whole file came and checked; only its rename may still be due (see {@link #finish}). */
+    public boolean checked() {
+        return checked;
+    }
+
+    /** Given up after {@link #MAX_RETRIES} mismatches: nothing more is asked. */
+    public boolean failed() {
+        return failed;
+    }
+
+    private Result mismatch() throws IOException {
         mismatches++;
         Files.deleteIfExists(part);
+        if (mismatches > MAX_RETRIES) {
+            failed = true;
+            return Result.FAILED;
+        }
         file = new RandomAccessFile(part.toFile(), "rw");
         confirmed = 0;
         askedEnd = 0;

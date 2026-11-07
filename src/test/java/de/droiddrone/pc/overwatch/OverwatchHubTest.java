@@ -200,6 +200,199 @@ class OverwatchHubTest {
         assertEquals(STARTED, OverwatchProtocol.readCommand(sent.get(0), sent.get(0).length).clipStartedAt);
     }
 
+    /** H4 (1.0.49): while a drone here may fly, the card asks for no preview - the uplink is the sticks'. */
+    @Test
+    void noPreviewIsAskedWhileADroneHereMayFly() throws Exception {
+        OverwatchHub hub = hub();
+        hub.setFlying(true);
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 2, 0));
+        assertEquals(List.of("MobileAlpha"), news, "the alert itself still comes (quietly: the window decides)");
+        assertTrue(commandsSent().contains(OverwatchProtocol.CMD_ACK));
+        for (long t = 1100; t < 8000; t += 100) hub.tickNow(t);
+        assertFalse(commandsSent().contains(OverwatchProtocol.CMD_PREVIEW));
+        hub.setFlying(false);
+        hub.tickNow(8100);
+        assertTrue(commandsSent().contains(OverwatchProtocol.CMD_PREVIEW), "landed: the preview is asked for");
+    }
+
+    /** M10 (1.0.49): the checked clip's hash is kept: announced again, it is not read whole again. */
+    @Test
+    void aClipAnnouncedAgainIsNotHashedAgain() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 5, 0));
+        byte[] clip = new byte[OverwatchProtocol.FRAGMENT * 3 + 5];
+        new Random(3).nextBytes(clip);
+        byte[] sha = MessageDigest.getInstance("SHA-256").digest(clip);
+        OverwatchProtocol.ClipInfo info = new OverwatchProtocol.ClipInfo(TOKEN, 5, clip.length, sha, 4000, STARTED, false, 640, 360);
+        receive(hub, info(info));
+        pull(hub, clip, 5);
+        ClipIndex.Clip c = hub.index().clips("MobileAlpha").get(0);
+        assertNotNull(c.fullClip());
+        assertEquals(OverwatchHub.hex(sha), c.meta().getProperty(OverwatchHub.CHECKED_SHA));
+        Files.write(c.fullClip(), new byte[clip.length]); // were it hashed again, it would no longer match
+        sent.clear();
+        receive(hub, info(info));
+        assertEquals(List.of(OverwatchProtocol.CMD_CLIP_DONE), commandsSent(), "told DONE from the kept hash");
+    }
+
+    /** M10: a clip that comes damaged three times is given up, and isn't fetched again when announced again. */
+    @Test
+    void aClipThatKeepsComingDamagedIsGivenUp() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 6, 0));
+        byte[] clip = new byte[OverwatchProtocol.FRAGMENT * 2];
+        byte[] sha = MessageDigest.getInstance("SHA-256").digest(new byte[]{1}); // never matches
+        OverwatchProtocol.ClipInfo info = new OverwatchProtocol.ClipInfo(TOKEN, 6, clip.length, sha, 2000, STARTED, false, 640, 360);
+        receive(hub, info(info));
+        long t = 2000;
+        for (int round = 0; round < 6; round++) t = pull(hub, clip, 6, t);
+        assertTrue(dones().contains(0), "the phone is told: not had (ok 0)");
+        assertNotNull(hub.index().clips("MobileAlpha").get(0).meta().getProperty(OverwatchHub.BAD_SHA));
+        sent.clear();
+        receive(hub, info(info));
+        for (long u = t; u < t + 5000; u += 500) hub.tickNow(u);
+        assertTrue(commandsSent().stream().noneMatch(c -> c == OverwatchProtocol.CMD_CLIP_GET), "not fetched a fourth time");
+    }
+
+    /** L11 (1.0.49): a removed event's clip arriving later doesn't bring the event back as a new one. */
+    @Test
+    void aRemovedEventStaysRemovedWhenItsClipComes() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 7, 0));
+        String id = hub.index().clips("MobileAlpha").get(0).id();
+        hub.index().hide("MobileAlpha", id);
+        OverwatchHub later = hub(); // a restart: the hub knows nothing of the event but its files
+        byte[] clip = new byte[100];
+        receive(later, info(new OverwatchProtocol.ClipInfo(TOKEN, 7, clip.length, MessageDigest.getInstance("SHA-256").digest(clip), 1000, STARTED,
+                false, 640, 360)));
+        assertTrue(later.index().clips("MobileAlpha").isEmpty(), "still off the list");
+        assertEquals(1, later.index().clips("MobileAlpha", true).size(), "one event, not a second one");
+        later.close();
+    }
+
+    /**
+     * M9 (1.0.49): the pilot's DISMISS never runs on the caller's thread (the Swing thread), even with the hub's
+     * queue full of a preview's datagrams - before, it ran there, beside the hub's own thread on its plain HashMap.
+     */
+    @Test
+    void aClickIsNeverRunOnTheCallersThreadEvenWithTheQueueFull() throws Exception {
+        java.util.concurrent.CountDownLatch inNews = new java.util.concurrent.CountDownLatch(1), release = new java.util.concurrent.CountDownLatch(1);
+        List<String> logThreads = new java.util.concurrent.CopyOnWriteArrayList<>();
+        OverwatchHub hub = new OverwatchHub(new ClipIndex(dir), sent::add);
+        hub.setListener(new OverwatchHub.Listener() {
+            @Override
+            public void onNews(String drone) {
+                inNews.countDown();
+                try {
+                    release.await(); // the hub's thread busy: its queue fills
+                } catch (InterruptedException ignored) {
+                }
+            }
+
+            @Override
+            public void onDropped(String drone, int reason, int batteryPercent, int tempDeci) {
+            }
+
+            @Override
+            public void onClips(String drone) {
+            }
+
+            @Override
+            public void log(String line) {
+                if (line.contains("dismissed")) logThreads.add(Thread.currentThread().getName());
+            }
+        });
+        hub.watch("MobileAlpha", TOKEN, null);
+        hub.start();
+        try {
+            byte[] a = alert(TOKEN, 9, 0);
+            hub.offer(a, a.length, InetAddress.getLoopbackAddress(), 40000);
+            assertTrue(inNews.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            byte[] stranger = alert(0x1234, 1, 0);
+            for (int i = 0; i < 5000; i++) hub.offer(stranger, stranger.length, InetAddress.getLoopbackAddress(), 40000);
+            assertTrue(hub.dropped() > 0, "the queue is full");
+            hub.dismiss("MobileAlpha");
+            assertTrue(logThreads.isEmpty(), "not run here, at once: " + logThreads);
+            release.countDown();
+            for (int i = 0; i < 100 && logThreads.isEmpty(); i++) Thread.sleep(50);
+            assertEquals(List.of("overwatch"), logThreads, "run on the hub's own thread");
+        } finally {
+            release.countDown();
+            hub.close();
+        }
+    }
+
+    /** pc.38's 60 s segments: filed under the one event, each part kept and confirmed by its own start, played in order. */
+    @Test
+    void anEventsSegmentsAreOneEventWithItsPartsInOrder() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 12, 0));
+        long t = 30_000;
+        for (int part = 1; part <= 2; part++) {
+            byte[] clip = new byte[OverwatchProtocol.FRAGMENT + 100 * part];
+            new Random(part).nextBytes(clip);
+            long segStart = STARTED + (part - 1) * 60_000L;
+            receive(hub, info(new OverwatchProtocol.ClipInfo(TOKEN, 12, clip.length, MessageDigest.getInstance("SHA-256").digest(clip),
+                    part == 1 ? 60_000 : 20_000, segStart, false, 640, 360, part, STARTED)));
+            sent.clear();
+            for (int round = 0; round < 5 && dones().isEmpty(); round++) t = pull(hub, clip, 12, t);
+            assertEquals(List.of(1), dones(), "part " + part + " checked");
+            OverwatchProtocol.Command done = null;
+            for (byte[] p : sent) {
+                OverwatchProtocol.Command c = OverwatchProtocol.readCommand(p, p.length);
+                if (c != null && c.cmd == OverwatchProtocol.CMD_CLIP_DONE) done = c;
+            }
+            assertEquals(segStart, done.clipStartedAt, "the DONE names the segment, so the phone deletes exactly it");
+        }
+        List<ClipIndex.Clip> clips = hub.index().clips("MobileAlpha");
+        assertEquals(1, clips.size(), "one event on the list, not one per segment");
+        ClipIndex.Clip c = clips.get(0);
+        assertEquals(2, c.parts().size());
+        assertTrue(c.parts().get(1).getFileName().toString().endsWith("-part2.mp4"));
+        assertEquals(80_000, c.durationMs(), "the parts added up");
+        assertEquals(c.parts().get(0), c.fullClip());
+    }
+
+    private static byte[] info(OverwatchProtocol.ClipInfo info) {
+        return OverwatchProtocol.clipInfo(info);
+    }
+
+    private List<Integer> dones() {
+        List<Integer> out = new ArrayList<>();
+        for (byte[] p : sent) {
+            OverwatchProtocol.Command c = OverwatchProtocol.readCommand(p, p.length);
+            if (c != null && c.cmd == OverwatchProtocol.CMD_CLIP_DONE) out.add((int) c.offset);
+        }
+        return out;
+    }
+
+    private void pull(OverwatchHub hub, byte[] clip, int event) throws Exception {
+        long t = 30_000;
+        for (int round = 0; round < 10 && !commandsSent().contains(OverwatchProtocol.CMD_CLIP_DONE); round++) t = pull(hub, clip, event, t);
+    }
+
+    /** One tick and the phone's answer to what it asked: the chunks. Returns the next tick's time. */
+    private long pull(OverwatchHub hub, byte[] clip, int event, long t) throws Exception {
+        int from = sent.size();
+        hub.tickNow(t);
+        for (byte[] p : new ArrayList<>(sent.subList(from, sent.size()))) {
+            OverwatchProtocol.Command c = OverwatchProtocol.readCommand(p, p.length);
+            if (c == null || c.cmd != OverwatchProtocol.CMD_CLIP_GET) continue;
+            for (int i = 0; i < c.count; i++) {
+                long off = c.offset + (long) i * OverwatchProtocol.FRAGMENT;
+                if (off >= clip.length) break;
+                int n = (int) Math.min(OverwatchProtocol.FRAGMENT, clip.length - off);
+                receive(hub, OverwatchProtocol.clipChunk(TOKEN, event, off, clip, (int) off, n));
+            }
+        }
+        return t + 2000;
+    }
+
     @Test
     void aClipWhoseAlertNeverCameStillFindsItsPlace() throws Exception {
         OverwatchHub hub = hub();

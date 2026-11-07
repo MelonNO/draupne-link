@@ -46,9 +46,17 @@ public final class Elevation {
     }
 
     public Elevation(String userAgent, boolean network) {
+        this(userAgent, network, de.droiddrone.pc.PossiblyFlying::now);
+    }
+
+    /** @param held true while nothing may be looked up (this PC's PossiblyFlying flag) */
+    Elevation(String userAgent, boolean network, java.util.function.BooleanSupplier held) {
         this.userAgent = userAgent;
         this.network = network;
+        this.held = held;
     }
+
+    private final java.util.function.BooleanSupplier held;
 
     /** Places about 10 m apart count as the same. */
     static long key(double lat, double lon) {
@@ -172,7 +180,7 @@ public final class Elevation {
 
     /** Kartverket over Norway; the world service elsewhere, and also when Kartverket has nothing for a border place. */
     private Double fetch(double lat, double lon) {
-        if (!network) return null;
+        if (!network || held.getAsBoolean()) return null; // 1.0.49: no lookups while a drone here may fly (unknown, asked again later)
         Double z = TileSource.inNorway(lat, lon) ? fetch(kartverketUrl(lat, lon)) : null;
         return z != null ? z : fetch(worldUrl(lat, lon));
     }

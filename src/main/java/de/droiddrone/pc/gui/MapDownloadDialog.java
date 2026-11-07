@@ -302,8 +302,10 @@ final class MapDownloadDialog extends JDialog {
                 done, d.total, d.fetched(), d.onDisk(), d.failed());
         if (!d.isFinished()) {
             TileSource now = d.current();
-            status.setText((d.isPaused() ? "PAUSED - " : now == null ? "" : now.title + " - ") + figures + (d.isPaused() ? "" : timeLeft(d)));
-            if (progress != null) progress.accept(String.format(Locale.ROOT, d.isPaused() ? "DOWNLOAD PAUSED %,d / %,d" : "DOWNLOADING %,d / %,d", done, d.total));
+            boolean flight = d.isHeldForFlight(); // 1.0.49: nothing fetched while a drone here may fly; on by itself after
+            status.setText((d.isPaused() ? "PAUSED - " : flight ? "WAITING: A DRONE HERE MAY BE FLYING - " : now == null ? "" : now.title + " - ")
+                    + figures + (d.isPaused() || flight ? "" : timeLeft(d)));
+            if (progress != null) progress.accept(String.format(Locale.ROOT, d.isPaused() || flight ? "DOWNLOAD PAUSED %,d / %,d" : "DOWNLOADING %,d / %,d", done, d.total));
             return;
         }
         refresh.stop();
