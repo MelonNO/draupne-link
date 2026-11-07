@@ -88,7 +88,7 @@ public class ControlLink {
 
         /**
          * One raw AAC frame (a copy, the listener's to keep) of the stream config describes; arrivedMs on
-         * System.currentTimeMillis, as the video's.
+         * MonoClock.ms, as the video's (1.0.49).
          */
         void onAudioFrame(AudioConfig config, byte[] frame, long arrivedMs);
     }
@@ -688,7 +688,7 @@ public class ControlLink {
         lastAudioFrameAt = MonoClock.ms();
         AudioConfig c = audioConfig;
         AudioListener l = audioListener;
-        if (c != null && l != null) l.onAudioFrame(c, java.util.Arrays.copyOfRange(d, 1, len), System.currentTimeMillis());
+        if (c != null && l != null) l.onAudioFrame(c, java.util.Arrays.copyOfRange(d, 1, len), MonoClock.ms());
         SpectatorHost h = host;
         if (forward && h != null) h.forward(d, len);
     }
@@ -869,7 +869,7 @@ public class ControlLink {
                 boolean toEndPoint = buffer.readBoolean();
                 long time = buffer.readLong();
                 if (toEndPoint) {
-                    pingMs = (int) (System.currentTimeMillis() - time); // UdpSender stamps pings with the wall clock
+                    pingMs = (int) (UdpSender.pingClockMs() - time); // 1.0.49: UdpSender's monotonic stamp, not the wall clock
                     lastPingTimestamp = MonoClock.ms();
                     maxPingMs.accumulateAndGet(pingMs, Math::max);
                 }

@@ -42,7 +42,7 @@ final class SpectatorHost implements AutoCloseable {
     private static final class Viewer {
         final InetAddress ip;
         final int port;
-        volatile long lastHeard = System.currentTimeMillis();
+        volatile long lastHeard = MonoClock.ms();
         long lastSnapshot;
         long budgetWindow;
         int resends;
@@ -65,7 +65,7 @@ final class SpectatorHost implements AutoCloseable {
     private final BooleanSupplier flying;
     private final IntSupplier ping;
     private final Consumer<String> events;
-    private final long start = System.currentTimeMillis();
+    private final long start = MonoClock.ms();
     private final AtomicInteger seq = new AtomicInteger();
     private final AtomicReferenceArray<byte[]> ring = new AtomicReferenceArray<>(RING);
     private final ArrayBlockingQueue<byte[]> outgoing = new ArrayBlockingQueue<>(1024);
@@ -115,6 +115,8 @@ final class SpectatorHost implements AutoCloseable {
         Thread t = new Thread(run, name);
         t.setDaemon(true);
         t.setPriority(Thread.NORM_PRIORITY - 1);
+        // 1.0.49: anything the loops don't catch (an Error) is logged - the spectators then know why the stream stopped
+        t.setUncaughtExceptionHandler((th, e) -> log(name + " died: " + e));
         t.start();
     }
 
@@ -149,7 +151,7 @@ final class SpectatorHost implements AutoCloseable {
     void forward(byte[] packet, int len) {
         if (viewers.length == 0 || paused) return;
         int s = seq.getAndIncrement();
-        byte[] p = Spectate.stream(s, (int) (System.currentTimeMillis() - start), packet, len);
+        byte[] p = Spectate.stream(s, (int) (MonoClock.ms() - start), packet, len);
         ring.set(s & (RING - 1), p);
         outgoing.offer(p);
     }
@@ -212,7 +214,7 @@ final class SpectatorHost implements AutoCloseable {
                 linkSocket.send(new DatagramPacket(new byte[]{Spectate.REFUSED, refuse}, 2, ip, port));
                 return;
             }
-            known.lastHeard = System.currentTimeMillis();
+            known.lastHeard = MonoClock.ms();
             byte[] welcome = Spectate.withPort(Spectate.WELCOME, streamPort());
             linkSocket.send(new DatagramPacket(welcome, welcome.length, ip, port));
             // the same from the stream port: lets the spectator's packets back in through this PC's firewall
@@ -234,7 +236,7 @@ final class SpectatorHost implements AutoCloseable {
                 if (p != null) {
                     for (Viewer v : viewers) send(p, v);
                 }
-                long now = System.currentTimeMillis();
+                long now = MonoClock.ms();
                 if (now < nextCheck) continue;
                 nextCheck = now + 100;
                 dropSilentViewers(now);
@@ -281,7 +283,7 @@ final class SpectatorHost implements AutoCloseable {
                 Viewer v = find(packet.getAddress(), packet.getPort());
                 int len = packet.getLength();
                 if (v == null || len < 1) continue;
-                v.lastHeard = System.currentTimeMillis();
+                v.lastHeard = MonoClock.ms();
                 if (buf[0] == Spectate.BYE) {
                     remove(v, "Spectator " + v.ip.getHostAddress() + " left.");
                 } else if (buf[0] == Spectate.KEEP && len >= 3) {
@@ -291,12 +293,14 @@ final class SpectatorHost implements AutoCloseable {
                 }
             } catch (IOException e) {
                 if (running) log("Spectator receive error: " + e);
+            } catch (RuntimeException e) {
+                log("Spectator receive error: " + e); // 1.0.49: logged and on, never a thread gone without a word
             }
         }
     }
 
     private void resend(Viewer v, int s) {
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         if (now - v.budgetWindow >= 1000) {
             v.budgetWindow = now;
             v.resends = 0;
@@ -309,7 +313,7 @@ final class SpectatorHost implements AutoCloseable {
     }
 
     private void sendSnapshot(Viewer v) {
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         if (now - v.lastSnapshot < 300) return;
         v.lastSnapshot = now;
         for (byte[] p : new byte[][]{videoConfig, fcInfo, boxNames, boxIds, audioConfig}) {

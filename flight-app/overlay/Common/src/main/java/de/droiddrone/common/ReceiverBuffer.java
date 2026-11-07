@@ -359,7 +359,7 @@ public class ReceiverBuffer {
     }
 
     private void calculatePing(long time){
-        int ping = (int) (System.currentTimeMillis() - time);
+        int ping = (int) (UdpSender.pingClockMs() - time); // DRAUPNE: the clock UdpSender stamped the ping with
         if (Math.abs(ping - pingMs) > 1000) return;
         pings.add(ping);
         int avgPing = 0;

@@ -43,11 +43,12 @@ final class FcArmedState {
     /** A MAVLink heartbeat's armed flag (Udp reads it from Mavlink's DD_MAVLINK_MODE record). */
     static void mavlinkHeartbeat(boolean armed) {
         mavlinkArmed = armed;
-        mavlinkAtMs = System.currentTimeMillis();
+        mavlinkAtMs = android.os.SystemClock.elapsedRealtime();
     }
 
+    /** pc.38: every age here on SystemClock.elapsedRealtime (Msp's status stamps too): a clock step can't freshen one. */
     static int of(Msp msp, Mavlink mavlink) {
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         int state;
         if (msp != null && msp.isInitialized()) {
             state = msp.armedState(now);

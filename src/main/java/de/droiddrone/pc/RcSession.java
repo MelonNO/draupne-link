@@ -1,5 +1,6 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.FcCommon;
 import de.droiddrone.pc.setup.ModeSwitch;
 
 import java.util.function.BooleanSupplier;
@@ -63,8 +64,24 @@ public class RcSession {
     /** When the radio vanished while RC was live; 0 when it didn't (or the window has passed). */
     private long lostAt;
     private volatile Banner banner;
-    /** The BEEPER button is held: AUX12 up in every frame (see {@link #withBeeper}). */
+    /** The BEEPER button is held (see {@link #withBeeper}); when it was pressed (this session's clock). */
     private volatile boolean beeperHeld;
+    private volatile long beeperHeldAt;
+    /** The BEEPER's channel in the frame (3 + BEEPER_AUX), or -1: not set up on the drone, or the channel is taken. */
+    private volatile int beeperChannel = -1;
+    /** Why the BEEPER does nothing on this drone (null: it works): shown on the button and logged at a press. */
+    private volatile String beeperOff = BEEPER_NOT_SET_UP;
+    /** The BEEPER sounded in the last frame; and it was let go by its time limit (said once). */
+    private volatile boolean beeping;
+    private boolean beeperTimedOut;
+    /** The flight controller said DISARMED, in telemetry no older than FC_ARMED_FRESH_MS (the BEEPER waits for it). */
+    private final BooleanSupplier fcDisarmedNow;
+    /** A held BEEPER lets go by itself after this long: a button stuck down (or a dialog over it) can't beep forever. */
+    public static final long BEEPER_MAX_MS = 10_000;
+    /** What Drone setup found: "true" when Betaflight's BEEPER mode sits on AUX14 alone, with the button's range. */
+    public static final String BEEPER_KEY = "drone.beeperSet";
+    public static final String BEEPER_NOT_SET_UP = "BEEPER off: not set up on this drone (Drone setup puts it on AUX"
+            + ModeSwitch.BEEPER_AUX + ")";
     /** When the idle sticks last went to the phone (see {@link #idleSticks}); 0 = not yet this session. */
     private long idleSentAt;
     /** The idle sticks go to the phone this often: a lost one is replaced soon, and they change only with the radio's AUX. */
@@ -72,7 +89,8 @@ public class RcSession {
 
     public RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, ArmSwitch armSwitch) {
         this(link, mapper, events, MonoClock::ms, link::sticksWanted,
-                () -> link.getTelemetry().isArmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS), armSwitch);
+                () -> link.getTelemetry().isArmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS),
+                () -> link.getTelemetry().isDisarmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS), armSwitch);
     }
 
     RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp) {
@@ -86,6 +104,12 @@ public class RcSession {
 
     RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp,
               BooleanSupplier fcArmedNow, ArmSwitch armSwitch) {
+        this(link, mapper, events, clock, linkUp, fcArmedNow, () -> false, armSwitch);
+    }
+
+    RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp,
+              BooleanSupplier fcArmedNow, BooleanSupplier fcDisarmedNow, ArmSwitch armSwitch) {
+        this.fcDisarmedNow = fcDisarmedNow;
         this.link = link;
         this.mapper = mapper;
         this.events = events;
@@ -134,10 +158,16 @@ public class RcSession {
     }
 
     /**
-     * The BEEPER button (1.0.44): while held, AUX12 ({@link ModeSwitch#BEEPER_AUX}) goes up in the frames, Betaflight's
-     * BEEPER mode there (Drone setup puts it) beeps the buzzer and - disarmed - the motors. Only while sticks go out.
+     * The BEEPER button (1.0.44; AUX14 from 1.0.49): while held, AUX14 ({@link ModeSwitch#BEEPER_AUX}) goes up in the
+     * frames, and Betaflight's BEEPER mode there (Drone setup puts it) beeps the buzzer and - disarmed - the motors.
+     * Only while sticks go out, only on a fresh DISARMED from the flight controller, and for {@link #BEEPER_MAX_MS} at
+     * most: then it lets go by itself until the next press.
      */
     public void setBeeper(boolean held) {
+        if (held && !beeperHeld) {
+            beeperHeldAt = clock.getAsLong();
+            beeperTimedOut = false;
+        }
         beeperHeld = held;
     }
 
@@ -145,48 +175,118 @@ public class RcSession {
         return beeperHeld;
     }
 
+    /** The drone beeps now: the last frame had BEEPER up. */
+    public boolean isBeeping() {
+        return beeping;
+    }
+
     /**
-     * The frame with the BEEPER channel set: padded to it as upstream pads unused channels (roll, pitch, yaw centred,
-     * the rest low), AUX12 up while held and low otherwise. The app owns AUX12 - a radio's AUX12 is overridden.
+     * Whether Drone setup put BEEPER on AUX14 ({@link #BEEPER_KEY}). Only then do the frames carry AUX14, and only while
+     * nothing else uses that channel: never ARM's (with ARM there, BEEPER up arms the drone - 1.0.48's C1), never one
+     * the radio's mapping drives.
      */
-    static short[] withBeeper(short[] channels, boolean held) {
+    public void setBeeperSetUp(boolean setUp) {
         int at = 3 + ModeSwitch.BEEPER_AUX; // roll, pitch, yaw, throttle, then AUX1 at index 4
-        short[] out = channels.length > at ? channels.clone() : java.util.Arrays.copyOf(channels, at + 1);
-        for (int i = channels.length; i < out.length; i++) out[i] = (short) (i < 3 ? RcMapper.MID_CHANNEL_LEVEL : RcMapper.MIN_CHANNEL_LEVEL);
-        out[at] = (short) (held ? RcMapper.MAX_CHANNEL_LEVEL : RcMapper.MIN_CHANNEL_LEVEL);
+        String aux = "AUX" + ModeSwitch.BEEPER_AUX;
+        String off = !setUp ? BEEPER_NOT_SET_UP
+                : at >= FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT ? "BEEPER off: " + aux + " is more than MSP carries"
+                : armSwitch != null && armSwitch.channel() == at ? "BEEPER off: " + aux + " is in use by ARM - move ARM in Drone setup"
+                : mapper.isMapped(at) ? "BEEPER off: " + aux + " is in use by the radio's mapping" : null;
+        beeperOff = off;
+        beeperChannel = off == null ? at : -1;
+    }
+
+    /** Why the BEEPER does nothing on this drone (not set up, its channel taken), or null when it works. */
+    public String beeperOff() {
+        return beeperOff;
+    }
+
+    /**
+     * From Drone setup's read of the CLI's "aux": true when Betaflight's BEEPER mode sits on AUX14 only, with 2000 inside
+     * its range and 1000 outside it - the button's. Anything else (BEEPER on a radio switch too, or not there): false.
+     */
+    public static boolean beeperSetUp(String auxOutput) {
+        boolean high = false, low = false;
+        for (String line : auxOutput.split("\\R")) {
+            String[] p = line.replaceFirst("^#\\s*", "").trim().split("\\s+");
+            if (p.length < 6 || !p[0].equals("aux")) continue;
+            try {
+                int mode = Integer.parseInt(p[2]), channel = Integer.parseInt(p[3]);
+                int start = Integer.parseInt(p[4]), end = Integer.parseInt(p[5]);
+                if (mode != ModeSwitch.BEEPER_MODE || start >= end) continue;
+                if (channel != ModeSwitch.BEEPER_AUX - 1) return false;
+                high |= RcMapper.MAX_CHANNEL_LEVEL >= start && RcMapper.MAX_CHANNEL_LEVEL < end;
+                low |= RcMapper.MIN_CHANNEL_LEVEL >= start && RcMapper.MIN_CHANNEL_LEVEL < end;
+            } catch (NumberFormatException ignored) {
+                // not an aux line after all
+            }
+        }
+        return high && !low;
+    }
+
+    /**
+     * The frame as it goes out (1.0.49): the radio's channels, padded to 8 as before 1.0.44 ({@link ControlLink#padForRxMap}).
+     * With a BEEPER channel (&gt;= 0) the frame reaches it - up while beeping, low otherwise - and the channels in between
+     * go out as 0: not sent, as Betaflight's rx_msp.c makes every channel a frame doesn't carry, and holds (rx.c).
+     * 1.0.44 to 1.0.48 padded every frame to 16 with 1000, and a mode with a low range on a switch the radio never
+     * sent came on.
+     */
+    static short[] withBeeper(short[] channels, int beeperChannel, boolean beep) {
+        short[] out = ControlLink.padForRxMap(channels);
+        if (beeperChannel < 0) return out;
+        if (out.length <= beeperChannel) out = java.util.Arrays.copyOf(out, beeperChannel + 1); // zeros in between
+        else if (out == channels) out = channels.clone();
+        out[beeperChannel] = (short) (beep ? RcMapper.MAX_CHANNEL_LEVEL : RcMapper.MIN_CHANNEL_LEVEL);
         return out;
     }
 
     /**
      * The sticks the phone feeds Betaflight while the drone is disarmed and no frame from this PC arrives (phone app
      * pc.33 on): Betaflight 2025.12 beeps "receiver lost" whenever no sticks come, disarmed too, and the pilot's rule is
-     * a silent drone while the phone is in. The radio's AUX as they are, but nothing that can arm or spin: throttle
-     * low, roll / pitch / yaw centred, the ARM switch at a value outside every arm range, BEEPER low. Null - nothing
-     * sent - while where ARM sits isn't known, or no value is outside its ranges. The phone takes them only on a fresh
-     * DISARMED from Betaflight; they can't arm it, and Betaflight wants the arm switch cycled after a receiver loss.
+     * a silent drone while the phone is in. The frame's AUX as they are (BEEPER low), but nothing that can arm or spin:
+     * throttle low, roll / pitch / yaw centred, the ARM switch at a value outside every arm range (the frame reaching
+     * it, 0 in between). Null - nothing sent - while where ARM sits isn't known, or no value is outside its ranges.
+     * The phone takes them only on a fresh DISARMED, and (pc.38) only when Betaflight's own arm ranges agree they can't
+     * arm - ARM may have moved since Drone setup read it.
      */
-    static short[] idleSticks(short[] channels, ArmSwitch arm) {
-        short[] out = withBeeper(channels, false);
+    static short[] idleSticks(short[] frame, ArmSwitch arm) {
+        if (arm == null) return null; // where ARM is isn't known yet: nothing sent rather than a guess
+        short[] out = frame.length > arm.channel() ? frame.clone() : java.util.Arrays.copyOf(frame, arm.channel() + 1);
         for (int i = 0; i < 3; i++) out[i] = (short) RcMapper.MID_CHANNEL_LEVEL;
         out[PcConfig.THROTTLE_INDEX] = (short) RcMapper.MIN_CHANNEL_LEVEL;
-        if (arm == null) return null; // where ARM is isn't known yet: nothing sent rather than a guess
-        if (arm.channel() < out.length) {
-            for (int v : new int[]{RcMapper.MIN_CHANNEL_LEVEL, RcMapper.MAX_CHANNEL_LEVEL, RcMapper.MID_CHANNEL_LEVEL}) {
-                out[arm.channel()] = (short) v;
-                if (!arm.on(out)) break;
-            }
+        for (int v : new int[]{RcMapper.MIN_CHANNEL_LEVEL, RcMapper.MAX_CHANNEL_LEVEL, RcMapper.MID_CHANNEL_LEVEL}) {
+            out[arm.channel()] = (short) v;
+            if (!arm.on(out)) break;
         }
         return arm.on(out) ? null : out; // an arm range over the whole stick: no idle that is surely disarmed
     }
 
+    /** The radio's frame passes the arm gate: throttle low, the arm switch known and off (idle sticks need it, H1). */
+    private boolean passesArmGate(short[] frame) {
+        return frame[PcConfig.THROTTLE_INDEX] <= THROTTLE_SAFE_MAX && armSwitch != null && !armSwitch.on(frame);
+    }
+
+    /** This frame beeps: BEEPER held (for under BEEPER_MAX_MS), set up and free, and the FC freshly DISARMED. */
+    private boolean beepNow(long now) {
+        if (!beeperHeld || beeperChannel < 0) return false;
+        if (now - beeperHeldAt >= BEEPER_MAX_MS) {
+            if (!beeperTimedOut) events.accept("BEEPER let go after " + BEEPER_MAX_MS / 1000 + " s - press it again to beep more.");
+            beeperTimedOut = true;
+            return false;
+        }
+        return fcDisarmedNow.getAsBoolean();
+    }
+
     /** Called on every input tick (the RC rate); sends immediately. state is null when the joystick is gone. */
     public void onInput(Joystick.State state) {
-        // judged as the flight controller will see it: channels the radio doesn't carry are padded (see ArmSwitch.on)
+        // judged as the flight controller will see it: channels the radio doesn't carry are padded or unknown (ArmSwitch.on)
         short[] channels = state == null ? null : mapper.map(state.axes(), state.buttons());
-        if (channels != null) channels = withBeeper(channels, beeperHeld);
+        long now = clock.getAsLong();
+        boolean beep = channels != null && beepNow(now);
+        beeping = beep;
+        if (channels != null) channels = withBeeper(channels, beeperChannel, beep);
         lastChannels = channels;
         radioPresent = state != null;
-        long now = clock.getAsLong();
         noteInput(state, now);
         if (!linkUp.getAsBoolean()) {
             if (rcEnabled) events.accept("Link given up - RC output stopped until it is back and the throttle is low.");
@@ -217,8 +317,9 @@ public class RcSession {
             }
             if (rcEnabled || !blip) lostAt = 0;
         }
-        if (channels != null && (idleSentAt == 0 || now - idleSentAt >= IDLE_STICKS_EVERY_MS)) {
-            short[] idle = idleSticks(channels, armSwitch);
+        // only while the radio itself is at rest (throttle low, ARM off): an idle frame can't carry a live switch then
+        if (channels != null && passesArmGate(channels) && (idleSentAt == 0 || now - idleSentAt >= IDLE_STICKS_EVERY_MS)) {
+            short[] idle = idleSticks(withBeeper(channels, beeperChannel, false), armSwitch);
             if (idle != null && link.sendIdleSticks(idle)) idleSentAt = now;
         }
         if (rcEnabled && frozenHolds(now)) return;
@@ -249,12 +350,14 @@ public class RcSession {
 
     /**
      * What the sticks wait for before they start: "NO RADIO" (no joystick), "MAPPING INCOMPLETE" (the radio lacks an
-     * axis or button the mapping needs), "THROTTLE DOWN", "ARM SWITCH OFF", or both; null when live.
+     * axis or button the mapping needs), "ARM SWITCH NOT SENT" (the radio's mapping doesn't carry Betaflight's ARM
+     * channel, so its value at the drone is unknown), "THROTTLE DOWN", "ARM SWITCH OFF", or both; null when live.
      */
     public String waitingFor() {
         if (rcEnabled) return null;
         short[] ch = lastChannels;
         if (ch == null) return radioPresent ? "MAPPING INCOMPLETE" : "NO RADIO";
+        if (armSwitch != null && armSwitch.isUnknown(ch)) return "ARM SWITCH NOT SENT";
         boolean throttle = ch[PcConfig.THROTTLE_INDEX] > THROTTLE_SAFE_MAX;
         boolean arm = armSwitch != null && armSwitch.on(ch);
         return throttle && arm ? "THROTTLE DOWN, ARM OFF" : arm ? "ARM SWITCH OFF" : "THROTTLE DOWN";

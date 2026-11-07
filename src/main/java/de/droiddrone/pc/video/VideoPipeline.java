@@ -2,6 +2,7 @@ package de.droiddrone.pc.video;
 
 import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FcTelemetry;
+import de.droiddrone.pc.MonoClock;
 
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -237,7 +238,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private long lastAcceptAt;
     /** Frames decoded but not drawn because a newer one was already waiting (decode thread). */
     private volatile long drawSkipped;
-    /** When the last fragment came (System.currentTimeMillis); the stats go to 0 once it is old. */
+    /** When the last fragment came (MonoClock, 1.0.49: was the wall clock); the stats go to 0 once it is old. */
     private volatile long lastFragmentAt;
     /** When the frame on screen arrived (decode thread); 0 = none yet. The OSD's picture age. */
     private volatile long shownArrivedMs;
@@ -254,7 +255,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     public VideoPipeline(FrameSink sink, IntSupplier ping) {
         this.sink = sink;
         this.ping = ping;
-        windowStart = System.currentTimeMillis();
+        windowStart = MonoClock.ms();
         this.bitrate = new BitrateControl(new BitrateControl.Sink() {
             @Override
             public void changeBitRate(boolean increase) {
@@ -327,7 +328,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         assembler.startedAfresh();
                     }
                 } else {
-                    sameConfigAt = System.currentTimeMillis(); // perhaps a restart's own, come first: see accept
+                    sameConfigAt = MonoClock.ms(); // perhaps a restart's own, come first: see accept
                 }
             }
             return;
@@ -368,7 +369,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     @Override
     public void onVideoFragment(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length) {
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         lastFragmentAt = now;
         windowBytes += length;
         FrameAssembler.Frame frame;
@@ -556,7 +557,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     @Override
     public void onVideoParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length) {
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         FrameAssembler.Frame frame;
         java.util.List<FrameAssembler.Frame> earlier;
         long lost;
@@ -572,7 +573,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     @Override
     public void onVideoParityGroup(boolean keyFrame, short frameNum, int frameSize, int group, byte[] buf, int dataOffset, int length) {
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         FrameAssembler.Frame frame;
         java.util.List<FrameAssembler.Frame> earlier;
         long lost;
@@ -595,7 +596,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         boolean mirror = false;
         int shown = 0;
         int noPictureRun = 0;
-        long shownWindow = System.currentTimeMillis();
+        long shownWindow = MonoClock.ms();
         try {
             while (running) {
                 Object item;
@@ -605,7 +606,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     break;
                 }
                 try { // nothing ends this thread but STOP: an error is shown on the HUD and the next frame is tried
-                    long now = System.currentTimeMillis();
+                    long now = MonoClock.ms();
                     // the bitrate control also acts when no frame comes (a dropout), while there is a stream
                     if (item == null && now - lastFragmentAt < 10_000) bitrate.onTick(now, ping.getAsInt());
                     if (now - shownWindow >= 1000) {
@@ -672,7 +673,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         decoder.convert(pixels, size[0], size[1]);
                         decodingOnGpu = decoder.isHardware();
                         sink.presentFrame();
-                        long shownAt = System.currentTimeMillis();
+                        long shownAt = MonoClock.ms();
                         lastPresentedAt = shownAt;
                         shownArrivedMs = frame.arrivedMs() > 0 ? frame.arrivedMs() : shownAt;
                         if (recording != null) record(osdRow(shownArrivedMs)); // the HUD's figures, for a replay
@@ -762,7 +763,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             lost = assembler.getLostFrames();
             recovered = assembler.getRecoveredFrames();
         }
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms();
         boolean flowing = now - lastFragmentAt < 1500; // stopped: no old figures
         long arrived = shownArrivedMs;
         return new Stats(c != null && c.hevc(), c == null ? 0 : c.width(), c == null ? 0 : c.height(), flowing ? receivedFps : 0,
@@ -825,7 +826,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     /** A key frame from the phone soon (the link limits how often too; nothing while watching or not connected). */
     private void requestKeyFrame() {
-        if (keyFrames.shouldSend(System.currentTimeMillis())) keyFrameSender.run();
+        if (keyFrames.shouldSend(MonoClock.ms())) keyFrameSender.run();
     }
 
     /** The current spacing of key frame requests, ms (the link log). */

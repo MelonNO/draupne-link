@@ -208,11 +208,20 @@ public class UdpSender {
         th.start();
     }
 
+    /**
+     * DRAUPNE (1.0.49 / pc.38): what a Ping is stamped with and its Pong measured against - a monotonic ms, as only the
+     * sender reads it back (the far side echoes it). On the wall clock a time correction gave one wild ping, which
+     * could drop a video tier.
+     */
+    public static long pingClockMs() {
+        return System.nanoTime() / 1_000_000;
+    }
+
     public void sendPing(boolean toEndPoint){
         try {
             UdpPacketData packetData = new UdpPacketData(UdpCommon.Ping);
             packetData.daos.writeBoolean(toEndPoint);
-            packetData.daos.writeLong(System.currentTimeMillis());
+            packetData.daos.writeLong(pingClockMs());
             sendPacket(packetData.getData());
         } catch (Exception e) {
             e.printStackTrace();
@@ -224,7 +233,7 @@ public class UdpSender {
         try {
             UdpPacketData packetData = new UdpPacketData(UdpCommon.Ping);
             packetData.daos.writeBoolean(true);
-            packetData.daos.writeLong(System.currentTimeMillis());
+            packetData.daos.writeLong(pingClockMs());
             packetData.daos.writeByte(0);//clientId placeholder
             sendPacket(packetData.getData());
         } catch (Exception e) {

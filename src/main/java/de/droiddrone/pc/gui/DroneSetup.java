@@ -1472,7 +1472,7 @@ final class DroneSetup {
                 boolean apply = mayApply && !plan.isEmpty() && version.startsWith("Betaflight"); // never INAV & co.
                 if (apply && abandoned) { // the page was left meanwhile: nothing is written behind the pilot's back
                     fc.exitCli();
-                    saveArm(arm);
+                    saveModes(aux);
                     main.logLine("Betaflight: the page was left while reading - nothing written.");
                 } else {
                     java.nio.file.Path backup = null;
@@ -1494,7 +1494,7 @@ final class DroneSetup {
                                 fc.saveAndReboot();
                                 saved = true;
                                 // the ARM switch as written now, for the sticks (RcSession) - not as read before it moved
-                                saveArm(written.auxAfter().isEmpty() ? arm : ArmSwitch.fromCli(written.auxAfter()));
+                                saveModes(written.auxAfter().isEmpty() ? aux : written.auxAfter());
                                 main.logLine("Betaflight: " + plan.stream().map(BetaflightPlan.Change::description).collect(Collectors.joining("; "))
                                         + ". Its settings before: " + backup);
                             } else {
@@ -1503,11 +1503,11 @@ final class DroneSetup {
                         }
                         if (!saved) {
                             fc.exitCli(); // "exit": Betaflight drops every change since the CLI opened (the receiver's too) and restarts
-                            saveArm(arm);
+                            saveModes(aux);
                             main.logLine("Betaflight: write stopped, nothing saved - " + refused);
                         }
                     } else {
-                        saveArm(arm);
+                        saveModes(aux);
                         fc.exitCli(); // Betaflight restarts (nothing changed, or the receiver only in RAM) - which also clears a stale "MSP" arming block
                     }
                     return new Read(port.systemName(), version, mspRx, BetaflightPlan.serialRate(rate),
@@ -1540,9 +1540,14 @@ final class DroneSetup {
             return CliWrite.brief(reply);
         }
 
-        /** Where ARM is, saved for the sticks (they wait for it to be off: RcSession); not covered (null) leaves the last. */
-        private void saveArm(ArmSwitch arm) {
+        /**
+         * Where ARM is, saved for the sticks (they wait for it to be off: RcSession; not covered leaves the last), and
+         * whether BEEPER sits alone on its channel (RcSession drives it only then) - from Betaflight's "aux" output.
+         */
+        private void saveModes(String aux) {
+            ArmSwitch arm = ArmSwitch.fromCli(aux);
             if (arm != null) main.save(Map.of(ArmSwitch.KEY, arm.format()));
+            main.save(Map.of(de.droiddrone.pc.RcSession.BEEPER_KEY, Boolean.toString(de.droiddrone.pc.RcSession.beeperSetUp(aux))));
         }
 
         /** The board's id over MSP (MSP_UID, else MSP_BOARD_INFO): what CONFIRM belongs to; null if neither answers. */

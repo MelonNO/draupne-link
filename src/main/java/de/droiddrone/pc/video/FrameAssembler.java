@@ -29,7 +29,7 @@ public class FrameAssembler {
     /**
      * @param damaged     true if fragments were missing (zero-filled)
      * @param streamStart the first frame of a (re)started stream (key frame number 1)
-     * @param arrivedMs   when the fragment that completed it came (System.currentTimeMillis), 0 if not given
+     * @param arrivedMs   when the fragment that completed it came (MonoClock.ms), 0 if not given
      */
     public record Frame(byte[] data, boolean keyFrame, short number, boolean damaged, boolean streamStart, long arrivedMs) {
         public Frame(byte[] data, boolean keyFrame, short number, boolean damaged, boolean streamStart) {
@@ -258,7 +258,7 @@ public class FrameAssembler {
         return put(keyFrame, frameNum, offset, frameSize, buf, dataOffset, length, 0);
     }
 
-    /** @param now when the fragment came (System.currentTimeMillis), kept on the frames it releases */
+    /** @param now when the fragment came (MonoClock.ms), kept on the frames it releases */
     public Frame put(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length, long now) {
         this.now = now;
         if (offset < 0 || length < 0 || (offset == 0 && (frameSize <= 0 || frameSize > PLAUSIBLE_FRAME_BYTES))) return null;
