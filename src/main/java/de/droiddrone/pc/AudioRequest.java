@@ -17,6 +17,7 @@ final class AudioRequest {
     private long mutedAt;
     /** What went out last (null = nothing yet this session) and when. */
     private Boolean lastOn;
+    private boolean lastInFlight;
     private long lastSentAt;
 
     synchronized void setMuted(boolean muted, long nowMs) {
@@ -39,10 +40,14 @@ final class AudioRequest {
      */
     synchronized byte[] due(long nowMs, boolean missingConfig) {
         boolean on = streamWanted(nowMs);
-        if (lastOn != null && lastOn == on && nowMs - lastSentAt < REPEAT_MS) return null;
+        boolean inFlight = on && !muted;
+        if (lastOn != null && lastOn == on && lastInFlight == inFlight && nowMs - lastSentAt < REPEAT_MS) return null;
         lastOn = on;
+        lastInFlight = inFlight;
         lastSentAt = nowMs;
-        return PcAudio.encode(on, PcAudio.DEFAULT_KBPS, on && missingConfig);
+        // not muted: the pilot wants to hear it, in the air too (1.0.50 - the PC mutes by itself at every arming, so
+        // unmuted while armed is always the pilot's own choice); muted but still within the 10 s: on the ground only
+        return PcAudio.encode(on, PcAudio.DEFAULT_KBPS, on && missingConfig, inFlight);
     }
 
     /** A new session with the phone: the next request goes out at once. */

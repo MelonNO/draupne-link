@@ -55,4 +55,23 @@ class PcAudioTest {
         gate.onRequest(null, 7000);
         assertFalse(gate.wanted(7000), "a broken packet changes nothing");
     }
+
+    /** pc.39: the phone streams armed only while the pilot's request says "in the air too"; an older PC's never does. */
+    @Test
+    void armedOnlyWhenThePilotAskedForTheSoundInTheAir() {
+        PcAudio gate = new PcAudio();
+        byte[] old = PcAudio.encode(true, PcAudio.DEFAULT_KBPS, false);
+        gate.onRequest(PcAudio.decode(old, old.length), 0);
+        assertFalse(gate.allowed(100, false, true), "an older PC's request: never armed");
+        byte[] air = PcAudio.encode(true, PcAudio.DEFAULT_KBPS, false, true);
+        PcAudio.Request r = PcAudio.decode(air, air.length);
+        assertTrue(r.inFlight);
+        gate.onRequest(r, 1000);
+        assertTrue(gate.allowed(1100, false, true), "the pilot unmuted in the air");
+        assertFalse(gate.allowed(1100, false, false), "standby or deep sleep: still no");
+        assertFalse(gate.allowed(1000 + PcAudio.WANT_EXPIRES_MS, false, true), "the request expires as an on does");
+        gate.onRequest(PcAudio.decode(old, old.length), 5000);
+        assertFalse(gate.allowed(5100, false, true), "muted again (no flag): armed stops at once");
+        assertTrue(gate.allowed(5100, true, true), "on the ground it goes on");
+    }
 }

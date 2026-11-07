@@ -25,12 +25,19 @@ package de.droiddrone.common;
  * the flight controller is known DISARMED (unknown counts as armed) and the phone is in normal power mode - so never
  * in the air: the uplink in flight carries the sticks' answers and the picture alone.
  * <p>
+ * DRAUPNE Link 1.0.50 / DRAUPNE Flight pc.39: flags bit 1 ({@link #FLAG_IN_FLIGHT}) = the pilot unmuted while armed and
+ * wants the sound in the air too: then the phone streams armed as well (still only while wanted, in normal power). The
+ * PC mutes by itself at every arming, so the sound in the air is always the pilot's own choice. An older phone ignores
+ * the bit and stays silent armed.
+ * <p>
  * Compiled into both apps (the PC's tests check the gate). Java 11: the phone app's language level.
  */
 public final class PcAudio {
     public static final byte PACKET = 0x79;
     /** Flags bit 0: the PC has frames but no config (it missed the AudioInitialFrame): the phone sends it again. */
     public static final int FLAG_RESEND_CONFIG = 1;
+    /** Flags bit 1 (pc.39): the pilot wants the sound while armed too (unmuted in the air). */
+    public static final int FLAG_IN_FLIGHT = 2;
     /** AAC-LC, mono: speech and engine noise come through, about 60 kbit/s on the link with the packet headers. */
     public static final int DEFAULT_KBPS = 48;
     public static final int MIN_KBPS = 16, MAX_KBPS = 64;
@@ -45,23 +52,34 @@ public final class PcAudio {
         public final boolean on;
         public final int kbps;
         public final boolean resendConfig;
+        public final boolean inFlight;
 
         public Request(boolean on, int kbps, boolean resendConfig) {
+            this(on, kbps, resendConfig, false);
+        }
+
+        public Request(boolean on, int kbps, boolean resendConfig, boolean inFlight) {
             this.on = on;
             this.kbps = kbps;
             this.resendConfig = resendConfig;
+            this.inFlight = inFlight;
         }
     }
 
     public static byte[] encode(boolean on, int kbps, boolean resendConfig) {
-        return new byte[]{PACKET, (byte) (on ? 1 : 0), (byte) clampKbps(kbps), (byte) (resendConfig ? FLAG_RESEND_CONFIG : 0)};
+        return encode(on, kbps, resendConfig, false);
+    }
+
+    public static byte[] encode(boolean on, int kbps, boolean resendConfig, boolean inFlight) {
+        int flags = (resendConfig ? FLAG_RESEND_CONFIG : 0) | (inFlight ? FLAG_IN_FLIGHT : 0);
+        return new byte[]{PACKET, (byte) (on ? 1 : 0), (byte) clampKbps(kbps), (byte) flags};
     }
 
     /** @return the request, or null: not an AUDIO packet, or too short. A missing flags byte reads as none. */
     public static Request decode(byte[] d, int len) {
         if (d == null || len < 3 || d[0] != PACKET) return null;
         int flags = len >= 4 ? d[3] & 0xff : 0;
-        return new Request(d[1] != 0, clampKbps(d[2] & 0xff), (flags & FLAG_RESEND_CONFIG) != 0);
+        return new Request(d[1] != 0, clampKbps(d[2] & 0xff), (flags & FLAG_RESEND_CONFIG) != 0, (flags & FLAG_IN_FLIGHT) != 0);
     }
 
     static int clampKbps(int kbps) {
@@ -71,6 +89,8 @@ public final class PcAudio {
     // ------------------------------------------------------------------ the phone's gate
 
     private volatile long wantedUntil;
+    /** Until when the pilot's "in the air too" holds (its own request's lifetime, as "on"). */
+    private volatile long inFlightUntil;
     private volatile int kbps = DEFAULT_KBPS;
 
     /** A request from the pilot PC. */
@@ -79,14 +99,17 @@ public final class PcAudio {
         if (r.on) {
             kbps = r.kbps;
             wantedUntil = nowMs + WANT_EXPIRES_MS;
+            inFlightUntil = r.inFlight ? nowMs + WANT_EXPIRES_MS : 0;
         } else {
             wantedUntil = 0;
+            inFlightUntil = 0;
         }
     }
 
     /** The session ended (disconnect, a new pilot): nothing wanted until the next request. */
     public void forget() {
         wantedUntil = 0;
+        inFlightUntil = 0;
     }
 
     /** The PC wants the sound now. */
@@ -101,9 +124,9 @@ public final class PcAudio {
 
     /**
      * The microphone may stream now: the PC wants it, the flight controller reads DISARMED (a fresh status, not
-     * unknown), and the phone isn't in standby or deep sleep.
+     * unknown) - or the pilot asked for the sound in the air too (pc.39) - and the phone isn't in standby or deep sleep.
      */
     public boolean allowed(long nowMs, boolean fcDisarmed, boolean normalPower) {
-        return fcDisarmed && normalPower && wanted(nowMs);
+        return normalPower && wanted(nowMs) && (fcDisarmed || nowMs < inFlightUntil);
     }
 }

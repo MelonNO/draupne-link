@@ -227,6 +227,13 @@ public class MainWindow extends JFrame {
     private final GlyphButton muteButton = new GlyphButton(GlyphButton.Glyph.SOUND, "Mute");
     static final String AUDIO_MUTED_KEY = "audio.muted";
     private boolean audioMuted;
+    /**
+     * 1.0.50: MUTE went on by itself at the arming (the pilot's rule: armed = muted, unless the pilot unmutes in the
+     * air); the disarm then gives the sound back. A press of MUTE meanwhile makes it the pilot's own choice again.
+     */
+    private boolean audioAutoMuted;
+    /** The drone read armed at the last refresh (for the arming's auto-mute). */
+    private boolean audioSawArmed;
     /** The phone's sound while connected, or null. */
     private LiveAudio liveAudio;
     /** What the live audio did at the last refresh, and the states already told in the log this connection. */
@@ -3314,6 +3321,7 @@ public class MainWindow extends JFrame {
 
     /** MUTE or M: silent here at once; after 10 s muted the phone stops sending; the choice kept for this phone. */
     private void toggleMute() {
+        audioAutoMuted = false;
         setAudioMuted(!audioMuted, true);
         String phone = config.getString(Names.PHONE_NAME_KEY);
         if (phone != null && !phone.isEmpty()) save(Map.of(audioMutedKey(phone), Boolean.toString(audioMuted)));
@@ -3332,6 +3340,7 @@ public class MainWindow extends JFrame {
 
     /** What the live audio does, said once a connection in the log, and always in the button's tooltip. */
     private void refreshAudio() {
+        autoMuteAtArming();
         Connection c = connection;
         ControlLink.AudioState s = c == null ? ControlLink.AudioState.NONE : c.getLink().audioState();
         if (s == lastAudioState) return;
@@ -3343,16 +3352,43 @@ public class MainWindow extends JFrame {
                     + c.getLink().getTelemetry().getPhoneAppVersion() + "): no sound from it.";
             case ON -> c.getLink().isSpectator() ? "Live sound: the pilot PC passes the phone's microphone on" + (audioMuted ? " (muted here: M)." : ".")
                     : "Live sound: the phone's microphone" + (audioMuted ? " comes, muted here (M)." : " plays on this PC (M mutes it).");
-            case HELD -> "Live sound held back by the phone: the drone is armed (or its state unknown) - the microphone is on only while it is disarmed.";
+            case HELD -> "Live sound held back by the phone: the drone is armed (or its state unknown)" + (audioMuted ? "." : " - its app sends it in the air from pc.39 on.");
             case FAILED -> "Live sound: the phone couldn't start its microphone (is the microphone allowed for DRAUPNE Flight?).";
             default -> null;
         };
         if (line != null) logLine(line);
     }
 
+    /**
+     * Armed = muted (1.0.50, the pilot's rule): at the arming MUTE goes on by itself; the pilot may unmute in the air
+     * (M), and the phone (pc.39 on) then sends the sound armed too. At the disarm the sound comes back if it was muted
+     * by the arming alone.
+     */
+    private void autoMuteAtArming() {
+        Connection c = connection;
+        long now = de.droiddrone.pc.MonoClock.ms();
+        boolean armed = c != null && !c.getLink().isSpectator() && c.getLink().getTelemetry().isArmedNow(now, 2000);
+        if (armed && !audioSawArmed) {
+            if (!audioMuted) {
+                audioAutoMuted = true;
+                setAudioMuted(true, true);
+                logLine("Armed: the sound is muted. M (or the loudspeaker) brings it back in the air.");
+            }
+        } else if (!armed && audioSawArmed) {
+            if (c != null && !c.getLink().getTelemetry().isDisarmedNow(now, 2000)) return; // a 4G gap: wait for the word
+            if (audioAutoMuted && audioMuted) {
+                setAudioMuted(false, true);
+                logLine("Disarmed: the sound is on again.");
+            }
+            audioAutoMuted = false;
+        }
+        audioSawArmed = armed;
+    }
+
     private String muteTip(ControlLink.AudioState s) {
         String what = (audioMuted ? "SOUND MUTED: M or click to hear" : "SOUND: M or click to mute")
-                + " the phone's microphone - live while the drone is disarmed; after 10 s muted the phone stops sending it";
+                + " the phone's microphone; arming mutes it by itself, unmuting in the air brings it back (phone app pc.39 on);"
+                + " after 10 s muted the phone stops sending it";
         if (s == null) return what;
         return switch (s) {
             case OLD_PHONE -> what + ". The phone app is too old: live sound needs pc." + ControlLink.AUDIO_MIN_PC_BUILD + ".";
