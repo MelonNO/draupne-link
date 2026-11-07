@@ -15,6 +15,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   (the mesh is closed; checked nose up, on its side, upside down), front props half red. ~8 ms a frame on 4 cores
   (10 without culling). `rotation()`, the grid, the label and the API the dialog uses are unchanged. Checked off screen
   only (rendered on a Linux PC); not yet seen in the real window.
+  The v1.0.43 tag run failed twice on `FcTelemetryTest.armedNowOnlyFromAFreshStatus`: the test compared
+  `System.currentTimeMillis()` with FcTelemetry's `MonoClock` stamps (wall clock at start + nanoTime), which drift
+  apart on the runner; the test now uses `MonoClock.ms()`, and the tag was moved to that commit before any release.
 
 - **1.0.42 (2026-11-06):** the pilot: "when recording is turned on one of the video files include OSD" and "a check of
   fc orientation with a 3d render of a drone following the actual movements". Why: an iFlight Blitz F722 (Betaflight

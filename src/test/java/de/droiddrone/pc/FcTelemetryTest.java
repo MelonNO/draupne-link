@@ -270,19 +270,19 @@ class FcTelemetryTest {
     @Test
     void armedNowOnlyFromAFreshStatus() throws Exception {
         FcTelemetry t = new FcTelemetry();
-        long now = System.currentTimeMillis();
+        long now = MonoClock.ms(); // the clock FcTelemetry stamps with: the wall clock drifts from it
         assertFalse(t.isArmedNow(now, 2000), "nothing known");
         t.parse(new DataReader(boxNamesPacket("ARM;ANGLE;"), true), BETAFLIGHT);
         t.parse(new DataReader(betaflightPacket(0, 0b10), true), BETAFLIGHT);
-        assertFalse(t.isArmedNow(System.currentTimeMillis(), 2000), "disarmed");
+        assertFalse(t.isArmedNow(MonoClock.ms(), 2000), "disarmed");
         t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
-        assertFalse(t.isArmedNow(System.currentTimeMillis(), 2000), "one report alone: it may be an old one let go late");
+        assertFalse(t.isArmedNow(MonoClock.ms(), 2000), "one report alone: it may be an old one let go late");
         t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
-        assertTrue(t.isArmedNow(System.currentTimeMillis(), 2000));
-        assertFalse(t.isArmedNow(System.currentTimeMillis() + 2001, 2000), "too old to say: the link may have been down since");
+        assertTrue(t.isArmedNow(MonoClock.ms(), 2000));
+        assertFalse(t.isArmedNow(MonoClock.ms() + 2001, 2000), "too old to say: the link may have been down since");
         t.parse(new DataReader(betaflightPacket(0, 0b10), true), BETAFLIGHT);
         t.parse(new DataReader(betaflightPacket(0, 0b11), true), BETAFLIGHT);
-        assertFalse(t.isArmedNow(System.currentTimeMillis(), 2000), "a disarm in between starts the count over");
+        assertFalse(t.isArmedNow(MonoClock.ms(), 2000), "a disarm in between starts the count over");
     }
 
     @Test
