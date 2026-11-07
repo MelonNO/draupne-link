@@ -97,8 +97,26 @@ public class BitrateControl {
     /** The phone's last report of its bitrate setting (bit/s), or -1 from a phone that doesn't report. */
     private int phoneTargetBps = -1;
 
+    /**
+     * The requests decided under the lock, sent after it is let go (1.0.49): a packet sent while holding it kept the
+     * Swing thread waiting in step() / baselinePingMs() (the HUD's figures) for the socket.
+     */
+    private final java.util.ArrayList<Runnable> toSend = new java.util.ArrayList<>();
+
     public BitrateControl(Sink sink) {
         this.sink = sink;
+    }
+
+    /** Sends what the last call decided; outside the lock (never call while holding it). */
+    private void send() {
+        while (true) {
+            Runnable r;
+            synchronized (this) {
+                if (toSend.isEmpty()) return;
+                r = toSend.remove(0);
+            }
+            r.run();
+        }
     }
 
     /** The highest step to ask for (the set limit, or bad coverage mode's 1 Mbit/s); above it, it steps down. */
@@ -110,9 +128,11 @@ public class BitrateControl {
      * Every 200 ms or so while the stream runs, frames or not: in a dropout no frame comes, and the steps down must not
      * wait for one (2026-11-01: the second step came 4.8 s after the first).
      */
-    public synchronized void onTick(long now, int ping) {
-        if (!started) return;
-        evaluate(false, false, now, 30, ping);
+    public void onTick(long now, int ping) {
+        synchronized (this) {
+            if (started) evaluate(false, false, now, 30, ping);
+        }
+        send();
     }
 
     /** A frame was lost or arrived damaged. */
@@ -125,12 +145,15 @@ public class BitrateControl {
      * @param fps   current frame rate (allowed bad frames per second scale with it)
      * @param ping  round trip in ms, -1 if unknown (no pong lately: a stall)
      */
-    public synchronized void onFrame(boolean keyFrame, long now, int fps, int ping) {
-        if (!started) {
-            started = true;
-            lastFrame = lastKeyFrame = lastChange = lastTrouble = windowStart = baselineStart = now;
+    public void onFrame(boolean keyFrame, long now, int fps, int ping) {
+        synchronized (this) {
+            if (!started) {
+                started = true;
+                lastFrame = lastKeyFrame = lastChange = lastTrouble = windowStart = baselineStart = now;
+            }
+            evaluate(true, keyFrame, now, fps, ping);
         }
-        evaluate(true, keyFrame, now, fps, ping);
+        send();
     }
 
     private void evaluate(boolean frame, boolean keyFrame, long now, int fps, int ping) {
@@ -157,7 +180,8 @@ public class BitrateControl {
                 badFrames = 0;
                 lastChange = now;
                 int to = step > FLOOR_STEP ? Math.min(FLOOR_STEP, maxStep) : step - 1; // to the floor in one go
-                sink.setStep(to, step);
+                int from = step;
+                toSend.add(() -> sink.setStep(to, from));
                 step = to;
             }
             if (frame) lastFrame = now;
@@ -167,7 +191,7 @@ public class BitrateControl {
         if (step > maxStep && now - lastChange >= SPIKE_PAUSE_MS) { // over the top (bad coverage mode came on): down
             lastChange = now;
             step--;
-            sink.changeBitRate(false);
+            toSend.add(() -> sink.changeBitRate(false));
         }
         boolean trouble = queueing
                 || badFrames > Math.max(2, Math.round(Math.max(fps, 1) / 10f))
@@ -183,7 +207,7 @@ public class BitrateControl {
                 badFrames = 0;
                 lastChange = now;
                 step--;
-                sink.changeBitRate(false);
+                toSend.add(() -> sink.changeBitRate(false));
             }
         } else if (now - lastTrouble >= calmMs && now - lastChange > PAUSE_MS && step < maxStep // never over the top
                 && spikeSince < 0 && now - lastSpike >= SPIKE_CALM_MS) { // nor while a spike is building up, or just after one
@@ -192,7 +216,7 @@ public class BitrateControl {
             lastTrouble = now;
             lastRaise = now; // not lastChange: if the higher rate brings trouble, back off at once
             step++;
-            sink.changeBitRate(true);
+            toSend.add(() -> sink.changeBitRate(true));
         }
         if (frame) lastFrame = now;
         if (keyFrame) lastKeyFrame = now;
@@ -210,7 +234,14 @@ public class BitrateControl {
      * maxStep: in bad coverage mode a calm scene arrives well under 0.5 Mbit/s at the 1 Mbit/s setting, and a rescue
      * there pushed it to 2 and back every 5 s (the reported target tells the two apart).
      */
-    public synchronized void onReceivedRate(double mbps, long now) {
+    public void onReceivedRate(double mbps, long now) {
+        synchronized (this) {
+            judgeReceivedRate(mbps, now);
+        }
+        send();
+    }
+
+    private void judgeReceivedRate(double mbps, long now) {
         boolean low = phoneTargetBps > 0 ? step < FLOOR_STEP : mbps < RESCUE_BELOW_MBPS;
         if (!low) {
             lowSince = -1;
@@ -222,7 +253,7 @@ public class BitrateControl {
         if (step >= maxStep) return; // where it is meant to be
         if (now - lastRescue >= RESCUE_MS) {
             lastRescue = now;
-            sink.changeBitRate(true);
+            toSend.add(() -> sink.changeBitRate(true));
         }
     }
 

@@ -15,10 +15,13 @@ class PipelineRecoveryTest {
         final int[] pixels = new int[160 * 120];
         final AtomicInteger presented = new AtomicInteger();
         final CountDownLatch held = new CountDownLatch(1);
+        /** The decode thread has made its decoder (taken the config). */
+        final CountDownLatch started = new CountDownLatch(1);
         volatile boolean hold = true;
 
         @Override
         public void videoStarted(int width, int height, boolean mirror) {
+            started.countDown();
         }
 
         @Override
@@ -56,30 +59,55 @@ class PipelineRecoveryTest {
     }
 
     /**
-     * 35 frames queue up while the screen is held (key frames every 10): the backlog is cut back to its newest
-     * whole key frame, not thrown away - the pictures from frame 21 on are shown, not only those from the next
-     * key frame to come (31).
+     * 35 frames queue up while the screen is held on frame 1 (key frames every 12: 1, 13, 25): when the 32nd comes,
+     * the backlog (2-31) is cut back to its newest whole key frame, not thrown away - frame 1, then the pictures from
+     * 25 on are shown; a thrown-away backlog would show nothing more before the next key frame (37, never sent).
+     * <p>
+     * T1 (1.0.49): the test waits for the decoder to be made and for frame 1 to be held before the rest comes, and
+     * reads the count once it has settled. Before, it fed everything at once and read the count while the decode
+     * thread still drew; where the cut fell depended on how far that thread had got (15 or 16 expected, sometimes
+     * neither).
      */
     @Test
     void aBacklogKeepsItsNewestKeyFrame() throws Exception {
-        TestStreams.Stream stream = TestStreams.h264(320, 240, 35, 10);
+        TestStreams.Stream stream = TestStreams.h264(320, 240, 35, 12);
         HoldingSink sink = new HoldingSink();
         AtomicInteger keyRequests = new AtomicInteger();
         try (VideoPipeline p = new VideoPipeline(sink, () -> 30)) {
             p.setDrawEveryFrame(true);
             p.setKeyFrameSender(keyRequests::incrementAndGet);
             p.onVideoConfig(320, 240, false, false, stream.codecConfig());
-            short num = 0;
-            for (TestStreams.Packet packet : stream.packets()) feed(p, packet, ++num);
-            Thread.sleep(200); // the decode thread sits in targetSize with frame 1; everything else is queued
+            assertTrue(sink.started.await(5, TimeUnit.SECONDS), "the decoder is made");
+            feed(p, stream.packets().get(0), (short) 1);
+            Thread.sleep(200); // the decode thread sits in targetSize with frame 1
+            for (int i = 1; i < 35; i++) feed(p, stream.packets().get(i), (short) (i + 1));
             sink.hold = false;
             sink.held.countDown();
             long end = System.currentTimeMillis() + 5000;
-            while (sink.presented.get() < 15 && System.currentTimeMillis() < end) Thread.sleep(20);
-            // from the newest key frame in the backlog (21) to 35: 15 pictures (16 with frame 1, when the decode
-            // thread had taken it before the rest came)
-            int shown = sink.presented.get();
-            assertTrue(shown == 15 || shown == 16, "21-35 (and maybe 1); a thrown-away backlog would show 31-35 only: " + shown);
+            while (sink.presented.get() < 12 && System.currentTimeMillis() < end) Thread.sleep(20);
+            int shown = VideoTest.settled(sink.presented);
+            assertEquals(12, shown, "frame 1, then 25-35");
+        }
+    }
+
+    /**
+     * A backlog with no whole key frame in it is cut all the same (1.0.49): before, its frames were put back behind
+     * the FLUSH, nothing went, and every frame after it put another FLUSH in.
+     */
+    @Test
+    void aBacklogWithoutAKeyFrameIsStillCut() throws Exception {
+        TestStreams.Stream stream = TestStreams.h264(320, 240, 45, 45); // one key frame, at the start
+        HoldingSink sink = new HoldingSink();
+        try (VideoPipeline p = new VideoPipeline(sink, () -> 30)) {
+            p.setKeyFrameSender(() -> { });
+            p.onVideoConfig(320, 240, false, false, stream.codecConfig());
+            assertTrue(sink.started.await(5, TimeUnit.SECONDS));
+            feed(p, stream.packets().get(0), (short) 1);
+            Thread.sleep(200); // the decode thread sits in targetSize with frame 1
+            for (int i = 1; i < 45; i++) feed(p, stream.packets().get(i), (short) (i + 1));
+            assertTrue(p.queuedForDecoder() <= VideoPipeline.MAX_BACKLOG, "cut back: " + p.queuedForDecoder());
+            sink.hold = false;
+            sink.held.countDown();
         }
     }
 

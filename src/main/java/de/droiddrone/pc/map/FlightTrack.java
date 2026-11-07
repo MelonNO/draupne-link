@@ -158,6 +158,15 @@ public final class FlightTrack {
         return new ArrayList<>(points);
     }
 
+    /** The points from index from on (the map takes them in as they come, not the whole track each time). */
+    public synchronized List<Point> pointsFrom(int from) {
+        return from >= points.size() ? List.of() : new ArrayList<>(points.subList(Math.max(0, from), points.size()));
+    }
+
+    public synchronized int size() {
+        return points.size();
+    }
+
     public synchronized Point last() {
         return points.isEmpty() ? null : points.get(points.size() - 1);
     }

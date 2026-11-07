@@ -91,6 +91,7 @@ public class MainWindow extends JFrame {
     private final de.droiddrone.pc.map.Elevation elevation = new de.droiddrone.pc.map.Elevation();
     /** Where the camera looks (1.0.39): drawn on the maps, and the STANAG 4609 stream's frame centre and corners. */
     private final de.droiddrone.pc.CameraView cameraView = new de.droiddrone.pc.CameraView(tileCache);
+    private final de.droiddrone.pc.CameraView.Live cameraLive = new de.droiddrone.pc.CameraView.Live(cameraView);
     private boolean cameraOnMap;
     /** The STANAG 4609 stream while it is on and the video runs; null otherwise. */
     private de.droiddrone.pc.video.StanagStream stanag;
@@ -1528,7 +1529,9 @@ public class MainWindow extends JFrame {
         VideoPipeline v = video;
         int[] size = v == null ? null : v.pictureSize();
         if (size != null) cameraView.setPictureSize(size[0], size[1]);
-        if (c != null && cameraOnMap && !fcLost) view = cameraView.compute(c.getLink().getTelemetry(), track);
+        // worked out five times a second off this thread (1.0.49: its terrain steps ran here every 33 ms)
+        cameraLive.want(c != null && cameraOnMap && !fcLost ? c.getLink().getTelemetry() : null, track);
+        view = cameraLive.latest();
         if (w != null) w.setCameraView(view);
         miniMap.setCameraView(view);
         List<de.droiddrone.pc.DetectionMarks.Mark> marks = c == null ? detectionMarks.marks(now) : detectionMarks(c.getLink().getTelemetry(), now);
@@ -1821,6 +1824,7 @@ public class MainWindow extends JFrame {
         if (observation != null) stopObservation();
         backToGrid = false;
         if (connection != null) disconnect();
+        if (osdRecorder != null) osdRecorder.finish(3000); // the file with the OSD closed whole, not cut off by the exit
         settingsWriter.shutdown(); // what is queued (the OSD layout, the window's place) reaches the file before the exit
         try {
             settingsWriter.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS);

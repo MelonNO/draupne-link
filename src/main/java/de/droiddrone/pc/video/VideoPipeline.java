@@ -65,7 +65,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
      */
     static final long MAX_BACKLOG_AGE_MS = 200;
 
-    private static final int MAX_BACKLOG = 30;
+    static final int MAX_BACKLOG = 30;
     private static final Object STOP = new Object();
     /** A dropped backlog: the decoder forgets what it holds and waits for a key frame - it is not rebuilt (a black gap). */
     private static final Object FLUSH = new Object();
@@ -117,21 +117,49 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private long ageDropLoggedAt;
 
     // recording: frames go to their own thread through a queue, so the receive thread never waits for the disk
-    private record RecFrame(byte[] data, boolean keyFrame, long arrivedMs) {}
+    private record RecFrame(byte[] data, boolean keyFrame, long arrivedMs, boolean streamStart) {}
     /** One frame of the live audio (1.0.45), of the stream config describes. */
     private record RecAudio(de.droiddrone.pc.audio.AudioConfig config, byte[] data, long arrivedMs) {}
     private static final Object REC_STOP = new Object();
-    private static final Object REC_NEW_FILE = new Object();
+    /** A (re)started stream's config came: the file ends, the next one is of this config. */
+    private record RecNewFile(Config config) {}
+    /** A restarted stream goes on under the config in hand (the same came again, or none came): no new file. */
+    private static final Object REC_SAME_CONFIG = new Object();
     /** About 3 s of video and its sound (47 AAC frames a second beside 30 pictures). */
-    private final LinkedBlockingQueue<Object> recordQueue = new LinkedBlockingQueue<>(480);
+    static final int RECORD_QUEUE = 480;
+    /**
+     * A restarted stream's first frames wait for its config this long at most (by their arrival), then go into the
+     * file in hand: the decoder doesn't wait longer either (CONFIG_WAIT_MS).
+     */
+    static final long RECORD_HOLD_MS = CONFIG_WAIT_MS + 1000;
+
+    /**
+     * One recording: its own queue and thread (1.0.49). Before, a new recording started while the last one still
+     * wrote shared the queue with it, and both files broke; now the new thread waits for the last one to finish.
+     */
+    private static final class Recording {
+        final java.nio.file.Path dir;
+        final LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<>(RECORD_QUEUE);
+        Thread thread;
+        /** The recording before this one, if its thread was still writing: waited for first. */
+        Thread before;
+        /** Frames left out because the queue was full, since the last log line (receive thread). */
+        int leftOut;
+        long leftOutLoggedAt = Long.MIN_VALUE / 2;
+
+        Recording(java.nio.file.Path dir) {
+            this.dir = dir;
+        }
+    }
     /**
      * The live audio's config as last seen (1.0.45); a file started while it is known gets a sound track of it, and
      * one started before it came gets the pc.34 phone's (AudioConfig.DEFAULT) when the phone can send sound.
      */
     private volatile de.droiddrone.pc.audio.AudioConfig recordAudioConfig;
-    private volatile java.nio.file.Path recordDir; // null = not recording
+    private volatile Recording recording; // null = not recording
     private volatile java.nio.file.Path recordFile;
-    private Thread recordThread;
+    /** The last recording's thread (guarded by this): a new recording waits for it. */
+    private Thread lastRecordThread;
 
     /**
      * Gets every recorded frame as well, on the record thread (1.0.42: the second file, with the OSD drawn in). Must
@@ -292,6 +320,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             synchronized (this) {
                 if (startsAhead > 0) { // a restarted stream waits for this: it goes on to the decoder now
                     startsAhead = 0;
+                    record(REC_SAME_CONFIG);
                     earlyFrames.forEach(queue::offer);
                     earlyFrames.clear();
                     synchronized (assembler) {
@@ -331,7 +360,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             kept.forEach(queue::offer);
             earlyFrames.clear();
         }
-        if (recordDir != null) recordQueue.offer(REC_NEW_FILE); // a (re)started stream: a file of its own
+        record(new RecNewFile(config)); // a (re)started stream: a file of its own
         FrameTap t = tap;
         if (t != null) t.onConfig(width, height, hevc, codecConfig);
         log("Video: " + (hevc ? "H.265" : "H.264") + " " + width + "x" + height);
@@ -350,11 +379,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             earlier = assembler.takeFlushed(); // older unfinished frames, damaged: decoded first, they are references
             lost = assembler.getLostFrames();
         }
-        for (; lastLost < lost; lastLost++) {
-            bitrate.onBadFrame(false);
-            if (!needKeyFrame) needKeyFrameSince = now;
-            needKeyFrame = true;
-        }
+        countLost(lost, now);
         for (FrameAssembler.Frame f : earlier) accept(f, now);
         if (frame != null) accept(frame, now);
         if (now - windowStart >= 1000) {
@@ -377,10 +402,29 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         }
     }
 
+    /**
+     * Frames the assembler counted lost (receive thread) - also those lost whole, every packet of them (1.0.49: a
+     * one-packet P-frame at the low tiers): each is trouble for the bitrate, and a key frame is asked for with the
+     * next frame accepted (unless that is a whole key frame).
+     */
+    private void countLost(long lost, long now) {
+        for (; lastLost < lost; lastLost++) {
+            bitrate.onBadFrame(false);
+            if (!needKeyFrame) needKeyFrameSince = now;
+            needKeyFrame = true;
+        }
+    }
+
     /** A finished frame (receive thread): recorded, counted, and queued for the decoder. */
     private void accept(FrameAssembler.Frame frame, long now) {
-        if (recordDir != null && !recordQueue.offer(new RecFrame(frame.data(), frame.keyFrame(), now))) {
-            log("Recording: the disk is too slow, a frame was left out");
+        Recording r = recording;
+        if (r != null && !r.queue.offer(new RecFrame(frame.data(), frame.keyFrame(), now, frame.streamStart()))) {
+            r.leftOut++; // logged once in a while: not a line per frame on this thread while the disk is slow
+            if (now - r.leftOutLoggedAt >= 5000) {
+                log("Recording: the disk is too slow, " + r.leftOut + " frame" + (r.leftOut == 1 ? " was" : "s were") + " left out");
+                r.leftOut = 0;
+                r.leftOutLoggedAt = now;
+            }
         }
         FrameTap t = tap;
         if (t != null) t.onFrame(frame.data(), frame.keyFrame(), now);
@@ -406,6 +450,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         synchronized (this) {
             if (frame.streamStart() && currentConfig != null && sameConfigAt != 0 && now - sameConfigAt < SAME_CONFIG_MS) {
                 sameConfigAt = 0; // its config came first and is the one in hand: nothing to wait for
+                record(REC_SAME_CONFIG);
                 synchronized (assembler) {
                     assembler.startedAfresh(); // it saw this start: only its flag goes
                 }
@@ -421,6 +466,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             if (awaiting && now - awaitingSince > CONFIG_ASK_MS) configRequester.run(); // the link limits how often
             if (awaiting && now - awaitingSince > CONFIG_WAIT_MS) { // no config came: under the old one, not frozen
                 startsAhead = 0;
+                record(REC_SAME_CONFIG);
                 awaiting = false;
                 earlyFrames.forEach(queue::offer);
                 earlyFrames.clear();
@@ -478,6 +524,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         return ageDrops;
     }
 
+    /** What waits for the decoder (tests). */
+    int queuedForDecoder() {
+        return queue.size();
+    }
+
     /**
      * Hopelessly behind: the queue is cut back to its newest whole key frame (or config), so the decoder starts
      * over there at once. Without one, everything goes and the decoder waits for the next key frame (FLUSH) - before
@@ -491,7 +542,13 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             Object o = queued.get(i);
             if (o instanceof Config || (o instanceof FrameAssembler.Frame f && f.keyFrame() && !f.damaged())) start = i;
         }
-        if (start < 0) queue.offer(FLUSH);
+        if (start < 0) { // none: the frames go (1.0.49 - before, they were all put back behind the FLUSH, nothing cut)
+            queue.offer(FLUSH);
+            start = queued.size();
+        }
+        Object config = null; // a config before the key frame cut to: the decoder hasn't had it, the frames need it
+        for (int i = 0; i < start; i++) if (queued.get(i) instanceof Config) config = queued.get(i);
+        if (config != null) queue.offer(config);
         for (int i = 0; i < queued.size(); i++) {
             if (i >= start || queued.get(i) == STOP) queue.offer(queued.get(i));
         }
@@ -502,10 +559,13 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         long now = System.currentTimeMillis();
         FrameAssembler.Frame frame;
         java.util.List<FrameAssembler.Frame> earlier;
+        long lost;
         synchronized (assembler) {
             frame = assembler.putParity(keyFrame, frameNum, frameSize, buf, dataOffset, length, now);
             earlier = assembler.takeFlushed();
+            lost = assembler.getLostFrames();
         }
+        countLost(lost, now);
         for (FrameAssembler.Frame f : earlier) accept(f, now);
         if (frame != null) accept(frame, now);
     }
@@ -515,10 +575,13 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         long now = System.currentTimeMillis();
         FrameAssembler.Frame frame;
         java.util.List<FrameAssembler.Frame> earlier;
+        long lost;
         synchronized (assembler) {
             frame = assembler.putParityGroup(keyFrame, frameNum, frameSize, group, buf, dataOffset, length, now);
             earlier = assembler.takeFlushed();
+            lost = assembler.getLostFrames();
         }
+        countLost(lost, now);
         for (FrameAssembler.Frame f : earlier) accept(f, now);
         if (frame != null) accept(frame, now);
     }
@@ -612,7 +675,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         long shownAt = System.currentTimeMillis();
                         lastPresentedAt = shownAt;
                         shownArrivedMs = frame.arrivedMs() > 0 ? frame.arrivedMs() : shownAt;
-                        if (recordDir != null) recordQueue.offer(osdRow(shownArrivedMs)); // the HUD's figures, for a replay
+                        if (recording != null) record(osdRow(shownArrivedMs)); // the HUD's figures, for a replay
                         long from = resizeFrom;
                         if (from > 0) { // the first picture at the new size: how long the picture stood still
                             resizeFrom = -1;
@@ -814,38 +877,45 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     /** Records the stream into a new MKV file in dir from the next key frame (a new file if the stream restarts). */
     public synchronized void startRecording(java.nio.file.Path dir) {
-        if (recordDir != null) return;
+        if (recording != null) return;
         requestKeyFrame(); // a file starts at a key frame: one now rather than in up to 10 s
-        recordQueue.clear();
-        recordDir = dir;
-        recordThread = new Thread(this::recordLoop, "videoRecord");
-        recordThread.setDaemon(true);
-        recordThread.setPriority(Thread.MIN_PRIORITY);
-        recordThread.start();
+        Recording r = new Recording(dir);
+        Thread last = lastRecordThread;
+        r.before = last != null && last.isAlive() ? last : null; // still finishing its file: this one waits for it
+        r.thread = new Thread(() -> recordLoop(r), "videoRecord");
+        r.thread.setDaemon(true);
+        r.thread.setPriority(Thread.MIN_PRIORITY);
+        lastRecordThread = r.thread;
+        recording = r;
+        r.thread.start();
     }
 
     /** Finishes the file. Waits for it outside the lock: the receive thread must not stand still for the disk. */
     public void stopRecording() {
-        Thread t;
+        Recording r;
         synchronized (this) {
-            if (recordDir == null) return;
-            recordDir = null;
-            if (!recordQueue.offer(REC_STOP)) { // full (a slow disk): what is in it is not worth the wait
-                recordQueue.clear();
-                recordQueue.offer(REC_STOP);
+            r = recording;
+            if (r == null) return;
+            recording = null;
+            if (!r.queue.offer(REC_STOP)) { // full (a slow disk): what is in it is not worth the wait
+                r.queue.clear();
+                r.queue.offer(REC_STOP);
             }
-            t = recordThread;
-            recordThread = null;
         }
-        if (t == null) return;
         try {
-            t.join(2000);
+            r.thread.join(2000);
         } catch (InterruptedException ignored) {
         }
     }
 
     public boolean isRecording() {
-        return recordDir != null;
+        return recording != null;
+    }
+
+    /** Into the recording's queue, if one runs; full: left out (never waits). */
+    private void record(Object item) {
+        Recording r = recording;
+        if (r != null) r.queue.offer(item);
     }
 
     /** The live audio's stream config (link threads): files started from now on declare their sound track with it. */
@@ -855,7 +925,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     /** One frame of the live audio (link threads): into the recording, if one runs. Never waits. */
     public void recordAudio(de.droiddrone.pc.audio.AudioConfig config, byte[] data, long arrivedMs) {
-        if (recordDir != null) recordQueue.offer(new RecAudio(config, data, arrivedMs)); // full: the frames come first
+        record(new RecAudio(config, data, arrivedMs)); // full: the frames come first
     }
 
     /** The sound track a file starting now gets: the stream's, the pc.34 default before it came, or none. */
@@ -890,16 +960,43 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 att == null ? Double.NaN : att.rollDeg(), att == null ? Double.NaN : att.pitchDeg(), att == null ? -1 : att.headingDeg());
     }
 
-    private void recordLoop() {
+    /**
+     * The record thread. A file starts at a key frame. A restarted stream (its key frame 1) ends the file in hand at
+     * once, and its first frames are held until its config comes (1.0.49): a new file of that config starts with
+     * them - or, when the config in hand stays (REC_SAME_CONFIG, or none came in RECORD_HOLD_MS), they go into a file
+     * of it. Before, the new stream's key frame went into the old file (another config) and the new file waited for
+     * the next key frame, 2-10 s.
+     */
+    private void recordLoop(Recording r) {
         StreamRecorder recorder = null;
+        Config fileConfig = null; // the config the next file is of: the last RecNewFile's (null: the one in hand)
+        boolean configCame = false; // a RecNewFile came since the file in hand started (or the recording did)
+        java.util.List<RecFrame> held = null; // a restarted stream's first frames, waiting for its config
+        boolean askedForKey = false;
         try {
+            Thread before = r.before;
+            r.before = null;
+            if (before != null) before.join(); // the last recording finishes its file first; this queue holds ~3 s
             while (true) {
-                Object item = recordQueue.take();
+                Object item = r.queue.take();
                 if (item == REC_STOP) break;
-                if (item == REC_NEW_FILE) {
+                if (item instanceof RecNewFile n) {
                     if (recorder != null) recorder.close();
                     recorder = null;
                     tapEnded();
+                    fileConfig = n.config();
+                    if (held != null) { // the restart's frames, held for this: the new file starts with them
+                        for (RecFrame h : held) recorder = write(recorder, h, fileConfig, r.dir);
+                        held = null;
+                    } else {
+                        configCame = true; // the stream's key frame 1 is on its way; if a later frame comes first, one is asked for
+                        askedForKey = false;
+                    }
+                    continue;
+                }
+                if (item == REC_SAME_CONFIG) {
+                    if (held != null) for (RecFrame h : held) recorder = write(recorder, h, fileConfig, r.dir);
+                    held = null;
                     continue;
                 }
                 if (item instanceof StreamRecorder.OsdRow row) {
@@ -912,32 +1009,75 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     continue;
                 }
                 RecFrame f = (RecFrame) item;
-                Config c = currentConfig;
-                java.nio.file.Path dir = recordDir;
-                if (recorder == null) {
-                    if (c == null || dir == null || !f.keyFrame()) continue; // a file starts at a key frame
-                    String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
-                    java.nio.file.Path file = dir.resolve("flight-" + stamp + ".mkv");
-                    de.droiddrone.pc.audio.AudioConfig sound = audioTrackForNewFile();
-                    recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
-                    recordFile = file;
-                    log("Recording to " + file + (sound == null ? "" : " (with the phone's sound when it sends it)"));
-                    tapOpen = true;
-                    tap(t -> t.fileStarted(file, c.hevc(), c.width(), c.height(), c.codecConfig()));
-                    if (sound != null) tap(t -> t.audioTrack(sound));
+                if (held != null) {
+                    if (f.arrivedMs() - held.get(0).arrivedMs() <= RECORD_HOLD_MS && held.size() < RECORD_QUEUE) {
+                        held.add(f);
+                        continue;
+                    }
+                    for (RecFrame h : held) recorder = write(recorder, h, fileConfig, r.dir); // no config came: as the decoder does
+                    held = null;
                 }
-                recorder.write(f.data(), f.keyFrame(), f.arrivedMs());
-                if (tapOpen) tap(t -> t.frame(f.data(), f.keyFrame(), f.arrivedMs()));
+                if (f.streamStart() && f.keyFrame() && !configCame) { // a restart whose config hasn't come: not into this file
+                    if (recorder != null) recorder.close();
+                    recorder = null;
+                    tapEnded();
+                    held = new java.util.ArrayList<>();
+                    held.add(f);
+                    continue;
+                }
+                if (recorder == null && !f.keyFrame()) {
+                    if (!askedForKey) requestKeyFrame(); // waiting for a key frame to start the file on
+                    askedForKey = true;
+                    continue;
+                }
+                boolean opening = recorder == null;
+                recorder = write(recorder, f, fileConfig, r.dir);
+                if (opening && recorder != null) {
+                    configCame = false;
+                    askedForKey = false;
+                }
             }
         } catch (InterruptedException ignored) {
         } catch (java.io.IOException | RuntimeException e) {
             log("Recording stopped: " + e.getMessage());
-            recordDir = null;
+            synchronized (this) {
+                if (recording == r) recording = null;
+            }
         } finally {
             if (recorder != null) recorder.close();
             tapEnded();
             recordFile = null;
         }
+    }
+
+    /**
+     * One frame into the file; at a key frame a file of config (null: the one in hand) is opened when none is.
+     * @return the file (null: none yet - not a key frame, or no config)
+     */
+    private StreamRecorder write(StreamRecorder recorder, RecFrame f, Config config, java.nio.file.Path dir) throws java.io.IOException {
+        if (recorder == null) {
+            Config c = config != null ? config : currentConfig;
+            if (c == null || !f.keyFrame()) return null; // a file starts at a key frame
+            java.nio.file.Path file = newFile(dir);
+            de.droiddrone.pc.audio.AudioConfig sound = audioTrackForNewFile();
+            recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
+            recordFile = file;
+            log("Recording to " + file + (sound == null ? "" : " (with the phone's sound when it sends it)"));
+            tapOpen = true;
+            tap(t -> t.fileStarted(file, c.hevc(), c.width(), c.height(), c.codecConfig()));
+            if (sound != null) tap(t -> t.audioTrack(sound));
+        }
+        recorder.write(f.data(), f.keyFrame(), f.arrivedMs());
+        if (tapOpen) tap(t -> t.frame(f.data(), f.keyFrame(), f.arrivedMs()));
+        return recorder;
+    }
+
+    /** flight-(date)_(time).mkv; a second file within the same second gets -2, -3 ... (it overwrote the first). */
+    static java.nio.file.Path newFile(java.nio.file.Path dir) {
+        String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+        java.nio.file.Path file = dir.resolve("flight-" + stamp + ".mkv");
+        for (int n = 2; java.nio.file.Files.exists(file); n++) file = dir.resolve("flight-" + stamp + "-" + n + ".mkv");
+        return file;
     }
 
     public boolean hasStream() {

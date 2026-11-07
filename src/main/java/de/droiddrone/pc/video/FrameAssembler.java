@@ -17,7 +17,8 @@ import java.util.Map;
  * released are dropped: on 4G packets can come reordered or twice, and a frame decoded out of turn smears the picture.
  * The phone numbers a restarted stream from 1, and its first frame is a key frame: key frame 1 starts afresh (but not
  * a late or doubled fragment of the key frame 1 just released, and after ORDER_RESET_MS without a frame the order is
- * forgotten).
+ * forgotten). A frame number passed over (the frame lost whole, every packet of it) counts as lost once a newer frame is
+ * released, so the pipeline asks for a key frame and the bitrate steps down (1.0.49).
  * <p>
  * Each fragment is copied once, straight into the frame-sized array the frame is handed over in (the offset-0 fragment
  * carries the size; the rare fragment that comes before it goes into a provisional array that grows). What came is
@@ -39,8 +40,22 @@ public class FrameAssembler {
     private static final int MAX_PENDING = 64;
     /** Frame numbers count 1..32767 and wrap; numbers within this distance behind a frame count as older. */
     private static final int ORDER_WINDOW = 1000;
-    /** Bigger than any frame the phone sends; a size from a broken packet beyond it is not allocated. */
-    static final int MAX_FRAME_BYTES = 8 << 20;
+    /**
+     * The largest frame that is plausible: the biggest picture the phone sends (1920x1080) raw - YUV 4:2:0, 1.5 bytes
+     * a pixel - and a little; no encoded frame is bigger. A broken packet claiming more is not allocated (1.0.49:
+     * before, any size up to 8 MB was, per frame number). Not from the stream's config: a restarted stream's key
+     * frame often comes before its config, and a bigger picture's would be dropped.
+     */
+    static final int PLAUSIBLE_FRAME_BYTES = 1920 * 1080 * 3 / 2 + (64 << 10);
+    /** What the frames being put together may hold in all; beyond it the oldest go (a flood of broken sizes). */
+    static final long PENDING_BUDGET = 4L * PLAUSIBLE_FRAME_BYTES;
+    /**
+     * A frame this far ahead of the last one released (plus MAX_FPS a second since it) can't be this stream's: a late
+     * frame of the stream before a restart. AHEAD_NEAR_OLD_STREAM for a number near where the old stream stood
+     * within ORDER_RESET_MS of the restart, else AHEAD_SLACK. Before 1.0.49 such a frame was released, and every
+     * frame of the new stream after it counted as older - the picture froze until ORDER_RESET_MS.
+     */
+    static final int MAX_FPS = 120, AHEAD_SLACK = 300, AHEAD_NEAR_OLD_STREAM = 30;
     /** The provisional array for fragments that come before the size is known: a start, and how it grows. */
     private static final int PROVISIONAL_BYTES = 16 << 10;
 
@@ -75,6 +90,16 @@ public class FrameAssembler {
     private boolean streamRestarted;
     /** The time of the last put, handed to the frames released by it (also the older ones flushed). */
     private long now;
+    /**
+     * The newest frame number accounted for: released, or counted lost (null: none since the order was last
+     * forgotten). The numbers between it and the next one accounted for never came whole: lost (1.0.49 - before,
+     * a frame lost with every packet of it was never counted, so no key frame was asked for: a one-packet P-frame at
+     * the low tiers left the picture smeared until the next scheduled key frame, 2-10 s).
+     */
+    private Short lastAccounted;
+    /** The old stream's last frame at a restart, and until when a frame near it is taken for one of it (see MAX_FPS). */
+    private short oldStreamLast;
+    private long oldStreamUntil;
 
     /**
      * The phone's packet payloads: the first carries FIRST_SEGMENT bytes of the frame, every later one SEGMENT (its
@@ -126,7 +151,7 @@ public class FrameAssembler {
             if (size > 0 && end > size) length = Math.max(0, size - offset); // beyond the frame: not the phone's; clipped
             if (data.length < offset + length) { // before the size is known: a provisional array that grows
                 int grown = Math.max(offset + length, Math.max(PROVISIONAL_BYTES, data.length * 2));
-                data = java.util.Arrays.copyOf(data, Math.min(grown, MAX_FRAME_BYTES + SEGMENT));
+                data = java.util.Arrays.copyOf(data, Math.min(grown, PLAUSIBLE_FRAME_BYTES + SEGMENT));
             }
             System.arraycopy(buf, bufOffset, data, offset, length);
             if (count == offsets.length) {
@@ -236,17 +261,21 @@ public class FrameAssembler {
     /** @param now when the fragment came (System.currentTimeMillis), kept on the frames it releases */
     public Frame put(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length, long now) {
         this.now = now;
-        if (offset < 0 || length < 0 || (offset == 0 && (frameSize <= 0 || frameSize > MAX_FRAME_BYTES))) return null;
-        if (offset > MAX_FRAME_BYTES) return null;
+        if (offset < 0 || length < 0 || (offset == 0 && (frameSize <= 0 || frameSize > PLAUSIBLE_FRAME_BYTES))) return null;
+        if (offset > PLAUSIBLE_FRAME_BYTES) return null;
         forgetOldOrder();
         boolean start = isStreamStart(keyFrame, frameNum) && !isFrameOneAgain(offset, frameSize, buf, dataOffset, length);
         if (start && lastReleased != null && lastReleased != 1) {
             pending.clear(); // the phone restarted its stream: the old one's leftovers are useless
+            oldStreamLast = lastReleased;
+            oldStreamUntil = now + ORDER_RESET_MS;
             lastReleased = null;
+            lastAccounted = null;
             frameOne = null;
             streamRestarted = true;
         }
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
+        if (!start && tooFarAhead(frameNum)) return null;
         if (offset == 0 && frameSize == length && !pending.containsKey(frameNum)) { // whole frame in one packet
             byte[] data = new byte[length];
             System.arraycopy(buf, dataOffset, data, 0, length);
@@ -256,7 +285,10 @@ public class FrameAssembler {
             return new Frame(data, keyFrame, frameNum, false, start, now);
         }
         Pending frame = pending(frameNum, keyFrame, start);
-        if (offset == 0) frame.setSize(frameSize);
+        if (offset == 0 && frame.size <= 0) {
+            frame.setSize(frameSize);
+            keepToBudget(frameNum);
+        }
         frame.put(offset, buf, dataOffset, length);
         return finish(frameNum, frame, keyFrame);
     }
@@ -271,11 +303,15 @@ public class FrameAssembler {
 
     public Frame putParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length, long now) {
         this.now = now;
-        if (frameSize <= 0 || frameSize > MAX_FRAME_BYTES || length <= 0) return null;
+        if (frameSize <= 0 || frameSize > PLAUSIBLE_FRAME_BYTES || length <= 0) return null;
         forgetOldOrder();
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
+        if (tooFarAhead(frameNum)) return null;
         Pending frame = pending(frameNum, keyFrame, isStreamStart(keyFrame, frameNum));
-        if (frame.size <= 0) frame.setSize(frameSize);
+        if (frame.size <= 0) {
+            frame.setSize(frameSize);
+            keepToBudget(frameNum);
+        }
         frame.parity = java.util.Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
         if (frame.recover()) recoveredFrames++;
         return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
@@ -288,11 +324,15 @@ public class FrameAssembler {
      */
     public Frame putParityGroup(boolean keyFrame, short frameNum, int frameSize, int group, byte[] buf, int dataOffset, int length, long now) {
         this.now = now;
-        if (frameSize <= 0 || frameSize > MAX_FRAME_BYTES || length <= 0 || group < 0 || group > 255) return null;
+        if (frameSize <= 0 || frameSize > PLAUSIBLE_FRAME_BYTES || length <= 0 || group < 0 || group > 255) return null;
         forgetOldOrder();
         if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
+        if (tooFarAhead(frameNum)) return null;
         Pending frame = pending(frameNum, keyFrame, isStreamStart(keyFrame, frameNum));
-        if (frame.size <= 0) frame.setSize(frameSize);
+        if (frame.size <= 0) {
+            frame.setSize(frameSize);
+            keepToBudget(frameNum);
+        }
         int groups = Math.max(group + 1, (frame.packets() + PARITY_GROUP - 1) / PARITY_GROUP);
         if (frame.groupParity == null) frame.groupParity = new byte[groups][];
         else if (frame.groupParity.length < groups) frame.groupParity = java.util.Arrays.copyOf(frame.groupParity, groups);
@@ -346,15 +386,55 @@ public class FrameAssembler {
     private void forgetOldOrder() {
         if (lastReleased != null && now > 0 && lastReleasedAt > 0 && now - lastReleasedAt > ORDER_RESET_MS) {
             lastReleased = null;
+            lastAccounted = null; // a blackout: the frames in it are not counted one by one (the gap asks for a key frame)
             frameOne = null;
         }
     }
 
-    /** The newest frame released (and when; a key frame 1 is kept, see frameOne). */
+    /**
+     * Far ahead of the last frame released a moment ago - further than the phone can have numbered since (see
+     * MAX_FPS): a late frame of the stream before a restart, dropped. Only with times (the receive path's puts).
+     */
+    private boolean tooFarAhead(short frameNum) {
+        if (lastReleased == null || now <= 0 || lastReleasedAt <= 0) return false;
+        int ahead = (frameNum - lastReleased + 32768) % 32768;
+        boolean nearOldStream = now < oldStreamUntil && Math.min((frameNum - oldStreamLast + 32768) % 32768,
+                (oldStreamLast - frameNum + 32768) % 32768) < AHEAD_SLACK;
+        long since = Math.max(0, now - lastReleasedAt);
+        return ahead > (nearOldStream ? AHEAD_NEAR_OLD_STREAM : AHEAD_SLACK) + since * MAX_FPS / 1000;
+    }
+
+    /** The newest frame released (and when; a key frame 1 is kept, see frameOne); the numbers skipped are lost. */
     private void released(short frameNum, boolean keyFrame, byte[] data) {
+        account(frameNum, false);
         lastReleased = frameNum;
         lastReleasedAt = now;
         if (keyFrame && frameNum == 1) frameOne = data;
+    }
+
+    /**
+     * Frame frameNum is released (lost = false) or lost: the numbers between the last one accounted for and it never
+     * came - lost, each. Nothing is counted twice: a number at or before the last one accounted for already was.
+     */
+    private void account(short frameNum, boolean lost) {
+        if (lastAccounted == null) {
+            if (lost) lostFrames++;
+            lastAccounted = frameNum;
+            return;
+        }
+        if (!isOlder(lastAccounted, frameNum)) return; // counted already (or out of the window: unknown)
+        lostFrames += skipped(lastAccounted, frameNum) + (lost ? 1 : 0);
+        lastAccounted = frameNum;
+    }
+
+    /**
+     * How many frame numbers lie between a and b (a older): the phone counts 1..32767 and wraps to 2 (pc.26; older
+     * apps to 1), so 0 and 1 are never in between when the counter wrapped.
+     */
+    static int skipped(short a, short b) {
+        int between = (b - a + 32768) % 32768 - 1;
+        if (b < a) between -= b > 1 ? 2 : 1; // wrapped: past 0 (and 1)
+        return Math.max(0, between);
     }
 
     private Frame finish(short frameNum, Pending frame, boolean keyFrame) {
@@ -395,7 +475,7 @@ public class FrameAssembler {
                 released(n, p.keyFrame, out.data());
                 flushed.add(out);
             } else {
-                lostFrames++;
+                account(n, true);
             }
         }
     }
@@ -408,6 +488,27 @@ public class FrameAssembler {
         return out;
     }
 
+    /** What the frames being put together hold now, bytes (tests). */
+    long pendingBytes() {
+        long held = 0;
+        for (Pending p : pending.values()) held += p.data.length;
+        return held;
+    }
+
+    /** Over PENDING_BUDGET in all: the oldest frames (not this one) go, lost. */
+    private void keepToBudget(short frameNum) {
+        while (pending.size() > 1) {
+            long held = 0;
+            for (Pending p : pending.values()) held += p.data.length;
+            if (held <= PENDING_BUDGET) return;
+            Short oldest = null;
+            for (short n : pending.keySet()) if (n != frameNum && (oldest == null || isOlder(n, oldest))) oldest = n;
+            if (oldest == null) return;
+            pending.remove(oldest);
+            account(oldest, true);
+        }
+    }
+
     private void dropOldest() {
         Short oldest = null;
         for (short n : pending.keySet()) {
@@ -415,7 +516,7 @@ public class FrameAssembler {
         }
         if (oldest != null) {
             pending.remove(oldest);
-            lostFrames++;
+            account(oldest, true);
         }
     }
 
@@ -433,6 +534,7 @@ public class FrameAssembler {
         pending.clear();
         flushed.clear();
         lastReleased = null;
+        lastAccounted = null;
         frameOne = null;
         streamRestarted = false;
     }

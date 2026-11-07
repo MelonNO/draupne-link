@@ -248,4 +248,36 @@ class MapViewTest {
         assertTrue(blue > near(before, 0x4fc3f7, 40) + 30, "the earlier flight's line: " + blue);
         assertTrue(yellow > near(before, Theme.WARN.getRGB() & 0xffffff, 40) + 40, "the flown drone's diamond and its name: " + yellow);
     }
+
+    /**
+     * H6 (1.0.49): the map is asked every 33 ms; it repaints when something changed (a new report, the heading), not
+     * every time - and the track it draws is taken in as it grows, not copied whole each paint.
+     */
+    @Test
+    void theMapRepaintsOnChangeOnly(@TempDir Path dir) {
+        int[] repaints = {0};
+        MapView map = new MapView(new TileCache(dir, "test", false)) {
+            @Override
+            public void repaint(long tm, int x, int y, int width, int height) {
+                repaints[0]++;
+            }
+        };
+        FlightTrack track = new FlightTrack(null);
+        long now = System.currentTimeMillis();
+        FcTelemetry.Gps a = fix(59.9139, 10.7522, now);
+        track.sample(a, true);
+        map.update(track, a, 45, false, true);
+        int after = repaints[0];
+        assertTrue(after >= 1, "the first report shows");
+        for (int i = 0; i < 20; i++) map.update(track, a, 45, false, true); // 20 refreshes, nothing new
+        assertEquals(after, repaints[0], "nothing changed: no repaint");
+        map.update(track, a, 50, false, true);
+        assertTrue(repaints[0] > after, "the heading turned");
+        after = repaints[0];
+        FcTelemetry.Gps b = fix(59.9149, 10.7542, now + 100);
+        track.sample(b, true);
+        map.update(track, b, 50, false, true);
+        assertTrue(repaints[0] > after, "a new report");
+        assertEquals(2, map.trackPath().taken(), "the line took in the new point only");
+    }
 }

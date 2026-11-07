@@ -90,6 +90,25 @@ class ObservationAudioTest {
         assertFalse(new VoiceActivity().frame(-55, 21.3, 0) || new VoiceActivity().frame(-55, 21.3, 21), "hiss under -50 dBFS never lights");
     }
 
+    /**
+     * L10: the REMOVE dropped from the full queue (here flooded behind it, the mix's thread stopped): the phone still
+     * leaves the mix, and its late frames are not taken in. Before 1.0.49 it stayed for good.
+     */
+    @Test
+    void aRemovedPhoneLeavesTheMixEvenWhenItsRemoveIsLost() throws Exception {
+        ObservationAudio audio = new ObservationAudio(() -> false, s -> { });
+        audio.close(); // the thread ends: nothing takes from the queue, the test plays its part
+        Thread.sleep(100);
+        int gone = audio.addSource(), stays = audio.addSource();
+        audio.removeSource(gone);
+        for (int i = 0; i < 600; i++) audio.onFrame(stays, new byte[10]); // the queue overflows: the REMOVE is pushed out
+        audio.onFrame(gone, new byte[10]);
+        assertFalse(audio.isReceiving(gone), "frames after the REMOVE are not taken");
+        audio.dropRemovedAndSilent(System.nanoTime());
+        assertEquals(1, audio.sourceCount());
+        assertTrue(audio.isReceiving(stays));
+    }
+
     @Test
     void silenceIsNeverSpeech() {
         VoiceActivity v = new VoiceActivity();

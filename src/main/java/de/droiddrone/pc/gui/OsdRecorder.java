@@ -42,6 +42,10 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
     static final int SOUND_QUEUE = 240;
 
     private static final Object END = new Object();
+    /** The app closes: the file in hand is closed and the thread ends (see finish). */
+    private static final Object FINISH = new Object();
+    /** finish() was called: the frames still waiting are left out, so the file closes at once. */
+    private volatile boolean finishing;
 
     /** What the screen shows, for this file: the OSD's figures as last painted, its layout, the picture's way round. */
     interface Source {
@@ -148,6 +152,30 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
         }
     }
 
+    /**
+     * The app closes (1.0.49): what is waiting is left out, the file is closed - its end written, so it is whole - and
+     * the thread ends; waits up to ms for that. Before, the app exited with the file still open: a daemon thread at
+     * the lowest priority, often seconds behind.
+     */
+    void finish(long ms) {
+        Thread t;
+        synchronized (this) {
+            t = thread;
+            thread = null;
+            if (t == null || !t.isAlive()) return;
+            finishing = true;
+            if (!queue.offer(FINISH)) {
+                queue.clear();
+                queue.offer(FINISH);
+            }
+        }
+        try {
+            t.join(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     // ------------------------------------------------------------------ its own thread
 
     private VideoDecoder decoder;
@@ -170,6 +198,12 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
                 close();
                 return;
             }
+            if (item == FINISH) {
+                close();
+                finishing = false;
+                return;
+            }
+            if (finishing && item instanceof Frame) continue;
             try {
                 if (item instanceof Start s) {
                     close();

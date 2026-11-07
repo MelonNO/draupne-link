@@ -84,16 +84,41 @@ final class Theme {
     }
 
     static Font font(int style, float size) {
-        return new Font(TEXT_FONT, style, 12).deriveFont(size);
+        return cached(0, style, size, () -> new Font(TEXT_FONT, style, 12).deriveFont(size));
     }
 
     /** Uppercase, condensed, widely spaced - stencil-like headings. */
     static Font headingFont(float size) {
-        return new Font(HEADING_FONT, Font.BOLD, 12).deriveFont(size).deriveFont(Map.of(TextAttribute.TRACKING, 0.08f));
+        return cached(1, Font.BOLD, size, () -> new Font(HEADING_FONT, Font.BOLD, 12).deriveFont(size).deriveFont(Map.of(TextAttribute.TRACKING, 0.08f)));
     }
 
     static Font monoFont(int style, float size) {
-        return new Font(MONO_FONT, style, 12).deriveFont(size);
+        return cached(2, style, size, () -> new Font(MONO_FONT, style, 12).deriveFont(size));
+    }
+
+    /**
+     * The fonts made so far, by family, style and size (1.0.49): the OSD asked for about 30 new ones every paint, 30+
+     * times a second, and the map for its own. Fonts never change once made. The newest FONT_CACHE kept (a window
+     * being resized makes a new OSD size at every step).
+     */
+    static final int FONT_CACHE = 256;
+    private static final Map<Long, Font> FONTS_MADE = new java.util.LinkedHashMap<>(64, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Long, Font> eldest) {
+            return size() > FONT_CACHE;
+        }
+    };
+
+    private static Font cached(int family, int style, float size, java.util.function.Supplier<Font> make) {
+        long key = ((long) family << 40) | ((long) (style & 0xff) << 32) | (Float.floatToIntBits(size) & 0xffffffffL);
+        synchronized (FONTS_MADE) {
+            Font f = FONTS_MADE.get(key);
+            if (f == null) {
+                f = make.get();
+                FONTS_MADE.put(key, f);
+            }
+            return f;
+        }
     }
 
     static JLabel label(String text, Font font, Color color) {
