@@ -209,6 +209,8 @@ public final class FleetPanel {
             head.add(state, BorderLayout.CENTER);
             JPanel headButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
             Theme.transparent(headButtons);
+            headButtons.add(button("Place phone", "Put this drone somewhere else: click the spot on a map (disarmed only)",
+                    () -> PlacePhoneDialog.open(frame, fleet, drone, FleetPanel.this::appendLog)));
             headButtons.add(button("Rename", "Another DRAUPNE name (MobileXxx) - DRAUPNE Link files it at its next scan", this::rename));
             headButtons.add(button("Remove", "This drone stops and leaves the fleet", () -> {
                 fleet.remove(drone);

@@ -1544,6 +1544,15 @@ public final class VirtualDrone {
         return name;
     }
 
+    /** Where it is now, {lat, lon} (PLACE PHONE's map). */
+    public double[] position() {
+        return new double[]{fc.latDeg(), fc.lonDeg()};
+    }
+
+    public boolean isArmed() {
+        return fc.isArmed();
+    }
+
     public int slot() {
         return slot;
     }
