@@ -2,6 +2,17 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.50
+
+PC app only; the phone app stays DRAUPNE Flight 2.3.0-pc.38.
+
+- **The virtual fleet: try DRAUPNE Link without any hardware.** Start `"DRAUPNE Link.exe" fleet` (or `Virtual fleet.bat` next to the exe; from source `gradlew run --args=fleet`) and several virtual drones appear in DRAUPNE Link's PHONE list, so the window, the map, OBSERVATION and OVERWATCH can be tried on one PC. DRAUPNE Link looks for them only while the fleet runs (it announces itself in `%APPDATA%\DraupneLink\virtual-fleet.txt`, loopback addresses only), so nothing changes for real drones.
+- Virtual drones speak the real phone protocol and fly like Betaflight: arm on AUX1 with the throttle low, ANGLE on AUX2, a draining 4S pack, the RX-loss failsafe (drop or land).
+- Their camera is a drawn horizon with the drone's name and a clock, or an old flight of yours looped (with its track, if the CSV is beside it); their microphone has wind, motors and now and then a voice.
+- The fleet window plays the bad days: 4G loss, a weak link (loss, jitter, bunching), a cell handover, flight controller lost, phone app restart; and overwatch and observation: a walker, vehicle or light crossing the picture for motion detection, an overwatch alert with pre-roll, live preview and clip, standby / deep sleep / wake and check-ins, voices for the speaking highlight.
+- A virtual drone is always marked VIRTUAL (PHONE list, a yellow tag on the video, the maps, its picture) and is never saved to the name map.
+- Tests: 696, among them a virtual drone against DRAUPNE Link's real link, video pipeline and overwatch hub end to end.
+
 ## 1.0.49
 
 The fix round from the full review of 1.0.48 (phone app 2.3.0-pc.38): every finding fixed, safety around arming first. Nothing of 1.0.44 - 1.0.49 has run on a phone, a flight controller or a drone yet: bench-test before flying (the bench plan in HANDOFF).
