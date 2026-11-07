@@ -18,6 +18,8 @@ import java.util.function.Consumer;
  * software on that thread, the OSD painted with the figures the screen painted last, OpenH264 on that thread too - so
  * nothing of it runs beside the live video's own threads, and the live picture never waits for it. Behind (a slow
  * PC): pictures are left out of this file (never out of the raw one); far behind: frames up to the next key frame.
+ * 1.0.45: the raw file's sound goes in too, the same frames at the same timestamps, through a queue of its own (the
+ * frame queue's length says how far behind the pictures are).
  */
 final class OsdRecorder implements VideoPipeline.RecordingTap {
     /** About three seconds of frames waiting; more and frames are dropped up to the next key frame. */
@@ -30,6 +32,14 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
     private record Start(Path rawFile, boolean hevc, int width, int height, byte[] codecConfig) {}
 
     private record Frame(byte[] data, boolean keyFrame, long arrivedMs) {}
+
+    private record Sound(byte[] data, long ptsMs) {}
+
+    /** The file just started has a sound track of this stream: in the frame queue, so it comes after its Start. */
+    private record Track(de.droiddrone.pc.audio.AudioConfig config) {}
+
+    /** The sound waiting for the file: about 5 s; more and the oldest go. */
+    static final int SOUND_QUEUE = 240;
 
     private static final Object END = new Object();
 
@@ -63,6 +73,7 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
     private final Source view;
     private final Consumer<String> log;
     private final LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<>(QUEUE);
+    private final java.util.concurrent.ArrayBlockingQueue<Sound> sound = new java.util.concurrent.ArrayBlockingQueue<>(SOUND_QUEUE);
     private volatile boolean dropping; // the queue overflowed: frames left out up to the next key frame
     private Thread thread;
 
@@ -97,6 +108,7 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
         }
         view.recording(true);
         dropping = false;
+        sound.clear();
         Start s = new Start(rawFile, hevc, width, height, codecConfig == null ? null : codecConfig.clone());
         if (!queue.offer(s)) { // far behind with the last file: that one ends here
             queue.clear();
@@ -115,6 +127,19 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
     }
 
     @Override
+    public void audioTrack(de.droiddrone.pc.audio.AudioConfig config) {
+        queue.offer(new Track(config)); // full: this file goes without sound, the next one has it
+    }
+
+    @Override
+    public void audio(byte[] data, long ptsMs) {
+        if (!sound.offer(new Sound(data, ptsMs))) {
+            sound.poll();
+            sound.offer(new Sound(data, ptsMs));
+        }
+    }
+
+    @Override
     public void fileEnded() {
         view.recording(false);
         if (!queue.offer(END)) {
@@ -128,6 +153,8 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
     private VideoDecoder decoder;
     private OsdVideoWriter writer;
     private Path file;
+    /** This file's sound track (Track, right after its Start); null = none. */
+    private de.droiddrone.pc.audio.AudioConfig audioTrack;
     private boolean failed;
     private long firstMs = -1;
     private long left, written;
@@ -150,11 +177,15 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
                     failed = false;
                     firstMs = -1;
                     left = written = 0;
+                    audioTrack = null;
                     decoder = VideoDecoder.oneThread(s.hevc(), s.codecConfig());
+                } else if (item instanceof Track t) {
+                    if (writer == null) audioTrack = t.config();
                 } else if (item == END) {
                     close();
                 } else if (item instanceof Frame f && decoder != null && !failed) {
                     if (firstMs < 0) firstMs = f.arrivedMs(); // the raw file's first key frame: the same clock
+                    writeSound(); // with every frame, the pictures left out too
                     if (!decoder.decode(f.data(), f.data().length)) continue;
                     if (queue.size() > BEHIND) { // behind: this picture is left out, the next ones keep up
                         left++;
@@ -175,7 +206,7 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
         int w = size[0], h = size[1];
         if (w <= 0 || h <= 0) return;
         if (writer == null) {
-            writer = new OsdVideoWriter(file, w, h, 30);
+            writer = new OsdVideoWriter(file, w, h, 30, audioTrack);
             canvas = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
             log.accept("Recording with the OSD to " + file + " (" + w + "x" + h + ", " + writer.codecName() + ").");
         }
@@ -203,6 +234,14 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
         }
         writer.write(out, ptsMs);
         written++;
+    }
+
+    /** The sound that came meanwhile; before the first picture there is no file yet, and it goes. */
+    private void writeSound() throws java.io.IOException {
+        Sound s;
+        while ((s = sound.poll()) != null) {
+            if (writer != null) writer.writeAudio(s.data(), s.ptsMs());
+        }
     }
 
     private void closeWriter() {

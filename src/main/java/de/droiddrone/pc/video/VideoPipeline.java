@@ -118,9 +118,17 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     // recording: frames go to their own thread through a queue, so the receive thread never waits for the disk
     private record RecFrame(byte[] data, boolean keyFrame, long arrivedMs) {}
+    /** One frame of the live audio (1.0.45), of the stream config describes. */
+    private record RecAudio(de.droiddrone.pc.audio.AudioConfig config, byte[] data, long arrivedMs) {}
     private static final Object REC_STOP = new Object();
     private static final Object REC_NEW_FILE = new Object();
-    private final LinkedBlockingQueue<Object> recordQueue = new LinkedBlockingQueue<>(240);
+    /** About 3 s of video and its sound (47 AAC frames a second beside 30 pictures). */
+    private final LinkedBlockingQueue<Object> recordQueue = new LinkedBlockingQueue<>(480);
+    /**
+     * The live audio's config as last seen (1.0.45); a file started while it is known gets a sound track of it, and
+     * one started before it came gets the pc.34 phone's (AudioConfig.DEFAULT) when the phone can send sound.
+     */
+    private volatile de.droiddrone.pc.audio.AudioConfig recordAudioConfig;
     private volatile java.nio.file.Path recordDir; // null = not recording
     private volatile java.nio.file.Path recordFile;
     private Thread recordThread;
@@ -134,6 +142,14 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         void fileStarted(java.nio.file.Path rawFile, boolean hevc, int width, int height, byte[] codecConfig);
 
         void frame(byte[] data, boolean keyFrame, long arrivedMs);
+
+        /** The raw file has a sound track of this stream (1.0.45): called right after fileStarted, or never. */
+        default void audioTrack(de.droiddrone.pc.audio.AudioConfig config) {
+        }
+
+        /** One AAC frame of the sound at its timestamp in the raw file (ms, the frames' clock). */
+        default void audio(byte[] data, long ptsMs) {
+        }
 
         /** The raw file was closed (recording stopped, or a new file for a restarted stream). */
         void fileEnded();
@@ -820,6 +836,25 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         return recordDir != null;
     }
 
+    /** The live audio's stream config (link threads): files started from now on declare their sound track with it. */
+    public void recordAudioConfig(de.droiddrone.pc.audio.AudioConfig config) {
+        recordAudioConfig = config;
+    }
+
+    /** One frame of the live audio (link threads): into the recording, if one runs. Never waits. */
+    public void recordAudio(de.droiddrone.pc.audio.AudioConfig config, byte[] data, long arrivedMs) {
+        if (recordDir != null) recordQueue.offer(new RecAudio(config, data, arrivedMs)); // full: the frames come first
+    }
+
+    /** The sound track a file starting now gets: the stream's, the pc.34 default before it came, or none. */
+    private de.droiddrone.pc.audio.AudioConfig audioTrackForNewFile() {
+        de.droiddrone.pc.audio.AudioConfig c = recordAudioConfig;
+        if (c != null) return c;
+        ControlLink l = link;
+        boolean canSend = l != null && l.getTelemetry().getPhonePcBuild() >= ControlLink.AUDIO_MIN_PC_BUILD;
+        return canSend ? de.droiddrone.pc.audio.AudioConfig.DEFAULT : null;
+    }
+
     /** The file being written, or null (none yet: waiting for the stream / its first key frame). */
     public java.nio.file.Path recordingFile() {
         return recordFile;
@@ -859,6 +894,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     if (recorder != null) recorder.writeOsd(row);
                     continue;
                 }
+                if (item instanceof RecAudio a) {
+                    long pts = recorder == null ? -1 : recorder.writeAudio(a.data(), a.config(), a.arrivedMs());
+                    if (pts >= 0 && tapOpen) tap(t -> t.audio(a.data(), pts));
+                    continue;
+                }
                 RecFrame f = (RecFrame) item;
                 Config c = currentConfig;
                 java.nio.file.Path dir = recordDir;
@@ -866,11 +906,13 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     if (c == null || dir == null || !f.keyFrame()) continue; // a file starts at a key frame
                     String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
                     java.nio.file.Path file = dir.resolve("flight-" + stamp + ".mkv");
-                    recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig());
+                    de.droiddrone.pc.audio.AudioConfig sound = audioTrackForNewFile();
+                    recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
                     recordFile = file;
-                    log("Recording to " + file);
+                    log("Recording to " + file + (sound == null ? "" : " (with the phone's sound when it sends it)"));
                     tapOpen = true;
                     tap(t -> t.fileStarted(file, c.hevc(), c.width(), c.height(), c.codecConfig()));
+                    if (sound != null) tap(t -> t.audioTrack(sound));
                 }
                 recorder.write(f.data(), f.keyFrame(), f.arrivedMs());
                 if (tapOpen) tap(t -> t.frame(f.data(), f.keyFrame(), f.arrivedMs()));

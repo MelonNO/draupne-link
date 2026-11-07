@@ -40,6 +40,8 @@
  *  opening; key frames in bad coverage mode go at about the bitrate; each frame keeps its own number; the encoder's
  *  flags are read as bits; all telemetry waiting goes out each tick (one MSP record per tick fell behind); the
  *  name answer goes out from the answer thread.
+ *  pc.34: live audio for the PC (PcAudio, AUDIO 0x79): the microphone streams while the PC asks and the FC reads
+ *  DISARMED (audioGateRun); PHONE_STATE says whether it is on, held back or failed.
  */
 
 package de.droiddrone.flight;
@@ -60,6 +62,7 @@ import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.Log;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
+import de.droiddrone.common.PcAudio;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
 import de.droiddrone.common.SettingsCommon;
@@ -130,6 +133,20 @@ public class Udp {
      */
     static final byte IdleSticks = 0x78;
     private static volatile short[] idleSticks;
+    /**
+     * pc.34: the live audio for DRAUPNE Link 1.0.45 (PcAudio: AUDIO [0x79], again every second from the PC). The
+     * microphone streams while the PC asks and the FC reads DISARMED - never in the air. audioGateRun decides every
+     * AUDIO_GATE_MS; audioAllowed stops the sending at once (audioSenderRun reads it before each frame), the encoder
+     * and microphone follow on the videoStarter thread.
+     */
+    private final PcAudio pcAudio = new PcAudio();
+    private volatile boolean audioAllowed, audioHeld, audioFailed;
+    /** A start or stop of the audio is waiting on the videoStarter thread: no second one meanwhile. */
+    private volatile boolean audioTaskQueued;
+    private long lastAudioStartMs;
+    static final long AUDIO_GATE_MS = 50;
+    /** A start that gave nothing (no microphone, no AAC encoder) is tried again this much later. */
+    static final long AUDIO_RETRY_MS = 2000;
     /** No stick frame for this long and the drone known disarmed since: the idle sticks go to Betaflight. */
     static final long IDLE_AFTER_MS = 300;
     /** Their rate: Betaflight counts MSP sticks lost after 100 ms without one (rx.c), so 20 a second leaves room. */
@@ -421,6 +438,10 @@ public class Udp {
             idleThread.setDaemon(true);
             idleThread.setName("idleSticksThread");
             idleThread.start();
+            Thread audioGate = new Thread(audioGateRun);
+            audioGate.setDaemon(true);
+            audioGate.setName("audioGateThread");
+            audioGate.start();
             // DRAUPNE Link: no rcThread any more - stick frames go to the flight controller from the receive thread
             // (handleRcFrame), which runs at MAX_PRIORITY like the serial writer that takes them
             return true;
@@ -646,6 +667,65 @@ public class Udp {
                     return;
                 } catch (Exception e) {
                     log("Idle sticks error: " + e);
+                }
+            }
+        }
+    };
+
+    /**
+     * pc.34: the live audio's gate, every AUDIO_GATE_MS. Allowed while PcAudio says so (the PC asked within the last 3
+     * s, the FC reads DISARMED in a fresh status - unknown counts as armed - and the phone is in normal power mode) and
+     * a PC is connected. An ARMED status ends the sending within this tick; the encoder and the microphone are started
+     * and stopped on the videoStarter thread, in turn with the camera's own starts and stops (the video restart path
+     * closes the audio with the camera; it starts again from here).
+     */
+    private final Runnable audioGateRun = new Runnable() {
+        public void run() {
+            final int id = udpThreadsId;
+            while (id == udpThreadsId) {
+                try {
+                    Thread.sleep(AUDIO_GATE_MS);
+                    long now = System.currentTimeMillis();
+                    boolean wanted = pcAudio.wanted(now);
+                    boolean disarmed = wanted && FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
+                    boolean allow = isConnected() && pcAudio.allowed(now, disarmed, PowerMode.mode() == PowerMode.NORMAL);
+                    if (allow != audioAllowed) {
+                        log(allow ? "Live audio to the PC: on" : "Live audio to the PC: off"
+                                + (wanted && !disarmed ? " (the FC is not known disarmed)" : ""));
+                    }
+                    audioAllowed = allow;
+                    audioHeld = wanted && !allow;
+                    if (audioTaskQueued) continue;
+                    boolean sending = streamEncoder.isAudioSending();
+                    if (allow && !sending && now - lastAudioStartMs >= AUDIO_RETRY_MS) {
+                        lastAudioStartMs = now;
+                        final int bitRate = pcAudio.bitRate();
+                        audioTaskQueued = true;
+                        videoStarter.execute(() -> {
+                            try {
+                                if (!audioAllowed) return;
+                                startAudioStream(bitRate);
+                                audioFailed = !streamEncoder.isAudioSending();
+                                if (audioFailed) log("Live audio: the microphone or the AAC encoder didn't start");
+                            } finally {
+                                audioTaskQueued = false;
+                            }
+                        });
+                    } else if (!allow && sending) {
+                        audioTaskQueued = true;
+                        videoStarter.execute(() -> {
+                            try {
+                                if (!audioAllowed && streamEncoder.isAudioSending()) stopAudioStream();
+                            } finally {
+                                audioTaskQueued = false;
+                            }
+                        });
+                    }
+                    if (!allow) audioFailed = false;
+                } catch (InterruptedException e) {
+                    return;
+                } catch (Exception e) {
+                    log("Audio gate error: " + e);
                 }
             }
         }
@@ -928,10 +1008,15 @@ public class Udp {
     }
 
     private void startAudioStream(){
+        startAudioStream(config.getAudioStreamBitrate());
+    }
+
+    /** pc.34: at the bitrate the PC's AUDIO asked for (upstream's Control app sets it in its config). */
+    private void startAudioStream(int bitRate){
         if (isAudioStarting) return;
         isAudioStarting = true;
         if (streamEncoder.isAudioSending()){
-            if (streamEncoder.getAudioBitRate() == config.getAudioStreamBitrate()) {
+            if (streamEncoder.getAudioBitRate() == bitRate) {
                 sendAudioInitialFrame(audioInitialFrame);
                 isAudioStarting = false;
                 return;
@@ -941,7 +1026,7 @@ public class Udp {
         }
         audioSenderThreadId++;
         audioInitialFrame = null;
-        streamEncoder.startAudioEncoder();
+        streamEncoder.startAudioEncoder(bitRate);
         if (streamEncoder.isAudioSending()){
             Thread audioSenderThread = new Thread(audioSenderRun);
             audioSenderThread.setDaemon(false);
@@ -1030,6 +1115,9 @@ public class Udp {
         Camera camera = cameraManager.getCamera();
         if (camera != null && camera.isOpened(config.getCameraId())) flags |= PcLinkStats.STATE_CAMERA_OPEN;
         if (videoRestarting) flags |= PcLinkStats.STATE_VIDEO_RESTARTING;
+        if (audioAllowed && streamEncoder.isAudioSending()) flags |= PcLinkStats.STATE_AUDIO_ON;
+        if (audioHeld) flags |= PcLinkStats.STATE_AUDIO_HELD;
+        if (audioFailed) flags |= PcLinkStats.STATE_AUDIO_FAILED;
         return flags;
     }
 
@@ -1082,7 +1170,16 @@ public class Udp {
             case UdpCommon.GetVideoConfig:
             {
                 sendVideoInitialFrame(null);
-                if (config.isSendAudioStream()) sendAudioInitialFrame(null);
+                if (config.isSendAudioStream() || streamEncoder.isAudioSending()) sendAudioInitialFrame(null);
+                break;
+            }
+            case PcAudio.PACKET:
+            {
+                // pc.34: [0x79][on u8][kbps u8][flags u8] from DRAUPNE Link 1.0.45, again every second; audioGateRun
+                // acts on it. Flags bit 0: the PC missed the stream's config - sent again
+                PcAudio.Request r = PcAudio.decode(packet.data, packet.data.length);
+                pcAudio.onRequest(r, System.currentTimeMillis());
+                if (r != null && r.resendConfig && streamEncoder.isAudioSending()) sendAudioInitialFrame(null);
                 break;
             }
             case VIDEO_PROFILE:
@@ -1244,6 +1341,7 @@ public class Udp {
                 // stop stream when controller disconnected - on the videoStarter thread (the camera and muxer take
                 // their time to close, and this thread delivers the PC's packets)
                 videoInitialFrame = null;
+                pcAudio.forget(); // pc.34: the microphone too (the stop below closes it)
                 videoStarter.execute(this::stopAudioVideo);
                 break;
             }
@@ -1499,7 +1597,9 @@ public class Udp {
             log("Audio sender thread is running");
             while (id == audioSenderThreadId && streamEncoder != null && streamEncoder.isAudioSending()) {
                 try {
-                    if (!config.isSendAudioStream()){
+                    // pc.34: a stream for DRAUPNE Link's AUDIO runs while its gate allows it (upstream's Control
+                    // app sets sendAudioStream instead, which DRAUPNE Link leaves off)
+                    if (!config.isSendAudioStream() && !pcAudio.wanted(System.currentTimeMillis())){
                         streamEncoder.stopAudioEncoder();
                         break;
                     }
@@ -1507,8 +1607,8 @@ public class Udp {
                     if (buf == null) continue;
                     if (buf.flags == MediaCodec.BUFFER_FLAG_CODEC_CONFIG) {
                         sendAudioInitialFrame(buf.data);
-                    } else {
-                        sendAudioFrame(buf.data);
+                    } else if (audioAllowed || config.isSendAudioStream()) {
+                        sendAudioFrame(buf.data); // pc.34: not one frame once the gate says no (armed)
                     }
                 } catch (Exception e) {
                     // do nothing

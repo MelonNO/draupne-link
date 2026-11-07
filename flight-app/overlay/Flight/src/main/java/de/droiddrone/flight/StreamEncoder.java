@@ -19,6 +19,8 @@
  *  a full output queue is cut back to its newest key frame instead of losing its oldest frame (which was the key
  *  frame everything after it needs).
  *  pc.31: the queue's cut reads the buffer flags as bits.
+ *  pc.34: the audio for DRAUPNE Link's live sound - at the PC's bitrate, whatever the video's (upstream encoded it
+ *  only at 2 Mbit/s and up), through a high-pass filter against wind and handling rumble.
  */
 
 package de.droiddrone.flight;
@@ -181,8 +183,13 @@ public class StreamEncoder {
     }
 
     public void startAudioEncoder(){
-        audioBitRate = config.getAudioStreamBitrate();
+        startAudioEncoder(config.getAudioStreamBitrate());
+    }
+
+    public void startAudioEncoder(int bitRate){
+        audioBitRate = bitRate;
         isAudioSending = false;
+        highPass = null; // a new stream: the filter starts from rest
         audioThreadId++;
         audioOutputBuffer.clear();
         if (!audioSource.initialize(MediaCommon.streamAudioConsumerId)){
@@ -240,7 +247,7 @@ public class StreamEncoder {
             while (isAudioSending && id == audioThreadId) {
                 try {
                     byte[] buf = audioSource.getBufferData(MediaCommon.streamAudioConsumerId);
-                    if (buf != null && getTargetBitRate() >= 2000000) offerAudioEncoder(buf);
+                    if (buf != null) offerAudioEncoder(highPass(buf.clone())); // a copy: the phone's own recording may hold the same buffer
                     checkAudioEncoderOutput();
                 } catch (Exception e) {
                     log("audioStreamRunnable error: " + e);
@@ -248,6 +255,38 @@ public class StreamEncoder {
             }
         }
     };
+
+    /** pc.34: the high-pass filter's corner: under it is wind on the microphone and the frame's rumble, not speech. */
+    static final double HIGH_PASS_HZ = 120;
+    /** Per channel: the last input and output sample (audio thread only); null = start from rest. */
+    private float[] highPass;
+
+    /**
+     * pc.34: a first-order high-pass filter, in place, on 16-bit little-endian PCM (interleaved when stereo): y[n] =
+     * a * (y[n-1] + x[n] - x[n-1]). Wind noise is mostly under 100-150 Hz and fills the AAC encoder's few bits with
+     * rumble; one multiply and two adds a sample.
+     */
+    private byte[] highPass(byte[] pcm) {
+        AudioFormat format = audioSource.getAudioFormat();
+        if (format == null || format.getEncoding() != AudioFormat.ENCODING_PCM_16BIT) return pcm;
+        int channels = Math.max(1, format.getChannelCount());
+        if (highPass == null || highPass.length != channels * 2) highPass = new float[channels * 2];
+        double rc = 1 / (2 * Math.PI * HIGH_PASS_HZ);
+        float a = (float) (rc / (rc + 1.0 / format.getSampleRate()));
+        float[] st = highPass;
+        for (int i = 0, c = 0; i + 1 < pcm.length; i += 2, c = (c + 1) % channels) {
+            float x = (short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8));
+            float y = a * (st[2 * c + 1] + x - st[2 * c]);
+            st[2 * c] = x;
+            st[2 * c + 1] = y;
+            int v = Math.round(y);
+            if (v > Short.MAX_VALUE) v = Short.MAX_VALUE;
+            if (v < Short.MIN_VALUE) v = Short.MIN_VALUE;
+            pcm[i] = (byte) v;
+            pcm[i + 1] = (byte) (v >> 8);
+        }
+        return pcm;
+    }
 
     private void offerAudioEncoder(byte[] buf) {
         if (audioEncoder == null) return;

@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.45
+
+- **Live sound from the phone's microphone, phone app 2.3.0-pc.34** (`audio.LiveAudio`, `PcAudio`): while the drone is disarmed and the PC is connected, the phone streams its microphone (AAC-LC, 48 kHz mono, 48 kbit/s - about 60 kbit/s on the link) and the PC plays it on the default sound device: FFmpeg's AAC decoder, a 200 ms jitter buffer (back to 200 ms when it passes 450), all on one thread at the lowest priority - nothing of it on the stick, video or Swing threads. The phone stops sending within one status reading of the flight controller saying ARMED (or its state going unknown) and starts again at the disarm, so the uplink in the air carries what it did before. A high-pass filter on the phone (120 Hz, first order) keeps wind rumble out. The PC asks with `AUDIO` 0x79 once a second (`[on][kbps][flags]`); an older phone app is never asked, and the log and the button's tooltip say the sound needs pc.34.
+- **MUTE button** (the filled loudspeaker under BEEPER; yellow with a cross when muted) **and the M key**: silent at once; after 10 s muted the PC tells the phone to stop sending (data and battery), unmuting starts it again in about half a second. Remembered per phone (`audio.muted.<phone>`). Alert beeps lower the stream while they play.
+- **Spectators hear the pilot's sound** (relayed like the video, the config in the join snapshot), each with their own MUTE.
+- **Recordings carry the sound**: the raw `flight-....mkv` and the `-osd.mkv` get an AAC track (the phone's frames copied, timestamps counted from their arrival - `AudioPts`), declared when the stream's config is known or the phone is pc.34+; the muxer waits at most 1 s for the other track.
+
 ## 1.0.44
 
 - **The GPS goes on one UART only, with Betaflight 2025.12 too** (`GpsSetup`): 2025.12's CLI lists the ports by name (`serial UART3 2 ...`, its own ids 51-60 for UART1-10); the app understood none of those lines, so a GPS on another port was never taken off it, and the chosen port was written by number with default baud rates and nothing else on it - which is how VTX Tramp and the ESC sensor came off UART1 and UART6 of the pilot's F722. Now both layouts are read, every port is written back named as the CLI named it, the GPS comes off every other port (only its bit: what else that port does stays).

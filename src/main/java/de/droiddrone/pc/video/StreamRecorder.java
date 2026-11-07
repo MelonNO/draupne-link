@@ -7,6 +7,8 @@ import org.bytedeco.ffmpeg.avformat.AVIOContext;
 import org.bytedeco.ffmpeg.avformat.AVStream;
 import org.bytedeco.ffmpeg.avutil.AVDictionary;
 import org.bytedeco.javacpp.BytePointer;
+import de.droiddrone.pc.audio.AudioConfig;
+import de.droiddrone.pc.audio.AudioPts;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -19,11 +21,17 @@ import static org.bytedeco.ffmpeg.global.avutil.*;
  * Writes the video exactly as it came from the phone into an MKV file: the frames are copied (remuxed), not encoded
  * again - no quality lost, next to no CPU. MKV rather than MP4 because a file cut short (a crash, the PC switched off)
  * still plays. Starts at the first key frame; timestamps are arrival times. Not thread-safe: one writer thread.
+ * 1.0.45: the phone's live audio as a second track (AAC, copied as it came), when the stream may have sound.
  */
 public final class StreamRecorder implements AutoCloseable {
     private final AVFormatContext oc;
     private final AVPacket pkt = av_packet_alloc();
     private AVStream stream;
+    /** The sound's track and the config it was declared with; null = a file without sound. */
+    private AVStream audioStream;
+    private AudioConfig audio;
+    private AudioPts audioPts;
+    private long audioFrames;
     private boolean started; // the first key frame is in
     private long firstMs;
     private long lastMs = -1;
@@ -35,7 +43,13 @@ public final class StreamRecorder implements AutoCloseable {
 
     /** @param codecConfig the stream's VPS/SPS/PPS as the phone sends them (Annex B) */
     public StreamRecorder(Path file, boolean hevc, int width, int height, byte[] codecConfig) throws IOException {
+        this(file, hevc, width, height, codecConfig, null);
+    }
+
+    /** @param audio the live audio's track (1.0.45), or null for a file without sound */
+    public StreamRecorder(Path file, boolean hevc, int width, int height, byte[] codecConfig, AudioConfig audio) throws IOException {
         this.file = file;
+        this.audio = audio;
         AVFormatContext ctx = new AVFormatContext(null);
         check(avformat_alloc_output_context2(ctx, null, "matroska", file.toString()), "create " + file);
         oc = ctx;
@@ -64,6 +78,11 @@ public final class StreamRecorder implements AutoCloseable {
             par.extradata_size(codecConfig.length);
         }
         stream.time_base(av_make_q(1, 1000));
+        if (audio != null) {
+            audioStream = addAacStream(oc, audio);
+            if (audioStream == null) throw new IOException("Recording: no audio track");
+            audioPts = new AudioPts(audio.frameMs());
+        }
         AVIOContext pb = new AVIOContext(null);
         check(avio_open(pb, file.toString(), AVIO_FLAG_WRITE), "open " + file);
         oc.pb(pb);
@@ -94,6 +113,71 @@ public final class StreamRecorder implements AutoCloseable {
 
     public long frames() {
         return frames;
+    }
+
+    /**
+     * An AAC track (1.0.45) on oc, before its header is written: the phone's frames go in as they came. Its packets'
+     * timestamps are ms. The muxer holds packets back to interleave the tracks, for as long as one track has none -
+     * the sound stops while the drone is armed - so it is told to wait at most 1 s: the file on disk at most that much
+     * behind, not up to 10 s (FFmpeg's default).
+     */
+    static AVStream addAacStream(AVFormatContext oc, AudioConfig audio) {
+        AVStream st = avformat_new_stream(oc, null);
+        if (st == null) return null;
+        AVCodecParameters par = st.codecpar();
+        par.codec_type(AVMEDIA_TYPE_AUDIO);
+        par.codec_id(AV_CODEC_ID_AAC);
+        par.sample_rate(audio.sampleRate());
+        av_channel_layout_default(par.ch_layout(), audio.channels());
+        par.frame_size(AudioConfig.SAMPLES_PER_FRAME);
+        byte[] asc = audio.asc();
+        if (asc != null && asc.length > 0) {
+            BytePointer extra = new BytePointer(av_mallocz(asc.length + AV_INPUT_BUFFER_PADDING_SIZE));
+            extra.put(asc);
+            par.extradata(extra); // freed with the context
+            par.extradata_size(asc.length);
+        }
+        st.time_base(av_make_q(1, 1000));
+        oc.max_interleave_delta(1_000_000);
+        return st;
+    }
+
+    /** One AAC frame into an audio track at ptsMs (the caller keeps it strictly rising). */
+    static int writeAac(AVFormatContext oc, AVPacket pkt, AVStream st, byte[] data, long ptsMs) {
+        int r = av_new_packet(pkt, data.length);
+        if (r < 0) return r;
+        pkt.data().put(data);
+        pkt.pts(ptsMs);
+        pkt.dts(ptsMs);
+        pkt.flags(AV_PKT_FLAG_KEY);
+        pkt.stream_index(st.index());
+        av_packet_rescale_ts(pkt, av_make_q(1, 1000), st.time_base());
+        r = av_interleaved_write_frame(oc, pkt); // takes the packet's data
+        av_packet_unref(pkt);
+        return r;
+    }
+
+    /**
+     * One frame of the live audio (1.0.45), stamped by counting frames from its arrival (AudioPts). Left out before
+     * the first key frame (the file's start), and when it belongs to a stream other than the one the track was
+     * declared with (the phone's encoder changed: the next file has it).
+     * @return its timestamp in this file, ms; -1 when left out
+     */
+    public long writeAudio(byte[] data, AudioConfig config, long arrivedMs) throws IOException {
+        if (!started || audioStream == null || !audio.sameAs(config)) return -1;
+        long ms = audioPts.next(Math.max(0, arrivedMs - firstMs));
+        check(writeAac(oc, pkt, audioStream, data, ms), "write the sound");
+        audioFrames++;
+        return ms;
+    }
+
+    public long audioFrames() {
+        return audioFrames;
+    }
+
+    /** The sound's track and its config, or null: a file without sound. */
+    public AudioConfig audio() {
+        return audioStream == null ? null : audio;
     }
 
     /**

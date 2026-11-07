@@ -13,6 +13,7 @@ import org.bytedeco.javacpp.BytePointer;
 import org.bytedeco.javacpp.DoublePointer;
 import org.bytedeco.javacpp.IntPointer;
 import org.bytedeco.javacpp.PointerPointer;
+import de.droiddrone.pc.audio.AudioConfig;
 
 import java.io.IOException;
 import java.nio.ByteOrder;
@@ -27,11 +28,16 @@ import static org.bytedeco.ffmpeg.global.swscale.*;
  * Encodes pictures (0xRRGGBB pixels, the OSD already drawn in) into an H.264 MKV - the second file of a recording
  * (1.0.42), next to the stream as it came. OpenH264 in software on one thread (the caller's, at low priority), MPEG-4
  * if this FFmpeg has no H.264 encoder. Timestamps in ms, the same clock as the raw file's. Not thread-safe.
+ * 1.0.45: the live audio as the raw file has it (the same AAC frames and timestamps), when that one has a sound track.
  */
 public final class OsdVideoWriter implements AutoCloseable {
     private final AVFormatContext oc;
     private final AVCodecContext enc;
     private final AVStream stream;
+    /** The sound's track, or null. */
+    private AVStream audioStream;
+    private AVPacket audioPkt;
+    private long lastAudioPts = -1;
     private final AVFrame yuv;
     private final AVPacket pkt;
     private final SwsContext sws;
@@ -50,6 +56,11 @@ public final class OsdVideoWriter implements AutoCloseable {
     }
 
     public OsdVideoWriter(Path file, int width, int height, int fps) throws IOException {
+        this(file, width, height, fps, null);
+    }
+
+    /** @param audio the raw file's sound track (1.0.45), or null for a file without sound */
+    public OsdVideoWriter(Path file, int width, int height, int fps, AudioConfig audio) throws IOException {
         if (width <= 0 || height <= 0 || (width & 1) != 0 || (height & 1) != 0) throw new IOException("Recording with OSD: bad size " + width + "x" + height);
         this.width = width;
         this.height = height;
@@ -90,6 +101,11 @@ public final class OsdVideoWriter implements AutoCloseable {
             if (stream == null || sws == null || sws.isNull()) throw new IOException("Recording with OSD: could not set up the file");
             check(avcodec_parameters_from_context(stream.codecpar(), enc), "set the stream up");
             stream.time_base(av_make_q(1, 1000));
+            if (audio != null) {
+                audioStream = StreamRecorder.addAacStream(oc, audio);
+                if (audioStream == null) throw new IOException("Recording with OSD: no audio track");
+                audioPkt = av_packet_alloc();
+            }
             yuv.format(AV_PIX_FMT_YUV420P);
             yuv.width(width);
             yuv.height(height);
@@ -131,6 +147,13 @@ public final class OsdVideoWriter implements AutoCloseable {
         return frames;
     }
 
+    /** One AAC frame of the sound at the raw file's timestamp (1.0.45); nothing without a sound track. */
+    public void writeAudio(byte[] data, long ptsMs) throws IOException {
+        if (closed || audioStream == null || ptsMs <= lastAudioPts) return;
+        lastAudioPts = ptsMs;
+        check(StreamRecorder.writeAac(oc, audioPkt, audioStream, data, ptsMs), "write the sound");
+    }
+
     private void drain() throws IOException {
         while (true) {
             int r = avcodec_receive_packet(enc, pkt);
@@ -164,6 +187,7 @@ public final class OsdVideoWriter implements AutoCloseable {
         avcodec_free_context(enc);
         av_frame_free(yuv);
         av_packet_free(pkt);
+        if (audioPkt != null) av_packet_free(audioPkt);
         if (sws != null && !sws.isNull()) sws_freeContext(sws);
         av_free(bgr);
         srcData.close();

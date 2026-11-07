@@ -9,6 +9,7 @@ import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.common.UdpPacketData;
 import de.droiddrone.common.UdpSender;
+import de.droiddrone.pc.audio.AudioConfig;
 
 import java.io.IOException;
 import java.net.DatagramPacket;
@@ -76,6 +77,41 @@ public class ControlLink {
         default double decodeLoad() {
             return 0;
         }
+    }
+
+    /**
+     * Receives the phone's live audio (1.0.45): its config and its raw AAC frames. Called on the link's receive and
+     * buffer threads (or, watching, the spectator thread): hand the data on and return at once.
+     */
+    public interface AudioListener {
+        void onAudioConfig(AudioConfig config);
+
+        /**
+         * One raw AAC frame (a copy, the listener's to keep) of the stream config describes; arrivedMs on
+         * System.currentTimeMillis, as the video's.
+         */
+        void onAudioFrame(AudioConfig config, byte[] frame, long arrivedMs);
+    }
+
+    /** The first phone app build that sends live audio on request (AUDIO, PcAudio). */
+    public static final int AUDIO_MIN_PC_BUILD = 34;
+
+    /** What the live audio does now, for the main window. */
+    public enum AudioState {
+        /** Not flying with a link up (and, watching, no sound from the pilot PC). */
+        NONE,
+        /** The phone app is older than pc.34. */
+        OLD_PHONE,
+        /** Asked for (or the phone's version not said yet), nothing yet. */
+        WAITING,
+        /** The sound comes. */
+        ON,
+        /** The phone holds it back: its flight controller isn't known disarmed (armed, or no fresh status). */
+        HELD,
+        /** The phone couldn't start its microphone or encoder. */
+        FAILED,
+        /** Muted long enough that the phone was asked to stop. */
+        STOPPED
     }
 
     /**
@@ -281,6 +317,12 @@ public class ControlLink {
     static final long VERIFY_AFTER_MS = 3000;
     static final int VERIFY_TRIES = 3;
     private volatile VideoListener videoListener;
+    private volatile AudioListener audioListener;
+    /** The phone's audio config (its AudioInitialFrame), or null: none came on this link. */
+    private volatile AudioConfig audioConfig;
+    /** When the last audio frame came (MonoClock.ms); 0 = none. */
+    private volatile long lastAudioFrameAt;
+    private final AudioRequest audioRequest = new AudioRequest();
     private volatile boolean videoHevc = true;
     private volatile boolean videoConfigReceived;
     /** Spectators may watch through this PC (direct phone mode only: the phone points them here). */
@@ -306,6 +348,11 @@ public class ControlLink {
     public void setVideoListener(VideoListener listener, boolean hevc) {
         videoListener = listener;
         videoHevc = hevc;
+    }
+
+    /** The live audio's listener (1.0.45); may be set while the link runs. */
+    public void setAudioListener(AudioListener listener) {
+        audioListener = listener;
     }
 
     /**
@@ -416,6 +463,10 @@ public class ControlLink {
                 }
                 lastReceivedAt = MonoClock.ms();
                 if (handleVideoFragment(packet)) continue;
+                if (packet.getLength() > 0 && d[0] == UdpCommon.AudioFrame) { // unnumbered: the queue adds nothing
+                    if (isConnected()) onAudioFrame(d, packet.getLength(), true);
+                    continue;
+                }
                 if (packet.getLength() > 0 && (d[0] == Spectate.PILOT_AT || d[0] == Spectate.NO_PILOT)) {
                     onPhoneSpectateAnswer(d, packet.getLength());
                     continue;
@@ -553,6 +604,10 @@ public class ControlLink {
         }
         if (d[0] == UdpCommon.TelemetryData) telemetryPacketsReceived.incrementAndGet();
         lastReceivedAt = MonoClock.ms();
+        if (d[0] == UdpCommon.AudioFrame) {
+            onAudioFrame(d, d.length, false);
+            return;
+        }
         processData(d);
     }
 
@@ -596,6 +651,20 @@ public class ControlLink {
             header = 11;
         }
         listener.onVideoFragment(d[0] == UdpCommon.KeyFrame, frameNum, offset, frameSize, d, header, len - header);
+    }
+
+    /**
+     * The phone's audio frame, [13][raw AAC frame] (upstream Flight Udp.sendAudioFrame): to the listener, and to the
+     * spectators (a copy into their queue). Not played until the stream's config has come: it can't be decoded.
+     */
+    private void onAudioFrame(byte[] d, int len, boolean forward) {
+        if (len < 2) return;
+        lastAudioFrameAt = MonoClock.ms();
+        AudioConfig c = audioConfig;
+        AudioListener l = audioListener;
+        if (c != null && l != null) l.onAudioFrame(c, java.util.Arrays.copyOfRange(d, 1, len), System.currentTimeMillis());
+        SpectatorHost h = host;
+        if (forward && h != null) h.forward(d, len);
     }
 
     private static int readInt(byte[] d, int i) {
@@ -662,6 +731,7 @@ public class ControlLink {
                     // kept: the flight controller's state (for FC_STATE_KEEP_MS, see below) and the video config -
                     // the phone's stream usually never stopped, and asking for it again would rebuild its encoder
                 }
+                if (!wasConnected && connected) audioRequest.newSession(); // the audio request goes out at once
                 if (!wasConnected && connected && lostAt > 0) {
                     log("Link back after " + (now - lostAt) + " ms.");
                     refreshFc = fcInfo != null;
@@ -730,6 +800,7 @@ public class ControlLink {
                         }
                     }
                     adjustResolution(now);
+                    sendAudioRequest(now);
                     if (fcInfo == null && now - lastFcInfoRequest >= 1000) {
                         sendRequest(UdpCommon.FcInfo);
                         lastFcInfoRequest = now;
@@ -828,10 +899,67 @@ public class ControlLink {
                     h.forward(data, data.length);
                 }
             }
+            case UdpCommon.AudioInitialFrame -> {
+                AudioConfig c = AudioConfig.parse(data, 3, data.length - 3);
+                if (c == null) return;
+                if (!c.sameAs(audioConfig)) log("Live audio: AAC " + c.sampleRate() + " Hz, " + (c.channels() == 1 ? "mono" : c.channels() + " channels"));
+                audioConfig = c;
+                AudioListener l = audioListener;
+                if (l != null) l.onAudioConfig(c);
+                SpectatorHost h = host;
+                if (h != null) {
+                    h.rememberAudioConfig(data);
+                    h.forward(data, data.length);
+                }
+            }
             default -> {
-                // audio and OSD packets are handled in later milestones
+                // the phone's OSD packets are not used: this PC draws its OSD from the telemetry
             }
         }
+    }
+
+    /**
+     * The live audio's request to the phone (AUDIO, PcAudio; phone app pc.34 on): on unless muted for 10 s
+     * (AudioRequest), at every change and every second. Unnumbered and straight out, like the video profile: the next
+     * one follows within a second. Not to an older phone app, which would drop it anyway.
+     */
+    private void sendAudioRequest(long now) {
+        if (spectator != null || telemetry.getPhonePcBuild() < AUDIO_MIN_PC_BUILD) return;
+        boolean missingConfig = audioConfig == null && lastAudioFrameAt != 0 && now - lastAudioFrameAt < 1000;
+        byte[] p = audioRequest.due(now, missingConfig);
+        if (p == null) return;
+        try {
+            socket.send(new DatagramPacket(p, p.length, remoteIp, remotePort));
+        } catch (IOException e) {
+            // sent again within a second
+        }
+    }
+
+    /**
+     * MUTE (1.0.45): the caller silences this PC's speakers at once (LiveAudio); the phone is asked to stop sending
+     * after AudioRequest.STOP_AFTER_MUTED_MS muted, and to start again at the unmute.
+     */
+    public void setAudioMuted(boolean muted) {
+        audioRequest.setMuted(muted, MonoClock.ms());
+    }
+
+    /** The live audio now (see AudioState). */
+    public AudioState audioState() {
+        long now = MonoClock.ms();
+        boolean flowing = lastAudioFrameAt != 0 && now - lastAudioFrameAt < 1000;
+        if (spectator != null) return flowing ? AudioState.ON : AudioState.NONE;
+        if (getState() != State.READY) return AudioState.NONE;
+        int build = telemetry.getPhonePcBuild();
+        if (build < 0) return AudioState.WAITING;
+        if (build < AUDIO_MIN_PC_BUILD) return AudioState.OLD_PHONE;
+        if (!audioRequest.streamWanted(now)) return AudioState.STOPPED;
+        if (flowing) return AudioState.ON;
+        FcTelemetry.PhoneState ps = telemetry.getPhoneState();
+        if (ps != null && now - ps.receivedAt() < 1000) {
+            if (ps.audioHeld()) return AudioState.HELD;
+            if (ps.audioFailed()) return AudioState.FAILED;
+        }
+        return AudioState.WAITING;
     }
 
     private void sendRequest(byte packetName) throws IOException {

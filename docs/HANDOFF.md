@@ -4,7 +4,24 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-07, 1.0.44 built, not released; phone app 2.3.0-pc.33 built from source, no APK yet)
+## Where things stand (2026-11-07, 1.0.45 built, not released; phone app 2.3.0-pc.34 compiled from source, no APK yet)
+
+- **1.0.45 live audio + phone pc.34 (2026-11-07, not released, untried on a phone - nothing of it has run on real
+  hardware or played through a real sound card):** the pilot: "when the drone is disarmed and the user is connected to
+  it, the phone's microphone streams audio to the PC, with a MUTE button". *Phone:* `PcAudio` (overlay/Common, in both
+  apps: the AUDIO packet 0x79 `[on][kbps][flags]` and the gate), `Udp.audioGateRun` (every 50 ms: the PC's "on" under
+  3 s old, `FcArmedState` DISARMED, normal power, a session; the sender drops frames the moment it says no, the
+  encoder stops on the videoStarter thread), upstream's AudioInitialFrame / AudioFrame unchanged, `AudioSource` mono,
+  `StreamEncoder` at any video bitrate (upstream: 2 Mbit/s and up) with a 120 Hz high-pass, `PHONE_STATE` bits 5-7.
+  *PC:* `ControlLink` (AudioFrame straight from the receive thread like the video; `AudioRequest`: on, off after 10 s
+  muted, every second, only to pc.34+; `audioState()`), `audio.LiveAudio` (one MIN_PRIORITY thread: FFmpeg AAC
+  (`AacDecoder`), `JitterBuffer` 200 / 450 ms, a ~60 ms SourceDataLine, MUTE flushes it, `AlertSound.isPlaying` ducks
+  to 20 %), MUTE `GlyphButton.SOUND/MUTED` under BEEPER and the M key (not while a text field has the focus),
+  `audio.muted.<phone>`, spectators get it relayed (config in the snapshot), both recordings get an AAC track
+  (`StreamRecorder.addAacStream`, `AudioPts`; `max_interleave_delta` 1 s). *To check on the real thing:* the sound's
+  delay and drop-outs over 4G, that ARMED really silences it within ~0.1-0.3 s, Android's AAC encoder at 48 kbit/s mono,
+  that the mkv files play with sound in VLC / mpv, a PC without a sound device (logged once, retried every 5 s). To
+  release: build the pc.34 APK from a clean HEAD, publish flight-2.3.0-pc.34, pin it in ApkShare.
 
 - **1.0.44 GPS + beepers + phone pc.33 (2026-11-07, not released, untried on hardware):** the pilot: the GPS must
   never sit on two UARTs; and "the betaflight setup turns off all beeper sounds even when left disarmed", the only

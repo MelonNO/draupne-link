@@ -89,6 +89,7 @@ Every phone running DRAUPNE Flight on your Tailscale network is **MobileAlpha, M
 - **Hardware video decoding** (off by default) decodes on the GPU. Only worth trying with big pictures or a slow CPU: at 720p it's slower.
 - **OSD** on or off, and **OSD layout**, which works like Betaflight's OSD tab: switch elements on or off (throttle %, current, mAh, power, RSSI, GPS coordinates, clock, stick overlays and more are there, off by default) and drag them where you want them. It shows on the live OSD at once and is remembered.
 - **POP OUT VIDEO** (the button over the video) puts the picture (with the OSD) in its own window, e.g. on a second screen; close it or press *VIDEO BACK* to put it back. **FULL SCREEN** is the button next to it. **Full screen** is F11.
+- **Sound:** while the drone is disarmed you hear the phone's microphone (phone app 2.3.0-pc.34 or newer; it stops the moment the drone arms). **MUTE** (the filled loudspeaker at the edge of the video) or **M** silences it at once; after 10 s muted the phone stops sending it. Remembered per phone. Recordings include it.
 
 **MENU > LINK**
 - **Warning sounds:** a short beep when the sticks stop reaching the drone (LINK LOST, LINK STALL, FAILSAFE, NO FLIGHT CONTROLLER), on by default.

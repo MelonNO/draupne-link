@@ -83,6 +83,8 @@ final class SpectatorHost implements AutoCloseable {
     private volatile int resendFrom;
     private volatile boolean running = true;
     private volatile byte[] videoConfig, fcInfo, boxNames, boxIds;
+    /** The phone's live audio config (1.0.45): a spectator joining while the sound runs can decode it at once. */
+    private volatile byte[] audioConfig;
 
     /**
      * @param linkSocket the link's socket: HELLO comes in there (the port the firewall opens), WELCOME goes back
@@ -160,6 +162,10 @@ final class SpectatorHost implements AutoCloseable {
 
     void rememberVideoConfig(byte[] packet) {
         videoConfig = packet;
+    }
+
+    void rememberAudioConfig(byte[] packet) {
+        audioConfig = packet;
     }
 
     void rememberFcInfo(byte[] packet) {
@@ -306,7 +312,7 @@ final class SpectatorHost implements AutoCloseable {
         long now = System.currentTimeMillis();
         if (now - v.lastSnapshot < 300) return;
         v.lastSnapshot = now;
-        for (byte[] p : new byte[][]{videoConfig, fcInfo, boxNames, boxIds}) {
+        for (byte[] p : new byte[][]{videoConfig, fcInfo, boxNames, boxIds, audioConfig}) {
             if (p != null) send(Spectate.snapshot(p), v);
         }
     }

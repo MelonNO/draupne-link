@@ -155,6 +155,22 @@ public class FcTelemetry {
 
     public record PhoneState(int flags, int lastRcSeq, int rcWriteAgeMs, int rcInToOutMs, long receivedAt) {
         static final int FLAG_CHANNEL_MAP = 1, FLAG_USB_PENDING = 2, FLAG_USB_DENIED = 4, FLAG_CAMERA_OPEN = 8, FLAG_VIDEO_RESTARTING = 16;
+        /** pc.34: the live audio on, held back (the FC not known disarmed, or standby), or failed to start. */
+        static final int FLAG_AUDIO_ON = 32, FLAG_AUDIO_HELD = 64, FLAG_AUDIO_FAILED = 128;
+
+        public boolean audioOn() {
+            return (flags & FLAG_AUDIO_ON) != 0;
+        }
+
+        /** The PC asks for the sound, but the phone holds it back: its FC isn't known disarmed (or it is in standby). */
+        public boolean audioHeld() {
+            return (flags & FLAG_AUDIO_HELD) != 0;
+        }
+
+        /** The phone's microphone or AAC encoder didn't start. */
+        public boolean audioFailed() {
+            return (flags & FLAG_AUDIO_FAILED) != 0;
+        }
 
         /** The phone's own watchdog is restarting its camera and encoder (no encoder output for 2 s). */
         public boolean videoRestarting() {

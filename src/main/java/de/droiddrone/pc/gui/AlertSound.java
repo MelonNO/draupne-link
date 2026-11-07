@@ -26,6 +26,13 @@ final class AlertSound {
     private volatile boolean enabled = true;
     private String current; // the warning sounding now, or null
     private long lastPlayed;
+    /** A beep is playing (1.0.45: the phone's live sound is lowered meanwhile, so the warning is heard). */
+    private static volatile boolean playing;
+
+    /** A warning beep is playing now. */
+    static boolean isPlaying() {
+        return playing;
+    }
 
     void setEnabled(boolean on) {
         enabled = on;
@@ -50,6 +57,7 @@ final class AlertSound {
 
     /** 880 Hz then 660 Hz, 120 ms each: short enough not to mask the motors, unlike a Windows sound. */
     private static void beep() {
+        playing = true;
         try (SourceDataLine line = AudioSystem.getSourceDataLine(new AudioFormat(RATE, 16, 1, true, false))) {
             line.open();
             line.start();
@@ -60,6 +68,8 @@ final class AlertSound {
             line.drain();
         } catch (Exception | LinkageError e) {
             log("Alert sound: " + e); // no audio device: the OSD still shows it
+        } finally {
+            playing = false;
         }
     }
 

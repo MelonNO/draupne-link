@@ -13,7 +13,7 @@ import java.awt.geom.Path2D;
  * room from the picture as possible. The text is kept as its name (the tour, the tooltip) and never painted.
  */
 final class GlyphButton extends JButton {
-    enum Glyph { POP_OUT, VIDEO_BACK, FULL_SCREEN, BEEPER }
+    enum Glyph { POP_OUT, VIDEO_BACK, FULL_SCREEN, BEEPER, SOUND, MUTED }
 
     private static final int SIZE = 30;
     private Glyph glyph;
@@ -83,6 +83,21 @@ final class GlyphButton extends JButton {
                     g.drawPolygon(new int[]{m - 1, m + 3, m + 8, m + 8, m + 3, m - 1}, new int[]{cy - 3, cy - 3, cy - 7, cy + 7, cy + 3, cy + 3}, 6);
                     g.drawArc(m + 6, cy - 5, 8, 10, -50, 100);
                     g.drawArc(m + 6, cy - 9, 14, 18, -50, 100);
+                }
+                case SOUND, MUTED -> {
+                    // the live sound (1.0.45): a filled loudspeaker, unlike the beeper's outline one; muted: a cross
+                    // instead of the sound arcs, in the warning colour, so a muted PC is seen at a glance
+                    int cy = h / 2;
+                    boolean muted = glyph == Glyph.MUTED;
+                    if (muted && !hot) g.setColor(Theme.WARN);
+                    g.fillPolygon(new int[]{m - 1, m + 3, m + 8, m + 8, m + 3, m - 1}, new int[]{cy - 3, cy - 3, cy - 7, cy + 7, cy + 3, cy + 3}, 6);
+                    if (muted) {
+                        g.drawLine(m + 11, cy - 4, m + 18, cy + 4);
+                        g.drawLine(m + 11, cy + 4, m + 18, cy - 4);
+                    } else {
+                        g.drawArc(m + 6, cy - 5, 8, 10, -50, 100);
+                        g.drawArc(m + 6, cy - 9, 14, 18, -50, 100);
+                    }
                 }
             }
         } finally {

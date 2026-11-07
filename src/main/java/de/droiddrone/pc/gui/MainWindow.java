@@ -14,6 +14,8 @@ import de.droiddrone.pc.Names;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.RcMapper;
 import de.droiddrone.pc.RcSession;
+import de.droiddrone.pc.audio.AudioConfig;
+import de.droiddrone.pc.audio.LiveAudio;
 import de.droiddrone.pc.setup.Tailscale;
 import de.droiddrone.pc.video.VideoPipeline;
 
@@ -194,6 +196,15 @@ public class MainWindow extends JFrame {
     private final GlyphButton popOutButton = new GlyphButton(GlyphButton.Glyph.POP_OUT, "Pop out video");
     private final GlyphButton fullScreenButton = new GlyphButton(GlyphButton.Glyph.FULL_SCREEN, "Full screen");
     private final GlyphButton beeperButton = new GlyphButton(GlyphButton.Glyph.BEEPER, "Beeper");
+    /** MUTE (1.0.45): the phone's live sound on this PC, on or off; per phone (AUDIO_MUTED_KEY). */
+    private final GlyphButton muteButton = new GlyphButton(GlyphButton.Glyph.SOUND, "Mute");
+    static final String AUDIO_MUTED_KEY = "audio.muted";
+    private boolean audioMuted;
+    /** The phone's sound while connected, or null. */
+    private LiveAudio liveAudio;
+    /** What the live audio did at the last refresh, and the states already told in the log this connection. */
+    private ControlLink.AudioState lastAudioState;
+    private final java.util.EnumSet<ControlLink.AudioState> audioStatesTold = java.util.EnumSet.noneOf(ControlLink.AudioState.class);
     private final JLabel poppedOutNote = Theme.label("VIDEO IS IN ITS OWN WINDOW", Theme.headingFont(16f), Theme.MUTED);
     private de.droiddrone.pc.video.LatencyMeter latencyMeter;
     private JComponent linkColumn;
@@ -378,6 +389,7 @@ public class MainWindow extends JFrame {
         hardwareDecode = "true".equalsIgnoreCase(config.getString(HW_DECODE_KEY));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString("osd")));
         videoView.setUpsideDown(upsideDownFor(config.getString(Names.PHONE_NAME_KEY))); // the chosen phone's (1.0.41)
+        setAudioMuted(mutedFor(config.getString(Names.PHONE_NAME_KEY)), false); // the chosen phone's (1.0.45)
         mapSource = de.droiddrone.pc.map.TileSource.parse(config.getString(MAP_SOURCE_KEY));
         coordinateFormat = de.droiddrone.pc.map.Coordinates.Format.parse(config.getString(COORDINATES_KEY));
         preferPhone = "phone".equalsIgnoreCase(config.getString(GPS_SOURCE_KEY));
@@ -402,6 +414,10 @@ public class MainWindow extends JFrame {
             save(Map.of("osd", Boolean.toString(videoView.isOsdEnabled())));
         });
         bindKey(java.awt.event.KeyEvent.VK_F11, this::toggleFullScreen);
+        // M: the live sound on / off (1.0.45) - a plain letter, so not while a text field takes the typing
+        bindKey(java.awt.event.KeyEvent.VK_M, () -> {
+            if (!(java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner() instanceof javax.swing.text.JTextComponent)) toggleMute();
+        });
         bindKey(java.awt.event.KeyEvent.VK_ESCAPE, () -> {
             if (latencyMeter != null) setLatencyTest(false);
             else exitFullScreen();
@@ -879,9 +895,15 @@ public class MainWindow extends JFrame {
             if (held) logLine(s.isRcEnabled() ? "BEEPER held - the drone beeps (AUX12 up)." : "BEEPER: no sticks go to the drone now - it can't beep.");
         });
         videoBar.add(beeperButton);
+        videoBar.add(Box.createVerticalStrut(4));
+        // the phone's microphone, heard here while the drone is disarmed (1.0.45)
+        muteButton.setAlignmentX(CENTER_ALIGNMENT);
+        muteButton.addActionListener(e -> toggleMute());
+        muteButton.setToolTipText(muteTip(null));
+        videoBar.add(muteButton);
         videoBar.add(Box.createVerticalGlue());
         video.add(videoBar, BorderLayout.EAST);
-        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off");
+        videoView.setToolTipText("Double-click: video only / back    F11: full screen    F2: OSD on / off    M: sound on / off");
         videoView.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {
@@ -1111,6 +1133,7 @@ public class MainWindow extends JFrame {
         if (!e.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) || !String.valueOf(e.ip()).equals(config.getIp())) {
             save(Map.of(Names.PHONE_NAME_KEY, e.name(), "ip", e.ip() == null ? "" : e.ip()));
             if (connection == null && e.kind() == Names.Kind.PHONE) videoView.setUpsideDown(upsideDownFor(e.name()));
+            if (connection == null) setAudioMuted(mutedFor(e.name()), false);
         }
         updatePhoneList();
     }
@@ -1243,6 +1266,7 @@ public class MainWindow extends JFrame {
             linkRef[0] = connection.getLink();
             connection.getLink().setNameReply(nameService::replyPacket);
             connection.getLink().setEvents(this::logLine);
+            startLiveAudio(connection.getLink(), video, target.name());
             if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
             if (video != null && recordVideo) startRecording(video);
@@ -1250,6 +1274,7 @@ public class MainWindow extends JFrame {
             videoView.setStatsSource(video == null ? null : video::stats);
         } catch (IOException | RuntimeException e) {
             connection = null;
+            stopLiveAudio();
             nameService.resume();
             if (video != null) video.close();
             video = null;
@@ -1345,6 +1370,7 @@ public class MainWindow extends JFrame {
         lostDroneButton.setVisible(false);
         if (connection != null) connection.close();
         connection = null;
+        stopLiveAudio();
         nameService.resume();
         updateFlightLayout();
         session = null;
@@ -1686,6 +1712,7 @@ public class MainWindow extends JFrame {
         refreshController(snap);
         refreshLink();
         alertSound.update(stickWarning(), System.currentTimeMillis());
+        refreshAudio();
         refreshMap();
         // keeps the HUD (and the latency test's time code) live even when no video frames arrive
         if (connection != null || latencyMeter != null) videoView.repaint();
@@ -2338,6 +2365,100 @@ public class MainWindow extends JFrame {
         } finally {
             wakeOnConnect = false;
         }
+    }
+
+    // ------------------------------------------------------------------ the live sound (1.0.45)
+
+    /**
+     * The phone's microphone on this PC while connected: LiveAudio plays it (its own low-priority thread), the
+     * recording takes it too. The link's threads only hand each frame on.
+     */
+    private void startLiveAudio(ControlLink link, VideoPipeline v, String phone) {
+        stopLiveAudio();
+        LiveAudio audio = new LiveAudio(AlertSound::isPlaying, msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
+        liveAudio = audio;
+        setAudioMuted(mutedFor(phone), false);
+        audioStatesTold.clear();
+        lastAudioState = null;
+        link.setAudioListener(new ControlLink.AudioListener() {
+            @Override
+            public void onAudioConfig(AudioConfig c) {
+                audio.onConfig(c);
+                if (v != null) v.recordAudioConfig(c);
+            }
+
+            @Override
+            public void onAudioFrame(AudioConfig c, byte[] frame, long arrivedMs) {
+                audio.onFrame(frame);
+                if (v != null) v.recordAudio(c, frame, arrivedMs);
+            }
+        });
+    }
+
+    private void stopLiveAudio() {
+        if (liveAudio != null) liveAudio.close();
+        liveAudio = null;
+    }
+
+    private static String audioMutedKey(String phone) {
+        return AUDIO_MUTED_KEY + "." + phone;
+    }
+
+    /** The phone's own choice; never set: not muted. */
+    private boolean mutedFor(String phone) {
+        return phone != null && !phone.isEmpty() && "true".equalsIgnoreCase(config.getString(audioMutedKey(phone)));
+    }
+
+    /** MUTE or M: silent here at once; after 10 s muted the phone stops sending; the choice kept for this phone. */
+    private void toggleMute() {
+        setAudioMuted(!audioMuted, true);
+        String phone = config.getString(Names.PHONE_NAME_KEY);
+        if (phone != null && !phone.isEmpty()) save(Map.of(audioMutedKey(phone), Boolean.toString(audioMuted)));
+        logLine(audioMuted ? "Sound muted (M). The phone stops sending it after 10 s." : "Sound on (M).");
+    }
+
+    private void setAudioMuted(boolean muted, boolean byHand) {
+        audioMuted = muted;
+        muteButton.setGlyph(muted ? GlyphButton.Glyph.MUTED : GlyphButton.Glyph.SOUND);
+        LiveAudio a = liveAudio;
+        if (a != null) a.setMuted(muted);
+        Connection c = connection;
+        if (c != null) c.getLink().setAudioMuted(muted);
+        if (byHand) muteButton.setToolTipText(muteTip(lastAudioState));
+    }
+
+    /** What the live audio does, said once a connection in the log, and always in the button's tooltip. */
+    private void refreshAudio() {
+        Connection c = connection;
+        ControlLink.AudioState s = c == null ? ControlLink.AudioState.NONE : c.getLink().audioState();
+        if (s == lastAudioState) return;
+        lastAudioState = s;
+        muteButton.setToolTipText(muteTip(s));
+        if (c == null || !audioStatesTold.add(s)) return;
+        String line = switch (s) {
+            case OLD_PHONE -> "Live sound needs DRAUPNE Flight 2.3.0-pc." + ControlLink.AUDIO_MIN_PC_BUILD + " or newer on the phone (it has "
+                    + c.getLink().getTelemetry().getPhoneAppVersion() + "): no sound from it.";
+            case ON -> c.getLink().isSpectator() ? "Live sound: the pilot PC passes the phone's microphone on" + (audioMuted ? " (muted here: M)." : ".")
+                    : "Live sound: the phone's microphone" + (audioMuted ? " comes, muted here (M)." : " plays on this PC (M mutes it).");
+            case HELD -> "Live sound held back by the phone: the drone is armed (or its state unknown) - the microphone is on only while it is disarmed.";
+            case FAILED -> "Live sound: the phone couldn't start its microphone (is the microphone allowed for DRAUPNE Flight?).";
+            default -> null;
+        };
+        if (line != null) logLine(line);
+    }
+
+    private String muteTip(ControlLink.AudioState s) {
+        String what = (audioMuted ? "SOUND MUTED: M or click to hear" : "SOUND: M or click to mute")
+                + " the phone's microphone - live while the drone is disarmed; after 10 s muted the phone stops sending it";
+        if (s == null) return what;
+        return switch (s) {
+            case OLD_PHONE -> what + ". The phone app is too old: live sound needs pc." + ControlLink.AUDIO_MIN_PC_BUILD + ".";
+            case HELD -> what + ". Now: held back, the drone is armed.";
+            case FAILED -> what + ". Now: the phone's microphone didn't start.";
+            case STOPPED -> what + ". Now: the phone has stopped sending.";
+            case ON -> what + ". Now: on.";
+            default -> what + ".";
+        };
     }
 
     // ------------------------------------------------------------------ the camera's way up, per phone (1.0.41)

@@ -183,6 +183,59 @@ class ControlLinkTest {
         assertEquals(4, phone.rcFrames.size(), "every frame reached the phone whole");
     }
 
+    /**
+     * Live audio (1.0.45): a pc.34 phone is asked for the sound (AUDIO on, again each second), its config and frames
+     * reach the listener; muted, the request stays on for STOP_AFTER_MUTED_MS (here: checked by AudioRequestTest) and
+     * the speakers are the caller's.
+     */
+    @Test
+    void liveAudioIsAskedForAndArrives() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.appVersion = "2.3.0-pc.34";
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        List<de.droiddrone.pc.audio.AudioConfig> configs = new CopyOnWriteArrayList<>();
+        List<byte[]> frames = new CopyOnWriteArrayList<>();
+        link.setAudioListener(new ControlLink.AudioListener() {
+            @Override
+            public void onAudioConfig(de.droiddrone.pc.audio.AudioConfig config) {
+                configs.add(config);
+            }
+
+            @Override
+            public void onAudioFrame(de.droiddrone.pc.audio.AudioConfig config, byte[] frame, long arrivedMs) {
+                frames.add(frame);
+            }
+        });
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> phone.audioRequests.size() >= 2, 4000, "two audio requests");
+        assertTrue(phone.audioRequests.get(0).on, "not muted: on");
+        assertEquals(de.droiddrone.common.PcAudio.DEFAULT_KBPS, phone.audioRequests.get(0).kbps);
+        assertEquals(ControlLink.AudioState.WAITING, link.audioState());
+        phone.sendAudioFrame(new byte[]{1, 2, 3}); // before the config: kept from the listener (it can't be decoded)
+        phone.sendAudioConfig();
+        waitFor(() -> configs.size() == 1, 2000, "audio config");
+        assertTrue(configs.get(0).sameAs(de.droiddrone.pc.audio.AudioConfig.DEFAULT), "48 kHz mono, its AudioSpecificConfig");
+        phone.sendAudioFrame(new byte[]{4, 5, 6, 7});
+        waitFor(() -> frames.size() == 1, 2000, "audio frame");
+        assertArrayEquals(new byte[]{4, 5, 6, 7}, frames.get(0), "the raw frame, without its type byte");
+        assertEquals(ControlLink.AudioState.ON, link.audioState());
+    }
+
+    /** A phone app older than pc.34 is never sent AUDIO; the window says why there is no sound. */
+    @Test
+    void anOlderPhoneGetsNoAudioRequest() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.appVersion = "2.3.0-pc.33";
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> link.getTelemetry().getPhonePcBuild() == 33, 5000, "version known");
+        Thread.sleep(1500);
+        assertTrue(phone.audioRequests.isEmpty(), "no AUDIO to pc.33");
+        assertEquals(ControlLink.AudioState.OLD_PHONE, link.audioState());
+    }
+
     /** Nothing from the phone for 2 s: the link counts as lost, well before upstream's 4000 ticks. */
     @Test
     void silenceOfTwoSecondsIsALinkLoss() throws Exception {
@@ -737,6 +790,25 @@ class ControlLinkTest {
         final List<Integer> rcSeqs = new CopyOnWriteArrayList<>();
         /** Key frame requests received (pc.13 on). */
         final AtomicInteger keyFrameRequests = new AtomicInteger();
+        /** The PC's live audio requests (AUDIO, pc.34 on), in order. */
+        final List<de.droiddrone.common.PcAudio.Request> audioRequests = new CopyOnWriteArrayList<>();
+
+        /** The stream's config as the Flight app sends it (numbered, acknowledged): 48 kHz mono AAC-LC. */
+        void sendAudioConfig() throws java.io.IOException {
+            UdpPacketData d = new UdpPacketData(UdpCommon.AudioInitialFrame);
+            d.daos.writeInt(48_000);
+            d.daos.writeByte(1);
+            d.daos.writeByte(2); // Android's ENCODING_PCM_16BIT
+            d.daos.write(new byte[]{0x11, (byte) 0x88});
+            udpSender.sendPacket(d.getData());
+        }
+
+        /** One raw AAC frame (unnumbered, fire and forget). */
+        void sendAudioFrame(byte[] aac) throws java.io.IOException {
+            UdpPacketData d = new UdpPacketData(UdpCommon.AudioFrame);
+            d.daos.write(aac);
+            udpSender.sendPacket(d.getData());
+        }
         /** PowerMode packets as {mode, checkIntervalMin}, and every Connect that reached the socket. */
         final List<int[]> powerModes = new CopyOnWriteArrayList<>();
         final AtomicInteger connects = new AtomicInteger();
@@ -952,6 +1024,7 @@ class ControlLinkTest {
                     udpSender.sendPong(toEndPoint, time, (byte) -1);
                 }
                 case ControlLink.KEY_FRAME_REQUEST -> keyFrameRequests.incrementAndGet();
+                case de.droiddrone.common.PcAudio.PACKET -> audioRequests.add(de.droiddrone.common.PcAudio.decode(packet.data, packet.data.length));
                 case ControlLink.POWER_MODE -> powerModes.add(new int[]{r.readByte(), r.readByte()});
                 case ControlLink.VIDEO_PROFILE -> videoProfile = r.readByte();
                 case ControlLink.SET_BITRATE -> bitRateSteps.add(r.readUnsignedByteAsInt());

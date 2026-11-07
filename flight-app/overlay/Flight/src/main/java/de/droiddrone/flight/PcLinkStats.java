@@ -56,6 +56,12 @@ final class PcLinkStats {
     static final int STATE_CAMERA_OPEN = 8;
     /** pc.26: the video watchdog is restarting the camera and encoder (no encoder output for 2 s). */
     static final int STATE_VIDEO_RESTARTING = 16;
+    /** pc.34: the microphone streams to the PC (PcAudio). */
+    static final int STATE_AUDIO_ON = 32;
+    /** pc.34: the PC asks for the sound, but the FC isn't known disarmed (or the phone is in standby): held back. */
+    static final int STATE_AUDIO_HELD = 64;
+    /** pc.34: the sound was asked for and allowed, but the microphone or the AAC encoder didn't start. */
+    static final int STATE_AUDIO_FAILED = 128;
 
     /**
      * The phone's power mode (pc.21, {@link PowerMode}), once a second and three times 300 ms apart when it changes:
