@@ -6,6 +6,23 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-07, 1.0.43, phone app still pc.32)
 
+- **1.0.44 4G COVERAGE (2026-11-07, not released; never run against OpenCelliD with a real key):** the pilot: "a map
+  overlay that gets the reception map from the possible mobile network distributors in that area ... identify where
+  there is poor reception before entering that area". No open coverage map of Norway exists (Nkom: % per
+  municipality only; Telenor / Telia / Ice: private token-gated tiles - not to be used), so the pilot chose a
+  prediction from cell positions. `OpenCellId`: `/cell/getInArea` allows 4 km2 a box, 50 cells an answer, 1,000
+  requests a day per key (checked on wiki.opencellid.org 2026-11-07); fixed boxes of 0.016 deg x n * 0.016 deg (n by
+  latitude, always under 4 km2), LTE then NR, paged, kept as CSV for 30 days (an empty box too), one request at a time
+  300 ms apart, 60 boxes a view, 900 a day by its own count, code 7 stops it for the day. IMPORT... reads the country
+  file (242.csv.gz from the downloads page; its URL with a token is not documented, so no automatic download) and
+  counts its bounding box as known. `CellCoverage`: cells within 60 m (same network) are one site; RSRP = 30 dBm RS
+  EIRP - max(free space, two-ray) - one knife edge (ITU-R P.526, 4/3 earth, terrain every 40 m, 8 - 120 looks) - clutter
+  (20 dB at 2 m, none from 30 m); 800 MHz, 30 m masts; best of the nearest 16 sites within 20 km; good >= -95, fair >=
+  -105, weak >= -115 dBm. Terrain from the radio horizon's Terrarium tiles. Settings `map.coverage.key / operator /
+  heightM` (read through `MainWindow.config()`, no MainWindow change). Tour step `coverage`. To check on the real
+  thing: whether the levels match what the pilot's phone shows (the constants are textbook, not fitted), and the
+  OpenCelliD positions' offset from the masts.
+
 - **1.0.43 (2026-11-07):** the pilot: "change the model for the fc check" to their FPV drone model (OBJ + textures;
   cleared for use by the maintainer, see THIRD-PARTY.md). `DroneModelView` now loads `model/fpv-drone.bin.gz`
   ('DRM1': per vertex xyz in the drone's axes + uv + a flag byte - texture 0/1/none, front prop; uint16 triangles) and

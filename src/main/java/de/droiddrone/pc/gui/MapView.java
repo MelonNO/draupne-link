@@ -2,9 +2,11 @@ package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.map.CameraFootprint;
+import de.droiddrone.pc.map.CellCoverage;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.MapGraphics;
 import de.droiddrone.pc.map.Mercator;
+import de.droiddrone.pc.map.OpenCellId;
 import de.droiddrone.pc.map.RadioHorizon;
 import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
@@ -67,7 +69,10 @@ class MapView extends JComponent {
     private boolean selectingByRequest;
     private Runnable onSelectModeEnded;
     private final Runnable tileReady = () -> SwingUtilities.invokeLater(this::repaint);
-    private final Timer settled = new Timer(1200, e -> prefetchVisible());
+    private final Timer settled = new Timer(1200, e -> {
+        prefetchVisible();
+        rested();
+    });
     /**
      * Following the drone the view never rests, so the rest prefetch never fires: every few seconds the levels under
      * the drone are fetched instead, when it has moved.
@@ -182,6 +187,15 @@ class MapView extends JComponent {
     private Rectangle horizonCross, searchCross;
     private String searchStatus;
     private Consumer<double[]> onSearchArea;
+    /**
+     * 4G COVERAGE (1.0.44): on or off (the button in MAP TOOLS), the estimate over the area last worked out (null
+     * while none), its picture, and the legend's status line. Worked out by the window when the view rests.
+     */
+    private boolean coverageOn;
+    private CellCoverage.Grid coverage;
+    private BufferedImage coverageImage; // one pixel per point, made once per estimate
+    private String coverageStatus;
+    private Consumer<double[]> onViewRested;
 
     private MapGraphics graphics;
     private Tool tool = Tool.NONE;
@@ -621,6 +635,7 @@ class MapView extends JComponent {
         if (!follow || !movedSincePrefetch) return;
         movedSincePrefetch = false;
         prefetchVisible();
+        rested();
     }
 
     void setFollow(boolean on) {
@@ -964,6 +979,65 @@ class MapView extends JComponent {
         searchCross = null;
         repaint();
         if (had && onSearchArea != null) onSearchArea.accept(null);
+    }
+
+    /** Told the visible area {minLat, maxLat, minLon, maxLon} when the map has rested on a place (and every few seconds while following). */
+    void setOnViewRested(Consumer<double[]> listener) {
+        onViewRested = listener;
+    }
+
+    private void rested() {
+        if (onViewRested != null && isShowing() && getWidth() >= 16) onViewRested.accept(visibleArea());
+    }
+
+    /** 4G COVERAGE on or off; the estimate (null: none yet, the old one stays while a new one is worked out) and its status line. */
+    void setCoverage(boolean on, CellCoverage.Grid grid, String status) {
+        coverageOn = on;
+        coverageStatus = status;
+        if (grid != coverage) {
+            coverage = grid;
+            coverageImage = grid == null ? null : coverageImage(grid);
+        }
+        repaint();
+    }
+
+    boolean coverageOn() {
+        return coverageOn;
+    }
+
+    CellCoverage.Grid coverage() {
+        return coverage;
+    }
+
+    String coverageStatus() {
+        return coverageStatus;
+    }
+
+    /** The levels as see-through colours, the GCS SEARCH's red - yellow - green with orange between; unknown left clear. */
+    static final Color[] COVERAGE_COLOURS = {new Color(227, 27, 35, 110), new Color(255, 140, 0, 110), new Color(252, 212, 5, 100),
+            new Color(46, 204, 64, 95)};
+    static final String[] COVERAGE_NAMES = {"NONE", "WEAK", "FAIR", "GOOD"};
+
+    private static BufferedImage coverageImage(CellCoverage.Grid g) {
+        BufferedImage img = new BufferedImage(g.cols(), g.rows(), BufferedImage.TYPE_INT_ARGB);
+        for (int r = 0; r < g.rows(); r++) {
+            for (int c = 0; c < g.cols(); c++) {
+                int v = g.at(c, r);
+                if (v >= 0) img.setRGB(c, r, COVERAGE_COLOURS[v].getRGB());
+            }
+        }
+        return img;
+    }
+
+    /** A mast's dot: Telenor blue, Telia purple, Ice orange, others grey. */
+    static Color operatorColour(OpenCellId.Operator op) {
+        if (op == null) return new Color(0x9e9e9e);
+        return switch (op) {
+            case TELENOR -> new Color(0x2196f3);
+            case TELIA -> new Color(0xb455f0);
+            case ICE -> new Color(0xff8c1a);
+            default -> new Color(0x9e9e9e);
+        };
     }
 
     static final int SEARCH_BUCKETS = 11; // 0 %, 10 % ... 100 %
@@ -1340,6 +1414,90 @@ class MapView extends JComponent {
         }
     }
 
+    /** Masts are drawn from this zoom in (further out they would cover the estimate). */
+    static final double COVERAGE_MASTS_ZOOM = 11;
+
+    /**
+     * 4G COVERAGE: the estimate's colours over the map, the masts as small dots in their network's colour, and the
+     * legend bottom left - that it is an estimate, the colours, what it is for, the status, and OpenCelliD's attribution.
+     */
+    private void paintCoverage(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            CellCoverage.Grid grid = coverage;
+            if (grid != null && coverageImage != null) {
+                double k = Math.pow(2, zi) * scale; // zoom-0 world pixels to screen
+                int sx0 = (int) Math.round((grid.x0() * Math.pow(2, zi) - wcx) * scale + w / 2.0);
+                int sy0 = (int) Math.round((grid.y0() * Math.pow(2, zi) - wcy) * scale + h / 2.0);
+                int sx1 = (int) Math.round(sx0 + (grid.x1() - grid.x0()) * k), sy1 = (int) Math.round(sy0 + (grid.y1() - grid.y0()) * k);
+                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+                g.drawImage(coverageImage, sx0, sy0, sx1, sy1, 0, 0, coverageImage.getWidth(), coverageImage.getHeight(), null);
+                if (zoom >= COVERAGE_MASTS_ZOOM) {
+                    g.setStroke(new BasicStroke(1.5f));
+                    for (CellCoverage.Site s : grid.sites()) {
+                        Point2D p = toScreen(s.lat(), s.lon(), zi, scale, wcx, wcy, w, h);
+                        if (p.getX() < -8 || p.getY() < -8 || p.getX() > w + 8 || p.getY() > h + 8) continue;
+                        int x = (int) Math.round(p.getX()), y = (int) Math.round(p.getY());
+                        g.setColor(operatorColour(s.operator()));
+                        g.fillOval(x - 4, y - 4, 9, 9);
+                        g.setColor(Color.BLACK);
+                        g.drawOval(x - 4, y - 4, 9, 9);
+                        if (s.nr()) { // 5G there too: a white ring round it
+                            g.setColor(Color.WHITE);
+                            g.drawOval(x - 7, y - 7, 15, 15);
+                        }
+                    }
+                }
+            }
+            paintCoverageLegend(g, grid, h);
+        } finally {
+            g.dispose();
+        }
+    }
+
+    /** Bottom left over the scale bar: the top middle has NO DRONE POSITION, the top right the zoom buttons. */
+    private void paintCoverageLegend(Graphics2D g, CellCoverage.Grid grid, int h) {
+        g.setFont(Theme.headingFont(11f));
+        FontMetrics fm = g.getFontMetrics();
+        Font small = Theme.font(Font.PLAIN, 10.5f);
+        FontMetrics sm = g.getFontMetrics(small);
+        String title = "4G COVERAGE (ESTIMATE)" + (grid != null ? String.format(Locale.ROOT, "   DRONE %.0f M   %s", grid.droneM(),
+                grid.operator().title.toUpperCase(Locale.ROOT)) : "");
+        String status = coverageStatus == null ? "" : coverageStatus;
+        int lh = fm.getHeight(), sh = sm.getHeight();
+        int swatchW = 0;
+        for (String n : COVERAGE_NAMES) swatchW += 14 + fm.stringWidth(n) + 12;
+        int bw = Math.max(Math.max(fm.stringWidth(title), swatchW), Math.max(sm.stringWidth(status), sm.stringWidth(OpenCellId.ATTRIBUTION))) + 16;
+        int bh = lh + lh + 4 + (status.isEmpty() ? 0 : sh) + sh + 10;
+        int x = 4, y = h - 50 - bh;
+        g.setColor(BOX);
+        g.fillRect(x, y, bw, bh);
+        g.setColor(Theme.ACCENT);
+        g.fillRect(x, y, 3, bh);
+        int ty = y + 4 + fm.getAscent();
+        g.setColor(Theme.TEXT);
+        g.drawString(title, x + 8, ty);
+        ty += lh + 2;
+        int sx = x + 8;
+        for (int i = COVERAGE_NAMES.length - 1; i >= 0; i--) { // GOOD first
+            Color c = COVERAGE_COLOURS[i];
+            g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue()));
+            g.fillRect(sx, ty - fm.getAscent() + 2, 10, 10);
+            g.setColor(Theme.TEXT);
+            g.drawString(COVERAGE_NAMES[i], sx + 14, ty);
+            sx += 14 + fm.stringWidth(COVERAGE_NAMES[i]) + 12;
+        }
+        g.setFont(small);
+        ty += sh + 2;
+        if (!status.isEmpty()) {
+            g.setColor(Theme.TEXT);
+            g.drawString(status, x + 8, ty);
+            ty += sh;
+        }
+        g.setColor(Theme.MUTED);
+        g.drawString(OpenCellId.ATTRIBUTION, x + 8, ty);
+    }
+
     /** A line of text on a dark box, centred on x, from y down. */
     private static void label(Graphics2D g, String text, int x, int y) {
         g.setFont(Theme.headingFont(11f));
@@ -1563,6 +1721,7 @@ class MapView extends JComponent {
             double scale = Math.pow(2, zoom - zi);
             double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
             paintTiles(g, src, zi, scale, wcx, wcy, w, h);
+            if (coverageOn && !forPicture && toolOverlaysShown) paintCoverage(g, zi, scale, wcx, wcy, w, h); // under the other tools
             if (searchArea != null && !forPicture && toolOverlaysShown) paintSearch(g, zi, scale, wcx, wcy, w, h);
             if (horizonMast != null && !forPicture && toolOverlaysShown) paintHorizon(g, zi, scale, wcx, wcy, w, h); // over the heat map
 

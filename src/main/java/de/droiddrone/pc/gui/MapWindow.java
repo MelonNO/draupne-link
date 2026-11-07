@@ -1,12 +1,14 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.FcTelemetry;
+import de.droiddrone.pc.map.CellCoverage;
 import de.droiddrone.pc.map.Coordinates;
 import de.droiddrone.pc.map.Elevation;
 import de.droiddrone.pc.map.MapGraphics;
 import de.droiddrone.pc.map.Kml;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.Mercator;
+import de.droiddrone.pc.map.OpenCellId;
 import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.RadioHorizon;
 import de.droiddrone.pc.map.TileCache;
@@ -168,6 +170,17 @@ final class MapWindow extends JFrame {
         });
         map.setOnHorizonMast(this::horizonMast);
         map.setOnSearchArea(this::searchArea);
+        // 4G COVERAGE (1.0.44): its choices from the settings file; worked out each time the view rests
+        de.droiddrone.pc.PcConfig config = owner instanceof MainWindow m ? m.config() : null;
+        coverageKey = config == null ? "" : config.getString(COVERAGE_KEY);
+        tools.coverageOperator.setSelectedIndex(OpenCellId.Operator.parse(config == null ? null : config.getString(COVERAGE_OPERATOR)).ordinal());
+        tools.coverageHeight.setSelectedIndex(heightIndex(config == null ? "" : config.getString(COVERAGE_HEIGHT)));
+        tools.coverage.addActionListener(e -> setCoverageOn(!coverageOn));
+        tools.coverageOperator.addActionListener(e -> coverageChoiceChanged());
+        tools.coverageHeight.addActionListener(e -> coverageChoiceChanged());
+        tools.coverageKey.addActionListener(e -> askCoverageKey());
+        tools.coverageImport.addActionListener(e -> importCells());
+        map.setOnViewRested(this::coverageView);
         // the pilot: the tools' overlays (radio horizon, search, measurement) show only while TOOLS is out; closed, they hide (still there until crossed out)
         // and their tool ends, so a click cannot move a mast that is not on screen
         tools.onGroupChanged(() -> {
@@ -176,6 +189,7 @@ final class MapWindow extends JFrame {
             MapView.Tool t = map.tool();
             if (!shown && (t == MapView.Tool.HORIZON || t == MapView.Tool.SEARCH || t == MapView.Tool.RULER)) map.cancelTool();
             profileCard.setVisible(shown && map.hasMeasurement()); // the measurement's elevation profile with it
+            if (shown && coverageOn) coverageView(map.visibleArea()); // nothing is fetched while it is hidden
         });
         map.setToolOverlaysShown(tools.toolsShown());
         addComponentListener(new ComponentAdapter() {
@@ -590,6 +604,231 @@ final class MapWindow extends JFrame {
         });
     }
 
+    // ---- 4G COVERAGE (1.0.44): the cells and the terrain load and the estimate is worked out on a thread of its own
+
+    static final String COVERAGE_KEY = "map.coverage.key", COVERAGE_OPERATOR = "map.coverage.operator", COVERAGE_HEIGHT = "map.coverage.heightM";
+    /** Masts this far outside the view still count, and their cells are fetched with the view's. */
+    static final double COVERAGE_MARGIN_M = 3000;
+    /** A wider view is worked out from the cells already known: fetching it would take hundreds of the key's requests. */
+    static final double COVERAGE_FETCH_MAX_M = 25_000;
+    /** Boxes fetched for one resting view at most (two requests each, of the key's 1,000 a day); the rest on the next rest. */
+    static final int COVERAGE_MAX_FETCH = 60;
+    /** An estimate is shown between fetches every this many boxes. */
+    private static final int COVERAGE_SHOW_EVERY = 20;
+    /** The estimate's points about this many pixels apart, at most 160 x 120 of them. */
+    private static final int COVERAGE_PX = 10;
+
+    private final OpenCellId cellData = new OpenCellId(OpenCellId.defaultDir());
+    private final java.util.concurrent.ExecutorService coverageWork = java.util.concurrent.Executors.newSingleThreadExecutor(r -> daemon(r, "cellCoverage"));
+    private final java.util.concurrent.atomic.AtomicInteger coverageRun = new java.util.concurrent.atomic.AtomicInteger();
+    private boolean coverageOn;
+    private volatile String coverageKey = "";
+    /** The view last worked out, and whether everything in it was fetched (else the same view is tried again). */
+    private double[] coverageArea;
+    private volatile boolean coverageComplete;
+
+    static int heightIndex(String value) {
+        int wanted;
+        try {
+            wanted = Integer.parseInt(value.trim());
+        } catch (RuntimeException e) {
+            wanted = CellCoverage.DEFAULT_HEIGHT_M;
+        }
+        int[] h = CellCoverage.HEIGHTS_M;
+        for (int i = 0; i < h.length; i++) if (h[i] == wanted) return i;
+        for (int i = 0; i < h.length; i++) if (h[i] == CellCoverage.DEFAULT_HEIGHT_M) return i;
+        return 0;
+    }
+
+    private OpenCellId.Operator coverageOperator() {
+        return OpenCellId.Operator.values()[Math.max(0, tools.coverageOperator.getSelectedIndex())];
+    }
+
+    private int coverageHeightM() {
+        return CellCoverage.HEIGHTS_M[Math.max(0, tools.coverageHeight.getSelectedIndex())];
+    }
+
+    void setCoverageOn(boolean on) {
+        coverageOn = on;
+        tools.setCoverageOn(on);
+        coverageArea = null;
+        if (!on) {
+            coverageRun.incrementAndGet(); // a fetch under way stops
+            map.setCoverage(false, null, null);
+            tools.coverageStatus.setText(" ");
+            return;
+        }
+        map.setCoverage(true, null, "Working it out...");
+        coverageView(map.visibleArea());
+    }
+
+    boolean coverageOn() {
+        return coverageOn;
+    }
+
+    private void coverageChoiceChanged() {
+        saver.accept(Map.of(COVERAGE_OPERATOR, coverageOperator().name(), COVERAGE_HEIGHT, Integer.toString(coverageHeightM())));
+        coverageArea = null;
+        if (coverageOn) coverageView(map.visibleArea());
+    }
+
+    private void askCoverageKey() {
+        String text = "<html>The 4G COVERAGE estimate needs an OpenCelliD access token (free).<br>Register at https://opencellid.org, log in, "
+                + "and copy the Access Token<br>your account page shows. It is kept in this PC's settings file.<br><br>"
+                + "A key has 1,000 requests a day: each 1.8 km box of map takes two, once a month.</html>";
+        Object answer = javax.swing.JOptionPane.showInputDialog(this, text, "OpenCelliD key", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, coverageKey);
+        if (answer == null) return;
+        coverageKey = answer.toString().trim();
+        saver.accept(Map.of(COVERAGE_KEY, coverageKey));
+        coverageArea = null;
+        if (coverageOn) coverageView(map.visibleArea());
+    }
+
+    /** A country file from OpenCelliD's downloads page, read on the coverage thread (Norway's is tens of MB unpacked). */
+    private void importCells() {
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(java.nio.file.Path.of(System.getProperty("user.home"), "Downloads").toFile());
+        chooser.setDialogTitle("Import an OpenCelliD cell file (242.csv.gz is Norway)");
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("OpenCelliD CSV (.csv, .csv.gz)", "csv", "gz"));
+        if (chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+        java.nio.file.Path file = chooser.getSelectedFile().toPath();
+        tools.coverageStatus.setText(status("Importing " + file.getFileName() + "..."));
+        coverageWork.execute(() -> {
+            String line;
+            try {
+                line = cellData.importCsv(file) + " 4G / 5G cells imported";
+            } catch (java.io.IOException | RuntimeException e) {
+                line = "Import failed: " + e.getMessage();
+            }
+            String done = line;
+            SwingUtilities.invokeLater(() -> {
+                tools.coverageStatus.setText(status(done));
+                coverageArea = null;
+                if (coverageOn) coverageView(map.visibleArea());
+            });
+        });
+    }
+
+    /** Two views are the same for the estimate when neither the centre nor the size moved by more than a tenth of it. */
+    static boolean sameView(double[] a, double[] b) {
+        double h = a[1] - a[0], w = a[3] - a[2];
+        return Math.abs((a[0] + a[1]) - (b[0] + b[1])) / 2 < h / 10 && Math.abs((a[2] + a[3]) - (b[2] + b[3])) / 2 < w / 10
+                && Math.abs(h - (b[1] - b[0])) < h / 10 && Math.abs(w - (b[3] - b[2])) < w / 10;
+    }
+
+    /** The view rested: unless it is the one already done, its estimate is worked out anew (a newer view stops an older one). */
+    private void coverageView(double[] area) {
+        if (!coverageOn || !map.toolOverlaysShown()) return;
+        if (coverageArea != null && coverageComplete && sameView(coverageArea, area)) return;
+        coverageArea = area;
+        coverageComplete = false;
+        int run = coverageRun.incrementAndGet();
+        OpenCellId.Operator op = coverageOperator();
+        int droneM = coverageHeightM();
+        String key = coverageKey;
+        int cols = Math.max(8, Math.min(160, map.getWidth() / COVERAGE_PX)), rows = Math.max(8, Math.min(120, map.getHeight() / COVERAGE_PX));
+        coverageWork.execute(() -> computeCoverage(run, area, op, droneM, key, cols, rows));
+    }
+
+    /**
+     * On the coverage thread: the terrain round the view, then the boxes of cells not fetched yet (nearest the middle
+     * first, a capped number, an estimate shown every few), then the estimate from everything known.
+     */
+    private void computeCoverage(int run, double[] area, OpenCellId.Operator op, int droneM, String key, int cols, int rows) {
+        java.util.function.BooleanSupplier cancelled = () -> coverageRun.get() != run;
+        if (cancelled.getAsBoolean()) return;
+        double[] reach = CellCoverage.grow(area, COVERAGE_MARGIN_M);
+        double mid = (area[0] + area[1]) / 2;
+        double sizeM = Math.max(Mercator.distanceM(mid, area[2], mid, area[3]), Mercator.distanceM(area[0], area[2], area[1], area[2]));
+        List<OpenCellId.Tile> tiles = OpenCellId.tiles(reach[0], reach[1], reach[2], reach[3]);
+        long now = System.currentTimeMillis();
+        List<OpenCellId.Tile> missing = new ArrayList<>();
+        for (OpenCellId.Tile t : tiles) if (!cellData.isFresh(t, now)) missing.add(t);
+        boolean noKey = key.isBlank();
+        boolean tooWide = sizeM > COVERAGE_FETCH_MAX_M;
+        int toFetch = noKey || tooWide ? 0 : Math.min(missing.size(), Math.min(COVERAGE_MAX_FETCH, cellData.creditsLeft() / 2));
+        coverageLine(run, "Loading the terrain...");
+        RadioHorizon.Data terrain = CellCoverage.loadTerrain(cache, reach, cancelled);
+        if (cancelled.getAsBoolean()) return;
+        String problem = null;
+        int fetched = 0;
+        if (toFetch > 0) publishCoverage(run, area, reach, tiles, op, droneM, terrain, cols, rows, "fetching cells 0 / " + toFetch + "...", false);
+        for (OpenCellId.Tile t : missing.subList(0, toFetch)) {
+            if (cancelled.getAsBoolean()) return;
+            OpenCellId.Answer a = cellData.fetch(t, key);
+            if (a.cells() == null) {
+                problem = switch (a.errorCode()) {
+                    case 2 -> "OpenCelliD does not know the key";
+                    case 7 -> "the key's requests for today are used up";
+                    case 0 -> "no connection to OpenCelliD: saved cells only";
+                    default -> "OpenCelliD: " + a.error();
+                };
+                break;
+            }
+            fetched++;
+            if (fetched % COVERAGE_SHOW_EVERY == 0 && fetched < toFetch) {
+                publishCoverage(run, area, reach, tiles, op, droneM, terrain, cols, rows, "fetching cells " + fetched + " / " + toFetch + "...", false);
+            }
+        }
+        int left = missing.size() - fetched;
+        if (problem == null && left > 0) {
+            problem = noKey ? "no OpenCelliD key (MAP TOOLS > TOOLS > Key...)" : tooWide ? "zoom in to fetch the cells here"
+                    : cellData.creditsLeft() < 2 ? "the key's requests for today are used up" : left + " boxes not fetched yet: rest the map again";
+        }
+        publishCoverage(run, area, reach, tiles, op, droneM, terrain, cols, rows, problem, left == 0);
+    }
+
+    /** The estimate from the cells known now (fetched boxes, however old, and the imported file), shown with a status line. */
+    private void publishCoverage(int run, double[] area, double[] reach, List<OpenCellId.Tile> tiles, OpenCellId.Operator op, int droneM,
+                                 RadioHorizon.Data terrain, int cols, int rows, String problem, boolean complete) {
+        java.util.Set<OpenCellId.Tile> known = new java.util.HashSet<>();
+        List<OpenCellId.Cell> cells = new ArrayList<>(cellData.importedIn(reach[0], reach[1], reach[2], reach[3]));
+        for (OpenCellId.Tile t : tiles) {
+            List<OpenCellId.Cell> c = cellData.cached(t);
+            if (c != null) {
+                known.add(t);
+                cells.addAll(c);
+            } else if (cellData.coveredByImport(t)) {
+                known.add(t);
+            }
+        }
+        List<CellCoverage.Site> sites = CellCoverage.sites(cells, op);
+        CellCoverage.Grid grid = CellCoverage.predict(area, cols, rows, sites, droneM, op, terrain,
+                (lat, lon) -> known.contains(OpenCellId.Tile.at(lat, lon)), () -> coverageRun.get() != run);
+        if (grid == null) return;
+        String line = coverageText(grid, problem);
+        SwingUtilities.invokeLater(() -> {
+            if (coverageRun.get() != run) return;
+            if (complete) coverageComplete = true;
+            map.setCoverage(true, grid, line);
+            tools.coverageStatus.setText(status(line.replace("  -  ", "<br>")));
+        });
+    }
+
+    private void coverageLine(int run, String line) {
+        SwingUtilities.invokeLater(() -> {
+            if (coverageRun.get() != run) return;
+            map.setCoverage(true, map.coverage(), line);
+            tools.coverageStatus.setText(status(line));
+        });
+    }
+
+    /** The legend's status: how many masts, how much of the view is good and how much weak or worse, and what is wrong if anything. */
+    static String coverageText(CellCoverage.Grid g, String problem) {
+        int[] c = g.counts();
+        int all = c[0] + c[1] + c[2] + c[3];
+        StringBuilder b = new StringBuilder();
+        b.append(g.sites().size()).append(g.sites().size() == 1 ? " mast" : " masts");
+        if (all > 0) {
+            b.append(String.format(Locale.ROOT, ", %d %% good, %d %% weak or none", Math.round(100.0 * c[CellCoverage.GOOD] / all),
+                    Math.round(100.0 * (c[CellCoverage.WEAK] + c[CellCoverage.NONE]) / all)));
+        } else {
+            b.append(", no cells known here");
+        }
+        if (g.terrainMissing()) b.append(", some terrain missing");
+        if (problem != null) b.append("  -  ").append(problem);
+        return b.toString();
+    }
+
     static String searchMapLine(RadioHorizon.Search r, String loading) {
         return "GCS SEARCH  best " + Math.round(r.bestScore() * 100) + " %" + (loading != null ? "  -  " + loading : "");
     }
@@ -648,6 +887,11 @@ final class MapWindow extends JFrame {
     javax.swing.JComponent tourHorizon() {
         tools.showGroup(MapToolsPanel.Group.TOOLS, false);
         return tools.horizon;
+    }
+
+    javax.swing.JComponent tourCoverage() {
+        tools.showGroup(MapToolsPanel.Group.TOOLS, false);
+        return tools.coverage;
     }
 
     javax.swing.JComponent tourSearch() {

@@ -33,7 +33,7 @@ import java.util.Map;
  * the next press. DRAW: LINE, RECTANGLE, ARROW with the colour, width and fill chosen first, SYMBOL with the type,
  * affiliation (the colour) and echelon (the size), ERASER, PLACE AT. TOOLS: the RULER (and KEEP / CLEAR for the
  * measurement), RADIO HORIZON and GCS SEARCH with their heights and frequency (sliding out under the button pressed),
- * PINS, GO TO. DATA: EXPORT, IMPORT, DOWNLOAD AREA, CLEAR ALL. The
+ * 4G COVERAGE (1.0.44: on / off, with the network, the drone's height and the OpenCelliD key), PINS, GO TO. DATA: EXPORT, IMPORT, DOWNLOAD AREA, CLEAR ALL. The
  * tool buttons light up while their tool is on the map.
  */
 final class MapToolsPanel extends JPanel {
@@ -70,6 +70,13 @@ final class MapToolsPanel extends JPanel {
     final JButton clearMeasure = Theme.secondaryButton("Clear");
     final JButton horizon = Theme.secondaryButton("Radio horizon");
     final JButton gcsSearch = Theme.secondaryButton("GCS search");
+    /** 4G COVERAGE (1.0.44): on / off, and its fields (the network, the drone's height, the OpenCelliD key, the country file). */
+    final JButton coverage = Theme.secondaryButton("4G coverage");
+    final JComboBox<String> coverageOperator = new JComboBox<>();
+    final JComboBox<String> coverageHeight = new JComboBox<>();
+    final JButton coverageKey = Theme.secondaryButton("Key...");
+    final JButton coverageImport = Theme.secondaryButton("Import...");
+    final JLabel coverageStatus = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.TEXT);
     final JButton line = Theme.secondaryButton("Line");
     final JButton rectangle = Theme.secondaryButton("Rectangle");
     final JButton arrow = Theme.secondaryButton("Arrow");
@@ -92,7 +99,7 @@ final class MapToolsPanel extends JPanel {
     final SpinnerNumberModel frequencyMHz = new SpinnerNumberModel(2400, 100, 6000, 1);
     final JLabel horizonStatus = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.TEXT);
     final JLabel searchStatus = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.TEXT);
-    final SlideOut horizonFields, searchFields;
+    final SlideOut horizonFields, searchFields, coverageFields;
     private final JButton[] swatches = new JButton[COLOURS.length];
     private final JButton[] widthButtons = new JButton[WIDTHS.length];
     private final JButton outline = Theme.secondaryButton("Outline");
@@ -111,6 +118,7 @@ final class MapToolsPanel extends JPanel {
         horizonFields = new SlideOut(fields(horizonStatus, "the aircraft's altitude above the ground under it, wherever it flies"));
         searchFields = new SlideOut(fields(searchStatus, "the aircraft's altitude above the ground under it, over the area wanted"));
         searchStatus.setToolTipText("Green: a mast there sees all of the area; red: none of it. The best place is ringed.");
+        coverageFields = new SlideOut(coverageFields());
         setOpaque(false);
         tab.setToolTipText("MAP TOOLS: drawing and symbols, the ruler and the radio horizon, export and import");
         tab.addActionListener(e -> setOpen(!open, true));
@@ -284,6 +292,13 @@ final class MapToolsPanel extends JPanel {
         row(body, gcsSearch);
         slideRow(body, searchFields);
 
+        section(body, "4G COVERAGE");
+        coverage.setToolTipText("<html>An ESTIMATE of the 4G signal the drone gets where the map is looked at: green good, yellow fair, orange weak, "
+                + "red none.<br>From where OpenCelliD's open database puts the 4G and 5G cells, and the terrain between them and the drone. "
+                + "Masts show as dots when zoomed in.<br>A guess, not a measurement: the operators' own maps are not open. Press again to turn it off</html>");
+        row(body, coverage);
+        slideRow(body, coverageFields);
+
         section(body, "MAP");
         row(body, goTo);
     }
@@ -317,6 +332,42 @@ final class MapToolsPanel extends JPanel {
         box.add(Box.createVerticalStrut(6));
         box.add(status);
         return box;
+    }
+
+    /** 4G COVERAGE's fields: network and height side by side, the key and the import, the status line. */
+    private JPanel coverageFields() {
+        for (de.droiddrone.pc.map.OpenCellId.Operator o : de.droiddrone.pc.map.OpenCellId.Operator.values()) coverageOperator.addItem(o.title);
+        for (int m : de.droiddrone.pc.map.CellCoverage.HEIGHTS_M) coverageHeight.addItem(m + " m");
+        TacticalCombo.install(coverageOperator);
+        TacticalCombo.install(coverageHeight);
+        coverageOperator.setToolTipText("The network your SIM is on: only its masts count");
+        coverageHeight.setToolTipText("The drone's height above the ground: the higher, the more masts it sees (2 m: on the ground)");
+        coverageKey.setToolTipText("Your OpenCelliD access token: register free at opencellid.org, then copy the Access Token");
+        coverageImport.setToolTipText("A country file from OpenCelliD's downloads page (242.csv.gz is Norway): every cell at once, no requests");
+        JPanel grid = new JPanel(new GridLayout(3, 2, 6, 4));
+        grid.setOpaque(false);
+        grid.add(Theme.label("Network", Theme.headingFont(11f), Theme.MUTED));
+        grid.add(coverageOperator);
+        grid.add(Theme.label("Drone", Theme.headingFont(11f), Theme.MUTED));
+        grid.add(coverageHeight);
+        grid.add(small(coverageKey));
+        grid.add(small(coverageImport));
+        JPanel box = new JPanel();
+        box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
+        box.setOpaque(false);
+        box.setBorder(BorderFactory.createEmptyBorder(2, 8, 4, 0)); // indented under its button
+        grid.setAlignmentX(LEFT_ALIGNMENT);
+        coverageStatus.setAlignmentX(LEFT_ALIGNMENT);
+        box.add(grid);
+        box.add(Box.createVerticalStrut(6));
+        box.add(coverageStatus);
+        return box;
+    }
+
+    /** The coverage button lit and its fields out while it is on. */
+    void setCoverageOn(boolean on) {
+        lit(coverage, on);
+        coverageFields.setOpen(on);
     }
 
     private static void addField(JPanel grid, String name, SpinnerNumberModel model, String tip) {

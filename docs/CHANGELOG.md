@@ -2,6 +2,10 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.44
+
+- **MAP TOOLS > TOOLS > 4G COVERAGE: an estimate of where the drone has good, fair, weak or no 4G** (`CellCoverage`, `OpenCellId`): no operator publishes an open coverage map of Norway, so it is worked out from where OpenCelliD's open database (CC BY-SA 4.0, a free key: KEY...) puts the 4G and 5G cells of the chosen network (All / Telenor / Telia / Ice) and the terrain between them and the drone (2, 50 or 120 m above the ground): RSRP at 800 MHz from a 30 m mast, free space or two-ray, the highest ridge as a knife edge, ground clutter near the ground. Worked out when the view rests; masts as dots from zoom 11; labelled ESTIMATE with OpenCelliD's attribution; only while TOOLS is open, never in an exported picture. Cells come in fixed boxes under the API's 4 km2 limit, two requests each, kept 30 days on disk (`%APPDATA%\DraupneLink\opencellid`), at most 60 boxes a view and 900 requests a day; or all at once from the country file (242.csv.gz, IMPORT...). Tests: `CellCoverageTest`, `CoverageOverlayTest`.
+
 ## 1.0.43
 
 - **Drone setup > Orientation draws a textured FPV drone model** (`DroneModelView`): the mesh in `model/fpv-drone.bin.gz` (47k vertices, 59k triangles, 'DRM1', made from the OBJ by `tools/model/export_fpv_drone.py`: the drone's axes, centred on the motors, scaled to the old quad's motor spacing) with two 1024 textures (ambient occlusion multiplied in), rasterised in software with a depth buffer at 2 x 2 sub-pixels in row bands on all cores, back faces culled; the front props tinted red; the shadow is the hull of every 8th vertex. About 8 ms a frame on 4 cores. Test: `DroneModelViewTest` (red props at the front, nose down moves them down).
