@@ -156,6 +156,7 @@ final class OsdRenderer {
             FcTelemetry.Gps gps = t == null ? null : t.getGps();
             FcTelemetry.Altitude alt = t == null ? null : t.getAltitude();
 
+            if (t != null) motion(t.getMotion().shown(now)); // under the HUD: the HUD's figures stay readable
             if (attFresh && this.layout.isOn(OsdElement.HORIZON)) horizon(att, d.invertPitch());
             if (this.layout.isOn(OsdElement.CROSSHAIR)) crosshair(g, w / 2f, h / 2f, unit);
             if (d.roleBanner() != null) { // a spectator: always in sight that this PC doesn't fly (red when it wanted to)
@@ -287,6 +288,48 @@ final class OsdRenderer {
         } finally { // also if an element throws: no Graphics left open, no bounds kept
             boundsOut = null;
             g.dispose();
+        }
+    }
+
+    /**
+     * The picture's way round as it is shown (VideoView, OsdRecorder): mirrored for a front camera, turned for one
+     * upside down. The motion boxes come in the camera's own coordinates and are turned with the picture.
+     */
+    void setPictureFlip(boolean flipX, boolean flipY) {
+        this.flipX = flipX;
+        this.flipY = flipY;
+    }
+
+    private volatile boolean flipX, flipY;
+
+    /**
+     * The phone's motion detection (1.0.46): a thin square round each thing that travels through the picture while the
+     * drone is disarmed, MOVING over it (LIGHT for one found in the dark), fading out within a second of the phone's
+     * last report of it (MotionBoxes). The square is the box's longer side and a little more, at least 28 px at 720.
+     */
+    private void motion(List<de.droiddrone.pc.MotionBoxes.Shown> boxes) {
+        if (boxes.isEmpty()) return;
+        java.awt.Composite saved = g.getComposite();
+        try {
+            g.setFont(Theme.headingFont(14 * unit));
+            for (de.droiddrone.pc.MotionBoxes.Shown s : boxes) {
+                if (s.alpha() <= 0) continue;
+                de.droiddrone.common.MotionRecord.Box b = s.box();
+                float bx = flipX ? 1 - b.x - b.w : b.x, by = flipY ? 1 - b.y - b.h : b.y;
+                float cx = (bx + b.w / 2) * w, cy = (by + b.h / 2) * h;
+                float side = Math.max(Math.max(b.w * w, b.h * h) * 1.2f, 28 * unit);
+                Rectangle2D square = new Rectangle2D.Float(cx - side / 2, cy - side / 2, side, side);
+                g.setComposite(java.awt.AlphaComposite.SrcOver.derive(s.alpha()));
+                g.setColor(OUTLINE);
+                g.setStroke(new BasicStroke(3.5f * unit, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
+                g.draw(square);
+                g.setColor(YELLOW);
+                g.setStroke(new BasicStroke(Math.max(1f, 1.5f * unit), BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
+                g.draw(square);
+                text(b.light() ? "LIGHT" : "MOVING", (float) square.getX(), (float) square.getY() - 5 * unit, YELLOW);
+            }
+        } finally {
+            g.setComposite(saved);
         }
     }
 

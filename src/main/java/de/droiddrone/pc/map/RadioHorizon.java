@@ -129,7 +129,7 @@ public final class RadioHorizon {
     }
 
     /** A point east and north of another by metres (flat over 30 km is close enough for a grid). */
-    static double[] offset(double lat, double lon, double eastM, double northM) {
+    public static double[] offset(double lat, double lon, double eastM, double northM) {
         return new double[]{lat + northM / 111_320.0, lon + eastM / (111_320.0 * Math.cos(Math.toRadians(lat)))};
     }
 

@@ -196,6 +196,7 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
                 g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
                 osd.setDisplayMs(view.displayMs());
+                osd.setPictureFlip(flipX, flipY); // the motion boxes (1.0.46) as the screen draws them
                 osd.paint(g, 0, 0, w, h, data, view.osdLayout());
             }
         } finally {

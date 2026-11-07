@@ -492,6 +492,12 @@ public class MainWindow extends JFrame {
         menu.add(videoRow);
         menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;",
                 videoView.isUpsideDown(), this::setUpsideDown));
+        MenuRows.ChoiceRow motionRow = new MenuRows.ChoiceRow("Motion detection", "Disarmed: what moves, boxed",
+                DETECTION_LEVELS, detectionFor(config.getString(Names.PHONE_NAME_KEY)), this::setDetection);
+        motionRow.setToolTipText("<html>While the drone is disarmed the phone watches the picture and boxes what travels through it"
+                + "<br>(people, cars, animals, birds - not leaves and branches in the wind; lights at night).<br>"
+                + "The direction goes on the map. Per drone; phone app 2.3.0-pc.35 or newer.</html>");
+        menu.add(motionRow);
         menu.add(new MenuRows.SwitchRow("Camera view on the map", "The ground the camera sees, on the map and the minimap",
                 cameraOnMap, on -> {
                     cameraOnMap = on;
@@ -1262,6 +1268,7 @@ public class MainWindow extends JFrame {
         RcSession s = session;
         s.setFrozenStopMs(config.getRadioFrozenStopS() * 1000L);
         connection.getLink().setMaxStickLagMs(config.getMaxStickLagMs());
+        if (!watch) connection.getLink().setDetection(detectionFor(target.name())); // the drone's own (1.0.46)
         // STANDBY / DEEP SLEEP: no sticks, and a WAKE starts with the throttle-low rule (not a radio blip's quick resume)
         service.setInputListener(state -> {
             if (sticksPaused()) s.onPaused(state); else s.onInput(state);
@@ -1419,16 +1426,75 @@ public class MainWindow extends JFrame {
             connected = state == ControlLink.State.READY || state == ControlLink.State.SPECTATING;
         }
         de.droiddrone.pc.map.CameraFootprint.View view = null;
-        if (c != null && cameraOnMap && !fcLost) {
-            VideoPipeline v = video;
-            int[] size = v == null ? null : v.pictureSize();
-            if (size != null) cameraView.setPictureSize(size[0], size[1]);
-            view = cameraView.compute(c.getLink().getTelemetry(), track);
-        }
+        VideoPipeline v = video;
+        int[] size = v == null ? null : v.pictureSize();
+        if (size != null) cameraView.setPictureSize(size[0], size[1]);
+        if (c != null && cameraOnMap && !fcLost) view = cameraView.compute(c.getLink().getTelemetry(), track);
         if (w != null) w.setCameraView(view);
         miniMap.setCameraView(view);
+        List<de.droiddrone.pc.DetectionMarks.Mark> marks = c == null ? detectionMarks.marks(now) : detectionMarks(c.getLink().getTelemetry(), now);
+        if (w != null) w.setDetections(marks);
+        miniMap.setDetections(marks);
         if (w != null) w.update(track, gps, heading, fcLost, connected);
         if (mini) miniMap.update(track, gps, heading, fcLost, connected);
+    }
+
+    // ------------------------------------------------------------------ motion detection (1.0.46)
+
+    /** The motion detection's marks on the map: a line along each detection's direction, its estimated ground point. */
+    private final de.droiddrone.pc.DetectionMarks detectionMarks = new de.droiddrone.pc.DetectionMarks();
+    private long motionIdsSeen, motionSaidAt;
+
+    /**
+     * The boxes of the phone's latest DETECTION record onto the map: each one's ray from the camera's pose now (the
+     * picture turned as the screen shows it), its mark following it. A new thing seen goes to the log (once in 10 s).
+     */
+    private List<de.droiddrone.pc.DetectionMarks.Mark> detectionMarks(de.droiddrone.pc.FcTelemetry t, long now) {
+        de.droiddrone.pc.MotionBoxes motion = t.getMotion();
+        boolean flipX = videoView.isMirror() != videoView.isUpsideDown(), flipY = videoView.isUpsideDown();
+        de.droiddrone.pc.map.CameraFootprint.Pose pose = null;
+        for (de.droiddrone.pc.MotionBoxes.Shown s : motion.shown(now)) {
+            if (now - s.seenAt() > de.droiddrone.pc.MotionBoxes.SOLID_MS) continue; // only what the latest record had
+            if (pose == null) pose = cameraView.sittingPose(t, track);
+            if (pose == null) break; // no position or heading: no line to draw
+            double[] uv = de.droiddrone.pc.DetectionMarks.pictureUv(s.box(), flipX, flipY);
+            detectionMarks.put(s.box().id, s.box().light(), pose.lat(), pose.lon(), cameraView.ray(t, track, uv[0], uv[1]), now);
+        }
+        long ids = motion.newIds();
+        if (ids > motionIdsSeen) {
+            if (now - motionSaidAt > 10_000) {
+                logLine("MOTION: something travels in the picture (" + (ids - motionIdsSeen) + " new) - see the boxes on the video and the map.");
+                motionSaidAt = now;
+            }
+            motionIdsSeen = ids;
+        }
+        return detectionMarks.marks(now);
+    }
+
+    static final String DETECTION_KEY = "detection";
+    static final String[] DETECTION_LEVELS = {"OFF", "LOW", "NORMAL", "HIGH"};
+
+    /** The phone's own motion detection setting (0 off .. 3 high); never set: NORMAL. */
+    private int detectionFor(String phone) {
+        String v = phone == null || phone.isEmpty() ? "" : config.getString(DETECTION_KEY + "." + phone);
+        if (v.isEmpty()) v = config.getString(DETECTION_KEY);
+        for (int i = 0; i < DETECTION_LEVELS.length; i++) if (DETECTION_LEVELS[i].equalsIgnoreCase(v.trim())) return i;
+        return 2;
+    }
+
+    /** VIDEO > Motion detection: saved for the chosen phone (the drone), told to it within a second. */
+    private void setDetection(int level) {
+        String phone = config.getString(Names.PHONE_NAME_KEY);
+        save(Map.of(phone.isEmpty() ? DETECTION_KEY : DETECTION_KEY + "." + phone, DETECTION_LEVELS[level].toLowerCase(Locale.ROOT)));
+        Connection c = connection;
+        if (c != null && !c.getLink().isSpectator()) {
+            c.getLink().setDetection(level);
+            if (!c.getLink().detectionSupported() && c.getLink().getTelemetry().getPhonePcBuild() >= 0) {
+                logLine("Motion detection: the phone app is older than 2.3.0-pc.35 - update it to use this.");
+                return;
+            }
+        }
+        logLine(level == 0 ? "Motion detection off." : "Motion detection " + DETECTION_LEVELS[level] + ": while the drone is disarmed the phone marks what travels through the picture (not swaying trees).");
     }
 
     /**

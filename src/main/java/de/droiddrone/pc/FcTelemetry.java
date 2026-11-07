@@ -143,6 +143,17 @@ public class FcTelemetry {
 
     private volatile PhoneUpdate phoneUpdate;
 
+    /**
+     * The phone's motion detection (record DETECTION 0x40FA, phone app pc.35, only while this PC asks for it): the
+     * boxes round what travels through the picture while the drone is disarmed. Read by the shared
+     * {@link de.droiddrone.common.MotionRecord}; kept by id so a box fades out after its last record.
+     */
+    private final MotionBoxes motion = new MotionBoxes();
+
+    public MotionBoxes getMotion() {
+        return motion;
+    }
+
     /** The phone's latest word on a remote update, or null. */
     public PhoneUpdate getPhoneUpdate() {
         return phoneUpdate;
@@ -431,6 +442,7 @@ public class FcTelemetry {
                 String text = b.readUTF();
                 phoneUpdate = new PhoneUpdate(state, percent, text == null ? "" : text, MonoClock.ms());
             }
+            case de.droiddrone.common.MotionRecord.CODE -> motion.update(de.droiddrone.common.MotionRecord.read(b), MonoClock.ms());
             case PHONE_RC_LAG -> {
                 int lag = b.readShort() & 0xffff;
                 int max = b.readShort() & 0xffff;

@@ -19,12 +19,16 @@
  *  be stopped without closing the camera (stopSession).
  *  pc.31: one camera thread, kept across opens (each open started one and none was quit); a device's callbacks for
  *  an earlier open (or one after close) only close that device, never the current camera's state.
+ *  pc.35: a second small YUV stream for the motion detection (MotionWatch) beside the encoder's surface - in the
+ *  session, but in the repeating request only while MotionWatch analyses (disarmed); a phone that refuses a session
+ *  with it gets one without, and isn't asked again.
  */
 
 package de.droiddrone.flight;
 
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -38,11 +42,14 @@ import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.Image;
+import android.media.ImageReader;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Range;
 import android.util.Size;
+import android.util.SizeF;
 import android.view.Surface;
 
 import androidx.annotation.NonNull;
@@ -80,6 +87,20 @@ public class InternalCamera implements Camera{
     private boolean isStarted;
     /** openCamera was called and the device hasn't answered yet (pc.26: a config change waits for it). */
     private volatile boolean isOpening;
+    /** pc.35: the motion detection's picture: its size (the video's shape, about 320 wide; null: none), reader, thread. */
+    private Size analysisSize;
+    private ImageReader analysisReader;
+    private HandlerThread analysisThread;
+    /** The analysis surface of the session being made or running; null when it has none. */
+    private volatile Surface sessionAnalysis;
+    /** MotionWatch wants pictures: the analysis surface is in the repeating request. */
+    private volatile boolean analysisOn;
+    /** A camera whose session failed with the analysis stream: never asked for it again while the app runs. */
+    private static volatile String analysisRefusedFor;
+    /** The encoder's (and recorder's) surfaces of the last session, for its second try without the analysis stream. */
+    private volatile List<Surface> sessionTargets;
+    /** The repeating request's targets change on three threads (recording, analysis, the session): one at a time. */
+    private final Object requestLock = new Object();
 
     public InternalCamera(Context context, Config config) {
         this.context = context;
@@ -245,6 +266,48 @@ public class InternalCamera implements Camera{
             this.recorderSurface = recorderSurface;
             targets.add(recorderSurface);
         }
+        sessionTargets = targets;
+        createSession(targets, analysisSurface());
+    }
+
+    /**
+     * pc.35: the motion detection's reader surface for a new session, or null: no small picture of the video's shape
+     * on this camera, or the camera refused it before. A reader of the same size is kept from session to session.
+     */
+    private Surface analysisSurface() {
+        Size size = analysisSize;
+        if (size == null || config.getCameraId().equals(analysisRefusedFor)) return null;
+        try {
+            if (analysisReader == null || analysisReader.getWidth() != size.getWidth() || analysisReader.getHeight() != size.getHeight()) {
+                if (analysisReader != null) analysisReader.close(); // the session that had it is stopped already
+                if (analysisThread == null || !analysisThread.isAlive()) {
+                    analysisThread = new HandlerThread("motionFrames", android.os.Process.THREAD_PRIORITY_BACKGROUND);
+                    analysisThread.start();
+                }
+                // 3 buffers: the newest is taken and closed at once (copied smaller), the camera never waits for one
+                analysisReader = ImageReader.newInstance(size.getWidth(), size.getHeight(), ImageFormat.YUV_420_888, 3);
+                analysisReader.setOnImageAvailableListener(reader -> {
+                    Image image = null;
+                    try {
+                        image = reader.acquireLatestImage();
+                        if (image != null) MotionWatch.offer(image);
+                    } catch (RuntimeException e) {
+                        // a reader closed under us
+                    } finally {
+                        if (image != null) image.close();
+                    }
+                }, new Handler(analysisThread.getLooper()));
+            }
+            return analysisReader.getSurface();
+        } catch (RuntimeException e) {
+            log("Motion detection's picture not made: " + e);
+            return null;
+        }
+    }
+
+    /** The capture session: the encoder's (and recorder's) surfaces shared, and the analysis surface on its own. */
+    private void createSession(List<Surface> targets, Surface analysis) {
+        sessionAnalysis = analysis;
         try {
             List<OutputConfiguration> outputConfigurations = new ArrayList<>();
             if (Build.VERSION.SDK_INT >= 28) {
@@ -258,6 +321,7 @@ public class InternalCamera implements Camera{
                     }
                 }
                 outputConfigurations.add(outputConfig);
+                if (analysis != null) outputConfigurations.add(new OutputConfiguration(analysis));
 
                 final Handler handler = new Handler(handlerThread.getLooper());
                 Executor executor = new Executor() {
@@ -273,6 +337,7 @@ public class InternalCamera implements Camera{
                     OutputConfiguration outputConfig = new OutputConfiguration(target);
                     outputConfigurations.add(outputConfig);
                 }
+                if (analysis != null) outputConfigurations.add(new OutputConfiguration(analysis));
 
                 final Handler handler = new Handler(handlerThread.getLooper());
                 camera.createCaptureSessionByOutputConfigurations(outputConfigurations, sessionStateCallback, handler);
@@ -289,24 +354,67 @@ public class InternalCamera implements Camera{
 
     @Override
     public void startCapture(){
-        if (recorderSurface != null){
-            mCaptureRequest.addTarget(recorderSurface);
-            try{
-                mCameraCaptureSession.setRepeatingRequest(mCaptureRequest.build(), captureCallback, new Handler(handlerThread.getLooper()));
-            }catch (CameraAccessException e){
-                log("addRecorderSurface CameraAccessException: "+ e);
+        synchronized (requestLock) {
+            if (recorderSurface != null){
+                mCaptureRequest.addTarget(recorderSurface);
+                try{
+                    mCameraCaptureSession.setRepeatingRequest(mCaptureRequest.build(), captureCallback, new Handler(handlerThread.getLooper()));
+                }catch (CameraAccessException e){
+                    log("addRecorderSurface CameraAccessException: "+ e);
+                }
             }
         }
     }
 
     @Override
     public void stopCapture(){
-        if (recorderSurface != null) mCaptureRequest.removeTarget(recorderSurface);
-        try{
-            mCameraCaptureSession.setRepeatingRequest(mCaptureRequest.build(), captureCallback, new Handler(handlerThread.getLooper()));
-        }catch (Exception e){
-            log("removeRecorderSurface CameraAccessException: "+ e);
+        synchronized (requestLock) {
+            if (recorderSurface != null) mCaptureRequest.removeTarget(recorderSurface);
+            try{
+                mCameraCaptureSession.setRepeatingRequest(mCaptureRequest.build(), captureCallback, new Handler(handlerThread.getLooper()));
+            }catch (Exception e){
+                log("removeRecorderSurface CameraAccessException: "+ e);
+            }
         }
+    }
+
+    /**
+     * pc.35: MotionWatch's pictures on or off (it asks every 0.1 s; nothing happens when it is already so). The
+     * analysis surface goes into the repeating request or out of it on the camera's thread, like the recorder's.
+     */
+    @Override
+    public void setAnalysis(boolean on){
+        if (on == analysisOn) return;
+        analysisOn = on;
+        HandlerThread thread = handlerThread;
+        if (thread == null) return;
+        try {
+            new Handler(thread.getLooper()).post(this::applyAnalysis);
+        } catch (RuntimeException e) {
+            // the camera thread is ending: the next session starts with analysisOn as it is
+        }
+    }
+
+    private void applyAnalysis(){
+        synchronized (requestLock) {
+            CaptureRequest.Builder request = mCaptureRequest;
+            CameraCaptureSession session = mCameraCaptureSession;
+            Surface analysis = sessionAnalysis;
+            HandlerThread thread = handlerThread;
+            if (request == null || session == null || analysis == null || thread == null) return;
+            if (analysisOn) request.addTarget(analysis);
+            else request.removeTarget(analysis);
+            try{
+                session.setRepeatingRequest(request.build(), captureCallback, new Handler(thread.getLooper()));
+            }catch (Exception e){
+                log("Motion detection's picture " + (analysisOn ? "on" : "off") + ": " + e);
+            }
+        }
+    }
+
+    @Override
+    public boolean analysisAvailable(){
+        return sessionAnalysis != null && mCameraCaptureSession != null;
     }
 
     private final CameraCaptureSession.StateCallback sessionStateCallback = new CameraCaptureSession.StateCallback(){
@@ -320,23 +428,35 @@ public class InternalCamera implements Camera{
                 log("createCaptureRequest CameraAccessException: "+ e);
                 return;
             }
-            mCaptureRequest = captureRequest;
-            mCameraCaptureSession = cameraCaptureSession;
-            configureCamera(captureRequest);
-            captureRequest.addTarget(streamEncoderSurface);
-            try{
-                cameraCaptureSession.setRepeatingRequest(captureRequest.build(), captureCallback, new Handler(handlerThread.getLooper()));
-                cameraFrameCounter = 0;
-                lastFps = 0;
-                cameraFrameTimestamp = System.currentTimeMillis();
-            }catch (Exception e){
-                log("Camera - setRepeatingRequest error: "+ e);
+            synchronized (requestLock) {
+                mCaptureRequest = captureRequest;
+                mCameraCaptureSession = cameraCaptureSession;
+                configureCamera(captureRequest);
+                captureRequest.addTarget(streamEncoderSurface);
+                Surface analysis = sessionAnalysis;
+                if (analysis != null && analysisOn) captureRequest.addTarget(analysis); // pc.35: MotionWatch analyses
+                try{
+                    cameraCaptureSession.setRepeatingRequest(captureRequest.build(), captureCallback, new Handler(handlerThread.getLooper()));
+                    cameraFrameCounter = 0;
+                    lastFps = 0;
+                    cameraFrameTimestamp = System.currentTimeMillis();
+                }catch (Exception e){
+                    log("Camera - setRepeatingRequest error: "+ e);
+                }
             }
         }
 
         @Override
         public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession){
             log("CameraCaptureSession - onConfigureFailed");
+            // pc.35: the phone won't take the motion detection's stream beside the video: the video without it, now
+            // and from here on (a USB camera or another phone may still do)
+            List<Surface> targets = sessionTargets;
+            if (sessionAnalysis != null && targets != null && camera != null) {
+                log("The camera refused the motion detection's picture: the video goes on without it");
+                analysisRefusedFor = config.getCameraId();
+                createSession(targets, null);
+            }
         }
     };
 
@@ -435,7 +555,41 @@ public class InternalCamera implements Camera{
         log("Min FPS: "+frameRate.getLower()+", Max FPS: "+frameRate.getUpper());
         cameraResolution = new Size(width, height);
         log("cameraResolution - Width: " + cameraResolution.getWidth() + ", Height: " + cameraResolution.getHeight());
+        // pc.35: the motion detection's small picture, the video's shape (so a box on it is a box on the video), and
+        // the angle the picture spans across (the boxes' angles off the camera's axis)
+        analysisSize = configurationMap == null ? null : pickAnalysisSize(configurationMap.getOutputSizes(ImageFormat.YUV_420_888), cameraResolution);
+        SizeF sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+        float focal = fLengths != null && fLengths.length > 0 ? fLengths[0] : 0;
+        MotionWatch.setFieldOfView(fieldOfView(sensor == null ? 0 : sensor.getWidth(), sensor == null ? 0 : sensor.getHeight(), focal,
+                (float) width / Math.max(1, height)));
         return true;
+    }
+
+    /**
+     * pc.35: the smallest YUV size of the video's shape at least 240 wide (320 or so on most phones), at most 720; null
+     * when the camera lists none of that shape - a box on a picture of another shape would be off on the video.
+     */
+    static Size pickAnalysisSize(Size[] sizes, Size video) {
+        if (sizes == null || video == null || video.getHeight() <= 0) return null;
+        double aspect = (double) video.getWidth() / video.getHeight();
+        Size best = null;
+        for (Size s : sizes) {
+            if (s.getWidth() < 240 || s.getWidth() > 720) continue;
+            if (Math.abs((double) s.getWidth() / Math.max(1, s.getHeight()) - aspect) > 0.03) continue;
+            if (best == null || s.getWidth() < best.getWidth()) best = s;
+        }
+        return best;
+    }
+
+    /**
+     * pc.35: the angle across a picture of this shape, degrees, from the sensor's size (mm) and the lens's focal length
+     * (mm); 0 when unknown. A picture wider in shape than the sensor uses its whole width; a narrower one is cut at
+     * the sides.
+     */
+    static float fieldOfView(float sensorWidth, float sensorHeight, float focal, float aspect) {
+        if (sensorWidth <= 0 || sensorHeight <= 0 || focal <= 0) return 0;
+        float used = Math.min(sensorWidth, sensorHeight * aspect);
+        return (float) Math.toDegrees(2 * Math.atan(used / (2 * focal)));
     }
 
     /**
@@ -602,6 +756,16 @@ public class InternalCamera implements Camera{
         if (handlerThread != null){
             handlerThread.quitSafely();
             handlerThread = null; // the next open starts a new one
+        }
+        // pc.35: the motion detection's reader and its thread, after the camera (no session left to feed them)
+        sessionAnalysis = null;
+        if (analysisReader != null) {
+            analysisReader.close();
+            analysisReader = null;
+        }
+        if (analysisThread != null) {
+            analysisThread.quitSafely();
+            analysisThread = null;
         }
     }
 }

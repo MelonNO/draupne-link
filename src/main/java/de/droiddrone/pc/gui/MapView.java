@@ -1736,6 +1736,7 @@ class MapView extends JComponent {
             if (pins != null) paintPins(g, last, home, zi, scale, wcx, wcy, w, h);
             paintGraphics(g, zi, scale, wcx, wcy, w, h);
             if (cameraView != null && !forPicture && connected) paintCameraView(g, zi, scale, wcx, wcy, w, h);
+            if (!forPicture) paintDetections(g, zi, scale, wcx, wcy, w, h);
             paintNetDrones(g, zi, scale, wcx, wcy, w, h);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
             else if (!forPicture) paintNoPosition(g, w, h);
@@ -2031,6 +2032,57 @@ class MapView extends JComponent {
     /** The camera's view on the map (null takes it away): the next repaint shows it. */
     void setCameraView(CameraFootprint.View view) {
         cameraView = view;
+    }
+
+    /** The motion detection's marks (1.0.46; empty: none): the next repaint shows them. */
+    void setDetections(List<de.droiddrone.pc.DetectionMarks.Mark> marks) {
+        detections = marks == null ? List.of() : marks;
+    }
+
+    private volatile List<de.droiddrone.pc.DetectionMarks.Mark> detections = List.of();
+    /** A ray that meets no ground is drawn this far (the camera's reach on the ground, CameraFootprint). */
+    static final double DETECTION_LINE_M = CameraFootprint.MAX_RANGE_M;
+
+    /**
+     * The motion detection (1.0.46): from the drone a thin dashed yellow line along each detection's direction, and
+     * where it meets the terrain a ring marked EST (an estimate: the camera's set angle and tilt, the map's heights),
+     * MOVING or LIGHT and its age beside it. Fading over DetectionMarks.KEEP_MS.
+     */
+    private void paintDetections(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+        List<de.droiddrone.pc.DetectionMarks.Mark> marks = detections;
+        if (marks.isEmpty()) return;
+        long now = de.droiddrone.pc.MonoClock.ms();
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            g.setFont(Theme.headingFont(10.5f));
+            for (de.droiddrone.pc.DetectionMarks.Mark m : marks) {
+                float a = m.alpha(now);
+                if (a <= 0) continue;
+                Point2D d = toScreen(m.droneLat(), m.droneLon(), zi, scale, wcx, wcy, w, h);
+                double[] end = m.ground() != null ? m.ground() : de.droiddrone.pc.map.RadioHorizon.offset(m.droneLat(), m.droneLon(),
+                        Math.sin(Math.toRadians(m.bearingDeg())) * DETECTION_LINE_M, Math.cos(Math.toRadians(m.bearingDeg())) * DETECTION_LINE_M);
+                Point2D e = toScreen(end[0], end[1], zi, scale, wcx, wcy, w, h);
+                Color yellow = Theme.alpha(Theme.WARN, Math.round(220 * a));
+                g.setColor(new Color(0, 0, 0, Math.round(120 * a)));
+                g.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g.draw(new java.awt.geom.Line2D.Double(d, e));
+                g.setColor(yellow);
+                g.setStroke(new BasicStroke(1.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1, new float[]{6, 4}, 0));
+                g.draw(new java.awt.geom.Line2D.Double(d, e));
+                String what = (m.light() ? "LIGHT" : "MOVING") + "  " + Math.max(0, (now - m.seenAt()) / 1000) + " S";
+                if (m.ground() != null) {
+                    double r = 7;
+                    g.setStroke(new BasicStroke(2f));
+                    g.draw(new Ellipse2D.Double(e.getX() - r, e.getY() - r, 2 * r, 2 * r));
+                    g.drawString("EST " + what + (Double.isNaN(m.rangeM()) ? "" : "  " + Math.round(m.rangeM()) + " M"),
+                            (float) e.getX() + 10, (float) e.getY() + 4);
+                } else {
+                    g.drawString(what, (float) e.getX() + 6, (float) e.getY() + 4);
+                }
+            }
+        } finally {
+            g.dispose();
+        }
     }
 
     /**

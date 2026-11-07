@@ -6,6 +6,43 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-07, 1.0.44 built, not released; phone app 2.3.0-pc.33 built from source, no APK yet)
 
+- **1.0.46 motion detection + phone pc.35 (2026-11-07, branch feat-detection, not released, never run on a phone or
+  real footage; versions left for the merge):** the pilot: "When the drone is disarmed the phone should detect
+  movements; if movement is detected add a square around the moving part of the screen. This must not trigger on
+  movement caused by vegetation." *Where:* `flight-app/overlay/Common/.../MotionDetector` (pure Java 11, no Android) +
+  `MotionRecord` (the 0x40FA record's writer and reader) - the overlay's Common is compiled into the phone app and into
+  the PC build (build.gradle's srcDir), so the PC's tests run the phone's detector unchanged, no copy. *Phone:*
+  `MotionWatch` (DETECTION_SET 0x7C from the PC, fresh 5 s; `tick` on the telemetry thread every 0.1 s: asked +
+  `FcArmedState` DISARMED + camera started; one picture at a time to a background-priority thread; the record in its
+  own packet), `InternalCamera` (an ImageReader YUV_420_888 of the video's shape 240-720 wide in the session as its own
+  OutputConfiguration, in the repeating request only while analysing, under `requestLock` with the recorder's target
+  changes; `onConfigureFailed` with it -> the session again without, `analysisRefusedFor` that camera id; the field of
+  view from SENSOR_INFO_PHYSICAL_SIZE + the first focal length), `UsbCamera` (now overlaid: `setFrameCallback` NV21
+  only while analysing, set again after each open), `Camera.setAnalysis/analysisAvailable`. *Detector:* 160-wide
+  working picture; shift by high-passed SAD (coarse +-16 px on a quarter copy, +-3, equiangular fraction); exposure
+  step > 8 % rescales the background; > 25 % changed = settling (tracks cleared, fast learning, restart after 3 s);
+  foreground = further than k sd + margin from all 3 x 3 background means (NORMAL k 2.5, +8 grey; LOW 3/12; HIGH
+  2.2/6), not "other light" (3 x 3 correlation > 0.8); variance up in 3 s (below the line) / 6 s capped 40 (foreground)
+  / 30 s (a confirmed track), down 20 s; tracks need age >= 2.0 s (LOW 2.5, HIGH 1.6), seen in 60 % of pictures, net
+  2 s way >= 7 px and half their size (x 1.5 in the first 20 s after the 3 s warm-up), straightness 0.6, both halves
+  the same way, not returning, no wake on the 8 s slow background; vegetation score = 0.35 flicker (max of 20 s
+  foreground frequency within 2 px, bias-corrected while young) + 0.3 green + 0.3 max(back-and-forth, 1 - straight) +
+  0.05 texture, cap 0.45 (x 0.5 while young). Night (mean luma < 35): brighter-only, margin 35, peak 60 over the mean.
+  *Measured on made-up gale scenes (6 seeds x 10 min + the tests):* no false alarm in 80 minutes at NORMAL and 5 at HIGH; walkers
+  found 18 of 20 (the two misses barely differ from the ground's brightness), ~2-3 s after they appear; ~1 ms a
+  picture on this PC. *PC:* `MotionBoxes` (FcTelemetry.getMotion: by id, solid 250 ms, gone 1 s), `OsdRenderer.motion`
+  (under the HUD, turned with the picture via `setPictureFlip` from VideoView and OsdRecorder), `DetectionMarks` +
+  `CameraView.ray` / `CameraFootprint.ray` (bearing and terrain hit; the position may be 2 min old for a sitting drone,
+  the attitude 3 s), `MapView.paintDetections` (dashed line, EST ring, 30 s), VIDEO > Motion detection
+  (`detection.<phone>`), `ControlLink.setDetection` / DETECTION_SET once a second to pc.35+. *Unsure / to check on
+  the real thing:* every threshold is tuned on synthetic pictures only; whether phones accept the third stream (LEGACY
+  devices especially) and whether adding/removing it from the repeating request at arming makes a visible hitch (the
+  recorder's target already changes the same way in flight); the UVC library's NV21 conversion cost on the capture
+  thread; the field of view of zoomed / logical cameras; slow low-contrast walkers and tiny targets over textured
+  shaking ground are missed; a uniformly grey thing on smooth ground could be taken for "other light" only where the
+  ground has texture (by design). Ids: 0x7C and 0x40FA were picked clear of the live-audio work's likely 0x79-0x7B /
+  0x40F8-9 - check at the merge.
+
 - **1.0.44 GPS + beepers + phone pc.33 (2026-11-07, not released, untried on hardware):** the pilot: the GPS must
   never sit on two UARTs; and "the betaflight setup turns off all beeper sounds even when left disarmed", the only
   exception the phone's USB out of the drone, else only a beeper button in the UI. *GPS:* Betaflight 2025.12's CLI

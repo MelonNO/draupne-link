@@ -43,6 +43,24 @@ public final class CameraFootprint {
                        boolean flatGround) {
     }
 
+    /**
+     * One ray from the camera (1.0.46, a motion detection's direction): its bearing from north, degrees, and where it
+     * meets the ground ({lat, lon, height m}; null where it shows sky or ground past MAX_RANGE_M), the slant range to
+     * there (NaN without), and whether the ground had to be taken as flat there.
+     */
+    public record Ray(double bearingDeg, double[] ground, double slantRangeM, boolean flatGround) {
+    }
+
+    /** The ray through picture point (u, v), -1..1 left to right and top to bottom of the picture as it is shown. */
+    public static Ray ray(Pose p, double u, double v, RadioHorizon.Terrain terrain, double groundFallbackM) {
+        boolean[] flat = {false};
+        double[] hit = cast(p, u, v, terrain, groundFallbackM, flat);
+        double[] d = direction(p, u, v);
+        double bearing = (Math.toDegrees(Math.atan2(d[1], d[0])) + 360) % 360;
+        boolean ground = hit[3] == 0;
+        return new Ray(bearing, ground ? new double[]{hit[0], hit[1], hit[2]} : null, ground ? hit[4] : Double.NaN, flat[0]);
+    }
+
     /** groundFallbackM: the ground's height where the terrain is not known (NaN: below the drone by its height over launch is the caller's choice). */
     public static View compute(Pose p, RadioHorizon.Terrain terrain, double groundFallbackM) {
         boolean[] flat = {false};
