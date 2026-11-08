@@ -1596,9 +1596,11 @@ public final class VirtualDrone {
             if (rec == null || !rec.picture(Scene.pixels(analysis), 320, 180, now)) scene.render(analysis, view(), now, null, false);
             else scene.paintTargets(analysis, view(), now); // the same picture the video shows, models and all
             int[] size = new int[2];
-            byte[] y = Scene.luma(Scene.pixels(analysis), 320, 180, 320, size);
+            int[] px = Scene.pixels(analysis);
+            byte[] y = Scene.luma(px, 320, 180, 320, size);
+            byte[][] uv = Scene.chroma(px, 320, 180); // the colour too, as the phone gives it (1.0.52)
             detector.setSensitivity(level);
-            MotionDetector.Result r = detector.process(y, size[0], size[1], null, null, now);
+            MotionDetector.Result r = detector.process(y, size[0], size[1], uv[0], uv[1], now);
             int flags = MotionRecord.FLAG_ACTIVE | (r.night ? MotionRecord.FLAG_NIGHT : 0) | (r.settling ? MotionRecord.FLAG_SETTLING : 0);
             report = MotionRecord.of(flags, (float) Scene.HFOV_DEG, r);
             overwatch.onPicture(analysis, report, now);
@@ -1609,7 +1611,7 @@ public final class VirtualDrone {
         int boxes = report.boxes.size();
         boolean due = now >= nextMotionReportAt || boxes != lastBoxCount;
         if (!due) return;
-        nextMotionReportAt = now + (boxes > 0 ? 200 : 1000);
+        nextMotionReportAt = now + (boxes > 0 ? 100 : 1000); // every picture while boxes show: the box keeps up (1.0.52)
         lastBoxCount = boxes;
         try {
             UdpPacketData p = new UdpPacketData(UdpCommon.TelemetryData);

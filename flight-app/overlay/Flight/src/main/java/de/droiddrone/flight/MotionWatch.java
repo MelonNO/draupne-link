@@ -58,7 +58,8 @@ final class MotionWatch {
     /** No picture for this long while analysing: the record says NO_PICTURE. */
     static final long NO_PICTURE_MS = 3000;
     /** The record: every this while something is shown, else once a second. */
-    static final long REPORT_BOXES_MS = 200, REPORT_IDLE_MS = 1000;
+    /** pc.40: every new result while boxes show (it was 200 ms: the box drew a car length behind a car). */
+    static final long REPORT_BOXES_MS = 100, REPORT_IDLE_MS = 1000;
 
     private static volatile int sensitivity;
     private static volatile long requestedAt;

@@ -142,6 +142,25 @@ import java.util.List;
     static final float OWN_MARGIN = 2.5f;
     /** Other light changes a 3 x 3 patch by one factor: its pixels' ratios to the background within this of each other. */
     static final float LIGHT_RATIO_SPREAD = 1.5f;
+    /**
+     * By day a pixel also counts by its colour (1.0.52, the pilot's recording: a red car on green ground has the
+     * ground's brightness, so only its wheels and windows were seen - late, and a box beside it): |U - U'| + |V - V'|
+     * against the colour background, over this (of 255) by sensitivity. Only with chroma (the phone; the virtual fleet).
+     */
+    static final float[] CHROMA_MARGIN = {0, 24, 18, 14};
+    /** ... within this many working pixels of what the brightness found (colourFill). */
+    static final int COLOUR_REACH = 3;
+    /** ... where the background's brightness varies less than this (grey levels squared). */
+    static final float COLOUR_STILL_VAR = 8 * 8;
+    /**
+     * A track that clearly drives through the picture counts early (1.0.52: a car was found half way across): from this
+     * age (s), when it went FAST_TRAVEL of the picture's width in a nearly straight line, seen in most pictures - whatever
+     * the sensitivity: a big branch swings a tenth of the width one way before it comes back.
+     */
+    static final float[] FAST_AGE_S = {0, 1.0f, 0.9f, 0.8f};
+    static final float FAST_TRAVEL = 0.15f;
+    static final float FAST_STRAIGHT = 0.85f;
+    static final float FAST_SEEN = 0.75f;
     /** A proven track not matched for this long ends (an unproven one after TRACK_LOST_MS): a vehicle turning head-on shrinks to nothing for a moment. */
     static final long PROVEN_LOST_MS = 3000;
 
@@ -235,6 +254,9 @@ import java.util.List;
     private int sensitivity;
     private int inWidth, inHeight, factor, w, h;
     private float[] cur, aligned, mean, var, sd, freq, green;
+    /** The picture's colour (U, V) per working pixel, and the background's (chromaKnown: learnt since the last restart). */
+    private float[] cu, cv, mu, mv, rawF, rawNear;
+    private boolean chromaKnown;
     /** A slower background: what the ground looked like before the last few seconds (leavesChange). */
     private float[] slow;
     /** The most any pixel within 2 of each flickered (freq): leaves at the far end of a swing sit next to ones that flicker often. */
@@ -323,6 +345,8 @@ import java.util.List;
         downsample(y);
         hasChroma = u != null && v != null && u.length >= (width / 2) * (height / 2) && v.length >= (width / 2) * (height / 2);
         if (hasChroma) greenness(u, v);
+        if (!hasChroma) chromaKnown = false;
+        else if (started && !chromaKnown) startChroma();
         float dt = !started ? 0.125f : Math.max(0.01f, Math.min(1f, (timeMs - lastMs) / 1000f));
         lastMs = timeMs;
         float lum = average(cur);
@@ -413,6 +437,13 @@ import java.util.List;
         sd = new float[n];
         freq = new float[n];
         green = new float[n];
+        cu = new float[n];
+        cv = new float[n];
+        mu = new float[n];
+        mv = new float[n];
+        rawF = new float[n];
+        rawNear = new float[n];
+        chromaKnown = false;
         slow = new float[n];
         near = new float[n];
         changed = new byte[n];
@@ -470,8 +501,12 @@ import java.util.List;
                 }
                 if (n == 0) {
                     green[wy * w + wx] = 0;
+                    cu[wy * w + wx] = 128;
+                    cv[wy * w + wx] = 128;
                     continue;
                 }
+                cu[wy * w + wx] = su / (float) n;
+                cv[wy * w + wx] = sv / (float) n;
                 float below = Math.min(128 - su / (float) n, 128 - sv / (float) n);
                 green[wy * w + wx] = Math.max(0, Math.min(1, (below - 2) / 8));
             }
@@ -503,12 +538,21 @@ import java.util.List;
         System.arraycopy(picture, 0, slow, 0, w * h);
         java.util.Arrays.fill(var, 4 * 4);
         java.util.Arrays.fill(freq, 0);
+        startChroma();
         tracks.clear();
         started = true;
         warmUntil = timeMs + WARM_UP_MS;
         settledFor = 0;
         shiftX = 0;
         shiftY = 0;
+    }
+
+    /** The colour background starts from this picture's colour (or stays unknown without one). */
+    private void startChroma() {
+        chromaKnown = hasChroma;
+        if (!hasChroma) return;
+        System.arraycopy(cu, 0, mu, 0, w * h);
+        System.arraycopy(cv, 0, mv, 0, w * h);
     }
 
     // ------------------------------------------------------------------ 1. the shift
@@ -664,6 +708,9 @@ import java.util.List;
         // strong edge (a vehicle far off on the horizon line) matches a dark neighbour in the 3 x 3 test and was never seen
         boolean steady = Math.abs(shiftX) < STEADY_SHIFT && Math.abs(shiftY) < STEADY_SHIFT;
         float ownMargin = margin * OWN_MARGIN;
+        boolean colour = chromaKnown && !night;
+        float chromaMargin = CHROMA_MARGIN[sensitivity];
+        int ox = Math.round(shiftX), oy = Math.round(shiftY);
         int count = 0;
         for (int yy = 0; yy < h; yy++) {
             for (int xx = 0; xx < w; xx++) {
@@ -700,7 +747,64 @@ import java.util.List;
                 }
             }
         }
+        if (colour) count += colourFill(ox, oy, chromaMargin);
         return count;
+    }
+
+    /**
+     * Colour completes what brightness found (1.0.52): a pixel whose colour differs from the colour background, within
+     * COLOUR_REACH of a brightness foreground pixel, is foreground too - a red car on green ground is the ground's
+     * brightness except its wheels, windows and roof line, and was seen as those bits. Colour alone never starts a blob:
+     * leaves swaying over another colour would.
+     */
+    private int colourFill(int ox, int oy, float margin) {
+        int n = w * h, added = 0;
+        for (int i = 0; i < n; i++) rawF[i] = raw[i];
+        nearMax(rawF, rawNear, COLOUR_REACH);
+        for (int yy = 1; yy < h - 1; yy++) {
+            for (int xx = 1; xx < w - 1; xx++) {
+                int i = yy * w + xx;
+                // and only on a still background: where leaves sway, the brightness learnt their range, the colour hasn't
+                if (raw[i] != 0 || rawNear[i] == 0 || valid[i] == 0 || var[i] > COLOUR_STILL_VAR) continue;
+                if (green[colourAt(xx, yy, ox, oy)] > 0.5f) continue; // the colour of leaves: never filled in
+
+                if (!colourChanged(xx, yy, ox, oy, margin)) continue;
+                // light changes brightness, hardly the colour: not other light
+                raw[i] = 1;
+                if (changed[i] == 0) {
+                    changed[i] = 1;
+                    added++;
+                }
+            }
+        }
+        return added;
+    }
+
+    /**
+     * Whether the colour here differs from the colour background: the picture's own pixel (the camera's shift rounded)
+     * against every background pixel round it - an edge a pixel off (shake, the colour's half size) still matches.
+     */
+    /** The picture's pixel behind working pixel (xx, yy), the camera's shift rounded (inside the picture). */
+    private int colourAt(int xx, int yy, int ox, int oy) {
+        int sx = Math.max(0, Math.min(w - 1, xx + ox)), sy = Math.max(0, Math.min(h - 1, yy + oy));
+        return sy * w + sx;
+    }
+
+    private boolean colourChanged(int xx, int yy, int ox, int oy, float margin) {
+        int sx = xx + ox, sy = yy + oy;
+        if (sx < 0 || sy < 0 || sx >= w || sy >= h) return false;
+        int c = sy * w + sx;
+        float u = cu[c], v = cv[c];
+        int i = yy * w + xx;
+        if (Math.abs(u - mu[i]) + Math.abs(v - mv[i]) <= margin) return false; // most pixels: done at once
+        for (int dy = -1; dy <= 1; dy++) {
+            int row = (yy + dy) * w + xx;
+            for (int dx = -1; dx <= 1; dx++) {
+                int n = row + dx;
+                if (Math.abs(u - mu[n]) + Math.abs(v - mv[n]) <= margin) return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -1058,8 +1162,13 @@ import java.util.List;
         boolean seen = t.hits >= 5 && t.hits >= MIN_SEEN * (frames - t.firstFrame + 1);
         boolean travels = ageS >= MIN_AGE_S[sensitivity] && seen && net >= needed
                 && straight >= MIN_STRAIGHT[sensitivity] && steady && !returning && !wake;
+        // or it plainly drives through: far, straight, one way, seen in nearly every picture - early
+        boolean drives = ageS >= FAST_AGE_S[sensitivity] && t.hits >= 5 && t.hits >= FAST_SEEN * (frames - t.firstFrame + 1)
+                && net >= Math.max(FAST_TRAVEL * w, size) && straight >= FAST_STRAIGHT && steady
+                && reversals == 0 && !returning && !wake;
         float maxVeg = MAX_VEGETATION[sensitivity] * (now - warmUntil < YOUNG_MS ? 0.5f : 1);
-        if (!t.confirmed && travels && t.vegetation < maxVeg) t.confirmed = true;
+        // the young background's stricter look is for what might be leaves; a thing that drove that far one way isn't
+        if (!t.confirmed && (travels && t.vegetation < maxVeg || drives && t.vegetation < MAX_VEGETATION[sensitivity])) t.confirmed = true;
         if (t.confirmed && t.maxFromOrigin >= PROVEN_TRAVEL * needed) t.proven = true;
         if (t.proven) {
             // it went far: a turn, a loop or a stop doesn't take its box away - only a look of leaves or a shadow's edge
@@ -1141,6 +1250,7 @@ import java.util.List;
         float aDown = fast ? rate(dt, 3) : rate(dt, 20);
         float aFreq = rate(dt, 20);
         float aSlow = rate(dt, 8), aSlowFg = rate(dt, 30);
+        int ox = Math.round(shiftX), oy = Math.round(shiftY);
         boolean[] confirmed = null;
         if (blobs != null && !blobs.isEmpty()) {
             int maxLabel = 0;
@@ -1154,7 +1264,15 @@ import java.util.List;
             boolean fg = !fast && raw[i] != 0;
             boolean light = !fast && raw[i] == 0 && changed[i] != 0;
             boolean inTrack = fg && labels[i] != 0 && confirmed != null && labels[i] < confirmed.length && confirmed[labels[i]];
-            mean[i] += (fast ? aMean : inTrack ? aMeanTrack : fg ? aMeanBlob : light ? aMeanLight : aMean) * d;
+            float am = fast ? aMean : inTrack ? aMeanTrack : fg ? aMeanBlob : light ? aMeanLight : aMean;
+            mean[i] += am * d;
+            if (chromaKnown) {
+                int c = i + oy * w + ox;
+                if (c >= 0 && c < w * h) {
+                    mu[i] += am * (cu[c] - mu[i]);
+                    mv[i] += am * (cv[c] - mv[i]);
+                }
+            }
             float d2 = Math.min(d * d, fg ? 40 * 40 : 60 * 60);
             if (d2 > var[i]) {
                 if (!light) var[i] += (inTrack ? aUpTrack : fg ? aUpFg : aUp) * (d2 - var[i]);

@@ -355,6 +355,35 @@ final class Scene {
         return y;
     }
 
+    /**
+     * The picture's chroma at half size each way, as a phone's YUV 4:2:0 analysis picture carries it (BT.601 video
+     * range, as luma): {U, V}, each (w / 2) x (h / 2). The motion detection counts colour as well as brightness.
+     */
+    static byte[][] chroma(int[] px, int w, int h) {
+        int cw = w / 2, ch = h / 2;
+        byte[] u = new byte[cw * ch], v = new byte[cw * ch];
+        for (int cy = 0; cy < ch; cy++) {
+            for (int cx = 0; cx < cw; cx++) {
+                int r = 0, g = 0, b = 0;
+                for (int j = 0; j < 2; j++) {
+                    int row = (cy * 2 + j) * w + cx * 2;
+                    for (int i = 0; i < 2; i++) {
+                        int c = px[row + i];
+                        r += c >> 16 & 0xff;
+                        g += c >> 8 & 0xff;
+                        b += c & 0xff;
+                    }
+                }
+                r /= 4;
+                g /= 4;
+                b /= 4;
+                u[cy * cw + cx] = (byte) ((-38 * r - 74 * g + 112 * b + 128 >> 8) + 128);
+                v[cy * cw + cx] = (byte) ((112 * r - 94 * g - 18 * b + 128 >> 8) + 128);
+            }
+        }
+        return new byte[][]{u, v};
+    }
+
     /** The drone's camera: world (north, east, up) to the picture. */
     static final class Camera {
         final double cn, ce, cu;
