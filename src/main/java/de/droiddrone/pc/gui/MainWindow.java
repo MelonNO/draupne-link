@@ -143,7 +143,9 @@ public class MainWindow extends JFrame {
     /** POP OUT MAP: says OVERWATCH while an alert waits and the map window is closed. */
     private JButton popMapButton;
     private boolean overwatchBadge;
-    private final JComboBox<String> checkIntervalCombo = new JComboBox<>(new String[]{"1 min", "2 min", "5 min"});
+    private final JComboBox<String> checkIntervalCombo = new JComboBox<>(new String[]{"0 min", "1 min", "2 min", "5 min"});
+    /** CHECK EVERY's choices in order; "0 min" is SleepCheck.ALWAYS, always listening (1.0.50). */
+    static final int[] CHECK_INTERVALS = {de.droiddrone.common.SleepCheck.ALWAYS, 1, 2, 5};
     /** What the modes are doing; wraps to the card (a label would cut the line). */
     private final WrappingText powerStatusText = WrappingText.fitting(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
     private final PowerStatus powerStatus = new PowerStatus();
@@ -166,6 +168,8 @@ public class MainWindow extends JFrame {
     /** When the phone went to sleep: its listening windows come every check interval from then on. */
     private long sleepStartAt;
     private int checkIntervalMin = 5;
+    /** The interval asked of the phone with the last sleep: CHECK EVERY, or 1 min for "0 min" to an app older than pc.39. */
+    private int sentIntervalMin = 5;
     private static final String CHECK_INTERVAL_KEY = "phone.sleepCheckMin";
     /** The last "still here" from the sleeping phone that went to the log (one line per check). */
     private long lastHelloLogged;
@@ -175,7 +179,7 @@ public class MainWindow extends JFrame {
      * on the LINK card with WAKE; its check-ins are answered "sleep on" (NameService) until WAKE connects, and the link
      * then answers the next one "wake". Kept in the settings, so it outlives a restart. Wall-clock times.
      */
-    private record Asleep(String name, String ip, long since, int intervalMin, boolean overwatch) {
+    record Asleep(String name, String ip, long since, int intervalMin, boolean overwatch) {
         Asleep(String name, String ip, long since, int intervalMin) {
             this(name, ip, since, intervalMin, false);
         }
@@ -184,10 +188,25 @@ public class MainWindow extends JFrame {
         String mode() {
             return overwatch ? "OVERWATCH" : "DEEP SLEEP";
         }
+
+        /** CHECK EVERY "0 min" (1.0.50, phone pc.39): its listening window never closes - WAKE and CONNECT reach it at once. */
+        boolean listening() {
+            return de.droiddrone.common.SleepCheck.isAlways(intervalMin);
+        }
+    }
+    /** How long a sleeping phone that answers name queries may go without a check-in before it counts as woken on the phone. */
+    private static long awakeAfterMs(Asleep a) {
+        return a.listening() ? 150_000 : 60_000; // always listening: it answers queries all along, and says hello once a minute
     }
     /** Every phone known to be asleep, by address; and its last check-in heard (receivedAt: wall clock). */
     private final Map<String, Asleep> asleepPhones = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, ControlLink.SleepHello> asleepHellos = new java.util.concurrent.ConcurrentHashMap<>();
+    /** An always-listening phone's hello last logged (wall ms): its hellos come once a minute, the log hears one in ten. */
+    private final Map<String, Long> listeningLogged = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private long lastListeningLogged(String ip) {
+        return listeningLogged.getOrDefault(ip, 0L);
+    }
     /**
      * Earlier flights kept on the map until removed (1.0.41): when this PC connects again, the flight before stays; a
      * spectator's flight ends when the pilot moves to another phone. Saved (name>file|...), read back at the start.
@@ -1302,7 +1321,7 @@ public class MainWindow extends JFrame {
             phoneCombo.removeAllItems();
             for (Names.Entry e : list) {
                 Asleep sleeping = e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
-                phoneCombo.addItem(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + (sleeping != null ? "   " + sleeping.mode() + " " + clock(nextCheck(sleeping, now) - now)
+                phoneCombo.addItem(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + (sleeping != null ? "   " + sleeping.mode() + " " + checkText(sleeping, now)
                         : e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
             }
             if (list.isEmpty()) phoneCombo.addItem(kind == Names.Kind.PHONE ? "No phone seen yet" : "No pilot PC seen yet");
@@ -1317,7 +1336,9 @@ public class MainWindow extends JFrame {
         Names.Entry e = at < 0 ? null : list.get(at);
         Asleep chosenAsleep = e == null || e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
         String hint = chosenAsleep != null
-                ? e.name() + (chosenAsleep.overwatch() ? " overwatches" : " is in deep sleep") + ": it checks for this PC in " + clock(nextCheck(chosenAsleep, now) - now) + ". WAKE below brings it back then."
+                ? e.name() + (chosenAsleep.overwatch() ? " overwatches" : " is in deep sleep") + (chosenAsleep.listening()
+                        ? ", listening for this PC: WAKE or CONNECT brings it back at once."
+                        : ": it checks for this PC in " + clock(nextCheck(chosenAsleep, now) - now) + ". WAKE below brings it back then.")
                 : e == null
                 ? (kind == Names.Kind.PHONE ? "Open DRAUPNE Flight on the phone, on Tailscale: it shows up here by itself."
                         : "A PC running DRAUPNE Link on your Tailscale network shows up here by itself.")
@@ -1523,8 +1544,8 @@ public class MainWindow extends JFrame {
         setVirtualShown(!watch && target.isVirtual());
         Asleep sleeping = target.ip() == null ? null : asleepPhones.get(target.ip());
         ControlLink.SleepHello lastCheck = sleeping == null ? null : asleepHellos.get(sleeping.ip());
-        if (sleeping != null && target.online() && (lastCheck == null || System.currentTimeMillis() - lastCheck.receivedAt() > 60_000)
-                && System.currentTimeMillis() - sleeping.since() > 60_000) {
+        if (sleeping != null && target.online() && (lastCheck == null || System.currentTimeMillis() - lastCheck.receivedAt() > awakeAfterMs(sleeping))
+                && System.currentTimeMillis() - sleeping.since() > awakeAfterMs(sleeping)) {
             clearAsleep(sleeping.ip()); // it answers name queries and hasn't checked in for a minute: woken on the phone
             sleeping = null;
         }
@@ -1533,7 +1554,11 @@ public class MainWindow extends JFrame {
             phoneAsleep = true;
             phoneOverwatching = sleeping.overwatch();
             sleepStartAt = de.droiddrone.pc.MonoClock.ms() - (System.currentTimeMillis() - sleeping.since());
-            if (wakeOnConnect) {
+            sentIntervalMin = sleeping.intervalMin();
+            if (sleeping.listening()) {
+                // CHECK EVERY 0 min: its window is open all along - this Connect wakes it now, WAKE or CONNECT alike
+                logLine((wakeOnConnect ? "WAKE: " : "CONNECT: ") + sleeping.name() + " is listening and wakes now, then its camera starts.");
+            } else if (wakeOnConnect) {
                 logLine("WAKE: " + sleeping.name() + " takes it at its next check (up to " + sleeping.intervalMin() + " min), then its camera starts.");
             } else {
                 connection.getLink().setDormant(true);
@@ -1608,7 +1633,7 @@ public class MainWindow extends JFrame {
             String name = config.getString(Names.PHONE_NAME_KEY), ip = config.getString("ip");
             if (!ip.isEmpty()) {
                 long since = System.currentTimeMillis() - (de.droiddrone.pc.MonoClock.ms() - sleepStartAt);
-                rememberAsleep(new Asleep(name, ip, since, checkIntervalMin, phoneOverwatching));
+                rememberAsleep(new Asleep(name, ip, since, sentIntervalMin, phoneOverwatching));
                 logLine(name + (phoneOverwatching ? " overwatches on: its alerts still come to this PC's map." : " sleeps on.")
                         + " This PC still answers its checks; WAKE on the LINK card brings it back.");
             }
@@ -2955,15 +2980,19 @@ public class MainWindow extends JFrame {
         interval.setOpaque(false);
         interval.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
         TacticalCombo.install(checkIntervalCombo);
-        checkIntervalCombo.setToolTipText("How often the sleeping phone wakes to listen for this PC: more often costs a little more power");
+        checkIntervalCombo.setToolTipText("<html>How often the sleeping phone wakes to listen for this PC: more often costs a little more power.<br>"
+                + "0 min: it never stops listening - WAKE and CONNECT reach it at once (phone app pc.39 on; an older one checks every 1 min)</html>");
         try {
             checkIntervalMin = Integer.parseInt(config.getString(CHECK_INTERVAL_KEY));
         } catch (NumberFormatException ignored) {
             checkIntervalMin = 5;
         }
-        checkIntervalCombo.setSelectedIndex(checkIntervalMin == 1 ? 0 : checkIntervalMin == 2 ? 1 : 2);
+        int chosen = CHECK_INTERVALS.length - 1;
+        for (int i = 0; i < CHECK_INTERVALS.length; i++) if (CHECK_INTERVALS[i] == checkIntervalMin) chosen = i;
+        checkIntervalMin = CHECK_INTERVALS[chosen];
+        checkIntervalCombo.setSelectedIndex(chosen);
         checkIntervalCombo.addActionListener(e -> {
-            checkIntervalMin = new int[]{1, 2, 5}[Math.max(0, checkIntervalCombo.getSelectedIndex())];
+            checkIntervalMin = CHECK_INTERVALS[Math.max(0, checkIntervalCombo.getSelectedIndex())];
             save(Map.of(CHECK_INTERVAL_KEY, Integer.toString(checkIntervalMin)));
         });
         interval.add(checkIntervalCombo, BorderLayout.CENTER);
@@ -3020,10 +3049,23 @@ public class MainWindow extends JFrame {
         powerWanted = mode;
         powerAskedAt = de.droiddrone.pc.MonoClock.ms();
         powerSentAt = 0;
+        int build = connection.getLink().getTelemetry().getPhonePcBuild();
+        sentIntervalMin = de.droiddrone.common.SleepCheck.forPhone(checkIntervalMin, build);
+        if (mode != ControlLink.POWER_STANDBY && sentIntervalMin != checkIntervalMin) {
+            logLine("CHECK EVERY 0 min needs DRAUPNE Flight 2.3.0-pc." + de.droiddrone.common.SleepCheck.ALWAYS_MIN_PC_BUILD + " or newer on the phone (it has "
+                    + (build < 0 ? "an older one" : "pc." + build) + "): it checks every " + sentIntervalMin + " min instead.");
+        }
+        String listens = listensText(sentIntervalMin);
         logLine(mode == ControlLink.POWER_STANDBY ? "STANDBY asked: the phone stops its camera and slows down; WAKE brings it back."
                 : mode == ControlLink.POWER_OVERWATCH ? "OVERWATCH asked: the phone sleeps with its camera watching; if something moves it calls this "
-                + "PC (the map window) and records it. It listens for this PC every " + checkIntervalMin + " min."
-                : "DEEP SLEEP asked: the phone drops the link and sleeps, listening for this PC every " + checkIntervalMin + " min.");
+                + "PC (the map window) and records it. It " + listens + "."
+                : "DEEP SLEEP asked: the phone drops the link and sleeps; it " + listens + ".");
+    }
+
+    /** "listens for this PC every 5 min", or "never stops listening for this PC" (0 min, always listening). */
+    private static String listensText(int intervalMin) {
+        return de.droiddrone.common.SleepCheck.isAlways(intervalMin) ? "never stops listening for this PC - WAKE and CONNECT reach it at once"
+                : "listens for this PC every " + intervalMin + " min";
     }
 
     // ------------------------------------------------------------------ OVERWATCH SLEEP (1.0.47)
@@ -3327,22 +3369,33 @@ public class MainWindow extends JFrame {
     /**
      * How long a sleeping phone is past the time it should have checked in by (ms; 0 or less: on time). "Late" is a
      * whole check-in missed and a minute more: the check it said it would make, then one interval of grace. A PC
-     * started meanwhile gives it one interval from its own start before calling it late.
+     * started meanwhile gives it one interval from its own start before calling it late. Always listening (CHECK EVERY
+     * 0 min) counts as a check every minute - it says hello once a minute.
      */
     long checkInOverdue(Asleep a, long now) {
-        ControlLink.SleepHello h = asleepHellos.get(a.ip());
-        long interval = Math.max(1, a.intervalMin()) * 60_000L;
-        long expected = h != null && h.nextCheckMin() > 0 ? h.receivedAt() + h.nextCheckMin() * 60_000L : a.since() + interval;
+        return checkInOverdue(a, asleepHellos.get(a.ip()), startedAtWall, now);
+    }
+
+    static long checkInOverdue(Asleep a, ControlLink.SleepHello h, long startedAtWall, long now) {
+        long interval = de.droiddrone.common.SleepCheck.checkInMinutes(a.intervalMin()) * 60_000L;
+        long expected = h != null && h.nextCheckMin() > 0
+                ? h.receivedAt() + de.droiddrone.common.SleepCheck.checkInMinutes(h.nextCheckMin()) * 60_000L : a.since() + interval;
         expected = Math.max(expected, startedAtWall + interval);
         return now - (expected + interval + 60_000L);
     }
 
     private long nextCheck(Asleep a, long now) {
         ControlLink.SleepHello h = asleepHellos.get(a.ip());
-        long interval = Math.max(1, a.intervalMin()) * 60_000L;
-        long next = h != null && h.nextCheckMin() > 0 ? h.receivedAt() + h.nextCheckMin() * 60_000L : a.since() + interval;
+        long interval = de.droiddrone.common.SleepCheck.checkInMinutes(a.intervalMin()) * 60_000L;
+        long next = h != null && h.nextCheckMin() > 0
+                ? h.receivedAt() + de.droiddrone.common.SleepCheck.checkInMinutes(h.nextCheckMin()) * 60_000L : a.since() + interval;
         while (next < now) next += interval;
         return next;
+    }
+
+    /** For the lists: the countdown to its next check, or "listening" (always listening: no countdown). */
+    private String checkText(Asleep a, long now) {
+        return a.listening() ? "listening" : clock(nextCheck(a, now) - now);
     }
 
     private static String clock(long ms) {
@@ -3367,6 +3420,10 @@ public class MainWindow extends JFrame {
             rememberAsleep(a);
         }
         ControlLink.SleepHello h = ControlLink.SleepHello.read(d, d.length, System.currentTimeMillis());
+        if (h.nextCheckMin() > 0 && h.nextCheckMin() != a.intervalMin()) { // the phone's own word: listening, or its interval
+            a = new Asleep(a.name(), a.ip(), a.since(), h.nextCheckMin(), a.overwatch());
+            rememberAsleep(a);
+        }
         if (d.length >= 7 && h.overwatch() != a.overwatch()) { // into overwatch, or out of it by itself (the floor, 1.0.47)
             Asleep was = a;
             a = new Asleep(a.name(), a.ip(), a.since(), a.intervalMin(), h.overwatch());
@@ -3385,9 +3442,13 @@ public class MainWindow extends JFrame {
             });
             return true;
         }
-        if (before == null || h.receivedAt() - before.receivedAt() > 20_000) { // one line per check window
+        // one line per check window; always listening (a hello a minute), one line in ten minutes
+        long quiet = a.listening() ? 10 * 60_000L : 20_000;
+        if (before == null || h.receivedAt() - before.receivedAt() > quiet || a.listening() && h.receivedAt() - lastListeningLogged(ip) > quiet) {
+            if (a.listening()) listeningLogged.put(ip, h.receivedAt());
             String line = a.name() + (a.overwatch() ? " overwatching" : " asleep") + ", still here: battery " + (h.batteryPercent() >= 0 ? h.batteryPercent() + " %" : "unknown")
-                    + (h.charging() ? ", charging" : "") + ", next check in " + h.nextCheckMin() + " min. WAKE on the LINK card brings it back.";
+                    + (h.charging() ? ", charging" : "") + (a.listening() ? ", listening. WAKE or CONNECT brings it back at once."
+                    : ", next check in " + h.nextCheckMin() + " min. WAKE on the LINK card brings it back.");
             SwingUtilities.invokeLater(() -> logLine(line));
         }
         return false;
@@ -3401,7 +3462,7 @@ public class MainWindow extends JFrame {
         ControlLink.SleepHello h = asleepHellos.get(a.ip());
         // it answers the name service's queries, and hasn't checked in for a minute: it is awake (woken on the phone)
         Names.Entry e = names.get(a.name());
-        if (e != null && e.online() && (h == null || now - h.receivedAt() > 60_000) && now - a.since() > 60_000) {
+        if (e != null && e.online() && (h == null || now - h.receivedAt() > awakeAfterMs(a)) && now - a.since() > awakeAfterMs(a)) {
             logLine(a.name() + " is awake: it answers this PC again.");
             clearAsleep(a.ip());
             return;
@@ -3418,8 +3479,8 @@ public class MainWindow extends JFrame {
             alive = "Heard " + (ago < 60 ? ago + " s" : ago / 60 + " min") + " ago"
                     + (h.batteryPercent() >= 0 ? ", battery " + h.batteryPercent() + " %" : "") + (h.charging() ? " (charging)" : "") + ". ";
         }
-        powerStatus.setText("<html>" + a.name() + " is in " + a.mode() + ". " + alive + "Next check in " + clock(nextCheck(a, now) - now)
-                + ". WAKE connects and brings it back then.</html>");
+        powerStatus.setText("<html>" + a.name() + " is in " + a.mode() + ". " + alive + (a.listening() ? "It is listening: WAKE connects and brings it back at once.</html>"
+                : "Next check in " + clock(nextCheck(a, now) - now) + ". WAKE connects and brings it back then.</html>"));
     }
 
     /**
@@ -3438,7 +3499,8 @@ public class MainWindow extends JFrame {
         if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) roleCombo.setSelectedItem(ROLE_PILOT);
         save(Map.of(Names.PHONE_NAME_KEY, drone));
         standbyAfterWake = drone;
-        logLine("WAKE " + drone + ": it wakes at its next check, then goes to STANDBY.");
+        Asleep a = asleepPhones.get(ip);
+        logLine("WAKE " + drone + ": it wakes " + (a != null && a.listening() ? "now (it is listening)" : "at its next check") + ", then goes to STANDBY.");
         wakeOnConnect = true;
         try {
             connect();
@@ -3739,7 +3801,7 @@ public class MainWindow extends JFrame {
                     doing = sleeping.mode() + " - MISSED ITS CHECK-IN, NOT HEARD " + Names.agoText(lastHeardAsleep(sleeping), now).toUpperCase(java.util.Locale.ROOT) + " - UNKNOWN";
                 } else {
                     kind = sleeping.overwatch() ? MapView.Kind.OVERWATCH : MapView.Kind.ASLEEP;
-                    doing = sleeping.mode() + " - check in " + clock(nextCheck(sleeping, now) - now);
+                    doing = sleeping.mode() + (sleeping.listening() ? " - LISTENING" : " - check in " + clock(nextCheck(sleeping, now) - now));
                 }
             } else if (age > 30_000) {
                 boolean wasFlying = Boolean.TRUE.equals(p.armed()) || p.flown();
@@ -3812,7 +3874,8 @@ public class MainWindow extends JFrame {
         powerSentAt = 0;
         if (connection != null && phoneAsleep) {
             connection.getLink().setDormant(false);
-            logLine("WAKE: the phone takes it at its next check (up to " + checkIntervalMin + " min), then its camera starts.");
+            logLine(de.droiddrone.common.SleepCheck.isAlways(sentIntervalMin) ? "WAKE: the phone is listening and wakes now, then its camera starts."
+                    : "WAKE: the phone takes it at its next check (up to " + sentIntervalMin + " min), then its camera starts.");
         } else {
             logLine("WAKE asked.");
         }
@@ -3839,9 +3902,11 @@ public class MainWindow extends JFrame {
             phoneOverwatching = powerWanted == ControlLink.POWER_OVERWATCH;
             sleepStartAt = pp.receivedAt() + pp.sleepInS() * 1000L;
             link.setDormant(true);
+            boolean always = de.droiddrone.common.SleepCheck.isAlways(sentIntervalMin);
             logLine(phoneOverwatching ? "The phone overwatches: its camera watches, the rest sleeps. Something moving shows in the map window; "
-                    + "it listens for this PC every " + checkIntervalMin + " min; press WAKE to bring it back."
-                    : "The phone is in deep sleep. It listens for this PC for 20 s every " + checkIntervalMin + " min; press WAKE to bring it back.");
+                    + "it " + listensText(sentIntervalMin) + "; press WAKE to bring it back."
+                    : always ? "The phone is in deep sleep, always listening for this PC: WAKE or CONNECT brings it back at once."
+                    : "The phone is in deep sleep. It listens for this PC for 20 s every " + sentIntervalMin + " min; press WAKE to bring it back.");
             autoDisconnect(link, "asleep"); // 1.0.50, the pilot: the sleep buttons end the connection by themselves
         }
         if (phoneAsleep) {
@@ -3855,7 +3920,8 @@ public class MainWindow extends JFrame {
                 logLine("The phone is awake again.");
                 clearAsleep(config.getString("ip"));
             } else {
-                long interval = Math.max(1, checkIntervalMin) * 60_000L;
+                boolean always = de.droiddrone.common.SleepCheck.isAlways(sentIntervalMin);
+                long interval = de.droiddrone.common.SleepCheck.checkInMinutes(sentIntervalMin) * 60_000L;
                 long next = sleepStartAt + interval;
                 // the phone's own word from its last check (pc.22): when the next one is, and its battery
                 ControlLink.SleepHello hello = link.getSleepHello();
@@ -3867,7 +3933,7 @@ public class MainWindow extends JFrame {
                             : "it left overwatch") + " - it is in deep sleep now.");
                 }
                 if (hello != null && hello.receivedAt() >= sleepStartAt - 5000) {
-                    if (hello.nextCheckMin() > 0) next = hello.receivedAt() + hello.nextCheckMin() * 60_000L;
+                    if (hello.nextCheckMin() > 0) next = hello.receivedAt() + de.droiddrone.common.SleepCheck.checkInMinutes(hello.nextCheckMin()) * 60_000L;
                     long ago = (now - hello.receivedAt()) / 1000;
                     alive = "Heard " + (ago < 60 ? ago + " s" : ago / 60 + " min") + " ago"
                             + (hello.batteryPercent() >= 0 ? ", battery " + hello.batteryPercent() + " %" : "")
@@ -3875,7 +3941,8 @@ public class MainWindow extends JFrame {
                     if (hello.receivedAt() != lastHelloLogged) {
                         lastHelloLogged = hello.receivedAt();
                         logLine("Phone asleep, still here: battery " + (hello.batteryPercent() >= 0 ? hello.batteryPercent() + " %" : "unknown")
-                                + (hello.charging() ? ", charging" : "") + ", next check in " + hello.nextCheckMin() + " min.");
+                                + (hello.charging() ? ", charging" : "") + (de.droiddrone.common.SleepCheck.isAlways(hello.nextCheckMin())
+                                ? ", listening." : ", next check in " + hello.nextCheckMin() + " min."));
                     }
                 }
                 while (next < now) next += interval;
@@ -3883,7 +3950,9 @@ public class MainWindow extends JFrame {
                 String in = String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
                 powerStatus.setText(link.isDormant()
                         ? "<html>" + (phoneOverwatching ? "OVERWATCH - its camera watches; an alert shows in the map window. " : "DEEP SLEEP - ") + alive
-                        + "The phone checks for this PC every " + checkIntervalMin + " min; next check in " + in + ". WAKE brings it back.</html>"
+                        + (always ? "The phone is listening for this PC. WAKE brings it back at once.</html>"
+                        : "The phone checks for this PC every " + sentIntervalMin + " min; next check in " + in + ". WAKE brings it back.</html>")
+                        : always ? "<html>WAKE sent - " + alive + "The phone is listening: it wakes now, then its camera starts.</html>"
                         : "<html>WAKE sent - " + alive + "The phone takes it at its next check, in " + in + ", then its camera starts.</html>");
                 standbyButton.setEnabled(false);
                 deepSleepButton.setEnabled(false);
@@ -3908,9 +3977,9 @@ public class MainWindow extends JFrame {
                     int level = detectionFor(config.getString(Names.PHONE_NAME_KEY));
                     if (level == 0) level = 2;
                     int flags = mutedFor(config.getString(Names.PHONE_NAME_KEY)) ? 0 : de.droiddrone.common.OverwatchProtocol.MODE_FLAG_SOUND;
-                    link.sendOverwatch(checkIntervalMin, level, flags, overwatchToken);
+                    link.sendOverwatch(sentIntervalMin, level, flags, overwatchToken);
                 } else {
-                    link.sendPowerMode(powerWanted, checkIntervalMin);
+                    link.sendPowerMode(powerWanted, powerWanted == ControlLink.POWER_NORMAL ? checkIntervalMin : sentIntervalMin);
                 }
                 powerSentAt = now;
             }
@@ -4335,7 +4404,8 @@ public class MainWindow extends JFrame {
             case ControlLink.POWER_STANDBY -> "<html>STANDBY - the phone would stop its camera, slow its GPS and telemetry and dim its "
                     + "screen; the link stays. WAKE brings the picture back in about two seconds.</html>";
             case ControlLink.POWER_DEEP_SLEEP -> "<html>DEEP SLEEP - the phone would drop the link, lock its screen and sleep, listening "
-                    + "for this PC 20 s every " + checkIntervalMin + " min and reporting its battery. WAKE reaches it at its next check.</html>";
+                    + (de.droiddrone.common.SleepCheck.isAlways(checkIntervalMin) ? "for this PC all the time and reporting its battery. WAKE reaches it at once.</html>"
+                    : "for this PC 20 s every " + checkIntervalMin + " min and reporting its battery. WAKE reaches it at its next check.</html>");
             default -> "<html>WAKE - the phone would be back to normal: the camera, the GPS and the sticks. Press DEEP SLEEP or OVERWATCH "
                     + "again, or NEXT.</html>";
         };
