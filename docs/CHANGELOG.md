@@ -24,6 +24,7 @@ With phone app DRAUPNE Flight 2.3.0-pc.39 (sound in the air).
 - **OBSERVATION: a drone whose phone sees something move stands out on the map** - a red ring (pulsing) round its number and MOTION beside it, while its tile shows the boxes.
 - OBSERVATION: a tile's MUTE, volume and CONNECT keep their place on the right; the name and status line give way (cut with "...") instead of pushing them off a narrow tile.
 - **No STANDBY button: DISCONNECT leaves the phone in standby** (camera off, GPS and telemetry slowed) when the drone is disarmed and the phone app is pc.21 or newer; the next CONNECT wakes it in about 2 s, and the map shows its moon meanwhile. DEEP SLEEP and OVERWATCH share the row.
+- **Shorter menus:** every line under a menu item is cut to the point, and one still too long wraps onto a second line at a fixed width - the menus no longer run off the window.
 - The LINK card is quieter: no hint line under the PHONE list and no status text under CHECK EVERY.
 - **WAKE shows only while the phone sleeps, overwatches or stands by** (connected and awake it is hidden).
 - **Parts of the LINK card slide open and shut** instead of jumping: the power row, WAKE, the phone and phone-app warnings, UPDATE PHONE APP, LOST DRONE and IT'S DOWN - RESUME.

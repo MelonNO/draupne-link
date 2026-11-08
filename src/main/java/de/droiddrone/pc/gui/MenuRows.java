@@ -16,12 +16,16 @@ import java.util.function.Consumer;
  * the menu stays open), a window row opens a window of its own (a chevron at its right edge).
  */
 final class MenuRows {
+    /** The text's width in a menu row, px: the detail line wraps within it (the switch or choice sits to its right). */
+    static final int TEXT_WIDTH = 230;
     private MenuRows() {
     }
 
     /** Title in capitals, what it does muted under it. */
     static String html(String title, String detail) {
-        return "<html><b>" + title.toUpperCase() + "</b><br><span style='color:" + Theme.MUTED_HEX + "'>" + detail + "</span></html>";
+        // a fixed width (1.0.50, the pilot: the menus ran off the window): a line too long for it wraps, never widens it
+        return "<html><div style='width:" + TEXT_WIDTH + "px'><b>" + title.toUpperCase() + "</b><br><span style='color:" + Theme.MUTED_HEX
+                + "'>" + detail + "</span></div></html>";
     }
 
     private static void style(JMenuItem item, int right) {

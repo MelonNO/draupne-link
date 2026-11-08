@@ -532,14 +532,14 @@ public class MainWindow extends JFrame {
         JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
-        addMenuItem(menu, "First-time setup", "Everything, step by step: PC, radio, drone, phone, connection", () -> SetupWizard.open(this));
+        addMenuItem(menu, "First-time setup", "Everything, step by step", () -> SetupWizard.open(this));
         if (advanced) { // TOOLS > Advanced
-            addMenuItem(menu, "PC setup", "Connection method, Tailscale, firewall, radio, Windows settings", () -> PcSetupWizard.open(this));
-            addMenuItem(menu, "Phone setup", "The phone on the drone: apps, settings, connection", () -> PhoneGuideWizard.open(this));
-            addMenuItem(menu, "Drone setup", "Betaflight's receiver, stick delay and flight mode switch, set over USB", () -> DroneSetup.open(this));
+            addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
+            addMenuItem(menu, "Phone setup", "The phone on the drone", () -> PhoneGuideWizard.open(this));
+            addMenuItem(menu, "Drone setup", "Betaflight over USB: receiver, switches", () -> DroneSetup.open(this));
         }
         menu.addSeparator();
-        addMenuItem(menu, "Tour", "The window's buttons, the map and the offline maps, one at a time", () -> Tour.start(this));
+        addMenuItem(menu, "Tour", "The buttons and the map, one at a time", () -> Tour.start(this));
         return menu;
     }
 
@@ -585,13 +585,13 @@ public class MainWindow extends JFrame {
                 + "<br>(people, cars, animals, birds - not leaves and branches in the wind; lights at night).<br>"
                 + "The direction goes on the map. Per drone; phone app 2.3.0-pc.35 or newer.</html>");
         if (advanced) menu.add(motionRow); // TOOLS > Advanced
-        if (advanced) menu.add(new MenuRows.SwitchRow("Camera view on the map", "The ground the camera sees, on the map and the minimap",
+        if (advanced) menu.add(new MenuRows.SwitchRow("Camera view on the map", "What the camera sees, on the maps",
                 cameraOnMap, on -> {
                     cameraOnMap = on;
                     save(Map.of(de.droiddrone.pc.CameraView.SHOW_KEY, Boolean.toString(on)));
                     refreshMap();
                 }));
-        menu.add(new MenuRows.SwitchRow("Record video", "Every flight, to Videos\\DRAUPNE Link",
+        menu.add(new MenuRows.SwitchRow("Record video", "Every flight, to Videos",
                 recordVideo, on -> {
                     recordVideo = on;
                     save(Map.of(RECORD_KEY, Boolean.toString(on)));
@@ -626,12 +626,12 @@ public class MainWindow extends JFrame {
     /** LINK: how the connection behaves. */
     private JPopupMenu linkMenu() {
         JPopupMenu menu = styledMenu();
-        menu.add(new MenuRows.SwitchRow("Warning sounds", "A beep when the sticks stop reaching the drone",
+        menu.add(new MenuRows.SwitchRow("Warning sounds", "A beep when the sticks stop reaching it",
                 alertSound.isEnabled(), on -> {
                     alertSound.setEnabled(on);
                     save(Map.of(AlertSound.KEY, Boolean.toString(on)));
                 }));
-        menu.add(new MenuRows.SwitchRow("Allow spectators", "Off by default. Other PCs watch your flight through this PC's upload",
+        menu.add(new MenuRows.SwitchRow("Allow spectators", "Other PCs watch through this PC",
                 de.droiddrone.pc.Connection.spectatorsAllowed(config), on -> {
                     save(Map.of(de.droiddrone.pc.Connection.ALLOW_SPECTATORS_KEY, Boolean.toString(on)));
                     Connection c = connection;
@@ -639,11 +639,11 @@ public class MainWindow extends JFrame {
                     logLine(on ? "Spectators allowed: a second PC that connects watches through this one."
                             : "Spectators off: nobody can watch through this PC.");
                 }));
-        menu.add(new MenuRows.WindowRow("Name map", "Every phone and PC seen on your Tailscale network: names and addresses, this PC's name, the port and key",
+        menu.add(new MenuRows.WindowRow("Name map", "Every phone and PC, the port and key",
                 this::openNameMap));
         if (!advanced) return menu; // STANAG 4609: TOOLS > Advanced
         menu.addSeparator();
-        menu.add(new MenuRows.SwitchRow("STANAG 4609 stream", "Off by default. The video with MISB metadata over UDP, for ATAK, QGIS, VLC ... (the address: settings below)",
+        menu.add(new MenuRows.SwitchRow("STANAG 4609 stream", "Video with metadata for ATAK, QGIS, VLC",
                 stanagEnabled(), on -> {
                     save(Map.of(StanagDialog.ENABLED_KEY, Boolean.toString(on)));
                     if (!on) {
@@ -655,7 +655,7 @@ public class MainWindow extends JFrame {
                         startStanag();
                     }
                 }));
-        menu.add(new MenuRows.WindowRow("STANAG 4609 settings", "Where the stream goes, mission id, country, the camera's angles",
+        menu.add(new MenuRows.WindowRow("STANAG 4609 settings", "Address, mission, camera angles",
                 this::openStanagSettings));
         return menu;
     }
@@ -663,14 +663,14 @@ public class MainWindow extends JFrame {
     /** TOOLS: the drone's whereabouts, tests, and what this is. */
     private JPopupMenu toolsMenu() {
         JPopupMenu menu = styledMenu();
-        menu.add(new MenuRows.WindowRow("Find drone", "The last known position with the coordinates to copy and map links, to go and get it", this::openFindDrone));
-        menu.add(new MenuRows.ChoiceRow("Position from", "The drone's GPS, or the phone's own (phone app pc.16, location allowed). The other fills in when the chosen one has nothing",
+        menu.add(new MenuRows.WindowRow("Find drone", "Last known position, to go and get it", this::openFindDrone));
+        menu.add(new MenuRows.ChoiceRow("Position from", "The drone's GPS or the phone's",
                 new String[]{"DRONE", "PHONE"}, preferPhone ? 1 : 0, i -> {
                     preferPhone = i == 1;
                     save(Map.of(GPS_SOURCE_KEY, preferPhone ? "phone" : "drone"));
                     if (mapWindow != null) mapWindow.setPreferPhone(preferPhone);
                 }));
-        menu.add(new MenuRows.WindowRow("Tracks folder", "Every flight's path as a GPX file, and last-position.txt (Documents\\DRAUPNE Link\\Tracks)", () -> {
+        menu.add(new MenuRows.WindowRow("Tracks folder", "Every flight's path (GPX)", () -> {
             try {
                 java.awt.Desktop.getDesktop().open(de.droiddrone.pc.map.FlightTrack.defaultDir().toFile());
             } catch (Exception e) {
@@ -678,18 +678,16 @@ public class MainWindow extends JFrame {
             }
         }));
         menu.addSeparator();
-        menu.add(new MenuRows.SwitchRow("Latency test", "A time code for the drone's camera: the real delay",
+        menu.add(new MenuRows.SwitchRow("Latency test", "Measures the real video delay",
                 latencyMeter != null, this::setLatencyTest));
         JMenuItem motors = new MenuRows.WindowRow("Motor test", isLinkActive()
-                ? "Disconnect from the drone first: it runs over USB"
-                : "Spin each motor: right place, right direction?", () -> MotorTestDialog.open(this, this));
+                ? "Disconnect first: it runs over USB"
+                : "Each motor: right place and direction?", () -> MotorTestDialog.open(this, this));
         motors.setEnabled(!isLinkActive());
         menu.add(motors);
-        if (advanced) menu.add(new MenuRows.WindowRow("Virtual fleet", "Virtual drones on this PC, to try the window, the map,"
-                + " OVERWATCH and OBSERVATION without hardware (a program of its own)", this::openVirtualFleet));
+        if (advanced) menu.add(new MenuRows.WindowRow("Virtual fleet", "Virtual drones to try things without hardware", this::openVirtualFleet));
         menu.addSeparator();
-        menu.add(new MenuRows.SwitchRow("Advanced", "Off by default. Shows PC, phone and drone setup, motion detection, the camera view,"
-                + " hardware decoding, the OSD, STANAG 4609 and the virtual fleet",
+        menu.add(new MenuRows.SwitchRow("Advanced", "Shows the settings few pilots need",
                 advanced, on -> {
                     advanced = on;
                     save(Map.of(ADVANCED_KEY, Boolean.toString(on)));
@@ -736,8 +734,7 @@ public class MainWindow extends JFrame {
     }
 
     private JMenuItem addMenuItem(JPopupMenu menu, String title, String detail, Runnable open) {
-        JMenuItem item = new JMenuItem("<html><b>" + title.toUpperCase() + "</b><br><span style='color:" + Theme.MUTED_HEX
-                + "'>" + detail + "</span></html>");
+        JMenuItem item = new JMenuItem(MenuRows.html(title, detail));
         item.setFont(Theme.font(Font.PLAIN, 13.5f));
         item.setForeground(Theme.TEXT);
         item.setBackground(Theme.PANEL_2);
