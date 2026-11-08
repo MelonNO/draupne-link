@@ -120,6 +120,35 @@ class MotionDetectorTest {
         assertEquals(cy, r.last.centreY(), 0.08, "box centre y");
     }
 
+    /**
+     * 1.0.52, the pilot's recording: a red car with the ground's brightness was seen as its wheels and windows only - found
+     * half way across, its box beside it. Its colour now completes it: found within 1.5 s of driving in, the box round all
+     * of it - also while the detector is young (it came in 7 s after the start).
+     */
+    @Test
+    void aCarOfTheGroundsBrightnessIsFoundEarlyByItsColour() {
+        SyntheticScene scene = windyWoods(7);
+        // 30 x 12 px, flat, the ground's mean brightness, red (V high), 40 px/s to the right from 7 s
+        scene.movers.add(new SyntheticScene.Mover(-30, 120, 30, 12, 40, 0, 7, 16, 108, 110, 190, false));
+        Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 12, null); // it is then in the middle
+        assertTrue(r.firstAt >= 7 && r.firstAt <= 8.5 + 0.75, "found soon after it drove in: " + r.firstAt);
+        float[] truth = scene.movers.get(0).at(r.lastAt);
+        assertTrue(r.last.w * W >= 0.7f * truth[2], "the box round the car, not a piece of it: " + r.last.w * W + " px of " + truth[2]);
+        assertEquals((truth[0] + truth[2] / 2) / W, r.last.centreX(), 0.04, "box centre x on the car");
+    }
+
+    /**
+     * 1.0.52: a long vehicle at walking pace read as flicker to a young detector (its first 20 s) and was found only once
+     * it had grown - an overwatch phone just put down would miss it. Its slow way that never comes back now counts.
+     */
+    @Test
+    void aLongSlowVehicleIsFoundWhileTheDetectorIsYoung() {
+        SyntheticScene scene = windyWoods(9);
+        scene.movers.add(new SyntheticScene.Mover(-60, 112, 60, 16, 8, 0, 5, 30, 60, 120, 132, true));
+        Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 20, null);
+        assertTrue(r.firstAt > 5 && r.firstAt <= 12, "found while the detector is young: " + r.firstAt);
+    }
+
     @Test
     void aBirdCrossingIsFound() {
         // a sky over a tree line swaying in the gale, the camera shaking

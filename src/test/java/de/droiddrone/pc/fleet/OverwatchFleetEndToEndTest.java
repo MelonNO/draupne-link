@@ -174,8 +174,8 @@ class OverwatchFleetEndToEndTest {
         ControlLink watchLink = link(config, xray);
         overwatch(watchLink, xray, "MobileX-ray", 0x5eed0001);
         hub.setFlag(flag);
-        // the detector's warm-up and its strict first 20 s, as on the phone: a slow, long BTR reads as flicker before
-        Thread.sleep(26_000);
+        // past the detector's warm-up only (1.0.52: the BTR counts in its young first 20 s too)
+        Thread.sleep(4_000);
         long crossed = System.currentTimeMillis();
         xray.addTarget("vehicle");
         waitFor(() -> view("MobileX-ray") != null, 10_000, "the alert while the BTR still drives");
@@ -188,7 +188,8 @@ class OverwatchFleetEndToEndTest {
         assertFalse(held.live(), "no preview while a drone here may be flying");
         int redSeen = 0;
         for (BufferedImage img : preRolls("MobileX-ray")) redSeen = Math.max(redSeen, count(img, OverwatchFleetEndToEndTest::btr));
-        assertTrue(redSeen > 8, "the BTR is in the pictures before the alert: " + redSeen + " of its pixels at most");
+        // found as it comes in at the edge (1.0.52: about 5 s after it is sent): only part of it in those small pictures
+        assertTrue(redSeen > 3, "the BTR is in the pictures before the alert: " + redSeen + " of its pixels at most");
 
         // CONNECT to MobileZulu again: it says DISARMED (the failsafe dropped it) - the window ends at once
         ControlLink again = link(config, zulu);
@@ -218,7 +219,8 @@ class OverwatchFleetEndToEndTest {
         assertTrue(zulu.scene.hasTargets(System.currentTimeMillis()), "while the person still crosses");
         de.droiddrone.common.OverwatchProtocol.Alert a = view("MobileZulu").alert();
         assertTrue(a.w > 0.01f && a.h > 0.05f && a.y + a.h > 0.4f, "the detector's box round the person: " + a.x + "," + a.y + " " + a.w + "x" + a.h);
-        waitFor(() -> view("MobileZulu").preRolls() > 0, 3000, "the pictures before it");
+        // all of them (they come one by one: read at the first, only the earliest - before he walked in - were there)
+        waitFor(() -> view("MobileZulu").preRolls() >= 5, 4000, "the pictures before it");
         List<BufferedImage> pre = preRolls("MobileZulu");
         // the last two pictures (two a second): under load the very last can be the one he has half left
         int seen = 0;

@@ -239,6 +239,8 @@ import java.util.List;
         int minX, minY, maxX, maxY;
         float flicker, green, textureRatio, vegetation, confidence;
         boolean confirmed, light, proven;
+        /** It once came back towards where it began (leaves do, at every swing): the slow way never counts for it. */
+        boolean cameBack;
         /** The last judgement's figures (describeTracks). */
         String why = "";
 
@@ -255,7 +257,10 @@ import java.util.List;
     private int inWidth, inHeight, factor, w, h;
     private float[] cur, aligned, mean, var, sd, freq, green;
     /** The picture's colour (U, V) per working pixel, and the background's (chromaKnown: learnt since the last restart). */
-    private float[] cu, cv, mu, mv, rawF, rawNear;
+    private float[] cu, cv, mu, mv;
+    /** colourFill: the brightness pixels it starts from, and which pixels it looked at this picture (by stamp). */
+    private int[] fillFrom, fillSeen;
+    private int fillStamp;
     private boolean chromaKnown;
     /** A slower background: what the ground looked like before the last few seconds (leavesChange). */
     private float[] slow;
@@ -441,8 +446,8 @@ import java.util.List;
         cv = new float[n];
         mu = new float[n];
         mv = new float[n];
-        rawF = new float[n];
-        rawNear = new float[n];
+        fillFrom = new int[n];
+        fillSeen = new int[n];
         chromaKnown = false;
         slow = new float[n];
         near = new float[n];
@@ -758,22 +763,33 @@ import java.util.List;
      * leaves swaying over another colour would.
      */
     private int colourFill(int ox, int oy, float margin) {
-        int n = w * h, added = 0;
-        for (int i = 0; i < n; i++) rawF[i] = raw[i];
-        nearMax(rawF, rawNear, COLOUR_REACH);
-        for (int yy = 1; yy < h - 1; yy++) {
-            for (int xx = 1; xx < w - 1; xx++) {
-                int i = yy * w + xx;
-                // and only on a still background: where leaves sway, the brightness learnt their range, the colour hasn't
-                if (raw[i] != 0 || rawNear[i] == 0 || valid[i] == 0 || var[i] > COLOUR_STILL_VAR) continue;
-                if (green[colourAt(xx, yy, ox, oy)] > 0.5f) continue; // the colour of leaves: never filled in
-
-                if (!colourChanged(xx, yy, ox, oy, margin)) continue;
-                // light changes brightness, hardly the colour: not other light
-                raw[i] = 1;
-                if (changed[i] == 0) {
-                    changed[i] = 1;
-                    added++;
+        // round each brightness pixel only (as it was before the fill), each pixel looked at once: the cost follows
+        // what moves, not the picture's size
+        int n = w * h, found = 0;
+        for (int i = 0; i < n; i++) if (raw[i] != 0) fillFrom[found++] = i;
+        if (found == 0) return 0;
+        if (++fillStamp == Integer.MAX_VALUE) {
+            java.util.Arrays.fill(fillSeen, 0);
+            fillStamp = 1;
+        }
+        int added = 0, r = COLOUR_REACH;
+        for (int k = 0; k < found; k++) {
+            int cx = fillFrom[k] % w, cy = fillFrom[k] / w;
+            for (int yy = Math.max(1, cy - r); yy <= Math.min(h - 2, cy + r); yy++) {
+                for (int xx = Math.max(1, cx - r); xx <= Math.min(w - 2, cx + r); xx++) {
+                    int i = yy * w + xx;
+                    if (fillSeen[i] == fillStamp) continue;
+                    fillSeen[i] = fillStamp;
+                    // and only on a still background: where leaves sway, the brightness learnt their range, the colour hasn't
+                    if (raw[i] != 0 || valid[i] == 0 || var[i] > COLOUR_STILL_VAR) continue;
+                    if (green[colourAt(xx, yy, ox, oy)] > 0.5f) continue; // the colour of leaves: never filled in
+                    if (!colourChanged(xx, yy, ox, oy, margin)) continue;
+                    // light changes brightness, hardly the colour: not other light
+                    raw[i] = 1;
+                    if (changed[i] == 0) {
+                        changed[i] = 1;
+                        added++;
+                    }
                 }
             }
         }
@@ -1149,11 +1165,13 @@ import java.util.List;
         // a young background doesn't know yet where leaves flicker: a longer way asked meanwhile
         if (now - warmUntil < YOUNG_MS) needed *= 1.5f;
         boolean returning = t.maxFromOrigin > needed * 0.5f && fromOrigin < 0.6f * t.maxFromOrigin;
+        if (returning) t.cameBack = true; // (a thing coming in at the edge grows: its centre jitters, it doesn't come back)
         boolean wake = leavesChange(t, now);
         float oscillation = Math.min(1, reversals / 3f);
         // the flicker's average started from 0 at the end of the warm-up: scaled up while it is young (its bias)
         float learnt = (float) (1 - Math.exp(-Math.max(0, now - warmUntil) / 20_000.0));
-        float flicker = Math.min(1, t.flicker / Math.max(0.2f, learnt) / 0.12f);
+        // (at most twice: more made every textured thing - a vehicle - look like leaves for the first 20 s, 1.0.52)
+        float flicker = Math.min(1, t.flicker / Math.max(0.5f, learnt) / 0.12f);
         float texture = Math.max(0, Math.min(1, (t.textureRatio - 1) / 2));
         t.vegetation = 0.35f * flicker + 0.3f * t.green + 0.3f * Math.max(oscillation, 1 - straight) + 0.05f * texture;
         float ageS = (now - t.first) / 1000f;
@@ -1166,16 +1184,27 @@ import java.util.List;
         boolean drives = ageS >= FAST_AGE_S[sensitivity] && t.hits >= 5 && t.hits >= FAST_SEEN * (frames - t.firstFrame + 1)
                 && net >= Math.max(FAST_TRAVEL * w, size) && straight >= FAST_STRAIGHT && steady
                 && reversals == 0 && !returning && !wake;
+        // or it goes its way slowly but never back (a long vehicle at walking pace covers half its length in 2 s only
+        // later): its way from where it began, in the window's direction - leaves come back at every swing
+        float gx = newest[1] - t.ox, gy = newest[2] - t.oy;
+        boolean keepsOn = ageS >= MIN_AGE_S[sensitivity] && seen && !t.cameBack && fromOrigin >= needed
+                && net >= MIN_TRAVEL[sensitivity] * 0.5f && cos(ux, uy, gx, gy) > 0.8f
+                && straight >= MIN_STRAIGHT[sensitivity] && steady && reversals == 0 && !returning && !wake;
         float maxVeg = MAX_VEGETATION[sensitivity] * (now - warmUntil < YOUNG_MS ? 0.5f : 1);
-        // the young background's stricter look is for what might be leaves; a thing that drove that far one way isn't
-        if (!t.confirmed && (travels && t.vegetation < maxVeg || drives && t.vegetation < MAX_VEGETATION[sensitivity])) t.confirmed = true;
+        // the young background's stricter look is for what might be leaves; a thing that went that far one way isn't -
+        // and its own flicker is its passing (a slow vehicle makes its pixels foreground again and again): its look then
+        // without the flicker
+        float wayLook = 0.3f * t.green + 0.3f * Math.max(oscillation, 1 - straight) + 0.05f * texture;
+        if (!t.confirmed && (travels && t.vegetation < maxVeg || (drives || keepsOn) && wayLook < MAX_VEGETATION[sensitivity])) {
+            t.confirmed = true;
+        }
         if (t.confirmed && t.maxFromOrigin >= PROVEN_TRAVEL * needed) t.proven = true;
         if (t.proven) {
             // it went far: a turn, a loop or a stop doesn't take its box away - only a look of leaves or a shadow's edge
             float look = 0.35f * flicker + 0.3f * t.green + 0.05f * texture;
             if (look > maxVeg + 0.15f || wake) t.confirmed = t.proven = false;
             else t.confirmed = true;
-        } else if (t.confirmed && (t.vegetation > maxVeg + 0.15f || returning || wake)) {
+        } else if (t.confirmed && ((t.cameBack ? t.vegetation : wayLook) > maxVeg + 0.15f || returning || wake)) {
             t.confirmed = false;
         }
         if (debug) {

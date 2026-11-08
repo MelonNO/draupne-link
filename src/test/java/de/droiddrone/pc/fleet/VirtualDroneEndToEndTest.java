@@ -240,10 +240,9 @@ class VirtualDroneEndToEndTest {
                 scene.setNight(night);
                 de.droiddrone.common.MotionDetector detector = new de.droiddrone.common.MotionDetector(de.droiddrone.common.MotionDetector.NORMAL);
                 java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(320, 180, java.awt.image.BufferedImage.TYPE_INT_RGB);
-                // the BTR (1.0.52, the panel's VEHICLE): a slow, long vehicle reads as flicker to a detector in its strict
-                // first 20 s (as on a phone just put to overwatch), so it is sent once the detector has grown - measured:
-                // in the picture 3 s after it is sent, found 2.4-4.8 s after
-                long addAfter = kind == Scene.Kind.VEHICLE ? 26_000 : 4000;
+                // sent 4 s in, the detector still young (its first 20 s, as a phone just put to overwatch): the BTR too
+                // since its slow, one-way drive counts without the young flicker bias (1.0.52)
+                long addAfter = 4000;
                 long t0 = System.currentTimeMillis(), added = t0 + addAfter, first = -1, until = 0;
                 for (long t = t0; t < added + 12_000; t += 200) { // five pictures a second, as the drone's loop
                     if (t == added) {
@@ -252,15 +251,15 @@ class VirtualDroneEndToEndTest {
                     }
                     scene.render(img, view, t, null, false);
                     int[] size = new int[2];
-                    byte[] y = Scene.luma(Scene.pixels(img), 320, 180, 320, size);
-                    de.droiddrone.common.MotionDetector.Result r = detector.process(y, size[0], size[1], null, null, t);
+                    int[] px = Scene.pixels(img);
+                    byte[] y = Scene.luma(px, 320, 180, 320, size);
+                    byte[][] uv = Scene.chroma(px, 320, 180); // as the drone feeds it
+                    de.droiddrone.common.MotionDetector.Result r = detector.process(y, size[0], size[1], uv[0], uv[1], t);
                     if (!r.detections.isEmpty() && first < 0) first = t;
                     if (t < added) assertTrue(r.detections.isEmpty(), kind + " night " + night + ": nothing before it");
                 }
-                // the soldier (1.0.52, a 3D model) by day: his swinging arms and legs flicker a little, and a detector
-                // still young (its first 20 s) asks half the vegetation score of a grown one - found later than the old
-                // stick figure was, still while he crosses (measured 6.6 s; 4.4 s once the detector has grown)
-                long within = kind == Scene.Kind.WALKER && !night || kind == Scene.Kind.VEHICLE ? 8000 : 6000;
+                // found while it crosses, early: the soldier in about 2.5 s, the slow BTR coming in at the edge in about 5 s
+                long within = kind == Scene.Kind.VEHICLE ? 6500 : 4000;
                 assertTrue(first > 0 && first - added <= within && first < until, kind + " night " + night + ": seen "
                         + (first - added) + " ms after it was sent, crossing until " + (until - added));
             }
