@@ -122,9 +122,20 @@ public final class FleetPanel {
         logArea.setBackground(Theme.PANEL);
         logArea.setForeground(Theme.TEXT);
         JScrollPane logScroll = new JScrollPane(logArea);
-        logScroll.setPreferredSize(new Dimension(100, 150));
+        logScroll.setPreferredSize(new Dimension(100, 130));
         logScroll.setBorder(BorderFactory.createLineBorder(Theme.LINE));
-        root.add(logScroll, BorderLayout.SOUTH);
+        // the log, said as such (1.0.50: an empty box with no title looked like a bar that does nothing)
+        JPanel logCard = new JPanel(new BorderLayout(0, 4));
+        Theme.transparent(logCard);
+        JPanel logHead = new JPanel(new BorderLayout(8, 0));
+        Theme.transparent(logHead);
+        logHead.add(Theme.sectionTitle("Fleet log"), BorderLayout.WEST);
+        logHead.add(Theme.label("what the virtual phones do, and what DRAUPNE Link asks of them", Theme.font(Font.PLAIN, 12f), Theme.MUTED),
+                BorderLayout.CENTER);
+        logHead.add(button("Clear", "Empties the log (the drones go on)", () -> logArea.setText("")), BorderLayout.EAST);
+        logCard.add(logHead, BorderLayout.NORTH);
+        logCard.add(logScroll, BorderLayout.CENTER);
+        root.add(logCard, BorderLayout.SOUTH);
         fleet.onLog(line -> SwingUtilities.invokeLater(() -> appendLog(line)));
 
         for (VirtualDrone d : fleet.drones()) addCard(d);
@@ -182,9 +193,13 @@ public final class FleetPanel {
 
     void refresh() {
         for (Card c : cardList) c.refresh();
-        summary.setText(fleet.drones().size() + " virtual drones up" + (fleet.key().isEmpty() ? ", no link key set" : "")
-                + ". Names from Zulu down, never one in DRAUPNE Link's map. Start place "
-                + de.droiddrone.pc.map.Coordinates.format(de.droiddrone.pc.map.Coordinates.Format.MGRS, startLat, startLon) + ".");
+        // short enough for the window (the names' rule in the tooltip): it was cut off at "Start place 32V P..."
+        String text = fleet.drones().size() + " virtual drones up" + (fleet.key().isEmpty() ? ", no link key set" : "") + ". Start place "
+                + de.droiddrone.pc.map.Coordinates.format(de.droiddrone.pc.map.Coordinates.Format.MGRS, startLat, startLon) + ".";
+        if (!text.equals(summary.getText())) {
+            summary.setText(text);
+            summary.setToolTipText("Names from Zulu down, never one already in DRAUPNE Link's name map");
+        }
     }
 
     // ------------------------------------------------------------------ one drone

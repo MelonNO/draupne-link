@@ -59,14 +59,27 @@ public final class Fleet implements AutoCloseable {
         namesTaken = taken;
     }
 
-    /** Every line the drones log goes here too (the panel's log). */
+    /**
+     * Every line the drones log goes here too (the panel's log), the ones from before it was added first (the drones
+     * come up before the window opens).
+     */
     public void onLog(Consumer<String> listener) {
-        listeners.add(listener);
+        synchronized (history) {
+            for (String line : history) listener.accept(line);
+            listeners.add(listener);
+        }
     }
+
+    /** The last lines, for a listener added late. */
+    private final java.util.ArrayDeque<String> history = new java.util.ArrayDeque<>();
 
     private void log(String line) {
         base.accept(line);
-        for (Consumer<String> l : listeners) l.accept(line);
+        synchronized (history) {
+            history.addLast(line);
+            if (history.size() > 200) history.removeFirst();
+            for (Consumer<String> l : listeners) l.accept(line);
+        }
     }
 
     public String key() {
