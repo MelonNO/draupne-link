@@ -207,6 +207,8 @@ public class MainWindow extends JFrame {
     }
     /** Every phone known to be asleep, by address; and its last check-in heard (receivedAt: wall clock). */
     private final Map<String, Asleep> asleepPhones = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Crashed drones (CRASHED_KEY): the name as the name map has it -> when LOST DRONE was pressed (wall clock). */
+    private final Map<String, Long> crashed = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, ControlLink.SleepHello> asleepHellos = new java.util.concurrent.ConcurrentHashMap<>();
     /** An always-listening phone's hello last logged (wall ms): its hellos come once a minute, the log hears one in ten. */
     private final Map<String, Long> listeningLogged = new java.util.concurrent.ConcurrentHashMap<>();
@@ -231,6 +233,8 @@ public class MainWindow extends JFrame {
         refreshFleet(); // FLEET MANAGEMENT's cards (1.0.52)
     });
     private static final String ASLEEP_KEY = "phone.asleep";
+    /** "name@wallMs;..." - the drones LOST DRONE was pressed for (1.0.52): CRASHED until heard again or cleared. */
+    static final String CRASHED_KEY = "drone.crashed";
     private long pilotViewSentAt;
     private long mapIdleUpdatedAt;
     static final String MAIN_BOUNDS_KEY = "mainWindow";
@@ -409,7 +413,10 @@ public class MainWindow extends JFrame {
         BootReveal.onOpen(window, () -> window.videoView.getParent() == null ? null
                 : SwingUtilities.convertRectangle(window.videoView.getParent(), window.videoView.getBounds(), window.getRootPane().getGlassPane()),
                 () -> window.boundsInPane(window.linkCard, window.logCard),       // the D's bars grow into the LINK and LOG cards
-                () -> window.boundsInPane(window.controllerCard));                // its diagonals into the controller card
+                // its diagonals: one into the controller card, the other into the MAP card (1.0.52), or both into the
+                // controller card while the map is popped out
+                () -> window.mapCard != null && window.mapCard.isVisible() && window.boundsInPane(window.mapCard) != null
+                        ? window.boundsInPane(window.controllerCard, window.mapCard) : window.boundsInPane(window.controllerCard));
         window.setVisible(true);
         SwingUtilities.invokeLater(window::reportLastUpdate);
         if (firstStart) {
@@ -476,6 +483,7 @@ public class MainWindow extends JFrame {
         nameService.setOverwatchSink(overwatch::offer); // the link port while no link holds it (1.0.47)
         startOverwatch();
         for (Asleep a : parseAsleep(config.getString(ASLEEP_KEY))) asleepPhones.put(a.ip(), a);
+        crashed.putAll(parseCrashed(config.getString(CRASHED_KEY)));
         loadKeptFlights();
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
@@ -579,10 +587,8 @@ public class MainWindow extends JFrame {
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
         addMenuItem(menu, "First-time setup", "Everything, step by step", () -> SetupWizard.open(this));
         addMenuItem(menu, "Set up a new drone", "Another drone and phone", () -> DroneSetup.openNewDrone(this));
-        if (advanced) { // TOOLS > Advanced
+        if (advanced) { // TOOLS > Advanced; phone and drone setup are in "Set up a new drone" (1.0.52)
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
-            addMenuItem(menu, "Phone setup", "The phone on the drone", () -> PhoneGuideWizard.open(this));
-            addMenuItem(menu, "Drone setup", "Betaflight over USB: receiver, switches", () -> DroneSetup.open(this));
         }
         menu.addSeparator();
         addMenuItem(menu, "Tour", "Buttons and map, one by one", () -> Tour.start(this));
@@ -1380,7 +1386,8 @@ public class MainWindow extends JFrame {
             phoneCombo.removeAllItems();
             for (Names.Entry e : list) {
                 Asleep sleeping = e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
-                phoneCombo.addItem(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + (sleeping != null ? "   " + sleeping.mode() + " " + checkText(sleeping, now)
+                phoneCombo.addItem(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + (kind == Names.Kind.PHONE && crashed.containsKey(e.name()) ? "   CRASHED"
+                        : sleeping != null ? "   " + sleeping.mode() + " " + checkText(sleeping, now)
                         : e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
             }
             if (list.isEmpty()) phoneCombo.addItem(kind == Names.Kind.PHONE ? "No phone seen yet" : "No pilot PC seen yet");
@@ -1979,6 +1986,15 @@ public class MainWindow extends JFrame {
 
     /** LOST DRONE: FIND DRONE opens and the last known position's MGRS is on the clipboard, ready to send to a phone. */
     private void lostDrone() {
+        // 1.0.52 (the pilot): the drone is down and gone - CRASHED on the map, the fleet and the PHONE list until its
+        // phone is heard again or the pilot clears it; FIND DRONE still has its last position
+        String name = config.getString(Names.PHONE_NAME_KEY);
+        if (name != null && !name.isBlank() && !crashed.containsKey(name)) {
+            crashed.put(name, System.currentTimeMillis());
+            saveCrashed();
+            logLine(name + ": CRASHED - LOST.");
+            lostDroneButton.setText("Crashed - find drone");
+        }
         FindDroneDialog d = openFindDrone();
         String mgrs = d.mgrs();
         if (mgrs != null) {
@@ -1987,6 +2003,39 @@ public class MainWindow extends JFrame {
         } else {
             logLine("LOST DRONE: no position yet.");
         }
+    }
+
+    /** "name@wallMs;..." to the map (a broken entry is left out). */
+    static Map<String, Long> parseCrashed(String saved) {
+        Map<String, Long> out = new java.util.LinkedHashMap<>();
+        if (saved == null || saved.isBlank()) return out;
+        for (String one : saved.split(";")) {
+            int at = one.lastIndexOf('@');
+            if (at <= 0) continue;
+            try {
+                out.put(one.substring(0, at), Long.parseLong(one.substring(at + 1)));
+            } catch (NumberFormatException ignored) {
+                // left out
+            }
+        }
+        return out;
+    }
+
+    private void saveCrashed() {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Long> e : crashed.entrySet()) sb.append(sb.length() == 0 ? "" : ";").append(e.getKey()).append('@').append(e.getValue());
+        save(Map.of(CRASHED_KEY, sb.toString()));
+    }
+
+    /** Heard again (a reply after the crash, or a link to it), or the pilot's Clear: no longer CRASHED. */
+    private void clearCrashed(String name, String why) {
+        if (name == null || crashed.remove(name) == null) return;
+        saveCrashed();
+        logLine(name + ": CRASHED cleared - " + why + ".");
+    }
+
+    boolean isCrashed(String name) {
+        return name != null && crashed.containsKey(name);
     }
 
     private long itsDownCheckedAt;
@@ -2044,6 +2093,7 @@ public class MainWindow extends JFrame {
         if (show && !shown(lostDroneButton)) logLine("Link lost while armed: LOST DRONE shows the last position.");
         if (shown(lostDroneButton) != show) {
             show(lostDroneButton, show);
+            if (!show) lostDroneButton.setText("Lost drone");
             lostDroneButton.getParent().revalidate();
         }
     }
@@ -2846,7 +2896,7 @@ public class MainWindow extends JFrame {
     private static String phoneProblem(Tailscale.PhoneState s) {
         return switch (s) {
             case OFFLINE -> "Phone not on Tailscale. Switch Tailscale on there; check mobile data.";
-            case NOT_FOUND -> "Phone address not on your Tailscale network. Run SETUP > Phone setup.";
+            case NOT_FOUND -> "Phone address not on your Tailscale network. Run SETUP > Set up a new drone.";
             case PC_OFF -> "Tailscale on this PC is off or signed out: connect it.";
             case NOT_INSTALLED -> "Tailscale not installed. Run SETUP > PC setup.";
             case ONLINE -> "";
@@ -3682,7 +3732,7 @@ public class MainWindow extends JFrame {
     private void wakeAsleep() {
         Asleep a = asleepChosen();
         if (a == null) return;
-        if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) roleCombo.setSelectedItem(ROLE_PILOT);
+        if (!ROLE_PILOT.equals(roleCombo.getSelectedItem())) roleCombo.setSelectedItem(ROLE_PILOT);
         save(Map.of(Names.PHONE_NAME_KEY, a.name()));
         connect();
     }
@@ -3982,12 +4032,33 @@ public class MainWindow extends JFrame {
                 kind = MapView.Kind.ACTIVE;
                 doing = (Boolean.TRUE.equals(p.armed()) ? "ARMED - " : "") + (p.flown() ? "FLOWN" + (pilot == null ? "" : " BY " + pilot) : "IDLE");
             }
+            Long crashedAt = crashed.get(d.name());
+            if (crashedAt != null && d.at() > crashedAt + 2000) {
+                clearCrashed(d.name(), "heard again"); // its phone answers: not gone after all
+            } else if (crashedAt != null) {
+                kind = MapView.Kind.CRASHED;
+                doing = "CRASHED - LOST " + Names.agoText(crashedAt, now);
+            }
             String state = (de.droiddrone.pc.fleet.VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + doing;
             drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot));
         }
+        // a crashed drone the network has no position of (the one flown here): at its track's last point
+        for (Map.Entry<String, Long> e : crashed.entrySet()) {
+            String name = e.getKey();
+            if (drones.stream().anyMatch(x -> x.name().equalsIgnoreCase(name))) continue;
+            if (connection != null && name.equalsIgnoreCase(flying) && connection.getLink().getState() == ControlLink.State.READY) {
+                clearCrashed(name, "link back"); // its link is up again: flying, not crashed
+                continue;
+            }
+            de.droiddrone.pc.map.FlightTrack.Point last = name.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) && track != null ? track.last() : null;
+            if (last != null) drones.add(new MapView.NetDrone(name, last.lat(), last.lon(), "CRASHED - LOST " + Names.agoText(e.getValue(), now),
+                    MapView.Kind.CRASHED, false, null));
+        }
         miniMap.setNetDrones(drones, this::connectFromMap);
+        miniMap.setOnClearCrashed(n -> clearCrashed(n, "cleared"));
         if (mapWindow != null) {
             mapWindow.map().setNetDrones(drones, this::connectFromMap);
+            mapWindow.map().setOnClearCrashed(n -> clearCrashed(n, "cleared"));
         }
         if (!asleepPhones.isEmpty() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
     }
@@ -4130,6 +4201,7 @@ public class MainWindow extends JFrame {
             FleetCards.Badge badge = FleetCards.badge(here, sleeping != null, sleeping != null && sleeping.overwatch(),
                     sleeping == null ? 0 : checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),
                     said, saidAge, e.online() || now - heardAt < 30_000, wasFlying);
+            if (crashed.containsKey(e.name()) && !here) badge = new FleetCards.Badge(MapView.Kind.CRASHED, "CRASHED");
             // the drone's battery per cell: live here, else what this PC last read
             double cell = Double.NaN;
             long cellAge = -1;
@@ -4180,11 +4252,13 @@ public class MainWindow extends JFrame {
 
     /** Right-click on a drone on the map: fly it (as pilot), or watch it through the PC that flies it. */
     private void connectFromMap(String phone, boolean watch) {
-        if (observation != null) {
-            JOptionPane.showMessageDialog(this, "Observing: CONNECT on " + phone + "'s tile, or STOP OBSERVING first.",
-                    "Observing", JOptionPane.INFORMATION_MESSAGE);
+        if (observation != null && watch) {
+            JOptionPane.showMessageDialog(this, "Observing: STOP OBSERVING first.", "Observing", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
+        // 1.0.52 (the pilot: "PILOT UAV needs to put the connect as to pilot"): every PILOT UAV - fleet, map, alert -
+        // flies: an observation (no sticks, streams only) ends first and CONNECT AS goes to Pilot below
+        if (observation != null) stopObservation();
         if (connection != null) {
             JOptionPane.showMessageDialog(this, "Connected: STANDBY MODE first, then PILOT UAV on " + phone + ".",
                     "Connected", JOptionPane.INFORMATION_MESSAGE);
@@ -4532,7 +4606,7 @@ public class MainWindow extends JFrame {
         }
         if (old) {
             phoneAppWarning.setHtml("Old phone app" + (version == null ? "" : " (" + version + ")")
-                    + "; newest is " + newest + ". Update: UPDATE PHONE APP or SETUP &gt; Phone setup.");
+                    + "; newest is " + newest + ". Update: UPDATE PHONE APP or SETUP &gt; Set up a new drone.");
             if (!phoneAppWarned) {
                 phoneAppWarned = true;
                 logLine("Warning: old phone app" + (version == null ? " (older than 2.3.0-pc.5)" : " " + version)
@@ -4568,7 +4642,7 @@ public class MainWindow extends JFrame {
         }
         if (version == null || de.droiddrone.pc.setup.UpdateCheck.isNewer(REMOTE_UPDATE_MIN_PHONE, version)) {
             JOptionPane.showMessageDialog(this, "The phone runs " + (version == null ? "an old phone app" : version) + ": can't update it from here.\n"
-                    + "Update once on the phone (SETUP > Phone setup).\n"
+                    + "Update once on the phone (SETUP > Set up a new drone).\n"
                     + "From " + REMOTE_UPDATE_MIN_PHONE + " on, UPDATE PHONE APP works.", "Update phone app", JOptionPane.INFORMATION_MESSAGE);
             return;
         }

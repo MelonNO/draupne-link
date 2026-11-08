@@ -116,13 +116,20 @@ class MapView extends JComponent {
      * DEEP SLEEP on time with its check-ins: a moon), OVERWATCH (on time: an eye), LOST (it went quiet while flown or
      * armed: a red diamond with "!"), UNKNOWN (quiet while idle, or asleep but its check-ins overdue: a grey "?").
      */
-    enum Kind { ACTIVE, ASLEEP, OVERWATCH, LOST, UNKNOWN }
+    /** CRASHED (1.0.52): LOST DRONE pressed for it - down and gone, until it is heard again or cleared. */
+    enum Kind { ACTIVE, ASLEEP, OVERWATCH, LOST, UNKNOWN, CRASHED }
 
     private List<NetDrone> netDrones = List.of();
     /** The other drone under the mouse: only its name and state are written out (1.0.50, the pilot); null: none. */
     private volatile String hoveredNet;
     /** Right-click on a drone: its name, and true to watch it (through its pilot PC), false to connect and fly. */
     private java.util.function.BiConsumer<String, Boolean> onDroneConnect;
+    /** Right-click "Clear CRASHED" on a crashed drone (1.0.52); null: not offered. */
+    private Consumer<String> onClearCrashed;
+
+    void setOnClearCrashed(Consumer<String> listener) {
+        onClearCrashed = listener;
+    }
 
     void setKept(List<Kept> flights, java.util.function.IntConsumer onRemove, Runnable onClear) {
         kept = flights == null ? List.of() : List.copyOf(flights);
@@ -1023,6 +1030,11 @@ class MapView extends JComponent {
             clips.addActionListener(e -> onClips.accept(clipsOf));
             menu.add(clips);
             if (drone == null) menu.addSeparator();
+        }
+        if (drone != null && drone.kind() == Kind.CRASHED && onClearCrashed != null) {
+            JMenuItem clear = new JMenuItem("Clear CRASHED on " + drone.name());
+            clear.addActionListener(e -> onClearCrashed.accept(drone.name()));
+            menu.add(clear);
         }
         if (drone != null && onDroneConnect != null) {
             if (drone.flown()) {
@@ -2154,6 +2166,7 @@ class MapView extends JComponent {
 
     /** The asleep drones' moon, the overwatching ones' eye: blue-violet and teal, never the lost red or the unknown grey. */
     private static final Color ASLEEP_COLOR = new Color(0x9fa8da), OVERWATCH_COLOR = new Color(0x4db6ac), LOST_COLOR = new Color(0xef5350);
+    static final Color CRASHED_COLOR = new Color(0x8a8a8a);
 
     // ---- the drone picked in FLEET MANAGEMENT (1.0.52, the pilot: "make the drone be highlighted in the map, if the
     // drone has a FOV sector, make this also be highlighted")
@@ -2249,6 +2262,7 @@ class MapView extends JComponent {
                 case OVERWATCH -> OVERWATCH_COLOR;
                 case LOST -> LOST_COLOR;
                 case UNKNOWN -> Theme.MUTED;
+                case CRASHED -> CRASHED_COLOR;
             };
             paintNetSign(g, d.kind(), c, s.getX(), s.getY());
             if (!d.name().equals(hoveredNet)) continue; // the sign alone; its name and state while the mouse is on it
@@ -2263,7 +2277,7 @@ class MapView extends JComponent {
             g.setColor(c);
             g.drawString(line1, bx + 5, by + fm.getAscent());
             if (line2 != null) {
-                g.setColor(d.kind() == Kind.LOST ? LOST_COLOR : Theme.MUTED);
+                g.setColor(d.kind() == Kind.LOST ? LOST_COLOR : d.kind() == Kind.CRASHED ? CRASHED_COLOR : Theme.MUTED);
                 g.drawString(line2, bx + 5, by + fm.getHeight() + fm.getAscent());
             }
         }
@@ -2271,11 +2285,12 @@ class MapView extends JComponent {
 
     /**
      * One drone's sign, 18 px across: a diamond (ACTIVE), a diamond with "!" (LOST), a circle with "?" (UNKNOWN), a
-     * circle with a crescent moon (ASLEEP) or an eye (OVERWATCH) - told apart by shape as well as colour.
+     * circle with a crescent moon (ASLEEP) or an eye (OVERWATCH), a grey diamond with an X (CRASHED) - told apart by
+     * shape as well as colour.
      */
     static void paintNetSign(Graphics2D g, Kind kind, Color c, double x, double y) { // also the fleet cards' badge (1.0.52)
         java.awt.Shape body;
-        if (kind == Kind.ACTIVE || kind == Kind.LOST) {
+        if (kind == Kind.ACTIVE || kind == Kind.LOST || kind == Kind.CRASHED) {
             Path2D diamond = new Path2D.Double();
             diamond.moveTo(x, y - 9);
             diamond.lineTo(x + 9, y);
@@ -2289,7 +2304,7 @@ class MapView extends JComponent {
         g.setStroke(new BasicStroke(3f));
         g.setColor(new Color(0, 0, 0, 150));
         g.draw(body);
-        g.setColor(Theme.alpha(c, kind == Kind.ACTIVE || kind == Kind.LOST ? 200 : 90));
+        g.setColor(Theme.alpha(c, kind == Kind.ACTIVE || kind == Kind.LOST || kind == Kind.CRASHED ? 200 : 90));
         g.fill(body);
         g.setColor(kind == Kind.ACTIVE ? Color.WHITE : c);
         g.setStroke(new BasicStroke(kind == Kind.ACTIVE ? 1.2f : 1.6f));
@@ -2311,6 +2326,12 @@ class MapView extends JComponent {
                 g.setStroke(new BasicStroke(1.4f));
                 g.draw(eye);
                 g.fill(new java.awt.geom.Ellipse2D.Double(x - 2.2, y - 2.2, 4.4, 4.4));
+            }
+            case CRASHED -> { // an X: down, no longer with us
+                g.setColor(Color.WHITE);
+                g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g.draw(new java.awt.geom.Line2D.Double(x - 3.8, y - 3.8, x + 3.8, y + 3.8));
+                g.draw(new java.awt.geom.Line2D.Double(x + 3.8, y - 3.8, x - 3.8, y + 3.8));
             }
             case LOST, UNKNOWN -> {
                 g.setFont(Theme.headingFont(12f));

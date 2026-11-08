@@ -1,6 +1,7 @@
 package de.droiddrone.pc.gui;
 
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.awt.image.BufferedImage;
 
@@ -109,5 +110,20 @@ class ControllerRenderTest {
         for (int i = 0; i < 5; i++) ControllerRender.frame(ControllerRender.Show.SWEEP, 0, i * 100L, 460, 250);
         long ms = (System.nanoTime() - t0) / 5_000_000;
         assertTrue(ms < 150, "a frame takes " + ms + " ms");
+    }
+
+    /** 1.0.52 (the pilot): the right toggles mirror the left ones - same rest, same throw, pivots mirrored. */
+    @Test
+    void theRightTogglesMirrorTheLeft() {
+        int[][] pairs = {{ControllerRender.SB, ControllerRender.SC}, {ControllerRender.SA, ControllerRender.SD},
+                {ControllerRender.SE, ControllerRender.SG}, {ControllerRender.SF, ControllerRender.SH}};
+        for (int[] p : pairs) {
+            double[] l = ControllerRender.leverAngles(p[0]), r = ControllerRender.leverAngles(p[1]);
+            for (int i = 0; i < l.length; i++) assertEquals(l[i], r[i], 1e-9, ControllerRender.switchName(p[1]) + " as " + ControllerRender.switchName(p[0]));
+            double[] lp = ControllerRender.switchPivot(p[0]), rp = ControllerRender.switchPivot(p[1]);
+            assertTrue(lp[0] < 0 && rp[0] > 0, "left and right");
+            assertEquals(lp[1], rp[1], 1e-6);
+            assertEquals(lp[2], rp[2], 1e-6);
+        }
     }
 }

@@ -162,4 +162,25 @@ class OverwatchProtocolTest {
         assertArrayEquals(new int[]{2, OverwatchProtocol.MODE_FLAG_SOUND, TOKEN}, OverwatchProtocol.readRequestTail(req, 3, req.length));
         assertNull(OverwatchProtocol.readRequestTail(new byte[]{0x6E, 3, 5}, 3, 3), "an old-style request has no tail");
     }
+
+    @Test
+    void theBoxesNowGoAsAPreviewUnitAndReadBack() {
+        List<float[]> boxes = new ArrayList<>();
+        boxes.add(new float[]{0.25f, 0.4f, 0.1f, 0.05f, 0});
+        boxes.add(new float[]{0.7f, 0.1f, 0.02f, 0.03f, 1});
+        byte[] u = OverwatchProtocol.boxesUnit(1_762_500_000_123L, boxes);
+        List<byte[]> parts = OverwatchProtocol.fragments(TOKEN, 7, 3, OverwatchProtocol.UNIT_BOXES, u);
+        assertEquals(1, parts.size(), "one datagram");
+        OverwatchProtocol.Fragment f = OverwatchProtocol.readFragment(parts.get(0), parts.get(0).length);
+        assertEquals(OverwatchProtocol.UNIT_BOXES, f.type);
+        float[][] r = OverwatchProtocol.readBoxes(java.util.Arrays.copyOfRange(f.data, f.dataOffset, f.dataOffset + f.dataLength));
+        assertEquals(2, r.length);
+        assertEquals(0.25f, r[0][0], 1e-4);
+        assertEquals(0.05f, r[0][3], 1e-4);
+        assertEquals(0, r[0][4]);
+        assertEquals(1, r[1][4], "a light");
+        float[][] none = OverwatchProtocol.readBoxes(OverwatchProtocol.boxesUnit(1, Collections.<float[]>emptyList()));
+        assertEquals(0, none.length, "nothing now");
+        assertNull(OverwatchProtocol.readBoxes(new byte[5]));
+    }
 }

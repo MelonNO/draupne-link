@@ -643,7 +643,7 @@ final class PinManagerDialog extends JDialog {
                 rg.drawString(distText(r.pin), c[4], text);
                 // go to, copy
                 boolean goHover = hover && "go".equals(hoverPart), copyHover = hover && "copy".equals(hoverPart);
-                goMark(rg, c[5] + Sheet.GO_W / 2, base + ROW / 2, goHover ? Color.WHITE : Theme.ACCENT);
+                goMark(rg, c[5] + Sheet.GO_W / 2, base + ROW / 2, goHover ? Color.WHITE : Theme.TEXT); // not red (1.0.52, the pilot)
                 boolean justCopied = r.pin.equals(copied);
                 copyMark(rg, c[6] + Sheet.COPY_W / 2, base + ROW / 2, justCopied ? Theme.OK : copyHover ? Color.WHITE : Theme.MUTED, justCopied);
                 // X: the column slides in with EDIT LIST; the mark shows on the row under the mouse

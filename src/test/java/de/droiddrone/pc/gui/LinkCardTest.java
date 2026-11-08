@@ -65,4 +65,13 @@ class LinkCardTest {
         assertEquals("32V", t.copyText());
         assertFalse(t.isEditable());
     }
+
+    /** LOST DRONE marks it CRASHED (1.0.52): kept in the settings as name@time, a broken entry left out. */
+    @Test
+    void crashedDronesSurviveARestart() {
+        java.util.Map<String, Long> m = MainWindow.parseCrashed("MobileAlpha@1700000000000;broken;MobileBravo@x;MobileZulu@5");
+        assertEquals(java.util.Map.of("MobileAlpha", 1700000000000L, "MobileZulu", 5L), m);
+        assertTrue(MainWindow.parseCrashed("").isEmpty());
+        assertTrue(MainWindow.parseCrashed(null).isEmpty());
+    }
 }

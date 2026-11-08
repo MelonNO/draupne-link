@@ -57,11 +57,20 @@ public final class OverwatchHub implements AutoCloseable {
      * What the map window shows of one drone, once a refresh. picture: the latest preview picture (or pre-roll
      * picture), null before one; alertAtWall / endedAtWall: wall-clock times (endedAtWall -1 while it goes on);
      * held: why the live preview and the clip wait, in plain words (a drone here may be flying; 1.0.50), null when they
-     * don't; preRolls: the pictures before the alert that came.
+     * don't; preRolls: the pictures before the alert that came. boxes: the detector's boxes now ({x, y, w, h, light}),
+     * from a pc.40 phone's live preview - null when none came lately (an older phone: the alert's box is all there is).
      */
     public record View(String drone, AlertCard.Shown shown, boolean ended, long alertAtWall, long endedAtWall,
                        BufferedImage picture, OverwatchProtocol.Alert alert, CameraFootprint.Pose pose, String clipLine,
-                       boolean live, String held, int preRolls) {}
+                       boolean live, String held, int preRolls, float[][] boxes) {
+        public View(String drone, AlertCard.Shown shown, boolean ended, long alertAtWall, long endedAtWall, BufferedImage picture,
+                    OverwatchProtocol.Alert alert, CameraFootprint.Pose pose, String clipLine, boolean live, String held, int preRolls) {
+            this(drone, shown, ended, alertAtWall, endedAtWall, picture, alert, pose, clipLine, live, held, preRolls, null);
+        }
+    }
+
+    /** The phone's boxes count as now for this long (it sends them 4 a second, an empty set when nothing is seen). */
+    static final long BOXES_FRESH_MS = 1500;
 
     public interface Listener {
         /** A new alert (or the same one again after a dismiss's 10 min): sound it and draw attention, unless flying. */
@@ -321,6 +330,8 @@ public final class OverwatchHub implements AutoCloseable {
             if (s.id == null) return;
             s.preRollSaved = 0;
             s.picture = null;
+            s.boxes = null;
+            s.boxesAt = Long.MIN_VALUE / 2;
             s.assembler.clear();
             saveMeta(s, a);
         }
@@ -356,6 +367,14 @@ public final class OverwatchHub implements AutoCloseable {
                 }
             }
             case OverwatchProtocol.UNIT_KEY_FRAME, OverwatchProtocol.UNIT_FRAME -> onFrame(s, u.data, u.type == OverwatchProtocol.UNIT_KEY_FRAME, now);
+            case OverwatchProtocol.UNIT_BOXES -> {
+                float[][] b = OverwatchProtocol.readBoxes(u.data);
+                if (b != null) {
+                    s.boxes = b;
+                    s.boxesAt = now;
+                    publish();
+                }
+            }
             default -> {
             }
         }
@@ -629,7 +648,8 @@ public final class OverwatchHub implements AutoCloseable {
             }
             long ended = s.card.endedAt(now);
             out.add(new View(s.drone(), s.card.shown(now), s.card.ended(now), s.card.alertAt() + wallOffset, ended < 0 ? -1 : ended + wallOffset,
-                    s.picture, s.alert, s.watched.pose(), clipLine, s.live, held, s.preRollSaved));
+                    s.picture, s.alert, s.watched.pose(), clipLine, s.live, held, s.preRollSaved,
+                    now - s.boxesAt <= BOXES_FRESH_MS ? s.boxes : null));
         }
         views = List.copyOf(out);
     }
@@ -770,6 +790,9 @@ public final class OverwatchHub implements AutoCloseable {
         long pictureAt = Long.MIN_VALUE / 2, preRollShownAt;
         boolean live;
         long liveAt;
+        /** The phone's boxes now (pc.40, with the preview) and when they came. */
+        float[][] boxes;
+        long boxesAt = Long.MIN_VALUE / 2;
         int preRollSaved;
         boolean endedSaid, droppedSaid;
         Transfer transfer;

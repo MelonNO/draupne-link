@@ -242,7 +242,8 @@ final class BootReveal extends JComponent {
      * diagonal is a 42-wide line of the X cut by the bars' box (exactly what Logo.paintLink draws, so the first frame
      * is the mark itself); a card is a line across its middle as thick as the card, cut by the card's bounds. The line,
      * its thickness and the cut slide from the one to the other, so the bars grow leftwards into the LINK and LOG
-     * cards and the diagonals swing level and grow into the controller card, and from a third of the way the solid
+     * cards and the diagonals swing level and grow into the controller card and the MAP card (bottom[1], 1.0.52; the
+ * controller card twice without it), and from a third of the way the solid
      * piece opens up from the inside until only the card's thin outline is left: no new corners, no cut.
      */
     private void paintD(Graphics2D g, double lx, double ly, double size, double fly, float pieceAlpha, Rectangle[] left, Rectangle[] bottom) {
@@ -361,7 +362,12 @@ final class BootReveal extends JComponent {
 
     /** For tests: a frame of the animation at this time, painted into an image this big. */
     static java.awt.image.BufferedImage frame(long atMs, int w, int h, Rectangle video) {
-        BootReveal r = new BootReveal(() -> video);
+        return frame(atMs, w, h, video, null, null);
+    }
+
+    /** For tests: the same with the cards the D morphs into. */
+    static java.awt.image.BufferedImage frame(long atMs, int w, int h, Rectangle video, Rectangle[] right, Rectangle[] bottom) {
+        BootReveal r = right == null ? new BootReveal(() -> video) : new BootReveal(() -> video, () -> right, () -> bottom);
         r.setSize(w, h);
         // the clock stands still: on a slow build machine Java2D's first use took seconds between here and the paint
         r.startedAt = 1;

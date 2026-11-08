@@ -125,6 +125,25 @@ import java.util.List;
     static final double LIGHT_CHANGE_MIN_SD = 3;
     /** Background texture (mean luma gradient) under this: no shift is estimated (a dark or flat picture). */
     static final float MIN_TEXTURE_FOR_SHIFT = 1.5f;
+    /**
+     * A confirmed track that has gone this many times its travel threshold from where it began is PROVEN (DRAUPNE
+     * Link 1.0.52): a vehicle that turns round or drives a loop keeps its box - the straight-line rules that keep
+     * swaying leaves out took it away at every turn. Leaves never get this far from their spot.
+     */
+    static final float PROVEN_TRAVEL = 3;
+    /**
+     * Other blobs this close (working pixels) to a confirmed track's last box are pieces of the same thing (a vehicle
+     * whose middle matches the ground): the box takes them in instead of shrinking to one piece.
+     */
+    static final int JOIN_GAP = 3;
+    /** The camera moved less than this (working pixels) against the background: steady, the own-pixel test runs too. */
+    static final float STEADY_SHIFT = 0.35f;
+    /** The own-pixel test's margin, times the 3 x 3 test's. */
+    static final float OWN_MARGIN = 2.5f;
+    /** Other light changes a 3 x 3 patch by one factor: its pixels' ratios to the background within this of each other. */
+    static final float LIGHT_RATIO_SPREAD = 1.5f;
+    /** A proven track not matched for this long ends (an unproven one after TRACK_LOST_MS): a vehicle turning head-on shrinks to nothing for a moment. */
+    static final long PROVEN_LOST_MS = 3000;
 
     /** A box round something that travels, in the input picture's own coordinates, 0..1. */
     public static final class Detection {
@@ -200,7 +219,7 @@ import java.util.List;
         float ox, oy, maxFromOrigin;
         int minX, minY, maxX, maxY;
         float flicker, green, textureRatio, vegetation, confidence;
-        boolean confirmed, light;
+        boolean confirmed, light, proven;
         /** The last judgement's figures (describeTracks). */
         String why = "";
 
@@ -239,6 +258,8 @@ import java.util.List;
     private float settledFor;
     private float textureMean;
     private final ArrayList<Track> tracks = new ArrayList<>();
+    /** Blobs under MIN_AREA (2 pixels at least): only a proven track may take one (a far vehicle turning head-on); never a track of their own. */
+    private final ArrayList<Blob> small = new ArrayList<>();
     private int nextId = 1;
     /** Tracks keep the figures they were judged by, for describeTracks. */
     boolean debug;
@@ -368,6 +389,10 @@ import java.util.List;
         frames++;
         List<Blob> blobs = blobs();
         follow(blobs, timeMs);
+        if (!small.isEmpty()) { // a small blob a proven track took learns as slowly as the track's
+            blobs = new ArrayList<>(blobs);
+            for (Blob b : small) if (b.track != null) blobs.add(b);
+        }
         learn(dt, blobs, false);
         return new Result(report(timeMs), night, false, tracks.size());
     }
@@ -635,6 +660,10 @@ import java.util.List;
         float margin = night ? MIN_DIFF_NIGHT[sensitivity] : MIN_DIFF_DAY[sensitivity];
         float floor = night ? 5f : 2.5f;
         for (int i = 0; i < w * h; i++) sd[i] = Math.max(floor, (float) Math.sqrt(var[i]));
+        // a steady camera: a pixel also counts against its own background alone, by a wider margin - a small thing on a
+        // strong edge (a vehicle far off on the horizon line) matches a dark neighbour in the 3 x 3 test and was never seen
+        boolean steady = Math.abs(shiftX) < STEADY_SHIFT && Math.abs(shiftY) < STEADY_SHIFT;
+        float ownMargin = margin * OWN_MARGIN;
         int count = 0;
         for (int yy = 0; yy < h; yy++) {
             for (int xx = 0; xx < w; xx++) {
@@ -643,6 +672,15 @@ import java.util.List;
                 changed[i] = 0;
                 if (valid[i] == 0) continue;
                 float a = aligned[i];
+                if (steady && !night) {
+                    float own = Math.abs(a - mean[i]) - k * sd[i];
+                    if (own > ownMargin) {
+                        count++;
+                        changed[i] = 1;
+                        if (!otherLight(xx, yy)) raw[i] = 1;
+                        continue;
+                    }
+                }
                 float least = Float.MAX_VALUE;
                 // further from every background pixel round it: a picture a fraction of a pixel off still matches
                 for (int dy = -1; dy <= 1 && least > margin; dy++) {
@@ -673,6 +711,7 @@ import java.util.List;
      */
     private boolean otherLight(int xx, int yy) {
         float sa = 0, sm = 0, saa = 0, smm = 0, sam = 0;
+        float least = Float.MAX_VALUE, most = 0;
         for (int dy = -1; dy <= 1; dy++) {
             int row = (yy + dy) * w + xx;
             for (int dx = -1; dx <= 1; dx++) {
@@ -682,8 +721,14 @@ import java.util.List;
                 saa += a * a;
                 smm += m * m;
                 sam += a * m;
+                float r = (a + 4) / (m + 4);
+                if (r < least) least = r;
+                if (r > most) most = r;
             }
         }
+        // light darkens or brightens the patch by one factor; a dark thing lying along a dark line (a vehicle on the
+        // horizon) follows the texture too, but leaves the pale ground round it as it was (1.0.52)
+        if (most > LIGHT_RATIO_SPREAD * least) return false;
         float va = saa / 9 - (sa / 9) * (sa / 9), vm = smm / 9 - (sm / 9) * (sm / 9);
         float minVar = (float) (LIGHT_CHANGE_MIN_SD * LIGHT_CHANGE_MIN_SD);
         if (vm < minVar || va < minVar * 0.25f) return false;
@@ -738,6 +783,7 @@ import java.util.List;
         java.util.Arrays.fill(labels, 0);
         float lumMean = average(cur);
         List<Blob> found = new ArrayList<>();
+        small.clear();
         int next = 0;
         for (int start = 0; start < w * h; start++) {
             if (grown[start] == 0 || labels[start] != 0) continue;
@@ -786,13 +832,14 @@ import java.util.List;
                     }
                 }
             }
-            if (b.count < MIN_AREA[sensitivity] || b.count > w * h / 4) continue;
+            if (b.count < 2 || b.count > w * h / 4) continue;
             if (night && b.peak < lumMean + NIGHT_PEAK_OVER_MEAN) continue;
             if (!night && lightChange(b)) continue;
             b.freq /= b.count;
             b.green /= b.count;
             b.texture /= b.count;
-            found.add(b);
+            if (b.count < MIN_AREA[sensitivity]) small.add(b);
+            else found.add(b);
         }
         return found;
     }
@@ -823,6 +870,8 @@ import java.util.List;
             float px = last[1] + vel[0] * ahead, py = last[2] + vel[1] * ahead;
             float size = Math.max(tr.maxX - tr.minX + 1, tr.maxY - tr.minY + 1);
             float gate = Math.max(10, 0.8f * size) + 0.5f * (float) Math.hypot(vel[0], vel[1]) * ahead;
+            // a proven thing that breaks up or stops to turn is as big and as fast as it was lately, not its last piece
+            if (tr.proven) gate = Math.max(gate, Math.max(10, recentSize(tr)) + recentSpeed(tr) * Math.max(0.25f, ahead));
             for (int b = 0; b < blobs.size(); b++) {
                 Blob bl = blobs.get(b);
                 float d = (float) Math.hypot(bl.cx() - px, bl.cy() - py);
@@ -835,7 +884,30 @@ import java.util.List;
             int t = (int) p[1], b = (int) p[2];
             if (trackTaken[t] || blobs.get(b).track != null) continue;
             trackTaken[t] = true;
-            update(tracks.get(t), blobs.get(b), now);
+            Track tr = tracks.get(t);
+            if (tr.confirmed) join(tr, blobs.get(b), blobs, tr.proven ? recentSize(tr) : 0);
+            update(tr, blobs.get(b), now);
+        }
+        // a proven track nothing matched: the nearest small blob in its gate (it shrank turning head-on, far off)
+        for (int t = 0; t < tracks.size(); t++) {
+            Track tr = tracks.get(t);
+            if (trackTaken[t] || !tr.proven || small.isEmpty()) continue;
+            float[] last = tr.history.get(tr.history.size() - 1);
+            float ahead = (rel(now) - last[0]) / 1000f;
+            float gate = Math.max(10, recentSize(tr)) + recentSpeed(tr) * Math.max(0.25f, ahead);
+            Blob best = null;
+            float bestD = gate;
+            for (Blob b : small) {
+                float d = (float) Math.hypot(b.cx() - last[1], b.cy() - last[2]);
+                if (b.track == null && d <= bestD) {
+                    bestD = d;
+                    best = b;
+                }
+            }
+            if (best != null) {
+                trackTaken[t] = true;
+                update(tr, best, now);
+            }
         }
         for (Blob b : blobs) {
             if (b.track != null) continue;
@@ -845,13 +917,54 @@ import java.util.List;
             update(t, b, now);
         }
         for (int i = tracks.size() - 1; i >= 0; i--) {
-            if (now - tracks.get(i).lastSeen > TRACK_LOST_MS) tracks.remove(i);
+            Track tr = tracks.get(i);
+            if (now - tr.lastSeen > (tr.proven ? PROVEN_LOST_MS : TRACK_LOST_MS)) tracks.remove(i);
         }
         // a busy picture: the oldest unconfirmed tracks go first, past 60
         for (int i = 0; tracks.size() > 60 && i < tracks.size(); ) {
             if (!tracks.get(i).confirmed) tracks.remove(i);
             else i++;
         }
+    }
+
+    /**
+     * The other pieces of a confirmed track's thing: unmatched blobs that touch its last box (JOIN_GAP) or the matched
+     * blob's join it - its bounds, area and sums grow, and they are the track's (no track of their own, learnt slowly).
+     */
+    private static void join(Track t, Blob main, List<Blob> blobs, float recentSize) {
+        int ax0 = Math.min(t.minX, main.minX) - JOIN_GAP, ay0 = Math.min(t.minY, main.minY) - JOIN_GAP;
+        int ax1 = Math.max(t.maxX, main.maxX) + JOIN_GAP, ay1 = Math.max(t.maxY, main.maxY) + JOIN_GAP;
+        for (Blob o : blobs) {
+            if (o == main || o.track != null) continue;
+            if (o.maxX < ax0 || o.minX > ax1 || o.maxY < ay0 || o.minY > ay1) continue;
+            // only within the matched blob's own reach: a separate thing passing close by stays its own
+            float reach = JOIN_GAP + Math.max(main.maxX - main.minX, recentSize);
+            if (o.maxX < main.minX - reach || o.minX > main.maxX + reach) continue;
+            o.track = t;
+            main.minX = Math.min(main.minX, o.minX);
+            main.minY = Math.min(main.minY, o.minY);
+            main.maxX = Math.max(main.maxX, o.maxX);
+            main.maxY = Math.max(main.maxY, o.maxY);
+        }
+    }
+
+    /** The largest the track's box was over its kept history (working pixels, its longer side). */
+    private static float recentSize(Track t) {
+        float s = 0;
+        for (float[] p : t.history) s = Math.max(s, Math.max(p[5] - p[3] + 1, p[6] - p[4] + 1));
+        return s;
+    }
+
+    /** The fastest the track went over its kept history, working pixels a second (half-second steps). */
+    private static float recentSpeed(Track t) {
+        float best = 0;
+        List<float[]> h = t.history;
+        for (int i = 0, j = 0; i < h.size(); i++) {
+            while (j < i && h.get(i)[0] - h.get(j + 1)[0] >= 500) j++;
+            float dt = (h.get(i)[0] - h.get(j)[0]) / 1000f;
+            if (dt >= 0.4f) best = Math.max(best, (float) Math.hypot(h.get(i)[1] - h.get(j)[1], h.get(i)[2] - h.get(j)[2]) / dt);
+        }
+        return best;
     }
 
     /** A time as the tracks' history keeps it: ms from the epoch, small enough for a float to hold exactly. */
@@ -947,7 +1060,15 @@ import java.util.List;
                 && straight >= MIN_STRAIGHT[sensitivity] && steady && !returning && !wake;
         float maxVeg = MAX_VEGETATION[sensitivity] * (now - warmUntil < YOUNG_MS ? 0.5f : 1);
         if (!t.confirmed && travels && t.vegetation < maxVeg) t.confirmed = true;
-        else if (t.confirmed && (t.vegetation > maxVeg + 0.15f || returning || wake)) t.confirmed = false;
+        if (t.confirmed && t.maxFromOrigin >= PROVEN_TRAVEL * needed) t.proven = true;
+        if (t.proven) {
+            // it went far: a turn, a loop or a stop doesn't take its box away - only a look of leaves or a shadow's edge
+            float look = 0.35f * flicker + 0.3f * t.green + 0.05f * texture;
+            if (look > maxVeg + 0.15f || wake) t.confirmed = t.proven = false;
+            else t.confirmed = true;
+        } else if (t.confirmed && (t.vegetation > maxVeg + 0.15f || returning || wake)) {
+            t.confirmed = false;
+        }
         if (debug) {
             t.why = String.format(java.util.Locale.ROOT, "net %.1f/%.1f straight %.2f steady %b rev %d returning %b wake %b",
                     net, needed, straight, steady, reversals, returning, wake);
