@@ -212,6 +212,7 @@ final class VirtualOverwatch {
                 sendAlert(now);
                 startEventVideo(now);
                 log.accept("overwatch: MOTION - event " + event.event() + (pc == null ? "" : ", calling the PC"));
+                ImpairedSocket.LATER.execute(drone::noteAlert); // the tour's scenario hears of it (never under this lock)
                 lastNews = "motion";
             } else if (a == OverwatchEvent.Action.ALERT_AGAIN) {
                 alert = makeAlert(box, night, hfov, alert == null ? now : alert.startedAt);
