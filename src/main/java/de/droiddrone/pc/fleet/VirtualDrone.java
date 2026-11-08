@@ -78,6 +78,28 @@ public final class VirtualDrone {
     private volatile Recording recording;
     /** The phone gets nothing from its flight controller (the panel's FC LOST). */
     private volatile boolean fcLost;
+
+    // ------------------------------------------------------------------ the tour's scenario (TourScenario)
+
+    /** What the tour hears from its drone: on the fleet's threads, quick. */
+    interface Events {
+        /** Its overwatch found something and calls the PC (the event's first alert). */
+        void alert(VirtualDrone d);
+
+        /** A PC connected to it as pilot. */
+        void connected(VirtualDrone d);
+
+        /** It flew into the scenario's vehicle: broken, silent from now on. */
+        void crashed(VirtualDrone d);
+    }
+
+    /** The scenario's vehicle and world (null: the usual scene), and who hears of it. */
+    private volatile BtrScene target;
+    private volatile Events events;
+    private volatile BtrSound targetSound;
+    /** It hit the vehicle: the link stays silent, as a broken drone's. */
+    private volatile boolean broken;
+    private boolean wasConnected;
     private final long startedAt = System.currentTimeMillis();
 
     // ------------------------------------------------------------------ the link
@@ -1124,20 +1146,33 @@ public final class VirtualDrone {
     private void audioRun(int gen, int kbps) {
         Recording rec = recording;
         boolean fromRecording = rec != null && rec.hasAudio();
-        try (AacEncoder enc = fromRecording ? null : new AacEncoder(Math.max(16, Math.min(64, kbps)) * 1000)) {
+        BtrScene scenario = fromRecording ? null : target;
+        BtrSound vehicle = targetSound;
+        int channels = scenario != null && vehicle != null ? 2 : 1;
+        float[] left = new float[AacEncoder.FRAME], right = new float[AacEncoder.FRAME];
+        try (AacEncoder enc = fromRecording ? null : new AacEncoder(Math.max(16, Math.min(64, kbps)) * 1000 * channels, channels)) {
             byte[] asc = fromRecording ? rec.audioConfig() : enc.config();
-            sendAudioConfig(asc);
+            sendAudioConfig(asc, channels);
             audioOn = true;
             long frameNs = 1_000_000_000L * AacEncoder.FRAME / AacEncoder.SAMPLE_RATE;
             long next = System.nanoTime();
             while (gen == audioGen && running) {
                 if (audioConfigResend) {
                     audioConfigResend = false;
-                    sendAudioConfig(asc);
+                    sendAudioConfig(asc, channels);
                 }
                 List<byte[]> frames;
                 if (fromRecording) {
                     frames = rec.audioFrames(System.currentTimeMillis());
+                } else if (channels == 2) {
+                    // the scenario: the drone's own sound in the middle, the vehicle from where it is
+                    float[] own = sound.next(fc.isArmed() ? fc.throttleOut() : -1);
+                    System.arraycopy(own, 0, left, 0, own.length);
+                    System.arraycopy(own, 0, right, 0, own.length);
+                    long now = System.currentTimeMillis();
+                    double[] rel = scenario.relative(view(), now);
+                    vehicle.add(left, right, rel[0], rel[1], rel[2], now >= scenario.drivesFrom() ? BtrScene.SPEED_MS : 0);
+                    frames = enc.encode(left, right);
                 } else {
                     frames = enc.encode(sound.next(fc.isArmed() ? fc.throttleOut() : -1));
                 }
@@ -1159,10 +1194,10 @@ public final class VirtualDrone {
         }
     }
 
-    private void sendAudioConfig(byte[] asc) throws IOException {
+    private void sendAudioConfig(byte[] asc, int channels) throws IOException {
         UdpPacketData p = new UdpPacketData(UdpCommon.AudioInitialFrame);
         p.daos.writeInt(AacEncoder.SAMPLE_RATE);
-        p.daos.writeByte(1);
+        p.daos.writeByte(channels);
         p.daos.writeByte(2); // Android's ENCODING_PCM_16BIT, as the phone says
         p.daos.write(asc);
         streamOut(p.getData());
@@ -1384,6 +1419,11 @@ public final class VirtualDrone {
                     feedIdleSticks(now);
                     fc.step(now, dt);
                 }
+                BtrScene t = target;
+                if (t != null && !broken && fc.isArmed() && t.hits(fc.northM(), fc.eastM(), fc.altitudeM(), now)) crashIntoTarget(now);
+                boolean nowConnected = isConnected();
+                if (nowConnected && !wasConnected && events != null) events.connected(this);
+                wasConnected = nowConnected;
                 noteBeeping(now);
                 powerTick(now);
                 overwatch.tick(now);
@@ -1597,6 +1637,49 @@ public final class VirtualDrone {
 
     public String name() {
         return name;
+    }
+
+    /** The tour's scenario: this drone's camera sees the BTR's world, its microphone hears it, flying into it breaks it. */
+    void attachTarget(BtrScene s, Events e) {
+        target = s;
+        events = e;
+        targetSound = s == null ? null : new BtrSound(3000L + slot);
+        scene.setWorld(s);
+    }
+
+    BtrScene target() {
+        return target;
+    }
+
+    public boolean isBroken() {
+        return broken;
+    }
+
+    /**
+     * Into a power mode as if this PC had asked (the tour's scenario): its check-ins and overwatch's calls go to pc.
+     * Refused like the PC's request while the FC isn't known disarmed.
+     */
+    void placeInMode(InetSocketAddress pc, int wanted, int intervalMin, int sensitivity, int flags, int overwatchToken) {
+        lastPcIp = pc.getAddress();
+        lastPcPort = pc.getPort();
+        if (wanted == OVERWATCH) overwatch.configure(sensitivity, flags, overwatchToken);
+        requestMode(wanted, intervalMin, "the tour");
+    }
+
+    /** Overwatch's first alert of an event (VirtualOverwatch). */
+    void noteAlert() {
+        Events e = events;
+        if (e != null) e.alert(this);
+    }
+
+    /** It flew into the vehicle: down, disarmed, and the link silent for good (a broken drone). */
+    private void crashIntoTarget(long now) {
+        broken = true;
+        fc.crash("flew into the BTR", now);
+        link.silence(now, 24L * 3600_000);
+        log.accept("CRASH: flew into the BTR - the drone is broken, its link is gone");
+        Events e = events;
+        if (e != null) e.crashed(this);
     }
 
     /** Where it is now, {lat, lon} (PLACE PHONE's map). */

@@ -473,6 +473,16 @@ public final class FlightModel {
         return throttleOut;
     }
 
+    /** It flew into something (the tour's BTR): disarmed where it is, and it falls. */
+    public synchronized void crash(String why, long nowMs) {
+        if (!armed) return;
+        crashed = true;
+        vn = 0;
+        ve = 0;
+        vz = Math.min(vz, 0);
+        disarm(why, nowMs);
+    }
+
     /** It disarmed on a hard touchdown. */
     public boolean crashed() {
         return crashed;

@@ -53,6 +53,16 @@ final class Scene {
     /** What the camera sees from: the drone's state. */
     record View(double north, double east, double alt, double rollDeg, double pitchDeg, double headingDeg) {}
 
+    /**
+     * A world of its own drawn instead of the grid and posts (the tour's scenario, {@link BtrScene}); its picture then
+     * gets the same name, VIRTUAL and clock burned in.
+     */
+    interface World {
+        /** @param analysis the motion detection's small picture: the world alone, no screen effects */
+        void render(BufferedImage img, View v, long nowMs, boolean analysis);
+    }
+
+    private volatile World world;
     private volatile String name;
     private final double[][] posts;
     private final List<Target> targets = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -69,6 +79,14 @@ final class Scene {
 
     void setName(String name) {
         this.name = name;
+    }
+
+    void setWorld(World w) {
+        world = w;
+    }
+
+    World world() {
+        return world;
     }
 
     void setNight(boolean night) {
@@ -125,6 +143,12 @@ final class Scene {
      */
     void render(BufferedImage img, View v, long nowMs, String extra, boolean burnIn) {
         int w = img.getWidth(), h = img.getHeight();
+        World wd = world;
+        if (wd != null) {
+            wd.render(img, v, nowMs, !burnIn);
+            if (burnIn) burnIn(img, extra);
+            return;
+        }
         Graphics2D g = img.createGraphics();
         try {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -340,7 +364,7 @@ final class Scene {
     }
 
     /** The drone's camera: world (north, east, up) to the picture. */
-    private static final class Camera {
+    static final class Camera {
         final double cn, ce, cu;
         final double[][] r; // world -> camera (x right, y down, z forward)
         final double f, cx, cy;
