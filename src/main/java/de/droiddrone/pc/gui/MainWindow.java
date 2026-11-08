@@ -683,9 +683,11 @@ public class MainWindow extends JFrame {
                 : "Spin each motor: right place, right direction?", () -> MotorTestDialog.open(this, this));
         motors.setEnabled(!isLinkActive());
         menu.add(motors);
+        if (advanced) menu.add(new MenuRows.WindowRow("Virtual fleet", "Virtual drones on this PC, to try the window, the map,"
+                + " OVERWATCH and OBSERVATION without hardware (a program of its own)", this::openVirtualFleet));
         menu.addSeparator();
         menu.add(new MenuRows.SwitchRow("Advanced", "Off by default. Shows PC, phone and drone setup, motion detection, the camera view,"
-                + " hardware decoding, the OSD and STANAG 4609",
+                + " hardware decoding, the OSD, STANAG 4609 and the virtual fleet",
                 advanced, on -> {
                     advanced = on;
                     save(Map.of(ADVANCED_KEY, Boolean.toString(on)));
@@ -698,6 +700,37 @@ public class MainWindow extends JFrame {
         about.setBorder(BorderFactory.createEmptyBorder(6, 14, 8, 14));
         menu.add(about);
         return menu;
+    }
+
+    /**
+     * TOOLS > Virtual fleet (Advanced, 1.0.50): starts the fleet program as a process of its own - the installed exe
+     * with "fleet", or from source this same Java with this classpath. Closing its window ends it; this window finds
+     * its drones at the next scan. Once only: a fleet already announcing itself is left as it is.
+     */
+    private void openVirtualFleet() {
+        if (!de.droiddrone.pc.fleet.VirtualFleet.announced().isEmpty()) {
+            logLine("Virtual fleet: it already runs - its window is open (its drones are in the PHONE list, marked VIRTUAL).");
+            return;
+        }
+        List<String> command = new java.util.ArrayList<>();
+        String app = System.getProperty("jpackage.app-path");
+        if (app != null) {
+            command.add(app);
+        } else {
+            String exe = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("windows") ? "java.exe" : "java";
+            command.add(java.nio.file.Path.of(System.getProperty("java.home"), "bin", exe).toString());
+            command.add("-Dfile.encoding=UTF-8");
+            command.add("-cp");
+            command.add(System.getProperty("java.class.path"));
+            command.add(de.droiddrone.pc.Main.class.getName());
+        }
+        command.add("fleet");
+        try {
+            new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            logLine("Virtual fleet starting: its window opens in a few seconds; its drones come into the PHONE list marked VIRTUAL.");
+        } catch (java.io.IOException e) {
+            logLine("Virtual fleet couldn't start: " + e.getMessage());
+        }
     }
 
     private JMenuItem addMenuItem(JPopupMenu menu, String title, String detail, Runnable open) {

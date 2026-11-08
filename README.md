@@ -88,7 +88,7 @@ Every phone running DRAUPNE Flight on your Tailscale network is **MobileAlpha, M
 - **Camera upside down** turns the picture; the OSD stays the right way up.
 - **Record video** saves every flight's video to `Videos\DRAUPNE Link`, exactly as it comes from the phone (MKV, no extra delay). A red **REC** shows on the OSD while it records. Next to it goes a copy with the OSD drawn in (`...-osd.mkv`), made on a low-priority thread of its own so the live picture never waits for it.
 - **Hardware video decoding** (on by default from 1.0.50; TOOLS > Advanced shows the switch) decodes on the GPU, and falls back to software when the GPU can't.
-- **TOOLS > Advanced** (off by default) shows the settings most pilots never need: PC, phone and drone setup in SETUP; motion detection, the camera view on the map, hardware decoding and the OSD in VIDEO; STANAG 4609 in LINK. Hidden, each keeps what it was set to.
+- **TOOLS > Advanced** (off by default) shows the settings most pilots never need: PC, phone and drone setup in SETUP; motion detection, the camera view on the map, hardware decoding and the OSD in VIDEO; STANAG 4609 in LINK; Virtual fleet in TOOLS. Hidden, each keeps what it was set to.
 - **OSD** on or off, and **OSD layout**, which works like Betaflight's OSD tab: switch elements on or off (throttle %, current, mAh, power, RSSI, GPS coordinates, clock, stick overlays and more are there, off by default) and drag them where you want them. It shows on the live OSD at once and is remembered.
 - **POP OUT VIDEO** (the button over the video) puts the picture (with the OSD) in its own window, e.g. on a second screen; close it or press *VIDEO BACK* to put it back. **FULL SCREEN** is the button next to it. **Full screen** is F11.
 - **Sound:** while the drone is disarmed you hear the phone's microphone (phone app 2.3.0-pc.34 or newer; it stops the moment the drone arms). **MUTE** (the filled loudspeaker at the edge of the video) or **M** silences it at once; after 10 s muted the phone stops sending it. Remembered per phone. Recordings include it.
@@ -253,6 +253,7 @@ Every DRAUPNE Link release includes the phone app as `DRAUPNE-Flight-<version>.a
 
 The **virtual fleet** is a program of its own that plays several drones (phone and flight controller) on this PC, so you can try the window, the map, OBSERVATION, OVERWATCH and the link's bad days without any hardware. Start it next to DRAUPNE Link:
 
+- in DRAUPNE Link: **TOOLS > Virtual fleet** (shown with TOOLS > Advanced on);
 - installed: double-click **Virtual fleet.bat** in DRAUPNE Link's folder (or start `"DRAUPNE Link.exe" fleet`);
 - from the source: `.\gradlew.bat run --args=fleet`.
 
