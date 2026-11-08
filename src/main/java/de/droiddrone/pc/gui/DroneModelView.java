@@ -197,10 +197,8 @@ final class DroneModelView extends JComponent {
         int w = getWidth(), h = getHeight();
         if (w <= 0 || h <= 0) return;
         Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
-        scale = Math.min(w, h * 1.25) * 1.3;
-        cx = w / 2.0;
-        cy = h * 0.52;
         double[][] rot = rotation(roll, pitch, yaw);
+        frame(w, h, rot);
         BufferedImage drone = render(w, h, rot);
 
         // the ground: a fixed grid, and the drone's shadow straight down on it
@@ -236,6 +234,43 @@ final class DroneModelView extends JComponent {
             g.drawString(s, (w - g.getFontMetrics().stringWidth(s)) / 2, 24);
         }
         g.dispose();
+    }
+
+    /** Share of the box the drone's outline fills (1.0.52, the pilot: the model was small - a fixed zoom for the worst pose). */
+    private static final double FILL = 0.84;
+    /** Easing towards the pose's framing per paint while the attitude streams in (no jump when it tilts). */
+    private static final double EASE = 0.35;
+    private double eased;
+    private long lastPaintNs;
+
+    /**
+     * The zoom and centre for this pose: the drone's outline (every SHADOW_STEP-th vertex) fills FILL of the box, the
+     * bottom line's label kept clear. Flat it is big; nose straight up it shrinks to fit. Eased between live frames.
+     */
+    private void frame(int w, int h, double[][] rot) {
+        float[] p = m.p();
+        double minU = Double.MAX_VALUE, maxU = -Double.MAX_VALUE, minV = Double.MAX_VALUE, maxV = -Double.MAX_VALUE;
+        for (int k = 0; k < p.length; k += 3 * SHADOW_STEP) {
+            double x = rot[0][0] * p[k] + rot[0][1] * p[k + 1] + rot[0][2] * p[k + 2] - EYE[0];
+            double y = rot[1][0] * p[k] + rot[1][1] * p[k + 1] + rot[1][2] * p[k + 2] - EYE[1];
+            double z = rot[2][0] * p[k] + rot[2][1] * p[k + 1] + rot[2][2] * p[k + 2] - EYE[2];
+            double depth = x * FORWARD[0] + y * FORWARD[1] + z * FORWARD[2];
+            double u = (x * RIGHT[0] + y * RIGHT[1] + z * RIGHT[2]) / depth, v = (x * DOWN[0] + y * DOWN[1] + z * DOWN[2]) / depth;
+            minU = Math.min(minU, u);
+            maxU = Math.max(maxU, u);
+            minV = Math.min(minV, v);
+            maxV = Math.max(maxV, v);
+        }
+        int usable = Math.max(1, h - 28); // "RED PROPS = FRONT" under it
+        double target = Math.min(w * FILL / Math.max(1e-6, maxU - minU), usable * FILL / Math.max(1e-6, maxV - minV));
+        long now = System.nanoTime();
+        boolean streaming = live && eased > 0 && now - lastPaintNs < 300_000_000L;
+        eased = streaming ? eased + (target - eased) * EASE : target;
+        lastPaintNs = now;
+        scale = eased;
+        cx = w / 2.0 - scale * (minU + maxU) / 2;
+        cy = usable / 2.0 - scale * (minV + maxV) / 2;
+        if (Math.abs(target - eased) > target * 0.005) repaint(); // not there yet: the next frame comes closer
     }
 
     /** Every SHADOW_STEP-th vertex makes the shadow: the same outline at a fraction of the cost. */
@@ -276,7 +311,7 @@ final class DroneModelView extends JComponent {
     }
 
     private BufferedImage render(int w, int h, double[][] rot) {
-        double[] pose = {w, h, roll, pitch, yaw, live ? 1 : 0};
+        double[] pose = {w, h, roll, pitch, yaw, live ? 1 : 0, scale, cx, cy};
         if (frame != null && Arrays.equals(pose, lastPose)) return frame;
         lastPose = pose;
         int bw = w * SS, bh = h * SS;

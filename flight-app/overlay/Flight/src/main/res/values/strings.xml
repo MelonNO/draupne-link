@@ -35,8 +35,8 @@
     <!-- DRAUPNE Link layout -->
     <string name="dd_title">DRAUPNE</string>
     <string name="dd_subtitle">FLIGHT UNIT</string>
-    <string name="dd_section_status">// STATUS</string>
-    <string name="dd_section_connection">// CONNECTION</string>
+    <string name="dd_section_status">STATUS</string>
+    <string name="dd_section_connection">CONNECTION</string>
     <string name="dd_label_mode">CONNECTION</string>
     <string name="dd_label_ip">SERVER IP</string>
     <string name="dd_label_port">PORT</string>

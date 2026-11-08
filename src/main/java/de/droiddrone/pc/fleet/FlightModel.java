@@ -410,6 +410,13 @@ public final class FlightModel {
         return heading;
     }
 
+    /** Turns the drone on the ground to look this way (the fleet panel's LOOK), only disarmed. */
+    public synchronized boolean turnTo(double headingDeg) {
+        if (armed) return false;
+        heading = norm(headingDeg);
+        return true;
+    }
+
     public double altitudeM() {
         return alt;
     }

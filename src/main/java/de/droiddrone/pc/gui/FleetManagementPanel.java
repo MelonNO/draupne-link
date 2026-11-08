@@ -54,6 +54,21 @@ final class FleetManagementPanel extends JPanel {
         /** PILOT UAV: fly the selected drone, as the map's right-click does. */
         default void connect(String phone) {
         }
+
+        /** Right-click on a drone not heard from (LOST, UNKNOWN): it is down and gone (1.0.52). */
+        default void markCrashed(String phone) {
+        }
+
+        /** Right-click on a CRASHED drone: not crashed after all. */
+        default void clearCrashed(String phone) {
+        }
+    }
+
+    /** What a row's right-click offers for this state: "Mark CRASHED", "Clear CRASHED", or null (nothing). */
+    static String crashChoice(MapView.Kind kind) {
+        if (kind == MapView.Kind.LOST || kind == MapView.Kind.UNKNOWN) return "Mark CRASHED";
+        if (kind == MapView.Kind.CRASHED) return "Clear CRASHED";
+        return null;
     }
 
     static final int BODY_WIDTH = 340;
@@ -459,8 +474,30 @@ final class FleetManagementPanel extends JPanel {
                 public void mousePressed(java.awt.event.MouseEvent e) {
                     select(RowView.this.phone);
                     actions.picked(RowView.this.phone);
+                    if (e.isPopupTrigger()) crashMenu(e);
+                }
+
+                @Override
+                public void mouseReleased(java.awt.event.MouseEvent e) {
+                    if (e.isPopupTrigger()) crashMenu(e); // Windows: the menu comes on release
                 }
             });
+        }
+
+        /** Right-click: Mark CRASHED on a drone not heard from, Clear CRASHED on a crashed one. */
+        private void crashMenu(java.awt.event.MouseEvent e) {
+            FleetCards.Card c = card;
+            String choice = c == null ? null : crashChoice(c.kind());
+            if (choice == null) return;
+            javax.swing.JPopupMenu menu = TacticalCombo.menu();
+            menu.setBackground(Theme.PANEL_2);
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(choice + " on " + phone);
+            item.addActionListener(a -> {
+                if (c.kind() == MapView.Kind.CRASHED) actions.clearCrashed(phone);
+                else actions.markCrashed(phone);
+            });
+            menu.add(item);
+            menu.show(this, e.getX(), e.getY());
         }
 
         @Override

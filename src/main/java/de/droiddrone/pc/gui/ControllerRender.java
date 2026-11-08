@@ -822,7 +822,7 @@ final class ControllerRender extends JComponent {
         g.setColor(new Color(227, 27, 35, 34));
         for (int x = 0; x < SCREEN_W; x += 12) g.drawLine(x, 26, x, SCREEN_H);
         for (int y = 26; y < SCREEN_H; y += 12) g.drawLine(0, y, SCREEN_W, y);
-        topBar(g, new Color(20, 0, 2), new Color(227, 27, 35), new Color(255, 80, 80), "DRAUPNE  //  OPS");
+        topBar(g, new Color(20, 0, 2), new Color(227, 27, 35), new Color(255, 80, 80), "DRAUPNE  OPS");
         // Red ops and Minimal in one (the pilot: "combine minimal and red ops, I basically want the logo larger"): the
         // mark large on the left with its name, over a faint crosshair; the flight state beside it
         Color red = new Color(255, 40, 46);

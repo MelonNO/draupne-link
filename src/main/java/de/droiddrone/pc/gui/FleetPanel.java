@@ -155,7 +155,7 @@ public final class FleetPanel {
     private void addDrone() {
         try {
             double[] at = fleet.nextPlace(startLat, startLon);
-            addCard(fleet.add(fleet.freeName(), at[0], at[1], 0));
+            addCard(fleet.add(fleet.freeName(), at[0], at[1], at[2]));
         } catch (IOException e) {
             JOptionPane.showMessageDialog(frame, e.getMessage(), "Add drone", JOptionPane.WARNING_MESSAGE);
         }
@@ -172,15 +172,34 @@ public final class FleetPanel {
             double lat = at[0], lon = at[1];
             startLat = lat;
             startLon = lon;
+            // the launch point goes there; the drones keep their places round it (FleetLayout, 1.0.52)
             int i = 0;
             for (VirtualDrone d : fleet.drones()) {
-                double east = i++ * 30 / (111_320.0 * Math.cos(Math.toRadians(lat)));
-                if (!d.moveTo(lat, lon + east)) appendLog(d.name() + ": armed - stays where it is");
+                double[] p = de.droiddrone.pc.fleet.FleetLayout.place(i++, lat, lon);
+                if (!d.moveTo(p[0], p[1])) appendLog(d.name() + ": armed - stays where it is");
             }
             refresh();
         } catch (RuntimeException e) {
             JOptionPane.showMessageDialog(frame, "Not a position. Use MGRS (" + Fleet.DEFAULT_PLACE + "), UTM or lat, lon.", "Start place", JOptionPane.WARNING_MESSAGE);
         }
+    }
+
+    /**
+     * LOOK's answer as a heading: degrees (a plain number), or the bearing from the drone ({lat, lon}) to a grid
+     * (MGRS, UTM, lat lon); null for neither.
+     */
+    static Double lookHeading(String text, double[] from) {
+        String t = text == null ? "" : text.trim();
+        if (t.isEmpty()) return null;
+        try {
+            double d = Double.parseDouble(t.replace(',', '.'));
+            if (Double.isFinite(d)) return ((d % 360) + 360) % 360;
+        } catch (NumberFormatException ignored) {
+            // a grid then
+        }
+        double[] at = de.droiddrone.pc.map.Coordinates.parse(t);
+        if (at == null || Math.abs(at[0]) > 85) return null;
+        return de.droiddrone.pc.fleet.FleetLayout.bearing(from, at);
     }
 
     private void addCard(VirtualDrone d) {
@@ -228,6 +247,7 @@ public final class FleetPanel {
             Theme.transparent(headButtons);
             headButtons.add(button("Place phone", "Move this drone: click a spot on the map (disarmed only)",
                     () -> PlacePhoneDialog.open(frame, fleet, drone, FleetPanel.this::appendLog)));
+            headButtons.add(button("Look", "Where its camera looks: degrees or a grid to look at (disarmed)", this::look));
             headButtons.add(button("Rename", "Another DRAUPNE name (MobileXxx)", this::rename));
             headButtons.add(button("Remove", "Stop this drone and remove it", () -> {
                 fleet.remove(drone);
@@ -274,8 +294,8 @@ public final class FleetPanel {
                         bunch.setValue(0);
                     })));
             actions.add(section("OVERWATCH + DETECTION"));
-            actions.add(row(button("Walker", "Person walks across, 10 m out (torch at NIGHT)", () -> drone.addTarget("walker")),
-                    button("Vehicle", "Car drives across, 25 m out, 30 km/h (lights at NIGHT)", () -> drone.addTarget("vehicle")),
+            actions.add(row(button("Walker", "A soldier walks across, 10 m out (torch at NIGHT). Fly into him: crash", () -> drone.addTarget("walker")),
+                    button("Vehicle", "A BTR on patrol 20-40 m out (lights at NIGHT). Fly into it: crash", () -> drone.addTarget("vehicle")),
                     button("Light", "Person with a lamp walks across, 15 m out (NIGHT)", () -> drone.addTarget("light")), night,
                     button("Someone now", "Someone crosses 6 m from the camera: motion detection must find it", drone::someoneNow)));
             actions.add(row(button("Standby", "The phone's STANDBY button", () -> drone.requestMode(VirtualDrone.STANDBY, 0, "the phone's button")),
@@ -325,6 +345,21 @@ public final class FleetPanel {
             LinkImpairment l = drone.link();
             l.set((Integer) loss.getValue(), (Integer) jitter.getValue(), 0, (Integer) bunch.getValue());
             appendLog(drone.name() + ": WEAK LINK loss " + loss.getValue() + " %, jitter " + jitter.getValue() + " ms, bunch " + bunch.getValue() + " ms");
+        }
+
+        /** LOOK (1.0.52, the pilot): where the camera looks - degrees, or a grid it looks at. */
+        private void look() {
+            String now = String.valueOf(Math.round(drone.headingDeg()) % 360);
+            String s = (String) JOptionPane.showInputDialog(frame, "Look: degrees (0-359), or a grid to look at:", "Look",
+                    JOptionPane.QUESTION_MESSAGE, null, null, now);
+            if (s == null) return;
+            Double heading = lookHeading(s, drone.position());
+            if (heading == null) {
+                JOptionPane.showMessageDialog(frame, "Not a direction. Use degrees, MGRS, UTM or lat, lon.", "Look", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            if (!drone.lookTo(heading)) appendLog(drone.name() + ": armed - looks where it flies");
+            else appendLog(drone.name() + ": looks " + Math.round(heading) % 360 + " deg");
         }
 
         private void rename() {
@@ -389,7 +424,7 @@ public final class FleetPanel {
     }
 
     private static JLabel section(String text) {
-        return Theme.label("// " + text, Theme.headingFont(12f), Theme.ACCENT);
+        return Theme.label(text, Theme.headingFont(12f), Theme.ACCENT);
     }
 
     private static JPanel row(JComponent... parts) {

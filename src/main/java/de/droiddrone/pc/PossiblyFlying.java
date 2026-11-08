@@ -56,6 +56,11 @@ public final class PossiblyFlying {
     private final Map<Object, Live> links = new ConcurrentHashMap<>();
     /** The last word of drones whose link ended, by drone: an armed one keeps the flag up for the rest of its window. */
     private final Map<Object, Ended> ended = new ConcurrentHashMap<>();
+    /**
+     * Drones the pilot marked CRASHED (1.0.52), by drone key -> when (MonoClock ms): a word heard before that no longer
+     * counts - it is down for good; a word heard after it (the phone answers again) counts as usual.
+     */
+    private final Map<Object, Long> downAt = new ConcurrentHashMap<>();
 
     /** A flag of its own (tests; everything else reads this PC's, {@link #pc()}). */
     public PossiblyFlying(LongSupplier clock) {
@@ -119,13 +124,13 @@ public final class PossiblyFlying {
             Word w = read(l.word());
             Ended e = ended.get(l.key());
             if (freshDisarmed(w, e)) ended.remove(l.key(), e); // connected again and it says DISARMED: it is down
-            if (live == null && counts(w, now)) live = new Hold(nameOf(l.drone()), true, w.at(), w.at() + LOST_DRONE_WINDOW_MS);
+            if (live == null && counts(w, now) && !markedDown(l.key(), w)) live = new Hold(nameOf(l.drone()), true, w.at(), w.at() + LOST_DRONE_WINDOW_MS);
         }
         if (live != null) return live;
         Hold best = null;
         for (Map.Entry<Object, Ended> e : ended.entrySet()) {
             Word w = e.getValue().word();
-            if (!counts(w, now)) {
+            if (!counts(w, now) || markedDown(e.getKey(), w)) {
                 ended.remove(e.getKey(), e.getValue()); // its window is over
                 continue;
             }
@@ -153,6 +158,26 @@ public final class PossiblyFlying {
             if (ended.remove(e.getKey(), e.getValue()) && counts(e.getValue().word(), now)) out.add(nameOf(e.getValue().drone()));
         }
         return out;
+    }
+
+    /**
+     * The pilot marked this drone CRASHED (1.0.52): it no longer flies - its armed words so far, kept or on a link still
+     * open and waiting, stop holding the flag. A newer word from it (heard again) counts as usual.
+     * @return whether it held the flag
+     */
+    public boolean markDown(String drone) {
+        if (drone == null || drone.isBlank()) return false;
+        Hold before = why();
+        Object key = keyOf(null, drone);
+        downAt.put(key, clock.getAsLong());
+        ended.remove(key);
+        return before != null && !java.util.Objects.equals(before, why());
+    }
+
+    /** A word from before the drone was marked CRASHED. */
+    private boolean markedDown(Object key, Word w) {
+        Long at = downAt.get(key);
+        return at != null && w.at() <= at;
     }
 
     /**

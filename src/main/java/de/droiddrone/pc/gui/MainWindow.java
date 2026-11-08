@@ -712,10 +712,9 @@ public class MainWindow extends JFrame {
         return menu;
     }
 
-    /** TOOLS: the drone's whereabouts, tests, and what this is. */
+    /** TOOLS: where the position comes from, tests, and what this is (FIND DRONE is on the map, the motor test in Drone setup). */
     private JPopupMenu toolsMenu() {
         JPopupMenu menu = styledMenu();
-        menu.add(new MenuRows.WindowRow("Find drone", "Last known position, to go and get it", this::openFindDrone));
         menu.add(new MenuRows.ChoiceRow("Position from", "The drone's GPS or the phone's",
                 new String[]{"DRONE", "PHONE"}, preferPhone ? 1 : 0, i -> {
                     preferPhone = i == 1;
@@ -725,11 +724,6 @@ public class MainWindow extends JFrame {
         menu.addSeparator();
         menu.add(new MenuRows.SwitchRow("Latency test", "Measures the real video delay",
                 latencyMeter != null, this::setLatencyTest));
-        JMenuItem motors = new MenuRows.WindowRow("Motor test", isLinkActive()
-                ? "Disconnect first: it runs over USB"
-                : "Each motor: right place and direction?", () -> MotorTestDialog.open(this, this));
-        motors.setEnabled(!isLinkActive());
-        menu.add(motors);
         if (advanced) menu.add(new MenuRows.WindowRow("Virtual fleet", "Virtual drones, no hardware needed", this::openVirtualFleet));
         if (advanced) menu.add(new MenuRows.WindowRow("Reset setup", "Settings back to a fresh install", () -> ResetSetup.ask(this)));
         menu.addSeparator();
@@ -866,7 +860,7 @@ public class MainWindow extends JFrame {
         dropdown(videoButton, this::videoMenu);
         linkButton.setToolTipText("Warning sounds, spectators, name map");
         dropdown(linkButton, this::linkMenu);
-        toolsButton.setToolTipText("Find drone, tracks, GPS source, tests, versions");
+        toolsButton.setToolTipText("GPS source, tests, versions");
         dropdown(toolsButton, this::toolsMenu);
         updateButton.setVisible(false);
         updateButton.addActionListener(e -> startUpdate());
@@ -1377,6 +1371,8 @@ public class MainWindow extends JFrame {
         String chosen = config.getString(Names.PHONE_NAME_KEY);
         java.util.List<Names.Entry> list = names.list(kind);
         if (kind == Names.Kind.PC) list.removeIf(e -> e.name().equalsIgnoreCase(nameService.ownName()));
+        // a CRASHED drone isn't offered (1.0.52, the pilot); the one this PC is still linked to stays while it waits
+        if (kind == Names.Kind.PHONE) list = offeredPhones(list, crashed.keySet(), connection != null ? config.getString(Names.PHONE_NAME_KEY) : null);
         long now = System.currentTimeMillis();
         int at = -1;
         for (int i = 0; i < list.size(); i++) if (list.get(i).name().equalsIgnoreCase(chosen)) at = i;
@@ -1823,6 +1819,7 @@ public class MainWindow extends JFrame {
         String liveIp = names.ipOf(livePhone);
         Asleep sleeping = liveIp == null ? null : asleepPhones.get(liveIp);
         boolean liveAsleep = sleeping != null && checkInOverdue(sleeping, System.currentTimeMillis()) <= 0;
+        if (isCrashed(livePhone)) liveAsleep = true; // CRASHED (1.0.52): its crash sign stands at the last point, never LAST KNOWN
         de.droiddrone.pc.map.FlightTrack.Point lastFix = track == null ? null : track.last();
         if (!liveAsleep && lastFix != null && livePhone != null && !livePhone.isEmpty()) liveAsleep = heardSince(livePhone, liveIp, lastFix.timeMs());
         // the pilot put it to sleep a moment ago: it goes quiet on purpose before the connection ends (the pilot: "they
@@ -1946,6 +1943,16 @@ public class MainWindow extends JFrame {
         return mapWindow;
     }
 
+    /**
+     * 1.0.52 (the pilot): CONNECT from the map window (an overwatch alert, the fleet strip, a right-click) brings this,
+     * the pilot's window, to the front - out of the taskbar too.
+     */
+    void toPilotWindow() {
+        if ((getExtendedState() & JFrame.ICONIFIED) != 0) setExtendedState(getExtendedState() & ~JFrame.ICONIFIED);
+        toFront();
+        requestFocus();
+    }
+
     /** MAP > Map window, F3: opens it (in front), or hides it. */
     private void toggleMapWindow() {
         MapWindow w = mapWindow();
@@ -1989,12 +1996,7 @@ public class MainWindow extends JFrame {
         // 1.0.52 (the pilot): the drone is down and gone - CRASHED on the map, the fleet and the PHONE list until its
         // phone is heard again or the pilot clears it; FIND DRONE still has its last position
         String name = config.getString(Names.PHONE_NAME_KEY);
-        if (name != null && !name.isBlank() && !crashed.containsKey(name)) {
-            crashed.put(name, System.currentTimeMillis());
-            saveCrashed();
-            logLine(name + ": CRASHED - LOST.");
-            lostDroneButton.setText("Crashed - find drone");
-        }
+        if (markCrashed(name, "lost")) lostDroneButton.setText("Crashed - find drone");
         FindDroneDialog d = openFindDrone();
         String mgrs = d.mgrs();
         if (mgrs != null) {
@@ -2027,11 +2029,40 @@ public class MainWindow extends JFrame {
         save(Map.of(CRASHED_KEY, sb.toString()));
     }
 
+    /**
+     * The drone is down and gone (1.0.52, the pilot): LOST DRONE after a link loss, or right-click "Mark CRASHED" on a
+     * drone not heard from for a while. CRASHED on the map and the fleet, out of the PHONE list, no LAST KNOWN, and it
+     * no longer counts as possibly flying (PossiblyFlying.markDown) - until it is heard again or cleared.
+     * @return whether it was newly marked
+     */
+    boolean markCrashed(String name, String why) {
+        if (name == null || name.isBlank() || crashed.containsKey(name)) return false;
+        crashed.put(name, System.currentTimeMillis());
+        saveCrashed();
+        boolean held = de.droiddrone.pc.PossiblyFlying.pc().markDown(name);
+        logLine(name + ": CRASHED - " + ("lost".equals(why) ? "LOST" : "marked by the pilot") + "." + (held ? " Not flying any more: downloads resume." : ""));
+        updatePhoneList();
+        return true;
+    }
+
+    /** The PHONE list without CRASHED drones (1.0.52), but the one still linked (its link waits after the crash). */
+    static java.util.List<Names.Entry> offeredPhones(java.util.List<Names.Entry> all, java.util.Set<String> crashedNames, String linked) {
+        java.util.List<Names.Entry> out = new java.util.ArrayList<>(all);
+        out.removeIf(e -> crashedNames.contains(e.name()) && !e.name().equalsIgnoreCase(linked));
+        return out;
+    }
+
+    /** The pilot's Clear CRASHED (map or fleet right-click). */
+    void clearCrashedByPilot(String name) {
+        clearCrashed(name, "cleared");
+    }
+
     /** Heard again (a reply after the crash, or a link to it), or the pilot's Clear: no longer CRASHED. */
     private void clearCrashed(String name, String why) {
         if (name == null || crashed.remove(name) == null) return;
         saveCrashed();
         logLine(name + ": CRASHED cleared - " + why + ".");
+        javax.swing.SwingUtilities.invokeLater(this::updatePhoneList); // offered in the PHONE list again
     }
 
     boolean isCrashed(String name) {
@@ -3415,6 +3446,7 @@ public class MainWindow extends JFrame {
         // 1.0.50 (the pilot): no confirm - CONNECT on the card connects (the 1.0.49 question is gone); a PC that may
         // fly another drone is still refused above
         overwatch.connect(drone);
+        toPilotWindow(); // 1.0.52 (the pilot): the card is in the map window; flying happens here
         if (same) {
             wakePhone(); // this PC's link to it waits dormant: the Connects go out again now
             return;
@@ -4057,10 +4089,12 @@ public class MainWindow extends JFrame {
                     MapView.Kind.CRASHED, false, null));
         }
         miniMap.setNetDrones(drones, this::connectFromMap);
-        miniMap.setOnClearCrashed(n -> clearCrashed(n, "cleared"));
+        miniMap.setOnClearCrashed(this::clearCrashedByPilot);
+        miniMap.setOnMarkCrashed(n -> markCrashed(n, "marked"));
         if (mapWindow != null) {
             mapWindow.map().setNetDrones(drones, this::connectFromMap);
-            mapWindow.map().setOnClearCrashed(n -> clearCrashed(n, "cleared"));
+            mapWindow.map().setOnClearCrashed(this::clearCrashedByPilot);
+            mapWindow.map().setOnMarkCrashed(n -> markCrashed(n, "marked"));
         }
         if (!asleepPhones.isEmpty() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
     }
@@ -4254,6 +4288,7 @@ public class MainWindow extends JFrame {
 
     /** Right-click on a drone on the map: fly it (as pilot), or watch it through the PC that flies it. */
     private void connectFromMap(String phone, boolean watch) {
+        toPilotWindow();
         if (observation != null && watch) {
             JOptionPane.showMessageDialog(this, "Observing: STOP OBSERVING first.", "Observing", JOptionPane.INFORMATION_MESSAGE);
             return;
@@ -4922,6 +4957,17 @@ public class MainWindow extends JFrame {
     /** A tour drone's pack per cell as if this PC had read it at its last flight (the fleet row's DRONE figure). */
     void tourLastCell(String drone, double cellVolts, long ageMs) {
         lastCell.put(drone.toLowerCase(Locale.ROOT), new double[]{cellVolts, System.currentTimeMillis() - ageMs});
+    }
+
+    /** The tour's drones: the name service asks the network now (they answer while still awake). */
+    void tourScanNames() {
+        nameService.scanSoon();
+    }
+
+    /** Whether the name map has all these phones (the tour waits for them before putting them to sleep). */
+    boolean tourNamesKnown(java.util.List<String> drones) {
+        for (String d : drones) if (names.get(d) == null) return false;
+        return true;
     }
 
     int tourLinkPort() {
