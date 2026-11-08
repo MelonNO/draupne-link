@@ -69,6 +69,83 @@ class OrientationTest {
         assertNull(Orientation.parseSetting("Invalid name", "align_board_yaw"));
     }
 
+    // ------------------------------------------------------------------ the compass (1.0.52)
+
+    private static double[] mul(int[][] m, double[] v) {
+        double[] r = new double[3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) r[i] += m[i][j] * v[j];
+        return r;
+    }
+
+    private static int[][] t(int[][] m) {
+        int[][] r = new int[3][3];
+        for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) r[i][j] = m[j][i];
+        return r;
+    }
+
+    /**
+     * What Betaflight would read with the nose north, east, south, west (body x forward, y left, z up; the field
+     * north and down, as in Norway), for a compass whose right align_mag is `right`, set to `current`, the board
+     * alignment `board` (null = none) applied after it, and an uncalibrated offset added.
+     */
+    private static double[][] readings(int right, int current, int[][] board) {
+        int[][] b = board == null ? Orientation.MAG_MATRICES[0] : board;
+        double[] offset = {137, -260, 55};
+        double[][] out = new double[4][];
+        for (int h = 0; h < 4; h++) {
+            double psi = Math.toRadians(h * 90);
+            double[] body = {400 * Math.cos(psi), 400 * Math.sin(psi), -1100};
+            // the right setting maps the sensor's raw reading onto the body: raw = Eright^T B^T body
+            double[] raw = mul(t(Orientation.MAG_MATRICES[right]), mul(t(b), body));
+            double[] m = mul(b, mul(Orientation.MAG_MATRICES[current], raw));
+            for (int i = 0; i < 3; i++) m[i] += offset[i];
+            out[h] = m;
+        }
+        return out;
+    }
+
+    @Test
+    void findsTheCompassSettingFromFourHeadingsWhateverItIsSetToNow() {
+        int[][][] boards = {null, Orientation.boardMatrix(0, 0, 180, true), Orientation.boardMatrix(180, 0, 0, true),
+                Orientation.boardMatrix(0, 0, 90, true)};
+        for (int[][] board : boards) {
+            for (int right = 0; right < 8; right++) {
+                for (int current = 0; current < 8; current++) {
+                    double[][] r = readings(right, current, board);
+                    String what = "right " + Orientation.MAG_ALIGNS[right] + ", set " + Orientation.MAG_ALIGNS[current];
+                    assertEquals(right == current, Orientation.compassRight(r[0], r[1], r[2], r[3]), what);
+                    assertEquals(right, Orientation.compassFix(current, r[0], r[1], r[2], r[3], board), what);
+                }
+            }
+        }
+    }
+
+    @Test
+    void noFitForReadingsThatTurnTheWrongWay() {
+        double[] same = {100, 0, -500};
+        assertEquals(-1, Orientation.compassFix(0, same, same, same, same, null), "the drone not turned: nothing fits");
+        assertEquals(-1, Orientation.compassFix(-1, same, same, same, same, null), "DEFAULT / CUSTOM: unknown start");
+    }
+
+    @Test
+    void readsTheCompassAndItsSetting() {
+        byte[] p = new byte[18];
+        int[] mag = {-300, 1200, -32000};
+        for (int i = 0; i < 3; i++) {
+            p[12 + 2 * i] = (byte) mag[i];
+            p[13 + 2 * i] = (byte) (mag[i] >> 8);
+        }
+        assertArrayEquals(new double[]{-300, 1200, -32000}, Orientation.parseMag(p), 1e-9);
+        assertNull(Orientation.parseMag(new byte[10]));
+        assertEquals("CW270FLIP", Orientation.parseAlign("align_mag = CW270FLIP\r\nAllowed values: DEFAULT, CW0, ..."));
+        assertEquals("DEFAULT", Orientation.parseAlign("align_mag = DEFAULT"));
+        assertNull(Orientation.parseAlign("Invalid name"));
+        assertEquals(7, Orientation.alignIndex("CW270FLIP"));
+        assertEquals(-1, Orientation.alignIndex("DEFAULT"));
+        assertNull(Orientation.boardMatrix(0, 0, 45, true), "only quarter turns");
+        assertArrayEquals(Orientation.boardMatrix(0, 0, 90, true)[0], Orientation.boardMatrix(0, 0, 270, false)[0]);
+    }
+
     @Test
     void saysTheTiltInWords() {
         assertEquals("nose up 31°, right side down 2°", Orientation.describe(2.2, -31));

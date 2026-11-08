@@ -30,8 +30,8 @@ import java.util.stream.Collectors;
  * cell count (6S unless the pilot changes it) - set over USB with nothing else to click; the GPS (its UART and the
  * compass, when the drone has one); the flight mode switch the pilot picks (AUX2 by default: acro, angle, GPS
  * position hold; or left as it is); ARM, PREARM, GPS rescue and the failsafe. The rows say only what the choices
- * next to them don't: what will be written, what is set, what is wrong. The motors and props are assumed checked;
- * the pilot can say so, or check them there and then with the motor test.
+ * next to them don't: what will be written, what is set, what is wrong. A second step (MotorsPage) has the motors and
+ * the orientation, with a 3D drone following the real one and the guided check.
  */
 final class DroneSetup {
     /**
@@ -43,9 +43,13 @@ final class DroneSetup {
     private DroneSetup() {
     }
 
-    /** Drone setup's steps. The first-time setup is made of these too (SetupWizard): a step added here is in both. */
+    /**
+     * Drone setup's steps: Betaflight's settings, then the motors and the orientation (1.0.52: two steps, the pilot).
+     * The first-time setup is made of these too (SetupWizard): a step added here is in both.
+     */
     static List<Page> pages(MainWindow main) {
-        return List.of(new BetaflightPage(main));
+        BetaflightPage betaflight = new BetaflightPage(main);
+        return List.of(betaflight, new MotorsPage(main, () -> betaflight.chosenPort));
     }
 
     /** SETUP &rarr; Drone setup. */
@@ -53,6 +57,22 @@ final class DroneSetup {
         new WizardDialog(main, "Drone setup", pages(main), () -> {
             main.save(Map.of("setup.droneDone", "true"));
             main.logLine("Drone setup finished.");
+        }).setVisible(true);
+        main.reloadSettings();
+    }
+
+    /**
+     * SETUP &rarr; Set up a new drone (1.0.52): another drone with its own phone - the drone's steps, the radio when its
+     * switches changed, then the phone's steps. This PC is set up already, so its steps aren't in it.
+     */
+    static void openNewDrone(MainWindow main) {
+        List<Page> pages = new java.util.ArrayList<>();
+        for (Page p : pages(main)) pages.add(p.in("DRONE"));
+        pages.add(new PcSetupWizard.RadioPage(main).in("RADIO")); // skipped unless the switches need it
+        for (Page p : PhoneGuideWizard.pages(main)) pages.add(p.in(p instanceof PhoneGuideWizard.ConnectPage ? "CONNECT" : "PHONE"));
+        new WizardDialog(main, "New drone", pages, () -> {
+            main.save(Map.of("setup.droneDone", "true", "setup.phoneDone", "true"));
+            main.logLine("New drone set up.");
         }).setVisible(true);
         main.reloadSettings();
     }
@@ -184,9 +204,17 @@ final class DroneSetup {
         private final Part receiver = settings.part("Receiver");
         private final Part stickDelay = settings.part("Stick delay");
         private final Part battery = settings.part("Battery");
-        /** GPS [No / Yes]; with Yes the compass, the UART and CALIBRATE COMPASS slide out under it. */
-        private final Section gpsSection = settings.section("GPS");
+        /** AVIONICS: GPS [No / Yes] PORT [UART3]; with Yes the COMPASS row slides out under it. */
+        private final Section gpsSection = settings.section("AVIONICS");
         private final Part gps = gpsSection.part("GPS");
+        private final Part compassPart = gpsSection.part("Compass");
+        /** PORT [UART3] beside the GPS choice: shown with Yes. */
+        private JComponent portBox;
+        /**
+         * The GPS answer is the default (Yes), not the pilot's: a round that finds no GPS with a battery in sets No and
+         * the failsafe to Drop (the pilot's rule, 1.0.52); without a battery it asks for one first.
+         */
+        private boolean gpsAuto;
         private javax.swing.JComboBox<String> gpsChoice;
         private javax.swing.JComboBox<String> compassChoice;
         private javax.swing.JComboBox<String> uartChoice;
@@ -205,11 +233,6 @@ final class DroneSetup {
         private final Part modeRow = switches.part("Flight modes");
         private final Part rescueRow = switches.part("GPS rescue");
         private Fold rescueFold;
-        private final CheckRow motors = new CheckRow("Motors and props");
-        /** 1.0.42: Betaflight sees the moves the right way round (a turned board flips the drone on takeoff). */
-        private final CheckRow orientation = new CheckRow("Orientation");
-        /** The orientation check has the flight controller's USB port: this page leaves it alone meanwhile. */
-        private boolean orientationOpen;
         /** The pilot's choice; null = leave Betaflight's modes as they are. Read by the background round. */
         private volatile ModeSwitch modeSwitch;
         /** GPS rescue's own switch (AUX number, 0 = none), fitted when Betaflight's failsafe is GPS rescue. */
@@ -222,7 +245,7 @@ final class DroneSetup {
         private javax.swing.JComboBox<String> prearmChoice;
         private final Section failsafeSection = settings.section("FAILSAFE");
         private final Part failsafeRow = failsafeSection.part("Failsafe");
-        /** The pilot's failsafe choice: left as it is by default. */
+        /** The pilot's failsafe choice: GPS rescue by default (Drop without a GPS). */
         private volatile ModeSwitch.Failsafe failsafeChoice = ModeSwitch.Failsafe.KEEP;
         private javax.swing.JComboBox<ModeSwitch.Failsafe> failsafeCombo;
         private javax.swing.JComboBox<String> rescueChoice;
@@ -236,8 +259,6 @@ final class DroneSetup {
         private final javax.swing.JComboBox<String> portChoice = new javax.swing.JComboBox<>(new String[]{AUTOMATIC});
         private static final String AUTOMATIC = "Automatic";
         private volatile String chosenPort; // null = automatic
-        /** The motor test has the flight controller's USB port: this page leaves it alone meanwhile. */
-        private boolean motorTestOpen;
         private JSpinner cellSpinner;
         /** The pilot's choice; read by the background round, so a change made meanwhile is noticed after it. */
         private volatile int cells;
@@ -284,7 +305,7 @@ final class DroneSetup {
 
         @Override
         String hint() {
-            return "Connect the drone by USB data cable. <b>Props off.</b>";
+            return "Battery in the drone, USB to this PC. <b>Props off.</b><br>If unsure, keep the defaults.";
         }
 
         /** Rank for a combined row's light: the worst part shows; INFO (nothing to do) only when all are. */
@@ -504,12 +525,24 @@ final class DroneSetup {
         private static JComponent line(Part part, String label, boolean below, JComponent... choices) {
             JPanel line = new JPanel(new java.awt.BorderLayout(10, 0));
             line.setOpaque(false);
-            JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+            // below (the flight modes): label and lists side by side, the lists wrapping under each other when narrow
+            // (FlowWrap) - the lists start where every other line's do (1.0.52)
+            JPanel left = new JPanel(below ? new java.awt.BorderLayout(8, 0) : new FlowLayout(FlowLayout.LEFT, 8, 2));
             left.setOpaque(false);
             javax.swing.JLabel l = Theme.label(label, Theme.headingFont(12f), Theme.MUTED);
+            if (below) { // the lists have small headings over them: the label on the lists' line, not between
+                left.setBorder(javax.swing.BorderFactory.createEmptyBorder(2, 8, 2, 0));
+                l.setBorder(javax.swing.BorderFactory.createEmptyBorder(l.getFontMetrics(Theme.headingFont(11f)).getHeight() + 5, 0, 0, 0));
+                l.setVerticalAlignment(javax.swing.SwingConstants.TOP);
+            }
             l.setPreferredSize(new java.awt.Dimension(LINE_LABEL_W, l.getPreferredSize().height));
-            left.add(l);
-            for (JComponent c : choices) left.add(c);
+            if (below) {
+                left.add(l, java.awt.BorderLayout.WEST);
+                left.add(choices[0], java.awt.BorderLayout.CENTER);
+            } else {
+                left.add(l);
+                for (JComponent c : choices) left.add(c);
+            }
             part.cell = WrappingText.fitting("", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
             if (below) {
                 line.add(left, java.awt.BorderLayout.NORTH);
@@ -571,9 +604,10 @@ final class DroneSetup {
             }
             card.add(link);
             card.add(javax.swing.Box.createVerticalStrut(8));
-            JComponent gpsLine = line(gps, "FITTED", gpsChoices());
-            JComponent gpsDetails = gpsDetails();
-            card.add(gpsSection.build(gpsLine, gpsDetails));
+            JComponent gpsChoice = gpsChoices();
+            JComponent compassLine = compassLine();
+            JComponent gpsLine = line(gps, "GPS", gpsChoice, portBox);
+            card.add(gpsSection.build(gpsLine, compassLine));
             card.add(javax.swing.Box.createVerticalStrut(8));
             rescueFold = new Fold(line(rescueRow, "GPS RESCUE", rescueChoices()), gpsYes);
             rescueRow.hidden = !gpsYes;
@@ -615,18 +649,11 @@ final class DroneSetup {
             disconnect.setToolTipText("Free the USB port (e.g. for Betaflight Configurator)");
             WizardDialog.addRow(col, usb);
             WizardDialog.addRow(col, settings.row);
-            motors.addAction("Already checked", this::motorsAlreadyChecked);
-            motors.addPrimaryAction("Check now", this::checkMotorsNow);
-            motors.setToolTipText("Motor places, directions and props");
-            WizardDialog.addRow(col, motors);
-            orientation.addPrimaryAction("Check now", this::checkOrientationNow);
-            orientation.setToolTipText("Tilt the drone, check Betaflight sees the same");
-            WizardDialog.addRow(col, orientation);
             showManual();
             usb.set(State.PENDING, "Searching...");
             receiver.set(State.PENDING, "");
             stickDelay.set(State.PENDING, "");
-            battery.set(cellsConfirmed ? State.PENDING : State.INFO, cellsConfirmed ? "" : "Correct? Change if not.");
+            battery.set(cellsConfirmed ? State.PENDING : State.INFO, "");
             ArmSwitch known = ArmSwitch.parse(main.config().getString(ArmSwitch.KEY));
             armRow.set(State.PENDING, armAux > 0 || known == null ? "" : describe(known));
             prearmRow.set(State.PENDING, "");
@@ -634,10 +661,6 @@ final class DroneSetup {
             showModeChoice();
             showRescueChoice();
             showFailsafeChoice();
-            boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(MOTORS_CHECKED_KEY));
-            motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore ? "Checked."
-                    : "Not sure? <b>Check now</b> (props off).");
-            orientation.set(State.INFO, "Once per drone: <b>Check now</b> (USB, props off).");
             showConfirmState();
             return col;
         }
@@ -645,10 +668,10 @@ final class DroneSetup {
         /** GPS [No / Yes]: in the GPS row. Not asked yet: Yes when the saved choices want a GPS (a GPS rescue failsafe). */
         private JComponent gpsChoices() {
             Boolean saved = GpsSetup.parseYesNo(main.config().getString(GpsSetup.GPS_KEY));
-            gpsAnswered = saved != null;
-            boolean evidence = ModeSwitch.Failsafe.parse(main.config().getString(ModeSwitch.Failsafe.KEY)) == ModeSwitch.Failsafe.GPS_RESCUE
-                    || "true".equalsIgnoreCase(main.config().getString(ModeSwitch.RESCUE_FITTED_KEY));
-            gpsYes = saved != null ? saved : evidence;
+            // not answered yet: Yes by default, and the rounds look for the GPS (gpsAuto)
+            gpsAnswered = true;
+            gpsAuto = saved == null;
+            gpsYes = saved == null || saved;
             compassYes = Boolean.TRUE.equals(GpsSetup.parseYesNo(main.config().getString(GpsSetup.COMPASS_KEY)));
             gpsUart = GpsSetup.parseUart(main.config().getString(GpsSetup.UART_KEY));
             gpsChoice = new javax.swing.JComboBox<>(new String[]{"No", "Yes"});
@@ -658,43 +681,41 @@ final class DroneSetup {
             gpsChoice.addActionListener(e -> {
                 if (revertingChoice) return;
                 boolean yes = gpsChoice.getSelectedIndex() == 1;
-                if (yes != gpsYes || !gpsAnswered) {
+                if (yes != gpsYes || gpsAuto) {
+                    gpsAuto = false; // the pilot's own answer from now on
                     choiceChanged();
                     setGps(yes, true, true);
                 }
             });
+            JPanel port = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+            port.setOpaque(false);
+            port.add(Theme.label("PORT", Theme.headingFont(12f), Theme.MUTED));
+            uartChoice = new javax.swing.JComboBox<>(uartItems(List.of()));
+            uartChoice.setToolTipText("UART the GPS is wired to (RX-TX, TX-RX); usually UART3");
+            uartChoice.setSelectedItem("UART" + gpsUart);
+            TacticalCombo.install(uartChoice);
+            uartChoice.addActionListener(e -> uartChoiceChanged());
+            port.add(uartChoice);
+            port.setVisible(gpsYes);
+            portBox = port;
             return gpsChoice;
         }
 
-        /** COMPASS [No / Yes]  UART [UART3]  [Calibrate compass]: slides out under the GPS row with Yes. */
-        private JComponent gpsDetails() {
-            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
-            row.setOpaque(false);
-            row.add(Theme.label("COMPASS", Theme.headingFont(12f), Theme.MUTED));
+        /** COMPASS [No / Yes] [Calibrate compass]: its own row under GPS, sliding out with Yes. */
+        private JComponent compassLine() {
             compassChoice = new javax.swing.JComboBox<>(new String[]{"No", "Yes"});
             compassChoice.setToolTipText("Compass on the GPS or board, for heading and GPS rescue. "
                     + "Calibrate once, away from metal");
             compassChoice.setSelectedIndex(compassYes ? 1 : 0);
             TacticalCombo.install(compassChoice);
             compassChoice.addActionListener(e -> compassChoiceChanged());
-            row.add(compassChoice);
-            row.add(javax.swing.Box.createHorizontalStrut(10));
-            row.add(Theme.label("UART", Theme.headingFont(12f), Theme.MUTED));
-            uartChoice = new javax.swing.JComboBox<>(uartItems(List.of()));
-            uartChoice.setToolTipText("UART the GPS is wired to (RX-TX, TX-RX); usually UART3");
-            uartChoice.setSelectedItem("UART" + gpsUart);
-            TacticalCombo.install(uartChoice);
-            uartChoice.addActionListener(e -> uartChoiceChanged());
-            row.add(uartChoice);
-            row.add(javax.swing.Box.createHorizontalStrut(10));
             calibrateCompass = Theme.secondaryButton("Calibrate compass");
             calibrateCompass.setToolTipText("Turn the drone round every axis for 30 s (USB, props off)");
             calibrateCompass.addActionListener(e -> calibrateCompassNow());
             calibrateCompass.setVisible(compassYes);
             calibrateCompass.setEnabled(false);
-            row.add(calibrateCompass);
-            row.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, LINE_LABEL_W + 8, 0, 0)); // under the FITTED choice
-            gpsFold = new Fold(row, gpsYes);
+            compassPart.hidden = !gpsYes;
+            gpsFold = new Fold(line(compassPart, "COMPASS", compassChoice, calibrateCompass), gpsYes);
             return gpsFold;
         }
 
@@ -737,6 +758,8 @@ final class DroneSetup {
                 revertingChoice = false;
             }
             gpsFold.setShown(yes, animate);
+            portBox.setVisible(yes);
+            compassPart.hidden = !yes;
             rescueFold.setShown(yes, animate);
             rescueRow.hidden = !yes;
             settings.refresh();
@@ -795,13 +818,13 @@ final class DroneSetup {
             return new ModeSwitch(m.aux(), p[0], p[1], p[2]);
         }
 
-        /** GPS rescue is on the failsafe list only with a GPS; chosen without one it becomes Leave as it is. */
+        /** GPS rescue is on the failsafe list only with a GPS; chosen without one it becomes Drop (the pilot's default). */
         private void offerGpsFailsafe(boolean gps) {
             ModeSwitch.Failsafe[] items = gps ? ModeSwitch.Failsafe.values()
                     : new ModeSwitch.Failsafe[]{ModeSwitch.Failsafe.KEEP, ModeSwitch.Failsafe.DROP};
             revertingChoice = true;
             if (failsafeCombo.getModel().getSize() != items.length) failsafeCombo.setModel(new DefaultComboBoxModel<>(items));
-            failsafeCombo.setSelectedItem(gps || failsafeChoice != ModeSwitch.Failsafe.GPS_RESCUE ? failsafeChoice : ModeSwitch.Failsafe.KEEP);
+            failsafeCombo.setSelectedItem(gps || failsafeChoice != ModeSwitch.Failsafe.GPS_RESCUE ? failsafeChoice : ModeSwitch.Failsafe.DROP);
             revertingChoice = false;
             failsafeChoiceChanged();
         }
@@ -840,16 +863,17 @@ final class DroneSetup {
 
         private void showGpsChoice() {
             gps.set(gpsYes ? State.PENDING : State.OK, "");
+            compassPart.set(gpsYes && compassYes ? State.PENDING : State.OK, "");
         }
 
         /** CALIBRATE COMPASS: the calibration window takes the USB port; the page reads again once it is closed. */
         private void calibrateCompassNow() {
             if (main.isLinkActive()) {
-                gps.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
+                compassPart.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
                 return;
             }
             compassCalOpen = true;
-            gps.set(State.PENDING, "Compass calibration open.");
+            compassPart.set(State.PENDING, "Compass calibration open.");
             CompassCalibrationDialog.open(javax.swing.SwingUtilities.getWindowAncestor(usb), main, chosenPort, () -> {
                 compassCalOpen = false;
                 nextTry = System.currentTimeMillis() + 1500; // the calibration lets go of the port first
@@ -875,7 +899,9 @@ final class DroneSetup {
         /** SWITCH [AUX2] LOW [Acro] MIDDLE [Angle] HIGH [GPS position hold], each name over its list: saved, written like the rest. */
         private JComponent modeChoices() {
             modeSwitch = ModeSwitch.parse(main.config().getString(ModeSwitch.KEY));
-            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+            // no gap before the first list: SWITCH lines up with the ARM / PREARM / GPS RESCUE lists below (1.0.52)
+            JPanel row = new JPanel();
+            row.setLayout(new FlowWrap(8, 4));
             row.setOpaque(false);
             auxChoice = auxCombo(MODES_OFF);
             auxChoice.setToolTipText("3-position flight mode switch (AUX2 = channel 6 by default). "
@@ -903,7 +929,11 @@ final class DroneSetup {
 
         /** FAILSAFE [Leave as it is]: in the failsafe row. */
         private JComponent failsafeChoices() {
-            failsafeChoice = ModeSwitch.Failsafe.parse(main.config().getString(ModeSwitch.Failsafe.KEY));
+            String savedFailsafe = main.config().getString(ModeSwitch.Failsafe.KEY);
+            // not chosen yet: GPS rescue with a GPS, else Drop (the pilot's defaults)
+            failsafeChoice = savedFailsafe == null || savedFailsafe.isBlank()
+                    ? (gpsYes ? ModeSwitch.Failsafe.GPS_RESCUE : ModeSwitch.Failsafe.DROP)
+                    : ModeSwitch.Failsafe.parse(savedFailsafe);
             failsafeCombo = new javax.swing.JComboBox<>(ModeSwitch.Failsafe.values());
             failsafeCombo.setToolTipText("What Betaflight does on lasting signal loss (failsafe stage 2)");
             failsafeCombo.setSelectedItem(failsafeChoice);
@@ -1107,47 +1137,6 @@ final class DroneSetup {
             modeRow.set(modeSwitch == null ? State.INFO : State.PENDING, modeSwitch == null ? "Left as it is." : "");
         }
 
-        private void motorsAlreadyChecked() {
-            main.save(Map.of(MOTORS_CHECKED_KEY, "true"));
-            motors.set(State.OK, "Checked.");
-        }
-
-        private void checkMotorsNow() {
-            if (main.isLinkActive()) {
-                motors.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
-                return;
-            }
-            motorTestOpen = true; // the page's own rounds would fight the motor test for the USB port
-            motors.set(State.PENDING, "Motor test open.");
-            MotorTestDialog.open(javax.swing.SwingUtilities.getWindowAncestor(motors), main, () -> {
-                motorTestOpen = false;
-                nextTry = System.currentTimeMillis() + 1500; // the motor test lets go of the port first
-                main.save(Map.of(MOTORS_CHECKED_KEY, "true"));
-                motors.set(State.OK, "Checked.");
-            });
-        }
-
-        /** CHECK NOW: the orientation check takes the USB port; the page reads again once it is closed. */
-        private void checkOrientationNow() {
-            if (main.isLinkActive()) {
-                orientation.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
-                return;
-            }
-            orientationOpen = true;
-            orientation.set(State.PENDING, "Orientation check open.");
-            boolean[] passed = {false};
-            OrientationCheckDialog.open(javax.swing.SwingUtilities.getWindowAncestor(orientation), main, chosenPort, () -> {
-                passed[0] = true;
-                orientation.set(State.OK, "Checked: correct.");
-            }, () -> {
-                orientationOpen = false;
-                nextTry = System.currentTimeMillis() + 1500; // the check lets go of the port first
-                done = false; // it may have changed the board alignment: read again
-                applies = 0;
-                if (!passed[0]) orientation.set(State.WARN, "Not finished. <b>Check now</b> before flying.");
-            });
-        }
-
         private int savedCells() {
             try {
                 int n = Integer.parseInt(main.config().getString(CELLS_KEY));
@@ -1277,8 +1266,8 @@ final class DroneSetup {
         @Override
         void refresh() {
             // the motor test or the compass calibration may have the port, however it was opened (Check now or SETTINGS)
-            if (paused || motorTestOpen || MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen()
-                    || orientationOpen || OrientationCheckDialog.isOpen()
+            if (paused || MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen()
+                    || OrientationCheckDialog.isOpen()
                     || busy || done || System.currentTimeMillis() < nextTry) return;
             busy = true;
             String writeFor = applies < MAX_APPLIES ? confirm.armedFor() : null; // the board CONFIRM was pressed for
@@ -1788,7 +1777,7 @@ final class DroneSetup {
             } else if (pendingWrite && lastRefused != null) {
                 settings.footer("<b>Nothing was written</b> - " + lastRefused + "<br>Fix it, then <b>Confirm</b> again.");
             } else if (pendingWrite) {
-                settings.footer("Set everything, then <b>Confirm</b> writes it (backed up first).");
+                settings.footer("<b>Confirm</b> writes it (backup first).");
             } else if (r.plan().isEmpty()) {
                 settings.footer("");
             } else {
@@ -1809,8 +1798,7 @@ final class DroneSetup {
                     cellSpinner.setValue(r.cells());
                     syncingSpinner = false;
                 }
-                battery.set(State.INFO, (r.cells() > 0 ? "Betaflight forces <b>" + r.cells() + "S</b> now. " : "Betaflight counts the cells itself. ")
-                        + "Correct? Change if not.");
+                battery.set(State.INFO, r.cells() > 0 ? "Betaflight forces <b>" + r.cells() + "S</b> now." : "Betaflight counts the cells itself.");
                 return false;
             }
             if (r.cells() == r.cellTarget()) {
@@ -1837,6 +1825,7 @@ final class DroneSetup {
             Gps g = r.gps();
             if (!g.wanted()) {
                 gps.set(okState(), "");
+                compassPart.set(okState(), "");
                 return false;
             }
             List<String> lines = new java.util.ArrayList<>();
@@ -1844,7 +1833,8 @@ final class DroneSetup {
             boolean wrong = false;
             if (g.gpsPending()) {
                 if (pendingWrite) {
-                    lines.add(WITH_WRITE + (g.portNote().isEmpty() ? "" : " " + Character.toUpperCase(g.portNote().charAt(0)) + g.portNote().substring(1) + "."));
+                    lines.add(WITH_WRITE + (g.portNote().isEmpty() ? "" : " " + Character.toUpperCase(g.portNote().charAt(0)) + g.portNote().substring(1) + ".")
+                            + (gpsAuto ? " Looked for after." : ""));
                     worst = State.TODO;
                 } else {
                     lines.add("Could not set it - the Ports tab (see <b>By hand</b>).");
@@ -1853,32 +1843,48 @@ final class DroneSetup {
                 }
             } else if (Boolean.TRUE.equals(r.gpsFound())) {
                 lines.add("GPS found.");
+                gpsAuto = false; // there: Yes stays
+            } else if (gpsAuto && (r.battery() == null || !r.battery().present())) {
+                lines.add("No GPS yet. <b>Connect the battery</b>, then <b>Read again</b>.");
+                worst = State.WARN;
+            } else if (gpsAuto && Boolean.FALSE.equals(r.gpsFound())) { // a battery in, and still no GPS: none fitted
+                noGpsFound();
+                return false;
             } else {
-                lines.add("No GPS on " + g.portNow() + ": check wiring (RX-TX, TX-RX) and power. Some need the battery "
-                        + "(props off), then <b>Read again</b>. No fix needed.");
+                lines.add("No GPS on " + g.portNow() + ": check wiring (RX-TX, TX-RX). Battery in, then <b>Read again</b>.");
                 worst = State.WARN;
             }
-            if (g.compass()) {
-                if (g.compassPending()) {
-                    if (pendingWrite) {
-                        lines.add("Compass: " + WITH_WRITE);
-                        if (rank(State.TODO) > rank(worst)) worst = State.TODO;
-                    } else {
-                        lines.add("Compass: could not set it - see <b>By hand</b>.");
-                        worst = State.BAD;
-                        wrong = true;
-                    }
-                } else if (!g.magFound()) {
-                    lines.add("No compass found (none, or not on I2C).");
-                    if (rank(State.WARN) > rank(worst)) worst = State.WARN;
-                } else if (g.calibrated()) {
-                    lines.add("Compass found and calibrated.");
-                } else {
-                    lines.add("Compass found. <b>Calibrate compass</b> before GPS rescue flights.");
-                }
-            }
             gps.set(worst, String.join("<br>", lines));
-            return wrong;
+            showCompass(g, pendingWrite);
+            return wrong || (g.compass() && g.compassPending() && !pendingWrite);
+        }
+
+        /** The COMPASS row after a round that changed nothing. */
+        private void showCompass(Gps g, boolean pendingWrite) {
+            if (!g.compass()) {
+                compassPart.set(okState(), "");
+            } else if (g.compassPending()) {
+                compassPart.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE : "Could not set it - see <b>By hand</b>.");
+            } else if (!g.magFound()) {
+                compassPart.set(State.WARN, "None found.");
+            } else if (g.calibrated()) {
+                compassPart.set(okState(), "Found, calibrated.");
+            } else {
+                compassPart.set(State.TODO, "Found. <b>Calibrate</b> before GPS rescue flights.");
+            }
+        }
+
+        /**
+         * GPS on by default, and none answered with a battery in: no GPS fitted. The choices become No and Drop, as if
+         * picked (the pilot's rule, 1.0.52); CONFIRM again writes the failsafe.
+         */
+        private void noGpsFound() {
+            gpsAuto = false;
+            main.logLine("Drone setup: no GPS found (battery in) - GPS No, failsafe Drop.");
+            choiceChanged();
+            setGps(false, true, true);
+            if (failsafeChoice != ModeSwitch.Failsafe.DROP) failsafeCombo.setSelectedItem(ModeSwitch.Failsafe.DROP);
+            gps.set(State.INFO, "No GPS found: set to No. Failsafe: Drop.");
         }
 
         /** The failsafe row after a round that changed nothing. @return true if it is not as chosen */
@@ -1986,11 +1992,11 @@ final class DroneSetup {
             if (busy && found) return "Reading Betaflight...";
             if (done) {
                 if (cleanDone) return "Betaflight set up - unplug the drone.";
-                if (!confirm.armed() && !confirm.confirmed()) return "Set everything, then Confirm (or Next to leave Betaflight as is).";
+                if (!confirm.armed() && !confirm.confirmed()) return "Set everything, then Confirm.";
                 wizard.setStatusColor(Theme.WARN);
                 return "Some settings could not be set - see By hand";
             }
-            if (!found) return "Waiting for the flight controller (or Next, and set it by hand).";
+            if (!found) return "Waiting for the flight controller.";
             if (failed) return "Waiting - close Betaflight Configurator, then Retry.";
             return "Setting up Betaflight...";
         }
@@ -1998,6 +2004,165 @@ final class DroneSetup {
         @Override
         boolean canContinue() {
             return !(busy && found); // a round reads (and may write) for up to half a minute: not left halfway
+        }
+    }
+
+    /**
+     * The second drone step (1.0.52, the pilot: Betaflight's step in two): the motors, and the orientation in the
+     * page itself - a 3D drone following Betaflight's attitude while the page is shown, and CHECK IT for the guided
+     * check that sets the board alignment and the compass itself.
+     */
+    static final class MotorsPage extends Page {
+        private final MainWindow main;
+        private final java.util.function.Supplier<String> port;
+        private final CheckRow motors = new CheckRow("Motors and props");
+        private final CheckRow orientation = new CheckRow("Orientation");
+        private final DroneModelView model = new DroneModelView();
+        private final javax.swing.JLabel reading = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
+        private volatile boolean shown;
+        private Thread live;
+
+        MotorsPage(MainWindow main, java.util.function.Supplier<String> port) {
+            this.main = main;
+            this.port = port;
+        }
+
+        @Override
+        String title() {
+            return "Motors and orientation";
+        }
+
+        @Override
+        String hint() {
+            return "<b>Props off.</b> Tilt the drone: the model must move the same way.";
+        }
+
+        @Override
+        JComponent build() {
+            JPanel col = WizardDialog.column();
+            motors.addAction("Already checked", this::motorsAlreadyChecked);
+            motors.addPrimaryAction("Check now", this::checkMotorsNow);
+            motors.setToolTipText("Motor places, directions and props");
+            WizardDialog.addRow(col, motors);
+            orientation.addPrimaryAction("Wrong? Check it", this::checkOrientationNow);
+            orientation.setToolTipText("Guided check: sets board alignment and compass");
+            JPanel view = new JPanel(new java.awt.BorderLayout(0, 4));
+            view.setOpaque(false);
+            model.setPreferredSize(new java.awt.Dimension(420, 260));
+            view.add(model, java.awt.BorderLayout.CENTER);
+            view.add(reading, java.awt.BorderLayout.SOUTH);
+            orientation.addBelow(view);
+            WizardDialog.addRow(col, orientation);
+            boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(BetaflightPage.MOTORS_CHECKED_KEY));
+            motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore ? "Checked." : "Not sure? <b>Check now</b>.");
+            orientation.set(State.INFO, "Moves differently? <b>Check it</b>.");
+            return col;
+        }
+
+        @Override
+        void onShow() {
+            shown = true;
+            if (live == null) {
+                live = new Thread(this::follow, "orientation-live");
+                live.setDaemon(true);
+                live.start();
+            }
+        }
+
+        @Override
+        void onHide() {
+            shown = false;
+        }
+
+        /** While the page is shown and nothing else has the port: Betaflight's attitude onto the model, 20 a second. */
+        private void follow() {
+            BetaflightUsb fc = null;
+            int startHeading = -1;
+            boolean opened = false; // the guide was on screen: once it isn't any more, this thread ends
+            try {
+                while (true) {
+                    boolean displayable = wizard != null && wizard.isDisplayable();
+                    if (opened && !displayable) break;
+                    opened |= displayable;
+                    boolean busy = !shown || MotorTestDialog.isOpen() || OrientationCheckDialog.isOpen()
+                            || CompassCalibrationDialog.isOpen() || main.isLinkActive();
+                    try {
+                        if (busy) {
+                            if (fc != null) {
+                                fc.close();
+                                fc = null;
+                                javax.swing.SwingUtilities.invokeLater(model::clear);
+                            }
+                            Thread.sleep(300);
+                            continue;
+                        }
+                        if (fc == null) {
+                            fc = OrientationCheckDialog.openBetaflight(port.get(), (s, text) -> javax.swing.SwingUtilities.invokeLater(() -> {
+                                reading.setText(text.replaceAll("<[^>]+>", ""));
+                                model.clear();
+                            }));
+                            if (fc == null) {
+                                Thread.sleep(1500);
+                                continue;
+                            }
+                            startHeading = -1;
+                        }
+                        de.droiddrone.pc.setup.Orientation.Attitude a = de.droiddrone.pc.setup.Orientation.parse(
+                                fc.msp(de.droiddrone.pc.setup.Orientation.MSP_ATTITUDE, null));
+                        if (a != null) {
+                            if (startHeading < 0) startHeading = a.headingDeg();
+                            double yaw = a.headingDeg() - startHeading;
+                            javax.swing.SwingUtilities.invokeLater(() -> {
+                                model.setAttitude(a.rollDeg(), a.pitchDeg(), yaw);
+                                reading.setText("Betaflight: " + de.droiddrone.pc.setup.Orientation.describe(a.rollDeg(), a.pitchDeg()));
+                            });
+                        }
+                        Thread.sleep(50);
+                    } catch (IOException | RuntimeException e) {
+                        if (fc != null) fc.close();
+                        fc = null;
+                        Thread.sleep(1500);
+                    }
+                }
+            } catch (InterruptedException ignored) {
+                // closing
+            } finally {
+                if (fc != null) fc.close();
+                live = null;
+            }
+        }
+
+        private void motorsAlreadyChecked() {
+            main.save(Map.of(BetaflightPage.MOTORS_CHECKED_KEY, "true"));
+            motors.set(State.OK, "Checked.");
+        }
+
+        private void checkMotorsNow() {
+            if (main.isLinkActive()) {
+                motors.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
+                return;
+            }
+            motors.set(State.PENDING, "Motor test open.");
+            MotorTestDialog.open(javax.swing.SwingUtilities.getWindowAncestor(motors), main, () -> {
+                main.save(Map.of(BetaflightPage.MOTORS_CHECKED_KEY, "true"));
+                motors.set(State.OK, "Checked.");
+            });
+        }
+
+        /** CHECK IT: the guided check takes the USB port (the live view lets go of it meanwhile). */
+        private void checkOrientationNow() {
+            if (main.isLinkActive()) {
+                orientation.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
+                return;
+            }
+            orientation.set(State.PENDING, "Check open.");
+            boolean[] passed = {false};
+            OrientationCheckDialog.open(javax.swing.SwingUtilities.getWindowAncestor(orientation), main, port.get(), () -> {
+                passed[0] = true;
+                orientation.set(State.OK, "Checked: correct.");
+            }, () -> {
+                if (!passed[0]) orientation.set(State.WARN, "Not finished. <b>Check it</b> before flying.");
+            });
         }
     }
 }

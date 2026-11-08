@@ -38,7 +38,7 @@ final class SetupWizard {
 
     /**
      * The first-time setup: every step of PC, drone and phone setup - their own lists, so none is left out - in the
-     * order a new pilot needs them: this PC (its shortcuts with it), the drone, the radio, the phone, the first
+     * order a new pilot needs them: this PC, the drone, the radio, the phone, the first
      * connection. The radio after the drone: its calibration names each switch after what Drone setup put on it.
      */
     static List<Page> firstTimePages(List<Page> pc, List<Page> drone, List<Page> phone, Page welcome) {
@@ -63,7 +63,7 @@ final class SetupWizard {
 
         @Override
         String hint() {
-            return "The PC does what it can. You do the hands-on parts.";
+            return "The PC does what it can. You do the rest.";
         }
 
         @Override
@@ -72,8 +72,8 @@ final class SetupWizard {
             WizardDialog.addRow(col, WizardDialog.subheading("Have ready"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
                     "&bull; Radio + USB cable<br>"
-                            + "&bull; Drone (Betaflight) + USB data cable<br>"
-                            + "&bull; Android phone with mobile data + USB data cable to the drone"));
+                            + "&bull; Drone (Betaflight), battery + USB data cable<br>"
+                            + "&bull; Android phone with mobile data + USB cable to the drone"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
                     "<b style='color:" + Theme.BAD_HEX + "'>Propellers OFF</b> during setup."));
             return col;

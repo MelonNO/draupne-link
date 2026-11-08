@@ -120,6 +120,14 @@ final class DroneModelView extends JComponent {
         repaint();
     }
 
+    /** An "N" at the grid's far edge (the orientation check's compass steps: north is ahead of the pilot). */
+    private boolean northMark;
+
+    void setNorthMark(boolean on) {
+        northMark = on;
+        repaint();
+    }
+
     /** No reading (not connected): the drone is drawn flat and dim. */
     void clear() {
         live = false;
@@ -208,6 +216,17 @@ final class DroneModelView extends JComponent {
 
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         g.drawImage(drone, 0, 0, null);
+        if (northMark) { // past the grid's far edge (whichever of the four lies highest on the screen), over the drone
+            double[] far = null;
+            for (double[] p : new double[][]{{0.31, 0}, {-0.31, 0}, {0, 0.31}, {0, -0.31}}) {
+                double[] s = project(p[0], p[1], GROUND);
+                if (far == null || s[1] < far[1]) far = s;
+            }
+            g.setFont(Theme.headingFont(20f));
+            g.setColor(Theme.ACCENT);
+            String n = "N";
+            g.drawString(n, (float) (far[0] - g.getFontMetrics().stringWidth(n) / 2.0), (float) far[1]);
+        }
         g.setFont(Theme.headingFont(12f));
         g.setColor(Theme.MUTED);
         g.drawString("RED PROPS = FRONT", 10, h - 10);
