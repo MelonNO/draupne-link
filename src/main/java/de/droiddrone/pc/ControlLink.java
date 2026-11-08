@@ -1037,7 +1037,9 @@ public class ControlLink {
      * The phone's power mode (phone app pc.21 on; older apps drop the packet): [0x6E][mode u8][checkIntervalMin u8].
      * Mode 0 = normal, 1 = STANDBY (no video, GPS and telemetry slowed, screen dimmed; the link stays), 2 = DEEP
      * SLEEP (the phone drops the link, sleeps, and listens for this PC's Connect for 20 s every checkIntervalMin
-     * minutes). The phone answers with its PHONE_POWER record; the caller repeats this until it does.
+     * minutes). The phone answers with its PHONE_POWER record; the caller repeats this until it does. checkIntervalMin
+     * SleepCheck.ALWAYS (1.0.50, CHECK EVERY "0 min") is a window that never closes; it goes only to pc.39 on - an older
+     * app is sent 1 min instead (sendPowerMode and sendOverwatch see to it).
      */
     public static final byte POWER_MODE = 0x6E;
     public static final int POWER_NORMAL = 0, POWER_STANDBY = 1, POWER_DEEP_SLEEP = 2;
@@ -1071,7 +1073,12 @@ public class ControlLink {
 
     public void sendPowerMode(int mode, int checkIntervalMin) {
         if (!running || !isConnected() || spectator != null) return;
-        udpSender.sendPacket(new byte[]{POWER_MODE, (byte) mode, (byte) checkIntervalMin});
+        udpSender.sendPacket(new byte[]{POWER_MODE, (byte) mode, (byte) intervalForPhone(checkIntervalMin)});
+    }
+
+    /** The check interval as this phone app can take it: SleepCheck.ALWAYS only to pc.39 on (an older one would read 255 min). */
+    int intervalForPhone(int checkIntervalMin) {
+        return de.droiddrone.common.SleepCheck.forPhone(checkIntervalMin, telemetry.getPhonePcBuild());
     }
 
     /**
@@ -1080,7 +1087,7 @@ public class ControlLink {
      */
     public void sendOverwatch(int checkIntervalMin, int sensitivity, int flags, int token) {
         if (!running || !isConnected() || spectator != null) return;
-        udpSender.sendPacket(de.droiddrone.common.OverwatchProtocol.request(POWER_MODE, checkIntervalMin, sensitivity, flags, token));
+        udpSender.sendPacket(de.droiddrone.common.OverwatchProtocol.request(POWER_MODE, intervalForPhone(checkIntervalMin), sensitivity, flags, token));
     }
 
     /**

@@ -332,7 +332,9 @@ public class MainActivity extends Activity {
             bWake.removeCallbacks(wakeAfterHold);
             bWake.setText(R.string.dd_power_wake);
         }
+        boolean always = PowerMode.isAlwaysListening() && (PowerMode.isChecking() || PowerMode.nextCheckAt() != 0); // pc.39
         tvPowerMode.setText(mode == PowerMode.STANDBY ? getString(R.string.dd_power_mode_standby)
+                : always ? getString(mode == PowerMode.OVERWATCH ? R.string.dd_power_mode_overwatch_listening : R.string.dd_power_mode_listening)
                 : mode == PowerMode.OVERWATCH && PowerMode.nextCheckAt() != 0 && !PowerMode.isChecking() ? getString(R.string.dd_power_mode_overwatch)
                 : !PowerMode.isSleepMode() ? getString(R.string.dd_power_mode_normal)
                 : PowerMode.isChecking() ? getString(R.string.dd_power_mode_checking)
@@ -352,7 +354,10 @@ public class MainActivity extends Activity {
                 case PowerMode.DEEP_SLEEP:
                 case PowerMode.OVERWATCH: // pc.36: the same checks; the mode line says it watches
                     long next = PowerMode.nextCheckAt();
-                    if (PowerMode.isChecking()) {
+                    if (always) {
+                        tvNetworkStatus.setText(R.string.dd_status_listening);
+                        setPill(R.string.dd_pill_sleeping, getColor(R.color.dd_panel_2), colorMuted);
+                    } else if (PowerMode.isChecking()) {
                         tvNetworkStatus.setText(R.string.dd_status_checking);
                         setPill(R.string.dd_pill_checking, getColor(R.color.dd_panel_2), colorWarn);
                     } else if (next != 0) {

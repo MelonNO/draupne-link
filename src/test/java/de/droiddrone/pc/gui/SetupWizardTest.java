@@ -71,7 +71,7 @@ class SetupWizardTest {
         assertTrue(DroneSetup.radioNeedsRedo(config));
         assertTrue(PcSetupWizard.RadioPage.shown(true, config), "shown again until a calibration is saved");
         String text = DroneSetup.radioRedoText(config);
-        assertTrue(text.startsWith("Calibrate the radio again so AUX1 (ARM)"), text);
+        assertTrue(text.startsWith("Recalibrate the radio so AUX1 (ARM)"), text);
         assertTrue(text.contains("AUX2 (flight modes)"), text);
         // a calibration saved: cleared
         config.set(DroneSetup.RADIO_REDO_KEY, "false");
@@ -79,9 +79,9 @@ class SetupWizardTest {
         // one switch only
         config.set(de.droiddrone.pc.setup.ModeSwitch.KEY, "off");
         config.set(de.droiddrone.pc.setup.ModeSwitch.RESCUE_KEY, "off");
-        assertEquals("Calibrate the radio again so AUX1 (ARM) and AUX3 (PREARM) are the right switches.", DroneSetup.radioRedoText(config));
+        assertEquals("Recalibrate the radio so AUX1 (ARM) and AUX3 (PREARM) are the right switches.", DroneSetup.radioRedoText(config));
         config.set(de.droiddrone.pc.setup.ModeSwitch.PREARM_KEY, "off");
-        assertEquals("Calibrate the radio again so AUX1 (ARM) is the right switch.", DroneSetup.radioRedoText(config));
+        assertEquals("Recalibrate the radio so AUX1 (ARM) is the right switch.", DroneSetup.radioRedoText(config));
     }
 
     @Test

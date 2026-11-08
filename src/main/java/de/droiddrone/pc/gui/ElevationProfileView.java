@@ -73,7 +73,7 @@ final class ElevationProfileView extends JComponent {
             if (range == null || total <= 0) {
                 g.setColor(Theme.MUTED);
                 g.setFont(Theme.headingFont(11f));
-                g.drawString(height.length == 0 ? "NO LINE MEASURED" : "LOOKING UP THE TERRAIN...", left + 10, top + ph / 2);
+                g.drawString(height.length == 0 ? "NO LINE MEASURED" : "LOOKING UP TERRAIN...", left + 10, top + ph / 2);
                 return;
             }
             double lo = range[0], hi = range[1];

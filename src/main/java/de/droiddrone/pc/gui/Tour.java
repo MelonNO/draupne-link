@@ -103,107 +103,96 @@ final class Tour {
     private void buildSteps() {
         Runnable openMenu = main::tourOpenMenu;
         Supplier<JComponent> header = main::tourHeader; // the menu steps: the header stays clear, so the slide-out and the menus show in front
-        steps.add(new Step("MENU", "Everything lives here. Press it and SETUP, VIDEO, LINK and TOOLS slide out - as now.",
-                "Tip: every button in this tour can be pressed twice - the second press closes or undoes what the first did. "
-                        + "NEXT stays unlocked.", main::tourMenuButton, openMenu, true, header));
-        steps.add(new Step("SETUP", "The guides: first-time setup and this tour - PC, drone and phone setup too with TOOLS > Advanced on.", main::tourSetupButton, openMenu, true, header));
-        steps.add(new Step("VIDEO", "The picture, the OSD and recording.", main::tourVideoButton, openMenu, true, header));
-        steps.add(new Step("LINK", "The link's sounds, and who may watch as a spectator.", main::tourLinkButton, openMenu, true, header));
-        steps.add(new Step("TOOLS", "Find the drone, the tracks folder and the tests.", main::tourToolsButton, openMenu, true, header));
-        steps.add(new Step("UPDATE", "A newer DRAUPNE Link is ready: one press installs it (not now - after the tour).",
+        steps.add(new Step("MENU", "Everything lives here. Press it: SETUP, VIDEO, LINK and TOOLS slide out.",
+                "Tip: a second press closes or undoes the first.", main::tourMenuButton, openMenu, true, header));
+        steps.add(new Step("SETUP", "First-time setup and this tour. PC, drone and phone setup with TOOLS > Advanced on.", main::tourSetupButton, openMenu, true, header));
+        steps.add(new Step("VIDEO", "Picture, OSD, recording.", main::tourVideoButton, openMenu, true, header));
+        steps.add(new Step("LINK", "Link sounds and spectators.", main::tourLinkButton, openMenu, true, header));
+        steps.add(new Step("TOOLS", "Find the drone, tracks folder, tests.", main::tourToolsButton, openMenu, true, header));
+        steps.add(new Step("UPDATE", "A newer version is ready: one press installs it. After the tour.",
                 main::tourUpdateButton, openMenu, false, header));
-        steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card away for more video, and brings it back. The sticks "
-                + "and switches keep working either way. Press it.", main::tourMinimizeButton, null));
+        steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card for more video. Sticks and switches keep working. "
+                + "Press it.", main::tourMinimizeButton, null));
         // the two video buttons are explained, not pressed: pop-out moves the picture to a window of its own and
         // full screen covers the window, both over the tour
-        steps.add(new Step("POP OUT VIDEO", "The picture in a window of its own, for a second screen; the same button (VIDEO BACK) "
-                + "puts it back. A double-click on the video shows it alone. Try it after the tour.", main::tourPopOutButton, null, false));
-        steps.add(new Step("FULL SCREEN", "The picture fills the whole screen (F11 too). Esc or a double-click brings the window back. "
-                + "Try it after the tour.", main::tourFullScreenButton, null, false));
-        steps.add(new Step("CONNECT", "Pick the phone by its name - MobileAlpha, MobileBravo ... - every phone with DRAUPNE Flight open on "
-                + "your Tailscale network is in the list. CONNECT opens the link (WATCH joins a pilot PC's flight as a spectator). "
-                + "The minimap under the figures shows where the drone is, with POP OUT MAP under it; F3 opens the map window any time.",
+        steps.add(new Step("POP OUT VIDEO", "Video in its own window, for a second screen. VIDEO BACK returns it. "
+                + "Double-click the video to show it alone.", main::tourPopOutButton, null, false));
+        steps.add(new Step("FULL SCREEN", "Video fills the screen (F11). Esc or double-click to exit.",
+                main::tourFullScreenButton, null, false));
+        steps.add(new Step("CONNECT", "Pick the phone by name (MobileAlpha, MobileBravo ...): every phone running DRAUPNE Flight "
+                + "on your Tailscale network. CONNECT flies; WATCH joins as a spectator. The minimap shows the drone; "
+                + "POP OUT MAP or F3 opens the map window.",
                 main::tourLinkCard, null, false).of(FEATURE_NAMES));
         // OBSERVATION (1.0.48): explained, not pressed - it opens streams to the drones
-        steps.add(new Step("OBSERVATION", "CONNECT AS > Observation watches up to six idle drones at once: CHOOSE DRONES picks them "
-                + "(a drone another PC flies can't be added), OBSERVE fills the video area with their pictures and plays all their "
-                + "sound, each tile with its own MUTE and volume and a green frame while its drone hears something. A click asks a "
-                + "tile for the sharp picture, a double-click enlarges it. CONNECT on a tile stops every stream and flies that drone "
-                + "the usual way; DISCONNECT offers the grid again.",
-                "Tip: on the map each observed drone is a numbered dot with its view cone in its tile's colour; hover a tile to find "
-                        + "its cone, click a cone to select its tile. A dashed cone's heading is approximate.",
+        steps.add(new Step("OBSERVATION", "CONNECT AS > Observation: watch up to six idle drones. CHOOSE DRONES picks them, "
+                + "OBSERVE shows them all with sound. Each tile: MUTE, volume, green frame on sound. Click for a sharp picture, "
+                + "double-click to enlarge. CONNECT on a tile flies that drone.",
+                "Tip: on the map each tile's drone has a numbered view cone in its colour. Dashed = approximate heading.",
                 main::tourLinkCard, null, false, null).of(FEATURE_OBSERVATION));
         // the sleep buttons only show while connected: the step puts them on the card as a demo that answers presses
-        steps.add(new Step("SLEEP BUTTONS", "While connected, these are here. DEEP SLEEP locks the phone and lets it sleep, checking for this "
-                + "PC every CHECK EVERY minutes; WAKE brings it back. DISCONNECT leaves the phone in standby (camera off) until the "
-                + "next CONNECT. They fold away while the drone is armed. This is a demo: press one and see the log.",
+        steps.add(new Step("SLEEP BUTTONS", "Shown while connected. DEEP SLEEP: phone sleeps, checks in every CHECK EVERY "
+                + "minutes; WAKE brings it back. DISCONNECT: standby, camera off. Hidden while armed. Demo: press one.",
                 main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null, null));
         // OVERWATCH (1.0.47): the third sleep button, in the same demo
-        steps.add(new Step("OVERWATCH", "Sleeps like DEEP SLEEP, but the camera and the motion detection stay on. When something moves "
-                + "the phone calls this PC at once: in the map window the drone pulses, its camera's view and the direction show in red, and "
-                + "a card has a live picture, CONNECT and DISMISS - with a sound, unless this PC flies. The phone records the event in full "
-                + "quality and sends it here after the motion ends. Disarmed only; under 20 % battery or too hot it goes to deep sleep by "
-                + "itself. About 15-25 h on a 5000 mAh phone (an estimate). Press it in this demo.",
+        steps.add(new Step("OVERWATCH", "Sleep with camera and motion detection on. On motion the phone calls in: the drone "
+                + "pulses red on the map, a card shows live video, CONNECT and DISMISS. The clip follows in full quality. "
+                + "Disarmed only; under 20 % battery or too hot it goes to deep sleep. About 15-25 h on 5000 mAh. Press it.",
                 main::tourOverwatchButton, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null, null).of(FEATURE_OVERWATCH));
         // on the map steps the map itself stays live under the dimming: panning, the wheel, pins and the cursor figures work
         Supplier<JComponent> map = () -> main.mapWindow().map();
-        steps.add(new Step("MOVING AROUND", "Drag to pan, the wheel zooms, a double-click fits the whole flight. FOLLOW keeps the "
-                + "drone in the middle; Home jumps to the launch point, End to the drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow, true, map));
+        steps.add(new Step("MOVING AROUND", "Drag to pan, wheel to zoom, double-click fits the flight. FOLLOW centres the "
+                + "drone. Home: launch point. End: drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow, true, map));
         // MAP TOOLS (1.0.35): the slide-out at the map's left edge; PINS and DOWNLOAD AREA live in it now
         Runnable mapAndTools = () -> {
             main.showMapWindow();
             main.mapWindow().openTools(true);
         };
-        steps.add(new Step("MAP TOOLS", "The tools slide out from this tab in three groups: DRAW (lines, rectangles, arrows, NATO symbols), "
-                + "TOOLS (the ruler, the radio horizon, the GCS search - their results on the map only while TOOLS is open) and DATA (export, import, offline maps). Press it.",
+        steps.add(new Step("MAP TOOLS", "Three groups: DRAW (lines, boxes, arrows, NATO symbols), TOOLS (ruler, radio horizon, "
+                + "GCS search - shown while TOOLS is open), DATA (export, import, offline maps). Press it.",
                 () -> main.mapWindow().tourTools(), main::showMapWindow, true, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("DRAW, TOOLS, DATA", "Each of these tabs slides its own list out beside it; press it again and it folds back. "
+        steps.add(new Step("DRAW, TOOLS, DATA", "Each tab opens its list; press again to fold. "
                 + "Press TOOLS.", () -> main.mapWindow().tourGroups(), mapAndTools, true, map).of(FEATURE_RADIO_HORIZON));
-        steps.add(new Step("RULER", "Click points on the map: each leg shows its length and bearing, the total at the end. Click the first "
-                + "point again to close a square and get its area; the terrain's elevation profile shows under the map. KEEP keeps it as a "
-                + "graphic, Esc clears it. Try it after the tour.", () -> main.mapWindow().tourRuler(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("RADIO HORIZON", "Set the mast's height and the aircraft's altitude (the mast above its ground, the aircraft above the ground under it) and the "
-                + "trees' height and the link's frequency, press RADIO HORIZON and click the map: blue is where the aircraft sees the mast "
-                + "over the terrain and through the forest the map shows (the higher the frequency, the less forest it gets through) - 30 km at most. A new click moves the mast; it stays on the map until you click the cross on its label. Try it after the tour.",
+        steps.add(new Step("RULER", "Click points: length and bearing per leg, total at the end. Click the first point to close "
+                + "and get the area. Elevation profile below. KEEP saves it, Esc clears.", () -> main.mapWindow().tourRuler(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("RADIO HORIZON", "Set mast height, aircraft altitude (each above its ground), tree height and frequency. "
+                + "Press RADIO HORIZON, click the map: blue = the aircraft sees the mast over terrain and through forest. "
+                + "Up to 30 km. Click again to move the mast; the cross on its label removes it.",
                 () -> main.mapWindow().tourHorizon(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
-        steps.add(new Step("GCS SEARCH", "Where to put the ground station: with the same fields, drag a box round the area you want good "
-                + "reception in. A heat map 30 km round it shows where an antenna sees all of the area (green) or none of it (red); the best "
-                + "place is ringed; the cross on its label takes it off. Try it after the tour.", () -> main.mapWindow().tourSearch(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
-        steps.add(new Step("4G COVERAGE", "Where the drone is likely to have good, weak or no 4G before it flies there: an estimate from where "
-                + "the open OpenCelliD database puts the masts, and the terrain between them and the drone. Pick your SIM's network and the "
-                + "drone's height; it needs a free OpenCelliD key (KEY...). A guess, not a measurement. Try it after the tour.",
+        steps.add(new Step("GCS SEARCH", "Where to put the ground station: drag a box round the area to cover. The heat map "
+                + "(30 km) shows green = sees all of it, red = none. Best spot ringed; the cross removes it.", () -> main.mapWindow().tourSearch(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
+        steps.add(new Step("4G COVERAGE", "Estimated good, weak or no 4G, from OpenCelliD masts and terrain. Pick your SIM's network "
+                + "and the drone's height. Needs a free OpenCelliD key (KEY...). A guess, not a measurement.",
                 () -> main.mapWindow().tourCoverage(), mapAndTools, false, map).of(FEATURE_COVERAGE));
-        steps.add(new Step("CLIPS", "What the drones in overwatch saw: per drone, each event's picture, time, length and place. Play one "
-                + "here, with the camera's view as it was on the map. REMOVE only takes it off the list - the files stay in "
-                + "Documents, DRAUPNE Link, Overwatch (FOLDER opens it there). Right-clicking a drone on the map gives its clips too. Try it after the tour.",
+        steps.add(new Step("CLIPS", "Overwatch events per drone: picture, time, length, place. Play one with its camera view on "
+                + "the map. REMOVE hides it; files stay in Documents\\DRAUPNE Link\\Overwatch (FOLDER). Right-click a drone for its clips.",
                 () -> main.mapWindow().tourClips(), mapAndTools, false, map).of(FEATURE_OVERWATCH));
-        steps.add(new Step("DRAW", "LINE through the points you click (double-click ends), RECTANGLE by dragging a box, ARROW with its head at the "
-                + "last point. Pick the colour, the width and outline or fill first. Right-click a drawing to rename or remove it.",
+        steps.add(new Step("DRAW", "LINE: click points, double-click ends. RECTANGLE: drag. ARROW: head at the last point. "
+                + "Pick colour, width, outline or fill first. Right-click a drawing to rename or remove.",
                 () -> main.mapWindow().tourDraw(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("SYMBOLS", "A NATO unit symbol where you click: the type (infantry, armour, artillery ...), then the colour - "
-                + "friend, hostile, neutral, unknown - then the size, the echelon. Every drawing is kept for the next flight.",
+        steps.add(new Step("SYMBOLS", "NATO unit symbol where you click: type, then friend/hostile/neutral/unknown, then echelon. "
+                + "Drawings are kept.",
                 () -> main.mapWindow().tourSymbol(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("PINS", "Right-click the map to drop a pin (Alpha, Bravo ...), or to rename or remove one. PINS lists "
-                + "them all: press it. Each pin shows its distance and bearing from the drone. The three here are examples; they go when the tour ends.",
+        steps.add(new Step("PINS", "Right-click the map to drop, rename or remove a pin. Each shows distance and bearing from the drone. "
+                + "PINS lists them: press it. These three are examples.",
                 () -> main.mapWindow().tourPins(), () -> {
                     mapAndTools.run();
                     main.mapWindow().map().showExamplePins(true);
                     examplePins = true;
                 }, true, map));
-        steps.add(new Step("UNDER THE CURSOR", "Move the mouse over the map: the position, in the format chosen top right, and the "
-                + "terrain height there show here. DRONE, ALTITUDE and LAUNCH are live.", () -> main.mapWindow().tourCursor(), null, false, map,
+        steps.add(new Step("UNDER THE CURSOR", "Position and terrain height under the mouse. DRONE, ALTITUDE and LAUNCH are live.",
+                () -> main.mapWindow().tourCursor(), null, false, map,
                 () -> main.mapWindow().tourTerrain()));
-        steps.add(new Step("THE DRONE", "The arrow is the drone, pointing where it heads, with its track behind it. The ring marked "
-                + "L is the launch point. LAST KNOWN on the arrow means its position is old.", () -> main.mapWindow().tourDrone(), null, false, map));
-        steps.add(new Step("MAP TYPE", "The map picture: topo (Kartverket's in Norway, the world topo map elsewhere), paper map, satellite or OpenStreetMap. Change it here any time; "
-                + "what you have looked at is kept for flying without internet.", () -> main.mapWindow().tourMapType(), null));
-        steps.add(new Step("COORDINATES", "The coordinate system for the cursor, the drone and the pins: degrees, UTM or MGRS. "
-                + "Change it here.", () -> main.mapWindow().tourFormat(), null));
-        steps.add(new Step("EXPORT", "Drag a box on the map: its picture (PNG) and everything drawn in it (KML) go to Documents, DRAUPNE Link, "
-                + "Exports. IMPORT brings a KML back - DRAUPNE's own, Google Earth's or ATAK's. Not now: after the tour.",
+        steps.add(new Step("THE DRONE", "The arrow is the drone, with its track. Ring L = launch point. "
+                + "LAST KNOWN = old position.", () -> main.mapWindow().tourDrone(), null, false, map));
+        steps.add(new Step("MAP TYPE", "Topo, paper map, satellite or OpenStreetMap. "
+                + "Viewed areas are kept for offline use.", () -> main.mapWindow().tourMapType(), null));
+        steps.add(new Step("COORDINATES", "Degrees, UTM or MGRS, for cursor, drone and pins.",
+                () -> main.mapWindow().tourFormat(), null));
+        steps.add(new Step("EXPORT", "Drag a box: PNG picture and KML drawings to Documents\\DRAUPNE Link\\Exports. "
+                + "IMPORT reads KML (DRAUPNE, Google Earth, ATAK).",
                 () -> main.mapWindow().tourExport(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("OFFLINE MAPS", "DOWNLOAD AREA saves the map for flying without internet: this view, or a box you draw "
-                + "with SELECT WITH CURSOR (or Alt + drag). Every map type and zoom level, one START. Not now: after the tour.",
+        steps.add(new Step("OFFLINE MAPS", "DOWNLOAD AREA saves this view, or a box (SELECT WITH CURSOR or Alt + drag), "
+                + "all map types and zooms, for flying without internet.",
                 () -> main.mapWindow().tourDownload(), mapAndTools, false)); // explained, not pressed: a download is for later
         // the last step is back in the main window: it comes to the front over the map window by itself
         Runnable backToMain = () -> {
@@ -211,8 +200,7 @@ final class Tour {
             main.requestFocus();
             main.tourOpenMenu();
         };
-        steps.add(new Step("THAT'S THE TOUR", "SETUP > Tour shows it again. Press CONNECT in the main window when the drone and "
-                + "the phone are ready.", main::tourMenuButton, backToMain, false));
+        steps.add(new Step("THAT'S THE TOUR", "SETUP > Tour shows it again. Press CONNECT when drone and phone are ready.", main::tourMenuButton, backToMain, false));
     }
 
     /** Set once the tour has been offered on this PC: after the first-time setup, or on the first start after an update brought it. */
@@ -235,13 +223,13 @@ final class Tour {
     static void offerNew(MainWindow main, List<String> features) {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         List<String> what = new ArrayList<>();
-        for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "the phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "the map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "the radio horizon, the GCS search and the map tools' three groups"
-                : f.equals(FEATURE_COVERAGE) ? "the 4G coverage estimate on the map"
-                : f.equals(FEATURE_OVERWATCH) ? "OVERWATCH sleep - the drone watches and calls this PC - and its clips on the map"
-                : f.equals(FEATURE_OBSERVATION) ? "observation - up to six idle drones at once" : f);
+        for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "radio horizon, GCS search"
+                : f.equals(FEATURE_COVERAGE) ? "4G coverage map"
+                : f.equals(FEATURE_OVERWATCH) ? "OVERWATCH and its clips"
+                : f.equals(FEATURE_OBSERVATION) ? "observation of six drones" : f);
         Object[] options = {"Yes", "Not now"};
-        int answer = JOptionPane.showOptionDialog(main, "New in this version: " + String.join(" and ", what)
-                        + ".\nA short tour of just the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+        int answer = JOptionPane.showOptionDialog(main, "New: " + String.join(", ", what)
+                        + ".\nTour the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
         if (answer == JOptionPane.YES_OPTION) new Tour(main, features).next();
     }
 
@@ -249,7 +237,7 @@ final class Tour {
     static void offer(MainWindow main) {
         main.save(java.util.Map.of(OFFERED_KEY, "true", SEEN_KEY, String.join(",", FEATURES)));
         Object[] options = {"Yes", "Not now"};
-        int answer = JOptionPane.showOptionDialog(main, "Take a short tour of the window?\nMENU, the video, the map and the offline maps, one by one.",
+        int answer = JOptionPane.showOptionDialog(main, "Take a short tour of the window?",
                 "Tour", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
         if (answer == JOptionPane.YES_OPTION) start(main);
     }
@@ -274,7 +262,7 @@ final class Tour {
             try {
                 s.before().run();
             } catch (RuntimeException e) {
-                main.logLine("Tour: step " + (index + 1) + " (" + s.title() + ") could not open its window: " + e);
+                main.logLine("Tour: step " + (index + 1) + " (" + s.title() + ") failed to open: " + e);
             }
         }
         retry.restart(); // the window just opened: let it lay out first
@@ -323,7 +311,7 @@ final class Tour {
         }
         if (anchor == null || !anchor.isShowing()) {
             if (++tries >= MAX_TRIES) { // not on screen (UPDATE with no update known, a layout without the control): skipped
-                main.logLine("Tour: step " + (index + 1) + " (" + s.title() + ") skipped - its control isn't shown.");
+                main.logLine("Tour: step " + (index + 1) + " (" + s.title() + ") skipped: not on screen.");
                 next();
                 return;
             }

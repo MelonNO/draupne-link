@@ -173,7 +173,7 @@ final class FindDroneDialog extends JDialog {
         text.setText(describe(last, t == null ? null : t.home(), t == null ? null : t.file(), file));
         boolean has = last != null;
         for (JButton b : new JButton[]{copy, copyMgrs, google, osm}) b.setEnabled(has);
-        none.setText(has ? "" : "No position yet (drone or phone GPS). The last flight's position is in last-position.txt in the Tracks folder.");
+        none.setText(has ? "" : "No position yet. Last flight's: last-position.txt in Tracks.");
         if (none.isVisible() != !has) {
             none.setVisible(!has);
             pack();
@@ -200,7 +200,7 @@ final class FindDroneDialog extends JDialog {
                     MapView.distanceText(Mercator.distanceM(home.lat(), home.lon(), last.lat(), last.lon())).toLowerCase(Locale.ROOT),
                     Mercator.bearingDeg(home.lat(), home.lon(), last.lat(), last.lon())));
         }
-        if (file != null) sb.append(fromFile ? "From the file   " : "Track file      ").append(file.getFileName()).append(fromFile ? "  (nothing in this session yet)" : "").append('\n');
+        if (file != null) sb.append(fromFile ? "From the file   " : "Track file      ").append(file.getFileName()).append(fromFile ? "  (none this session)" : "").append('\n');
         return sb.toString().stripTrailing();
     }
 

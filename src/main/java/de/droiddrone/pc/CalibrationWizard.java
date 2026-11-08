@@ -116,32 +116,33 @@ public class CalibrationWizard {
         Arrays.fill(min, Float.MAX_VALUE);
         Arrays.fill(max, -Float.MAX_VALUE);
         steps.add(new Step(StepKind.RANGE, -1, Direction.NONE, "Move all sticks to their limits",
-                "Circle both sticks a few times, firmly into every corner. That is their end (1000 / 2000)."));
+                "Circle both sticks a few times, firmly into every corner."));
         steps.add(new Step(StepKind.CENTER, -1, Direction.NONE, "Center the sticks",
-                "All sticks to the center, throttle too, thumbs off. This is the middle (1500). Then Next."));
+                "All sticks to the center, throttle too. Thumbs off. "
+                        + "Then press Next."));
         steps.add(new Step(StepKind.ASSIGN, 3, Direction.UP, "Throttle up",
-                "THROTTLE stick fully UP and hold."));
+                "THROTTLE fully UP and hold."));
         steps.add(new Step(StepKind.ASSIGN, 2, Direction.RIGHT, "Yaw right",
-                "YAW stick fully RIGHT and hold."));
+                "YAW fully RIGHT and hold."));
         steps.add(new Step(StepKind.ASSIGN, 1, Direction.UP, "Pitch up",
-                "PITCH stick fully UP (forward) and hold."));
+                "PITCH fully UP (forward) and hold."));
         steps.add(new Step(StepKind.ASSIGN, 0, Direction.RIGHT, "Roll right",
-                "ROLL stick fully RIGHT and hold."));
+                "ROLL fully RIGHT and hold."));
         for (int i = 0; i < switchSteps; i++) {
             de.droiddrone.pc.setup.ModeSwitch.Purpose p = i < purposes.length ? purposes[i] : null;
             if (p != null) {
                 steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " - " + p.title(), p.hint()));
             } else if (i == 0 && purposes.length == 0) {
                 steps.add(new Step(StepKind.SWITCH, 4, Direction.NONE, "AUX1 switch",
-                        "Flip your ARM switch ON. Skip if not needed."));
+                        "Flip your ARM switch ON. Skip if unused."));
             } else {
                 // nothing chosen for it in Drone setup: a spare, for whatever the pilot sets in Betaflight later
                 steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " - reserve",
-                        "Nothing set for AUX" + (i + 1) + ". Flip a spare switch ON to keep it, or Skip."));
+                        "Nothing is set for AUX" + (i + 1) + ". Flip a spare switch ON, or Skip."));
             }
         }
         steps.add(new Step(StepKind.SUMMARY, -1, Direction.NONE, "Check and save",
-                "Move every stick and switch, check its channel follows. Tick Invert for anything backwards, then Finish."));
+                "Move every stick and switch; check each channel follows. Invert anything backwards, then Finish."));
     }
 
     /** How many AUX switches are asked for. */
