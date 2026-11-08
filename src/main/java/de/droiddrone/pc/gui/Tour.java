@@ -108,7 +108,7 @@ final class Tour {
         steps.add(new Step("SETUP", "First-time setup and this tour. PC, drone and phone setup with TOOLS > Advanced on.", main::tourSetupButton, openMenu, true, header));
         steps.add(new Step("VIDEO", "Picture, OSD, recording.", main::tourVideoButton, openMenu, true, header));
         steps.add(new Step("LINK", "Link sounds and spectators.", main::tourLinkButton, openMenu, true, header));
-        steps.add(new Step("TOOLS", "Find the drone, tracks folder, tests.", main::tourToolsButton, openMenu, true, header));
+        steps.add(new Step("TOOLS", "Find the drone, previous flights, tests.", main::tourToolsButton, openMenu, true, header));
         steps.add(new Step("UPDATE", "A newer version is ready: one press installs it. After the tour.",
                 main::tourUpdateButton, openMenu, false, header));
         steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card for more video. Sticks and switches keep working. "

@@ -42,7 +42,7 @@ import java.util.function.Consumer;
 
 /**
  * The map in a window of its own, for a second screen (MAP > Map window, F3). Hidden until opened; remembers where
- * it was (and whether maximized). A toolbar in the program's style above the map (FOLLOW, GO TO, TRACKS, PINS,
+ * it was (and whether maximized). A toolbar in the program's style above the map (FOLLOW, GO TO, PREVIOUS FLIGHTS, PINS,
  * DOWNLOAD AREA, FIND DRONE; the map picture and the coordinate format), the figures under it: the place under the
  * mouse and the terrain height there (m and ft), the drone's position, altitude, distance and bearing from the
  * launch point, and which GPS the position comes from (with the phone's accuracy). Right-click on the map drops a
@@ -69,7 +69,7 @@ final class MapWindow extends JFrame {
     private boolean profileShown = true;
     private final Consumer<Map<String, String>> saver;
     private final JButton followButton = Theme.secondaryButton("Follow: on");
-    private final JButton tracksButton = Theme.secondaryButton("Tracks");
+    private final JButton tracksButton = Theme.secondaryButton("Previous flights");
     /** A hidden download's progress, in the toolbar; a click brings its window back. */
     private final JLabel downloadLine = Theme.label("", Theme.headingFont(12f), Theme.ACCENT);
     private JPanel cursorCell, terrainCell, droneCell;
@@ -145,16 +145,16 @@ final class MapWindow extends JFrame {
         });
         left.add(followButton);
         // the whole flight: a double-click on the map; the launch point: the Home key (End: the drone)
-        tracksButton.setToolTipText("Show an earlier flight's track");
-        tracksButton.addActionListener(e -> TacticalCombo.show(tracksMenu(), tracksButton, 0, tracksButton.getHeight() + 4));
+        tracksButton.setToolTipText("Play back, show on map, export");
+        tracksButton.addActionListener(e -> PreviousFlightsDialog.show(this, cache, map.source(), this::showOldTrackOrClear));
         left.add(tracksButton);
         // MAP TOOLS (1.0.35): GO TO, PINS and DOWNLOAD AREA live in the slide-out, with the ruler, the drawings and the symbols
         tools.goTo.setToolTipText("Centre on a position: MGRS, UTM or lat, lon");
         tools.goTo.addActionListener(e -> goToPosition());
-        tools.pins.setToolTipText("All pins: go to, rename, remove, add");
+        tools.pins.setToolTipText("All pins: go to, copy, edit");
         tools.pins.addActionListener(e -> {
             if (pinManager == null || !pinManager.isDisplayable()) {
-                pinManager = new PinManagerDialog(this, pins, map, () -> this.format, () -> track);
+                pinManager = new PinManagerDialog(this, pins, map, () -> this.format, () -> track, elevation);
             }
             pinManager.setVisible(true);
             pinManager.toFront();
@@ -1225,7 +1225,7 @@ final class MapWindow extends JFrame {
         sourceValue.setText(source);
     }
 
-    // ------------------------------------------------------------------ GO TO, TRACKS, the CURSOR cell
+    // ------------------------------------------------------------------ GO TO, an earlier flight, the CURSOR cell
 
     /** GO TO: a position pasted in any format the map writes; the map centres there, with a pin if asked. */
     private void goToPosition() {
@@ -1253,61 +1253,33 @@ final class MapWindow extends JFrame {
         }
     }
 
-    /** TRACKS: the earlier flights in the Tracks folder, newest first; one on the map at a time, or none. */
-    private javax.swing.JPopupMenu tracksMenu() {
-        javax.swing.JPopupMenu menu = TacticalCombo.menu();
-        menu.setBackground(Theme.PANEL_2);
-        java.util.List<java.nio.file.Path> files = java.util.List.of();
-        try {
-            files = FlightTrack.files(FlightTrack.defaultDir());
-        } catch (java.io.IOException ignored) {
-        }
-        if (files.isEmpty()) {
-            javax.swing.JMenuItem none = new javax.swing.JMenuItem("No earlier flights in Tracks");
-            none.setEnabled(false);
-            menu.add(none);
-        }
-        int shown = 0;
-        for (java.nio.file.Path f : files) {
-            if (++shown > 25) break;
-            String name = f.getFileName().toString();
-            javax.swing.JMenuItem item = new javax.swing.JMenuItem(trackTitle(name));
-            item.addActionListener(e -> showOldTrack(f));
-            menu.add(item);
-        }
-        if (map.hasOldTrack()) {
-            menu.addSeparator();
-            javax.swing.JMenuItem fit = new javax.swing.JMenuItem("Fit earlier flight");
-            fit.addActionListener(e -> {
-                map.fitOldTrack();
-                syncFollow();
-            });
-            menu.add(fit);
-            javax.swing.JMenuItem clear = new javax.swing.JMenuItem("Clear earlier flight");
-            clear.addActionListener(e -> map.setOldTrack(null, null));
-            menu.add(clear);
-        }
-        return menu;
-    }
-
     /** "2026-11-02 14:05" from track-20261102-140512.gpx; the file's name when it isn't one of ours. */
     static String trackTitle(String fileName) {
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("track-(\\d{4})(\\d{2})(\\d{2})-(\\d{2})(\\d{2})\\d{2}\\.gpx").matcher(fileName);
         return m.matches() ? m.group(1) + "-" + m.group(2) + "-" + m.group(3) + " " + m.group(4) + ":" + m.group(5) : fileName;
     }
 
+    /** PREVIOUS FLIGHTS' ON MAP: that flight on the map, fitted (null: OFF MAP takes it off). */
+    void showOldTrackOrClear(java.nio.file.Path file) {
+        if (file == null) {
+            map.setOldTrack(null, null);
+            return;
+        }
+        showOldTrack(file);
+    }
+
     private void showOldTrack(java.nio.file.Path file) {
         try {
             FlightTrack t = FlightTrack.read(file);
             if (t.isEmpty()) {
-                javax.swing.JOptionPane.showMessageDialog(this, "No positions in " + file.getFileName() + ".", "Tracks", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+                javax.swing.JOptionPane.showMessageDialog(this, "No positions in " + file.getFileName() + ".", "Previous flights", javax.swing.JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
             map.setOldTrack(t.points(), trackTitle(file.getFileName().toString()));
             map.fitOldTrack();
             syncFollow();
         } catch (java.io.IOException e) {
-            javax.swing.JOptionPane.showMessageDialog(this, "Can't read " + file.getFileName() + ": " + e.getMessage(), "Tracks", javax.swing.JOptionPane.WARNING_MESSAGE);
+            javax.swing.JOptionPane.showMessageDialog(this, "Can't read " + file.getFileName() + ": " + e.getMessage(), "Previous flights", javax.swing.JOptionPane.WARNING_MESSAGE);
         }
     }
 
