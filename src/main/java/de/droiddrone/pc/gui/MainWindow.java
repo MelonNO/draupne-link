@@ -1946,6 +1946,16 @@ public class MainWindow extends JFrame {
         return mapWindow;
     }
 
+    /**
+     * 1.0.52 (the pilot): CONNECT from the map window (an overwatch alert, the fleet strip, a right-click) brings this,
+     * the pilot's window, to the front - out of the taskbar too.
+     */
+    void toPilotWindow() {
+        if ((getExtendedState() & JFrame.ICONIFIED) != 0) setExtendedState(getExtendedState() & ~JFrame.ICONIFIED);
+        toFront();
+        requestFocus();
+    }
+
     /** MAP > Map window, F3: opens it (in front), or hides it. */
     private void toggleMapWindow() {
         MapWindow w = mapWindow();
@@ -3415,6 +3425,7 @@ public class MainWindow extends JFrame {
         // 1.0.50 (the pilot): no confirm - CONNECT on the card connects (the 1.0.49 question is gone); a PC that may
         // fly another drone is still refused above
         overwatch.connect(drone);
+        toPilotWindow(); // 1.0.52 (the pilot): the card is in the map window; flying happens here
         if (same) {
             wakePhone(); // this PC's link to it waits dormant: the Connects go out again now
             return;
@@ -4254,6 +4265,7 @@ public class MainWindow extends JFrame {
 
     /** Right-click on a drone on the map: fly it (as pilot), or watch it through the PC that flies it. */
     private void connectFromMap(String phone, boolean watch) {
+        toPilotWindow();
         if (observation != null && watch) {
             JOptionPane.showMessageDialog(this, "Observing: STOP OBSERVING first.", "Observing", JOptionPane.INFORMATION_MESSAGE);
             return;
@@ -4922,6 +4934,17 @@ public class MainWindow extends JFrame {
     /** A tour drone's pack per cell as if this PC had read it at its last flight (the fleet row's DRONE figure). */
     void tourLastCell(String drone, double cellVolts, long ageMs) {
         lastCell.put(drone.toLowerCase(Locale.ROOT), new double[]{cellVolts, System.currentTimeMillis() - ageMs});
+    }
+
+    /** The tour's drones: the name service asks the network now (they answer while still awake). */
+    void tourScanNames() {
+        nameService.scanSoon();
+    }
+
+    /** Whether the name map has all these phones (the tour waits for them before putting them to sleep). */
+    boolean tourNamesKnown(java.util.List<String> drones) {
+        for (String d : drones) if (names.get(d) == null) return false;
+        return true;
     }
 
     int tourLinkPort() {

@@ -83,6 +83,50 @@ class TourTest {
         assertEquals(0, n.tickRepaintArea(false), "nothing moves once it is in");
     }
 
+    /**
+     * The pause after POP OUT MAP (the pilot): the press hides the MAP card, and the step waited HIDDEN_MS (2.5 s) for
+     * its gone control before moving on. Pressed and gone: on at once. Gone without a press: no.
+     */
+    @Test
+    void aPressedControlThatGoesAwayMovesTheTourOnAtOnce() {
+        JLayeredPane layer = window(1366, 768);
+        JButton pop = new JButton("POP OUT MAP");
+        pop.setBounds(40, 600, 300, 40);
+        layer.add(pop);
+        int[] nexts = {0};
+        Tour.Step step = new Tour.Step("POP OUT MAP", "The map in its own window. Press it.", () -> pop).press();
+        Tour.TourNotice n = new Tour.TourNotice(pop, step, 15, 33, () -> nexts[0]++, () -> { }, false, null);
+        n.attachForTest(layer, 10_000);
+        n.tickForTest(); // off screen: the control counts as gone
+        assertEquals(0, nexts[0], "not pressed: the step waits");
+        n.pressForTest();
+        n.tickForTest();
+        assertEquals(1, nexts[0], "pressed and gone: the next step at once");
+    }
+
+    /**
+     * The alert step (the pilot: "the tour alert is still saying to press connect"): CONNECT closes the alert card it
+     * points at, and a step whose control was gone never looked at what it waited for. Now the wait comes first.
+     */
+    @Test
+    void whatTheStepWaitsForMovesItOnEvenWithItsControlGone() {
+        JLayeredPane layer = window(1366, 768);
+        JButton card = new JButton("CONNECT");
+        card.setBounds(1000, 100, 300, 200);
+        layer.add(card);
+        boolean[] connected = {false};
+        int[] nexts = {0};
+        Tour.Step step = new Tour.Step("ALERT", "Press CONNECT on the alert.", () -> card)
+                .waitFor(() -> connected[0], "Press CONNECT", true);
+        Tour.TourNotice n = new Tour.TourNotice(card, step, 32, 33, () -> nexts[0]++, () -> { }, false, null);
+        n.attachForTest(layer, 10_000);
+        n.tickForTest();
+        assertEquals(0, nexts[0], "nothing yet");
+        connected[0] = true;
+        n.tickForTest();
+        assertEquals(1, nexts[0], "connected: on, though the card is gone");
+    }
+
     @Test
     void anUpdateBringsTheFleetAndPreviousFlightsSteps() throws Exception {
         PcConfig config = PcConfig.defaults();

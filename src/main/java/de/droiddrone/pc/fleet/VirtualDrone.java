@@ -1278,6 +1278,9 @@ public final class VirtualDrone {
         }
     }
 
+    /** Placed by the tour: its first check-in comes as soon as it is asleep, then every interval. Under powerLock. */
+    private boolean checkInAtOnce;
+
     /** The panel's CHECK NOW: the next check window opens now (the phone's alarm, early). */
     public void checkNow() {
         synchronized (powerLock) {
@@ -1300,7 +1303,8 @@ public final class VirtualDrone {
                 InetSocketAddress pc = lastPcIp == null ? null : new InetSocketAddress(lastPcIp, lastPcPort);
                 closeSocket(); // the link's socket, the FC's port, the GPS: let go
                 // always listening (pc.39): no alarm - the window opens shortly (the PC's link quiet by then) and stays
-                nextCheckAt = now + (always() ? SleepCheck.ALWAYS_OPEN_AFTER_MS : checkIntervalMin * 60_000L);
+                nextCheckAt = now + (always() || checkInAtOnce ? SleepCheck.ALWAYS_OPEN_AFTER_MS : checkIntervalMin * 60_000L);
+                checkInAtOnce = false;
                 if (mode == OVERWATCH) overwatch.begin(pc);
                 log.accept(modeName(mode) + (always() ? ": always listening for the PC in " + SleepCheck.ALWAYS_OPEN_AFTER_MS / 1000 + " s"
                         : ": next check in " + checkIntervalMin + " min"));
@@ -1675,6 +1679,7 @@ public final class VirtualDrone {
      * Refused like the PC's request while the FC isn't known disarmed.
      */
     void placeInMode(InetSocketAddress pc, int wanted, int intervalMin, int sensitivity, int flags, int overwatchToken) {
+        checkInAtOnce = true; // the tour: the PC's lists show it asleep at once, not at its first check in minutes
         lastPcIp = pc.getAddress();
         lastPcPort = pc.getPort();
         if (wanted == OVERWATCH) overwatch.configure(sensitivity, flags, overwatchToken);
@@ -1833,6 +1838,19 @@ public final class VirtualDrone {
     /** A fresh pack, on the ground only. */
     public void newBattery() {
         fc.newBattery();
+    }
+
+    /**
+     * Turns the disarmed drone to look this way (the fleet panel's LOOK, 1.0.52): its camera, its overwatch picture and
+     * the heading it reports - the PC's map turns its view cone with the next telemetry.
+     */
+    public boolean lookTo(double headingDeg) {
+        return fc.turnTo(headingDeg);
+    }
+
+    /** Where it looks (degrees clockwise from north). */
+    public double headingDeg() {
+        return fc.headingDeg();
     }
 
     /** Puts the disarmed drone on the ground somewhere else (a new start place). */

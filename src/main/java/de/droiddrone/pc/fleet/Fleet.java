@@ -22,15 +22,15 @@ public final class Fleet implements AutoCloseable {
     /** As many as this: one PC's observation grid holds six, and a few more for the PHONE list. */
     public static final int MAX_DRONES = 12;
     /**
-     * Where the drones stand unless the pilot picks a place (the pilot's choice, 1.0.50): the middle of the MGRS
-     * 100 km square 32V PN. The first drone there, the others 30 m apart to the east.
+     * Where the drones stand unless the pilot picks a place (1.0.52, the pilot): the tour's launch point, the drones
+     * round it as {@link FleetLayout} sets them (it was the middle of 32V PN, 30 m apart, from 1.0.50).
      */
-    public static final String DEFAULT_PLACE = "32V PN 50000 50000";
+    public static final String DEFAULT_PLACE = FleetLayout.LAUNCH;
     public static final double DEFAULT_LAT, DEFAULT_LON;
 
     static {
         double[] at = de.droiddrone.pc.map.Coordinates.parse(DEFAULT_PLACE);
-        // the middle of that metre, so it reads back as 50000 50000 (its corner can come out as 49999)
+        // the middle of that metre, so it reads back as written (its corner can come out a metre short)
         DEFAULT_LAT = at[0] + 0.5 / 111_320.0;
         DEFAULT_LON = at[1] + 0.5 / (111_320.0 * Math.cos(Math.toRadians(at[0])));
     }
@@ -134,10 +134,12 @@ public final class Fleet implements AutoCloseable {
         return d;
     }
 
-    /** The next drone's start place: DEFAULT_LAT/LON, 30 m east of the last. */
+    /**
+     * The next drone's start place {lat, lon, heading degrees} with the launch point at (lat, lon): the layout's
+     * ({@link FleetLayout}), then near the launch point.
+     */
     public double[] nextPlace(double lat, double lon) {
-        int n = drones.size();
-        return new double[]{lat, lon + n * 30 / (111_320.0 * Math.cos(Math.toRadians(lat)))};
+        return FleetLayout.place(drones.size(), lat, lon);
     }
 
     private boolean slotTaken(int slot) {

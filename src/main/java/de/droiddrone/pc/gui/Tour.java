@@ -209,10 +209,11 @@ final class Tour {
         // ---- the LINK card: phone, PILOT UAV, sleep, CONNECT AS
         steps.add(new Step("PHONE", "Every phone running DRAUPNE Flight, by name. Pick one here. Press it.",
                 main::tourPhoneCombo).press().of(FEATURE_NAMES));
-        steps.add(new Step("PILOT UAV", "Flies the chosen drone. Connected, it reads STANDBY MODE: camera off, back in 2 s.",
+        steps.add(new Step("PILOT UAV", "Connects and flies the chosen drone. Connected, it turns STANDBY MODE: rests it, back "
+                + "in 2 s. A sleeping drone: REGAINING CONTROL IN x MIN, until its check-in.",
                 main::tourConnectButton));
-        steps.add(new Step("DEEP SLEEP / OVERWATCH", "DEEP SLEEP: the phone sleeps and checks in at CHECK EVERY. OVERWATCH: "
-                + "the same, with the camera watching; motion calls you. Press one.", main::tourDeepSleepButton)
+        steps.add(new Step("DEEP SLEEP / OVERWATCH", "DEEP SLEEP: the phone sleeps and checks in at the interval set in CHECK "
+                + "EVERY. OVERWATCH: the same, with the camera watching; motion calls you. Press one.", main::tourDeepSleepButton)
                 .extra(main::tourCheckEvery)
                 .targets(() -> List.of(main.tourDeepSleepButton(), main.tourOverwatchButton()))
                 .before(() -> main.tourPowerDemo(true)).after(() -> main.tourPowerDemo(false)).of(FEATURE_OVERWATCH));
@@ -273,14 +274,14 @@ final class Tour {
                 .before(this::startFinale).press().live(map).of(FEATURE_FLEET));
         steps.add(new Step("THE ROWS", "A row a phone: mode sign, drone V/cell, phone %, last heard, ring to next check-in. "
                 + "Click one: it shows on the map.", () -> main.mapWindow().tourFleetRows()).live(map).of(FEATURE_FLEET));
-        steps.add(new Step("MODES", "STANDBY, DEEP SLEEP, OVERWATCH and EVERY wait for the phone's next check-in. "
-                + "No connecting. PILOT UAV flies it.", () -> main.mapWindow().tourFleetStrip()).live(map).of(FEATURE_FLEET));
+        steps.add(new Step("MODES", "STANDBY, DEEP SLEEP, OVERWATCH and EVERY reach the phone at its next "
+                + "check-in, without connecting. PILOT UAV flies it.", () -> main.mapWindow().tourFleetStrip()).live(map).of(FEATURE_FLEET));
         steps.add(new Step("THE EYES", "Eyes are drones on OVERWATCH; the cones are what they see. Anything entering a "
                 + "cone alerts you.", map).before(this::showTourArea).after(finale::driveIn).live(map).skip(noDrones)
                 .of(FEATURE_FLEET));
-        steps.add(new Step("OVERWATCH", "Something is moving. Wait for the alert.",
+        steps.add(new Step("INTEL", "Enemy movement reported near the eyes. Attack may come soon. Stand by.",
                 () -> main.mapWindow().tourFleetRows()).live(map).skip(noDrones)
-                .waitFor(finale::alerted, "Watching...", true).of(FEATURE_FLEET));
+                .waitFor(finale::alerted, "Standing by...", true).of(FEATURE_FLEET));
         steps.add(new Step("ALERT", "It saw something. Press CONNECT on the alert.", () -> main.mapWindow().tourAlertCards())
                 .live(map).skip(noDrones).waitFor(finale::connected, "Press CONNECT", true).of(FEATURE_FLEET));
         steps.add(new Step("FLY", "Hear it? It comes from where it is. Arm, fly to it and hit it.", main::tourVideo)
@@ -314,8 +315,25 @@ final class Tour {
             main.logLine("Tour: no drones for the fleet steps - " + finale.refused());
             return;
         }
-        finale.placeModes();
         showTourArea();
+        // 1.0.52 (the pilot: "only Zulu shows at once, Whiskey after a while"): asleep, a drone answers no name
+        // query, so the three that check in every 1-5 min were only known at their first check-in. The name service
+        // asks now, while all four are still awake; the modes follow once it has them (4 s at most), and each then
+        // checks in at once (TourScenario.placeModes): rows, eyes and moons right away.
+        main.tourScanNames();
+        long until = System.currentTimeMillis() + 4000;
+        Timer wait = new Timer(100, null);
+        wait.addActionListener(e -> {
+            if (!finale.started()) {
+                wait.stop();
+                return;
+            }
+            if (main.tourNamesKnown(finale.names()) || System.currentTimeMillis() > until) {
+                wait.stop();
+                finale.placeModes();
+            }
+        });
+        wait.start();
     }
 
     /** The map on the tour's drones, their flights and the units, before anything moves. */
@@ -632,9 +650,13 @@ final class Tour {
             this.extra = extra;
         }
 
+        /** The control was pressed (a press step): when it then goes from the window, the step moves on at once. */
+        private boolean pressDone;
+
         private void pressed() {
             if (!waitingForPress) return;
             waitingForPress = false;
+            pressDone = true;
             if (waitingForEvent) return;
             next.setEnabled(true);
             next.setText("Next");
@@ -685,7 +707,21 @@ final class Tour {
         }
 
         private void tick() {
+            // what the step waits for came: on, even with its control gone (CONNECT closes the alert card - the step
+            // kept saying "Press CONNECT", 1.0.52)
+            if (waitingForEvent && auto && waitFor.getAsBoolean()) {
+                waitingForEvent = false;
+                next.setEnabled(true);
+                next.doClick();
+                return;
+            }
             if (!anchor.isShowing()) {
+                // pressed, and the press took the control away (POP OUT MAP hides its card): on at once, not after
+                // HIDDEN_MS - the pause the pilot saw
+                if (pressDone && next.isEnabled()) {
+                    next.doClick();
+                    return;
+                }
                 if (notShowingSince == 0) notShowingSince = System.currentTimeMillis();
                 long hidden = System.currentTimeMillis() - notShowingSince;
                 Window w = SwingUtilities.getWindowAncestor(anchor);
@@ -755,6 +791,16 @@ final class Tour {
         /** Tests: what one tick asks to repaint once the step is in (full: as every tick did before 1.0.52). */
         int tickRepaintArea(boolean full) {
             return repaintDim(full);
+        }
+
+        /** Tests: one tick, as the timer runs it. */
+        void tickForTest() {
+            tick();
+        }
+
+        /** Tests: the lit control pressed. */
+        void pressForTest() {
+            pressed();
         }
 
         /** Pictures: the notice and its dim painted into g at the layer's origin. */
@@ -1016,8 +1062,27 @@ final class Tour {
                 addMouseWheelListener(swallow);
             }
 
+            /** The window's edges, left to the window (resizing) through the dim. */
+            private static final int EDGE = 6;
+
+            /**
+             * Where the dim lies: the window's content, not the title bar above it (1.0.52, the pilot: "during the
+             * entire tour make it possible to resize the window" - the dim over FlatLaf's title bar took its drag,
+             * double-click and the resize band at the top).
+             */
+            private Rectangle content() {
+                Rectangle all = new Rectangle(0, 0, getWidth(), getHeight());
+                JRootPane root = SwingUtilities.getRootPane(this);
+                Component layer = getParent();
+                if (root == null || layer == null || root.getContentPane().getParent() == null) return all;
+                java.awt.Container cp = root.getContentPane();
+                return SwingUtilities.convertRectangle(cp.getParent(), cp.getBounds(), layer).intersection(all);
+            }
+
             @Override
             public boolean contains(int x, int y) {
+                if (x < EDGE || y < EDGE || x >= getWidth() - EDGE || y >= getHeight() - EDGE) return false;
+                if (!content().contains(x, y)) return false; // the title bar: drag, maximize, resize as always
                 Rectangle a = anchorBounds();
                 if (a != null && a.contains(x, y)) return false;
                 JComponent l = live;
@@ -1035,7 +1100,7 @@ final class Tour {
                     long now = System.currentTimeMillis();
                     float in = Math.min(1, (now - shownAt) / (float) IN_MS);
                     Rectangle a = anchorBounds();
-                    Area shade = new Area(new Rectangle(0, 0, getWidth(), getHeight()));
+                    Area shade = new Area(content()); // the title bar stays clear: it works during the tour
                     RoundRectangle2D hole = null;
                     if (a != null) {
                         hole = new RoundRectangle2D.Float(a.x - 6, a.y - 6, a.width + 12, a.height + 12, 10, 10);

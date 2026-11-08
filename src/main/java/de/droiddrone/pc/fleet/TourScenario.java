@@ -49,18 +49,11 @@ public final class TourScenario implements AutoCloseable {
     /** Placed this long before {@link #driveInNow}, the BTR is found at once: the overwatch countdown (1 s), the detection's warm-up (3 s) and young phase (20 s), and a margin. */
     public static final long DRIVE_IN_AFTER_MS = 26_000;
 
-    /** Where all four took off (the pilot's). */
-    public static final String LAUNCH = "32V PN 49401 50639";
+    /** Where all four took off: {@link FleetLayout#LAUNCH} (the virtual fleet's layout too). */
+    public static final String LAUNCH = FleetLayout.LAUNCH;
 
-    /** One drone's place: where it sits, where its camera looks (null: no camera job), its mode. */
-    public record Place(String at, String lookAt, int mode) {}
-
-    /** The pilot's layout: the first one sees the BTR. */
-    public static final List<Place> PLACES = List.of(
-            new Place("32V PN 48978 50762", "32V PN 49199 50956", VirtualDrone.OVERWATCH),
-            new Place("32V PN 48686 51068", "32V PN 48496 51269", VirtualDrone.OVERWATCH),
-            new Place("32V PN 49177 50442", "32V PN 48991 50241", VirtualDrone.OVERWATCH),
-            new Place("32V PN 49411 50763", null, VirtualDrone.DEEP_SLEEP));
+    /** The pilot's layout ({@link FleetLayout#PLACES}, shared with the virtual fleet): the first one sees the BTR. */
+    public static final List<FleetLayout.Place> PLACES = FleetLayout.PLACES;
 
     /**
      * After hours outside, all different: the drone's pack at rest after its flight (V per cell), the phone's battery
@@ -123,10 +116,9 @@ public final class TourScenario implements AutoCloseable {
             List<Flight> flights = new ArrayList<>();
             long now = System.currentTimeMillis();
             for (int i = 0; i < PLACES.size(); i++) {
-                Place p = PLACES.get(i);
-                double[] at = Coordinates.parse(p.at());
-                double heading = p.lookAt() != null ? bearing(at, Coordinates.parse(p.lookAt())) : bearing(launch, at);
-                VirtualDrone d = fleet.add(fleet.freeName(), at[0], at[1], heading);
+                double[] placed = FleetLayout.place(i, launch[0], launch[1]);
+                double[] at = {placed[0], placed[1]};
+                VirtualDrone d = fleet.add(fleet.freeName(), at[0], at[1], placed[2]);
                 double[] o = OUTSIDE[i];
                 d.setOutside(o[0], (int) o[1], o[2], (int) o[3]);
                 drones.add(d);
@@ -164,8 +156,7 @@ public final class TourScenario implements AutoCloseable {
 
     /** Degrees clockwise from north, from a to b ({lat, lon}). */
     static double bearing(double[] a, double[] b) {
-        double dn = (b[0] - a[0]) * 111_320.0, de = (b[1] - a[1]) * 111_320.0 * Math.cos(Math.toRadians(a[0]));
-        return (Math.toDegrees(Math.atan2(de, dn)) + 360) % 360;
+        return FleetLayout.bearing(a, b);
     }
 
     /**

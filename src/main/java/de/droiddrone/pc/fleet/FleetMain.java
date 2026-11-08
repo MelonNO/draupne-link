@@ -15,7 +15,7 @@ import java.nio.file.Path;
  */
 public final class FleetMain {
     /** How many drones the fleet starts with. */
-    public static final int START_DRONES = 3;
+    public static final int START_DRONES = FleetLayout.PLACES.size(); // the layout's four (1.0.52)
 
     private FleetMain() {
     }
@@ -27,7 +27,7 @@ public final class FleetMain {
         Runtime.getRuntime().addShutdownHook(new Thread(fleet::close, "fleetClose"));
         for (int i = 0; i < START_DRONES; i++) {
             double[] at = fleet.nextPlace(Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON);
-            fleet.add(fleet.freeName(), at[0], at[1], 0);
+            fleet.add(fleet.freeName(), at[0], at[1], at[2]);
         }
         fleet.startHeartbeat();
         System.out.println("Virtual fleet: " + fleet.drones().size() + " drones up. In DRAUPNE Link they show in the PHONE list as VIRTUAL.");
