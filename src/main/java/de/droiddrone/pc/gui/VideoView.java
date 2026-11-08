@@ -476,7 +476,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         int ty = Math.max(40, y0 + 30);
         g.setFont(Theme.headingFont(20f));
         g.setColor(Theme.ACCENT);
-        g.drawString("// LATENCY TEST", tx, ty);
+        g.drawString("LATENCY TEST", tx, ty);
         g.setFont(Theme.font(Font.PLAIN, 14f));
         g.setColor(Theme.TEXT);
         ty += 34;

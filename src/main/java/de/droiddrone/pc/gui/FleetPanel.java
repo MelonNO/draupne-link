@@ -424,7 +424,7 @@ public final class FleetPanel {
     }
 
     private static JLabel section(String text) {
-        return Theme.label("// " + text, Theme.headingFont(12f), Theme.ACCENT);
+        return Theme.label(text, Theme.headingFont(12f), Theme.ACCENT);
     }
 
     private static JPanel row(JComponent... parts) {

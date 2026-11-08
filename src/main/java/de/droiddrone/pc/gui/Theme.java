@@ -129,9 +129,9 @@ final class Theme {
         return label;
     }
 
-    /** "// LINK" style section marker. */
+    /** "LINK" style section marker (red heading). */
     static JLabel sectionTitle(String text) {
-        return label("// " + text.toUpperCase(), headingFont(12.5f), ACCENT);
+        return label(text.toUpperCase(), headingFont(12.5f), ACCENT);
     }
 
     static JPanel card(LayoutManager layout) {

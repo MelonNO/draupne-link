@@ -318,7 +318,7 @@ class WizardDialog extends JDialog {
         int shownTotal = (int) pages.stream().filter(Page::isApplicable).count();
         int shownIndex = (int) pages.subList(0, index).stream().filter(Page::isApplicable).count();
         progress.setProgress(shownIndex, shownTotal);
-        stepCounter.setText("STEP " + (shownIndex + 1) + " OF " + shownTotal + (page.section.isEmpty() ? "" : "   //   " + page.section));
+        stepCounter.setText("STEP " + (shownIndex + 1) + " OF " + shownTotal + (page.section.isEmpty() ? "" : "   ·   " + page.section));
     }
 
     /** Re-evaluates navigation now (pages call this after their state changes). */
