@@ -67,18 +67,22 @@ final class TacticalCombo {
                     java.awt.Rectangle[] rows = rows(popup, list);
                     popup.setPreferredSize(new java.awt.Dimension(0, 0)); // opens where it belongs, but not seen
                     javax.swing.SwingUtilities.invokeLater(() -> {
-                        if (!popup.isShowing()) {
+                        // a zero-size popup never counts as showing: go by visible, and place the picture from the
+                        // combo (under it, or over it when the window has no room below - as the box opens)
+                        if (!popup.isVisible() || !combo.isShowing()) {
                             popup.setPreferredSize(null);
                             return;
                         }
                         javax.swing.JLayeredPane layer = root.getLayeredPane();
-                        java.awt.Point at = popup.getLocationOnScreen();
-                        javax.swing.SwingUtilities.convertPointFromScreen(at, layer);
+                        java.awt.Point at = javax.swing.SwingUtilities.convertPoint(combo, 0, combo.getHeight(), layer);
+                        if (at.y + size.height > layer.getHeight()) at.y -= combo.getHeight() + size.height;
                         Ghost.play(layer, new java.awt.Rectangle(at.x, at.y, size.width, size.height), picture, rows, true, () -> {
                             popup.setPreferredSize(null);
-                            if (!popup.isVisible()) return; // closed meanwhile
+                            if (!popup.isVisible() || !combo.isShowing()) return; // closed meanwhile
+                            // the real box, opened the usual way (pack() on the zero-size popup never grew it back)
                             revealed[0] = true;
-                            popup.pack(); // the real box, at its size, in the same place
+                            combo.hidePopup();
+                            combo.showPopup();
                             revealed[0] = false;
                         });
                     });
