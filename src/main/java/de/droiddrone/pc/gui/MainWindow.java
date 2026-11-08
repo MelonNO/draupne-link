@@ -2263,8 +2263,10 @@ public class MainWindow extends JFrame {
         }
         de.droiddrone.pc.AppLog.drain(2000); // the last lines ("Installing ...") reach the file before the exit
         if (beforeExit != null) beforeExit.run();
-        service.stop(); // the main thread leaves its polling loop and exits the app
+        // the window goes first, then the main thread exits: exiting while this thread was still taking the window
+        // down (its drop targets) deadlocked in Windows' toolkit shutdown - the process stayed, with no window
         dispose();
+        service.stop(); // the main thread leaves its polling loop and exits the app
     }
 
     /**

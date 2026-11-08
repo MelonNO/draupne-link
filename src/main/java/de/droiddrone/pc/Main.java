@@ -160,6 +160,18 @@ public class Main {
         SwingUtilities.invokeLater(() -> MainWindow.open(config, configFile, service));
         service.run();
         Joystick.terminate();
+        // a stuck exit (a window still being taken down, a hook that never returns) must not leave a process without
+        // a window behind: settings and logs are written before this point
+        Thread watchdog = new Thread(() -> {
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                return;
+            }
+            Runtime.getRuntime().halt(0);
+        }, "exitWatchdog");
+        watchdog.setDaemon(true);
+        watchdog.start();
         System.exit(0);
     }
 
