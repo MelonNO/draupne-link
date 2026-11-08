@@ -294,8 +294,8 @@ public final class FleetPanel {
                         bunch.setValue(0);
                     })));
             actions.add(section("OVERWATCH + DETECTION"));
-            actions.add(row(button("Walker", "Person walks across, 10 m out (torch at NIGHT)", () -> drone.addTarget("walker")),
-                    button("Vehicle", "Car drives across, 25 m out, 30 km/h (lights at NIGHT)", () -> drone.addTarget("vehicle")),
+            actions.add(row(button("Walker", "A soldier walks across, 10 m out (torch at NIGHT). Fly into him: crash", () -> drone.addTarget("walker")),
+                    button("Vehicle", "A BTR on patrol 20-40 m out (lights at NIGHT). Fly into it: crash", () -> drone.addTarget("vehicle")),
                     button("Light", "Person with a lamp walks across, 15 m out (NIGHT)", () -> drone.addTarget("light")), night,
                     button("Someone now", "Someone crosses 6 m from the camera: motion detection must find it", drone::someoneNow)));
             actions.add(row(button("Standby", "The phone's STANDBY button", () -> drone.requestMode(VirtualDrone.STANDBY, 0, "the phone's button")),
