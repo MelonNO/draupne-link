@@ -249,8 +249,8 @@ final class Scene {
 
     /**
      * A model of what moves (1.0.50, the pilot: the detection must be tested by something moving in the picture): a
-     * person walking (legs and arms swinging), a car driving (body, cabin, turning wheels; headlights at night), a
-     * person with a lamp. Drawn side on, facing the way it goes.
+     * soldier walking (a 3D model since 1.0.52, {@link Soldier}), a car driving (body, cabin, turning wheels;
+     * headlights at night), a soldier with a lamp. Facing the way it goes.
      */
     private void paintTarget(Graphics2D g, Camera cam, Target t, long nowMs) {
         double[] p = t.at(nowMs);
@@ -259,41 +259,29 @@ final class Scene {
         double x = s[0], y = s[1], m = s[2]; // where it stands on the picture, pixels a metre there
         double walked = (nowMs - t.startMs) / 1000.0 * t.speed;
         switch (t.kind) {
-            case WALKER -> person(g, x, y, m, walked, night ? new Color(0x2a2a2a) : new Color(0x283a8a),
-                    night ? new Color(0x1e1e1e) : new Color(0x30302a), night ? new Color(0xfffbe0) : null); // a torch at night
-            case LIGHT -> person(g, x, y, m, walked, night ? new Color(0x262626) : new Color(0x6a5a3a),
-                    night ? new Color(0x1c1c1c) : new Color(0x3a3020), new Color(0xffffe8));
+            case WALKER -> {
+                Soldier.paint(g, cam, p[0], p[1], t.dirDeg, walked, night);
+                if (night) lamp(g, cam, p, t.dirDeg, new Color(0xfffbe0)); // a torch at night
+            }
+            case LIGHT -> {
+                Soldier.paint(g, cam, p[0], p[1], t.dirDeg, walked, night);
+                lamp(g, cam, p, t.dirDeg, new Color(0xffffe8));
+            }
             case VEHICLE -> car(g, x, y, m, walked);
         }
     }
 
-    /** A person 1.8 m tall walking to the right; lamp: a light held out in front (null: none). */
-    private static void person(Graphics2D g, double x, double y, double m, double walked, Color body, Color legs, Color lamp) {
-        double swing = Math.sin(walked / 0.7 * Math.PI) * 0.28 * m; // a step every 0.7 m
-        double hip = y - 0.9 * m, shoulder = y - 1.45 * m;
-        g.setStroke(new BasicStroke((float) Math.max(1.5, 0.14 * m), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        g.setColor(legs);
-        g.draw(new java.awt.geom.Line2D.Double(x, hip, x + swing, y));
-        g.draw(new java.awt.geom.Line2D.Double(x, hip, x - swing, y));
-        g.setColor(body);
-        g.fill(new java.awt.geom.RoundRectangle2D.Double(x - 0.2 * m, shoulder, 0.4 * m, hip - shoulder + 0.05 * m, 0.15 * m, 0.15 * m));
-        g.setStroke(new BasicStroke((float) Math.max(1.2, 0.1 * m), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-        g.draw(new java.awt.geom.Line2D.Double(x, shoulder + 0.05 * m, x - swing * 0.8, hip));
-        double handX = x + swing * 0.8, handY = hip;
-        if (lamp != null) {
-            handX = x + 0.4 * m;
-            handY = shoulder + 0.25 * m;
-        }
-        g.draw(new java.awt.geom.Line2D.Double(x, shoulder + 0.05 * m, handX, handY));
-        double head = 0.13 * m;
-        g.fill(new java.awt.geom.Ellipse2D.Double(x - head, shoulder - 2.2 * head, 2 * head, 2 * head));
-        if (lamp != null) {
-            double r = Math.max(2, 0.12 * m); // the lamp and its glow
-            g.setColor(new Color(lamp.getRed(), lamp.getGreen(), lamp.getBlue(), 90));
-            g.fill(new java.awt.geom.Ellipse2D.Double(handX - 2.5 * r, handY - 2.5 * r, 5 * r, 5 * r));
-            g.setColor(lamp);
-            g.fill(new java.awt.geom.Ellipse2D.Double(handX - r, handY - r, 2 * r, 2 * r));
-        }
+    /** A light held out in front of a walking soldier, chest high, and its glow. */
+    private static void lamp(Graphics2D g, Camera cam, double[] at, double dirDeg, Color lamp) {
+        double d = Math.toRadians(dirDeg);
+        double[] k = cam.cam(at[0] + Math.cos(d) * 0.4, at[1] + Math.sin(d) * 0.4, 1.2);
+        if (k[2] < 0.5) return;
+        double hx = cam.cx + cam.f * k[0] / k[2], hy = cam.cy + cam.f * k[1] / k[2], m = cam.f / k[2];
+        double r = Math.max(2, 0.12 * m);
+        g.setColor(new Color(lamp.getRed(), lamp.getGreen(), lamp.getBlue(), 90));
+        g.fill(new java.awt.geom.Ellipse2D.Double(hx - 2.5 * r, hy - 2.5 * r, 5 * r, 5 * r));
+        g.setColor(lamp);
+        g.fill(new java.awt.geom.Ellipse2D.Double(hx - r, hy - r, 2 * r, 2 * r));
     }
 
     /** A car 4.5 m long, side on, driving to the right. */
