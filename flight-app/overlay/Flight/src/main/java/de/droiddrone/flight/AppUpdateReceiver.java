@@ -28,7 +28,7 @@ public class AppUpdateReceiver extends BroadcastReceiver {
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
             if (confirm == null) return;
-            if (remote) RemoteUpdate.set(RemoteUpdate.TAP_NEEDED, 100, "tap Update on the phone's screen");
+            if (remote) RemoteUpdate.set(RemoteUpdate.TAP_NEEDED, 100, "tap Update on the phone");
             if (DDService.isRunning && !remote) { // the PC asked, disarmed: the prompt goes up while connected
                 // connected since the tap: an update now would end the app and the sticks with it
                 log("Update not offered: connected.");
@@ -49,7 +49,7 @@ public class AppUpdateReceiver extends BroadcastReceiver {
             log("Update not installed: " + status + " " + why);
             if (remote) {
                 RemoteUpdate.set(RemoteUpdate.FAILED, 0, status == PackageInstaller.STATUS_FAILURE_ABORTED ? "cancelled on the phone"
-                        : why == null ? "the installer said no (" + status + ")" : why);
+                        : why == null ? "installer refused (" + status + ")" : why);
                 RemoteUpdate.pending(context, false);
             }
             if (status != PackageInstaller.STATUS_FAILURE_ABORTED) {

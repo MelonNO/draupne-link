@@ -64,9 +64,9 @@ public final class PowerFloor {
     public static String describe(int reason) {
         switch (reason) {
             case REASON_BATTERY:
-                return "the phone's battery is under " + BATTERY_MIN + " %";
+                return "battery under " + BATTERY_MIN + " %";
             case REASON_HEAT:
-                return "the phone is too hot";
+                return "phone too hot";
             default:
                 return "";
         }

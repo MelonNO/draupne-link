@@ -1457,7 +1457,7 @@ public class Udp {
                     int token = buffer.readInt();
                     Overwatch.configure(sensitivity, flags, token);
                 }
-                PowerMode.request(mode, intervalMin, "the PC");
+                PowerMode.request(mode, intervalMin, "PC");
                 break;
             }
             case UdpCommon.Ping:

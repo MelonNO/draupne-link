@@ -663,7 +663,7 @@ final class Overwatch {
             case OverwatchProtocol.CMD_CONNECT:
                 if (watching) {
                     log("Overwatch: the PC connects (CONNECT on its alert)");
-                    PowerMode.request(PowerMode.NORMAL, 0, "the PC's CONNECT on an overwatch alert");
+                    PowerMode.request(PowerMode.NORMAL, 0, "PC CONNECT on alert");
                 }
                 break;
             case OverwatchProtocol.CMD_ENDED_ACK:

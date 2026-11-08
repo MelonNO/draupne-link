@@ -197,10 +197,10 @@ final class PowerMode {
             if (p.asleep || p.checking) {
                 p.mode = DEEP_SLEEP;
                 p.service.overwatchToDeepSleep(p.nextCheckAt);
-                event("Overwatch gave way to deep sleep: " + de.droiddrone.common.PowerFloor.describe(reason));
+                event("Overwatch ended: " + de.droiddrone.common.PowerFloor.describe(reason));
                 p.burst();
             } else {
-                p.apply(DEEP_SLEEP, 0, "the floor: " + de.droiddrone.common.PowerFloor.describe(reason));
+                p.apply(DEEP_SLEEP, 0, de.droiddrone.common.PowerFloor.describe(reason));
             }
         });
     }
@@ -262,7 +262,7 @@ final class PowerMode {
         if (p == null || p.mode == NORMAL) return;
         p.worker.execute(() -> {
             if (p.mode == STANDBY || p.sleeping() && p.sleepAt != 0 && !p.asleep && !p.checking) {
-                p.apply(NORMAL, 0, "the flight controller armed");
+                p.apply(NORMAL, 0, "FC armed");
             }
         });
     }
@@ -315,16 +315,16 @@ final class PowerMode {
 
     private void apply(int wanted, int intervalMin, String from) {
         if (intervalMin > 0) checkIntervalMin = Math.min(255, intervalMin);
-        if (from.equals("the PC")) floorReason = 0; // the PC chose again
+        if (from.equals("PC")) floorReason = 0; // the PC chose again
         // pc.31: refused unless the FC is known to be disarmed (FcArmedState: unknown counts as armed)
         if (wanted != NORMAL && service.isFcArmed()) {
             if (mode == NORMAL) {
-                event(name(wanted) + " refused (" + from + "): the flight controller is " + FcArmedState.name(service.fcArmedState()));
+                event(name(wanted) + " refused (" + from + "): FC " + FcArmedState.name(service.fcArmedState()));
                 burst(); // the PC asks again until it hears the mode back: mode 0 it is
                 return;
             }
             wanted = NORMAL; // armed in standby: out of it
-            from = "the flight controller is armed";
+            from = "FC armed";
         }
         switch (wanted) {
             case NORMAL:
@@ -368,7 +368,7 @@ final class PowerMode {
     }
 
     private String checksText() {
-        return always() ? "always listening for the PC" : "checks every " + checkIntervalMin + " min";
+        return always() ? "always listening" : "checks every " + checkIntervalMin + " min";
     }
 
     /** Normal mode from whatever this was: the countdown, standby, sleep between checks or a check window. */
@@ -404,8 +404,8 @@ final class PowerMode {
         // flight controller's port closes here
         int armed = service.fcArmedState();
         if (armed != FcArmedState.DISARMED) {
-            event("Deep sleep refused at the end of its countdown: the flight controller is " + FcArmedState.name(armed));
-            wake("the flight controller is " + FcArmedState.name(armed)); // mode 0 goes back to the PC, as a refusal does
+            event("Deep sleep refused: FC " + FcArmedState.name(armed));
+            wake("FC " + FcArmedState.name(armed)); // mode 0 goes back to the PC, as a refusal does
             return;
         }
         sleepAt = 0;
@@ -417,7 +417,7 @@ final class PowerMode {
             acquireWindowLock(service, SleepCheck.ALWAYS_OPEN_AFTER_MS + WINDOW_LOCK_SPARE_MS);
             if (mode == OVERWATCH) service.powerOverwatch(nextCheckAt);
             else service.powerSleep(nextCheckAt);
-            event((mode == OVERWATCH ? "Overwatch: the camera watches; " : "Deep sleep: ") + "always listening for the PC from "
+            event((mode == OVERWATCH ? "Overwatch: " : "Deep sleep: ") + "always listening from "
                     + time(service, nextCheckAt));
             cancelPending();
             pending = worker.schedule(this::openWindow, SleepCheck.ALWAYS_OPEN_AFTER_MS, TimeUnit.MILLISECONDS);
@@ -427,10 +427,10 @@ final class PowerMode {
         scheduleAlarm(service, nextCheckAt); // before the wake lock goes
         if (mode == OVERWATCH) {
             service.powerOverwatch(nextCheckAt);
-            event("Overwatch: the camera watches; next check at " + time(service, nextCheckAt));
+            event("Overwatch: next check " + time(service, nextCheckAt));
         } else {
             service.powerSleep(nextCheckAt);
-            event("Deep sleep: next check at " + time(service, nextCheckAt));
+            event("Deep sleep: next check " + time(service, nextCheckAt));
         }
     }
 
@@ -445,7 +445,7 @@ final class PowerMode {
         windowOpenedAt = System.currentTimeMillis();
         if (always()) nextCheckAt = 0; // no next check: this window is it
         service.powerListen();
-        event(always() ? "Always listening for the PC" : "Sleep check: listening for the PC for " + CHECK_WINDOW_MS / 1000 + " s");
+        event(always() ? "Always listening" : "Sleep check: listening " + CHECK_WINDOW_MS / 1000 + " s");
         cancelPending();
         pending = worker.scheduleAtFixedRate(this::pollWindow, WINDOW_POLL_MS, WINDOW_POLL_MS, TimeUnit.MILLISECONDS);
         // "still here" to the PC, again and again through the window: its answer ends the window early (sleep on)
@@ -470,9 +470,9 @@ final class PowerMode {
         if (p == null) return;
         p.worker.execute(() -> {
             if (!p.sleeping() || !p.checking) return;
-            if (wake) p.wake("the PC called");
+            if (wake) p.wake("PC called");
             else if (!p.always()) { // always listening (pc.39): the window stays open whatever the PC says
-                p.event("Sleep check: the PC says sleep on");
+                p.event("Sleep check: PC says sleep on");
                 p.closeWindow();
             }
         });
@@ -484,7 +484,7 @@ final class PowerMode {
             return;
         }
         if (service.isPcConnected()) {
-            wake("the PC called");
+            wake("PC called");
             return;
         }
         if (!always() && System.currentTimeMillis() - windowOpenedAt >= CHECK_WINDOW_MS) closeWindow();
@@ -498,7 +498,7 @@ final class PowerMode {
         nextCheckAt = System.currentTimeMillis() + checkIntervalMin * 60_000L;
         scheduleAlarm(service, nextCheckAt);
         service.powerSleepOn(nextCheckAt);
-        event("Sleep check: nothing from the PC; next check at " + time(service, nextCheckAt));
+        event("Sleep check: no PC; next check " + time(service, nextCheckAt));
         releaseWindowLock(); // in overwatch the service's own lock keeps the CPU up for the camera
     }
 
