@@ -1996,6 +1996,7 @@ class MapView extends JComponent {
             else if (!forPicture) paintNoPosition(g, w, h);
             // an overwatch alert over everything else on the map (1.0.50, the pilot: it was under the drone's label)
             if (!forPicture) paintOverwatch(g, zi, scale, wcx, wcy, w, h);
+            if (!forPicture && highlighted != null) paintHighlight(g, zi, scale, wcx, wcy, w, h);
 
             paintScale(g, h);
             paintAttribution(g, src, w, h);
@@ -2093,6 +2094,89 @@ class MapView extends JComponent {
 
     /** The asleep drones' moon, the overwatching ones' eye: blue-violet and teal, never the lost red or the unknown grey. */
     private static final Color ASLEEP_COLOR = new Color(0x9fa8da), OVERWATCH_COLOR = new Color(0x4db6ac), LOST_COLOR = new Color(0xef5350);
+
+    // ---- the drone picked in FLEET MANAGEMENT (1.0.52, the pilot: "make the drone be highlighted in the map, if the
+    // drone has a FOV sector, make this also be highlighted")
+
+    /** The drone picked in the fleet list, or null; rings pulse out from it for PULSE_MS, then one ring stays. */
+    private volatile String highlighted;
+    private long highlightedAt;
+    private static final long PULSE_MS = 2400;
+    private final javax.swing.Timer pulse = new javax.swing.Timer(40, e -> {
+        repaint();
+        if (System.currentTimeMillis() - highlightedAt > PULSE_MS) ((javax.swing.Timer) e.getSource()).stop();
+    });
+
+    /** Picks the drone to stand out (null: none). */
+    void highlight(String drone) {
+        highlighted = drone;
+        highlightedAt = System.currentTimeMillis();
+        if (drone != null) pulse.restart();
+        else pulse.stop();
+        repaint();
+    }
+
+    String highlighted() {
+        return highlighted;
+    }
+
+    /** Where a drone on the network or in overwatch stands {lat, lon}, or null when the map has no place for it. */
+    double[] positionOf(String drone) {
+        if (drone == null) return null;
+        for (OverwatchMark m : overwatchMarks) if (m.drone().equalsIgnoreCase(drone)) return new double[]{m.lat(), m.lon()};
+        for (NetDrone d : netDrones) if (d.name().equalsIgnoreCase(drone)) return new double[]{d.lat(), d.lon()};
+        return null;
+    }
+
+    /** The picked drone: its camera's ground outlined bright (when it has one), rings round it and its name. */
+    private void paintHighlight(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+        String drone = highlighted;
+        double[] at = positionOf(drone);
+        if (at == null) return;
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            for (OverwatchMark m : overwatchMarks) {
+                if (!m.drone().equalsIgnoreCase(drone) || m.view() == null) continue;
+                Path2D shape = new Path2D.Double();
+                for (double[] ll : m.view().outline()) {
+                    Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                    if (shape.getCurrentPoint() == null) shape.moveTo(p.getX(), p.getY());
+                    else shape.lineTo(p.getX(), p.getY());
+                }
+                shape.closePath();
+                g.setColor(Theme.alpha(Color.WHITE, 40));
+                g.fill(shape);
+                g.setColor(Theme.alpha(Color.WHITE, 230));
+                g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g.draw(shape);
+            }
+            Point2D s = toScreen(at[0], at[1], zi, scale, wcx, wcy, w, h);
+            long t = System.currentTimeMillis() - highlightedAt;
+            if (t < PULSE_MS) { // rings going out from it, fading
+                for (int i = 0; i < 2; i++) {
+                    double p = ((t + i * 500) % 1000) / 1000.0;
+                    double r = 14 + 34 * p;
+                    g.setColor(Theme.alpha(Color.WHITE, (int) (200 * (1 - p))));
+                    g.setStroke(new BasicStroke(2f));
+                    g.draw(new java.awt.geom.Ellipse2D.Double(s.getX() - r, s.getY() - r, 2 * r, 2 * r));
+                }
+            }
+            g.setColor(Color.WHITE);
+            g.setStroke(new BasicStroke(2f));
+            g.draw(new java.awt.geom.Ellipse2D.Double(s.getX() - 15, s.getY() - 15, 30, 30));
+            g.setFont(Theme.headingFont(11f));
+            FontMetrics fm = g.getFontMetrics();
+            int tw = fm.stringWidth(drone) + 10;
+            int bx = (int) s.getX() + 18, by = (int) s.getY() - fm.getHeight() / 2 - 1;
+            if (bx + tw > w - 4) bx = (int) s.getX() - 18 - tw;
+            g.setColor(BOX);
+            g.fillRect(bx, by, tw, fm.getHeight() + 2);
+            g.setColor(Color.WHITE);
+            g.drawString(drone, bx + 5, by + fm.getAscent() + 1);
+        } finally {
+            g.dispose();
+        }
+    }
 
     /** The other drones on the network: a sign each by what it is doing (Kind), its name and state. */
     private void paintNetDrones(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {

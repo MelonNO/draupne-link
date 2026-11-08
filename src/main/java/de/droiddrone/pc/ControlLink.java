@@ -1107,7 +1107,7 @@ public class ControlLink {
 
     public void setDormant(boolean dormant) {
         this.dormant = dormant;
-        if (dormant) log("Phone in DEEP SLEEP: quiet until WAKE.");
+        if (dormant) log("Phone in DEEP SLEEP: quiet until it is woken.");
     }
 
     public boolean isDormant() {

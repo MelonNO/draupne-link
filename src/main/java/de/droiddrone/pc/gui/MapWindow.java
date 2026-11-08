@@ -295,6 +295,16 @@ final class MapWindow extends JFrame {
             public void cancel(String phone) {
                 if (main != null) main.fleetCancel(phone);
             }
+
+            @Override
+            public void picked(String phone) {
+                showDrone(phone);
+            }
+
+            @Override
+            public void connect(String phone) {
+                if (main != null) main.fleetConnect(phone);
+            }
         });
         JPanel east = new JPanel(new BorderLayout(6, 0)); // the alerts left of the fleet, both at the right edge
         east.setOpaque(false);
@@ -961,6 +971,13 @@ final class MapWindow extends JFrame {
 
     /** The drones in OVERWATCH now: their camera's view on this map, alert or not (1.0.50). */
     /** FLEET MANAGEMENT's cards, once a second from the main window (Swing thread). */
+    /** A fleet row picked: that drone stands out on the map, panned to when it is off the screen. */
+    void showDrone(String phone) {
+        map.highlight(phone);
+        double[] at = map.positionOf(phone);
+        if (at != null && !map.shows(at[0], at[1], 40)) map.panTo(at[0], at[1]);
+    }
+
     void setFleet(java.util.List<FleetCards.Card> cards) {
         fleetPanel.setCards(cards);
     }

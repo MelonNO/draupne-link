@@ -46,6 +46,14 @@ final class FleetManagementPanel extends JPanel {
         void clips(String phone);
 
         void cancel(String phone);
+
+        /** A row picked by a click: its drone stands out on the map. */
+        default void picked(String phone) {
+        }
+
+        /** PILOT UAV: fly the selected drone, as the map's right-click does. */
+        default void connect(String phone) {
+        }
     }
 
     static final int BODY_WIDTH = 340;
@@ -72,6 +80,7 @@ final class FleetManagementPanel extends JPanel {
     private final JButton every = button("", "How often it checks in. Changes a sleeping phone at its next check-in");
     private final JButton clips = button("CLIPS", "Its overwatch clips");
     private final JButton cancel = button("CANCEL", "Drop the queued mode");
+    private final JButton fly = button("PILOT UAV", "Connect and fly it (a sleeping one at its next check)");
     private final Timer slide = new Timer(15, e -> tick());
     private String selected;
     private boolean open;
@@ -129,14 +138,26 @@ final class FleetManagementPanel extends JPanel {
         }, BorderLayout.CENTER);
         empty = Theme.label("No phones yet.", Theme.font(java.awt.Font.PLAIN, 12f), Theme.MUTED);
         empty.setBorder(BorderFactory.createEmptyBorder(6, 2, 6, 2));
-        JPanel buttons = new JPanel(new GridLayout(2, 3, 4, 3));
+        // the modes and EVERY over PILOT UAV (1.0.52, the pilot: "connect to the drone from the fleet management tab"),
+        // CLIPS and CANCEL
+        JPanel modes = new JPanel(new GridLayout(1, 4, 4, 0));
+        modes.setOpaque(false);
+        modes.add(standby);
+        modes.add(sleep);
+        modes.add(watch);
+        modes.add(every);
+        JPanel more = new JPanel(new GridLayout(1, 3, 4, 0));
+        more.setOpaque(false);
+        more.add(fly);
+        more.add(clips);
+        more.add(cancel);
+        JPanel buttons = new JPanel(new GridLayout(2, 1, 0, 3));
         buttons.setOpaque(false);
-        buttons.add(standby);
-        buttons.add(sleep);
-        buttons.add(watch);
-        buttons.add(every);
-        buttons.add(clips);
-        buttons.add(cancel);
+        buttons.add(modes);
+        buttons.add(more);
+        fly.addActionListener(e -> {
+            if (selected != null) actions.connect(selected);
+        });
         standby.addActionListener(e -> mode(ControlLink.POWER_STANDBY));
         sleep.addActionListener(e -> mode(ControlLink.POWER_DEEP_SLEEP));
         watch.addActionListener(e -> mode(ControlLink.POWER_OVERWATCH));
@@ -299,6 +320,9 @@ final class FleetManagementPanel extends JPanel {
         mark(watch, usable, "OVERWATCH".equals(now));
         every.setEnabled(usable);
         clips.setEnabled(c != null && c.events() > 0);
+        fly.setEnabled(c != null && !"CONNECTED".equals(c.badge()));
+        fly.setBackground(Theme.BG);
+        fly.setForeground(Theme.ACCENT);
         cancel.setEnabled(c != null && c.queued() != null);
         detail.repaint();
     }
@@ -417,6 +441,7 @@ final class FleetManagementPanel extends JPanel {
                 @Override
                 public void mousePressed(java.awt.event.MouseEvent e) {
                     select(RowView.this.phone);
+                    actions.picked(RowView.this.phone);
                 }
             });
         }

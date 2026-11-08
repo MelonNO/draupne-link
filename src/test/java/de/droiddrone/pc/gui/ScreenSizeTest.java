@@ -39,22 +39,29 @@ class ScreenSizeTest {
         JPanel rows = new LinkCardLayout.Rows(null);
         rows.setPreferredSize(new Dimension(300, 700)); // the sleep row, a warning: taller than a short screen has
         JScrollPane scroll = new JScrollPane(rows);
+        JPanel link = new JPanel(new java.awt.BorderLayout());
+        link.add(scroll);
         JPanel mini = new JPanel();
         JButton pop = new JButton("Pop out map");
-        JPanel card = new JPanel();
-        card.setLayout(new LinkCardLayout(scroll, rows, mini, pop));
-        card.add(scroll);
-        card.add(mini);
-        card.add(pop);
-        card.setSize(340, 420);
-        card.doLayout();
-        Rectangle b = pop.getBounds();
-        assertTrue(b.height > 0 && b.y + b.height <= 420, "POP OUT MAP inside the card: " + b);
-        assertTrue(scroll.getHeight() < 700 && scroll.getY() == 0, "the rows scroll from the top: " + scroll.getBounds());
+        JPanel map = new JPanel(new LinkCardLayout(mini, pop)); // the MAP card of its own (1.0.52)
+        map.add(mini);
+        map.add(pop);
+        JPanel log = new JPanel();
+        JPanel column = new JPanel(new LinkCardLayout.Column(link, map, log));
+        column.add(link);
+        column.add(map);
+        column.add(log);
+        column.setSize(340, 560);
+        column.doLayout();
+        map.doLayout();
+        Rectangle m = map.getBounds(), b = pop.getBounds();
+        assertTrue(m.y + m.height <= 560 - LinkCardLayout.Column.LOG_MIN, "the MAP card above the log: " + m);
+        assertTrue(b.height > 0 && b.y + b.height <= m.height, "POP OUT MAP inside its card: " + b);
+        assertTrue(link.getHeight() < 700 && link.getY() == 0, "the rows scroll from the top: " + link.getBounds());
         assertTrue(mini.getHeight() >= LinkCardLayout.MINI_MIN, "the minimap keeps some room: " + mini.getBounds());
-        mini.setVisible(false); // the map popped out: the rows take its room
-        card.doLayout();
-        assertTrue(pop.getHeight() > 0 && scroll.getHeight() > 300);
+        map.setVisible(false); // the map popped out: the whole card goes, the LINK card and the log take its room
+        column.doLayout();
+        assertTrue(link.getHeight() > 300 && log.getY() > link.getHeight() && log.getY() + log.getHeight() == 560);
     }
 
     @Test

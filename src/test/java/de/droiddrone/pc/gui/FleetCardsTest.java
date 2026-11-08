@@ -135,6 +135,62 @@ class FleetCardsTest {
         assertEquals("MobileAlpha", p.selected(), "a selected phone that is gone: the first again");
     }
 
+    /** 1.0.52, the pilot: a click on a row picks the drone on the map; PILOT UAV flies it. */
+    @Test
+    void aPickedRowShowsItsDroneAndPilotUavFliesIt(@TempDir Path dir) {
+        java.util.List<String> picked = new java.util.ArrayList<>(), flown = new java.util.ArrayList<>();
+        FleetManagementPanel p = new FleetManagementPanel(new FleetManagementPanel.Actions() {
+            public void mode(String phone, int mode, int intervalMin) {
+            }
+
+            public void clips(String phone) {
+            }
+
+            public void cancel(String phone) {
+            }
+
+            public void picked(String phone) {
+                picked.add(phone);
+            }
+
+            public void connect(String phone) {
+                flown.add(phone);
+            }
+        });
+        p.setCards(sample());
+        javax.swing.JComponent row = p.cardOf("MobileBravo");
+        row.dispatchEvent(new java.awt.event.MouseEvent(row, java.awt.event.MouseEvent.MOUSE_PRESSED, 0, 0, 5, 5, 1, false));
+        assertEquals(java.util.List.of("MobileBravo"), picked);
+        assertEquals("MobileBravo", p.selected());
+        javax.swing.JButton fly = findButton(p, "PILOT UAV");
+        assertNotNull(fly, "PILOT UAV in the strip");
+        fly.doClick();
+        assertEquals(java.util.List.of("MobileBravo"), flown);
+
+        MapView map = new MapView(new TileCache(dir.resolve("tiles"), "test", false));
+        map.setNetDrones(java.util.List.of(new MapView.NetDrone("MobileBravo", 60.5, 10.5, "ASLEEP", MapView.Kind.ASLEEP, false, "")), (n, w) -> {});
+        assertArrayEquals(new double[]{60.5, 10.5}, map.positionOf("MobileBravo"), 1e-9);
+        assertNull(map.positionOf("MobileZulu"), "no place for a drone the map hasn't seen");
+        map.highlight("MobileBravo");
+        assertEquals("MobileBravo", map.highlighted());
+        map.setSize(600, 400);
+        BufferedImage img = new BufferedImage(600, 400, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        map.paint(g); // the rings and the name over the map, without throwing
+        g.dispose();
+    }
+
+    private static javax.swing.JButton findButton(Container c, String text) {
+        for (Component k : c.getComponents()) {
+            if (k instanceof javax.swing.JButton b && text.equals(b.getText())) return b;
+            if (k instanceof Container ct) {
+                javax.swing.JButton b = findButton(ct, text);
+                if (b != null) return b;
+            }
+        }
+        return null;
+    }
+
     private static void layout(Container c) {
         c.doLayout();
         for (Component k : c.getComponents()) if (k instanceof Container ct) layout(ct);

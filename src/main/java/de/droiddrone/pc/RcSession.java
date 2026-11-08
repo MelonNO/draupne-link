@@ -156,7 +156,7 @@ public class RcSession {
         lastChannels = channels;
         radioPresent = state != null;
         noteInput(state, clock.getAsLong());
-        if (rcEnabled) events.accept("Sticks paused (phone resting) - RC output off until WAKE and throttle low.");
+        if (rcEnabled) events.accept("Sticks paused (phone resting) - RC output off until it wakes and the throttle is low.");
         rcEnabled = false;
         frozenStopped = false;
         lostAt = 0;
