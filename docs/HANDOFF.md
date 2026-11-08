@@ -4,7 +4,26 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-07, 1.0.49 + phone app 2.3.0-pc.38 released; last flown: 1.0.43)
+## Where things stand (2026-11-08, 1.0.50 + phone app 2.3.0-pc.39 released; last flown: 1.0.43)
+
+- **1.0.50 + phone pc.39 (released 2026-11-08; nothing of 1.0.44-1.0.50 run on a drone or real phone yet).** The pilot's
+  session of 2026-11-08, mostly tested with the new virtual fleet (TOOLS > Virtual fleet with Advanced on, or
+  `gradlew run --args=fleet`; see "The virtual fleet" below). In it: the virtual fleet (`pc/fleet`, real phone protocol,
+  Betaflight-like flight model, drawn targets the real MotionDetector must find, link-problem buttons, PLACE PHONE,
+  start in MGRS 32V PN); map signs per state (MapView.Kind: ACTIVE / ASLEEP moon / OVERWATCH eye / LOST ! / UNKNOWN ?,
+  names on hover, a sleeper that misses a check-in turns UNKNOWN - MainWindow.checkInOverdue); NAME_REPLY's power byte
+  (every phone's mode on every PC's map); CHECK EVERY 0 min = always listening (Common SleepCheck.ALWAYS = 255, pc.39
+  only); STANDBY / DEEP SLEEP / OVERWATCH auto-disconnect, no STANDBY button (DISCONNECT sends STANDBY when disarmed,
+  `standbyPhones`), right-click Wake then STANDBY; overwatch: camera view on both maps while watching
+  (CameraFootprint.sitting: 0.5 m over the terrain, 300 m), alerts on top, X on the card, no confirm on CONNECT, card
+  width bug fixed (ImageObserver.WIDTH); PossiblyFlying per drone with reason + IT'S DOWN - RESUME; MotionDetector
+  float-time bug fixed (Common, big clocks); arming auto-mutes, unmute in the air (AUDIO flag bit 1, pc.39);
+  TOOLS > Advanced hides rare settings; hardware decoding on by default; pins copy + ADD AT GRID; minimap always there
+  (log grows when popped out); LINK card parts slide (Fold, MainWindow.folded/show/shown); menus wrap at
+  MenuRows.TEXT_WIDTH; a text pass over every visible string in both apps (short and concise - the pilot's rule for
+  all future text). Known flake: OverwatchFleetEndToEndTest.lostArmed... under load (re-run alone). Network tests use
+  fixed UDP ports: one test suite at a time. Open ideas the pilot asked about but didn't order: idle watch (idle
+  phones that watch like overwatch). Mission debrief is still the next planned feature.
 
 - **1.0.49 + phone pc.38 (released 2026-11-07, nothing of 1.0.44-1.0.49 run on hardware):** the fix round of the
   full review of 1.0.48 - every finding (C1, H1-H10, M1-M20, L1-L11, T1); the per-finding notes are in CHANGELOG 1.0.49.
