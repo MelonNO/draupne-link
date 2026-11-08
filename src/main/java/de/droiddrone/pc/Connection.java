@@ -83,11 +83,11 @@ public class Connection {
 
     public String describe(ControlLink.State state) {
         return switch (state) {
-            case CONNECTING -> link.isWatchOnly() ? "Waiting for the pilot PC... (is it connected, with Allow spectators on?)"
-                    : "Waiting for the phone... (DRAUPNE Flight open on it, the phone on Tailscale, the same key?)";
+            case CONNECTING -> link.isWatchOnly() ? "Waiting for the pilot PC... (connected? Allow spectators on?)"
+                    : "Waiting for the phone... (DRAUPNE Flight open? On Tailscale? Same key?)";
             case CONFIGURING -> "Connected. Sending settings...";
-            case READY -> "Flight phone accepted settings - link ready.";
-            case VERSION_MISMATCH -> "VERSION MISMATCH: install DRAUPNE Flight (or DroidDrone Flight 2.3.0) on the phone.";
+            case READY -> "Settings accepted - link ready.";
+            case VERSION_MISMATCH -> "VERSION MISMATCH: phone needs DRAUPNE Flight (or DroidDrone Flight 2.3.0).";
             case SPECTATING, SPECTATOR_WAITING -> link.spectatorStatus();
             case CLOSED -> "Link closed.";
         };

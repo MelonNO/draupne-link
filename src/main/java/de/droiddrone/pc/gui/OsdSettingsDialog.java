@@ -73,7 +73,7 @@ final class OsdSettingsDialog extends JFrame {
         JPanel head = new JPanel(new BorderLayout(0, 4));
         head.setOpaque(false);
         head.add(Theme.label("OSD", Theme.headingFont(26f), Theme.TEXT), BorderLayout.NORTH);
-        head.add(Theme.label("Switch elements on or off on the left. Drag them in the preview to move them. Changes show on the live OSD at once and are saved.",
+        head.add(Theme.label("Switch elements on the left, drag them in the preview. Changes apply and save at once.",
                 Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.SOUTH);
         root.add(head, BorderLayout.NORTH);
 
@@ -85,8 +85,8 @@ final class OsdSettingsDialog extends JFrame {
         previewHead.add(Theme.label("SAMPLE FLIGHT DATA", Theme.headingFont(11f), Theme.MUTED), BorderLayout.EAST);
         previewCard.add(previewHead, BorderLayout.NORTH);
         previewCard.add(preview, BorderLayout.CENTER);
-        previewCard.add(Theme.label("<html>Drag to move. An element lines up by the third of the picture it is in: "
-                + "left-aligned, centred or right-aligned, so it grows away from the edge.</html>", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED), BorderLayout.SOUTH);
+        previewCard.add(Theme.label("<html>Drag to move. Elements align to the nearest edge "
+                + "(left, centre or right third).</html>", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED), BorderLayout.SOUTH);
         root.add(previewCard, BorderLayout.CENTER);
         root.add(infoCard(), BorderLayout.EAST);
 
@@ -283,7 +283,7 @@ final class OsdSettingsDialog extends JFrame {
         card.add(left(gap(10)));
         card.add(left(infoState));
         card.add(left(gap(14)));
-        resetElement.setToolTipText("Put this element back where it was, on or off as it was");
+        resetElement.setToolTipText("Back to this element's default place and state");
         resetElement.addActionListener(e -> apply(layout.with(selected, OsdLayout.defaultPlacement(selected))));
         card.add(left(resetElement));
         column.add(card, BorderLayout.NORTH);
@@ -292,13 +292,13 @@ final class OsdSettingsDialog extends JFrame {
         all.setLayout(new BoxLayout(all, BoxLayout.Y_AXIS));
         all.add(left(Theme.sectionTitle("Layout")));
         all.add(left(gap(8)));
-        all.add(left(Theme.label("<html>Back to the standard OSD: every element in its place, the extras off.</html>",
+        all.add(left(Theme.label("<html>Back to the standard OSD, extras off.</html>",
                 Theme.font(Font.PLAIN, 12.5f), Theme.MUTED)));
         all.add(left(gap(10)));
         JButton resetAll = Theme.secondaryButton("Reset all");
         resetAll.addActionListener(e -> {
             if (layout.equals(OsdLayout.defaults())) return;
-            int answer = JOptionPane.showConfirmDialog(this, "Put every OSD element back to the standard layout?", "Reset OSD",
+            int answer = JOptionPane.showConfirmDialog(this, "Reset every OSD element to the standard layout?", "Reset OSD",
                     JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
             if (answer == JOptionPane.OK_OPTION) apply(OsdLayout.defaults());
         });

@@ -176,7 +176,7 @@ final class ObservationGrid extends JPanel {
             JPanel controls = new JPanel();
             controls.setOpaque(false);
             controls.setLayout(new BoxLayout(controls, BoxLayout.X_AXIS));
-            mute.setToolTipText("Mute this drone's sound (the others play on)");
+            mute.setToolTipText("Mute this drone (others play on)");
             mute.addActionListener(e -> listener.mute(index, !muted));
             controls.add(mute);
             volume.setOpaque(false);
@@ -190,7 +190,7 @@ final class ObservationGrid extends JPanel {
             controls.add(volume);
             controls.add(Box.createHorizontalStrut(6));
             connect.setFocusable(false);
-            connect.setToolTipText("Fly this drone: every stream stops, then the usual pilot connection opens (throttle low, arm switch off)");
+            connect.setToolTipText("Fly this drone: streams stop, pilot link opens (throttle low, arm off)");
             connect.addActionListener(e -> listener.connect(index));
             controls.add(connect);
             bar.add(controls, BorderLayout.EAST);
@@ -230,7 +230,7 @@ final class ObservationGrid extends JPanel {
             if (s.muted() != muted) {
                 muted = s.muted();
                 mute.setGlyph(muted ? GlyphButton.Glyph.MUTED : GlyphButton.Glyph.SOUND);
-                mute.setToolTipText(muted ? "Muted - press to hear this drone" : "Mute this drone's sound (the others play on)");
+                mute.setToolTipText(muted ? "Muted - press to hear this drone" : "Mute this drone (others play on)");
             }
             if (!volume.getValueIsAdjusting() && volume.getValue() != s.volume()) {
                 updating = true;

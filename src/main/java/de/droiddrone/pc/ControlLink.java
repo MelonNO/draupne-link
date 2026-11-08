@@ -559,7 +559,7 @@ public class ControlLink {
             long now = MonoClock.ms();
             if (now - ownSessionNamedLog >= 2000) {
                 ownSessionNamedLog = now;
-                events.accept("The phone still thinks this PC's previous session is the pilot - connecting again.");
+                events.accept("Phone still holds this PC's old session - reconnecting.");
             }
             ownSessionNamedAt = now;
             return;
@@ -572,8 +572,8 @@ public class ControlLink {
             if (spectator != null || !running) return;
             spectator = new SpectatorClient(socket, remoteIp, remotePort, key, spectatorDelayMs, pilot, this::playSpectated);
         }
-        events.accept("Another PC flies the drone (" + pilot.ip().getHostAddress() + "): watching as a spectator, "
-                + spectatorDelayMs + " ms behind it. This PC sends no sticks.");
+        events.accept("Another PC (" + pilot.ip().getHostAddress() + ") flies: spectating, "
+                + spectatorDelayMs + " ms behind. No sticks sent.");
     }
 
     /** A session of this PC closed this recently may still be the phone's idea of the pilot. */
@@ -751,7 +751,7 @@ public class ControlLink {
                 long now = MonoClock.ms();
                 boolean connected = isConnected();
                 if (wasConnected && !connected) {
-                    log("Link lost, reconnecting..." + (everReady ? " The sticks keep going." : ""));
+                    log("Link lost, reconnecting..." + (everReady ? " Sticks still sent." : ""));
                     lostAt = now;
                     configReceived = false;
                     // kept: the flight controller's state (for FC_STATE_KEEP_MS, see below) and the video config -
@@ -766,7 +766,7 @@ public class ControlLink {
                 }
                 wasConnected = connected;
                 if (!connected && lostAt > 0 && fcInfo != null && now - lostAt > FC_STATE_KEEP_MS) {
-                    log("No link for " + FC_STATE_KEEP_MS / 1000 + " s: the flight controller's state is read again when it is back.");
+                    log("No link for " + FC_STATE_KEEP_MS / 1000 + " s: FC state is re-read on reconnect.");
                     fcInfo = null;
                     telemetry.forgetBoxIds(); // a restarted phone app has to read them again
                     telemetry.forgetBoxNames(); // and a different FC has its modes on other bits: read them again too
@@ -805,7 +805,7 @@ public class ControlLink {
                         if (videoCheckAt > 0 && now >= videoCheckAt) {
                             videoCheckAt = 0;
                             if (lastVideoFragmentAt < reconnectedAt) {
-                                log("No video since the link came back: asking for the stream again.");
+                                log("No video since link came back: requesting stream.");
                                 videoConfigReceived = false;
                             }
                         }
@@ -820,7 +820,7 @@ public class ControlLink {
                             sendStartVideo();
                             lastStartVideo = now;
                         } else if (videoDead && now - lastStartVideo >= START_VIDEO_RETRY_MS) {
-                            log("Telemetry comes but no video for " + (now - lastVideoFragmentAt) + " ms: asking for the stream again.");
+                            log("Telemetry but no video for " + (now - lastVideoFragmentAt) + " ms: requesting stream.");
                             sendStartVideo();
                             lastStartVideo = now;
                         }
@@ -1091,7 +1091,7 @@ public class ControlLink {
 
     public void setDormant(boolean dormant) {
         this.dormant = dormant;
-        if (dormant) log("The phone is in deep sleep: this PC stays quiet until WAKE.");
+        if (dormant) log("Phone in DEEP SLEEP: quiet until WAKE.");
     }
 
     public boolean isDormant() {
@@ -1321,12 +1321,12 @@ public class ControlLink {
                 case SURVIVAL -> videoWidth <= Math.min(ROBUST_WIDTH, config.getCameraWidth() * 3 / 4); // or the nearest size it has
             };
             if (switched || verifyTries >= VERIFY_TRIES) {
-                if (!switched) events.accept("Video: the phone didn't change the picture size (still " + videoWidth + " wide).");
+                if (!switched) events.accept("Video: phone kept the picture size (" + videoWidth + " wide).");
                 verifyFrom = -1;
             } else {
                 verifyTries++;
                 verifyFrom = now + VERIFY_AFTER_MS;
-                log("Video size not changed by the phone yet: sending it again (" + verifyTries + ")");
+                log("Video size not applied yet: resending (" + verifyTries + ")");
                 sendConfig();
                 sendProfile();
             }
@@ -1363,17 +1363,17 @@ public class ControlLink {
             boolean cantDecode = decodeSlowSince >= 0 && now - decodeSlowSince >= SHARP_DROP_MS;
             boolean watched = watched();
             want = !stalls.isEmpty() || relayed || cantCarry || cantDecode || watched ? Tier.NORMAL : Tier.SHARP;
-            why = !stalls.isEmpty() ? "a stall" : relayed ? "the way to the phone is a relay"
-                    : watched ? "a spectator watches through this PC: its upload carries the picture again"
-                    : cantDecode ? "this PC's decoder can't keep up with the sharp picture"
-                    : "the bitrate stayed under " + normalTopBps / 1_000_000 + " Mbit/s for " + SHARP_DROP_MS / 1000 + " s";
+            why = !stalls.isEmpty() ? "a stall" : relayed ? "relayed"
+                    : watched ? "a spectator: upload carries the picture"
+                    : cantDecode ? "decoder too slow"
+                    : "under " + normalTopBps / 1_000_000 + " Mbit/s for " + SHARP_DROP_MS / 1000 + " s";
         } else if (tier == Tier.NORMAL) {
             boolean lowRate = lowRateSince >= 0 && now - lowRateSince >= LOW_RES_AFTER_MS;
             boolean stalls3 = stalls.size() >= STALLS_FOR_ROBUST;
             if (lowRate || stalls3 || relayed) {
                 want = Tier.ROBUST;
-                why = lowRate ? "the bitrate stayed at " + bps / 1000 + " kbit/s"
-                        : stalls3 ? stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s" : "the way to the phone is a relay";
+                why = lowRate ? "bitrate at " + bps / 1000 + " kbit/s"
+                        : stalls3 ? stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s" : "relayed";
                 if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) {
                     robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2); // back too soon: stay longer next time
                 }
@@ -1392,11 +1392,11 @@ public class ControlLink {
             boolean worse = now - tierSince >= SURVIVAL_AFTER_MS && (lowRate || stalls3);
             if (worse) {
                 want = Tier.SURVIVAL;
-                why = lowRate ? "the bitrate stayed at " + bps / 1000 + " kbit/s in bad coverage mode" : stalls.size() + " stalls in bad coverage mode";
+                why = lowRate ? "still " + bps / 1000 + " kbit/s" : "still " + stalls.size() + " stalls";
                 if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2);
             } else if (relayed) {
                 want = Tier.ROBUST;
-                why = "the way to the phone is a relay";
+                why = "relayed";
             } else {
                 // calm long enough in bad coverage mode: no stall, and the bitrate not struggling under its 1 Mbit/s
                 boolean calm = now - tierSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs
@@ -1430,16 +1430,16 @@ public class ControlLink {
     /** What the log says when the tier changes. */
     private String tierMessage(Tier want, Tier was, String why) {
         return switch (want) {
-            case SHARP -> "Video: sharp (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", up to "
+            case SHARP -> "Video: sharp (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", max "
                     + config.getSharpBitrateLimitMbps() + " Mbit/s.";
             case ROBUST -> was.ordinal() < Tier.ROBUST.ordinal()
                     ? "Video: bad coverage mode (" + why + "): " + cameraWidth() + "x" + cameraHeight()
-                            + ", up to 1 Mbit/s, key frames sent twice - softer, but it holds."
+                            + ", max 1 Mbit/s, key frames doubled."
                     : "Video: bad coverage mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
             case SURVIVAL -> "Video: survival tier (" + why + "): " + cameraWidth() + "x" + cameraHeight() + " at " + cameraFps()
-                    + " fps, up to 250 kbit/s - a small picture rather than none.";
+                    + " fps, max 250 kbit/s.";
             case NORMAL -> was == Tier.SHARP
-                    ? "Video: the normal picture (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", up to "
+                    ? "Video: normal (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", max "
                             + config.getBitrateLimitMbps() + " Mbit/s."
                     : "Video: normal mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
         };
@@ -1796,22 +1796,22 @@ public class ControlLink {
         String left = c.pilotLeft();
         PilotView view = c.pilotView();
         if (left != null) {
-            return "SPECTATOR: the pilot PC disconnected" + (left.isEmpty() ? "" : " from " + left) + " on purpose - not a link loss. "
-                    + (watchOnly ? "Waiting for a pilot to connect." : "Nobody flies it now: DISCONNECT and CONNECT again to fly it from here.");
+            return "SPECTATOR: pilot PC disconnected" + (left.isEmpty() ? "" : " from " + left) + " on purpose - not a link loss. "
+                    + (watchOnly ? "Waiting for a pilot." : "Nobody flies: DISCONNECT, CONNECT to fly from here.");
         }
         if (c.phase() == SpectatorClient.Phase.WATCHING && view != null && !view.linkReady()) {
-            return "SPECTATOR: " + who + " lost its link to " + (phone == null ? "the drone" : phone) + " - LINK LOST there, it tries to get it back.";
+            return "SPECTATOR: " + who + " LINK LOST to " + (phone == null ? "the drone" : phone) + ", reconnecting.";
         }
         return switch (c.phase()) {
             case WATCHING -> "SPECTATOR: watching " + who + (phone == null ? "" : " fly " + phone) + ", " + c.delayMs()
-                    + " ms behind it. This PC sends no sticks.";
-            case JOINING -> p == null ? "SPECTATOR: asking the phone which PC flies..."
-                    : "SPECTATOR: another PC flies the drone - joining " + who + "...";
-            case REFUSED_NOT_FLYING -> "SPECTATOR: " + who + " is not flying yet - waiting.";
-            case REFUSED_FULL -> "SPECTATOR: " + who + " already has " + SpectatorHost.MAX_SPECTATORS + " spectators - waiting for a place.";
-            case REFUSED_OFF -> "SPECTATOR: " + who + " lets nobody watch (SETTINGS > Allow spectators is off there).";
-            case NO_PILOT -> watchOnly ? "SPECTATOR: nobody flies the drone yet - waiting for a pilot to connect."
-                    : "SPECTATOR: nobody flies the drone now. To fly it from this PC, DISCONNECT and CONNECT again.";
+                    + " ms behind. No sticks sent.";
+            case JOINING -> p == null ? "SPECTATOR: asking phone which PC flies..."
+                    : "SPECTATOR: joining " + who + "...";
+            case REFUSED_NOT_FLYING -> "SPECTATOR: " + who + " not flying yet - waiting.";
+            case REFUSED_FULL -> "SPECTATOR: " + who + " has " + SpectatorHost.MAX_SPECTATORS + " spectators - waiting for a place.";
+            case REFUSED_OFF -> "SPECTATOR: " + who + " allows no spectators.";
+            case NO_PILOT -> watchOnly ? "SPECTATOR: nobody flies yet - waiting for a pilot."
+                    : "SPECTATOR: nobody flies. DISCONNECT, CONNECT to fly from here.";
         };
     }
 

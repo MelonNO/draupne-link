@@ -30,7 +30,7 @@ public final class FleetMain {
             fleet.add(fleet.freeName(), at[0], at[1], 0);
         }
         fleet.startHeartbeat();
-        System.out.println("Virtual fleet: " + fleet.drones().size() + " drones up. Start DRAUPNE Link: they show up in its PHONE list as VIRTUAL.");
+        System.out.println("Virtual fleet: " + fleet.drones().size() + " drones up. In DRAUPNE Link they show in the PHONE list as VIRTUAL.");
         SwingUtilities.invokeLater(() -> de.droiddrone.pc.gui.FleetPanel.open(fleet, configFile));
     }
 }

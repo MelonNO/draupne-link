@@ -33,7 +33,7 @@ final class ObservePicker {
                              java.util.Set<String> asleep) {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        JLabel head = new JLabel("<html>Up to " + ObserveSet.MAX + " drones in the grid. Idle drones only: one another PC flies can't be added.</html>");
+        JLabel head = new JLabel("<html>Up to " + ObserveSet.MAX + " drones. Idle drones only, none another PC flies.</html>");
         head.setBorder(BorderFactory.createEmptyBorder(0, 0, 8, 0));
         panel.add(head);
         List<JCheckBox> boxes = new ArrayList<>();
@@ -49,7 +49,7 @@ final class ObservePicker {
         };
         for (Names.Entry e : phones) {
             String why = refusals.get(e.name());
-            String state = why != null ? "  -  " + why : asleep.contains(e.name()) ? "  -  deep sleep: joins at its next check-in"
+            String state = why != null ? "  -  " + why : asleep.contains(e.name()) ? "  -  deep sleep: joins at next check-in"
                     : e.online() ? "  -  online" : "  -  not seen lately";
             JCheckBox b = new JCheckBox(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + state, why == null && current.contains(e.name()));
             b.setFont(b.getFont().deriveFont(why == null ? Font.PLAIN : Font.ITALIC));
@@ -58,7 +58,7 @@ final class ObservePicker {
             names.add(e.name());
             panel.add(b);
         }
-        if (phones.isEmpty()) panel.add(new JLabel("No phone seen yet: open DRAUPNE Flight on the phones, on Tailscale."));
+        if (phones.isEmpty()) panel.add(new JLabel("No phone seen yet: open DRAUPNE Flight, on Tailscale."));
         limit.run();
         int answer = JOptionPane.showConfirmDialog(owner, panel, "Observation - choose the drones", JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.PLAIN_MESSAGE);

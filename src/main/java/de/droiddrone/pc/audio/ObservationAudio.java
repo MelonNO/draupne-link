@@ -271,7 +271,7 @@ public final class ObservationAudio implements AutoCloseable {
             saidNoDevice = false;
         } catch (Exception | LinkageError e) {
             nextOpenAt = System.currentTimeMillis() + LiveAudio.REOPEN_MS;
-            if (!saidNoDevice) log.accept("Observation sound: no sound device to play it on (" + e.getMessage() + ").");
+            if (!saidNoDevice) log.accept("Observation sound: no sound device (" + e.getMessage() + ").");
             saidNoDevice = true;
         }
     }

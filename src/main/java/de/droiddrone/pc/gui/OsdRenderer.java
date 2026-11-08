@@ -166,7 +166,7 @@ final class OsdRenderer {
                 }
                 if (d.roleAlarm()) {
                     g.setFont(Theme.headingFont(18 * unit));
-                    put("ANOTHER PC IS THE PILOT - YOUR STICKS ARE NOT SENT", w / 2f, 162 * unit, YELLOW, OsdLayout.Align.CENTER);
+                    put("ANOTHER PC IS PILOT - YOUR STICKS NOT SENT", w / 2f, 162 * unit, YELLOW, OsdLayout.Align.CENTER);
                 }
             }
             element(OsdElement.HEADING, (ex, ey, a) -> {
@@ -719,8 +719,8 @@ final class OsdRenderer {
             put(d.linkHint(), x, ly, YELLOW, a);
             ly += 24 * unit;
         } else if (d.fcLost()) { // under the blinking title: what it means and where to look
-            put("THE PHONE LOST ITS USB LINK TO THE FC - YOUR STICKS DON'T REACH THE DRONE", x, ly, YELLOW, a);
-            put("CHECK THE OTG CABLE. KEEPS HAPPENING? SETUP > DRONE SETUP", x, ly + 24 * unit, YELLOW, a);
+            put("PHONE LOST USB TO THE FC - STICKS DON'T REACH THE DRONE", x, ly, YELLOW, a);
+            put("CHECK THE OTG CABLE. REPEATS? SETUP > DRONE SETUP", x, ly + 24 * unit, YELLOW, a);
             ly += 48 * unit;
         } else if (rcGap) {
             g.setFont(Theme.headingFont(22 * unit));

@@ -129,9 +129,9 @@ public final class NameService {
         byte[] assign = Names.assign(config.getKey(), name);
         try (DatagramSocket socket = new DatagramSocket()) {
             socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), VirtualFleet.portOf(ip, port)));
-            log.accept("Names: the phone at " + ip + " is " + name + " now (renamed).");
+            log.accept("Names: phone at " + ip + " renamed to " + name + ".");
         } catch (IOException e) {
-            log.accept("Names: could not rename the phone at " + ip + ": " + e);
+            log.accept("Names: rename failed for phone at " + ip + ": " + e);
         }
         scanSoon();
     }
@@ -289,7 +289,7 @@ public final class NameService {
                     positions.put(reply.name(), new DronePosition(reply.name(), reply.position(), System.currentTimeMillis()));
                 }
                 String moved = names.seen(reply, ip, host);
-                if (moved != null) log.accept("Names: " + reply.name() + " answers from " + ip + " now (it was " + moved + ").");
+                if (moved != null) log.accept("Names: " + reply.name() + " now at " + ip + " (was " + moved + ").");
             }
             names.onlineOnly(onlineIps);
             noteDuplicates(claims);
@@ -299,7 +299,7 @@ public final class NameService {
                 String free = names.firstFree(Names.Kind.PC, onlinePcNames);
                 if (free != null) {
                     saver.accept(java.util.Map.of(Names.PC_NAME_KEY, free));
-                    log.accept("This PC is " + free + (own.isEmpty() ? "." : " now (" + own + " was taken)."));
+                    log.accept("This PC is " + free + (own.isEmpty() ? "." : " (" + own + " was taken)."));
                     own = free;
                 }
             }
@@ -313,7 +313,7 @@ public final class NameService {
                     byte[] assign = Names.assign(key, name);
                     try {
                         socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), ports.getOrDefault(ip, port)));
-                        log.accept("Names: the phone at " + ip + " is " + name + " now.");
+                        log.accept("Names: phone at " + ip + " is " + name + ".");
                     } catch (IOException ignored) {
                     }
                 }
@@ -361,7 +361,7 @@ public final class NameService {
             if (!next.containsKey(c.getKey())) {
                 Names.Entry e = names.get(c.getKey());
                 log.accept("Names: " + (e == null ? c.getKey() : e.name()) + " answers from " + String.join(" and ", c.getValue())
-                        + " - two devices with one name. CONNECT to it is refused until one is renamed.");
+                        + " - two devices, one name. CONNECT refused until one is renamed.");
             }
             next.put(c.getKey(), new Duplicate(List.copyOf(c.getValue()), now));
         }

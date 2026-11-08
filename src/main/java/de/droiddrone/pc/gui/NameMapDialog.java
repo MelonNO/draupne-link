@@ -69,9 +69,8 @@ final class NameMapDialog extends JDialog {
         JPanel head = new JPanel(new BorderLayout(0, 6));
         head.setOpaque(false);
         head.add(Theme.label("NAME MAP", Theme.headingFont(14f), Theme.ACCENT), BorderLayout.NORTH);
-        WrappingText intro = new WrappingText("Every phone and PC seen on your Tailscale network. Phones are MobileAlpha, MobileBravo ...; "
-                + "the pilot PC with the highest letter online names the phones that have none. A name stays with its device; "
-                + "RENAME gives a phone another name, REMOVE forgets a device.", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
+        WrappingText intro = new WrappingText("Every phone and PC on your Tailscale network. The PC with the highest letter "
+                + "names new phones (MobileAlpha, MobileBravo ...). A name stays with its device.", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
         head.add(intro, BorderLayout.CENTER);
         root.add(head, BorderLayout.NORTH);
 
@@ -96,7 +95,7 @@ final class NameMapDialog extends JDialog {
         own.add(Theme.label("THIS PC IS", Theme.headingFont(11f), Theme.MUTED));
         for (String letter : Names.LETTERS) ownName.addItem(Names.Kind.PC.prefix + letter);
         TacticalCombo.install(ownName);
-        ownName.setToolTipText("This PC's name on the network. It names itself with the first free PC letter; change it here");
+        ownName.setToolTipText("This PC's name (first free PC letter by default)");
         ownName.addActionListener(e -> {
             if (settingOwn) return;
             String name = (String) ownName.getSelectedItem();
@@ -119,7 +118,7 @@ final class NameMapDialog extends JDialog {
         keyField.setText(config.getKey());
         advanced.add(keyField);
         JButton apply = Theme.secondaryButton("Apply");
-        apply.setToolTipText("The link port and key, the same on every phone (Advanced in DRAUPNE Flight). A new port takes effect at the next start");
+        apply.setToolTipText("Link port and key, same on every phone. New port applies on restart");
         apply.addActionListener(e -> applyAdvanced());
         advanced.add(apply);
         south.add(advanced, BorderLayout.CENTER);
@@ -127,11 +126,11 @@ final class NameMapDialog extends JDialog {
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         buttons.setOpaque(false);
         JButton rename = Theme.secondaryButton("Rename");
-        rename.setToolTipText("Give the selected phone another Mobile name (it must be online: a phone keeps its name itself)");
+        rename.setToolTipText("New Mobile name for the selected phone (must be online)");
         rename.addActionListener(e -> renameSelected());
         buttons.add(rename);
         JButton remove = Theme.secondaryButton("Remove");
-        remove.setToolTipText("Forget the selected device (it comes back when it answers again)");
+        remove.setToolTipText("Forget the selected device (returns when it answers)");
         remove.addActionListener(e -> {
             int row = table.getSelectedRow();
             if (row < 0 || row >= shown.size()) return;
@@ -141,7 +140,7 @@ final class NameMapDialog extends JDialog {
         });
         buttons.add(remove);
         JButton rescan = Theme.secondaryButton("Ask again");
-        rescan.setToolTipText("Ask every device on the network now");
+        rescan.setToolTipText("Ask every device now");
         rescan.addActionListener(e -> service.scanSoon());
         buttons.add(rescan);
         JButton close = Theme.primaryButton("Close");
@@ -170,12 +169,12 @@ final class NameMapDialog extends JDialog {
         if (row < 0 || row >= shown.size()) return;
         Names.Entry e = shown.get(row);
         if (e.kind() != Names.Kind.PHONE) {
-            JOptionPane.showMessageDialog(this, "Only phones are renamed here. This PC's name is the THIS PC IS choice; other PCs name themselves.",
+            JOptionPane.showMessageDialog(this, "Only phones are renamed here. Set this PC's name under THIS PC IS.",
                     "Rename", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         if (!e.online() || e.ip() == null || e.ip().isEmpty()) {
-            JOptionPane.showMessageDialog(this, e.name() + " is offline. A phone keeps its name itself, so it must be online to be renamed.",
+            JOptionPane.showMessageDialog(this, e.name() + " is offline. Only an online phone can be renamed.",
                     "Rename", JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -208,12 +207,12 @@ final class NameMapDialog extends JDialog {
             port = Integer.parseInt(portField.getText().trim());
             if (port < 1024 || port > 65534) throw new NumberFormatException();
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "Port must be a number between 1024 and 65534.", "Name map", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Port: 1024..65534.", "Name map", JOptionPane.WARNING_MESSAGE);
             return;
         }
         String key = keyField.getText().trim();
         if (key.isEmpty() || key.length() > 16) {
-            JOptionPane.showMessageDialog(this, "The key is 1 to 16 characters.", "Name map", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(this, "Key: 1 to 16 characters.", "Name map", JOptionPane.WARNING_MESSAGE);
             return;
         }
         saver.accept(Map.of("port", Integer.toString(port), "key", key));
@@ -230,7 +229,7 @@ final class NameMapDialog extends JDialog {
         } finally {
             settingOwn = false;
         }
-        masterLine.setText(service.isMaster() ? "- the master: it names the phones" : "- another PC with a higher letter names the phones");
+        masterLine.setText(service.isMaster() ? "- master: names the phones" : "- a higher-letter PC names the phones");
         List<Names.Entry> all = names.all();
         all.sort((a, b) -> a.kind() != b.kind() ? (a.kind() == Names.Kind.PHONE ? -1 : 1)
                 : a.online() != b.online() ? (a.online() ? -1 : 1) : Integer.compare(Names.letterOf(a.name()), Names.letterOf(b.name())));

@@ -202,7 +202,7 @@ class SpectatorTest {
         spectator = link(SPECTATOR_PORT, true, 300);
         spectator.start();
         waitFor(() -> spectator.getState() == ControlLink.State.SPECTATOR_WAITING
-                && spectator.spectatorStatus().contains("lets nobody watch"), 5000, "spectator refused");
+                && spectator.spectatorStatus().contains("allows no spectators"), 5000, "spectator refused");
         assertEquals(0, pilot.getSpectatorCount());
     }
 
@@ -215,7 +215,7 @@ class SpectatorTest {
         waitFor(() -> spectator.getState() == ControlLink.State.SPECTATING, 5000, "spectator watching");
         pilot.setSpectatorsAllowed(false);
         assertEquals(0, pilot.getSpectatorCount());
-        waitFor(() -> spectator.spectatorStatus().contains("lets nobody watch"), 5000, "spectator told");
+        waitFor(() -> spectator.spectatorStatus().contains("allows no spectators"), 5000, "spectator told");
         assertEquals(ControlLink.State.READY, pilot.getState());
     }
 
@@ -252,14 +252,14 @@ class SpectatorTest {
         pilot = link(PILOT_PORT, true, 600);
         pilot.setEvents(events::add);
         pilot.start();
-        waitFor(() -> events.stream().anyMatch(e -> e.contains("previous session")), 3000, "told what the phone does");
+        waitFor(() -> events.stream().anyMatch(e -> e.contains("old session")), 3000, "told what the phone does");
         int answersBefore = phone.spectatorAnswers.get();
         Thread.sleep(1500);
         assertFalse(pilot.isSpectator(), "no spectator of itself");
         assertEquals(ControlLink.State.CONNECTING, pilot.getState());
         assertTrue(phone.spectatorAnswers.get() - answersBefore >= 4, "kept asking to connect, faster than every 500 ms: "
                 + (phone.spectatorAnswers.get() - answersBefore) + " in 1.5 s");
-        assertEquals(1, events.stream().filter(e -> e.contains("previous session")).count(), "said once, not with every answer");
+        assertEquals(1, events.stream().filter(e -> e.contains("old session")).count(), "said once, not with every answer");
         phone.staleSession = null; // the phone lets the old session go
         waitFor(() -> pilot.getState() == ControlLink.State.READY, 5000, "connected at last");
         assertFalse(pilot.isSpectator());
@@ -584,7 +584,7 @@ class SpectatorTest {
         assertNull(spectator.getPilotLeft(), "nobody left");
         // the pilot's own link lost: said as that
         pilot.setPilotView(new ControlLink.PilotView(false, true, false, false, false, false, null, null, null, null, "MobileAlpha", false));
-        waitFor(() -> spectator.spectatorStatus().contains("lost its link to MobileAlpha"), 3000, "the pilot's link lost");
+        waitFor(() -> spectator.spectatorStatus().contains("LINK LOST to MobileAlpha"), 3000, "the pilot's link lost");
         pilot.close(); // DISCONNECT on the pilot PC
         waitFor(() -> spectator.getPilotLeft() != null, 3000, "told the pilot left");
         assertEquals("MobileAlpha", spectator.getPilotLeft());

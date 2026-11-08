@@ -177,7 +177,7 @@ public final class Fleet implements AutoCloseable {
         try {
             VirtualFleet.write(announceFile, list, System.currentTimeMillis());
         } catch (IOException e) {
-            log("Fleet: could not announce the drones (" + e.getMessage() + ") - DRAUPNE Link won't find them");
+            log("Fleet: can't announce the drones (" + e.getMessage() + ") - DRAUPNE Link won't find them");
         }
     }
 

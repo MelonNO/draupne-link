@@ -61,11 +61,9 @@ final class StanagDialog extends JDialog {
         JPanel head = new JPanel(new BorderLayout(0, 6));
         head.setOpaque(false);
         head.add(Theme.label("STANAG 4609 STREAM", Theme.headingFont(14f), Theme.ACCENT), BorderLayout.NORTH);
-        head.add(new WrappingText("The video as it comes from the phone, in an MPEG transport stream with MISB ST 0601 "
-                + "metadata (where the drone is, how it lies, where the camera looks), sent over UDP to one address: ATAK / "
-                + "WinTAK, QGIS, VLC or a NATO ground station plays it. In VLC: udp://@:PORT on that machine. A multicast "
-                + "address (239.x.x.x) reaches every listener on the local network; Tailscale carries unicast only. "
-                + "The stream uses this PC's upload: on a weak one it can delay the sticks.",
+        head.add(new WrappingText("The phone's video as MPEG-TS with MISB ST 0601 metadata, over UDP to one address. "
+                + "Plays in ATAK / WinTAK, QGIS, VLC (udp://@:PORT). Multicast (239.x.x.x) is local only; Tailscale is unicast. "
+                + "Uses this PC's upload: on a weak link it can delay the sticks.",
                 Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.CENTER);
         root.add(head, BorderLayout.NORTH);
 
@@ -78,11 +76,11 @@ final class StanagDialog extends JDialog {
         v.configure(config);
         hfov.setText(number(v.hfovDeg()));
         tilt.setText(number(v.tiltDeg()));
-        row(form, 0, "SEND TO", target, "host:port - e.g. a TAK device's Tailscale address, or 127.0.0.1 for a player on this PC");
-        row(form, 1, "MISSION ID", mission, "Optional: shown by the player");
-        row(form, 2, "COUNTRY", country, "Three letters (ISO 3166): the security marking's country. Always UNCLASSIFIED");
-        row(form, 3, "CAMERA ANGLE ACROSS", hfov, "Degrees across the picture (a phone's main camera: about 70)");
-        row(form, 4, "CAMERA TILT UP", tilt, "Degrees the camera points up on the frame (an FPV uptilt; 0 = straight ahead)");
+        row(form, 0, "SEND TO", target, "host:port - a TAK device's Tailscale address, or 127.0.0.1 here");
+        row(form, 1, "MISSION ID", mission, "Optional, shown by the player");
+        row(form, 2, "COUNTRY", country, "ISO 3166, three letters. Marking is always UNCLASSIFIED");
+        row(form, 3, "CAMERA ANGLE ACROSS", hfov, "Degrees across the picture (phone main camera: ~70)");
+        row(form, 4, "CAMERA TILT UP", tilt, "FPV uptilt in degrees (0 = straight ahead)");
         root.add(form, BorderLayout.CENTER);
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
@@ -134,7 +132,7 @@ final class StanagDialog extends JDialog {
         }
         double h = CameraView.number(hfov.getText(), Double.NaN, 5, 170), u = CameraView.number(tilt.getText(), Double.NaN, -90, 90);
         if (Double.isNaN(h) || Double.isNaN(u)) {
-            complain("The camera angle across must be 5..170 degrees, the tilt -90..90.");
+            complain("Camera angle: 5..170 degrees. Tilt: -90..90.");
             return;
         }
         Map<String, String> m = new LinkedHashMap<>();

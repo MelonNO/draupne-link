@@ -252,9 +252,9 @@ public final class VirtualDrone {
                 }
                 videoWanted = false;
                 openSocket(keep);
-                log.accept("phone app started again: a new session from the next Connect");
+                log.accept("phone app back: new session on next Connect");
             } catch (IOException e) {
-                log.accept("phone app could not open its socket again: " + e.getMessage());
+                log.accept("phone app can't reopen its socket: " + e.getMessage());
             } finally {
                 restarting = false;
             }
@@ -269,9 +269,9 @@ public final class VirtualDrone {
         try {
             closeSocket();
             openSocket(0);
-            log.accept("now on port " + port + " (a new address, as after a cell change without Tailscale)");
+            log.accept("now on port " + port + " (new address, like a cell change without Tailscale)");
         } catch (IOException e) {
-            log.accept("could not move to a new port: " + e.getMessage());
+            log.accept("can't move to a new port: " + e.getMessage());
         }
     }
 
@@ -323,7 +323,7 @@ public final class VirtualDrone {
                 lastPcPort = fromPort;
                 if (d[0] == UdpCommon.Connect && keyMatches(d, len, 4)) {
                     if (now - sessionStartedMs < SAME_SESSION_MS) return;
-                    log.accept("the pilot connects again (its link was lost): a new session");
+                    log.accept("pilot reconnects (link was lost): new session");
                     newSession();
                     sessionStartedMs = now;
                     buffer = receiverBuffer;
@@ -345,7 +345,7 @@ public final class VirtualDrone {
             }
             if (d[0] != UdpCommon.Connect) return;
             if (!keyMatches(d, len, 4)) {
-                log.accept("a PC at " + from.getHostAddress() + " tried to connect with another key");
+                log.accept("PC at " + from.getHostAddress() + " tried another key");
                 return;
             }
             if (lastPcIp != null && !(from.equals(lastPcIp) && fromPort == lastPcPort)) {
@@ -353,7 +353,7 @@ public final class VirtualDrone {
                     answerSpectator(d, len, from, fromPort, true);
                     return;
                 }
-                if (!from.equals(lastPcIp)) log.accept("new session from " + from.getHostAddress() + " (the pilot is silent, the FC disarmed)");
+                if (!from.equals(lastPcIp)) log.accept("new session from " + from.getHostAddress() + " (pilot silent, FC disarmed)");
             }
             lastPilotPacketMs = now;
             sessionStartedMs = now;
@@ -379,7 +379,7 @@ public final class VirtualDrone {
             if (!keyMatches(d, len, 4)) return false;
             boolean sameAddress = from.equals(udpSender.getIp());
             if (Takeover.allowed(sameAddress, disarmed, silent)) {
-                log.accept("new session from " + from.getHostAddress() + ":" + fromPort + (sameAddress ? " (the pilot's address)" : " (the pilot is silent)"));
+                log.accept("new session from " + from.getHostAddress() + ":" + fromPort + (sameAddress ? " (pilot's address)" : " (pilot silent)"));
                 newSession();
                 sessionStartedMs = now;
                 return true;
@@ -520,7 +520,7 @@ public final class VirtualDrone {
         if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT || len != 2 + count * 2) return;
         short[] frame = new short[count];
         for (int i = 0, at = 2; i < count; i++, at += 2) frame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
-        if (idleSticks == null) log.accept("idle sticks from the PC: fed to the FC while it is disarmed and no sticks come");
+        if (idleSticks == null) log.accept("idle sticks from the PC: fed to the FC while disarmed without sticks");
         idleSticks = frame;
     }
 
@@ -536,7 +536,7 @@ public final class VirtualDrone {
                 lastRcWriteMs = now;
             }
         }
-        if (feed != idleFeeding) log.accept(feed ? "idle sticks to the FC (disarmed, no sticks from the PC)" : "idle sticks stopped");
+        if (feed != idleFeeding) log.accept(feed ? "idle sticks to the FC (disarmed, no PC sticks)" : "idle sticks stopped");
         idleFeeding = feed;
     }
 
@@ -642,7 +642,7 @@ public final class VirtualDrone {
                     }
                 }
                 case REMOTE_UPDATE -> {
-                    if (updateRefusal == null) log.accept("remote update asked for: a virtual drone takes none");
+                    if (updateRefusal == null) log.accept("remote update asked: virtual drones take none");
                     updateRefusal = "a virtual drone takes no update";
                     updateRefusedAt = System.currentTimeMillis();
                 }
@@ -1105,7 +1105,7 @@ public final class VirtualDrone {
             log.accept("live audio to the PC: on");
         } else if (!allow && audioThread != null) {
             stopAudio();
-            log.accept("live audio to the PC: off" + (audioHeld && !fcDisarmed() ? " (the FC is not known disarmed)" : ""));
+            log.accept("live audio to the PC: off" + (audioHeld && !fcDisarmed() ? " (FC not known disarmed)" : ""));
         }
     }
 
@@ -1171,12 +1171,12 @@ public final class VirtualDrone {
             if (wanted < NORMAL || wanted > OVERWATCH) return;
             if (wanted != NORMAL && !fcDisarmed()) {
                 if (mode == NORMAL) {
-                    log.accept(modeName(wanted) + " refused (" + from + "): the flight controller is not known disarmed");
+                    log.accept(modeName(wanted) + " refused (" + from + "): FC not known disarmed");
                     burst();
                     return;
                 }
                 wanted = NORMAL;
-                from = "the flight controller is armed";
+                from = "FC armed";
             }
             if (wanted == mode && wanted != NORMAL) return;
             switch (wanted) {
@@ -1249,8 +1249,8 @@ public final class VirtualDrone {
             if (sleepAt != 0 && now >= sleepAt) {
                 sleepAt = 0;
                 if (!fcDisarmed()) {
-                    log.accept("deep sleep refused at the end of its countdown: the flight controller is not known disarmed");
-                    wake("the flight controller is armed");
+                    log.accept("deep sleep refused at countdown end: FC not known disarmed");
+                    wake("FC armed");
                     return;
                 }
                 asleep = true;
@@ -1581,7 +1581,7 @@ public final class VirtualDrone {
     // ------------------------------------------------------------------ the panel
 
     public void setFcLost(boolean lost) {
-        if (lost != fcLost) log.accept(lost ? "FC LOST: the phone gets nothing from its flight controller" : "the flight controller answers again");
+        if (lost != fcLost) log.accept(lost ? "FC LOST: phone gets nothing from the FC" : "FC answers again");
         fcLost = lost;
     }
 
@@ -1636,8 +1636,8 @@ public final class VirtualDrone {
         scene.addTarget(k, view(), System.currentTimeMillis()); // in front of the camera where it is now (1.0.50)
         int level = detectionWanted(System.currentTimeMillis());
         log.accept("a " + kind + " crosses the picture" + (level > 0 ? " (motion detection " + level + ")"
-                : " - no motion detection asked (the PC's VIDEO > Motion detection, an observation or OVERWATCH asks for it)")
-                + (fc.isArmed() ? " - armed: the detection waits until disarmed" : ""));
+                : " - no motion detection asked (VIDEO > Motion detection, observation or OVERWATCH)")
+                + (fc.isArmed() ? " - armed: detection waits until disarmed" : ""));
     }
 
     public void setNight(boolean night) {

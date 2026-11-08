@@ -204,7 +204,7 @@ final class SpectatorHost implements AutoCloseable {
                     list.add(known);
                     viewers = list.toArray(new Viewer[0]);
                     events.accept("Spectator watching from " + ip.getHostAddress() + " (" + viewers.length + " of "
-                            + MAX_SPECTATORS + "). It gets the video through this PC's upload.");
+                            + MAX_SPECTATORS + "), video over this PC's upload.");
                     joined.run();
                 }
             }
@@ -248,13 +248,13 @@ final class SpectatorHost implements AutoCloseable {
                     outgoing.clear();
                     resendFrom = seq.get(); // what was queued is gone for good; the stream goes on from here
                     nextPauseNotice = 0;
-                    events.accept("Spectator video paused: the link to the drone slowed down (ping " + pingMs + " ms, usually "
-                            + gate.usual() + "). It goes on once the ping has been back to normal for "
-                            + RelayGate.RECOVER_HOLD_MS / 1000 + " s, after " + gate.minPauseMs() / 1000 + " s at least.");
+                    events.accept("Spectator video paused: drone link slowed (ping " + pingMs + " ms, usually "
+                            + gate.usual() + "). Resumes after " + RelayGate.RECOVER_HOLD_MS / 1000 + " s of normal ping, "
+                            + gate.minPauseMs() / 1000 + " s at least.");
                 } else if (change == RelayGate.Change.RESUMED) {
                     paused = false;
                     for (Viewer v : viewers) send(new byte[]{Spectate.PAUSE, 0}, v);
-                    if (viewers.length > 0) events.accept("Spectator video on again: the link to the drone is back to normal (ping " + pingMs + " ms).");
+                    if (viewers.length > 0) events.accept("Spectator video on again: drone link normal (ping " + pingMs + " ms).");
                 }
                 byte[] view = pilotView;
                 if (view != null && now >= nextView) { // a few dozen bytes: sent through a pause too, the warnings stay true

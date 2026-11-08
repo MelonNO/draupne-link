@@ -422,7 +422,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (r != null && !r.queue.offer(new RecFrame(frame.data(), frame.keyFrame(), now, frame.streamStart()))) {
             r.leftOut++; // logged once in a while: not a line per frame on this thread while the disk is slow
             if (now - r.leftOutLoggedAt >= 5000) {
-                log("Recording: the disk is too slow, " + r.leftOut + " frame" + (r.leftOut == 1 ? " was" : "s were") + " left out");
+                log("Recording: disk too slow, " + r.leftOut + " frame" + (r.leftOut == 1 ? "" : "s") + " dropped");
                 r.leftOut = 0;
                 r.leftOutLoggedAt = now;
             }
@@ -484,8 +484,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                     ageDrops++;
                     if (now - ageDropLoggedAt > 5000) {
                         ageDropLoggedAt = now;
-                        log("Video: the decoder is " + oldestQueuedAge(now) + " ms behind (" + String.format("%.1f", decodeMs)
-                                + " ms a frame) - cut back to the newest key frame");
+                        log("Video: decoder " + oldestQueuedAge(now) + " ms behind (" + String.format("%.1f", decodeMs)
+                                + " ms/frame) - skipped to newest key frame");
                     }
                     dropBacklog();
                 }
@@ -653,7 +653,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                             // happened here, and the picture stood until the next periodic key frame or for good
                             noPictureRun++;
                             if (frame.keyFrame()) {
-                                log("Video: a key frame gave no picture - asking for the stream's config and a key frame");
+                                log("Video: key frame gave no picture - requesting config and key frame");
                                 configRequester.run();
                                 requestKeyFrame();
                                 waitingForKey = true;
@@ -681,7 +681,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         if (from > 0) { // the first picture at the new size: how long the picture stood still
                             resizeFrom = -1;
                             lastResizeGapMs = shownAt - from;
-                            log("Video: new picture size shown " + lastResizeGapMs + " ms after the last one at the old size");
+                            log("Video: new size shown " + lastResizeGapMs + " ms after the last old-size frame");
                         }
                         convertMs = smooth(convertMs, (System.nanoTime() - t1) / 1e6);
                         shown++;
@@ -1063,7 +1063,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             de.droiddrone.pc.audio.AudioConfig sound = audioTrackForNewFile();
             recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
             recordFile = file;
-            log("Recording to " + file + (sound == null ? "" : " (with the phone's sound when it sends it)"));
+            log("Recording to " + file + (sound == null ? "" : " (with phone sound if sent)"));
             tapOpen = true;
             tap(t -> t.fileStarted(file, c.hevc(), c.width(), c.height(), c.codecConfig()));
             if (sound != null) tap(t -> t.audioTrack(sound));

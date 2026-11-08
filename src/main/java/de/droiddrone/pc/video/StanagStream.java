@@ -140,7 +140,7 @@ public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable
                         told = true;
                     } catch (IOException | RuntimeException e) {
                         failedAt = now;
-                        log.accept("STANAG 4609 stream: " + e.getMessage() + " - trying again in 5 s.");
+                        log.accept("STANAG 4609 stream: " + e.getMessage() + " - retry in 5 s.");
                         continue;
                     }
                 }
@@ -155,7 +155,7 @@ public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable
                     mux.writeVideo(withConfig(f.data(), f.keyFrame(), config.hevc(), config.codecConfig()), f.keyFrame(), f.arrivedMs());
                     sentFrames++;
                 } catch (IOException | RuntimeException e) {
-                    log.accept("STANAG 4609 stream stopped: " + e.getMessage() + " - trying again in 5 s.");
+                    log.accept("STANAG 4609 stream stopped: " + e.getMessage() + " - retry in 5 s.");
                     mux.close();
                     mux = null;
                     failedAt = System.currentTimeMillis();
