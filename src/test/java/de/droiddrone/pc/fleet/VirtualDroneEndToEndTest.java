@@ -1,6 +1,7 @@
 package de.droiddrone.pc.fleet;
 
 import de.droiddrone.common.Observe;
+import de.droiddrone.common.SleepCheck;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FcTelemetry;
@@ -79,7 +80,7 @@ class VirtualDroneEndToEndTest {
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY");
         FcTelemetry t = link.getTelemetry();
         waitFor(() -> t.getStatus() != null && t.hasBoxNames() && t.getAttitude() != null, 5000, "the FC's status, modes and attitude");
-        waitFor(() -> t.getPhonePcBuild() == 38, 3000, "the phone app's version");
+        waitFor(() -> t.getPhonePcBuild() == FcTelemetry.pcBuild(VirtualDrone.VERSION), 3000, "the phone app's version");
         assertNotNull(link.getFcInfo(), "FcInfo answered");
         assertFalse(t.getStatus().armed());
         waitFor(() -> t.getGps() != null && t.getBattery() != null, 3000, "GPS and battery");
@@ -157,6 +158,41 @@ class VirtualDroneEndToEndTest {
         waitFor(() -> drone.mode() == VirtualDrone.NORMAL && !drone.asleep(), 3000, "woken by the PC");
         waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back");
         assertTrue(log.stream().anyMatch(l -> l.contains("sleep check: listening")), String.join("\n", log));
+    }
+
+    /**
+     * CHECK EVERY "0 min" (1.0.50, pc.39): overwatch always listening - after the countdown the window opens (no
+     * alarm), says hello with "listening", stays open through the PC's "sleep on", and the PC's Connect wakes it at once.
+     */
+    @Test
+    void overwatchAlwaysListeningWakesWithinSecondsOfConnect() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        startDrone(config);
+        startLink(config, null);
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY");
+        FcTelemetry t = link.getTelemetry();
+        waitFor(() -> t.getPhonePower() != null && t.getPhonePcBuild() >= SleepCheck.ALWAYS_MIN_PC_BUILD, 3000, "the power record and a pc.39 app");
+        long until = System.currentTimeMillis() + 3000;
+        while (drone.mode() != VirtualDrone.OVERWATCH && System.currentTimeMillis() < until) {
+            link.sendOverwatch(SleepCheck.ALWAYS, 2, 0, 0x5eed0001);
+            Thread.sleep(200);
+        }
+        waitFor(() -> t.getPhonePower() != null && t.getPhonePower().checkIntervalMin() == SleepCheck.ALWAYS, 3000, "the phone reports always listening");
+        waitFor(() -> drone.asleep(), 3000, "asleep after the countdown");
+        link.setDormant(true); // as MainWindow does once the phone sleeps: no Connect until WAKE or CONNECT
+        waitFor(() -> link.getState() != ControlLink.State.READY, 4000, "the link down: the phone sleeps");
+        waitFor(() -> drone.listening(), SleepCheck.ALWAYS_OPEN_AFTER_MS + 3000, "the window open by itself, no check to wait for");
+        waitFor(() -> link.getSleepHello() != null && SleepCheck.isAlways(link.getSleepHello().nextCheckMin()), 3000, "the hello says listening");
+        Thread.sleep(2500); // more hellos, each answered "sleep on" while the PC is dormant
+        assertTrue(drone.listening(), "the PC's sleep on doesn't close an always-listening window");
+        assertEquals(VirtualDrone.OVERWATCH, drone.mode());
+
+        long connectAt = System.currentTimeMillis();
+        link.setDormant(false); // CONNECT (or WAKE): the Connects go out again
+        waitFor(() -> drone.mode() == VirtualDrone.NORMAL && !drone.asleep() && !drone.listening(), 3000, "woken by the Connect");
+        assertTrue(System.currentTimeMillis() - connectAt < 3000, "awake within a couple of seconds");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back");
+        assertTrue(log.stream().anyMatch(l -> l.contains("always listening for the PC")), String.join("\n", log));
     }
 
     @Test

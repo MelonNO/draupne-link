@@ -101,7 +101,7 @@ class FleetTelemetryTest {
             TelemetryRecords.phonePower(out, 2, 5, 3, 15);
         });
         assertEquals(VirtualDrone.VERSION, t.getPhoneAppVersion());
-        assertEquals(38, t.getPhonePcBuild(), "the newest layouts: the PC uses them all");
+        assertEquals(39, t.getPhonePcBuild(), "the newest layouts: the PC uses them all (pc.39: CHECK EVERY 0 min)");
         assertEquals(4_000_000, t.getPhoneTargetBitRate());
         assertEquals(52.4732, t.getPhonePosition().latDeg(), 1e-6);
         FcTelemetry.PhoneState ps = t.getPhoneState();

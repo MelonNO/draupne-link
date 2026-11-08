@@ -9,6 +9,7 @@ import de.droiddrone.common.PcAudio;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
 import de.droiddrone.common.SettingsCommon;
+import de.droiddrone.common.SleepCheck;
 import de.droiddrone.common.Takeover;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.common.UdpPacketData;
@@ -43,7 +44,7 @@ import java.util.function.Consumer;
  */
 public final class VirtualDrone {
     /** What it says it is: the newest phone app, so the PC uses every packet layout it knows. */
-    public static final String VERSION = "2.3.0-pc.38";
+    public static final String VERSION = "2.3.0-pc.39";
     public static final String DEVICE = "VIRTUAL DRONE";
     /** The phone's encoder steps, bit/s (StreamEncoder.baseBitRates). */
     static final int[] STEPS = {150_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000,
@@ -1192,7 +1193,7 @@ public final class VirtualDrone {
                     if (mode != NORMAL) wake(from);
                     mode = wanted;
                     sleepAt = System.currentTimeMillis() + SLEEP_COUNTDOWN_MS;
-                    log.accept(modeName(wanted) + " in 1 s (" + from + "), checks every " + checkIntervalMin + " min");
+                    log.accept(modeName(wanted) + " in 1 s (" + from + "), " + (always() ? "always listening for the PC" : "checks every " + checkIntervalMin + " min"));
                     burst();
                 }
             }
@@ -1230,7 +1231,7 @@ public final class VirtualDrone {
         synchronized (powerLock) {
             if (!checking) return;
             if (wakeUp) wake("the PC called");
-            else {
+            else if (!always()) { // always listening (pc.39): the window stays open whatever the PC says
                 log.accept("sleep check: the PC says sleep on");
                 closeWindow(System.currentTimeMillis());
             }
@@ -1258,9 +1259,11 @@ public final class VirtualDrone {
                 stopAudio();
                 InetSocketAddress pc = lastPcIp == null ? null : new InetSocketAddress(lastPcIp, lastPcPort);
                 closeSocket(); // the link's socket, the FC's port, the GPS: let go
-                nextCheckAt = now + checkIntervalMin * 60_000L;
+                // always listening (pc.39): no alarm - the window opens shortly (the PC's link quiet by then) and stays
+                nextCheckAt = now + (always() ? SleepCheck.ALWAYS_OPEN_AFTER_MS : checkIntervalMin * 60_000L);
                 if (mode == OVERWATCH) overwatch.begin(pc);
-                log.accept(modeName(mode) + ": next check in " + checkIntervalMin + " min");
+                log.accept(modeName(mode) + (always() ? ": always listening for the PC in " + SleepCheck.ALWAYS_OPEN_AFTER_MS / 1000 + " s"
+                        : ": next check in " + checkIntervalMin + " min"));
             }
             if (asleep && now >= nextCheckAt) {
                 asleep = false;
@@ -1272,15 +1275,16 @@ public final class VirtualDrone {
                 } catch (IOException e) {
                     log.accept("sleep check: no socket: " + e.getMessage());
                 }
-                log.accept("sleep check: listening for the PC for " + CHECK_WINDOW_MS / 1000 + " s");
+                log.accept(always() ? "always listening for the PC" : "sleep check: listening for the PC for " + CHECK_WINDOW_MS / 1000 + " s");
             }
             if (checking) {
                 if (isConnected()) {
                     wake("the PC called");
-                } else if (now - windowOpenedAt >= CHECK_WINDOW_MS) {
+                } else if (!always() && now - windowOpenedAt >= CHECK_WINDOW_MS) {
                     closeWindow(now);
                 } else if (now >= nextHelloAt) {
-                    nextHelloAt = now + HELLO_GAP_MS;
+                    // always listening: as a window's first seconds, then once a minute
+                    nextHelloAt = now + (always() && now - windowOpenedAt > SleepCheck.ALWAYS_HELLO_BURST_MS ? SleepCheck.ALWAYS_HELLO_MS : HELLO_GAP_MS);
                     sendSleepHello();
                 }
             }
@@ -1576,6 +1580,16 @@ public final class VirtualDrone {
 
     public boolean asleep() {
         return asleep;
+    }
+
+    /** A listening window is open (a check, or always listening). */
+    public boolean listening() {
+        return checking;
+    }
+
+    /** CHECK EVERY "0 min" (pc.39): the window stays open. */
+    private boolean always() {
+        return SleepCheck.isAlways(checkIntervalMin);
     }
 
     // ------------------------------------------------------------------ the panel
