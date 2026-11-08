@@ -193,6 +193,7 @@ final class MotorTestDialog extends JFrame {
 
         setLocationRelativeTo(owner);
         WindowReveal.onOpen(this);
+        java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(pressWhileWaiting, java.awt.AWTEvent.MOUSE_EVENT_MASK);
         worker = new Thread(this::run, "motor-test");
         worker.setDaemon(true);
         worker.start();
@@ -246,9 +247,20 @@ final class MotorTestDialog extends JFrame {
         }
     }
 
+    /**
+     * A press anywhere in this window while the flight controller isn't there (1.0.52, the pilot): the waiting line
+     * under the drone pulses and shakes, in the warning colour, so it is read.
+     */
+    private final java.awt.event.AWTEventListener pressWhileWaiting = event -> {
+        if (event.getID() != MouseEvent.MOUSE_PRESSED || info != null) return;
+        if (event.getSource() instanceof java.awt.Component c && SwingUtilities.getWindowAncestor(c) == this) diagram.nudge();
+    };
+
     @Override
     public void dispose() {
         if (open == this) open = null;
+        java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(pressWhileWaiting);
+        diagram.nudge.stop();
         flip.stop();
         autoStop.stop();
         stopAll();
@@ -987,6 +999,18 @@ final class MotorTestDialog extends JFrame {
             repaint();
             if (activeCount() == 0) ((Timer) e.getSource()).stop();
         });
+        /** The waiting line's pulse after a press while the flight controller isn't there. */
+        private static final long NUDGE_MS = 900;
+        private long nudgedAt;
+        final Timer nudge = new Timer(30, e -> {
+            repaint();
+            if (System.currentTimeMillis() - nudgedAt > NUDGE_MS) ((Timer) e.getSource()).stop();
+        });
+
+        void nudge() {
+            nudgedAt = System.currentTimeMillis();
+            nudge.restart();
+        }
 
         Diagram() {
             setPreferredSize(new Dimension(DW / 2, DH / 2));
@@ -1098,11 +1122,14 @@ final class MotorTestDialog extends JFrame {
                     String s = "MOTOR " + reorderStep + " SPINS - CLICK WHERE IT IS";
                     g.drawString(s, (DW - g.getFontMetrics().stringWidth(s)) / 2f, DH - 2);
                 }
-                if (i == null) {
-                    g.setFont(Theme.headingFont(12f));
-                    g.setColor(Theme.MUTED);
+                if (i == null) { // in the warning colour; a press anywhere makes it pulse and shake (nudge)
+                    double t = Math.min(1, (System.currentTimeMillis() - nudgedAt) / (double) NUDGE_MS);
+                    double swell = t < 1 ? Math.sin(t * Math.PI) : 0;
+                    float shake = t < 1 ? (float) (Math.sin(t * Math.PI * 8) * 6 * (1 - t)) : 0;
+                    g.setFont(Theme.headingFont((float) (12 + 3 * swell)));
+                    g.setColor(swell > 0 ? Theme.ACCENT : Theme.WARN);
                     String s = "WAITING FOR THE FLIGHT CONTROLLER";
-                    g.drawString(s, (DW - g.getFontMetrics().stringWidth(s)) / 2f, DH - 2);
+                    g.drawString(s, (DW - g.getFontMetrics().stringWidth(s)) / 2f + shake, DH - 2);
                 }
             } finally {
                 g.dispose();

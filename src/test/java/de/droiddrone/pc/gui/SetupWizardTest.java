@@ -36,9 +36,9 @@ class SetupWizardTest {
     @Test
     void everyStepOfTheSeparateSetupsIsInTheFirstTimeSetup() {
         WizardDialog.Page radio = new PcSetupWizard.RadioPage(null);
-        WizardDialog.Page shortcuts = new PcSetupWizard.ShortcutsPage(null);
+        WizardDialog.Page latency = new Stub("latency");
         WizardDialog.Page connect = new PhoneGuideWizard.ConnectPage(null);
-        List<WizardDialog.Page> pc = List.of(new Stub("connection"), new Stub("tailscale"), radio, new Stub("latency"), shortcuts);
+        List<WizardDialog.Page> pc = List.of(new Stub("connection"), new Stub("tailscale"), radio, latency);
         List<WizardDialog.Page> drone = List.of(new Stub("betaflight"));
         List<WizardDialog.Page> phone = List.of(new Stub("tailscale on the phone"), new Stub("flight app"), connect);
         WizardDialog.Page welcome = new Stub("welcome");
@@ -51,8 +51,8 @@ class SetupWizardTest {
         assertEquals(pc.size() + drone.size() + phone.size() + 1, all.size(), "nothing twice");
         assertSame(welcome, all.get(0));
         assertSame(connect, all.get(all.size() - 1), "the first connection is the last step: no delay, ready or sleep page after it");
-        assertEquals("THIS PC", shortcuts.section, "the shortcuts with the other PC steps");
-        assertTrue(all.indexOf(shortcuts) < all.indexOf(drone.get(0)), "this PC's steps together, then the drone");
+        assertEquals("THIS PC", latency.section, "the latency check with the other PC steps");
+        assertTrue(all.indexOf(latency) < all.indexOf(drone.get(0)), "this PC's steps together, then the drone");
         assertTrue(all.indexOf(drone.get(0)) < all.indexOf(radio), "the radio after the drone: it names the switches");
         assertEquals("RADIO", radio.section);
         assertEquals("CONNECT", connect.section);

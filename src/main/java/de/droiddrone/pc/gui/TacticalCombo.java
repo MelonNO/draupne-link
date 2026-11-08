@@ -45,9 +45,59 @@ final class TacticalCombo {
             long total = STAGGER_MS * Math.max(0, combo.getItemCount() - 1) + REVEAL_MS + 30;
             if (System.currentTimeMillis() - openedAt[0] > total) timer.stop();
         });
+        // 1.0.52: the box itself (frame and background) came at once and only the rows wiped in - "the square is
+        // complete before the animation has finished". Now as the menus: a picture of the whole box wipes in, row by
+        // row, and the real box takes its place after. Meanwhile the real popup is open at no size, where it will be.
+        Object ui = combo.getUI().getAccessibleChild(combo, 0);
+        boolean wiped = ui instanceof JPopupMenu;
+        if (ui instanceof JPopupMenu popup) {
+            boolean[] revealed = {false};
+            popup.addPopupMenuListener(new PopupMenuListener() {
+                @Override
+                public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
+                    if (revealed[0]) { // the real box, after its picture: as it is
+                        revealed[0] = false;
+                        return;
+                    }
+                    java.awt.Dimension size = popup.getPreferredSize();
+                    javax.swing.JRootPane root = javax.swing.SwingUtilities.getRootPane(combo);
+                    if (root == null || size.width <= 0 || size.height <= 0 || !combo.isShowing()) return;
+                    java.awt.image.BufferedImage picture = picture(popup, size);
+                    JList<?> list = popupList(combo);
+                    java.awt.Rectangle[] rows = rows(popup, list);
+                    popup.setPreferredSize(new java.awt.Dimension(0, 0)); // opens where it belongs, but not seen
+                    javax.swing.SwingUtilities.invokeLater(() -> {
+                        if (!popup.isShowing()) {
+                            popup.setPreferredSize(null);
+                            return;
+                        }
+                        javax.swing.JLayeredPane layer = root.getLayeredPane();
+                        java.awt.Point at = popup.getLocationOnScreen();
+                        javax.swing.SwingUtilities.convertPointFromScreen(at, layer);
+                        Ghost.play(layer, new java.awt.Rectangle(at.x, at.y, size.width, size.height), picture, rows, true, () -> {
+                            popup.setPreferredSize(null);
+                            if (!popup.isVisible()) return; // closed meanwhile
+                            revealed[0] = true;
+                            popup.pack(); // the real box, at its size, in the same place
+                            revealed[0] = false;
+                        });
+                    });
+                }
+
+                @Override
+                public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
+                    if (popup.getPreferredSize().width == 0) popup.setPreferredSize(null);
+                }
+
+                @Override
+                public void popupMenuCanceled(PopupMenuEvent e) {
+                }
+            });
+        }
         combo.addPopupMenuListener(new PopupMenuListener() {
             @Override
             public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
+                if (wiped) return; // the picture of the whole box does it
                 openedAt[0] = System.currentTimeMillis();
                 timer.restart();
             }
@@ -111,6 +161,37 @@ final class TacticalCombo {
         g.fillRect(x, 0, w - x, h);
         g.setColor(Theme.ACCENT);
         g.fillRect(Math.max(0, x - 2), 2, 3, h - 4);
+    }
+
+    /** The popup as it will look at this size, laid out and painted off screen. */
+    private static java.awt.image.BufferedImage picture(JPopupMenu popup, java.awt.Dimension size) {
+        popup.setSize(size);
+        layoutAll(popup);
+        java.awt.image.BufferedImage picture = new java.awt.image.BufferedImage(size.width, size.height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = picture.createGraphics();
+        try {
+            popup.paint(g);
+        } finally {
+            g.dispose();
+        }
+        return picture;
+    }
+
+    private static void layoutAll(java.awt.Container c) {
+        c.doLayout();
+        for (Component child : c.getComponents()) if (child instanceof java.awt.Container k) layoutAll(k);
+    }
+
+    /** The list's rows in the popup's coordinates, for the wipe; the whole popup as one row without a list. */
+    private static java.awt.Rectangle[] rows(JPopupMenu popup, JList<?> list) {
+        int n = list == null ? 0 : list.getModel().getSize();
+        if (n == 0) return new java.awt.Rectangle[]{new java.awt.Rectangle(0, 0, popup.getWidth(), popup.getHeight())};
+        java.awt.Rectangle[] rows = new java.awt.Rectangle[n];
+        for (int i = 0; i < n; i++) {
+            java.awt.Rectangle r = list.getCellBounds(i, i);
+            rows[i] = r == null ? new java.awt.Rectangle() : javax.swing.SwingUtilities.convertRectangle(list, r, popup);
+        }
+        return rows;
     }
 
     private static JList<?> popupList(JComboBox<?> combo) {

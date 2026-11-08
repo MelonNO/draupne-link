@@ -110,8 +110,7 @@ final class PhoneGuideWizard {
             page.add(left, BorderLayout.WEST);
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "Install <b>Tailscale</b>, sign in with <b>the same account</b> as the PC, allow the VPN. "
-                            + "The phone appears below."));
+                    "Install <b>Tailscale</b>. Same account as the PC. Allow the VPN."));
             WizardDialog.addRow(col, pc);
             phoneChoice.setRenderer(new javax.swing.DefaultListCellRenderer() {
                 @Override
@@ -234,8 +233,7 @@ final class PhoneGuideWizard {
             page.add(left, BorderLayout.WEST);
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "On the phone: tap <b>Download the app</b>, open the file, allow installing if asked, <b>Install</b>.<br>"
-                            + "Phone must be on Tailscale or this PC's Wi-Fi. "
+                    "Tap <b>Download the app</b>, open it, <b>Install</b>.<br>"
                             + "Link fails? Pick another address under the code."));
             WizardDialog.addRow(col, file);
             firewall.setVisible(false);
@@ -332,21 +330,19 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "DRAUPNE Flight shows a yellow line per thing to fix. Two it can't check are below.";
+            return "Fix each yellow line in DRAUPNE Flight. Then tick below.";
         }
 
         /** Three boxes the pilot ticks; the phone app watches everything else and says so in yellow. */
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
-            WizardDialog.addRow(col, setting("yellow", "Yellow lines in DRAUPNE Flight: tap each, allow",
-                    "Tick this when no yellow line is left."));
-            WizardDialog.addRow(col, setting("vpn", "Tailscale: Always-on VPN (recommended)",
-                    "Keeps Tailscale up after a restart: Settings > Network &amp; internet > VPN > gear by Tailscale > "
-                            + "<b>Always-on VPN</b>."));
-            WizardDialog.addRow(col, setting("otg", "OTG switched on (some phones)",
-                    "Some phones have an <b>OTG</b> switch in Settings: turn it on just before plugging in "
-                            + "(it times out). None: skip."));
+            WizardDialog.addRow(col, setting("yellow", "No yellow lines left in DRAUPNE Flight",
+                    "Tap each line, allow."));
+            WizardDialog.addRow(col, setting("vpn", "Tailscale: Always-on VPN",
+                    "Settings > VPN > gear by Tailscale > <b>Always-on VPN</b>."));
+            WizardDialog.addRow(col, setting("otg", "OTG on (some phones)",
+                    "Turn <b>OTG</b> on just before plugging in. No such switch: skip."));
             return col;
         }
 
@@ -422,7 +418,7 @@ final class PhoneGuideWizard {
 
         @Override
         String hint() {
-            return "Open DRAUPNE Flight on the phone. Plug it into the drone with a USB data cable (props off).";
+            return "Open DRAUPNE Flight. Plug the phone into the drone by USB. <b>Props off.</b>";
         }
 
         @Override
@@ -444,7 +440,12 @@ final class PhoneGuideWizard {
             phoneChoice.setVisible(false);
             phoneRow.addComponent(phoneChoice);
             WizardDialog.addRow(col, phoneRow);
-            WizardDialog.addRow(col, WizardDialog.paragraph("On the USB prompt tick <b>Always allow</b> (or <b>Use by default</b>), tap <b>OK</b>."));
+            // 1.0.52: a point of its own, ticked by the pilot - the phone can't tell (the line under the phone before)
+            String usbKey = "setup.phoneSetting.usbAlways";
+            WizardDialog.addRow(col, new CheckRow("Phone's USB pop-up: Always open + OK").tickable(
+                    "Plugging into the drone: tick <b>Always open DRAUPNE Flight</b>, tap <b>OK</b>. Then it connects by itself.",
+                    "true".equalsIgnoreCase(main.config().getString(usbKey)),
+                    done -> main.save(Map.of(usbKey, Boolean.toString(done)))));
             WizardDialog.addRow(col, fc);
             // the camera check next to its picture, FLIP on the row
             JPanel cam = new JPanel(new BorderLayout(18, 0));

@@ -166,6 +166,18 @@ public final class WindowsSetup {
         }
     }
 
+    /**
+     * The desktop and Start menu shortcuts, made when missing (1.0.52: no setup step for them any more - the pilot:
+     * "just have the software always do it"). Only for an installed copy (launcher known); slow (PowerShell), so off
+     * the Swing thread.
+     */
+    public static void ensureShortcuts(Path launcher, Path workingDir) {
+        if (launcher == null) return;
+        for (Path lnk : List.of(desktopShortcut(), startMenuShortcut())) {
+            if (!exists(lnk)) createShortcut(lnk, launcher, workingDir);
+        }
+    }
+
     public static boolean exists(Path path) {
         return path != null && Files.exists(path);
     }

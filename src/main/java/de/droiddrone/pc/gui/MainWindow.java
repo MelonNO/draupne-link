@@ -572,6 +572,7 @@ public class MainWindow extends JFrame {
         menu.setBackground(Theme.PANEL_2);
         menu.setBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1));
         addMenuItem(menu, "First-time setup", "Everything, step by step", () -> SetupWizard.open(this));
+        addMenuItem(menu, "Set up a new drone", "Another drone and phone", () -> DroneSetup.openNewDrone(this));
         if (advanced) { // TOOLS > Advanced
             addMenuItem(menu, "PC setup", "Tailscale, firewall, radio, Windows", () -> PcSetupWizard.open(this));
             addMenuItem(menu, "Phone setup", "The phone on the drone", () -> PhoneGuideWizard.open(this));
@@ -725,6 +726,7 @@ public class MainWindow extends JFrame {
         motors.setEnabled(!isLinkActive());
         menu.add(motors);
         if (advanced) menu.add(new MenuRows.WindowRow("Virtual fleet", "Virtual drones, no hardware needed", this::openVirtualFleet));
+        if (advanced) menu.add(new MenuRows.WindowRow("Reset setup", "Settings back to a fresh install", () -> ResetSetup.ask(this)));
         menu.addSeparator();
         menu.add(new MenuRows.SwitchRow("Advanced", "Shows the settings few pilots need",
                 advanced, on -> {
@@ -751,6 +753,18 @@ public class MainWindow extends JFrame {
             logLine("Virtual fleet already runs: its drones are in the PHONE list as VIRTUAL.");
             return;
         }
+        List<String> command = appCommand();
+        command.add("fleet");
+        try {
+            new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            logLine("Virtual fleet starting: its drones appear in the PHONE list as VIRTUAL.");
+        } catch (java.io.IOException e) {
+            logLine("Virtual fleet couldn't start: " + e.getMessage());
+        }
+    }
+
+    /** This app again: the installed exe, or from source this same Java with this classpath; its arguments go after. */
+    private static List<String> appCommand() {
         List<String> command = new java.util.ArrayList<>();
         String app = System.getProperty("jpackage.app-path");
         if (app != null) {
@@ -763,13 +777,27 @@ public class MainWindow extends JFrame {
             command.add(System.getProperty("java.class.path"));
             command.add(de.droiddrone.pc.Main.class.getName());
         }
-        command.add("fleet");
-        try {
-            new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
-            logLine("Virtual fleet starting: its drones appear in the PHONE list as VIRTUAL.");
-        } catch (java.io.IOException e) {
-            logLine("Virtual fleet couldn't start: " + e.getMessage());
-        }
+        return command;
+    }
+
+    /**
+     * TOOLS > Advanced > Reset setup (1.0.52): this PC's settings file goes (the name map, the calibration, the tour's
+     * and the setup's state, queued fleet modes - all in it); flights, videos, clips, pins, drawings and saved maps
+     * stay. The app closes and starts again as a fresh install would: the setup guide, then the tour. The new one
+     * waits for this one to have gone (its ports, its settings writes).
+     */
+    void resetSetupAndRestart() {
+        shutdown(() -> {
+            try {
+                java.nio.file.Files.deleteIfExists(configFile);
+                List<String> command = appCommand();
+                command.addAll(List.of("gui", "--after", Long.toString(ProcessHandle.current().pid())));
+                new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+                de.droiddrone.pc.AppLog.drain(500);
+            } catch (IOException e) {
+                System.err.println("Reset setup: " + e.getMessage());
+            }
+        });
     }
 
     private JMenuItem addMenuItem(JPopupMenu menu, String title, String detail, Runnable open) {
@@ -2132,6 +2160,11 @@ public class MainWindow extends JFrame {
     }
 
     private void shutdown() {
+        shutdown(null);
+    }
+
+    /** @param beforeExit run once the settings are written and before the app exits (Reset setup), or null */
+    private void shutdown(Runnable beforeExit) {
         phoneWatch.shutdownNow();
         nameService.stop();
         overwatch.close();
@@ -2147,6 +2180,7 @@ public class MainWindow extends JFrame {
             Thread.currentThread().interrupt();
         }
         de.droiddrone.pc.AppLog.drain(2000); // the last lines ("Installing ...") reach the file before the exit
+        if (beforeExit != null) beforeExit.run();
         service.stop(); // the main thread leaves its polling loop and exits the app
         dispose();
     }

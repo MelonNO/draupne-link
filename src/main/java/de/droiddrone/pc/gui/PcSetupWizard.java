@@ -1,6 +1,5 @@
 package de.droiddrone.pc.gui;
 
-import de.droiddrone.pc.AppPaths;
 import de.droiddrone.pc.JoystickService;
 import de.droiddrone.pc.setup.ApkShare;
 import de.droiddrone.pc.setup.NetInfo;
@@ -23,13 +22,12 @@ import java.awt.BorderLayout;
 import java.awt.Desktop;
 import java.awt.Font;
 import java.net.URI;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Everything the Windows side needs, one step at a time; steps that are already done are skipped:
- * Tailscale, firewall, radio + calibration, power plan, shortcuts.
+ * Tailscale, firewall, radio + calibration, power plan. Shortcuts need no step: Main makes missing ones at start.
  */
 final class PcSetupWizard {
     private PcSetupWizard() {
@@ -41,8 +39,7 @@ final class PcSetupWizard {
                 new TailscalePage(main),
                 new FirewallPage(main),
                 new RadioPage(main),
-                new LatencyPage(main),
-                new ShortcutsPage(main));
+                new LatencyPage(main));
     }
 
     static void open(MainWindow main) {
@@ -587,91 +584,6 @@ final class PcSetupWizard {
                     main.logLine("Power plan set to High performance.");
                 }
                 checkPower();
-            });
-        }
-    }
-
-    /** Step 6: shortcuts. */
-    static final class ShortcutsPage extends Page {
-        private final MainWindow main;
-        private final CheckRow desktop = new CheckRow("Desktop shortcut");
-        private final CheckRow startMenu = new CheckRow("Start menu entry");
-        private final Path launcher = AppPaths.launcher();
-        private Path desktopLnk;
-        private final Path startMenuLnk = WindowsSetup.startMenuShortcut();
-        /** Both shortcuts exist (from the installer, or made just now): nothing to show. */
-        private volatile boolean readyAtStart;
-
-        ShortcutsPage(MainWindow main) {
-            this.main = main;
-        }
-
-        @Override
-        boolean isApplicable() {
-            return !readyAtStart;
-        }
-
-        @Override
-        void prepare() {
-            if (launcher == null) return;
-            background(() -> {
-                boolean ok = true;
-                for (Path lnk : List.of(WindowsSetup.desktopShortcut(), startMenuLnk)) {
-                    if (!WindowsSetup.exists(lnk)) WindowsSetup.createShortcut(lnk, launcher, AppPaths.dataDir());
-                    ok &= WindowsSetup.exists(lnk);
-                }
-                return ok;
-            }, ok -> readyAtStart = Boolean.TRUE.equals(ok));
-        }
-
-        @Override
-        String title() {
-            return "Shortcuts";
-        }
-
-        @Override
-        String hint() {
-            return "Start DRAUPNE Link with one click.";
-        }
-
-        @Override
-        JComponent build() {
-            JPanel col = WizardDialog.column();
-            if (launcher != null) {
-                desktop.addPrimaryAction("Create", () -> create(desktopLnk, desktop));
-                startMenu.addPrimaryAction("Create", () -> create(startMenuLnk, startMenu));
-            }
-            WizardDialog.addRow(col, desktop);
-            WizardDialog.addRow(col, startMenu);
-            desktop.set(State.PENDING, "Checking...");
-            startMenu.set(State.PENDING, "Checking...");
-            return col;
-        }
-
-        @Override
-        void onShow() {
-            if (launcher == null) {
-                desktop.set(State.INFO, "Start from <b>DRAUPNE Link.exe</b> to create shortcuts.");
-                startMenu.set(State.INFO, "");
-                return;
-            }
-            background(WindowsSetup::desktopShortcut, lnk -> {
-                desktopLnk = lnk;
-                show(desktop, lnk);
-            });
-            show(startMenu, startMenuLnk);
-        }
-
-        private void show(CheckRow row, Path lnk) {
-            boolean exists = WindowsSetup.exists(lnk);
-            row.set(exists ? State.OK : State.WARN, exists ? "Created: " + lnk : "Starts " + launcher.getFileName());
-        }
-
-        private void create(Path lnk, CheckRow row) {
-            if (lnk == null) return;
-            background(() -> WindowsSetup.createShortcut(lnk, launcher, AppPaths.dataDir()), r -> {
-                if (r == null || !r.ok()) main.logLine("Shortcut not created: " + (r == null ? "" : lastLine(r.output())));
-                show(row, lnk);
             });
         }
     }

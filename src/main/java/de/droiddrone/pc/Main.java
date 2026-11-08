@@ -19,6 +19,10 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         String command = args.length > 0 ? args[0] : "gui";
+        // "--after <pid>": started by Reset setup - wait for the old window to have gone (its ports, its settings file)
+        for (int i = 1; i + 1 < args.length; i++) {
+            if ("--after".equals(args[i])) waitForExit(args[i + 1]);
+        }
         // run by the installer and its scheduled task as administrator / SYSTEM: no settings file, no window
         switch (command) {
             case "prepare-pc" -> {
@@ -113,6 +117,21 @@ public class Main {
         }
     }
 
+    /** Waits (15 s at most) until the process with this id has ended; a bad id waits for nothing. */
+    static void waitForExit(String pid) {
+        try {
+            ProcessHandle.of(Long.parseLong(pid.trim())).ifPresent(p -> {
+                try {
+                    p.onExit().get(15, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    // gone, or still there after 15 s: start anyway
+                }
+            });
+        } catch (NumberFormatException ignored) {
+            // not a process id
+        }
+    }
+
     /** GLFW polling stays on this (main) thread; the window runs on the Swing thread and reads snapshots. */
     private static void gui(PcConfig config, Path configFile) {
         AppLog.start(AppPaths.dataDir().resolve("logs"));
@@ -120,7 +139,10 @@ public class Main {
         WindowsTuning.apply();
         removeOldPerUserInstall();
         if (AppPaths.launcher() != null) {
-            Thread t = new Thread(de.droiddrone.pc.setup.WindowsSetup::removeDeadOldShortcuts, "removeOldShortcuts");
+            Thread t = new Thread(() -> {
+                de.droiddrone.pc.setup.WindowsSetup.removeDeadOldShortcuts();
+                de.droiddrone.pc.setup.WindowsSetup.ensureShortcuts(AppPaths.launcher(), AppPaths.dataDir());
+            }, "shortcuts");
             t.setDaemon(true);
             t.start();
         }
