@@ -57,7 +57,7 @@ final class PlacePhoneDialog extends JDialog {
         JPanel head = new JPanel(new java.awt.GridLayout(0, 1, 0, 2));
         head.setOpaque(false);
         head.add(Theme.sectionTitle("Place " + drone.name()));
-        head.add(Theme.label("Click on the map where " + drone.name() + " should stand. Drag to pan, the wheel zooms.",
+        head.add(Theme.label("Click where " + drone.name() + " should stand. Drag pans, wheel zooms.",
                 Theme.font(Font.PLAIN, 12.5f), Theme.TEXT));
         head.add(status);
         root.add(head, BorderLayout.NORTH);
@@ -99,11 +99,11 @@ final class PlacePhoneDialog extends JDialog {
         if (ll == null) return;
         String where = Coordinates.mgrs(ll[0], ll[1], 5);
         if (drone.isArmed() || !drone.moveTo(ll[0], ll[1])) {
-            status.setText(drone.name() + " is armed: it stays where it flies. Disarm it first.");
+            status.setText(drone.name() + " is armed: disarm first.");
             status.setForeground(Theme.BAD);
             return;
         }
-        status.setText(drone.name() + " placed at " + where + ". Click again to move it again, or DONE.");
+        status.setText(drone.name() + " placed at " + where + ". Click to move, or DONE.");
         status.setForeground(Theme.TEXT);
         log.accept(drone.name() + ": placed at " + where);
         showDrones();

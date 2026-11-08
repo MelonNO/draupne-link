@@ -295,7 +295,7 @@ final class OverwatchPanel extends JPanel {
             head.add(when);
             // a plain close in the corner (1.0.50, the pilot): the same as DISMISS - the card goes until a new alert
             JButton closeCard = Theme.secondaryButton("X");
-            closeCard.setToolTipText("Close: as DISMISS - the preview stops, and the drone stays silent until the motion ends (10 min at most)");
+            closeCard.setToolTipText("Close (= DISMISS): preview stops, drone silent until motion ends (max 10 min)");
             closeCard.addActionListener(e -> onDismiss.accept(drone));
             JPanel headRow = new JPanel(new BorderLayout(6, 0));
             headRow.setOpaque(false);
@@ -313,7 +313,7 @@ final class OverwatchPanel extends JPanel {
             lines.setOpaque(false);
             lines.add(info, BorderLayout.NORTH);
             lines.add(held, BorderLayout.CENTER);
-            resume.setToolTipText("The drone that holds this PC back is on the ground: the preview and the clip come at once (asks first)");
+            resume.setToolTipText("The drone holding this back has landed: send preview and clip now (asks first)");
             resume.addActionListener(e -> {
                 if (onResume != null) onResume.run();
             });
@@ -324,10 +324,10 @@ final class OverwatchPanel extends JPanel {
             JPanel buttons = new JPanel(new GridLayout(1, 3, 6, 0));
             buttons.setOpaque(false);
             JButton connect = Theme.primaryButton("Connect");
-            connect.setToolTipText("Wake the drone and connect to it as its pilot");
+            connect.setToolTipText("Wake the drone and connect as pilot");
             connect.addActionListener(e -> onConnect.accept(drone));
             JButton dismiss = Theme.secondaryButton("Dismiss");
-            dismiss.setToolTipText("Close this: the preview stops, and the drone stays silent until the motion ends (10 min at most)");
+            dismiss.setToolTipText("Preview stops, drone silent until motion ends (max 10 min)");
             dismiss.addActionListener(e -> onDismiss.accept(drone));
             JButton clips = Theme.secondaryButton("Clips");
             clips.setToolTipText("This drone's clips");
@@ -344,7 +344,7 @@ final class OverwatchPanel extends JPanel {
             JButton open = Theme.secondaryButton("Clips");
             open.addActionListener(e -> openClips(drone));
             JButton close = Theme.secondaryButton("X");
-            close.setToolTipText("Off the map window; the clip stays in the list");
+            close.setToolTipText("Hide; the clip stays in the list");
             close.addActionListener(e -> onCloseBadge.accept(drone));
             badgeButtons.add(open);
             badgeButtons.add(close);
@@ -389,7 +389,7 @@ final class OverwatchPanel extends JPanel {
                 held.setVisible(pausedNow);
                 layout = true;
             }
-            picture.setNote(pausedNow ? "LIVE PREVIEW PAUSED" : "WAITING FOR THE PICTURE");
+            picture.setNote(pausedNow ? "LIVE PREVIEW PAUSED" : "WAITING FOR PICTURE");
             picture.setImage(v.picture(), v.ended() ? null : a == null ? null : new float[]{a.x, a.y, a.w, a.h});
             return layout;
         }
@@ -414,7 +414,7 @@ final class OverwatchPanel extends JPanel {
     private static final class Picture extends JComponent {
         private volatile BufferedImage image;
         private volatile float[] box;
-        private volatile String note = "WAITING FOR THE PICTURE";
+        private volatile String note = "WAITING FOR PICTURE";
 
         Picture() {
             setOpaque(true);
@@ -471,7 +471,7 @@ final class OverwatchPanel extends JPanel {
         head.setOpaque(false);
         head.add(Theme.label("CLIPS", Theme.headingFont(13f), Theme.TEXT), BorderLayout.WEST);
         TacticalCombo.install(droneCombo);
-        droneCombo.setToolTipText("Whose clips: every drone that has a folder in Documents\\DRAUPNE Link\\Overwatch");
+        droneCombo.setToolTipText("Drone (folders in Documents\\DRAUPNE Link\\Overwatch)");
         droneCombo.addActionListener(e -> {
             if (!fillingCombo) fillClips();
         });
@@ -502,10 +502,10 @@ final class OverwatchPanel extends JPanel {
         JButton play = Theme.primaryButton("Play");
         play.addActionListener(e -> playSelected());
         JButton remove = Theme.secondaryButton("Remove");
-        remove.setToolTipText("Off this list; the files stay in the folder");
+        remove.setToolTipText("Remove from list; files stay");
         remove.addActionListener(e -> removeSelected());
         JButton folder = Theme.secondaryButton("Folder");
-        folder.setToolTipText("Show in folder: Explorer opens on the clip's files");
+        folder.setToolTipText("Show the clip's files in Explorer");
         folder.addActionListener(e -> showInFolder());
         actions.add(play);
         actions.add(remove);
@@ -582,15 +582,15 @@ final class OverwatchPanel extends JPanel {
         int gen = ++listGen;
         if (drone == null) {
             clipModel.clear();
-            folderSize.setText("No clips yet: a drone in OVERWATCH records what it sees move.");
+            folderSize.setText("No clips yet. A drone in OVERWATCH records motion.");
             return;
         }
         Coordinates.Format fmt = format.get();
         listWork.execute(() -> {
             List<Row> rows = new ArrayList<>();
             for (ClipIndex.Clip c : index.clips(drone)) rows.add(row(c, fmt));
-            String size = rows.size() + " clip" + (rows.size() == 1 ? "" : "s") + "  -  the folder holds " + ClipIndex.sizeText(index.folderBytes(drone))
-                    + " (removed ones too; nothing is deleted by the app)";
+            String size = rows.size() + " clip" + (rows.size() == 1 ? "" : "s") + "  -  folder " + ClipIndex.sizeText(index.folderBytes(drone))
+                    + " (incl. removed; the app deletes nothing)";
             SwingUtilities.invokeLater(() -> {
                 if (gen != listGen) return; // a newer list is on its way
                 clipModel.clear();
@@ -608,9 +608,9 @@ final class OverwatchPanel extends JPanel {
         String when = c.startedAt() > 0 ? DAY_TIME.format(Instant.ofEpochMilli(c.startedAt()).atZone(ZoneId.systemDefault())) : c.id();
         int parts = c.parts().size(); // pc.38's 60 s segments: one event, one row
         boolean full = parts > 0, preview = c.preview() != null;
-        String kind = full ? "full quality" + (parts > 1 ? " (" + parts + " parts)" : "") : preview ? "preview (the full clip is on its way)" : "pictures only";
+        String kind = full ? "full quality" + (parts > 1 ? " (" + parts + " parts)" : "") : preview ? "preview (full clip coming)" : "pictures only";
         if ("none".equals(c.meta().getProperty("clip")) && !full) kind = preview ? "preview (no full clip)" : "pictures only";
-        if (c.meta().getProperty("clipBadSha256") != null && !full) kind = preview ? "preview (the full clip came damaged)" : "pictures only";
+        if (c.meta().getProperty("clipBadSha256") != null && !full) kind = preview ? "preview (full clip damaged)" : "pictures only";
         String where = c.hasPosition() ? Coordinates.format(fmt, c.lat(), c.lon()) : "position unknown";
         return new Row(c, thumb(c.thumbnail()), "<html><b>" + when + "</b><br>" + length(c.durationMs()) + "  -  " + kind
                 + "<br><span style='color:#8c8c7e'>" + where + "</span></html>");
@@ -769,7 +769,7 @@ final class OverwatchPanel extends JPanel {
                 sleep(500);
             }
             if (videos.isEmpty()) {
-                post(gen, null, "No video of this event: only the pictures before the alert", -1);
+                post(gen, null, "No video: only the pictures before the alert", -1);
                 return;
             }
             // where each part starts on the event's one timeline

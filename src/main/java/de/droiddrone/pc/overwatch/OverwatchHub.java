@@ -193,7 +193,7 @@ public final class OverwatchHub implements AutoCloseable {
             if (s == null) return;
             s.card.dismiss(now());
             send(s, OverwatchProtocol.command(s.token, s.event, OverwatchProtocol.CMD_DISMISS));
-            log(drone + ": alert dismissed. It stays silent until the motion ends (10 min at most).");
+            log(drone + ": alert dismissed; silent until motion ends (max 10 min).");
             publish();
         });
     }
@@ -316,7 +316,7 @@ public final class OverwatchHub implements AutoCloseable {
         boolean news = s.card.onAlert(a.event, a.alertNo, now);
         if (news) {
             log(s.drone() + ": MOTION " + (a.light() ? "(a light) " : "") + "- overwatch alert"
-                    + (a.alertNo > 0 ? " again (still moving 10 min after the dismiss)" : "") + ".");
+                    + (a.alertNo > 0 ? " again (still moving 10 min after dismiss)" : "") + ".");
             Listener l = listener;
             if (l != null) l.onNews(s.drone());
         }
@@ -357,7 +357,7 @@ public final class OverwatchHub implements AutoCloseable {
             try {
                 s.decoder = VideoDecoder.oneThread(false, s.config);
             } catch (RuntimeException e) {
-                log(s.drone() + ": the preview can't be decoded: " + e.getMessage());
+                log(s.drone() + ": preview can't be decoded: " + e.getMessage());
                 return;
             }
         }
@@ -369,7 +369,7 @@ public final class OverwatchHub implements AutoCloseable {
                 s.recorder = new StreamRecorder(file, false, w, h, s.config);
                 s.recordStart = now;
             } catch (IOException e) {
-                log(s.drone() + ": the preview isn't recorded: " + e.getMessage());
+                log(s.drone() + ": preview not recorded: " + e.getMessage());
                 s.recordFailed = true;
             }
         }
@@ -417,7 +417,7 @@ public final class OverwatchHub implements AutoCloseable {
                 }
             }
         } catch (IOException e) {
-            log(s.drone() + ": a picture before the alert wasn't saved: " + e.getMessage());
+            log(s.drone() + ": pre-alert picture not saved: " + e.getMessage());
         }
     }
 
@@ -438,7 +438,7 @@ public final class OverwatchHub implements AutoCloseable {
                         m.setProperty("endedAt", Long.toString(e[0]));
                         if (e[1] == 0) m.setProperty("clip", "none");
                     });
-                    log(s.drone() + ": the motion ended" + (e[1] != 0 ? "; its clip comes " + (isFlying() ? "once no drone here may be flying (" + heldWhy() + ")." : "now.") : "."));
+                    log(s.drone() + ": motion ended" + (e[1] != 0 ? "; clip comes " + (isFlying() ? "when no drone may be flying (" + heldWhy() + ")." : "now.") : "."));
                     Listener l = listener;
                     if (l != null) l.onClips(s.drone());
                 }
@@ -448,7 +448,7 @@ public final class OverwatchHub implements AutoCloseable {
             case OverwatchProtocol.CLIP_CHUNK -> onChunk(s, d, event);
             case OverwatchProtocol.CLIP_NONE -> {
                 String why = OverwatchProtocol.readClipNone(d, d.length);
-                log(s.drone() + ": no full-quality clip of that event (" + why + "); the preview recorded here stays as its clip.");
+                log(s.drone() + ": no full-quality clip (" + why + "); the preview is kept as the clip.");
             }
             default -> {
             }
@@ -486,11 +486,11 @@ public final class OverwatchHub implements AutoCloseable {
                 m.setProperty("clipSound", Boolean.toString(info.sound));
                 m.setProperty("clipSize.wh", info.width + "x" + info.height);
             });
-            log(s.drone() + ": its clip" + (part > 1 ? " (part " + part + ")" : "") + " (" + ClipIndex.sizeText(info.size)
-                    + (ct.received() > 0 ? ", going on from " + ClipIndex.sizeText(ct.received()) : "")
-                    + ") comes" + (isFlying() ? " once no drone here may be flying (" + heldWhy() + ")." : " now."));
+            log(s.drone() + ": clip" + (part > 1 ? " (part " + part + ")" : "") + " (" + ClipIndex.sizeText(info.size)
+                    + (ct.received() > 0 ? ", resuming at " + ClipIndex.sizeText(ct.received()) : "")
+                    + ") comes" + (isFlying() ? " when no drone may be flying (" + heldWhy() + ")." : " now."));
         } catch (IOException e) {
-            log(s.drone() + ": the clip can't be stored: " + e.getMessage());
+            log(s.drone() + ": clip can't be stored: " + e.getMessage());
         }
     }
 
@@ -502,7 +502,7 @@ public final class OverwatchHub implements AutoCloseable {
             t.clip.onChunk(OverwatchProtocol.chunkOffset(d), d, OverwatchProtocol.CHUNK_DATA_AT, d.length - OverwatchProtocol.CHUNK_DATA_AT);
             if (!t.clip.complete()) return;
         } catch (IOException e) {
-            log(s.drone() + ": the clip can't be written: " + e.getMessage());
+            log(s.drone() + ": clip can't be written: " + e.getMessage());
             return;
         }
         finishClip(s, t, now());
@@ -517,7 +517,7 @@ public final class OverwatchHub implements AutoCloseable {
         try {
             r = t.clip.finish();
         } catch (IOException e) {
-            if (!t.renameFailedSaid) log(s.drone() + ": the clip came and checked, but can't be given its name (" + e.getMessage() + "): tried again.");
+            if (!t.renameFailedSaid) log(s.drone() + ": clip checked but can't be renamed (" + e.getMessage() + "): retrying.");
             t.renameFailedSaid = true;
             return;
         }
@@ -530,19 +530,19 @@ public final class OverwatchHub implements AutoCloseable {
                     m.setProperty("clip", "full");
                     m.setProperty(CHECKED_SHA + sfx, hex(t.info.sha256)); // the phone may announce it again: no second hashing
                 });
-                log(s.drone() + ": its full-quality clip" + (t.info.part > 1 ? " (part " + t.info.part + ")" : "") + " is here ("
-                        + ClipIndex.sizeText(t.info.size) + ", checked); the phone deletes its copy.");
+                log(s.drone() + ": full-quality clip" + (t.info.part > 1 ? " (part " + t.info.part + ")" : "") + " is here ("
+                        + ClipIndex.sizeText(t.info.size) + ", checked); phone deletes its copy.");
                 Listener l = listener;
                 if (l != null) l.onClips(s.drone());
             }
-            case MISMATCH -> log(s.drone() + ": the clip came damaged (its SHA-256 differs): fetched again (" + t.clip.mismatches()
-                    + " of " + ClipTransfer.MAX_RETRIES + " tries again).");
+            case MISMATCH -> log(s.drone() + ": clip damaged (SHA-256 differs): fetching again (" + t.clip.mismatches()
+                    + " of " + ClipTransfer.MAX_RETRIES + " retries).");
             case FAILED -> {
                 send(s, OverwatchProtocol.clipDone(s.token, event, false, t.info.startedAt));
                 t.close();
                 s.transfer = null;
                 updateMeta(s, t.id, m -> m.setProperty(BAD_SHA + sfx, hex(t.info.sha256)));
-                log(s.drone() + ": the clip came damaged " + t.clip.mismatches() + " times: given up. The preview recorded here stays as its clip.");
+                log(s.drone() + ": clip damaged " + t.clip.mismatches() + " times: gave up. The preview is kept as the clip.");
                 Listener l = listener;
                 if (l != null) l.onClips(s.drone());
             }
@@ -628,7 +628,7 @@ public final class OverwatchHub implements AutoCloseable {
         try {
             return idFor(s, event, startedAt);
         } catch (IOException e) {
-            log(s.drone() + ": the event can't be stored: " + e.getMessage());
+            log(s.drone() + ": event can't be stored: " + e.getMessage());
             return null;
         }
     }
@@ -694,7 +694,7 @@ public final class OverwatchHub implements AutoCloseable {
             }
             index.save(s.drone(), id, m);
         } catch (IOException e) {
-            log(s.drone() + ": the event's facts weren't saved: " + e.getMessage());
+            log(s.drone() + ": event details not saved: " + e.getMessage());
         }
     }
 

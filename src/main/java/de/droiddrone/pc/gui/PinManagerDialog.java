@@ -41,7 +41,7 @@ final class PinManagerDialog extends JDialog {
     private final Supplier<FlightTrack> track;
     private final DefaultListModel<Pins.Pin> model = new DefaultListModel<>();
     private final JList<Pins.Pin> list = new JList<>(model);
-    private final JLabel none = Theme.label("No pins yet. Right-click on the map, or ADD AT GRID / ADD AT DRONE / ADD AT LAUNCH.", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
+    private final JLabel none = Theme.label("No pins. Right-click the map, or ADD AT GRID / DRONE / LAUNCH.", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
     private final Timer refresh = new Timer(1000, e -> refresh());
     private List<Pins.Pin> shown = List.of();
 
@@ -93,11 +93,11 @@ final class PinManagerDialog extends JDialog {
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         buttons.setOpaque(false);
         JButton go = Theme.primaryButton("Go to");
-        go.setToolTipText("Centre the map on the pin (also a double-click)");
+        go.setToolTipText("Centre on the pin (or double-click)");
         go.addActionListener(e -> goTo());
         buttons.add(go);
         JButton copy = Theme.secondaryButton("Copy");
-        copy.setToolTipText("The pin's position, as the list shows it, to the clipboard (also Ctrl+C)");
+        copy.setToolTipText("Copy the position (Ctrl+C)");
         Timer copied = new Timer(1500, e -> copy.setText("Copy"));
         copied.setRepeats(false);
         Runnable copySelected = () -> {
@@ -139,11 +139,11 @@ final class PinManagerDialog extends JDialog {
         buttons.add(remove);
         buttons.add(Box.createHorizontalStrut(10));
         JButton atGrid = Theme.secondaryButton("Add at grid");
-        atGrid.setToolTipText("A pin at a position typed or pasted: MGRS, UTM, or latitude, longitude");
+        atGrid.setToolTipText("Pin at a typed position: MGRS, UTM or lat, lon");
         atGrid.addActionListener(e -> addAtGrid());
         buttons.add(atGrid);
         JButton atDrone = Theme.secondaryButton("Add at drone");
-        atDrone.setToolTipText("A pin where the drone is (its last known position)");
+        atDrone.setToolTipText("Pin at the drone's last known position");
         atDrone.addActionListener(e -> {
             FlightTrack t = track.get();
             FlightTrack.Point last = t == null ? null : t.last();
@@ -153,7 +153,7 @@ final class PinManagerDialog extends JDialog {
         });
         buttons.add(atDrone);
         JButton atLaunch = Theme.secondaryButton("Add at launch");
-        atLaunch.setToolTipText("A pin where the drone armed");
+        atLaunch.setToolTipText("Pin where the drone armed");
         atLaunch.addActionListener(e -> {
             FlightTrack t = track.get();
             FlightTrack.Point h = t == null ? null : t.home();
@@ -164,7 +164,7 @@ final class PinManagerDialog extends JDialog {
         buttons.add(atLaunch);
         buttons.add(Box.createHorizontalStrut(10));
         JButton export = Theme.secondaryButton("Export GPX");
-        export.setToolTipText("Every pin as a GPX waypoint file, for another map program or a phone");
+        export.setToolTipText("All pins as GPX waypoints");
         export.addActionListener(e -> exportGpx());
         buttons.add(export);
         JButton clear = Theme.secondaryButton("Remove all");
@@ -229,7 +229,7 @@ final class PinManagerDialog extends JDialog {
             if (JOptionPane.showConfirmDialog(this, box, "Add pin at grid", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
             double[] ll = Coordinates.parse(position.getText());
             if (ll == null) {
-                hint.setText("Not a position I can read. MGRS, UTM, or latitude, longitude.");
+                hint.setText("Unreadable position. MGRS, UTM or lat, lon.");
                 hint.setForeground(Theme.BAD);
                 continue;
             }
@@ -272,7 +272,7 @@ final class PinManagerDialog extends JDialog {
             String why = problem;
             javax.swing.SwingUtilities.invokeLater(() -> {
                 if (why == null) JOptionPane.showMessageDialog(this, "Pins written to " + file.getFileName() + ".", "Pins", JOptionPane.INFORMATION_MESSAGE);
-                else JOptionPane.showMessageDialog(this, "Could not write the file: " + why, "Pins", JOptionPane.WARNING_MESSAGE);
+                else JOptionPane.showMessageDialog(this, "Write failed: " + why, "Pins", JOptionPane.WARNING_MESSAGE);
             });
         }, "pinsExport").start();
     }
