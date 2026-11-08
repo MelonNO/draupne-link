@@ -908,6 +908,11 @@ final class MapWindow extends JFrame {
         overwatchPanel.setViews(views);
     }
 
+    /** The drones in OVERWATCH now: their camera's view on this map, alert or not (1.0.50). */
+    void setOverwatchWatching(java.util.List<OverwatchPanel.Watching> watching) {
+        overwatchPanel.setWatching(watching);
+    }
+
     /**
      * A new alert: the map pans to the drone when it is off the screen; with attention (this PC doesn't fly) the
      * window comes up in front and its taskbar button asks to be looked at. Flying, it shows quietly.

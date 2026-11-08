@@ -1537,6 +1537,7 @@ public class MainWindow extends JFrame {
         lastArmedAt = 0;
         linkLogTimer.start();
         updateFlightLayout();
+        standbyPhones.remove(target.ip()); // a Connect wakes a standby phone
         logLine((watch ? "Watching " : "Connecting to ") + target.name() + (target.isVirtual() ? " (VIRTUAL)" : "") + " (" + target.ip() + ":" + de.droiddrone.pc.fleet.VirtualFleet.portOf(target.ip(), port) + ")" + (target.online() ? "" : " - last seen " + Names.agoText(target.lastSeen(), System.currentTimeMillis())));
         setLinkEditable(false);
     }
@@ -3143,6 +3144,21 @@ public class MainWindow extends JFrame {
     private void refreshOverwatch() {
         java.util.List<de.droiddrone.pc.overwatch.OverwatchHub.View> views = overwatch.views();
         MapWindow w = mapWindow;
+        // the drones in OVERWATCH now, on time with their check-ins: their camera's view on both maps (1.0.50, the pilot)
+        java.util.List<OverwatchPanel.Watching> watching = new java.util.ArrayList<>();
+        java.util.List<MapView.OverwatchMark> miniMarks = new java.util.ArrayList<>();
+        long wall = System.currentTimeMillis();
+        for (Asleep a : asleepPhones.values()) {
+            if (!a.overwatch() || checkInOverdue(a, wall) > 0) continue;
+            for (de.droiddrone.pc.overwatch.OverwatchHub.Watched wd : overwatch.watched()) {
+                if (!wd.drone().equalsIgnoreCase(a.name()) || wd.pose() == null) continue;
+                watching.add(new OverwatchPanel.Watching(wd.drone(), wd.pose()));
+                miniMarks.add(new MapView.OverwatchMark(wd.drone(), wd.pose().lat(), wd.pose().lon(), watchedView(wd.pose()),
+                        Double.NaN, false, false, null, true));
+            }
+        }
+        miniMap.setOverwatchMarks(miniMarks);
+        if (w != null) w.setOverwatchWatching(watching);
         if (w != null && w.isShown()) {
             w.setOverwatch(views);
             setOverwatchBadge(false);
@@ -3155,6 +3171,19 @@ public class MainWindow extends JFrame {
             }
         }
     }
+
+    /** The minimap's view of a watching drone's camera: worked out once per pose (flat ground under it: no terrain). */
+    private de.droiddrone.pc.map.CameraFootprint.View watchedView(de.droiddrone.pc.map.CameraFootprint.Pose p) {
+        de.droiddrone.pc.map.CameraFootprint.View v = watchedViews.get(p);
+        if (v == null) {
+            v = de.droiddrone.pc.map.CameraFootprint.compute(p, null, p.altM() - 2);
+            if (watchedViews.size() > 32) watchedViews.clear();
+            watchedViews.put(p, v);
+        }
+        return v;
+    }
+
+    private final Map<de.droiddrone.pc.map.CameraFootprint.Pose, de.droiddrone.pc.map.CameraFootprint.View> watchedViews = new java.util.HashMap<>();
 
     /** CONNECT on an overwatch card: the phone wakes (told over the overwatch link) and this PC connects to it as its pilot. */
     void overwatchConnect(String drone) {
@@ -3618,7 +3647,16 @@ public class MainWindow extends JFrame {
             // they miss their check-ins, then they are unknown; a drone gone quiet while flown or armed is lost
             MapView.Kind kind;
             String doing;
-            if (sleeping != null) {
+            String standbyName = ip == null || sleeping != null ? null : standbyPhones.get(ip);
+            if (standbyName != null && Boolean.TRUE.equals(p.armed())) {
+                standbyPhones.remove(ip); // armed ends standby on the phone
+                standbyName = null;
+            }
+            if (standbyName != null) {
+                kind = age > 120_000 ? MapView.Kind.UNKNOWN : MapView.Kind.ASLEEP;
+                doing = age > 120_000 ? "STANDBY - NOT HEARD " + Names.agoText(now - age, now).toUpperCase(java.util.Locale.ROOT) + " - UNKNOWN"
+                        : "STANDBY - CONNECT wakes it";
+            } else if (sleeping != null) {
                 long overdue = checkInOverdue(sleeping, now);
                 if (overdue > 0) {
                     kind = MapView.Kind.UNKNOWN;
@@ -3724,6 +3762,7 @@ public class MainWindow extends JFrame {
             logLine(phoneOverwatching ? "The phone overwatches: its camera watches, the rest sleeps. Something moving shows in the map window; "
                     + "it listens for this PC every " + checkIntervalMin + " min; press WAKE to bring it back."
                     : "The phone is in deep sleep. It listens for this PC for 20 s every " + checkIntervalMin + " min; press WAKE to bring it back.");
+            autoDisconnect(link, "asleep"); // 1.0.50, the pilot: the sleep buttons end the connection by themselves
         }
         if (phoneAsleep) {
             if (link.isConnected()) {
@@ -3799,6 +3838,11 @@ public class MainWindow extends JFrame {
             powerStatus.setText(" ");
         } else if (reported == ControlLink.POWER_STANDBY) {
             powerStatus.setText("<html>STANDBY - the phone's camera is off, its GPS and telemetry slowed, its screen dimmed. No sticks are sent. Press WAKE.</html>");
+            if (powerWanted == ControlLink.POWER_STANDBY && !link.isSpectator()) { // 1.0.50: STANDBY ends the connection too
+                String ip = config.getString("ip");
+                if (!ip.isEmpty()) standbyPhones.put(ip, config.getString(Names.PHONE_NAME_KEY));
+                autoDisconnect(link, "standby");
+            }
         } else if (reported == ControlLink.POWER_DEEP_SLEEP) {
             powerStatus.setText("Going to deep sleep in " + pp.sleepInS() + " s...");
         } else if (reported == ControlLink.POWER_OVERWATCH) {
@@ -3814,6 +3858,28 @@ public class MainWindow extends JFrame {
         wakeButton.setEnabled(powerWanted != ControlLink.POWER_NORMAL || reported > 0);
         checkIntervalCombo.setEnabled(idle);
     }
+
+    /**
+     * STANDBY, DEEP SLEEP and OVERWATCH end the connection by themselves once the phone is in the mode (1.0.50, the
+     * pilot). A sleeping phone stays in the PHONE list with WAKE and its check-in countdown; a standby one wakes at the
+     * next CONNECT. Later on the Swing thread, and only if that same link is still this PC's connection.
+     */
+    private void autoDisconnect(ControlLink link, String why) {
+        if (autoDisconnecting) return;
+        autoDisconnecting = true;
+        SwingUtilities.invokeLater(() -> {
+            autoDisconnecting = false;
+            Connection c = connection;
+            if (c == null || c.getLink() != link || fcArmedNow()) return;
+            logLine(why.equals("standby") ? "STANDBY: disconnected by itself; CONNECT wakes the phone again (about 2 s)."
+                    : "Disconnected by itself: the phone sleeps; this PC still answers its checks (WAKE in the PHONE list).");
+            disconnect();
+        });
+    }
+
+    private boolean autoDisconnecting;
+    /** Phones left in STANDBY by this PC's auto-disconnect: their map sign is the moon until they are connected to again. */
+    private final Map<String, String> standbyPhones = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** In STANDBY no sticks go out: the session sees "no radio" and, on waking, waits for a low throttle again. */
     private boolean sticksPaused() {

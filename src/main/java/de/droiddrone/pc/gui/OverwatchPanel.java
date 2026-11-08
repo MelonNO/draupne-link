@@ -213,8 +213,28 @@ final class OverwatchPanel extends JPanel {
         return a != null && a.hasPosition() ? new double[]{a.latE7 / 1e7, a.lonE7 / 1e7} : null;
     }
 
+    /** A drone in OVERWATCH now (on time with its check-ins) and where it stands and looks: its view goes on the map. */
+    record Watching(String drone, CameraFootprint.Pose pose) {}
+
+    private List<Watching> watching = List.of();
+
+    /** The drones overwatching now (MainWindow, once a second): their camera's view on the map, alert or not (1.0.50). */
+    void setWatching(List<Watching> list) {
+        List<Watching> next = list == null ? List.of() : List.copyOf(list);
+        if (next.equals(watching)) return;
+        watching = next;
+        map.setOverwatchMarks(marks());
+    }
+
     private List<MapView.OverwatchMark> marks() {
         List<MapView.OverwatchMark> out = new ArrayList<>();
+        for (Watching wd : watching) { // under the alerts: the calm view of each drone that watches
+            boolean alerting = false;
+            for (OverwatchHub.View v : views) if (v.drone().equalsIgnoreCase(wd.drone()) && v.shown() == AlertCard.Shown.CARD) alerting = true;
+            if (alerting) continue; // its alert draws the view, red
+            out.add(new MapView.OverwatchMark(wd.drone(), wd.pose().lat(), wd.pose().lon(), cone(wd.drone(), "watch:" + wd.drone(), wd.pose()),
+                    Double.NaN, false, false, null, true));
+        }
         for (OverwatchHub.View v : views) {
             double[] at = position(v);
             if (at == null || v.shown() == AlertCard.Shown.HIDDEN) continue;

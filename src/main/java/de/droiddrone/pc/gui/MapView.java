@@ -823,7 +823,12 @@ class MapView extends JComponent {
      * = a clip of it plays (the view as it was, calmer).
      */
     record OverwatchMark(String drone, double lat, double lon, CameraFootprint.View view, double bearingDeg, boolean alert,
-                         boolean replay, String label) {}
+                         boolean replay, String label, boolean watching) {
+        OverwatchMark(String drone, double lat, double lon, CameraFootprint.View view, double bearingDeg, boolean alert,
+                      boolean replay, String label) {
+            this(drone, lat, lon, view, bearingDeg, alert, replay, label, false);
+        }
+    }
 
     private volatile List<OverwatchMark> overwatchMarks = List.of();
     /** Right-click on a drone: CLIPS of it (the map window's clip list). */
@@ -878,6 +883,22 @@ class MapView extends JComponent {
         try {
             double phase = (System.currentTimeMillis() % 1400) / 1400.0;
             for (OverwatchMark m : marks) {
+                if (m.watching()) { // a drone in OVERWATCH, no alert (1.0.50): the ground its camera watches, calm teal
+                    if (m.view() == null) continue; // its eye (the drone's sign) stands for it
+                    Path2D shape = new Path2D.Double();
+                    for (double[] ll : m.view().outline()) {
+                        Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                        if (shape.getCurrentPoint() == null) shape.moveTo(p.getX(), p.getY());
+                        else shape.lineTo(p.getX(), p.getY());
+                    }
+                    shape.closePath();
+                    g.setColor(Theme.alpha(OVERWATCH_COLOR, 38));
+                    g.fill(shape);
+                    g.setColor(Theme.alpha(OVERWATCH_COLOR, 190));
+                    g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1, new float[]{6, 4}, 0));
+                    g.draw(shape);
+                    continue;
+                }
                 Color c = m.replay() ? new Color(255, 236, 160) : ALERT;
                 Point2D d = toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, w, h);
                 if (m.view() != null) {
