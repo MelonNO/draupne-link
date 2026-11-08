@@ -376,7 +376,7 @@ class MapView extends JComponent {
                 if (tool == Tool.HORIZON) { // the mast goes here; a second click moves it (one at a time)
                     double[] ll = toLatLon(e.getX(), e.getY());
                     horizonMast = new MapGraphics.LatLon(ll[0], ll[1]);
-                    setHorizon(null, "Loading the terrain...");
+                    setHorizon(null, "Loading terrain...");
                     if (onHorizonMast != null) onHorizonMast.accept(horizonMast);
                     return;
                 }
@@ -616,7 +616,7 @@ class MapView extends JComponent {
     private void addPin(int x, int y) {
         if (pins == null) return;
         double[] ll = toLatLon(x, y);
-        String name = (String) javax.swing.JOptionPane.showInputDialog(this, "Name of the pin", "Add pin",
+        String name = (String) javax.swing.JOptionPane.showInputDialog(this, "Pin name", "Add pin",
                 javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, pins.nextName());
         if (name == null) return;
         pins.add(name, ll[0], ll[1]);
@@ -977,15 +977,15 @@ class MapView extends JComponent {
         OverwatchMark watching = overwatchAt(x, y);
         String clipsOf = watching != null ? watching.drone() : drone != null ? drone.name() : null;
         if (clipsOf != null && onClips != null) { // 1.0.47: the drone's overwatch clips
-            JMenuItem clips = new JMenuItem("Clips of " + clipsOf + " (overwatch)...");
+            JMenuItem clips = new JMenuItem("Overwatch clips of " + clipsOf + "...");
             clips.addActionListener(e -> onClips.accept(clipsOf));
             menu.add(clips);
             if (drone == null) menu.addSeparator();
         }
         if (drone != null && onDroneConnect != null) {
             if (drone.flown()) {
-                JMenuItem watch = new JMenuItem(drone.pilot() != null ? "Watch " + drone.name() + " (" + drone.pilot() + " flies it)"
-                        : "Watch " + drone.name() + " (its pilot PC isn't known yet)");
+                JMenuItem watch = new JMenuItem(drone.pilot() != null ? "Watch " + drone.name() + " (" + drone.pilot() + " flies)"
+                        : "Watch " + drone.name() + " (pilot PC unknown)");
                 watch.setEnabled(drone.pilot() != null);
                 watch.addActionListener(e -> onDroneConnect.accept(drone.name(), true));
                 menu.add(watch);
@@ -997,20 +997,20 @@ class MapView extends JComponent {
                 wake.addActionListener(e -> onDroneWake.accept(drone.name()));
                 menu.add(wake);
             }
-            JMenuItem fly = new JMenuItem(drone.flown() ? "Connect to " + drone.name() + " - another PC flies it, so this one watches"
-                    : "Connect to " + drone.name() + " and fly it");
+            JMenuItem fly = new JMenuItem(drone.flown() ? "Connect to " + drone.name() + " (another PC flies: watch only)"
+                    : "Connect to " + drone.name() + " and fly");
             fly.addActionListener(e -> onDroneConnect.accept(drone.name(), false));
             menu.add(fly);
             menu.addSeparator();
         }
         int flight = keptAt(x, y);
         if (flight >= 0 && onRemoveKept != null) {
-            JMenuItem remove = new JMenuItem("Remove the flight " + kept.get(flight).name() + " from the map");
+            JMenuItem remove = new JMenuItem("Remove flight " + kept.get(flight).name());
             remove.addActionListener(e -> onRemoveKept.accept(flight));
             menu.add(remove);
         }
         if (!kept.isEmpty() && onClearKept != null) {
-            JMenuItem clear = new JMenuItem("Remove all " + kept.size() + " earlier flight" + (kept.size() == 1 ? "" : "s") + " from the map...");
+            JMenuItem clear = new JMenuItem("Remove all " + kept.size() + " earlier flight" + (kept.size() == 1 ? "" : "s") + "...");
             clear.addActionListener(e -> onClearKept.run());
             menu.add(clear);
             menu.addSeparator();
@@ -1036,7 +1036,7 @@ class MapView extends JComponent {
             Pins.Pin hit = pinAt(x, y);
             if (hit != null) {
                 String position = Coordinates.format(coordinateFormat.get(), hit.lat(), hit.lon());
-                JMenuItem copy = new JMenuItem("Copy " + hit.name() + "'s position (" + position + ")");
+                JMenuItem copy = new JMenuItem("Copy " + hit.name() + " (" + position + ")");
                 copy.addActionListener(e -> copyPosition(coordinateFormat.get(), hit));
                 menu.add(copy);
                 JMenuItem rename = new JMenuItem("Rename " + hit.name() + "...");
@@ -1056,20 +1056,20 @@ class MapView extends JComponent {
             menu.addSeparator();
         }
         // the map picture is chosen with the toolbar's MAP TYPE (the minimap takes the map window's choice)
-        JMenuItem followItem = new JMenuItem("Follow the drone");
+        JMenuItem followItem = new JMenuItem("Follow drone");
         followItem.addActionListener(e -> setFollow(true));
         menu.add(followItem);
-        JMenuItem homeItem = new JMenuItem("Centre on the launch point");
+        JMenuItem homeItem = new JMenuItem("Centre on launch point");
         homeItem.setEnabled(track != null && track.home() != null);
         homeItem.addActionListener(e -> centreOn(track.home().lat(), track.home().lon(), Math.max(zoom, 15)));
         menu.add(homeItem);
-        JMenuItem fit = new JMenuItem("Fit the whole flight");
+        JMenuItem fit = new JMenuItem("Fit whole flight");
         fit.setEnabled(track != null && !track.isEmpty());
         fit.addActionListener(e -> fitTrack());
         menu.add(fit);
         if (onAreaSelected != null) {
             menu.addSeparator();
-            JMenuItem download = new JMenuItem("Download this view for offline use...");
+            JMenuItem download = new JMenuItem("Download this view offline...");
             download.addActionListener(e -> onAreaSelected.accept(visibleArea()));
             menu.add(download);
         }
@@ -1460,7 +1460,7 @@ class MapView extends JComponent {
         if (tool == Tool.SEARCH) { // the wanted area: the heat map is worked out round it; a new box replaces it, the tool stays
             if (box.width < 8 || box.height < 8) return;
             searchArea = area(box);
-            setSearch(null, "Loading the terrain...");
+            setSearch(null, "Loading terrain...");
             if (onSearchArea != null) onSearchArea.accept(searchArea);
             return;
         }
@@ -2631,7 +2631,7 @@ class MapView extends JComponent {
     }
 
     private void paintNoPosition(Graphics2D g, int w, int h) {
-        String text = !connected ? "NO DRONE POSITION" : "WAITING FOR A GPS FIX";
+        String text = !connected ? "NO DRONE POSITION" : "WAITING FOR GPS FIX";
         g.setFont(Theme.headingFont(13f));
         FontMetrics fm = g.getFontMetrics();
         int tw = fm.stringWidth(text) + 24, th = fm.getHeight() + 10;
@@ -2679,7 +2679,7 @@ class MapView extends JComponent {
         String text = src.attribution + (cache.isOffline() ? "   SAVED TILES ONLY" : "");
         if (cache.isHeld()) { // 1.0.50: say why nothing new loads (PossiblyFlying)
             String why = de.droiddrone.pc.PossiblyFlying.reasonNow();
-            text = src.attribution + "   SAVED TILES ONLY - " + (why == null ? "a drone here may be flying" : why);
+            text = src.attribution + "   SAVED TILES ONLY - " + (why == null ? "drone may be flying" : why);
         }
         g.setFont(Theme.font(Font.PLAIN, 10f));
         FontMetrics fm = g.getFontMetrics();
