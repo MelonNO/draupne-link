@@ -106,6 +106,8 @@ final class MapToolsPanel extends JPanel {
     private final JButton[] widthButtons = new JButton[WIDTHS.length];
     private final JButton outline = Theme.secondaryButton("Outline");
     private final JButton fill = Theme.secondaryButton("Fill");
+    /** OUTLINE / FILL, out only while RECTANGLE is the tool. */
+    SlideOut fillFields;
     private final JComboBox<String> unitCombo = new JComboBox<>();
     private final JButton[] affiliationButtons = new JButton[MapGraphics.Affiliation.values().length];
     private final JComboBox<String> echelonCombo = new JComboBox<>();
@@ -232,7 +234,14 @@ final class MapToolsPanel extends JPanel {
         });
         fillRow.add(outline);
         fillRow.add(fill);
-        row(body, fillRow);
+        // OUTLINE / FILL only while RECTANGLE is on (the pilot: they mean nothing for a line or an arrow); they slide
+        // out from under the width row and back in, like a tool's fields
+        JPanel fillBox = new JPanel();
+        fillBox.setOpaque(false);
+        fillBox.setLayout(new javax.swing.BoxLayout(fillBox, javax.swing.BoxLayout.Y_AXIS));
+        row(fillBox, fillRow);
+        fillFields = new SlideOut(fillBox);
+        slideRow(body, fillFields);
 
         section(body, "SYMBOLS");
         symbol.setToolTipText("NATO unit symbol where you click; type, affiliation, echelon below");
@@ -457,6 +466,7 @@ final class MapToolsPanel extends JPanel {
         lit(horizon, t == MapView.Tool.HORIZON);
         lit(gcsSearch, t == MapView.Tool.SEARCH);
         horizonFields.setOpen(t == MapView.Tool.HORIZON);
+        fillFields.setOpen(t == MapView.Tool.AREA);
         searchFields.setOpen(t == MapView.Tool.SEARCH);
         boolean measured = map.currentMeasurement() != null;
         if (measureRow.isVisible() != measured) {

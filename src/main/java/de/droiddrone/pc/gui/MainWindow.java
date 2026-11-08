@@ -709,13 +709,11 @@ public class MainWindow extends JFrame {
                     save(Map.of(GPS_SOURCE_KEY, preferPhone ? "phone" : "drone"));
                     if (mapWindow != null) mapWindow.setPreferPhone(preferPhone);
                 }));
-        menu.add(new MenuRows.WindowRow("Tracks folder", "Every flight's path (GPX)", () -> {
-            try {
-                java.awt.Desktop.getDesktop().open(de.droiddrone.pc.map.FlightTrack.defaultDir().toFile());
-            } catch (Exception e) {
-                logLine("Can't open the tracks folder: " + e.getMessage());
-            }
-        }));
+        menu.add(new MenuRows.WindowRow("Previous flights", "Play back, map, export", () ->
+                PreviousFlightsDialog.show(this, tileCache, mapSource, f -> {
+                    if (f != null) showMapWindow();
+                    mapWindow().showOldTrackOrClear(f);
+                })));
         menu.addSeparator();
         menu.add(new MenuRows.SwitchRow("Latency test", "Measures the real video delay",
                 latencyMeter != null, this::setLatencyTest));

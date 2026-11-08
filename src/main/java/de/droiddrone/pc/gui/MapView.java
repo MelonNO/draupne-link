@@ -175,6 +175,11 @@ class MapView extends JComponent {
     private List<FlightTrack.Point> oldTrack;
     private TrackPath oldTrackPath;
     private String oldTrackName;
+    /** PREVIOUS FLIGHTS' map: the flight played back, bright, and where the drone was at the playback time. */
+    private TrackPath replayPath;
+    private double replayLat = Double.NaN, replayLon, replayHeading = Double.NaN;
+    /** The pins list's "+ > on the map": the next left click is the place (right-click or Esc calls it off). */
+    private Consumer<double[]> pickNext;
 
     private double centerLat = 64.5, centerLon = 12.0, zoom = 4.3; // Norway, until a fix comes
     private double targetZoom = zoom;
@@ -281,6 +286,10 @@ class MapView extends JComponent {
                 }
                 crossPressed = false;
                 if (SwingUtilities.isRightMouseButton(e)) {
+                    if (pickNext != null) { // the pin's place: called off
+                        endPick(null);
+                        return;
+                    }
                     if (moving != null) { // the point goes back where it was
                         cancelMoving();
                         return;
@@ -356,6 +365,10 @@ class MapView extends JComponent {
                     if (horizonCross != null && horizonCross.contains(e.getPoint())) clearHorizon();
                     else if (searchCross != null && searchCross.contains(e.getPoint())) clearSearch();
                     repaint();
+                    return;
+                }
+                if (pickNext != null) { // the place asked for (a pin added from the pins list)
+                    endPick(toLatLon(e.getX(), e.getY()));
                     return;
                 }
                 if (moving != null) { // the point picked up is dropped here
@@ -564,6 +577,42 @@ class MapView extends JComponent {
 
     boolean hasOldTrack() {
         return oldTrack != null;
+    }
+
+    /** PREVIOUS FLIGHTS: the flight to play back (in view, bright); null clears it with its marker. */
+    void setReplay(List<FlightTrack.Point> points) {
+        replayPath = points == null || points.isEmpty() ? null : TrackPath.of(points);
+        replayLat = Double.NaN;
+        if (points != null && !points.isEmpty()) fit(points, null);
+        repaint();
+    }
+
+    /** Where the played-back drone is now (NaN: nowhere known); heading in degrees, NaN unknown. */
+    void setReplayMarker(double lat, double lon, double headingDeg) {
+        if (Double.compare(lat, replayLat) == 0 && Double.compare(lon, replayLon) == 0 && Double.compare(headingDeg, replayHeading) == 0) return;
+        replayLat = lat;
+        replayLon = lon;
+        replayHeading = headingDeg;
+        repaint();
+    }
+
+    /** The next left click on the map is a place for this (a crosshair until then); a right-click calls it off (null). */
+    void pickPointNext(Consumer<double[]> then) {
+        pickNext = then;
+        setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.CROSSHAIR_CURSOR));
+        repaint();
+    }
+
+    boolean isPickingPoint() {
+        return pickNext != null;
+    }
+
+    private void endPick(double[] latLon) {
+        Consumer<double[]> then = pickNext;
+        pickNext = null;
+        setCursor(java.awt.Cursor.getDefaultCursor());
+        repaint();
+        if (then != null) then.accept(latLon);
     }
 
     /** The whole earlier track in view. */
@@ -1106,6 +1155,7 @@ class MapView extends JComponent {
 
     /** Esc: the tool ends, what it was drawing is dropped; a point picked up goes back. */
     void cancelTool() {
+        if (pickNext != null) endPick(null); // Esc: no pin after all
         if (moving != null) cancelMoving();
         tool = Tool.NONE;
         drawing.clear();
@@ -1988,12 +2038,13 @@ class MapView extends JComponent {
             FlightTrack.Point last = track == null ? null : track.last();
             if (pins != null) paintPins(g, last, home, zi, scale, wcx, wcy, w, h);
             paintGraphics(g, zi, scale, wcx, wcy, w, h);
+            if (replayPath != null) paintReplay(g, zi, scale, wcx, wcy, w, h);
             if (cameraView != null && !forPicture && connected) paintCameraView(g, zi, scale, wcx, wcy, w, h);
             if (!forPicture) paintDetections(g, zi, scale, wcx, wcy, w, h);
             if (!forPicture) paintObserved(g, zi, scale, wcx, wcy, w, h);
             paintNetDrones(g, zi, scale, wcx, wcy, w, h);
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
-            else if (!forPicture) paintNoPosition(g, w, h);
+            else if (!forPicture && replayPath == null) paintNoPosition(g, w, h);
             // an overwatch alert over everything else on the map (1.0.50, the pilot: it was under the drone's label)
             if (!forPicture) paintOverwatch(g, zi, scale, wcx, wcy, w, h);
 
@@ -2201,6 +2252,43 @@ class MapView extends JComponent {
             g.setColor(Theme.MUTED);
             g.drawString(oldTrackName, (int) end.getX() + 13, (int) end.getY() + fm.getAscent() / 2 - 1);
         }
+    }
+
+    /** The flight played back: its line in the accent colour, and the drone where it was at the playback time. */
+    private void paintReplay(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+        Path2D path = line(replayPath, zi, scale, wcx, wcy, w, h);
+        g.setStroke(new BasicStroke(5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setColor(new Color(0, 0, 0, 120));
+        g.draw(path);
+        g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.setColor(Theme.ACCENT);
+        g.draw(path);
+        if (Double.isNaN(replayLat)) return;
+        Point2D c = toScreen(replayLat, replayLon, zi, scale, wcx, wcy, w, h);
+        double x = c.getX(), y = c.getY();
+        g.setStroke(new BasicStroke(2f));
+        if (Double.isNaN(replayHeading)) {
+            g.setColor(Color.WHITE);
+            g.fill(new java.awt.geom.Ellipse2D.Double(x - 6, y - 6, 12, 12));
+            g.setColor(Theme.ACCENT);
+            g.draw(new java.awt.geom.Ellipse2D.Double(x - 6, y - 6, 12, 12));
+            return;
+        }
+        double a = Math.toRadians(replayHeading);
+        Path2D arrow = new Path2D.Double();
+        arrow.moveTo(0, -11);
+        arrow.lineTo(7, 8);
+        arrow.lineTo(0, 4);
+        arrow.lineTo(-7, 8);
+        arrow.closePath();
+        Graphics2D r = (Graphics2D) g.create();
+        r.translate(x, y);
+        r.rotate(a);
+        r.setColor(Color.WHITE);
+        r.fill(arrow);
+        r.setColor(Theme.ACCENT);
+        r.draw(arrow);
+        r.dispose();
     }
 
     private void paintTrack(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
