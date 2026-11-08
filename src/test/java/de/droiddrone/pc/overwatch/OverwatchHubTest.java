@@ -139,6 +139,28 @@ class OverwatchHubTest {
         assertEquals(3, hub.index().clips("MobileAlpha").get(0).preRoll().size());
     }
 
+    /** 1.0.52: the phone's boxes now (pc.40, with the live preview) reach the card; stale ones are dropped. */
+    @Test
+    void thePhonesBoxesNowReachTheCardAndGoStale() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 3, 0));
+        assertNull(hub.views().get(0).boxes(), "none yet: an older phone never sends them");
+        List<float[]> boxes = new ArrayList<>();
+        boxes.add(new float[]{0.6f, 0.45f, 0.1f, 0.05f, 0});
+        for (byte[] p : OverwatchProtocol.fragments(TOKEN, 3, 1, OverwatchProtocol.UNIT_BOXES, OverwatchProtocol.boxesUnit(STARTED + 2000, boxes))) receive(hub, p);
+        float[][] got = hub.views().get(0).boxes();
+        assertNotNull(got);
+        assertEquals(0.6f, got[0][0], 1e-4);
+        hub.nowOverride = 1000 + OverwatchHub.BOXES_FRESH_MS + 1;
+        hub.tickNow(hub.nowOverride);
+        assertNull(hub.views().get(0).boxes(), "not heard lately: no box rather than an old one");
+        // another event's boxes are not this one's
+        hub.nowOverride = 5000;
+        for (byte[] p : OverwatchProtocol.fragments(TOKEN, 99, 2, OverwatchProtocol.UNIT_BOXES, OverwatchProtocol.boxesUnit(STARTED, boxes))) receive(hub, p);
+        assertNull(hub.views().get(0).boxes());
+    }
+
     @Test
     void theMotionsEndIsAcknowledgedAndTheCardShrinksLater() throws Exception {
         OverwatchHub hub = hub();
