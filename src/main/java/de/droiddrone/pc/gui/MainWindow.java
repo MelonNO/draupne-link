@@ -250,7 +250,7 @@ public class MainWindow extends JFrame {
     private final java.util.EnumSet<ControlLink.AudioState> audioStatesTold = java.util.EnumSet.noneOf(ControlLink.AudioState.class);
     private final JLabel poppedOutNote = Theme.label("VIDEO IS IN ITS OWN WINDOW", Theme.headingFont(16f), Theme.MUTED);
     private de.droiddrone.pc.video.LatencyMeter latencyMeter;
-    private JComponent linkColumn;
+    private JPanel linkColumn;
     private JComponent controllerCard;
     /** The LINK card: the connection fields, in flight the minimap; the tour points at it. */
     private JComponent linkCard;
@@ -815,21 +815,16 @@ public class MainWindow extends JFrame {
     }
 
     /**
-     * The log keeps at least LOG_MIN of the link column and the minimap takes what is left, up to MINI_MAX. Short of
-     * room the log gives way, down to LOG_FLOOR, before the minimap shrinks under MINI_MIN; it goes only when even
-     * that does not fit (it went far too soon before, the pilot: "the minimap sometimes disappears").
+     * The link column (1.0.50, the pilot: "it does not show the minimap, but instead has a bunch of empty space"): with
+     * the map not popped out, the LINK card takes the column and the minimap in it every pixel left over, the log
+     * LOG_HEIGHT under it; popped out, the minimap goes and the log takes the room. (Up to 1.0.49 the minimap's height
+     * was worked out from the card's preferred size, which a wrapped warning overstated: the minimap went, and the card
+     * stood centred in the space it had kept.)
      */
-    private static final int LOG_MIN = 180, LOG_FLOOR = 110, MINI_MAX = 190, MINI_MIN = 90, MINI_FLOOR = 64;
-    private int miniHeight = MINI_MAX;
+    private static final int LOG_HEIGHT = 190, MINI_PREFERRED = 90;
 
-    private JComponent buildLinkColumn() {
-        JPanel column = new JPanel(new BorderLayout(0, 14)) {
-            @Override
-            public void doLayout() {
-                fitMiniMap(getHeight());
-                super.doLayout();
-            }
-        };
+    private JPanel buildLinkColumn() {
+        JPanel column = new JPanel(new BorderLayout(0, 14));
         column.setOpaque(false);
         column.setPreferredSize(new Dimension(340, 100));
 
@@ -928,7 +923,8 @@ public class MainWindow extends JFrame {
         // the minimap and the way to the map window, always: connected or not, nothing folds away for it
         JPanel mini = new JPanel(new BorderLayout(0, 8));
         mini.setOpaque(false);
-        miniMap.setPreferredSize(new Dimension(300, MINI_MAX));
+        miniMap.setPreferredSize(new Dimension(300, MINI_PREFERRED)); // and every pixel the card has over (weighty)
+        miniMap.setMinimumSize(new Dimension(100, 40));
         miniMap.setToolTipText("Where the drone is. Wheel zooms; right-click adds a pin; POP OUT MAP for the whole map");
         mini.add(miniMap, BorderLayout.CENTER);
         JButton popMap = Theme.primaryButton("Pop out map");
@@ -937,7 +933,11 @@ public class MainWindow extends JFrame {
         popMap.addActionListener(e -> toggleMapWindow());
         mini.add(popMap, BorderLayout.SOUTH);
         c.insets = new Insets(10, 0, 0, 0);
+        c.weighty = 1; // the card's spare height goes to the minimap, not round the card's rows
+        c.fill = GridBagConstraints.BOTH;
         link.add(mini, c);
+        c.weighty = 0;
+        c.fill = GridBagConstraints.HORIZONTAL;
         phoneWarning.setVisible(false);
         c.insets = new Insets(8, 0, 0, 0);
         link.add(phoneWarning, c);
@@ -949,9 +949,10 @@ public class MainWindow extends JFrame {
         updatePhoneButton.addActionListener(e -> askRemoteUpdate());
         c.insets = new Insets(6, 0, 0, 0);
         link.add(updatePhoneButton, c);
-        column.add(link, BorderLayout.NORTH);
+        column.add(link, BorderLayout.CENTER);
 
         JPanel logCard = Theme.card(new BorderLayout(0, 8));
+        logCard.setPreferredSize(new Dimension(340, LOG_HEIGHT));
         JPanel logTitle = new JPanel(new BorderLayout());
         logTitle.setOpaque(false);
         logTitle.add(Theme.sectionTitle("Log"), BorderLayout.WEST);
@@ -966,7 +967,7 @@ public class MainWindow extends JFrame {
         JScrollPane scroll = new JScrollPane(log);
         scroll.setBorder(BorderFactory.createEmptyBorder());
         logCard.add(scroll, BorderLayout.CENTER);
-        column.add(logCard, BorderLayout.CENTER);
+        column.add(logCard, BorderLayout.SOUTH);
         this.logCard = logCard; // the boot animation grows a piece of the mark into it
         return column;
     }
@@ -1771,6 +1772,7 @@ public class MainWindow extends JFrame {
      * the detail figures folded away for it; the minimap now has its own place on the LINK card.)
      */
     private void updateFlightLayout() {
+        placeMiniMap();
         boolean flying = connection != null && !(mapWindow != null && mapWindow.isShown()); // minimized to the taskbar: not shown
         if (flying) {
             miniMap.setFollow(true);
@@ -1779,21 +1781,20 @@ public class MainWindow extends JFrame {
     }
 
     /**
-     * The minimap's height for a link column this tall: the LINK card's other rows, the gap and the log's LOG_MIN come
-     * first. Too little left and the minimap goes (POP OUT MAP stays) - the log was pushed out of the window otherwise.
+     * The map in its own window: no minimap, the LINK card as tall as its rows and the log takes the rest of the column.
+     * Back: the minimap again, taking the card's spare room, the log LOG_HEIGHT.
      */
-    private void fitMiniMap(int columnHeight) {
-        if (linkCard == null || columnHeight <= 0) return;
-        int others = linkCard.getPreferredSize().height - (miniMap.isVisible() ? miniHeight : 0);
-        int room = columnHeight - 14 - LOG_MIN - others;
-        int h = Math.min(MINI_MAX, room);
-        if (h < MINI_MIN) h = Math.min(MINI_MIN, columnHeight - 14 - LOG_FLOOR - others); // the log gives way first
-        if (h < MINI_FLOOR) h = 0;
-        if (h == miniHeight && miniMap.isVisible() == (h > 0)) return;
-        miniHeight = h;
-        miniMap.setPreferredSize(new Dimension(300, Math.max(1, h)));
-        miniMap.setVisible(h > 0);
-        linkCard.invalidate();
+    private void placeMiniMap() {
+        if (linkColumn == null || linkCard == null || logCard == null) return;
+        boolean popped = mapWindow != null && mapWindow.isShown();
+        if (miniMap.isVisible() == !popped && linkColumn.getComponentCount() == 2) return;
+        miniMap.setVisible(!popped);
+        linkColumn.remove(linkCard);
+        linkColumn.remove(logCard);
+        linkColumn.add(linkCard, popped ? BorderLayout.NORTH : BorderLayout.CENTER);
+        linkColumn.add(logCard, popped ? BorderLayout.CENTER : BorderLayout.SOUTH);
+        linkColumn.revalidate();
+        linkColumn.repaint();
     }
 
     MapWindow mapWindow() {
