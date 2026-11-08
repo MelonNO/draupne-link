@@ -227,6 +227,7 @@ final class MapWindow extends JFrame {
         find.setToolTipText("Last known position, coordinates and map links");
         find.addActionListener(e -> findDrone.run());
         left.add(find);
+        findButton = find;
         bar.add(left, BorderLayout.WEST);
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         right.setOpaque(false);
@@ -1094,6 +1095,62 @@ final class MapWindow extends JFrame {
     // ---- what the tour points at
     javax.swing.JComponent tourFollow() {
         return followButton;
+    }
+
+    /** FIND DRONE in the top bar. */
+    private JButton findButton;
+
+    javax.swing.JComponent tourFindDrone() {
+        return findButton;
+    }
+
+    javax.swing.JComponent tourPreviousFlights() {
+        return tracksButton;
+    }
+
+    /** The tour's slow switch to a MAP TOOLS list (null folds the open one); done once it is out. */
+    void tourSwitch(MapToolsPanel.Group g, Runnable done) {
+        tools.tourSwitch(g, done);
+    }
+
+    javax.swing.JComponent tourDrawEnd(boolean open) {
+        return tools.tourDrawEnd(open);
+    }
+
+    javax.swing.JComponent tourSymbolEnd() {
+        return tools.tourSymbolEnd();
+    }
+
+    javax.swing.JComponent tourPlaceAt() {
+        return tools.placeAt;
+    }
+
+    javax.swing.JComponent tourToolsEnd() {
+        return tools.tourToolsEnd();
+    }
+
+    javax.swing.JComponent tourDataEnd() {
+        return tools.tourDataEnd();
+    }
+
+    /** FLEET MANAGEMENT: its tab, its rows, the selected phone's strip. */
+    javax.swing.JComponent tourFleetTab() {
+        return fleetPanel.tourTab();
+    }
+
+    javax.swing.JComponent tourFleetRows() {
+        fleetPanel.setOpen(true, true);
+        return fleetPanel.tourRows();
+    }
+
+    javax.swing.JComponent tourFleetStrip() {
+        fleetPanel.setOpen(true, true);
+        return fleetPanel.tourStrip();
+    }
+
+    /** The overwatch alert cards (CONNECT on the alert). */
+    javax.swing.JComponent tourAlertCards() {
+        return overwatchPanel.tourCards();
     }
 
     javax.swing.JComponent tourPins() {

@@ -5,6 +5,7 @@ import javax.swing.JComponent;
 import javax.swing.JLayeredPane;
 import javax.swing.JOptionPane;
 import javax.swing.JRootPane;
+import javax.swing.MenuSelectionManager;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import java.awt.AlphaComposite;
@@ -17,190 +18,303 @@ import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.Window;
 import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.awt.geom.Area;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
  * The tour of the window, offered once the first-time setup is finished and under SETUP any time: one control at a
- * time is lit while the rest dims (and is dead to the mouse), with a notice in the style of the locked-button notices
- * saying what it does (NEXT, and a cross top right that exits the tour). It walks the main window (MENU and each of its slide-out buttons, the
- * controller card's fold, pop-out video, full screen, the map's place), then opens the map window for the map itself: pins, what the cursor
- * shows, the drone, the map picture and coordinate format, DOWNLOAD AREA. The pilot learns by doing: a step at a
- * button or a choice keeps NEXT locked ("Press it") until that control was pressed. A step whose control isn't on
- * screen (UPDATE with no update known) is skipped; a window closed under the tour ends it.
+ * time is lit while the rest dims (and is dead to the mouse), with a notice saying what it does (NEXT, and a cross top
+ * right that exits the tour). The pilot learns by doing: a step at a button or a choice keeps NEXT black ("Press it")
+ * until the lit control was pressed; a press anywhere else rings the lit control.
+ * <p>
+ * The order (1.0.52, the pilot): a welcome, the main window top down (MENU, its four lists in one step, PREVIOUS
+ * FLIGHTS, the controller card, the video's buttons, the LINK card: phone, PILOT UAV, sleep, CONNECT AS), POP OUT MAP,
+ * the map window (the map itself first, then MAP TOOLS: DRAW, TOOLS, DATA - each list folding slowly into the next
+ * before its step), FLEET MANAGEMENT with three drones of its own ({@link TourFinale}), and the finale: an OVERWATCH
+ * alert of a BTR, CONNECT, fly into it - the crash ends the tour.
+ * <p>
+ * A step whose control is hidden (UPDATE with no update known) is skipped at once; one not on screen yet (a window
+ * opening) is tried again for a second; a window closed under the tour ends it.
  */
 final class Tour {
-    /**
-     * @param before done as the step comes up (opens the menu, the map window); null for nothing
-     * @param press  the pilot must press the control before NEXT works (a button or a choice); false for a plain
-     *               area, and for UPDATE, whose press would start the update
-     * @param tip    a muted line under the text: good to know, not the step itself; null for none
-     * @param feature the feature the step came with (FEATURE_*), for the tour of what is new after an update; null
-     *                for the steps every tour has had
-     */
-    private record Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press,
-                        Supplier<JComponent> live, Supplier<JComponent> extra, Runnable after, String tip, String feature) {
-        Step(String title, String text, Supplier<JComponent> anchor, Runnable before) {
-            this(title, text, anchor, before, true, null, null, null, null, null);
+    /** One step: built with the setters, read by the tour. */
+    static final class Step {
+        final String title;
+        String text;
+        /** What is lit; null = a centred box (the welcome, the finish) over the main window. */
+        Supplier<JComponent> anchor;
+        /** Done as the step comes up; and undone (after) when it is over. */
+        Runnable before, after;
+        /** The pilot must press the lit control (or one of the targets) before NEXT works. */
+        boolean press;
+        /** Areas the mouse still works over (the header on the menu steps, the map on the map steps). */
+        Supplier<JComponent> live;
+        /** A second control lit with the first: the box covers both and everything between. */
+        Supplier<JComponent> extra;
+        /** Any of these pressed counts (the four menu buttons); null = the lit area. */
+        Supplier<List<JComponent>> targets;
+        /** Something to wait for instead of a press; NEXT shows waitText meanwhile. With auto, it moves on by itself. */
+        BooleanSupplier waitFor;
+        String waitText;
+        boolean auto;
+        /** Skip the step when this says so (the finale without its drones). */
+        BooleanSupplier skip;
+        /** Run first, with the step shown when it calls back (the slow switch between MAP TOOLS lists). */
+        Consumer<Runnable> transition;
+        String tip, feature;
+        /** The welcome's legend (the black NEXT and the cross explained). */
+        boolean legend;
+        /** The finish: its burst. */
+        boolean finish;
+
+        Step(String title, String text, Supplier<JComponent> anchor) {
+            this.title = title;
+            this.text = text;
+            this.anchor = anchor;
         }
 
-        Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press) {
-            this(title, text, anchor, before, press, null, null, null, null, null);
+        Step before(Runnable r) {
+            before = r;
+            return this;
         }
 
-        Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live) {
-            this(title, text, anchor, before, press, live, null, null, null, null);
+        Step after(Runnable r) {
+            after = r;
+            return this;
         }
 
-        Step(String title, String text, String tip, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live) {
-            this(title, text, anchor, before, press, live, null, null, tip, null);
+        Step press() {
+            press = true;
+            return this;
         }
 
-        Step(String title, String text, Supplier<JComponent> anchor, Runnable before, boolean press, Supplier<JComponent> live, Supplier<JComponent> extra) {
-            this(title, text, anchor, before, press, live, extra, null, null, null);
+        Step live(Supplier<JComponent> s) {
+            live = s;
+            return this;
         }
 
-        /** The same step, marked as part of a feature. */
-        Step of(String feature) {
-            return new Step(title, text, anchor, before, press, live, extra, after, tip, feature);
+        Step extra(Supplier<JComponent> s) {
+            extra = s;
+            return this;
+        }
+
+        Step targets(Supplier<List<JComponent>> s) {
+            targets = s;
+            press = true;
+            return this;
+        }
+
+        Step waitFor(BooleanSupplier s, String text, boolean auto) {
+            waitFor = s;
+            waitText = text;
+            this.auto = auto;
+            return this;
+        }
+
+        Step skip(BooleanSupplier s) {
+            skip = s;
+            return this;
+        }
+
+        Step transition(Consumer<Runnable> t) {
+            transition = t;
+            return this;
+        }
+
+        Step tip(String t) {
+            tip = t;
+            return this;
+        }
+
+        Step of(String f) {
+            feature = f;
+            return this;
         }
     }
 
     /** The features whose steps came after the first tour: a PC that had the tour before them is offered them alone. */
     static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon",
-            FEATURE_COVERAGE = "coverage", FEATURE_OVERWATCH = "overwatch", FEATURE_OBSERVATION = "observation";
+            FEATURE_COVERAGE = "coverage", FEATURE_OVERWATCH = "overwatch", FEATURE_OBSERVATION = "observation",
+            FEATURE_FLEET = "fleet", FEATURE_FLIGHTS = "flights";
     static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE,
-            FEATURE_OVERWATCH, FEATURE_OBSERVATION);
+            FEATURE_OVERWATCH, FEATURE_OBSERVATION, FEATURE_FLEET, FEATURE_FLIGHTS);
     /** The features the pilot has been offered a tour of, comma-separated. */
     static final String SEEN_KEY = "tour.seen";
 
     /** A control not on screen after this many tries (150 ms apart) is skipped: the step would wait forever. */
     private static final int MAX_TRIES = 7;
 
+    /** The tour running now: a second one (SETUP > Tour during the tour) ends it first, never runs beside it. */
+    private static Tour current;
+
     private final MainWindow main;
     private final List<Step> steps = new ArrayList<>();
     private int index = -1;
     private int tries;
+    /** Counts the steps shown: a transition calling back after its step is over does nothing. */
+    private int generation;
     private TourNotice notice;
     private final Timer retry = new Timer(150, e -> show());
-
-    private Tour(MainWindow main) {
-        this(main, null);
-    }
+    private final TourFinale finale;
 
     /** @param only the features to show the steps of (the tour of what is new); null for the whole tour */
     private Tour(MainWindow main, java.util.Collection<String> only) {
         this.main = main;
+        finale = new TourFinale(main);
         retry.setRepeats(false);
         buildSteps();
-        if (only != null) steps.removeIf(s -> s.feature() == null || !only.contains(s.feature()));
+        if (only != null) steps.removeIf(s -> s.feature == null || !only.contains(s.feature));
     }
 
+    /** The order, worked out from where things are (1.0.52): top to bottom of the main window, then the map window, then the fleet. */
     private void buildSteps() {
-        Runnable openMenu = main::tourOpenMenu;
-        Supplier<JComponent> header = main::tourHeader; // the menu steps: the header stays clear, so the slide-out and the menus show in front
-        steps.add(new Step("MENU", "Everything lives here. Press it: SETUP, VIDEO, LINK and TOOLS slide out.",
-                "Tip: a second press closes or undoes the first.", main::tourMenuButton, openMenu, true, header));
-        steps.add(new Step("SETUP", "First-time setup and this tour. PC, drone and phone setup with TOOLS > Advanced on.", main::tourSetupButton, openMenu, true, header));
-        steps.add(new Step("VIDEO", "Picture, OSD, recording.", main::tourVideoButton, openMenu, true, header));
-        steps.add(new Step("LINK", "Link sounds and spectators.", main::tourLinkButton, openMenu, true, header));
-        steps.add(new Step("TOOLS", "Find the drone, previous flights, tests.", main::tourToolsButton, openMenu, true, header));
-        steps.add(new Step("UPDATE", "A newer version is ready: one press installs it. After the tour.",
-                main::tourUpdateButton, openMenu, false, header));
-        steps.add(new Step("MINIMIZE / EXPAND", "Folds the controller card for more video. Sticks and switches keep working. "
-                + "Press it.", main::tourMinimizeButton, null));
-        // the two video buttons are explained, not pressed: pop-out moves the picture to a window of its own and
-        // full screen covers the window, both over the tour
-        steps.add(new Step("POP OUT VIDEO", "Video in its own window, for a second screen. VIDEO BACK returns it. "
-                + "Double-click the video to show it alone.", main::tourPopOutButton, null, false));
-        steps.add(new Step("FULL SCREEN", "Video fills the screen (F11). Esc or double-click to exit.",
-                main::tourFullScreenButton, null, false));
-        steps.add(new Step("CONNECT", "Pick the phone by name (MobileAlpha, MobileBravo ...): every phone running DRAUPNE Flight "
-                + "on your Tailscale network. CONNECT flies; WATCH joins as a spectator. The minimap shows the drone; "
-                + "POP OUT MAP or F3 opens the map window.",
-                main::tourLinkCard, null, false).of(FEATURE_NAMES));
-        // OBSERVATION (1.0.48): explained, not pressed - it opens streams to the drones
-        steps.add(new Step("OBSERVATION", "CONNECT AS > Observation: watch up to six idle drones. CHOOSE DRONES picks them, "
-                + "OBSERVE shows them all with sound. Each tile: MUTE, volume, green frame on sound. Click for a sharp picture, "
-                + "double-click to enlarge. CONNECT on a tile flies that drone.",
-                "Tip: on the map each tile's drone has a numbered view cone in its colour. Dashed = approximate heading.",
-                main::tourLinkCard, null, false, null).of(FEATURE_OBSERVATION));
-        // the sleep buttons only show while connected: the step puts them on the card as a demo that answers presses
-        steps.add(new Step("SLEEP BUTTONS", "Shown while connected. DEEP SLEEP: phone sleeps, checks in every CHECK EVERY "
-                + "minutes; WAKE brings it back. DISCONNECT: standby, camera off. Hidden while armed. Demo: press one.",
-                main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null, null));
-        // OVERWATCH (1.0.47): the third sleep button, in the same demo
-        steps.add(new Step("OVERWATCH", "Sleep with camera and motion detection on. On motion the phone calls in: the drone "
-                + "pulses red on the map, a card shows live video, CONNECT and DISMISS. The clip follows in full quality. "
-                + "Disarmed only; under 20 % battery or too hot it goes to deep sleep. About 15-25 h on 5000 mAh. Press it.",
-                main::tourOverwatchButton, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null, null).of(FEATURE_OVERWATCH));
-        // on the map steps the map itself stays live under the dimming: panning, the wheel, pins and the cursor figures work
-        Supplier<JComponent> map = () -> main.mapWindow().map();
-        steps.add(new Step("MOVING AROUND", "Drag to pan, wheel to zoom, double-click fits the flight. FOLLOW centres the "
-                + "drone. Home: launch point. End: drone.", () -> main.mapWindow().tourFollow(), main::showMapWindow, true, map));
-        // MAP TOOLS (1.0.35): the slide-out at the map's left edge; PINS and DOWNLOAD AREA live in it now
-        Runnable mapAndTools = () -> {
-            main.showMapWindow();
-            main.mapWindow().openTools(true);
-        };
-        steps.add(new Step("MAP TOOLS", "Three groups: DRAW (lines, boxes, arrows, NATO symbols), TOOLS (ruler, radio horizon, "
-                + "GCS search - shown while TOOLS is open), DATA (export, import, offline maps). Press it.",
-                () -> main.mapWindow().tourTools(), main::showMapWindow, true, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("DRAW, TOOLS, DATA", "Each tab opens its list; press again to fold. "
-                + "Press TOOLS.", () -> main.mapWindow().tourGroups(), mapAndTools, true, map).of(FEATURE_RADIO_HORIZON));
-        steps.add(new Step("RULER", "Click points: length and bearing per leg, total at the end. Click the first point to close "
-                + "and get the area. Elevation profile below. KEEP saves it, Esc clears.", () -> main.mapWindow().tourRuler(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("RADIO HORIZON", "Set mast height, aircraft altitude (each above its ground), tree height and frequency. "
-                + "Press RADIO HORIZON, click the map: blue = the aircraft sees the mast over terrain and through forest. "
-                + "Up to 30 km. Click again to move the mast; the cross on its label removes it.",
-                () -> main.mapWindow().tourHorizon(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
-        steps.add(new Step("GCS SEARCH", "Where to put the ground station: drag a box round the area to cover. The heat map "
-                + "(30 km) shows green = sees all of it, red = none. Best spot ringed; the cross removes it.", () -> main.mapWindow().tourSearch(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
-        steps.add(new Step("COVERAGE", "Estimated good, weak or no mobile signal (5G and older), from OpenCelliD masts and terrain. Pick your SIM's network "
-                + "and the drone's height. Needs a free OpenCelliD key (KEY...). A guess, not a measurement.",
-                () -> main.mapWindow().tourCoverage(), mapAndTools, false, map).of(FEATURE_COVERAGE));
-        steps.add(new Step("CLIPS", "Overwatch events per drone: picture, time, length, place. Play one with its camera view on "
-                + "the map. REMOVE hides it; files stay in Documents\\DRAUPNE Link\\Overwatch (FOLDER). Right-click a drone for its clips.",
-                () -> main.mapWindow().tourClips(), mapAndTools, false, map).of(FEATURE_OVERWATCH));
-        steps.add(new Step("DRAW", "LINE: click points, double-click ends. RECTANGLE: drag. ARROW: head at the last point. "
-                + "Pick colour, width, outline or fill first. Right-click a drawing to rename or remove.",
-                () -> main.mapWindow().tourDraw(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("SYMBOLS", "NATO unit symbol where you click: type, then friend/hostile/neutral/unknown, then echelon. "
-                + "Drawings are kept.",
-                () -> main.mapWindow().tourSymbol(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("PINS", "Right-click the map to drop, rename or remove a pin. Each shows distance and bearing from the drone. "
-                + "PINS lists them: press it. These three are examples.",
-                () -> main.mapWindow().tourPins(), () -> {
-                    mapAndTools.run();
-                    main.mapWindow().map().showExamplePins(true);
-                    examplePins = true;
-                }, true, map));
-        steps.add(new Step("UNDER THE CURSOR", "Position and terrain height under the mouse. DRONE, ALTITUDE and LAUNCH are live.",
-                () -> main.mapWindow().tourCursor(), null, false, map,
-                () -> main.mapWindow().tourTerrain()));
-        steps.add(new Step("THE DRONE", "The arrow is the drone, with its track. Ring L = launch point. "
-                + "LAST KNOWN = old position.", () -> main.mapWindow().tourDrone(), null, false, map));
-        steps.add(new Step("MAP TYPE", "Topo, paper map, satellite or OpenStreetMap. "
-                + "Viewed areas are kept for offline use.", () -> main.mapWindow().tourMapType(), null));
-        steps.add(new Step("COORDINATES", "Degrees, UTM or MGRS, for cursor, drone and pins.",
-                () -> main.mapWindow().tourFormat(), null));
-        steps.add(new Step("EXPORT", "Drag a box: PNG picture and KML drawings to Documents\\DRAUPNE Link\\Exports. "
-                + "IMPORT reads KML (DRAUPNE, Google Earth, ATAK).",
-                () -> main.mapWindow().tourExport(), mapAndTools, false, map).of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("OFFLINE MAPS", "DOWNLOAD AREA saves this view, or a box (SELECT WITH CURSOR or Alt + drag), "
-                + "all map types and zooms, for flying without internet.",
-                () -> main.mapWindow().tourDownload(), mapAndTools, false)); // explained, not pressed: a download is for later
-        // the last step is back in the main window: it comes to the front over the map window by itself
-        Runnable backToMain = () -> {
-            main.toFront();
-            main.requestFocus();
+        Runnable openMenu = () -> {
+            closeMenus();
             main.tourOpenMenu();
         };
-        steps.add(new Step("THAT'S THE TOUR", "SETUP > Tour shows it again. Press CONNECT when drone and phone are ready.", main::tourMenuButton, backToMain, false));
+        Supplier<JComponent> header = main::tourHeader; // the menu steps: the header stays clear, so the slide-out and the menus show in front
+        Supplier<JComponent> centre = main::tourCentre;
+
+        Step welcome = new Step("GUIDED TOUR", "A short walk through DRAUPNE, one part at a time. Animations show what each step "
+                + "is about.", centre);
+        welcome.legend = true;
+        steps.add(welcome);
+
+        // ---- the main window, top down
+        steps.add(new Step("MENU", "Everything lives here. Press it.", main::tourMenuButton).before(openMenu).press().live(header));
+        steps.add(new Step("THE MENUS", "SETUP: first-time setup, Set up a new drone, this tour. VIDEO: picture, OSD, "
+                + "recording. LINK: sounds, spectators. TOOLS: find drone, previous flights, tests, Reset setup. Press one.",
+                main::tourSetupButton).extra(main::tourToolsButton).before(openMenu).live(header)
+                .targets(() -> List.of(main.tourSetupButton(), main.tourVideoButton(), main.tourLinkButton(), main.tourToolsButton())));
+        steps.add(new Step("PREVIOUS FLIGHTS", "TOOLS > Previous flights: each flight's video, track on the map, height, speed, "
+                + "battery and link on one timeline. EXPORT or DELETE.", PreviousFlightsDialog::tourList)
+                .extra(PreviousFlightsDialog::tourTimeline).before(() -> {
+                    closeMenus();
+                    main.tourOpenPreviousFlights();
+                }).after(PreviousFlightsDialog::tourClose).of(FEATURE_FLIGHTS));
+        steps.add(new Step("UPDATE", "A newer version is ready: one press installs it. After the tour.",
+                main::tourUpdateButton).before(openMenu).live(header));
+        steps.add(new Step("MINIMIZE", "Folds the controller card for more video. Sticks and switches keep working. Press it.",
+                main::tourMinimizeButton).before(this::closeMenus).press());
+        // the video's buttons are explained, not pressed: pop-out and full screen would cover the tour
+        steps.add(new Step("POP OUT VIDEO", "Video in its own window, for a second screen. Double-click the video to show it alone.",
+                main::tourPopOutButton));
+        steps.add(new Step("FULL SCREEN", "Video fills the screen (F11). Esc to exit.", main::tourFullScreenButton));
+        steps.add(new Step("BEEPER", "Hold it: the drone beeps, to find it in the grass.", main::tourBeeperButton));
+        steps.add(new Step("MUTE", "The phone's microphone. M mutes. Arming mutes it.", main::tourMuteButton));
+
+        // ---- the LINK card: phone, PILOT UAV, sleep, CONNECT AS
+        steps.add(new Step("PHONE", "Every phone running DRAUPNE Flight, by name. Pick one here. Press it.",
+                main::tourPhoneCombo).press().of(FEATURE_NAMES));
+        steps.add(new Step("PILOT UAV", "Flies the chosen drone. Connected, it reads STANDBY MODE: camera off, back in 2 s.",
+                main::tourConnectButton));
+        steps.add(new Step("DEEP SLEEP / OVERWATCH", "DEEP SLEEP: the phone sleeps and checks in at CHECK EVERY. OVERWATCH: "
+                + "the same, with the camera watching; motion calls you. Press one.", main::tourDeepSleepButton)
+                .extra(main::tourCheckEvery)
+                .targets(() -> List.of(main.tourDeepSleepButton(), main.tourOverwatchButton()))
+                .before(() -> main.tourPowerDemo(true)).after(() -> main.tourPowerDemo(false)).of(FEATURE_OVERWATCH));
+        steps.add(new Step("CONNECT AS", "Pilot flies. Spectator watches another PC's flight. Observation shows up to six idle "
+                + "drones with sound.", main::tourRoleCombo).of(FEATURE_OBSERVATION));
+        steps.add(new Step("POP OUT MAP", "The map in its own window. Press it.", main::tourPopMapButton)
+                .before(main::tourHideMapWindow).press());
+
+        // ---- the map window: the map itself first
+        Supplier<JComponent> map = () -> main.mapWindow().map();
+        steps.add(new Step("MOVING AROUND", "Drag to pan, wheel to zoom. FOLLOW keeps the drone in view. Press it.",
+                () -> main.mapWindow().tourFollow()).before(main::showMapWindow).press().live(map));
+        steps.add(new Step("FIND DRONE", "FIND DRONE: last position, to go and get it. PREVIOUS FLIGHTS: replay a flight.",
+                () -> main.mapWindow().tourPreviousFlights()).extra(() -> main.mapWindow().tourFindDrone()).live(map));
+        steps.add(new Step("MAP TYPE", "Topo, paper map, satellite or OpenStreetMap. Viewed areas are kept offline. Press it.",
+                () -> main.mapWindow().tourMapType()).press());
+        steps.add(new Step("COORDINATES", "MGRS, UTM or degrees, for cursor, drone and pins. Press it.",
+                () -> main.mapWindow().tourFormat()).press());
+        steps.add(new Step("UNDER THE CURSOR", "Position and terrain height under the mouse. Right-click the map: Copy grid.",
+                () -> main.mapWindow().tourCursor()).extra(() -> main.mapWindow().tourTerrain()).live(map));
+        steps.add(new Step("THE DRONE", "The arrow is the drone, with its track. L = launch point.",
+                () -> main.mapWindow().tourDrone()).live(map));
+
+        // ---- MAP TOOLS: DRAW, TOOLS, DATA, each list folding into the next before its step
+        steps.add(new Step("MAP TOOLS", "Drawing, tools and data. Press it.", () -> main.mapWindow().tourTools())
+                .press().live(map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("DRAW", "LINE, RECTANGLE, ARROW: colour and width first. OUTLINE / FILL for rectangles. "
+                + "Right-click a drawing to rename or remove.", () -> main.mapWindow().tourDraw())
+                .extra(() -> main.mapWindow().tourDrawEnd(true)).transition(group(MapToolsPanel.Group.DRAW))
+                .after(() -> main.mapWindow().tourDrawEnd(false)).live(map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("SYMBOLS", "A NATO symbol where you click: type, side (colour), unit size.",
+                () -> main.mapWindow().tourSymbol()).extra(() -> main.mapWindow().tourSymbolEnd()).live(map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("PLACE AT", "A point or symbol at a typed grid.", () -> main.mapWindow().tourPlaceAt())
+                .live(map).of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("PINS", "Right-click the map to drop one. PINS lists them; EDIT LIST adds, renames, removes. "
+                + "These three are examples. Press it.", () -> main.mapWindow().tourPins()).before(() -> {
+                    main.mapWindow().map().showExamplePins(true);
+                    examplePins = true;
+                }).press().live(map));
+        steps.add(new Step("TOOLS", "RULER: lengths, bearings, height profile. RADIO HORIZON and GCS SEARCH are for traditional "
+                + "radios, not 5G. GO TO: centre on a grid. CLIPS: overwatch events.", () -> main.mapWindow().tourRuler())
+                .extra(() -> main.mapWindow().tourToolsEnd()).transition(group(MapToolsPanel.Group.TOOLS)).live(map)
+                .of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("DATA", "EXPORT a box as picture and KML; IMPORT KML. DOWNLOAD AREA keeps maps for offline. "
+                + "CLEAR ALL empties the map.", () -> main.mapWindow().tourExport())
+                .extra(() -> main.mapWindow().tourDataEnd()).transition(group(MapToolsPanel.Group.DATA)).live(map)
+                .of(FEATURE_MAP_TOOLS));
+
+        // ---- FLEET MANAGEMENT, with three drones of the tour's own, and the finale
+        BooleanSupplier noDrones = () -> !finale.started();
+        steps.add(new Step("FLEET", "Every phone at a glance; modes changed without connecting. Press it.",
+                () -> main.mapWindow().tourFleetTab()).transition(done -> main.mapWindow().tourSwitch(null, done))
+                .before(this::startFinale).press().live(map).of(FEATURE_FLEET));
+        steps.add(new Step("THE ROWS", "A row a phone: mode sign, drone V/cell, phone %, last heard, ring to next check-in. "
+                + "Click one: it shows on the map.", () -> main.mapWindow().tourFleetRows()).live(map).of(FEATURE_FLEET));
+        steps.add(new Step("MODES", "STANDBY, DEEP SLEEP, OVERWATCH and EVERY wait for the phone's next check-in. "
+                + "No connecting. PILOT UAV flies it.", () -> main.mapWindow().tourFleetStrip()).live(map).of(FEATURE_FLEET));
+        steps.add(new Step("OVERWATCH", "One drone is on OVERWATCH. Something moves in its picture: wait for the alert.",
+                () -> main.mapWindow().tourFleetRows()).live(map).skip(noDrones)
+                .waitFor(finale::alerted, "Watching...", true).of(FEATURE_FLEET));
+        steps.add(new Step("ALERT", "It saw something. Press CONNECT on the alert.", () -> main.mapWindow().tourAlertCards())
+                .live(map).skip(noDrones).waitFor(finale::connected, "Press CONNECT", true).of(FEATURE_FLEET));
+        steps.add(new Step("FLY", "Hear it? It comes from where it is. Arm, fly to it and hit it.", main::tourVideo)
+                .before(() -> {
+                    main.toFront();
+                    main.tourKeepSound(true);
+                }).live(main::tourVideo).skip(noDrones).waitFor(finale::crashed, "Hit the BTR", true).of(FEATURE_FLEET));
+
+        Step finish = new Step("TOUR COMPLETE", "SETUP > Tour shows it again.", centre).before(() -> {
+            main.toFront();
+            if (finale.crashed()) steps.get(index).text = "Direct hit: the drone is gone, link lost - as a real crash. "
+                    + "SETUP > Tour shows it again.";
+        });
+        finish.finish = true;
+        steps.add(finish);
+    }
+
+    /** The slow switch to a MAP TOOLS list, then the step. */
+    private Consumer<Runnable> group(MapToolsPanel.Group g) {
+        return done -> {
+            main.showMapWindow();
+            main.mapWindow().tourSwitch(g, done);
+        };
+    }
+
+    private void startFinale() {
+        if (finale.started()) return;
+        if (!finale.start()) {
+            main.logLine("Tour: no drones for the fleet steps - " + finale.refused());
+            return;
+        }
+        finale.placeModes();
+    }
+
+    /** An open SETUP / VIDEO / LINK / TOOLS list goes before the next step. */
+    private void closeMenus() {
+        MenuSelectionManager.defaultManager().clearSelectedPath();
     }
 
     /** Set once the tour has been offered on this PC: after the first-time setup, or on the first start after an update brought it. */
@@ -223,14 +337,21 @@ final class Tour {
     static void offerNew(MainWindow main, List<String> features) {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         List<String> what = new ArrayList<>();
-        for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "radio horizon, GCS search"
-                : f.equals(FEATURE_COVERAGE) ? "coverage map"
-                : f.equals(FEATURE_OVERWATCH) ? "OVERWATCH and its clips"
-                : f.equals(FEATURE_OBSERVATION) ? "observation of six drones" : f);
+        for (String f : features) what.add(switch (f) {
+            case FEATURE_NAMES -> "phone by name";
+            case FEATURE_MAP_TOOLS -> "map tools";
+            case FEATURE_RADIO_HORIZON -> "radio horizon, GCS search";
+            case FEATURE_COVERAGE -> "coverage map";
+            case FEATURE_OVERWATCH -> "OVERWATCH";
+            case FEATURE_OBSERVATION -> "observation";
+            case FEATURE_FLEET -> "fleet management";
+            case FEATURE_FLIGHTS -> "previous flights";
+            default -> f;
+        });
         Object[] options = {"Yes", "Not now"};
         int answer = JOptionPane.showOptionDialog(main, "New: " + String.join(", ", what)
                         + ".\nTour the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
-        if (answer == JOptionPane.YES_OPTION) new Tour(main, features).next();
+        if (answer == JOptionPane.YES_OPTION) run(new Tour(main, features));
     }
 
     /** Asks first; the tour runs on yes. The whole tour counts every feature as seen. */
@@ -244,7 +365,15 @@ final class Tour {
 
     static void start(MainWindow main) {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
-        new Tour(main).next();
+        run(new Tour(main, null));
+    }
+
+    private static void run(Tour t) {
+        if (current != null) current.end(); // never two at once: each would dim and tick over the other
+        current = t;
+        t.main.tourExpandController(); // open, so the pilot folds it when asked
+        t.main.tourHideSleep(true); // the sleep row shows at its own step (the pilot)
+        t.next();
     }
 
     private void next() {
@@ -253,17 +382,30 @@ final class Tour {
         after();
         index++;
         tries = 0;
+        generation++;
+        while (index < steps.size() && steps.get(index).skip != null && steps.get(index).skip.getAsBoolean()) index++;
         if (index >= steps.size()) {
-            clearExamplePins();
+            finished();
             return;
         }
         Step s = steps.get(index);
-        if (s.before() != null) {
+        if (s.before != null) {
             try {
-                s.before().run();
+                s.before.run();
             } catch (RuntimeException e) {
-                main.logLine("Tour: step " + (index + 1) + " (" + s.title() + ") failed to open: " + e);
+                main.logLine("Tour: step " + (index + 1) + " (" + s.title + ") failed to open: " + e);
             }
+        }
+        if (s.transition != null) {
+            int g = generation;
+            try {
+                s.transition.accept(() -> {
+                    if (g == generation) retry.restart();
+                });
+            } catch (RuntimeException e) {
+                retry.restart();
+            }
+            return;
         }
         retry.restart(); // the window just opened: let it lay out first
     }
@@ -274,14 +416,24 @@ final class Tour {
         notice = null;
         after();
         index = steps.size();
-        clearExamplePins();
+        generation++;
+        retry.stop();
+        finished();
     }
 
-    /** The step that is over undoes what it set up (the sleep buttons' demo). */
+    /** Whatever way it ended: the example pins and the tour's drones go, the window is as before. */
+    private void finished() {
+        clearExamplePins();
+        finale.close();
+        main.tourHideSleep(false);
+        if (current == this) current = null;
+    }
+
+    /** The step that is over undoes what it set up (the sleep buttons' demo, the open flights window). */
     private void after() {
-        if (index < 0 || index >= steps.size() || steps.get(index).after() == null) return;
+        if (index < 0 || index >= steps.size() || steps.get(index).after == null) return;
         try {
-            steps.get(index).after().run();
+            steps.get(index).after.run();
         } catch (RuntimeException e) {
             main.logLine("Tour: step " + (index + 1) + " could not clean up: " + e);
         }
@@ -305,31 +457,45 @@ final class Tour {
         Step s = steps.get(index);
         JComponent anchor = null;
         try {
-            anchor = s.anchor().get();
+            anchor = s.anchor.get();
         } catch (RuntimeException e) {
             // the window isn't there (yet): as not showing
         }
+        // hidden on purpose (UPDATE with no update known): skipped at once - waiting for it was the pause before MINIMIZE
+        if (anchor != null && !anchor.isVisible()) {
+            main.logLine("Tour: step " + (index + 1) + " (" + s.title + ") skipped: not shown.");
+            next();
+            return;
+        }
         if (anchor == null || !anchor.isShowing()) {
-            if (++tries >= MAX_TRIES) { // not on screen (UPDATE with no update known, a layout without the control): skipped
-                main.logLine("Tour: step " + (index + 1) + " (" + s.title() + ") skipped: not on screen.");
+            if (++tries >= MAX_TRIES) { // not on screen (a window that didn't open): skipped
+                main.logLine("Tour: step " + (index + 1) + " (" + s.title + ") skipped: not on screen.");
                 next();
                 return;
             }
             retry.restart();
             return;
         }
-        notice = new TourNotice(anchor, s.title(), s.text(), s.tip(), index + 1, steps.size(), this::next, this::end);
-        notice.requirePress(s.press());
-        if (s.live() != null) {
+        List<JComponent> targets = null;
+        if (s.targets != null) {
             try {
-                notice.setLive(s.live().get());
+                targets = s.targets.get();
+            } catch (RuntimeException e) {
+                // the lit area then
+            }
+        }
+        boolean centred = s.legend || s.finish;
+        notice = new TourNotice(anchor, s, index + 1, steps.size(), this::next, this::end, centred, targets);
+        if (s.live != null) {
+            try {
+                notice.setLive(s.live.get());
             } catch (RuntimeException e) {
                 // no live area then
             }
         }
-        if (s.extra() != null) {
+        if (s.extra != null) {
             try {
-                notice.setExtra(s.extra().get());
+                notice.setExtra(s.extra.get());
             } catch (RuntimeException e) {
                 // the one control then
             }
@@ -337,8 +503,11 @@ final class Tour {
         if (!notice.pop()) retry.restart();
     }
 
-    /** The notice: pointer at the control, the text, STEP i OF n, NEXT across the bottom and a cross top right that exits the tour; the rest of the window dims. */
-    private static final class TourNotice extends JComponent {
+    /**
+     * The notice: pointer at the control, the text, STEP i OF n, NEXT across the bottom and a cross top right that
+     * exits the tour; the rest of the window dims. Centred (the welcome, the finish): a box in the middle, no pointer.
+     */
+    static final class TourNotice extends JComponent {
         private static final int WIDTH = 460;
         private static final int PAD = 12;
         private static final int POINTER = 8;
@@ -346,6 +515,15 @@ final class Tour {
         /** The exit cross's box, top right. */
         private static final int CLOSE = 24;
         private static final long IN_MS = 180;
+        /** The lit area's ring closes in from this far over its first IN_FOCUS_MS: the eye goes to it. */
+        private static final int FOCUS_FROM = 46;
+        private static final long FOCUS_MS = 450;
+        /** A press outside the lit area: rings run out from it this long. */
+        private static final long NUDGE_MS = 750;
+        /** The pulse's frame time: the ring alone is repainted, not the window (1.0.52: the tour's lag). */
+        private static final int TICK_MS = 40;
+        /** The legend's rows (the welcome). */
+        private static final int LEGEND_ROW = 30;
         /** The control hidden this long (a card folded): the step moves on. */
         private static final long HIDDEN_MS = 2500;
         /** Its window gone this long (closed): the tour ends. */
@@ -361,40 +539,75 @@ final class Tour {
         private final JButton exit = new CloseButton();
         private final Runnable onEnd;
         private final Dim dim = new Dim();
-        private final Timer timer = new Timer(33, e -> tick());
+        private final Timer timer = new Timer(TICK_MS, e -> tick());
+        private final boolean centred, legend, finish;
+        private final List<JComponent> targets;
+        private final BooleanSupplier waitFor;
+        private final boolean auto;
         private long shownAt;
+        private long nudgeAt = -1;
         private boolean above;
         private long notShowingSince;
         /** NEXT is locked until the control was pressed: a mouse button let go over it (or its button fired). */
         private boolean waitingForPress;
+        /** NEXT is locked until waitFor says so. */
+        private boolean waitingForEvent;
         private final java.awt.event.AWTEventListener pressWatch = this::watchPress;
         private final java.awt.event.ActionListener firedWatch = e -> pressed();
+        /** Repaints asked of the window per tick (for the lag test). */
+        int lastTickDirtyArea;
 
         private void watchPress(java.awt.AWTEvent event) {
-            if (event.getID() != java.awt.event.MouseEvent.MOUSE_RELEASED || !(event.getSource() instanceof Component c)) return;
-            if (c == anchor || SwingUtilities.isDescendingFrom(c, anchor)) pressed();
+            if (event.getID() != MouseEvent.MOUSE_RELEASED || !(event.getSource() instanceof Component c)) return;
+            if (isTarget(c)) pressed();
         }
 
-        TourNotice(JComponent anchor, String title, String text, String tip, int step, int of, Runnable onNext, Runnable onEnd) {
+        private boolean isTarget(Component c) {
+            if (targets != null) {
+                for (JComponent t : targets) if (t != null && (c == t || SwingUtilities.isDescendingFrom(c, t))) return true;
+                return false;
+            }
+            if (c == anchor || SwingUtilities.isDescendingFrom(c, anchor)) return true;
+            JComponent e = extra;
+            return e != null && (c == e || SwingUtilities.isDescendingFrom(c, e));
+        }
+
+        TourNotice(JComponent anchor, Step s, int step, int of, Runnable onNext, Runnable onEnd, boolean centred,
+                   List<JComponent> targets) {
             this.anchor = anchor;
-            this.title = title;
+            this.title = s.title;
             this.onEnd = onEnd;
-            counter = "STEP " + step + " OF " + of;
+            this.centred = centred;
+            this.legend = s.legend;
+            this.finish = s.finish;
+            this.targets = targets;
+            this.waitFor = s.waitFor;
+            this.auto = s.auto;
+            counter = s.finish || s.legend ? "" : "STEP " + step + " OF " + of;
             setOpaque(false);
             setLayout(null);
-            lines = wrap(text, getFontMetrics(textFont()), WIDTH - 2 * PAD);
-            tipLines = tip == null || tip.isBlank() ? List.of() : wrap(tip, getFontMetrics(tipFont()), WIDTH - 2 * PAD);
-            next.setText(step == of ? "Done" : "Next");
+            lines = wrap(s.text, getFontMetrics(textFont()), WIDTH - 2 * PAD);
+            tipLines = s.tip == null || s.tip.isBlank() ? List.of() : wrap(s.tip, getFontMetrics(tipFont()), WIDTH - 2 * PAD);
+            next.setText(step == of ? "Done" : s.legend ? "Start" : "Next");
             next.addActionListener(e -> onNext.run());
             exit.addActionListener(e -> onEnd.run());
             exit.setVisible(step != of);
             add(next);
             add(exit);
+            waitingForPress = s.press;
+            waitingForEvent = s.waitFor != null;
+            if (waitingForEvent) {
+                next.setEnabled(false);
+                next.setText(s.waitText == null ? "Wait" : s.waitText);
+            } else if (waitingForPress) {
+                next.setEnabled(false);
+                next.setText("Press it");
+            }
         }
 
         /** An area the mouse still works over while this step shows (the map under the map steps); null = none. */
         private JComponent live;
-        /** A second control lit with the first (CURSOR and TERRAIN HEIGHT together); null = just the one. */
+        /** A second control lit with the first: the box covers both; null = just the one. */
         private JComponent extra;
 
         void setLive(JComponent live) {
@@ -405,16 +618,10 @@ final class Tour {
             this.extra = extra;
         }
 
-        /** The pilot learns by doing: NEXT says "Press it" and waits until the control was pressed. */
-        void requirePress(boolean required) {
-            waitingForPress = required;
-            next.setEnabled(!required);
-            next.setText(required ? "Press it" : next.getText());
-        }
-
         private void pressed() {
             if (!waitingForPress) return;
             waitingForPress = false;
+            if (waitingForEvent) return;
             next.setEnabled(true);
             next.setText("Next");
             repaint();
@@ -425,7 +632,9 @@ final class Tour {
             if (root == null || !anchor.isShowing()) return false;
             if (waitingForPress) {
                 java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(pressWatch, java.awt.AWTEvent.MOUSE_EVENT_MASK);
-                if (anchor instanceof javax.swing.AbstractButton b) b.addActionListener(firedWatch);
+                if (targets != null) {
+                    for (JComponent t : targets) if (t instanceof javax.swing.AbstractButton b) b.addActionListener(firedWatch);
+                } else if (anchor instanceof javax.swing.AbstractButton b) b.addActionListener(firedWatch);
             }
             JLayeredPane layer = root.getLayeredPane();
             // the dim sits under the popup layer: a menu that opens, and the rows that fly as it closes, show over it
@@ -449,7 +658,9 @@ final class Tour {
         void dismiss() {
             timer.stop();
             java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(pressWatch);
-            if (anchor instanceof javax.swing.AbstractButton b) b.removeActionListener(firedWatch);
+            if (targets != null) {
+                for (JComponent t : targets) if (t instanceof javax.swing.AbstractButton b) b.removeActionListener(firedWatch);
+            } else if (anchor instanceof javax.swing.AbstractButton b) b.removeActionListener(firedWatch);
             for (JComponent c : new JComponent[]{this, dim}) {
                 Component parent = c.getParent();
                 if (parent == null) continue;
@@ -466,49 +677,133 @@ final class Tour {
                 Window w = SwingUtilities.getWindowAncestor(anchor);
                 boolean windowGone = w == null || !w.isDisplayable() || !w.isVisible();
                 if (windowGone && hidden > WINDOW_GONE_MS) onEnd.run(); // its window was closed: the tour is over
-                else if (!windowGone && hidden > HIDDEN_MS) next.doClick(); // only the control went (folded away): move on
+                else if (!windowGone && hidden > HIDDEN_MS && next.isEnabled()) next.doClick(); // only the control went (folded away): move on
                 return;
             }
             notShowingSince = 0;
+            if (waitingForEvent && waitFor.getAsBoolean()) {
+                waitingForEvent = false;
+                if (auto) {
+                    next.setEnabled(true);
+                    next.doClick();
+                    return;
+                }
+                if (!waitingForPress) {
+                    next.setEnabled(true);
+                    next.setText("Next");
+                    repaint();
+                }
+            }
             Component layer = getParent();
+            boolean full = false;
             if (layer != null && !dim.getBounds().equals(new Rectangle(0, 0, layer.getWidth(), layer.getHeight()))) {
                 dim.setBounds(0, 0, layer.getWidth(), layer.getHeight());
+                full = true;
             }
+            Rectangle before = getBounds();
             place();
-            repaint();
-            dim.repaint();
+            if (!getBounds().equals(before)) full = true;
+            long now = System.currentTimeMillis();
+            if (now - shownAt < Math.max(IN_MS, FOCUS_MS) + TICK_MS || (nudgeAt >= 0 && now - nudgeAt < NUDGE_MS + TICK_MS)) {
+                full = true; // fading in, closing in, rings running out: the whole dim
+                repaint();
+            }
+            lastTickDirtyArea = repaintDim(full);
+        }
+
+        /**
+         * 1.0.52 (the pilot: "if the tour is open for a while it starts to lag the program"): the dim covers the whole
+         * window, so its repaint 30 times a second repainted everything under it - the video, the map with its tiles,
+         * the fleet panel - for as long as the tour ran. Now only the pulsing ring's band is repainted once the dim is
+         * in; the whole dim only while it fades in, a ring closes in or a nudge runs. Returns the area asked for.
+         */
+        private int repaintDim(boolean full) {
+            if (full || centred) {
+                if (centred && !full && !finish) return 0; // the welcome holds still once in
+                dim.repaint();
+                return dim.getWidth() * dim.getHeight();
+            }
+            Rectangle band = ringBand(anchorBounds());
+            if (band == null) return 0;
+            dim.repaint(band);
+            return band.width * band.height;
+        }
+
+        /** Tests and pictures: on this layer as pop() puts it, without a window on screen; the step came up long ago. */
+        void attachForTest(JLayeredPane layer, long shownAgoMs) {
+            layer.add(dim, JLayeredPane.MODAL_LAYER);
+            layer.add(this, NOTICE_LAYER);
+            dim.setBounds(0, 0, layer.getWidth(), layer.getHeight());
+            place();
+            shownAt = System.currentTimeMillis() - shownAgoMs;
+        }
+
+        /** Tests: what one tick asks to repaint once the step is in (full: as every tick did before 1.0.52). */
+        int tickRepaintArea(boolean full) {
+            return repaintDim(full);
+        }
+
+        /** Pictures: the notice and its dim painted into g at the layer's origin. */
+        void paintForTest(Graphics2D g) {
+            dim.paint(g);
+            Graphics2D n = (Graphics2D) g.create(getX(), getY(), getWidth(), getHeight());
+            try {
+                paint(n);
+            } finally {
+                n.dispose();
+            }
+        }
+
+        /** Where the pulsing ring paints: the lit area's outline, a few pixels either side. */
+        static Rectangle ringBand(Rectangle lit) {
+            if (lit == null) return null;
+            return new Rectangle(lit.x - 10, lit.y - 10, lit.width + 20, lit.height + 20);
+        }
+
+        private int legendHeight() {
+            return legend ? 2 * LEGEND_ROW + 8 : 0;
         }
 
         private int height() {
-            return POINTER + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + 12 + 34 + 4;
+            int pointer = centred ? 0 : POINTER;
+            return pointer + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 12 + 34 + 4;
         }
 
-        /** Under the control, or above it when there is no room below; inside the window. */
+        /** Under the control, or above it when there is no room below; inside the window. Centred: the middle. */
         private boolean place() {
             Component layer = getParent();
             if (layer == null) return false;
-            Rectangle a = anchorBounds();
-            if (a == null) return false;
             int h = height();
-            int x = Math.max(0, Math.min(a.x + a.width / 2 - WIDTH / 2, layer.getWidth() - WIDTH));
-            above = a.y + a.height + GAP + h > layer.getHeight() && a.y - GAP - h >= 0;
-            int y = above ? a.y - GAP - h : a.y + a.height + GAP;
+            int x, y;
+            if (centred) {
+                x = Math.max(0, (layer.getWidth() - WIDTH) / 2);
+                y = Math.max(0, (layer.getHeight() - h) / 2);
+                above = false;
+            } else {
+                Rectangle a = anchorBounds();
+                if (a == null) return false;
+                x = Math.max(0, Math.min(a.x + a.width / 2 - WIDTH / 2, layer.getWidth() - WIDTH));
+                above = a.y + a.height + GAP + h > layer.getHeight() && a.y - GAP - h >= 0;
+                y = above ? a.y - GAP - h : a.y + a.height + GAP;
+            }
             Rectangle r = new Rectangle(x, Math.max(0, Math.min(y, layer.getHeight() - h)), WIDTH, h);
             if (!r.equals(getBounds())) setBounds(r);
-            int top = above ? 0 : POINTER;
-            int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + 8 - PAD;
+            int top = above || centred ? 0 : POINTER;
+            int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 8 - PAD;
             next.setBounds(PAD, by, WIDTH - 2 * PAD, 30); // across the box: the exit is the cross top right
             exit.setBounds(WIDTH - PAD - CLOSE + 6, top + PAD - 6, CLOSE, CLOSE);
             return true;
         }
 
-        /** The lit area: the control, and the second one with it when there is one (their union). */
+        /** The lit area: the control, and the second one with it when there is one (their union); null when centred. */
         private Rectangle anchorBounds() {
+            if (centred) return null;
             Component layer = getParent();
             if (layer == null || anchor.getParent() == null) return null;
             Rectangle r = SwingUtilities.convertRectangle(anchor.getParent(), anchor.getBounds(), layer);
             JComponent e = extra;
-            if (e != null && e.isShowing() && e.getParent() != null) {
+            if (e != null && e.isVisible() && e.getParent() != null
+                    && SwingUtilities.getRootPane(e) == SwingUtilities.getRootPane(anchor)) {
                 r = r.union(SwingUtilities.convertRectangle(e.getParent(), e.getBounds(), layer));
             }
             return r;
@@ -523,20 +818,27 @@ final class Tour {
             try {
                 g.setComposite(AlphaComposite.SrcOver.derive(Math.max(0, easeIn)));
                 int w = getWidth(), h = getHeight();
-                g.translate(0, Math.round((above ? 6 : -6) * (1 - easeIn)));
-                int top = above ? 0 : POINTER, boxH = h - POINTER - 1;
+                if (centred) { // grows into place from the middle
+                    double s = 0.92 + 0.08 * easeIn;
+                    g.translate(w / 2.0, h / 2.0);
+                    g.scale(s, s);
+                    g.translate(-w / 2.0, -h / 2.0);
+                } else {
+                    g.translate(0, Math.round((above ? 6 : -6) * (1 - easeIn)));
+                }
+                int top = above || centred ? 0 : POINTER, boxH = h - (centred ? 0 : POINTER) - 1;
                 Rectangle a = anchorBounds();
                 int tipX = a == null ? w / 2 : Math.min(Math.max(a.x + a.width / 2 - getX(), PAD + POINTER), w - PAD - POINTER);
                 Path2D box = new Path2D.Float();
                 box.moveTo(0, top);
-                if (!above) {
+                if (!above && !centred) {
                     box.lineTo(tipX - POINTER, top);
                     box.lineTo(tipX, 0);
                     box.lineTo(tipX + POINTER, top);
                 }
                 box.lineTo(w - 1, top);
                 box.lineTo(w - 1, top + boxH);
-                if (above) {
+                if (above && !centred) {
                     box.lineTo(tipX + POINTER, top + boxH);
                     box.lineTo(tipX, top + boxH + POINTER);
                     box.lineTo(tipX - POINTER, top + boxH);
@@ -577,9 +879,37 @@ final class Tour {
                         y += tipLineHeight();
                     }
                 }
+                if (legend) paintLegend(g, y + 8);
             } finally {
                 g.dispose();
             }
+        }
+
+        /** The welcome's legend: a black PRESS IT (press the lit control) and the cross (ends the tour), drawn as they look. */
+        private void paintLegend(Graphics2D g, int y) {
+            int chipW = 96, chipH = 22;
+            g.setFont(Theme.headingFont(11f));
+            FontMetrics fm = g.getFontMetrics();
+            // the locked NEXT: black
+            g.setColor(Theme.BG);
+            g.fillRect(PAD + 2, y, chipW, chipH);
+            g.setColor(Theme.LINE);
+            g.drawRect(PAD + 2, y, chipW, chipH);
+            g.setColor(Theme.MUTED);
+            String p = "PRESS IT";
+            g.drawString(p, PAD + 2 + (chipW - fm.stringWidth(p)) / 2, y + (chipH + fm.getAscent()) / 2 - 2);
+            g.setFont(textFont());
+            g.setColor(Theme.TEXT);
+            g.drawString("Black: press the lit control.", PAD + chipW + 14, y + (chipH + g.getFontMetrics().getAscent()) / 2 - 2);
+            y += LEGEND_ROW;
+            // the cross
+            int cx = PAD + 2 + chipW / 2, cy = y + chipH / 2, r = 5;
+            g.setColor(Theme.MUTED);
+            g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.drawLine(cx - r, cy - r, cx + r, cy + r);
+            g.drawLine(cx + r, cy - r, cx - r, cy + r);
+            g.setColor(Theme.TEXT);
+            g.drawString("The x top right ends the tour.", PAD + chipW + 14, y + (chipH + g.getFontMetrics().getAscent()) / 2 - 2);
         }
 
         private static Font textFont() {
@@ -652,13 +982,20 @@ final class Tour {
         }
 
         /**
-         * Dims the window but the control, which gets a pulsing ring. The mouse is dead everywhere but over the control
-         * (it owns every point outside it, and listens, so clicks end here); keyboard shortcuts still work.
+         * Dims the window but the control, which gets a pulsing ring that closes in on it as the step comes up. The
+         * mouse is dead everywhere but over the control and the live area (it owns every point outside them, and
+         * listens, so clicks end here - and ring the lit control: "press here"); keyboard shortcuts still work.
          */
         private final class Dim extends JComponent {
             Dim() {
                 setOpaque(false);
                 MouseAdapter swallow = new MouseAdapter() {
+                    @Override
+                    public void mousePressed(MouseEvent e) {
+                        if (centred) return;
+                        nudgeAt = System.currentTimeMillis();
+                        repaint();
+                    }
                 };
                 addMouseListener(swallow);
                 addMouseMotionListener(swallow);
@@ -679,27 +1016,62 @@ final class Tour {
 
             @Override
             protected void paintComponent(Graphics graphics) {
-                Rectangle a = anchorBounds();
-                if (a == null) return;
                 Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
                 try {
-                    float in = Math.min(1, (System.currentTimeMillis() - shownAt) / (float) IN_MS);
+                    long now = System.currentTimeMillis();
+                    float in = Math.min(1, (now - shownAt) / (float) IN_MS);
+                    Rectangle a = anchorBounds();
                     Area shade = new Area(new Rectangle(0, 0, getWidth(), getHeight()));
-                    RoundRectangle2D hole = new RoundRectangle2D.Float(a.x - 6, a.y - 6, a.width + 12, a.height + 12, 10, 10);
-                    shade.subtract(new Area(hole));
-                    JComponent l = live; // the live area (the header on the menu steps, the map on the map steps) stays clear too
-                    if (l != null && l.isShowing() && l.getParent() != null) {
-                        Rectangle r = SwingUtilities.convertRectangle(l.getParent(), l.getBounds(), getParent());
-                        shade.subtract(new Area(new Rectangle(r.x - 2, r.y - 2, r.width + 4, r.height + 4)));
+                    RoundRectangle2D hole = null;
+                    if (a != null) {
+                        hole = new RoundRectangle2D.Float(a.x - 6, a.y - 6, a.width + 12, a.height + 12, 10, 10);
+                        shade.subtract(new Area(hole));
+                        JComponent l = live; // the live area (the header on the menu steps, the map on the map steps) stays clear too
+                        if (l != null && l.isShowing() && l.getParent() != null) {
+                            Rectangle r = SwingUtilities.convertRectangle(l.getParent(), l.getBounds(), getParent());
+                            shade.subtract(new Area(new Rectangle(r.x - 2, r.y - 2, r.width + 4, r.height + 4)));
+                        }
                     }
-                    g.setColor(Theme.alpha(java.awt.Color.BLACK, Math.round(150 * in)));
+                    g.setColor(Theme.alpha(java.awt.Color.BLACK, Math.round((centred ? 170 : 150) * in)));
                     g.fill(shade);
-                    double pulse = 0.5 + 0.5 * Math.sin((System.currentTimeMillis() - shownAt) / 320.0);
+                    if (finish) paintBurst(g, now);
+                    if (hole == null) return;
+                    // the ring closes in on the lit area as the step comes up, then pulses on it
+                    float focus = Math.min(1, (now - shownAt) / (float) FOCUS_MS);
+                    float grow = (1 - focus) * (1 - focus) * FOCUS_FROM;
+                    double pulse = 0.5 + 0.5 * Math.sin((now - shownAt) / 320.0);
                     g.setColor(Theme.alpha(Theme.ACCENT, (int) Math.round((120 + 135 * pulse) * in)));
                     g.setStroke(new BasicStroke(2.5f));
-                    g.draw(hole);
+                    g.draw(grow < 0.5f ? hole : new RoundRectangle2D.Float(a.x - 6 - grow, a.y - 6 - grow,
+                            a.width + 12 + 2 * grow, a.height + 12 + 2 * grow, 10 + grow, 10 + grow));
+                    // a press elsewhere: three rings run out from the lit area - here
+                    if (nudgeAt >= 0 && now - nudgeAt < NUDGE_MS) {
+                        float t = (now - nudgeAt) / (float) NUDGE_MS;
+                        for (int i = 0; i < 3; i++) {
+                            float ti = t - i * 0.18f;
+                            if (ti <= 0 || ti >= 1) continue;
+                            float d = 6 + ti * 40;
+                            g.setColor(Theme.alpha(Theme.ACCENT, Math.round(230 * (1 - ti))));
+                            g.setStroke(new BasicStroke(3f * (1 - ti) + 1));
+                            g.draw(new RoundRectangle2D.Float(a.x - d, a.y - d, a.width + 2 * d, a.height + 2 * d, 10 + d, 10 + d));
+                        }
+                    }
                 } finally {
                     g.dispose();
+                }
+            }
+
+            /** The finish: rings running out from the middle, slower and slower, behind the box. */
+            private void paintBurst(Graphics2D g, long now) {
+                double cx = getWidth() / 2.0, cy = getHeight() / 2.0;
+                double max = Math.hypot(cx, cy);
+                long t = now - shownAt;
+                for (int i = 0; i < 4; i++) {
+                    double phase = ((t / 1800.0) + i * 0.25) % 1.0;
+                    double r = 60 + phase * max;
+                    g.setColor(Theme.alpha(Theme.ACCENT, (int) Math.round(150 * (1 - phase))));
+                    g.setStroke(new BasicStroke((float) (3 * (1 - phase) + 1)));
+                    g.draw(new Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r));
                 }
             }
         }

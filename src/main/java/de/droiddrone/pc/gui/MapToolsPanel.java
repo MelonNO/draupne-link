@@ -545,8 +545,75 @@ final class MapToolsPanel extends JPanel {
         slide.start();
     }
 
+    /** The slide's length: MS, or the tour's slow one while it shows which list the pilot is in. */
+    private int slideMs = MS;
+    /** The tour's slide: slow enough to follow. */
+    static final int TOUR_SLIDE_MS = 600;
+
+    /**
+     * The tour (1.0.52, the pilot): the open list folds slowly, then the next one comes out slowly, so the pilot sees
+     * which list the step is in; done runs once it is out (Swing thread). Already out: done at once.
+     */
+    void tourSwitch(Group g, Runnable done) {
+        if (open && group == g && (g == null ? bodyShown <= 0 : bodyShown >= 1)) {
+            done.run();
+            return;
+        }
+        if (g == null) { // only the fold
+            slideMs = TOUR_SLIDE_MS;
+            showGroup(null, true);
+            Timer t = new Timer(TOUR_SLIDE_MS + 60, e -> {
+                slideMs = MS;
+                done.run();
+            });
+            t.setRepeats(false);
+            t.start();
+            return;
+        }
+        Runnable out = () -> {
+            slideMs = TOUR_SLIDE_MS;
+            showGroup(g, true);
+            Timer t = new Timer(TOUR_SLIDE_MS + 60, e -> {
+                slideMs = MS;
+                done.run();
+            });
+            t.setRepeats(false);
+            t.start();
+        };
+        if (group == null || group == g || !open) {
+            out.run();
+            return;
+        }
+        slideMs = TOUR_SLIDE_MS;
+        showGroup(null, true);
+        Timer t = new Timer(TOUR_SLIDE_MS + 60, e -> out.run());
+        t.setRepeats(false);
+        t.start();
+    }
+
+    /** The tour lights DRAW from LINE down to OUTLINE / FILL: out for the step, as RECTANGLE would show them. */
+    JComponent tourDrawEnd(boolean open) {
+        fillFields.setOpen(open || map.tool() == MapView.Tool.AREA);
+        return fillFields;
+    }
+
+    /** The symbol's field ends with the echelon list. */
+    JComponent tourSymbolEnd() {
+        return echelonCombo;
+    }
+
+    /** The last of the TOOLS list (CLIPS), for lighting the whole list. */
+    JComponent tourToolsEnd() {
+        return clips;
+    }
+
+    /** The last of the DATA list. */
+    JComponent tourDataEnd() {
+        return clearAll;
+    }
+
     private void tick() {
-        float t = Math.min(1, (System.currentTimeMillis() - slideStart) / (float) MS);
+        float t = Math.min(1, (System.currentTimeMillis() - slideStart) / (float) slideMs);
         shown = shownFrom + (shownTo - shownFrom) * t;
         bodyShown = bodyFrom + (bodyTo - bodyFrom) * t;
         revalidate();

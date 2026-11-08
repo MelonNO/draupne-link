@@ -79,6 +79,24 @@ final class PreviousFlightsDialog extends JDialog {
     private Player player;
     private FileAudio audio;
 
+    /** The tour's quick look: the flight list, while the window is open; null otherwise. */
+    static javax.swing.JComponent tourList() {
+        PreviousFlightsDialog d = open;
+        return d != null && d.isDisplayable() ? d.list : null;
+    }
+
+    /** The timeline, lit with the list. */
+    static javax.swing.JComponent tourTimeline() {
+        PreviousFlightsDialog d = open;
+        return d != null && d.isDisplayable() ? d.timeline : null;
+    }
+
+    /** The tour moves on: the window closes (its playback stops with it). */
+    static void tourClose() {
+        PreviousFlightsDialog d = open;
+        if (d != null && d.isDisplayable()) d.dispose();
+    }
+
     /** Opens it (in front if open already). */
     static void show(Window owner, TileCache cache, TileSource source, Consumer<Path> onMap) {
         if (open != null && open.isDisplayable()) {

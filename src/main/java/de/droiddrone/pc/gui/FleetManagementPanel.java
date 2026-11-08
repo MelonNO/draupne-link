@@ -174,6 +174,7 @@ final class FleetManagementPanel extends JPanel {
                 BorderFactory.createEmptyBorder(5, 8, 6, 8)));
         strip.add(detail, BorderLayout.CENTER);
         strip.add(buttons, BorderLayout.SOUTH);
+        actionStrip = strip;
         JPanel body = new JPanel(new BorderLayout()) {
             @Override
             public Dimension getPreferredSize() {
@@ -201,6 +202,21 @@ final class FleetManagementPanel extends JPanel {
 
     boolean isOpen() {
         return open;
+    }
+
+    /** The selected phone's details and buttons (the tour points at it). */
+    private JPanel actionStrip;
+
+    JComponent tourTab() {
+        return tab;
+    }
+
+    JComponent tourRows() {
+        return scroll;
+    }
+
+    JComponent tourStrip() {
+        return actionStrip;
     }
 
     void setOpen(boolean open, boolean animate) {

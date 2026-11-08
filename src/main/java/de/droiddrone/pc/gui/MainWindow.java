@@ -150,6 +150,8 @@ public class MainWindow extends JFrame {
     private final WrappingText powerStatusText = WrappingText.fitting(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
     private final PowerStatus powerStatus = new PowerStatus();
     private JPanel powerRow;
+    /** CHECK EVERY and its list, under the sleep buttons (the tour lights it with them). */
+    private JPanel checkEveryRow;
     /** DEEP SLEEP and OVERWATCH, folded away (animated) while the drone is armed: no sleep then. */
     private Fold sleepFold;
 
@@ -3066,6 +3068,7 @@ public class MainWindow extends JFrame {
         });
         interval.add(checkIntervalCombo, BorderLayout.CENTER);
         powerRow.add(interval, c);
+        checkEveryRow = interval;
         // 1.0.50 (the pilot): no status text under CHECK EVERY (powerStatus still feeds the log and tooltips where used)
         return powerRow;
     }
@@ -3775,7 +3778,7 @@ public class MainWindow extends JFrame {
         long now = de.droiddrone.pc.MonoClock.ms();
         boolean armed = c != null && !c.getLink().isSpectator() && c.getLink().getTelemetry().isArmedNow(now, 2000);
         if (armed && !audioSawArmed) {
-            if (!audioMuted) {
+            if (!audioMuted && !tourKeepSound) {
                 audioAutoMuted = true;
                 setAudioMuted(true, true);
                 logLine("Armed: sound muted. M unmutes.");
@@ -4398,7 +4401,9 @@ public class MainWindow extends JFrame {
         refreshConnectText(); // the wake countdown
         if (connection == null) {
             videoView.setIdleText("Not connected");
-            if (asleepChosen() != null && !tourPowerDemo) refreshAsleep();
+            if (tourSleepHidden && !tourPowerDemo) {
+                if (powerRow != null && shown(powerRow)) show(powerRow, false);
+            } else if (asleepChosen() != null && !tourPowerDemo) refreshAsleep();
             else if (powerRow != null && !tourPowerDemo) refreshIdlePower();
             if (observation == null) setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED); // observing: refreshObservation's
             fcValue.setText("-");
@@ -4697,7 +4702,9 @@ public class MainWindow extends JFrame {
         tourPowerDemo = on;
         show(powerRow, on);
         if (on) {
+            tourSleepHidden = false;
             sleepFold.setShown(true, false);
+            checkIntervalCombo.setEnabled(true);
             standbyButton.setEnabled(true);
             deepSleepButton.setEnabled(true);
             overwatchButton.setEnabled(true);
@@ -4728,6 +4735,103 @@ public class MainWindow extends JFrame {
         powerStatus.setText(demo);
         logLine("Demo: " + demo.replace("<html>", "").replace("</html>", "")); // the line under the buttons is gone (1.0.50): the log says it
         return true;
+    }
+
+    // ---- the tour of 1.0.52
+
+    /** Until the tour's sleep step: the sleep row stays hidden while nothing is connected (the pilot). */
+    private boolean tourSleepHidden;
+    /** The tour's finale: arming keeps the sound on, so the BTR is heard in the air. */
+    private boolean tourKeepSound;
+
+    void tourHideSleep(boolean hide) {
+        tourSleepHidden = hide;
+        if (hide && connection == null && powerRow != null) show(powerRow, false);
+        linkCard.revalidate();
+        linkCard.repaint();
+    }
+
+    void tourKeepSound(boolean keep) {
+        tourKeepSound = keep;
+        if (keep && audioMuted) setAudioMuted(false, true);
+    }
+
+    /** The tour starts with the controller card open, so the pilot folds it when asked. */
+    void tourExpandController() {
+        if (controllerMinimized) setControllerMinimized(false, false);
+    }
+
+    JComponent tourBeeperButton() {
+        return beeperButton;
+    }
+
+    JComponent tourMuteButton() {
+        return muteButton;
+    }
+
+    JComponent tourPhoneCombo() {
+        return phoneCombo;
+    }
+
+    JComponent tourConnectButton() {
+        return connectButton;
+    }
+
+    JComponent tourRoleCombo() {
+        return roleCombo;
+    }
+
+    JComponent tourDeepSleepButton() {
+        return deepSleepButton;
+    }
+
+    JComponent tourCheckEvery() {
+        return checkEveryRow;
+    }
+
+    JComponent tourPopMapButton() {
+        return popMapButton;
+    }
+
+    /** TOOLS > Previous flights, for the tour's quick look. */
+    void tourOpenPreviousFlights() {
+        PreviousFlightsDialog.show(this, tileCache, mapSource, f -> {
+            if (f != null) showMapWindow();
+            mapWindow().showOldTrackOrClear(f);
+        });
+    }
+
+    /** The map window closed, so the pilot opens it with POP OUT MAP when the tour asks. */
+    void tourHideMapWindow() {
+        if (mapWindow != null && mapWindow.isVisible()) toggleMapWindow();
+    }
+
+    /** An overwatch token registered for a tour drone, as prepareOverwatch does for a real one. */
+    int tourWatch(String drone, de.droiddrone.pc.map.CameraFootprint.Pose pose) {
+        int token;
+        do {
+            token = new java.security.SecureRandom().nextInt();
+        } while (token == 0);
+        overwatch.watch(drone, token, pose);
+        return token;
+    }
+
+    /** The video, for the finale's flight. */
+    JComponent tourVideo() {
+        return videoView;
+    }
+
+    /** The window's content, for the tour's centred boxes (the welcome, the finish). */
+    JComponent tourCentre() {
+        return (JComponent) getContentPane();
+    }
+
+    void tourForget(String drone) {
+        overwatch.forget(drone);
+    }
+
+    int tourLinkPort() {
+        return config.getPort();
     }
 
     JComponent tourHeader() {
