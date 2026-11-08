@@ -115,8 +115,7 @@ final class RcCheckDialog extends JDialog {
         timer = new Timer(150, e -> refresh());
         timer.start();
         refresh();
-        setMinimumSize(new Dimension(980, 640));
-        setSize(1120, 720);
+        ScreenFit.apply(this, 820, 560, 1120, 720);
         setLocationRelativeTo(main);
         WindowReveal.onOpen(this);
     }

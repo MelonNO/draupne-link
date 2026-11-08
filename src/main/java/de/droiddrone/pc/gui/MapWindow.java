@@ -90,6 +90,8 @@ final class MapWindow extends JFrame {
     private final OverwatchPanel overwatchPanel;
     /** FLEET MANAGEMENT (1.0.52): the FLEET tab at the right edge and its cards. */
     private final FleetManagementPanel fleetPanel;
+    /** The least width of one of the figures under the map (an MGRS position in full). */
+    static final int STAT_MIN_WIDTH = 190;
     /** The overwatch drone's pulse on the map: repaints while an alert is on. */
     private final javax.swing.Timer pulse = new javax.swing.Timer(40, e -> {
         if (overwatchPulsing() && isShowing()) map().repaint();
@@ -331,7 +333,29 @@ final class MapWindow extends JFrame {
         root.add(centre, BorderLayout.CENTER);
 
         // ---- the figures
-        JPanel stats = Theme.card(new GridLayout(1, 6, 14, 0));
+        // six across; a narrow window two rows of three, so a grid position is never cut short (1.0.52)
+        JPanel stats = Theme.card(new GridLayout(1, 6, 14, 0) {
+            private void fit(java.awt.Container parent) {
+                boolean narrow = parent.getWidth() > 0 && parent.getWidth() < 6 * STAT_MIN_WIDTH;
+                setRows(narrow ? 2 : 1);
+                setColumns(narrow ? 3 : 6);
+                setVgap(narrow ? 8 : 0);
+            }
+
+            @Override
+            public java.awt.Dimension preferredLayoutSize(java.awt.Container parent) {
+                fit(parent);
+                return super.preferredLayoutSize(parent);
+            }
+
+            @Override
+            public void layoutContainer(java.awt.Container parent) {
+                int rows = getRows();
+                fit(parent);
+                super.layoutContainer(parent);
+                if (rows != getRows()) SwingUtilities.invokeLater(parent::revalidate); // a row more or less: the height follows
+            }
+        });
         cursorCell = stat(stats, "CURSOR", cursorValue);
         cursorCell.setToolTipText("Right-click: pin at the cursor");
         cursorValue.setMenu(this::cursorMenu);
@@ -351,9 +375,12 @@ final class MapWindow extends JFrame {
         syncCombos();
         syncFollow();
 
+        ScreenFit.least(this, 640, 480);
         if (!restoreBounds(savedBounds)) {
-            setSize(1180, 780);
+            ScreenFit.apply(this, 640, 480, 1180, 780);
             setLocationRelativeTo(owner);
+        } else {
+            ScreenFit.clampToScreen(this); // kept from a bigger screen
         }
         addComponentListener(new ComponentAdapter() {
             @Override

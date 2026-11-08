@@ -81,6 +81,7 @@ final class Theme {
         UIManager.put("ComboBox.background", PANEL_2);
         UIManager.put("ToolTip.background", PANEL_2);
         UIManager.put("defaultFont", font(Font.PLAIN, 13f));
+        ScaleSafeUI.install(); // no "..." on labels and buttons at 125-200 % display scaling
     }
 
     static Font font(int style, float size) {

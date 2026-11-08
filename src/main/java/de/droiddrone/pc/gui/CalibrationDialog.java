@@ -155,10 +155,7 @@ class CalibrationDialog extends JDialog {
 
         timer = new Timer(16, e -> tick());
         timer.start();
-        setMinimumSize(new Dimension(1100, 740));
-        int screenHeight = getGraphicsConfiguration().getBounds().height;
-        int screenWidth = getGraphicsConfiguration().getBounds().width;
-        setSize(Math.max(1100, Math.min(1320, screenWidth - 60)), Math.max(700, Math.min(920, screenHeight - 80)));
+        ScreenFit.apply(this, 900, 600, 1320, 920); // within the screen (ScreenFit)
         setLocationRelativeTo(owner);
         WindowReveal.onOpen(this);
     }

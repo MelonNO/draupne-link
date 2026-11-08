@@ -112,8 +112,7 @@ final class OrientationCheckDialog extends JFrame {
         getRootPane().registerKeyboardAction(e -> dispose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
         usb.set(State.PENDING, "Searching...");
         resetRows();
-        setMinimumSize(new Dimension(940, 600));
-        setSize(1000, 660);
+        ScreenFit.apply(this, 760, 520, 1000, 660);
         setLocationRelativeTo(owner);
         WindowReveal.onOpen(this);
         worker = new Thread(this::run, "orientation-check");

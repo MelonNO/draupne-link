@@ -66,7 +66,7 @@ public final class FleetPanel {
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE); // the shutdown hook closes the fleet
         frame.getContentPane().setBackground(Theme.BG);
         frame.setContentPane(p.content());
-        frame.setSize(1180, 860);
+        ScreenFit.apply(frame, 800, 560, 1180, 860);
         frame.setLocationByPlatform(true);
         frame.setIconImages(AppIcon.images());
         frame.setVisible(true);

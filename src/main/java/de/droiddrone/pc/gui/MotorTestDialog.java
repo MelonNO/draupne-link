@@ -189,9 +189,7 @@ final class MotorTestDialog extends JFrame {
         mixer.set(State.PENDING, "");
         battery.set(State.PENDING, "");
         showMotors(4, false);
-        setMinimumSize(new Dimension(1100, 720));
-        java.awt.Rectangle screen = (owner != null ? owner.getGraphicsConfiguration() : getGraphicsConfiguration()).getBounds();
-        setSize(Math.max(1100, Math.min(1440, screen.width - 80)), Math.max(720, Math.min(1000, screen.height - 60))); // the drone big
+        ScreenFit.apply(this, 900, 600, 1440, 1000); // the drone big, within the screen
 
         setLocationRelativeTo(owner);
         WindowReveal.onOpen(this);

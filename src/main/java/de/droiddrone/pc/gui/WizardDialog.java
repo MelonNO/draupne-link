@@ -235,9 +235,7 @@ class WizardDialog extends JDialog {
         });
 
         timer = new Timer(500, e -> tick());
-        setMinimumSize(new Dimension(900, 640));
-        int screenHeight = owner == null ? 1000 : owner.getGraphicsConfiguration().getBounds().height;
-        setSize(1020, Math.max(640, Math.min(880, screenHeight - 80)));
+        ScreenFit.apply(this, 760, 560, 1020, 880);
         setLocationRelativeTo(owner);
         WindowReveal.onOpen(this);
         preparing = true;
@@ -365,7 +363,7 @@ class WizardDialog extends JDialog {
     }
 
     static WrappingText paragraph(String html) {
-        return new WrappingText(html, Theme.font(Font.PLAIN, 16f), Theme.TEXT);
+        return WrappingText.fitting(html, Theme.font(Font.PLAIN, 16f), Theme.TEXT); // wraps to the width it gets (1.0.52: cut off on a small screen)
     }
 
     static JLabel subheading(String text) {

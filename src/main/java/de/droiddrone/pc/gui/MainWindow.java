@@ -35,6 +35,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.ScrollPaneConstants;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.SwingConstants;
@@ -438,6 +439,20 @@ public class MainWindow extends JFrame {
         }
     }
 
+    private void startNetwork() {
+        networkTimer.start();
+        phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, java.util.concurrent.TimeUnit.SECONDS);
+        nameService.onChange(() -> SwingUtilities.invokeLater(this::updatePhoneList)); // the PHONE list follows the network
+        nameService.start();
+        // at once on opening, then every 15 minutes; its own thread, so a slow GitHub never holds up the phone check
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "updateCheck");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY);
+            return t;
+        }).scheduleWithFixedDelay(this::checkForUpdate, 0, 15 * 60, java.util.concurrent.TimeUnit.SECONDS); // a release made while the app runs shows within a quarter of an hour
+    }
+
     private MainWindow(PcConfig config, Path configFile, JoystickService service) {
         super("DRAUPNE Link " + de.droiddrone.pc.AppInfo.version());
         setIconImages(AppIcon.images());
@@ -523,23 +538,16 @@ public class MainWindow extends JFrame {
             else exitFullScreen();
         });
         new Timer(33, e -> refresh()).start();
-        networkTimer.start();
-        phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, java.util.concurrent.TimeUnit.SECONDS);
-        nameService.onChange(() -> SwingUtilities.invokeLater(this::updatePhoneList)); // the PHONE list follows the network
-        nameService.start();
-        // at once on opening, then every 15 minutes; its own thread, so a slow GitHub never holds up the phone check
-        java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "updateCheck");
-            t.setDaemon(true);
-            t.setPriority(Thread.MIN_PRIORITY);
-            return t;
-        }).scheduleWithFixedDelay(this::checkForUpdate, 0, 15 * 60, java.util.concurrent.TimeUnit.SECONDS); // a release made while the app runs shows within a quarter of an hour
-        setMinimumSize(new Dimension(1100, 760));
+        startNetwork();
+        // up to 1.0.51 at least 1100x760: more than a 1080p screen at 150 % has (1.0.52, the pilot's cut-off window)
+        ScreenFit.least(this, 960, 560);
         // where it was last time (screen, size, maximized); the first time maximized, the size below is what un-maximizing gives
         if (!mainBounds.restore(config.getString(MAIN_BOUNDS_KEY))) {
-            setSize(1280, 820);
+            ScreenFit.apply(this, 960, 560, 1280, 820);
             setLocationRelativeTo(null);
             setExtendedState(JFrame.MAXIMIZED_BOTH);
+        } else if ((getExtendedState() & JFrame.MAXIMIZED_BOTH) == 0) {
+            ScreenFit.clampToScreen(this); // kept from a bigger screen or a higher scaling
         }
         saveMainBounds.setRepeats(false);
         addComponentListener(new java.awt.event.ComponentAdapter() {
@@ -845,28 +853,31 @@ public class MainWindow extends JFrame {
     /**
      * The link column (1.0.50, the pilot: "it does not show the minimap, but instead has a bunch of empty space"): with
      * the map not popped out, the LINK card takes the column and the minimap in it every pixel left over, the log
-     * LOG_HEIGHT under it; popped out, the minimap goes and the log takes the room. (Up to 1.0.49 the minimap's height
+     * under it (LinkCardLayout.Column); popped out, the minimap goes and the log takes the room. (Up to 1.0.49 the minimap's height
      * was worked out from the card's preferred size, which a wrapped warning overstated: the minimap went, and the card
      * stood centred in the space it had kept.)
      */
-    private static final int LOG_HEIGHT = 190, MINI_PREFERRED = 90;
+    private static final int MINI_PREFERRED = 90;
 
     private JPanel buildLinkColumn() {
-        JPanel column = new JPanel(new BorderLayout(0, 14));
+        JPanel column = new JPanel();
         column.setOpaque(false);
-        column.setPreferredSize(new Dimension(340, 100));
 
-        JPanel link = Theme.card(new GridBagLayout());
+        JPanel link = Theme.card(null);
         linkCard = link;
+        // the card's rows scroll when the column is too short for them (a small screen, a warning, the sleep row); the
+        // minimap takes what is left over and POP OUT MAP always sits at the bottom (1.0.52, the pilot: "the pop out map
+        // button is gone when not connected", the card's top cut off)
+        JPanel rows = new LinkCardLayout.Rows(new GridBagLayout());
         GridBagConstraints c = new GridBagConstraints();
         c.gridx = 0;
         c.gridwidth = 2;
         c.fill = GridBagConstraints.HORIZONTAL;
         c.weightx = 1;
         c.insets = new Insets(0, 0, 6, 0);
-        link.add(Theme.sectionTitle("Link"), c);
+        rows.add(Theme.sectionTitle("Link"), c);
         connectedNameLabel.setToolTipText("The phone this PC is connected to");
-        link.add(folded(connectedNameLabel, 0), c);
+        rows.add(folded(connectedNameLabel, 0), c);
         JPanel fields = new JPanel(new GridBagLayout());
         fields.setOpaque(false);
         fields.add(phoneLabel, c);
@@ -904,7 +915,7 @@ public class MainWindow extends JFrame {
         });
         fields.add(roleCombo, c);
         c.insets = new Insets(0, 0, 0, 0);
-        link.add(fields, c);
+        rows.add(fields, c);
         linkFields = fields;
         c.insets = new Insets(4, 0, 14, 0);
         connectButton.addActionListener(e -> {
@@ -914,19 +925,20 @@ public class MainWindow extends JFrame {
             else if (confirmEndWhileArmed("Disconnect")) disconnectToStandby();
         });
         connectButton.setFocusable(false); // SPACE on a focused DISCONNECT must never end a flight
-        link.add(connectButton, c);
-        link.add(folded(powerPanel(), 0), c);
+        rows.add(connectButton, c);
+        c.insets = new Insets(0, 0, 0, 0); // the gaps go in the folds: a folded one leaves none (up to 1.0.51 each kept 14 px)
+        rows.add(folded(powerPanel(), 0), c);
         // the link dropped while the drone was armed: one click opens FIND DRONE and copies the MGRS to send on
         lostDroneButton.setBackground(Theme.BAD);
         lostDroneButton.setToolTipText("Link lost while armed: last position in FIND DRONE, MGRS copied");
         lostDroneButton.addActionListener(e -> lostDrone());
-        link.add(folded(lostDroneButton, 0), c);
+        rows.add(folded(lostDroneButton, 14), c);
         // 1.0.50: a drone lost armed holds this PC's downloads, previews and clips for 10 min - the pilot who knows it
         // is down ends that here (never while a link here says armed)
         itsDownButton.setToolTipText("Drone lost armed: downloads wait 10 min. Press once it is down");
         itsDownButton.addActionListener(e -> itsDownResume(this));
-        link.add(folded(itsDownButton, 0), c);
-        link.add(folded(itsDownLine, 0), c);
+        rows.add(folded(itsDownButton, 14), c);
+        rows.add(folded(itsDownLine, 6), c);
 
         // what matters in flight stays; the rest folds away with the fields
         // 1.0.51 (the pilot): no ping, telemetry packets or RC frames here - the link log keeps them
@@ -934,44 +946,47 @@ public class MainWindow extends JFrame {
         stats.setOpaque(false);
         addStat(stats, "PHONE BATTERY", phoneBatteryValue);
         addStat(stats, "FLIGHT CONTROLLER", fcValue);
-        c.insets = new Insets(4, 0, 0, 0);
-        link.add(stats, c);
+        c.insets = new Insets(14, 0, 0, 0);
+        rows.add(stats, c);
         JPanel details = new JPanel(new GridLayout(2, 2, 8, 6));
         details.setOpaque(false);
         details.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
         addStat(details, "PHONE ON TAILSCALE", phoneValue);
         addStat(details, "PHONE APP", phoneAppValue);
         c.insets = new Insets(0, 0, 0, 0);
-        link.add(details, c);
+        rows.add(details, c);
         // the minimap and the way to the map window, always: connected or not, nothing folds away for it
-        JPanel mini = new JPanel(new BorderLayout(0, 8));
-        mini.setOpaque(false);
-        miniMap.setPreferredSize(new Dimension(300, MINI_PREFERRED)); // and every pixel the card has over (weighty)
+        miniMap.setPreferredSize(new Dimension(300, MINI_PREFERRED)); // and every pixel the card has over
         miniMap.setMinimumSize(new Dimension(100, 40));
         miniMap.setToolTipText("Wheel zooms; right-click adds a pin");
-        mini.add(miniMap, BorderLayout.CENTER);
         JButton popMap = Theme.primaryButton("Pop out map");
         popMapButton = popMap;
         popMap.setToolTipText("The map in its own window (F3)");
         popMap.addActionListener(e -> toggleMapWindow());
-        mini.add(popMap, BorderLayout.SOUTH);
-        c.insets = new Insets(10, 0, 0, 0);
-        c.weighty = 1; // the card's spare height goes to the minimap, not round the card's rows
-        c.fill = GridBagConstraints.BOTH;
-        link.add(mini, c);
-        c.weighty = 0;
-        c.fill = GridBagConstraints.HORIZONTAL;
         c.insets = new Insets(0, 0, 0, 0); // the gaps go in the folds, so a folded one leaves none
-        link.add(folded(phoneWarning, 8), c);
-        link.add(folded(phoneAppWarning, 8), c);
+        rows.add(folded(phoneWarning, 8), c);
+        rows.add(folded(phoneAppWarning, 8), c);
         updatePhoneButton.setToolTipText("The phone installs the new app itself. Disarmed only; the link drops briefly");
         updatePhoneButton.setFocusable(false);
         updatePhoneButton.addActionListener(e -> askRemoteUpdate());
-        link.add(folded(updatePhoneButton, 6), c);
-        column.add(link, BorderLayout.CENTER);
+        rows.add(folded(updatePhoneButton, 6), c);
+        JScrollPane rowsScroll = new JScrollPane(rows, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER) {
+            @Override
+            public boolean isValidateRoot() {
+                return false; // a fold opening in the rows lays the whole card out again, not just the scroll pane
+            }
+        };
+        rowsScroll.setBorder(BorderFactory.createEmptyBorder());
+        rowsScroll.setOpaque(false);
+        rowsScroll.getViewport().setOpaque(false);
+        rowsScroll.getVerticalScrollBar().setUnitIncrement(16);
+        link.setLayout(new LinkCardLayout(rowsScroll, rows, miniMap, popMap));
+        link.add(rowsScroll);
+        link.add(miniMap);
+        link.add(popMap);
+        column.add(link);
 
         JPanel logCard = Theme.card(new BorderLayout(0, 8));
-        logCard.setPreferredSize(new Dimension(340, LOG_HEIGHT));
         JPanel logTitle = new JPanel(new BorderLayout());
         logTitle.setOpaque(false);
         logTitle.add(Theme.sectionTitle("Log"), BorderLayout.WEST);
@@ -986,7 +1001,8 @@ public class MainWindow extends JFrame {
         JScrollPane scroll = new JScrollPane(log);
         scroll.setBorder(BorderFactory.createEmptyBorder());
         logCard.add(scroll, BorderLayout.CENTER);
-        column.add(logCard, BorderLayout.SOUTH);
+        column.add(logCard);
+        column.setLayout(new LinkCardLayout.Column(link, logCard, miniMap)); // its width and the log's height follow the window
         this.logCard = logCard; // the boot animation grows a piece of the mark into it
         return column;
     }
@@ -1147,7 +1163,7 @@ public class MainWindow extends JFrame {
         controller.setBackground(card.getBackground());
         controller.setBorder(card.getBorder());
         controllerCard = controller;
-        JPanel top = new JPanel(new BorderLayout(10, 0));
+        JPanel top = new JPanel();
         top.setOpaque(false);
         JPanel topLeft = new JPanel();
         topLeft.setOpaque(false);
@@ -1158,7 +1174,7 @@ public class MainWindow extends JFrame {
             @Override
             public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean selected, boolean focus) {
                 super.getListCellRendererComponent(list, value, index, selected, focus);
-                setText(value instanceof Joystick.Info info ? info.name() : "No controller - plug in the TX16S (USB Joystick)");
+                setText(value instanceof Joystick.Info info ? info.name() : "No controller");
                 return this;
             }
         });
@@ -1173,6 +1189,7 @@ public class MainWindow extends JFrame {
         joystickSlot.add(joystickCombo, "combo");
         joystickSlot.setPreferredSize(new Dimension(320, 32));
         joystickSlot.setMaximumSize(new Dimension(420, 32));
+        joystickSlot.setMinimumSize(new Dimension(140, 32)); // a narrow window: the name shortens before a button goes
         topLeft.add(joystickSlot);
         topLeft.add(Box.createHorizontalStrut(10));
         // locked while connected: it shows (stripes, padlock), and a click on it says why, under it (never over the video).
@@ -1206,19 +1223,20 @@ public class MainWindow extends JFrame {
         rcCheckButton.setToolTipText("Compare sent sticks with what Betaflight reads");
         rcCheckButton.addActionListener(e -> RcCheckDialog.open(this));
         topLeft.add(rcCheckButton);
-        top.add(topLeft, BorderLayout.WEST);
+        top.add(topLeft);
         JPanel states = new JPanel(new GridLayout(3, 1, 0, 0));
         states.setOpaque(false);
-        states.setBorder(BorderFactory.createEmptyBorder(0, 16, 0, 0));
+        states.setBorder(BorderFactory.createEmptyBorder(0, 6, 0, 0));
         states.add(calibrationLabel);
         states.add(rcStateLabel);
         states.add(fcStateLabel);
-        top.add(states, BorderLayout.CENTER);
+        top.add(states);
         minimizeButton.addActionListener(e -> {
             setControllerMinimized(!controllerMinimized, true); // also mid-fold: turns it round
             save(Map.of(MINIMIZED_KEY, Boolean.toString(controllerMinimized)));
         });
-        top.add(minimizeButton, BorderLayout.EAST);
+        top.add(minimizeButton);
+        top.setLayout(new WrapRowLayout(topLeft, states, minimizeButton, 10, 8)); // narrow: the status lines under the buttons
         controller.add(top, BorderLayout.NORTH);
 
         JPanel gimbals = new JPanel(new GridLayout(1, 2, 18, 0));
@@ -1854,17 +1872,13 @@ public class MainWindow extends JFrame {
 
     /**
      * The map in its own window: no minimap, the LINK card as tall as its rows and the log takes the rest of the column.
-     * Back: the minimap again, taking the card's spare room, the log LOG_HEIGHT.
+     * Back: the minimap again, taking the card's spare room, the log its usual height.
      */
     private void placeMiniMap() {
         if (linkColumn == null || linkCard == null || logCard == null) return;
         boolean popped = mapWindow != null && mapWindow.isShown();
-        if (miniMap.isVisible() == !popped && linkColumn.getComponentCount() == 2) return;
-        miniMap.setVisible(!popped);
-        linkColumn.remove(linkCard);
-        linkColumn.remove(logCard);
-        linkColumn.add(linkCard, popped ? BorderLayout.NORTH : BorderLayout.CENTER);
-        linkColumn.add(logCard, popped ? BorderLayout.CENTER : BorderLayout.SOUTH);
+        if (miniMap.isVisible() == !popped) return;
+        miniMap.setVisible(!popped); // LinkCardLayout.Column: the LINK card as tall as its rows, the log the rest
         linkColumn.revalidate();
         linkColumn.repaint();
     }
@@ -2539,7 +2553,7 @@ public class MainWindow extends JFrame {
         boolean choice = list.size() > 1;
         joystickCards.show(joystickSlot, choice ? "combo" : "field");
         if (!choice) {
-            String text = list.isEmpty() ? "No controller - plug in the TX16S (USB Joystick)" : list.get(0).name();
+            String text = list.isEmpty() ? "No controller" : list.get(0).name();
             if (!text.equals(joystickField.getText())) joystickField.setText(text);
             joystickField.setForeground(list.isEmpty() ? Theme.WARN : Theme.TEXT);
             // no controller: the field's frame pulses red

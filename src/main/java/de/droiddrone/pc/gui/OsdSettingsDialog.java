@@ -101,8 +101,7 @@ final class OsdSettingsDialog extends JFrame {
 
         select(OsdElement.BATTERY);
         ticker.start();
-        setMinimumSize(new Dimension(1100, 680));
-        setSize(1300, 780);
+        ScreenFit.apply(this, 900, 560, 1300, 780);
         setLocationRelativeTo(owner); // where "restore down" puts it
         setExtendedState(MAXIMIZED_BOTH); // opens maximised: the biggest preview
         WindowReveal.onOpen(this);
