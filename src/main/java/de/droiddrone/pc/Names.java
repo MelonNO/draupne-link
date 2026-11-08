@@ -76,7 +76,17 @@ public final class Names {
     /**
      * @param position where the phone's drone is, from its reply (phone app pc.32 on), or null
      */
-    public record Reply(Kind kind, String name, String device, String version, Position position) {
+    /**
+     * @param position   where the phone's drone is, from its reply (phone app pc.32 on), or null
+     * @param powerMode  its power mode (pc.39 on; {@link #POWER_UNKNOWN} not said) - also when it has no position
+     * @param status     how it is doing (pc.40 on, FLEET MANAGEMENT), or null
+     */
+    public record Reply(Kind kind, String name, String device, String version, Position position, int powerMode,
+                        de.droiddrone.common.FleetProtocol.Status status) {
+        public Reply(Kind kind, String name, String device, String version, Position position) {
+            this(kind, name, device, version, position, position == null ? POWER_UNKNOWN : position.powerMode(), null);
+        }
+
         public Reply(Kind kind, String name, String device, String version) {
             this(kind, name, device, version, null);
         }
@@ -338,7 +348,11 @@ public final class Names {
             String name = in.readUTF(), device = in.readUTF(), version = in.readUTF();
             Kind k = kind == 0 ? Kind.PHONE : kind == 1 ? Kind.PC : null;
             if (k == null || !name.isEmpty() && !isValidName(name, k)) return null; // not a DRAUPNE name: never filed
-            return new Reply(k, name, printable(device, MAX_TEXT), printable(version, MAX_TEXT), readPosition(in));
+            int[] power = {POWER_UNKNOWN};
+            Position position = readPosition(in, power);
+            // pc.40: the fleet status block after the power byte (only when the position block was read whole)
+            de.droiddrone.common.FleetProtocol.Status status = power[0] != POWER_UNKNOWN ? de.droiddrone.common.FleetProtocol.Status.readFrom(in) : null;
+            return new Reply(k, name, printable(device, MAX_TEXT), printable(version, MAX_TEXT), position, power[0], status);
         } catch (IOException e) {
             return null;
         }
@@ -346,6 +360,12 @@ public final class Names {
 
     /** The position block after the version (phone app pc.32), or null: none, no fix, or a version unknown here. */
     static Position readPosition(DataInputStream in) {
+        return readPosition(in, new int[1]);
+    }
+
+    /** As above; power[0] gets the power byte (pc.39) whether or not there is a fix, else POWER_UNKNOWN. */
+    static Position readPosition(DataInputStream in, int[] power) {
+        power[0] = POWER_UNKNOWN;
         try {
             if (in.available() < 1 || in.readUnsignedByte() != 1) return null;
             int source = in.readUnsignedByte();
@@ -360,9 +380,10 @@ public final class Names {
                 in.readFully(a);
                 pilot = java.net.InetAddress.getByAddress(a).getHostAddress();
             }
-            int power = in.available() >= 1 ? in.readUnsignedByte() : POWER_UNKNOWN; // pc.39: its power mode
+            int pm = in.available() >= 1 ? in.readUnsignedByte() : POWER_UNKNOWN; // pc.39: its power mode
+            power[0] = pm;
             if (source == 0) return null;
-            return new Position(source == 1, lat / 1e7, lon / 1e7, age, armed == 2 ? null : armed == 1, flown, pilot, power);
+            return new Position(source == 1, lat / 1e7, lon / 1e7, age, armed == 2 ? null : armed == 1, flown, pilot, pm);
         } catch (IOException e) {
             return null;
         }

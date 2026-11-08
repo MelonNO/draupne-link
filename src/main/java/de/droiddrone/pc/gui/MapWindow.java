@@ -88,6 +88,8 @@ final class MapWindow extends JFrame {
     private final Timer saveBounds = new Timer(800, e -> saveBounds());
     private boolean settingCombos;
     private final OverwatchPanel overwatchPanel;
+    /** FLEET MANAGEMENT (1.0.52): the FLEET tab at the right edge and its cards. */
+    private final FleetManagementPanel fleetPanel;
     /** The overwatch drone's pulse on the map: repaints while an alert is on. */
     private final javax.swing.Timer pulse = new javax.swing.Timer(40, e -> {
         if (overwatchPulsing() && isShowing()) map().repaint();
@@ -276,7 +278,27 @@ final class MapWindow extends JFrame {
                 d -> { if (main != null) main.overwatchDismiss(d); },
                 d -> { if (main != null) main.overwatch().closeBadge(d); },
                 () -> { if (main != null) main.itsDownResume(this); });
-        mapRow.add(overwatchPanel, BorderLayout.EAST);
+        fleetPanel = new FleetManagementPanel(new FleetManagementPanel.Actions() {
+            @Override
+            public void mode(String phone, int mode, int intervalMin) {
+                if (main != null) main.fleetRequest(phone, mode, intervalMin, fleetPanelComponent());
+            }
+
+            @Override
+            public void clips(String phone) {
+                overwatchPanel.openClips(phone);
+            }
+
+            @Override
+            public void cancel(String phone) {
+                if (main != null) main.fleetCancel(phone);
+            }
+        });
+        JPanel east = new JPanel(new BorderLayout(6, 0)); // the alerts left of the fleet, both at the right edge
+        east.setOpaque(false);
+        east.add(overwatchPanel, BorderLayout.CENTER);
+        east.add(fleetPanel, BorderLayout.EAST);
+        mapRow.add(east, BorderLayout.EAST);
         map.setOnClips(overwatchPanel::openClips);
         tools.clips.addActionListener(e -> {
             if (overwatchPanel.libraryOpen()) overwatchPanel.closeLibrary();
@@ -911,6 +933,15 @@ final class MapWindow extends JFrame {
     }
 
     /** The drones in OVERWATCH now: their camera's view on this map, alert or not (1.0.50). */
+    /** FLEET MANAGEMENT's cards, once a second from the main window (Swing thread). */
+    void setFleet(java.util.List<FleetCards.Card> cards) {
+        fleetPanel.setCards(cards);
+    }
+
+    private javax.swing.JComponent fleetPanelComponent() {
+        return fleetPanel;
+    }
+
     void setOverwatchWatching(java.util.List<OverwatchPanel.Watching> watching) {
         overwatchPanel.setWatching(watching);
     }

@@ -42,6 +42,10 @@ public class Msp {
     /** pc.32: the flight controller's last 2D/3D GPS fix (1e-7 degrees) and when (elapsedRealtime), 0 = none yet. */
     volatile int gpsLatE7, gpsLonE7;
     volatile long gpsFixAt;
+    /** pc.40 (fleet management): the FC's GPS satellites and whether it has a fix, as last read, and when (0 never). */
+    volatile int gpsSats;
+    volatile boolean gpsHasFix;
+    volatile long gpsReadAt;
     /**
      * pc.37 (DRAUPNE Link's observation): the FC's heading (MSP_ATTITUDE yaw, degrees) and when it was read, and the
      * sensors it has (the status's bit mask, -1 unread; bit 2 a magnetometer: then the yaw is a compass heading).
@@ -741,6 +745,9 @@ public class Msp {
                         int lat = buffer.readInt();
                         int lon = buffer.readInt();
                         short altGps = buffer.readShort();
+                        gpsSats = numSat & 0xff; // pc.40: for the fleet cards
+                        gpsHasFix = fixType >= 2;
+                        gpsReadAt = android.os.SystemClock.elapsedRealtime();
                         // pc.32: kept for the PCs' map (the name reply says where this drone is)
                         if (fixType >= 2 && (lat != 0 || lon != 0)) {
                             gpsLatE7 = lat;

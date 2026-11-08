@@ -413,6 +413,18 @@ public class DDService extends Service {
         return new int[]{percent, charging, thermal, temp};
     }
 
+    /** pc.40: the mobile signal, 0-4 bars as Android counts them (API 28 on), or FleetProtocol.UNKNOWN. */
+    int signalLevel() {
+        if (Build.VERSION.SDK_INT < 28) return de.droiddrone.common.FleetProtocol.UNKNOWN;
+        try {
+            android.telephony.TelephonyManager tm = (android.telephony.TelephonyManager) getSystemService(TELEPHONY_SERVICE);
+            android.telephony.SignalStrength ss = tm == null ? null : tm.getSignalStrength();
+            return ss == null ? de.droiddrone.common.FleetProtocol.UNKNOWN : ss.getLevel();
+        } catch (Exception e) {
+            return de.droiddrone.common.FleetProtocol.UNKNOWN;
+        }
+    }
+
     /** A check window: the socket open and listening (new receive, buffer and stats threads). */
     void powerListen() {
         if (!udp.initialize()) log("Sleep check: the socket could not be opened");

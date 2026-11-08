@@ -2129,7 +2129,7 @@ class MapView extends JComponent {
      * One drone's sign, 18 px across: a diamond (ACTIVE), a diamond with "!" (LOST), a circle with "?" (UNKNOWN), a
      * circle with a crescent moon (ASLEEP) or an eye (OVERWATCH) - told apart by shape as well as colour.
      */
-    private static void paintNetSign(Graphics2D g, Kind kind, Color c, double x, double y) {
+    static void paintNetSign(Graphics2D g, Kind kind, Color c, double x, double y) { // also the fleet cards' badge (1.0.52)
         java.awt.Shape body;
         if (kind == Kind.ACTIVE || kind == Kind.LOST) {
             Path2D diamond = new Path2D.Double();

@@ -224,7 +224,10 @@ public class MainWindow extends JFrame {
     /** Watching: the phone the pilot flew at the last look (a new one: a new flight). */
     private String watchedPhone;
     /** The other drones on the network, for the map (1 s). */
-    private final Timer networkTimer = new Timer(1000, e -> refreshNetwork());
+    private final Timer networkTimer = new Timer(1000, e -> {
+        refreshNetwork();
+        refreshFleet(); // FLEET MANAGEMENT's cards (1.0.52)
+    });
     private static final String ASLEEP_KEY = "phone.asleep";
     /** WAKE pressed while disconnected: the connect that follows wakes the phone instead of keeping quiet. */
     private boolean wakeOnConnect;
@@ -446,6 +449,9 @@ public class MainWindow extends JFrame {
         names = new Names(config, this::save);
         nameService = new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
         nameService.setSleepHandler(this::onSleepCheck);
+        fleet = new de.droiddrone.pc.FleetManager(config.getKey(), config.getPort(), config.getString(FLEET_QUEUE_KEY), this::save, this::logLine);
+        fleet.setOnTaken(this::fleetTaken);
+        nameService.setFleet(fleet, this::fleetHello);
         nameService.setOverwatchSink(overwatch::offer); // the link port while no link holds it (1.0.47)
         startOverwatch();
         for (Asleep a : parseAsleep(config.getString(ASLEEP_KEY))) asleepPhones.put(a.ip(), a);
@@ -1538,6 +1544,7 @@ public class MainWindow extends JFrame {
         lastSpectators = 0;
         toldNotFlying = false;
         connection.getLink().setForeignSleepHandler(this::onSleepCheck); // another phone's check-in: sleep on
+        connection.getLink().setFleetHello(this::fleetHello); // and a fleet mode queued for it goes ahead (1.0.52)
         connection.getLink().setOverwatchSink(overwatch::offer); // the link holds the link port now (1.0.47)
         phoneOverwatching = false;
         // the flight before stays on the map; this one is the live one
@@ -3829,6 +3836,186 @@ public class MainWindow extends JFrame {
             mapWindow.map().setNetDrones(drones, this::connectFromMap);
         }
         if (!asleepPhones.isEmpty() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
+    }
+
+    // ------------------------------------------------------------------ FLEET MANAGEMENT (1.0.52)
+
+    private static final String FLEET_QUEUE_KEY = "fleet.queue";
+    private de.droiddrone.pc.FleetManager fleet;
+    /** The drone's battery per cell as this PC last read it while connected: name -> {volts per cell, wall ms}. */
+    private final Map<String, double[]> lastCell = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Overwatch clips per drone (count, last start), read off the Swing thread every 15 s. */
+    private volatile Map<String, long[]> fleetClips = Map.of();
+    private long fleetClipsAt;
+
+    /** A sleeping phone's check-in (any thread): its queued fleet mode to send ahead of the answer, or null. */
+    private byte[] fleetHello(String ip, byte[] hello) {
+        String name = names.nameAt(ip);
+        de.droiddrone.pc.FleetManager f = fleet;
+        if (name == null || f == null) return null;
+        long now = System.currentTimeMillis();
+        return f.onHello(name, ControlLink.SleepHello.read(hello, hello.length, now), now);
+    }
+
+    /** The phone took a queued mode: the lists follow at once, not at its next word. */
+    private void fleetTaken(de.droiddrone.pc.FleetManager.Wanted w) {
+        SwingUtilities.invokeLater(() -> {
+            String ip = names.ipOf(w.phone());
+            if (ip == null) return;
+            if (w.mode() == ControlLink.POWER_STANDBY) {
+                clearAsleep(ip);
+                standbyPhones.put(ip, w.phone());
+            } else {
+                standbyPhones.remove(ip);
+                rememberAsleep(new Asleep(w.phone(), ip, System.currentTimeMillis(), w.intervalMin(), w.mode() == ControlLink.POWER_OVERWATCH));
+            }
+            logLine(w.phone() + " is in " + de.droiddrone.pc.FleetManager.modeName(w.mode()) + " (fleet).");
+            refreshFleet();
+        });
+    }
+
+    /** True when this PC's pilot link is to that phone. */
+    private boolean connectedTo(String phone) {
+        Connection c = connection;
+        return c != null && !c.getLink().isSpectator() && phone.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY));
+    }
+
+    /** A card's button: the mode queued for the phone - or refused, said beside the button. */
+    void fleetRequest(String phone, int mode, int intervalMin, javax.swing.JComponent near) {
+        if (fleet == null) return;
+        NameService.DronePosition pos = null;
+        for (NameService.DronePosition d : nameService.dronePositions()) if (d.name().equalsIgnoreCase(phone)) pos = d;
+        String reason = de.droiddrone.pc.PossiblyFlying.reasonNow();
+        boolean flyingHere = de.droiddrone.pc.PossiblyFlying.now() && (connectedTo(phone)
+                || reason != null && reason.toLowerCase(Locale.ROOT).contains(phone.toLowerCase(Locale.ROOT)));
+        String no = de.droiddrone.pc.FleetManager.refusal(pos == null ? null : pos.position().armed(), flyingHere, connectedTo(phone), fleet.pcBuild(phone));
+        if (no != null) {
+            new LockedNotice(near, near, "NOT NOW", no).pop();
+            return;
+        }
+        int sensitivity = 0, flags = 0, owToken = 0;
+        if (mode == ControlLink.POWER_OVERWATCH) {
+            // as the LINK card's OVERWATCH: the drone's own detection level (OFF counts as NORMAL), its sound in the clip
+            // unless muted here, and a new token - the camera's view on the map is the one it had last time, if any
+            sensitivity = detectionFor(phone);
+            if (sensitivity == 0) sensitivity = 2;
+            flags = mutedFor(phone) ? 0 : de.droiddrone.common.OverwatchProtocol.MODE_FLAG_SOUND;
+            do {
+                owToken = new java.security.SecureRandom().nextInt();
+            } while (owToken == 0);
+            de.droiddrone.pc.map.CameraFootprint.Pose pose = null;
+            for (de.droiddrone.pc.overwatch.OverwatchHub.Watched w : overwatch.watched()) if (w.drone().equalsIgnoreCase(phone)) pose = w.pose();
+            overwatch.watch(phone, owToken, pose);
+            saveWatched();
+        }
+        fleet.queue(phone, mode, intervalMin, sensitivity, flags, owToken, System.currentTimeMillis());
+        logLine("Fleet: " + de.droiddrone.pc.FleetManager.modeName(mode) + " queued for " + phone + " - sent when it listens.");
+        nameService.scanSoon(); // an awake phone gets it now
+        refreshFleet();
+    }
+
+    void fleetCancel(String phone) {
+        if (fleet == null) return;
+        fleet.cancel(phone);
+        logLine("Fleet: queued mode for " + phone + " dropped.");
+        refreshFleet();
+    }
+
+    /** Once a second: every phone's card for the map window (only while it is open). */
+    private void refreshFleet() {
+        MapWindow w = mapWindow;
+        if (fleet == null || w == null || !w.isShown()) return;
+        long now = System.currentTimeMillis();
+        if (now - fleetClipsAt > 15_000) {
+            fleetClipsAt = now;
+            java.util.concurrent.CompletableFuture.runAsync(() -> {
+                Map<String, long[]> m = new java.util.HashMap<>();
+                de.droiddrone.pc.overwatch.ClipIndex clipIndex = overwatch.index();
+                for (String d : clipIndex.drones()) {
+                    long last = 0;
+                    java.util.List<de.droiddrone.pc.overwatch.ClipIndex.Clip> list = clipIndex.clips(d);
+                    for (de.droiddrone.pc.overwatch.ClipIndex.Clip c : list) last = Math.max(last, c.startedAt());
+                    m.put(d.toLowerCase(Locale.ROOT), new long[]{list.size(), last});
+                }
+                fleetClips = m;
+            });
+        }
+        // the flown drone's battery per cell, while this PC reads it
+        Connection c = connection;
+        String flown = config.getString(Names.PHONE_NAME_KEY);
+        FcTelemetry live = c != null && !c.getLink().isSpectator() && c.getLink().getState() == ControlLink.State.READY ? c.getLink().getTelemetry() : null;
+        if (live != null && live.getBattery() != null && live.getBattery().cellCountKnown() && !flown.isEmpty()) {
+            lastCell.put(flown.toLowerCase(Locale.ROOT), new double[]{live.getBattery().cellVolts(), now});
+        }
+        Map<String, NameService.DronePosition> positions = new java.util.HashMap<>();
+        for (NameService.DronePosition d : nameService.dronePositions()) positions.put(d.name().toLowerCase(Locale.ROOT), d);
+        Map<String, int[]> alerts = new java.util.HashMap<>();
+        for (de.droiddrone.pc.overwatch.OverwatchHub.View v : overwatch.views()) {
+            alerts.computeIfAbsent(v.drone().toLowerCase(Locale.ROOT), k -> new int[1])[0]++;
+        }
+        java.util.List<FleetCards.Card> cards = new java.util.ArrayList<>();
+        for (Names.Entry e : names.list(Names.Kind.PHONE)) {
+            String id = e.name().toLowerCase(Locale.ROOT);
+            boolean here = live != null && connectedTo(e.name());
+            Asleep sleeping = e.ip() == null ? null : asleepPhones.get(e.ip());
+            ControlLink.SleepHello hello = e.ip() == null ? null : asleepHellos.get(e.ip());
+            de.droiddrone.pc.FleetManager.Heard heard = fleet.heard(e.name());
+            NameService.DronePosition pos = positions.get(id);
+            long heardAt = Math.max(e.lastSeen(), Math.max(hello == null ? 0 : hello.receivedAt(), heard == null ? 0 : heard.at()));
+            if (here) heardAt = now;
+            de.droiddrone.common.FleetProtocol.Status st = heard == null ? null : heard.status();
+            int said = st != null && st.mode >= 0 ? st.mode : pos != null ? pos.position().powerMode() : -1;
+            long saidAge = st != null ? now - heard.at() : pos != null ? now - pos.at() : -1;
+            boolean wasFlying = pos != null && (Boolean.TRUE.equals(pos.position().armed()) || pos.position().flown());
+            FleetCards.Badge badge = FleetCards.badge(here, sleeping != null, sleeping != null && sleeping.overwatch(),
+                    sleeping == null ? 0 : checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),
+                    said, saidAge, e.online() || now - heardAt < 30_000, wasFlying);
+            // the drone's battery per cell: live here, else what this PC last read
+            double cell = Double.NaN;
+            long cellAge = -1;
+            double[] lc = lastCell.get(id);
+            if (lc != null) {
+                cell = lc[0];
+                cellAge = here ? 0 : now - (long) lc[1];
+            }
+            // the phone's battery: its newest word
+            int pct = -1;
+            boolean charging = false;
+            if (here && live.getPhoneBatteryPercent() >= 0) {
+                pct = live.getPhoneBatteryPercent();
+            } else if (hello != null && (st == null || hello.receivedAt() >= heard.at()) && hello.batteryPercent() >= 0) {
+                pct = hello.batteryPercent();
+                charging = hello.charging();
+            } else if (st != null && st.batteryPercent >= 0) {
+                pct = st.batteryPercent;
+                charging = st.charging;
+            }
+            long next = -1;
+            int interval = st != null && st.intervalMin > 0 ? st.intervalMin : 0;
+            if (sleeping != null) {
+                interval = sleeping.intervalMin();
+                next = sleeping.listening() ? FleetCards.LISTENING : nextCheck(sleeping, now) - now;
+            }
+            int signal = st == null ? -1 : st.signal, fix = st == null ? -1 : st.gpsFix, sats = st == null ? -1 : st.sats;
+            if (here && live.getGps() != null) {
+                fix = live.getGps().fix() >= 2 ? 1 : 0;
+                sats = live.getGps().sats();
+            }
+            int phoneTemp = st != null && st.tempKnown() ? st.batteryTempDeci : FleetCards.NO_TEMP;
+            int fcTemp = here && live.getStatus() != null && live.getStatus().coreTempKnown() ? live.getStatus().coreTempC() : FleetCards.NO_TEMP;
+            long[] clips = fleetClips.get(id);
+            int[] views = alerts.get(id);
+            int events = (int) Math.max(clips == null ? 0 : clips[0], views == null ? 0 : views[0]);
+            de.droiddrone.pc.FleetManager.Wanted wanted = fleet.wanted(e.name());
+            int build = fleet.pcBuild(e.name());
+            if (build < 0) build = de.droiddrone.common.FleetProtocol.pcBuild(e.version());
+            String note = here ? "Connected: use the LINK card"
+                    : build >= 0 && build < de.droiddrone.common.FleetProtocol.MIN_PC_BUILD ? "Needs phone app pc." + de.droiddrone.common.FleetProtocol.MIN_PC_BUILD : null;
+            cards.add(new FleetCards.Card(e.name(), e.isVirtual(), badge.kind(), badge.text(), cell, cellAge, pct, charging, next, interval,
+                    heardAt <= 0 ? -1 : now - heardAt, signal, fix, sats, events, clips == null ? 0 : clips[1], phoneTemp, fcTemp,
+                    wanted == null ? null : de.droiddrone.pc.FleetManager.modeName(wanted.mode()), note));
+        }
+        w.setFleet(cards);
     }
 
     /** Right-click on a drone on the map: fly it (as pilot), or watch it through the PC that flies it. */

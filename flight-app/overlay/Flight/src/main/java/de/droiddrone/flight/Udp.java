@@ -65,6 +65,7 @@ import java.util.concurrent.TimeUnit;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
+import de.droiddrone.common.FleetProtocol;
 import de.droiddrone.common.Log;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
@@ -261,6 +262,7 @@ public class Udp {
             out.writeUTF(MainActivity.deviceName());
             out.writeUTF(MainActivity.versionName == null ? "" : MainActivity.versionName);
             writePosition(out);
+            fleetStatus().writeTo(out); // pc.40: how this phone is doing, for the PCs' fleet cards
             byte[] r = bytes.toByteArray();
             // pc.31: from the answer thread - this is the receive thread, and a full send buffer (video) held the sticks
             final DatagramPacket reply = new DatagramPacket(r, r.length, packet.getAddress(), packet.getPort());
@@ -526,6 +528,11 @@ public class Udp {
                     // DRAUPNE names (pc.28): a PC asking who this phone is, or the master PC naming it - in any state
                     if (d[0] == NAME_QUERY || d[0] == NAME_ASSIGN) {
                         answerName(receiverPacket, d, len);
+                        continue;
+                    }
+                    // pc.40: a PC's fleet management asks for a power mode - in any state but a pilot session
+                    if (d[0] == FleetProtocol.MODE) {
+                        onFleetMode(receiverPacket, d, len);
                         continue;
                     }
                     // pc.37: an observer's OBSERVE / OBSERVE_STOP, in any state - never a session, never sticks
@@ -1184,8 +1191,12 @@ public class Udp {
         DatagramSocket s = socket;
         if (ip == null || s == null || s.isClosed()) return false;
         // pc.36: two bytes more - overwatching / an event runs, and why it left overwatch by itself (an older PC reads six)
-        byte[] d = {PowerMode.SLEEP_HELLO, (byte) Math.min(255, Math.max(0, batteryPercent)), (byte) (charging ? 1 : 0),
+        byte[] head = {PowerMode.SLEEP_HELLO, (byte) Math.min(255, Math.max(0, batteryPercent)), (byte) (charging ? 1 : 0),
                 (byte) Math.min(255, nextCheckMin), (byte) (milliVolts >> 8), (byte) milliVolts, (byte) owFlags, (byte) floorReason};
+        // pc.40: then the fleet status block (an older PC reads eight)
+        byte[] status = fleetStatus().bytes();
+        byte[] d = java.util.Arrays.copyOf(head, head.length + status.length);
+        System.arraycopy(status, 0, d, head.length, status.length);
         try {
             s.send(new DatagramPacket(d, d.length, ip, lastPcPort));
             return true;
@@ -1206,6 +1217,56 @@ public class Udp {
     java.net.InetSocketAddress lastPcAddress() {
         InetAddress ip = lastPcIp;
         return ip == null ? null : new java.net.InetSocketAddress(ip, lastPcPort);
+    }
+
+    /** pc.40: the last FLEET_MODE taken (its token; 0 none) - each is taken once, the PC repeats it until it sees this. */
+    private static volatile int fleetToken;
+    /** The FC's GPS reading counts for the fleet status this long. */
+    private static final long FLEET_GPS_MS = 10_000;
+
+    /**
+     * pc.40: FLEET_MODE from a PC's fleet management - a power mode without a session. Refused (not taken: the PC goes
+     * on asking) while a pilot is connected or the FC isn't known to be disarmed. Taken, the PC that sent it becomes
+     * the one this phone checks in with and calls with overwatch alerts.
+     */
+    private void onFleetMode(DatagramPacket packet, byte[] d, int len) {
+        FleetProtocol.Request r = FleetProtocol.parseRequest(d, len, key);
+        if (r == null || r.token == fleetToken) return;
+        String from = packet.getAddress().getHostAddress();
+        if (isConnected()) {
+            log("Fleet: " + PowerMode.name(r.mode) + " from " + from + " refused: a pilot is connected");
+            return;
+        }
+        if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) {
+            log("Fleet: " + PowerMode.name(r.mode) + " from " + from + " refused: FC not known disarmed");
+            return;
+        }
+        fleetToken = r.token;
+        lastPcIp = packet.getAddress();
+        lastPcPort = r.pcPort;
+        if (r.mode == PowerMode.OVERWATCH) Overwatch.configure(r.sensitivity, r.flags, r.owToken);
+        PowerMode.request(r.mode, r.intervalMin, "PC fleet");
+    }
+
+    /** pc.40: how this phone is doing (FleetProtocol.Status), for the name reply and the sleep hello. */
+    FleetProtocol.Status fleetStatus() {
+        int percent = FleetProtocol.UNKNOWN, temp = Short.MIN_VALUE, signal = FleetProtocol.UNKNOWN;
+        boolean charging = false;
+        DDService service = DDService.instance();
+        if (service != null) {
+            int[] b = service.batteryReadings();
+            if (b[0] != de.droiddrone.common.PowerFloor.UNKNOWN) percent = b[0];
+            charging = b[1] == 1;
+            if (b[3] != de.droiddrone.common.PowerFloor.UNKNOWN) temp = b[3];
+            signal = service.signalLevel();
+        }
+        int fix = FleetProtocol.UNKNOWN, sats = FleetProtocol.UNKNOWN;
+        Msp m = msp;
+        if (m != null && m.gpsReadAt != 0 && android.os.SystemClock.elapsedRealtime() - m.gpsReadAt < FLEET_GPS_MS) {
+            fix = m.gpsHasFix ? 1 : 0;
+            sats = m.gpsSats;
+        }
+        return new FleetProtocol.Status(percent, charging, signal, fix, sats, temp, PowerMode.mode(), PowerMode.checkIntervalMin(), fleetToken);
     }
 
     /** Where the drone is now, as NAME_REPLY says it: {source 0 none / 1 FC / 2 phone, latE7, lonE7, age s}. */
