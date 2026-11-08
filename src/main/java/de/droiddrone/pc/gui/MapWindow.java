@@ -304,6 +304,16 @@ final class MapWindow extends JFrame {
             public void connect(String phone) {
                 if (main != null) main.fleetConnect(phone);
             }
+
+            @Override
+            public void markCrashed(String phone) {
+                if (main != null) main.markCrashed(phone, "marked");
+            }
+
+            @Override
+            public void clearCrashed(String phone) {
+                if (main != null) main.clearCrashedByPilot(phone);
+            }
         });
         JPanel east = new JPanel(new BorderLayout(6, 0)); // the alerts left of the fleet, both at the right edge
         east.setOpaque(false);

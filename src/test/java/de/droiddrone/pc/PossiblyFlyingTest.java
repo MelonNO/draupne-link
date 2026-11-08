@@ -23,6 +23,27 @@ class PossiblyFlyingTest {
     }
 
     @Test
+    void aDroneMarkedCrashedNoLongerHoldsTheFlagUntilItIsHeardAgain() {
+        // lost armed on an open link still waiting, and another kept from an ended link
+        flag.attach(link, "MobileZulu", () -> word[0]);
+        word[0] = new PossiblyFlying.Word(true, now[0]);
+        Object other = new Object();
+        PossiblyFlying.Word[] otherWord = {new PossiblyFlying.Word(true, now[0])};
+        flag.attach(other, "MobileYankee", () -> otherWord[0]);
+        flag.detach(other);
+        now[0] += 5_000;
+        assertTrue(flag.holds());
+        assertTrue(flag.markDown("MobileZulu"), "it held the flag");
+        assertTrue(flag.holds(), "MobileYankee is still lost armed");
+        assertEquals("MobileYankee", flag.why().drone());
+        flag.markDown("mobileyankee");
+        assertFalse(flag.holds(), "both marked crashed: nothing here flies");
+        now[0] += 1_000;
+        word[0] = new PossiblyFlying.Word(true, now[0]); // Zulu's link hears it armed again: it counts again
+        assertTrue(flag.holds());
+    }
+
+    @Test
     void twoSecondsOfQuietIsNoProofOfLanding() {
         flag.attach(link, () -> word[0]);
         word[0] = new PossiblyFlying.Word(true, now[0]);

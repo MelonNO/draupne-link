@@ -617,7 +617,7 @@ final class PcSetupWizard {
             guide.addActionListener(e -> {
                 openPhoneGuide[0] = true;
                 finished(main);
-                wizard.dispose();
+                wizard.closeAs("finished"); // the phone's guide opens next
             });
             buttons.add(guide, BorderLayout.WEST);
             WizardDialog.addRow(col, buttons);

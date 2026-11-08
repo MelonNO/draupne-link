@@ -131,6 +131,13 @@ class MapView extends JComponent {
         onClearCrashed = listener;
     }
 
+    /** Right-click "Mark CRASHED" on a drone not heard from (LOST, UNKNOWN; 1.0.52); null: not offered. */
+    private Consumer<String> onMarkCrashed;
+
+    void setOnMarkCrashed(Consumer<String> listener) {
+        onMarkCrashed = listener;
+    }
+
     void setKept(List<Kept> flights, java.util.function.IntConsumer onRemove, Runnable onClear) {
         kept = flights == null ? List.of() : List.copyOf(flights);
         List<TrackPath> paths = new java.util.ArrayList<>();
@@ -1035,6 +1042,11 @@ class MapView extends JComponent {
             JMenuItem clear = new JMenuItem("Clear CRASHED on " + drone.name());
             clear.addActionListener(e -> onClearCrashed.accept(drone.name()));
             menu.add(clear);
+        }
+        if (drone != null && (drone.kind() == Kind.LOST || drone.kind() == Kind.UNKNOWN) && onMarkCrashed != null) {
+            JMenuItem mark = new JMenuItem("Mark CRASHED: " + drone.name());
+            mark.addActionListener(e -> onMarkCrashed.accept(drone.name()));
+            menu.add(mark);
         }
         if (drone != null && onDroneConnect != null) {
             if (drone.flown()) {

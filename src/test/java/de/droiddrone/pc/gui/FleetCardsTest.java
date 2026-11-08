@@ -238,4 +238,13 @@ class FleetCardsTest {
             owner.dispose();
         }
     }
+
+    @Test
+    void aDroneNotHeardFromCanBeMarkedCrashedFromItsRow() {
+        assertEquals("Mark CRASHED", FleetManagementPanel.crashChoice(MapView.Kind.LOST));
+        assertEquals("Mark CRASHED", FleetManagementPanel.crashChoice(MapView.Kind.UNKNOWN));
+        assertEquals("Clear CRASHED", FleetManagementPanel.crashChoice(MapView.Kind.CRASHED));
+        assertNull(FleetManagementPanel.crashChoice(MapView.Kind.ACTIVE), "a drone heard from now isn't crashed");
+        assertNull(FleetManagementPanel.crashChoice(MapView.Kind.OVERWATCH));
+    }
 }

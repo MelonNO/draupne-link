@@ -463,7 +463,20 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         List<String> elsewhere = new ArrayList<>();
         List<Slot> onSwitches = new ArrayList<>();
         List<Slot> offElsewhere = new ArrayList<>(); // managed modes on other switches: taken off, each in one place
+        // 1.0.52 (the pilot): a switch chosen here for ARM or PREARM carries that alone - HORIZON already on AUX3 goes
+        // when PREARM takes AUX3 (shown before CONFIRM, like every mode taken off)
+        List<Slot> offOwn = new ArrayList<>();
+        Set<Integer> cleared = new HashSet<>(); // slot indexes cleared here: no later loop clears them twice
         for (Slot s : slots) {
+            if (!s.used()) continue;
+            if ((armChannel >= 0 && s.channel() == armChannel && s.mode() != MODE_ARM)
+                    || (prearmChannel >= 0 && s.channel() == prearmChannel && s.mode() != MODE_PREARM)) {
+                offOwn.add(s);
+                cleared.add(s.index());
+            }
+        }
+        for (Slot s : slots) {
+            if (cleared.contains(s.index())) continue;
             if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
             if (beeperChannel >= 0 && (s.mode() == BEEPER_MODE || s.channel() == beeperChannel)) continue; // below
             if (wanted.containsKey(s.channel())) {
@@ -500,6 +513,12 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
             if (!replaced.contains(line)) replaced.add(line);
         }
+        for (Slot s : offOwn) {
+            commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
+            free.add(s.index());
+            String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
+            if (!replaced.contains(line)) replaced.add(line);
+        }
         place.removeIf(w -> !toPlace.contains(key(w[0], w[1], w[2], w[3])));
         if (armChannel >= 0) {
             boolean armThere = false;
@@ -519,7 +538,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         if (prearmChannel >= 0) {
             boolean prearmThere = false;
             for (Slot s : slots) {
-                if (!s.used() || s.mode() != MODE_PREARM) continue;
+                if (!s.used() || s.mode() != MODE_PREARM || cleared.contains(s.index())) continue;
                 if (s.channel() == prearmChannel) {
                     prearmThere = true; // its own range stays, like ARM's
                     continue;
@@ -535,6 +554,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             boolean beeperThere = false;
             for (Slot s : slots) {
                 if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
+                if (cleared.contains(s.index())) continue;
                 if (s.mode() != BEEPER_MODE && s.channel() != beeperChannel) continue;
                 if (!beeperThere && s.mode() == BEEPER_MODE && s.channel() == beeperChannel
                         && s.start() == BEEPER_RANGE[0] && s.end() == BEEPER_RANGE[1]) {
@@ -680,6 +700,9 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             case 2 -> "HORIZON";
             case 3 -> "ALT HOLD";
             case 13 -> "BEEPER";
+            case 26 -> "BLACKBOX";
+            case 27 -> "FAILSAFE";
+            case 28 -> "AIR MODE";
             case 35 -> "TURTLE";
             case 36 -> "PREARM";
             default -> "Betaflight mode " + id;

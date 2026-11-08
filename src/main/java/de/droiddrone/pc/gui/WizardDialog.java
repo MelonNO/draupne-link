@@ -166,7 +166,7 @@ class WizardDialog extends JDialog {
         super(owner, heading, ModalityType.APPLICATION_MODAL);
         this.pages = pages;
         this.onFinish = onFinish;
-        setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
+        setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE); // the title bar's X: closeAs, so the log says why
 
         JPanel root = new JPanel(new BorderLayout(0, 18));
         root.setBackground(Theme.BG);
@@ -205,7 +205,7 @@ class WizardDialog extends JDialog {
         root.add(centerCard, BorderLayout.CENTER);
 
         JButton closeButton = Theme.secondaryButton("Close");
-        closeButton.addActionListener(e -> dispose());
+        closeButton.addActionListener(e -> closeAs("CLOSE"));
         backButton.addActionListener(e -> go(-1));
         nextButton.addActionListener(e -> {
             if (isLastPage()) {
@@ -225,9 +225,15 @@ class WizardDialog extends JDialog {
         footer.add(right, BorderLayout.EAST);
         Theme.transparent(footer, left, right);
         root.add(footer, BorderLayout.SOUTH);
-        getRootPane().registerKeyboardAction(e -> dispose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
+        // Esc asks first (1.0.52): the guide closing "by itself" must never be a stray key
+        getRootPane().registerKeyboardAction(e -> askClose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
                 JComponent.WHEN_IN_FOCUSED_WINDOW);
         addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                closeAs("the window's X");
+            }
+
             @Override
             public void windowClosed(WindowEvent e) {
                 if (index >= 0) pages.get(index).onHide();
@@ -247,11 +253,45 @@ class WizardDialog extends JDialog {
         timer.start();
     }
 
+    /** Why the guide is closing (CLOSE, Esc, the window's X, finished); null: nothing of the pilot's asked for it. */
+    private String closing;
+
+    void closeAs(String why) {
+        closing = why;
+        dispose();
+    }
+
+    private void askClose() {
+        int answer = javax.swing.JOptionPane.showConfirmDialog(this, "Close the setup? What's done stays done.", "Close setup",
+                javax.swing.JOptionPane.YES_NO_OPTION, javax.swing.JOptionPane.QUESTION_MESSAGE);
+        if (answer == javax.swing.JOptionPane.YES_OPTION) closeAs("Esc");
+    }
+
     @Override
     public void dispose() {
+        if (isDisplayable()) {
+            // 1.0.52 (the pilot: "I plugged in the drone and the setup window closed by itself", nothing in the log):
+            // every close says why; one nobody asked for says from where
+            if (closing == null) log(getTitle() + " closed - not by the pilot: " + caller() + ".");
+            else if (!"finished".equals(closing)) log(getTitle() + " closed (" + closing + ").");
+        }
         timer.stop();
         countTimer.stop();
         super.dispose();
+    }
+
+    /** The first frames outside this class and Swing/AWT that asked for dispose(): where a close came from. */
+    static String caller() {
+        StringBuilder sb = new StringBuilder();
+        for (StackTraceElement f : Thread.currentThread().getStackTrace()) {
+            String c = f.getClassName();
+            if (c.startsWith("java.") || c.startsWith("javax.") || c.startsWith("sun.") || c.startsWith("jdk.")
+                    || c.equals(WizardDialog.class.getName())) continue;
+            if (sb.length() > 0) sb.append(" < ");
+            sb.append(c.substring(c.lastIndexOf('.') + 1)).append('.').append(f.getMethodName()).append(':').append(f.getLineNumber());
+            if (sb.length() > 200) break;
+        }
+        return sb.length() == 0 ? "Swing" : sb.toString();
     }
 
     /** To the app log, when the wizard belongs to the main window. */
@@ -335,7 +375,7 @@ class WizardDialog extends JDialog {
 
     private void finish() {
         if (onFinish != null) onFinish.run();
-        dispose();
+        closeAs("finished");
     }
 
     // ------------------------------------------------------------------ page building helpers

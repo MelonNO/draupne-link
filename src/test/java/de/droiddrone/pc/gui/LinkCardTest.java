@@ -74,4 +74,15 @@ class LinkCardTest {
         assertTrue(MainWindow.parseCrashed("").isEmpty());
         assertTrue(MainWindow.parseCrashed(null).isEmpty());
     }
+
+    @Test
+    void aCrashedDroneIsNotOfferedInThePhoneList() {
+        java.util.function.Function<String, de.droiddrone.pc.Names.Entry> phone = n ->
+                new de.droiddrone.pc.Names.Entry(n, de.droiddrone.pc.Names.Kind.PHONE, "100.64.0.1", "", "", "", 0, false);
+        java.util.List<de.droiddrone.pc.Names.Entry> all = java.util.List.of(phone.apply("MobileAlpha"), phone.apply("MobileZulu"), phone.apply("MobileBravo"));
+        assertEquals(java.util.List.of("MobileAlpha", "MobileBravo"),
+                MainWindow.offeredPhones(all, java.util.Set.of("MobileZulu"), null).stream().map(de.droiddrone.pc.Names.Entry::name).toList());
+        // the one still linked (its link waits after the crash) stays until the pilot ends it
+        assertEquals(3, MainWindow.offeredPhones(all, java.util.Set.of("MobileZulu"), "mobilezulu").size());
+    }
 }

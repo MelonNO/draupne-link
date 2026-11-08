@@ -356,6 +356,21 @@ class ModeSwitchTest {
     }
 
     @Test
+    void theArmAndPrearmSwitchesCarryTheirModeAlone() {
+        // the pilot: HORIZON (2) already on AUX3, PREARM put on AUX3 -> HORIZON comes off AUX3; AIRMODE (28) beside ARM on
+        // AUX1 comes off too; ANGLE on AUX5 (not placed here) stays
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 28 0 1700 2100 0 0", "aux 2 2 2 1300 1700 0 0",
+                "aux 3 1 4 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 3);
+        assertNull(p.prearmProblem());
+        assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 2 0 0 900 900 0 0", "aux 1 36 2 1700 2100 0 0"), p.commands());
+        assertTrue(p.replaced().contains("HORIZON on AUX3"), p.replaced().toString());
+        assertEquals(2, p.replaced().size(), "AIR MODE off AUX1, HORIZON off AUX3: " + p.replaced());
+        // ARM and PREARM left as they are (0): nothing on their switches is touched
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 28 0 1700 2100 0 0", "aux 2 36 2 1700 2100 0 0",
+                "aux 3 2 2 1300 1700 0 0"), ALL, java.util.Map.of(), null, 0, 0, 0).commands().isEmpty());
+    }
+
+    @Test
     void prearmOnTheArmModeOrRescueSwitchIsRefused() {
         assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), null, 0, 1, 1).prearmProblem().contains("ARM is on AUX1"));
         assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 0, 1, 2).prearmProblem().contains("flight mode switch"));
