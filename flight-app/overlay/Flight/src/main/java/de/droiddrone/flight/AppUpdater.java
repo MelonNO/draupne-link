@@ -73,7 +73,7 @@ final class AppUpdater {
         if (found.sha256 == null) throw new IOException(c.getString(R.string.dd_update_no_digest));
         File d = dir(c);
         cleanUp(c);
-        if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room for the download");
+        if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room to download");
         File apk = new File(d, "update.apk");
         try {
             // pc.38: and stopped as soon as the PC connects (the download would share the link with the sticks)
@@ -99,11 +99,11 @@ final class AppUpdater {
         if (found.sha256 == null) throw new IOException(c.getString(R.string.dd_update_no_digest));
         File d = dir(c);
         cleanUp(c);
-        if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room for the download");
+        if (!d.isDirectory() && !d.mkdirs()) throw new IOException("no room to download");
         File apk = new File(d, "update.apk");
         try {
-            download(found, apk, text -> { }, percent, disarmed, "the flight controller isn't known to be disarmed - the download stopped");
-            if (!disarmed.getAsBoolean()) throw new GuardedCopy.Stopped("the flight controller isn't known to be disarmed now - not installed");
+            download(found, apk, text -> { }, percent, disarmed, "FC not known disarmed: download stopped");
+            if (!disarmed.getAsBoolean()) throw new GuardedCopy.Stopped("FC not known disarmed: not installed");
             installing.run();
             RemoteUpdate.pending(c, true); // opens again by itself once updated
             install(c, apk, true);
@@ -129,14 +129,14 @@ final class AppUpdater {
         try (InputStream in = conn.getInputStream(); OutputStream out = new FileOutputStream(apk)) {
             GuardedCopy.copy(in, out, sha, total, percent -> {
                 if (percentOut != null) percentOut.accept(Math.max(0, percent));
-                progress.update(percent < 0 ? "Downloading the update..." : "Downloading the update... " + percent + "%");
+                progress.update(percent < 0 ? "Downloading..." : "Downloading... " + percent + "%");
             }, mayGoOn, stopped);
         } finally {
             conn.disconnect(); // pc.38: a stopped download lets go of its connection at once
         }
         String got = hex(sha.digest());
         if (found.sha256 == null || !found.sha256.equalsIgnoreCase(got)) {
-            throw new IOException("the download doesn't match the release's SHA-256");
+            throw new IOException("SHA-256 mismatch");
         }
     }
 

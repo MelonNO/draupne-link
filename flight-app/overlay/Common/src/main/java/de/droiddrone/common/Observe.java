@@ -77,12 +77,12 @@ public final class Observe {
     public static String stateName(int state) {
         switch (state) {
             case STREAMING: return "streaming";
-            case REFUSED_PILOT: return "a pilot flies it";
-            case ENDED_PILOT: return "a pilot connected";
-            case REFUSED_FULL: return "it streams to " + MAX_OBSERVERS + " observers already";
-            case REFUSED_POWER: return "it is in standby, asleep or on overwatch";
+            case REFUSED_PILOT: return "pilot flying";
+            case ENDED_PILOT: return "pilot connected";
+            case REFUSED_FULL: return "full (" + MAX_OBSERVERS + " observers)";
+            case REFUSED_POWER: return "standby, sleep or overwatch";
             case STOPPED: return "stopped";
-            case REFUSED_ARMED: return "its flight controller isn't known to be disarmed";
+            case REFUSED_ARMED: return "FC not known disarmed";
             default: return "state " + state;
         }
     }

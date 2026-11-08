@@ -99,7 +99,7 @@ class ObserverLinkTest {
                 phone.send(new DatagramPacket(ended, ended.length, observer, observerPort));
                 for (int i = 0; i < 200 && events.isEmpty(); i++) Thread.sleep(10);
                 assertEquals(1, events.size());
-                assertTrue(events.get(0).contains("a pilot connected"), events.get(0));
+                assertTrue(events.get(0).contains("pilot connected"), events.get(0));
             } finally {
                 link.close();
             }

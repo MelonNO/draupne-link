@@ -68,7 +68,7 @@ final class RemoteUpdate {
             return;
         }
         if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) {
-            set(REFUSED_ARMED, 0, "the flight controller isn't known to be disarmed");
+            set(REFUSED_ARMED, 0, "FC not known disarmed");
             return;
         }
         busy = true;

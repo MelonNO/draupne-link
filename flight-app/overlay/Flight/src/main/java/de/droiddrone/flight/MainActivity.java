@@ -157,7 +157,7 @@ public class MainActivity extends Activity {
     private static final long WAKE_HOLD_MS = 2000;
     private final Runnable wakeAfterHold = () -> {
         bWake.setText(R.string.dd_power_wake);
-        PowerMode.request(PowerMode.NORMAL, 0, "the phone's WAKE button, held");
+        PowerMode.request(PowerMode.NORMAL, 0, "WAKE button");
     };
     private TextView tvPowerMode, tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery;
     /** pc.28: Data Saver, and the radios before flying - checked here, not listed in the PC's guide any more. */
