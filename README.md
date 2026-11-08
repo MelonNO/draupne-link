@@ -37,7 +37,7 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 **Power modes** (disarmed; arming ends them)
 - **DISCONNECT** = standby: camera off, back in about 2 s.
 - **DEEP SLEEP:** phone sleeps, checks in every 0/1/2/5 min (0 = always listening). WAKE brings it back.
-- **OVERWATCH:** asleep, camera watching. On motion: alert on the map, live picture, CONNECT or DISMISS, full-quality clip sent after. About 15-25 h on 5000 mAh (estimate).
+- **OVERWATCH:** asleep, camera watching. See [Overwatch](#overwatch).
 
 **Map** (F3 or POP OUT MAP)
 - Kartverket topo, world topo, satellite, OpenStreetMap. MGRS / UTM / degrees. Works offline after **DOWNLOAD AREA**.
@@ -56,7 +56,16 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 - Receiver to MSP, stick rate, cell count, GPS on one UART, compass and calibration.
 - Switches: ARM AUX1, flight modes AUX2, PREARM AUX3, GPS rescue AUX4. Failsafe.
 - Silent drone: beeps only on RX lost. **BEEPER** button (AUX12) beeps on demand.
-- **Motor test:** reorder, spin direction, props in/out. **Orientation:** check and fix board alignment.
+- **Motor test:** reorder, spin direction, props in/out.
+
+**Radio calibration:** move each stick and switch as the 3D radio shows. **Orientation:** the 3D drone follows the real one; Fix it sets board alignment.
+
+<table>
+<tr>
+<td width="50%"><img src="docs/images/calibration-radio.png" alt="Radio calibration: the 3D radio shows pitch up"></td>
+<td width="50%"><img src="docs/images/orientation-drone.png" alt="Orientation check: the 3D FPV drone"></td>
+</tr>
+</table>
 
 **More than one PC**
 - **Spectator:** a second PC watches the pilot's video and OSD (Allow spectators on the pilot PC). Never sends sticks.
@@ -64,6 +73,17 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 - **STANAG 4609:** MPEG-TS + MISB ST 0601 over UDP for ATAK, QGIS, VLC (MENU > LINK, Advanced).
 
 **TOOLS > Advanced** shows rarely needed settings.
+
+## Overwatch
+
+A drone on the ground as a sentry. The phone sleeps with the camera watching (disarmed; arming ends it).
+
+- Motion (people, cars, lights; not trees in wind): the drone turns red on the map, with its view and the direction.
+- Alert card: live picture, **CONNECT** (wake and fly), **DISMISS**, **CLIPS**.
+- The phone records the event in full quality and sends the clip after. Clips: `Documents\DRAUPNE Link\Overwatch`.
+- Under 20 % battery or too hot: deep sleep by itself. About 15-25 h on 5000 mAh (estimate).
+
+![Overwatch alert on the map](docs/images/overwatch.png)
 
 ## Latency
 
