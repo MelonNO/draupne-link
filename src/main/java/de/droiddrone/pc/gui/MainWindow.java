@@ -1726,10 +1726,15 @@ public class MainWindow extends JFrame {
         List<de.droiddrone.pc.DetectionMarks.Mark> marks = c == null ? detectionMarks.marks(now) : detectionMarks(c.getLink().getTelemetry(), now);
         if (w != null) w.setDetections(marks);
         miniMap.setDetections(marks);
-        // the chosen drone put to sleep and on time with its check-ins: its sleep sign, not LAST KNOWN (1.0.50)
-        String liveIp = names.ipOf(config.getString(Names.PHONE_NAME_KEY));
+        // the chosen drone put to sleep and on time with its check-ins: its sleep sign, not LAST KNOWN (1.0.50) - and
+        // the same when it was heard of after the track's last point (an overwatch alert, a sleep check, its phone's
+        // position): LAST KNOWN is only for a drone nothing newer is known of (the pilot)
+        String livePhone = config.getString(Names.PHONE_NAME_KEY);
+        String liveIp = names.ipOf(livePhone);
         Asleep sleeping = liveIp == null ? null : asleepPhones.get(liveIp);
         boolean liveAsleep = sleeping != null && checkInOverdue(sleeping, System.currentTimeMillis()) <= 0;
+        de.droiddrone.pc.map.FlightTrack.Point lastFix = track == null ? null : track.last();
+        if (!liveAsleep && lastFix != null && livePhone != null && !livePhone.isEmpty()) liveAsleep = heardSince(livePhone, liveIp, lastFix.timeMs());
         if (w != null) w.map().setLiveAsleep(liveAsleep);
         miniMap.setLiveAsleep(liveAsleep);
         if (w != null) w.update(track, gps, heading, fcLost, connected);
@@ -3293,6 +3298,21 @@ public class MainWindow extends JFrame {
     }
 
     /** When this sleeping phone checks for this PC next (wall clock). */
+    /**
+     * The drone was heard of after wallMs (a track point's time): its phone's position in a name reply, an overwatch
+     * alert from it, or a sleep check. Then the map shows that newer word, not LAST KNOWN.
+     */
+    private boolean heardSince(String phone, String ip, long wallMs) {
+        for (NameService.DronePosition d : nameService.dronePositions()) {
+            if (d.name().equalsIgnoreCase(phone) && d.at() - d.position().ageS() * 1000L > wallMs) return true;
+        }
+        for (de.droiddrone.pc.overwatch.OverwatchHub.View v : overwatch.views()) {
+            if (v.drone().equalsIgnoreCase(phone) && v.alertAtWall() > wallMs) return true;
+        }
+        ControlLink.SleepHello h = ip == null ? null : asleepHellos.get(ip);
+        return h != null && h.receivedAt() > wallMs;
+    }
+
     /** When this PC last heard a sleeping phone: its last check-in, else when it went to sleep (wall ms). */
     private long lastHeardAsleep(Asleep a) {
         ControlLink.SleepHello h = asleepHellos.get(a.ip());

@@ -2540,10 +2540,12 @@ class MapView extends JComponent {
 
     private void paintDrone(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {
         Point2D c = toScreen(last.lat(), last.lon(), zi, scale, wcx, wcy, w, h);
-        if (liveAsleep && !connected) { // put to sleep on purpose and on time: its moon or eye says so, never LAST KNOWN
+        if (liveAsleep && !connected) { // asleep on time, or heard of since: its newer sign says so, never LAST KNOWN
             for (NetDrone d : netDrones) {
-                if (d.kind() != Kind.ASLEEP && d.kind() != Kind.OVERWATCH) continue;
                 if (toScreen(d.lat(), d.lon(), zi, scale, wcx, wcy, w, h).distance(c) < 60) return; // its sign stands in
+            }
+            for (OverwatchMark m : overwatchMarks) {
+                if (toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, w, h).distance(c) < 60) return; // its alert stands in
             }
         }
         paintAccuracy(g, last, c);
@@ -2582,7 +2584,10 @@ class MapView extends JComponent {
     }
 
     private volatile boolean virtualDrone;
-    /** The live drone was put to sleep (STANDBY, DEEP SLEEP, OVERWATCH) and checks in on time: not lost (1.0.50). */
+    /**
+     * The live drone was put to sleep (STANDBY, DEEP SLEEP, OVERWATCH) and checks in on time, or was heard of after its
+     * track's last point (an overwatch alert, a check, its phone's position): no LAST KNOWN on it (1.0.50).
+     */
     private volatile boolean liveAsleep;
 
     void setLiveAsleep(boolean on) {
