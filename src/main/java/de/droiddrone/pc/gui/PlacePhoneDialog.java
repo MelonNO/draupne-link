@@ -115,7 +115,7 @@ final class PlacePhoneDialog extends JDialog {
         for (VirtualDrone d : fleet.drones()) {
             double[] p = d.position();
             String state = (d == drone ? "PLACING - " : "") + (d.isArmed() ? "ARMED" : "on the ground");
-            dots.add(new MapView.NetDrone(d.name(), p[0], p[1], state, false, false, null));
+            dots.add(new MapView.NetDrone(d.name(), p[0], p[1], state, MapView.Kind.ACTIVE, false, null));
         }
         map.setNetDrones(dots, (name, watch) -> { });
         map.repaint();

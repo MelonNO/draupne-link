@@ -101,12 +101,26 @@ class MapView extends JComponent {
      * Every other drone on the network, where its phone says it is (phone app pc.32; 1.0.41, the pilot: "the location
      * of all drones on the network shown in the MAP ... connect to a drone from the map by right clicking it").
      * @param state  what to write under the name: IDLE, FLOWN BY PCBravo, ARMED, DEEP SLEEP ...
-     * @param stale  not heard from for a while: drawn grey
+     * @param kind   which sign it gets (1.0.50, the pilot: a drone put to sleep must never look like a lost one)
      * @param pilot  the PC that flies it (to watch through), or null
      */
-    record NetDrone(String name, double lat, double lon, String state, boolean stale, boolean flown, String pilot) {}
+    record NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot) {
+        /** Not heard from as it should be (asleep, lost or unknown): its name in grey. */
+        boolean stale() {
+            return kind != Kind.ACTIVE;
+        }
+    }
+
+    /**
+     * What a drone on the map is doing, each with a sign of its own: ACTIVE (heard now: a diamond), ASLEEP (STANDBY or
+     * DEEP SLEEP on time with its check-ins: a moon), OVERWATCH (on time: an eye), LOST (it went quiet while flown or
+     * armed: a red diamond with "!"), UNKNOWN (quiet while idle, or asleep but its check-ins overdue: a grey "?").
+     */
+    enum Kind { ACTIVE, ASLEEP, OVERWATCH, LOST, UNKNOWN }
 
     private List<NetDrone> netDrones = List.of();
+    /** The other drone under the mouse: only its name and state are written out (1.0.50, the pilot); null: none. */
+    private volatile String hoveredNet;
     /** Right-click on a drone: its name, and true to watch it (through its pilot PC), false to connect and fly. */
     private java.util.function.BiConsumer<String, Boolean> onDroneConnect;
 
@@ -374,6 +388,12 @@ class MapView extends JComponent {
             public void mouseMoved(MouseEvent e) {
                 tellCursor(e);
                 mouseAt = e.getPoint();
+                NetDrone over = netDrones.isEmpty() ? null : netDroneAt(e.getX(), e.getY());
+                String overName = over == null ? null : over.name();
+                if (!java.util.Objects.equals(overName, hoveredNet)) { // its name and state show while the mouse is on it
+                    hoveredNet = overName;
+                    repaint();
+                }
                 if (moving != null) followMoving(e.getX(), e.getY());
                 if (tool != Tool.NONE) repaint(); // the rubber band to the cursor
             }
@@ -381,6 +401,10 @@ class MapView extends JComponent {
             @Override
             public void mouseExited(MouseEvent e) {
                 if (onCursor != null) onCursor.accept(null);
+                if (hoveredNet != null) {
+                    hoveredNet = null;
+                    repaint();
+                }
             }
 
             @Override
@@ -1940,9 +1964,10 @@ class MapView extends JComponent {
             if (!forPicture) paintDetections(g, zi, scale, wcx, wcy, w, h);
             if (!forPicture) paintObserved(g, zi, scale, wcx, wcy, w, h);
             paintNetDrones(g, zi, scale, wcx, wcy, w, h);
-            if (!forPicture) paintOverwatch(g, zi, scale, wcx, wcy, w, h); // over the drone's diamond: its alert (1.0.47)
             if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
             else if (!forPicture) paintNoPosition(g, w, h);
+            // an overwatch alert over everything else on the map (1.0.50, the pilot: it was under the drone's label)
+            if (!forPicture) paintOverwatch(g, zi, scale, wcx, wcy, w, h);
 
             paintScale(g, h);
             paintAttribution(g, src, w, h);
@@ -2038,26 +2063,23 @@ class MapView extends JComponent {
         }
     }
 
-    /** The other drones on the network: a diamond each (grey when not heard from for a while), its name and state. */
+    /** The asleep drones' moon, the overwatching ones' eye: blue-violet and teal, never the lost red or the unknown grey. */
+    private static final Color ASLEEP_COLOR = new Color(0x9fa8da), OVERWATCH_COLOR = new Color(0x4db6ac), LOST_COLOR = new Color(0xef5350);
+
+    /** The other drones on the network: a sign each by what it is doing (Kind), its name and state. */
     private void paintNetDrones(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
         for (NetDrone d : netDrones) {
             Point2D s = toScreen(d.lat(), d.lon(), zi, scale, wcx, wcy, w, h);
             if (s.getX() < -40 || s.getY() < -40 || s.getX() > w + 40 || s.getY() > h + 40) continue;
-            Color c = d.stale() ? Theme.MUTED : d.flown() ? Theme.WARN : new Color(0x4fc3f7);
-            Path2D diamond = new Path2D.Double();
-            diamond.moveTo(s.getX(), s.getY() - 9);
-            diamond.lineTo(s.getX() + 9, s.getY());
-            diamond.lineTo(s.getX(), s.getY() + 9);
-            diamond.lineTo(s.getX() - 9, s.getY());
-            diamond.closePath();
-            g.setStroke(new BasicStroke(3f));
-            g.setColor(new Color(0, 0, 0, 150));
-            g.draw(diamond);
-            g.setColor(Theme.alpha(c, 200));
-            g.fill(diamond);
-            g.setColor(Color.WHITE);
-            g.setStroke(new BasicStroke(1.2f));
-            g.draw(diamond);
+            Color c = switch (d.kind()) {
+                case ACTIVE -> d.flown() ? Theme.WARN : new Color(0x4fc3f7);
+                case ASLEEP -> ASLEEP_COLOR;
+                case OVERWATCH -> OVERWATCH_COLOR;
+                case LOST -> LOST_COLOR;
+                case UNKNOWN -> Theme.MUTED;
+            };
+            paintNetSign(g, d.kind(), c, s.getX(), s.getY());
+            if (!d.name().equals(hoveredNet)) continue; // the sign alone; its name and state while the mouse is on it
             g.setFont(Theme.headingFont(11f));
             FontMetrics fm = g.getFontMetrics();
             String line1 = d.name(), line2 = d.state();
@@ -2069,8 +2091,63 @@ class MapView extends JComponent {
             g.setColor(c);
             g.drawString(line1, bx + 5, by + fm.getAscent());
             if (line2 != null) {
-                g.setColor(Theme.MUTED);
+                g.setColor(d.kind() == Kind.LOST ? LOST_COLOR : Theme.MUTED);
                 g.drawString(line2, bx + 5, by + fm.getHeight() + fm.getAscent());
+            }
+        }
+    }
+
+    /**
+     * One drone's sign, 18 px across: a diamond (ACTIVE), a diamond with "!" (LOST), a circle with "?" (UNKNOWN), a
+     * circle with a crescent moon (ASLEEP) or an eye (OVERWATCH) - told apart by shape as well as colour.
+     */
+    private static void paintNetSign(Graphics2D g, Kind kind, Color c, double x, double y) {
+        java.awt.Shape body;
+        if (kind == Kind.ACTIVE || kind == Kind.LOST) {
+            Path2D diamond = new Path2D.Double();
+            diamond.moveTo(x, y - 9);
+            diamond.lineTo(x + 9, y);
+            diamond.lineTo(x, y + 9);
+            diamond.lineTo(x - 9, y);
+            diamond.closePath();
+            body = diamond;
+        } else {
+            body = new java.awt.geom.Ellipse2D.Double(x - 9, y - 9, 18, 18);
+        }
+        g.setStroke(new BasicStroke(3f));
+        g.setColor(new Color(0, 0, 0, 150));
+        g.draw(body);
+        g.setColor(Theme.alpha(c, kind == Kind.ACTIVE || kind == Kind.LOST ? 200 : 90));
+        g.fill(body);
+        g.setColor(kind == Kind.ACTIVE ? Color.WHITE : c);
+        g.setStroke(new BasicStroke(kind == Kind.ACTIVE ? 1.2f : 1.6f));
+        g.draw(body);
+        switch (kind) {
+            case ASLEEP -> { // a crescent moon: a disc with a disc taken out of its right side
+                java.awt.geom.Area moon = new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(x - 5.5, y - 5.5, 11, 11));
+                moon.subtract(new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(x - 2, y - 7.5, 11, 11)));
+                g.setColor(Color.WHITE);
+                g.fill(moon);
+            }
+            case OVERWATCH -> { // an eye: two arcs and the pupil
+                Path2D eye = new Path2D.Double();
+                eye.moveTo(x - 6.5, y);
+                eye.quadTo(x, y - 6.5, x + 6.5, y);
+                eye.quadTo(x, y + 6.5, x - 6.5, y);
+                eye.closePath();
+                g.setColor(Color.WHITE);
+                g.setStroke(new BasicStroke(1.4f));
+                g.draw(eye);
+                g.fill(new java.awt.geom.Ellipse2D.Double(x - 2.2, y - 2.2, 4.4, 4.4));
+            }
+            case LOST, UNKNOWN -> {
+                g.setFont(Theme.headingFont(12f));
+                FontMetrics fm = g.getFontMetrics();
+                String mark = kind == Kind.LOST ? "!" : "?";
+                g.setColor(Color.WHITE);
+                g.drawString(mark, (float) (x - fm.stringWidth(mark) / 2.0), (float) (y + fm.getAscent() / 2.0 - 1.5));
+            }
+            default -> {
             }
         }
     }
@@ -2411,6 +2488,12 @@ class MapView extends JComponent {
 
     private void paintDrone(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {
         Point2D c = toScreen(last.lat(), last.lon(), zi, scale, wcx, wcy, w, h);
+        if (liveAsleep && !connected) { // put to sleep on purpose and on time: its moon or eye says so, never LAST KNOWN
+            for (NetDrone d : netDrones) {
+                if (d.kind() != Kind.ASLEEP && d.kind() != Kind.OVERWATCH) continue;
+                if (toScreen(d.lat(), d.lon(), zi, scale, wcx, wcy, w, h).distance(c) < 60) return; // its sign stands in
+            }
+        }
         paintAccuracy(g, last, c);
         long age = System.currentTimeMillis() - last.timeMs();
         boolean stale = age > STALE_MS || (fcLost && !last.phone()) || !connected;
@@ -2443,10 +2526,18 @@ class MapView extends JComponent {
             g.setColor(Theme.WARN);
             g.drawString("VIRTUAL", (float) c.getX() + 13, (float) c.getY() + (last.phone() ? 17 : 4));
         }
-        if (stale) badge(g, "LAST KNOWN  " + ageText(age), (int) c.getX(), (int) c.getY() - 24);
+        if (stale && !(liveAsleep && !connected)) badge(g, "LAST KNOWN  " + ageText(age), (int) c.getX(), (int) c.getY() - 24);
     }
 
     private volatile boolean virtualDrone;
+    /** The live drone was put to sleep (STANDBY, DEEP SLEEP, OVERWATCH) and checks in on time: not lost (1.0.50). */
+    private volatile boolean liveAsleep;
+
+    void setLiveAsleep(boolean on) {
+        if (liveAsleep == on) return;
+        liveAsleep = on;
+        repaint();
+    }
 
     /** The live drone is one of the virtual fleet: VIRTUAL beside it. */
     void setVirtualDrone(boolean on) {

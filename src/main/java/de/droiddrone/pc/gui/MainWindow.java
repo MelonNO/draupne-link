@@ -239,6 +239,8 @@ public class MainWindow extends JFrame {
      * air); the disarm then gives the sound back. A press of MUTE meanwhile makes it the pilot's own choice again.
      */
     private boolean audioAutoMuted;
+    /** When this window started (wall ms): a sleeping phone gets one check-in interval from here before it is late. */
+    private final long startedAtWall = System.currentTimeMillis();
     /** The drone read armed at the last refresh (for the arming's auto-mute). */
     private boolean audioSawArmed;
     /** The phone's sound while connected, or null. */
@@ -1696,6 +1698,12 @@ public class MainWindow extends JFrame {
         List<de.droiddrone.pc.DetectionMarks.Mark> marks = c == null ? detectionMarks.marks(now) : detectionMarks(c.getLink().getTelemetry(), now);
         if (w != null) w.setDetections(marks);
         miniMap.setDetections(marks);
+        // the chosen drone put to sleep and on time with its check-ins: its sleep sign, not LAST KNOWN (1.0.50)
+        String liveIp = names.ipOf(config.getString(Names.PHONE_NAME_KEY));
+        Asleep sleeping = liveIp == null ? null : asleepPhones.get(liveIp);
+        boolean liveAsleep = sleeping != null && checkInOverdue(sleeping, System.currentTimeMillis()) <= 0;
+        if (w != null) w.map().setLiveAsleep(liveAsleep);
+        miniMap.setLiveAsleep(liveAsleep);
         if (w != null) w.update(track, gps, heading, fcLost, connected);
         if (mini) miniMap.update(track, gps, heading, fcLost, connected);
     }
@@ -3233,6 +3241,25 @@ public class MainWindow extends JFrame {
     }
 
     /** When this sleeping phone checks for this PC next (wall clock). */
+    /** When this PC last heard a sleeping phone: its last check-in, else when it went to sleep (wall ms). */
+    private long lastHeardAsleep(Asleep a) {
+        ControlLink.SleepHello h = asleepHellos.get(a.ip());
+        return h != null ? Math.max(h.receivedAt(), a.since()) : a.since();
+    }
+
+    /**
+     * How long a sleeping phone is past the time it should have checked in by (ms; 0 or less: on time). "Late" is a
+     * whole check-in missed and a minute more: the check it said it would make, then one interval of grace. A PC
+     * started meanwhile gives it one interval from its own start before calling it late.
+     */
+    long checkInOverdue(Asleep a, long now) {
+        ControlLink.SleepHello h = asleepHellos.get(a.ip());
+        long interval = Math.max(1, a.intervalMin()) * 60_000L;
+        long expected = h != null && h.nextCheckMin() > 0 ? h.receivedAt() + h.nextCheckMin() * 60_000L : a.since() + interval;
+        expected = Math.max(expected, startedAtWall + interval);
+        return now - (expected + interval + 60_000L);
+    }
+
     private long nextCheck(Asleep a, long now) {
         ControlLink.SleepHello h = asleepHellos.get(a.ip());
         long interval = Math.max(1, a.intervalMin()) * 60_000L;
@@ -3579,10 +3606,29 @@ public class MainWindow extends JFrame {
             String ip = names.ipOf(d.name());
             Asleep sleeping = ip == null ? null : asleepPhones.get(ip);
             String pilot = p.pilotIp().isEmpty() ? null : names.nameAt(p.pilotIp());
-            String state = (de.droiddrone.pc.fleet.VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + (sleeping != null ? sleeping.mode() + " - check in " + clock(nextCheck(sleeping, now) - now)
-                    : (Boolean.TRUE.equals(p.armed()) ? "ARMED - " : "") + (p.flown() ? "FLOWN" + (pilot == null ? "" : " BY " + pilot) : "IDLE")
-                    + (age > 30_000 ? " - " + Names.agoText(now - age, now) : ""));
-            drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, age > 30_000 || sleeping != null, p.flown(), pilot));
+            // 1.0.50 (the pilot): asleep and overwatching drones get signs of their own, never the lost one's - until
+            // they miss their check-ins, then they are unknown; a drone gone quiet while flown or armed is lost
+            MapView.Kind kind;
+            String doing;
+            if (sleeping != null) {
+                long overdue = checkInOverdue(sleeping, now);
+                if (overdue > 0) {
+                    kind = MapView.Kind.UNKNOWN;
+                    doing = sleeping.mode() + " - MISSED ITS CHECK-IN, NOT HEARD " + Names.agoText(lastHeardAsleep(sleeping), now).toUpperCase(java.util.Locale.ROOT) + " - UNKNOWN";
+                } else {
+                    kind = sleeping.overwatch() ? MapView.Kind.OVERWATCH : MapView.Kind.ASLEEP;
+                    doing = sleeping.mode() + " - check in " + clock(nextCheck(sleeping, now) - now);
+                }
+            } else if (age > 30_000) {
+                boolean wasFlying = Boolean.TRUE.equals(p.armed()) || p.flown();
+                kind = wasFlying ? MapView.Kind.LOST : MapView.Kind.UNKNOWN;
+                doing = (wasFlying ? "LINK LOST" + (Boolean.TRUE.equals(p.armed()) ? " WHILE ARMED" : "") : "NOT HEARD - UNKNOWN") + " - " + Names.agoText(now - age, now);
+            } else {
+                kind = MapView.Kind.ACTIVE;
+                doing = (Boolean.TRUE.equals(p.armed()) ? "ARMED - " : "") + (p.flown() ? "FLOWN" + (pilot == null ? "" : " BY " + pilot) : "IDLE");
+            }
+            String state = (de.droiddrone.pc.fleet.VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + doing;
+            drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot));
         }
         miniMap.setNetDrones(drones, this::connectFromMap);
         if (mapWindow != null) mapWindow.map().setNetDrones(drones, this::connectFromMap);

@@ -235,7 +235,7 @@ class MapViewTest {
         earlier.sample(fix(59.9150, 10.7540, now - 8000), true);
         earlier.sample(fix(59.9160, 10.7538, now - 7000), true);
         map.setKept(java.util.List.of(new MapView.Kept("MobileAlpha 22:41", earlier.points())), i -> { }, () -> { });
-        map.setNetDrones(java.util.List.of(new MapView.NetDrone("MobileBravo", 59.9163, 10.7580, "FLOWN BY PCBravo", false, true, "PCBravo")),
+        map.setNetDrones(java.util.List.of(new MapView.NetDrone("MobileBravo", 59.9163, 10.7580, "FLOWN BY PCBravo", MapView.Kind.ACTIVE, true, "PCBravo")),
                 (name, watch) -> { });
         BufferedImage img = map.snapshot(400, 300);
         if (Boolean.getBoolean("shot")) {
