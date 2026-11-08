@@ -60,7 +60,7 @@ final class OrientationCheckDialog extends JFrame {
     private final javax.swing.JLabel reading = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
     private final JButton done = Theme.primaryButton("Done");
     private final JButton skip = Theme.secondaryButton("Skip compass");
-    private final JButton fix = Theme.primaryButton("Fix it");
+    private final JButton fix = Theme.primaryButton("Apply");
     private final JButton again = Theme.secondaryButton("Check again");
     /** The pose the drone is shown in (what to do): eased towards the target. */
     private final double[] shown = new double[3], target = new double[3];
@@ -74,6 +74,12 @@ final class OrientationCheckDialog extends JFrame {
     private volatile boolean sampleWanted;
     private volatile boolean skipCompass;
     private Thread worker;
+    /** COMPASS: Yes chosen in Drone setup (with a GPS): only then is the compass checked (1.0.52, the pilot). */
+    private final boolean compassWanted;
+    /** Betaflight's board alignment (roll, pitch, yaw degrees) as read when it answered; null unknown. */
+    private volatile int[] boardAlign;
+    /** What APPLY wrote in this window ("yaw 0° -> 90°"), for the verdict after the restart; null none. */
+    private volatile String applied;
 
     private OrientationCheckDialog(Window owner, MainWindow main, String chosenPort, Runnable onPassed) {
         super("Orientation check - DRAUPNE Link");
@@ -83,6 +89,9 @@ final class OrientationCheckDialog extends JFrame {
         this.main = main;
         this.chosenPort = chosenPort;
         this.onPassed = onPassed;
+        this.compassWanted = Boolean.TRUE.equals(GpsSetup.parseYesNo(main.config().getString(GpsSetup.GPS_KEY)))
+                && Boolean.TRUE.equals(GpsSetup.parseYesNo(main.config().getString(GpsSetup.COMPASS_KEY)));
+        compassRow.setVisible(compassWanted);
         JPanel root = new JPanel(new BorderLayout(14, 14));
         root.setBackground(Theme.BG);
         root.setBorder(BorderFactory.createEmptyBorder(18, 20, 16, 20));
@@ -281,9 +290,14 @@ final class OrientationCheckDialog extends JFrame {
                             continue;
                         }
                         try {
-                            magPresent = GpsSetup.magInStatus(fc.msp(101 /* MSP_STATUS */, null));
+                            magPresent = compassWanted && GpsSetup.magInStatus(fc.msp(101 /* MSP_STATUS */, null));
                         } catch (IOException e) {
                             magPresent = false;
+                        }
+                        try {
+                            boardAlign = Orientation.parseBoardAlignment(fc.msp(Orientation.MSP_BOARD_ALIGNMENT_CONFIG, null));
+                        } catch (IOException e) {
+                            boardAlign = null;
                         }
                         ui(() -> usb.set(State.OK, "Found."));
                         if (finished) {
@@ -368,7 +382,7 @@ final class OrientationCheckDialog extends JFrame {
                     main.logLine("Orientation check: Betaflight sees the drone on its back while it lies flat.");
                     ui(() -> {
                         flat.set(State.BAD, "Seen on its back.");
-                        result.set(State.BAD, "Board upside down. <b>Fix it</b> sets roll +180°.");
+                        result.set(State.BAD, "Difference: seen on its back. " + suggestion("roll", 0, 180) + " <b>Apply</b>?");
                         fix.setVisible(true);
                     });
                     pose("UPSIDE DOWN TO BETAFLIGHT", 0, 0, 0, false);
@@ -377,9 +391,9 @@ final class OrientationCheckDialog extends JFrame {
                 step = Step.NOSE_UP;
                 ui(() -> {
                     flat.set(State.OK, "Flat.");
-                    noseRow.set(State.PENDING, "Lift the nose about 45°.");
+                    noseRow.set(State.PENDING, "Nose straight up (90°).");
                 });
-                pose("LIFT THE NOSE", 0, -45, 0, false);
+                pose("NOSE STRAIGHT UP", 0, -90, 0, false);
             }
             case NOSE_UP -> {
                 double[] d = Orientation.delta(level, a);
@@ -395,8 +409,8 @@ final class OrientationCheckDialog extends JFrame {
             case FLAT_AGAIN -> {
                 if (Orientation.size(Orientation.delta(level, a)) > Orientation.FLAT_DEG) return;
                 step = Step.RIGHT_DOWN;
-                ui(() -> rightRow.set(State.PENDING, "Lower the right side about 45°."));
-                pose("LOWER THE RIGHT SIDE", 45, 0, 0, false);
+                ui(() -> rightRow.set(State.PENDING, "Right side straight down (90°)."));
+                pose("RIGHT SIDE DOWN", 90, 0, 0, false);
             }
             case RIGHT_DOWN -> {
                 double[] d = Orientation.delta(level, a);
@@ -421,12 +435,13 @@ final class OrientationCheckDialog extends JFrame {
             if (magPresent) {
                 startCompass();
             } else {
-                ui(() -> compassRow.set(State.INFO, "None found."));
+                if (compassWanted) ui(() -> compassRow.set(State.INFO, "None found."));
                 passed("ALL RIGHT");
             }
         } else if (turn > 0) {
             ui(() -> {
-                result.set(State.BAD, "Board turned " + turn + "°: it would flip. <b>Fix it</b> sets yaw +" + turn + "°.");
+                result.set(State.BAD, "Difference: board turned " + turn + "° on the frame, it would flip. "
+                        + suggestion("yaw", 2, turn) + " <b>Apply</b>?");
                 fix.setVisible(true);
             });
             pose("WRONG WAY ROUND", 0, 0, 0, false);
@@ -436,10 +451,19 @@ final class OrientationCheckDialog extends JFrame {
         }
     }
 
+    /** "Suggested: board alignment yaw 0° -> 90°." from the alignment read (index 0 roll, 2 yaw); the turn alone when unknown. */
+    private String suggestion(String axis, int index, int more) {
+        int[] a = boardAlign;
+        if (a == null) return "Suggested: board alignment " + axis + " +" + more + "°.";
+        return "Suggested: board alignment " + axis + " " + a[index] + "° -> " + Orientation.turned(a[index], more) + "°.";
+    }
+
     private void passed(String what) {
         finished = true;
+        String fixed = applied;
         ui(() -> {
-            result.set(State.OK, "Correct.");
+            // the window stays open with the verdict (1.0.52, the pilot): CLOSE when read
+            result.set(State.OK, fixed != null ? "Fixed: " + fixed + ". No difference now." : "No difference. Correct.");
             if (onPassed != null) onPassed.run();
         });
         pose(what, 0, 0, 0, false);
@@ -640,6 +664,7 @@ final class OrientationCheckDialog extends JFrame {
         fc.saveAndReboot();
         main.logLine("Betaflight: board alignment " + (roll ? "roll" : "yaw") + " " + current + "° -> " + next + "° (orientation check)."
                 + " Its settings before: " + backup);
+        applied = (roll ? "roll " : "yaw ") + current + "° -> " + next + "°";
         ui(() -> result.set(State.PENDING, "Set " + (roll ? "roll" : "yaw") + " " + current + "° -> " + next + "°. Again after the restart."));
     }
 

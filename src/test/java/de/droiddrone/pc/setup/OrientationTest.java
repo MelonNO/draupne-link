@@ -151,4 +151,11 @@ class OrientationTest {
         assertEquals("nose up 31°, right side down 2°", Orientation.describe(2.2, -31));
         assertEquals("nose down 12°, sides level", Orientation.describe(0.1, 12.2));
     }
+
+    @Test
+    void readsTheBoardAlignmentOverMsp() {
+        assertArrayEquals(new int[]{180, 0, 90}, Orientation.parseBoardAlignment(new byte[]{(byte) 180, 0, 0, 0, 90, 0}));
+        assertArrayEquals(new int[]{0, 0, -45}, Orientation.parseBoardAlignment(new byte[]{0, 0, 0, 0, (byte) 0xd3, (byte) 0xff}));
+        assertNull(Orientation.parseBoardAlignment(new byte[]{1, 2}));
+    }
 }

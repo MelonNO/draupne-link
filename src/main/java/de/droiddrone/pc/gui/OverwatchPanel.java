@@ -321,8 +321,12 @@ final class OverwatchPanel extends JPanel {
             held.setVisible(false);
             lines.add(resume, BorderLayout.SOUTH);
             foot.add(lines, BorderLayout.NORTH);
-            JPanel buttons = new JPanel(new GridLayout(1, 3, 6, 0));
+            // CONNECT on a row of its own, DISMISS and CLIPS under it: three in a row cut CONNECT to "CONN..." in the
+            // 340 px card (1.0.52, the pilot's screenshot)
+            JPanel buttons = new JPanel(new BorderLayout(0, 6));
             buttons.setOpaque(false);
+            JPanel twoButtons = new JPanel(new GridLayout(1, 2, 6, 0));
+            twoButtons.setOpaque(false);
             JButton connect = Theme.primaryButton("Connect");
             connect.setToolTipText("Wake the drone and connect as pilot");
             connect.addActionListener(e -> onConnect.accept(drone));
@@ -332,9 +336,10 @@ final class OverwatchPanel extends JPanel {
             JButton clips = Theme.secondaryButton("Clips");
             clips.setToolTipText("This drone's clips");
             clips.addActionListener(e -> openClips(drone));
-            buttons.add(connect);
-            buttons.add(dismiss);
-            buttons.add(clips);
+            buttons.add(connect, BorderLayout.NORTH);
+            twoButtons.add(dismiss);
+            twoButtons.add(clips);
+            buttons.add(twoButtons, BorderLayout.SOUTH);
             foot.add(buttons, BorderLayout.SOUTH);
             full.add(foot, BorderLayout.SOUTH);
             badge.setOpaque(false);

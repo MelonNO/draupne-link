@@ -35,6 +35,15 @@ public final class Orientation {
         return new Attitude(roll / 10.0, pitch / 10.0, Math.floorMod(yaw, 360));
     }
 
+    /** Betaflight's MSP_BOARD_ALIGNMENT_CONFIG: the board alignment, read without the CLI (which restarts on exit). */
+    public static final int MSP_BOARD_ALIGNMENT_CONFIG = 38;
+
+    /** MSP_BOARD_ALIGNMENT_CONFIG: roll, pitch and yaw in whole degrees, little-endian s16 each; null if short. */
+    public static int[] parseBoardAlignment(byte[] p) {
+        if (p == null || p.length < 6) return null;
+        return new int[]{(short) ((p[0] & 0xff) | (p[1] << 8)), (short) ((p[2] & 0xff) | (p[3] << 8)), (short) ((p[4] & 0xff) | (p[5] << 8))};
+    }
+
     /** From level to now: {roll change, pitch change}, each within -180..180. */
     public static double[] delta(Attitude level, Attitude now) {
         return new double[]{wrap(now.rollDeg() - level.rollDeg()), wrap(now.pitchDeg() - level.pitchDeg())};

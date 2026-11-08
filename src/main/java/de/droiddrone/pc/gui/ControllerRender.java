@@ -424,6 +424,39 @@ final class ControllerRender extends JComponent {
                 md.bushingBox[slot] = bushingOf.get(row.get(i));
             }
         }
+        // 1.0.52 (the pilot: "the top switches on the left side are not symmetrical with the switches on the right"):
+        // the CAD has each right-hand paddle twisted and leaning its own way. Each right toggle is its left partner
+        // mirrored across the pair's middle - same shape, same rest, same throw; the right bushings stay where they are.
+        java.util.Map<Integer, Raw> bySlot = new java.util.HashMap<>();
+        slotOf.forEach((r, s) -> bySlot.put(s, r));
+        for (int[] pair : new int[][]{{SB, SC}, {SA, SD}, {SE, SG}, {SF, SH}}) {
+            Raw l = bySlot.get(pair[0]), r = bySlot.get(pair[1]);
+            if (l == null || r == null) continue;
+            double mid = (md.switchPivot[pair[0]][0] + md.switchPivot[pair[1]][0]) / 2;
+            float[] p = l.p().clone(), n = l.n().clone();
+            int[] t = l.t().clone();
+            for (int i = 0; i < p.length; i += 3) {
+                p[i] = (float) (2 * mid - p[i]);
+                n[i] = -n[i];
+            }
+            for (int i = 0; i < t.length; i += 3) { // mirrored: the other winding, so its faces still face out
+                int k = t[i + 1];
+                t[i + 1] = t[i + 2];
+                t[i + 2] = k;
+            }
+            double[] b = l.box();
+            Raw mirrored = new Raw(r.name(), p, n, t, new double[]{2 * mid - b[3], b[1], b[2], 2 * mid - b[0], b[4], b[5]});
+            double[] c = collarOf.get(l);
+            collarOf.put(mirrored, new double[]{2 * mid - c[0], c[1], c[2], -c[3], c[4], c[5], c[6]});
+            raws.set(raws.indexOf(r), mirrored);
+            slotOf.remove(r);
+            slotOf.put(mirrored, pair[1]);
+            double[] pl = md.switchPivot[pair[0]];
+            md.switchPivot[pair[1]] = new double[]{2 * mid - pl[0], pl[1], pl[2]};
+            md.leverRest[pair[1]] = md.leverRest[pair[0]];
+            md.leverThrow[pair[1]] = md.leverThrow[pair[0]];
+            md.switchAxis[pair[1]] = md.switchAxis[pair[0]];
+        }
         // the antenna folds back, about its base
         double[] antPivot = null;
         for (Raw r : raws) if (r.name().startsWith("Ant Base")) antPivot = new double[]{(r.box()[0] + r.box()[3]) / 2, r.box()[4] - 0.4, (r.box()[2] + r.box()[5]) / 2};

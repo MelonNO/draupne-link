@@ -368,6 +368,7 @@ final class FleetManagementPanel extends JPanel {
             case OVERWATCH -> new Color(0x4db6ac);
             case LOST -> new Color(0xef5350);
             case UNKNOWN -> Theme.MUTED;
+            case CRASHED -> MapView.CRASHED_COLOR;
         };
     }
 

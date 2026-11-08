@@ -869,7 +869,7 @@ final class DroneSetup {
         /** CALIBRATE COMPASS: the calibration window takes the USB port; the page reads again once it is closed. */
         private void calibrateCompassNow() {
             if (main.isLinkActive()) {
-                compassPart.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
+                compassPart.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
                 return;
             }
             compassCalOpen = true;
@@ -2015,9 +2015,23 @@ final class DroneSetup {
     static final class MotorsPage extends Page {
         private final MainWindow main;
         private final java.util.function.Supplier<String> port;
+        private final CheckRow level = new CheckRow("Accelerometer");
         private final CheckRow motors = new CheckRow("Motors and props");
         private final CheckRow orientation = new CheckRow("Orientation");
         private final DroneModelView model = new DroneModelView();
+        /** The model's box: as big as the page leaves (1.0.52, the pilot: "it does not utilise the window's size"). */
+        private final JPanel modelBox = new JPanel(new java.awt.BorderLayout()) {
+            @Override
+            public java.awt.Dimension getPreferredSize() {
+                javax.swing.JViewport vp = (javax.swing.JViewport) javax.swing.SwingUtilities.getAncestorOfClass(javax.swing.JViewport.class, this);
+                int h = vp == null ? 260 : vp.getHeight() - OTHER_ROWS_PX;
+                return new java.awt.Dimension(420, Math.max(240, Math.min(1400, h)));
+            }
+        };
+        /** The page's other rows and gaps above and below the model (measured at 100 %, scaled with the font). */
+        private static final int OTHER_ROWS_PX = Math.round(250 * Theme.font(Font.PLAIN, 13f).getSize2D() / 13f);
+        /** Set on the Swing thread, done by the live thread (it owns the port): MSP_ACC_CALIBRATION. */
+        private volatile boolean levelWanted;
         private final javax.swing.JLabel reading = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
         private volatile boolean shown;
         private Thread live;
@@ -2034,12 +2048,16 @@ final class DroneSetup {
 
         @Override
         String hint() {
-            return "<b>Props off.</b> Tilt the drone: the model must move the same way.";
+            return "<b>Props off.</b> Drone flat, then CALIBRATE. Tilt it: the model must follow.";
         }
 
         @Override
         JComponent build() {
             JPanel col = WizardDialog.column();
+            level.addPrimaryAction("Calibrate", this::calibrateLevel);
+            level.setToolTipText("Betaflight's level: drone flat and still");
+            WizardDialog.addRow(col, level);
+            level.set(State.INFO, "Drone flat and still, then <b>Calibrate</b>.");
             motors.addAction("Already checked", this::motorsAlreadyChecked);
             motors.addPrimaryAction("Check now", this::checkMotorsNow);
             motors.setToolTipText("Motor places, directions and props");
@@ -2048,14 +2066,22 @@ final class DroneSetup {
             orientation.setToolTipText("Guided check: sets board alignment and compass");
             JPanel view = new JPanel(new java.awt.BorderLayout(0, 4));
             view.setOpaque(false);
-            model.setPreferredSize(new java.awt.Dimension(420, 260));
-            view.add(model, java.awt.BorderLayout.CENTER);
+            modelBox.setOpaque(false);
+            modelBox.add(model, java.awt.BorderLayout.CENTER);
+            view.add(modelBox, java.awt.BorderLayout.CENTER);
             view.add(reading, java.awt.BorderLayout.SOUTH);
             orientation.addBelow(view);
             WizardDialog.addRow(col, orientation);
             boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(BetaflightPage.MOTORS_CHECKED_KEY));
             motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore ? "Checked." : "Not sure? <b>Check now</b>.");
             orientation.set(State.INFO, "Moves differently? <b>Check it</b>.");
+            // the window resized: the model takes the new room
+            col.addHierarchyBoundsListener(new java.awt.event.HierarchyBoundsAdapter() {
+                @Override
+                public void ancestorResized(java.awt.event.HierarchyEvent e) {
+                    modelBox.revalidate();
+                }
+            });
             return col;
         }
 
@@ -2107,6 +2133,10 @@ final class DroneSetup {
                             }
                             startHeading = -1;
                         }
+                        if (levelWanted) {
+                            levelWanted = false;
+                            calibrate(fc);
+                        }
                         de.droiddrone.pc.setup.Orientation.Attitude a = de.droiddrone.pc.setup.Orientation.parse(
                                 fc.msp(de.droiddrone.pc.setup.Orientation.MSP_ATTITUDE, null));
                         if (a != null) {
@@ -2132,6 +2162,40 @@ final class DroneSetup {
             }
         }
 
+        /** CALIBRATE: done by the live thread, which has the port open. */
+        private void calibrateLevel() {
+            if (main.isLinkActive()) {
+                level.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                return;
+            }
+            levelWanted = true;
+            level.set(State.PENDING, "Calibrating. Keep it still...");
+            // no flight controller yet: say so (the live thread takes the wish once one answers)
+            javax.swing.Timer t = new javax.swing.Timer(2500, e -> {
+                if (levelWanted) level.set(State.WARN, "Waiting for the flight controller. Battery in, USB to this PC.");
+            });
+            t.setRepeats(false);
+            t.start();
+        }
+
+        /** MSP_ACC_CALIBRATION, Betaflight's ~2 s of samples, then flat must read flat (within 3 degrees). */
+        private void calibrate(BetaflightUsb fc) throws IOException, InterruptedException {
+            fc.msp(MSP_ACC_CALIBRATION, null);
+            Thread.sleep(2500);
+            de.droiddrone.pc.setup.Orientation.Attitude a = de.droiddrone.pc.setup.Orientation.parse(
+                    fc.msp(de.droiddrone.pc.setup.Orientation.MSP_ATTITUDE, null));
+            boolean flat = a != null && Math.abs(a.rollDeg()) <= 3 && Math.abs(a.pitchDeg()) <= 3;
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                if (flat) level.set(State.OK, "Calibrated: reads flat.");
+                else level.set(State.WARN, a == null ? "No answer. <b>Calibrate</b> again."
+                        : "Not flat after it (" + de.droiddrone.pc.setup.Orientation.describe(a.rollDeg(), a.pitchDeg())
+                        + "). Flat surface, <b>Calibrate</b> again.");
+            });
+        }
+
+        /** Betaflight's MSP_ACC_CALIBRATION: levels the accelerometer where the drone sits (saved by Betaflight itself). */
+        static final int MSP_ACC_CALIBRATION = 205;
+
         private void motorsAlreadyChecked() {
             main.save(Map.of(BetaflightPage.MOTORS_CHECKED_KEY, "true"));
             motors.set(State.OK, "Checked.");
@@ -2139,7 +2203,7 @@ final class DroneSetup {
 
         private void checkMotorsNow() {
             if (main.isLinkActive()) {
-                motors.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
+                motors.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
                 return;
             }
             motors.set(State.PENDING, "Motor test open.");
@@ -2152,7 +2216,7 @@ final class DroneSetup {
         /** CHECK IT: the guided check takes the USB port (the live view lets go of it meanwhile). */
         private void checkOrientationNow() {
             if (main.isLinkActive()) {
-                orientation.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
+                orientation.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
                 return;
             }
             orientation.set(State.PENDING, "Check open.");
