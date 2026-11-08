@@ -117,12 +117,12 @@ final class MapToolsPanel extends JPanel {
     MapToolsPanel(MapView map) {
         super(new BorderLayout());
         this.map = map;
-        horizonFields = new SlideOut(fields(horizonStatus, "the aircraft's altitude above the ground under it, wherever it flies"));
-        searchFields = new SlideOut(fields(searchStatus, "the aircraft's altitude above the ground under it, over the area wanted"));
-        searchStatus.setToolTipText("Green: a mast there sees all of the area; red: none of it. The best place is ringed.");
+        horizonFields = new SlideOut(fields(horizonStatus, "height above the ground below it"));
+        searchFields = new SlideOut(fields(searchStatus, "height above the ground, over the area"));
+        searchStatus.setToolTipText("Green: a mast there sees all the area; red: none. Best spot ringed.");
         coverageFields = new SlideOut(coverageFields());
         setOpaque(false);
-        tab.setToolTipText("MAP TOOLS: drawing and symbols, the ruler and the radio horizon, export and import");
+        tab.setToolTipText("Drawing, symbols, ruler, radio horizon, export, import");
         tab.addActionListener(e -> setOpen(!open, true));
         add(tab, BorderLayout.WEST);
         JPanel clip = new JPanel(new BorderLayout()) {
@@ -156,8 +156,8 @@ final class MapToolsPanel extends JPanel {
             body.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
             bodies.put(g, body);
         }
-        groupTabs.get(Group.DRAW).setToolTipText("Lines, rectangles, arrows, NATO symbols, the eraser, pins");
-        groupTabs.get(Group.TOOLS).setToolTipText("The ruler, the radio horizon, the GCS search, go to. Their results show on the map only while this is open");
+        groupTabs.get(Group.DRAW).setToolTipText("Lines, boxes, arrows, NATO symbols, eraser, pins");
+        groupTabs.get(Group.TOOLS).setToolTipText("Ruler, radio horizon, GCS search, go to. Results show only while open");
         groupTabs.get(Group.DATA).setToolTipText("Export, import, offline maps, clear all");
         clip.add(strip, BorderLayout.WEST);
         scroll = new javax.swing.JScrollPane(bodies.get(Group.DRAW), javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
@@ -183,9 +183,9 @@ final class MapToolsPanel extends JPanel {
 
     private void buildDraw(JPanel body) {
         section(body, "DRAW");
-        line.setToolTipText("A line through the points you click; double-click or Enter ends it");
-        rectangle.setToolTipText("Drag a box on the map");
-        arrow.setToolTipText("A line through the points you click, with an arrowhead at the last");
+        line.setToolTipText("Click points; double-click or Enter ends");
+        rectangle.setToolTipText("Drag a box");
+        arrow.setToolTipText("Click points; arrowhead at the last");
         row(body, line);
         row(body, rectangle);
         row(body, arrow);
@@ -220,8 +220,8 @@ final class MapToolsPanel extends JPanel {
         fillRow.setOpaque(false);
         small(outline);
         small(fill);
-        outline.setToolTipText("A rectangle as its frame only");
-        fill.setToolTipText("A rectangle with a see-through fill");
+        outline.setToolTipText("Frame only");
+        fill.setToolTipText("See-through fill");
         outline.addActionListener(e -> {
             filled = false;
             syncStyle();
@@ -235,18 +235,18 @@ final class MapToolsPanel extends JPanel {
         row(body, fillRow);
 
         section(body, "SYMBOLS");
-        symbol.setToolTipText("A NATO unit symbol where you click: the type, the affiliation (its colour) and the echelon (its size) below");
+        symbol.setToolTipText("NATO unit symbol where you click; type, affiliation, echelon below");
         row(body, symbol);
         for (MapGraphics.UnitType t : MapGraphics.UnitType.values()) unitCombo.addItem(t.title);
         TacticalCombo.install(unitCombo);
-        unitCombo.setToolTipText("The unit type: the icon inside the frame");
+        unitCombo.setToolTipText("Unit type: the icon in the frame");
         unitCombo.addActionListener(e -> syncSymbol());
         row(body, unitCombo);
         JPanel affRow = new JPanel(new GridLayout(1, affiliationButtons.length, 3, 0));
         affRow.setOpaque(false);
         for (MapGraphics.Affiliation a : MapGraphics.Affiliation.values()) {
             JButton b = new Swatch(a.fillRgb);
-            b.setToolTipText(a.title + ": the frame's shape and colour");
+            b.setToolTipText(a.title + ": frame shape and colour");
             b.addActionListener(e -> {
                 affiliation = a;
                 syncSymbol();
@@ -258,13 +258,13 @@ final class MapToolsPanel extends JPanel {
         for (MapGraphics.Echelon ec : MapGraphics.Echelon.values()) echelonCombo.addItem(ec.title + "  " + ec.mark);
         TacticalCombo.install(echelonCombo);
         echelonCombo.setSelectedIndex(MapGraphics.Echelon.PLATOON.ordinal());
-        echelonCombo.setToolTipText("The echelon: the size mark above the frame");
+        echelonCombo.setToolTipText("Echelon: size mark above the frame");
         echelonCombo.addActionListener(e -> syncSymbol());
         row(body, echelonCombo);
 
         section(body, "EDIT");
-        eraser.setToolTipText("Click a drawing or symbol to take it off the map; Esc ends. A double-click on a point of any drawing picks it up to move it");
-        placeAt.setToolTipText("A position typed or pasted (MGRS, UTM or latitude, longitude): a point of the line being drawn, else a symbol there");
+        eraser.setToolTipText("Click a drawing to erase it; Esc ends. Double-click a point to move it");
+        placeAt.setToolTipText("Typed position (MGRS, UTM or lat, lon): next line point, else a symbol");
         row(body, eraser);
         row(body, placeAt);
         row(body, pins); // the pilot: pins belong with the drawings (1.0.39)
@@ -272,32 +272,31 @@ final class MapToolsPanel extends JPanel {
 
     private void buildTools(JPanel body) {
         section(body, "MEASURE");
-        ruler.setToolTipText("Click points on the map; double-click or Enter ends, Esc cancels, right-click takes the last point back. Click the first point again to close the loop (its area shows)");
+        ruler.setToolTipText("Click points; double-click/Enter ends, Esc cancels, right-click undoes. Click the first point to close (shows area)");
         row(body, ruler);
         measureRow.setOpaque(false);
-        keep.setToolTipText("Keep this measurement on the map as a graphic");
-        clearMeasure.setToolTipText("Take the measurement off the map");
+        keep.setToolTipText("Keep the measurement as a drawing");
+        clearMeasure.setToolTipText("Remove the measurement");
         measureRow.add(small(keep));
         measureRow.add(small(clearMeasure));
         measureRow.setVisible(false);
         row(body, measureRow);
 
         gap(body); // no heading: the button says it
-        horizon.setToolTipText("Click the map to put a mast there: green is where the aircraft at the height set can see it, over the "
-                + "terrain and through the forest on the map (by the frequency), 30 km at most. A new click moves the mast. It stays on the map when the tool ends: the cross on its label takes it off");
+        horizon.setToolTipText("Click to place a mast: green where the aircraft sees it over terrain and forest, up to 30 km. "
+                + "Click again to move. The cross on its label removes it");
         row(body, horizon);
         slideRow(body, horizonFields);
 
         gap(body);
-        gcsSearch.setToolTipText("Drag a box round the area you want good reception in: a heat map 30 km round it shows where a ground "
-                + "station's antenna sees all of it (green) or none of it (red), the best place ringed. A new box replaces it. It stays on the map when the tool ends: the cross on its label takes it off");
+        gcsSearch.setToolTipText("Drag a box round the area needing reception: green where a ground antenna sees all of it, red none, "
+                + "best spot ringed (30 km). The cross on its label removes it");
         row(body, gcsSearch);
         slideRow(body, searchFields);
 
         gap(body);
-        coverage.setToolTipText("<html>An ESTIMATE of the 4G signal the drone gets where the map is looked at: green good, yellow fair, orange weak, "
-                + "red none.<br>From where OpenCelliD's open database puts the 4G and 5G cells, and the terrain between them and the drone. "
-                + "Masts show as dots when zoomed in.<br>A guess, not a measurement: the operators' own maps are not open. Press again to turn it off</html>");
+        coverage.setToolTipText("<html>ESTIMATED 4G signal in view: green good, yellow fair, orange weak, red none.<br>"
+                + "From OpenCelliD cell positions and terrain; masts as dots when zoomed in.<br>A guess, not a measurement. Press again to turn off</html>");
         row(body, coverage);
         slideRow(body, coverageFields);
 
@@ -305,15 +304,15 @@ final class MapToolsPanel extends JPanel {
         row(body, goTo);
 
         section(body, "OVERWATCH");
-        clips.setToolTipText("What the drones in overwatch saw: each event's clip, when, how long and where, to play here with the camera's view on the map");
+        clips.setToolTipText("Overwatch event clips: play with the camera view on the map");
         row(body, clips);
     }
 
     private void buildData(JPanel body) {
         section(body, "DATA");
-        export.setToolTipText("Drag a box on the map: its picture (PNG) and everything drawn in it (KML) go to Documents\\DRAUPNE Link\\Exports");
-        importButton.setToolTipText("A KML file's lines, areas, symbols and points onto the map (DRAUPNE's own, Google Earth's, ATAK's)");
-        clearAll.setToolTipText("Every drawing, symbol, pin and measurement off the map");
+        export.setToolTipText("Drag a box: PNG + KML to Documents\\DRAUPNE Link\\Exports");
+        importButton.setToolTipText("Load a KML (DRAUPNE, Google Earth, ATAK)");
+        clearAll.setToolTipText("Remove all drawings, symbols, pins, measurements");
         row(body, export);
         row(body, importButton);
         row(body, download);
@@ -324,10 +323,10 @@ final class MapToolsPanel extends JPanel {
     private JPanel fields(JLabel status, String aircraftTip) {
         JPanel grid = new JPanel(new GridLayout(4, 2, 6, 4));
         grid.setOpaque(false);
-        addField(grid, "Mast m", mastM, "The mast: the antenna's height above the ground, in metres");
-        addField(grid, "Aircraft m", aircraftM, "The aircraft: " + aircraftTip + ", in metres");
-        addField(grid, "Trees m", treeM, "How tall the trees are where the map shows forest, in metres (0: the forest is ignored)");
-        addField(grid, "Freq. MHz", frequencyMHz, "The link's frequency in MHz: the higher, the less forest it gets through (e.g. 800 or 1800 for 4G, 2400, 5800)");
+        addField(grid, "Mast m", mastM, "Antenna height above ground, metres");
+        addField(grid, "Aircraft m", aircraftM, "Aircraft " + aircraftTip + ", metres");
+        addField(grid, "Trees m", treeM, "Tree height in mapped forest, metres (0: ignore forest)");
+        addField(grid, "Freq. MHz", frequencyMHz, "Link frequency: higher gets through less forest (4G: 800, 1800)");
         JPanel box = new JPanel();
         box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
         box.setOpaque(false);
@@ -346,10 +345,10 @@ final class MapToolsPanel extends JPanel {
         for (int m : de.droiddrone.pc.map.CellCoverage.HEIGHTS_M) coverageHeight.addItem(m + " m");
         TacticalCombo.install(coverageOperator);
         TacticalCombo.install(coverageHeight);
-        coverageOperator.setToolTipText("The network your SIM is on: only its masts count");
-        coverageHeight.setToolTipText("The drone's height above the ground: the higher, the more masts it sees (2 m: on the ground)");
-        coverageKey.setToolTipText("Your OpenCelliD access token: register free at opencellid.org, then copy the Access Token");
-        coverageImport.setToolTipText("A country file from OpenCelliD's downloads page (242.csv.gz is Norway): every cell at once, no requests");
+        coverageOperator.setToolTipText("Your SIM's network: only its masts count");
+        coverageHeight.setToolTipText("Drone height above ground (2 m: on the ground)");
+        coverageKey.setToolTipText("OpenCelliD access token (free at opencellid.org)");
+        coverageImport.setToolTipText("OpenCelliD country file (242.csv.gz = Norway): all cells, no requests");
         JPanel grid = new JPanel(new GridLayout(3, 2, 6, 4));
         grid.setOpaque(false);
         grid.add(Theme.label("Network", Theme.headingFont(11f), Theme.MUTED));

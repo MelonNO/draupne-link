@@ -133,20 +133,20 @@ final class MapWindow extends JFrame {
         left.setOpaque(false);
         left.add(Theme.sectionTitle("Map"));
         left.add(Box.createHorizontalStrut(6));
-        followButton.setToolTipText("Keep the drone in the middle; dragging the map turns it off");
+        followButton.setToolTipText("Keep the drone centred; dragging the map stops it");
         followButton.addActionListener(e -> {
             map.setFollow(!map.isFollowing());
             syncFollow();
         });
         left.add(followButton);
         // the whole flight: a double-click on the map; the launch point: the Home key (End: the drone)
-        tracksButton.setToolTipText("An earlier flight's track on the map, from the Tracks folder");
+        tracksButton.setToolTipText("Show an earlier flight's track");
         tracksButton.addActionListener(e -> TacticalCombo.show(tracksMenu(), tracksButton, 0, tracksButton.getHeight() + 4));
         left.add(tracksButton);
         // MAP TOOLS (1.0.35): GO TO, PINS and DOWNLOAD AREA live in the slide-out, with the ruler, the drawings and the symbols
-        tools.goTo.setToolTipText("Centre the map on a position typed or pasted: MGRS, UTM, or latitude, longitude");
+        tools.goTo.setToolTipText("Centre on a position: MGRS, UTM or lat, lon");
         tools.goTo.addActionListener(e -> goToPosition());
-        tools.pins.setToolTipText("Every pin: go to, rename, remove, add at the drone or the launch point");
+        tools.pins.setToolTipText("All pins: go to, rename, remove, add");
         tools.pins.addActionListener(e -> {
             if (pinManager == null || !pinManager.isDisplayable()) {
                 pinManager = new PinManagerDialog(this, pins, map, () -> this.format, () -> track);
@@ -154,7 +154,7 @@ final class MapWindow extends JFrame {
             pinManager.setVisible(true);
             pinManager.toFront();
         });
-        tools.download.setToolTipText("Save the map for offline use: this view, or a box drawn on the map (SELECT WITH CURSOR, or Alt + drag)");
+        tools.download.setToolTipText("Save the map offline: this view or a box (Alt + drag)");
         tools.download.addActionListener(e -> downloadArea(map.visibleArea()));
         tools.ruler.addActionListener(e -> map.setTool(MapView.Tool.RULER));
         tools.line.addActionListener(e -> map.setTool(MapView.Tool.LINE));
@@ -207,7 +207,7 @@ final class MapWindow extends JFrame {
         tools.importButton.addActionListener(e -> importKml());
         tools.clearAll.addActionListener(e -> { // 1.0.37: the pins and the measurement go too (the pilot)
             if (graphics.isEmpty() && pins.list().isEmpty() && !map.hasMeasurement()) return;
-            int answer = javax.swing.JOptionPane.showConfirmDialog(this, "Take every drawing, symbol, pin and measurement off the map?",
+            int answer = javax.swing.JOptionPane.showConfirmDialog(this, "Clear all drawings, symbols, pins and measurements?",
                     "Clear all", javax.swing.JOptionPane.OK_CANCEL_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE);
             if (answer != javax.swing.JOptionPane.OK_OPTION) return;
             graphics.clear();
@@ -219,7 +219,7 @@ final class MapWindow extends JFrame {
         map.setOnMeasurement(m -> SwingUtilities.invokeLater(() -> showProfile(m)));
         map.setOnExportArea(this::exportArea);
         JButton find = Theme.primaryButton("Find drone");
-        find.setToolTipText("The last known position, with the coordinates to copy and map links");
+        find.setToolTipText("Last known position, coordinates and map links");
         find.addActionListener(e -> findDrone.run());
         left.add(find);
         bar.add(left, BorderLayout.WEST);
@@ -227,7 +227,7 @@ final class MapWindow extends JFrame {
         right.setOpaque(false);
         // a download put away with HIDE goes on here; a click brings its window back
         downloadLine.setVisible(false);
-        downloadLine.setToolTipText("A download is running: click for its window");
+        downloadLine.setToolTipText("Download running: click to show");
         downloadLine.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
         downloadLine.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
@@ -240,7 +240,7 @@ final class MapWindow extends JFrame {
         });
         right.add(downloadLine);
         TacticalCombo.install(pictureCombo);
-        pictureCombo.setToolTipText("The map picture. Auto and TOPO: Kartverket's topo map in Norway, the world topo map (OpenTopoMap) elsewhere. WORLD TOPO: OpenTopoMap everywhere. Satellite from Esri");
+        pictureCombo.setToolTipText("AUTO/TOPO: Kartverket in Norway, else OpenTopoMap. SATELLITE: Esri");
         pictureCombo.addActionListener(e -> {
             if (settingCombos) return;
             TileSource s = SOURCES[pictureCombo.getSelectedIndex()];
@@ -250,7 +250,7 @@ final class MapWindow extends JFrame {
         right.add(pictureCombo);
         for (Coordinates.Format f : Coordinates.Format.values()) formatCombo.addItem(f.title);
         TacticalCombo.install(formatCombo);
-        formatCombo.setToolTipText("How positions are written: MGRS (the military grid), UTM, decimal degrees, degrees-minutes-seconds");
+        formatCombo.setToolTipText("Position format: MGRS, UTM, decimal or DMS");
         formatCombo.addActionListener(e -> {
             if (settingCombos) return;
             setFormat(Coordinates.Format.values()[formatCombo.getSelectedIndex()]);
@@ -310,7 +310,7 @@ final class MapWindow extends JFrame {
         // ---- the figures
         JPanel stats = Theme.card(new GridLayout(1, 6, 14, 0));
         cursorCell = stat(stats, "CURSOR", cursorValue);
-        cursorCell.setToolTipText("Right-click: a pin where the cursor last was on the map");
+        cursorCell.setToolTipText("Right-click: pin at the cursor");
         cursorCell.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mousePressed(java.awt.event.MouseEvent e) {
@@ -407,9 +407,9 @@ final class MapWindow extends JFrame {
         }
         String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm"));
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(dir.toFile());
-        chooser.setDialogTitle("Export the box as a picture and KML");
+        chooser.setDialogTitle("Export box as PNG + KML");
         chooser.setSelectedFile(dir.resolve("map-" + stamp + ".kml").toFile());
-        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("KML (a PNG with the same name goes with it)", "kml"));
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("KML (+ PNG of the same name)", "kml"));
         if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
         java.nio.file.Path kml = chooser.getSelectedFile().toPath();
         if (!kml.getFileName().toString().toLowerCase(java.util.Locale.ROOT).endsWith(".kml")) kml = kml.resolveSibling(kml.getFileName() + ".kml");
@@ -453,7 +453,7 @@ final class MapWindow extends JFrame {
     /** IMPORT: a KML file's lines, areas, arrows, symbols and points (as pins) onto the map; the map goes to them. */
     private void importKml() {
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(java.nio.file.Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports").toFile());
-        chooser.setDialogTitle("Import a KML file");
+        chooser.setDialogTitle("Import KML");
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("KML", "kml"));
         if (chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
         try {
@@ -492,11 +492,11 @@ final class MapWindow extends JFrame {
     /** PLACE AT: a position typed or pasted in any format the map writes; a point of the drawing on, else a symbol. */
     private void placeAtPosition() {
         String text = (String) javax.swing.JOptionPane.showInputDialog(this,
-                "Position: MGRS (32V PN 35026 85877), UTM, or latitude, longitude", "Place at", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, "");
+                "MGRS (32V PN 35026 85877), UTM or lat, lon", "Place at", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, "");
         if (text == null || text.isBlank()) return;
         double[] ll = Coordinates.parse(text);
         if (ll == null) {
-            javax.swing.JOptionPane.showMessageDialog(this, "Not a position I can read: " + text, "Place at", javax.swing.JOptionPane.WARNING_MESSAGE);
+            javax.swing.JOptionPane.showMessageDialog(this, "Unreadable position: " + text, "Place at", javax.swing.JOptionPane.WARNING_MESSAGE);
             return;
         }
         map.placeAt(ll[0], ll[1]);
@@ -529,7 +529,7 @@ final class MapWindow extends JFrame {
             tools.horizonStatus.setText(" ");
             return;
         }
-        tools.horizonStatus.setText(status("Loading the terrain..."));
+        tools.horizonStatus.setText(status("Loading terrain..."));
         horizonLoad.execute(() -> {
             if (horizonRun.get() != run) return;
             long[] last = {0};
@@ -581,7 +581,7 @@ final class MapWindow extends JFrame {
             tools.searchStatus.setText(" ");
             return;
         }
-        tools.searchStatus.setText(status("Loading the terrain..."));
+        tools.searchStatus.setText(status("Loading terrain..."));
         double cLat = (area[0] + area[1]) / 2, cLon = (area[2] + area[3]) / 2;
         double radius = RadioHorizon.searchRadiusM(area[0], area[1], area[2], area[3]);
         horizonLoad.execute(() -> {
@@ -592,7 +592,7 @@ final class MapWindow extends JFrame {
                 searchLoading = forestDone < forestTotal ? "forest map " + forestDone + " / " + forestTotal : null;
                 if (forestDone == 0 || forestDone == forestTotal) recomputeSearch(); // a first look on the terrain, then the real one
                 else SwingUtilities.invokeLater(() -> {
-                    if (searchRun.get() == run && map.search() == null) map.setSearch(null, "Loading the " + searchLoading + "...");
+                    if (searchRun.get() == run && map.search() == null) map.setSearch(null, "Loading " + searchLoading + "...");
                 });
             }, () -> searchRun.get() != run);
         });
@@ -611,7 +611,7 @@ final class MapWindow extends JFrame {
             RadioHorizon.Search r = RadioHorizon.search(area[0], area[1], area[2], area[3], horizonSettings, data, data,
                     done -> SwingUtilities.invokeLater(() -> {
                         if (searchRun.get() == run && searchSum.get() == sum) {
-                            String line = "Working it out: " + done + " / " + points + " points";
+                            String line = "Computing: " + done + " / " + points + " points";
                             map.setSearch(map.search(), line);
                             tools.searchStatus.setText(status(line));
                         }
@@ -680,7 +680,7 @@ final class MapWindow extends JFrame {
             tools.coverageStatus.setText(" ");
             return;
         }
-        map.setCoverage(true, null, "Working it out...");
+        map.setCoverage(true, null, "Computing...");
         coverageView(map.visibleArea());
     }
 
@@ -695,9 +695,9 @@ final class MapWindow extends JFrame {
     }
 
     private void askCoverageKey() {
-        String text = "<html>The 4G COVERAGE estimate needs an OpenCelliD access token (free).<br>Register at https://opencellid.org, log in, "
-                + "and copy the Access Token<br>your account page shows. It is kept in this PC's settings file.<br><br>"
-                + "A key has 1,000 requests a day: each 1.8 km box of map takes two, once a month.</html>";
+        String text = "<html>4G COVERAGE needs a free OpenCelliD access token.<br>Register at https://opencellid.org and copy the "
+                + "Access Token<br>from your account page. Saved in the settings file.<br><br>"
+                + "1,000 requests a day; each 1.8 km box takes two, once a month.</html>";
         Object answer = javax.swing.JOptionPane.showInputDialog(this, text, "OpenCelliD key", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, coverageKey);
         if (answer == null) return;
         coverageKey = answer.toString().trim();
@@ -709,7 +709,7 @@ final class MapWindow extends JFrame {
     /** A country file from OpenCelliD's downloads page, read on the coverage thread (Norway's is tens of MB unpacked). */
     private void importCells() {
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(java.nio.file.Path.of(System.getProperty("user.home"), "Downloads").toFile());
-        chooser.setDialogTitle("Import an OpenCelliD cell file (242.csv.gz is Norway)");
+        chooser.setDialogTitle("Import OpenCelliD cells (242.csv.gz = Norway)");
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("OpenCelliD CSV (.csv, .csv.gz)", "csv", "gz"));
         if (chooser.showOpenDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
         java.nio.file.Path file = chooser.getSelectedFile().toPath();
@@ -768,7 +768,7 @@ final class MapWindow extends JFrame {
         boolean noKey = key.isBlank();
         boolean tooWide = sizeM > COVERAGE_FETCH_MAX_M;
         int toFetch = noKey || tooWide ? 0 : Math.min(missing.size(), Math.min(COVERAGE_MAX_FETCH, cellData.creditsLeft() / 2));
-        coverageLine(run, "Loading the terrain...");
+        coverageLine(run, "Loading terrain...");
         RadioHorizon.Data terrain = CellCoverage.loadTerrain(cache, reach, cancelled);
         if (cancelled.getAsBoolean()) return;
         String problem = null;
@@ -779,10 +779,10 @@ final class MapWindow extends JFrame {
             OpenCellId.Answer a = cellData.fetch(t, key);
             if (a.cells() == null) {
                 problem = switch (a.errorCode()) {
-                    case 2 -> "OpenCelliD does not know the key";
-                    case 7 -> "the key's requests for today are used up";
-                    case 0 -> "no connection to OpenCelliD: saved cells only";
-                    case OpenCellId.HELD -> "a drone here may be flying: saved cells only until it has landed";
+                    case 2 -> "OpenCelliD key unknown";
+                    case 7 -> "key's daily requests used up";
+                    case 0 -> "no OpenCelliD connection: saved cells only";
+                    case OpenCellId.HELD -> "drone may be flying: saved cells only until landed";
                     default -> "OpenCelliD: " + a.error();
                 };
                 break;
@@ -794,8 +794,8 @@ final class MapWindow extends JFrame {
         }
         int left = missing.size() - fetched;
         if (problem == null && left > 0) {
-            problem = noKey ? "no OpenCelliD key (MAP TOOLS > TOOLS > Key...)" : tooWide ? "zoom in to fetch the cells here"
-                    : cellData.creditsLeft() < 2 ? "the key's requests for today are used up" : left + " boxes not fetched yet: rest the map again";
+            problem = noKey ? "no OpenCelliD key (MAP TOOLS > TOOLS > Key...)" : tooWide ? "zoom in to fetch cells"
+                    : cellData.creditsLeft() < 2 ? "key's daily requests used up" : left + " boxes not fetched: rest the map again";
         }
         publishCoverage(run, area, reach, tiles, op, droneM, terrain, cols, rows, problem, left == 0);
     }
@@ -845,7 +845,7 @@ final class MapWindow extends JFrame {
             b.append(String.format(Locale.ROOT, ", %d %% good, %d %% weak or none", Math.round(100.0 * c[CellCoverage.GOOD] / all),
                     Math.round(100.0 * (c[CellCoverage.WEAK] + c[CellCoverage.NONE]) / all)));
         } else {
-            b.append(", no cells known here");
+            b.append(", no cells known");
         }
         if (g.terrainMissing()) b.append(", some terrain missing");
         if (problem != null) b.append("  -  ").append(problem);
@@ -860,10 +860,10 @@ final class MapWindow extends JFrame {
     static String searchPanelText(RadioHorizon.Search r, String loading) {
         StringBuilder sb = new StringBuilder();
         double dist = Mercator.distanceM(r.lat(), r.lon(), r.bestLat(), r.bestLon());
-        sb.append(String.format(Locale.ROOT, "Best: %d %% of the area<br>%s from its centre, %03d°",
+        sb.append(String.format(Locale.ROOT, "Best: %d %% of area<br>%s from centre, %03d°",
                 Math.round(r.bestScore() * 100), km(dist), Mercator.bearingDeg(r.lat(), r.lon(), r.bestLat(), r.bestLon())));
         if (r.settings().treeM() > 0) sb.append(String.format(Locale.ROOT, "<br>Through %.0f m of forest", r.forestDepthM()));
-        if (loading != null) sb.append("<br>Terrain only, loading the ").append(loading);
+        if (loading != null) sb.append("<br>Terrain only, loading ").append(loading);
         else if (r.forestUnknownPct() > 0) sb.append("<br>No forest map: ").append(r.forestUnknownPct()).append(" %");
         if (r.terrainMissing()) sb.append("<br>Some terrain missing");
         return sb.toString();
@@ -885,9 +885,9 @@ final class MapWindow extends JFrame {
 
     static String horizonPanelText(RadioHorizon.Result r, String loading) {
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format(Locale.ROOT, "Seen up to %s<br>Ground at the mast %.0f m", km(furthestM(r)), r.groundM()));
+        sb.append(String.format(Locale.ROOT, "Seen up to %s<br>Ground at mast %.0f m", km(furthestM(r)), r.groundM()));
         if (r.settings().treeM() > 0) sb.append(String.format(Locale.ROOT, "<br>Through %.0f m of forest", r.forestDepthM()));
-        if (loading != null) sb.append("<br>Loading the ").append(loading);
+        if (loading != null) sb.append("<br>Loading ").append(loading);
         else if (r.forestUnknownPct() > 0) sb.append("<br>No forest map: ").append(r.forestUnknownPct()).append(" %");
         if (r.terrainMissing()) sb.append("<br>Some terrain missing");
         return sb.toString();
@@ -1165,7 +1165,7 @@ final class MapWindow extends JFrame {
             if (answer != 0 && answer != 1) return;
             double[] ll = Coordinates.parse(field.getText());
             if (ll == null) {
-                hint.setText("Not a position I can read. " + hint.getText());
+                hint.setText("Unreadable position. " + hint.getText());
                 hint.setForeground(Theme.BAD);
                 continue;
             }
@@ -1186,7 +1186,7 @@ final class MapWindow extends JFrame {
         } catch (java.io.IOException ignored) {
         }
         if (files.isEmpty()) {
-            javax.swing.JMenuItem none = new javax.swing.JMenuItem("No earlier flights in the Tracks folder");
+            javax.swing.JMenuItem none = new javax.swing.JMenuItem("No earlier flights in Tracks");
             none.setEnabled(false);
             menu.add(none);
         }
@@ -1200,13 +1200,13 @@ final class MapWindow extends JFrame {
         }
         if (map.hasOldTrack()) {
             menu.addSeparator();
-            javax.swing.JMenuItem fit = new javax.swing.JMenuItem("Fit the earlier flight");
+            javax.swing.JMenuItem fit = new javax.swing.JMenuItem("Fit earlier flight");
             fit.addActionListener(e -> {
                 map.fitOldTrack();
                 syncFollow();
             });
             menu.add(fit);
-            javax.swing.JMenuItem clear = new javax.swing.JMenuItem("Clear the earlier flight");
+            javax.swing.JMenuItem clear = new javax.swing.JMenuItem("Clear earlier flight");
             clear.addActionListener(e -> map.setOldTrack(null, null));
             menu.add(clear);
         }
@@ -1239,7 +1239,7 @@ final class MapWindow extends JFrame {
         javax.swing.JPopupMenu menu = TacticalCombo.menu();
         menu.setBackground(Theme.PANEL_2);
         double[] at = lastCursor;
-        javax.swing.JMenuItem pin = new javax.swing.JMenuItem(at == null ? "Move the mouse over the map first"
+        javax.swing.JMenuItem pin = new javax.swing.JMenuItem(at == null ? "Hover over the map first"
                 : "Add pin at " + Coordinates.format(format, at[0], at[1]));
         pin.setEnabled(at != null);
         pin.addActionListener(e -> map.addPinAt(at[0], at[1], null));
