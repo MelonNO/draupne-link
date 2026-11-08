@@ -84,7 +84,7 @@ public final class Beepers {
         if (silenced > 0) what.add(silenced + " beeper sound" + (silenced == 1 ? "" : "s") + " off");
         if (commands.size() - silenced - (beacon ? 1 : 0) > 0) what.add("receiver lost and BEEPER on");
         if (beacon) what.add("motors beep with BEEPER (DShot beacon)");
-        return new BetaflightPlan.Change("Beepers: " + String.join(", ", what) + " - silent unless BEEPER is pressed or the phone is unplugged",
+        return new BetaflightPlan.Change("Beepers: " + String.join(", ", what) + " - silent unless BEEPER or phone unplugged",
                 List.copyOf(commands));
     }
 }

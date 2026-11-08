@@ -77,7 +77,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
             if (v == null || minMajor == 0) return null;
             boolean old = v[0] < minMajor || (v[0] == minMajor && v[1] < minMinor);
             return old ? title + " needs Betaflight " + minMajor + "." + minMinor + " or newer - this one is " + v[0] + "." + v[1]
-                    + ". Update Betaflight to use it." : null;
+                    + "." : null;
         }
 
         @Override
@@ -254,23 +254,23 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         if (arm == 0 && read != null) arm = read.channel() - 3;
         if (arm >= 1 && arm <= MAX_AUX) {
             // an ARM that was already on that switch keeps its own range (plan): it may arm low, not up
-            p[arm - 1] = new Purpose("ARM", "Flip the switch you ARM with to its armed position ("
+            p[arm - 1] = new Purpose("ARM", "Flip ARM to armed ("
                     + (read != null && read.channel() - 3 == arm ? armedPosition(read) : "up") + ").");
         }
         ModeSwitch modes = parse(config.getString(KEY));
         if (modes != null && p[modes.aux - 1] == null) {
-            p[modes.aux - 1] = new Purpose("flight modes", "Flip the 3-position flight mode switch to the top (" + modes.high.title
-                    + "). The middle is " + modes.middle.title + ", the bottom " + modes.low.title + ".");
+            p[modes.aux - 1] = new Purpose("flight modes", "Flip the flight mode switch to the top (" + modes.high.title
+                    + "). Middle: " + modes.middle.title + ", bottom: " + modes.low.title + ".");
         }
         int rescue = parseRescueAux(config.getString(RESCUE_KEY));
         boolean fitted = Failsafe.parse(config.getString(Failsafe.KEY)) == Failsafe.GPS_RESCUE
                 || "true".equalsIgnoreCase(config.getString(RESCUE_FITTED_KEY));
         if (rescue > 0 && fitted && p[rescue - 1] == null) {
-            p[rescue - 1] = new Purpose("GPS rescue", "Flip the GPS rescue switch up (rescue on).");
+            p[rescue - 1] = new Purpose("GPS rescue", "Flip GPS rescue up.");
         }
         int prearm = parsePrearmAux(config.getString(PREARM_KEY));
         if (prearm > 0 && p[prearm - 1] == null) {
-            p[prearm - 1] = new Purpose("PREARM", "Flip the PREARM switch up (prearm on). Betaflight arms only while it is on: flip it before ARM.");
+            p[prearm - 1] = new Purpose("PREARM", "Flip PREARM up. Needed before ARM.");
         }
         return p;
     }
@@ -406,11 +406,11 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         int beeperChannel = -1;
         if (beeperAux > 0) {
             if (armChannels.contains(beeperAux - 1)) {
-                beeperProblem = "ARM is on AUX" + beeperAux + ", the channel the app's BEEPER button drives: BEEPER would arm the drone. "
-                        + "Choose an ARM switch (AUX1-" + MAX_AUX + ") above - ARM moves there, then BEEPER goes on AUX" + beeperAux + ".";
+                beeperProblem = "ARM is on AUX" + beeperAux + ", the BEEPER channel: BEEPER would arm the drone. "
+                        + "Choose an ARM switch (AUX1-" + MAX_AUX + ") above; BEEPER then takes AUX" + beeperAux + ".";
             } else if (prearmChannels.contains(beeperAux - 1)) {
-                beeperProblem = "PREARM is on AUX" + beeperAux + ", the channel the app's BEEPER button drives. Choose a PREARM switch "
-                        + "(AUX1-" + MAX_AUX + ") above - PREARM moves there, then BEEPER goes on AUX" + beeperAux + ".";
+                beeperProblem = "PREARM is on AUX" + beeperAux + ", the BEEPER channel. Choose a PREARM switch "
+                        + "(AUX1-" + MAX_AUX + ") above; BEEPER then takes AUX" + beeperAux + ".";
             } else if ((modes != null && modes.aux == beeperAux) || rescueAux == beeperAux) {
                 beeperProblem = "AUX" + beeperAux + " is the app's BEEPER channel - pick another switch.";
             } else {
@@ -553,7 +553,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         }
         free.sort(null);
         if (free.size() < place.size()) {
-            return new Plan(List.of(), "Betaflight's Modes are full - free a few in Betaflight Configurator.", rescueProblem,
+            return new Plan(List.of(), "Modes full - free some in Betaflight Configurator.", rescueProblem,
                     missing, blocked, elsewhere, List.of(), armProblem, prearmProblem, doubled, beeperProblem);
         }
         // the clears stay, also for a slot filled again below: they all come before the first fill
@@ -563,7 +563,7 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         }
         String unsafe = sharedWithArm(after(slots, commands), commands);
         if (unsafe != null) { // never expected: a last check on the result, so no plan can ever put a mode beside ARM
-            return new Plan(List.of(), unsafe + " - nothing is written; set the Modes tab by hand.", rescueProblem, missing, blocked,
+            return new Plan(List.of(), unsafe + " - nothing written; set Modes by hand.", rescueProblem, missing, blocked,
                     elsewhere, List.of(), armProblem, prearmProblem, doubled, beeperProblem);
         }
         return new Plan(List.copyOf(commands), problem, rescueProblem, missing, blocked, elsewhere, List.copyOf(replaced), armProblem,

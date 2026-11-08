@@ -69,9 +69,9 @@ final class DroneSetup {
         for (int i = 0; i < purposes.length; i++) {
             if (purposes[i] != null) named.add("AUX" + (i + 1) + " (" + purposes[i].title() + ")");
         }
-        if (named.isEmpty()) return "Calibrate the radio again so each AUX is the right switch.";
-        if (named.size() == 1) return "Calibrate the radio again so " + named.get(0) + " is the right switch.";
-        return "Calibrate the radio again so " + String.join(", ", named.subList(0, named.size() - 1)) + " and "
+        if (named.isEmpty()) return "Recalibrate the radio so each AUX is the right switch.";
+        if (named.size() == 1) return "Recalibrate the radio so " + named.get(0) + " is the right switch.";
+        return "Recalibrate the radio so " + String.join(", ", named.subList(0, named.size() - 1)) + " and "
                 + named.get(named.size() - 1) + " are the right switches.";
     }
 
@@ -284,7 +284,7 @@ final class DroneSetup {
 
         @Override
         String hint() {
-            return "Plug a USB data cable into the drone and this computer. <b>Props off.</b>";
+            return "Connect the drone by USB data cable. <b>Props off.</b>";
         }
 
         /** Rank for a combined row's light: the worst part shows; INFO (nothing to do) only when all are. */
@@ -542,17 +542,17 @@ final class DroneSetup {
             cellSpinner.setFont(Theme.headingFont(16f));
             ((JSpinner.DefaultEditor) cellSpinner.getEditor()).getTextField().setColumns(2);
             cellSpinner.addChangeListener(e -> cellsChanged((Integer) cellSpinner.getValue()));
-            cellSpinner.setToolTipText("The packs this drone flies on: Betaflight then always uses this count");
+            cellSpinner.setToolTipText("Cell count of this drone's packs");
             measuredCells = Theme.secondaryButton("Use measured");
             measuredCells.addActionListener(e -> cellSpinner.setValue(measured));
-            measuredCells.setToolTipText("The cell count Betaflight sees on the battery plugged in now");
+            measuredCells.setToolTipText("Cell count of the battery plugged in now");
             measuredCells.setVisible(false);
             confirm.restore(main.config().getString(CONFIRMED_KEY));
             confirmButton = Theme.primaryButton("Confirm");
             confirmButton.setFont(Theme.headingFont(12.5f));
             confirmButton.setBorder(javax.swing.BorderFactory.createEmptyBorder(8, 16, 8, 16));
             confirmButton.addActionListener(e -> confirmNow());
-            confirmButton.setToolTipText("Every setting on this page is right: write them to the flight controller (its settings are backed up first)");
+            confirmButton.setToolTipText("Write these settings to the flight controller (backed up first)");
             confirmButton.setVisible(!confirm.confirmed());
             confirmButton.setEnabled(false);
             // the card: the link's settings, then GPS, SWITCHES and FAILSAFE as sections, CONFIRM at the bottom
@@ -595,7 +595,7 @@ final class DroneSetup {
                 if (c instanceof JComponent j) j.setAlignmentX(javax.swing.JComponent.LEFT_ALIGNMENT);
             }
             settings.row.addBelow(card);
-            portChoice.setToolTipText("Which USB port the flight controller is on, if more than one is found");
+            portChoice.setToolTipText("The flight controller's USB port");
             portChoice.addActionListener(e -> {
                 Object c = portChoice.getSelectedItem();
                 String chosen = c == null || AUTOMATIC.equals(c) ? null : c.toString();
@@ -608,25 +608,25 @@ final class DroneSetup {
             usb.addComponent(portChoice);
             portChoice.setVisible(false); // shown once more than one port is found
             byHand = usb.addAction("By hand", this::showByHand);
-            byHand.setToolTipText("The same settings in Betaflight Configurator, for a drone without USB to this PC");
+            byHand.setToolTipText("The same settings in Betaflight Configurator");
             readAgain = usb.addAction("Retry", this::checkModesAgain);
-            readAgain.setToolTipText("Look for the flight controller again, or read it again after plugging the battery in or changing something in Betaflight");
+            readAgain.setToolTipText("Read the flight controller again");
             disconnect = usb.addAction("Disconnect", this::togglePaused);
-            disconnect.setToolTipText("Let go of the USB port, e.g. for Betaflight Configurator; RECONNECT carries on");
+            disconnect.setToolTipText("Free the USB port (e.g. for Betaflight Configurator)");
             WizardDialog.addRow(col, usb);
             WizardDialog.addRow(col, settings.row);
             motors.addAction("Already checked", this::motorsAlreadyChecked);
             motors.addPrimaryAction("Check now", this::checkMotorsNow);
-            motors.setToolTipText("Each motor in the right place, turning the right way, the props on the right way round");
+            motors.setToolTipText("Motor places, directions and props");
             WizardDialog.addRow(col, motors);
             orientation.addPrimaryAction("Check now", this::checkOrientationNow);
-            orientation.setToolTipText("A drone on screen that moves as Betaflight sees the real one: lift the nose, lower the right side, and see it does the same");
+            orientation.setToolTipText("Tilt the drone, check Betaflight sees the same");
             WizardDialog.addRow(col, orientation);
             showManual();
-            usb.set(State.PENDING, "Looking for it...");
+            usb.set(State.PENDING, "Searching...");
             receiver.set(State.PENDING, "");
             stickDelay.set(State.PENDING, "");
-            battery.set(cellsConfirmed ? State.PENDING : State.INFO, cellsConfirmed ? "" : "Correct? Change it if not.");
+            battery.set(cellsConfirmed ? State.PENDING : State.INFO, cellsConfirmed ? "" : "Correct? Change if not.");
             ArmSwitch known = ArmSwitch.parse(main.config().getString(ArmSwitch.KEY));
             armRow.set(State.PENDING, armAux > 0 || known == null ? "" : describe(known));
             prearmRow.set(State.PENDING, "");
@@ -636,8 +636,8 @@ final class DroneSetup {
             showFailsafeChoice();
             boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(MOTORS_CHECKED_KEY));
             motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore ? "Checked."
-                    : "Not sure? <b>Check now</b> opens the motor test (props off).");
-            orientation.set(State.INFO, "Check each drone once: <b>Check now</b> (USB, props off).");
+                    : "Not sure? <b>Check now</b> (props off).");
+            orientation.set(State.INFO, "Once per drone: <b>Check now</b> (USB, props off).");
             showConfirmState();
             return col;
         }
@@ -652,7 +652,7 @@ final class DroneSetup {
             compassYes = Boolean.TRUE.equals(GpsSetup.parseYesNo(main.config().getString(GpsSetup.COMPASS_KEY)));
             gpsUart = GpsSetup.parseUart(main.config().getString(GpsSetup.UART_KEY));
             gpsChoice = new javax.swing.JComboBox<>(new String[]{"No", "Yes"});
-            gpsChoice.setToolTipText("The drone has a GPS: Betaflight's GPS goes on, on the UART chosen, and GPS rescue and position hold can be used");
+            gpsChoice.setToolTipText("Drone has GPS: enables GPS, GPS rescue and position hold");
             gpsChoice.setSelectedIndex(gpsYes ? 1 : 0);
             TacticalCombo.install(gpsChoice);
             gpsChoice.addActionListener(e -> {
@@ -672,8 +672,8 @@ final class DroneSetup {
             row.setOpaque(false);
             row.add(Theme.label("COMPASS", Theme.headingFont(12f), Theme.MUTED));
             compassChoice = new javax.swing.JComboBox<>(new String[]{"No", "Yes"});
-            compassChoice.setToolTipText("A compass (magnetometer) on the GPS module or the board: Betaflight uses it for the heading and GPS rescue; "
-                    + "it must be calibrated once, on the drone, away from metal");
+            compassChoice.setToolTipText("Compass on the GPS or board, for heading and GPS rescue. "
+                    + "Calibrate once, away from metal");
             compassChoice.setSelectedIndex(compassYes ? 1 : 0);
             TacticalCombo.install(compassChoice);
             compassChoice.addActionListener(e -> compassChoiceChanged());
@@ -681,14 +681,14 @@ final class DroneSetup {
             row.add(javax.swing.Box.createHorizontalStrut(10));
             row.add(Theme.label("UART", Theme.headingFont(12f), Theme.MUTED));
             uartChoice = new javax.swing.JComboBox<>(uartItems(List.of()));
-            uartChoice.setToolTipText("The flight controller's UART the GPS is wired to (RX to TX, TX to RX); UART3 on most boards");
+            uartChoice.setToolTipText("UART the GPS is wired to (RX-TX, TX-RX); usually UART3");
             uartChoice.setSelectedItem("UART" + gpsUart);
             TacticalCombo.install(uartChoice);
             uartChoice.addActionListener(e -> uartChoiceChanged());
             row.add(uartChoice);
             row.add(javax.swing.Box.createHorizontalStrut(10));
             calibrateCompass = Theme.secondaryButton("Calibrate compass");
-            calibrateCompass.setToolTipText("Turn the drone round every axis for 30 s while Betaflight learns the compass's offsets (over USB, props off)");
+            calibrateCompass.setToolTipText("Turn the drone round every axis for 30 s (USB, props off)");
             calibrateCompass.addActionListener(e -> calibrateCompassNow());
             calibrateCompass.setVisible(compassYes);
             calibrateCompass.setEnabled(false);
@@ -845,11 +845,11 @@ final class DroneSetup {
         /** CALIBRATE COMPASS: the calibration window takes the USB port; the page reads again once it is closed. */
         private void calibrateCompassNow() {
             if (main.isLinkActive()) {
-                gps.set(State.WARN, "Disconnect from the drone first: the calibration runs over this PC's USB, with the drone on the bench.");
+                gps.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
                 return;
             }
             compassCalOpen = true;
-            gps.set(State.PENDING, "The compass calibration is open. Close it when you're done.");
+            gps.set(State.PENDING, "Compass calibration open.");
             CompassCalibrationDialog.open(javax.swing.SwingUtilities.getWindowAncestor(usb), main, chosenPort, () -> {
                 compassCalOpen = false;
                 nextTry = System.currentTimeMillis() + 1500; // the calibration lets go of the port first
@@ -878,8 +878,8 @@ final class DroneSetup {
             JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
             row.setOpaque(false);
             auxChoice = auxCombo(MODES_OFF);
-            auxChoice.setToolTipText("The 3-position switch on your radio for the flight modes (AUX2 = the radio's channel 6 by default). "
-                    + "Which switch is which AUX is chosen in the radio step.");
+            auxChoice.setToolTipText("3-position flight mode switch (AUX2 = channel 6 by default). "
+                    + "Switches map to AUX in the radio step.");
             auxChoice.setSelectedIndex(modeSwitch == null ? 0 : modeSwitch.aux());
             TacticalCombo.install(auxChoice);
             row.add(stacked("SWITCH", auxChoice));
@@ -889,7 +889,7 @@ final class DroneSetup {
                 javax.swing.JComboBox<ModeSwitch.Mode> c = new javax.swing.JComboBox<>(ModeSwitch.Mode.values());
                 c.setPrototypeDisplayValue(ModeSwitch.Mode.POS_HOLD);
                 c.setSelectedItem(shown.positions()[i]);
-                c.setToolTipText("What the switch in this position does");
+                c.setToolTipText("Mode in this position");
                 TacticalCombo.install(c);
                 c.addActionListener(e -> modeChoiceChanged());
                 positionChoices.add(c);
@@ -905,7 +905,7 @@ final class DroneSetup {
         private JComponent failsafeChoices() {
             failsafeChoice = ModeSwitch.Failsafe.parse(main.config().getString(ModeSwitch.Failsafe.KEY));
             failsafeCombo = new javax.swing.JComboBox<>(ModeSwitch.Failsafe.values());
-            failsafeCombo.setToolTipText("What Betaflight does when the signal is lost for good (failsafe stage 2)");
+            failsafeCombo.setToolTipText("What Betaflight does on lasting signal loss (failsafe stage 2)");
             failsafeCombo.setSelectedItem(failsafeChoice);
             TacticalCombo.install(failsafeCombo);
             failsafeCombo.addActionListener(e -> failsafeChoiceChanged());
@@ -917,8 +917,8 @@ final class DroneSetup {
         private JComponent armChoices() {
             armAux = ModeSwitch.parseArmAux(main.config().getString(ModeSwitch.ARM_KEY));
             armChoice = auxCombo(MODES_OFF);
-            armChoice.setToolTipText("The switch that arms the drone (up = armed; an ARM already on that switch keeps its own range). "
-                    + "ARM on any other switch is taken off.");
+            armChoice.setToolTipText("ARM switch (up = armed). "
+                    + "ARM on other switches is removed.");
             armChoice.setSelectedIndex(armAux);
             TacticalCombo.install(armChoice);
             armChoice.addActionListener(e -> armChoiceChanged());
@@ -929,8 +929,8 @@ final class DroneSetup {
         private JComponent prearmChoices() {
             prearmAux = ModeSwitch.parsePrearmAux(main.config().getString(ModeSwitch.PREARM_KEY));
             prearmChoice = auxCombo(MODES_OFF);
-            prearmChoice.setToolTipText("A second switch that must be on (up) before ARM arms: a knocked ARM switch alone does nothing. "
-                    + "PREARM on any other switch is taken off.");
+            prearmChoice.setToolTipText("Must be up before ARM arms, so a knocked ARM switch does nothing. "
+                    + "PREARM elsewhere is removed.");
             prearmChoice.setSelectedIndex(prearmAux);
             TacticalCombo.install(prearmChoice);
             prearmChoice.addActionListener(e -> prearmChoiceChanged());
@@ -941,7 +941,7 @@ final class DroneSetup {
         private JComponent rescueChoices() {
             rescueAux = ModeSwitch.parseRescueAux(main.config().getString(ModeSwitch.RESCUE_KEY));
             rescueChoice = auxCombo("None");
-            rescueChoice.setToolTipText("A switch to call GPS rescue yourself (up = rescue); fitted when Betaflight's failsafe is GPS rescue");
+            rescueChoice.setToolTipText("Manual GPS rescue switch (up = rescue); with GPS rescue failsafe");
             rescueChoice.setSelectedIndex(rescueAux);
             TacticalCombo.install(rescueChoice);
             rescueChoice.addActionListener(e -> rescueChoiceChanged());
@@ -1083,7 +1083,7 @@ final class DroneSetup {
             done = false;
             applies = 0;
             nextTry = 0;
-            usb.set(State.PENDING, "Reading Betaflight again" + (gpsYes ? " and looking for the GPS (up to " + GPS_WAIT_MS / 1000 + " s)..." : "..."));
+            usb.set(State.PENDING, "Reading Betaflight" + (gpsYes ? " and GPS (up to " + GPS_WAIT_MS / 1000 + " s)..." : "..."));
         }
 
         /** CONFIRM: every setting on the page (the cell count too) goes to Betaflight now; the rows go green once it is all there. */
@@ -1114,11 +1114,11 @@ final class DroneSetup {
 
         private void checkMotorsNow() {
             if (main.isLinkActive()) {
-                motors.set(State.WARN, "Disconnect from the drone first: the motor test runs over this PC's USB, with the drone on the bench.");
+                motors.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
                 return;
             }
             motorTestOpen = true; // the page's own rounds would fight the motor test for the USB port
-            motors.set(State.PENDING, "The motor test is open. Close it when you're done.");
+            motors.set(State.PENDING, "Motor test open.");
             MotorTestDialog.open(javax.swing.SwingUtilities.getWindowAncestor(motors), main, () -> {
                 motorTestOpen = false;
                 nextTry = System.currentTimeMillis() + 1500; // the motor test lets go of the port first
@@ -1130,21 +1130,21 @@ final class DroneSetup {
         /** CHECK NOW: the orientation check takes the USB port; the page reads again once it is closed. */
         private void checkOrientationNow() {
             if (main.isLinkActive()) {
-                orientation.set(State.WARN, "Disconnect from the drone first: the check runs over this PC's USB, with the drone on the bench.");
+                orientation.set(State.WARN, "DISCONNECT first: runs over USB, on the bench.");
                 return;
             }
             orientationOpen = true;
-            orientation.set(State.PENDING, "The orientation check is open. Close it when you're done.");
+            orientation.set(State.PENDING, "Orientation check open.");
             boolean[] passed = {false};
             OrientationCheckDialog.open(javax.swing.SwingUtilities.getWindowAncestor(orientation), main, chosenPort, () -> {
                 passed[0] = true;
-                orientation.set(State.OK, "Checked: Betaflight sees it the right way round.");
+                orientation.set(State.OK, "Checked: correct.");
             }, () -> {
                 orientationOpen = false;
                 nextTry = System.currentTimeMillis() + 1500; // the check lets go of the port first
                 done = false; // it may have changed the board alignment: read again
                 applies = 0;
-                if (!passed[0]) orientation.set(State.WARN, "Not checked to the end. <b>Check now</b> again before flying.");
+                if (!passed[0]) orientation.set(State.WARN, "Not finished. <b>Check now</b> before flying.");
             });
         }
 
@@ -1213,7 +1213,7 @@ final class DroneSetup {
             int rescue = gpsYes ? rescueAux : 0;
             int arm = armAux;
             int prearm = prearmAux;
-            manualHtml = ("Can't plug the drone into this PC? Make the same settings in Betaflight Configurator: "
+            manualHtml = ("In Betaflight Configurator: "
                     + "<b>Receiver</b> tab > Receiver Mode <b>MSP RX input</b> > Save. "
                     + "<b>CLI</b> tab > <b>set serial_update_rate_hz = 2000</b> (1000 on F411 boards), "
                     + "<b>set force_battery_cell_count = " + cells + "</b> > <b>save</b>."
@@ -1240,7 +1240,7 @@ final class DroneSetup {
             return parts.isEmpty() ? "nothing (acro throughout)" : String.join(", ", parts);
         }
 
-        private static final String PAUSED_TEXT = "Disconnected: the USB port is free, e.g. for Betaflight Configurator. Press <b>Reconnect</b> to carry on.";
+        private static final String PAUSED_TEXT = "USB port free. Press <b>Reconnect</b> to continue.";
 
         /** DISCONNECT / RECONNECT: the rounds stop, so the USB port is free; a round in progress finishes its read first. */
         private void togglePaused() {
@@ -1253,13 +1253,13 @@ final class DroneSetup {
                 done = false;
                 markByHand(false);
                 calibrateCompass.setEnabled(false);
-                usb.set(busy ? State.PENDING : State.INFO, busy ? "Finishing the current read, then the port is free..." : PAUSED_TEXT);
+                usb.set(busy ? State.PENDING : State.INFO, busy ? "Finishing read, then freeing the port..." : PAUSED_TEXT);
                 for (Part p : new Part[]{receiver, stickDelay, battery}) p.set(State.PENDING, "");
             } else {
                 abandoned = false;
                 applies = 0;
                 nextTry = 0;
-                usb.set(State.PENDING, "Looking for it...");
+                usb.set(State.PENDING, "Searching...");
             }
             wizard.update();
         }
@@ -1306,7 +1306,7 @@ final class DroneSetup {
             String chosen = chosenPort;
             List<BetaflightUsb.Port> ports = chosen == null ? all : all.stream().filter(p -> p.systemName().equals(chosen)).toList();
             if (ports.isEmpty()) {
-                return new Read(chosen, chosen + " isn't plugged in - pick another port, or Automatic.", cellTarget, modeTarget,
+                return new Read(chosen, chosen + " not plugged in - pick another port or Automatic.", cellTarget, modeTarget,
                         rescueTarget, failsafeTarget, armTarget, prearmTarget, names, gpsWanted);
             }
             // each port that looks like one, not just the first: a GPS or ESC adapter may come first. Asked over MSP
@@ -1316,8 +1316,8 @@ final class DroneSetup {
                 try (BetaflightUsb fc = BetaflightUsb.open(port)) {
                     String firmware = fc.firmware();
                     if (!firmware.startsWith("BTFL")) {
-                        why = port.systemName() + " runs <b>" + firmwareName(firmware) + "</b>, not Betaflight. DRAUPNE Link needs "
-                                + "Betaflight: flash it with Betaflight Configurator. Nothing was changed.";
+                        why = port.systemName() + " runs <b>" + firmwareName(firmware) + "</b>, not Betaflight. "
+                                + "Flash Betaflight with Betaflight Configurator. Nothing changed.";
                         continue;
                     }
                     return work(fc, port, writeFor, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, names, gpsWanted);
@@ -1334,7 +1334,7 @@ final class DroneSetup {
                 // which board this is, over MSP before anything else: CONFIRM pressed for another one writes nothing here
                 String boardId = boardId(fc);
                 boolean mayApply = writeFor != null && writeFor.equals(boardId);
-                if (writeFor != null && !mayApply) main.logLine("Betaflight: another flight controller than the one confirmed - nothing written.");
+                if (writeFor != null && !mayApply) main.logLine("Betaflight: not the confirmed flight controller - nothing written.");
                 java.util.Set<Integer> modesOffered = null; // over MSP, before the CLI: which modes this board has
                 try {
                     modesOffered = fc.boxIds();
@@ -1380,7 +1380,7 @@ final class DroneSetup {
                 String forced = fc.command("get force_battery_cell_count");
                 List<BetaflightPlan.Change> plan = new java.util.ArrayList<>(BetaflightPlan.plan(rate, version, forced, cellTarget, cellsOk));
                 if (!mspRx) {
-                    plan.add(0, new BetaflightPlan.Change("Receiver: MSP RX input (the phone sends the sticks over MSP), now "
+                    plan.add(0, new BetaflightPlan.Change("Receiver: MSP RX input, now "
                             + receiverNow, List.of()));
                 }
                 // the GPS as answered: its feature, its port, the compass
@@ -1431,7 +1431,7 @@ final class DroneSetup {
                         } else if (!gpsWanted.wanted()) {
                             blocked.put(m, "Needs a GPS: answer <b>Yes</b> under GPS above.");
                         } else if (!gpsOnFc) {
-                            blocked.put(m, "Betaflight's GPS is being turned on; the GPS is looked for once it has restarted.");
+                            blocked.put(m, "Turning GPS on; checked after restart.");
                         } else if (!Boolean.TRUE.equals(gpsFound)) {
                             blocked.put(m, "No GPS found - see the GPS row.");
                         }
@@ -1473,7 +1473,7 @@ final class DroneSetup {
                 if (apply && abandoned) { // the page was left meanwhile: nothing is written behind the pilot's back
                     fc.exitCli();
                     saveModes(aux);
-                    main.logLine("Betaflight: the page was left while reading - nothing written.");
+                    main.logLine("Betaflight: page left while reading - nothing written.");
                 } else {
                     java.nio.file.Path backup = null;
                     String refused = null;
@@ -1485,7 +1485,7 @@ final class DroneSetup {
                         if (!CliWrite.usableBackup(diff)) main.logLine("Betaflight's \"diff all\" didn't come back whole: " + brief(diff));
                         backup = CliWrite.usableBackup(diff) ? backup(diff, version) : null;
                         if (backup == null) {
-                            refused = "No backup of Betaflight's settings could be made (see the log), so nothing was written.";
+                            refused = "Backup failed (see log): nothing written.";
                         } else {
                             List<String> commands = new java.util.ArrayList<>();
                             for (BetaflightPlan.Change c : plan) commands.addAll(c.commands());
@@ -1498,7 +1498,7 @@ final class DroneSetup {
                                 main.logLine("Betaflight: " + plan.stream().map(BetaflightPlan.Change::description).collect(Collectors.joining("; "))
                                         + ". Its settings before: " + backup);
                             } else {
-                                refused = written.stopped() + ". Nothing was saved: the flight controller is as it was.";
+                                refused = written.stopped() + ". Nothing saved: flight controller unchanged.";
                             }
                         }
                         if (!saved) {
@@ -1595,7 +1595,7 @@ final class DroneSetup {
                         + "To go back: paste this into Betaflight Configurator's CLI tab, then type save.\n\n" + diff + "\n");
                 return file;
             } catch (IOException e) {
-                main.logLine("Could not save a backup of Betaflight's settings: " + e.getMessage());
+                main.logLine("Betaflight backup failed: " + e.getMessage());
                 return null;
             }
         }
@@ -1646,8 +1646,8 @@ final class DroneSetup {
                 if (now - restartedAt < RESTART_MS) {
                     usb.set(State.PENDING, "Betaflight restarts...");
                 } else {
-                    usb.set(State.WARN, "Not found yet. Use a USB <b>data</b> cable (some only charge). If Windows doesn't see the drone, "
-                            + "install the STM32 VCP driver (ImpulseRC Driver Fixer) once.");
+                    usb.set(State.WARN, "Not found. Use a USB <b>data</b> cable. Windows doesn't see it? "
+                            + "Install the STM32 VCP driver (ImpulseRC Driver Fixer).");
                 }
                 receiver.set(State.PENDING, "");
                 stickDelay.set(State.PENDING, "");
@@ -1660,8 +1660,8 @@ final class DroneSetup {
                 sameErrorCount = r.error().equals(lastError) ? sameErrorCount + 1 : 1;
                 lastError = r.error();
                 usb.set(State.BAD, r.error() + (sameErrorCount >= SAME_ERROR_LIMIT
-                        ? "<br><b>Unplug and plug the drone's USB in again.</b>"
-                        : "<br>Trying again by itself every few seconds, or press <b>Retry</b>."));
+                        ? "<br><b>Replug the drone's USB.</b>"
+                        : "<br>Retrying, or press <b>Retry</b>."));
                 return;
             }
             lastError = null;
@@ -1680,7 +1680,7 @@ final class DroneSetup {
             if (r.switchesWritten()) switchChanged();
             String usbText = "<b>" + r.port() + "</b>" + (r.version().isEmpty() ? "" : " - " + BetaflightPlan.shortVersion(r.version()))
                     + (r.board().isEmpty() ? "" : " - " + r.board())
-                    + (r.backup() == null ? "" : "<br>Its settings before the change: " + r.backup())
+                    + (r.backup() == null ? "" : "<br>Backup: " + r.backup())
                     + (lastRefused == null ? "" : "<br><b>Nothing written:</b> " + lastRefused);
             usb.set(lastRefused == null ? State.OK : State.WARN, usbText);
             showMeasured(r.battery());
@@ -1692,12 +1692,12 @@ final class DroneSetup {
             if (r.applied()) {
                 applies++;
                 nextTry = now + 4000; // then read again, to check the settings stuck
-                settings.footer("Saved - Betaflight restarts, then the settings are checked...");
+                settings.footer("Saved. Restarting, then checking...");
                 receiver.set(State.PENDING, "");
                 if (r.modes() != null && !r.modes().blocked().isEmpty() && r.modeTarget() != null) {
-                    modeRow.set(State.PENDING, "Betaflight restarts, then the GPS is looked for (up to " + GPS_WAIT_MS / 1000 + " s)...");
+                    modeRow.set(State.PENDING, "Restarting, then GPS check (up to " + GPS_WAIT_MS / 1000 + " s)...");
                 }
-                if (r.gps().wanted()) gps.set(State.PENDING, "Betaflight restarts, then the GPS is looked for...");
+                if (r.gps().wanted()) gps.set(State.PENDING, "Restarting, then GPS check...");
                 stickDelay.set(State.PENDING, "");
                 battery.set(State.PENDING, "");
                 return;
@@ -1730,11 +1730,11 @@ final class DroneSetup {
                 armRow.set(State.WARN, armPlan.armProblem());
             } else if (r.armTarget() > 0 && (r.arm() == null || r.arm().channel() - 3 != r.armTarget())) {
                 armRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE + takenOff(r.replaced())
-                        : "Could not set it - the Modes tab (see <b>By hand</b>).");
+                        : "Not set - use the Modes tab (<b>By hand</b>).");
             } else if (r.arm() == null) {
                 armRow.set(State.WARN, r.armAuxes().size() > 1
-                        ? "On more than one switch in Betaflight - set it on one."
-                        : "On no switch in Betaflight - the drone can't be armed. Choose a switch (AUX1 is usual).");
+                        ? "On several switches - pick one."
+                        : "On no switch - can't arm. Choose one (usually AUX1).");
             } else {
                 armRow.set(okState(), describe(r.arm()) + (r.armTarget() > 0 ? takenOff(lastReplaced) : ""));
             }
@@ -1743,10 +1743,10 @@ final class DroneSetup {
                 prearmRow.set(State.WARN, armPlan.prearmProblem());
             } else if (r.prearmTarget() > 0 && !prearmOnIt) {
                 prearmRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE
-                        : "Could not set it - the Modes tab (see <b>By hand</b>).");
+                        : "Not set - use the Modes tab (<b>By hand</b>).");
             } else if (r.prearmTarget() > 0) {
                 prearmRow.set(r.prearmAuxes().size() > 1 ? State.WARN : okState(), r.prearmAuxes().size() > 1
-                        ? "Set, but PREARM is on more than one switch in Betaflight - set it on one." : setText());
+                        ? "Set, but PREARM is on several switches - pick one." : setText());
             } else if (r.prearmAuxes().isEmpty()) {
                 prearmRow.set(State.INFO, "None: ARM alone arms.");
             } else {
@@ -1761,7 +1761,7 @@ final class DroneSetup {
                     : pendingWrite ? "MSP RX input - now " + r.receiverNow() + ". " + WITH_WRITE
                     : "Could not set it - see <b>By hand</b>.");
             if (r.rate() < 0) {
-                stickDelay.set(State.WARN, "Not in this Betaflight (it came in 4.2) - update Betaflight for the least stick delay.");
+                stickDelay.set(State.WARN, "Needs Betaflight 4.2+ for least stick delay.");
             } else if (r.rate() >= r.target()) {
                 stickDelay.set(okState(), "serial_update_rate_hz " + r.rate() + ".");
             } else if (pendingWrite) {
@@ -1777,7 +1777,7 @@ final class DroneSetup {
             boolean byHandNeeded = !pendingWrite && (!r.msp() || (r.rate() >= 0 && r.rate() < r.target()) || cellsWrong || gpsWrong || modesWrong);
             markByHand(byHandNeeded);
             cleanDone = confirm.confirmed() && r.plan().isEmpty() && !byHandNeeded && lastRefused == null && beeperProblem == null;
-            if (cleanDone) usb.set(State.OK, usbText + "<br><b>Done - you can unplug the drone from the PC.</b>");
+            if (cleanDone) usb.set(State.OK, usbText + "<br><b>Done - unplug the drone.</b>");
         }
 
         /** CONFIRM and its line under the settings: before the press; what is left after the last try. */
@@ -1786,9 +1786,9 @@ final class DroneSetup {
             if (confirm.confirmed()) {
                 settings.footer("");
             } else if (pendingWrite && lastRefused != null) {
-                settings.footer("<b>Nothing was written</b> - " + lastRefused + "<br>Fix it (or change the choice), then <b>Confirm</b> again.");
+                settings.footer("<b>Nothing was written</b> - " + lastRefused + "<br>Fix it, then <b>Confirm</b> again.");
             } else if (pendingWrite) {
-                settings.footer("Set everything on this page, then <b>Confirm</b> writes it to the flight controller (backed up first).");
+                settings.footer("Set everything, then <b>Confirm</b> writes it (backed up first).");
             } else if (r.plan().isEmpty()) {
                 settings.footer("");
             } else {
@@ -1800,7 +1800,7 @@ final class DroneSetup {
         /** The battery line. @return true if the count is not as the pilot's (confirmed) choice */
         private boolean showCells(Read r, boolean pendingWrite) {
             if (r.cells() < 0) {
-                battery.set(State.WARN, "Not in this Betaflight - it counts the cells itself; the OSD corrects a wrong count.");
+                battery.set(State.WARN, "Not in this Betaflight - it counts cells itself.");
                 return false;
             }
             if (!r.cellsConfirmed()) {
@@ -1810,7 +1810,7 @@ final class DroneSetup {
                     syncingSpinner = false;
                 }
                 battery.set(State.INFO, (r.cells() > 0 ? "Betaflight forces <b>" + r.cells() + "S</b> now. " : "Betaflight counts the cells itself. ")
-                        + "Correct? Change it if not.");
+                        + "Correct? Change if not.");
                 return false;
             }
             if (r.cells() == r.cellTarget()) {
@@ -1854,8 +1854,8 @@ final class DroneSetup {
             } else if (Boolean.TRUE.equals(r.gpsFound())) {
                 lines.add("GPS found.");
             } else {
-                lines.add("No GPS answers on " + g.portNow() + ": check its wiring (RX to TX, TX to RX) and power - some boards power it "
-                        + "from the battery only: plug it in (props off), then <b>Read again</b>. No fix is needed.");
+                lines.add("No GPS on " + g.portNow() + ": check wiring (RX-TX, TX-RX) and power. Some need the battery "
+                        + "(props off), then <b>Read again</b>. No fix needed.");
                 worst = State.WARN;
             }
             if (g.compass()) {
@@ -1869,12 +1869,12 @@ final class DroneSetup {
                         wrong = true;
                     }
                 } else if (!g.magFound()) {
-                    lines.add("No compass found: none on the GPS module, or not wired to the board's I2C.");
+                    lines.add("No compass found (none, or not on I2C).");
                     if (rank(State.WARN) > rank(worst)) worst = State.WARN;
                 } else if (g.calibrated()) {
                     lines.add("Compass found and calibrated.");
                 } else {
-                    lines.add("Compass found. <b>Calibrate compass</b> once, before flying with GPS rescue.");
+                    lines.add("Compass found. <b>Calibrate compass</b> before GPS rescue flights.");
                 }
             }
             gps.set(worst, String.join("<br>", lines));
@@ -1895,7 +1895,7 @@ final class DroneSetup {
             }
             if (now == null || !now.equals(f.value)) {
                 failsafeRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? "Now " + (now == null ? "?" : now) + ". " + WITH_WRITE
-                        : "Could not set it - Betaflight Configurator's Failsafe tab.");
+                        : "Not set - use Betaflight Configurator's Failsafe tab.");
                 return !pendingWrite;
             }
             String text = setText() + (Boolean.TRUE.equals(r.gpsFound()) && f == ModeSwitch.Failsafe.GPS_RESCUE ? " GPS found." : "");
@@ -1926,7 +1926,7 @@ final class DroneSetup {
             }
             if (!p.commands().isEmpty()) {
                 rescueRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE
-                        : "Could not set it - GPS RESCUE on AUX" + aux + " 1700-2100 in the Modes tab.");
+                        : "Not set - Modes tab: GPS RESCUE on AUX" + aux + " 1700-2100.");
                 return !pendingWrite;
             }
             StringBuilder text = new StringBuilder(setText());
@@ -1950,7 +1950,7 @@ final class DroneSetup {
             }
             if (!p.isSet()) {
                 modeRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE + takenOff(r.replaced())
-                        : "Could not set it - the Modes tab (see <b>By hand</b>).");
+                        : "Not set - use the Modes tab (<b>By hand</b>).");
                 return !pendingWrite;
             }
             boolean partly = !p.blocked().isEmpty() || !p.missing().isEmpty();
@@ -1963,17 +1963,17 @@ final class DroneSetup {
             }
             if (r.rescueNote() != null) text.append("<br>").append(r.rescueNote());
             for (ModeSwitch.Mode missing : p.missing()) {
-                text.append("<br><b>").append(missing.title).append("</b> isn't offered by this Betaflight (")
+                text.append("<br><b>").append(missing.title).append("</b> not in this Betaflight (")
                         .append(missing.detail).append("): that position flies acro.");
             }
             if (!p.elsewhere().isEmpty()) {
-                text.append("<br>Also in Betaflight's Modes, left as they are: ").append(String.join(", ", p.elsewhere())).append('.');
+                text.append("<br>Other modes, unchanged: ").append(String.join(", ", p.elsewhere())).append('.');
             }
             // a mode on two switches that nothing here takes off (the switch left as it is, or the write refused)
             boolean doubled = !p.doubled().isEmpty() && p.commands().isEmpty();
             if (doubled) {
-                text.append("<br>On more than one switch in Betaflight: ").append(String.join("; ", p.doubled()))
-                        .append(" - set each on one (choose a switch above, or the Modes tab).");
+                text.append("<br>On several switches: ").append(String.join("; ", p.doubled()))
+                        .append(" - put each on one.");
             }
             boolean warn = !p.missing().isEmpty() || !p.blocked().isEmpty() || doubled;
             modeRow.set(warn ? State.WARN : okState(), text.toString());
@@ -1982,16 +1982,16 @@ final class DroneSetup {
 
         @Override
         String status() {
-            if (paused) return busy ? "Finishing the current read, then the port is free..." : "Disconnected from the USB port - press Reconnect to carry on.";
+            if (paused) return busy ? "Finishing read, then freeing the port..." : "USB port free - press Reconnect.";
             if (busy && found) return "Reading Betaflight...";
             if (done) {
-                if (cleanDone) return "Betaflight is set up - you can unplug the drone from the PC.";
-                if (!confirm.armed() && !confirm.confirmed()) return "Set everything above, then press Confirm to write it to the flight controller (or Next to leave Betaflight as it is).";
+                if (cleanDone) return "Betaflight set up - unplug the drone.";
+                if (!confirm.armed() && !confirm.confirmed()) return "Set everything, then Confirm (or Next to leave Betaflight as is).";
                 wizard.setStatusColor(Theme.WARN);
                 return "Some settings could not be set - see By hand";
             }
-            if (!found) return "Waiting for the flight controller (or press Next and use the settings by hand).";
-            if (failed) return "Waiting for the flight controller - close or Disconnect Betaflight Configurator, then Retry.";
+            if (!found) return "Waiting for the flight controller (or Next, and set it by hand).";
+            if (failed) return "Waiting - close Betaflight Configurator, then Retry.";
             return "Setting up Betaflight...";
         }
 

@@ -116,33 +116,33 @@ public class CalibrationWizard {
         Arrays.fill(min, Float.MAX_VALUE);
         Arrays.fill(max, -Float.MAX_VALUE);
         steps.add(new Step(StepKind.RANGE, -1, Direction.NONE, "Move all sticks to their limits",
-                "Rotate both sticks in full circles a few times, pushing firmly into every corner. However far they go is their end (1000 / 2000)."));
+                "Circle both sticks a few times, firmly into every corner."));
         steps.add(new Step(StepKind.CENTER, -1, Direction.NONE, "Center the sticks",
-                "Put all four sticks in the center - the throttle too - and take your thumbs off. This center is what the "
-                        + "flight controller gets as the middle (1500). Then press Next."));
+                "All sticks to the center, throttle too. Thumbs off. "
+                        + "Then press Next."));
         steps.add(new Step(StepKind.ASSIGN, 3, Direction.UP, "Throttle up",
-                "Push the THROTTLE stick fully UP and hold it there."));
+                "THROTTLE fully UP and hold."));
         steps.add(new Step(StepKind.ASSIGN, 2, Direction.RIGHT, "Yaw right",
-                "Push the YAW stick fully RIGHT and hold it there."));
+                "YAW fully RIGHT and hold."));
         steps.add(new Step(StepKind.ASSIGN, 1, Direction.UP, "Pitch up",
-                "Push the PITCH stick fully UP (forward) and hold it there."));
+                "PITCH fully UP (forward) and hold."));
         steps.add(new Step(StepKind.ASSIGN, 0, Direction.RIGHT, "Roll right",
-                "Push the ROLL stick fully RIGHT and hold it there."));
+                "ROLL fully RIGHT and hold."));
         for (int i = 0; i < switchSteps; i++) {
             de.droiddrone.pc.setup.ModeSwitch.Purpose p = i < purposes.length ? purposes[i] : null;
             if (p != null) {
                 steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " - " + p.title(), p.hint()));
             } else if (i == 0 && purposes.length == 0) {
                 steps.add(new Step(StepKind.SWITCH, 4, Direction.NONE, "AUX1 switch",
-                        "Flip the switch you use to ARM to its ON position. Press Skip if you don't need it."));
+                        "Flip your ARM switch ON. Skip if unused."));
             } else {
                 // nothing chosen for it in Drone setup: a spare, for whatever the pilot sets in Betaflight later
                 steps.add(new Step(StepKind.SWITCH, 4 + i, Direction.NONE, "AUX" + (i + 1) + " - reserve",
-                        "Nothing is set for AUX" + (i + 1) + " yet. Flip a spare switch to ON to keep it for later, or press Skip."));
+                        "Nothing is set for AUX" + (i + 1) + ". Flip a spare switch ON, or Skip."));
             }
         }
         steps.add(new Step(StepKind.SUMMARY, -1, Direction.NONE, "Check and save",
-                "Move every stick and switch and check its channel follows. Tick Invert for anything backwards, then press Finish."));
+                "Move every stick and switch; check each channel follows. Invert anything backwards, then Finish."));
     }
 
     /** How many AUX switches are asked for. */
