@@ -887,21 +887,18 @@ public class MainWindow extends JFrame {
         });
         connectButton.setFocusable(false); // SPACE on a focused DISCONNECT must never end a flight
         link.add(connectButton, c);
-        link.add(powerPanel(), c);
+        link.add(folded(powerPanel(), 0), c);
         // the link dropped while the drone was armed: one click opens FIND DRONE and copies the MGRS to send on
         lostDroneButton.setBackground(Theme.BAD);
         lostDroneButton.setToolTipText("The link dropped while armed: the last known position in FIND DRONE, its MGRS copied to the clipboard");
-        lostDroneButton.setVisible(false);
         lostDroneButton.addActionListener(e -> lostDrone());
-        link.add(lostDroneButton, c);
+        link.add(folded(lostDroneButton, 0), c);
         // 1.0.50: a drone lost armed holds this PC's downloads, previews and clips for 10 min - the pilot who knows it
         // is down ends that here (never while a link here says armed)
         itsDownButton.setToolTipText("A drone was lost armed: map tiles, overwatch previews and clips wait for 10 min in case it flies. Press once you know it is down");
-        itsDownButton.setVisible(false);
         itsDownButton.addActionListener(e -> itsDownResume(this));
-        link.add(itsDownButton, c);
-        itsDownLine.setVisible(false);
-        link.add(itsDownLine, c);
+        link.add(folded(itsDownButton, 0), c);
+        link.add(folded(itsDownLine, 0), c);
 
         // what matters in flight stays; the rest folds away with the fields
         JPanel stats = new JPanel(new GridLayout(3, 2, 8, 6));
@@ -938,17 +935,13 @@ public class MainWindow extends JFrame {
         link.add(mini, c);
         c.weighty = 0;
         c.fill = GridBagConstraints.HORIZONTAL;
-        phoneWarning.setVisible(false);
-        c.insets = new Insets(8, 0, 0, 0);
-        link.add(phoneWarning, c);
-        phoneAppWarning.setVisible(false);
-        link.add(phoneAppWarning, c);
+        c.insets = new Insets(0, 0, 0, 0); // the gaps go in the folds, so a folded one leaves none
+        link.add(folded(phoneWarning, 8), c);
+        link.add(folded(phoneAppWarning, 8), c);
         updatePhoneButton.setToolTipText("The phone downloads the new phone app, checks it and installs it, over its own internet - only while the drone is disarmed. The link drops for a moment and comes back");
         updatePhoneButton.setFocusable(false);
-        updatePhoneButton.setVisible(false);
         updatePhoneButton.addActionListener(e -> askRemoteUpdate());
-        c.insets = new Insets(6, 0, 0, 0);
-        link.add(updatePhoneButton, c);
+        link.add(folded(updatePhoneButton, 6), c);
         column.add(link, BorderLayout.CENTER);
 
         JPanel logCard = Theme.card(new BorderLayout(0, 8));
@@ -970,6 +963,38 @@ public class MainWindow extends JFrame {
         column.add(logCard, BorderLayout.SOUTH);
         this.logCard = logCard; // the boot animation grows a piece of the mark into it
         return column;
+    }
+
+    /**
+     * 1.0.50 (the pilot: "animation between all button and box transitions"): the LINK card's parts that come and go
+     * slide open and shut (Fold) instead of jumping. folded() wraps one, its gap above inside the fold; show() and
+     * shown() stand in for setVisible() and isVisible().
+     */
+    private final Map<JComponent, Fold> folds = new java.util.HashMap<>();
+
+    private Fold folded(JComponent c, int gapAbove) {
+        JComponent content = c;
+        if (gapAbove > 0) {
+            JPanel gap = new JPanel(new BorderLayout());
+            gap.setOpaque(false);
+            gap.setBorder(BorderFactory.createEmptyBorder(gapAbove, 0, 0, 0));
+            gap.add(c, BorderLayout.CENTER);
+            content = gap;
+        }
+        Fold f = new Fold(content, false);
+        folds.put(c, f);
+        return f;
+    }
+
+    private void show(JComponent c, boolean on) {
+        Fold f = folds.get(c);
+        if (f == null) c.setVisible(on);
+        else f.setShown(on, true);
+    }
+
+    private boolean shown(JComponent c) {
+        Fold f = folds.get(c);
+        return f == null ? c.isVisible() : f.isShown();
     }
 
     /** A small "COPY" next to the log's title: the whole log to the clipboard, e.g. to send it to someone. */
@@ -1591,6 +1616,7 @@ public class MainWindow extends JFrame {
             }
         }
         service.setInputListener(null);
+        standbyAfterWake = null; // a WAKE from the map not finished: the next CONNECT is an ordinary one
         remoteUpdateAskedAt = 0; // a remote update in flight: the phone goes on with it, this PC stops following it
         updatePhoneButton.setText("Update phone app");
         updatePhoneButton.setEnabled(true);
@@ -1598,12 +1624,12 @@ public class MainWindow extends JFrame {
         powerWanted = ControlLink.POWER_NORMAL;
         phoneAsleep = false;
         phoneOverwatching = false;
-        if (powerRow != null) powerRow.setVisible(false);
+        if (powerRow != null) show(powerRow, false);
         sampleLinkLog();
         linkLogTimer.stop();
         if (liveTrack != null) liveTrack.close(pins.list()); // stays for FIND DRONE and the map
         keepFlight(liveTrack, liveTrackName); // remembered; shown as the live one until the next connection
-        lostDroneButton.setVisible(false);
+        show(lostDroneButton, false);
         if (connection != null) {
             de.droiddrone.pc.PossiblyFlying.pc().detach(connection.getLink()); // armed at the end: the flag stays for the lost-drone window
             connection.close();
@@ -1888,9 +1914,9 @@ public class MainWindow extends JFrame {
         boolean show = flag.resumable();
         String why = show ? flag.reason() : null;
         if (why != null) itsDownLine.setText("<html><div style='width:220px'>Downloads, overwatch previews and clips wait: " + why + ".</div></html>");
-        if (itsDownButton.isVisible() != show) {
-            itsDownButton.setVisible(show);
-            itsDownLine.setVisible(show);
+        if (shown(itsDownButton) != show) {
+            show(itsDownButton, show);
+            show(itsDownLine, show);
             itsDownButton.getParent().revalidate();
         }
     }
@@ -1926,9 +1952,9 @@ public class MainWindow extends JFrame {
         if (st != null && st.armed() && now - st.receivedAt() < 2000) lastArmedAt = now;
         boolean dropped = !link.isSpectator() && (state != ControlLink.State.READY || link.isFcLost() || link.isLinkStalled());
         boolean show = dropped && lastArmedAt != 0 && now - lastArmedAt < LOST_DRONE_WINDOW_MS && track != null && !track.isEmpty();
-        if (show && !lostDroneButton.isVisible()) logLine("The link dropped while the drone was armed: LOST DRONE opens FIND DRONE with its last known position.");
-        if (lostDroneButton.isVisible() != show) {
-            lostDroneButton.setVisible(show);
+        if (show && !shown(lostDroneButton)) logLine("The link dropped while the drone was armed: LOST DRONE opens FIND DRONE with its last known position.");
+        if (shown(lostDroneButton) != show) {
+            show(lostDroneButton, show);
             lostDroneButton.getParent().revalidate();
         }
     }
@@ -2716,8 +2742,8 @@ public class MainWindow extends JFrame {
         }
         boolean warn = s != null && s.isProblem();
         if (warn) phoneWarning.setHtml(phoneProblem(s));
-        if (phoneWarning.isVisible() != warn) {
-            phoneWarning.setVisible(warn);
+        if (shown(phoneWarning) != warn) {
+            show(phoneWarning, warn);
             phoneWarning.getParent().revalidate();
         }
     }
@@ -2921,7 +2947,7 @@ public class MainWindow extends JFrame {
         sleepButtons.add(overwatchButton);
         sleepFold = new Fold(sleepButtons, true); // folds away while the drone is armed, and back when it is disarmed
         powerRow.add(sleepFold, c);
-        powerRow.add(wakeButton, c);
+        powerRow.add(folded(wakeButton, 0), c); // 1.0.50: only while the phone sleeps, overwatches or stands by
         JPanel interval = new JPanel(new BorderLayout(8, 0));
         interval.setOpaque(false);
         interval.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
@@ -2940,7 +2966,6 @@ public class MainWindow extends JFrame {
         interval.add(checkIntervalCombo, BorderLayout.CENTER);
         powerRow.add(interval, c);
         powerRow.add(powerStatusText, c);
-        powerRow.setVisible(false);
         return powerRow;
     }
 
@@ -3196,12 +3221,8 @@ public class MainWindow extends JFrame {
                     + "Land it and DISCONNECT, then CONNECT to " + drone + ".", "Overwatch", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        // 1.0.49 (H4): a click on an alert card ends what this PC does now, so it asks first
-        String[] options = {"Connect to " + drone, "Cancel"};
-        int choice = JOptionPane.showOptionDialog(this, "Wake " + drone + " and connect to it as its pilot?"
-                        + (same ? "" : c != null ? "\nThis PC's link now (" + (c.getLink().isSpectator() ? "watching " : "") + flown + ") is closed first." : ""),
-                "Overwatch", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[1]);
-        if (choice != 0) return;
+        // 1.0.50 (the pilot): no confirm - CONNECT on the card connects (the 1.0.49 question is gone); a PC that may
+        // fly another drone is still refused above
         overwatch.connect(drone);
         if (same) {
             wakePhone(); // this PC's link to it waits dormant: the Connects go out again now
@@ -3359,11 +3380,12 @@ public class MainWindow extends JFrame {
             clearAsleep(a.ip());
             return;
         }
-        if (!powerRow.isVisible()) powerRow.setVisible(true);
+        if (!shown(powerRow)) show(powerRow, true);
         standbyButton.setEnabled(false);
         deepSleepButton.setEnabled(false);
         checkIntervalCombo.setEnabled(false);
         wakeButton.setEnabled(true);
+        show(wakeButton, true);
         String alive = "";
         if (h != null) {
             long ago = (now - h.receivedAt()) / 1000;
@@ -3373,6 +3395,34 @@ public class MainWindow extends JFrame {
         powerStatus.setText("<html>" + a.name() + " is in " + a.mode() + ". " + alive + "Next check in " + clock(nextCheck(a, now) - now)
                 + ". WAKE connects and brings it back then.</html>");
     }
+
+    /**
+     * Right-click on a sleeping or overwatching drone on the map: WAKE (1.0.50, the pilot) - this PC connects to it as
+     * its pilot (the link answers its next check "wake"), then asks STANDBY as soon as it is up, and STANDBY ends the
+     * connection by itself: the phone ends in standby, back in about 2 s at the next CONNECT.
+     */
+    private void wakeToStandby(String drone) {
+        if (connection != null || observation != null) {
+            JOptionPane.showMessageDialog(this, "This PC is connected now. DISCONNECT first, then wake " + drone + " from the map.",
+                    "Wake", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        String ip = names.ipOf(drone);
+        if (ip == null) return;
+        if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) roleCombo.setSelectedItem(ROLE_PILOT);
+        save(Map.of(Names.PHONE_NAME_KEY, drone));
+        standbyAfterWake = drone;
+        logLine("WAKE " + drone + ": it wakes at its next check, then goes to STANDBY.");
+        wakeOnConnect = true;
+        try {
+            connect();
+        } finally {
+            wakeOnConnect = false;
+        }
+    }
+
+    /** The drone woken from the map, to be put in STANDBY once its link is up; null: none. */
+    private String standbyAfterWake;
 
     /** WAKE with no link: connect to the sleeping phone as its pilot; the link answers its next check "wake". */
     private void wakeAsleep() {
@@ -3677,7 +3727,11 @@ public class MainWindow extends JFrame {
             drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot));
         }
         miniMap.setNetDrones(drones, this::connectFromMap);
-        if (mapWindow != null) mapWindow.map().setNetDrones(drones, this::connectFromMap);
+        miniMap.setOnDroneWake(this::wakeToStandby);
+        if (mapWindow != null) {
+            mapWindow.map().setNetDrones(drones, this::connectFromMap);
+            mapWindow.map().setOnDroneWake(this::wakeToStandby);
+        }
         if (!asleepPhones.isEmpty() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
     }
 
@@ -3744,7 +3798,7 @@ public class MainWindow extends JFrame {
         FcTelemetry.PhonePower pp = link.getTelemetry().getPhonePower();
         int reported = pp == null ? -1 : pp.mode();
         boolean ready = link.getState() == ControlLink.State.READY;
-        if (!powerRow.isVisible()) powerRow.setVisible(true);
+        if (!shown(powerRow)) show(powerRow, true);
         sleepFold.setShown(!fcArmedNow(), true); // armed: the two sleep buttons slide away; disarmed: they slide back
         if (powerWanted != ControlLink.POWER_NORMAL && fcArmedNow()) {
             powerWanted = ControlLink.POWER_NORMAL;
@@ -3809,8 +3863,15 @@ public class MainWindow extends JFrame {
                 deepSleepButton.setEnabled(false);
                 overwatchButton.setEnabled(false);
                 wakeButton.setEnabled(link.isDormant());
+                show(wakeButton, true); // it sleeps: WAKE is the way back
                 checkIntervalCombo.setEnabled(false);
             }
+            return;
+        }
+        if (standbyAfterWake != null && ready && powerWanted == ControlLink.POWER_NORMAL && reported == ControlLink.POWER_NORMAL
+                && standbyAfterWake.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) && !link.isSpectator()) {
+            standbyAfterWake = null; // woken from the map: now to STANDBY, which disconnects by itself
+            askPower(ControlLink.POWER_STANDBY);
             return;
         }
         if (ready && powerWanted != reported) {
@@ -3856,6 +3917,7 @@ public class MainWindow extends JFrame {
         deepSleepButton.setEnabled(idle && !fcArmedNow());
         overwatchButton.setEnabled(idle && !fcArmedNow());
         wakeButton.setEnabled(powerWanted != ControlLink.POWER_NORMAL || reported > 0);
+        show(wakeButton, powerWanted != ControlLink.POWER_NORMAL || reported > 0);
         checkIntervalCombo.setEnabled(idle);
     }
 
@@ -3891,7 +3953,7 @@ public class MainWindow extends JFrame {
         if (connection == null) {
             videoView.setIdleText("Not connected");
             if (asleepChosen() != null && !tourPowerDemo) refreshAsleep();
-            else if (powerRow != null && powerRow.isVisible() && !tourPowerDemo) powerRow.setVisible(false);
+            else if (powerRow != null && shown(powerRow) && !tourPowerDemo) show(powerRow, false);
             if (observation == null) setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED); // observing: refreshObservation's
             pingValue.setText("-");
             fcValue.setText("-");
@@ -4024,14 +4086,14 @@ public class MainWindow extends JFrame {
                         + ", this PC brings " + newest + ". Update it with SETUP > Phone setup.");
             }
         }
-        if (phoneAppWarning.isVisible() != old) {
-            phoneAppWarning.setVisible(old);
+        if (shown(phoneAppWarning) != old) {
+            show(phoneAppWarning, old);
             phoneAppWarning.getParent().revalidate();
         }
         boolean pilot = connection != null && !connection.getLink().isSpectator();
         boolean offer = (old && pilot) || remoteUpdateAskedAt != 0;
-        if (updatePhoneButton.isVisible() != offer) {
-            updatePhoneButton.setVisible(offer);
+        if (shown(updatePhoneButton) != offer) {
+            show(updatePhoneButton, offer);
             updatePhoneButton.getParent().revalidate();
         }
         if (t != null && pilot) refreshRemoteUpdate(t, version);
@@ -4124,8 +4186,8 @@ public class MainWindow extends JFrame {
         updatePhoneButton.setToolTipText(text);
         updatePhoneButton.setEnabled(over);
         phoneAppWarning.setHtml(text);
-        if (!phoneAppWarning.isVisible()) {
-            phoneAppWarning.setVisible(true);
+        if (!shown(phoneAppWarning)) {
+            show(phoneAppWarning, true);
             phoneAppWarning.getParent().revalidate();
         }
         if (over) {
@@ -4193,19 +4255,21 @@ public class MainWindow extends JFrame {
             return;
         }
         tourPowerDemo = on;
-        powerRow.setVisible(on);
+        show(powerRow, on);
         if (on) {
             sleepFold.setShown(true, false);
             standbyButton.setEnabled(true);
             deepSleepButton.setEnabled(true);
             overwatchButton.setEnabled(true);
             wakeButton.setEnabled(false);
+            show(wakeButton, true); // the tour shows every button
             powerStatus.setText("A demo while nothing is connected: press STANDBY, DEEP SLEEP, OVERWATCH or WAKE to read what the phone would do.");
         } else {
             standbyButton.setEnabled(true);
             deepSleepButton.setEnabled(true);
             overwatchButton.setEnabled(true);
             wakeButton.setEnabled(true);
+            show(wakeButton, false);
             powerStatus.setText(" ");
         }
         linkCard.revalidate();
@@ -4219,6 +4283,7 @@ public class MainWindow extends JFrame {
         deepSleepButton.setEnabled(mode == ControlLink.POWER_NORMAL);
         overwatchButton.setEnabled(mode == ControlLink.POWER_NORMAL);
         wakeButton.setEnabled(mode != ControlLink.POWER_NORMAL);
+        show(wakeButton, true); // the tour's demo shows every button
         powerStatus.setText(switch (mode) {
             case ControlLink.POWER_OVERWATCH -> "<html>OVERWATCH - the phone would sleep like DEEP SLEEP but keep its camera and the motion "
                     + "detection on: when something moves it calls this PC - the map window shows where, a live picture, CONNECT and DISMISS - "

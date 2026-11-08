@@ -134,6 +134,13 @@ class MapView extends JComponent {
         repaint();
     }
 
+    /** Right-click WAKE on a sleeping drone (1.0.50): it wakes at its next check and goes to STANDBY. */
+    private Consumer<String> onDroneWake;
+
+    void setOnDroneWake(Consumer<String> onWake) {
+        onDroneWake = onWake;
+    }
+
     void setNetDrones(List<NetDrone> drones, java.util.function.BiConsumer<String, Boolean> onConnect) {
         netDrones = drones == null ? List.of() : List.copyOf(drones);
         onDroneConnect = onConnect;
@@ -982,6 +989,13 @@ class MapView extends JComponent {
                 watch.setEnabled(drone.pilot() != null);
                 watch.addActionListener(e -> onDroneConnect.accept(drone.name(), true));
                 menu.add(watch);
+            }
+            boolean sleeps = drone.kind() == Kind.ASLEEP && !drone.state().contains("STANDBY") || drone.kind() == Kind.OVERWATCH
+                    || drone.kind() == Kind.UNKNOWN && drone.state().contains("CHECK-IN");
+            if (sleeps && onDroneWake != null) { // 1.0.50: wake it (at its next check), and it goes to STANDBY by itself
+                JMenuItem wake = new JMenuItem("Wake " + drone.name() + " (then STANDBY)");
+                wake.addActionListener(e -> onDroneWake.accept(drone.name()));
+                menu.add(wake);
             }
             JMenuItem fly = new JMenuItem(drone.flown() ? "Connect to " + drone.name() + " - another PC flies it, so this one watches"
                     : "Connect to " + drone.name() + " and fly it");
