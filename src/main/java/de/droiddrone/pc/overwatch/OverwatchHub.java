@@ -128,14 +128,26 @@ public final class OverwatchHub implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        boolean wasRunning = running;
-        running = false;
-        if (thread != null) thread.interrupt();
-        thread = null;
-        if (!wasRunning) cleanUp(); // no thread to do it (tests)
-        if (socket != null) socket.close();
-        socket = null;
+    public void close() {
+        Thread t;
+        synchronized (this) {
+            boolean wasRunning = running;
+            running = false;
+            t = thread;
+            if (t != null) t.interrupt();
+            thread = null;
+            if (!wasRunning) cleanUp(); // no thread to do it (tests)
+            if (socket != null) socket.close();
+            socket = null;
+        }
+        // the thread's cleanUp closes the clip files: wait for it (outside the lock it may need), 1 s at most
+        if (t != null && t != Thread.currentThread()) {
+            try {
+                t.join(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /** The drone was put to overwatch with this token (and stood like this). Kept until {@link #forget}. */
