@@ -62,8 +62,8 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 
 <table>
 <tr>
-<td width="50%"><img src="docs/images/calibration-radio.png" alt="Radio calibration: the 3D radio shows pitch up"></td>
-<td width="50%"><img src="docs/images/orientation-drone.png" alt="Orientation check: the 3D FPV drone"></td>
+<td width="50%"><img src="docs/images/calibration-radio.png" alt="Radio calibration: the PITCH UP step"></td>
+<td width="50%"><img src="docs/images/orientation-drone.png" alt="Orientation check: lift the nose"></td>
 </tr>
 </table>
 
