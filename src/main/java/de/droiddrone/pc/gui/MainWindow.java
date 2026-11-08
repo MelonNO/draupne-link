@@ -855,14 +855,12 @@ public class MainWindow extends JFrame {
         chooseDronesButton.addActionListener(e -> pickDrones());
         chooseDronesButton.setVisible(false);
         fields.add(chooseDronesButton, c);
-        c.insets = new Insets(0, 0, 8, 0);
-        phoneHint.setPreferredSize(new Dimension(300, 36));
-        phoneHint.setVerticalAlignment(SwingConstants.TOP);
-        fields.add(phoneHint, c);
+        // 1.0.50 (the pilot): no hint line under the PHONE list - it said what the list says (phoneHint is kept, unshown)
         c.gridwidth = 2;
         c.gridy = GridBagConstraints.RELATIVE;
-        c.insets = new Insets(0, 0, 6, 0);
+        c.insets = new Insets(10, 0, 6, 0); // the gap the hint line left
         fields.add(Theme.label("CONNECT AS", Theme.headingFont(11f), Theme.MUTED), c);
+        c.insets = new Insets(0, 0, 6, 0);
         roleCombo.setSelectedItem(savedRole());
         roleCombo.setToolTipText("<html>Pilot flies the drone. Spectator only watches another PC's flight (needs Allow spectators on that PC).<br>"
                 + "Observation watches up to six idle drones at once - pictures, sound, the map - and CONNECT on one flies it.</html>");
@@ -2971,7 +2969,7 @@ public class MainWindow extends JFrame {
         });
         interval.add(checkIntervalCombo, BorderLayout.CENTER);
         powerRow.add(interval, c);
-        powerRow.add(powerStatusText, c);
+        // 1.0.50 (the pilot): no status text under CHECK EVERY (powerStatus still feeds the log and tooltips where used)
         return powerRow;
     }
 

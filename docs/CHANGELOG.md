@@ -22,6 +22,7 @@ With phone app DRAUPNE Flight 2.3.0-pc.39 (sound in the air).
 - **LAST KNOWN goes once the drone is heard of again**: an overwatch alert, a sleep check-in or its phone's position after the track's last point - its newer sign (or the alert) shows instead.
 - **OBSERVATION: a drone whose phone sees something move stands out on the map** - a red ring (pulsing) round its number and MOTION beside it, while its tile shows the boxes.
 - OBSERVATION: a tile's MUTE, volume and CONNECT keep their place on the right; the name and status line give way (cut with "...") instead of pushing them off a narrow tile.
+- The LINK card is quieter: no hint line under the PHONE list and no status text under CHECK EVERY.
 - **WAKE shows only while the phone sleeps, overwatches or stands by** (connected and awake it is hidden).
 - **Parts of the LINK card slide open and shut** instead of jumping: the power row, WAKE, the phone and phone-app warnings, UPDATE PHONE APP, LOST DRONE and IT'S DOWN - RESUME.
 - **CONNECT on an overwatch alert connects at once** - no confirm box (a PC that may still fly another drone is still refused).
