@@ -195,8 +195,30 @@ final class VirtualOverwatch {
             byte[] jpeg = jpeg(analysis);
             if (jpeg != null) preRoll.add(now, jpeg);
         }
+        if (report != null) sendBoxes(report, now);
         if (report == null || report.boxes.isEmpty()) return;
         onDetection(report.boxes.get(0), report.night(), report.hfovDeg, now);
+    }
+
+    /** When the boxes last went with the preview; whether that was none (an empty set goes once). As the phone (pc.40). */
+    private long boxesSentAt;
+    private boolean boxesEmpty = true;
+
+    /** The detector's boxes now, with the live preview: the PC's card box follows the thing (UNIT_BOXES). */
+    private void sendBoxes(MotionRecord.Report report, long now) {
+        boolean previewing;
+        synchronized (lock) {
+            previewing = event.isActive() && previewWantedAt >= 0 && now - previewWantedAt < OverwatchProtocol.PREVIEW_FRESH_MS
+                    && !event.isSilenced(now);
+        }
+        if (!previewing) return;
+        boolean none = report.boxes.isEmpty();
+        if (none && boxesEmpty || now - boxesSentAt < 250 && !(none && !boxesEmpty)) return;
+        boxesSentAt = now;
+        boxesEmpty = none;
+        List<float[]> boxes = new java.util.ArrayList<>();
+        for (MotionRecord.Box b : report.boxes) boxes.add(new float[]{b.x, b.y, b.w, b.h, b.light() ? 1 : 0});
+        sendUnit(OverwatchProtocol.UNIT_BOXES, OverwatchProtocol.boxesUnit(System.currentTimeMillis(), boxes));
     }
 
     /** The detector found something that travels: onPicture is the only way here. */

@@ -197,6 +197,11 @@ final class Overwatch {
     private List<PreRoll.Frame> eventPreRoll;
     private volatile long previewWantedAt = -1;
     private volatile boolean previewing;
+    /** When the detector's boxes last went with the preview (the analysis thread's; BOXES_EVERY_MS apart). */
+    private long boxesSentAt;
+    /** The last boxes sent were none: an empty set goes once, then nothing until something is seen again. */
+    private boolean boxesEmpty = true;
+    private static final long BOXES_EVERY_MS = 250;
     private OverwatchRecorder recorder;
     /** pc.38: the segment being written, and the next one while a cut waits for its key frame. */
     private ClipStore.Clip recordingClip, nextClip;
@@ -353,12 +358,26 @@ final class Overwatch {
             byte[] jpeg = jpeg(y, u, v, w, h);
             if (jpeg != null) preRoll.add(wallMs, jpeg);
         }
+        if (previewing && r != null) sendBoxes(r, wallMs);
         if (r == null || r.detections.isEmpty()) return;
         MotionRecord.Report report = MotionRecord.of(MotionRecord.FLAG_ACTIVE | (r.night ? MotionRecord.FLAG_NIGHT : 0), MotionWatch.fieldOfView(), r);
         if (report.boxes.isEmpty()) return;
         final MotionRecord.Box box = report.boxes.get(0);
         final boolean night = r.night;
         worker.execute(() -> onDetection(box, night, report.hfovDeg));
+    }
+
+    /** The detector's boxes now, with the live preview (pc.40): the PC's card box follows the thing. */
+    private void sendBoxes(MotionDetector.Result r, long wallMs) {
+        boolean none = r.detections.isEmpty();
+        if (none && boxesEmpty || wallMs - boxesSentAt < BOXES_EVERY_MS && !(none && !boxesEmpty)) return;
+        boxesSentAt = wallMs;
+        boxesEmpty = none;
+        final java.util.List<float[]> boxes = new java.util.ArrayList<>();
+        for (MotionDetector.Detection d : r.detections) boxes.add(new float[]{d.x, d.y, d.w, d.h, d.light ? 1 : 0});
+        worker.execute(() -> {
+            if (previewing) sendUnit(OverwatchProtocol.UNIT_BOXES, OverwatchProtocol.boxesUnit(wallMs, boxes));
+        });
     }
 
     /** I420 to NV21 to a small JPEG (Android's own encoder): 5-12 KB, a few ms on a background thread. */

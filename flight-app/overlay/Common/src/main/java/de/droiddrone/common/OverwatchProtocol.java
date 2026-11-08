@@ -44,7 +44,8 @@ import java.util.List;
  * (1.0.49: then {@code [startedAt i64]}, the INFO's - which clip of the event the PC has),
  * {@link #CMD_STATUS_ACK}, {@link #CMD_PREROLL} (the pre-roll again).</li>
  * <li>{@link #PREVIEW} phone to PC: {@code [event u16][unit u16][type u8][total u32][offset u32][bytes]} - one
- * fragment of a unit: a pre-roll JPEG ({@code [capturedAt i64][jpeg]}), the H.264 config, a key frame or a frame.</li>
+ * fragment of a unit: a pre-roll JPEG ({@code [capturedAt i64][jpeg]}), the H.264 config, a key frame or a frame;
+ * pc.40: also the detector's boxes now ({@link #UNIT_BOXES}).</li>
  * <li>{@link #CLIP} phone to PC: {@code [event u16][type u8]...} - INFO {@code [size u32][sha256 32 bytes][durationMs
  * u32][startedAt i64][flags u8: bit 0 sound][width u16][height u16]} (pc.38: then {@code [part u16][eventStartedAt
  * i64]} - an event records in segments, each a clip of its own with its own startedAt), CHUNK {@code [offset u32][bytes]}, ENDED
@@ -64,6 +65,15 @@ public final class OverwatchProtocol {
     public static final int CMD_ACK = 1, CMD_PREVIEW = 2, CMD_DISMISS = 3, CMD_CONNECT = 4, CMD_ENDED_ACK = 5,
             CMD_CLIP_GET = 6, CMD_CLIP_DONE = 7, CMD_STATUS_ACK = 8, CMD_PREROLL = 9;
     public static final int UNIT_PREROLL = 0, UNIT_CONFIG = 1, UNIT_KEY_FRAME = 2, UNIT_FRAME = 3;
+    /**
+     * pc.40 (DRAUPNE Link 1.0.52): the detector's boxes now, sent with the live preview a few times a second - the
+     * card's box follows the thing (it drew the alert's box over the live picture, where the thing was at the alert).
+     * {@code [capturedAt i64 wall ms][n u8][n x (x, y, w, h u16 of 65535, flags u8: bit 0 a light)]}; n 0: nothing now.
+     * An older PC skips the unit type it doesn't know.
+     */
+    public static final int UNIT_BOXES = 4;
+    /** The most boxes a BOXES unit carries. */
+    public static final int MAX_BOXES = 4;
     public static final int CLIP_INFO = 0, CLIP_CHUNK = 1, CLIP_ENDED = 2, CLIP_NONE = 3;
     /** STATUS states: still overwatching; left for deep sleep by itself. */
     public static final int STATE_WATCHING = 1, STATE_DROPPED = 2;
@@ -319,6 +329,39 @@ public final class OverwatchProtocol {
         int n = len - 18;
         if (offset + n > total) return null;
         return new Fragment(token(d), event, unit, type, total, offset, d, 18, n);
+    }
+
+    /** A BOXES unit: {x, y, w, h} (0..1 of the picture) each, a light's with a fifth value 1. */
+    public static byte[] boxesUnit(long capturedAt, List<float[]> boxes) {
+        int n = Math.min(MAX_BOXES, boxes.size());
+        byte[] u = new byte[9 + n * 9];
+        for (int i = 0; i < 8; i++) u[i] = (byte) (capturedAt >>> (56 - 8 * i));
+        u[8] = (byte) n;
+        for (int i = 0, o = 9; i < n; i++) {
+            float[] b = boxes.get(i);
+            for (int k = 0; k < 4; k++, o += 2) {
+                int v = Math.max(0, Math.min(65535, Math.round(b[k] * 65535)));
+                u[o] = (byte) (v >> 8);
+                u[o + 1] = (byte) v;
+            }
+            u[o++] = (byte) (b.length > 4 && b[4] != 0 ? 1 : 0);
+        }
+        return u;
+    }
+
+    /** @return the boxes as boxesUnit took them ({x, y, w, h, light 0/1}), or null when the unit is short */
+    public static float[][] readBoxes(byte[] u) {
+        if (u == null || u.length < 9) return null;
+        int n = Math.min(MAX_BOXES, u[8] & 0xff);
+        if (u.length < 9 + n * 9) return null;
+        float[][] out = new float[n][];
+        for (int i = 0, o = 9; i < n; i++) {
+            float[] b = new float[5];
+            for (int k = 0; k < 4; k++, o += 2) b[k] = (((u[o] & 0xff) << 8) | (u[o + 1] & 0xff)) / 65535f;
+            b[4] = u[o++] & 1;
+            out[i] = b;
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------ the clip

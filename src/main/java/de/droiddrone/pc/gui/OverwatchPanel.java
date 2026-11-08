@@ -395,9 +395,22 @@ final class OverwatchPanel extends JPanel {
                 layout = true;
             }
             picture.setNote(pausedNow ? "LIVE PREVIEW PAUSED" : "WAITING FOR PICTURE");
-            picture.setImage(v.picture(), v.ended() ? null : a == null ? null : new float[]{a.x, a.y, a.w, a.h});
+            picture.setImage(v.picture(), cardBox(v));
             return layout;
         }
+    }
+
+    /**
+     * The box on the card's picture (1.0.52): the phone's box now while it sends them (pc.40, with the live preview), so
+     * it follows the thing; the alert's own box only on the pictures from the alert (before the live picture) - it drew
+     * that box over the live picture for as long as the event lasted, where the thing was at the alert.
+     */
+    static float[] cardBox(OverwatchHub.View v) {
+        if (v.ended()) return null;
+        float[][] now = v.boxes();
+        if (now != null) return now.length == 0 ? null : new float[]{now[0][0], now[0][1], now[0][2], now[0][3]};
+        OverwatchProtocol.Alert a = v.alert();
+        return a == null || v.live() ? null : new float[]{a.x, a.y, a.w, a.h};
     }
 
     /** A line wrapped to the card's width. */

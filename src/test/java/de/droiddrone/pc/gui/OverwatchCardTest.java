@@ -109,4 +109,24 @@ class OverwatchCardTest {
         Component card = ((Container) p.getComponent(0)).getComponent(0);
         assertTrue(card.getHeight() > 250, "the picture's room is there while it comes: " + card.getHeight());
     }
+
+    /** 1.0.52: the box follows the thing - the phone's boxes now; the alert's box only on the pictures from the alert. */
+    @Test
+    void theCardsBoxIsThePhonesBoxNowNotTheAlertsOverTheLivePicture() {
+        OverwatchHub.View v = view(preRoll(), null);
+        OverwatchProtocol.Alert a = v.alert();
+        assertArrayEquals(new float[]{a.x, a.y, a.w, a.h}, OverwatchPanel.cardBox(v), "a pre-roll picture: the alert's box");
+        OverwatchHub.View live = new OverwatchHub.View(v.drone(), v.shown(), false, v.alertAtWall(), -1, v.picture(), a, null, null,
+                true, null, 8, null);
+        assertNull(OverwatchPanel.cardBox(live), "an older phone's live picture: no box rather than where it was at the alert");
+        OverwatchHub.View now = new OverwatchHub.View(v.drone(), v.shown(), false, v.alertAtWall(), -1, v.picture(), a, null, null,
+                true, null, 8, new float[][]{{0.6f, 0.45f, 0.1f, 0.05f, 0}});
+        assertArrayEquals(new float[]{0.6f, 0.45f, 0.1f, 0.05f}, OverwatchPanel.cardBox(now), "the phone's box now");
+        OverwatchHub.View gone = new OverwatchHub.View(v.drone(), v.shown(), false, v.alertAtWall(), -1, v.picture(), a, null, null,
+                true, null, 8, new float[0][]);
+        assertNull(OverwatchPanel.cardBox(gone), "nothing seen now: no box");
+        OverwatchHub.View ended = new OverwatchHub.View(v.drone(), v.shown(), true, v.alertAtWall(), -1, v.picture(), a, null, null,
+                false, null, 8, null);
+        assertNull(OverwatchPanel.cardBox(ended));
+    }
 }
