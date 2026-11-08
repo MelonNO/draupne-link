@@ -21,7 +21,7 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 ## Features
 
 **Link**
-- Phones and PCs get names (MobileAlpha, PCAlpha …). Pick by name, press CONNECT. No addresses.
+- Phones and PCs get names (MobileAlpha, PCAlpha …). Pick by name, press **PILOT UAV**. No addresses.
 - Sticks at 250 Hz, no queues. RC only goes out with throttle low and ARM off.
 - Red frame when sticks don't reach the drone: LINK LOST, LINK STALL, NO FLIGHT CONTROLLER.
 - **RC CHECK:** what Betaflight sees, and why it won't arm.
@@ -35,15 +35,17 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 - Hardware decoding, pop-out video, F11 full screen, OSD layout editor.
 
 **Power modes** (disarmed; arming ends them)
-- **DISCONNECT** = standby: camera off, back in about 2 s.
-- **DEEP SLEEP:** phone sleeps, checks in every 0/1/2/5 min (0 = always listening). WAKE brings it back.
+- **STANDBY MODE** (when connected): camera off, back in about 2 s.
+- **DEEP SLEEP:** phone sleeps, checks in every 0/1/2/5 min (0 = always listening). PILOT UAV brings it back at its next check-in.
+- Mode changes on a sleeping phone are queued and sent at its next check-in, without connecting.
 - **OVERWATCH:** asleep, camera watching. See [Overwatch](#overwatch).
 
 **Map** (F3 or POP OUT MAP)
 - Kartverket topo, world topo, satellite, OpenStreetMap. MGRS / UTM / degrees. Works offline after **DOWNLOAD AREA**.
 - Every drone on the map with its state: active, asleep, overwatch, lost, unknown. Right-click to fly, watch or copy the grid.
-- Flights saved as GPX. **FIND DRONE** / **LOST DRONE** with the MGRS on the clipboard.
-- **MAP TOOLS:** ruler with elevation profile, lines, rectangles, arrows, NATO symbols (MIL-STD-2525D / APP-6D), pins (add by grid), **RADIO HORIZON**, **GCS SEARCH**, **COVERAGE** (mobile network, estimate from OpenCelliD masts), overwatch **CLIPS**, KML/PNG export and import.
+- **PREVIOUS FLIGHTS:** video, track and telemetry on one timeline, link quality graph, export, delete.
+- **FIND DRONE** / **LOST DRONE** with the MGRS on the clipboard.
+- **MAP TOOLS:** ruler with elevation profile, lines, rectangles, arrows, NATO symbols (MIL-STD-2525D / APP-6D), pins list, **RADIO HORIZON**, **GCS SEARCH**, **COVERAGE** (mobile network, estimate from OpenCelliD masts), overwatch **CLIPS**, KML/PNG export and import.
 
 <table>
 <tr>
@@ -52,8 +54,10 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 </tr>
 </table>
 
-**Drone setup** (over USB, backup first, CONFIRM to write)
-- Receiver to MSP, stick rate, cell count, GPS on one UART, compass and calibration.
+- **FLEET** (map's right edge): every phone in one row, mode, batteries, last heard, next check-in. Queue modes without connecting. 10 phones without scrolling.
+
+**Drone setup** (over USB, backup first, CONFIRM to write). **SETUP > Set up a new drone** for one more drone and phone.
+- Receiver to MSP, stick rate, cell count, GPS on one UART, compass and calibration. Failsafe GPS rescue by default.
 - Switches: ARM AUX1, flight modes AUX2, PREARM AUX3, GPS rescue AUX4. Failsafe.
 - Silent drone: beeps only on RX lost. **BEEPER** button (AUX12) beeps on demand.
 - **Motor test:** reorder, spin direction, props in/out.
@@ -72,7 +76,9 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 - **Observation:** up to six idle drones in a grid, with sound and view cones on the map. CONNECT on a tile to fly it.
 - **STANAG 4609:** MPEG-TS + MISB ST 0601 over UDP for ATAK, QGIS, VLC (MENU > LINK, Advanced).
 
-**TOOLS > Advanced** shows rarely needed settings.
+**TOOLS > Advanced** shows rarely needed settings, and **RESET SETUP** (settings only, like a fresh install).
+
+**Tour:** a guided walk through every part, ending with an overwatch alert you fly to.
 
 ## Overwatch
 
