@@ -493,6 +493,13 @@ public class ControlLink {
         foreignSleepHandler = handler;
     }
 
+    /** FLEET MANAGEMENT (1.0.52): a sleeping phone's check-in (address, hello) - its queued FLEET_MODE, or null. */
+    private volatile java.util.function.BiFunction<String, byte[], byte[]> fleetHello;
+
+    public void setFleetHello(java.util.function.BiFunction<String, byte[], byte[]> hook) {
+        fleetHello = hook;
+    }
+
     /**
      * 1.0.47: where a phone's overwatch packets go (OverwatchHub.offer: a copy into its queue, nothing more). They come
      * from the phone's own overwatch socket, never the link's port, so they arrive here as foreign packets.
@@ -516,7 +523,9 @@ public class ControlLink {
         }
         if (packet.getLength() >= 6 && packet.getData()[0] == SLEEP_HELLO) {
             java.util.function.BiFunction<String, byte[], Boolean> h = foreignSleepHandler;
-            Boolean wake = h == null ? null : h.apply(packet.getAddress().getHostAddress(), java.util.Arrays.copyOf(packet.getData(), packet.getLength()));
+            byte[] hello = java.util.Arrays.copyOf(packet.getData(), packet.getLength());
+            NameService.sendFleetMode(socket, packet, fleetHello, hello);
+            Boolean wake = h == null ? null : h.apply(packet.getAddress().getHostAddress(), hello);
             if (wake != null) {
                 try {
                     socket.send(new DatagramPacket(new byte[]{SLEEP_ANSWER, (byte) (wake ? 1 : 0)}, 2, packet.getAddress(), packet.getPort()));
@@ -1122,20 +1131,23 @@ public class ControlLink {
      * floorReason: why it left overwatch for deep sleep by itself (PowerFloor.REASON_*, 0 none).
      */
     public record SleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, long receivedAt,
-                             int owFlags, int floorReason) {
+                             int owFlags, int floorReason, de.droiddrone.common.FleetProtocol.Status status) {
         public SleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, long receivedAt) {
-            this(batteryPercent, charging, nextCheckMin, milliVolts, receivedAt, 0, 0);
+            this(batteryPercent, charging, nextCheckMin, milliVolts, receivedAt, 0, 0, null);
         }
 
         public boolean overwatch() {
             return (owFlags & de.droiddrone.common.OverwatchProtocol.HELLO_OVERWATCH) != 0;
         }
 
-        /** The hello's bytes: [0x6F][battery][charging][nextCheckMin][mV u16], then (pc.36) [owFlags][floorReason]. */
+        /**
+         * The hello's bytes: [0x6F][battery][charging][nextCheckMin][mV u16], then (pc.36) [owFlags][floorReason], then
+         * (pc.40) the fleet status block (FleetProtocol.Status; null without it).
+         */
         public static SleepHello read(byte[] d, int len, long receivedAt) {
             int pct = d[1] & 0xff;
             return new SleepHello(pct == 255 ? -1 : pct, d[2] != 0, d[3] & 0xff, ((d[4] & 0xff) << 8) | (d[5] & 0xff), receivedAt,
-                    len >= 7 ? d[6] & 0xff : 0, len >= 8 ? d[7] & 0xff : 0);
+                    len >= 7 ? d[6] & 0xff : 0, len >= 8 ? d[7] & 0xff : 0, de.droiddrone.common.FleetProtocol.Status.read(d, 8, len));
         }
     }
 
@@ -1149,6 +1161,9 @@ public class ControlLink {
     private void onSleepHello(byte[] d, int len) {
         if (len < 6) return;
         sleepHello = SleepHello.read(d, len, MonoClock.ms());
+        java.util.function.BiFunction<String, byte[], byte[]> f = fleetHello;
+        byte[] mode = f == null || remoteIp == null ? null : f.apply(remoteIp.getHostAddress(), java.util.Arrays.copyOf(d, len));
+        if (mode != null) udpSender.sendPacket(mode); // a fleet mode queued for this dormant phone: ahead of the answer
         udpSender.sendPacket(new byte[]{SLEEP_ANSWER, (byte) (dormant ? 0 : 1)});
     }
 

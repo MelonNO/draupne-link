@@ -44,7 +44,7 @@ import java.util.function.Consumer;
  */
 public final class VirtualDrone {
     /** What it says it is: the newest phone app, so the PC uses every packet layout it knows. */
-    public static final String VERSION = "2.3.0-pc.39";
+    public static final String VERSION = "2.3.0-pc.40";
     public static final String DEVICE = "VIRTUAL DRONE";
     /** The phone's encoder steps, bit/s (StreamEncoder.baseBitRates). */
     static final int[] STEPS = {150_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000,
@@ -311,6 +311,10 @@ public final class VirtualDrone {
         }
         if (d[0] == Observe.OBSERVE || d[0] == Observe.STOP) {
             onObserve(d, len, from, fromPort);
+            return;
+        }
+        if (d[0] == de.droiddrone.common.FleetProtocol.MODE) { // pc.40: fleet management, in any state but a session
+            onFleetMode(d, len, from);
             return;
         }
         ReceiverBuffer buffer = receiverBuffer;
@@ -770,6 +774,7 @@ public final class VirtualDrone {
             synchronized (powerLock) {
                 out.writeByte(mode); // pc.39: its power mode, as the phone says it
             }
+            fleetStatus().writeTo(out); // pc.40: how it is doing, for the fleet cards
             sendRaw(bytes.toByteArray(), new InetSocketAddress(from, fromPort));
         } catch (IOException ignored) {
         }
@@ -1305,9 +1310,50 @@ public final class VirtualDrone {
         if (ip == null) return;
         int pct = phoneBatteryPercent();
         int mv = 3700 + pct * 5;
-        byte[] d = {SLEEP_HELLO, (byte) pct, 0, (byte) Math.min(255, checkIntervalMin), (byte) (mv >> 8), (byte) mv,
+        byte[] head = {SLEEP_HELLO, (byte) pct, 0, (byte) Math.min(255, checkIntervalMin), (byte) (mv >> 8), (byte) mv,
                 (byte) overwatch.helloFlags(), 0};
+        byte[] status = fleetStatus().bytes(); // pc.40
+        byte[] d = java.util.Arrays.copyOf(head, head.length + status.length);
+        System.arraycopy(status, 0, d, head.length, status.length);
         sendRaw(d, new InetSocketAddress(ip, lastPcPort));
+    }
+
+    // ------------------------------------------------------------------ fleet management (pc.40, FleetProtocol)
+
+    /** The last FLEET_MODE taken (its token; 0 none). */
+    private volatile int fleetToken;
+
+    /** As the phone's Udp.onFleetMode: refused (not taken) in a session or unless the FC is known disarmed. */
+    private void onFleetMode(byte[] d, int len, InetAddress from) {
+        de.droiddrone.common.FleetProtocol.Request r = de.droiddrone.common.FleetProtocol.parseRequest(d, len, key);
+        if (r == null || r.token == fleetToken) return;
+        if (isConnected()) {
+            log.accept("fleet: " + modeName(r.mode) + " from " + from.getHostAddress() + " refused: a pilot is connected");
+            return;
+        }
+        if (!fcDisarmed()) {
+            log.accept("fleet: " + modeName(r.mode) + " from " + from.getHostAddress() + " refused: FC not known disarmed");
+            return;
+        }
+        fleetToken = r.token;
+        lastPcIp = from;
+        lastPcPort = r.pcPort;
+        if (r.mode == OVERWATCH) overwatch.configure(r.sensitivity, r.flags, r.owToken);
+        requestMode(r.mode, r.intervalMin, "PC fleet");
+    }
+
+    /** How this virtual phone is doing: its battery, three bars, the FC's GPS, a phone at 31 C. */
+    de.droiddrone.common.FleetProtocol.Status fleetStatus() {
+        long now = System.currentTimeMillis();
+        boolean gps = !fcLost && !asleep && !checking;
+        int m, interval;
+        synchronized (powerLock) {
+            m = mode;
+            interval = checkIntervalMin;
+        }
+        return new de.droiddrone.common.FleetProtocol.Status(phoneBatteryPercent(), false, 3,
+                gps ? (fc.gpsFix(now) ? 1 : 0) : de.droiddrone.common.FleetProtocol.UNKNOWN,
+                gps ? fc.satellites(now) : de.droiddrone.common.FleetProtocol.UNKNOWN, 310, m, interval, fleetToken);
     }
 
     static String modeName(int m) {

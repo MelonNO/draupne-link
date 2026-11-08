@@ -149,6 +149,18 @@ public final class NameService {
     private volatile java.util.function.BiFunction<String, byte[], Boolean> sleepHandler;
 
     /**
+     * FLEET MANAGEMENT (1.0.52): a phone answered a scan - the queued FLEET_MODE to send it, or null; and a sleeping
+     * phone's check-in (address, hello bytes) - the same, sent ahead of the answer. Null hooks: nothing sent.
+     */
+    private volatile FleetManager fleet;
+    private volatile java.util.function.BiFunction<String, byte[], byte[]> fleetHello;
+
+    public void setFleet(FleetManager fleet, java.util.function.BiFunction<String, byte[], byte[]> onHello) {
+        this.fleet = fleet;
+        this.fleetHello = onHello;
+    }
+
+    /**
      * Where each phone's drone is (phone app pc.32 on: its NAME_REPLY says), by the phone's name, as of the last scan
      * that heard it; for the map's view of every drone on the network. at = when it was heard (wall clock).
      */
@@ -290,6 +302,15 @@ public final class NameService {
                 }
                 String moved = names.seen(reply, ip, host);
                 if (moved != null) log.accept("Names: " + reply.name() + " now at " + ip + " (was " + moved + ").");
+                FleetManager f = fleet;
+                byte[] mode = f == null ? null : f.onReply(reply, System.currentTimeMillis());
+                if (mode != null) {
+                    try {
+                        socket.send(new DatagramPacket(mode, mode.length, packet.getAddress(), packet.getPort()));
+                    } catch (IOException ignored) {
+                        // again at the next scan
+                    }
+                }
             }
             names.onlineOnly(onlineIps);
             noteDuplicates(claims);
@@ -422,12 +443,25 @@ public final class NameService {
     private void answerSleepCheck(DatagramSocket s, DatagramPacket packet) {
         java.util.function.BiFunction<String, byte[], Boolean> h = sleepHandler;
         if (h == null) return;
-        Boolean wake = h.apply(packet.getAddress().getHostAddress(), java.util.Arrays.copyOf(packet.getData(), packet.getLength()));
+        byte[] hello = java.util.Arrays.copyOf(packet.getData(), packet.getLength());
+        sendFleetMode(s, packet, fleetHello, hello);
+        Boolean wake = h.apply(packet.getAddress().getHostAddress(), hello);
         if (wake == null) return;
         byte[] answer = {ControlLink.SLEEP_ANSWER, (byte) (wake ? 1 : 0)};
         try {
             s.send(new DatagramPacket(answer, answer.length, packet.getAddress(), packet.getPort()));
         } catch (IOException ignored) {
+        }
+    }
+
+    /** A queued FLEET_MODE for the phone whose sleep hello this is, back to it ahead of the answer (1.0.52). */
+    static void sendFleetMode(DatagramSocket s, DatagramPacket from, java.util.function.BiFunction<String, byte[], byte[]> hook, byte[] hello) {
+        byte[] mode = hook == null ? null : hook.apply(from.getAddress().getHostAddress(), hello);
+        if (mode == null) return;
+        try {
+            s.send(new DatagramPacket(mode, mode.length, from.getAddress(), from.getPort()));
+        } catch (IOException ignored) {
+            // again at its next hello
         }
     }
 
