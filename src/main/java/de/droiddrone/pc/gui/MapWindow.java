@@ -75,7 +75,8 @@ final class MapWindow extends JFrame {
     private JPanel cursorCell, terrainCell, droneCell;
     private final JComboBox<String> pictureCombo = new JComboBox<>(PICTURES);
     private final JComboBox<String> formatCombo = new JComboBox<>();
-    private final JLabel cursorValue = value(), terrainValue = value(), droneValue = value(), altitudeValue = value(),
+    // selectable and copyable (1.0.51, the pilot)
+    private final CopyableText cursorValue = value(), terrainValue = value(), droneValue = value(), altitudeValue = value(),
             homeValue = value(), sourceValue = value();
     private Coordinates.Format format;
     private boolean preferPhone;
@@ -311,6 +312,7 @@ final class MapWindow extends JFrame {
         JPanel stats = Theme.card(new GridLayout(1, 6, 14, 0));
         cursorCell = stat(stats, "CURSOR", cursorValue);
         cursorCell.setToolTipText("Right-click: pin at the cursor");
+        cursorValue.setMenu(this::cursorMenu);
         cursorCell.addMouseListener(new java.awt.event.MouseAdapter() {
             @Override
             public void mousePressed(java.awt.event.MouseEvent e) {
@@ -997,11 +999,11 @@ final class MapWindow extends JFrame {
         onShownChanged = listener;
     }
 
-    private static JLabel value() {
-        return Theme.label("-", Theme.monoFont(Font.BOLD, 12.5f), Theme.TEXT);
+    private static CopyableText value() {
+        return new CopyableText("-", Theme.monoFont(Font.BOLD, 12.5f), Theme.TEXT, Theme.PANEL);
     }
 
-    private static JPanel stat(JPanel panel, String name, JLabel value) {
+    private static JPanel stat(JPanel panel, String name, javax.swing.JComponent value) {
         JPanel cell = new JPanel(new GridLayout(2, 1, 0, 3));
         cell.setOpaque(false);
         cell.add(Theme.label(name, Theme.headingFont(11f), Theme.MUTED));
@@ -1077,7 +1079,7 @@ final class MapWindow extends JFrame {
     void setFormat(Coordinates.Format format) {
         this.format = format;
         syncCombos();
-        if (cursor != null) cursorValue.setText(Coordinates.format(format, cursor[0], cursor[1]));
+        if (lastCursor != null) cursorValue.setText(Coordinates.format(format, lastCursor[0], lastCursor[1]));
         refreshStats();
     }
 
@@ -1254,20 +1256,22 @@ final class MapWindow extends JFrame {
 
     private void cursorAt(double[] latLon) {
         cursor = latLon;
-        if (latLon != null) lastCursor = latLon;
-        cursorSerial++;
-        if (latLon == null) {
-            cursorValue.setText("-");
-            terrainValue.setText("-");
-            terrainLookup.stop();
+        if (latLon == null) { // off the map: the last place and its height stay, to be copied (1.0.51)
+            if (lastCursor == null) {
+                cursorValue.setText("-");
+                terrainValue.setText("-");
+                terrainLookup.stop();
+            }
             return;
         }
+        lastCursor = latLon;
+        cursorSerial++;
         cursorValue.setText(Coordinates.format(format, latLon[0], latLon[1]));
         terrainLookup.restart();
     }
 
     private void lookupTerrain() {
-        double[] c = cursor;
+        double[] c = cursor != null ? cursor : lastCursor;
         if (c == null) return;
         long serial = cursorSerial;
         elevation.lookup(c[0], c[1], z -> SwingUtilities.invokeLater(() -> {
