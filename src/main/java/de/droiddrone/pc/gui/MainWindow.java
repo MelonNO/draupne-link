@@ -1733,6 +1733,11 @@ public class MainWindow extends JFrame {
         boolean liveAsleep = sleeping != null && checkInOverdue(sleeping, System.currentTimeMillis()) <= 0;
         de.droiddrone.pc.map.FlightTrack.Point lastFix = track == null ? null : track.last();
         if (!liveAsleep && lastFix != null && livePhone != null && !livePhone.isEmpty()) liveAsleep = heardSince(livePhone, liveIp, lastFix.timeMs());
+        // the pilot put it to sleep a moment ago: it goes quiet on purpose before the connection ends (the pilot: "they
+        // know where it is as they put it in overwatch") - no LAST KNOWN in between either
+        if (!liveAsleep && connection != null && !connection.getLink().isSpectator() && (phoneAsleep
+                || powerWanted == ControlLink.POWER_DEEP_SLEEP || powerWanted == ControlLink.POWER_OVERWATCH
+                || powerWanted == ControlLink.POWER_STANDBY)) liveAsleep = true;
         if (w != null) w.map().setLiveAsleep(liveAsleep);
         miniMap.setLiveAsleep(liveAsleep);
         if (w != null) w.update(track, gps, heading, fcLost, connected);
