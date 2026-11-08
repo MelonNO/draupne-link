@@ -3597,9 +3597,16 @@ public class MainWindow extends JFrame {
         long now = System.currentTimeMillis();
         String flying = connection == null ? null : connection.getLink().isSpectator() ? connection.getLink().getPilotPhone()
                 : config.getString(Names.PHONE_NAME_KEY);
+        // the flown drone is left out only once its live position is on the map: until then (a CONNECT waiting for a
+        // sleeping or overwatching phone to wake, its new track still empty) its own sign stays (1.0.50, the pilot)
+        boolean liveShown = false;
+        if (connection != null && track != null && track.last() != null) {
+            ControlLink.State st = connection.getLink().getState();
+            liveShown = st == ControlLink.State.READY || st == ControlLink.State.SPECTATING;
+        }
         java.util.List<MapView.NetDrone> drones = new java.util.ArrayList<>();
         for (NameService.DronePosition d : nameService.dronePositions()) {
-            if (d.name().equalsIgnoreCase(flying)) continue; // shown live already
+            if (liveShown && d.name().equalsIgnoreCase(flying)) continue; // shown live already
             if (observedNames.contains(d.name())) continue; // OBSERVATION draws it, numbered
             Names.Position p = d.position();
             long age = now - d.at() + p.ageS() * 1000L;
