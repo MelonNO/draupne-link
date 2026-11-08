@@ -22,6 +22,8 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.PowerManager;
 
+import de.droiddrone.common.SleepCheck;
+
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.Date;
@@ -43,7 +45,10 @@ import java.util.concurrent.TimeUnit;
  * it may ({@link PowerAdminReceiver}). An exact alarm ({@link PowerAlarmReceiver}) brings it back every
  * checkIntervalMin minutes for a {@link #CHECK_WINDOW_MS} window with the socket open: a Connect with the right key
  * (the PC wants it back) wakes it fully; nothing, and it sleeps on until the next alarm. The service stays a
- * foreground service throughout, or Android would end it.</li>
+ * foreground service throughout, or Android would end it. pc.39: CHECK EVERY "0 min" ({@link SleepCheck#ALWAYS}) is
+ * a window that opens {@link SleepCheck#ALWAYS_OPEN_AFTER_MS} after the sleep began and never closes - no alarms, the
+ * socket open, a "still here" every minute, the PC's "sleep on" doesn't close it, a Connect wakes the phone at once;
+ * the window's wake lock is renewed with every hello.</li>
  * <li>{@link #OVERWATCH} (pc.36): deep sleep with the camera and the motion detection on and the CPU kept up for
  * them (the service's partial wake lock stays); a detection calls the PC ({@link Overwatch}). The checks for the PC
  * go on as in deep sleep. Under 20 % battery or hot it becomes deep sleep by itself ({@link #floorDrop}).</li>
@@ -78,6 +83,8 @@ final class PowerMode {
     static final long BURST_GAP_MS = 300;
     static final int BURST_COUNT = 3;
     static final long SLEEP_COUNTDOWN_MS = 1000;
+    /** How long a window's wake lock outlasts the time it is asked for. */
+    private static final long WINDOW_LOCK_SPARE_MS = 10_000;
     /** How often the check window looks whether the PC has connected. */
     private static final long WINDOW_POLL_MS = 250;
     /** Preferences: the prompts that are made only once (the status card offers them again). */
@@ -106,6 +113,8 @@ final class PowerMode {
     private volatile boolean checking;
     private volatile long nextCheckAt;
     private long windowOpenedAt;
+    /** When the last hello of this window went (worker thread). */
+    private long lastHelloAt;
     // the burst of records after a change; guarded by this
     private int burstLeft;
     private long nextBurstAt;
@@ -158,6 +167,17 @@ final class PowerMode {
 
     private boolean sleeping() {
         return mode == DEEP_SLEEP || mode == OVERWATCH;
+    }
+
+    /** pc.39: CHECK EVERY "0 min" - the listening window stays open. */
+    private boolean always() {
+        return SleepCheck.isAlways(checkIntervalMin);
+    }
+
+    /** Asleep and always listening (pc.39): the status card and the notification say so instead of a next check. */
+    static boolean isAlwaysListening() {
+        PowerMode p = current;
+        return p != null && p.sleeping() && p.always();
     }
 
     static int floorReason() {
@@ -329,7 +349,7 @@ final class PowerMode {
                 }
                 mode = DEEP_SLEEP;
                 sleepAt = System.currentTimeMillis() + SLEEP_COUNTDOWN_MS;
-                event("Deep sleep in " + SLEEP_COUNTDOWN_MS / 1000 + " s (" + from + "), checks every " + checkIntervalMin + " min");
+                event("Deep sleep in " + SLEEP_COUNTDOWN_MS / 1000 + " s (" + from + "), " + checksText());
                 burst();
                 cancelPending();
                 pending = worker.schedule(this::fallAsleep, SLEEP_COUNTDOWN_MS, TimeUnit.MILLISECONDS);
@@ -339,12 +359,16 @@ final class PowerMode {
                 if (mode != NORMAL) wake(from); // from standby or deep sleep: everything back first, then down again
                 mode = OVERWATCH;
                 sleepAt = System.currentTimeMillis() + SLEEP_COUNTDOWN_MS;
-                event("Overwatch in " + SLEEP_COUNTDOWN_MS / 1000 + " s (" + from + "), checks every " + checkIntervalMin + " min");
+                event("Overwatch in " + SLEEP_COUNTDOWN_MS / 1000 + " s (" + from + "), " + checksText());
                 burst();
                 cancelPending();
                 pending = worker.schedule(this::fallAsleep, SLEEP_COUNTDOWN_MS, TimeUnit.MILLISECONDS);
                 break;
         }
+    }
+
+    private String checksText() {
+        return always() ? "always listening" : "checks every " + checkIntervalMin + " min";
     }
 
     /** Normal mode from whatever this was: the countdown, standby, sleep between checks or a check window. */
@@ -386,6 +410,19 @@ final class PowerMode {
         }
         sleepAt = 0;
         asleep = true;
+        if (always()) {
+            // pc.39: no alarm - the window opens shortly, on this thread, and stays open; its lock keeps the CPU up
+            // from now (the service's goes with the sleep)
+            nextCheckAt = System.currentTimeMillis() + SleepCheck.ALWAYS_OPEN_AFTER_MS;
+            acquireWindowLock(service, SleepCheck.ALWAYS_OPEN_AFTER_MS + WINDOW_LOCK_SPARE_MS);
+            if (mode == OVERWATCH) service.powerOverwatch(nextCheckAt);
+            else service.powerSleep(nextCheckAt);
+            event((mode == OVERWATCH ? "Overwatch: " : "Deep sleep: ") + "always listening from "
+                    + time(service, nextCheckAt));
+            cancelPending();
+            pending = worker.schedule(this::openWindow, SleepCheck.ALWAYS_OPEN_AFTER_MS, TimeUnit.MILLISECONDS);
+            return;
+        }
         nextCheckAt = System.currentTimeMillis() + checkIntervalMin * 60_000L;
         scheduleAlarm(service, nextCheckAt); // before the wake lock goes
         if (mode == OVERWATCH) {
@@ -406,14 +443,24 @@ final class PowerMode {
         asleep = false;
         checking = true;
         windowOpenedAt = System.currentTimeMillis();
+        if (always()) nextCheckAt = 0; // no next check: this window is it
         service.powerListen();
-        event("Sleep check: listening " + CHECK_WINDOW_MS / 1000 + " s");
+        event(always() ? "Always listening" : "Sleep check: listening " + CHECK_WINDOW_MS / 1000 + " s");
         cancelPending();
         pending = worker.scheduleAtFixedRate(this::pollWindow, WINDOW_POLL_MS, WINDOW_POLL_MS, TimeUnit.MILLISECONDS);
         // "still here" to the PC, again and again through the window: its answer ends the window early (sleep on)
-        // or wakes the phone
+        // or wakes the phone. Always listening (pc.39): as in a window's first seconds, then once a minute, the
+        // window's wake lock renewed with each
+        lastHelloAt = 0;
         helloPending = worker.scheduleAtFixedRate(() -> {
-            if (checking) service.powerHello(checkIntervalMin);
+            if (!checking) return;
+            long now = System.currentTimeMillis();
+            if (always()) {
+                if (now - windowOpenedAt > SleepCheck.ALWAYS_HELLO_BURST_MS && now - lastHelloAt < SleepCheck.ALWAYS_HELLO_MS) return;
+                acquireWindowLock(service, SleepCheck.ALWAYS_HELLO_MS + WINDOW_LOCK_SPARE_MS);
+            }
+            lastHelloAt = now;
+            service.powerHello(checkIntervalMin);
         }, HELLO_FIRST_MS, HELLO_GAP_MS, TimeUnit.MILLISECONDS);
     }
 
@@ -424,7 +471,7 @@ final class PowerMode {
         p.worker.execute(() -> {
             if (!p.sleeping() || !p.checking) return;
             if (wake) p.wake("PC called");
-            else {
+            else if (!p.always()) { // always listening (pc.39): the window stays open whatever the PC says
                 p.event("Sleep check: PC says sleep on");
                 p.closeWindow();
             }
@@ -440,7 +487,7 @@ final class PowerMode {
             wake("PC called");
             return;
         }
-        if (System.currentTimeMillis() - windowOpenedAt >= CHECK_WINDOW_MS) closeWindow();
+        if (!always() && System.currentTimeMillis() - windowOpenedAt >= CHECK_WINDOW_MS) closeWindow();
     }
 
     private void closeWindow() {
@@ -462,14 +509,23 @@ final class PowerMode {
         helloPending = null;
     }
 
-    private synchronized void acquireWindowLock(Context context) {
+    private void acquireWindowLock(Context context) {
+        acquireWindowLock(context, CHECK_WINDOW_MS + WINDOW_LOCK_SPARE_MS); // a window that never closes still lets go
+    }
+
+    /**
+     * Held for timeoutMs from now. Not reference counted, so asking again while it is held renews the timeout (pc.39:
+     * an always-listening window's hellos keep it from lapsing, and a stuck worker still lets it go).
+     */
+    private synchronized void acquireWindowLock(Context context, long timeoutMs) {
         try {
             if (windowLock == null) {
                 PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
                 if (pm == null) return;
                 windowLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DRAUPNE:sleepCheck");
+                windowLock.setReferenceCounted(false);
             }
-            if (!windowLock.isHeld()) windowLock.acquire(CHECK_WINDOW_MS + 10_000); // a window that never closes still lets go
+            windowLock.acquire(timeoutMs);
         } catch (Exception e) {
             log("Sleep check wake lock error: " + e);
         }

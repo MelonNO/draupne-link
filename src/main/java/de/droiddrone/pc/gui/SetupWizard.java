@@ -63,7 +63,7 @@ final class SetupWizard {
 
         @Override
         String hint() {
-            return "What this PC can do itself, it does. You do only what needs your hands.";
+            return "The PC does what it can. You do the hands-on parts.";
         }
 
         @Override
@@ -71,11 +71,11 @@ final class SetupWizard {
             JPanel col = WizardDialog.column();
             WizardDialog.addRow(col, WizardDialog.subheading("Have ready"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "&bull; Your radio and its USB cable<br>"
-                            + "&bull; The drone (Betaflight) and a USB data cable<br>"
-                            + "&bull; An Android phone with mobile data, and a USB data cable from the phone to the drone"));
+                    "&bull; Radio + USB cable<br>"
+                            + "&bull; Drone (Betaflight) + USB data cable<br>"
+                            + "&bull; Android phone with mobile data + USB data cable to the drone"));
             WizardDialog.addRow(col, WizardDialog.paragraph(
-                    "<b style='color:" + Theme.BAD_HEX + "'>Keep the propellers OFF</b> for the whole setup."));
+                    "<b style='color:" + Theme.BAD_HEX + "'>Propellers OFF</b> during setup."));
             return col;
         }
     }

@@ -333,9 +333,14 @@ public class DDService extends Service {
         lockScreen();
     }
 
-    /** Between checks: the notification says when the next one is. */
+    /** Between checks: the notification says when the next one is (pc.39: or that it always listens). */
     void powerSleepOn(long nextCheckAt) {
-        updateNotification(getString(PowerMode.mode() == PowerMode.OVERWATCH ? R.string.dd_notification_overwatch : R.string.dd_notification_sleep,
+        boolean overwatch = PowerMode.mode() == PowerMode.OVERWATCH;
+        if (PowerMode.isAlwaysListening()) {
+            updateNotification(getString(overwatch ? R.string.dd_notification_overwatch_listening : R.string.dd_notification_listening));
+            return;
+        }
+        updateNotification(getString(overwatch ? R.string.dd_notification_overwatch : R.string.dd_notification_sleep,
                 PowerMode.time(this, nextCheckAt)));
     }
 
@@ -366,7 +371,7 @@ public class DDService extends Service {
     void overwatchToDeepSleep(long nextCheckAt) {
         Overwatch.end("deep sleep instead");
         releaseWakeLock();
-        if (nextCheckAt > 0) powerSleepOn(nextCheckAt);
+        if (nextCheckAt > 0 || PowerMode.isAlwaysListening()) powerSleepOn(nextCheckAt);
     }
 
     /** pc.36: the camera in use (Overwatch's watch and event sessions). */
@@ -412,7 +417,8 @@ public class DDService extends Service {
     void powerListen() {
         if (!udp.initialize()) log("Sleep check: the socket could not be opened");
         startMainTimer(); // tends the socket for the window
-        updateNotification(getString(R.string.dd_notification_checking));
+        if (PowerMode.isAlwaysListening()) powerSleepOn(0); // pc.39: this window stays open
+        else updateNotification(getString(R.string.dd_notification_checking));
     }
 
     /** The sleep check's "still here" to the PC: the battery as Android reports it. */

@@ -98,7 +98,7 @@ public final class BetaflightUsb implements AutoCloseable {
         port.setComPortParameters(115200, 8, SerialPort.ONE_STOP_BIT, SerialPort.NO_PARITY);
         port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, 100, 1000);
         if (!port.openPort()) {
-            throw new IOException(p.systemName() + " is in use - close Betaflight Configurator (or anything else using the flight controller) and try again.");
+            throw new IOException(p.systemName() + " is in use - close Betaflight Configurator and retry.");
         }
         port.flushIOBuffers();
         return new BetaflightUsb(new PortWire(port));
@@ -201,7 +201,7 @@ public final class BetaflightUsb implements AutoCloseable {
                 return f.payload();
             }
         }
-        throw new IOException("No answer from the flight controller to an MSP2 request - it may be too old a Betaflight");
+        throw new IOException("No MSP2 answer - Betaflight may be too old");
     }
 
     /** "$X<", flag 0, command u16, size u16, payload, CRC-8/DVB-S2 over flag to payload. */

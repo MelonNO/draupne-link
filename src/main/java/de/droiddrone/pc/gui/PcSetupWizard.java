@@ -64,7 +64,7 @@ final class PcSetupWizard {
         try {
             Desktop.getDesktop().browse(URI.create(url));
         } catch (Exception e) {
-            main.logLine("Could not open the browser - open this link yourself: " + url);
+            main.logLine("Browser did not open. Open: " + url);
         }
     }
 
@@ -119,7 +119,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Sign in when your browser opens. Use the same account on the phone later.";
+            return "Sign in when the browser opens. Use the same account on the phone.";
         }
 
         @Override
@@ -129,7 +129,7 @@ final class PcSetupWizard {
             openButton = installed.addAction("Open Tailscale", () -> {
                 if (!Tailscale.openApp()) main.logLine("Could not open Tailscale's window.");
             });
-            openButton.setToolTipText("Tailscale's own window: its service starts with it");
+            openButton.setToolTipText("Opens Tailscale and starts its service");
             openButton.setVisible(false);
             signInButton = signedIn.addPrimaryAction("Sign in", this::signIn);
             WizardDialog.addRow(col, installed);
@@ -171,8 +171,8 @@ final class PcSetupWizard {
                 if (installerBusy) {
                     if (installerWaitSince == 0) installerWaitSince = System.currentTimeMillis();
                     boolean tooLong = System.currentTimeMillis() - installerWaitSince > INSTALLER_WAIT_MS;
-                    installed.set(State.PENDING, "Being installed by the DRAUPNE Link installer - this takes a minute or two..."
-                            + (tooLong ? " Taking long: press Install to do it here instead." : ""));
+                    installed.set(State.PENDING, "Installer is installing it (1-2 min)..."
+                            + (tooLong ? " Slow: press Install to do it here." : ""));
                     installButton.setVisible(tooLong); // the installer's task may be stuck: not waited for forever
                     return;
                 }
@@ -182,7 +182,7 @@ final class PcSetupWizard {
                     return;
                 }
                 installed.set(State.BAD, (installError.isEmpty() ? "Not installed." : "Not installed: " + installError)
-                        + " Press Install to try again (Windows asks you to approve it).");
+                        + " Press Install to retry (approve the Windows prompt).");
                 installButton.setVisible(true);
                 return;
             }
@@ -190,9 +190,8 @@ final class PcSetupWizard {
             if (!s.running()) { // `tailscale status` printed no JSON: the service isn't there to ask
                 if (serviceDownSince == 0) serviceDownSince = System.currentTimeMillis();
                 boolean justInstalled = System.currentTimeMillis() - serviceDownSince < SERVICE_GRACE_MS;
-                installed.set(State.WARN, justInstalled ? "Installed, but its service isn't answering yet - give it a few seconds."
-                        : "Installed, but Tailscale's service isn't running - restart the PC, or start Tailscale from the Start menu "
-                        + "(<b>Open Tailscale</b>).");
+                installed.set(State.WARN, justInstalled ? "Installed, service starting..."
+                        : "Installed, service not running. Press <b>Open Tailscale</b> or restart the PC.");
                 openButton.setVisible(!justInstalled);
                 signedIn.set(State.PENDING, "Once Tailscale runs.");
                 signInButton.setVisible(false);
@@ -203,16 +202,16 @@ final class PcSetupWizard {
             openButton.setVisible(false);
             installed.set(State.OK, "Installed and running.");
             if (s.signedIn()) {
-                signedIn.set(State.OK, "Signed in as this device: " + s.selfName());
+                signedIn.set(State.OK, "Signed in as " + s.selfName());
                 signInButton.setVisible(false);
                 address.set(State.OK, "<b>" + s.selfIp() + "</b>");
                 openLinkWhenReady = false;
             } else {
                 signInButton.setVisible(true);
                 boolean stopped = "Stopped".equals(s.backendState());
-                signedIn.set(State.WARN, stopped ? "Tailscale is switched off. Switching it on - sign in when your browser opens (or press Sign in)."
-                        : "Not signed in. Your browser opens Tailscale's login page - sign in there (or press Sign in).");
-                address.set(State.PENDING, "Appears after signing in.");
+                signedIn.set(State.WARN, stopped ? "Tailscale is off. Turning it on - sign in when the browser opens."
+                        : "Not signed in. Sign in in the browser (or press Sign in).");
+                address.set(State.PENDING, "After sign-in.");
                 if (!autoSignInTried && s.running()) { // nothing to click: ask for the sign-in page straight away
                     autoSignInTried = true;
                     signIn();
@@ -227,7 +226,7 @@ final class PcSetupWizard {
         private void install() {
             installing = true;
             installButton.setVisible(false);
-            installed.set(State.PENDING, "Installing Tailscale - approve the Windows prompt. Takes a minute or two.");
+            installed.set(State.PENDING, "Installing - approve the Windows prompt (1-2 min).");
             background(Tailscale::install, r -> {
                 installing = false;
                 installButton.setEnabled(true);
@@ -250,7 +249,7 @@ final class PcSetupWizard {
             } else {
                 openLinkWhenReady = true;
                 Tailscale.startLogin();
-                signedIn.set(State.PENDING, "Asking Tailscale for a sign-in link...");
+                signedIn.set(State.PENDING, "Getting sign-in link...");
             }
             nextPoll = 0;
         }
@@ -258,7 +257,7 @@ final class PcSetupWizard {
         @Override
         String status() {
             if (status == null) return "Checking Tailscale...";
-            if (!status.installed()) return "Install Tailscale to continue (or go Back and pick another method).";
+            if (!status.installed()) return "Install Tailscale to continue.";
             if (!status.signedIn()) return "Sign in to Tailscale.";
             return "Tailscale is ready.";
         }
@@ -299,7 +298,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Approve the Windows prompt to add the rules.";
+            return "Approve the Windows prompt.";
         }
 
         @Override
@@ -337,10 +336,10 @@ final class PcSetupWizard {
 
         private void show(boolean link, boolean apk) {
             int port = main.config().getPort();
-            linkRule.set(link ? State.OK : State.WARN, link ? "Inbound UDP " + port + " allowed: other PCs find this PC by its name, spectators connect to it."
-                    : "Recommended: other PCs find this PC by its name, and spectators connect to it, on UDP " + port + ".");
-            apkRule.set(apk ? State.OK : State.WARN, apk ? "Allowed from your home network and Tailscale."
-                    : "Recommended: lets the phone download the Flight app straight from this PC.");
+            linkRule.set(link ? State.OK : State.WARN, link ? "UDP " + port + " open: name lookup and spectators work."
+                    : "Recommended: UDP " + port + " for name lookup and spectators.");
+            apkRule.set(apk ? State.OK : State.WARN, apk ? "Open to home network and Tailscale."
+                    : "Recommended: phone downloads the Flight app from this PC.");
             addButton.setVisible(!(link && apk));
             if (!(link && apk) && !autoAddTried) { // nothing to click: add them straight away
                 autoAddTried = true;
@@ -407,7 +406,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Turn the radio on, plug it into this PC and choose <b>USB Joystick (HID)</b> on the radio.";
+            return "Radio on, plug in USB, choose <b>USB Joystick (HID)</b> on the radio.";
         }
 
         @Override
@@ -422,7 +421,7 @@ final class PcSetupWizard {
                     return this;
                 }
             });
-            radioChoice.setToolTipText("Which controller is the radio: the list follows what is plugged in");
+            radioChoice.setToolTipText("Which plugged-in controller is the radio");
             TacticalCombo.install(radioChoice);
             radioChoice.addActionListener(e -> {
                 if (updatingChoice) return;
@@ -451,22 +450,22 @@ final class PcSetupWizard {
             JoystickService.Snapshot snap = main.service().getSnapshot();
             showChoice(snap);
             if (snap.selected() == null) {
-                radio.set(State.BAD, "Not found yet. Select the model you fly, use the USB-C port on top of the radio, "
-                        + "and choose USB Joystick (HID) on its pop-up.");
+                radio.set(State.BAD, "Not found. Select your model, use the top USB-C port, "
+                        + "choose USB Joystick (HID).");
             } else {
                 int axes = snap.state() == null ? 0 : snap.state().axes().length;
                 radio.set(State.OK, "<b>" + snap.selected().name() + "</b> - " + axes + " axes."
-                        + (snap.joysticks().size() > 1 ? " " + snap.joysticks().size() + " controllers found: pick your radio on the right." : ""));
+                        + (snap.joysticks().size() > 1 ? " " + snap.joysticks().size() + " controllers: pick yours on the right." : ""));
             }
             boolean ready = snap.selected() != null && !main.isLinkActive();
             calibrateButton.setEnabled(ready);
             radioChoice.setEnabled(!main.isLinkActive());
             if (changedController) {
-                calibration.set(State.WARN, "Another controller: press Calibrate for its sticks and switches.");
+                calibration.set(State.WARN, "New controller: press Calibrate.");
             } else {
                 calibration.set(main.isCalibrated() ? State.OK : State.WARN, main.isCalibrated()
                         ? "Done."
-                        : "Press Calibrate and follow the steps (about a minute).");
+                        : "Press Calibrate (about a minute).");
             }
         }
 
@@ -490,7 +489,7 @@ final class PcSetupWizard {
         @Override
         String status() {
             if (changedController) return "Calibrate the controller you picked.";
-            return main.isCalibrated() ? "Radio ready." : "Calibrate the radio before flying.";
+            return main.isCalibrated() ? "Radio ready." : "Calibrate before flying.";
         }
     }
 
@@ -541,7 +540,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Power saving delays packets while the CPU and Wi-Fi wake up.";
+            return "Power saving delays packets.";
         }
 
         @Override
@@ -562,9 +561,9 @@ final class PcSetupWizard {
         private void checkPower() {
             background(WindowsSetup::activePowerPlan, plan -> {
                 if (modernStandby) {
-                    power.set(State.INFO, "This PC uses Modern Standby: the power plans change nothing here"
-                            + (plan == null || !plan.isHighPerformance() ? "" : " (" + plan.name() + " is set anyway)")
-                            + ". Set Settings > System > Power > Power mode to <b>Best performance</b>, on battery and plugged in.");
+                    power.set(State.INFO, "Modern Standby: power plans do nothing here"
+                            + (plan == null || !plan.isHighPerformance() ? "" : " (" + plan.name() + " set)")
+                            + ". Set Settings > System > Power > Power mode to <b>Best performance</b>, battery and plugged in.");
                     powerButton.setVisible(plan != null && !plan.isHighPerformance());
                 } else if (plan == null) {
                     power.set(State.INFO, "Could not read the power plan.");
@@ -572,8 +571,7 @@ final class PcSetupWizard {
                     power.set(State.OK, plan.name() + ".");
                     powerButton.setVisible(false);
                 } else {
-                    power.set(State.WARN, plan.name() + ". Press the button, or set Settings > System > Power > "
-                            + "Power mode to <b>Best performance</b>.");
+                    power.set(State.WARN, plan.name() + ". Press the button, or set Power mode to <b>Best performance</b>.");
                     powerButton.setVisible(true);
                 }
             });
@@ -653,7 +651,7 @@ final class PcSetupWizard {
         @Override
         void onShow() {
             if (launcher == null) {
-                desktop.set(State.INFO, "Start the app from <b>DRAUPNE Link.exe</b> (or draupne-link.bat) to create shortcuts.");
+                desktop.set(State.INFO, "Start from <b>DRAUPNE Link.exe</b> to create shortcuts.");
                 startMenu.set(State.INFO, "");
                 return;
             }
@@ -695,7 +693,7 @@ final class PcSetupWizard {
 
         @Override
         String hint() {
-            return "Next: the phone that flies on the drone.";
+            return "Next: the drone's phone.";
         }
 
         @Override

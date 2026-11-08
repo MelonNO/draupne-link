@@ -75,8 +75,8 @@ final class OrientationCheckDialog extends JFrame {
         JPanel head = new JPanel(new BorderLayout(0, 4));
         head.setOpaque(false);
         head.add(Theme.label("ORIENTATION", Theme.headingFont(26f), Theme.TEXT), BorderLayout.NORTH);
-        head.add(Theme.label("The drone on screen moves as Betaflight sees the real one. Stand behind the drone, its front away from you, "
-                + "and do what it says. Props off.", Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.SOUTH);
+        head.add(Theme.label("The model moves as Betaflight sees the drone. Stand behind it, front away, "
+                + "follow the steps. Props off.", Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.SOUTH);
         root.add(head, BorderLayout.NORTH);
 
         JPanel side = Theme.card(null);
@@ -110,7 +110,7 @@ final class OrientationCheckDialog extends JFrame {
         buttons.add(close);
         root.add(buttons, BorderLayout.SOUTH);
         getRootPane().registerKeyboardAction(e -> dispose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
-        usb.set(State.PENDING, "Looking for it...");
+        usb.set(State.PENDING, "Searching...");
         resetRows();
         setMinimumSize(new Dimension(940, 600));
         setSize(1000, 660);
@@ -190,7 +190,7 @@ final class OrientationCheckDialog extends JFrame {
         fixRoll = false;
         ui(() -> {
             resetRows();
-            flat.set(State.PENDING, "Put it flat on the table, front away from you.");
+            flat.set(State.PENDING, "Put it flat, front away from you.");
             instruction.setText("PUT THE DRONE FLAT");
         });
     }
@@ -277,8 +277,8 @@ final class OrientationCheckDialog extends JFrame {
                     main.logLine("Orientation check: Betaflight sees the drone on its back while it lies flat.");
                     ui(() -> {
                         flat.set(State.BAD, "Betaflight sees it on its back.");
-                        result.set(State.BAD, "Upside down: the board is mounted upside down and Betaflight isn't told. "
-                                + "<b>Fix it</b> turns Betaflight's board alignment roll by 180°.");
+                        result.set(State.BAD, "Board mounted upside down. "
+                                + "<b>Fix it</b> sets board roll +180°.");
                         instruction.setText("UPSIDE DOWN TO BETAFLIGHT");
                         fix.setVisible(true);
                     });
@@ -287,7 +287,7 @@ final class OrientationCheckDialog extends JFrame {
                 step = Step.NOSE_UP;
                 ui(() -> {
                     flat.set(State.OK, "Flat.");
-                    noseRow.set(State.PENDING, "Lift the nose, about 45°, the tail on the table.");
+                    noseRow.set(State.PENDING, "Lift the nose about 45°.");
                     instruction.setText("LIFT THE NOSE");
                 });
             }
@@ -306,7 +306,7 @@ final class OrientationCheckDialog extends JFrame {
                 if (Orientation.size(Orientation.delta(level, a)) > Orientation.FLAT_DEG) return;
                 step = Step.RIGHT_DOWN;
                 ui(() -> {
-                    rightRow.set(State.PENDING, "Lower the right side, about 45°, the left on the table.");
+                    rightRow.set(State.PENDING, "Lower the right side about 45°.");
                     instruction.setText("LOWER THE RIGHT SIDE");
                 });
             }
@@ -330,18 +330,18 @@ final class OrientationCheckDialog extends JFrame {
         ui(() -> {
             rightRow.set(State.OK, "Done.");
             if (turn == 0) {
-                result.set(State.OK, "The right way round. Safe to fly as far as this goes.");
+                result.set(State.OK, "Correct.");
                 instruction.setText("ALL RIGHT");
                 if (onPassed != null) onPassed.run();
             } else if (turn > 0) {
-                String how = turn == 180 ? "turned round: nose up looks like nose down to it, and it flips on takeoff"
-                        : "turned " + turn + "° on the frame: it mixes up pitch and roll, and it flips on takeoff";
-                result.set(State.BAD, "Betaflight sees the drone " + how + ". <b>Fix it</b> turns Betaflight's board alignment (yaw) by " + turn + "°, then check again.");
+                String how = turn == 180 ? "turned round: it would flip on takeoff"
+                        : "turned " + turn + "°: pitch and roll mixed, it would flip on takeoff";
+                result.set(State.BAD, "Betaflight sees the drone " + how + ". <b>Fix it</b> sets board yaw +" + turn + "°, then check again.");
                 instruction.setText("WRONG WAY ROUND");
                 fix.setVisible(true);
             } else {
-                result.set(State.BAD, "Betaflight's tilts don't match a turned board (" + seen + "). Do the moves again, slowly; if it stays so, "
-                        + "set the board alignment in Betaflight Configurator.");
+                result.set(State.BAD, "Tilts don't match a turned board (" + seen + "). Repeat slowly; if it stays, "
+                        + "fix board alignment in Betaflight Configurator.");
                 instruction.setText("NOT CLEAR");
             }
         });
@@ -363,7 +363,7 @@ final class OrientationCheckDialog extends JFrame {
         java.nio.file.Path backup = de.droiddrone.pc.setup.CliWrite.usableBackup(diff) ? backup(diff, version) : null;
         if (backup == null) {
             fc.exitCli();
-            throw new IOException("No backup of Betaflight's settings could be made, so nothing was written");
+            throw new IOException("Backup failed, nothing written");
         }
         Integer current = Orientation.parseSetting(fc.command("get " + name), name);
         if (current == null) {
@@ -380,7 +380,7 @@ final class OrientationCheckDialog extends JFrame {
         fc.saveAndReboot();
         main.logLine("Betaflight: board alignment " + (roll ? "roll" : "yaw") + " " + current + "° -> " + next + "° (orientation check)."
                 + " Its settings before: " + backup);
-        ui(() -> result.set(State.PENDING, "Written: " + (roll ? "roll" : "yaw") + " " + current + "° -> " + next + "°. Checking again once Betaflight is back..."));
+        ui(() -> result.set(State.PENDING, "Written: " + (roll ? "roll" : "yaw") + " " + current + "° -> " + next + "°. Rechecking after restart..."));
     }
 
     private java.nio.file.Path backup(String diff, String version) {
@@ -391,7 +391,7 @@ final class OrientationCheckDialog extends JFrame {
                     + "To go back: paste this into Betaflight Configurator's CLI tab, then type save.\n\n" + diff + "\n");
             return file;
         } catch (IOException e) {
-            main.logLine("Could not save a backup of Betaflight's settings: " + e.getMessage());
+            main.logLine("Betaflight backup failed: " + e.getMessage());
             return null;
         }
     }
@@ -401,7 +401,7 @@ final class OrientationCheckDialog extends JFrame {
         List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
         if (chosenPort != null) ports = ports.stream().filter(p -> p.systemName().equals(chosenPort)).toList();
         if (ports.isEmpty()) {
-            ui(() -> usb.set(State.WARN, "Not found yet. Plug it into this PC with a data USB cable."));
+            ui(() -> usb.set(State.WARN, "Not found. Plug in a USB data cable."));
             return null;
         }
         String why = null;

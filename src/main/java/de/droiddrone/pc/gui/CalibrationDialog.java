@@ -187,7 +187,7 @@ class CalibrationDialog extends JDialog {
         if (wizard.getStepIndex() != shownStep) showStep(step);
 
         if (state == null) {
-            setStatus("Controller disconnected - plug it back in to continue.", Theme.BAD);
+            setStatus("Controller unplugged - plug it back in.", Theme.BAD);
         } else {
             updateStatus(step, now);
             updateVisuals(step, state, now);
@@ -240,13 +240,13 @@ class CalibrationDialog extends JDialog {
             case RANGE -> {
                 int swept = wizard.getFullySweptAxisCount();
                 long in = wizard.rangeAutoNextInMs(now);
-                setStatus(in >= 0 ? "Full range on all " + CalibrationWizard.STICK_AXES + " stick axes - keep going into the corners, "
-                                + "centring next in " + (in + 999) / 1000 + " s"
-                                : "Full range reached on " + swept + " of " + CalibrationWizard.STICK_AXES + " stick axes",
+                setStatus(in >= 0 ? "All " + CalibrationWizard.STICK_AXES + " axes at full range - keep circling, "
+                                + "centring in " + (in + 999) / 1000 + " s"
+                                : "Full range: " + swept + " of " + CalibrationWizard.STICK_AXES + " stick axes",
                         in >= 0 ? Theme.OK : Theme.MUTED);
             }
             case CENTER -> setStatus(wizard.isCenterReady() ? "Sticks at rest - press Next."
-                    : "All four sticks centred, thumbs off - waiting for them to rest...", wizard.isCenterReady() ? Theme.OK : Theme.MUTED);
+                    : "Sticks centred, thumbs off - waiting...", wizard.isCenterReady() ? Theme.OK : Theme.MUTED);
             case ASSIGN, SWITCH -> {
                 String candidate = wizard.getCandidate();
                 if (candidate == null) {
@@ -260,11 +260,11 @@ class CalibrationDialog extends JDialog {
             case SUMMARY -> {
                 java.util.List<String> off = wizard.offCenterSticks();
                 if (off.isEmpty()) {
-                    setStatus("Check every channel, then press Finish to save.", Theme.OK);
+                    setStatus("Check every channel, then Finish.", Theme.OK);
                 } else {
                     // a centre off the middle is a constant stick input at rest: the drone leans when landed and armed
-                    setStatus("<html>Off centre at rest: " + String.join(", ", off) + ". Was a stick touched, or a trim off? "
-                            + "Close and calibrate again, hands off at the centre step.</html>", Theme.WARN);
+                    setStatus("<html>Off centre at rest: " + String.join(", ", off) + ". Stick touched or trim off? "
+                            + "Calibrate again, hands off at centring.</html>", Theme.WARN);
                 }
             }
         }

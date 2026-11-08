@@ -81,8 +81,8 @@ final class CompassCalibrationDialog extends JFrame {
         JPanel head = new JPanel(new BorderLayout(0, 4));
         head.setOpaque(false);
         head.add(Theme.label("COMPASS", Theme.headingFont(26f), Theme.TEXT), BorderLayout.NORTH);
-        head.add(Theme.label("Press START, then turn the drone slowly round every axis for 30 s: nose round the horizon, "
-                + "roll it over, pitch it over. Away from metal, magnets and this PC.", Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.SOUTH);
+        head.add(Theme.label("Press START, turn the drone slowly round every axis for 30 s. "
+                + "Away from metal, magnets and the PC.", Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.SOUTH);
         root.add(head, BorderLayout.NORTH);
 
         JPanel side = Theme.card(null);
@@ -115,7 +115,7 @@ final class CompassCalibrationDialog extends JFrame {
         buttons.add(close);
         root.add(buttons, BorderLayout.SOUTH);
         getRootPane().registerKeyboardAction(e -> dispose(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), JComponent.WHEN_IN_FOCUSED_WINDOW);
-        usb.set(State.PENDING, "Looking for it...");
+        usb.set(State.PENDING, "Searching...");
         compass.set(State.PENDING, "");
         setMinimumSize(new Dimension(900, 560));
         setSize(960, 620);
@@ -196,7 +196,7 @@ final class CompassCalibrationDialog extends JFrame {
                             fc.exitCli();
                             fc = null;
                             retryAt = System.currentTimeMillis() + RESTART_MS;
-                            ui(() -> usb.set(State.PENDING, "Read the compass's offsets - Betaflight restarts..."));
+                            ui(() -> usb.set(State.PENDING, "Offsets read, restarting..."));
                             continue;
                         }
                         magFound = GpsSetup.magInStatus(fc.msp(MSP_STATUS, null));
@@ -205,7 +205,7 @@ final class CompassCalibrationDialog extends JFrame {
                         ui(() -> {
                             usb.set(State.OK, "Found.");
                             compass.set(mag ? State.OK : State.BAD, mag ? "Found. Press <b>Start</b>."
-                                    : "Not found: Betaflight sees no compass. Is one fitted and on in Drone setup (COMPASS: Yes, written)?");
+                                    : "No compass. Fitted, and COMPASS: Yes written in Drone setup?");
                             start.setEnabled(mag && !calibrating);
                         });
                     }
@@ -216,7 +216,7 @@ final class CompassCalibrationDialog extends JFrame {
                         startedAt = System.currentTimeMillis();
                         calibrating = true;
                         main.logLine("Compass calibration started.");
-                        ui(() -> compass.set(State.PENDING, "Calibrating - turn the drone round every axis..."));
+                        ui(() -> compass.set(State.PENDING, "Calibrating - turn it round every axis..."));
                     }
                     if (calibrating) {
                         int[] m = GpsSetup.magFromRawImu(fc.msp(MSP_RAW_IMU, null));
@@ -232,8 +232,8 @@ final class CompassCalibrationDialog extends JFrame {
                             fc = null;
                             retryAt = System.currentTimeMillis() + RESTART_MS;
                             ui(() -> {
-                                compass.set(ok ? State.OK : State.WARN, ok ? "Calibrated. You can close this window."
-                                        : "Betaflight's compass offsets didn't change: it didn't take. <b>Start</b> again and turn the drone further round every axis, away from metal.");
+                                compass.set(ok ? State.OK : State.WARN, ok ? "Calibrated."
+                                        : "Offsets unchanged: failed. <b>Start</b> again, turn further, away from metal.");
                                 usb.set(State.PENDING, "Betaflight restarts...");
                                 start.setEnabled(false);
                             });
@@ -279,7 +279,7 @@ final class CompassCalibrationDialog extends JFrame {
         List<BetaflightUsb.Port> ports = BetaflightUsb.findFlightControllers();
         if (chosenPort != null) ports = ports.stream().filter(p -> p.systemName().equals(chosenPort)).toList();
         if (ports.isEmpty()) {
-            ui(() -> usb.set(State.WARN, "Not found yet. Plug it into this PC with a data USB cable."));
+            ui(() -> usb.set(State.WARN, "Not found. Plug in a USB data cable."));
             return null;
         }
         String why = null;

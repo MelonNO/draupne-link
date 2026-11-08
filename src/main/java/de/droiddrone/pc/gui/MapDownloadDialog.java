@@ -81,7 +81,7 @@ final class MapDownloadDialog extends JDialog {
         areaRow.setOpaque(false);
         areaRow.add(areaValue, BorderLayout.CENTER);
         JButton select = Theme.secondaryButton("Select with cursor");
-        select.setToolTipText("Draw the area on the map: press on one corner and drag to the other (Alt + drag does the same any time); right-click on the map calls it off");
+        select.setToolTipText("Drag a box on the map (or Alt + drag); right-click cancels");
         select.addActionListener(e -> {
             selectWithCursor.run();
             areaValue.setText("DRAW A BOX ON THE MAP");
@@ -92,14 +92,14 @@ final class MapDownloadDialog extends JDialog {
         picture.addItem(ALL);
         for (TileSource s : TileSource.values()) picture.addItem(s.title);
         TacticalCombo.install(picture);
-        picture.setToolTipText("Which map types to save: all of them, one after another, or one. OpenStreetMap and the world topo map are fetched one tile at a time: keep their areas small");
+        picture.setToolTipText("Map types to save. OSM and world topo are slow: keep areas small");
         picture.addActionListener(e -> {
             if (!settingUp) count();
         });
         row(rows, "MAP TYPE", picture);
         JSpinner from = spinner(fromModel), to = spinner(toModel);
-        from.setToolTipText("The coarsest zoom level to save: 2 is the whole world in a few tiles, so every level costs little until about 12");
-        to.setToolTipText("The finest zoom level to save: 19 is the deepest there is (18 for Kartverket), and each level down has four times the tiles");
+        from.setToolTipText("Coarsest zoom: levels up to ~12 cost little");
+        to.setToolTipText("Finest zoom: max 19 (Kartverket 18); each level is 4x the tiles");
         row(rows, "FROM LEVEL", from);
         row(rows, "TO LEVEL", to);
         row(rows, "TILES", tilesValue);
@@ -117,12 +117,12 @@ final class MapDownloadDialog extends JDialog {
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         buttons.setOpaque(false);
-        hide.setToolTipText("Put this window away; a download goes on, and the line in the map window brings it back");
+        hide.setToolTipText("Hide; the download goes on (click its line in the map window)");
         hide.addActionListener(e -> setVisible(false));
-        start.setToolTipText("Fetch every tile of the area that isn't saved yet");
+        start.setToolTipText("Fetch the tiles not saved yet");
         start.addActionListener(e -> start());
-        pause.setToolTipText("Hold the download; RESUME goes on where it was");
-        cancel.setToolTipText("Stop; the tiles saved so far stay");
+        pause.setToolTipText("Hold; RESUME continues");
+        cancel.setToolTipText("Stop; saved tiles stay");
         // HIDE, PAUSE and CANCEL only mean something while a download runs: they appear with START
         hide.setVisible(false);
         pause.setVisible(false);
@@ -213,7 +213,7 @@ final class MapDownloadDialog extends JDialog {
     private void count() {
         int from = (Integer) fromModel.getValue(), to = (Integer) toModel.getValue();
         if (to < from) {
-            tilesValue.setText("TO LEVEL must not be lower than FROM LEVEL");
+            tilesValue.setText("TO LEVEL must be at least FROM LEVEL");
             tilesValue.setForeground(Theme.BAD);
             start.setEnabled(false);
             return;
@@ -225,8 +225,8 @@ final class MapDownloadDialog extends JDialog {
         boolean aLot = n > TileCache.MAX_DOWNLOAD;
         tilesValue.setForeground(aLot ? Theme.WARN : Theme.TEXT);
         if (download == null || download.isFinished()) {
-            String warn = aLot ? "A lot of tiles: this will take a long time. A smaller area or a lower TO LEVEL is much quicker." : "";
-            String out = kartverketOut ? "Kartverket is left out: the area is outside Norway, where its maps end." : "";
+            String warn = aLot ? "Many tiles: slow. Use a smaller area or lower TO LEVEL." : "";
+            String out = kartverketOut ? "Kartverket left out: area is outside Norway." : "";
             status.setText(warn.isEmpty() && out.isEmpty() ? " " : warn.isEmpty() || out.isEmpty() ? warn + out : "<html>" + warn + "<br>" + out + "</html>");
             status.setForeground(Theme.WARN);
         }
@@ -298,12 +298,12 @@ final class MapDownloadDialog extends JDialog {
         if (d == null) return;
         int done = d.done();
         bar.setValue(d.total == 0 ? 1000 : (int) (1000L * done / d.total));
-        String figures = String.format(Locale.ROOT, "%,d of %,d tiles: %,d fetched, %,d saved already, %,d failed",
+        String figures = String.format(Locale.ROOT, "%,d of %,d tiles: %,d fetched, %,d already saved, %,d failed",
                 done, d.total, d.fetched(), d.onDisk(), d.failed());
         if (!d.isFinished()) {
             TileSource now = d.current();
             boolean flight = d.isHeldForFlight(); // 1.0.49: nothing fetched while a drone here may fly; on by itself after
-            status.setText((d.isPaused() ? "PAUSED - " : flight ? "WAITING: A DRONE HERE MAY BE FLYING - " : now == null ? "" : now.title + " - ")
+            status.setText((d.isPaused() ? "PAUSED - " : flight ? "WAITING: DRONE MAY BE FLYING - " : now == null ? "" : now.title + " - ")
                     + figures + (d.isPaused() || flight ? "" : timeLeft(d)));
             if (progress != null) progress.accept(String.format(Locale.ROOT, d.isPaused() || flight ? "DOWNLOAD PAUSED %,d / %,d" : "DOWNLOADING %,d / %,d", done, d.total));
             return;
@@ -317,9 +317,9 @@ final class MapDownloadDialog extends JDialog {
         if (!d.refused().isEmpty()) {
             StringBuilder names = new StringBuilder();
             for (TileSource s : d.refused()) names.append(names.length() == 0 ? "" : ", ").append(s.title);
-            refused = " - " + names + " left out: the server kept refusing";
+            refused = " - " + names + " left out: server refused";
         }
-        String how = d.isCancelled() ? "Cancelled" : d.gaveUp() ? "Stopped: no map server could be reached" : d.failed() > 0 ? "Done, with failures (try again for them)" : "Done";
+        String how = d.isCancelled() ? "Cancelled" : d.gaveUp() ? "Stopped: no map server reachable" : d.failed() > 0 ? "Done with failures (run again)" : "Done";
         status.setText(how + refused + " - " + figures);
         status.setForeground(d.isCancelled() || d.gaveUp() ? Theme.WARN : d.failed() > 0 ? Theme.WARN : Theme.OK);
         if (progress != null) progress.accept(null);
