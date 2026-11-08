@@ -111,7 +111,7 @@ final class VirtualOverwatch {
     /** Overwatch begins (the countdown over): the PC it calls is where the drone last flew from. */
     void begin(InetSocketAddress pcAddress) {
         pc = pcAddress;
-        if (pc == null) log.accept("overwatch: no PC to call (none flew it since the start) - it watches anyway");
+        if (pc == null) log.accept("overwatch: no PC to call (none flew it yet) - watching anyway");
         openSocket();
         preRoll.clear();
         watching = true;
@@ -305,7 +305,7 @@ final class VirtualOverwatch {
                 if (wait > 0) java.util.concurrent.locks.LockSupport.parkNanos(wait);
             }
         } catch (IOException | RuntimeException e) {
-            log.accept("overwatch: the event's video stopped: " + e.getMessage());
+            log.accept("overwatch: event video stopped: " + e.getMessage());
         } finally {
             if (clip != null) {
                 clip.close();
@@ -348,7 +348,7 @@ final class VirtualOverwatch {
         endedSends = 0;
         endedSentAt = 0;
         lastNews = "motion ended";
-        log.accept("overwatch: the motion ended (event " + endedEvent + ")");
+        log.accept("overwatch: motion ended (event " + endedEvent + ")");
     }
 
     private void sendUnit(int type, byte[] data) {
@@ -424,7 +424,7 @@ final class VirtualOverwatch {
                 }
                 case OverwatchProtocol.CMD_CONNECT -> {
                     if (watching) {
-                        log.accept("overwatch: the PC connects (CONNECT on its alert)");
+                        log.accept("overwatch: PC connects (CONNECT on its alert)");
                         ImpairedSocket.LATER.execute(() -> drone.requestMode(VirtualDrone.NORMAL, 0, "the PC's CONNECT on an overwatch alert"));
                     }
                 }
@@ -441,7 +441,7 @@ final class VirtualOverwatch {
                     } catch (IOException ignored) {
                     }
                     lastNews = "the PC has the clip";
-                    log.accept("overwatch: the PC has the clip (checked): deleted here");
+                    log.accept("overwatch: PC has the clip (checked), deleted here");
                 }
                 default -> {
                 }

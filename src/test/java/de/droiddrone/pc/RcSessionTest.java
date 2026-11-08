@@ -312,7 +312,7 @@ class RcSessionTest {
         assertTrue(s.isRcEnabled(), "still live: it goes on the moment the radio moves");
         s.onInput(sticks(-0.99f));
         assertFalse(s.isFrozenStopped());
-        assertEquals("The radio moves again - sticks sent again.", events.get(events.size() - 1));
+        assertEquals("Radio moves again - sticks resumed.", events.get(events.size() - 1));
         now[0] += 60_000;
         fcArmed[0] = false;
         s.onInput(sticks(-0.99f));

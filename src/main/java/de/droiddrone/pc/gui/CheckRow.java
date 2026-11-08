@@ -58,7 +58,7 @@ class CheckRow extends JPanel {
      */
     CheckRow tickable(String text, boolean done, java.util.function.Consumer<Boolean> changed) {
         set(done ? State.OK : State.TODO, text);
-        setToolTipText("Click when it's done on the phone (click again to undo)");
+        setToolTipText("Click when done on the phone (again to undo)");
         java.awt.event.MouseAdapter click = new java.awt.event.MouseAdapter() {
             @Override
             public void mouseClicked(java.awt.event.MouseEvent e) {

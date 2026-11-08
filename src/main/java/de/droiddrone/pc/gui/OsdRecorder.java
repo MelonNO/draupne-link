@@ -229,7 +229,7 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
                 }
             } catch (Throwable e) { // this file only: the raw recording goes on regardless
                 failed = true;
-                log.accept("Recording with the OSD stopped: " + (e.getMessage() == null ? e.toString() : e.getMessage()));
+                log.accept("OSD recording stopped: " + (e.getMessage() == null ? e.toString() : e.getMessage()));
                 closeWriter();
             }
         }
@@ -242,7 +242,7 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
         if (writer == null) {
             writer = new OsdVideoWriter(file, w, h, 30, audioTrack);
             canvas = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-            log.accept("Recording with the OSD to " + file + " (" + w + "x" + h + ", " + writer.codecName() + ").");
+            log.accept("OSD recording to " + file + " (" + w + "x" + h + ", " + writer.codecName() + ").");
         }
         if (canvas.getWidth() != w || canvas.getHeight() != h) return; // the stream changed size: a new file comes with it
         int[] out = ((DataBufferInt) canvas.getRaster().getDataBuffer()).getData();
@@ -282,8 +282,8 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
     private void closeWriter() {
         if (writer != null) {
             writer.close();
-            log.accept("Recording with the OSD: " + file.getFileName() + " closed, " + written + " pictures"
-                    + (left > 0 ? " (" + left + " left out to keep up)" : "") + ".");
+            log.accept("OSD recording: " + file.getFileName() + " closed, " + written + " pictures"
+                    + (left > 0 ? " (" + left + " dropped)" : "") + ".");
             writer = null;
         }
     }

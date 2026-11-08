@@ -80,7 +80,7 @@ public class RcSession {
     public static final long BEEPER_MAX_MS = 10_000;
     /** What Drone setup found: "true" when Betaflight's BEEPER mode sits on AUX14 alone, with the button's range. */
     public static final String BEEPER_KEY = "drone.beeperSet";
-    public static final String BEEPER_NOT_SET_UP = "BEEPER off: not set up on this drone (Drone setup puts it on AUX"
+    public static final String BEEPER_NOT_SET_UP = "BEEPER off: not set up (Drone setup puts it on AUX"
             + ModeSwitch.BEEPER_AUX + ")";
     /** When the idle sticks last went to the phone (see {@link #idleSticks}); 0 = not yet this session. */
     private long idleSentAt;
@@ -156,7 +156,7 @@ public class RcSession {
         lastChannels = channels;
         radioPresent = state != null;
         noteInput(state, clock.getAsLong());
-        if (rcEnabled) events.accept("Sticks paused (the phone rests) - RC output stops until WAKE and the throttle is low.");
+        if (rcEnabled) events.accept("Sticks paused (phone resting) - RC output off until WAKE and throttle low.");
         rcEnabled = false;
         frozenStopped = false;
         lostAt = 0;
@@ -201,9 +201,9 @@ public class RcSession {
         int at = 3 + ModeSwitch.BEEPER_AUX; // roll, pitch, yaw, throttle, then AUX1 at index 4
         String aux = "AUX" + ModeSwitch.BEEPER_AUX;
         String off = !setUp ? BEEPER_NOT_SET_UP
-                : at >= FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT ? "BEEPER off: " + aux + " is more than MSP carries"
-                : armSwitch != null && armSwitch.channel() == at ? "BEEPER off: " + aux + " is in use by ARM - move ARM in Drone setup"
-                : mapper.isMapped(at) ? "BEEPER off: " + aux + " is in use by the radio's mapping" : null;
+                : at >= FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT ? "BEEPER off: " + aux + " is beyond what MSP carries"
+                : armSwitch != null && armSwitch.channel() == at ? "BEEPER off: " + aux + " in use by ARM - move ARM in Drone setup"
+                : mapper.isMapped(at) ? "BEEPER off: " + aux + " in use by the radio mapping" : null;
         beeperOff = off;
         beeperChannel = off == null ? at : -1;
     }
@@ -282,7 +282,7 @@ public class RcSession {
     private boolean beepNow(long now) {
         if (!beeperHeld || beeperChannel < 0) return false;
         if (now - beeperHeldAt >= BEEPER_MAX_MS) {
-            if (!beeperTimedOut) events.accept("BEEPER let go after " + BEEPER_MAX_MS / 1000 + " s - press it again to beep more.");
+            if (!beeperTimedOut) events.accept("BEEPER let go after " + BEEPER_MAX_MS / 1000 + " s - press again for more.");
             beeperTimedOut = true;
             return false;
         }
@@ -301,7 +301,7 @@ public class RcSession {
         radioPresent = state != null;
         noteInput(state, now);
         if (!linkUp.getAsBoolean()) {
-            if (rcEnabled) events.accept("Link given up - RC output stopped until it is back and the throttle is low.");
+            if (rcEnabled) events.accept("Link given up - RC output off until link back and throttle low.");
             rcEnabled = false;
             lostAt = 0; // a link that was down long enough to notice: Betaflight has failed safe, no quick resume
             return;
@@ -310,7 +310,7 @@ public class RcSession {
         boolean noArm = channels != null && armBlocked.getAsBoolean() && !fcArmedNow.getAsBoolean()
                 && (armSwitch == null || armSwitch.isUnknown(channels) || armSwitch.on(channels));
         if (noArm && rcEnabled) {
-            events.accept("The phone installs an update - RC output stopped: no arming until it is back (throttle low, arm switch off).");
+            events.accept("Phone installs an update - RC output stopped. No arming until back (throttle low, arm off).");
             rcEnabled = false;
             lostAt = 0;
         }
@@ -353,9 +353,9 @@ public class RcSession {
         long limit = frozenStopMs;
         boolean frozen = limit > 0 && inputChangedAt != 0 && now - inputChangedAt > limit && fcArmedNow.getAsBoolean();
         if (frozen && !frozenStopped) {
-            events.accept("RADIO FROZEN for " + limit / 1000 + " s while armed - sticks stopped, Betaflight's failsafe takes over until the radio moves.");
+            events.accept("RADIO FROZEN " + limit / 1000 + " s while armed - sticks stopped, FC failsafe until the radio moves.");
         } else if (!frozen && frozenStopped) {
-            events.accept("The radio moves again - sticks sent again.");
+            events.accept("Radio moves again - sticks resumed.");
         }
         frozenStopped = frozen;
         return frozen;

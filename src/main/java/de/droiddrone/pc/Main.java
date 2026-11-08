@@ -74,16 +74,16 @@ public class Main {
 
     private static void printHelp() {
         System.out.println("""
-                draupne-link - fly a Betaflight drone over 4G from a Windows PC
-                (talks to Flight app protocol version %d, i.e. DroidDrone 2.3.0)
+                draupne-link - fly a Betaflight drone over 4G
+                (Flight app protocol %d, DroidDrone 2.3.0)
 
                 Commands:
-                  gui                 open the main window (default)
-                  init-config         write draupne-link.properties to edit
-                  list                list connected joysticks
-                  monitor             live view of joystick inputs and mapped RC channels (no network)
-                  connect [address]   connect using linkMode from the settings and send RC from the joystick
-                  fleet               the virtual fleet: virtual drones on this PC for trying DRAUPNE Link without hardware
+                  gui                 main window (default)
+                  init-config         write draupne-link.properties
+                  list                list joysticks
+                  monitor             show joystick inputs and RC channels (no network)
+                  connect [address]   connect and send RC from the joystick
+                  fleet               virtual fleet: virtual drones on this PC, no hardware
                 """.formatted(SettingsCommon.versionCompatibleCode));
     }
 
@@ -108,7 +108,7 @@ public class Main {
 
     private static void initJoystickOrExit() {
         if (!Joystick.init()) {
-            System.err.println("Could not initialise GLFW for joystick input.");
+            System.err.println("GLFW failed to start: no joystick input.");
             System.exit(1);
         }
     }
@@ -145,7 +145,7 @@ public class Main {
         initJoystickOrExit();
         List<Joystick.Info> joysticks = Joystick.list();
         if (joysticks.isEmpty()) {
-            System.out.println("No joysticks found. On the TX16S choose 'USB Joystick (HID)' when plugging in USB.");
+            System.out.println("No joysticks found. On the TX16S pick 'USB Joystick (HID)' when plugging in.");
         }
         for (Joystick.Info info : joysticks) {
             Joystick.State state = Joystick.read(info.id());
@@ -159,7 +159,7 @@ public class Main {
     private static Joystick.Info findJoystick(PcConfig config) {
         Joystick.Info info = Joystick.find(config.getJoystickFilter());
         if (info == null) {
-            System.err.println("No joystick matching '" + config.getJoystickFilter() + "'. Run 'list' to see what is connected.");
+            System.err.println("No joystick matching '" + config.getJoystickFilter() + "'. Run 'list'.");
         }
         return info;
     }
@@ -183,7 +183,7 @@ public class Main {
         initJoystickOrExit();
         Joystick.Info joystick = findJoystick(config);
         if (joystick == null) System.exit(1);
-        System.out.println("Monitoring " + joystick.name() + ". Move each stick/switch and check the channel moves. Press Enter to stop.");
+        System.out.println("Monitoring " + joystick.name() + ". Move sticks/switches, check the channels. Enter stops.");
         startQuitListener();
         while (!quit) {
             Joystick.poll();
@@ -220,7 +220,7 @@ public class Main {
         }
         ControlLink link = connection.getLink();
         Runtime.getRuntime().addShutdownHook(new Thread(connection::close));
-        System.out.printf("Joystick: %s%nPhone: %s at %s (port %d). Press Enter to disconnect.%n",
+        System.out.printf("Joystick: %s%nPhone: %s at %s (port %d). Enter disconnects.%n",
                 joystick.name(), config.getString(Names.PHONE_NAME_KEY), config.getIp(), config.getPort()); // not the key: consoles get pasted
         startQuitListener();
 

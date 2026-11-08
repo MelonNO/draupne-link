@@ -70,8 +70,8 @@ final class RcCheckDialog extends JDialog {
         header.add(Box.createVerticalStrut(6));
         header.add(Theme.label("WHAT BETAFLIGHT SEES", Theme.headingFont(28f), Theme.TEXT));
         header.add(Box.createVerticalStrut(4));
-        header.add(Theme.label("<html>Props off. Move the sticks and flip the switches: left is what this PC sends, "
-                + "right is what the flight controller reports back.</html>", Theme.font(Font.PLAIN, 14f), Theme.MUTED));
+        header.add(Theme.label("<html>Props off. Move sticks, flip switches: left is sent, "
+                + "right is what the FC reports.</html>", Theme.font(Font.PLAIN, 14f), Theme.MUTED));
         root.add(header, BorderLayout.NORTH);
 
         JPanel left = Theme.card(new BorderLayout(0, 12));
@@ -79,8 +79,8 @@ final class RcCheckDialog extends JDialog {
         left.add(bars, BorderLayout.CENTER);
         JPanel leftBottom = WizardDialog.column();
         WizardDialog.addRow(leftBottom, output);
-        WizardDialog.addRow(leftBottom, WizardDialog.paragraph("Channels go out as Roll, Pitch, Yaw, Throttle, then the switches: "
-                + auxNames(config) + ". The Flight app reorders them to the channel map set in Betaflight's Receiver tab."));
+        WizardDialog.addRow(leftBottom, WizardDialog.paragraph("Sent as Roll, Pitch, Yaw, Throttle, then "
+                + auxNames(config) + ". The phone reorders them to Betaflight's channel map."));
         left.add(leftBottom, BorderLayout.SOUTH);
 
         JPanel rightColumn = WizardDialog.column();
@@ -145,20 +145,20 @@ final class RcCheckDialog extends JDialog {
         bars.setValues(ch, 8);
         ControlLink link = main.activeLink();
         if (link == null) {
-            output.set(State.PENDING, "Not connected - press CONNECT in the main window (the phone must be running).");
+            output.set(State.PENDING, "Not connected - press CONNECT in the main window.");
             for (CheckRow r : new CheckRow[]{received, throttle, arm, modes}) r.set(State.PENDING, "Needs a connection.");
             blockers.setHtml("");
             return;
         }
         boolean live = session != null && session.isRcEnabled();
         output.set(live ? State.OK : State.WARN, live ? "LIVE - " + link.getRcFramesSent() + " frames sent."
-                : "OFF - pull the throttle fully down to start sending.");
+                : "OFF - throttle fully down to start sending.");
 
         FcTelemetry.Status s = link.getTelemetry().getStatus();
         if (s == null || de.droiddrone.pc.MonoClock.ms() - s.receivedAt() > STALE_MS) {
             String why = link.getState() != ControlLink.State.READY ? "Waiting for the link..."
-                    : link.getFcInfo() == null ? "The phone isn't talking to the flight controller yet."
-                    : "Waiting for status from the flight controller...";
+                    : link.getFcInfo() == null ? "Phone not talking to the FC yet."
+                    : "Waiting for FC status...";
             for (CheckRow r : new CheckRow[]{received, throttle, arm, modes}) r.set(State.PENDING, why);
             blockers.setHtml("");
             return;
@@ -174,13 +174,13 @@ final class RcCheckDialog extends JDialog {
             throttle.set(State.PENDING, "Needs RC first.");
         } else if (thr >= 0 && thr <= RcSession.THROTTLE_SAFE_MAX) {
             throttle.set(fcThrottleHigh ? State.BAD : State.OK, fcThrottleHigh
-                    ? "<b>Wrong:</b> you send throttle " + thr + " but Betaflight thinks it's up. The channels arrive in the "
-                      + "wrong order - check the channel map in Betaflight's Receiver tab (AETR1234 is standard) and run CALIBRATE."
-                    : "Throttle down here and down on the FC.");
+                    ? "<b>Wrong:</b> you send throttle " + thr + " but Betaflight sees it up. Wrong channel order - "
+                      + "check the channel map (AETR1234 is standard) and run CALIBRATE."
+                    : "Throttle down here and on the FC.");
         } else {
             throttle.set(fcThrottleHigh ? State.OK : State.INFO, fcThrottleHigh
-                    ? "Throttle up here and up on the FC. Pull it down to check the low end."
-                    : "Pull the throttle stick fully down to check.");
+                    ? "Throttle up here and on the FC. Pull it down to check the low end."
+                    : "Throttle fully down to check.");
         }
 
         String auxName = "AUX" + (armChannel - 3);
@@ -194,21 +194,21 @@ final class RcCheckDialog extends JDialog {
         } else if (on) {
             boolean seen = has(s, "ARMSWITCH");
             arm.set(seen ? State.OK : State.WARN, seen
-                    ? "Betaflight sees the arm switch ON, but won't arm yet - see the reasons below."
-                    : auxName + " is " + aux + " but Betaflight doesn't react. In the Modes tab, ARM must be on " + auxName
-                    + " with a range that includes " + aux + ".");
+                    ? "Arm switch seen ON, but arming blocked - reasons below."
+                    : auxName + " is " + aux + " but Betaflight doesn't react. Modes tab: ARM on " + auxName
+                    + ", range including " + aux + ".");
         } else if (aux >= 0) {
-            arm.set(State.INFO, auxName + " is " + aux + " (off). Flip your arm switch to test - props off!");
+            arm.set(State.INFO, auxName + " is " + aux + " (off). Flip the arm switch to test - props off!");
         } else {
-            arm.set(State.WARN, auxName + " isn't mapped - run CALIBRATE and flip your arm switch at the " + auxName + " step.");
+            arm.set(State.WARN, auxName + " not mapped - run CALIBRATE, flip the arm switch at the " + auxName + " step.");
         }
 
         modes.set(State.INFO, s.activeModes().isEmpty()
-                ? "None. Flip a mode switch - the mode set for it in Betaflight's Modes tab should appear here."
-                : "<b>" + String.join(", ", s.activeModes()) + "</b> - flip your switches and watch these change.");
+                ? "None. Flip a mode switch - its mode should appear here."
+                : "<b>" + String.join(", ", s.activeModes()) + "</b> - flip switches to see these change.");
 
         if (s.blockers().isEmpty()) {
-            blockers.setHtml(s.armed() ? "Armed." : "Nothing - the drone will arm when you flip the arm switch.");
+            blockers.setHtml(s.armed() ? "Armed." : "Nothing - it arms when you flip the arm switch.");
         } else {
             StringBuilder html = new StringBuilder();
             for (FcTelemetry.Blocker b : s.blockers()) {

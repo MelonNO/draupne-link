@@ -498,8 +498,8 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         g.setFont(Theme.font(Font.PLAIN, 14f));
         g.setColor(Theme.TEXT);
         ty += 34;
-        for (String line : new String[]{"Point the drone's camera at this code,", "close enough that it fills most of the picture.",
-                "Hold still until a time shows below: that is your delay.", "", "Press ESC to end the latency test."}) {
+        for (String line : new String[]{"Point the drone's camera at this code,", "filling most of the picture.",
+                "Hold still until a time shows below.", "", "ESC ends the test."}) {
             g.drawString(line, tx, ty);
             ty += 21;
         }
@@ -516,7 +516,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         g.setFont(Theme.font(Font.PLAIN, 13f));
         g.setColor(Theme.MUTED);
         g.drawString(r.count() == 0 ? "No code seen in the video yet"
-                : String.format(Locale.ROOT, "median of %d readings, min %.0f, max %.0f", r.count(), r.minMs(), r.maxMs()), tx, ty);
+                : String.format(Locale.ROOT, "median of %d, min %.0f, max %.0f", r.count(), r.minMs(), r.maxMs()), tx, ty);
     }
 
     /** O key / settings: show or hide the HUD. */

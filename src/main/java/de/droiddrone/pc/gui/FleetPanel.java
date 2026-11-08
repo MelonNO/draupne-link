@@ -83,9 +83,9 @@ public final class FleetPanel {
         JPanel titles = new JPanel(new GridLayout(0, 1, 0, 2));
         Theme.transparent(titles);
         titles.add(Theme.sectionTitle("Virtual fleet"));
-        titles.add(Theme.label("Virtual drones on this PC's loopback, speaking the real phone protocol.",
+        titles.add(Theme.label("Virtual drones on loopback, real phone protocol.",
                 Theme.font(Font.PLAIN, 12.5f), Theme.TEXT));
-        titles.add(Theme.label("Start DRAUPNE Link as usual: they show up marked VIRTUAL. No serial port, no Tailscale.",
+        titles.add(Theme.label("In DRAUPNE Link they show as VIRTUAL. No serial port, no Tailscale.",
                 Theme.font(Font.PLAIN, 12.5f), Theme.TEXT));
         titles.add(summary);
         top.add(titles, BorderLayout.CENTER);
@@ -94,14 +94,14 @@ public final class FleetPanel {
         JButton add = Theme.primaryButton("Add drone");
         add.addActionListener(e -> addDrone());
         JButton place = Theme.secondaryButton("Start place");
-        place.setToolTipText("Where new drones stand (MGRS, UTM or lat, lon) - and moves the disarmed ones there");
+        place.setToolTipText("Where new drones stand; moves disarmed ones there");
         place.addActionListener(e -> pickPlace());
         JComboBox<String> arm = new JComboBox<>(new String[]{"ARM on AUX1", "ARM on AUX2", "ARM on AUX3", "ARM on AUX4", "ARM on AUX5", "ARM on AUX6"});
-        arm.setToolTipText("The virtual Betaflight's ARM switch (1700-2100 us) for drones added from now on; MSP_MODE_RANGES says so to the phone");
+        arm.setToolTipText("ARM switch (1700-2100 us) for drones added next");
         arm.setSelectedIndex(fleet.setup().armAux);
         arm.addActionListener(e -> fleet.setup().armAux = arm.getSelectedIndex());
         JComboBox<String> fs = new JComboBox<>(new String[]{"Failsafe: DROP", "Failsafe: LAND"});
-        fs.setToolTipText("Betaflight's failsafe stage 2 for drones added from now on");
+        fs.setToolTipText("Failsafe stage 2 for drones added next");
         fs.addActionListener(e -> fleet.setup().procedure = fs.getSelectedIndex() == 0 ? FlightModel.Procedure.DROP : FlightModel.Procedure.LAND);
         topButtons.add(arm);
         topButtons.add(fs);
@@ -130,9 +130,9 @@ public final class FleetPanel {
         JPanel logHead = new JPanel(new BorderLayout(8, 0));
         Theme.transparent(logHead);
         logHead.add(Theme.sectionTitle("Fleet log"), BorderLayout.WEST);
-        logHead.add(Theme.label("what the virtual phones do, and what DRAUPNE Link asks of them", Theme.font(Font.PLAIN, 12f), Theme.MUTED),
+        logHead.add(Theme.label("what the virtual phones do and are asked", Theme.font(Font.PLAIN, 12f), Theme.MUTED),
                 BorderLayout.CENTER);
-        logHead.add(button("Clear", "Empties the log (the drones go on)", () -> logArea.setText("")), BorderLayout.EAST);
+        logHead.add(button("Clear", "Empty the log (drones keep running)", () -> logArea.setText("")), BorderLayout.EAST);
         logCard.add(logHead, BorderLayout.NORTH);
         logCard.add(logScroll, BorderLayout.CENTER);
         root.add(logCard, BorderLayout.SOUTH);
@@ -163,7 +163,7 @@ public final class FleetPanel {
 
     private void pickPlace() {
         String now = de.droiddrone.pc.map.Coordinates.format(de.droiddrone.pc.map.Coordinates.Format.MGRS, startLat, startLon);
-        String s = (String) JOptionPane.showInputDialog(frame, "Where the drones stand - MGRS, UTM or latitude, longitude:",
+        String s = (String) JOptionPane.showInputDialog(frame, "Start place - MGRS, UTM or lat, lon:",
                 "Start place", JOptionPane.QUESTION_MESSAGE, null, null, now);
         if (s == null) return;
         double[] at = de.droiddrone.pc.map.Coordinates.parse(s);
@@ -179,7 +179,7 @@ public final class FleetPanel {
             }
             refresh();
         } catch (RuntimeException e) {
-            JOptionPane.showMessageDialog(frame, "Not a position: MGRS (" + Fleet.DEFAULT_PLACE + "), UTM or latitude, longitude", "Start place", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(frame, "Not a position. Use MGRS (" + Fleet.DEFAULT_PLACE + "), UTM or lat, lon.", "Start place", JOptionPane.WARNING_MESSAGE);
         }
     }
 
@@ -198,7 +198,7 @@ public final class FleetPanel {
                 + de.droiddrone.pc.map.Coordinates.format(de.droiddrone.pc.map.Coordinates.Format.MGRS, startLat, startLon) + ".";
         if (!text.equals(summary.getText())) {
             summary.setText(text);
-            summary.setToolTipText("Names from Zulu down, never one already in DRAUPNE Link's name map");
+            summary.setToolTipText("Names from Zulu down, never one in the name map");
         }
     }
 
@@ -226,10 +226,10 @@ public final class FleetPanel {
             head.add(state, BorderLayout.CENTER);
             JPanel headButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
             Theme.transparent(headButtons);
-            headButtons.add(button("Place phone", "Put this drone somewhere else: click the spot on a map (disarmed only)",
+            headButtons.add(button("Place phone", "Move this drone: click a spot on the map (disarmed only)",
                     () -> PlacePhoneDialog.open(frame, fleet, drone, FleetPanel.this::appendLog)));
-            headButtons.add(button("Rename", "Another DRAUPNE name (MobileXxx) - DRAUPNE Link files it at its next scan", this::rename));
-            headButtons.add(button("Remove", "This drone stops and leaves the fleet", () -> {
+            headButtons.add(button("Rename", "Another DRAUPNE name (MobileXxx)", this::rename));
+            headButtons.add(button("Remove", "Stop this drone and remove it", () -> {
                 fleet.remove(drone);
                 cards.remove(panel);
                 cardList.remove(this);
@@ -258,35 +258,35 @@ public final class FleetPanel {
             JPanel actions = new JPanel(new GridLayout(0, 1, 0, 4));
             Theme.transparent(actions);
             actions.add(section("LINK PROBLEMS"));
-            actions.add(row(button("4G loss", "Nothing either way for the seconds set here", this::fourGLoss), lossSeconds,
+            actions.add(row(button("4G loss", "No packets either way for these seconds", this::fourGLoss), lossSeconds,
                     Theme.label("s", Theme.font(Font.PLAIN, 12f), Theme.MUTED), fcLost,
-                    button("Phone restart", "The app restarts: no link for 3 s, then a new session", drone::restartApp)));
-            actions.add(row(button("Handover", "A cell change: the phone's packets held 1.5 s then let go at once, 80 ms slower for 15 s"
-                            + " (with \"new port\": its address changes too, as without Tailscale)", this::handover), newPort));
+                    button("Phone restart", "App restarts: no link for 3 s, then a new session", drone::restartApp)));
+            actions.add(row(button("Handover", "Cell change: packets held 1.5 s, then 80 ms slower for 15 s"
+                            + " (\"new port\": new address too)", this::handover), newPort));
             actions.add(row(Theme.label("weak link:  loss %", Theme.font(Font.PLAIN, 12f), Theme.MUTED), loss,
                     Theme.label("jitter ms", Theme.font(Font.PLAIN, 12f), Theme.MUTED), jitter,
                     Theme.label("bunch ms", Theme.font(Font.PLAIN, 12f), Theme.MUTED), bunch,
-                    button("Apply", "The weak link's loss, jitter and bunching, both ways", this::applyWeak),
-                    button("Clear", "A perfect link again", () -> {
+                    button("Apply", "Apply loss, jitter and bunching, both ways", this::applyWeak),
+                    button("Clear", "Perfect link again", () -> {
                         drone.link().clear();
                         loss.setValue(0);
                         jitter.setValue(0);
                         bunch.setValue(0);
                     })));
             actions.add(section("OVERWATCH + DETECTION"));
-            actions.add(row(button("Walker", "A person walks across the picture, 10 m out (a torch at NIGHT)", () -> drone.addTarget("walker")),
-                    button("Vehicle", "A car drives across, 25 m out at 30 km/h (headlights at NIGHT)", () -> drone.addTarget("vehicle")),
-                    button("Light", "A person with a lamp walks across, 15 m out (for NIGHT)", () -> drone.addTarget("light")), night,
-                    button("Someone now", "Someone walks across 6 m from the camera (a torch at night): the motion detection, connected or in OVERWATCH, must find it", drone::someoneNow)));
-            actions.add(row(button("Standby", "The phone's own STANDBY button", () -> drone.requestMode(VirtualDrone.STANDBY, 0, "the phone's button")),
-                    button("Deep sleep", "The phone's own DEEP SLEEP button", () -> drone.requestMode(VirtualDrone.DEEP_SLEEP, 0, "the phone's button")),
-                    button("Check now", "Asleep: the next sleep check window opens now (hello to the PC)", drone::checkNow),
-                    button("Wake", "The phone's own hold-to-wake", () -> drone.requestMode(VirtualDrone.NORMAL, 0, "the phone's button"))));
+            actions.add(row(button("Walker", "Person walks across, 10 m out (torch at NIGHT)", () -> drone.addTarget("walker")),
+                    button("Vehicle", "Car drives across, 25 m out, 30 km/h (lights at NIGHT)", () -> drone.addTarget("vehicle")),
+                    button("Light", "Person with a lamp walks across, 15 m out (NIGHT)", () -> drone.addTarget("light")), night,
+                    button("Someone now", "Someone crosses 6 m from the camera: motion detection must find it", drone::someoneNow)));
+            actions.add(row(button("Standby", "The phone's STANDBY button", () -> drone.requestMode(VirtualDrone.STANDBY, 0, "the phone's button")),
+                    button("Deep sleep", "The phone's DEEP SLEEP button", () -> drone.requestMode(VirtualDrone.DEEP_SLEEP, 0, "the phone's button")),
+                    button("Check now", "Asleep: open the sleep check window now", drone::checkNow),
+                    button("Wake", "The phone's hold-to-wake", () -> drone.requestMode(VirtualDrone.NORMAL, 0, "the phone's button"))));
             actions.add(section("OBSERVATION + VIDEO"));
-            actions.add(row(button("Speak", "A voice on its microphone now (the observation grid's speaking highlight)", drone::speakNow), voices,
-                    button("New battery", "A full pack (on the ground)", drone::newBattery)));
-            actions.add(row(button("Flight file...", "Loop an old flight (a DRAUPNE Link recording) as its camera", this::pickFile), track,
-                    button("Generated", "The generated picture again", this::generated), videoLabel));
+            actions.add(row(button("Speak", "A voice on its microphone now", drone::speakNow), voices,
+                    button("New battery", "Full pack (on the ground)", drone::newBattery)));
+            actions.add(row(button("Flight file...", "Loop a DRAUPNE Link recording as its camera", this::pickFile), track,
+                    button("Generated", "Generated picture again", this::generated), videoLabel));
             body.add(actions, BorderLayout.CENTER);
             panel.add(body, BorderLayout.CENTER);
 
@@ -328,17 +328,17 @@ public final class FleetPanel {
         }
 
         private void rename() {
-            String s = (String) JOptionPane.showInputDialog(frame, "The DRAUPNE name (MobileAlpha ... MobileZulu):", "Rename",
+            String s = (String) JOptionPane.showInputDialog(frame, "DRAUPNE name (MobileAlpha ... MobileZulu):", "Rename",
                     JOptionPane.QUESTION_MESSAGE, null, null, drone.name());
             if (s == null) return;
             s = s.trim();
             if (!de.droiddrone.pc.Names.isValidName(s, de.droiddrone.pc.Names.Kind.PHONE)) {
-                JOptionPane.showMessageDialog(frame, "Not a DRAUPNE phone name: Mobile and a letter word, like MobileYankee.", "Rename", JOptionPane.WARNING_MESSAGE);
+                JOptionPane.showMessageDialog(frame, "Not a DRAUPNE name. Use Mobile + a letter word, like MobileYankee.", "Rename", JOptionPane.WARNING_MESSAGE);
                 return;
             }
             if (fleet.nameTaken(s)) {
-                JOptionPane.showMessageDialog(frame, s + " is in DRAUPNE Link's name map already (one of your phones, or a drone seen before).\n"
-                        + "A virtual drone never takes such a name.", "Rename", JOptionPane.WARNING_MESSAGE);
+                JOptionPane.showMessageDialog(frame, s + " is already in the name map (a known phone).\n"
+                        + "Virtual drones can't use it.", "Rename", JOptionPane.WARNING_MESSAGE);
                 return;
             }
             for (VirtualDrone o : fleet.drones()) {

@@ -179,7 +179,7 @@ public final class LiveAudio implements AutoCloseable {
             saidNoDevice = false;
         } catch (Exception | LinkageError e) {
             nextOpenAt = System.currentTimeMillis() + REOPEN_MS;
-            if (!saidNoDevice) log.accept("Live audio: no sound device to play it on (" + e.getMessage() + ").");
+            if (!saidNoDevice) log.accept("Live audio: no sound device (" + e.getMessage() + ").");
             saidNoDevice = true;
         }
     }
