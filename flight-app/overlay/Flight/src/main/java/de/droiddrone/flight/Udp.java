@@ -312,6 +312,7 @@ public class Udp {
         byte[] a = pilot == null ? new byte[0] : pilot.getAddress();
         out.writeByte(a.length);
         out.write(a);
+        out.writeByte(PowerMode.mode()); // pc.39: what it is doing (0 normal, 1 standby, 2 deep sleep, 3 overwatch), for every PC's map
     }
 
     private static final byte SPECTATE_PILOT_AT = 0x61;

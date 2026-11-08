@@ -766,6 +766,9 @@ public final class VirtualDrone {
             byte[] a = pilot == null ? new byte[0] : pilot.getAddress();
             out.writeByte(a.length);
             out.write(a);
+            synchronized (powerLock) {
+                out.writeByte(mode); // pc.39: its power mode, as the phone says it
+            }
             sendRaw(bytes.toByteArray(), new InetSocketAddress(from, fromPort));
         } catch (IOException ignored) {
         }

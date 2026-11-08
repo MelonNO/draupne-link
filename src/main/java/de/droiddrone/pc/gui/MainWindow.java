@@ -3728,7 +3728,12 @@ public class MainWindow extends JFrame {
                 standbyPhones.remove(ip); // armed ends standby on the phone
                 standbyName = null;
             }
-            if (standbyName != null) {
+            int said = p.powerMode(); // pc.39: what the phone said it was doing at the last scan that heard it
+            if (standbyName == null && sleeping == null && said >= 1 && said <= 3 && age <= 30_000) {
+                // put to sleep by another PC (or by this one, forgotten): its own word, while it is heard
+                kind = said == 3 ? MapView.Kind.OVERWATCH : MapView.Kind.ASLEEP;
+                doing = (said == 1 ? "STANDBY" : said == 2 ? "DEEP SLEEP" : "OVERWATCH") + " (the phone says)";
+            } else if (standbyName != null) {
                 kind = age > 120_000 ? MapView.Kind.UNKNOWN : MapView.Kind.ASLEEP;
                 doing = age > 120_000 ? "STANDBY - NOT HEARD " + Names.agoText(now - age, now).toUpperCase(java.util.Locale.ROOT) + " - UNKNOWN"
                         : "STANDBY - CONNECT wakes it";

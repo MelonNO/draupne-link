@@ -373,4 +373,27 @@ class NamesTest {
         none[old.length] = 1; // version 1, source 0, the rest zero
         assertNull(Names.parseReply(none, none.length, "DD").position());
     }
+
+    /** pc.39: a phone's reply says its power mode after its position; an older one's says nothing (unknown). */
+    @Test
+    void aReplySaysThePhonesPowerMode() throws Exception {
+        for (int mode : new int[]{-1, 0, 1, 2, 3}) {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+            out.write(Names.reply("DD", Names.Kind.PHONE, "MobileBravo", "XR", "2.3.0-pc.39"));
+            out.writeByte(1);
+            out.writeByte(1);
+            out.writeInt(599_139_000);
+            out.writeInt(107_522_000);
+            out.writeShort(2);
+            out.writeByte(0);
+            out.writeByte(0);
+            out.writeByte(0);
+            if (mode >= 0) out.writeByte(mode);
+            byte[] d = bytes.toByteArray();
+            Names.Reply r = Names.parseReply(d, d.length, "DD");
+            assertNotNull(r.position());
+            assertEquals(mode, r.position().powerMode());
+        }
+    }
 }

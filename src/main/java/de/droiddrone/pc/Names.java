@@ -86,7 +86,14 @@ public final class Names {
      * A phone's word on where its drone is (phone app pc.32 on, in its NAME_REPLY): from the FC's GPS or the phone's,
      * how old, armed (null = unknown), whether a PC flies it and which (its address, or "").
      */
-    public record Position(boolean fromFc, double lat, double lon, int ageS, Boolean armed, boolean flown, String pilotIp) {}
+    public record Position(boolean fromFc, double lat, double lon, int ageS, Boolean armed, boolean flown, String pilotIp, int powerMode) {
+        public Position(boolean fromFc, double lat, double lon, int ageS, Boolean armed, boolean flown, String pilotIp) {
+            this(fromFc, lat, lon, ageS, armed, flown, pilotIp, -1);
+        }
+    }
+
+    /** A reply's power mode (phone app pc.39; -1: not said): 0 normal, 1 standby, 2 deep sleep, 3 overwatch. */
+    public static final int POWER_UNKNOWN = -1;
 
     private final Map<String, Entry> entries = new LinkedHashMap<>();
     private final Consumer<Map<String, String>> saver;
@@ -353,8 +360,9 @@ public final class Names {
                 in.readFully(a);
                 pilot = java.net.InetAddress.getByAddress(a).getHostAddress();
             }
+            int power = in.available() >= 1 ? in.readUnsignedByte() : POWER_UNKNOWN; // pc.39: its power mode
             if (source == 0) return null;
-            return new Position(source == 1, lat / 1e7, lon / 1e7, age, armed == 2 ? null : armed == 1, flown, pilot);
+            return new Position(source == 1, lat / 1e7, lon / 1e7, age, armed == 2 ? null : armed == 1, flown, pilot, power);
         } catch (IOException e) {
             return null;
         }
