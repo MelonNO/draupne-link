@@ -91,4 +91,23 @@ class CameraFootprintTest {
         assertTrue(v.flatGround());
         assertEquals(100 / Math.tan(Math.toRadians(30)), northM(v.centre()), 1.5);
     }
+
+    /**
+     * OVERWATCH (1.0.50, the pilot: "way too big" and gone after a few seconds): a drone sitting on a hill at 300 m whose
+     * own height is 0 (barometric, over launch) still sees the ground round it, and nothing past the watch range.
+     */
+    @Test
+    void aSittingDroneSeesTheGroundRoundItOutToTheWatchRange() {
+        CameraFootprint.Pose p = new CameraFootprint.Pose(61.0, 10.0, 0, 90, 0, 0, 0, 90, 50);
+        for (RadioHorizon.Terrain t : new RadioHorizon.Terrain[]{(lat, lon) -> 300.0, null}) {
+            CameraFootprint.View v = CameraFootprint.sitting(p, t);
+            double far = 0;
+            for (double[] ll : v.outline()) {
+                double north = (ll[0] - 61.0) * 111_320, east = (ll[1] - 10.0) * 111_320 * Math.cos(Math.toRadians(61.0));
+                far = Math.max(far, Math.hypot(north, east));
+            }
+            assertTrue(far > 100, "it sees out a fair way, not a point under the hill: " + far);
+            assertTrue(far <= CameraFootprint.WATCH_RANGE_M + 5, "and no further than the watch range: " + far);
+        }
+    }
 }

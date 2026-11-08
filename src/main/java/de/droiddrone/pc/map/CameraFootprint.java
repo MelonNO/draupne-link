@@ -61,8 +61,33 @@ public final class CameraFootprint {
         return new Ray(bearing, ground ? new double[]{hit[0], hit[1], hit[2]} : null, ground ? hit[4] : Double.NaN, flat[0]);
     }
 
+    /**
+     * A drone sitting on the ground watching (OVERWATCH, 1.0.50 - the pilot: "way too big", and gone a few seconds
+     * later): its camera {@link #SITTING_CAMERA_M} over the terrain where it stands (the pose's own height is not on the
+     * terrain's scale - a barometric height over launch put the camera under the hill once the terrain came, and it saw
+     * nothing), and what it watches ends at {@link #WATCH_RANGE_M}: a phone's small picture finds nothing further off,
+     * and a level camera's rays over flat ground ran to MAX_RANGE_M. Without terrain the ground is flat under it.
+     */
+    public static View sitting(Pose p, RadioHorizon.Terrain terrain) {
+        double ground = terrain == null ? Double.NaN : terrain.heightM(p.lat(), p.lon());
+        double groundM = Double.isNaN(ground) ? p.altM() - SITTING_CAMERA_M : ground;
+        Pose on = new Pose(p.lat(), p.lon(), groundM + SITTING_CAMERA_M, p.headingDeg(), p.pitchDeg(), p.rollDeg(), p.tiltDeg(),
+                p.hfovDeg(), p.vfovDeg());
+        return compute(on, Double.isNaN(ground) ? null : terrain, groundM, WATCH_RANGE_M);
+    }
+
+    /** The camera's height over the ground of a drone standing on it (an FPV camera on a quad on its legs). */
+    public static final double SITTING_CAMERA_M = 0.5;
+    /** How far a watching drone's view is drawn: past this its motion detection finds nothing anyway. */
+    public static final double WATCH_RANGE_M = 300;
+
     /** groundFallbackM: the ground's height where the terrain is not known (NaN: below the drone by its height over launch is the caller's choice). */
     public static View compute(Pose p, RadioHorizon.Terrain terrain, double groundFallbackM) {
+        return compute(p, terrain, groundFallbackM, MAX_RANGE_M);
+    }
+
+    /** As compute(p, terrain, groundFallbackM), with the view ending at rangeM. */
+    public static View compute(Pose p, RadioHorizon.Terrain terrain, double groundFallbackM, double rangeM) {
         boolean[] flat = {false};
         List<double[]> outline = new ArrayList<>(4 * PER_EDGE);
         double[][] corners = new double[4][];
@@ -72,12 +97,12 @@ public final class CameraFootprint {
             for (int i = 0; i < PER_EDGE; i++) {
                 double t = (double) i / PER_EDGE;
                 double u = a[0] + (b[0] - a[0]) * t, v = a[1] + (b[1] - a[1]) * t;
-                double[] hit = cast(p, u, v, terrain, groundFallbackM, flat);
+                double[] hit = cast(p, u, v, terrain, groundFallbackM, flat, rangeM);
                 if (i == 0) corners[e] = hit[3] > 0 ? null : new double[]{hit[0], hit[1], hit[2]};
                 outline.add(new double[]{hit[0], hit[1]});
             }
         }
-        double[] c = cast(p, 0, 0, terrain, groundFallbackM, flat);
+        double[] c = cast(p, 0, 0, terrain, groundFallbackM, flat, rangeM);
         double[] centre = c[3] > 0 ? null : new double[]{c[0], c[1], c[2]};
         return new View(p, outline, centre, corners, centre == null ? Double.NaN : c[4], flat[0]);
     }
@@ -113,10 +138,14 @@ public final class CameraFootprint {
 
     /** {lat, lon, ground height, 1 if it met no ground (sky or too far) else 0, slant range m}. */
     static double[] cast(Pose p, double u, double v, RadioHorizon.Terrain terrain, double fallbackM, boolean[] flat) {
+        return cast(p, u, v, terrain, fallbackM, flat, MAX_RANGE_M);
+    }
+
+    static double[] cast(Pose p, double u, double v, RadioHorizon.Terrain terrain, double fallbackM, boolean[] flat, double rangeM) {
         double[] d = direction(p, u, v);
         double horiz = Math.hypot(d[0], d[1]);
         double prevS = 0, s = 0;
-        double maxS = horiz < 1e-6 ? 20_000 : MAX_RANGE_M / horiz;
+        double maxS = horiz < 1e-6 ? 20_000 : rangeM / horiz;
         while (s < maxS) {
             double step = Math.max(2, s * 0.01); // 1 % of the way: 30 m at the far end, metres near the drone
             prevS = s;
@@ -132,7 +161,7 @@ public final class CameraFootprint {
             }
         }
         // sky, or ground past the range: the range's end on the ray's bearing (straight up: over the drone)
-        double reach = horiz < 1e-6 ? 0 : MAX_RANGE_M / horiz;
+        double reach = horiz < 1e-6 ? 0 : rangeM / horiz;
         double[] ll = RadioHorizon.offset(p.lat(), p.lon(), d[1] * reach, d[0] * reach);
         return new double[]{ll[0], ll[1], Double.NaN, 1, Double.NaN};
     }

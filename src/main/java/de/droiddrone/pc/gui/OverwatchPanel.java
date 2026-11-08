@@ -256,7 +256,7 @@ final class OverwatchPanel extends JPanel {
         if (cached != null && cached[0].equals(p) && now - (long) cached[2] < 10_000) return (CameraFootprint.View) cached[1];
         CameraFootprint.Terrain terrain = newTerrain == null ? null : terrains.computeIfAbsent(drone.toLowerCase(Locale.ROOT), k -> newTerrain.get());
         if (terrain != null) terrain.around(p.lat(), p.lon());
-        CameraFootprint.View v = CameraFootprint.compute(p, terrain, p.altM() - 2);
+        CameraFootprint.View v = CameraFootprint.sitting(p, terrain); // on the ground, out to the watch range (1.0.50)
         viewCache.put(key, new Object[]{p, v, now});
         return v;
     }

@@ -3203,18 +3203,26 @@ public class MainWindow extends JFrame {
         }
     }
 
-    /** The minimap's view of a watching drone's camera: worked out once per pose (flat ground under it: no terrain). */
+    /**
+     * The minimap's view of a watching drone's camera: on the ground, out to the watch range, over the terrain once it
+     * has come (one loader for the minimap's watching drones), worked out again every 10 s until then.
+     */
     private de.droiddrone.pc.map.CameraFootprint.View watchedView(de.droiddrone.pc.map.CameraFootprint.Pose p) {
-        de.droiddrone.pc.map.CameraFootprint.View v = watchedViews.get(p);
-        if (v == null) {
-            v = de.droiddrone.pc.map.CameraFootprint.compute(p, null, p.altM() - 2);
-            if (watchedViews.size() > 32) watchedViews.clear();
-            watchedViews.put(p, v);
+        Object[] cached = watchedViews.get(p);
+        long now = System.currentTimeMillis();
+        if (cached != null && (!((de.droiddrone.pc.map.CameraFootprint.View) cached[0]).flatGround() || now - (long) cached[1] < 10_000)) {
+            return (de.droiddrone.pc.map.CameraFootprint.View) cached[0];
         }
+        if (watchTerrain == null) watchTerrain = new de.droiddrone.pc.map.CameraFootprint.Terrain(tileCache);
+        watchTerrain.around(p.lat(), p.lon());
+        de.droiddrone.pc.map.CameraFootprint.View v = de.droiddrone.pc.map.CameraFootprint.sitting(p, watchTerrain);
+        if (watchedViews.size() > 32) watchedViews.clear();
+        watchedViews.put(p, new Object[]{v, now});
         return v;
     }
 
-    private final Map<de.droiddrone.pc.map.CameraFootprint.Pose, de.droiddrone.pc.map.CameraFootprint.View> watchedViews = new java.util.HashMap<>();
+    private final Map<de.droiddrone.pc.map.CameraFootprint.Pose, Object[]> watchedViews = new java.util.HashMap<>();
+    private de.droiddrone.pc.map.CameraFootprint.Terrain watchTerrain;
 
     /** CONNECT on an overwatch card: the phone wakes (told over the overwatch link) and this PC connects to it as its pilot. */
     void overwatchConnect(String drone) {
