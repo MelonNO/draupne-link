@@ -1418,10 +1418,5 @@ final class MapWindow extends JFrame {
         super.setVisible(visible);
         if (opening) WindowReveal.fadeIn((javax.swing.JComponent) getContentPane());
     }
-
-    /** Wide enough for the toolbar's buttons and both choices, and the six figures. */
-    @Override
-    public Dimension getMinimumSize() {
-        return new Dimension(1120, 560);
-    }
+    // no getMinimumSize() of its own: ScreenFit.least sets it (it was 1120 x 560 here, wider than a 1366 screen at 125 %)
 }
