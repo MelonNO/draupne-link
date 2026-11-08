@@ -274,7 +274,7 @@ public class MainWindow extends JFrame {
     private final long startedAtWall = System.currentTimeMillis();
     /** The drone read armed at the last refresh (for the arming's auto-mute). */
     private boolean audioSawArmed;
-    /** The arming's mute comes this long after it (1.0.52): the motors spinning up are heard. */
+    /** A virtual drone's arming mute comes this long after it (1.0.52): its motors spinning up are heard. */
     private static final long SPIN_UP_HEARD_MS = 1500;
     /** When this arming was seen (MonoClock ms), and whether its mute has come. */
     private long armedSoundAt;
@@ -3831,8 +3831,10 @@ public class MainWindow extends JFrame {
             armedSoundAt = now;
             armMuteDone = false;
         }
-        if (armed && !armMuteDone && now - armedSoundAt >= SPIN_UP_HEARD_MS) {
-            // the motors spinning up are heard first (1.0.52, the pilot), then armed = muted
+        // a virtual drone's motors spinning up are heard first (1.0.52, the pilot), then armed = muted; a real drone
+        // mutes at once, so its phone doesn't send sound over the uplink at take-off
+        long spinUp = videoView.isVirtual() ? SPIN_UP_HEARD_MS : 0;
+        if (armed && !armMuteDone && now - armedSoundAt >= spinUp) {
             armMuteDone = true;
             if (!audioMuted) {
                 audioAutoMuted = true;
