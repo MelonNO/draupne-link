@@ -47,7 +47,8 @@ import java.util.function.Supplier;
 final class Tour {
     /** One step: built with the setters, read by the tour. */
     static final class Step {
-        final String title;
+        /** The finish's may change before it shows (a hit). */
+        String title;
         String text;
         /** What is lit; null = a centred box (the welcome, the finish) over the main window. */
         Supplier<JComponent> anchor;
@@ -191,15 +192,9 @@ final class Tour {
         // ---- the main window, top down
         steps.add(new Step("MENU", "Everything lives here. Press it.", main::tourMenuButton).before(openMenu).press().live(header));
         steps.add(new Step("THE MENUS", "SETUP: first-time setup, Set up a new drone, this tour. VIDEO: picture, OSD, "
-                + "recording. LINK: sounds, spectators. TOOLS: find drone, previous flights, tests, Reset setup. Press one.",
+                + "recording. LINK: sounds, spectators. TOOLS: find drone, tests, Reset setup. Press one.",
                 main::tourSetupButton).extra(main::tourToolsButton).before(openMenu).live(header)
                 .targets(() -> List.of(main.tourSetupButton(), main.tourVideoButton(), main.tourLinkButton(), main.tourToolsButton())));
-        steps.add(new Step("PREVIOUS FLIGHTS", "TOOLS > Previous flights: each flight's video, track on the map, height, speed, "
-                + "battery and link on one timeline. EXPORT or DELETE.", PreviousFlightsDialog::tourList)
-                .extra(PreviousFlightsDialog::tourTimeline).before(() -> {
-                    closeMenus();
-                    main.tourOpenPreviousFlights();
-                }).after(PreviousFlightsDialog::tourClose).of(FEATURE_FLIGHTS));
         steps.add(new Step("UPDATE", "A newer version is ready: one press installs it. After the tour.",
                 main::tourUpdateButton).before(openMenu).live(header));
         steps.add(new Step("MINIMIZE", "Folds the controller card for more video. Sticks and switches keep working. Press it.",
@@ -230,8 +225,8 @@ final class Tour {
         Supplier<JComponent> map = () -> main.mapWindow().map();
         steps.add(new Step("MOVING AROUND", "Drag to pan, wheel to zoom. FOLLOW keeps the drone in view. Press it.",
                 () -> main.mapWindow().tourFollow()).before(main::showMapWindow).press().live(map));
-        steps.add(new Step("FIND DRONE", "FIND DRONE: last position, to go and get it. PREVIOUS FLIGHTS: replay a flight.",
-                () -> main.mapWindow().tourPreviousFlights()).extra(() -> main.mapWindow().tourFindDrone()).live(map));
+        steps.add(new Step("FIND DRONE", "The drone's last position, to go and get it.",
+                () -> main.mapWindow().tourFindDrone()).live(map));
         steps.add(new Step("MAP TYPE", "Topo, paper map, satellite or OpenStreetMap. Viewed areas are kept offline. Press it.",
                 () -> main.mapWindow().tourMapType()).press());
         steps.add(new Step("COORDINATES", "MGRS, UTM or degrees, for cursor, drone and pins. Press it.",
@@ -258,11 +253,16 @@ final class Tour {
                     examplePins = true;
                 }).press().live(map));
         steps.add(new Step("TOOLS", "RULER: lengths, bearings, height profile. RADIO HORIZON and GCS SEARCH are for traditional "
-                + "radios, not 5G. GO TO: centre on a grid. CLIPS: overwatch events.", () -> main.mapWindow().tourRuler())
+                + "radios, not 5G. GO TO: centre on a grid. CLIPS: overwatch events. PREVIOUS FLIGHTS: replay.",
+                () -> main.mapWindow().tourRuler())
                 .extra(() -> main.mapWindow().tourToolsEnd()).transition(group(MapToolsPanel.Group.TOOLS)).live(map)
                 .of(FEATURE_MAP_TOOLS));
-        steps.add(new Step("DATA", "EXPORT a box as picture and KML; IMPORT KML. DOWNLOAD AREA keeps maps for offline. "
-                + "CLEAR ALL empties the map.", () -> main.mapWindow().tourExport())
+        steps.add(new Step("PREVIOUS FLIGHTS", "Each flight's video, track, height, speed, battery and link on one timeline. "
+                + "EXPORT or DELETE.", PreviousFlightsDialog::tourList)
+                .extra(PreviousFlightsDialog::tourTimeline).before(() -> main.mapWindow().tourOpenPreviousFlights())
+                .after(PreviousFlightsDialog::tourClose).of(FEATURE_FLIGHTS));
+        steps.add(new Step("DATA", "EXPORT a box: PNG and KML for Google Earth, ATAK / WinTAK and QGIS. IMPORT their KML. "
+                + "DOWNLOAD AREA keeps maps offline. CLEAR ALL empties the map.", () -> main.mapWindow().tourExport())
                 .extra(() -> main.mapWindow().tourDataEnd()).transition(group(MapToolsPanel.Group.DATA)).live(map)
                 .of(FEATURE_MAP_TOOLS));
 
@@ -275,7 +275,10 @@ final class Tour {
                 + "Click one: it shows on the map.", () -> main.mapWindow().tourFleetRows()).live(map).of(FEATURE_FLEET));
         steps.add(new Step("MODES", "STANDBY, DEEP SLEEP, OVERWATCH and EVERY wait for the phone's next check-in. "
                 + "No connecting. PILOT UAV flies it.", () -> main.mapWindow().tourFleetStrip()).live(map).of(FEATURE_FLEET));
-        steps.add(new Step("OVERWATCH", "One drone is on OVERWATCH. Something moves in its picture: wait for the alert.",
+        steps.add(new Step("THE EYES", "Eyes are drones on OVERWATCH; the cones are what they see. Anything entering a "
+                + "cone alerts you.", map).before(this::showTourArea).after(finale::driveIn).live(map).skip(noDrones)
+                .of(FEATURE_FLEET));
+        steps.add(new Step("OVERWATCH", "Something is moving. Wait for the alert.",
                 () -> main.mapWindow().tourFleetRows()).live(map).skip(noDrones)
                 .waitFor(finale::alerted, "Watching...", true).of(FEATURE_FLEET));
         steps.add(new Step("ALERT", "It saw something. Press CONNECT on the alert.", () -> main.mapWindow().tourAlertCards())
@@ -283,13 +286,15 @@ final class Tour {
         steps.add(new Step("FLY", "Hear it? It comes from where it is. Arm, fly to it and hit it.", main::tourVideo)
                 .before(() -> {
                     main.toFront();
-                    main.tourKeepSound(true);
+                    main.tourSoundOn();
                 }).live(main::tourVideo).skip(noDrones).waitFor(finale::crashed, "Hit the BTR", true).of(FEATURE_FLEET));
 
-        Step finish = new Step("TOUR COMPLETE", "SETUP > Tour shows it again.", centre).before(() -> {
+        Step finish = new Step("TOUR COMPLETE", "You're ready to fly for real. SETUP > Tour shows this again.", centre).before(() -> {
             main.toFront();
-            if (finale.crashed()) steps.get(index).text = "Direct hit: the drone is gone, link lost - as a real crash. "
-                    + "SETUP > Tour shows it again.";
+            if (finale.crashed()) {
+                steps.get(index).title = "DIRECT HIT";
+                steps.get(index).text = "You're ready to fly for real.";
+            }
         });
         finish.finish = true;
         steps.add(finish);
@@ -310,6 +315,15 @@ final class Tour {
             return;
         }
         finale.placeModes();
+        showTourArea();
+    }
+
+    /** The map on the tour's drones, their flights and the units, before anything moves. */
+    private void showTourArea() {
+        if (!finale.started()) return;
+        double[] c = finale.centre();
+        main.mapWindow().map().setFollow(false);
+        main.mapWindow().map().centreOn(c[0], c[1], 14.4);
     }
 
     /** An open SETUP / VIDEO / LINK / TOOLS list goes before the next step. */
@@ -1061,18 +1075,81 @@ final class Tour {
                 }
             }
 
-            /** The finish: rings running out from the middle, slower and slower, behind the box. */
+            /**
+             * The finish (1.0.52, the pilot: a new one): a hit. The window's four corner brackets close in on the box
+             * and a reticle narrows on its middle (0.9 s); then the impact - a white flash ring and shards flying out -
+             * and after it a slow radar sweep behind the box, the brackets breathing on its corners.
+             */
             private void paintBurst(Graphics2D g, long now) {
-                double cx = getWidth() / 2.0, cy = getHeight() / 2.0;
-                double max = Math.hypot(cx, cy);
+                Rectangle box = TourNotice.this.getBounds();
+                double cx = box.getCenterX(), cy = box.getCenterY();
+                double w = getWidth(), h = getHeight(), max = Math.hypot(w, h);
                 long t = now - shownAt;
+                double close = ease(Math.min(1, t / 900.0)); // 0 at the window's corners, 1 on the box
+                // the brackets: from the window's corners to the box's, breathing once there
+                double breathe = t > 900 ? 3 + 3 * Math.sin((t - 900) / 380.0) : 0;
+                double[][] from = {{12, 12}, {w - 12, 12}, {12, h - 12}, {w - 12, h - 12}};
+                double[][] to = {{box.x - 14 - breathe, box.y - 14 - breathe}, {box.getMaxX() + 14 + breathe, box.y - 14 - breathe},
+                        {box.x - 14 - breathe, box.getMaxY() + 14 + breathe}, {box.getMaxX() + 14 + breathe, box.getMaxY() + 14 + breathe}};
+                g.setColor(Theme.ACCENT);
+                g.setStroke(new BasicStroke(3f, BasicStroke.CAP_SQUARE, BasicStroke.JOIN_MITER));
                 for (int i = 0; i < 4; i++) {
-                    double phase = ((t / 1800.0) + i * 0.25) % 1.0;
-                    double r = 60 + phase * max;
-                    g.setColor(Theme.alpha(Theme.ACCENT, (int) Math.round(150 * (1 - phase))));
-                    g.setStroke(new BasicStroke((float) (3 * (1 - phase) + 1)));
-                    g.draw(new Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r));
+                    double x = from[i][0] + (to[i][0] - from[i][0]) * close, y = from[i][1] + (to[i][1] - from[i][1]) * close;
+                    double sx = i % 2 == 0 ? 1 : -1, sy = i < 2 ? 1 : -1, arm = 26;
+                    java.awt.geom.Path2D b = new java.awt.geom.Path2D.Double();
+                    b.moveTo(x, y + sy * arm);
+                    b.lineTo(x, y);
+                    b.lineTo(x + sx * arm, y);
+                    g.draw(b);
                 }
+                if (t < 1100) { // the reticle narrows on the middle, then goes at the hit
+                    double r = 30 + (1 - close) * max / 3;
+                    g.setColor(Theme.alpha(Theme.ACCENT, (int) Math.round(200 * Math.min(1, t / 200.0))));
+                    g.setStroke(new BasicStroke(2f));
+                    g.draw(new Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r));
+                    g.draw(new java.awt.geom.Line2D.Double(cx - r - 18, cy, cx - r * 0.55, cy));
+                    g.draw(new java.awt.geom.Line2D.Double(cx + r * 0.55, cy, cx + r + 18, cy));
+                    g.draw(new java.awt.geom.Line2D.Double(cx, cy - r - 18, cx, cy - r * 0.55));
+                    g.draw(new java.awt.geom.Line2D.Double(cx, cy + r * 0.55, cx, cy + r + 18));
+                }
+                long hit = t - 900;
+                if (hit >= 0 && hit < 1400) { // the impact: a flash ring and shards
+                    double p = hit / 1400.0, q = ease(p);
+                    double r = 20 + q * max * 0.55;
+                    g.setColor(Theme.alpha(java.awt.Color.WHITE, (int) Math.round(230 * (1 - p))));
+                    g.setStroke(new BasicStroke((float) (6 * (1 - p) + 1)));
+                    g.draw(new Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r));
+                    java.util.Random shards = new java.util.Random(4609);
+                    g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    for (int i = 0; i < 28; i++) {
+                        double a = shards.nextDouble() * 2 * Math.PI, v = 0.35 + shards.nextDouble() * 0.65, len = 10 + shards.nextDouble() * 22;
+                        double d = 30 + q * v * max * 0.6;
+                        g.setColor(Theme.alpha(i % 3 == 0 ? java.awt.Color.WHITE : Theme.ACCENT, (int) Math.round(220 * (1 - p))));
+                        g.draw(new java.awt.geom.Line2D.Double(cx + Math.cos(a) * d, cy + Math.sin(a) * d,
+                                cx + Math.cos(a) * (d + len), cy + Math.sin(a) * (d + len)));
+                    }
+                }
+                if (hit > 600) { // then a slow sweep behind the box
+                    double ang = (hit - 600) / 1600.0 * 2 * Math.PI;
+                    double r = Math.max(box.width, box.height) * 0.9 + 60;
+                    float fade = (float) Math.min(1, (hit - 600) / 800.0);
+                    for (int i = 0; i < 24; i++) { // the trail: wedges fading behind the line
+                        g.setColor(Theme.alpha(Theme.ACCENT, Math.round(fade * 70 * (1 - i / 24f))));
+                        g.fill(new java.awt.geom.Arc2D.Double(cx - r, cy - r, 2 * r, 2 * r, -Math.toDegrees(ang - i * 0.035),
+                                Math.toDegrees(0.036), java.awt.geom.Arc2D.PIE));
+                    }
+                    g.setColor(Theme.alpha(Theme.ACCENT, Math.round(fade * 200)));
+                    g.setStroke(new BasicStroke(2f));
+                    g.draw(new java.awt.geom.Line2D.Double(cx, cy, cx + Math.cos(ang) * r, cy + Math.sin(ang) * r));
+                    g.setColor(Theme.alpha(Theme.ACCENT, Math.round(fade * 90)));
+                    g.setStroke(new BasicStroke(1.5f));
+                    g.draw(new Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r));
+                    g.draw(new Ellipse2D.Double(cx - r * 0.6, cy - r * 0.6, 1.2 * r, 1.2 * r));
+                }
+            }
+
+            private double ease(double x) {
+                return 1 - Math.pow(1 - x, 3);
             }
         }
     }

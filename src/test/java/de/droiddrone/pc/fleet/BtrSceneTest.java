@@ -52,10 +52,10 @@ class BtrSceneTest {
         s.render(img, v, t0 - 1000, false);
         shot(img, "btr-waiting.png");
         assertTrue(count(img) < 30, "waiting out of the picture: " + count(img));
-        for (long t : new long[]{6000, 9000, 13000, 17000}) {
+        for (long t : new long[]{9000, 15000, 24000, 36000}) {
             s.render(img, v, t0 + t, false);
             shot(img, "btr-video-" + t + ".png");
-            assertTrue(count(img) > 400, "the vehicle at " + t + " ms: " + count(img) + " pixels");
+            assertTrue(count(img) > 250, "the vehicle at " + t + " ms: " + count(img) + " pixels");
         }
         int pale = 0;
         for (int x = 0; x < 1280; x += 8) if ((img.getRGB(x, 20) & 0xff) > 200) pale++;
@@ -105,7 +105,55 @@ class BtrSceneTest {
         assertFalse(s.hits(q[0], q[1], 3.5, at), "a metre over it");
         double h = Math.toRadians(q[2]);
         assertFalse(s.hits(q[0] - Math.sin(h) * 3, q[1] + Math.cos(h) * 3, 1, at), "3 m to its side");
-        assertTrue(Math.hypot(q[0], q[1]) > 15, "the loop is well in front of the drone");
+        assertTrue(Math.hypot(q[0], q[1]) > 50, "the route is well away from the drone");
+    }
+
+    @Test
+    void theRealRecordingsLoadAndArmingSpinsTheMotorsUp() {
+        for (String n : new String[]{"btr-idle", "btr-drive", "fpv-spinup", "fpv-flight"}) {
+            SoundSample s = SoundSample.of(n);
+            assertTrue(s.seconds() > 1.5, n + ": " + s.seconds() + " s");
+            double e = 0;
+            for (float v : s.data) e += v * v;
+            assertTrue(Math.sqrt(e / s.data.length) > 0.05, n + " is not silence");
+        }
+        SoundMaker m = new SoundMaker(1);
+        m.setQuiet(true);
+        double off = 0, on = 0;
+        for (int i = 0; i < 20; i++) for (float v : m.next(-1)) off += v * v; // disarmed: the breeze alone
+        for (int i = 0; i < 20; i++) for (float v : m.next(0.1)) on += v * v; // armed: the spin-up
+        assertTrue(on > 20 * off, "the motors are heard at the arming: " + on + " vs " + off);
+    }
+
+    @Test
+    void itPatrolsFarOffWithBendsSpeedChangesAndHaltsNeverALoop() {
+        long t0 = 4_000_000;
+        BtrScene s = new BtrScene(0, 0, 0, t0);
+        double nearest = 1e9, farthest = 0, top = 0;
+        int halts = 0;
+        boolean halted = false;
+        java.util.Set<Long> headings = new java.util.HashSet<>();
+        double[] first = null;
+        int returns = 0;
+        for (long t = 10_000; t <= 600_000; t += 500) {
+            double[] q = s.pose(t0 + t);
+            double d = Math.hypot(q[0], q[1]);
+            nearest = Math.min(nearest, d);
+            farthest = Math.max(farthest, d);
+            double v = s.speedAt(t0 + t);
+            top = Math.max(top, v);
+            if (v == 0 && !halted) halts++;
+            halted = v == 0;
+            headings.add(Math.round(((q[2] % 360) + 360) % 360 / 30));
+            if (first == null) first = q;
+            else if (t > 60_000 && Math.hypot(q[0] - first[0], q[1] - first[1]) < 2) returns++;
+        }
+        assertTrue(nearest > BtrScene.NEAR_M - 15, "never close to the drone: " + nearest);
+        assertTrue(farthest < BtrScene.FAR_M * 1.6, "within its area: " + farthest);
+        assertTrue(top > 6 && top < 10, "a dash now and then: " + top);
+        assertTrue(halts >= 3, "halts on the way: " + halts);
+        assertTrue(headings.size() >= 8, "it turns every way over ten minutes: " + headings.size());
+        assertTrue(returns < 3, "not a loop: back at its first place " + returns + " times");
     }
 
     @Test

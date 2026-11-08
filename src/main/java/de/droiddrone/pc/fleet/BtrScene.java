@@ -18,23 +18,21 @@ import java.util.Random;
 import java.util.zip.GZIPInputStream;
 
 /**
- * The tour's finale scene (the pilot, 2026-11-08): a BTR driving a loop in front of a virtual drone in overwatch. The
+ * The tour's finale scene (the pilot, 2026-11-08): a BTR on patrol in front of a virtual drone in overwatch. The
  * vehicle is drawn real - its own textures, lit by a low sun, its wheels turning, a shadow on the ground - in a world
  * drawn like a computer simulation: a pale sky and ground, a faint data grid, glowing outlines of far structures,
  * floating fragments, scan lines and now and then a glitch. The motion detection's picture gets the world and the
  * vehicle without the screen effects, so only the vehicle travels in it.
  * <p>
  * Software raster with a depth buffer (DroneModelView's way), one thread per picture (the video's, the detection's,
- * overwatch's preview's each have their own buffers). The loop is fixed on the ground relative to the drone's start:
- * {@link #AHEAD_M} in front of it, {@link #ACROSS_M} to each side, {@link #DEPTH_M} deep, at {@link #SPEED_MS}. The
- * vehicle waits out of the picture, to the left, until {@link #driveFrom}; then it drives in along a straight line and
- * takes the loop. (The detection's first 20 s after its warm-up are strict - a slow, long thing reads as flicker then -
- * so the scenario lets it in once the watching is older than that.)
+ * overwatch's preview's each have their own buffers). Its route (1.0.52, the pilot: "more realistic of a military
+ * vehicle, not just a circle, and farther away") is fixed on the ground relative to the drone's start: a road
+ * {@link #NEAR_M} to {@link #FAR_M} in front of it, wandering across its picture with bends, speed changes and halts,
+ * never the same stretch twice. It waits out of the picture, to the left, until {@link #driveFrom}. (The detection's
+ * first 20 s after its warm-up are strict - a slow, long thing reads as flicker then - so the scenario lets it in once
+ * the watching is older than that.)
  */
 final class BtrScene implements Scene.World {
-    static final double AHEAD_M = 30, ACROSS_M = 18, DEPTH_M = 8, SPEED_MS = 6;
-    /** Where it waits: on the loop's near side, this far across (out of a 90 degree picture from the drone's start). */
-    static final double WAIT_ACROSS_M = -50;
     /** The sun: from the south-west, 35 degrees up (north, east, up). */
     private static final double[] SUN = unit(new double[]{-0.574, -0.574, 0.70});
     private static final String MESH = "/model/btr.bin.gz";
@@ -188,48 +186,57 @@ final class BtrScene implements Scene.World {
         return (p[a * 3] - p[o * 3]) * (double) (p[b * 3 + 1] - p[o * 3 + 1]) - (p[a * 3 + 1] - p[o * 3 + 1]) * (double) (p[b * 3] - p[o * 3]);
     }
 
-    // ------------------------------------------------------------------ the loop
+    // ------------------------------------------------------------------ the route
 
     private final Model m = model();
-    private final double centreN, centreE, fwdN, fwdE, rightN, rightE;
+    private final double originN, originE, fwdN, fwdE, rightN, rightE;
+    /** Its range ahead of the drone (NEAR_M, FAR_M unless a test asks). */
+    private final double nearM, farM;
     private volatile long startMs;
-    private final double approachM;
-    /** Arc length along the loop at each of LOOP_STEPS angles, and the loop's length. */
-    private static final int LOOP_STEPS = 720;
-    /** The loop is taken from its near side's middle, heading across (where the way in joins it). */
-    private static final double LOOP_START = 1.5 * Math.PI;
-    private final double[] arc = new double[LOOP_STEPS + 1];
-    private final double loopM;
     /** The far structures and the floating fragments, fixed in the world. */
     private final double[][] structures, fragments;
+    /** The road it drives, every ROUTE_STEP_M along it: north and east. */
+    private final double[] routeN, routeE;
+    /** Its drive, every TICK_S from the start: the distance along the road and the speed then. */
+    private final float[] driveS, driveV;
+
+    /**
+     * The route's nearest and farthest point ahead of the drone, metres (the pilot: farther away - about three times the
+     * 1.0.51 loop's). Farther, the vehicle is a few pixels in the detection's picture and the detector of
+     * 1.0.52 no longer finds it reliably (it reaches about 80 m; measured: 85-140 m took over a minute, 100-190 m never).
+     */
+    static final double NEAR_M = 50, FAR_M = 95;
+    private static final double ROUTE_STEP_M = 0.5, TICK_S = 0.1;
+    /** Its drive is worked out this far ahead; after that it stands (a tour never takes this long). */
+    private static final double DRIVE_S = 40 * 60;
+    /** How hard it speeds up, brakes and takes a bend (m/s2): a heavy wheeled vehicle off-road. */
+    private static final double ACCEL = 0.9, BRAKE = 1.6, LATERAL = 1.2;
 
     /**
      * @param north     east the drone's start point (metres, the flight model's)
-     * @param headingDeg where the drone looks: the loop is AHEAD_M in front
+     * @param headingDeg where the drone looks: the route is NEAR_M to FAR_M in front of it, across its picture
      */
     BtrScene(double north, double east, double headingDeg, long startMs) {
+        this(north, east, headingDeg, startMs, NEAR_M, FAR_M);
+    }
+
+    /** With its own range ahead (tests: how far the detection still finds it). */
+    BtrScene(double north, double east, double headingDeg, long startMs, double nearM, double farM) {
+        this.nearM = nearM;
+        this.farM = farM;
         double h = Math.toRadians(headingDeg);
         fwdN = Math.cos(h);
         fwdE = Math.sin(h);
         rightN = -Math.sin(h);
         rightE = Math.cos(h);
-        centreN = north + fwdN * AHEAD_M;
-        centreE = east + fwdE * AHEAD_M;
+        originN = north;
+        originE = east;
         this.startMs = startMs;
-        double len = 0;
-        double[] prev = loopPoint(LOOP_START);
-        for (int i = 1; i <= LOOP_STEPS; i++) {
-            double[] q = loopPoint(LOOP_START + 2 * Math.PI * i / LOOP_STEPS);
-            len += Math.hypot(q[0] - prev[0], q[1] - prev[1]);
-            arc[i] = len;
-            prev = q;
-        }
-        loopM = len;
-        approachM = -WAIT_ACROSS_M; // along the loop's near side, from WAIT_ACROSS_M to its middle (where it heads across)
         Random r = new Random(4609);
+        // the far structures stand behind the route
         structures = new double[18][];
         for (int i = 0; i < structures.length; i++) {
-            double a = r.nextDouble() * 2 * Math.PI, d = 140 + r.nextDouble() * 160;
+            double a = r.nextDouble() * 2 * Math.PI, d = 230 + r.nextDouble() * 200;
             structures[i] = new double[]{north + Math.cos(a) * d, east + Math.sin(a) * d, 8 + r.nextDouble() * 22, 8 + r.nextDouble() * 26,
                     10 + r.nextDouble() * 45, r.nextDouble() * Math.PI / 2};
         }
@@ -238,12 +245,148 @@ final class BtrScene implements Scene.World {
             double a = r.nextDouble() * 2 * Math.PI, d = 15 + r.nextDouble() * 130;
             fragments[i] = new double[]{north + Math.cos(a) * d, east + Math.sin(a) * d, 0.8 + r.nextDouble() * 9, r.nextDouble() * 6.28, 0.2 + r.nextDouble() * 0.5};
         }
+        List<double[]> way = waypoints(new Random(1980), nearM, farM);
+        double[][] road = road(way);
+        routeN = road[0];
+        routeE = road[1];
+        float[][] d = drive(way, road[2]);
+        driveS = d[0];
+        driveV = d[1];
     }
 
-    /** The loop at angle t: an ellipse across the view; {north, east}. */
-    private double[] loopPoint(double t) {
-        double a = Math.cos(t) * ACROSS_M, b = Math.sin(t) * DEPTH_M;
-        return new double[]{centreN + rightN * a + fwdN * b, centreE + rightE * a + fwdE * b};
+    /**
+     * Where it drives, in the drone's frame {forward, right, speed on the way there m/s, halt there s}: from its hide
+     * outside the picture's left edge into the picture, then on and on across it - legs of 35-90 m, bends of at most 70
+     * degrees, now a crawl, now a dash, now and then a halt (to look, as a vehicle on patrol does). Seeded: the same
+     * drive each time, never a loop.
+     */
+    private static List<double[]> waypoints(Random r, double near, double far) {
+        List<double[]> w = new ArrayList<>();
+        double mid = (near + far) / 2, side = near * 0.95, scale = mid / 145;
+        double in = near + 0.15 * (far - near); // the way in at the near side: biggest in the picture when it is first seen
+        w.add(new double[]{in, -in * 1.2, 0, 0}); // the hide: 50 degrees left of the nose, out of a 90 degree picture
+        w.add(new double[]{in * 1.02, -in * 0.83, 6.5, 0});
+        w.add(new double[]{in, -in * 0.48, 6, 0});
+        double f = near + 0.3 * (far - near), s = -mid * 0.26, dir = Math.toRadians(80); // heading across, to the right
+        w.add(new double[]{f, s, 3.5, 6}); // the first halt, in the picture
+        for (int i = 0; i < 90; i++) {
+            double leg = (35 + r.nextDouble() * 55) * Math.max(0.5, scale);
+            double turn = Math.toRadians((r.nextDouble() * 2 - 1) * 70);
+            double nf = f + Math.cos(dir + turn) * leg, ns = s + Math.sin(dir + turn) * leg;
+            if (nf < near || nf > far || Math.abs(ns) > side) { // out of its area: back towards the middle
+                double back = Math.atan2(-s * 0.6, mid - f);
+                double t = Math.atan2(Math.sin(back - dir), Math.cos(back - dir));
+                turn = Math.max(-Math.toRadians(110), Math.min(Math.toRadians(110), t));
+                nf = f + Math.cos(dir + turn) * leg;
+                ns = s + Math.sin(dir + turn) * leg;
+            }
+            dir += turn;
+            f = Math.max(near - 10, Math.min(far + 10, nf));
+            s = Math.max(-side - 10, Math.min(side + 10, ns));
+            double speed = r.nextDouble() < 0.25 ? 2 + r.nextDouble() * 1.5 : 4.5 + r.nextDouble() * 4;
+            double halt = r.nextDouble() < 0.2 ? 3 + r.nextDouble() * 7 : 0;
+            w.add(new double[]{f, s, speed, halt});
+        }
+        return w;
+    }
+
+    /** The waypoints as a smooth road (Catmull-Rom), every ROUTE_STEP_M: {north[], east[], waypoint index there[]}. */
+    private double[][] road(List<double[]> way) {
+        List<double[]> pts = new ArrayList<>();
+        int n = way.size();
+        for (int i = 0; i < n - 1; i++) {
+            double[] p0 = world(way.get(Math.max(0, i - 1))), p1 = world(way.get(i)), p2 = world(way.get(i + 1)),
+                    p3 = world(way.get(Math.min(n - 1, i + 2)));
+            int k = 400;
+            for (int j = 0; j < k; j++) {
+                double t = (double) j / k, t2 = t * t, t3 = t2 * t;
+                double pn = 0.5 * (2 * p1[0] + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3);
+                double pe = 0.5 * (2 * p1[1] + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3);
+                pts.add(new double[]{pn, pe, i + t});
+            }
+        }
+        double[] last = world(way.get(n - 1));
+        pts.add(new double[]{last[0], last[1], n - 1});
+        List<double[]> even = new ArrayList<>(); // resampled every ROUTE_STEP_M of road
+        even.add(pts.get(0));
+        double carry = 0;
+        for (int i = 1; i < pts.size(); i++) {
+            double[] a = pts.get(i - 1), b = pts.get(i);
+            double seg = Math.hypot(b[0] - a[0], b[1] - a[1]);
+            double pos = ROUTE_STEP_M - carry;
+            while (pos <= seg) {
+                double k = pos / seg;
+                even.add(new double[]{a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k});
+                pos += ROUTE_STEP_M;
+            }
+            carry = seg - (pos - ROUTE_STEP_M);
+        }
+        double[][] out = new double[3][even.size()];
+        for (int i = 0; i < even.size(); i++) {
+            out[0][i] = even.get(i)[0];
+            out[1][i] = even.get(i)[1];
+            out[2][i] = even.get(i)[2];
+        }
+        return out;
+    }
+
+    /** A point in the drone's frame {forward, right} on the ground {north, east}. */
+    private double[] world(double[] w) {
+        return new double[]{originN + fwdN * w[0] + rightN * w[1], originE + fwdE * w[0] + rightE * w[1]};
+    }
+
+    /**
+     * Drives the road: towards each leg's speed at ACCEL / BRAKE, slower in bends (LATERAL), braking in time for each
+     * halt and standing there its seconds. Every TICK_S: {distance along the road[], speed[]}.
+     */
+    private float[][] drive(List<double[]> way, double[] wpAt) {
+        int points = routeN.length;
+        double[] limit = new double[points]; // the bend's speed limit at each point
+        for (int i = 0; i < points; i++) {
+            int a = Math.max(0, i - 6), b = Math.min(points - 1, i + 6);
+            double h1 = Math.atan2(routeE[i] - routeE[a], routeN[i] - routeN[a]), h2 = Math.atan2(routeE[b] - routeE[i], routeN[b] - routeN[i]);
+            double dh = Math.abs(Math.atan2(Math.sin(h2 - h1), Math.cos(h2 - h1)));
+            double curvature = dh / Math.max(ROUTE_STEP_M, (b - a) * ROUTE_STEP_M / 2);
+            limit[i] = curvature < 1e-4 ? 99 : Math.sqrt(LATERAL / curvature);
+        }
+        List<int[]> halts = new ArrayList<>(); // {road point, ms}
+        for (int w = 1; w < way.size(); w++) {
+            if (way.get(w)[3] <= 0) continue;
+            int at = 0;
+            while (at < points - 1 && wpAt[at] < w) at++;
+            halts.add(new int[]{at, (int) Math.round(way.get(w)[3] * 1000)});
+        }
+        int ticks = (int) (DRIVE_S / TICK_S);
+        float[] ds = new float[ticks], dv = new float[ticks];
+        double pos = 0, v = 0, standUntil = -1;
+        int nextHalt = 0;
+        for (int k = 0; k < ticks; k++) {
+            double t = k * TICK_S;
+            int i = Math.min(points - 1, (int) (pos / ROUTE_STEP_M));
+            if (standUntil > t || i >= points - 1) {
+                v = 0;
+            } else {
+                int leg = (int) Math.min(way.size() - 1, Math.floor(wpAt[i]) + 1);
+                double want = Math.min(way.get(leg)[2], limit[i]);
+                // a bend ahead: slow down for it in time
+                for (int j = i; j < Math.min(points, i + 60); j++) want = Math.min(want, Math.sqrt(limit[j] * limit[j] + 2 * BRAKE * (j - i) * ROUTE_STEP_M));
+                if (nextHalt < halts.size()) {
+                    double toHalt = (halts.get(nextHalt)[0] - i) * ROUTE_STEP_M;
+                    want = Math.min(want, Math.max(0.3, Math.sqrt(2 * BRAKE * Math.max(0, toHalt))));
+                    if (toHalt <= 0.3) {
+                        standUntil = t + halts.get(nextHalt)[1] / 1000.0;
+                        nextHalt++;
+                        want = 0;
+                        v = 0;
+                    }
+                }
+                v = want > v ? Math.min(want, v + ACCEL * TICK_S) : Math.max(want, v - BRAKE * TICK_S);
+                pos += v * TICK_S;
+            }
+            ds[k] = (float) pos;
+            dv[k] = (float) v;
+        }
+        return new float[][]{ds, dv};
     }
 
     /** It starts driving at this time (until then it waits out of the picture). */
@@ -255,22 +398,29 @@ final class BtrScene implements Scene.World {
         return startMs;
     }
 
+    /** Its speed now, m/s (0 waiting or halted). */
+    double speedAt(long nowMs) {
+        int k = (int) Math.floor((nowMs - startMs) / 1000.0 / TICK_S);
+        return k < 0 ? 0 : driveV[Math.min(driveV.length - 1, k)];
+    }
+
     /** Where the vehicle is: {north, east, heading degrees, metres driven}. */
     double[] pose(long nowMs) {
-        double driven = Math.max(0, nowMs - startMs) / 1000.0 * SPEED_MS;
-        if (driven < approachM) { // the way in: straight across, towards the loop's left end
-            double a = WAIT_ACROSS_M + driven;
-            double heading = Math.toDegrees(Math.atan2(rightE, rightN));
-            return new double[]{centreN + rightN * a - fwdN * DEPTH_M, centreE + rightE * a - fwdE * DEPTH_M, heading, driven};
+        double t = (nowMs - startMs) / 1000.0 / TICK_S;
+        double s;
+        if (t <= 0) {
+            s = 0;
+        } else {
+            int k = (int) t;
+            s = k >= driveS.length - 1 ? driveS[driveS.length - 1] : driveS[k] + (driveS[k + 1] - driveS[k]) * (t - k);
         }
-        double s = (driven - approachM) % loopM;
-        int i = Arrays.binarySearch(arc, s);
-        i = Math.min(LOOP_STEPS, Math.max(1, i < 0 ? -i - 1 : i));
-        double f = (s - arc[i - 1]) / Math.max(1e-9, arc[i] - arc[i - 1]);
-        double t = LOOP_START + 2 * Math.PI * (i - 1 + f) / LOOP_STEPS;
-        double[] at = loopPoint(t), ahead = loopPoint(t + 0.01);
-        double heading = Math.toDegrees(Math.atan2(ahead[1] - at[1], ahead[0] - at[0]));
-        return new double[]{at[0], at[1], heading, driven};
+        double x = Math.min(routeN.length - 1.001, s / ROUTE_STEP_M);
+        int i = (int) x;
+        double f = x - i;
+        double n = routeN[i] + (routeN[i + 1] - routeN[i]) * f, e = routeE[i] + (routeE[i + 1] - routeE[i]) * f;
+        int a = Math.max(0, i - 2), b = Math.min(routeN.length - 1, i + 3);
+        double heading = Math.toDegrees(Math.atan2(routeE[b] - routeE[a], routeN[b] - routeN[a]));
+        return new double[]{n, e, heading, s};
     }
 
     /** Whether a drone at this point touches the vehicle (its box and a margin). */

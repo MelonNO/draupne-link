@@ -270,6 +270,11 @@ public class MainWindow extends JFrame {
     private final long startedAtWall = System.currentTimeMillis();
     /** The drone read armed at the last refresh (for the arming's auto-mute). */
     private boolean audioSawArmed;
+    /** The arming's mute comes this long after it (1.0.52): the motors spinning up are heard. */
+    private static final long SPIN_UP_HEARD_MS = 1500;
+    /** When this arming was seen (MonoClock ms), and whether its mute has come. */
+    private long armedSoundAt;
+    private boolean armMuteDone;
     /** The phone's sound while connected, or null. */
     private LiveAudio liveAudio;
     /** What the live audio did at the last refresh, and the states already told in the log this connection. */
@@ -711,11 +716,6 @@ public class MainWindow extends JFrame {
                     save(Map.of(GPS_SOURCE_KEY, preferPhone ? "phone" : "drone"));
                     if (mapWindow != null) mapWindow.setPreferPhone(preferPhone);
                 }));
-        menu.add(new MenuRows.WindowRow("Previous flights", "Play back, map, export", () ->
-                PreviousFlightsDialog.show(this, tileCache, mapSource, f -> {
-                    if (f != null) showMapWindow();
-                    mapWindow().showOldTrackOrClear(f);
-                })));
         menu.addSeparator();
         menu.add(new MenuRows.SwitchRow("Latency test", "Measures the real video delay",
                 latencyMeter != null, this::setLatencyTest));
@@ -3778,7 +3778,13 @@ public class MainWindow extends JFrame {
         long now = de.droiddrone.pc.MonoClock.ms();
         boolean armed = c != null && !c.getLink().isSpectator() && c.getLink().getTelemetry().isArmedNow(now, 2000);
         if (armed && !audioSawArmed) {
-            if (!audioMuted && !tourKeepSound) {
+            armedSoundAt = now;
+            armMuteDone = false;
+        }
+        if (armed && !armMuteDone && now - armedSoundAt >= SPIN_UP_HEARD_MS) {
+            // the motors spinning up are heard first (1.0.52, the pilot), then armed = muted
+            armMuteDone = true;
+            if (!audioMuted) {
                 audioAutoMuted = true;
                 setAudioMuted(true, true);
                 logLine("Armed: sound muted. M unmutes.");
@@ -3886,6 +3892,7 @@ public class MainWindow extends JFrame {
             logLine(n + " earlier flight" + (n == 1 ? "" : "s") + " taken off the map.");
             pushKept();
         };
+        list.addAll(tourFlights); // after the kept ones: removing one of those never reaches these
         miniMap.setKept(list, remove, clear);
         if (mapWindow != null) mapWindow.map().setKept(list, remove, clear);
     }
@@ -4741,8 +4748,6 @@ public class MainWindow extends JFrame {
 
     /** Until the tour's sleep step: the sleep row stays hidden while nothing is connected (the pilot). */
     private boolean tourSleepHidden;
-    /** The tour's finale: arming keeps the sound on, so the BTR is heard in the air. */
-    private boolean tourKeepSound;
 
     void tourHideSleep(boolean hide) {
         tourSleepHidden = hide;
@@ -4751,9 +4756,9 @@ public class MainWindow extends JFrame {
         linkCard.repaint();
     }
 
-    void tourKeepSound(boolean keep) {
-        tourKeepSound = keep;
-        if (keep && audioMuted) setAudioMuted(false, true);
+    /** The tour's finale: the sound on, so the BTR is heard before the arming (which mutes it as always). */
+    void tourSoundOn() {
+        if (audioMuted) setAudioMuted(false, true);
     }
 
     /** The tour starts with the controller card open, so the pilot folds it when asked. */
@@ -4793,13 +4798,6 @@ public class MainWindow extends JFrame {
         return popMapButton;
     }
 
-    /** TOOLS > Previous flights, for the tour's quick look. */
-    void tourOpenPreviousFlights() {
-        PreviousFlightsDialog.show(this, tileCache, mapSource, f -> {
-            if (f != null) showMapWindow();
-            mapWindow().showOldTrackOrClear(f);
-        });
-    }
 
     /** The map window closed, so the pilot opens it with POP OUT MAP when the tour asks. */
     void tourHideMapWindow() {
@@ -4828,6 +4826,26 @@ public class MainWindow extends JFrame {
 
     void tourForget(String drone) {
         overwatch.forget(drone);
+        lastCell.remove(drone.toLowerCase(Locale.ROOT));
+    }
+
+    /** The tour's drones' flights on the maps, after the kept ones; never saved (empty takes them off). */
+    private java.util.List<MapView.Kept> tourFlights = java.util.List.of();
+
+    void tourFlights(java.util.List<MapView.Kept> flights) {
+        tourFlights = java.util.List.copyOf(flights);
+        pushKept();
+    }
+
+    /** The tour's units on both maps; never in graphics.kml (empty takes them off). */
+    void tourUnits(java.util.List<de.droiddrone.pc.map.MapGraphics.Item> units) {
+        miniMap.setTourItems(units);
+        if (mapWindow != null) mapWindow.map().setTourItems(units);
+    }
+
+    /** A tour drone's pack per cell as if this PC had read it at its last flight (the fleet row's DRONE figure). */
+    void tourLastCell(String drone, double cellVolts, long ageMs) {
+        lastCell.put(drone.toLowerCase(Locale.ROOT), new double[]{cellVolts, System.currentTimeMillis() - ageMs});
     }
 
     int tourLinkPort() {

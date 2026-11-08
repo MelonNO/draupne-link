@@ -1876,6 +1876,14 @@ class MapView extends JComponent {
         }
     }
 
+    /** The tour's own drawings (its fleet steps' units): painted only, never in graphics.kml, gone when the tour ends. */
+    private volatile List<MapGraphics.Item> tourItems = List.of();
+
+    void setTourItems(List<MapGraphics.Item> items) {
+        tourItems = items == null ? List.of() : List.copyOf(items);
+        repaint();
+    }
+
     private void paintGraphics(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
         if (graphics != null) {
             for (MapGraphics.Item it : graphics.list()) {
@@ -1883,6 +1891,7 @@ class MapView extends JComponent {
                 paintItem(g, it, false, zi, scale, wcx, wcy, w, h);
             }
         }
+        for (MapGraphics.Item it : tourItems) paintItem(g, it, false, zi, scale, wcx, wcy, w, h);
         if (measurement != null && measurement != moving && toolOverlaysShown) paintItem(g, measurement, false, zi, scale, wcx, wcy, w, h);
         if (movingLive != null) paintItem(g, movingLive, false, zi, scale, wcx, wcy, w, h);
         if (tool == Tool.NONE || forPicture) return;

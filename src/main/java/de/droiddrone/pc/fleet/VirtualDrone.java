@@ -1171,7 +1171,7 @@ public final class VirtualDrone {
                     System.arraycopy(own, 0, right, 0, own.length);
                     long now = System.currentTimeMillis();
                     double[] rel = scenario.relative(view(), now);
-                    vehicle.add(left, right, rel[0], rel[1], rel[2], now >= scenario.drivesFrom() ? BtrScene.SPEED_MS : 0);
+                    vehicle.add(left, right, rel[0], rel[1], rel[2], scenario.speedAt(now));
                     frames = enc.encode(left, right);
                 } else {
                     frames = enc.encode(sound.next(fc.isArmed() ? fc.throttleOut() : -1));
@@ -1377,7 +1377,7 @@ public final class VirtualDrone {
         requestMode(r.mode, r.intervalMin, "PC fleet");
     }
 
-    /** How this virtual phone is doing: its battery, three bars, the FC's GPS, a phone at 31 C. */
+    /** How this virtual phone is doing: its battery, its signal bars, the FC's GPS, its temperature. */
     de.droiddrone.common.FleetProtocol.Status fleetStatus() {
         long now = System.currentTimeMillis();
         boolean gps = !fcLost && !asleep && !checking;
@@ -1386,9 +1386,9 @@ public final class VirtualDrone {
             m = mode;
             interval = checkIntervalMin;
         }
-        return new de.droiddrone.common.FleetProtocol.Status(phoneBatteryPercent(), false, 3,
+        return new de.droiddrone.common.FleetProtocol.Status(phoneBatteryPercent(), false, signalBars,
                 gps ? (fc.gpsFix(now) ? 1 : 0) : de.droiddrone.common.FleetProtocol.UNKNOWN,
-                gps ? fc.satellites(now) : de.droiddrone.common.FleetProtocol.UNKNOWN, 310, m, interval, fleetToken);
+                gps ? fc.satellites(now) : de.droiddrone.common.FleetProtocol.UNKNOWN, phoneTempDeci, m, interval, fleetToken);
     }
 
     static String modeName(int m) {
@@ -1546,7 +1546,22 @@ public final class VirtualDrone {
 
     int phoneBatteryPercent() {
         long minutes = (System.currentTimeMillis() - startedAt) / 60_000;
-        return (int) Math.max(15, 92 - minutes / 6);
+        return (int) Math.max(5, phoneStartPercent - minutes / 6);
+    }
+
+    /** The phone's battery at the start, its temperature (tenths of a degree) and its signal bars (the tour's drones set them). */
+    private volatile int phoneStartPercent = 92, phoneTempDeci = 310, signalBars = 3;
+
+    /**
+     * As if out in the field for hours (the tour's drones): the drone's pack at this rest voltage per cell after its
+     * flight, the phone at this battery, temperature and signal; only the breeze and the motors in its microphone.
+     */
+    void setOutside(double restCellVolts, int phonePercent, double phoneTempC, int bars) {
+        fc.useTo(restCellVolts);
+        phoneStartPercent = phonePercent;
+        phoneTempDeci = (int) Math.round(phoneTempC * 10);
+        signalBars = bars;
+        sound.setQuiet(true);
     }
 
     // ------------------------------------------------------------------ the motion detection (MotionWatch's part)
@@ -1689,6 +1704,11 @@ public final class VirtualDrone {
 
     public boolean isArmed() {
         return fc.isArmed();
+    }
+
+    /** The pack's voltage per cell now. */
+    public double cellVolts() {
+        return fc.volts() / fc.cells();
     }
 
     public int slot() {

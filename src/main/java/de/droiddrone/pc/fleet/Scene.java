@@ -132,21 +132,23 @@ final class Scene {
         return !targets(nowMs).isEmpty();
     }
 
-    /** Draws the picture into img (TYPE_INT_RGB), the name, the clock and extra burned in. */
+    /**
+     * Draws the picture into img (TYPE_INT_RGB). Nothing is written on a generated picture any more (1.0.52, the pilot:
+     * the OSD shows the state and the clock, the graphics make it plainly virtual); extra is unused there.
+     */
     void render(BufferedImage img, View v, long nowMs, String extra) {
         render(img, v, nowMs, extra, true);
     }
 
     /**
-     * @param burnIn the name, VIRTUAL, the clock and extra written on it - not on the motion detection's picture (the
-     *               phone's analysis picture has none, and a clock's digits change every picture)
+     * @param burnIn false for the motion detection's picture (a world's screen effects left out); nothing is written
+     *               on either since 1.0.52
      */
     void render(BufferedImage img, View v, long nowMs, String extra, boolean burnIn) {
         int w = img.getWidth(), h = img.getHeight();
         World wd = world;
         if (wd != null) {
             wd.render(img, v, nowMs, !burnIn);
-            if (burnIn) burnIn(img, extra);
             return;
         }
         Graphics2D g = img.createGraphics();
@@ -199,13 +201,15 @@ final class Scene {
                 cam.line(g, p[0], p[1], 0, p[0], p[1], p[2]);
             }
             for (Target t : targets(nowMs)) paintTarget(g, cam, t, nowMs);
-            if (burnIn) burnIn(g, w, h, extra);
         } finally {
             g.dispose();
         }
     }
 
-    /** The name, VIRTUAL and the clock written on any picture (a replayed flight's too), extra at the bottom. */
+    /**
+     * The name, VIRTUAL and the clock written on a replayed flight's picture, extra at the bottom: real footage, so it
+     * keeps saying it is a replay in the virtual fleet.
+     */
     void burnIn(BufferedImage img, String extra) {
         Graphics2D g = img.createGraphics();
         try {

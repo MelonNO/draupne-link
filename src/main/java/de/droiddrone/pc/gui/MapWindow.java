@@ -42,7 +42,7 @@ import java.util.function.Consumer;
 
 /**
  * The map in a window of its own, for a second screen (MAP > Map window, F3). Hidden until opened; remembers where
- * it was (and whether maximized). A toolbar in the program's style above the map (FOLLOW, GO TO, PREVIOUS FLIGHTS, PINS,
+ * it was (and whether maximized). A toolbar in the program's style above the map (FOLLOW, GO TO, PINS,
  * DOWNLOAD AREA, FIND DRONE; the map picture and the coordinate format), the figures under it: the place under the
  * mouse and the terrain height there (m and ft), the drone's position, altitude, distance and bearing from the
  * launch point, and which GPS the position comes from (with the phone's accuracy). Right-click on the map drops a
@@ -69,7 +69,6 @@ final class MapWindow extends JFrame {
     private boolean profileShown = true;
     private final Consumer<Map<String, String>> saver;
     private final JButton followButton = Theme.secondaryButton("Follow: on");
-    private final JButton tracksButton = Theme.secondaryButton("Previous flights");
     /** A hidden download's progress, in the toolbar; a click brings its window back. */
     private final JLabel downloadLine = Theme.label("", Theme.headingFont(12f), Theme.ACCENT);
     private JPanel cursorCell, terrainCell, droneCell;
@@ -145,9 +144,8 @@ final class MapWindow extends JFrame {
         });
         left.add(followButton);
         // the whole flight: a double-click on the map; the launch point: the Home key (End: the drone)
-        tracksButton.setToolTipText("Play back, show on map, export");
-        tracksButton.addActionListener(e -> PreviousFlightsDialog.show(this, cache, map.source(), this::showOldTrackOrClear));
-        left.add(tracksButton);
+        // PREVIOUS FLIGHTS: in MAP TOOLS > TOOLS only (1.0.52, the pilot)
+        tools.flights.addActionListener(e -> PreviousFlightsDialog.show(this, cache, map.source(), this::showOldTrackOrClear));
         // MAP TOOLS (1.0.35): GO TO, PINS and DOWNLOAD AREA live in the slide-out, with the ruler, the drawings and the symbols
         tools.goTo.setToolTipText("Centre on a position: MGRS, UTM or lat, lon");
         tools.goTo.addActionListener(e -> goToPosition());
@@ -1104,8 +1102,14 @@ final class MapWindow extends JFrame {
         return findButton;
     }
 
+    /** The tour opens PREVIOUS FLIGHTS from here (MAP TOOLS > TOOLS), in front of the map window. */
+    void tourOpenPreviousFlights() {
+        PreviousFlightsDialog.show(this, cache, map.source(), this::showOldTrackOrClear);
+    }
+
+    /** PREVIOUS FLIGHTS in MAP TOOLS > TOOLS. */
     javax.swing.JComponent tourPreviousFlights() {
-        return tracksButton;
+        return tools.flights;
     }
 
     /** The tour's slow switch to a MAP TOOLS list (null folds the open one); done once it is out. */

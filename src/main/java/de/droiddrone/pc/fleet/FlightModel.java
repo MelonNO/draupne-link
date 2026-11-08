@@ -500,6 +500,23 @@ public final class FlightModel {
         return setup.capacityMah;
     }
 
+    /**
+     * A pack used down to this rest voltage per cell (the tour's drones, back from a flight and out for hours), only on
+     * the ground: the charge drawn that leaves it there.
+     */
+    public synchronized void useTo(double restCellVolts) {
+        if (armed) return;
+        double lo = 0, hi = setup.capacityMah;
+        for (int i = 0; i < 40; i++) {
+            double mid = (lo + hi) / 2;
+            double soc = Math.max(0, 1 - mid / setup.capacityMah);
+            double cell = 3.3 + 0.75 * soc + 0.15 * Math.pow(soc, 0.25) - 0.05 * (1 - soc) * (1 - soc);
+            if (cell > restCellVolts) lo = mid;
+            else hi = mid;
+        }
+        mahDrawn = (lo + hi) / 2;
+    }
+
     /** A fresh pack (the panel's NEW BATTERY), only on the ground. */
     public synchronized void newBattery() {
         if (!armed) mahDrawn = 0;

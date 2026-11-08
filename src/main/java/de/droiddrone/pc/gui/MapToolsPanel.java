@@ -87,6 +87,8 @@ final class MapToolsPanel extends JPanel {
     final JButton goTo = Theme.secondaryButton("Go to");
     /** 1.0.47: the overwatch clips, per drone (the map window's clip list). */
     final JButton clips = Theme.secondaryButton("Clips");
+    /** 1.0.52 (the pilot): PREVIOUS FLIGHTS lives here only - not in the map's top bar or the main TOOLS menu. */
+    final JButton flights = Theme.secondaryButton("Previous flights");
     final JButton download = Theme.secondaryButton("Download area");
     final JButton export = Theme.secondaryButton("Export...");
     final JButton importButton = Theme.secondaryButton("Import...");
@@ -159,7 +161,7 @@ final class MapToolsPanel extends JPanel {
             bodies.put(g, body);
         }
         groupTabs.get(Group.DRAW).setToolTipText("Lines, boxes, arrows, NATO symbols, eraser, pins");
-        groupTabs.get(Group.TOOLS).setToolTipText("Ruler, radio horizon, GCS search, go to. Results show only while open");
+        groupTabs.get(Group.TOOLS).setToolTipText("Ruler, radio horizon, GCS search, go to, clips, previous flights. Results show only while open");
         groupTabs.get(Group.DATA).setToolTipText("Export, import, offline maps, clear all");
         clip.add(strip, BorderLayout.WEST);
         scroll = new javax.swing.JScrollPane(bodies.get(Group.DRAW), javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
@@ -315,6 +317,10 @@ final class MapToolsPanel extends JPanel {
         section(body, "OVERWATCH");
         clips.setToolTipText("Overwatch event clips: play with the camera view on the map");
         row(body, clips);
+
+        section(body, "FLIGHTS");
+        flights.setToolTipText("Play back, show on map, export");
+        row(body, flights);
     }
 
     private void buildData(JPanel body) {
@@ -602,9 +608,9 @@ final class MapToolsPanel extends JPanel {
         return echelonCombo;
     }
 
-    /** The last of the TOOLS list (CLIPS), for lighting the whole list. */
+    /** The last of the TOOLS list (PREVIOUS FLIGHTS), for lighting the whole list. */
     JComponent tourToolsEnd() {
-        return clips;
+        return flights;
     }
 
     /** The last of the DATA list. */
