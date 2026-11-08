@@ -103,7 +103,7 @@ final class TourFinale implements AutoCloseable {
         double[] lo = {90, 180}, hi = {-90, -180};
         List<String> all = new ArrayList<>();
         all.add(TourScenario.LAUNCH);
-        for (TourScenario.Place p : TourScenario.PLACES) all.add(p.at());
+        for (de.droiddrone.pc.fleet.FleetLayout.Place p : TourScenario.PLACES) all.add(p.at());
         for (TourScenario.Unit u : TourScenario.UNITS) all.add(u.at());
         for (String g : all) {
             double[] p = de.droiddrone.pc.map.Coordinates.parse(g);
@@ -117,6 +117,11 @@ final class TourFinale implements AutoCloseable {
 
     String watcher() {
         return watcher;
+    }
+
+    /** The tour's drones' names. */
+    List<String> names() {
+        return List.copyOf(names);
     }
 
     String refused() {

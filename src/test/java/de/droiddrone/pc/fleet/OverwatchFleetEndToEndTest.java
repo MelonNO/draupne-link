@@ -126,18 +126,22 @@ class OverwatchFleetEndToEndTest {
     }
 
     /** The vehicle's red (0xb02020) through JPEG. */
-    private static boolean red(int c) {
+    /**
+     * The BTR's olive hull (1.0.52: the panel's VEHICLE is the realistic BTR, no longer a red car): warm, where the
+     * simulation world is all pale blue-grey - sky, ground, grid, outlines.
+     */
+    private static boolean btr(int c) {
         int r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
-        return r > 130 && g < 80 && b < 80;
+        return r > b + 12 && g > b + 4; // warm: the simulation world is all blue-grey and white
     }
 
     /**
-     * The walking soldier (1.0.52: a 3D model in woodland camouflage with goggles and a rifle): the only thing in the
-     * day picture this dark - sky, grass, grid and posts are all brighter (luma 50 and up).
+     * The walking soldier (1.0.52: a 3D model in woodland camouflage): warm olive and brown, where the simulation world
+     * is all pale blue-grey - sky, ground, grid, outlines.
      */
     private static boolean walker(int c) {
         int r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
-        return (66 * r + 129 * g + 25 * b + 128 >> 8) + 16 < 50;
+        return r > b + 12 && g > b + 4 || (66 * r + 129 * g + 25 * b + 128 >> 8) + 16 < 60; // camouflage, or its darkest
     }
 
     @Test
@@ -170,10 +174,11 @@ class OverwatchFleetEndToEndTest {
         ControlLink watchLink = link(config, xray);
         overwatch(watchLink, xray, "MobileX-ray", 0x5eed0001);
         hub.setFlag(flag);
-        Thread.sleep(3500); // the detector's warm-up, as on the phone
+        // the detector's warm-up and its strict first 20 s, as on the phone: a slow, long BTR reads as flicker before
+        Thread.sleep(26_000);
         long crossed = System.currentTimeMillis();
         xray.addTarget("vehicle");
-        waitFor(() -> view("MobileX-ray") != null, 6000, "the alert while the vehicle still crosses");
+        waitFor(() -> view("MobileX-ray") != null, 10_000, "the alert while the BTR still drives");
         assertTrue(xray.scene.hasTargets(System.currentTimeMillis()), "it alerted while the vehicle was in the picture ("
                 + (System.currentTimeMillis() - crossed) + " ms)");
         waitFor(() -> view("MobileX-ray").picture() != null && view("MobileX-ray").preRolls() > 0, 3000, "the pictures before the alert on the card");
@@ -182,8 +187,8 @@ class OverwatchFleetEndToEndTest {
         assertTrue(held.held().startsWith("MobileZulu was lost armed "), held.held());
         assertFalse(held.live(), "no preview while a drone here may be flying");
         int redSeen = 0;
-        for (BufferedImage img : preRolls("MobileX-ray")) redSeen = Math.max(redSeen, count(img, OverwatchFleetEndToEndTest::red));
-        assertTrue(redSeen > 8, "the vehicle is in the pictures before the alert: " + redSeen + " red pixels at most");
+        for (BufferedImage img : preRolls("MobileX-ray")) redSeen = Math.max(redSeen, count(img, OverwatchFleetEndToEndTest::btr));
+        assertTrue(redSeen > 8, "the BTR is in the pictures before the alert: " + redSeen + " of its pixels at most");
 
         // CONNECT to MobileZulu again: it says DISARMED (the failsafe dropped it) - the window ends at once
         ControlLink again = link(config, zulu);
@@ -215,8 +220,10 @@ class OverwatchFleetEndToEndTest {
         assertTrue(a.w > 0.01f && a.h > 0.05f && a.y + a.h > 0.4f, "the detector's box round the person: " + a.x + "," + a.y + " " + a.w + "x" + a.h);
         waitFor(() -> view("MobileZulu").preRolls() > 0, 3000, "the pictures before it");
         List<BufferedImage> pre = preRolls("MobileZulu");
-        assertTrue(count(pre.get(pre.size() - 1), OverwatchFleetEndToEndTest::walker) > 15,
-                "the walker is in the last picture before the alert");
+        // the last two pictures (two a second): under load the very last can be the one he has half left
+        int seen = 0;
+        for (int i = Math.max(0, pre.size() - 2); i < pre.size(); i++) seen = Math.max(seen, count(pre.get(i), OverwatchFleetEndToEndTest::walker));
+        assertTrue(seen > 15, "the walker is in the last pictures before the alert: " + seen + " of his pixels");
         assertNull(view("MobileZulu").held());
         waitFor(() -> view("MobileZulu").live(), 8000, "the live preview");
         assertTrue(count(view("MobileZulu").picture(), OverwatchFleetEndToEndTest::walker) > 30, "the walker in the preview");

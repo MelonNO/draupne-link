@@ -1,24 +1,21 @@
 package de.droiddrone.pc.fleet;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
-import java.awt.geom.Path2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Random;
 
 /**
- * A virtual drone's camera picture: sky and ground split by the horizon as the drone's roll and pitch put it, a ground
- * grid and posts that move with its heading, position and height, its name and a clock burned in, and optional
- * targets passing - a walker, a vehicle, a light at night - for the motion detection and overwatch. Drawn with Java2D,
- * small and cheap; the camera looks along the nose, level with it.
+ * A virtual drone's camera picture: the simulation world ({@link SimWorld}, 1.0.52: every drone in the tour's style)
+ * as the drone's roll, pitch, heading, position and height put it, and optional targets passing - a soldier walking,
+ * a BTR on patrol, a soldier with a lamp at night - for the motion detection and overwatch. An armed drone flying into
+ * one crashes and the target is gone ({@link #hit}). The camera looks along the nose, level with it.
  */
 final class Scene {
     /** The camera's horizontal field of view, degrees (an action camera's 16:9 picture). */
@@ -32,8 +29,15 @@ final class Scene {
         final Kind kind;
         final double startN, startE, dirDeg, speed;
         final long startMs, untilMs;
+        /** A VEHICLE: the BTR on its patrol (1.0.52, the pilot: the realistic BTR, not a drawn car), and its sound. */
+        final BtrScene btr;
+        final BtrSound sound;
 
         Target(Kind kind, double startN, double startE, double dirDeg, double speed, long startMs, long untilMs) {
+            this(kind, startN, startE, dirDeg, speed, startMs, untilMs, null);
+        }
+
+        Target(Kind kind, double startN, double startE, double dirDeg, double speed, long startMs, long untilMs, BtrScene btr) {
             this.kind = kind;
             this.startN = startN;
             this.startE = startE;
@@ -41,14 +45,34 @@ final class Scene {
             this.speed = speed;
             this.startMs = startMs;
             this.untilMs = untilMs;
+            this.btr = btr;
+            this.sound = btr == null ? null : new BtrSound(startMs);
         }
 
         double[] at(long nowMs) {
+            if (btr != null) {
+                double[] q = btr.pose(nowMs);
+                return new double[]{q[0], q[1]};
+            }
             double t = (nowMs - startMs) / 1000.0;
             double d = Math.toRadians(dirDeg);
             return new double[]{startN + Math.cos(d) * speed * t, startE + Math.sin(d) * speed * t};
         }
+
+        /** Whether a drone at this point touches it: the BTR's hull, a soldier's height and reach. */
+        boolean hits(double north, double east, double alt, long nowMs) {
+            if (btr != null) return btr.hits(north, east, alt, nowMs);
+            double[] p = at(nowMs);
+            return Math.hypot(north - p[0], east - p[1]) <= SOLDIER_REACH_M && alt <= SOLDIER_HEIGHT_M;
+        }
     }
+
+    /** A soldier as a drone hits him: this far from his middle, this high (with a margin). */
+    static final double SOLDIER_REACH_M = 0.7, SOLDIER_HEIGHT_M = 2.1;
+    /** A VEHICLE's patrol: this near and far ahead of the drone that sent it (near: the detection reaches about 80 m). */
+    static final double VEHICLE_NEAR_M = 20, VEHICLE_FAR_M = 40;
+    /** And this long, unless hit. */
+    static final long VEHICLE_MS = 10 * 60_000L;
 
     /** What the camera sees from: the drone's state. */
     record View(double north, double east, double alt, double rollDeg, double pitchDeg, double headingDeg) {}
@@ -64,17 +88,13 @@ final class Scene {
 
     private volatile World world;
     private volatile String name;
-    private final double[][] posts;
+    /** The world it stands in (every virtual drone's, 1.0.52). */
+    private final SimWorld env = new SimWorld(0, 0);
     private final List<Target> targets = new java.util.concurrent.CopyOnWriteArrayList<>();
     private volatile boolean night;
 
     Scene(String name, long seed) {
         this.name = name;
-        Random r = new Random(seed);
-        posts = new double[60][];
-        for (int i = 0; i < posts.length; i++) {
-            posts[i] = new double[]{(r.nextDouble() - 0.5) * 500, (r.nextDouble() - 0.5) * 500, 2 + r.nextDouble() * 6};
-        }
     }
 
     void setName(String name) {
@@ -110,8 +130,13 @@ final class Scene {
     /** SOMEONE NOW's distance: close, large in the picture. */
     static final double CLOSE_M = 6;
 
-    /** As addTarget, at dist metres in front. */
+    /** As addTarget, at dist metres in front (a VEHICLE: a BTR on patrol VEHICLE_NEAR_M to VEHICLE_FAR_M ahead). */
     void addTarget(Kind kind, View from, long nowMs, double dist) {
+        if (kind == Kind.VEHICLE) {
+            BtrScene btr = new BtrScene(from.north(), from.east(), from.headingDeg(), nowMs, VEHICLE_NEAR_M, VEHICLE_FAR_M);
+            targets.add(new Target(kind, from.north(), from.east(), from.headingDeg(), 0, nowMs, nowMs + VEHICLE_MS, btr));
+            return;
+        }
         double speed = kind == Kind.VEHICLE ? 8 : kind == Kind.LIGHT ? 2 : 1.4;
         double half = Math.tan(Math.toRadians(HFOV_DEG / 2)) * dist * 1.08;
         double h = Math.toRadians(from.headingDeg());
@@ -130,6 +155,17 @@ final class Scene {
 
     boolean hasTargets(long nowMs) {
         return !targets(nowMs).isEmpty();
+    }
+
+    /** The target a drone at this point flies into, taken out of the picture (1.0.52: it is hit); null for none. */
+    Target hit(double north, double east, double alt, long nowMs) {
+        for (Target t : targets(nowMs)) {
+            if (t.hits(north, east, alt, nowMs)) {
+                targets.remove(t);
+                return t;
+            }
+        }
+        return null;
     }
 
     /**
@@ -152,58 +188,15 @@ final class Scene {
             return;
         }
         Graphics2D g = img.createGraphics();
+        Camera cam = new Camera(v, w, h);
         try {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            Camera cam = new Camera(v, w, h);
-            // sky, then the ground as a polygon below the horizon (the horizon is far: two points on it)
-            g.setColor(night ? new Color(0x0b1020) : new Color(0x6fa6d8));
-            g.fillRect(0, 0, w, h);
-            double[] a = cam.horizon(-1), b = cam.horizon(1);
-            if (a != null && b != null) {
-                double dx = b[0] - a[0], dy = b[1] - a[1];
-                double len = Math.max(1e-6, Math.hypot(dx, dy));
-                double ux = dx / len, uy = dy / len;
-                double nx = -uy, ny = ux; // across the horizon, turned to the ground's side
-                if (!cam.towardGround(nx, ny)) {
-                    nx = -nx;
-                    ny = -ny;
-                }
-                double far = (w + h) * 4.0;
-                Path2D ground = new Path2D.Double();
-                ground.moveTo(a[0] - ux * far, a[1] - uy * far);
-                ground.lineTo(a[0] + ux * far, a[1] + uy * far);
-                ground.lineTo(a[0] + ux * far + nx * far, a[1] + uy * far + ny * far);
-                ground.lineTo(a[0] - ux * far + nx * far, a[1] - uy * far + ny * far);
-                ground.closePath();
-                g.setColor(night ? new Color(0x0d120d) : new Color(0x5b7a3c));
-                g.fill(ground);
-            } else if (cam.lookingDown()) {
-                g.setColor(night ? new Color(0x0d120d) : new Color(0x5b7a3c));
-                g.fillRect(0, 0, w, h);
-            }
-            // the grid on the ground, every 20 m round the drone
-            g.setStroke(new BasicStroke(Math.max(1f, w / 640f)));
-            g.setColor(night ? new Color(0x26331f) : new Color(0x3f5a28));
-            double step = 20, reach = 300;
-            double gn = Math.floor(v.north() / step) * step, ge = Math.floor(v.east() / step) * step;
-            for (double n = gn - reach; n <= gn + reach; n += step) cam.line(g, n, ge - reach, 0, n, ge + reach, 0);
-            for (double e = ge - reach; e <= ge + reach; e += step) cam.line(g, gn - reach, e, 0, gn + reach, e, 0);
-            // the start pad
-            g.setColor(night ? new Color(0x404040) : new Color(0xd8d0b0));
-            cam.line(g, -3, -3, 0, -3, 3, 0);
-            cam.line(g, -3, 3, 0, 3, 3, 0);
-            cam.line(g, 3, 3, 0, 3, -3, 0);
-            cam.line(g, 3, -3, 0, -3, -3, 0);
-            // posts
-            g.setColor(night ? new Color(0x202020) : new Color(0x4a3a2a));
-            for (double[] p : posts) {
-                if (Math.abs(p[0] - v.north()) > 400 || Math.abs(p[1] - v.east()) > 400) continue;
-                cam.line(g, p[0], p[1], 0, p[0], p[1], p[2]);
-            }
-            for (Target t : targets(nowMs)) paintTarget(g, cam, t, nowMs);
+            env.paint(g, cam, v, w, h, nowMs, !burnIn, night);
         } finally {
             g.dispose();
         }
+        paintTargets(img, v, nowMs);
+        if (burnIn) SimWorld.effects(img, nowMs);
     }
 
     /**
@@ -237,11 +230,12 @@ final class Scene {
     void paintTargets(BufferedImage img, View v, long nowMs) {
         List<Target> list = targets(nowMs);
         if (list.isEmpty()) return;
+        for (Target t : list) if (t.btr != null) t.btr.renderVehicle(img, v, nowMs, night); // through its own depth buffer
         Graphics2D g = img.createGraphics();
         try {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             Camera cam = new Camera(v, img.getWidth(), img.getHeight());
-            for (Target t : list) paintTarget(g, cam, t, nowMs);
+            for (Target t : list) if (t.btr == null) paintTarget(g, cam, t, nowMs);
         } finally {
             g.dispose();
         }
@@ -249,8 +243,8 @@ final class Scene {
 
     /**
      * A model of what moves (1.0.50, the pilot: the detection must be tested by something moving in the picture): a
-     * soldier walking (a 3D model since 1.0.52, {@link Soldier}), a car driving (body, cabin, turning wheels;
-     * headlights at night), a soldier with a lamp. Facing the way it goes.
+     * soldier walking (a 3D model since 1.0.52, {@link Soldier}), a soldier with a lamp. Facing the way he goes. (The
+     * BTR draws itself: {@link BtrScene#renderVehicle}.)
      */
     private void paintTarget(Graphics2D g, Camera cam, Target t, long nowMs) {
         double[] p = t.at(nowMs);
@@ -267,7 +261,9 @@ final class Scene {
                 Soldier.paint(g, cam, p[0], p[1], t.dirDeg, walked, night);
                 lamp(g, cam, p, t.dirDeg, new Color(0xffffe8));
             }
-            case VEHICLE -> car(g, x, y, m, walked);
+            case VEHICLE -> {
+                // drawn by its BtrScene
+            }
         }
     }
 
@@ -282,42 +278,6 @@ final class Scene {
         g.fill(new java.awt.geom.Ellipse2D.Double(hx - 2.5 * r, hy - 2.5 * r, 5 * r, 5 * r));
         g.setColor(lamp);
         g.fill(new java.awt.geom.Ellipse2D.Double(hx - r, hy - r, 2 * r, 2 * r));
-    }
-
-    /** A car 4.5 m long, side on, driving to the right. */
-    private void car(Graphics2D g, double x, double y, double m, double driven) {
-        double len = 4.5 * m, wheel = 0.33 * m;
-        double left = x - len / 2;
-        g.setColor(night ? new Color(0x3a3a3a) : new Color(0xb02020));
-        g.fill(new java.awt.geom.RoundRectangle2D.Double(left, y - 1.15 * m, len, 0.75 * m, 0.25 * m, 0.25 * m)); // the body
-        Path2D cabin = new Path2D.Double();
-        cabin.moveTo(left + 0.9 * m, y - 1.1 * m);
-        cabin.lineTo(left + 1.5 * m, y - 1.6 * m);
-        cabin.lineTo(left + 3.2 * m, y - 1.6 * m);
-        cabin.lineTo(left + 3.8 * m, y - 1.1 * m);
-        cabin.closePath();
-        g.fill(cabin);
-        g.setColor(night ? new Color(0x101820) : new Color(0x9fc4e0)); // the windows
-        g.fill(new java.awt.geom.Rectangle2D.Double(left + 1.55 * m, y - 1.52 * m, 0.75 * m, 0.38 * m));
-        g.fill(new java.awt.geom.Rectangle2D.Double(left + 2.4 * m, y - 1.52 * m, 0.75 * m, 0.38 * m));
-        for (double at : new double[]{left + 0.95 * m, left + len - 0.95 * m}) {
-            g.setColor(new Color(0x181818));
-            g.fill(new java.awt.geom.Ellipse2D.Double(at - wheel, y - 2 * wheel, 2 * wheel, 2 * wheel));
-            g.setColor(new Color(0x9a9a9a)); // a spoke, turning with the way driven
-            double a = driven / 0.33;
-            g.setStroke(new BasicStroke((float) Math.max(1, 0.05 * m)));
-            g.draw(new java.awt.geom.Line2D.Double(at - Math.cos(a) * wheel * 0.7, y - wheel - Math.sin(a) * wheel * 0.7,
-                    at + Math.cos(a) * wheel * 0.7, y - wheel + Math.sin(a) * wheel * 0.7));
-        }
-        if (night) { // headlights in front, a tail light behind
-            double r = Math.max(2, 0.15 * m);
-            g.setColor(new Color(255, 248, 208, 90));
-            g.fill(new java.awt.geom.Ellipse2D.Double(left + len - r * 1.5, y - 0.85 * m - 2.5 * r, 5 * r, 5 * r));
-            g.setColor(new Color(0xfff8d0));
-            g.fill(new java.awt.geom.Ellipse2D.Double(left + len - r, y - 0.85 * m - r, 2 * r, 2 * r));
-            g.setColor(new Color(0xd02020));
-            g.fill(new java.awt.geom.Ellipse2D.Double(left - r * 0.5, y - 0.85 * m - r * 0.6, r * 1.2, r * 1.2));
-        }
     }
 
     private static void outlined(Graphics2D g, String text, float x, float y) {

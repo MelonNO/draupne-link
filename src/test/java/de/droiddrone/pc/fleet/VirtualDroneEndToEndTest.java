@@ -240,8 +240,12 @@ class VirtualDroneEndToEndTest {
                 scene.setNight(night);
                 de.droiddrone.common.MotionDetector detector = new de.droiddrone.common.MotionDetector(de.droiddrone.common.MotionDetector.NORMAL);
                 java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(320, 180, java.awt.image.BufferedImage.TYPE_INT_RGB);
-                long t0 = System.currentTimeMillis(), added = t0 + 4000, first = -1, until = 0;
-                for (long t = t0; t < t0 + 16_000; t += 200) { // five pictures a second, as the drone's loop
+                // the BTR (1.0.52, the panel's VEHICLE): a slow, long vehicle reads as flicker to a detector in its strict
+                // first 20 s (as on a phone just put to overwatch), so it is sent once the detector has grown - measured:
+                // in the picture 3 s after it is sent, found 2.4-4.8 s after
+                long addAfter = kind == Scene.Kind.VEHICLE ? 26_000 : 4000;
+                long t0 = System.currentTimeMillis(), added = t0 + addAfter, first = -1, until = 0;
+                for (long t = t0; t < added + 12_000; t += 200) { // five pictures a second, as the drone's loop
                     if (t == added) {
                         scene.addTarget(kind, view, t); // after the background has settled
                         until = scene.targets(t).get(0).untilMs;
@@ -256,7 +260,7 @@ class VirtualDroneEndToEndTest {
                 // the soldier (1.0.52, a 3D model) by day: his swinging arms and legs flicker a little, and a detector
                 // still young (its first 20 s) asks half the vegetation score of a grown one - found later than the old
                 // stick figure was, still while he crosses (measured 6.6 s; 4.4 s once the detector has grown)
-                long within = kind == Scene.Kind.WALKER && !night ? 8000 : 6000;
+                long within = kind == Scene.Kind.WALKER && !night || kind == Scene.Kind.VEHICLE ? 8000 : 6000;
                 assertTrue(first > 0 && first - added <= within && first < until, kind + " night " + night + ": seen "
                         + (first - added) + " ms after it was sent, crossing until " + (until - added));
             }

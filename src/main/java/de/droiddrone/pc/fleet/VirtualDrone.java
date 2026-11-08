@@ -274,6 +274,10 @@ public final class VirtualDrone {
                     sleepAt = 0;
                 }
                 videoWanted = false;
+                if (broken && target == null) { // crashed into the panel's BTR or a soldier: a new drone on the spot
+                    broken = false;
+                    link.clear();
+                }
                 openSocket(keep);
                 log.accept("phone app back: new session on next Connect");
             } catch (IOException e) {
@@ -1148,7 +1152,9 @@ public final class VirtualDrone {
         boolean fromRecording = rec != null && rec.hasAudio();
         BtrScene scenario = fromRecording ? null : target;
         BtrSound vehicle = targetSound;
-        int channels = scenario != null && vehicle != null ? 2 : 1;
+        // stereo for the tour's BTR, and (1.0.52) for every generated picture: a BTR sent by the panel is heard from
+        // where it drives, whenever it comes
+        int channels = fromRecording ? 1 : 2;
         float[] left = new float[AacEncoder.FRAME], right = new float[AacEncoder.FRAME];
         try (AacEncoder enc = fromRecording ? null : new AacEncoder(Math.max(16, Math.min(64, kbps)) * 1000 * channels, channels)) {
             byte[] asc = fromRecording ? rec.audioConfig() : enc.config();
@@ -1165,13 +1171,21 @@ public final class VirtualDrone {
                 if (fromRecording) {
                     frames = rec.audioFrames(System.currentTimeMillis());
                 } else if (channels == 2) {
-                    // the scenario: the drone's own sound in the middle, the vehicle from where it is
+                    // the drone's own sound in the middle, each vehicle from where it is
                     float[] own = sound.next(fc.isArmed() ? fc.throttleOut() : -1);
                     System.arraycopy(own, 0, left, 0, own.length);
                     System.arraycopy(own, 0, right, 0, own.length);
                     long now = System.currentTimeMillis();
-                    double[] rel = scenario.relative(view(), now);
-                    vehicle.add(left, right, rel[0], rel[1], rel[2], scenario.speedAt(now));
+                    Scene.View view = view();
+                    if (scenario != null && vehicle != null) {
+                        double[] rel = scenario.relative(view, now);
+                        vehicle.add(left, right, rel[0], rel[1], rel[2], scenario.speedAt(now));
+                    }
+                    for (Scene.Target t : scene.targets(now)) {
+                        if (t.btr == null) continue;
+                        double[] rel = t.btr.relative(view, now);
+                        t.sound.add(left, right, rel[0], rel[1], rel[2], t.btr.speedAt(now));
+                    }
                     frames = enc.encode(left, right);
                 } else {
                     frames = enc.encode(sound.next(fc.isArmed() ? fc.throttleOut() : -1));
@@ -1278,6 +1292,9 @@ public final class VirtualDrone {
         }
     }
 
+    /** Placed by the tour: its first check-in comes as soon as it is asleep, then every interval. Under powerLock. */
+    private boolean checkInAtOnce;
+
     /** The panel's CHECK NOW: the next check window opens now (the phone's alarm, early). */
     public void checkNow() {
         synchronized (powerLock) {
@@ -1300,7 +1317,8 @@ public final class VirtualDrone {
                 InetSocketAddress pc = lastPcIp == null ? null : new InetSocketAddress(lastPcIp, lastPcPort);
                 closeSocket(); // the link's socket, the FC's port, the GPS: let go
                 // always listening (pc.39): no alarm - the window opens shortly (the PC's link quiet by then) and stays
-                nextCheckAt = now + (always() ? SleepCheck.ALWAYS_OPEN_AFTER_MS : checkIntervalMin * 60_000L);
+                nextCheckAt = now + (always() || checkInAtOnce ? SleepCheck.ALWAYS_OPEN_AFTER_MS : checkIntervalMin * 60_000L);
+                checkInAtOnce = false;
                 if (mode == OVERWATCH) overwatch.begin(pc);
                 log.accept(modeName(mode) + (always() ? ": always listening for the PC in " + SleepCheck.ALWAYS_OPEN_AFTER_MS / 1000 + " s"
                         : ": next check in " + checkIntervalMin + " min"));
@@ -1420,7 +1438,11 @@ public final class VirtualDrone {
                     fc.step(now, dt);
                 }
                 BtrScene t = target;
-                if (t != null && !broken && fc.isArmed() && t.hits(fc.northM(), fc.eastM(), fc.altitudeM(), now)) crashIntoTarget(now);
+                if (t != null && !broken && fc.isArmed() && t.hits(fc.northM(), fc.eastM(), fc.altitudeM(), now)) crashIntoTarget(now, "the BTR");
+                else if (!broken && fc.isArmed()) { // the panel's BTR and soldiers (1.0.52): flown into, the drone breaks and they go
+                    Scene.Target hit = scene.hit(fc.northM(), fc.eastM(), fc.altitudeM(), now);
+                    if (hit != null) crashIntoTarget(now, hit.kind == Scene.Kind.VEHICLE ? "the BTR" : "a soldier");
+                }
                 boolean nowConnected = isConnected();
                 if (nowConnected && !wasConnected && events != null) events.connected(this);
                 wasConnected = nowConnected;
@@ -1675,6 +1697,7 @@ public final class VirtualDrone {
      * Refused like the PC's request while the FC isn't known disarmed.
      */
     void placeInMode(InetSocketAddress pc, int wanted, int intervalMin, int sensitivity, int flags, int overwatchToken) {
+        checkInAtOnce = true; // the tour: the PC's lists show it asleep at once, not at its first check in minutes
         lastPcIp = pc.getAddress();
         lastPcPort = pc.getPort();
         if (wanted == OVERWATCH) overwatch.configure(sensitivity, flags, overwatchToken);
@@ -1687,12 +1710,15 @@ public final class VirtualDrone {
         if (e != null) e.alert(this);
     }
 
-    /** It flew into the vehicle: down, disarmed, and the link silent for good (a broken drone). */
-    private void crashIntoTarget(long now) {
+    /**
+     * It flew into the vehicle (or a soldier): down, disarmed, and the link silent as a broken drone's. In the fleet
+     * window PHONE RESTART brings it back (a new drone on the spot); the tour's ends there.
+     */
+    private void crashIntoTarget(long now, String what) {
         broken = true;
-        fc.crash("flew into the BTR", now);
+        fc.crash("flew into " + what, now);
         link.silence(now, 24L * 3600_000);
-        log.accept("CRASH: flew into the BTR - the drone is broken, its link is gone");
+        log.accept("CRASH: flew into " + what + " - the drone is broken, its link is gone" + (target == null ? " (PHONE RESTART: a new one)" : ""));
         Events e = events;
         if (e != null) e.crashed(this);
     }
@@ -1833,6 +1859,19 @@ public final class VirtualDrone {
     /** A fresh pack, on the ground only. */
     public void newBattery() {
         fc.newBattery();
+    }
+
+    /**
+     * Turns the disarmed drone to look this way (the fleet panel's LOOK, 1.0.52): its camera, its overwatch picture and
+     * the heading it reports - the PC's map turns its view cone with the next telemetry.
+     */
+    public boolean lookTo(double headingDeg) {
+        return fc.turnTo(headingDeg);
+    }
+
+    /** Where it looks (degrees clockwise from north). */
+    public double headingDeg() {
+        return fc.headingDeg();
     }
 
     /** Puts the disarmed drone on the ground somewhere else (a new start place). */

@@ -3,7 +3,6 @@ package de.droiddrone.pc.fleet;
 import javax.imageio.ImageIO;
 import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.Path2D;
@@ -193,8 +192,8 @@ final class BtrScene implements Scene.World {
     /** Its range ahead of the drone (NEAR_M, FAR_M unless a test asks). */
     private final double nearM, farM;
     private volatile long startMs;
-    /** The far structures and the floating fragments, fixed in the world. */
-    private final double[][] structures, fragments;
+    /** The world round it (the far structures, the fragments): {@link SimWorld}, every virtual drone's since 1.0.52. */
+    private final SimWorld env;
     /** The road it drives, every ROUTE_STEP_M along it: north and east. */
     private final double[] routeN, routeE;
     /** Its drive, every TICK_S from the start: the distance along the road and the speed then. */
@@ -232,19 +231,7 @@ final class BtrScene implements Scene.World {
         originN = north;
         originE = east;
         this.startMs = startMs;
-        Random r = new Random(4609);
-        // the far structures stand behind the route
-        structures = new double[18][];
-        for (int i = 0; i < structures.length; i++) {
-            double a = r.nextDouble() * 2 * Math.PI, d = 230 + r.nextDouble() * 200;
-            structures[i] = new double[]{north + Math.cos(a) * d, east + Math.sin(a) * d, 8 + r.nextDouble() * 22, 8 + r.nextDouble() * 26,
-                    10 + r.nextDouble() * 45, r.nextDouble() * Math.PI / 2};
-        }
-        fragments = new double[70][];
-        for (int i = 0; i < fragments.length; i++) {
-            double a = r.nextDouble() * 2 * Math.PI, d = 15 + r.nextDouble() * 130;
-            fragments[i] = new double[]{north + Math.cos(a) * d, east + Math.sin(a) * d, 0.8 + r.nextDouble() * 9, r.nextDouble() * 6.28, 0.2 + r.nextDouble() * 0.5};
-        }
+        env = new SimWorld(north, east);
         List<double[]> way = waypoints(new Random(1980), nearM, farM);
         double[][] road = road(way);
         routeN = road[0];
@@ -450,9 +437,6 @@ final class BtrScene implements Scene.World {
 
     // ------------------------------------------------------------------ the picture
 
-    private static final Color SKY_TOP = new Color(0xeef2f6), SKY_LOW = new Color(0xd6dfe8), GROUND = new Color(0xc7d0d9),
-            GRID = new Color(0x7e98b2), GRID_MAJOR = new Color(0x5f7f9f), EDGE = new Color(0x8fd8ff);
-
     /** One thread's buffers (the video's, the detection's, the preview's draw at once). */
     private static final class Buffers {
         float[] z = new float[0];
@@ -469,130 +453,52 @@ final class BtrScene implements Scene.World {
         Graphics2D g = img.createGraphics();
         try {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            world(g, cam, v, w, h, nowMs, analysis);
-            double[] q = pose(nowMs);
-            shadow(g, cam, q);
+            env.paint(g, cam, v, w, h, nowMs, analysis, false);
         } finally {
             g.dispose();
         }
-        vehicle(Scene.pixels(img), w, h, cam, v, pose(nowMs));
-        if (!analysis) effects(img, cam, nowMs);
+        renderVehicle(img, v, nowMs, false);
+        if (!analysis) SimWorld.effects(img, nowMs);
     }
 
-    /** Sky, ground, the grid, the far structures (outlines glowing), a haze at the horizon. */
-    private void world(Graphics2D g, Scene.Camera cam, Scene.View v, int w, int h, long nowMs, boolean analysis) {
-        g.setPaint(new GradientPaint(0, 0, SKY_TOP, 0, h, SKY_LOW));
-        g.fillRect(0, 0, w, h);
-        double[] a = cam.horizon(-1), b = cam.horizon(1);
-        if (a != null && b != null) {
-            double dx = b[0] - a[0], dy = b[1] - a[1];
-            double len = Math.max(1e-6, Math.hypot(dx, dy));
-            double ux = dx / len, uy = dy / len;
-            double nx = -uy, ny = ux;
-            if (!cam.towardGround(nx, ny)) {
-                nx = -nx;
-                ny = -ny;
-            }
-            double far = (w + h) * 4.0;
-            Path2D ground = new Path2D.Double();
-            ground.moveTo(a[0] - ux * far, a[1] - uy * far);
-            ground.lineTo(a[0] + ux * far, a[1] + uy * far);
-            ground.lineTo(a[0] + ux * far + nx * far, a[1] + uy * far + ny * far);
-            ground.lineTo(a[0] - ux * far + nx * far, a[1] - uy * far + ny * far);
-            ground.closePath();
-            // the ground pales into the haze at the horizon
-            float hx = (float) a[0], hy = (float) a[1];
-            g.setPaint(new GradientPaint(hx, hy, new Color(0xdde4ec), (float) (hx + nx * h * 0.35), (float) (hy + ny * h * 0.35), GROUND));
-            g.fill(ground);
-        } else if (cam.lookingDown()) {
-            g.setColor(GROUND);
-            g.fillRect(0, 0, w, h);
+    /**
+     * The vehicle alone - its shadow, itself, and at night its headlights - over a picture already drawn (a virtual
+     * drone's world with a BTR in it, 1.0.52).
+     */
+    void renderVehicle(BufferedImage img, Scene.View v, long nowMs, boolean night) {
+        int w = img.getWidth(), h = img.getHeight();
+        Scene.Camera cam = new Scene.Camera(v, w, h);
+        double[] q = pose(nowMs);
+        Graphics2D g = img.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            if (!night) shadow(g, cam, q);
+        } finally {
+            g.dispose();
         }
-        float px = Math.max(1f, w / 640f);
-        // the data grid: every 10 m, stronger every 50
-        double step = 10, reach = 200;
-        double gn = Math.floor(v.north() / step) * step, ge = Math.floor(v.east() / step) * step;
-        g.setStroke(new BasicStroke(px * 0.8f));
-        g.setColor(new Color(GRID.getRed(), GRID.getGreen(), GRID.getBlue(), 70));
-        for (double n = gn - reach; n <= gn + reach; n += step) if (Math.floorMod((long) n, 50) != 0) cam.line(g, n, ge - reach, 0, n, ge + reach, 0);
-        for (double e = ge - reach; e <= ge + reach; e += step) if (Math.floorMod((long) e, 50) != 0) cam.line(g, gn - reach, e, 0, gn + reach, e, 0);
-        // and a fine one close by, every 2 m (the floor under the camera)
-        double fine = 2, near = 24;
-        double fn = Math.floor(v.north() / fine) * fine, fe = Math.floor(v.east() / fine) * fine;
-        g.setColor(new Color(GRID.getRed(), GRID.getGreen(), GRID.getBlue(), 45));
-        for (double n = fn - near; n <= fn + near; n += fine) cam.line(g, n, fe - near, 0, n, fe + near, 0);
-        for (double e = fe - near; e <= fe + near; e += fine) cam.line(g, fn - near, e, 0, fn + near, e, 0);
-        g.setStroke(new BasicStroke(px * 1.2f));
-        g.setColor(new Color(GRID_MAJOR.getRed(), GRID_MAJOR.getGreen(), GRID_MAJOR.getBlue(), 110));
-        for (double n = gn - reach; n <= gn + reach; n += step) if (Math.floorMod((long) n, 50) == 0) cam.line(g, n, ge - reach, 0, n, ge + reach, 0);
-        for (double e = ge - reach; e <= ge + reach; e += step) if (Math.floorMod((long) e, 50) == 0) cam.line(g, gn - reach, e, 0, gn + reach, e, 0);
-        // the far structures: pale blocks with glowing edges
-        for (double[] s : structures) structure(g, cam, s, px);
-        if (analysis) return;
-        // floating fragments: small squares that shimmer where they hang (they never travel)
-        double t = nowMs / 1000.0;
-        for (double[] f : fragments) {
-            double[] c = cam.cam(f[0], f[1], f[2]);
-            if (c[2] < 1) continue;
-            double sx = cam.cx + cam.f * c[0] / c[2], sy = cam.cy + cam.f * c[1] / c[2];
-            double size = Math.max(1.5, cam.f * f[4] / c[2]);
-            int alpha = (int) (60 + 60 * Math.sin(t * 1.7 + f[3]));
-            if (alpha <= 8) continue;
-            g.setColor(new Color(255, 255, 255, Math.min(255, alpha + 60)));
-            g.fill(new java.awt.geom.Rectangle2D.Double(sx - size / 2, sy - size / 2, size, size));
-            g.setColor(new Color(EDGE.getRed(), EDGE.getGreen(), EDGE.getBlue(), alpha));
-            g.draw(new java.awt.geom.Rectangle2D.Double(sx - size, sy - size, size * 2, size * 2));
-        }
+        vehicle(Scene.pixels(img), w, h, cam, v, q, night ? 0.32f : 1f, SimWorld.haze(night));
+        if (night) headlights(img, cam, q);
     }
 
-    /** A far block {north, east, width, depth, height, turn}: its faces filled pale, its edges glowing. */
-    private static void structure(Graphics2D g, Scene.Camera cam, double[] s, float px) {
-        double c = Math.cos(s[5]), sn = Math.sin(s[5]);
-        double[][] base = new double[4][];
-        double[][] dirs = {{-1, -1}, {1, -1}, {1, 1}, {-1, 1}};
-        for (int i = 0; i < 4; i++) {
-            double a = dirs[i][0] * s[2] / 2, b = dirs[i][1] * s[3] / 2;
-            base[i] = new double[]{s[0] + a * c - b * sn, s[1] + a * sn + b * c};
-        }
-        List<double[]> pts = new ArrayList<>();
-        for (double[] p : base) {
-            for (double z : new double[]{0, s[4]}) {
-                double[] q = cam.cam(p[0], p[1], z);
-                if (q[2] < 1) return;
-                pts.add(new double[]{cam.cx + cam.f * q[0] / q[2], cam.cy + cam.f * q[1] / q[2]});
+    /** Two headlights at the front at night, and their glow. */
+    private void headlights(BufferedImage img, Scene.Camera cam, double[] q) {
+        double hd = Math.toRadians(q[2]), c = Math.cos(hd), s = Math.sin(hd);
+        Graphics2D g = img.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            for (double side : new double[]{-0.33, 0.33}) {
+                double x = m.length() / 2, y = side * m.width();
+                double[] k = cam.cam(q[0] + x * c - y * s, q[1] + x * s + y * c, 1.1);
+                if (k[2] < 0.5) continue;
+                double hx = cam.cx + cam.f * k[0] / k[2], hy = cam.cy + cam.f * k[1] / k[2];
+                double r = Math.max(2, 0.16 * cam.f / k[2]);
+                g.setColor(new Color(255, 248, 208, 90));
+                g.fill(new java.awt.geom.Ellipse2D.Double(hx - 2.5 * r, hy - 2.5 * r, 5 * r, 5 * r));
+                g.setColor(new Color(0xfff8d0));
+                g.fill(new java.awt.geom.Ellipse2D.Double(hx - r, hy - r, 2 * r, 2 * r));
             }
-        }
-        // the silhouette
-        pts.sort((u, v) -> u[0] != v[0] ? Double.compare(u[0], v[0]) : Double.compare(u[1], v[1]));
-        List<double[]> hull = new ArrayList<>();
-        for (int pass = 0; pass < 2; pass++) {
-            int start = hull.size();
-            for (int j = 0; j < pts.size(); j++) {
-                double[] p = pass == 0 ? pts.get(j) : pts.get(pts.size() - 1 - j);
-                while (hull.size() >= start + 2) {
-                    double[] o = hull.get(hull.size() - 2), a = hull.get(hull.size() - 1);
-                    if ((a[0] - o[0]) * (p[1] - o[1]) - (a[1] - o[1]) * (p[0] - o[0]) > 0) break;
-                    hull.remove(hull.size() - 1);
-                }
-                hull.add(p);
-            }
-            hull.remove(hull.size() - 1);
-        }
-        Path2D path = new Path2D.Double();
-        for (int i = 0; i < hull.size(); i++) {
-            if (i == 0) path.moveTo(hull.get(i)[0], hull.get(i)[1]);
-            else path.lineTo(hull.get(i)[0], hull.get(i)[1]);
-        }
-        path.closePath();
-        g.setColor(new Color(250, 252, 255, 120));
-        g.fill(path);
-        g.setStroke(new BasicStroke(px));
-        g.setColor(new Color(EDGE.getRed(), EDGE.getGreen(), EDGE.getBlue(), 150));
-        for (int i = 0; i < 4; i++) {
-            double[] p = base[i], n = base[(i + 1) % 4];
-            cam.line(g, p[0], p[1], 0, n[0], n[1], 0);
-            cam.line(g, p[0], p[1], s[4], n[0], n[1], s[4]);
-            cam.line(g, p[0], p[1], 0, p[0], p[1], s[4]);
+        } finally {
+            g.dispose();
         }
     }
 
@@ -622,7 +528,7 @@ final class BtrScene implements Scene.World {
     }
 
     /** The vehicle, textured and lit, into the picture's pixels through a depth buffer. */
-    private void vehicle(int[] px, int w, int h, Scene.Camera cam, Scene.View v, double[] q) {
+    private void vehicle(int[] px, int w, int h, Scene.Camera cam, Scene.View v, double[] q, float lightScale, int haze) {
         Buffers b = buffers.get();
         int nv = m.u().length;
         if (b.w != w || b.h != h) {
@@ -695,15 +601,15 @@ final class BtrScene implements Scene.World {
             }
             double sun = Math.max(0, nx * SUN[0] + ny * SUN[1] + nz * SUN[2]);
             double sky = 0.5 + 0.5 * nz;
-            float light = (float) (0.30 + 0.26 * sky + 0.78 * sun);
+            float light = (float) (0.30 + 0.26 * sky + 0.78 * sun) * lightScale;
             double dist = b.cz[i0];
             float fog = (float) (1 - Math.exp(-dist * fogK));
-            raster(px, b.z, w, h, b, i0, i1, i2, m.tex()[i0], light, fog);
+            raster(px, b.z, w, h, b, i0, i1, i2, m.tex()[i0], light, fog, haze);
         }
     }
 
     /** One triangle, perspective-correct texture, nearest texel. */
-    private void raster(int[] px, float[] zb, int w, int h, Buffers b, int i0, int i1, int i2, int texId, float light, float fog) {
+    private void raster(int[] px, float[] zb, int w, int h, Buffers b, int i0, int i1, int i2, int texId, float light, float fog, int haze) {
         float x0 = b.sx[i0], y0 = b.sy[i0], x1 = b.sx[i1], y1 = b.sy[i1], x2 = b.sx[i2], y2 = b.sy[i2];
         float area = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
         if (Math.abs(area) < 1e-6f) return;
@@ -725,7 +631,6 @@ final class BtrScene implements Scene.World {
         int[] tex = m.mip()[id][level];
         int tw = m.mipW()[id][level], th = m.mipH()[id][level];
         float inv = 1 / area;
-        int haze = 0xdde4ec;
         for (int y = minY; y <= maxY; y++) {
             float py = y + 0.5f;
             for (int x = minX; x <= maxX; x++) {
@@ -750,39 +655,6 @@ final class BtrScene implements Scene.World {
                 gg += (int) ((((haze >> 8) & 0xff) - gg) * fog);
                 bb += (int) (((haze & 0xff) - bb) * fog);
                 px[o] = 0xff000000 | (r << 16) | (gg << 8) | bb;
-            }
-        }
-    }
-
-    /** The simulation's screen: faint scan lines, a cool edge glow, and now and then a glitch band. */
-    private static void effects(BufferedImage img, Scene.Camera cam, long nowMs) {
-        int w = img.getWidth(), h = img.getHeight();
-        int[] px = Scene.pixels(img);
-        int every = Math.max(2, h / 240);
-        for (int y = 0; y < h; y += every) {
-            int o = y * w;
-            for (int x = 0; x < w; x++) {
-                int c = px[o + x];
-                px[o + x] = (c & 0xff000000) | ((((c >> 16) & 0xff) * 243 >> 8) << 16) | ((((c >> 8) & 0xff) * 245 >> 8) << 8) | ((c & 0xff) * 250 >> 8);
-            }
-        }
-        // a glitch: about every 5 s for 0.18 s, a band of rows slips sideways with a cyan cast
-        long cycle = 5300, at = nowMs % cycle;
-        if (at < 180) {
-            Random r = new Random(nowMs / cycle * 31 + at / 60);
-            int bands = 1 + r.nextInt(2);
-            for (int k = 0; k < bands; k++) {
-                int y0 = r.nextInt(Math.max(1, h - h / 10)), bh = Math.max(2, h / 60 + r.nextInt(Math.max(1, h / 25)));
-                int shift = (r.nextBoolean() ? 1 : -1) * (w / 80 + r.nextInt(Math.max(1, w / 40)));
-                int[] row = new int[w];
-                for (int y = y0; y < Math.min(h, y0 + bh); y++) {
-                    System.arraycopy(px, y * w, row, 0, w);
-                    for (int x = 0; x < w; x++) {
-                        int c = row[Math.floorMod(x - shift, w)];
-                        int rr = ((c >> 16) & 0xff) * 200 >> 8, gg = Math.min(255, (((c >> 8) & 0xff) * 240 >> 8) + 12), bb = Math.min(255, (c & 0xff) + 30);
-                        px[y * w + x] = 0xff000000 | (rr << 16) | (gg << 8) | bb;
-                    }
-                }
             }
         }
     }
