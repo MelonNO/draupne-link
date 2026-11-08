@@ -59,7 +59,7 @@ public class ApkShare implements AutoCloseable {
         String hash = sha256(tmp);
         if (!APK_SHA256.equalsIgnoreCase(hash)) {
             Files.deleteIfExists(tmp);
-            throw new IOException("Downloaded file failed its integrity check (SHA-256 " + hash + ") - not using it");
+            throw new IOException("Download failed its SHA-256 check (" + hash + ")");
         }
         Files.move(tmp, apk, StandardCopyOption.REPLACE_EXISTING);
         return apk;

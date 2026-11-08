@@ -78,7 +78,7 @@ public final class MotorTest implements AutoCloseable {
             byte[] v = fc.msp(FcCommon.MSP_FC_VERSION, null);
             String version = v.length >= 3 ? (v[0] & 0xff) + "." + (v[1] & 0xff) + "." + (v[2] & 0xff) : "";
             if (is3d(fc.msp(MSP_FEATURE_CONFIG, null))) {
-                throw new IOException("3D mode is on: stop isn't the lowest value. Use Betaflight Configurator's Motors tab for this drone.");
+                throw new IOException("3D mode is on: use Betaflight Configurator's Motors tab.");
             }
             byte[] mixer = fc.msp(FcCommon.MSP_MIXER_CONFIG, null);
             int count = motorCount(fc.msp(MSP_MOTOR, null));
@@ -159,7 +159,7 @@ public final class MotorTest implements AutoCloseable {
      */
     public synchronized void setDirection(int motor, boolean reversed) throws IOException {
         if (closed) throw new IOException("The motor test is closed");
-        if (!info.dshot()) throw new IOException("The motors don't run DShot: the ESCs can't be told a direction this way.");
+        if (!info.dshot()) throw new IOException("Not DShot: can't set direction here.");
         fc.msp(MSP_SET_MOTOR, setMotorPayload(new int[0]));
         fc.msp2(MSP2_SEND_DSHOT_COMMAND, dshotPayload(motor - 1, reversed ? DSHOT_SPIN_REVERSED : DSHOT_SPIN_NORMAL, DSHOT_SAVE_SETTINGS));
     }
