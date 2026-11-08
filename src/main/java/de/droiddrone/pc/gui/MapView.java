@@ -2351,7 +2351,7 @@ class MapView extends JComponent {
      * mouse (highlighted) or is selected.
      */
     record Observed(int tile, Color colour, double lat, double lon, double headingDeg, boolean approximate,
-                    List<double[]> cone, boolean highlighted, boolean selected) {}
+                    List<double[]> cone, boolean highlighted, boolean selected, boolean motion) {}
 
     private volatile List<Observed> observed = List.of();
     private volatile java.util.function.IntConsumer onObservedClick;
@@ -2412,6 +2412,23 @@ class MapView extends JComponent {
                     observedTiles.add(m.tile() - 1);
                 }
                 double r = strong ? 11 : 9;
+                if (m.motion()) { // 1.0.50 (the pilot): its phone sees something move - the drone stands out, in the alert red
+                    double phase = (System.currentTimeMillis() % 1200) / 1200.0;
+                    double rr = r + 6 + 10 * phase;
+                    g.setColor(Theme.alpha(ALERT, (int) Math.round(230 * (1 - phase))));
+                    g.setStroke(new BasicStroke(2.5f));
+                    g.draw(new Ellipse2D.Double(c.getX() - rr, c.getY() - rr, 2 * rr, 2 * rr));
+                    g.setColor(ALERT);
+                    g.setStroke(new BasicStroke(3f));
+                    g.draw(new Ellipse2D.Double(c.getX() - r - 4, c.getY() - r - 4, 2 * r + 8, 2 * r + 8));
+                    FontMetrics lm = g.getFontMetrics();
+                    String label = "MOTION";
+                    int lx = (int) c.getX() + (int) r + 8, ly = (int) c.getY() - lm.getHeight() / 2;
+                    g.setColor(BOX);
+                    g.fillRect(lx, ly, lm.stringWidth(label) + 10, lm.getHeight() + 2);
+                    g.setColor(ALERT);
+                    g.drawString(label, lx + 5, ly + lm.getAscent() + 1);
+                }
                 Ellipse2D dot = new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r);
                 g.setColor(new Color(0, 0, 0, 170));
                 g.fill(new Ellipse2D.Double(c.getX() - r - 2, c.getY() - r - 2, 2 * r + 4, 2 * r + 4));

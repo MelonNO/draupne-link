@@ -2454,8 +2454,9 @@ public class MainWindow extends JFrame {
                     ? de.droiddrone.pc.observe.ObservedCone.edge(p.lat, p.lon, p.altM, hd.deg(), hfov, cameraView.tiltDeg(), aspect)
                     : java.util.List.of();
             boolean selected = i == o.set().selected() || i == o.set().enlarged();
+            boolean motion = !f.link().telemetry().getMotion().shown(now).isEmpty(); // its phone sees something move now
             marks.add(new MapView.Observed(i + 1, ObservationGrid.colour(i), p.lat, p.lon, hd.deg(), hd.approximate(), cone,
-                    i == hoveredTile, selected));
+                    i == hoveredTile, selected, motion));
         }
         java.util.function.IntConsumer click = tile -> {
             de.droiddrone.pc.observe.ObservationSession s = observation;

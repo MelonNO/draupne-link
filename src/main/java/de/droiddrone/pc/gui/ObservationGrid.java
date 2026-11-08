@@ -162,34 +162,38 @@ final class ObservationGrid extends JPanel {
             setBackground(Color.BLACK);
             name = Theme.label((index + 1) + "  " + phone, Theme.headingFont(12.5f), colour(index));
             add(video, BorderLayout.CENTER);
-            JPanel bar = new JPanel();
-            bar.setLayout(new BoxLayout(bar, BoxLayout.X_AXIS));
+            // the controls keep their place on the right; the name and the status line give way, cut with "..." (1.0.50:
+            // in one row the status pushed MUTE, the volume and CONNECT off a narrow tile)
+            JPanel bar = new JPanel(new BorderLayout(6, 0));
             bar.setBackground(Theme.PANEL);
             bar.setBorder(BorderFactory.createEmptyBorder(3, 6, 3, 4));
-            JPanel texts = new JPanel();
+            JPanel texts = new JPanel(new java.awt.GridLayout(2, 1));
             texts.setOpaque(false);
-            texts.setLayout(new BoxLayout(texts, BoxLayout.Y_AXIS));
+            texts.setMinimumSize(new Dimension(0, 0));
             texts.add(name);
             texts.add(status);
-            bar.add(texts);
-            bar.add(Box.createHorizontalGlue());
+            bar.add(texts, BorderLayout.CENTER);
+            JPanel controls = new JPanel();
+            controls.setOpaque(false);
+            controls.setLayout(new BoxLayout(controls, BoxLayout.X_AXIS));
             mute.setToolTipText("Mute this drone's sound (the others play on)");
             mute.addActionListener(e -> listener.mute(index, !muted));
-            bar.add(mute);
+            controls.add(mute);
             volume.setOpaque(false);
             volume.setFocusable(false);
-            volume.setPreferredSize(new Dimension(80, 22));
-            volume.setMaximumSize(new Dimension(80, 22));
+            volume.setPreferredSize(new Dimension(64, 22));
+            volume.setMaximumSize(new Dimension(64, 22));
             volume.setToolTipText("This drone's volume");
             volume.addChangeListener(e -> {
                 if (!updating) listener.volume(index, volume.getValue(), !volume.getValueIsAdjusting());
             });
-            bar.add(volume);
-            bar.add(Box.createHorizontalStrut(6));
+            controls.add(volume);
+            controls.add(Box.createHorizontalStrut(6));
             connect.setFocusable(false);
             connect.setToolTipText("Fly this drone: every stream stops, then the usual pilot connection opens (throttle low, arm switch off)");
             connect.addActionListener(e -> listener.connect(index));
-            bar.add(connect);
+            controls.add(connect);
+            bar.add(controls, BorderLayout.EAST);
             add(bar, BorderLayout.SOUTH);
             MouseAdapter mouse = new MouseAdapter() {
                 @Override
