@@ -131,10 +131,13 @@ class OverwatchFleetEndToEndTest {
         return r > 130 && g < 80 && b < 80;
     }
 
-    /** The walker's blue (0x283a8a) - not the sky's (0x6fa6d8). */
+    /**
+     * The walking soldier (1.0.52: a 3D model in woodland camouflage with goggles and a rifle): the only thing in the
+     * day picture this dark - sky, grass, grid and posts are all brighter (luma 50 and up).
+     */
     private static boolean walker(int c) {
         int r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
-        return r < 80 && g < 100 && b > 100;
+        return (66 * r + 129 * g + 25 * b + 128 >> 8) + 16 < 50;
     }
 
     @Test
