@@ -148,7 +148,7 @@ public class MainWindow extends JFrame {
     private final WrappingText powerStatusText = WrappingText.fitting(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
     private final PowerStatus powerStatus = new PowerStatus();
     private JPanel powerRow;
-    /** STANDBY and DEEP SLEEP, folded away (animated) while the drone is armed: no sleep then. */
+    /** DEEP SLEEP and OVERWATCH, folded away (animated) while the drone is armed: no sleep then. */
     private Fold sleepFold;
 
     /** setText on the wrapping text, with the html wrapper the old label calls used. */
@@ -881,7 +881,7 @@ public class MainWindow extends JFrame {
             if (observation != null) stopObservation();
             else if (connection == null && observerRole()) startObservation();
             else if (connection == null) connect();
-            else if (confirmEndWhileArmed("Disconnect")) disconnect();
+            else if (confirmEndWhileArmed("Disconnect")) disconnectToStandby();
         });
         connectButton.setFocusable(false); // SPACE on a focused DISCONNECT must never end a flight
         link.add(connectButton, c);
@@ -2930,7 +2930,7 @@ public class MainWindow extends JFrame {
         c.fill = GridBagConstraints.HORIZONTAL;
         c.weightx = 1;
         c.insets = new Insets(0, 0, 6, 0);
-        JPanel buttons = new JPanel(new GridLayout(1, 2, 6, 0)); // STANDBY and DEEP SLEEP side by side, WAKE under them
+        JPanel buttons = new JPanel(new GridLayout(1, 2, 6, 0)); // DEEP SLEEP and OVERWATCH side by side, WAKE under them
         buttons.setOpaque(false);
         standbyButton.setToolTipText("Before take-off: the phone stops its camera, slows its GPS and telemetry and dims its screen; the link stays. WAKE brings the picture back in about two seconds");
         standbyButton.addActionListener(e -> askPower(ControlLink.POWER_STANDBY));
@@ -2938,17 +2938,16 @@ public class MainWindow extends JFrame {
         deepSleepButton.addActionListener(e -> askPower(ControlLink.POWER_DEEP_SLEEP));
         wakeButton.setToolTipText("Back to normal: the camera, the GPS and the sticks");
         wakeButton.addActionListener(e -> wakePhone());
-        buttons.add(standbyButton);
+        // 1.0.50 (the pilot): no STANDBY button - DISCONNECT leaves the phone in standby by itself
         buttons.add(deepSleepButton);
-        // 1.0.47: OVERWATCH under the two, as wide as both
+        buttons.add(overwatchButton);
         overwatchButton.setToolTipText("<html>Sleeps like DEEP SLEEP, but the camera and the motion detection stay on: when something moves "
                 + "the phone calls this PC at once -<br>the map window shows where, a live picture, CONNECT and DISMISS - and records the event in "
                 + "full quality. Disarmed only; about 15-25 h on a 5000 mAh phone</html>");
         overwatchButton.addActionListener(e -> askPower(ControlLink.POWER_OVERWATCH));
-        JPanel sleepButtons = new JPanel(new GridLayout(2, 1, 0, 6));
+        JPanel sleepButtons = new JPanel(new GridLayout(1, 1, 0, 6));
         sleepButtons.setOpaque(false);
         sleepButtons.add(buttons);
-        sleepButtons.add(overwatchButton);
         sleepFold = new Fold(sleepButtons, true); // folds away while the drone is armed, and back when it is disarmed
         powerRow.add(sleepFold, c);
         powerRow.add(folded(wakeButton, 0), c); // 1.0.50: only while the phone sleeps, overwatches or stands by
@@ -3949,6 +3948,24 @@ public class MainWindow extends JFrame {
     }
 
     /**
+     * DISCONNECT (1.0.50, the pilot - there is no STANDBY button): a pilot's phone, disarmed, is told STANDBY on the way
+     * out (three times, unnumbered - the link closes right after), so it sits with its camera off until the next CONNECT
+     * wakes it (about 2 s); its map sign is the moon meanwhile. Armed, watching, asleep or an app older than pc.21: an
+     * ordinary disconnect.
+     */
+    private void disconnectToStandby() {
+        Connection c = connection;
+        if (c != null && !c.getLink().isSpectator() && !phoneAsleep && !fcArmedNow() && c.getLink().getState() == ControlLink.State.READY
+                && c.getLink().getTelemetry().getPhonePcBuild() >= 21) {
+            for (int i = 0; i < 3; i++) c.getLink().sendPowerMode(ControlLink.POWER_STANDBY, checkIntervalMin);
+            String ip = config.getString("ip");
+            if (!ip.isEmpty()) standbyPhones.put(ip, config.getString(Names.PHONE_NAME_KEY));
+            logLine("The phone stands by (camera off): CONNECT wakes it in about 2 s.");
+        }
+        disconnect();
+    }
+
+    /**
      * STANDBY, DEEP SLEEP and OVERWATCH end the connection by themselves once the phone is in the mode (1.0.50, the
      * pilot). A sleeping phone stays in the PHONE list with WAKE and its check-in countdown; a standby one wakes at the
      * next CONNECT. Later on the Swing thread, and only if that same link is still this PC's connection.
@@ -4311,7 +4328,7 @@ public class MainWindow extends JFrame {
         overwatchButton.setEnabled(mode == ControlLink.POWER_NORMAL);
         wakeButton.setEnabled(mode != ControlLink.POWER_NORMAL);
         show(wakeButton, true); // the tour's demo shows every button
-        powerStatus.setText(switch (mode) {
+        String demo = switch (mode) {
             case ControlLink.POWER_OVERWATCH -> "<html>OVERWATCH - the phone would sleep like DEEP SLEEP but keep its camera and the motion "
                     + "detection on: when something moves it calls this PC - the map window shows where, a live picture, CONNECT and DISMISS - "
                     + "and records it in full quality. Under 20 % battery or too hot it goes to deep sleep by itself.</html>";
@@ -4319,9 +4336,11 @@ public class MainWindow extends JFrame {
                     + "screen; the link stays. WAKE brings the picture back in about two seconds.</html>";
             case ControlLink.POWER_DEEP_SLEEP -> "<html>DEEP SLEEP - the phone would drop the link, lock its screen and sleep, listening "
                     + "for this PC 20 s every " + checkIntervalMin + " min and reporting its battery. WAKE reaches it at its next check.</html>";
-            default -> "<html>WAKE - the phone would be back to normal: the camera, the GPS and the sticks. Press STANDBY or DEEP SLEEP "
+            default -> "<html>WAKE - the phone would be back to normal: the camera, the GPS and the sticks. Press DEEP SLEEP or OVERWATCH "
                     + "again, or NEXT.</html>";
-        });
+        };
+        powerStatus.setText(demo);
+        logLine("Demo: " + demo.replace("<html>", "").replace("</html>", "")); // the line under the buttons is gone (1.0.50): the log says it
         return true;
     }
 

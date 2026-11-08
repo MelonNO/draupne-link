@@ -134,9 +134,9 @@ final class Tour {
                         + "its cone, click a cone to select its tile. A dashed cone's heading is approximate.",
                 main::tourLinkCard, null, false, null).of(FEATURE_OBSERVATION));
         // the sleep buttons only show while connected: the step puts them on the card as a demo that answers presses
-        steps.add(new Step("SLEEP BUTTONS", "While connected, these are here. STANDBY stops the phone's camera and dims its "
-                + "screen; DEEP SLEEP locks the phone and lets it sleep, checking for this PC every CHECK EVERY minutes; WAKE brings "
-                + "it back. They fold away while the drone is armed. This is a demo: press one and read the line under them.",
+        steps.add(new Step("SLEEP BUTTONS", "While connected, these are here. DEEP SLEEP locks the phone and lets it sleep, checking for this "
+                + "PC every CHECK EVERY minutes; WAKE brings it back. DISCONNECT leaves the phone in standby (camera off) until the "
+                + "next CONNECT. They fold away while the drone is armed. This is a demo: press one and see the log.",
                 main::tourPowerRow, () -> main.tourPowerDemo(true), true, null, null, () -> main.tourPowerDemo(false), null, null));
         // OVERWATCH (1.0.47): the third sleep button, in the same demo
         steps.add(new Step("OVERWATCH", "Sleeps like DEEP SLEEP, but the camera and the motion detection stay on. When something moves "
