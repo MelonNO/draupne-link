@@ -1722,7 +1722,7 @@ class MapView extends JComponent {
         FontMetrics fm = g.getFontMetrics();
         Font small = Theme.font(Font.PLAIN, 10.5f);
         FontMetrics sm = g.getFontMetrics(small);
-        String title = "4G COVERAGE (ESTIMATE)" + (grid != null ? String.format(Locale.ROOT, "   DRONE %.0f M   %s", grid.droneM(),
+        String title = "COVERAGE (ESTIMATE)" + (grid != null ? String.format(Locale.ROOT, "   DRONE %.0f M   %s", grid.droneM(),
                 grid.operator().title.toUpperCase(Locale.ROOT)) : "");
         String status = coverageStatus == null ? "" : coverageStatus;
         int lh = fm.getHeight(), sh = sm.getHeight();

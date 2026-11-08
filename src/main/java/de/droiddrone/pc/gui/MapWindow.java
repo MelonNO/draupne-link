@@ -695,7 +695,7 @@ final class MapWindow extends JFrame {
     }
 
     private void askCoverageKey() {
-        String text = "<html>4G COVERAGE needs a free OpenCelliD access token.<br>Register at https://opencellid.org and copy the "
+        String text = "<html>COVERAGE needs a free OpenCelliD access token.<br>Register at https://opencellid.org and copy the "
                 + "Access Token<br>from your account page. Saved in the settings file.<br><br>"
                 + "1,000 requests a day; each 1.8 km box takes two, once a month.</html>";
         Object answer = javax.swing.JOptionPane.showInputDialog(this, text, "OpenCelliD key", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, coverageKey);
@@ -717,7 +717,7 @@ final class MapWindow extends JFrame {
         coverageWork.execute(() -> {
             String line;
             try {
-                line = cellData.importCsv(file) + " 4G / 5G cells imported";
+                line = cellData.importCsv(file) + " mobile cells imported";
             } catch (java.io.IOException | RuntimeException e) {
                 line = "Import failed: " + e.getMessage();
             }

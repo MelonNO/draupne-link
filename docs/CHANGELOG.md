@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.51
+
+PC app only; phone app stays DRAUPNE Flight 2.3.0-pc.39.
+
+- **README rewritten short** (290 to about 125 lines) and brought up to 1.0.50's features.
+- **The mobile network, not "4G":** the map tool 4G COVERAGE is COVERAGE (it already used 4G and 5G cells), with its tooltip, token dialog, import line and tour step; the welcome page says "Fly your drone over 5G and mobile"; the OSD's RSSI description and the radio horizon's frequency hint say mobile. Virtual fleet: 4G loss / 4G LOST are Net loss / NET LOST. Only text; the tour's feature key is unchanged.
+
 ## 1.0.50
 
 With phone app DRAUPNE Flight 2.3.0-pc.39 (sound in the air).

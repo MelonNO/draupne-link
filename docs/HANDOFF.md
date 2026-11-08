@@ -4,7 +4,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-08, 1.0.50 + phone app 2.3.0-pc.39 released; last flown: 1.0.43)
+## Where things stand (2026-11-08, 1.0.51 + phone app 2.3.0-pc.39 released; last flown: 1.0.43)
+
+- **1.0.51 (PC only, 2026-11-08):** README rewritten short and up to date; no visible "4G" left in the PC app (COVERAGE, Net loss, "5G and mobile"). Phone app unchanged (pc.39 pinned).
 
 - **1.0.50 + phone pc.39 (released 2026-11-08; nothing of 1.0.44-1.0.50 run on a drone or real phone yet).** The pilot's
   session of 2026-11-08, mostly tested with the new virtual fleet (TOOLS > Virtual fleet with Advanced on, or

@@ -520,7 +520,7 @@ public final class OpenCellId {
              BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8), 1 << 16)) {
             cells = parseCsv(reader);
         }
-        if (cells.isEmpty()) throw new IOException("No 4G or 5G cells in " + source.getFileName());
+        if (cells.isEmpty()) throw new IOException("No mobile cells in " + source.getFileName());
         write(dir.resolve(IMPORTED), toCsv(cells).getBytes(StandardCharsets.UTF_8));
         synchronized (this) {
             importLoaded = false;

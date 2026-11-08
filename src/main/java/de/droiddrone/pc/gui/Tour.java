@@ -160,7 +160,7 @@ final class Tour {
                 () -> main.mapWindow().tourHorizon(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
         steps.add(new Step("GCS SEARCH", "Where to put the ground station: drag a box round the area to cover. The heat map "
                 + "(30 km) shows green = sees all of it, red = none. Best spot ringed; the cross removes it.", () -> main.mapWindow().tourSearch(), mapAndTools, false, map).of(FEATURE_RADIO_HORIZON));
-        steps.add(new Step("4G COVERAGE", "Estimated good, weak or no 4G, from OpenCelliD masts and terrain. Pick your SIM's network "
+        steps.add(new Step("COVERAGE", "Estimated good, weak or no mobile signal (5G and older), from OpenCelliD masts and terrain. Pick your SIM's network "
                 + "and the drone's height. Needs a free OpenCelliD key (KEY...). A guess, not a measurement.",
                 () -> main.mapWindow().tourCoverage(), mapAndTools, false, map).of(FEATURE_COVERAGE));
         steps.add(new Step("CLIPS", "Overwatch events per drone: picture, time, length, place. Play one with its camera view on "
@@ -224,7 +224,7 @@ final class Tour {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         List<String> what = new ArrayList<>();
         for (String f : features) what.add(f.equals(FEATURE_NAMES) ? "phone by name" : f.equals(FEATURE_MAP_TOOLS) ? "map tools" : f.equals(FEATURE_RADIO_HORIZON) ? "radio horizon, GCS search"
-                : f.equals(FEATURE_COVERAGE) ? "4G coverage map"
+                : f.equals(FEATURE_COVERAGE) ? "coverage map"
                 : f.equals(FEATURE_OVERWATCH) ? "OVERWATCH and its clips"
                 : f.equals(FEATURE_OBSERVATION) ? "observation of six drones" : f);
         Object[] options = {"Yes", "Not now"};

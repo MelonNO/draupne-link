@@ -58,7 +58,7 @@ final class SetupWizard {
     private static final class WelcomePage extends Page {
         @Override
         String title() {
-            return "Fly your drone over 4G";
+            return "Fly your drone over 5G and mobile";
         }
 
         @Override

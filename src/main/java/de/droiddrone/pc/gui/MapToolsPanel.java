@@ -71,7 +71,7 @@ final class MapToolsPanel extends JPanel {
     final JButton horizon = Theme.secondaryButton("Radio horizon");
     final JButton gcsSearch = Theme.secondaryButton("GCS search");
     /** 4G COVERAGE (1.0.44): on / off, and its fields (the network, the drone's height, the OpenCelliD key, the country file). */
-    final JButton coverage = Theme.secondaryButton("4G coverage");
+    final JButton coverage = Theme.secondaryButton("Coverage");
     final JComboBox<String> coverageOperator = new JComboBox<>();
     final JComboBox<String> coverageHeight = new JComboBox<>();
     final JButton coverageKey = Theme.secondaryButton("Key...");
@@ -295,7 +295,7 @@ final class MapToolsPanel extends JPanel {
         slideRow(body, searchFields);
 
         gap(body);
-        coverage.setToolTipText("<html>ESTIMATED 4G signal in view: green good, yellow fair, orange weak, red none.<br>"
+        coverage.setToolTipText("<html>ESTIMATED mobile signal (5G and older) in view: green good, yellow fair, orange weak, red none.<br>"
                 + "From OpenCelliD cell positions and terrain; masts as dots when zoomed in.<br>A guess, not a measurement. Press again to turn off</html>");
         row(body, coverage);
         slideRow(body, coverageFields);
@@ -326,7 +326,7 @@ final class MapToolsPanel extends JPanel {
         addField(grid, "Mast m", mastM, "Antenna height above ground, metres");
         addField(grid, "Aircraft m", aircraftM, "Aircraft " + aircraftTip + ", metres");
         addField(grid, "Trees m", treeM, "Tree height in mapped forest, metres (0: ignore forest)");
-        addField(grid, "Freq. MHz", frequencyMHz, "Link frequency: higher gets through less forest (4G: 800, 1800)");
+        addField(grid, "Freq. MHz", frequencyMHz, "Link frequency: higher gets through less forest (mobile: 800, 1800, 3500)");
         JPanel box = new JPanel();
         box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
         box.setOpaque(false);

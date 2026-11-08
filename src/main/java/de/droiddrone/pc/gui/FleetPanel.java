@@ -258,7 +258,7 @@ public final class FleetPanel {
             JPanel actions = new JPanel(new GridLayout(0, 1, 0, 4));
             Theme.transparent(actions);
             actions.add(section("LINK PROBLEMS"));
-            actions.add(row(button("4G loss", "No packets either way for these seconds", this::fourGLoss), lossSeconds,
+            actions.add(row(button("Net loss", "No packets either way for these seconds", this::fourGLoss), lossSeconds,
                     Theme.label("s", Theme.font(Font.PLAIN, 12f), Theme.MUTED), fcLost,
                     button("Phone restart", "App restarts: no link for 3 s, then a new session", drone::restartApp)));
             actions.add(row(button("Handover", "Cell change: packets held 1.5 s, then 80 ms slower for 15 s"
@@ -309,7 +309,7 @@ public final class FleetPanel {
         private void fourGLoss() {
             int s = (Integer) lossSeconds.getValue();
             drone.link().silence(System.currentTimeMillis(), s * 1000L);
-            appendLog(drone.name() + ": 4G LOSS for " + s + " s");
+            appendLog(drone.name() + ": NET LOSS for " + s + " s");
         }
 
         private void handover() {

@@ -1708,7 +1708,7 @@ public final class VirtualDrone {
             obs = observers.size();
         }
         String linkText = restarting ? "APP RESTARTING" : socket == null ? (asleep ? "ASLEEP" : "CLOSED")
-                : link.silent(now) ? "4G LOST " + link.silentForMs(now) / 1000 + " s" : connected ? "SESSION" : obs > 0 ? "OBSERVED x" + obs : "IDLE";
+                : link.silent(now) ? "NET LOST " + link.silentForMs(now) / 1000 + " s" : connected ? "SESSION" : obs > 0 ? "OBSERVED x" + obs : "IDLE";
         if (link.active(now) && !link.silent(now)) {
             linkText += String.format(java.util.Locale.ROOT, "  (loss %.0f%%, jitter %d ms, bunch %d ms)", link.lossPercent(), link.jitterMs(), link.bunchMs());
         }

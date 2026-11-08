@@ -38,7 +38,7 @@ enum OsdElement {
     PACK_VOLTAGE("packVoltage", "Battery voltage", "The whole pack's voltage.", false, left(), y(375), true, true),
     POWER("power", "Power", "Battery power in watts.", false, left(), y(400), true, true),
     DISTANCE("distance", "Distance flown", "Distance travelled while armed, from the GPS.", false, left(), y(425), true, true),
-    RSSI("rssi", "RSSI", "Link quality from Betaflight (follows the 4G link).", false, right(), y(300), true, true),
+    RSSI("rssi", "RSSI", "Link quality from Betaflight (follows the mobile link).", false, right(), y(300), true, true),
     CPU_LOAD("cpuLoad", "CPU load", "The flight controller's CPU load.", false, right(), y(325), true, true),
     VARIO("vario", "Vertical speed", "Climb or sink rate.", false, right(), y(350), true, true),
     PITCH("pitch", "Pitch angle", "Pitch in degrees.", false, right(), y(375), true, true),
