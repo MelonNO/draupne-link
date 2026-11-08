@@ -30,6 +30,8 @@ class TacticalButton extends JButton {
     private long deniedStart;     // 0 = no "locked" shake running
     private long lastTick;
     private boolean showLocked;
+    /** Lit as the phone's mode now (1.0.51, the pilot: OVERWATCH looks different while the phone overwatches). */
+    private boolean current;
     private final Timer timer = new Timer(15, e -> tick());
     /** Slow, so a locked button costs next to nothing while flying (it is locked while connected). */
     private final Timer lockedTimer = new Timer(66, e -> lockedTick());
@@ -126,10 +128,21 @@ class TacticalButton extends JButton {
         graphics.translate(-dx, 0);
     }
 
+    /** Lit: filled red with black text, enabled or not - the mode the phone is in now. */
+    void setCurrent(boolean on) {
+        if (current == on) return;
+        current = on;
+        repaint();
+    }
+
+    boolean isCurrent() {
+        return current;
+    }
+
     /** Locked: a grey frame instead of the red one (red for a moment when clicked). */
     @Override
     protected void paintBorder(Graphics graphics) {
-        if (isEnabled() || !showLocked) {
+        if (isEnabled() || !showLocked || current) {
             super.paintBorder(graphics);
             return;
         }
@@ -146,6 +159,10 @@ class TacticalButton extends JButton {
     @Override
     protected void paintComponent(Graphics graphics) {
         super.paintComponent(graphics);
+        if (current) {
+            paintCurrent((Graphics2D) graphics);
+            return;
+        }
         if (!isEnabled()) {
             if (showLocked) paintLocked((Graphics2D) graphics);
             return;
@@ -180,6 +197,22 @@ class TacticalButton extends JButton {
                 g.setColor(primary ? Theme.BG : Theme.ACCENT);
                 g.fillRect(0, 0, w, h);
             }
+        } finally {
+            g.dispose();
+        }
+    }
+
+    private void paintCurrent(Graphics2D graphics) {
+        Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
+        try {
+            int w = getWidth(), h = getHeight();
+            g.setColor(Theme.ACCENT);
+            g.fillRect(0, 0, w, h);
+            g.setFont(getFont());
+            java.awt.FontMetrics fm = g.getFontMetrics();
+            String text = getText();
+            g.setColor(Theme.BG);
+            g.drawString(text, (w - fm.stringWidth(text)) / 2, (h - fm.getHeight()) / 2 + fm.getAscent());
         } finally {
             g.dispose();
         }

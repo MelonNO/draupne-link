@@ -165,6 +165,11 @@ public class MainWindow extends JFrame {
     private long powerSentAt, powerAskedAt;
     /** The phone said DEEP SLEEP and the link dropped: it sleeps, and this PC keeps quiet (ControlLink.setDormant). */
     private volatile boolean phoneAsleep;
+    /**
+     * Waiting for a sleeping phone (DEEP SLEEP / OVERWATCH) to wake: no warning beep until the link is READY once (the
+     * pilot, 1.0.51: the countdown to its check-in is no link loss).
+     */
+    private volatile boolean awaitingWake;
     /** When the phone went to sleep: its listening windows come every check interval from then on. */
     private long sleepStartAt;
     private int checkIntervalMin = 5;
@@ -335,10 +340,10 @@ public class MainWindow extends JFrame {
     private volatile de.droiddrone.pc.setup.UpdateCheck.Release update;
     private boolean updating;
     private final JLabel statePill = new JLabel("OFFLINE", SwingConstants.CENTER);
-    private final JLabel pingValue = statValue();
     private final JLabel fcValue = statValue();
-    private final JLabel telemetryValue = statValue();
-    private final JLabel rcSentValue = statValue();
+    /** The connected phone's name (or the watched PC's), big on the LINK card while connected (the pilot, 1.0.51). */
+    private final JLabel connectedNameLabel = Theme.label("", Theme.headingFont(20f), Theme.TEXT);
+    private String connectedName;
     private final JLabel phoneValue = statValue();
     private final JLabel phoneAppValue = statValue();
     private final JLabel phoneBatteryValue = statValue();
@@ -372,9 +377,10 @@ public class MainWindow extends JFrame {
     /** RC CHECK on the controller card; the boot animation flies a piece of the mark to it. */
     private JButton rcCheckButton;
     // the controller's status lines, beside its name in the card's top row (1.0.39, the pilot): folded, the card is that one row
-    private final JLabel calibrationLabel = Theme.label(" ", Theme.font(Font.BOLD, 11f), Theme.MUTED);
-    private final JLabel rcStateLabel = Theme.label(" ", Theme.headingFont(11f), Theme.MUTED);
-    private final JLabel fcStateLabel = Theme.label(" ", Theme.headingFont(11f), Theme.MUTED);
+    // the controller card's status lines: selectable and copyable (1.0.51, the pilot)
+    private final CopyableText calibrationLabel = new CopyableText(" ", Theme.font(Font.BOLD, 11f), Theme.MUTED, Theme.PANEL);
+    private final CopyableText rcStateLabel = new CopyableText(" ", Theme.headingFont(11f), Theme.MUTED, Theme.PANEL);
+    private final CopyableText fcStateLabel = new CopyableText(" ", Theme.headingFont(11f), Theme.MUTED, Theme.PANEL);
     private final GimbalView leftGimbal = new GimbalView("Throttle / Yaw", "YAW", "THR");
     private final GimbalView rightGimbal = new GimbalView("Pitch / Roll", "ROLL", "PIT");
     private final ChannelBars channelBars = new ChannelBars();
@@ -853,6 +859,8 @@ public class MainWindow extends JFrame {
         c.weightx = 1;
         c.insets = new Insets(0, 0, 6, 0);
         link.add(Theme.sectionTitle("Link"), c);
+        connectedNameLabel.setToolTipText("The phone this PC is connected to");
+        link.add(folded(connectedNameLabel, 0), c);
         JPanel fields = new JPanel(new GridBagLayout());
         fields.setOpaque(false);
         fields.add(phoneLabel, c);
@@ -915,20 +923,18 @@ public class MainWindow extends JFrame {
         link.add(folded(itsDownLine, 0), c);
 
         // what matters in flight stays; the rest folds away with the fields
-        JPanel stats = new JPanel(new GridLayout(3, 2, 8, 6));
+        // 1.0.51 (the pilot): no ping, telemetry packets or RC frames here - the link log keeps them
+        JPanel stats = new JPanel(new GridLayout(2, 2, 8, 6));
         stats.setOpaque(false);
         addStat(stats, "PHONE BATTERY", phoneBatteryValue);
-        addStat(stats, "PING", pingValue);
         addStat(stats, "FLIGHT CONTROLLER", fcValue);
         c.insets = new Insets(4, 0, 0, 0);
         link.add(stats, c);
-        JPanel details = new JPanel(new GridLayout(4, 2, 8, 6));
+        JPanel details = new JPanel(new GridLayout(2, 2, 8, 6));
         details.setOpaque(false);
         details.setBorder(BorderFactory.createEmptyBorder(6, 0, 0, 0));
         addStat(details, "PHONE ON TAILSCALE", phoneValue);
         addStat(details, "PHONE APP", phoneAppValue);
-        addStat(details, "TELEMETRY PACKETS", telemetryValue);
-        addStat(details, "RC FRAMES SENT", rcSentValue);
         c.insets = new Insets(0, 0, 0, 0);
         link.add(details, c);
         // the minimap and the way to the map window, always: connected or not, nothing folds away for it
@@ -1491,6 +1497,7 @@ public class MainWindow extends JFrame {
             de.droiddrone.pc.PossiblyFlying.pc().attach(flown, target.name(), () ->de.droiddrone.pc.PossiblyFlying.of(flown.getTelemetry().getStatus()));
             connection.getLink().setNameReply(nameService::replyPacket);
             connection.getLink().setEvents(this::logLine);
+            connectedName = target.name() + (target.isVirtual() ? " (VIRTUAL)" : "");
             startLiveAudio(connection.getLink(), video, target.name());
             if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
@@ -1525,6 +1532,7 @@ public class MainWindow extends JFrame {
         if (!watch && de.droiddrone.pc.WindowsTuning.keepAwake(true)) logLine("PC and screen stay awake while connected.");
         powerWanted = ControlLink.POWER_NORMAL;
         phoneAsleep = false;
+        awaitingWake = false;
         lastState = null;
         lastStateText = null;
         lastSpectators = 0;
@@ -1548,6 +1556,7 @@ public class MainWindow extends JFrame {
         if (!watch && sleeping != null && sleeping.ip().equals(target.ip())) {
             // the phone sleeps: quiet until WAKE (a Connect in its listening window would wake it), or woken now
             phoneAsleep = true;
+            awaitingWake = true;
             phoneOverwatching = sleeping.overwatch();
             sleepStartAt = de.droiddrone.pc.MonoClock.ms() - (System.currentTimeMillis() - sleeping.since());
             sentIntervalMin = sleeping.intervalMin();
@@ -1635,13 +1644,13 @@ public class MainWindow extends JFrame {
             }
         }
         service.setInputListener(null);
-        standbyAfterWake = null; // a WAKE from the map not finished: the next CONNECT is an ordinary one
         remoteUpdateAskedAt = 0; // a remote update in flight: the phone goes on with it, this PC stops following it
         updatePhoneButton.setText("Update phone app");
         updatePhoneButton.setEnabled(true);
         de.droiddrone.pc.WindowsTuning.keepAwake(false);
         powerWanted = ControlLink.POWER_NORMAL;
         phoneAsleep = false;
+        awaitingWake = false;
         phoneOverwatching = false;
         if (powerRow != null) show(powerRow, false);
         sampleLinkLog();
@@ -2506,6 +2515,7 @@ public class MainWindow extends JFrame {
         refreshJoystickCombo(snap);
         refreshController(snap);
         refreshLink();
+        refreshPowerMarks();
         alertSound.update(stickWarning(), System.currentTimeMillis());
         refreshAudio();
         refreshObservation();
@@ -2896,6 +2906,7 @@ public class MainWindow extends JFrame {
         if (c == null) return null;
         ControlLink l = c.getLink();
         if (l.isSpectator()) return null; // watching: no sticks to lose, no alarm
+        if (quietWhileWaking(awaitingWake, l.getState())) return null;
         if (l.getState() != ControlLink.State.READY) return "LINK LOST";
         if (l.isLinkStalled()) return "LINK STALL";
         if (l.isFcLost()) return "NO FLIGHT CONTROLLER";
@@ -2908,6 +2919,11 @@ public class MainWindow extends JFrame {
         if (armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS) return "RADIO FROZEN";
         if (stickLagMs(l) > STICKS_LATE_MS) return "STICKS LATE";
         return null;
+    }
+
+    /** Waiting for a sleeping phone's check-in, and since until its link is READY: no beep (disarmed only, as sleep is). */
+    static boolean quietWhileWaking(boolean awaitingWake, ControlLink.State state) {
+        return awaitingWake && state != ControlLink.State.READY;
     }
 
     /** Under LINK LOST on the OSD: the reason, when Tailscale knows it; else that the sticks still go out. */
@@ -3337,6 +3353,28 @@ public class MainWindow extends JFrame {
     }
 
     /** The phone chosen in the PHONE list, if it is asleep; null otherwise (or as a spectator). */
+    /**
+     * The chosen phone's mode lights its button (1.0.51, the pilot): OVERWATCH while it overwatches, DEEP SLEEP while it
+     * sleeps - connected or not. Not while the tour's demo drives the buttons.
+     */
+    private void refreshPowerMarks() {
+        if (tourPowerDemo) return;
+        int mode = shownPowerMode(connection == null ? null : connection.getLink(), asleepChosen(), phoneAsleep, phoneOverwatching);
+        ((TacticalButton) deepSleepButton).setCurrent(mode == ControlLink.POWER_DEEP_SLEEP);
+        ((TacticalButton) overwatchButton).setCurrent(mode == ControlLink.POWER_OVERWATCH);
+    }
+
+    /** The mode the chosen phone is in now, or -1 when unknown. */
+    static int shownPowerMode(ControlLink link, Asleep chosenAsleep, boolean asleep, boolean overwatching) {
+        if (link == null) {
+            return chosenAsleep == null ? -1 : chosenAsleep.overwatch() ? ControlLink.POWER_OVERWATCH : ControlLink.POWER_DEEP_SLEEP;
+        }
+        if (link.isSpectator()) return -1;
+        if (asleep) return overwatching ? ControlLink.POWER_OVERWATCH : ControlLink.POWER_DEEP_SLEEP;
+        FcTelemetry.PhonePower pp = link.getTelemetry().getPhonePower();
+        return pp == null ? -1 : pp.mode();
+    }
+
     private Asleep asleepChosen() {
         if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) return null;
         String ip = config.getString("ip");
@@ -3480,35 +3518,6 @@ public class MainWindow extends JFrame {
         powerStatus.setText("<html>" + a.name() + " is in " + a.mode() + ". " + alive + (a.listening() ? "It is listening: WAKE connects and brings it back at once.</html>"
                 : "Next check in " + clock(nextCheck(a, now) - now) + ". WAKE connects and brings it back then.</html>"));
     }
-
-    /**
-     * Right-click on a sleeping or overwatching drone on the map: WAKE (1.0.50, the pilot) - this PC connects to it as
-     * its pilot (the link answers its next check "wake"), then asks STANDBY as soon as it is up, and STANDBY ends the
-     * connection by itself: the phone ends in standby, back in about 2 s at the next CONNECT.
-     */
-    private void wakeToStandby(String drone) {
-        if (connection != null || observation != null) {
-            JOptionPane.showMessageDialog(this, "Connected: DISCONNECT first, then wake " + drone + ".",
-                    "Wake", JOptionPane.INFORMATION_MESSAGE);
-            return;
-        }
-        String ip = names.ipOf(drone);
-        if (ip == null) return;
-        if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) roleCombo.setSelectedItem(ROLE_PILOT);
-        save(Map.of(Names.PHONE_NAME_KEY, drone));
-        standbyAfterWake = drone;
-        Asleep a = asleepPhones.get(ip);
-        logLine("WAKE " + drone + ": " + (a != null && a.listening() ? "now" : "at its next check") + ", then STANDBY.");
-        wakeOnConnect = true;
-        try {
-            connect();
-        } finally {
-            wakeOnConnect = false;
-        }
-    }
-
-    /** The drone woken from the map, to be put in STANDBY once its link is up; null: none. */
-    private String standbyAfterWake;
 
     /** WAKE with no link: connect to the sleeping phone as its pilot; the link answers its next check "wake". */
     private void wakeAsleep() {
@@ -3816,10 +3825,8 @@ public class MainWindow extends JFrame {
             drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot));
         }
         miniMap.setNetDrones(drones, this::connectFromMap);
-        miniMap.setOnDroneWake(this::wakeToStandby);
         if (mapWindow != null) {
             mapWindow.map().setNetDrones(drones, this::connectFromMap);
-            mapWindow.map().setOnDroneWake(this::wakeToStandby);
         }
         if (!asleepPhones.isEmpty() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
     }
@@ -3900,6 +3907,7 @@ public class MainWindow extends JFrame {
         boolean sleepMode = powerWanted == ControlLink.POWER_DEEP_SLEEP || powerWanted == ControlLink.POWER_OVERWATCH;
         if (sleepMode && reported == powerWanted && !phoneAsleep && !link.isConnected()) {
             phoneAsleep = true;
+            awaitingWake = true;
             phoneOverwatching = powerWanted == ControlLink.POWER_OVERWATCH;
             sleepStartAt = pp.receivedAt() + pp.sleepInS() * 1000L;
             link.setDormant(true);
@@ -3960,12 +3968,6 @@ public class MainWindow extends JFrame {
                 show(wakeButton, true); // it sleeps: WAKE is the way back
                 checkIntervalCombo.setEnabled(false);
             }
-            return;
-        }
-        if (standbyAfterWake != null && ready && powerWanted == ControlLink.POWER_NORMAL && reported == ControlLink.POWER_NORMAL
-                && standbyAfterWake.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) && !link.isSpectator()) {
-            standbyAfterWake = null; // woken from the map: now to STANDBY, which disconnects by itself
-            askPower(ControlLink.POWER_STANDBY);
             return;
         }
         if (ready && powerWanted != reported) {
@@ -4067,10 +4069,8 @@ public class MainWindow extends JFrame {
             if (asleepChosen() != null && !tourPowerDemo) refreshAsleep();
             else if (powerRow != null && shown(powerRow) && !tourPowerDemo) show(powerRow, false);
             if (observation == null) setPill("OFFLINE", Theme.PANEL_2, Theme.MUTED); // observing: refreshObservation's
-            pingValue.setText("-");
             fcValue.setText("-");
-            telemetryValue.setText("-");
-            rcSentValue.setText("-");
+            showConnectedName(null);
             refreshPhoneApp(null);
             return;
         }
@@ -4118,6 +4118,7 @@ public class MainWindow extends JFrame {
         } else {
             videoView.setIdleText("Waiting for the first key frame...");
         }
+        if (state == ControlLink.State.READY && !phoneAsleep) awaitingWake = false;
         switch (state) {
             case READY -> {
                 // M14 (1.0.49): green only while the phone is heard - not for the 2 s before the link counts as lost
@@ -4140,13 +4141,9 @@ public class MainWindow extends JFrame {
             default -> setPill(state == ControlLink.State.CONNECTING ? "CONNECTING" : "WAITING FOR PHONE", Theme.WARN, Theme.BG);
         }
         refreshLostDrone(link, state);
-        int ping = link.getPing();
-        pingValue.setText(ping < 0 ? "-" : ping + " ms");
-        pingValue.setForeground(ping < 0 ? Theme.MUTED : ping > 150 ? Theme.BAD : ping > 80 ? Theme.WARN : Theme.OK);
+        showConnectedName(link.isSpectator() ? "WATCHING " + connectedName : connectedName);
         FcInfo fc = link.getFcInfo();
         fcValue.setText(fc == null ? "-" : fc.getFcName() + " " + fc.getFcVersionStr());
-        telemetryValue.setText(Long.toString(link.getTelemetryPacketsReceived()));
-        rcSentValue.setText(Long.toString(link.getRcFramesSent()));
         refreshPhoneApp(state == ControlLink.State.READY ? link.getTelemetry() : null);
     }
 
@@ -4605,11 +4602,22 @@ public class MainWindow extends JFrame {
         revalidate();
     }
 
+    /** The connected phone's name on the LINK card; null hides it. */
+    private void showConnectedName(String name) {
+        boolean on = name != null && connection != null;
+        if (on && !name.equals(connectedNameLabel.getText())) connectedNameLabel.setText(name);
+        if (on != shown(connectedNameLabel)) show(connectedNameLabel, on);
+    }
+
     private void setPill(String text, Color background, Color foreground) {
         if (text.equals(statePill.getText()) && background.equals(statePill.getBackground())) return;
         statePill.setText(text);
         statePill.setBackground(background);
         statePill.setForeground(foreground);
+    }
+
+    private static void setLabel(CopyableText label, String text, Color color) {
+        label.show(text, color);
     }
 
     private static void setLabel(JLabel label, String text, Color color) {

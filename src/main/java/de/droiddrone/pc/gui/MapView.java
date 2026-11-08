@@ -134,13 +134,6 @@ class MapView extends JComponent {
         repaint();
     }
 
-    /** Right-click WAKE on a sleeping drone (1.0.50): it wakes at its next check and goes to STANDBY. */
-    private Consumer<String> onDroneWake;
-
-    void setOnDroneWake(Consumer<String> onWake) {
-        onDroneWake = onWake;
-    }
-
     void setNetDrones(List<NetDrone> drones, java.util.function.BiConsumer<String, Boolean> onConnect) {
         netDrones = drones == null ? List.of() : List.copyOf(drones);
         onDroneConnect = onConnect;
@@ -990,13 +983,7 @@ class MapView extends JComponent {
                 watch.addActionListener(e -> onDroneConnect.accept(drone.name(), true));
                 menu.add(watch);
             }
-            boolean sleeps = drone.kind() == Kind.ASLEEP && !drone.state().contains("STANDBY") || drone.kind() == Kind.OVERWATCH
-                    || drone.kind() == Kind.UNKNOWN && drone.state().contains("CHECK-IN");
-            if (sleeps && onDroneWake != null) { // 1.0.50: wake it (at its next check), and it goes to STANDBY by itself
-                JMenuItem wake = new JMenuItem("Wake " + drone.name() + " (then STANDBY)");
-                wake.addActionListener(e -> onDroneWake.accept(drone.name()));
-                menu.add(wake);
-            }
+            // 1.0.51 (the pilot): no right-click WAKE - a sleeping drone wakes from the LINK card
             JMenuItem fly = new JMenuItem(drone.flown() ? "Connect to " + drone.name() + " (another PC flies: watch only)"
                     : "Connect to " + drone.name() + " and fly");
             fly.addActionListener(e -> onDroneConnect.accept(drone.name(), false));
@@ -1032,6 +1019,12 @@ class MapView extends JComponent {
             menu.add(remove);
             menu.addSeparator();
         }
+        double[] here = toLatLon(x, y); // 1.0.51 (the pilot): the clicked point's grid to the clipboard
+        String grid = Coordinates.format(coordinateFormat.get(), here[0], here[1]);
+        JMenuItem copyGrid = new JMenuItem("Copy grid (" + grid + ")");
+        copyGrid.addActionListener(e -> java.awt.Toolkit.getDefaultToolkit().getSystemClipboard()
+                .setContents(new java.awt.datatransfer.StringSelection(grid), null));
+        menu.add(copyGrid);
         if (pins != null) {
             Pins.Pin hit = pinAt(x, y);
             if (hit != null) {
