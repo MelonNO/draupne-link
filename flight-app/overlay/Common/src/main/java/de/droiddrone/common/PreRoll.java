@@ -46,10 +46,23 @@ public final class PreRoll {
     private final ArrayDeque<Frame> frames = new ArrayDeque<>();
     private long lastAddedAt = Long.MIN_VALUE / 2;
     private int bytes;
+    private boolean detectedBefore;
+    /** A detection's first picture comes this soon after the last at most (one flickering on and off adds no flood). */
+    static final long FIRST_MIN_MS = 100;
 
     /** A picture is wanted now: the last was EVERY_MS ago or more (the caller then makes the JPEG). */
     public synchronized boolean due(long now) {
         return now - lastAddedAt >= EVERY_MS;
+    }
+
+    /**
+     * {@link #due} or the first picture of a detection (1.0.54): the picture that raises an alert is the last one
+     * before it. Up to EVERY_MS older otherwise - something found as it came in wasn't in any of them.
+     */
+    public synchronized boolean due(long now, boolean detected) {
+        boolean first = detected && !detectedBefore;
+        detectedBefore = detected;
+        return due(now) || first && now - lastAddedAt >= FIRST_MIN_MS;
     }
 
     public synchronized void add(long now, byte[] jpeg) {
@@ -74,6 +87,7 @@ public final class PreRoll {
         frames.clear();
         bytes = 0;
         lastAddedAt = Long.MIN_VALUE / 2;
+        detectedBefore = false;
     }
 
     private void trim(long now) {

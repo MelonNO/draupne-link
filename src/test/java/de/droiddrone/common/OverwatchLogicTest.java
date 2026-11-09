@@ -30,6 +30,29 @@ class OverwatchLogicTest {
     }
 
     @Test
+    void theFirstPictureOfADetectionIsTheLastBeforeTheAlert() {
+        PreRoll r = new PreRoll();
+        long t = 1_000_000;
+        int added = 0;
+        long lastAt = 0;
+        // 8 pictures a second; something found at 1250 ms (between two pre-roll pictures), still seen after that
+        for (long now = t; now < t + 3_000; now += 125) {
+            boolean detected = now >= t + 1_250;
+            if (r.due(now, detected)) {
+                r.add(now, new byte[]{(byte) added++});
+                lastAt = now;
+            }
+            if (now == t + 1_250) assertEquals(now, lastAt, "the picture that found it is in");
+        }
+        assertEquals(7, added, "two a second plus the one that found it, no more while it stays found");
+        // a detection flickering on and off every picture adds one picture at most every FIRST_MIN_MS
+        r.clear();
+        added = 0;
+        for (long now = t; now < t + 1_000; now += 50) if (r.due(now, (now / 50) % 2 == 0)) r.add(now, new byte[]{(byte) added++});
+        assertTrue(added <= 1_000 / PreRoll.FIRST_MIN_MS, "added " + added);
+    }
+
+    @Test
     void thePreRollNeverHoldsMoreThanItsBytes() {
         PreRoll r = new PreRoll();
         for (int i = 0; i < 10; i++) r.add(i * 500L, new byte[60 * 1024]);

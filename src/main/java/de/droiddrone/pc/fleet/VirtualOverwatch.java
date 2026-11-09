@@ -191,7 +191,7 @@ final class VirtualOverwatch {
      */
     void onPicture(BufferedImage analysis, MotionRecord.Report report, long now) {
         if (!watching) return;
-        if (preRoll.due(now)) {
+        if (preRoll.due(now, report != null && !report.boxes.isEmpty())) {
             byte[] jpeg = jpeg(analysis);
             if (jpeg != null) preRoll.add(now, jpeg);
         }

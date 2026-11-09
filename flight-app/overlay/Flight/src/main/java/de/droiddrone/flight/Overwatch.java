@@ -354,7 +354,7 @@ final class Overwatch {
 
     private void onPicture(byte[] y, byte[] u, byte[] v, int w, int h, MotionDetector.Result r, long wallMs) {
         if (!watching) return;
-        if (preRoll.due(wallMs)) {
+        if (preRoll.due(wallMs, r != null && !r.detections.isEmpty())) {
             byte[] jpeg = jpeg(y, u, v, w, h);
             if (jpeg != null) preRoll.add(wallMs, jpeg);
         }
