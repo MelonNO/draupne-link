@@ -14,6 +14,8 @@ import java.util.Set;
 import java.util.TreeMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * ModeSwitch.plan over a grid of Betaflight "aux" lists and targets, against the plans as 1.0.53 made them (the review's
@@ -64,7 +66,18 @@ class ModeSwitchGoldenTest {
                 + "\ndoubled=" + p.doubled() + "\nbeeperProblem=" + p.beeperProblem() + "\n";
     }
 
+    /** Every case of the grid: its name, its "aux" list and the plan. */
+    interface Case {
+        void accept(String name, String aux, ModeSwitch.Plan plan);
+    }
+
     static String grid() {
+        StringBuilder sb = new StringBuilder();
+        forEachCase((name, aux, plan) -> sb.append(name).append('\n').append(canonical(plan)));
+        return sb.toString();
+    }
+
+    static void forEachCase(Case each) {
         List<Set<Integer>> available = new ArrayList<>();
         available.add(Set.of(0, 1, 2, 11, 13, 36, 46));
         available.add(null);
@@ -80,7 +93,6 @@ class ModeSwitchGoldenTest {
         int[] arms = {0, 1, 2, 3};
         int[] prearms = {0, 3, 1, 2};
         int[] beepers = {0, ModeSwitch.BEEPER_AUX};
-        StringBuilder sb = new StringBuilder();
         List<String> auxLists = auxLists();
         for (int a = 0; a < auxLists.size(); a++) {
             for (int v = 0; v < available.size(); v++) {
@@ -90,10 +102,11 @@ class ModeSwitchGoldenTest {
                             for (int arm : arms) {
                                 for (int prearm : prearms) {
                                     for (int beeper : beepers) {
-                                        sb.append("# aux ").append(a).append(" available ").append(v).append(" blocked ").append(b)
-                                                .append(" modes ").append(m == null ? "-" : m.format()).append(" rescue ").append(rescue)
-                                                .append(" arm ").append(arm).append(" prearm ").append(prearm).append(" beeper ").append(beeper).append('\n');
-                                        sb.append(canonical(plan(auxLists.get(a), available.get(v), blocked.get(b), m, rescue, arm, prearm, beeper)));
+                                        String name = "# aux " + a + " available " + v + " blocked " + b + " modes "
+                                                + (m == null ? "-" : m.format()) + " rescue " + rescue + " arm " + arm
+                                                + " prearm " + prearm + " beeper " + beeper;
+                                        each.accept(name, auxLists.get(a), ModeSwitch.plan(auxLists.get(a), available.get(v),
+                                                blocked.get(b), new ModeSwitch.Switches(m, rescue, arm, prearm, beeper)));
                                     }
                                 }
                             }
@@ -102,12 +115,6 @@ class ModeSwitchGoldenTest {
                 }
             }
         }
-        return sb.toString();
-    }
-
-    private static ModeSwitch.Plan plan(String aux, Set<Integer> available, Map<ModeSwitch.Mode, String> blocked, ModeSwitch modes,
-                                        int rescue, int arm, int prearm, int beeper) {
-        return ModeSwitch.plan(aux, available, blocked, modes, rescue, arm, prearm, beeper);
     }
 
     @Test
@@ -117,5 +124,28 @@ class ModeSwitchGoldenTest {
         if (dump != null) Files.writeString(Path.of(dump), text);
         String hash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));
         assertEquals(RECORDED, hash, "the plans differ from the recorded ones (GOLDEN_DUMP=<file> writes them for a diff)");
+    }
+
+    /**
+     * What the clearing loops had to keep apart, over the whole grid: no slot cleared twice, no slot filled twice, every
+     * clear before the first fill, and never a placed mode beside ARM in the slots as they end up.
+     */
+    @Test
+    void noSlotIsClearedOrFilledTwiceAnywhere() {
+        forEachCase((name, aux, plan) -> {
+            Set<Integer> clearedSlots = new java.util.HashSet<>(), filled = new java.util.HashSet<>();
+            boolean filling = false;
+            for (String c : plan.commands()) {
+                int slot = Integer.parseInt(c.split(" ")[1]);
+                if (c.matches("aux \\d+ 0 0 900 900.*")) {
+                    assertTrue(!filling, name + ": a clear after a fill " + plan.commands());
+                    assertTrue(clearedSlots.add(slot), name + ": slot " + slot + " cleared twice " + plan.commands());
+                } else {
+                    filling = true;
+                    assertTrue(filled.add(slot), name + ": slot " + slot + " filled twice " + plan.commands());
+                }
+            }
+            assertNull(ModeSwitch.sharedWithArm(ModeSwitch.after(ModeSwitch.slots(aux), plan.commands()), plan.commands()), name);
+        });
     }
 }

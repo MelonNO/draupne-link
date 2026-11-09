@@ -68,7 +68,7 @@ class ModeSwitchTest {
         // ARM was on AUX2 in slot 0; ARM goes to AUX1 and the flight modes to AUX2. 1.0.48 sent only the fill for a slot
         // it refilled - a fill Betaflight didn't take left ARM there with the new channel (ARM on the mode switch)
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 1 1700 2100 0 0", "aux 1 0 1 900 1300 0 0"), ALL, java.util.Map.of(),
-                ModeSwitch.DEFAULT, 0, 1);
+                ModeSwitch.Switches.of(ModeSwitch.DEFAULT).arm(1));
         List<String> c = p.commands();
         for (String fill : c) {
             if (fill.contains(" 900 900")) continue;
@@ -118,7 +118,7 @@ class ModeSwitchTest {
     @Test
     void aSwitchLeftAsItIsKeepsThemAndDoublesAreReported() {
         String aux = aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 3 1 4 1300 1700 0 0");
-        ModeSwitch.Plan p = ModeSwitch.plan(aux, ALL, java.util.Map.of(), null, 0, 1, 0);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux, ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1));
         assertTrue(p.commands().isEmpty(), "ARM is where it should be, the modes are the pilot's own");
         assertEquals(List.of("ANGLE on AUX2", "ANGLE on AUX5"), p.elsewhere());
         assertEquals(List.of("ANGLE on AUX2, AUX5"), p.doubled());
@@ -209,13 +209,13 @@ class ModeSwitchTest {
 
     @Test
     void rescueGoesUpOnAux4BesidesTheModeSwitch() {
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 4);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(ModeSwitch.DEFAULT).rescue(4));
         assertNull(p.problem());
         assertNull(p.rescueProblem());
         // the two switches share the free slots: no slot used twice
         assertEquals(List.of("aux 1 1 1 1300 1700 0 0", "aux 2 11 1 1700 2100 0 0", "aux 3 46 3 1700 2100 0 0"), p.commands());
         ModeSwitch.Plan done = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0",
-                "aux 2 11 1 1700 2100 0 0", "aux 3 46 3 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 4);
+                "aux 2 11 1 1700 2100 0 0", "aux 3 46 3 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(ModeSwitch.DEFAULT).rescue(4));
         assertTrue(done.commands().isEmpty());
         assertTrue(done.elsewhere().isEmpty(), "rescue on its own switch isn't 'elsewhere'");
     }
@@ -223,7 +223,7 @@ class ModeSwitchTest {
     @Test
     void rescueAloneWithTheModeSwitchLeftAsItIs() {
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 3 1700 2100 0 0"), ALL,
-                java.util.Map.of(), null, 4);
+                java.util.Map.of(), ModeSwitch.Switches.of(null).rescue(4));
         assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 1 46 3 1700 2100 0 0"), p.commands(), "the beeper on AUX4 makes way");
         assertEquals(List.of("BEEPER on AUX4"), p.replaced());
     }
@@ -231,10 +231,10 @@ class ModeSwitchTest {
     @Test
     void rescueSwitchConflictsAreRefused() {
         ModeSwitch sameSwitch = new ModeSwitch(4, ModeSwitch.Mode.ACRO, ModeSwitch.Mode.ANGLE, ModeSwitch.Mode.POS_HOLD);
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), sameSwitch, 4);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(sameSwitch).rescue(4));
         assertTrue(p.rescueProblem().contains("is the flight mode switch"));
         assertNull(p.problem(), "the mode switch still goes on");
-        ModeSwitch.Plan arm = ModeSwitch.plan(aux("aux 0 0 3 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 4);
+        ModeSwitch.Plan arm = ModeSwitch.plan(aux("aux 0 0 3 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(ModeSwitch.DEFAULT).rescue(4));
         assertTrue(arm.rescueProblem().contains("ARM is on AUX4"));
         assertFalse(arm.commands().stream().anyMatch(c -> c.contains(" 46 ")));
     }
@@ -242,7 +242,7 @@ class ModeSwitchTest {
     @Test
     void blockedRescueLeavesItsSwitchAlone() {
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 3 1700 2100 0 0"), ALL,
-                java.util.Map.of(ModeSwitch.Mode.GPS_RESCUE, "No GPS found"), null, 4);
+                java.util.Map.of(ModeSwitch.Mode.GPS_RESCUE, "No GPS found"), ModeSwitch.Switches.of(null).rescue(4));
         assertEquals("No GPS found", p.rescueProblem());
         assertTrue(p.commands().isEmpty(), "the beeper stays while rescue can't go on");
     }
@@ -257,7 +257,7 @@ class ModeSwitchTest {
     @Test
     void armIsPutOnItsSwitchAndTakenOffOthers() {
         // ARM on AUX3 before: moved to AUX1 (up), so there is one arm switch
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 2 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 2 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1));
         assertNull(p.armProblem());
         assertEquals(List.of("aux 0 0 0 900 900 0 0", "aux 0 0 0 1700 2100 0 0"), p.commands(), "the old slot cleared, then reused for the new ARM");
         assertEquals(List.of("ARM on AUX3"), p.replaced());
@@ -266,14 +266,41 @@ class ModeSwitchTest {
     @Test
     void armAlreadyOnTheSwitchKeepsItsOwnRange() {
         // armed low on AUX1: the pilot's switch, left as it is
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 900 1300 0 0"), ALL, java.util.Map.of(), null, 0, 1);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 900 1300 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1));
         assertTrue(p.commands().isEmpty());
+    }
+
+    @Test
+    void armOnTheChosenSwitchAndAnotherKeepsTheOneAndClearsTheOther() {
+        // ARM low on AUX1 (kept: the pilot's range) and on AUX5 too: AUX5's taken off, no second ARM placed
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 900 1300 0 0", "aux 1 0 4 1700 2100 0 0"), ALL, java.util.Map.of(),
+                ModeSwitch.Switches.of(null).arm(1));
+        assertEquals(List.of("aux 1 0 0 900 900 0 0"), p.commands());
+        assertEquals(List.of("ARM on AUX5"), p.replaced());
+    }
+
+    @Test
+    void prearmTakesItsSwitchFromHorizonAndLeavesItsOldOne() {
+        // HORIZON on AUX3 (the PREARM switch chosen) and PREARM on AUX6: both slots cleared once, PREARM into the first
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 2 2 1700 2100 0 0", "aux 2 36 5 1700 2100 0 0"),
+                ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).prearm(3));
+        assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 2 0 0 900 900 0 0", "aux 1 36 2 1700 2100 0 0"), p.commands());
+        assertEquals(List.of("HORIZON on AUX3", "PREARM on AUX6"), p.replaced());
+    }
+
+    @Test
+    void switchesSayWhatIsSet() {
+        ModeSwitch.Switches s = ModeSwitch.Switches.of(null);
+        assertTrue(s.none());
+        assertEquals(new ModeSwitch.Switches(ModeSwitch.DEFAULT, 4, 1, 3, ModeSwitch.BEEPER_AUX),
+                ModeSwitch.Switches.of(ModeSwitch.DEFAULT).rescue(4).arm(1).prearm(3).beeper(ModeSwitch.BEEPER_AUX));
+        assertTrue(!s.beeper(ModeSwitch.BEEPER_AUX).none());
     }
 
     @Test
     void armMovedOffTheModeSwitchFreesIt() {
         // ARM was on AUX2; choosing AUX1 for ARM lets the flight modes go on AUX2
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 1 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 0, 1);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 1 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(ModeSwitch.DEFAULT).arm(1));
         assertNull(p.problem());
         assertNull(p.armProblem());
         assertEquals(List.of("aux 0 0 0 900 900 0 0", "aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 11 1 1700 2100 0 0"),
@@ -282,9 +309,9 @@ class ModeSwitchTest {
 
     @Test
     void armOnTheModeOrRescueSwitchIsRefused() {
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 4, 2);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(ModeSwitch.DEFAULT).rescue(4).arm(2));
         assertTrue(p.armProblem().contains("flight mode switch"));
-        ModeSwitch.Plan q = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), null, 4, 4);
+        ModeSwitch.Plan q = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).rescue(4).arm(4));
         assertTrue(q.armProblem().contains("GPS rescue switch"));
     }
 
@@ -342,16 +369,16 @@ class ModeSwitchTest {
     @Test
     void prearmIsPutOnItsSwitchUpAndTakenOffOthers() {
         // ARM on AUX1 already; PREARM (36) on AUX5 before: moved to AUX3, up, so there is one prearm switch
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 4 36 4 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 3);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 4 36 4 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).prearm(3));
         assertNull(p.armProblem());
         assertNull(p.prearmProblem());
         assertEquals(List.of("aux 4 0 0 900 900 0 0", "aux 1 36 2 1700 2100 0 0"), p.commands(), "the old one cleared, the new PREARM in the lowest free slot");
         assertEquals(List.of("PREARM on AUX5"), p.replaced());
         // none before: written into a free slot; already there: nothing to do
-        assertEquals(List.of("aux 1 36 2 1700 2100 0 0"), ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 3).commands());
-        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 2 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 3).commands().isEmpty());
+        assertEquals(List.of("aux 1 36 2 1700 2100 0 0"), ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).prearm(3)).commands());
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 2 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).prearm(3)).commands().isEmpty());
         // left as it is (0): PREARM elsewhere stays
-        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 4 36 4 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0).commands().isEmpty());
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 4 36 4 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1)).commands().isEmpty());
         assertEquals(Set.of(5), ModeSwitch.prearmAuxes(aux("aux 4 36 4 1700 2100 0 0")));
     }
 
@@ -360,23 +387,23 @@ class ModeSwitchTest {
         // the pilot: HORIZON (2) already on AUX3, PREARM put on AUX3 -> HORIZON comes off AUX3; AIRMODE (28) beside ARM on
         // AUX1 comes off too; ANGLE on AUX5 (not placed here) stays
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 28 0 1700 2100 0 0", "aux 2 2 2 1300 1700 0 0",
-                "aux 3 1 4 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 3);
+                "aux 3 1 4 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).prearm(3));
         assertNull(p.prearmProblem());
         assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 2 0 0 900 900 0 0", "aux 1 36 2 1700 2100 0 0"), p.commands());
         assertTrue(p.replaced().contains("HORIZON on AUX3"), p.replaced().toString());
         assertEquals(2, p.replaced().size(), "AIR MODE off AUX1, HORIZON off AUX3: " + p.replaced());
         // ARM and PREARM left as they are (0): nothing on their switches is touched
         assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 28 0 1700 2100 0 0", "aux 2 36 2 1700 2100 0 0",
-                "aux 3 2 2 1300 1700 0 0"), ALL, java.util.Map.of(), null, 0, 0, 0).commands().isEmpty());
+                "aux 3 2 2 1300 1700 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null)).commands().isEmpty());
     }
 
     @Test
     void prearmOnTheArmModeOrRescueSwitchIsRefused() {
-        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), null, 0, 1, 1).prearmProblem().contains("ARM is on AUX1"));
-        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 0, 1, 2).prearmProblem().contains("flight mode switch"));
-        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), null, 4, 1, 4).prearmProblem().contains("GPS rescue switch"));
+        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).prearm(1)).prearmProblem().contains("ARM is on AUX1"));
+        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.Switches.of(ModeSwitch.DEFAULT).arm(1).prearm(2)).prearmProblem().contains("flight mode switch"));
+        assertTrue(ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).rescue(4).arm(1).prearm(4)).prearmProblem().contains("GPS rescue switch"));
         // the flight modes and ARM are written all the same
-        ModeSwitch.Plan p = ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.DEFAULT, 0, 1, 2);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux(), ALL, java.util.Map.of(), ModeSwitch.Switches.of(ModeSwitch.DEFAULT).arm(1).prearm(2));
         assertEquals(List.of("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 11 1 1700 2100 0 0"), p.commands());
     }
 
@@ -385,32 +412,31 @@ class ModeSwitchTest {
         assertEquals(14, ModeSwitch.BEEPER_AUX, "the last channel MSP carries, almost never a radio switch (AUX12 before 1.0.49)");
         // BEEPER (13) on the radio's AUX4 and ANGLE on AUX14 before: both taken off, BEEPER up on AUX14 (channel 13)
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 3 1700 2100 0 0", "aux 2 1 13 900 1300 0 0"),
-                ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX);
+                ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).beeper(ModeSwitch.BEEPER_AUX));
         assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 2 0 0 900 900 0 0", "aux 1 13 13 1700 2100 0 0"), p.commands(),
                 "both cleared, the old BEEPER slot filled again with the new one");
         assertEquals(List.of("BEEPER on AUX4", "ANGLE on AUX14"), p.replaced());
         assertNull(p.beeperProblem());
         // already so: nothing; with another range on AUX14 it is set to the button's
-        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0,
-                ModeSwitch.BEEPER_AUX).commands().isEmpty());
+        assertTrue(ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).beeper(ModeSwitch.BEEPER_AUX)).commands().isEmpty());
         assertEquals(List.of("aux 1 0 0 900 900 0 0", "aux 1 13 13 1700 2100 0 0"), ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0",
-                "aux 1 13 13 900 1300 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX).commands());
+                "aux 1 13 13 900 1300 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).beeper(ModeSwitch.BEEPER_AUX)).commands());
     }
 
     @Test
     void armLeftOnTheBeeperChannelBlocksBeeperAndAsksToMoveArm() {
         // ARM left as it is (0) on AUX14: BEEPER isn't put there, and the page says why
-        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 13 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 0, 0, ModeSwitch.BEEPER_AUX);
+        ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 13 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).beeper(ModeSwitch.BEEPER_AUX));
         assertTrue(p.commands().isEmpty());
         assertTrue(p.beeperProblem().startsWith("ARM is on AUX14"), p.beeperProblem());
         assertTrue(p.beeperProblem().contains("Choose an ARM switch"));
         // an ARM switch chosen: ARM moves off AUX14 (cleared first), then BEEPER goes there
-        ModeSwitch.Plan moved = ModeSwitch.plan(aux("aux 0 0 13 1700 2100 0 0"), ALL, java.util.Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX);
+        ModeSwitch.Plan moved = ModeSwitch.plan(aux("aux 0 0 13 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).beeper(ModeSwitch.BEEPER_AUX));
         assertNull(moved.beeperProblem());
         assertEquals(List.of("aux 0 0 0 900 900 0 0", "aux 0 0 0 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0"), moved.commands());
         // PREARM left on AUX14: the same
         ModeSwitch.Plan prearm = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 13 1700 2100 0 0"), ALL, java.util.Map.of(),
-                null, 0, 1, 0, ModeSwitch.BEEPER_AUX);
+                ModeSwitch.Switches.of(null).arm(1).beeper(ModeSwitch.BEEPER_AUX));
         assertTrue(prearm.beeperProblem().startsWith("PREARM is on AUX14"), prearm.beeperProblem());
         assertTrue(prearm.commands().isEmpty(), "PREARM stays where the pilot has it");
     }
@@ -426,7 +452,7 @@ class ModeSwitchTest {
                 for (int armAux = 0; armAux <= ModeSwitch.MAX_AUX; armAux++) {
                     for (int prearmAux : new int[]{0, 3}) {
                         for (ModeSwitch modes : new ModeSwitch[]{null, ModeSwitch.DEFAULT}) {
-                            ModeSwitch.Plan p = ModeSwitch.plan(read, ALL, java.util.Map.of(), modes, 4, armAux, prearmAux, ModeSwitch.BEEPER_AUX);
+                            ModeSwitch.Plan p = ModeSwitch.plan(read, ALL, java.util.Map.of(), ModeSwitch.Switches.of(modes).rescue(4).arm(armAux).prearm(prearmAux).beeper(ModeSwitch.BEEPER_AUX));
                             List<ModeSwitch.Slot> after = ModeSwitch.after(ModeSwitch.slots(read), p.commands());
                             String where = "ARM read on " + armRead + ", ARM " + armAux + ", PREARM " + prearmAux + ", modes " + modes + ": " + p.commands();
                             assertNull(ModeSwitch.sharedWithArm(after, p.commands()), where);
@@ -462,16 +488,16 @@ class ModeSwitchTest {
     void prearmLeftAsItIsKeepsItsSwitch() {
         // PREARM on the flight mode switch, PREARM left as it is: 1.0.48 took it off; now the mode switch is refused
         ModeSwitch.Plan p = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 1 1700 2100 0 0"), ALL, java.util.Map.of(),
-                ModeSwitch.DEFAULT, 0, 1, 0);
+                ModeSwitch.Switches.of(ModeSwitch.DEFAULT).arm(1));
         assertTrue(p.problem().startsWith("PREARM is on AUX2"), p.problem());
         assertFalse(p.commands().stream().anyMatch(c -> c.startsWith("aux 1 ")), "PREARM's slot isn't touched: " + p.commands());
         // on the rescue switch: the same for GPS rescue
-        ModeSwitch.Plan r = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 3 1700 2100 0 0"), ALL, java.util.Map.of(), null, 4, 1, 0);
+        ModeSwitch.Plan r = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 3 1700 2100 0 0"), ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).rescue(4).arm(1));
         assertTrue(r.rescueProblem().startsWith("PREARM is on AUX4"), r.rescueProblem());
         assertTrue(r.commands().isEmpty());
         // a PREARM switch chosen elsewhere: then PREARM moves, and the mode switch is free
         ModeSwitch.Plan moved = ModeSwitch.plan(aux("aux 0 0 0 1700 2100 0 0", "aux 1 36 1 1700 2100 0 0"), ALL, java.util.Map.of(),
-                ModeSwitch.DEFAULT, 0, 1, 3);
+                ModeSwitch.Switches.of(ModeSwitch.DEFAULT).arm(1).prearm(3));
         assertNull(moved.problem());
         assertEquals(List.of("PREARM on AUX2"), moved.replaced());
     }
@@ -530,7 +556,7 @@ class ModeSwitchTest {
     @Test
     void armMovedOffThePrearmSwitchKeepsBothInSlotsOfTheirOwn() {
         String before = aux("aux 0 0 2 1700 2100 0 0");
-        ModeSwitch.Plan p = ModeSwitch.plan(before, ALL, java.util.Map.of(), null, 0, 1, 3);
+        ModeSwitch.Plan p = ModeSwitch.plan(before, ALL, java.util.Map.of(), ModeSwitch.Switches.of(null).arm(1).prearm(3));
         assertNull(p.armProblem());
         assertNull(p.prearmProblem());
         String after = listed(ModeSwitch.after(ModeSwitch.slots(before), p.commands()));
@@ -552,7 +578,7 @@ class ModeSwitchTest {
                 for (int armAux = 0; armAux <= ModeSwitch.MAX_AUX; armAux++) {
                     for (int prearmAux = 0; prearmAux <= ModeSwitch.MAX_AUX; prearmAux++) {
                         for (ModeSwitch modes : new ModeSwitch[]{null, ModeSwitch.DEFAULT}) {
-                            ModeSwitch.Plan p = ModeSwitch.plan(read, ALL, java.util.Map.of(), modes, 4, armAux, prearmAux, ModeSwitch.BEEPER_AUX);
+                            ModeSwitch.Plan p = ModeSwitch.plan(read, ALL, java.util.Map.of(), ModeSwitch.Switches.of(modes).rescue(4).arm(armAux).prearm(prearmAux).beeper(ModeSwitch.BEEPER_AUX));
                             String where = "ARM read " + armRead + ", PREARM read " + prearmRead + ", ARM " + armAux + ", PREARM "
                                     + prearmAux + ", modes " + modes + ": " + p.commands();
                             java.util.Map<Integer, Integer> fills = new java.util.HashMap<>();

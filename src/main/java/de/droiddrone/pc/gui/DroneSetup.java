@@ -1445,7 +1445,7 @@ final class DroneSetup {
                     if (withoutFix != null) plan.add(withoutFix);
                 }
                 ModeSwitch.Plan modes = modeTarget == null && rescueOn == 0 && armTarget == 0 && prearmTarget == 0 && beeperTarget == 0 ? null
-                        : ModeSwitch.plan(aux, modesOffered, blocked, modeTarget, rescueOn, armTarget, prearmTarget, beeperTarget);
+                        : ModeSwitch.plan(aux, modesOffered, blocked, ModeSwitch.Switches.of(modeTarget).rescue(rescueOn).arm(armTarget).prearm(prearmTarget).beeper(beeperTarget));
                 List<String> replaced = modes == null ? List.of() : modes.replaced();
                 if (modes != null && !modes.commands().isEmpty()) {
                     List<String> what = new java.util.ArrayList<>();

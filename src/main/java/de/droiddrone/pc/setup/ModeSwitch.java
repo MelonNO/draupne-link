@@ -322,6 +322,43 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
     }
 
     /**
+     * The switches one plan sets together (they share Betaflight's mode slots); 0 leaves that one as it is.
+     * @param modes     the flight mode switch, or null to leave it
+     * @param rescueAux GPS rescue up on this AUX too (0 = no): for when Betaflight's failsafe is GPS rescue
+     * @param armAux    ARM on this AUX, up (0 = leave ARM as it is). ARM on any other switch is taken off: one arm switch.
+     * @param prearmAux PREARM on this AUX, up (0 = leave PREARM as it is). PREARM on any other switch is taken off.
+     * @param beeperAux BEEPER alone on this AUX, up ({@link #BEEPER_AUX}; 0 = leave BEEPER as it is). Never where ARM
+     *                  or PREARM is or stays: then beeperProblem asks to move them, and BEEPER is left as it is.
+     */
+    public record Switches(ModeSwitch modes, int rescueAux, int armAux, int prearmAux, int beeperAux) {
+        /** The flight mode switch alone (null: none), the others left as they are. */
+        public static Switches of(ModeSwitch modes) {
+            return new Switches(modes, 0, 0, 0, 0);
+        }
+
+        public Switches rescue(int aux) {
+            return new Switches(modes, aux, armAux, prearmAux, beeperAux);
+        }
+
+        public Switches arm(int aux) {
+            return new Switches(modes, rescueAux, aux, prearmAux, beeperAux);
+        }
+
+        public Switches prearm(int aux) {
+            return new Switches(modes, rescueAux, armAux, aux, beeperAux);
+        }
+
+        public Switches beeper(int aux) {
+            return new Switches(modes, rescueAux, armAux, prearmAux, aux);
+        }
+
+        /** Nothing to set: no plan needed. */
+        public boolean none() {
+            return modes == null && rescueAux == 0 && armAux == 0 && prearmAux == 0 && beeperAux == 0;
+        }
+    }
+
+    /**
      * @param auxOutput the CLI's "aux" output
      * @param available the modes this Betaflight offers (MSP_BOXIDS: permanent ids), or null if unknown
      */
@@ -331,43 +368,21 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
 
     /** @param blocked modes not to write now, with the reason shown (they fly acro meanwhile) */
     public Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked) {
-        return plan(auxOutput, available, blocked, this, 0, 0);
-    }
-
-    /** As below, ARM left as it is. */
-    public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
-                            int rescueAux) {
-        return plan(auxOutput, available, blocked, modes, rescueAux, 0);
-    }
-
-    /** As below, PREARM left as it is. */
-    public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
-                            int rescueAux, int armAux) {
-        return plan(auxOutput, available, blocked, modes, rescueAux, armAux, 0);
-    }
-
-    /** As below, BEEPER left as it is. */
-    public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
-                            int rescueAux, int armAux, int prearmAux) {
-        return plan(auxOutput, available, blocked, modes, rescueAux, armAux, prearmAux, 0);
+        return plan(auxOutput, available, blocked, Switches.of(this));
     }
 
     /**
-     * The switches together (they share Betaflight's mode slots).
-     * @param modes     the flight mode switch, or null to leave it
-     * @param rescueAux GPS rescue up on this AUX too (0 = no): for when Betaflight's failsafe is GPS rescue
-     * @param armAux    ARM on this AUX, up (0 = leave ARM as it is). ARM on any other switch is taken off: one arm switch.
-     * @param prearmAux PREARM on this AUX, up (0 = leave PREARM as it is). PREARM on any other switch is taken off.
-     * @param beeperAux BEEPER alone on this AUX, up ({@link #BEEPER_AUX}; 0 = leave BEEPER as it is). Never where ARM
-     *                  or PREARM is or stays: then beeperProblem asks to move them, and BEEPER is left as it is.
+     * The switches together (see {@link Switches}).
      *
      * Only the modes this plan places are taken off other switches (1.0.49): a pilot's own GPS RESCUE switch stays
      * while GPS rescue isn't chosen here, and PREARM left as it is keeps its switch - a switch chosen here that PREARM
      * is on is refused, like ARM. Every slot written is cleared first, even one that is filled again: Betaflight keeps
      * a slot's old mode when it doesn't take the new one, and the write is checked against its echo (see echoProblem).
      */
-    public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, ModeSwitch modes,
-                            int rescueAux, int armAux, int prearmAux, int beeperAux) {
+    public static Plan plan(String auxOutput, Set<Integer> available, java.util.Map<Mode, String> blocked, Switches switches) {
+        ModeSwitch modes = switches.modes();
+        int rescueAux = switches.rescueAux(), armAux = switches.armAux(), prearmAux = switches.prearmAux(),
+                beeperAux = switches.beeperAux();
         blocked = java.util.Map.copyOf(blocked);
         List<Slot> slots = slots(auxOutput);
         String armProblem = null;
@@ -465,18 +480,16 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         List<Slot> offElsewhere = new ArrayList<>(); // managed modes on other switches: taken off, each in one place
         // 1.0.52 (the pilot): a switch chosen here for ARM or PREARM carries that alone - HORIZON already on AUX3 goes
         // when PREARM takes AUX3 (shown before CONFIRM, like every mode taken off)
-        List<Slot> offOwn = new ArrayList<>();
-        Set<Integer> cleared = new HashSet<>(); // slot indexes cleared here: no later loop clears them twice
+        Set<Integer> offOwn = new HashSet<>(); // slot indexes: no other loop takes them
         for (Slot s : slots) {
             if (!s.used()) continue;
             if ((armChannel >= 0 && s.channel() == armChannel && s.mode() != MODE_ARM)
                     || (prearmChannel >= 0 && s.channel() == prearmChannel && s.mode() != MODE_PREARM)) {
-                offOwn.add(s);
-                cleared.add(s.index());
+                offOwn.add(s.index());
             }
         }
         for (Slot s : slots) {
-            if (cleared.contains(s.index())) continue;
+            if (offOwn.contains(s.index())) continue;
             if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
             if (beeperChannel >= 0 && (s.mode() == BEEPER_MODE || s.channel() == beeperChannel)) continue; // below
             if (wanted.containsKey(s.channel())) {
@@ -496,80 +509,39 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
                 place.add(new int[]{e.getKey(), w[0], w[1], w[2]});
             }
         }
-        int fields = slots.isEmpty() ? 7 : slots.get(0).fields();
-        List<String> commands = new ArrayList<>();
-        List<String> replaced = new ArrayList<>();
-        List<Integer> free = new ArrayList<>();
+        Clears clears = new Clears(slots.isEmpty() ? 7 : slots.get(0).fields());
         for (Slot s : onSwitches) {
             if (toPlace.remove(key(s.channel(), s.mode(), s.start(), s.end()))) continue; // already right: kept
-            commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
-            free.add(s.index());
-            String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
-            if (!replaced.contains(line)) replaced.add(line);
+            clears.clear(s);
         }
-        for (Slot s : offElsewhere) {
-            commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
-            free.add(s.index());
-            String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
-            if (!replaced.contains(line)) replaced.add(line);
-        }
-        for (Slot s : offOwn) {
-            commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
-            free.add(s.index());
-            String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
-            if (!replaced.contains(line)) replaced.add(line);
-        }
+        for (Slot s : offElsewhere) clears.clear(s);
+        for (Slot s : slots) if (offOwn.contains(s.index())) clears.clear(s);
         place.removeIf(w -> !toPlace.contains(key(w[0], w[1], w[2], w[3])));
-        if (armChannel >= 0) {
-            boolean armThere = false;
-            for (Slot s : slots) {
-                // (an ARM on the PREARM switch chosen here is cleared above already: twice, its slot was free twice and
-                // two modes went into it - PREARM over ARM, review 1.0.53)
-                if (!s.used() || s.mode() != MODE_ARM || cleared.contains(s.index())) continue;
-                if (s.channel() == armChannel) {
-                    armThere = true; // its own range stays: the pilot's switch may arm low
-                    continue;
-                }
-                commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
-                free.add(s.index());
-                String line = "ARM on AUX" + (s.channel() + 1);
-                if (!replaced.contains(line)) replaced.add(line);
-            }
-            if (!armThere) place.add(0, new int[]{armChannel, MODE_ARM, ARM_RANGE[0], ARM_RANGE[1]});
+        if (armChannel >= 0 && !onlyOn(slots, MODE_ARM, armChannel, clears)) {
+            place.add(0, new int[]{armChannel, MODE_ARM, ARM_RANGE[0], ARM_RANGE[1]});
         }
-        if (prearmChannel >= 0) {
-            boolean prearmThere = false;
-            for (Slot s : slots) {
-                if (!s.used() || s.mode() != MODE_PREARM || cleared.contains(s.index())) continue;
-                if (s.channel() == prearmChannel) {
-                    prearmThere = true; // its own range stays, like ARM's
-                    continue;
-                }
-                commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
-                free.add(s.index());
-                String line = "PREARM on AUX" + (s.channel() + 1);
-                if (!replaced.contains(line)) replaced.add(line);
-            }
-            if (!prearmThere) place.add(new int[]{prearmChannel, MODE_PREARM, PREARM_RANGE[0], PREARM_RANGE[1]});
+        if (prearmChannel >= 0 && !onlyOn(slots, MODE_PREARM, prearmChannel, clears)) {
+            place.add(new int[]{prearmChannel, MODE_PREARM, PREARM_RANGE[0], PREARM_RANGE[1]});
         }
         if (beeperChannel >= 0) {
             boolean beeperThere = false;
             for (Slot s : slots) {
                 if (!s.used() || s.mode() == MODE_ARM || (s.mode() == MODE_PREARM && prearmChannel >= 0)) continue;
-                if (cleared.contains(s.index())) continue;
+                if (clears.done(s)) continue;
                 if (s.mode() != BEEPER_MODE && s.channel() != beeperChannel) continue;
                 if (!beeperThere && s.mode() == BEEPER_MODE && s.channel() == beeperChannel
                         && s.start() == BEEPER_RANGE[0] && s.end() == BEEPER_RANGE[1]) {
                     beeperThere = true; // the button's range exactly: kept
                     continue;
                 }
-                commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
-                free.add(s.index());
-                String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
-                if (!replaced.contains(line)) replaced.add(line);
+                clears.clear(s);
             }
             if (!beeperThere) place.add(new int[]{beeperChannel, BEEPER_MODE, BEEPER_RANGE[0], BEEPER_RANGE[1]});
         }
+        int fields = clears.fields;
+        List<String> commands = clears.commands;
+        List<String> replaced = clears.replaced;
+        List<Integer> free = clears.free;
         for (Slot s : slots) {
             if (!s.used()) free.add(s.index());
         }
@@ -590,6 +562,49 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         }
         return new Plan(List.copyOf(commands), problem, rescueProblem, missing, blocked, elsewhere, List.copyOf(replaced), armProblem,
                 prearmProblem, doubled, beeperProblem);
+    }
+
+    /**
+     * The slots a plan clears, in order: each once (review 1.0.53: an ARM on the PREARM switch chosen here was cleared
+     * twice, its slot was free twice and two modes went into it - PREARM over ARM), what was there for "Taken off", and
+     * the freed slots for the fills.
+     */
+    private static final class Clears {
+        final int fields;
+        final List<String> commands = new ArrayList<>();
+        final List<String> replaced = new ArrayList<>();
+        final List<Integer> free = new ArrayList<>();
+        private final Set<Integer> cleared = new HashSet<>();
+
+        Clears(int fields) {
+            this.fields = fields;
+        }
+
+        void clear(Slot s) {
+            if (!cleared.add(s.index())) return;
+            commands.add(auxCommand(s.index(), 0, 0, 900, 900, fields));
+            free.add(s.index());
+            String line = modeName(s.mode()) + " on AUX" + (s.channel() + 1);
+            if (!replaced.contains(line)) replaced.add(line);
+        }
+
+        boolean done(Slot s) {
+            return cleared.contains(s.index());
+        }
+    }
+
+    /**
+     * ARM or PREARM on one switch: taken off every other one. True when it is on that switch already - its own range
+     * stays (the pilot's switch may arm low).
+     */
+    private static boolean onlyOn(List<Slot> slots, int mode, int channel, Clears clears) {
+        boolean there = false;
+        for (Slot s : slots) {
+            if (!s.used() || s.mode() != mode || clears.done(s)) continue;
+            if (s.channel() == channel) there = true;
+            else clears.clear(s);
+        }
+        return there;
     }
 
     /** Betaflight's slots as the plan expects them once these "aux" commands are taken: the slots as read, then each command. */

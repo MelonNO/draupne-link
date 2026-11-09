@@ -148,7 +148,7 @@ class CliWriteTest {
     void aWholePlanGoesThroughOnABoardThatKnowsItsModes() throws IOException {
         // the plan as Drone setup makes it (ARM moved off AUX14, BEEPER there), against the fake board: all of it taken
         String read = "aux 0 0 13 1700 2100 0 0\naux 1 13 3 1700 2100 0 0\n";
-        ModeSwitch.Plan p = ModeSwitch.plan(read, BOXES, Map.of(), null, 0, 1, 0, ModeSwitch.BEEPER_AUX);
+        ModeSwitch.Plan p = ModeSwitch.plan(read, BOXES, Map.of(), ModeSwitch.Switches.of(null).arm(1).beeper(ModeSwitch.BEEPER_AUX));
         FakeBetaflight fc = new FakeBetaflight(BOXES, SETTINGS).with(0, 0, 13, 1700, 2100).with(1, 13, 3, 1700, 2100);
         CliWrite.Result r = CliWrite.run(fc, p.commands(), l -> {});
         assertTrue(r.complete(), r.stopped());
