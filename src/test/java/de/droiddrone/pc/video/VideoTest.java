@@ -926,6 +926,32 @@ class VideoTest {
         }
     }
 
+    /**
+     * Held frames let go without their config are CONFIG_WAIT_MS old: they waited for the config, not for the decoder,
+     * and are no backlog. Before 1.0.54 they were cut as one; when the decoder took the key frame in that moment, a
+     * FLUSH went in behind it and nothing was shown until the next key frame (the test above failed under load).
+     */
+    @Test
+    void heldFramesLetGoLateAreNotABacklog() throws Exception {
+        TestStreams.Stream a = TestStreams.h264(320, 240, 10, 5);
+        FakeScreen screen = new FakeScreen();
+        try (VideoPipeline p = new VideoPipeline(screen, () -> 40)) {
+            p.onVideoConfig(320, 240, false, false, a.codecConfig());
+            feed(p, a, 0, 9, 1);
+            assertTrue(waitFor(() -> p.framesDone() >= 9, 5000), "the decode thread is done with 9 frames");
+            int shown = screen.presented.get();
+            screen.gate = new java.util.concurrent.CountDownLatch(1);
+            feed(p, a, 9, 10, 10); // the decoder stops at this picture: what comes next stays in the queue
+            feed(p, a, 5, 6, 1); // "restarted": key frame 1, held for a config that never comes
+            Thread.sleep(VideoPipeline.CONFIG_WAIT_MS + 200);
+            feed(p, a, 6, 7, 2); // lets the held key frame go, with this frame behind it
+            assertEquals(0, p.decoderBehindDrops(), "not taken for a decoder behind");
+            screen.gate.countDown();
+            assertTrue(waitFor(() -> screen.presented.get() >= shown + 2, 2000), "frame 10, then the restart's second frame");
+            assertEquals(1, screen.starts.size());
+        }
+    }
+
     /** A backlog is dropped by flushing the decoder, not by rebuilding it (a black gap); then from the next key frame. */
     @Test
     void aDroppedBacklogKeepsTheDecoder() throws Exception {

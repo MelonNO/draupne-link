@@ -473,11 +473,13 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 }
             }
             boolean awaiting = startsAhead > 0 && currentConfig != null;
+            boolean heldReleased = false;
             if (awaiting && now - awaitingSince > CONFIG_ASK_MS) configRequester.run(); // the link limits how often
             if (awaiting && now - awaitingSince > CONFIG_WAIT_MS) { // no config came: under the old one, not frozen
                 startsAhead = 0;
                 record(REC_SAME_CONFIG);
                 awaiting = false;
+                heldReleased = true;
                 earlyFrames.forEach(queue::offer);
                 earlyFrames.clear();
             }
@@ -489,7 +491,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             } else {
                 if (queue.size() >= MAX_BACKLOG) {
                     dropBacklog();
-                } else if (decoderBehind(oldestQueuedAge(now))) {
+                } else if (!heldReleased && decoderBehind(oldestQueuedAge(now))) {
+                    // not right after the held frames went in: they are CONFIG_WAIT_MS old because they waited for
+                    // their config, not for the decoder (1.0.54: they were cut as a backlog - see dropBacklog)
                     ageDrops++;
                     if (now - ageDropLoggedAt > 5000) {
                         ageDropLoggedAt = now;
@@ -552,6 +556,9 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private void dropBacklog() {
         java.util.List<Object> queued = new java.util.ArrayList<>();
         queue.drainTo(queued);
+        // the decoder took what there was in the meantime: nothing to cut. Before 1.0.54 a FLUSH went in all the same,
+        // behind the frame being decoded - its picture was passed over, the frames after it waited for a key frame
+        if (queued.isEmpty()) return;
         int start = -1;
         for (int i = 0; i < queued.size(); i++) {
             Object o = queued.get(i);
