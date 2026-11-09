@@ -88,9 +88,9 @@ public class RcSession {
     static final long IDLE_STICKS_EVERY_MS = 1000;
 
     public RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, ArmSwitch armSwitch) {
-        this(link, mapper, events, MonoClock::ms, link::sticksWanted,
+        this(link, mapper, events, new Inputs(MonoClock::ms, link::sticksWanted,
                 () -> link.getTelemetry().isArmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS),
-                () -> link.getTelemetry().isDisarmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS), armSwitch);
+                () -> link.getTelemetry().isDisarmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS), armSwitch));
         armBlocked = () -> link.getTelemetry().isPhoneInstalling(MonoClock.ms());
     }
 
@@ -105,30 +105,28 @@ public class RcSession {
         armBlocked = blocked;
     }
 
-    RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp) {
-        this(link, mapper, events, clock, linkUp, () -> false, null);
+    /**
+     * What a session reads besides the link: its clock (ms), whether the link is up for sticks, the flight
+     * controller's armed and disarmed state as fresh telemetry says (both false: unknown), and the arm switch (null:
+     * none set).
+     */
+    record Inputs(LongSupplier clock, BooleanSupplier linkUp, BooleanSupplier fcArmedNow, BooleanSupplier fcDisarmedNow,
+                  ArmSwitch armSwitch) {
+        /** Tests: a clock and a link, the FC's state unknown, no arm switch. */
+        static Inputs of(LongSupplier clock, BooleanSupplier linkUp) {
+            return new Inputs(clock, linkUp, () -> false, () -> false, null);
+        }
     }
 
-    RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp,
-              ArmSwitch armSwitch) {
-        this(link, mapper, events, clock, linkUp, () -> false, armSwitch);
-    }
-
-    RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp,
-              BooleanSupplier fcArmedNow, ArmSwitch armSwitch) {
-        this(link, mapper, events, clock, linkUp, fcArmedNow, () -> false, armSwitch);
-    }
-
-    RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, LongSupplier clock, BooleanSupplier linkUp,
-              BooleanSupplier fcArmedNow, BooleanSupplier fcDisarmedNow, ArmSwitch armSwitch) {
-        this.fcDisarmedNow = fcDisarmedNow;
+    RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, Inputs in) {
+        this.fcDisarmedNow = in.fcDisarmedNow();
         this.link = link;
         this.mapper = mapper;
         this.events = events;
-        this.clock = clock;
-        this.linkUp = linkUp;
-        this.fcArmedNow = fcArmedNow;
-        this.armSwitch = armSwitch;
+        this.clock = in.clock();
+        this.linkUp = in.linkUp();
+        this.fcArmedNow = in.fcArmedNow();
+        this.armSwitch = in.armSwitch();
     }
 
     /**

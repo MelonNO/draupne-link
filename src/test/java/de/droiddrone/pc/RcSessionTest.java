@@ -31,7 +31,7 @@ class RcSessionTest {
     RcSessionTest() throws java.io.IOException {
         // never started: sendRc just returns false, which is all the gate needs
         ControlLink link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 46390, 46391);
-        session = new RcSession(link, mapper, events::add, () -> now[0], () -> linkUp[0]);
+        session = new RcSession(link, mapper, events::add, RcSession.Inputs.of(() -> now[0], () -> linkUp[0]));
     }
 
     /** Throttle (axis3) from -1 (1000) to 1 (2000). */
@@ -71,8 +71,8 @@ class RcSessionTest {
     void theArmSwitchMustBeOffToo() {
         // arm switch on AUX1 (the frame's 5th channel), armed at 1700-2100
         RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
-        RcSession armed = new RcSession(new RcSessionTest.NoLink().link, five, events::add, () -> now[0], () -> true,
-                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        RcSession armed = new RcSession(new RcSessionTest.NoLink().link, five, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> false, new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100}))));
         armed.onInput(new Joystick.State(new float[]{0, 0, 0, -1f, 1f}, new boolean[0])); // throttle down, arm switch ON
         assertFalse(armed.isRcEnabled(), "arm switch on: the sticks don't start");
         assertEquals("ARM SWITCH OFF", armed.waitingFor());
@@ -140,8 +140,8 @@ class RcSessionTest {
     void anArmedDroneGetsTheSticksBackAtOnceAfterALinkLoss() {
         boolean[] fcArmed = {false};
         RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
-        RcSession armed = new RcSession(new NoLink().link, five, events::add, () -> now[0], () -> linkUp[0], () -> fcArmed[0],
-                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        RcSession armed = new RcSession(new NoLink().link, five, events::add,
+                new RcSession.Inputs(() -> now[0], () -> linkUp[0], () -> fcArmed[0], () -> false, new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100}))));
         armed.onInput(new Joystick.State(new float[]{0, 0, 0, -1f, -1f}, new boolean[0])); // throttle down, arm off
         assertTrue(armed.isRcEnabled());
         Joystick.State flying = new Joystick.State(new float[]{0, 0, 0, 0.4f, 1f}, new boolean[0]); // throttle up, arm ON
@@ -169,8 +169,8 @@ class RcSessionTest {
     void noArmingWhileThePhoneInstallsAnUpdate() {
         boolean[] fcArmed = {false}, installing = {false};
         RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
-        RcSession s = new RcSession(new NoLink().link, five, events::add, () -> now[0], () -> true, () -> fcArmed[0],
-                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        RcSession s = new RcSession(new NoLink().link, five, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> fcArmed[0], () -> false, new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100}))));
         s.setArmBlocked(() -> installing[0]);
         Joystick.State idle = new Joystick.State(new float[]{0, 0, 0, -1f, -1f}, new boolean[0]);
         Joystick.State arm = new Joystick.State(new float[]{0, 0, 0, -1f, 1f}, new boolean[0]);
@@ -204,7 +204,7 @@ class RcSessionTest {
     @Test
     void anUnknownArmSwitchSendsNothingWhileThePhoneInstalls() {
         boolean[] installing = {true};
-        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true, () -> false, null);
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> false, null));
         s.setArmBlocked(() -> installing[0]);
         s.onInput(sticks(-1f));
         assertFalse(s.isRcEnabled());
@@ -217,7 +217,7 @@ class RcSessionTest {
     @Test
     void aDisarmedOrUnknownDroneStillNeedsTheThrottleLowAfterALinkLoss() {
         boolean[] fcArmed = {false};
-        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> linkUp[0], () -> fcArmed[0], null);
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, new RcSession.Inputs(() -> now[0], () -> linkUp[0], () -> fcArmed[0], () -> false, null));
         s.onInput(sticks(-1f));
         s.onInput(sticks(0.4f));
         linkUp[0] = false;
@@ -241,13 +241,13 @@ class RcSessionTest {
      */
     @Test
     void anArmChannelTheRadioDoesntSendIsJudgedAsThePaddedFrame() {
-        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true,
-                new ArmSwitch(4, java.util.List.of(new int[]{900, 1100})));
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> false, new ArmSwitch(4, java.util.List.of(new int[]{900, 1100}))));
         s.onInput(sticks(-1f));
         assertFalse(s.isRcEnabled(), "AUX1 goes out as 1000: the switch is on");
         assertEquals("ARM SWITCH OFF", s.waitingFor());
-        RcSession usual = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true,
-                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        RcSession usual = new RcSession(new NoLink().link, mapper, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> false, new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100}))));
         usual.onInput(sticks(-1f));
         assertTrue(usual.isRcEnabled(), "the usual range: 1000 is off");
     }
@@ -268,8 +268,8 @@ class RcSessionTest {
     @Test
     void theArmSwitchIsUnknownUntilDroneSetupReadIt() {
         assertTrue(session.isArmSwitchUnknown());
-        RcSession known = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true,
-                new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100})));
+        RcSession known = new RcSession(new NoLink().link, mapper, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> false, new ArmSwitch(4, java.util.List.of(new int[]{1700, 2100}))));
         assertFalse(known.isArmSwitchUnknown());
     }
 
@@ -300,7 +300,7 @@ class RcSessionTest {
     @Test
     void aFrozenRadioStopsTheSticksOnlyWhenAskedAndOnlyWhileArmed() {
         boolean[] fcArmed = {true};
-        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true, () -> fcArmed[0], null);
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, new RcSession.Inputs(() -> now[0], () -> true, () -> fcArmed[0], () -> false, null));
         s.onInput(sticks(-1f));
         now[0] += 60_000;
         s.onInput(sticks(-1f));
@@ -365,7 +365,7 @@ class RcSessionTest {
         assertEquals(1000, RcSession.withBeeper(four, BEEPER_AT, false)[BEEPER_AT]);
         assertEquals(4, four.length, "the radio's frame untouched");
 
-        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true, () -> false, () -> true, null);
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> true, null));
         s.onInput(sticks(-1f));
         assertEquals(8, s.getLastChannels().length, "BEEPER not set up: no AUX14");
         s.setBeeperSetUp(true);
@@ -380,8 +380,8 @@ class RcSessionTest {
         for (int[] range : new int[][]{{1700, 2100}, {900, 1100}}) {
             ArmSwitch arm = new ArmSwitch(BEEPER_AT, List.of(range));
             boolean inverted = range[0] < 1000;
-            RcSession s = new RcSession(new NoLink().link, withButtonOn(BEEPER_AT), events::add, () -> now[0], () -> true,
-                    () -> false, () -> true, arm);
+            RcSession s = new RcSession(new NoLink().link, withButtonOn(BEEPER_AT), events::add,
+                    new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> true, arm));
             s.setBeeperSetUp(true);
             assertNotNull(s.beeperOff(), "ARM there: BEEPER is off");
             assertTrue(s.beeperOff().contains("in use by ARM"), s.beeperOff());
@@ -393,7 +393,7 @@ class RcSessionTest {
         }
         // the radio doesn't carry ARM's channel (inverted range): never extended to it, unknown, the sticks wait
         ArmSwitch inverted = new ArmSwitch(BEEPER_AT, List.of(new int[]{900, 1100}));
-        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true, () -> false, () -> true, inverted);
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add, new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> true, inverted));
         s.setBeeperSetUp(true);
         s.setBeeper(true);
         s.onInput(sticks(-1f));
@@ -406,8 +406,8 @@ class RcSessionTest {
     void theBeeperLeavesArmOnAnotherChannelAlone() {
         // ARM on the AUX next to the BEEPER's, inverted (arms low): the radio holds it high, BEEPER beeps on its own
         ArmSwitch arm = new ArmSwitch(OTHER_AT, List.of(new int[]{900, 1100}));
-        RcSession s = new RcSession(new NoLink().link, withButtonOn(OTHER_AT), events::add, () -> now[0], () -> true,
-                () -> false, () -> true, arm);
+        RcSession s = new RcSession(new NoLink().link, withButtonOn(OTHER_AT), events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> true, arm));
         s.setBeeperSetUp(true);
         assertNull(s.beeperOff());
         s.onInput(lowThrottleButton(true));
@@ -424,8 +424,8 @@ class RcSessionTest {
     @Test
     void theBeeperBeepsOnlyOnAFreshDisarmedAndLetsGoAfterTenSeconds() {
         boolean[] disarmed = {false};
-        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true, () -> false,
-                () -> disarmed[0], null);
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> disarmed[0], null));
         s.setBeeperSetUp(true);
         s.setBeeper(true);
         s.onInput(sticks(-1f));
@@ -448,8 +448,8 @@ class RcSessionTest {
 
     @Test
     void theBeeperIsOffWhereTheRadioDrivesItsChannelOrNothingSetItUp() {
-        RcSession s = new RcSession(new NoLink().link, withButtonOn(BEEPER_AT), events::add, () -> now[0], () -> true,
-                () -> false, () -> true, null);
+        RcSession s = new RcSession(new NoLink().link, withButtonOn(BEEPER_AT), events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> true, null));
         assertEquals(RcSession.BEEPER_NOT_SET_UP, s.beeperOff());
         s.setBeeperSetUp(true);
         assertTrue(s.beeperOff().contains("radio"), s.beeperOff());
@@ -471,8 +471,8 @@ class RcSessionTest {
     /** M1: a channel the frame doesn't carry was taken as 0 = off; Betaflight holds it, so it is unknown. */
     @Test
     void anArmChannelTheRadioDoesntCarryIsUnknownNeverOff() {
-        RcSession s = new RcSession(new NoLink().link, mapper, events::add, () -> now[0], () -> true,
-                new ArmSwitch(9, List.of(new int[]{1700, 2100}))); // ARM on AUX6: beyond the padded 8
+        RcSession s = new RcSession(new NoLink().link, mapper, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> false, new ArmSwitch(9, List.of(new int[]{1700, 2100})))); // ARM on AUX6: beyond the padded 8
         s.onInput(sticks(-1f));
         assertFalse(s.isRcEnabled());
         assertEquals("ARM SWITCH NOT SENT", s.waitingFor());
@@ -483,8 +483,8 @@ class RcSessionTest {
     void idleSticksGoOnlyWhileTheRadioPassesTheArmGate() throws java.io.IOException {
         IdleRecorder link = new IdleRecorder();
         RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
-        RcSession s = new RcSession(link, five, events::add, () -> now[0], () -> true,
-                new ArmSwitch(4, List.of(new int[]{1700, 2100})));
+        RcSession s = new RcSession(link, five, events::add,
+                new RcSession.Inputs(() -> now[0], () -> true, () -> false, () -> false, new ArmSwitch(4, List.of(new int[]{1700, 2100}))));
         s.onInput(new Joystick.State(new float[]{0, 0, 0, -1f, 1f}, new boolean[0])); // ARM on
         now[0] += 1000;
         s.onInput(new Joystick.State(new float[]{0, 0, 0, 0.5f, -1f}, new boolean[0])); // throttle up
