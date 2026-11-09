@@ -77,7 +77,9 @@ try {
     $log = Join-Path $root 'build\flight-build.log'
     Invoke-Tool { & .\gradlew.bat --no-daemon -q ':Flight:assembleRelease' } | Set-Content -Path $log -Encoding utf8
     if ($LASTEXITCODE -ne 0) {
-        Get-Content $log | Select-String -Pattern 'error|What went wrong|failed' -Context 0, 2 | Select-Object -First 20 | Write-Host
+        $hits = Get-Content $log | Select-String -Pattern 'error|What went wrong|failed|exception' -Context 0, 2 | Select-Object -First 20
+        # nothing matched (a wrapper download that failed, say): the log's end instead
+        if ($hits) { $hits | Write-Host } else { Get-Content $log -Tail 30 | Write-Host }
         throw "Gradle failed ($LASTEXITCODE), full output: $log"
     }
 } finally {
