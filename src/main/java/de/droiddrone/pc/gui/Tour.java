@@ -301,7 +301,7 @@ final class Tour {
                 () -> main.mapWindow().tourFollow()).before(main::showMapWindow).press().live(map));
         steps.add(new Step("FIND DRONE", "The drone's last position, to go and get it.",
                 () -> main.mapWindow().tourFindDrone()).live(map));
-        steps.add(new Step("MAP TYPE", "Topo, paper map, satellite or OpenStreetMap. Viewed areas are kept offline. Press it.",
+        steps.add(new Step("MAP TYPE", "Topo, paper map, satellite or OpenStreetMap. Outside Norway, topo and paper show the world topo. Viewed areas are kept offline. Press it.",
                 () -> main.mapWindow().tourMapType()).press());
         steps.add(new Step("COORDINATES", "MGRS, UTM or degrees, for cursor, drone and pins. Press it.",
                 () -> main.mapWindow().tourFormat()).press());

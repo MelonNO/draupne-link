@@ -57,25 +57,28 @@ class MapTest {
     }
 
     @Test
-    void autoPicksKartverketInNorwayAndOpenStreetMapElsewhere() {
-        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(OSLO_LAT, OSLO_LON));
-        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(78.22, 15.63), "Longyearbyen");
-        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(52.52, 13.40), "Berlin");
-        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(59.33, 18.07), "Stockholm");
-        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(67.86, 20.23), "Kiruna");
-        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(57.71, 11.97), "Gothenburg");
-        assertEquals(TileSource.WORLD_TOPO, TileSource.forPosition(68.91, 27.03), "Inari, Finland");
-        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(69.65, 18.96), "Tromso");
-        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(60.39, 5.32), "Bergen");
-        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(70.66, 23.68), "Hammerfest");
-        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(58.15, 8.0), "Kristiansand");
-        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.forPosition(59.12, 11.39), "Halden, by the Swedish border");
+    void kartverketsMapsGiveWayToTheWorldTopoOutsideNorway() {
+        // every map is "auto" (1.0.57, the pilot): the paper map too
+        assertEquals(TileSource.KARTVERKET_RASTER, TileSource.KARTVERKET_RASTER.at(OSLO_LAT, OSLO_LON));
+        assertEquals(TileSource.WORLD_TOPO, TileSource.KARTVERKET_RASTER.at(59.33, 18.07), "Stockholm");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_TOPO.at(OSLO_LAT, OSLO_LON));
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_TOPO.at(78.22, 15.63), "Longyearbyen");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.KARTVERKET_TOPO.at(52.52, 13.40), "Berlin");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.KARTVERKET_TOPO.at(59.33, 18.07), "Stockholm");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.KARTVERKET_TOPO.at(67.86, 20.23), "Kiruna");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.KARTVERKET_TOPO.at(57.71, 11.97), "Gothenburg");
+        assertEquals(TileSource.WORLD_TOPO, TileSource.KARTVERKET_TOPO.at(68.91, 27.03), "Inari, Finland");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_TOPO.at(69.65, 18.96), "Tromso");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_TOPO.at(60.39, 5.32), "Bergen");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_TOPO.at(70.66, 23.68), "Hammerfest");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_TOPO.at(58.15, 8.0), "Kristiansand");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.KARTVERKET_TOPO.at(59.12, 11.39), "Halden, by the Swedish border");
     }
 
     @Test
     void settingsValuesParse() {
-        assertNull(TileSource.parse("auto"));
-        assertNull(TileSource.parse(null));
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.parse("auto"), "the old AUTO: topo, which switches by place");
+        assertEquals(TileSource.KARTVERKET_TOPO, TileSource.parse(null));
         assertEquals(TileSource.SATELLITE, TileSource.parse("Satellite"));
         assertEquals(TileSource.KARTVERKET_RASTER, TileSource.parse("kartverket-raster"));
     }

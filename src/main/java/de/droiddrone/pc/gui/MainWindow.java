@@ -2043,7 +2043,7 @@ public class MainWindow extends JFrame {
     private void setMapSource(TileSource source) {
         mapSource = source;
         miniMap.setSource(source);
-        save(Map.of(MAP_SOURCE_KEY, source == null ? TileSource.AUTO : source.id));
+        save(Map.of(MAP_SOURCE_KEY, (source == null ? TileSource.DEFAULT : source).id));
         if (mapWindow != null && mapWindow.source() != source) mapWindow.setSource(source);
     }
 

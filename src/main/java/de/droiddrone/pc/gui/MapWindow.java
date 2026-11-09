@@ -52,8 +52,8 @@ import java.util.function.Consumer;
  */
 final class MapWindow extends JFrame {
     static final String BOUNDS_KEY = "mapWindow";
-    private static final String[] PICTURES = {"AUTO", "TOPO", "WORLD TOPO", "PAPER", "SATELLITE", "OSM"};
-    private static final TileSource[] SOURCES = {null, TileSource.KARTVERKET_TOPO, TileSource.WORLD_TOPO, TileSource.KARTVERKET_RASTER, TileSource.SATELLITE, TileSource.OSM};
+    private static final String[] PICTURES = {"TOPO", "WORLD TOPO", "PAPER", "SATELLITE", "OSM"};
+    private static final TileSource[] SOURCES = {TileSource.KARTVERKET_TOPO, TileSource.WORLD_TOPO, TileSource.KARTVERKET_RASTER, TileSource.SATELLITE, TileSource.OSM};
 
     private final MapView map;
     private final TileCache cache;
@@ -244,7 +244,7 @@ final class MapWindow extends JFrame {
         });
         right.add(downloadLine);
         TacticalCombo.install(pictureCombo);
-        pictureCombo.setToolTipText("AUTO/TOPO: Kartverket in Norway, else OpenTopoMap. SATELLITE: Esri");
+        pictureCombo.setToolTipText("TOPO/PAPER: Kartverket in Norway, world topo outside. SATELLITE: Esri");
         pictureCombo.addActionListener(e -> {
             if (settingCombos) return;
             TileSource s = SOURCES[pictureCombo.getSelectedIndex()];

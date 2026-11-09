@@ -32,8 +32,10 @@ public enum TileSource {
             "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
             "© OpenStreetMap contributors", 19, false, false);
 
-    /** The settings value for "pick by where the drone is". */
+    /** Old settings' "pick by place" (before 1.0.57): read as Kartverket topo, which now does that itself. */
     public static final String AUTO = "auto";
+    /** The map with no choice saved. */
+    public static final TileSource DEFAULT = KARTVERKET_TOPO;
 
     public final String id;
     public final String title;
@@ -59,22 +61,20 @@ public enum TileSource {
         return template.replace("{z}", Integer.toString(z)).replace("{x}", Integer.toString(x)).replace("{y}", Integer.toString(y));
     }
 
-    /** The settings value (mapSource); null for auto or anything unknown. */
+    /** The settings value (mapSource); DEFAULT for none, the old "auto" or anything unknown. */
     public static TileSource parse(String value) {
-        if (value == null) return null;
+        if (value == null) return DEFAULT;
         String v = value.trim().toLowerCase(Locale.ROOT);
         for (TileSource s : values()) if (s.id.equals(v)) return s;
-        return null;
+        return DEFAULT;
     }
 
-    /** Auto: Kartverket's topo over Norway (mainland, Svalbard, Jan Mayen), the world topo map anywhere else. */
-    public static TileSource forPosition(double latDeg, double lonDeg) {
-        return inNorway(latDeg, lonDeg) ? KARTVERKET_TOPO : WORLD_TOPO;
-    }
-
-    /** What this choice shows at a place: TOPO is a topo map everywhere (Kartverket's ends at the border, the world one takes over). */
+    /**
+     * What this choice shows at a place. Every map is "auto" (1.0.57, the pilot: "remove the Auto map, make all maps
+     * Auto"): Kartverket's maps cover Norway only, so outside it the world topo map takes over.
+     */
     public TileSource at(double latDeg, double lonDeg) {
-        return this == KARTVERKET_TOPO && !inNorway(latDeg, lonDeg) ? WORLD_TOPO : this;
+        return norwayOnly && !inNorway(latDeg, lonDeg) ? WORLD_TOPO : this;
     }
 
     /** The mainland's outline, roughly (lat, lon), clockwise from the south-west: Sweden and Finland stay outside. */

@@ -79,7 +79,7 @@ class MapViewTest {
         map.setSource(TileSource.SATELLITE);
         assertEquals(TileSource.SATELLITE, map.effectiveSource());
         map.setSource(null);
-        assertNull(map.source());
+        assertEquals(TileSource.DEFAULT, map.source(), "no AUTO any more: the default map");
         assertEquals("12 S AGO", MapView.ageText(12_500));
         assertEquals("3 MIN AGO", MapView.ageText(190_000));
         assertEquals("1.25 KM", MapView.distanceText(1250));

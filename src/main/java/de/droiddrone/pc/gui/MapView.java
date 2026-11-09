@@ -59,7 +59,7 @@ class MapView extends JComponent {
     static final Color BOX = new Color(10, 10, 10, 215);
 
     private final TileCache cache;
-    private TileSource chosen; // null = auto (by where the drone is)
+    private TileSource chosen = TileSource.DEFAULT;
     private Consumer<TileSource> onSourceChosen;
     private Consumer<double[]> onCursor;
     private Consumer<double[]> onAreaSelected;
@@ -673,9 +673,9 @@ class MapView extends JComponent {
         repaint();
     }
 
-    /** The source chosen in the settings; null = auto. */
+    /** The source chosen in the settings; null = the default. */
     void setSource(TileSource source) {
-        chosen = source;
+        chosen = source == null ? TileSource.DEFAULT : source;
         viewChanged();
     }
 
@@ -688,10 +688,9 @@ class MapView extends JComponent {
         onSourceChosen = listener;
     }
 
+    /** The map shown: the chosen one, or the world topo map where it has nothing - by the place looked at (the middle). */
     TileSource effectiveSource() {
-        FlightTrack.Point p = track == null ? null : track.last();
-        double lat = p != null ? p.lat() : centerLat, lon = p != null ? p.lon() : centerLon;
-        return chosen != null ? chosen.at(lat, lon) : TileSource.forPosition(lat, lon);
+        return chosen.at(centerLat, centerLon);
     }
 
     double zoom() {
