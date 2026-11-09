@@ -471,6 +471,8 @@ public final class OverwatchHub implements AutoCloseable {
 
     private void onClip(Session s, byte[] d, long now) {
         int type = OverwatchProtocol.clipType(d, d.length);
+        // cut short: no type, or a chunk without its offset (each threw on the hub's thread, its tick skipped)
+        if (type < 0 || type == OverwatchProtocol.CLIP_CHUNK && d.length < OverwatchProtocol.CHUNK_DATA_AT) return;
         int event = OverwatchProtocol.clipEvent(d);
         switch (type) {
             case OverwatchProtocol.CLIP_ENDED -> {
