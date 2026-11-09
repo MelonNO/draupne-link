@@ -772,7 +772,7 @@ class VideoTest {
 
     @Test
     void keyFrameRequestsBackOffWhileTheyComeDamaged() {
-        VideoPipeline.KeyFrameBackoff k = new VideoPipeline.KeyFrameBackoff();
+        KeyFrameBackoff k = new KeyFrameBackoff();
         assertTrue(k.shouldSend(0));
         assertFalse(k.shouldSend(1400), "the link's own spacing");
         k.onKeyFrame(true); // the requested one came damaged
@@ -785,11 +785,11 @@ class VideoTest {
         k.onKeyFrame(true);
         assertEquals(6000, k.spacingMs(), "no further than 6 s");
         k.onKeyFrame(false); // a whole one
-        assertEquals(VideoPipeline.KeyFrameBackoff.BASE_MS, k.spacingMs(), "back to the start");
+        assertEquals(KeyFrameBackoff.BASE_MS, k.spacingMs(), "back to the start");
         k.onKeyFrame(true); // damaged, but not one that was asked for: a scheduled key frame lost on the way
-        assertEquals(VideoPipeline.KeyFrameBackoff.BASE_MS, k.spacingMs());
+        assertEquals(KeyFrameBackoff.BASE_MS, k.spacingMs());
         k.setRobust(true);
-        assertEquals(VideoPipeline.KeyFrameBackoff.ROBUST_BASE_MS, k.spacingMs(), "bad coverage: the second copy first");
+        assertEquals(KeyFrameBackoff.ROBUST_BASE_MS, k.spacingMs(), "bad coverage: the second copy first");
     }
 
     @Test
