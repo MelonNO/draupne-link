@@ -26,7 +26,6 @@ import static de.droiddrone.common.Logcat.log;
 import android.location.Location;
 import android.location.LocationManager;
 
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -37,6 +36,8 @@ import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DataWriter;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.FcCommon;
+import de.droiddrone.common.MspFrames;
+import de.droiddrone.common.MspPages;
 import de.droiddrone.common.TelemetryData;
 
 public class Msp {
@@ -56,17 +57,6 @@ public class Msp {
     volatile int sensorStatus = -1;
     static final int SENSOR_MAG = 4;
 
-    private static final byte MSP_HEADER_START = 0x24;//$
-    private static final byte MSP_HEADER_V1 = 0x4D;//M
-    private static final byte MSP_HEADER_V2 = 0x58;//X
-    private static final byte MSP_HEADER_REQUEST = 0x3C;//<
-    private static final byte MSP_HEADER_RESPONSE = 0x3E;//>
-    private static final byte MSP_HEADER_ERROR = 0x21;//!
-    private static final byte MSP_V1_HEADER_SIZE = 5;
-    private static final byte MSP_V2_HEADER_SIZE = 8;
-    private static final byte MSP_CRC_SIZE = 1;
-    private static final byte MSP_V1_MIN_REQUEST_SIZE = MSP_V1_HEADER_SIZE + MSP_CRC_SIZE;
-    private static final byte MSP_V2_MIN_REQUEST_SIZE = MSP_V2_HEADER_SIZE + MSP_CRC_SIZE;
     private final Serial serial;
     private final Config config;
     public final ArrayBlockingQueue<TelemetryData> telemetryOutputBuffer = new ArrayBlockingQueue<>(30);
@@ -84,10 +74,8 @@ public class Msp {
     private boolean runFcInit;
     private boolean runGetBoxNames;
     private boolean runGetBoxIds;
-    private byte bfBoxNamesPage = 0;
-    private byte bfBoxIdsPage = 0;
-    private final byte[][] bfBoxNamesData = new byte[FcCommon.BF_BOXMODES_PAGE_COUNT][];
-    private final byte[][] bfBoxIdsData = new byte[FcCommon.BF_BOXMODES_PAGE_COUNT][];
+    /** Betaflight's BOXNAMES and BOXIDS pages (MspPages). */
+    private final MspPages bfBoxNames = new MspPages(), bfBoxIds = new MspPages();
     private boolean runGetOsdConfig;
     private boolean runGetBatteryConfig;
     private long onTimestamp, flyTimestamp;
@@ -97,9 +85,8 @@ public class Msp {
      * the order the PC sends them, which could put roll on the throttle channel. Volatile: read on the receive thread.
      */
     private volatile int[] rxMap = null;
-    /** DRAUPNE Link: a reply cut by the end of a USB read, waiting for the rest (parsePackets). */
-    private byte[] carry = null;
-    private static final int MAX_CARRY = 4096;
+    /** DRAUPNE Link: the replies in the USB reads' byte stream, a reply cut by the end of a read kept for the rest. */
+    private final MspFrames frames = new MspFrames();
     private volatile int[] boxIds = null;
     private int[] modeFlagsInav = null;
     private byte[] modeFlagsBtfl = null;
@@ -235,7 +222,7 @@ public class Msp {
         setRcMinPeriod();
         telemetryOutputBuffer.clear();
         serialRawData.clear();
-        carry = null;
+        frames.reset();
         threadsId++;
         Thread mspThread = new Thread(mspRun);
         mspThread.setDaemon(false);
@@ -279,10 +266,10 @@ public class Msp {
         platformType = -1;
         fcInfo = null;
         rxMap = null; // DRAUPNE Link: a reconnected (maybe another) flight controller: read its channel map again
-        carry = null;
+        frames.reset();
         // pc.31: and its mode ids and status too (another FC has its modes on other bits; armed is UNKNOWN until then)
         boxIds = null;
-        bfBoxIdsPage = 0;
+        bfBoxIds.restart();
         modeFlagsBtfl = null;
         modeFlagsInav = null;
         statusAtMs = 0;
@@ -344,8 +331,8 @@ public class Msp {
                                     if (runGetBoxNames) getBoxNames();
                                     break;
                                 case FcInfo.FC_VARIANT_BETAFLIGHT:
-                                    if (runGetBoxIds) getBoxIds(bfBoxIdsPage);
-                                    if (runGetBoxNames) getBoxNames(bfBoxNamesPage);
+                                    if (runGetBoxIds) getBoxIds(bfBoxIds.page());
+                                    if (runGetBoxNames) getBoxNames(bfBoxNames.page());
                                     break;
                             }
                         }
@@ -382,115 +369,6 @@ public class Msp {
         }
     };
 
-    public static class MspPacket{
-        public final byte version;
-        public final byte type;
-        public final byte flag;
-        public final int code;
-        public final int payloadSize;
-        public final byte[] payload;
-
-        public MspPacket(byte type, byte flag, int code, int payloadSize, byte[] payload) {
-            this.version = MSP_HEADER_V2;
-            this.type = type;
-            this.flag = flag;
-            this.code = code;
-            this.payloadSize = payloadSize;
-            this.payload = payload;
-        }
-
-        public MspPacket(byte type, int code, int payloadSize, byte[] payload) {
-            this.version = MSP_HEADER_V1;
-            this.type = type;
-            this.flag = 0;
-            this.code = code;
-            this.payloadSize = payloadSize;
-            this.payload = payload;
-        }
-    }
-
-    /**
-     * DRAUPNE Link: the whole MSP frames in data, as a byte stream. Upstream took data as whole frames and dropped
-     * the rest of a read at the first frame that was cut short - and a USB read ends wherever it ends: long replies
-     * (BOXNAMES, OSD_CONFIG) split across two reads were lost, asked for again, and lost again. Here a frame that
-     * isn't complete yet stays in {@link #carry} for the next read; a byte that is no frame start, or a frame with
-     * a bad checksum, is stepped over one byte at a time until the next frame start.
-     */
-    private List<MspPacket> parsePackets(byte[] data){
-        List<MspPacket> packets = new ArrayList<>();
-        byte[] s = data;
-        if (carry != null) {
-            s = new byte[carry.length + data.length];
-            System.arraycopy(carry, 0, s, 0, carry.length);
-            System.arraycopy(data, 0, s, carry.length, data.length);
-            carry = null;
-        }
-        int len = s.length;
-        int i = 0;
-        while (i < len) {
-            if (s[i] != MSP_HEADER_START) {
-                i++;
-                continue;
-            }
-            if (len - i < 3) break; // the rest of the header comes with the next read
-            byte magic = s[i + 1];
-            byte type = s[i + 2];
-            boolean isMsp2 = magic == MSP_HEADER_V2;
-            if (magic != MSP_HEADER_V1 && !isMsp2 || type != MSP_HEADER_REQUEST && type != MSP_HEADER_RESPONSE && type != MSP_HEADER_ERROR) {
-                i++;
-                continue;
-            }
-            int frameSize;
-            if (isMsp2) {
-                if (len - i < MSP_V2_HEADER_SIZE) break;
-                byte flag = s[i + 3];
-                int code = (s[i + 4] & 0xFF) | (s[i + 5] & 0xFF) << 8;
-                int payloadSize = (s[i + 6] & 0xFF) | (s[i + 7] & 0xFF) << 8;
-                if (payloadSize > MAX_CARRY) { // no MSP reply is that long: not a frame start
-                    i++;
-                    continue;
-                }
-                frameSize = MSP_V2_HEADER_SIZE + payloadSize + MSP_CRC_SIZE;
-                if (len - i < frameSize) break;
-                byte[] payload = null;
-                if (payloadSize > 0) {
-                    payload = new byte[payloadSize];
-                    System.arraycopy(s, i + MSP_V2_HEADER_SIZE, payload, 0, payloadSize);
-                }
-                int checksum = s[i + frameSize - 1] & 0xFF;
-                if (checksum == calculateCrcV2(flag, code, payloadSize, payload)) {
-                    packets.add(new MspPacket(type, flag, code, payloadSize, payload));
-                    i += frameSize;
-                } else {
-                    i++;
-                }
-            } else {
-                if (len - i < MSP_V1_HEADER_SIZE) break;
-                int payloadSize = s[i + 3] & 0xFF;
-                int code = s[i + 4] & 0xFF;
-                frameSize = MSP_V1_HEADER_SIZE + payloadSize + MSP_CRC_SIZE;
-                if (len - i < frameSize) break;
-                byte[] payload = null;
-                if (payloadSize > 0) {
-                    payload = new byte[payloadSize];
-                    System.arraycopy(s, i + MSP_V1_HEADER_SIZE, payload, 0, payloadSize);
-                }
-                int checksum = s[i + frameSize - 1] & 0xFF;
-                if (checksum == calculateCrcV1(code, payloadSize, payload)) {
-                    packets.add(new MspPacket(type, code, payloadSize, payload));
-                    i += frameSize;
-                } else {
-                    i++;
-                }
-            }
-        }
-        if (i < len) {
-            int rest = len - i;
-            if (rest <= MAX_CARRY) carry = Arrays.copyOfRange(s, i, len);
-        }
-        return packets;
-    }
-
     public void addData(byte[] buf, int dataLength){
         if (dataLength <= 0) return; // DRAUPNE Link: a short read can be the end of a frame begun in the last one
         byte[] data = new byte[dataLength];
@@ -514,22 +392,22 @@ public class Msp {
     };
 
     private void processData(byte[] data){
-        List<MspPacket> packets = null;
+        List<MspFrames.Frame> packets = null;
         try {
-            packets = parsePackets(data);
+            packets = frames.feed(data, data.length);
         }catch (Exception e){
             log("Msp - parsePackets error: " + e);
         }
         if (packets == null || packets.isEmpty()) return;
-        for (MspPacket packet : packets) {
+        for (MspFrames.Frame packet : packets) {
             try {
-                if (packet.type == MSP_HEADER_ERROR) {
+                if (packet.type == MspFrames.ERROR) {
                     StringBuilder s = new StringBuilder();
                     for (byte b : data) s.append(String.valueOf(b)).append(" ");
                     log("MSP error received: " + s);
                     continue;
                 }
-                if (packet.type != MSP_HEADER_RESPONSE) continue;
+                if (packet.type != MspFrames.RESPONSE) continue;
                 DataReader buffer = new DataReader(packet.payload, false);
                 switch (packet.code) {
                     case FcCommon.MSP_API_VERSION:
@@ -566,39 +444,10 @@ public class Msp {
                                 break;
                             }
                             case FcInfo.FC_VARIANT_BETAFLIGHT: {
-                                byte[] pageData = buffer.getData();
-                                if (bfBoxNamesPage > 0) {
-                                    boolean found = false;
-                                    for (int i = 0; i < bfBoxNamesPage; i++) {
-                                        if (Arrays.equals(bfBoxNamesData[i], pageData)) {
-                                            found = true;
-                                            break;
-                                        }
-                                    }
-                                    if (found) break;
-                                }
-                                bfBoxNamesData[bfBoxNamesPage] = pageData;
-                                bfBoxNamesPage++;
-                                if (bfBoxNamesPage == FcCommon.BF_BOXMODES_PAGE_COUNT || pageData == null && bfBoxNamesPage > 1) {
-                                    runGetBoxNames = false;
-                                    bfBoxNamesPage = 0;
-                                    int total = 0;
-                                    int offset = 0;
-                                    for (int i = 0; i < FcCommon.BF_BOXMODES_PAGE_COUNT; i++) {
-                                        if (bfBoxNamesData[i] == null) continue;
-                                        total += bfBoxNamesData[i].length;
-                                    }
-                                    if (total > 0) {
-                                        byte[] allPages = new byte[total];
-                                        for (int i = 0; i < FcCommon.BF_BOXMODES_PAGE_COUNT; i++) {
-                                            if (bfBoxNamesData[i] == null) continue;
-                                            int length = bfBoxNamesData[i].length;
-                                            System.arraycopy(bfBoxNamesData[i], 0, allPages, offset, length);
-                                            offset += length;
-                                        }
-                                        telemetryOutputBuffer.offer(new TelemetryData(packet.code, allPages));
-                                    }
-                                }
+                                if (!bfBoxNames.add(buffer.getData())) break;
+                                runGetBoxNames = false;
+                                byte[] allPages = bfBoxNames.joined();
+                                if (allPages != null) telemetryOutputBuffer.offer(new TelemetryData(packet.code, allPages));
                                 break;
                             }
                         }
@@ -613,39 +462,12 @@ public class Msp {
                                 break;
                             }
                             case FcInfo.FC_VARIANT_BETAFLIGHT: {
-                                byte[] pageData = buffer.getData();
-                                if (bfBoxIdsPage > 0) {
-                                    boolean found = false;
-                                    for (int i = 0; i < bfBoxIdsPage; i++) {
-                                        if (Arrays.equals(bfBoxIdsData[i], pageData)) {
-                                            found = true;
-                                            break;
-                                        }
-                                    }
-                                    if (found) break;
-                                }
-                                bfBoxIdsData[bfBoxIdsPage] = pageData;
-                                bfBoxIdsPage++;
-                                if (bfBoxIdsPage == FcCommon.BF_BOXMODES_PAGE_COUNT || pageData == null && bfBoxIdsPage > 1) {
-                                    runGetBoxIds = false;
-                                    bfBoxIdsPage = 0;
-                                    int total = 0;
-                                    int offset = 0;
-                                    for (int i = 0; i < FcCommon.BF_BOXMODES_PAGE_COUNT; i++) {
-                                        if (bfBoxIdsData[i] == null) continue;
-                                        total += bfBoxIdsData[i].length;
-                                    }
-                                    if (total > 0) {
-                                        byte[] allPages = new byte[total];
-                                        for (int i = 0; i < FcCommon.BF_BOXMODES_PAGE_COUNT; i++) {
-                                            if (bfBoxIdsData[i] == null) continue;
-                                            int length = bfBoxIdsData[i].length;
-                                            System.arraycopy(bfBoxIdsData[i], 0, allPages, offset, length);
-                                            offset += length;
-                                        }
-                                        boxIds = FcCommon.getBoxIds(allPages);
-                                        telemetryOutputBuffer.offer(new TelemetryData(packet.code, allPages));
-                                    }
+                                if (!bfBoxIds.add(buffer.getData())) break;
+                                runGetBoxIds = false;
+                                byte[] allPages = bfBoxIds.joined();
+                                if (allPages != null) {
+                                    boxIds = FcCommon.getBoxIds(allPages);
+                                    telemetryOutputBuffer.offer(new TelemetryData(packet.code, allPages));
                                 }
                                 break;
                             }
@@ -1013,72 +835,10 @@ public class Msp {
     }
 
     private byte[] getMspRequest(short cmd){
-        byte[] data = {MSP_HEADER_START, MSP_HEADER_V2, MSP_HEADER_REQUEST, 0, (byte) (cmd & 0xFF), (byte) (cmd >> 8 & 0xFF), 0, 0, 0};
-        setCrcV2(data);
-        return data;
+        return MspFrames.v2Request(cmd & 0xFFFF, null);
     }
 
     private byte[] getMspRequestWithPayload(short cmd, byte[] payload){
-        int payloadSize = payload.length;
-        int totalSize = payloadSize + MSP_V2_MIN_REQUEST_SIZE;
-        byte[] data = new byte[totalSize];
-        byte[] header = {MSP_HEADER_START, MSP_HEADER_V2, MSP_HEADER_REQUEST, 0, (byte) (cmd & 0xFF), (byte) (cmd >> 8 & 0xFF), (byte) (payloadSize & 0xFF), (byte) (payloadSize >> 8 & 0xFF)};
-        System.arraycopy(header, 0, data, 0, MSP_V2_HEADER_SIZE);
-        System.arraycopy(payload, 0, data, MSP_V2_HEADER_SIZE, payloadSize);
-        setCrcV2(data);
-        return data;
-    }
-
-    private void setCrcV2(byte[] data){
-        if (data == null || data.length < MSP_V2_MIN_REQUEST_SIZE) return;
-        data[data.length-1] = (byte)calculateCrcV2(data, data.length);
-    }
-
-    private int calculateCrcV2(byte[] data, int dataLength){
-        int crc = 0;
-        for (int i = 3; i < dataLength-1; i++) {
-            crc = crc8_dvb_s2(crc, data[i]);
-        }
-        return crc;
-    }
-
-    private int calculateCrcV2(byte flag, int code, int payloadSize, byte[] payload){
-        int crc = 0;
-        crc = crc8_dvb_s2(crc, flag);
-        crc = crc8_dvb_s2(crc, code & 0xFF);
-        crc = crc8_dvb_s2(crc, code >> 8 & 0xFF);
-        crc = crc8_dvb_s2(crc, payloadSize & 0xFF);
-        crc = crc8_dvb_s2(crc, payloadSize >> 8 & 0xFF);
-        if (payloadSize > 0){
-            for (int i = 0; i < payloadSize; i++) {
-                crc = crc8_dvb_s2(crc, payload[i]);
-            }
-        }
-        return crc;
-    }
-
-    private int calculateCrcV1(int code, int payloadSize, byte[] payload){
-        int crc = 0;
-        crc ^= code;
-        crc ^= payloadSize;
-        if (payloadSize > 0){
-            for (int i = 0; i < payloadSize; i++) {
-                crc ^= payload[i];
-            }
-        }
-        return crc;
-    }
-
-    private int crc8_dvb_s2(int crc, int a) {
-        crc ^= a;
-        for (int i = 0; i < 8; i++) {
-            if ((crc & 0x80) != 0) {
-                crc = (crc << 1) ^ 0xD5;
-            } else {
-                crc = crc << 1;
-            }
-        }
-        crc &= 0xFF;
-        return crc;
+        return MspFrames.v2Request(cmd & 0xFFFF, payload);
     }
 }

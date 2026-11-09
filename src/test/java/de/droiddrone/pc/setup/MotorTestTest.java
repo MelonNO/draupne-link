@@ -1,6 +1,9 @@
 package de.droiddrone.pc.setup;
 
+import de.droiddrone.common.MspFrames;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,22 +27,19 @@ class MotorTestTest {
 
     @Test
     void answersAreFoundInTheByteStreamAndBadOnesDropped() {
-        BetaflightUsb.MspParser parser = new BetaflightUsb.MspParser();
+        MspFrames parser = new MspFrames(MspFrames.V1); // BetaflightUsb.msp's reader
         byte[] noise = {'#', ' ', '$', 'X'};
-        for (byte b : noise) assertNull(parser.feed(b));
+        assertTrue(parser.feed(noise, noise.length).isEmpty());
         byte[] good = {'$', 'M', '>', 2, 104, (byte) 0xe8, 0x03, (byte) (2 ^ 104 ^ 0xe8 ^ 0x03)};
-        BetaflightUsb.MspParser.Frame frame = null;
-        for (byte b : good) frame = parser.feed(b);
-        assertNotNull(frame);
-        assertEquals(104, frame.command());
-        assertArrayEquals(new byte[]{(byte) 0xe8, 0x03}, frame.payload());
+        List<MspFrames.Frame> frames = parser.feed(good, good.length);
+        assertEquals(1, frames.size());
+        assertEquals(104, frames.get(0).code);
+        assertArrayEquals(new byte[]{(byte) 0xe8, 0x03}, frames.get(0).payload);
         byte[] bad = {'$', 'M', '>', 1, 104, 7, 0};
-        frame = null;
-        for (byte b : bad) frame = parser.feed(b);
-        assertNull(frame, "checksum wrong");
+        assertTrue(parser.feed(bad, bad.length).isEmpty(), "checksum wrong");
         byte[] refused = {'$', 'M', '!', 0, (byte) 214, (byte) 214};
-        for (byte b : refused) frame = parser.feed(b);
-        assertTrue(frame.error());
+        frames = parser.feed(refused, refused.length);
+        assertTrue(frames.get(0).isError());
     }
 
     @Test
@@ -96,6 +96,11 @@ class MotorTestTest {
         int crc = 0;
         for (byte b : "123456789".getBytes(java.nio.charset.StandardCharsets.US_ASCII)) crc = BetaflightUsb.crc8DvbS2(crc, b);
         assertEquals(0xBC, crc);
+        crc = 0;
+        for (byte b : new byte[]{(byte) 0x80, (byte) 0xff, 0x7f}) crc = BetaflightUsb.crc8DvbS2(crc, b);
+        int unsigned = 0;
+        for (int b : new int[]{0x80, 0xff, 0x7f}) unsigned = MspFrames.crc8DvbS2(unsigned, b);
+        assertEquals(unsigned, crc, "bytes over 127 count unsigned");
     }
 
     @Test
@@ -108,18 +113,63 @@ class MotorTestTest {
         // an answer: the same frame shape with '>' - found among noise, a bad checksum dropped
         byte[] answer = BetaflightUsb.msp2Frame(0x3001, new byte[]{4, 0, 1, 2, 3});
         answer[2] = '>';
-        BetaflightUsb.Msp2Parser parser = new BetaflightUsb.Msp2Parser();
-        for (byte b : new byte[]{'#', '$', 'M', '>'}) assertNull(parser.feed(b));
-        BetaflightUsb.MspParser.Frame frame = null;
-        for (byte b : answer) frame = parser.feed(b);
-        assertNotNull(frame);
-        assertEquals(0x3001, frame.command());
-        assertFalse(frame.error());
-        assertArrayEquals(new byte[]{4, 0, 1, 2, 3}, frame.payload());
+        MspFrames parser = new MspFrames(MspFrames.V2); // BetaflightUsb.msp2's reader
+        byte[] noise = {'#', '$', 'M', '>'};
+        assertTrue(parser.feed(noise, noise.length).isEmpty());
+        List<MspFrames.Frame> frames = parser.feed(answer, answer.length);
+        assertEquals(1, frames.size(), "a v1 header in the noise is none in a v2 stream");
+        MspFrames.Frame frame = frames.get(0);
+        assertEquals(0x3001, frame.code);
+        assertFalse(frame.isError());
+        assertArrayEquals(new byte[]{4, 0, 1, 2, 3}, frame.payload);
         answer[answer.length - 1] ^= 1;
-        frame = null;
-        for (byte b : answer) frame = parser.feed(b);
-        assertNull(frame, "checksum wrong");
+        assertTrue(parser.feed(answer, answer.length).isEmpty(), "checksum wrong");
+    }
+
+    /** The answers in the reads as they come: noise, the other version's header, a frame cut across two reads. */
+    @Test
+    void mspAnswersAreReadFromThePortThroughTheSharedFrames() throws Exception {
+        byte[] answer = BetaflightUsb.msp2Frame(0x3001, new byte[]{4, 0, 1, 2, 3});
+        answer[2] = '>';
+        byte[] refused = BetaflightUsb.mspFrame(214, null);
+        refused[2] = '!';
+        java.util.ArrayDeque<byte[]> reads = new java.util.ArrayDeque<>();
+        reads.add(new byte[]{'#', '$', 'M', '>'});
+        reads.add(java.util.Arrays.copyOf(answer, 6));
+        reads.add(java.util.Arrays.copyOfRange(answer, 6, answer.length));
+        reads.add(refused);
+        BetaflightUsb.Wire wire = new BetaflightUsb.Wire() {
+            @Override
+            public int read(byte[] buf) {
+                byte[] next = reads.poll();
+                if (next == null) return 0;
+                System.arraycopy(next, 0, buf, 0, next.length);
+                return next.length;
+            }
+
+            @Override
+            public int available() {
+                return reads.isEmpty() ? 0 : reads.peek().length;
+            }
+
+            @Override
+            public void write(byte[] data) {
+            }
+
+            @Override
+            public boolean isOpen() {
+                return true;
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        try (BetaflightUsb fc = BetaflightUsb.onWire(wire)) {
+            assertArrayEquals(new byte[]{4, 0, 1, 2, 3}, fc.msp2(0x3001, null));
+            java.io.IOException e = assertThrows(java.io.IOException.class, () -> fc.msp(214, null));
+            assertTrue(e.getMessage().contains("refused MSP command 214"), e.getMessage());
+        }
     }
 
     @Test
