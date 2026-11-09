@@ -266,4 +266,16 @@ class TourTest {
         config.set(Tour.SEEN_KEY, String.join(",", Tour.FEATURES));
         assertTrue(Tour.unseen(config).isEmpty());
     }
+
+    @Test
+    void theTourShowsAMaximizedMapWindowAtASizeThatCanBeResized() {
+        Rectangle screen = new Rectangle(0, 0, 1920, 1040);
+        assertEquals(new Rectangle(370, 126, 1180, 780), MapWindow.tourNormalBounds(new Rectangle(370, 126, 1180, 780), screen),
+                "its own normal size when it has one on this screen");
+        Rectangle fallback = MapWindow.tourNormalBounds(null, screen);
+        assertEquals(new Rectangle(240, 130, 1440, 780), fallback, "else three quarters of the screen, centred");
+        assertEquals(fallback, MapWindow.tourNormalBounds(new Rectangle(0, 0, 1920, 1040), screen),
+                "a normal size as big as the screen would be no better than maximized");
+        assertEquals(fallback, MapWindow.tourNormalBounds(new Rectangle(3000, 100, 800, 600), screen), "off this screen");
+    }
 }

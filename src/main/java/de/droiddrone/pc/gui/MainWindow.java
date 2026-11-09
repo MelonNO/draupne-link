@@ -1913,6 +1913,11 @@ public class MainWindow extends JFrame {
         linkColumn.repaint();
     }
 
+    /** The map window if it was ever made, without making it. */
+    MapWindow mapWindowIfOpen() {
+        return mapWindow;
+    }
+
     MapWindow mapWindow() {
         if (mapWindow == null) {
             mapWindow = new MapWindow(this, tileCache, elevation, pins, graphics, mapSource, coordinateFormat, config.getString(MapWindow.BOUNDS_KEY), this::save,

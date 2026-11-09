@@ -1479,6 +1479,37 @@ final class MapWindow extends JFrame {
 
     private final Bounds bounds = new Bounds(this);
 
+    /**
+     * The size the tour gave the window, or null (2026-11-09, the pilot: "in the tour it is not possible to resize the
+     * window"): a maximized window has no edges to drag, and the saved map window opens maximized. The tour shows it
+     * at its normal size, once; the pilot may maximize it again.
+     */
+    private Rectangle tourWindowed;
+
+    /** The tour shows this window: maximized, it comes down to its normal size so it can be moved and resized. */
+    void tourWindowed() {
+        if (tourWindowed != null || !isShown() || (getExtendedState() & MAXIMIZED_BOTH) == 0) return;
+        Rectangle r = tourNormalBounds(bounds.normal, getGraphicsConfiguration().getBounds());
+        setExtendedState(getExtendedState() & ~MAXIMIZED_BOTH);
+        setBounds(r);
+        tourWindowed = r;
+    }
+
+    /** The tour is over: maximized again if the tour took it down and the pilot left it as the tour put it. */
+    void tourWindowedEnd() {
+        Rectangle r = tourWindowed;
+        tourWindowed = null;
+        if (r == null || !isShown()) return;
+        if ((getExtendedState() & MAXIMIZED_BOTH) == 0 && getBounds().equals(r)) setExtendedState(getExtendedState() | MAXIMIZED_BOTH);
+    }
+
+    /** The normal size the tour shows: the window's own normal bounds, else three quarters of its screen, centred. */
+    static Rectangle tourNormalBounds(Rectangle normal, Rectangle screen) {
+        if (normal != null && normal.width < screen.width && normal.height < screen.height && screen.contains(normal)) return new Rectangle(normal);
+        int w = screen.width * 3 / 4, h = screen.height * 3 / 4;
+        return new Rectangle(screen.x + (screen.width - w) / 2, screen.y + (screen.height - h) / 2, w, h);
+    }
+
     private boolean restoreBounds(String saved) {
         return bounds.restore(saved);
     }

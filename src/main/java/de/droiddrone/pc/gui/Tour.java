@@ -597,6 +597,8 @@ final class Tour {
         clearExamplePins();
         finale.close();
         main.tourHideSleep(false);
+        MapWindow m = main.mapWindowIfOpen();
+        if (m != null) m.tourWindowedEnd();
         if (current == this) current = null;
     }
 
@@ -684,6 +686,7 @@ final class Tour {
                 // the one control then
             }
         }
+        if (anchor != null && SwingUtilities.getWindowAncestor(anchor) instanceof MapWindow m) m.tourWindowed();
         if (!notice.pop()) retry.restart();
     }
 

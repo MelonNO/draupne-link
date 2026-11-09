@@ -9,7 +9,7 @@ The pilot's round of 2026-11-09. Nothing of it run on a drone or a real phone ye
 - **Fixed: no motion detection on a real phone.** A phone that lists 16:9 only from 1280x720 up got no analysis picture for any 16:9 video: no live boxes, nothing to watch with in OVERWATCH. Now the smallest size of the video's shape from 240 wide up (`AnalysisSize`), averaged down to 320 wide. The PC says so once when a camera gives no picture.
 - **Picture turned once, turned everywhere:** a phone's upside-down setting (`CameraTurn`) now also turns its observation tiles, overwatch cards and clips, and previous flights' recordings; the boxes turn with it. Right-click a tile to set it.
 - **OSD on each observation tile**, from that drone's own telemetry (phone pc.43: observers get the FC's records).
-- **Tour:** asks to close the virtual fleet instead of running the fleet steps on an empty map (the "broken" Overwatch demo); the BTR leaves only on NEXT at THE EYES; the pins sheet closes after its step; the tour's box can be moved and resized.
+- **Tour:** asks to close the virtual fleet instead of running the fleet steps on an empty map (the "broken" Overwatch demo); the BTR leaves only on NEXT at THE EYES; the pins sheet closes after its step; the tour's box can be moved and resized; a maximized map window comes down to its normal size during the tour so it can be resized (maximized again at the end if left as it was).
 - Previous flights: closing waits for the player to shut its file (`PinsAndFlightsTest` flake on Windows).
 
 ## 1.0.54 + phone pc.42
