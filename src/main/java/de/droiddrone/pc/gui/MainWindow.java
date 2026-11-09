@@ -420,8 +420,6 @@ public class MainWindow extends JFrame {
 
     private final JComboBox<Joystick.Info> joystickCombo = new JComboBox<>();
     private final JButton calibrateButton = Theme.secondaryButton("Calibrate");
-    /** RC CHECK on the controller card; the boot animation flies a piece of the mark to it. */
-    private JButton rcCheckButton;
     // the controller's status lines, beside its name in the card's top row (1.0.39, the pilot): folded, the card is that one row
     // the controller card's status lines: selectable and copyable (1.0.51, the pilot)
     private final CopyableText calibrationLabel = new CopyableText(" ", Theme.font(Font.BOLD, 11f), Theme.MUTED, Theme.PANEL);
@@ -772,6 +770,7 @@ public class MainWindow extends JFrame {
                     if (mapWindow != null) mapWindow.setPreferPhone(preferPhone);
                 }));
         menu.addSeparator();
+        menu.add(new MenuRows.WindowRow("RC check", "What Betaflight reads, why it won't arm", () -> RcCheckDialog.open(this)));
         menu.add(new MenuRows.SwitchRow("Latency test", "Measures the real video delay",
                 latencyMeter != null, this::setLatencyTest));
         if (advanced) menu.add(new MenuRows.WindowRow("Virtual fleet", "Virtual drones, no hardware needed", this::openVirtualFleet));
@@ -1300,12 +1299,7 @@ public class MainWindow extends JFrame {
                 calibrateLocked.pop();
             }
         });
-        topLeft.add(calibrateButton);
-        topLeft.add(Box.createHorizontalStrut(8));
-        rcCheckButton = Theme.secondaryButton("RC check");
-        rcCheckButton.setToolTipText("Compare sent sticks with what Betaflight reads");
-        rcCheckButton.addActionListener(e -> RcCheckDialog.open(this));
-        topLeft.add(rcCheckButton);
+        topLeft.add(calibrateButton); // 1.0.56: RC check moved to TOOLS (the pilot)
         top.add(topLeft);
         JPanel states = new JPanel(new GridLayout(3, 1, 0, 0));
         states.setOpaque(false);
@@ -2751,7 +2745,7 @@ public class MainWindow extends JFrame {
             setLabel(fcStateLabel, "FC: DISARMED - READY TO ARM", Theme.OK);
         } else {
             setLabel(fcStateLabel, "FC: ARMING BLOCKED BY " + fc.blockers().stream().map(FcTelemetry.Blocker::osdName)
-                    .reduce((a, b) -> a + ", " + b).orElse("") + "  (RC CHECK explains)", Theme.WARN);
+                    .reduce((a, b) -> a + ", " + b).orElse("") + "  (TOOLS > RC check)", Theme.WARN);
         }
     }
 
