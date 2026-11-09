@@ -245,7 +245,7 @@ final class Tour {
         steps.add(new Step("BEEPER", "Hold it: the drone beeps, to find it in the grass.", main::tourBeeperButton));
         steps.add(new Step("MUTE", "The phone's microphone. M mutes. Arming mutes it.", main::tourMuteButton));
 
-        // ---- the LINK card (2026-11-09, the pilot): PILOT mode, a phone, PILOT UAV onto a race, STANDBY, the sleep
+        // ---- the LINK card (2026-11-09, the pilot): PILOT mode, a phone, PILOT UAV onto a drone team, STANDBY, the sleep
         // modes, then OBSERVER with six drones - the tour's own, each with something to see
         BooleanSupplier noShowcase = () -> !finale.showcaseStarted();
         // each mode is selected by the pilot, never by the tour (2026-11-09)
@@ -387,7 +387,7 @@ final class Tour {
     }
 
     /** Stands for the racer's name in the PHONE step's text until the six are up ("MobileZulu" then). */
-    private static final String RACER = "the race drone";
+    private static final String RACER = "the tour's first drone";
 
     private void nameRacer() {
         String r = finale.racer();
