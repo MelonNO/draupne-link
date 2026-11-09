@@ -6,6 +6,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-09, 1.0.54 + phone app 2.3.0-pc.42 released; last flown: 1.0.43)
 
+- **Unreleased on main (2026-11-09, to be 1.0.55 + phone pc.43, versions not bumped, no APK):** see CHANGELOG
+  "Unreleased". Real-phone motion detection (Common `AnalysisSize`, `MotionWatch` block average), `CameraTurn` (one
+  upside-down setting per phone for every view), `ObservationOsd` (observers get FC records + FcInfo from the phone),
+  tour: `virtual-fleet.stop` request file the fleet program honours, BTR on NEXT only, pins sheet closes, movable box.
+  1013 tests; phone compiles.
+
 - **1.0.54 + phone pc.42 (2026-11-09):** the review's maintainability list done, see CHANGELOG 1.0.54. New homes: gui `PowerController` / `FleetController` / `TourHost` / `DetectionController` /
   `OsdDataBuilder`, `pc/TierPolicy`, video `VideoRecording` / `KeyFrameBackoff`, gui `MapProjection` + `Map*Layer`,
   setup `SetupPlanner` (`ModeSwitchGoldenTest` pins every plan), Common `PacketIds` / `Bytes` / `SessionGate` / `RcPath` /
