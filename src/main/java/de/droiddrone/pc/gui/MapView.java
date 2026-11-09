@@ -156,15 +156,11 @@ class MapView extends JComponent {
 
     /** The kept flight whose line passes within 7 px of (x, y), or -1. */
     private int keptAt(int x, int y) {
-        TileSource src = effectiveSource();
-        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
-        double scale = Math.pow(2, zoom - zi);
-        double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
-        int w = getWidth(), h = getHeight();
+        MapProjection proj = projection();
         for (int i = kept.size() - 1; i >= 0; i--) {
             Point2D prev = null;
             for (FlightTrack.Point p : kept.get(i).points()) {
-                Point2D s = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
+                Point2D s = proj.toScreen(p.lat(), p.lon());
                 if (prev != null && java.awt.geom.Line2D.ptSegDist(prev.getX(), prev.getY(), s.getX(), s.getY(), x, y) <= 7) return i;
                 prev = s;
             }
@@ -174,12 +170,9 @@ class MapView extends JComponent {
 
     /** The other drone drawn within 14 px of (x, y), or null. */
     private NetDrone netDroneAt(int x, int y) {
-        TileSource src = effectiveSource();
-        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
-        double scale = Math.pow(2, zoom - zi);
-        double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
+        MapProjection proj = projection();
         for (NetDrone d : netDrones) {
-            Point2D s = toScreen(d.lat(), d.lon(), zi, scale, wcx, wcy, getWidth(), getHeight());
+            Point2D s = proj.toScreen(d.lat(), d.lon());
             if (s.distance(x, y) <= 14) return d;
         }
         return null;
@@ -460,9 +453,7 @@ class MapView extends JComponent {
 
     /** The place under a pixel. */
     double[] toLatLon(int x, int y) {
-        double lon = Mercator.lon(Mercator.x(centerLon, zoom) + x - getWidth() / 2.0, zoom);
-        double lat = Mercator.lat(Mercator.y(centerLat, zoom) + y - getHeight() / 2.0, zoom);
-        return new double[]{lat, lon};
+        return projection().toLatLon(x, y);
     }
 
     /** Gets the place under the mouse as {lat, lon}, or null when it leaves the map. */
@@ -658,12 +649,9 @@ class MapView extends JComponent {
     /** The pin under a pixel (within its marker), or null. */
     private Pins.Pin pinAt(int x, int y) {
         if (pins == null) return null;
-        TileSource src = effectiveSource();
-        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
-        double scale = Math.pow(2, zoom - zi);
-        double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
+        MapProjection proj = projection();
         for (Pins.Pin p : allPins()) {
-            Point2D s = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, getWidth(), getHeight());
+            Point2D s = proj.toScreen(p.lat(), p.lon());
             if (Math.abs(s.getX() - x) <= 12 && Math.abs(s.getY() - y) <= 12) return p;
         }
         return null;
@@ -910,10 +898,7 @@ class MapView extends JComponent {
 
     /** Whether (lat, lon) is on the map's screen now, with a margin. */
     boolean shows(double lat, double lon, int margin) {
-        TileSource src = effectiveSource();
-        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
-        double scale = Math.pow(2, zoom - zi);
-        Point2D s = toScreen(lat, lon, zi, scale, Mercator.x(centerLon, zi), Mercator.y(centerLat, zi), getWidth(), getHeight());
+        Point2D s = projection().toScreen(lat, lon);
         return s.getX() >= margin && s.getY() >= margin && s.getX() <= getWidth() - margin && s.getY() <= getHeight() - margin;
     }
 
@@ -924,12 +909,9 @@ class MapView extends JComponent {
 
     /** The overwatch drone within 16 px of (x, y), or null. */
     private OverwatchMark overwatchAt(int x, int y) {
-        TileSource src = effectiveSource();
-        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
-        double scale = Math.pow(2, zoom - zi);
-        double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
+        MapProjection proj = projection();
         for (OverwatchMark m : overwatchMarks) {
-            if (toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, getWidth(), getHeight()).distance(x, y) <= 16) return m;
+            if (proj.toScreen(m.lat(), m.lon()).distance(x, y) <= 16) return m;
         }
         return null;
     }
@@ -939,7 +921,7 @@ class MapView extends JComponent {
      * direction dashed from the drone, rings pulsing out from the drone while its alert is on, and its name. A clip
      * playing shows its view as it was, in the camera view's own pale yellow.
      */
-    private void paintOverwatch(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintOverwatch(Graphics2D g0, MapProjection proj) {
         List<OverwatchMark> marks = overwatchMarks;
         if (marks.isEmpty()) return;
         Graphics2D g = (Graphics2D) g0.create();
@@ -950,7 +932,7 @@ class MapView extends JComponent {
                     if (m.view() == null) continue; // its eye (the drone's sign) stands for it
                     Path2D shape = new Path2D.Double();
                     for (double[] ll : m.view().outline()) {
-                        Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                        Point2D p = proj.toScreen(ll[0], ll[1]);
                         if (shape.getCurrentPoint() == null) shape.moveTo(p.getX(), p.getY());
                         else shape.lineTo(p.getX(), p.getY());
                     }
@@ -963,11 +945,11 @@ class MapView extends JComponent {
                     continue;
                 }
                 Color c = m.replay() ? new Color(255, 236, 160) : ALERT;
-                Point2D d = toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, w, h);
+                Point2D d = proj.toScreen(m.lat(), m.lon());
                 if (m.view() != null) {
                     Path2D shape = new Path2D.Double();
                     for (double[] ll : m.view().outline()) {
-                        Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                        Point2D p = proj.toScreen(ll[0], ll[1]);
                         if (shape.getCurrentPoint() == null) shape.moveTo(p.getX(), p.getY());
                         else shape.lineTo(p.getX(), p.getY());
                     }
@@ -981,7 +963,7 @@ class MapView extends JComponent {
                 if (!Double.isNaN(m.bearingDeg())) {
                     double[] end = RadioHorizon.offset(m.lat(), m.lon(), Math.sin(Math.toRadians(m.bearingDeg())) * DETECTION_LINE_M,
                             Math.cos(Math.toRadians(m.bearingDeg())) * DETECTION_LINE_M);
-                    Point2D e = toScreen(end[0], end[1], zi, scale, wcx, wcy, w, h);
+                    Point2D e = proj.toScreen(end[0], end[1]);
                     g.setColor(new Color(0, 0, 0, 130));
                     g.setStroke(new BasicStroke(3.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                     g.draw(new java.awt.geom.Line2D.Double(d, e));
@@ -1011,7 +993,7 @@ class MapView extends JComponent {
                     FontMetrics fm = g.getFontMetrics();
                     int tw = fm.stringWidth(m.label()) + 10;
                     int bx = (int) d.getX() + 14, by = (int) d.getY() + 10;
-                    if (bx + tw > w - 4) bx = (int) d.getX() - 14 - tw;
+                    if (bx + tw > proj.w() - 4) bx = (int) d.getX() - 14 - tw;
                     g.setColor(BOX);
                     g.fillRect(bx, by, tw, fm.getHeight() + 2);
                     g.setColor(c);
@@ -1561,17 +1543,13 @@ class MapView extends JComponent {
         graphics.rename(item, name);
     }
 
-    /** The view's numbers for the current zoom and centre: {zi, scale, wcx, wcy}. */
-    private double[] view() {
-        TileSource src = effectiveSource();
-        int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
-        double scale = Math.pow(2, zoom - zi);
-        return new double[]{zi, scale, Mercator.x(centerLon, zi), Mercator.y(centerLat, zi)};
+    /** Where the map looks now, at its size now. */
+    MapProjection projection() {
+        return MapProjection.of(centerLat, centerLon, zoom, effectiveSource().maxZoom, getWidth(), getHeight());
     }
 
     private Point2D screenOf(MapGraphics.LatLon p) {
-        double[] v = view();
-        return toScreen(p.lat(), p.lon(), (int) v[0], v[1], v[2], v[3], getWidth(), getHeight());
+        return projection().toScreen(p.lat(), p.lon());
     }
 
     /** The drawing or symbol under a pixel (symbols first, then lines within 6 px of a leg), or null. */
@@ -1579,11 +1557,10 @@ class MapView extends JComponent {
         if (graphics == null) return null;
         List<MapGraphics.Item> items = graphics.list();
         if (measurement != null && toolOverlaysShown) items.add(measurement); // hidden with TOOLS: not picked either
-        double[] v = view();
-        int zi = (int) v[0];
+        MapProjection proj = projection();
         for (MapGraphics.Item it : items) {
             if (it.kind() != MapGraphics.Kind.SYMBOL) continue;
-            Point2D c = toScreen(it.points().get(0).lat(), it.points().get(0).lon(), zi, v[1], v[2], v[3], getWidth(), getHeight());
+            Point2D c = proj.toScreen(it.points().get(0).lat(), it.points().get(0).lon());
             if (UnitSymbol.bounds((int) c.getX(), (int) c.getY(), it.unit(), it.affiliation()).contains(x, y)) return it;
         }
         for (MapGraphics.Item it : items) {
@@ -1593,8 +1570,8 @@ class MapView extends JComponent {
             int legs = around ? pts.size() : pts.size() - 1;
             for (int i = 0; i < legs; i++) {
                 MapGraphics.LatLon a = pts.get(i), b = pts.get((i + 1) % pts.size());
-                Point2D sa = toScreen(a.lat(), a.lon(), zi, v[1], v[2], v[3], getWidth(), getHeight());
-                Point2D sb = toScreen(b.lat(), b.lon(), zi, v[1], v[2], v[3], getWidth(), getHeight());
+                Point2D sa = proj.toScreen(a.lat(), a.lon());
+                Point2D sb = proj.toScreen(b.lat(), b.lon());
                 if (java.awt.geom.Line2D.ptSegDist(sa.getX(), sa.getY(), sb.getX(), sb.getY(), x, y) <= 6) return it;
             }
         }
@@ -1618,11 +1595,11 @@ class MapView extends JComponent {
         if (graphics == null) return false;
         List<MapGraphics.Item> items = graphics.list();
         if (measurement != null && toolOverlaysShown) items.add(measurement); // hidden with TOOLS: not picked either
-        double[] v = view();
+        MapProjection proj = projection();
         for (MapGraphics.Item it : items) {
             List<MapGraphics.LatLon> pts = it.points();
             for (int i = 0; i < pts.size(); i++) {
-                Point2D c = toScreen(pts.get(i).lat(), pts.get(i).lon(), (int) v[0], v[1], v[2], v[3], getWidth(), getHeight());
+                Point2D c = proj.toScreen(pts.get(i).lat(), pts.get(i).lon());
                 boolean hit = it.kind() == MapGraphics.Kind.SYMBOL
                         ? UnitSymbol.bounds((int) c.getX(), (int) c.getY(), it.unit(), it.affiliation()).contains(x, y)
                         : c.distance(x, y) <= 8;
@@ -1695,34 +1672,34 @@ class MapView extends JComponent {
     private static final Color HORIZON_SEEN = new Color(30, 144, 255, 120);
 
     /** GCS SEARCH: the heat map, the 30 km circle round the area's centre, the area's box, the best place. */
-    private void paintSearch(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintSearch(Graphics2D g0, MapProjection proj) {
         Graphics2D g = (Graphics2D) g0.create();
         try {
             if (searchImage != null) { // the grid's outer corners on screen; cells stay sharp (nearest neighbour)
                 double half = search.size() / 2.0 * RadioHorizon.SEARCH_CELL_M;
                 double dLat = half / 111_320.0, dLon = half / (111_320.0 * Math.cos(Math.toRadians(search.lat())));
-                Point2D tl = toScreen(search.lat() + dLat, search.lon() - dLon, zi, scale, wcx, wcy, w, h);
-                Point2D br = toScreen(search.lat() - dLat, search.lon() + dLon, zi, scale, wcx, wcy, w, h);
+                Point2D tl = proj.toScreen(search.lat() + dLat, search.lon() - dLon);
+                Point2D br = proj.toScreen(search.lat() - dLat, search.lon() + dLon);
                 g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
                 g.drawImage(searchImage, (int) Math.round(tl.getX()), (int) Math.round(tl.getY()), (int) Math.round(br.getX()),
                         (int) Math.round(br.getY()), 0, 0, searchImage.getWidth(), searchImage.getHeight(), null);
             }
             double cLat = (searchArea[0] + searchArea[1]) / 2, cLon = (searchArea[2] + searchArea[3]) / 2;
-            Point2D c = toScreen(cLat, cLon, zi, scale, wcx, wcy, w, h);
-            double pxPerM = scale / Mercator.metersPerPixel(cLat, zi);
+            Point2D c = proj.toScreen(cLat, cLon);
+            double pxPerM = proj.scale() / Mercator.metersPerPixel(cLat, proj.zi());
             double r = RadioHorizon.MAX_RANGE_M * pxPerM;
             g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 10f, new float[]{8f, 6f}, 0f));
             g.setColor(Theme.ACCENT);
             g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
-            Point2D nw = toScreen(searchArea[1], searchArea[2], zi, scale, wcx, wcy, w, h);
-            Point2D se = toScreen(searchArea[0], searchArea[3], zi, scale, wcx, wcy, w, h);
+            Point2D nw = proj.toScreen(searchArea[1], searchArea[2]);
+            Point2D se = proj.toScreen(searchArea[0], searchArea[3]);
             g.setStroke(new BasicStroke(2f));
             g.setColor(Color.WHITE);
             g.draw(new Rectangle((int) Math.round(nw.getX()), (int) Math.round(nw.getY()),
                     (int) Math.round(se.getX() - nw.getX()), (int) Math.round(se.getY() - nw.getY())));
             int labelY = (int) Math.round(se.getY()) + 4;
             if (search != null) { // the best place: a ring and its share
-                Point2D b = toScreen(search.bestLat(), search.bestLon(), zi, scale, wcx, wcy, w, h);
+                Point2D b = proj.toScreen(search.bestLat(), search.bestLon());
                 int bx = (int) Math.round(b.getX()), by = (int) Math.round(b.getY());
                 g.setStroke(new BasicStroke(3f));
                 g.setColor(Color.BLACK);
@@ -1749,22 +1726,22 @@ class MapView extends JComponent {
      * 4G COVERAGE: the estimate's colours over the map, the masts as small dots in their network's colour, and the
      * legend bottom left - that it is an estimate, the colours, what it is for, the status, and OpenCelliD's attribution.
      */
-    private void paintCoverage(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintCoverage(Graphics2D g0, MapProjection proj) {
         Graphics2D g = (Graphics2D) g0.create();
         try {
             CellCoverage.Grid grid = coverage;
             if (grid != null && coverageImage != null) {
-                double k = Math.pow(2, zi) * scale; // zoom-0 world pixels to screen
-                int sx0 = (int) Math.round((grid.x0() * Math.pow(2, zi) - wcx) * scale + w / 2.0);
-                int sy0 = (int) Math.round((grid.y0() * Math.pow(2, zi) - wcy) * scale + h / 2.0);
+                double k = proj.level() * proj.scale(); // zoom-0 world pixels to screen
+                int sx0 = (int) Math.round(proj.screenX(grid.x0() * proj.level()));
+                int sy0 = (int) Math.round(proj.screenY(grid.y0() * proj.level()));
                 int sx1 = (int) Math.round(sx0 + (grid.x1() - grid.x0()) * k), sy1 = (int) Math.round(sy0 + (grid.y1() - grid.y0()) * k);
                 g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
                 g.drawImage(coverageImage, sx0, sy0, sx1, sy1, 0, 0, coverageImage.getWidth(), coverageImage.getHeight(), null);
                 if (zoom >= COVERAGE_MASTS_ZOOM) {
                     g.setStroke(new BasicStroke(1.5f));
                     for (CellCoverage.Site s : grid.sites()) {
-                        Point2D p = toScreen(s.lat(), s.lon(), zi, scale, wcx, wcy, w, h);
-                        if (p.getX() < -8 || p.getY() < -8 || p.getX() > w + 8 || p.getY() > h + 8) continue;
+                        Point2D p = proj.toScreen(s.lat(), s.lon());
+                        if (p.getX() < -8 || p.getY() < -8 || p.getX() > proj.w() + 8 || p.getY() > proj.h() + 8) continue;
                         int x = (int) Math.round(p.getX()), y = (int) Math.round(p.getY());
                         g.setColor(operatorColour(s.operator()));
                         g.fillOval(x - 4, y - 4, 9, 9);
@@ -1777,7 +1754,7 @@ class MapView extends JComponent {
                     }
                 }
             }
-            paintCoverageLegend(g, grid, h);
+            paintCoverageLegend(g, grid, proj.h());
         } finally {
             g.dispose();
         }
@@ -1859,13 +1836,13 @@ class MapView extends JComponent {
     }
 
     /** RADIO HORIZON: the seen ground blue, the 30 km limit and the smooth-earth horizon as dashed rings, the mast. */
-    private void paintHorizon(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintHorizon(Graphics2D g0, MapProjection proj) {
         Graphics2D g = (Graphics2D) g0.create();
         try {
             if (horizonShape != null) {
-                double k = Math.pow(2, zi) * scale;
+                double k = proj.level() * proj.scale();
                 AffineTransform t = new AffineTransform();
-                t.translate(w / 2.0 - wcx * scale, h / 2.0 - wcy * scale);
+                t.translate(proj.w() / 2.0 - proj.wcx() * proj.scale(), proj.h() / 2.0 - proj.wcy() * proj.scale());
                 t.scale(k, k);
                 // no antialiasing: the quads' shared edges would show as seams
                 g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF);
@@ -1873,8 +1850,8 @@ class MapView extends JComponent {
                 g.fill(t.createTransformedShape(horizonShape));
                 g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             }
-            Point2D c = toScreen(horizonMast.lat(), horizonMast.lon(), zi, scale, wcx, wcy, w, h);
-            double pxPerM = scale / Mercator.metersPerPixel(horizonMast.lat(), zi);
+            Point2D c = proj.toScreen(horizonMast.lat(), horizonMast.lon());
+            double pxPerM = proj.scale() / Mercator.metersPerPixel(horizonMast.lat(), proj.zi());
             g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_ROUND, 10f, new float[]{8f, 6f}, 0f));
             g.setColor(Theme.ACCENT);
             double r = RadioHorizon.MAX_RANGE_M * pxPerM;
@@ -1908,16 +1885,16 @@ class MapView extends JComponent {
         repaint();
     }
 
-    private void paintGraphics(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintGraphics(Graphics2D g, MapProjection proj) {
         if (graphics != null) {
             for (MapGraphics.Item it : graphics.list()) {
                 if (it == moving) continue; // its moving copy is painted instead
-                paintItem(g, it, false, zi, scale, wcx, wcy, w, h);
+                paintItem(g, it, false, proj);
             }
         }
-        for (MapGraphics.Item it : tourItems) paintItem(g, it, false, zi, scale, wcx, wcy, w, h);
-        if (measurement != null && measurement != moving && toolOverlaysShown) paintItem(g, measurement, false, zi, scale, wcx, wcy, w, h);
-        if (movingLive != null) paintItem(g, movingLive, false, zi, scale, wcx, wcy, w, h);
+        for (MapGraphics.Item it : tourItems) paintItem(g, it, false, proj);
+        if (measurement != null && measurement != moving && toolOverlaysShown) paintItem(g, measurement, false, proj);
+        if (movingLive != null) paintItem(g, movingLive, false, proj);
         if (tool == Tool.NONE || forPicture) return;
         // what is being drawn, with the rubber band to the cursor
         if (tool == Tool.SYMBOL && mouseAt != null) {
@@ -1938,17 +1915,17 @@ class MapView extends JComponent {
             case ARROW -> MapGraphics.Item.arrow("", pts, drawColor, drawWidth);
             default -> MapGraphics.Item.line("", pts, drawColor, drawWidth);
         };
-        paintItem(g, live, true, zi, scale, wcx, wcy, w, h);
+        paintItem(g, live, true, proj);
     }
 
-    private void paintItem(Graphics2D g, MapGraphics.Item it, boolean live, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintItem(Graphics2D g, MapGraphics.Item it, boolean live, MapProjection proj) {
         List<MapGraphics.LatLon> pts = it.points();
         if (pts.isEmpty()) return;
         Point2D[] sp = new Point2D[pts.size()];
         boolean anyNear = false;
         for (int i = 0; i < pts.size(); i++) {
-            sp[i] = toScreen(pts.get(i).lat(), pts.get(i).lon(), zi, scale, wcx, wcy, w, h);
-            if (sp[i].getX() > -2000 && sp[i].getX() < w + 2000 && sp[i].getY() > -2000 && sp[i].getY() < h + 2000) anyNear = true;
+            sp[i] = proj.toScreen(pts.get(i).lat(), pts.get(i).lon());
+            if (sp[i].getX() > -2000 && sp[i].getX() < proj.w() + 2000 && sp[i].getY() > -2000 && sp[i].getY() < proj.h() + 2000) anyNear = true;
         }
         if (!anyNear) return;
         if (it.kind() == MapGraphics.Kind.SYMBOL) {
@@ -2042,10 +2019,6 @@ class MapView extends JComponent {
 
     // ------------------------------------------------------------------ painting
 
-    private Point2D toScreen(double lat, double lon, int zi, double scale, double wcx, double wcy, int w, int h) {
-        return new Point2D.Double((Mercator.x(lon, zi) - wcx) * scale + w / 2.0, (Mercator.y(lat, zi) - wcy) * scale + h / 2.0);
-    }
-
     @Override
     protected void paintComponent(Graphics graphics) {
         Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
@@ -2054,33 +2027,31 @@ class MapView extends JComponent {
             g.setColor(Theme.PANEL);
             g.fillRect(0, 0, w, h);
             TileSource src = effectiveSource();
-            int zi = (int) Math.max(0, Math.min(src.maxZoom, Math.floor(zoom)));
-            double scale = Math.pow(2, zoom - zi);
-            double wcx = Mercator.x(centerLon, zi), wcy = Mercator.y(centerLat, zi);
-            paintTiles(g, src, zi, scale, wcx, wcy, w, h);
-            if (coverageOn && !forPicture && toolOverlaysShown) paintCoverage(g, zi, scale, wcx, wcy, w, h); // under the other tools
-            if (searchArea != null && !forPicture && toolOverlaysShown) paintSearch(g, zi, scale, wcx, wcy, w, h);
-            if (horizonMast != null && !forPicture && toolOverlaysShown) paintHorizon(g, zi, scale, wcx, wcy, w, h); // over the heat map
+            MapProjection proj = MapProjection.of(centerLat, centerLon, zoom, src.maxZoom, w, h);
+            paintTiles(g, src, proj);
+            if (coverageOn && !forPicture && toolOverlaysShown) paintCoverage(g, proj); // under the other tools
+            if (searchArea != null && !forPicture && toolOverlaysShown) paintSearch(g, proj);
+            if (horizonMast != null && !forPicture && toolOverlaysShown) paintHorizon(g, proj); // over the heat map
 
             FlightTrack.Point home = track == null ? null : track.home();
-            if (home != null) paintRings(g, home, zi, scale, wcx, wcy, w, h);
-            if (oldTrack != null) paintOldTrack(g, zi, scale, wcx, wcy, w, h);
-            paintKept(g, zi, scale, wcx, wcy, w, h);
-            paintTrack(g, zi, scale, wcx, wcy, w, h);
-            if (home != null) paintHome(g, home, zi, scale, wcx, wcy, w, h);
+            if (home != null) paintRings(g, home, proj);
+            if (oldTrack != null) paintOldTrack(g, proj);
+            paintKept(g, proj);
+            paintTrack(g, proj);
+            if (home != null) paintHome(g, home, proj);
             FlightTrack.Point last = track == null ? null : track.last();
-            if (pins != null) paintPins(g, last, home, zi, scale, wcx, wcy, w, h);
-            paintGraphics(g, zi, scale, wcx, wcy, w, h);
-            if (replayPath != null) paintReplay(g, zi, scale, wcx, wcy, w, h);
-            if (cameraView != null && !forPicture && connected) paintCameraView(g, zi, scale, wcx, wcy, w, h);
-            if (!forPicture) paintDetections(g, zi, scale, wcx, wcy, w, h);
-            if (!forPicture) paintObserved(g, zi, scale, wcx, wcy, w, h);
-            paintNetDrones(g, zi, scale, wcx, wcy, w, h);
-            if (last != null) paintDrone(g, last, zi, scale, wcx, wcy, w, h);
+            if (pins != null) paintPins(g, last, home, proj);
+            paintGraphics(g, proj);
+            if (replayPath != null) paintReplay(g, proj);
+            if (cameraView != null && !forPicture && connected) paintCameraView(g, proj);
+            if (!forPicture) paintDetections(g, proj);
+            if (!forPicture) paintObserved(g, proj);
+            paintNetDrones(g, proj);
+            if (last != null) paintDrone(g, last, proj);
             else if (!forPicture && replayPath == null) paintNoPosition(g, w, h);
             // an overwatch alert over everything else on the map (1.0.50, the pilot: it was under the drone's label)
-            if (!forPicture) paintOverwatch(g, zi, scale, wcx, wcy, w, h);
-            if (!forPicture && highlighted != null) paintHighlight(g, zi, scale, wcx, wcy, w, h);
+            if (!forPicture) paintOverwatch(g, proj);
+            if (!forPicture && highlighted != null) paintHighlight(g, proj);
 
             paintScale(g, h);
             paintAttribution(g, src, w, h);
@@ -2115,24 +2086,24 @@ class MapView extends JComponent {
         g.drawString(text, box.x + 8, box.y + 2 + fm.getAscent() + 2);
     }
 
-    private void paintTiles(Graphics2D g, TileSource src, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintTiles(Graphics2D g, TileSource src, MapProjection proj) {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        int n = 1 << zi;
-        int tx0 = (int) Math.floor((wcx - w / 2.0 / scale) / Mercator.TILE), tx1 = (int) Math.floor((wcx + w / 2.0 / scale) / Mercator.TILE);
-        int ty0 = (int) Math.floor((wcy - h / 2.0 / scale) / Mercator.TILE), ty1 = (int) Math.floor((wcy + h / 2.0 / scale) / Mercator.TILE);
+        int n = 1 << proj.zi();
+        int tx0 = (int) Math.floor((proj.wcx() - proj.w() / 2.0 / proj.scale()) / Mercator.TILE), tx1 = (int) Math.floor((proj.wcx() + proj.w() / 2.0 / proj.scale()) / Mercator.TILE);
+        int ty0 = (int) Math.floor((proj.wcy() - proj.h() / 2.0 / proj.scale()) / Mercator.TILE), ty1 = (int) Math.floor((proj.wcy() + proj.h() / 2.0 / proj.scale()) / Mercator.TILE);
         for (int ty = Math.max(0, ty0); ty <= Math.min(n - 1, ty1); ty++) {
-            int sy0 = (int) Math.floor((ty * Mercator.TILE - wcy) * scale + h / 2.0);
-            int sy1 = (int) Math.floor(((ty + 1) * Mercator.TILE - wcy) * scale + h / 2.0);
+            int sy0 = (int) Math.floor(proj.screenY(ty * Mercator.TILE));
+            int sy1 = (int) Math.floor(proj.screenY((ty + 1) * Mercator.TILE));
             for (int tx = tx0; tx <= tx1; tx++) {
-                int sx0 = (int) Math.floor((tx * Mercator.TILE - wcx) * scale + w / 2.0);
-                int sx1 = (int) Math.floor(((tx + 1) * Mercator.TILE - wcx) * scale + w / 2.0);
-                BufferedImage img = cache.get(src, zi, tx, ty, tileReady);
+                int sx0 = (int) Math.floor(proj.screenX(tx * Mercator.TILE));
+                int sx1 = (int) Math.floor(proj.screenX((tx + 1) * Mercator.TILE));
+                BufferedImage img = cache.get(src, proj.zi(), tx, ty, tileReady);
                 if (img != null) {
                     g.drawImage(img, sx0, sy0, sx1, sy1, 0, 0, img.getWidth(), img.getHeight(), null);
                     continue;
                 }
                 // not in yet: the parent tile's quarter, blown up, until it is
-                BufferedImage parent = zi > 0 ? cache.get(src, zi - 1, Math.floorDiv(Math.floorMod(tx, n), 2), ty / 2, tileReady) : null;
+                BufferedImage parent = proj.zi() > 0 ? cache.get(src, proj.zi() - 1, Math.floorDiv(Math.floorMod(tx, n), 2), ty / 2, tileReady) : null;
                 if (parent != null) {
                     int px = (Math.floorMod(tx, n) & 1) * parent.getWidth() / 2, py = (ty & 1) * parent.getHeight() / 2;
                     g.drawImage(parent, sx0, sy0, sx1, sy1, px, py, px + parent.getWidth() / 2, py + parent.getHeight() / 2, null);
@@ -2147,12 +2118,12 @@ class MapView extends JComponent {
     }
 
     /** The kept flights: each a line in its own colour, its name at its end. */
-    private void paintKept(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintKept(Graphics2D g, MapProjection proj) {
         List<TrackPath> paths = keptPaths;
         for (int i = 0; i < kept.size() && i < paths.size(); i++) {
             TrackPath tp = paths.get(i);
             if (tp.size() < 2) continue;
-            Path2D path = line(tp, zi, scale, wcx, wcy, w, h);
+            Path2D path = line(tp, proj);
             Point2D end = path.getCurrentPoint();
             Color c = KEPT_COLOURS[i % KEPT_COLOURS.length];
             g.setStroke(new BasicStroke(4.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
@@ -2167,7 +2138,7 @@ class MapView extends JComponent {
                 FontMetrics fm = g.getFontMetrics();
                 int tw = fm.stringWidth(name) + 10;
                 int lx = (int) end.getX() + 8;
-                if (lx + tw > w - 4) lx = (int) end.getX() - 8 - tw; // near the right edge: the label on the left
+                if (lx + tw > proj.w() - 4) lx = (int) end.getX() - 8 - tw; // near the right edge: the label on the left
                 g.setColor(BOX);
                 g.fillRect(lx, (int) end.getY() - fm.getHeight() / 2, tw, fm.getHeight() + 2);
                 g.setColor(c);
@@ -2214,7 +2185,7 @@ class MapView extends JComponent {
     }
 
     /** The picked drone: its camera's ground outlined bright (when it has one), rings round it and its name. */
-    private void paintHighlight(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintHighlight(Graphics2D g0, MapProjection proj) {
         String drone = highlighted;
         double[] at = positionOf(drone);
         if (at == null) return;
@@ -2224,7 +2195,7 @@ class MapView extends JComponent {
                 if (!m.drone().equalsIgnoreCase(drone) || m.view() == null) continue;
                 Path2D shape = new Path2D.Double();
                 for (double[] ll : m.view().outline()) {
-                    Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                    Point2D p = proj.toScreen(ll[0], ll[1]);
                     if (shape.getCurrentPoint() == null) shape.moveTo(p.getX(), p.getY());
                     else shape.lineTo(p.getX(), p.getY());
                 }
@@ -2235,7 +2206,7 @@ class MapView extends JComponent {
                 g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                 g.draw(shape);
             }
-            Point2D s = toScreen(at[0], at[1], zi, scale, wcx, wcy, w, h);
+            Point2D s = proj.toScreen(at[0], at[1]);
             long t = System.currentTimeMillis() - highlightedAt;
             if (t < PULSE_MS) { // rings going out from it, fading
                 for (int i = 0; i < 2; i++) {
@@ -2253,7 +2224,7 @@ class MapView extends JComponent {
             FontMetrics fm = g.getFontMetrics();
             int tw = fm.stringWidth(drone) + 10;
             int bx = (int) s.getX() + 18, by = (int) s.getY() - fm.getHeight() / 2 - 1;
-            if (bx + tw > w - 4) bx = (int) s.getX() - 18 - tw;
+            if (bx + tw > proj.w() - 4) bx = (int) s.getX() - 18 - tw;
             g.setColor(BOX);
             g.fillRect(bx, by, tw, fm.getHeight() + 2);
             g.setColor(Color.WHITE);
@@ -2264,10 +2235,10 @@ class MapView extends JComponent {
     }
 
     /** The other drones on the network: a sign each by what it is doing (Kind), its name and state. */
-    private void paintNetDrones(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintNetDrones(Graphics2D g, MapProjection proj) {
         for (NetDrone d : netDrones) {
-            Point2D s = toScreen(d.lat(), d.lon(), zi, scale, wcx, wcy, w, h);
-            if (s.getX() < -40 || s.getY() < -40 || s.getX() > w + 40 || s.getY() > h + 40) continue;
+            Point2D s = proj.toScreen(d.lat(), d.lon());
+            if (s.getX() < -40 || s.getY() < -40 || s.getX() > proj.w() + 40 || s.getY() > proj.h() + 40) continue;
             Color c = switch (d.kind()) {
                 case ACTIVE -> d.flown() ? Theme.WARN : new Color(0x4fc3f7);
                 case ASLEEP -> ASLEEP_COLOR;
@@ -2283,7 +2254,7 @@ class MapView extends JComponent {
             String line1 = d.name(), line2 = d.state();
             int tw = Math.max(fm.stringWidth(line1), line2 == null ? 0 : fm.stringWidth(line2)) + 10;
             int bx = (int) s.getX() + 13, by = (int) s.getY() - fm.getHeight();
-            if (bx + tw > w - 4) bx = (int) s.getX() - 13 - tw; // near the right edge: the label on the left
+            if (bx + tw > proj.w() - 4) bx = (int) s.getX() - 13 - tw; // near the right edge: the label on the left
             g.setColor(BOX);
             g.fillRect(bx, by, tw, (line2 == null ? 1 : 2) * fm.getHeight() + 2);
             g.setColor(c);
@@ -2358,10 +2329,10 @@ class MapView extends JComponent {
     }
 
     /** An earlier flight: a thin muted line with its file's name at its end, under everything live. */
-    private void paintOldTrack(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintOldTrack(Graphics2D g, MapProjection proj) {
         TrackPath tp = oldTrackPath;
         if (tp == null || tp.size() == 0) return;
-        Path2D path = line(tp, zi, scale, wcx, wcy, w, h);
+        Path2D path = line(tp, proj);
         Point2D end = path.getCurrentPoint();
         g.setStroke(new BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.setColor(new Color(0, 0, 0, 90));
@@ -2381,8 +2352,8 @@ class MapView extends JComponent {
     }
 
     /** The flight played back: its line in the accent colour, and the drone where it was at the playback time. */
-    private void paintReplay(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
-        Path2D path = line(replayPath, zi, scale, wcx, wcy, w, h);
+    private void paintReplay(Graphics2D g, MapProjection proj) {
+        Path2D path = line(replayPath, proj);
         g.setStroke(new BasicStroke(5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.setColor(new Color(0, 0, 0, 120));
         g.draw(path);
@@ -2390,7 +2361,7 @@ class MapView extends JComponent {
         g.setColor(Theme.ACCENT);
         g.draw(path);
         if (Double.isNaN(replayLat)) return;
-        Point2D c = toScreen(replayLat, replayLon, zi, scale, wcx, wcy, w, h);
+        Point2D c = proj.toScreen(replayLat, replayLon);
         double x = c.getX(), y = c.getY();
         g.setStroke(new BasicStroke(2f));
         if (Double.isNaN(replayHeading)) {
@@ -2417,10 +2388,10 @@ class MapView extends JComponent {
         r.dispose();
     }
 
-    private void paintTrack(Graphics2D g, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintTrack(Graphics2D g, MapProjection proj) {
         TrackPath tp = trackPath;
         if (tp == null || tp.size() < 2) return;
-        Path2D path = line(tp, zi, scale, wcx, wcy, w, h);
+        Path2D path = line(tp, proj);
         g.setStroke(new BasicStroke(5.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.setColor(new Color(0, 0, 0, 120));
         g.draw(path);
@@ -2429,35 +2400,35 @@ class MapView extends JComponent {
         g.draw(path);
         if (zoom >= 15.5) { // each report as a dot (the newest TrackPath.RECENT): a gap in them is a gap in the telemetry
             g.setColor(new Color(255, 255, 255, 170));
-            double k = Mercator.worldSize(zi) / Mercator.TILE;
+            double k = proj.level();
             for (int i = 0; i < tp.recentSize(); i++) {
-                double x = (tp.recentX(i) * k - wcx) * scale + w / 2.0, y = (tp.recentY(i) * k - wcy) * scale + h / 2.0;
-                if (x < -4 || y < -4 || x > w + 4 || y > h + 4) continue;
+                double x = proj.screenX(tp.recentX(i) * k), y = proj.screenY(tp.recentY(i) * k);
+                if (x < -4 || y < -4 || x > proj.w() + 4 || y > proj.h() + 4) continue;
                 g.fill(new Ellipse2D.Double(x - 1.6, y - 1.6, 3.2, 3.2));
             }
         }
     }
 
     /** A thinned track (zoom-0 map units) as a line on the screen. */
-    private static Path2D line(TrackPath tp, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private static Path2D line(TrackPath tp, MapProjection proj) {
         Path2D path = new Path2D.Double(Path2D.WIND_NON_ZERO, tp.size());
-        double k = Mercator.worldSize(zi) / Mercator.TILE;
+        double k = proj.level();
         for (int i = 0; i < tp.size(); i++) {
-            double x = (tp.x(i) * k - wcx) * scale + w / 2.0, y = (tp.y(i) * k - wcy) * scale + h / 2.0;
+            double x = proj.screenX(tp.x(i) * k), y = proj.screenY(tp.y(i) * k);
             if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
         }
         return path;
     }
 
-    private void paintRings(Graphics2D g, FlightTrack.Point home, int zi, double scale, double wcx, double wcy, int w, int h) {
-        Point2D c = toScreen(home.lat(), home.lon(), zi, scale, wcx, wcy, w, h);
+    private void paintRings(Graphics2D g, FlightTrack.Point home, MapProjection proj) {
+        Point2D c = proj.toScreen(home.lat(), home.lon());
         double mpp = Mercator.metersPerPixel(home.lat(), zoom);
         g.setStroke(new BasicStroke(1.1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{6f, 6f}, 0f));
         g.setFont(Theme.headingFont(10.5f));
         int shown = 0;
         for (int m : RING_M) {
             double r = m / mpp;
-            if (r < 36 || r > Math.max(w, h) * 1.2) continue;
+            if (r < 36 || r > Math.max(proj.w(), proj.h()) * 1.2) continue;
             g.setColor(new Color(255, 255, 255, 130));
             g.draw(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
             String label = m >= 1000 ? (m / 1000) + " KM" : m + " M";
@@ -2471,8 +2442,8 @@ class MapView extends JComponent {
         }
     }
 
-    private void paintHome(Graphics2D g, FlightTrack.Point home, int zi, double scale, double wcx, double wcy, int w, int h) {
-        Point2D c = toScreen(home.lat(), home.lon(), zi, scale, wcx, wcy, w, h);
+    private void paintHome(Graphics2D g, FlightTrack.Point home, MapProjection proj) {
+        Point2D c = proj.toScreen(home.lat(), home.lon());
         double r = 10;
         g.setColor(new Color(0, 0, 0, 170));
         g.fill(new Ellipse2D.Double(c.getX() - r, c.getY() - r, 2 * r, 2 * r));
@@ -2494,10 +2465,10 @@ class MapView extends JComponent {
      * A pin: a diamond with its name, and the distance and bearing to it from the drone's last position (D) and from
      * the launch point (L), for the one who walks there.
      */
-    private void paintPins(Graphics2D g, FlightTrack.Point last, FlightTrack.Point home, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintPins(Graphics2D g, FlightTrack.Point last, FlightTrack.Point home, MapProjection proj) {
         for (Pins.Pin p : allPins()) {
-            Point2D c = toScreen(p.lat(), p.lon(), zi, scale, wcx, wcy, w, h);
-            if (c.getX() < -200 || c.getX() > w + 200 || c.getY() < -200 || c.getY() > h + 200) continue;
+            Point2D c = proj.toScreen(p.lat(), p.lon());
+            if (c.getX() < -200 || c.getX() > proj.w() + 200 || c.getY() < -200 || c.getY() > proj.h() + 200) continue;
             Path2D d = new Path2D.Double();
             d.moveTo(c.getX(), c.getY() - 9);
             d.lineTo(c.getX() + 7, c.getY());
@@ -2589,7 +2560,7 @@ class MapView extends JComponent {
      * Each observed phone: its cone in its tile's colour (stronger while its tile has the mouse or is selected; dashed
      * edge when the heading is approximate), a round marker with its number at the phone.
      */
-    private void paintObserved(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintObserved(Graphics2D g0, MapProjection proj) {
         List<Observed> marks = observed;
         observedShapes.clear();
         observedTiles.clear();
@@ -2598,13 +2569,13 @@ class MapView extends JComponent {
         try {
             g.setFont(Theme.headingFont(11f));
             for (Observed m : marks) {
-                Point2D c = toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, w, h);
+                Point2D c = proj.toScreen(m.lat(), m.lon());
                 boolean strong = m.highlighted() || m.selected();
                 if (m.cone().size() >= 3) {
                     Path2D shape = new Path2D.Double();
                     shape.moveTo(c.getX(), c.getY());
                     for (double[] ll : m.cone()) {
-                        Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                        Point2D p = proj.toScreen(ll[0], ll[1]);
                         shape.lineTo(p.getX(), p.getY());
                     }
                     shape.closePath();
@@ -2674,7 +2645,7 @@ class MapView extends JComponent {
      * where it meets the terrain a ring marked EST (an estimate: the camera's set angle and tilt, the map's heights),
      * MOVING or LIGHT and its age beside it. Fading over DetectionMarks.KEEP_MS.
      */
-    private void paintDetections(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintDetections(Graphics2D g0, MapProjection proj) {
         List<de.droiddrone.pc.DetectionMarks.Mark> marks = detections;
         if (marks.isEmpty()) return;
         long now = de.droiddrone.pc.MonoClock.ms();
@@ -2684,10 +2655,10 @@ class MapView extends JComponent {
             for (de.droiddrone.pc.DetectionMarks.Mark m : marks) {
                 float a = m.alpha(now);
                 if (a <= 0) continue;
-                Point2D d = toScreen(m.droneLat(), m.droneLon(), zi, scale, wcx, wcy, w, h);
+                Point2D d = proj.toScreen(m.droneLat(), m.droneLon());
                 double[] end = m.ground() != null ? m.ground() : de.droiddrone.pc.map.RadioHorizon.offset(m.droneLat(), m.droneLon(),
                         Math.sin(Math.toRadians(m.bearingDeg())) * DETECTION_LINE_M, Math.cos(Math.toRadians(m.bearingDeg())) * DETECTION_LINE_M);
-                Point2D e = toScreen(end[0], end[1], zi, scale, wcx, wcy, w, h);
+                Point2D e = proj.toScreen(end[0], end[1]);
                 Color yellow = Theme.alpha(Theme.WARN, Math.round(220 * a));
                 g.setColor(new Color(0, 0, 0, Math.round(120 * a)));
                 g.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
@@ -2715,13 +2686,13 @@ class MapView extends JComponent {
      * The camera's view: the ground it sees, pale over the map, its edge, and a line from the drone to where the
      * picture's centre lands (a cross there). Ground out of the camera's reach ends at CameraFootprint.MAX_RANGE_M.
      */
-    private void paintCameraView(Graphics2D g0, int zi, double scale, double wcx, double wcy, int w, int h) {
+    private void paintCameraView(Graphics2D g0, MapProjection proj) {
         CameraFootprint.View v = cameraView;
         Graphics2D g = (Graphics2D) g0.create();
         try {
             Path2D shape = new Path2D.Double();
             for (double[] ll : v.outline()) {
-                Point2D p = toScreen(ll[0], ll[1], zi, scale, wcx, wcy, w, h);
+                Point2D p = proj.toScreen(ll[0], ll[1]);
                 if (shape.getCurrentPoint() == null) shape.moveTo(p.getX(), p.getY());
                 else shape.lineTo(p.getX(), p.getY());
             }
@@ -2732,8 +2703,8 @@ class MapView extends JComponent {
             g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.draw(shape);
             if (v.centre() != null) {
-                Point2D d = toScreen(v.pose().lat(), v.pose().lon(), zi, scale, wcx, wcy, w, h);
-                Point2D c = toScreen(v.centre()[0], v.centre()[1], zi, scale, wcx, wcy, w, h);
+                Point2D d = proj.toScreen(v.pose().lat(), v.pose().lon());
+                Point2D c = proj.toScreen(v.centre()[0], v.centre()[1]);
                 g.setStroke(new BasicStroke(1.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1, new float[]{5, 4}, 0));
                 g.draw(new java.awt.geom.Line2D.Double(d, c));
                 g.setStroke(new BasicStroke(2f));
@@ -2745,14 +2716,14 @@ class MapView extends JComponent {
         }
     }
 
-    private void paintDrone(Graphics2D g, FlightTrack.Point last, int zi, double scale, double wcx, double wcy, int w, int h) {
-        Point2D c = toScreen(last.lat(), last.lon(), zi, scale, wcx, wcy, w, h);
+    private void paintDrone(Graphics2D g, FlightTrack.Point last, MapProjection proj) {
+        Point2D c = proj.toScreen(last.lat(), last.lon());
         if (liveAsleep && !connected) { // asleep on time, or heard of since: its newer sign says so, never LAST KNOWN
             for (NetDrone d : netDrones) {
-                if (toScreen(d.lat(), d.lon(), zi, scale, wcx, wcy, w, h).distance(c) < 60) return; // its sign stands in
+                if (proj.toScreen(d.lat(), d.lon()).distance(c) < 60) return; // its sign stands in
             }
             for (OverwatchMark m : overwatchMarks) {
-                if (toScreen(m.lat(), m.lon(), zi, scale, wcx, wcy, w, h).distance(c) < 60) return; // its alert stands in
+                if (proj.toScreen(m.lat(), m.lon()).distance(c) < 60) return; // its alert stands in
             }
         }
         paintAccuracy(g, last, c);
