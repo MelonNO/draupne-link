@@ -2,7 +2,7 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## Unreleased (to be 1.0.53 + phone pc.41)
+## 1.0.53 + phone pc.41
 
 A full review round: every area read, bugs fixed with a test each, perf tests added. Nothing of it run on a drone or a real phone yet.
 
@@ -12,7 +12,7 @@ A full review round: every area read, bugs fixed with a test each, perf tests ad
 - **Settings:** a key written twice in the file lost its change at the next start.
 - **PowerShell quoting:** a typographic quote in a path broke the updater, Tailscale install and shortcuts.
 - **Link:** resends and gap waits ran on the wall clock (a clock set back stopped every resend; both apps); the name scan too; AUTO went to SHARP on a new link's first tick; a cut overwatch CLIP packet threw on the hub thread.
-- **Video:** a recording that failed at its start stayed open and locked; playback read an unknown heading as -1 degrees; the two known flaky video tests fixed (their timing).
+- **Video:** a recording that failed at its start stayed open and locked; playback read an unknown heading as -1 degrees; two flaky video tests steadied (one still fails now and then under load).
 - **Map / GUI:** the warning beep queued a backlog on a flapping link; a pin name with a line break wiped pins.txt; a control character wiped graphics.kml; windows restored off-screen after monitors moved; profile labels.
 - **Phone:** standby stopped reading the FC's status 8 times in 10 (armed read UNKNOWN, no idle sticks).
 - **Virtual fleet:** cheaper frames (the sky drawn once).
