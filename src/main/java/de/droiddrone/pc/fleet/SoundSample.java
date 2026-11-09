@@ -9,19 +9,23 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * A real recording the virtual fleet plays (1.0.52, the pilot: real sounds, not made-up ones): one of the 16 kHz
- * mono mu-law files in /sound (tools/sound/prepare_sounds.py makes them from freesound.org CC0 recordings, see
+ * A real recording the virtual fleet plays (1.0.52, the pilot: real sounds, not made-up ones): one of the mono
+ * mu-law files in /sound (16 kHz, the FPV arming 22.05 kHz: played at its own rate) (tools/sound/prepare_sounds.py makes them from freesound.org CC0 recordings, see
  * THIRD-PARTY.md), read once with javax.sound and kept as floats. {@link Voice} plays one at any speed (the pitch with
  * it) at the encoder's 48 kHz, looped or once. A missing file plays silence.
  */
 final class SoundSample {
+    /** The rate a file says nothing of (and a missing file's). */
     static final int RATE = 16_000;
     private static final Map<String, SoundSample> CACHE = new ConcurrentHashMap<>();
 
     final float[] data;
+    /** Samples a second, as the file has them. */
+    final float rate;
 
-    private SoundSample(float[] data) {
+    private SoundSample(float[] data, float rate) {
         this.data = data;
+        this.rate = rate;
     }
 
     /** /sound/{name}.wav, read once. */
@@ -31,7 +35,7 @@ final class SoundSample {
 
     private static SoundSample load(String name) {
         try (InputStream raw = SoundSample.class.getResourceAsStream("/sound/" + name + ".wav")) {
-            if (raw == null) return new SoundSample(new float[1]);
+            if (raw == null) return new SoundSample(new float[1], RATE);
             try (AudioInputStream in = AudioSystem.getAudioInputStream(new BufferedInputStream(raw));
                  AudioInputStream pcm = AudioSystem.getAudioInputStream(
                          new AudioFormat(AudioFormat.Encoding.PCM_SIGNED, in.getFormat().getSampleRate(), 16, 1, 2,
@@ -39,16 +43,17 @@ final class SoundSample {
                 byte[] b = pcm.readAllBytes();
                 float[] f = new float[b.length / 2];
                 for (int i = 0; i < f.length; i++) f[i] = (short) ((b[2 * i] & 0xff) | (b[2 * i + 1] << 8)) / 32768f;
-                return new SoundSample(f.length == 0 ? new float[1] : f);
+                float rate = in.getFormat().getSampleRate();
+                return new SoundSample(f.length == 0 ? new float[1] : f, rate > 0 ? rate : RATE);
             }
         } catch (Exception e) {
-            return new SoundSample(new float[1]);
+            return new SoundSample(new float[1], RATE);
         }
     }
 
     /** Seconds long. */
     double seconds() {
-        return (double) data.length / RATE;
+        return data.length / rate;
     }
 
     /** One playing of a sample: where it is, at what speed. Not shared between threads. */
@@ -82,7 +87,7 @@ final class SoundSample {
             double f = pos - i;
             int j = i + 1 < d.length ? i + 1 : loop ? 0 : i;
             float v = (float) (d[i] + (d[j] - d[i]) * f);
-            pos += speed * RATE / AacEncoder.SAMPLE_RATE;
+            pos += speed * s.rate / AacEncoder.SAMPLE_RATE;
             if (loop && pos >= d.length) pos -= d.length;
             return v;
         }
