@@ -1420,21 +1420,37 @@ final class MapWindow extends JFrame {
                 String[] p = saved.split(",");
                 Rectangle r = new Rectangle(Integer.parseInt(p[0].trim()), Integer.parseInt(p[1].trim()), Integer.parseInt(p[2].trim()), Integer.parseInt(p[3].trim()));
                 boolean max = p.length > 4 && "max".equals(p[4].trim());
-                if (r.width < 400 || r.height < 300) return false;
-                for (GraphicsDevice d : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
-                    Rectangle screen = d.getDefaultConfiguration().getBounds();
-                    Rectangle on = screen.intersection(r);
-                    if (on.width >= 200 && on.height >= 150) { // enough of it on a screen that is still there
-                        frame.setBounds(r);
-                        normal = r;
-                        if (max) frame.setExtendedState(frame.getExtendedState() | JFrame.MAXIMIZED_BOTH);
-                        return true;
-                    }
-                }
+                GraphicsDevice[] devices = GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices();
+                Rectangle[] screens = new Rectangle[devices.length];
+                for (int i = 0; i < devices.length; i++) screens[i] = devices[i].getDefaultConfiguration().getBounds();
+                Rectangle fitted = fit(r, screens);
+                if (fitted == null) return false;
+                frame.setBounds(fitted);
+                normal = fitted;
+                if (max) frame.setExtendedState(frame.getExtendedState() | JFrame.MAXIMIZED_BOTH);
+                return true;
             } catch (RuntimeException e) {
                 // not ours to parse
             }
             return false;
+        }
+
+        /**
+         * Where saved bounds go now: on the first screen still there that holds enough of them (200 x 150), made to fit
+         * it and moved fully onto it - the screens may have been arranged otherwise since, and a title bar left above
+         * the screen's top can't be dragged back. Null when none holds enough, or the bounds are too small to be ours.
+         */
+        static Rectangle fit(Rectangle r, Rectangle[] screens) {
+            if (r.width < 400 || r.height < 300) return null;
+            for (Rectangle screen : screens) {
+                Rectangle on = screen.intersection(r);
+                if (on.width < 200 || on.height < 150) continue;
+                int w = Math.min(r.width, screen.width), h = Math.min(r.height, screen.height);
+                int x = Math.max(screen.x, Math.min(r.x, screen.x + screen.width - w));
+                int y = Math.max(screen.y, Math.min(r.y, screen.y + screen.height - h));
+                return new Rectangle(x, y, w, h);
+            }
+            return null;
         }
 
         /** The value to save now, or null when the window's state says nothing worth keeping. */
