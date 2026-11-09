@@ -74,6 +74,7 @@ import de.droiddrone.common.PcAudio;
 import de.droiddrone.common.RcPath;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
+import de.droiddrone.common.SessionGate;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.Takeover;
 import de.droiddrone.common.TelemetryData;
@@ -113,8 +114,8 @@ public class Udp {
     private volatile ReceiverBuffer receiverBuffer;
     private boolean isVideoStarting, isAudioStarting;
     private final Object udpSync = new Object();
-    /** When the pilot PC was last heard from (any packet from its address and port). */
-    private volatile long lastPilotPacketMs;
+    /** Who gets a session (SessionGate): the key, the pilot's Connects, another PC's; when the pilot was last heard. */
+    private final SessionGate gate;
     /**
      * A pilot silent for this long is not announced to a Connect from elsewhere (PILOT_AT): that PC takes over.
      * pc.26: 10 s, was 1 s - a routine 4G fade of 1.5 s handed the drone to any second PC left on its CONNECT
@@ -171,9 +172,6 @@ public class Udp {
     static final long IDLE_EVERY_MS = 50;
     /** A status read this long after the last stick frame: one that frame's arm switch could have changed is past. */
     static final long IDLE_STATUS_AFTER_MS = 100;
-    /** pc.31: when the pilot's Connect last started a session here; a repeat within the second is the same session. */
-    private volatile long sessionStartedMs;
-    private static final long SAME_SESSION_MS = 1000;
     /** pc.31: an FC-port config change waiting for the FC to be disarmed (applyDeferredFcConfig). */
     private volatile boolean fcConfigDeferred;
     /** pc.31: a StartVideo queued for the video starter thread, not begun yet. */
@@ -394,6 +392,7 @@ public class Udp {
         this.destIpStr = destIpStr;
         this.port = port;
         this.key = key;
+        this.gate = new SessionGate(key);
         this.connectionMode = connectionMode;
         this.streamEncoder = streamEncoder;
         this.mp4Recorder = mp4Recorder;
@@ -526,26 +525,23 @@ public class Udp {
                         if (!receiverPacket.getAddress().equals(destIp)
                                 || receiverPacket.getPort() != port) continue;
                     }else if (buffer.isConnected()){
+                        long now = android.os.SystemClock.elapsedRealtime();
                         if (receiverPacket.getAddress().equals(udpSender.getIp())
                                 && receiverPacket.getPort() == udpSender.getPort()) {
-                            lastPilotPacketMs = android.os.SystemClock.elapsedRealtime();
                             lastPcIp = udpSender.getIp(); // kept across deep sleep: the check window's hello goes there
                             lastPcPort = udpSender.getPort();
-                            if (d[0] == UdpCommon.Connect && keyMatches(d, len, 4)) {
-                                // pc.31: the Connects in flight after a loss (one every 150 ms) are one new session:
-                                // each made a new one, and each answer restarted the PC's numbering. The first one's
-                                // answer reaches the PC; if it was lost, the PC's Connect a second later is answered
-                                if (android.os.SystemClock.elapsedRealtime() - sessionStartedMs < SAME_SESSION_MS) continue;
+                            SessionGate.Verdict v = gate.fromPilot(d, len, now);
+                            if (v == SessionGate.Verdict.SAME_SESSION) continue; // one of the Connects in flight after a loss
+                            if (v == SessionGate.Verdict.NEW_SESSION) {
                                 // pc.26: the pilot itself asks to connect again - it counts the link as lost (2 s of
                                 // silence from here). A new session now; before, the Connect was dropped until this
                                 // side's own 4 s timer ran out, and the PC sat without its handshake meanwhile
                                 log("The pilot connects again (its link was lost): a new session");
                                 newSession();
-                                sessionStartedMs = android.os.SystemClock.elapsedRealtime();
                                 buffer = receiverBuffer;
                             }
                         } else {
-                            if (!otherPcWhileConnected(receiverPacket, d, len)) continue;
+                            if (!otherPcWhileConnected(receiverPacket, d, len, now)) continue;
                             buffer = receiverBuffer; // the new session
                         }
                     }else{
@@ -553,36 +549,32 @@ public class Udp {
                             answerSpectator(receiverPacket, false);
                             continue;
                         }
+                        long now = android.os.SystemClock.elapsedRealtime();
                         // every (re)connect passes here: the PC's stick sequence starts over
-                        rcPath.restart(android.os.SystemClock.elapsedRealtime());
+                        rcPath.restart(now);
                         // pc.22: the PC's answer to this phone's sleep check hello (from the PC it last flew with)
                         if (d[0] == PowerMode.SLEEP_ANSWER) {
                             if (len >= 2 && receiverPacket.getAddress().equals(lastPcIp)) PowerMode.sleepAnswer(d[1] != 0);
                             continue;
                         }
-                        // pc.31: no session, nothing but a keyed Connect - the dead session's buffer took any packet
-                        // (keyless, from any device on the network) and came back to life on it
-                        if (d[0] != UdpCommon.Connect) continue;
-                        if (!keyMatches(d, len, 4)) {
+                        // pc.31: no session, nothing but a keyed Connect; from another PC than the last pilot's, the
+                        // takeover rule holds on after the 4 s timeout (SessionGate, Takeover)
+                        InetAddress from = receiverPacket.getAddress();
+                        boolean pilotKnown = lastPcIp != null;
+                        boolean sameAddress = from.equals(lastPcIp);
+                        boolean samePc = sameAddress && receiverPacket.getPort() == lastPcPort;
+                        SessionGate.Verdict v = gate.noSession(d, len, pilotKnown, samePc, sameAddress,
+                                () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, now);
+                        if (v == SessionGate.Verdict.DROP) continue;
+                        if (v == SessionGate.Verdict.WRONG_KEY) {
                             noteWrongKey(receiverPacket);
                             continue;
                         }
-                        // pc.31: the session timed out (4 s), but the rule of otherPcWhileConnected holds on: another
-                        // PC takes over only while the FC is known to be disarmed and the pilot has been silent for
-                        // PILOT_ALIVE_MS - a 4G fade of 4 s handed an armed drone to any PC left on CONNECT. pc.38:
-                        // the pilot's address on a new port too (Takeover), unless disarmed or the pilot silent 2 s
-                        InetAddress from = receiverPacket.getAddress();
-                        if (lastPcIp != null && !(from.equals(lastPcIp) && receiverPacket.getPort() == lastPcPort)) {
-                            boolean disarmed = FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
-                            long silent = android.os.SystemClock.elapsedRealtime() - lastPilotPacketMs;
-                            if (!Takeover.allowed(from.equals(lastPcIp), disarmed, silent)) {
-                                answerSpectator(receiverPacket, true); // PILOT_AT the pilot: it can watch
-                                continue;
-                            }
-                            if (!from.equals(lastPcIp)) log("New session from " + from.getHostAddress() + " (the pilot is silent, the FC disarmed)");
+                        if (v == SessionGate.Verdict.SPECTATOR) {
+                            answerSpectator(receiverPacket, true); // PILOT_AT the pilot: it can watch
+                            continue;
                         }
-                        lastPilotPacketMs = android.os.SystemClock.elapsedRealtime(); // heard from: no takeover in its first half second
-                        sessionStartedMs = lastPilotPacketMs;
+                        if (pilotKnown && !sameAddress) log("New session from " + from.getHostAddress() + " (the pilot is silent, the FC disarmed)");
                         idleSticks = null; // pc.38: a new session's PC sends its own within a second; none kept from before
                     }
                     // DRAUPNE Link: sticks straight to the flight controller from here - not through the buffer, a
@@ -739,41 +731,31 @@ public class Udp {
     };
 
     /**
-     * A packet from another address or port while a PC is connected. A keyed Connect from the pilot's own address
-     * (it started again, on a new port) or from anywhere while the pilot has been silent for {@link #PILOT_ALIVE_MS}
-     * (its session is only still open because the 4 s timeout hasn't run out) starts the new session now: before,
-     * such a PC was told PILOT_AT - the dead session's address - and became a spectator of itself for up to 4 s, a
-     * restarted PC never connecting. Anything else is a spectator's question, or a wrong key. pc.38 (Takeover): the
-     * pilot's address on a new port only while the FC is known DISARMED, or after 2 s of silence from the pilot - a
-     * second DRAUPNE Link on the pilot's PC (or behind its NAT) took an armed drone in the air.
+     * A packet from another address or port while a PC is connected (SessionGate.fromOther): a keyed Connect Takeover
+     * allows starts the new session now; anything else is a spectator's question, or a wrong key.
      * @return true if the packet belongs to a (new) session and is to be taken
      */
-    private boolean otherPcWhileConnected(DatagramPacket packet, byte[] d, int len) {
+    private boolean otherPcWhileConnected(DatagramPacket packet, byte[] d, int len, long now) {
         // armed: the pilot's silence is a fade, not an absence - nobody takes the drone over in the air (pc.31: nor
         // while armed is unknown, nor on a MAVLink FC, which isArmed never saw: FcArmedState)
-        long now = android.os.SystemClock.elapsedRealtime();
-        long silent = now - lastPilotPacketMs;
         boolean disarmed = FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
-        boolean pilotAlive = silent < PILOT_ALIVE_MS || !disarmed;
-        if (d[0] == UdpCommon.Connect) {
-            if (!keyMatches(d, len, 4)) {
-                noteWrongKey(packet);
-                return false;
-            }
-            boolean sameAddress = packet.getAddress().equals(udpSender.getIp());
-            if (Takeover.allowed(sameAddress, disarmed, silent)) {
-                log("New session from " + packet.getAddress().getHostAddress() + ":" + packet.getPort()
-                        + (sameAddress ? " (the pilot's address)" : " (the pilot is silent)"));
-                newSession();
-                sessionStartedMs = now;
-                return true;
-            }
-            if (sameAddress && now - sameAddressRefusedLogMs >= Takeover.SAME_IP_SILENT_MS) {
-                sameAddressRefusedLogMs = now;
-                log("A Connect from the pilot's address on another port (" + packet.getPort() + "): refused, the FC isn't known disarmed and the pilot is heard");
-            }
+        boolean sameAddress = packet.getAddress().equals(udpSender.getIp());
+        SessionGate.Verdict v = gate.fromOther(d, len, sameAddress, disarmed, now);
+        if (v == SessionGate.Verdict.WRONG_KEY) {
+            noteWrongKey(packet);
+            return false;
         }
-        answerSpectator(packet, pilotAlive);
+        if (v == SessionGate.Verdict.NEW_SESSION) {
+            log("New session from " + packet.getAddress().getHostAddress() + ":" + packet.getPort()
+                    + (sameAddress ? " (the pilot's address)" : " (the pilot is silent)"));
+            newSession();
+            return true;
+        }
+        if (v == SessionGate.Verdict.REFUSED && sameAddress && now - sameAddressRefusedLogMs >= Takeover.SAME_IP_SILENT_MS) {
+            sameAddressRefusedLogMs = now;
+            log("A Connect from the pilot's address on another port (" + packet.getPort() + "): refused, the FC isn't known disarmed and the pilot is heard");
+        }
+        answerSpectator(packet, gate.pilotAlive(disarmed, now));
         return false;
     }
 
@@ -790,9 +772,7 @@ public class Udp {
 
     /** Whether the key written (UTF) at keyAt - 4 in a Connect, 1 in a PILOT_QUERY - is this phone's. */
     private boolean keyMatches(byte[] d, int len, int keyAt) {
-        if (len < keyAt + 2) return false;
-        int n = ((d[keyAt] & 0xff) << 8) | (d[keyAt + 1] & 0xff);
-        return keyAt + 2 + n <= len && key.equals(new String(d, keyAt + 2, n, java.nio.charset.StandardCharsets.UTF_8));
+        return gate.keyMatches(d, len, keyAt);
     }
 
     /** A PC tried to connect with another key: ReceiverBuffer drops it without a word; the screen says so. */
@@ -2436,7 +2416,7 @@ public class Udp {
         if (r == null) return;
         long now = System.currentTimeMillis();
         int state;
-        boolean pilotNear = isConnected() || android.os.SystemClock.elapsedRealtime() - lastPilotPacketMs < OBSERVE_AFTER_PILOT_MS
+        boolean pilotNear = isConnected() || gate.silentMs(android.os.SystemClock.elapsedRealtime()) < OBSERVE_AFTER_PILOT_MS
                 && !packet.getAddress().equals(lastPcIp); // pc.38: the pilot's silence on the monotonic clock
         if (pilotNear) state = Observe.REFUSED_PILOT;
         else if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) state = Observe.REFUSED_ARMED;
