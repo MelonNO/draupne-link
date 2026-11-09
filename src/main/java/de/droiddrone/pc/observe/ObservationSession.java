@@ -1,7 +1,12 @@
 package de.droiddrone.pc.observe;
 
+import de.droiddrone.common.Observe;
+
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * The grid while observing (1.0.48): one feed per tile, which tile wants the sharp picture, and CONNECT - every stream
@@ -24,10 +29,15 @@ public final class ObservationSession {
         void release();
     }
 
+    /** The muted tile asks its phone to stop the sound after this long (as the pilot's MUTE does). */
+    public static final long MUTED_STOP_MS = 10_000;
+
     private final ObserveSet set;
     private final List<Feed> feeds;
     private final Runnable stopSound;
     private boolean stopped;
+    /** When each observed phone's tile was muted (MonoClock); absent: not muted. */
+    private final Map<String, Long> mutedAt = new HashMap<>();
 
     /**
      * @param set       the grid's phones (the feeds in its order) and its selection
@@ -91,6 +101,53 @@ public final class ObservationSession {
     /** STOP OBSERVING: every stream stopped, the decoders let go. */
     public synchronized void stop() {
         if (!stopped) stopAll(-1);
+    }
+
+    /**
+     * A tile muted (now, or back at the start - then it asks no sound from the first look) or unmuted.
+     * @param at when (MonoClock)
+     */
+    public synchronized void setMuted(String phone, boolean muted, long at) {
+        if (muted) mutedAt.put(phone, at);
+        else mutedAt.remove(phone);
+    }
+
+    public synchronized boolean isMuted(String phone) {
+        return mutedAt.containsKey(phone);
+    }
+
+    /** The phone's sound is still asked for: not muted, or muted less than {@link #MUTED_STOP_MS} ago. */
+    public synchronized boolean audioWanted(String phone, long now) {
+        Long at = mutedAt.get(phone);
+        return at == null || now - at < MUTED_STOP_MS;
+    }
+
+    /** A tile's volume as saved (0..100; nothing saved or a broken value: 100). */
+    public static int volume(String saved) {
+        try {
+            return saved.isEmpty() ? 100 : Math.max(0, Math.min(100, Integer.parseInt(saved)));
+        } catch (NumberFormatException e) {
+            return 100;
+        }
+    }
+
+    /**
+     * The line under a tile: a phone that says it isn't streaming (for 3 s after it said so), one not heard yet (asleep:
+     * it joins at its check-in), one gone quiet, else the picture's size and rate.
+     * @param state the phone's last OBSERVE state, or null; stateAt when it came, lastPacketAt the last packet (0 none)
+     * @param picture {width (0: none yet), height, frames shown a second}, asked for only while it streams
+     */
+    public static String tileStatus(Observe.State state, long stateAt, long lastPacketAt, boolean asleep, Supplier<int[]> picture,
+                                    boolean sharp, long now) {
+        if (state != null && state.state != Observe.STREAMING && now - stateAt < 3000) {
+            return "NOT STREAMING: " + Observe.stateName(state.state);
+        }
+        if (lastPacketAt == 0) return asleep ? "DEEP SLEEP - joins at next check-in" : "Asking the phone...";
+        if (now - lastPacketAt > ObserverLink.SILENT_MS) return "NO SIGNAL for " + (now - lastPacketAt) / 1000 + " s";
+        int[] p = picture.get();
+        String status = p[0] > 0 ? p[0] + "x" + p[1] + "  " + p[2] + " FPS" : "Waiting for the picture...";
+        if (sharp) status += "  SHARP";
+        return status;
     }
 
     public synchronized boolean isStopped() {

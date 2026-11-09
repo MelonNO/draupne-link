@@ -364,8 +364,6 @@ public class MainWindow extends JFrame {
     private static final String ROLE_OBSERVER = "Observation - watch idle drones";
     private static final String CONNECT_AS_OBSERVATION = "observation";
     static final String OBSERVE_VOLUME_KEY = "observe.volume";
-    /** The muted tile asks its phone to stop the sound after this long (as the pilot's MUTE does). */
-    private static final long OBSERVE_MUTED_STOP_MS = 10_000;
     private final JButton chooseDronesButton = Theme.secondaryButton("Choose drones");
     private ObservationGrid observationGrid;
     private volatile ObservationSession observation;
@@ -374,8 +372,6 @@ public class MainWindow extends JFrame {
     private final List<TileFeed> tileFeeds = new ArrayList<>();
     /** The observed phones, for the name service's thread (a sleeping one is woken at its check-in). */
     private volatile Set<String> observedNames = Set.of();
-    /** When each observed phone's tile was muted (MonoClock); absent: not muted. */
-    private final Map<String, Long> observeMutedAt = new HashMap<>();
     private int hoveredTile = -1;
     private long observedMapAt;
     /** CONNECT from the grid: the pilot connection's DISCONNECT offers the grid again. */
@@ -2338,12 +2334,7 @@ public class MainWindow extends JFrame {
     }
 
     private int volumeFor(String phone) {
-        String v = config.getString(OBSERVE_VOLUME_KEY + "." + phone);
-        try {
-            return v.isEmpty() ? 100 : Math.max(0, Math.min(100, Integer.parseInt(v)));
-        } catch (NumberFormatException e) {
-            return 100;
-        }
+        return ObservationSession.volume(config.getString(OBSERVE_VOLUME_KEY + "." + phone));
     }
 
     private boolean compassCalibrated(String phone) {
@@ -2391,7 +2382,7 @@ public class MainWindow extends JFrame {
                 config.getCameraHeight(), 30, Math.max(1000, config.getBitrateLimitMbps() * 1000));
         List<TileFeed> feeds = new ArrayList<>();
         long now = MonoClock.ms();
-        observeMutedAt.clear();
+        List<String> mutedPhones = new ArrayList<>();
         try {
             for (int i = 0; i < set.size(); i++) {
                 String phone = set.phones().get(i);
@@ -2403,7 +2394,7 @@ public class MainWindow extends JFrame {
                 boolean muted = mutedFor(phone);
                 audio.setMuted(f.audioId(), muted);
                 audio.setVolume(f.audioId(), volumeFor(phone) / 100f);
-                if (muted) observeMutedAt.put(phone, now - OBSERVE_MUTED_STOP_MS); // asks no sound from the start
+                if (muted) mutedPhones.add(phone); // asks no sound from the start
             }
         } catch (IOException | RuntimeException ex) {
             for (TileFeed f : feeds) {
@@ -2420,6 +2411,7 @@ public class MainWindow extends JFrame {
         observationAudio = audio;
         observationGrid = grid;
         observation = new ObservationSession(set, new ArrayList<>(feeds), audio::close);
+        for (String phone : mutedPhones) observation.setMuted(phone, true, now - ObservationSession.MUTED_STOP_MS);
         observedNames = Set.copyOf(set.phones());
         hoveredTile = -1;
         Container home = videoHome();
@@ -2455,8 +2447,8 @@ public class MainWindow extends JFrame {
                 if (tile < 0 || tile >= tileFeeds.size() || observationAudio == null) return;
                 TileFeed f = tileFeeds.get(tile);
                 observationAudio.setMuted(f.audioId(), muted);
-                if (muted) observeMutedAt.put(f.phone(), MonoClock.ms());
-                else observeMutedAt.remove(f.phone());
+                ObservationSession o = observation;
+                if (o != null) o.setMuted(f.phone(), muted, MonoClock.ms());
                 save(Map.of(audioMutedKey(f.phone()), Boolean.toString(muted))); // the phone's own choice, as the pilot's MUTE
             }
 
@@ -2562,31 +2554,24 @@ public class MainWindow extends JFrame {
             TileFeed f = tileFeeds.get(i);
             ObserverLink l = f.link();
             String phone = f.phone();
-            Observe.State st = l.state();
             long last = l.lastPacketAt();
-            String status;
-            if (st != null && st.state != Observe.STREAMING && now - l.stateAt() < 3000) {
-                status = "NOT STREAMING: " + Observe.stateName(st.state);
-            } else if (last == 0) {
+            boolean asleep = false;
+            if (last == 0) {
                 Names.Entry e = names.get(phone);
-                status = e != null && e.ip() != null && power.isAsleep(e.ip()) ? "DEEP SLEEP - joins at next check-in"
-                        : "Asking the phone...";
-            } else if (now - last > ObserverLink.SILENT_MS) {
-                status = "NO SIGNAL for " + (now - last) / 1000 + " s";
-            } else {
-                VideoPipeline.Stats vs = f.video().stats();
-                status = vs.width() > 0 ? vs.width() + "x" + vs.height() + "  " + vs.shownFps() + " FPS" : "Waiting for the picture...";
-                if (l.quality() != ObserverLink.Quality.GRID) status += "  SHARP";
+                asleep = e != null && e.ip() != null && power.isAsleep(e.ip());
             }
+            String status = ObservationSession.tileStatus(l.state(), l.stateAt(), last, asleep, () -> {
+                VideoPipeline.Stats vs = f.video().stats();
+                return new int[]{vs.width(), vs.height(), vs.shownFps()};
+            }, l.quality() != ObserverLink.Quality.GRID, now);
             FcTelemetry.Observed ob = l.telemetry().getObserved();
             HeadingChoice.Heading hd = HeadingChoice.choose(
                     ob == null ? null : ob.position(), compassCalibrated(phone));
             String note = ob == null ? null : hd.source() == HeadingChoice.Source.NONE ? "no heading"
                     : hd.approximate() ? "heading approximate" : null;
-            Long mutedAt = observeMutedAt.get(phone);
-            l.setAudioWanted(mutedAt == null || now - mutedAt < OBSERVE_MUTED_STOP_MS);
+            l.setAudioWanted(o.audioWanted(phone, now));
             ObservationAudio audio = observationAudio;
-            grid.update(i, new ObservationGrid.TileState(status, audio != null && audio.isSpeaking(f.audioId()), mutedAt != null,
+            grid.update(i, new ObservationGrid.TileState(status, audio != null && audio.isSpeaking(f.audioId()), o.isMuted(phone),
                     volumeFor(phone), note, l.telemetry().getMotion().shown(now)));
         }
         grid.setSelection(o.set().selected(), o.set().enlarged());
