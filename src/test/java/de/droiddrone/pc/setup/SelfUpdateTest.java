@@ -42,4 +42,32 @@ class SelfUpdateTest {
         assertTrue(strict.contains("-notmatch 'O=It''s Us'"), "the signer quoted for PowerShell: " + strict);
         assertTrue(strict.contains("$lock.Close(); Finish"), "a refusal lets go of the file and starts the old app again");
     }
+
+    /** 1.0.56, the pilot: "when updating ... check if the user already has a desktop shortcut, and if they don't add one". */
+    @Test
+    void anUpdateMakesADesktopShortcutOnlyWhenThereIsNone() throws Exception {
+        Path installer = Path.of("C:\\Temp\\DraupneLink-update\\DRAUPNE-Link-Setup-1.0.56.exe");
+        String script = SelfUpdate.script(installer, 1234, Path.of("C:\\Program Files\\DRAUPNE Link\\DRAUPNE Link.exe"), "ab".repeat(32));
+        int ok = script.indexOf("{ EnsureShortcut; Finish ('OK installed");
+        assertTrue(ok > script.indexOf("$p = Start-Process -FilePath"), "after a good install, before the app starts again");
+        String fn = script.substring(script.indexOf("function EnsureShortcut"), script.indexOf("function Finish"));
+        int check = fn.indexOf("if ((Test-Path -LiteralPath $shared) -or (Test-Path -LiteralPath $own))");
+        assertTrue(check > 0 && check < fn.indexOf("CreateShortcut"), "both desktops looked at before one is made: " + fn);
+        assertTrue(fn.contains("'DRAUPNE Link.lnk'"), fn);
+        // the whole helper is valid PowerShell (parsed only, nothing run)
+        if (System.getProperty("os.name", "").startsWith("Windows")) {
+            Path ps1 = java.nio.file.Files.createTempFile("update-helper", ".ps1");
+            try {
+                java.nio.file.Files.writeString(ps1, script);
+                Process p = new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                        "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('" + ps1 + "', [ref]$null, [ref]$e); "
+                                + "if ($e.Count) { $e | ForEach-Object { $_.Message }; exit 1 }")
+                        .redirectErrorStream(true).start();
+                String out = new String(p.getInputStream().readAllBytes());
+                assertTrue(p.waitFor() == 0, "PowerShell parse errors: " + out);
+            } finally {
+                java.nio.file.Files.deleteIfExists(ps1);
+            }
+        }
+    }
 }

@@ -225,7 +225,7 @@ final class PinManagerDialog extends JDialog {
             }
         });
         while (true) {
-            if (JOptionPane.showConfirmDialog(this, box, "Add pin", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
+            if (Dialogs.confirm(this, box, "Add pin", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE) != JOptionPane.OK_OPTION) return;
             double[] ll = Coordinates.parse(position.getText());
             if (ll == null) {
                 hint.setText("Unreadable grid. MGRS, UTM or lat, lon.");
@@ -242,7 +242,7 @@ final class PinManagerDialog extends JDialog {
     private void removeAllPins() {
         List<Pins.Pin> all = map.allPins();
         if (all.isEmpty()) return;
-        if (JOptionPane.showConfirmDialog(this, "Remove all " + all.size() + " pins? This can't be undone.", "Remove all",
+        if (Dialogs.confirm(this, "Remove all " + all.size() + " pins? This can't be undone.", "Remove all",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
         for (Pins.Pin p : all) {
             if (map.isExamplePin(p)) map.changeExamplePin(p, null);

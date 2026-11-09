@@ -90,4 +90,16 @@ class SetupWizardTest {
         assertEquals("serial_update_rate_hz set to 2000", DroneSetup.BetaflightPage.brief("serial_update_rate_hz set to 2000\r\n\r\n"));
         assertEquals(80, DroneSetup.BetaflightPage.brief("x".repeat(200)).length());
     }
+
+    /** 1.0.56, the pilot: users thought the FC wasn't connecting - it takes a while. */
+    @Test
+    void anFcNotFoundYetIsStillLookingForAWhileThenAWarning() {
+        long opened = 1_000_000;
+        String[] early = DroneSetup.BetaflightPage.notFound(opened + 3000, 0, opened);
+        assertEquals("PENDING", early[0], "seconds after the page opened: still looking");
+        assertTrue(early[1].startsWith("Looking for the FC"), early[1]);
+        String[] late = DroneSetup.BetaflightPage.notFound(opened + DroneSetup.BetaflightPage.LOOKING_MS + 1, 0, opened);
+        assertEquals("WARN", late[0], "long after: the cable and driver hint");
+        assertEquals("PENDING", DroneSetup.BetaflightPage.notFound(opened + 60_000, opened + 59_000, opened)[0], "Betaflight restarting");
+    }
 }

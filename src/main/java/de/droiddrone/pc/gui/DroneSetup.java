@@ -257,6 +257,14 @@ final class DroneSetup {
         private boolean paused;
         private boolean busy;
         private boolean found;
+        /**
+         * 1.0.56, the pilot: users thought the FC wasn't connecting, as it takes a while. A port is being opened now
+         * (the round's thread): the status says CONNECTING; and for a while after the page opens, "not found" is
+         * still LOOKING, not a warning (Windows takes seconds to list a board just plugged in).
+         */
+        private volatile boolean connecting;
+        private long lookingSince;
+        static final long LOOKING_MS = 12_000;
         private boolean failed;
         private boolean done;
         /** Done, and everything is as it should be (the unplug line); otherwise something needs doing by hand. */
@@ -1166,7 +1174,7 @@ final class DroneSetup {
         private void showByHand() {
             javax.swing.JLabel text = new javax.swing.JLabel("<html><div style='width:520px'>" + manualHtml + "</div></html>");
             text.setFont(Theme.font(java.awt.Font.PLAIN, 14f));
-            javax.swing.JOptionPane.showMessageDialog(javax.swing.SwingUtilities.getWindowAncestor(usb), text,
+            Dialogs.message(javax.swing.SwingUtilities.getWindowAncestor(usb), text,
                     "Betaflight settings by hand", javax.swing.JOptionPane.INFORMATION_MESSAGE);
         }
 
@@ -1234,6 +1242,24 @@ final class DroneSetup {
         @Override
         void onShow() {
             abandoned = paused;
+            if (!found) lookingSince = System.currentTimeMillis();
+        }
+
+        /** No FC found this round: {state, text} - still LOOKING for a while after the page opens, then the warning. */
+        static String[] notFound(long now, long restartedAt, long lookingSince) {
+            if (now - restartedAt < RESTART_MS) return new String[]{"PENDING", "Betaflight restarts..."};
+            if (now - lookingSince < LOOKING_MS) return new String[]{"PENDING", "Looking for the FC. Plug in its USB."};
+            return new String[]{"WARN", "Not found. Use a USB <b>data</b> cable. Windows doesn't see it? "
+                    + "Install the STM32 VCP driver (ImpulseRC Driver Fixer)."};
+        }
+
+        /** From the round's thread: what it does now, on the USB row while nothing else has been said. */
+        private void progress(String text) {
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                if (!busy || paused) return;
+                usb.set(State.PENDING, text);
+                wizard.update();
+            });
         }
 
         @Override
@@ -1280,7 +1306,10 @@ final class DroneSetup {
             // first (no restart, nothing written); only Betaflight gets the CLI
             String why = null;
             for (BetaflightUsb.Port port : ports) {
+                if (!found) progress("FC on " + port.systemName() + ". Connecting...");
+                connecting = !found;
                 try (BetaflightUsb fc = BetaflightUsb.open(port)) {
+                    if (!found) progress("Connected. Reading Betaflight...");
                     String firmware = fc.firmware();
                     if (!firmware.startsWith("BTFL")) {
                         why = port.systemName() + " runs <b>" + firmwareName(firmware) + "</b>, not Betaflight. "
@@ -1290,6 +1319,8 @@ final class DroneSetup {
                     return work(fc, port, writeFor, cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, names, gpsWanted);
                 } catch (IOException e) {
                     why = port.systemName() + ": " + e.getMessage();
+                } finally {
+                    connecting = false;
                 }
             }
             return new Read(ports.get(0).systemName(), why, cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, names, gpsWanted);
@@ -1497,12 +1528,8 @@ final class DroneSetup {
             confirmButton.setEnabled(found && !failed && r.boardId() != null); // CONFIRM is for a board known by its id
             if (r == null) {
                 nextTry = now + 1500;
-                if (now - restartedAt < RESTART_MS) {
-                    usb.set(State.PENDING, "Betaflight restarts...");
-                } else {
-                    usb.set(State.WARN, "Not found. Use a USB <b>data</b> cable. Windows doesn't see it? "
-                            + "Install the STM32 VCP driver (ImpulseRC Driver Fixer).");
-                }
+                String[] said = notFound(now, restartedAt, lookingSince);
+                usb.set(State.valueOf(said[0]), said[1]);
                 receiver.set(State.PENDING, "");
                 stickDelay.set(State.PENDING, "");
                 return;
@@ -1861,6 +1888,7 @@ final class DroneSetup {
                 wizard.setStatusColor(Theme.WARN);
                 return "Some settings could not be set - see By hand";
             }
+            if (connecting) return "Connecting to the FC...";
             if (!found) return "Waiting for the flight controller.";
             if (failed) return "Waiting - close Betaflight Configurator, then Retry.";
             return "Setting up Betaflight...";

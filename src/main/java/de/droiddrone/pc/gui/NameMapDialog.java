@@ -169,12 +169,12 @@ final class NameMapDialog extends JDialog {
         if (row < 0 || row >= shown.size()) return;
         Names.Entry e = shown.get(row);
         if (e.kind() != Names.Kind.PHONE) {
-            JOptionPane.showMessageDialog(this, "Only phones are renamed here. Set this PC's name under THIS PC IS.",
+            Dialogs.message(this, "Only phones are renamed here. Set this PC's name under THIS PC IS.",
                     "Rename", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         if (!e.online() || e.ip() == null || e.ip().isEmpty()) {
-            JOptionPane.showMessageDialog(this, e.name() + " is offline. Only an online phone can be renamed.",
+            Dialogs.message(this, e.name() + " is offline. Only an online phone can be renamed.",
                     "Rename", JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -184,13 +184,13 @@ final class NameMapDialog extends JDialog {
             if (names.get(n) == null) free.add(n);
         }
         if (free.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "Every Mobile name is taken - remove a device first.", "Rename", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, "Every Mobile name is taken - remove a device first.", "Rename", JOptionPane.WARNING_MESSAGE);
             return;
         }
         JComboBox<String> pick = new JComboBox<>(free.toArray(new String[0]));
         TacticalCombo.install(pick);
         String detail = e.detail();
-        int answer = JOptionPane.showConfirmDialog(this, new Object[]{"New name for " + e.name() + (detail.isEmpty() ? "" : " (" + detail + ")") + ":", pick},
+        int answer = Dialogs.confirm(this, new Object[]{"New name for " + e.name() + (detail.isEmpty() ? "" : " (" + detail + ")") + ":", pick},
                 "Rename", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
         String to = (String) pick.getSelectedItem();
@@ -207,12 +207,12 @@ final class NameMapDialog extends JDialog {
             port = Integer.parseInt(portField.getText().trim());
             if (port < 1024 || port > 65534) throw new NumberFormatException();
         } catch (NumberFormatException e) {
-            JOptionPane.showMessageDialog(this, "Port: 1024..65534.", "Name map", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, "Port: 1024..65534.", "Name map", JOptionPane.WARNING_MESSAGE);
             return;
         }
         String key = keyField.getText().trim();
         if (key.isEmpty() || key.length() > 16) {
-            JOptionPane.showMessageDialog(this, "Key: 1 to 16 characters.", "Name map", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, "Key: 1 to 16 characters.", "Name map", JOptionPane.WARNING_MESSAGE);
             return;
         }
         saver.accept(Map.of("port", Integer.toString(port), "key", key));

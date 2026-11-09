@@ -97,6 +97,11 @@ public final class TileCache {
         if (loaders) for (int i = 0; i < LOADERS; i++) thread(this::loaderRun, "mapTiles").start();
     }
 
+    /** Disk only, and nothing ever loads: what is asked stays on its way (other packages' tests). */
+    public static TileCache neverLoading(Path dir) {
+        return new TileCache(dir, "test", false, false, () -> false);
+    }
+
     /** Whether fetching waits now: a drone on this PC may be flying (the map says so). */
     public boolean isHeld() {
         return held.getAsBoolean();
@@ -133,6 +138,17 @@ public final class TileCache {
     /** True once a fetch failed to reach any server (the map then says it shows saved tiles only). */
     public boolean isOffline() {
         return offline;
+    }
+
+    /**
+     * Tiles are on their way to a map now (1.0.56, the pilot: "an indication that the map is loading"): one loading,
+     * or one waiting that a map still shows. Not while fetching is held (a drone may fly): nothing would come.
+     */
+    public synchronized boolean loading() {
+        if (isHeld()) return false;
+        if (!active.isEmpty()) return true;
+        for (Request r : queued.values()) if (!stale(r)) return true;
+        return false;
     }
 
     /** Tiles the current prefetch still has to fetch (0 when done). */

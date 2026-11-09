@@ -579,11 +579,51 @@ final class OverwatchPanel extends JPanel {
         controls.add(seek, BorderLayout.CENTER);
         controls.add(playTime, BorderLayout.EAST);
         playerBox.add(controls, BorderLayout.SOUTH);
-        JPanel stack = new JPanel(new BorderLayout(0, 10));
-        stack.setOpaque(false);
-        stack.add(body, BorderLayout.NORTH);
-        stack.add(playerBox, BorderLayout.CENTER);
-        library.add(stack, BorderLayout.CENTER);
+        // 1.0.56, the pilot: "when play is clicked have it open the video in a large window so it is possible to see
+        // it" - the player in a window of its own, not the 320 px strip under the list
+        playerBox.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        playerBox.setOpaque(true);
+        playerBox.setBackground(Theme.BG);
+        this.playerBox = playerBox;
+        library.add(body, BorderLayout.CENTER);
+    }
+
+    private JPanel playerBox;
+    /** The large player window: made at the first PLAY, kept (hidden) after; closing it stops the clip. */
+    private javax.swing.JDialog playerWindow;
+
+    /** The player window up, titled for this clip; a new one sized to most of the screen. */
+    private void showPlayerWindow(ClipIndex.Clip c) {
+        java.awt.Window owner = SwingUtilities.getWindowAncestor(this);
+        if (playerWindow == null) {
+            playerWindow = new javax.swing.JDialog(owner, "Clip", java.awt.Dialog.ModalityType.MODELESS);
+            playerWindow.setDefaultCloseOperation(javax.swing.WindowConstants.HIDE_ON_CLOSE);
+            playerWindow.setContentPane(playerBox);
+            playerWindow.addWindowListener(new java.awt.event.WindowAdapter() {
+                @Override
+                public void windowClosing(java.awt.event.WindowEvent e) {
+                    stopPlaying();
+                }
+            });
+            playerWindow.setMinimumSize(new Dimension(480, 320));
+            playerWindow.setBounds(playerBounds(owner == null ? null : owner.getGraphicsConfiguration().getBounds()));
+        }
+        playerWindow.setTitle("Clip " + c.drone() + "  " + clock(c.startedAt()));
+        if (!playerWindow.isVisible()) playerWindow.setVisible(true);
+        playerWindow.toFront();
+    }
+
+    /** Most of the screen (16:9 picture plus the controls), in its middle. */
+    static java.awt.Rectangle playerBounds(java.awt.Rectangle screen) {
+        if (screen == null) screen = new java.awt.Rectangle(0, 0, 1920, 1080);
+        int w = Math.min(screen.width * 3 / 4, (screen.height * 3 / 4 - 60) * 16 / 9);
+        int h = w * 9 / 16 + 60;
+        return new java.awt.Rectangle(screen.x + (screen.width - w) / 2, screen.y + (screen.height - h) / 2, w, h);
+    }
+
+    /** The player window, for the tests; null before the first PLAY. */
+    javax.swing.JDialog playerWindow() {
+        return playerWindow;
     }
 
     /** The clip list for this drone (MAP TOOLS > CLIPS: the first drone with clips, or the one shown). */
@@ -607,6 +647,7 @@ final class OverwatchPanel extends JPanel {
 
     void closeLibrary() {
         stopPlaying();
+        if (playerWindow != null) playerWindow.setVisible(false);
         library.setVisible(false);
         syncVisible();
         revalidate();
@@ -775,7 +816,7 @@ final class OverwatchPanel extends JPanel {
         play(c);
     }
 
-    private void play(ClipIndex.Clip c) {
+    void play(ClipIndex.Clip c) {
         stopPlaying();
         playing = c;
         player.phone = c.drone();
@@ -787,6 +828,7 @@ final class OverwatchPanel extends JPanel {
         if (replay != null && !map.shows(replay.lat(), replay.lon(), 40)) map.panTo(replay.lat(), replay.lon());
         int gen = ++playGen;
         playerThread.execute(() -> runPlayback(gen, c));
+        showPlayerWindow(c);
     }
 
     /** The camera's view as it was when the clip was made (the event's facts), calm yellow on the map. */
@@ -855,7 +897,7 @@ final class OverwatchPanel extends JPanel {
             int k = 0;
             ClipPlayer player = new ClipPlayer(videos.get(0));
             try {
-                int w = Math.min(640, Math.max(16, player.width())), h = Math.max(16, Math.round(player.height() * (float) w / Math.max(1, player.width())));
+                int w = Math.min(1280, Math.max(16, player.width())), h = Math.max(16, Math.round(player.height() * (float) w / Math.max(1, player.width())));
                 int[] pixels = new int[w * h];
                 long wallStart = System.currentTimeMillis();
                 long pos = 0;

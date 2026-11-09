@@ -37,6 +37,8 @@ public final class SelfUpdate {
      * null: releases aren't code-signed yet (README: Windows says "unknown publisher"), so NotSigned is accepted.
      */
     static final String SIGNER = null;
+    /** The desktop shortcut's name (the installer's and WindowsSetup's). */
+    static final String SHORTCUT = "DRAUPNE Link.lnk";
 
     private SelfUpdate() {
     }
@@ -204,6 +206,24 @@ public final class SelfUpdate {
                 "  }",
                 "  if (Test-Path -LiteralPath $app) { Note ('starting ' + $app); Start-Process -FilePath $app } else { Note 'the app was not found to start again' }",
                 "}",
+                "function EnsureShortcut {",
+                "  $a = $app",
+                "  if (-not (Test-Path -LiteralPath $a)) {",
+                "    $k = Get-ChildItem 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall' | Get-ItemProperty |",
+                "      Where-Object { $_.DisplayName -eq 'DRAUPNE Link' -and $_.InstallLocation } | Select-Object -First 1",
+                "    if ($k) { $a =Join-Path $k.InstallLocation 'DRAUPNE Link.exe' }",
+                "  }",
+                "  $shared = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) '" + SHORTCUT + "'",
+                "  $own = Join-Path ([Environment]::GetFolderPath('Desktop')) '" + SHORTCUT + "'",
+                "  if ((Test-Path -LiteralPath $shared) -or (Test-Path -LiteralPath $own)) { Note 'desktop shortcut there'; return }",
+                "  if (-not (Test-Path -LiteralPath $a)) { Note 'no desktop shortcut, and no app to point one at'; return }",
+                "  $s = (New-Object -ComObject WScript.Shell).CreateShortcut($own)",
+                "  $s.TargetPath = $a",
+                "  $s.WorkingDirectory = Split-Path -Parent $a",
+                "  $s.Description = 'DRAUPNE Link ground station'",
+                "  $s.Save()",
+                "  if (Test-Path -LiteralPath $own) { Note ('desktop shortcut made: ' + $own) } else { Note 'desktop shortcut could not be made' }",
+                "}",
                 "function Finish($result) { Note ('RESULT ' + $result); Add-Content -LiteralPath $log -Value ('RESULT ' + $result); StartApp; Remove-Item -LiteralPath " + quote(installer) + " -Force; exit }",
                 "Note 'helper started; waiting for DRAUPNE Link (pid " + pid + ") to close'",
                 "Wait-Process -Id " + pid + " -Timeout 120",
@@ -222,7 +242,8 @@ public final class SelfUpdate {
                 "Note 'running the installer'",
                 "$p = Start-Process -FilePath " + quote(installer) + " -ArgumentList '/passive','/norestart' -Wait -PassThru",
                 "$lock.Close()",
-                "if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) { Finish ('OK installed (installer exit code ' + $p.ExitCode + ')') }",
+                // 1.0.56 (the pilot: "check if the user already has a desktop shortcut, and if they don't add one")
+                "if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) { EnsureShortcut; Finish ('OK installed (installer exit code ' + $p.ExitCode + ')') }",
                 "if ($p.ExitCode -eq 1602 -or $p.ExitCode -eq 1223) { Finish 'the Windows permission prompt was declined, so nothing was installed' }",
                 "Finish ('the installer stopped with code ' + $p.ExitCode)",
                 "");

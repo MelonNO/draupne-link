@@ -24,7 +24,7 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 - Phones and PCs get names (MobileAlpha, PCAlpha …). Pick by name, press **PILOT UAV**. No addresses.
 - Sticks at 250 Hz, no queues. RC only goes out with throttle low and ARM off.
 - Red frame when sticks don't reach the drone: LINK LOST, LINK STALL, NO FLIGHT CONTROLLER.
-- **RC CHECK:** what Betaflight sees, and why it won't arm.
+- **RC CHECK** (TOOLS): what Betaflight sees, and why it won't arm.
 - **UPDATE PHONE APP** over the link (disarmed).
 
 **Video and sound**

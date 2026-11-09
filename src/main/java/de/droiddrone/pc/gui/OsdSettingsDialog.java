@@ -297,7 +297,7 @@ final class OsdSettingsDialog extends JFrame {
         JButton resetAll = Theme.secondaryButton("Reset all");
         resetAll.addActionListener(e -> {
             if (layout.equals(OsdLayout.defaults())) return;
-            int answer = JOptionPane.showConfirmDialog(this, "Reset every OSD element to the standard layout?", "Reset OSD",
+            int answer = Dialogs.confirm(this, "Reset every OSD element to the standard layout?", "Reset OSD",
                     JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
             if (answer == JOptionPane.OK_OPTION) apply(OsdLayout.defaults());
         });

@@ -146,6 +146,6 @@ final class StanagDialog extends JDialog {
     }
 
     private void complain(String what) {
-        JOptionPane.showMessageDialog(this, what, "STANAG 4609", JOptionPane.WARNING_MESSAGE);
+        Dialogs.message(this, what, "STANAG 4609", JOptionPane.WARNING_MESSAGE);
     }
 }

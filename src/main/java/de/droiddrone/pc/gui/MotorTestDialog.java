@@ -410,7 +410,7 @@ final class MotorTestDialog extends JFrame {
         }
         if (volts >= 0 && !batteryIn) {
             stopAll();
-            JOptionPane.showMessageDialog(this, "Plug in a battery: motors can't spin on USB power.\n\nProps off.",
+            Dialogs.message(this, "Plug in a battery: motors can't spin on USB power.\n\nProps off.",
                     "No battery", JOptionPane.WARNING_MESSAGE);
             return false;
         }
@@ -527,7 +527,7 @@ final class MotorTestDialog extends JFrame {
             note.setHtml("All motors in place. Nothing to change.");
             return;
         }
-        int answer = JOptionPane.showConfirmDialog(this, "Save the new motor order?\nBetaflight restarts; "
+        int answer = Dialogs.confirm(this, "Save the new motor order?\nBetaflight restarts; "
                 + "then check again.", "Reorder motors", JOptionPane.YES_NO_OPTION);
         if (answer != JOptionPane.YES_OPTION) {
             note.setHtml("Motor order not changed.");
@@ -757,7 +757,7 @@ final class MotorTestDialog extends JFrame {
         MotorTest.Info i = info;
         if (i != null && i.quadX() && i.reversed() != out) {
             stopAll();
-            int answer = JOptionPane.showConfirmDialog(this, "Set Betaflight to " + (out ? "props out" : "props in")
+            int answer = Dialogs.confirm(this, "Set Betaflight to " + (out ? "props out" : "props in")
                             + "?\nBetaflight restarts.", "Props in / out", JOptionPane.YES_NO_OPTION);
             if (answer != JOptionPane.YES_OPTION) return;
             String was = i.reversed() ? "props out" : "props in", now = out ? "props out" : "props in";
