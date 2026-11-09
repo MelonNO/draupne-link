@@ -66,6 +66,21 @@ final class FleetCards {
         return wasFlying ? new Badge(MapView.Kind.LOST, "LOST") : new Badge(MapView.Kind.UNKNOWN, "UNKNOWN");
     }
 
+    /**
+     * A mode queued for the phone shows at once (1.0.56, the pilot: "OVERWATCH ... just puts the phone in the question
+     * mark"): its sign and word, until the phone's own word follows. Not over this PC's link, a lost or crashed drone.
+     * @param queuedMode the queued mode (ControlLink.POWER_*), -1 none
+     */
+    static Badge withQueued(Badge b, int queuedMode) {
+        if (queuedMode < 1 || queuedMode > 3) return b;
+        if (b.kind() == MapView.Kind.LOST || b.kind() == MapView.Kind.CRASHED || "CONNECTED".equals(b.text())) return b;
+        return switch (queuedMode) {
+            case 1 -> new Badge(MapView.Kind.ASLEEP, "STANDBY");
+            case 2 -> new Badge(MapView.Kind.ASLEEP, "ASLEEP");
+            default -> new Badge(MapView.Kind.OVERWATCH, "OVERWATCH");
+        };
+    }
+
     /** "0:20 ago", "12 min ago", "3 h ago", or "-". */
     static String ago(long ms) {
         if (ms < 0) return "-";

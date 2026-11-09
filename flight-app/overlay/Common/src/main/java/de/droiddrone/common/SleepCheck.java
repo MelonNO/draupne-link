@@ -67,8 +67,8 @@ public final class SleepCheck {
         return isAlways(intervalMin) ? 1 : Math.max(1, intervalMin);
     }
 
-    /** "1 min", "5 min", or "0 min" for always listening (as the CHECK EVERY list shows it). */
+    /** "1 min", "5 min", or "Constant" for always listening (as the CHECK EVERY list shows it; 1.0.56: was "0 min"). */
     public static String label(int intervalMin) {
-        return isAlways(intervalMin) ? "0 min" : intervalMin + " min";
+        return isAlways(intervalMin) ? "Constant" : intervalMin + " min";
     }
 }

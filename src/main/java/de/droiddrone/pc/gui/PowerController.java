@@ -53,7 +53,10 @@ final class PowerController {
     volatile boolean awaitingWake;
     /** When the phone went to sleep: its listening windows come every check interval from then on. */
     long sleepStartAt;
+    /** CHECK EVERY for DEEP SLEEP (5 min unless chosen). */
     int checkIntervalMin = 5;
+    /** CHECK EVERY for OVERWATCH (1.0.56, the pilot: Constant unless chosen - an alert wakes it, PILOT UAV reaches it at once). */
+    int overwatchIntervalMin = defaultInterval(ControlLink.POWER_OVERWATCH);
     /** The interval asked of the phone with the last sleep: CHECK EVERY, or 1 min for "0 min" to an app older than pc.39. */
     int sentIntervalMin = 5;
     /** The last "still here" from the sleeping phone that went to the log (one line per check). */
@@ -293,6 +296,16 @@ final class PowerController {
                     + (h.charging() ? ", charging" : "") + (a.listening() ? ", listening." : ", next check in " + h.nextCheckMin() + " min."));
         }
         return false;
+    }
+
+    /** CHECK EVERY when none was chosen: Constant for OVERWATCH, 5 min for the rest. */
+    static int defaultInterval(int mode) {
+        return mode == ControlLink.POWER_OVERWATCH ? SleepCheck.ALWAYS : 5;
+    }
+
+    /** The interval this mode goes with. */
+    int intervalFor(int mode) {
+        return mode == ControlLink.POWER_OVERWATCH ? overwatchIntervalMin : checkIntervalMin;
     }
 
     // ------------------------------------------------------------------ words for the LINK card

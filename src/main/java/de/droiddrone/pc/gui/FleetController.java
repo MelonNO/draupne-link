@@ -216,6 +216,8 @@ final class FleetController {
                     sleeping == null ? 0 : power.checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),
                     said, saidAge, e.online() || now - heardAt < 30_000, wasFlying);
             if (crashed.containsKey(e.name()) && !here) badge = new FleetCards.Badge(MapView.Kind.CRASHED, "CRASHED");
+            FleetManager.Wanted queuedNow = fleet.wanted(e.name());
+            if (!here) badge = FleetCards.withQueued(badge, queuedNow == null ? -1 : queuedNow.mode());
             // the drone's battery per cell: live here, else what this PC last read
             double cell = Double.NaN;
             long cellAge = -1;

@@ -11,7 +11,7 @@ class SleepCheckTest {
         assertEquals(255, SleepCheck.ALWAYS);
         assertTrue(SleepCheck.isAlways(SleepCheck.ALWAYS));
         for (int m : new int[]{0, 1, 2, 5, 254}) assertFalse(SleepCheck.isAlways(m), m + " min");
-        assertEquals("0 min", SleepCheck.label(SleepCheck.ALWAYS));
+        assertEquals("Constant", SleepCheck.label(SleepCheck.ALWAYS));
         assertEquals("5 min", SleepCheck.label(5));
     }
 
