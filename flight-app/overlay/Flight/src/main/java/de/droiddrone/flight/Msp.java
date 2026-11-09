@@ -297,7 +297,9 @@ public class Msp {
             log("Start MSP thread - OK");
             while (id == threadsId) {
                 try {
-                    timerDiv += slowPoll ? 5 : 1;
+                    // 1.0.53: in standby to the next multiple of 5 - a plain += 5 from a count standby began at (3, say)
+                    // went 8, 13, 18 ... and never polled the status (the ARM flag) again until standby ended
+                    timerDiv = slowPoll ? (timerDiv / 5 + 1) * 5 : timerDiv + 1;
 
                     if (!isInitialized && isInitialized()) setFcInfo();
                     // DRAUPNE Link: the channel map every tick (10 a second) from the port opening until it is
