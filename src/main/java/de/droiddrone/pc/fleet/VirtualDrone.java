@@ -13,6 +13,7 @@ import de.droiddrone.common.Takeover;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.common.UdpPacketData;
 import de.droiddrone.common.UdpSender;
+import de.droiddrone.common.VoiceActivity;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -165,6 +166,8 @@ public final class VirtualDrone {
     private volatile boolean observing, observeAudio;
     private volatile Observe.Request observeWant;
     private long observeKeyFrameAt;
+    /** pc.45: "sound heard" to observers that muted it (the tick thread). */
+    private final Observe.HeardReport observeHeard = new Observe.HeardReport();
 
     // power modes (the tick thread, and requests from the buffer thread: under powerLock)
     private final Object powerLock = new Object();
@@ -184,6 +187,8 @@ public final class VirtualDrone {
     private volatile Thread audioThread;
     private volatile int audioGen;
     private volatile boolean audioOn, audioHeld;
+    /** pc.45: the sound thread only listens (observers that muted it): soundHeard, nothing sent. */
+    private volatile boolean audioListening, soundHeard;
     private volatile String lastBeep;
 
     VirtualDrone(int slot, String name, String key, InetAddress address, double lat, double lon, double headingDeg,
@@ -889,7 +894,8 @@ public final class VirtualDrone {
         synchronized (observers) {
             count = observers.size();
         }
-        sendRaw(Observe.encodeState(state, cameraWidthNow(), cameraHeightNow(), cameraFpsNow(), count), who);
+        int flags = state == Observe.STREAMING && isSoundHeard() ? Observe.STATE_SOUND_HEARD : 0; // pc.45
+        sendRaw(Observe.encodeState(state, cameraWidthNow(), cameraHeightNow(), cameraFpsNow(), count, flags), who);
     }
 
     private void refreshObserverTargets() {
@@ -926,6 +932,7 @@ public final class VirtualDrone {
         }
         observeWant = want;
         if (want == null) {
+            observeHeard.reset();
             if (observing) {
                 observing = false;
                 observeAudio = false;
@@ -942,6 +949,9 @@ public final class VirtualDrone {
         }
         observeAudio = want.audio();
         if (!video.isOn()) video.start();
+        if (observeHeard.due(isSoundHeard(), now)) { // pc.45: the muted tiles' speaking highlight
+            for (InetSocketAddress who : observerTargets) answerObserver(who, Observe.STREAMING);
+        }
     }
 
     private void sendToObservers(byte[] data) {
@@ -1064,30 +1074,58 @@ public final class VirtualDrone {
         return allow;
     }
 
+    /** pc.45: observed, no observer wants the sound: listened to for their "sound heard", as the phone app does. */
+    private boolean listenWanted() {
+        return observing && !observeAudio && !isConnected() && fcDisarmed() && mode == NORMAL;
+    }
+
+    /** pc.45: the listening hears something now. */
+    boolean isSoundHeard() {
+        return audioListening && soundHeard;
+    }
+
     private void audioTick(long now) {
         boolean allow = audioAllowed(now);
-        if (allow && audioThread == null) {
+        boolean listen = !allow && listenWanted();
+        if (allow && (audioThread == null || audioListening)) {
+            if (audioThread != null) stopAudio();
             int gen = ++audioGen;
             int kbps = isConnected() ? pcAudio.bitRate() / 1000 : PcAudio.DEFAULT_KBPS;
-            Thread t = new Thread(() -> audioRun(gen, kbps), "fleetAudio" + slot);
-            t.setDaemon(true);
-            t.setPriority(Thread.MIN_PRIORITY);
-            audioThread = t;
-            t.start();
+            startAudioThread(() -> audioRun(gen, kbps, false));
             log.accept("live audio to the PC: on");
-        } else if (!allow && audioThread != null) {
+        } else if (listen && audioThread == null) {
+            int gen = ++audioGen;
+            audioListening = true;
+            startAudioThread(() -> audioRun(gen, 0, true));
+            log.accept("listening only (observers muted)");
+        } else if (!allow && audioThread != null && !(listen && audioListening)) {
+            boolean wasListening = audioListening;
             stopAudio();
-            log.accept("live audio to the PC: off" + (audioHeld && !fcDisarmed() ? " (FC not known disarmed)" : ""));
+            if (!wasListening) log.accept("live audio to the PC: off" + (audioHeld && !fcDisarmed() ? " (FC not known disarmed)" : ""));
         }
+    }
+
+    private void startAudioThread(Runnable r) {
+        Thread t = new Thread(r, "fleetAudio" + slot);
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        audioThread = t;
+        t.start();
     }
 
     void stopAudio() {
         audioGen++;
         audioThread = null;
         audioOn = false;
+        audioListening = false;
+        soundHeard = false;
     }
 
-    private void audioRun(int gen, int kbps) {
+    /**
+     * The sound, made and sent; or (pc.45, listen) made and only heard - a VoiceActivity on it, nothing encoded or sent
+     * (a recording's sound is AAC already: not heard then).
+     */
+    private void audioRun(int gen, int kbps, boolean listen) {
         Recording rec = recording;
         boolean fromRecording = rec != null && rec.hasAudio();
         BtrScene scenario = fromRecording ? null : target;
@@ -1095,19 +1133,23 @@ public final class VirtualDrone {
         // stereo for the tour's BTR, and (1.0.52) for every generated picture: a BTR sent by the panel is heard from
         // where it drives, whenever it comes
         int channels = fromRecording ? 1 : 2;
-        float[] left = new float[AacEncoder.FRAME], right = new float[AacEncoder.FRAME];
-        try (AacEncoder enc = fromRecording ? null : new AacEncoder(Math.max(16, Math.min(64, kbps)) * 1000 * channels, channels)) {
-            byte[] asc = fromRecording ? rec.audioConfig() : enc.config();
-            sendAudioConfig(asc, channels);
-            audioOn = true;
+        float[] left = new float[AacEncoder.FRAME], right = new float[AacEncoder.FRAME], heard = new float[AacEncoder.FRAME];
+        VoiceActivity voice = listen ? new VoiceActivity() : null;
+        try (AacEncoder enc = fromRecording || listen ? null : new AacEncoder(Math.max(16, Math.min(64, kbps)) * 1000 * channels, channels)) {
+            byte[] asc = listen ? null : fromRecording ? rec.audioConfig() : enc.config();
+            if (!listen) {
+                sendAudioConfig(asc, channels);
+                audioOn = true;
+            }
             long frameNs = 1_000_000_000L * AacEncoder.FRAME / AacEncoder.SAMPLE_RATE;
+            double frameMs = frameNs / 1e6;
             long next = System.nanoTime();
             while (gen == audioGen && running) {
-                if (audioConfigResend) {
+                if (!listen && audioConfigResend) {
                     audioConfigResend = false;
                     sendAudioConfig(asc, channels);
                 }
-                List<byte[]> frames;
+                List<byte[]> frames = List.of();
                 if (fromRecording) {
                     frames = rec.audioFrames(System.currentTimeMillis());
                 } else if (channels == 2) {
@@ -1126,10 +1168,21 @@ public final class VirtualDrone {
                         double[] rel = t.btr.relative(view, now);
                         t.sound.add(left, right, rel[0], rel[1], rel[2], t.btr.speedAt(now));
                     }
-                    if (scene.world() instanceof Scene.Sounding heard) heard.addSound(left, right, view, now); // the tour's scenes
-                    frames = enc.encode(left, right);
+                    if (scene.world() instanceof Scene.Sounding world) world.addSound(left, right, view, now); // the tour's scenes
+                    if (listen) {
+                        for (int i = 0; i < heard.length; i++) heard[i] = (left[i] + right[i]) / 2;
+                    } else {
+                        frames = enc.encode(left, right);
+                    }
+                } else if (listen) {
+                    System.arraycopy(sound.next(fc.isArmed() ? fc.throttleOut() : -1, lastBeep), 0, heard, 0, heard.length);
                 } else {
                     frames = enc.encode(sound.next(fc.isArmed() ? fc.throttleOut() : -1, lastBeep));
+                }
+                if (listen) { // heard, never sent
+                    boolean on = !fromRecording && voice.frame(VoiceActivity.levelDb(heard, 0, heard.length), frameMs, System.currentTimeMillis());
+                    if (gen == audioGen) soundHeard = on;
+                    frames = List.of();
                 }
                 for (byte[] f : frames) {
                     byte[] p = new byte[f.length + 1];

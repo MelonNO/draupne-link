@@ -48,6 +48,8 @@
  *  Observe.MAX_OBSERVERS PCs that send OBSERVE get the video, the sound and the observer record (where the phone is,
  *  which way it looks) - the one encoder's stream, copied to each (streamOut). No sticks from them, ever: an observer is
  *  no session. A pilot's session ends the observation at once (ENDED_PILOT).
+ *  pc.45: observers that all muted the sound get "sound heard" in OBSERVE_STATE instead (Observe.STATE_SOUND_HEARD):
+ *  the microphone listened to (StreamEncoder.startListening), nothing encoded or sent.
  */
 
 package de.droiddrone.flight;
@@ -160,6 +162,9 @@ public class Udp {
     private Observe.Request observeApplied;
     private long observeStartTriedMs, observeStepAt, observeDetectionAt, observeRecordAt, observeKeyFrameAt, observeFcInfoAt;
     private int observeStep = -1;
+    /** pc.45: "sound heard" to the observers (telemetry thread). */
+    private final Observe.HeardReport observeHeard = new Observe.HeardReport();
+    private long lastListenStartMs;
     /** No observation within this long of the pilot's last packet, but for that very PC (its "back to the grid"). */
     static final long OBSERVE_AFTER_PILOT_MS = PILOT_ALIVE_MS;
     /** A start or stop of the audio is waiting on the videoStarter thread: no second one meanwhile. */
@@ -696,8 +701,12 @@ public class Udp {
                     }
                     audioAllowed = allow;
                     audioHeld = wanted && !allow;
+                    // pc.45: observed, no observer wants the sound: listened to for their "sound heard", never sent
+                    boolean listen = !allow && observing && !observeAudio && !isConnected() && normal
+                            && FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
                     if (audioTaskQueued) continue;
                     boolean sending = streamEncoder.isAudioSending();
+                    boolean listening = streamEncoder.isListening();
                     if (allow && !sending && now - lastAudioStartMs >= AUDIO_RETRY_MS) {
                         lastAudioStartMs = now;
                         final int bitRate = pcAudio.bitRate();
@@ -717,6 +726,25 @@ public class Udp {
                         videoStarter.execute(() -> {
                             try {
                                 if (!audioAllowed && streamEncoder.isAudioSending()) stopAudioStream();
+                            } finally {
+                                audioTaskQueued = false;
+                            }
+                        });
+                    } else if (listen && !listening && !sending && now - lastListenStartMs >= AUDIO_RETRY_MS) {
+                        lastListenStartMs = now;
+                        audioTaskQueued = true;
+                        videoStarter.execute(() -> {
+                            try {
+                                if (!audioAllowed && observing && !observeAudio && streamEncoder.startListening()) log("Observers muted: listening only");
+                            } finally {
+                                audioTaskQueued = false;
+                            }
+                        });
+                    } else if (!listen && listening) {
+                        audioTaskQueued = true;
+                        videoStarter.execute(() -> {
+                            try {
+                                streamEncoder.stopListening();
                             } finally {
                                 audioTaskQueued = false;
                             }
@@ -2178,7 +2206,8 @@ public class Udp {
         synchronized (observers) {
             count = observers.size();
         }
-        byte[] a = Observe.encodeState(state, w, h, fps, count);
+        int flags = state == Observe.STREAMING && streamEncoder.isSoundHeard() ? Observe.STATE_SOUND_HEARD : 0; // pc.45
+        byte[] a = Observe.encodeState(state, w, h, fps, count, flags);
         final DatagramSocket s = socket;
         if (s == null) return;
         spectatorAnswers.execute(() -> {
@@ -2256,6 +2285,7 @@ public class Udp {
         DDService service = DDService.instance();
         android.content.Context context = service == null ? null : service.getApplicationContext();
         if (want == null) {
+            observeHeard.reset();
             if (observing) {
                 observing = false;
                 observeAudio = false;
@@ -2312,6 +2342,9 @@ public class Udp {
         if (now - observeRecordAt >= 200) {
             observeRecordAt = now;
             sendObserveRecord();
+        }
+        if (observeHeard.due(streamEncoder.isSoundHeard(), now)) { // pc.45: the muted tiles' speaking highlight
+            for (java.net.InetSocketAddress who : observerTargets) answerObserver(who, Observe.STREAMING);
         }
         if (now - observeFcInfoAt >= 1000) { // pc.43: the PC reads the FC's records only knowing the FC (each tile's OSD)
             FcInfo info = msp != null && msp.isInitialized() ? msp.getFcInfo() : mavlink != null && mavlink.isInitialized() ? mavlink.getFcInfo() : null;

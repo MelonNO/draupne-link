@@ -387,7 +387,7 @@ final class MirrorController implements AutoCloseable {
             FcTelemetry t = l.telemetry();
             OsdRenderer.Data osd = ObservationOsd.data(t, f.video().stats(), last, invert, now);
             ObservationAudio a = audio;
-            g.update(i, new ObservationGrid.TileState(status, a != null && a.isSpeaking(f.audioId()), tileMuted[i], tileVolume[i],
+            g.update(i, new ObservationGrid.TileState(status, ObservationSession.speaking(a, f.audioId(), l, now), tileMuted[i], tileVolume[i],
                     null, t.getMotion().shown(now), osd));
         }
     }

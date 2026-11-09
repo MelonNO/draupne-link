@@ -1,6 +1,7 @@
 package de.droiddrone.pc.observe;
 
 import de.droiddrone.common.Observe;
+import de.droiddrone.pc.audio.ObservationAudio;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -29,7 +30,10 @@ public final class ObservationSession {
         void release();
     }
 
-    /** The muted tile asks its phone to stop the sound after this long (as the pilot's MUTE does). */
+    /**
+     * The muted tile asks its phone to stop the sound after this long (as the pilot's MUTE does); a pc.45 phone then only
+     * says when it hears something.
+     */
     public static final long MUTED_STOP_MS = 10_000;
 
     private final ObserveSet set;
@@ -120,6 +124,14 @@ public final class ObservationSession {
     public synchronized boolean audioWanted(String phone, long now) {
         Long at = mutedAt.get(phone);
         return at == null || now - at < MUTED_STOP_MS;
+    }
+
+    /**
+     * A tile's speaking highlight: heard here, or (pc.45) the phone says it hears something - a muted tile's phone
+     * sends no sound after {@link #MUTED_STOP_MS}, only that word.
+     */
+    public static boolean speaking(ObservationAudio audio, int audioId, ObserverLink link, long now) {
+        return audio != null && audio.isSpeaking(audioId) || link != null && link.soundHeard(now);
     }
 
     /** A tile's volume as saved (0..100; nothing saved or a broken value: 100). */

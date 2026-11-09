@@ -21,6 +21,8 @@
  *  pc.31: the queue's cut reads the buffer flags as bits.
  *  pc.34: the audio for DRAUPNE Link's live sound - at the PC's bitrate, whatever the video's (upstream encoded it
  *  only at 2 Mbit/s and up), through a high-pass filter against wind and handling rumble.
+ *  pc.45: listening only (startListening) - the microphone through the same filter into a VoiceActivity, nothing
+ *  encoded or sent: "sound heard" for observers that muted the phone (Observe.STATE_SOUND_HEARD).
  */
 
 package de.droiddrone.flight;
@@ -36,6 +38,7 @@ import android.view.Surface;
 import androidx.annotation.NonNull;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
+import de.droiddrone.common.VoiceActivity;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -80,6 +83,10 @@ public class StreamEncoder {
     private boolean isAudioSending;
     private boolean isVideoEncoderInitialized;
     private int audioThreadId;
+    /** pc.45: listening only (no encoder); its thread's generation; what it hears now. */
+    private volatile boolean isListening;
+    private volatile int listenThreadId;
+    private volatile boolean soundHeard;
     private long lastBitrateReduceTs;
     private Surface surface;
 
@@ -187,6 +194,7 @@ public class StreamEncoder {
     }
 
     public void startAudioEncoder(int bitRate){
+        endListening(); // pc.45: the sound itself now; the microphone stays open
         audioBitRate = bitRate;
         isAudioSending = false;
         highPass = null; // a new stream: the filter starts from rest
@@ -241,6 +249,75 @@ public class StreamEncoder {
         return audioSource.getAudioFormat();
     }
 
+    /**
+     * pc.45: the microphone heard, nothing sent (observers that muted the phone): opened if it isn't, each buffer through
+     * the high-pass filter into a VoiceActivity on a thread of its own at the lowest priority. Not while the sound is
+     * sent (that has the microphone). @return listening
+     */
+    public synchronized boolean startListening(){
+        if (isListening) return true;
+        if (isAudioSending) return false;
+        if (!audioSource.initialize(MediaCommon.streamAudioConsumerId)) return false;
+        isListening = true;
+        listenThreadId++;
+        Thread t = new Thread(listenRunnable);
+        t.setDaemon(true);
+        t.setName("audioListenThread");
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
+        return true;
+    }
+
+    /** pc.45: listening ends, the microphone closed (unless the sound or the recording has it). */
+    public synchronized void stopListening(){
+        if (!isListening) return;
+        endListening();
+        if (!isAudioSending) audioSource.stop(MediaCommon.streamAudioConsumerId);
+    }
+
+    /** The listening thread ends at its next buffer; the microphone left as it is. */
+    private synchronized void endListening(){
+        isListening = false;
+        listenThreadId++;
+        soundHeard = false;
+    }
+
+    public boolean isListening(){
+        return isListening;
+    }
+
+    /** pc.45: the listening hears something now (VoiceActivity: held a moment after the last loud frame). */
+    public boolean isSoundHeard(){
+        return isListening && soundHeard;
+    }
+
+    private final Runnable listenRunnable = new Runnable() {
+        public void run() {
+            final int id = listenThreadId;
+            VoiceActivity voice = new VoiceActivity();
+            float[] filter = null;
+            while (isListening && id == listenThreadId) {
+                try {
+                    byte[] buf = audioSource.getBufferData(MediaCommon.streamAudioConsumerId);
+                    long now = System.currentTimeMillis();
+                    AudioFormat format = audioSource.getAudioFormat();
+                    if (buf == null || format == null) {
+                        if (id == listenThreadId) soundHeard = voice.isActive(now);
+                        continue;
+                    }
+                    int channels = Math.max(1, format.getChannelCount());
+                    if (filter == null || filter.length != channels * 2) filter = new float[channels * 2];
+                    byte[] pcm = highPass(buf.clone(), filter); // a copy: the phone's own recording may hold the same buffer
+                    double ms = pcm.length / 2.0 / channels * 1000.0 / format.getSampleRate();
+                    boolean heard = voice.frame(VoiceActivity.levelDbPcm16(pcm, pcm.length), ms, now);
+                    if (id == listenThreadId) soundHeard = heard;
+                } catch (Exception e) {
+                    log("audioListenRunnable error: " + e);
+                }
+            }
+        }
+    };
+
     private final Runnable audioStreamRunnable = new Runnable() {
         public void run() {
             final int id = audioThreadId;
@@ -268,12 +345,19 @@ public class StreamEncoder {
      */
     private byte[] highPass(byte[] pcm) {
         AudioFormat format = audioSource.getAudioFormat();
-        if (format == null || format.getEncoding() != AudioFormat.ENCODING_PCM_16BIT) return pcm;
+        if (format == null) return pcm;
         int channels = Math.max(1, format.getChannelCount());
         if (highPass == null || highPass.length != channels * 2) highPass = new float[channels * 2];
+        return highPass(pcm, highPass);
+    }
+
+    /** The filter with its own state (channels * 2: each channel's last input and output); pc.45's listening has one. */
+    private byte[] highPass(byte[] pcm, float[] st) {
+        AudioFormat format = audioSource.getAudioFormat();
+        if (format == null || format.getEncoding() != AudioFormat.ENCODING_PCM_16BIT) return pcm;
+        int channels = Math.max(1, format.getChannelCount());
         double rc = 1 / (2 * Math.PI * HIGH_PASS_HZ);
         float a = (float) (rc / (rc + 1.0 / format.getSampleRate()));
-        float[] st = highPass;
         for (int i = 0, c = 0; i + 1 < pcm.length; i += 2, c = (c + 1) % channels) {
             float x = (short) ((pcm[i] & 0xff) | (pcm[i + 1] << 8));
             float y = a * (st[2 * c + 1] + x - st[2 * c]);
@@ -569,6 +653,7 @@ public class StreamEncoder {
     public void close(){
         sendFrames = false;
         audioThreadId++;
+        stopListening(); // pc.45
         isVideoEncoderInitialized = false;
         surface = null;
         if (videoEncoder != null){
