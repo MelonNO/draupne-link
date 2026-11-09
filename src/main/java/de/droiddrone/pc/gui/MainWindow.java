@@ -517,7 +517,11 @@ public class MainWindow extends JFrame {
         cameraView.configure(config);
         cameraOnMap = !"false".equalsIgnoreCase(config.getString(CameraView.SHOW_KEY));
         names = new Names(config, this::save);
-        nameService = new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
+        cameraTurn.setVirtualTest(n -> {
+            Names.Entry e = names.get(n);
+            return e != null && e.isVirtual();
+        });
+        nameService =new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
         nameService.setSleepHandler(this::onSleepCheck);
         FleetManager fleet = new FleetManager(config.getKey(), config.getPort(), config.getString(FLEET_QUEUE_KEY), this::save, this::logLine);
         fleets = new FleetController(fleet, config, names, nameService, overwatch, power, standbyPhones, crashed, new FleetHost());

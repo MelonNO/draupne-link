@@ -39,6 +39,21 @@ class CameraTurnTest {
     }
 
     @Test
+    void aVirtualDroneNeverTakesTheOldPcWideSetting() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        config.set(CameraTurn.KEY, "true"); // the pilot's settings: a real camera mounted upside down before 1.0.41
+        CameraTurn turn = new CameraTurn(config, null);
+        java.util.Set<String> virtual = new java.util.HashSet<>();
+        turn.setVirtualTest(virtual::contains);
+        assertTrue(turn.upsideDown("MobileZulu"), "not known yet as virtual: a real phone's fallback");
+        virtual.add("MobileZulu"); // the name list learns it is the tour's drone
+        assertFalse(turn.upsideDown("MobileZulu"), "the virtual picture is upright; the early answer wasn't kept");
+        assertTrue(turn.upsideDown("MobileGolf"), "a real phone never set still takes it");
+        turn.set("MobileZulu", true);
+        assertTrue(turn.upsideDown("MobileZulu"), "turned by the pilot: its own setting wins");
+    }
+
+    @Test
     void eachPhoneKeepsItsOwnWayUpAndAnUnsetOneTakesTheOldPcWideSetting() throws Exception {
         PcConfig config = PcConfig.defaults();
         List<Map<String, String>> saved = new ArrayList<>();

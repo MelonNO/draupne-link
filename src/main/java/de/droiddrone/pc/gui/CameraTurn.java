@@ -29,9 +29,18 @@ final class CameraTurn {
     private final Map<String, Boolean> cache = new ConcurrentHashMap<>();
     private final List<BiConsumer<String, Boolean>> listeners = new CopyOnWriteArrayList<>();
 
+    /** A drone of the virtual fleet or the tour (by name); none in tests unless set. */
+    private volatile java.util.function.Predicate<String> isVirtual = name -> false;
+
     CameraTurn(PcConfig config, Consumer<Map<String, String>> saver) {
         this.config = config;
         this.saver = saver;
+    }
+
+    /** How to tell a virtual drone by its name (MainWindow: the name list's loopback addresses). */
+    void setVirtualTest(java.util.function.Predicate<String> test) {
+        isVirtual = test;
+        cache.clear();
     }
 
     static String key(String phone) {
@@ -44,9 +53,13 @@ final class CameraTurn {
         Boolean b = cache.get(name.toLowerCase(Locale.ROOT));
         if (b != null) return b;
         String v = name.isEmpty() ? "" : config.getString(key(name));
-        if (v.isEmpty()) v = config.getString(KEY);
+        // a virtual drone's picture is made upright: the old PC-wide setting (a real camera's) never turns it (the
+        // pilot, 2026-11-09: "the simulation window is upside down")
+        boolean own = !v.isEmpty();
+        if (!own && !isVirtual.test(name)) v = config.getString(KEY);
         boolean on = "true".equalsIgnoreCase(v);
-        cache.put(name.toLowerCase(Locale.ROOT), on);
+        // kept only when the phone has its own: the fallback waits for the name list to know a drone as virtual
+        if (own) cache.put(name.toLowerCase(Locale.ROOT), on);
         return on;
     }
 
