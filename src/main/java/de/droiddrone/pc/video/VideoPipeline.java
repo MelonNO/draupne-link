@@ -186,6 +186,13 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     private volatile RecordingTap recordingTap;
 
+    /** Told each new recording file as it is created (record thread), or null - the tour notes its own files by path. */
+    private volatile java.util.function.Consumer<java.nio.file.Path> fileListener;
+
+    public void setRecordingFileListener(java.util.function.Consumer<java.nio.file.Path> listener) {
+        fileListener = listener;
+    }
+
     public void setRecordingTap(RecordingTap tap) {
         recordingTap = tap;
     }
@@ -1063,6 +1070,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             de.droiddrone.pc.audio.AudioConfig sound = audioTrackForNewFile();
             recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
             recordFile = file;
+            java.util.function.Consumer<java.nio.file.Path> started = fileListener;
+            if (started != null) started.accept(file);
             log("Recording to " + file + (sound == null ? "" : " (with phone sound if sent)"));
             tapOpen = true;
             tap(t -> t.fileStarted(file, c.hevc(), c.width(), c.height(), c.codecConfig()));

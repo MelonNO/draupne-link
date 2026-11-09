@@ -19,7 +19,7 @@ import java.util.stream.Stream;
  * What the tour's finale leaves on this PC (1.0.52, the pilot: "clean up all the simulated drones and flights after the
  * tour"), noted as it happens so the tour's end can take it all off again and nothing of the pilot's own: the settings
  * that name a tour drone (its name map entry, its mute, its detection ...) as they were before, the files of a flight
- * flown to a tour drone (its link log and track, noted by path; its recordings, by the time they were made), the clips
+ * flown to a tour drone (its link log, track and recordings, each noted by its exact path), the clips
  * of the tour's overwatch events (made in a tour drone's folder after the tour began), and last-position.txt as it was.
  */
 final class TourTraces {
@@ -118,23 +118,12 @@ final class TourTraces {
     }
 
     /**
-     * The files to delete: those noted, the recordings in videosDir made during a tour connection, and what the tour's
+     * The files to delete: those noted (the tour flight's link log, track and recordings, each by its exact path) and what the tour's
      * events left in a tour drone's clip folder under clipsRoot after the tour began.
      */
     List<Path> filesToDelete(Path videosDir, Path clipsRoot, long now) {
         if (openSince != 0) disconnected(now);
         Set<Path> out = new LinkedHashSet<>(files);
-        if (videosDir != null && !windows.isEmpty()) {
-            for (Path f : list(videosDir, false)) {
-                long t = created(f);
-                for (long[] w : windows) {
-                    if (t >= w[0] - SLACK_MS && t <= w[1] + SLACK_MS) {
-                        out.add(f);
-                        break;
-                    }
-                }
-            }
-        }
         if (clipsRoot != null) {
             for (String n : names) {
                 Path dir = folder(clipsRoot, n);

@@ -3041,6 +3041,15 @@ public class MainWindow extends JFrame {
             boolean withOsd = !"false".equalsIgnoreCase(config.getString("recordOsd"));
             if (withOsd && osdRecorder == null) osdRecorder = new OsdRecorder(OsdRecorder.Source.of(videoView), this::logLine);
             v.setRecordingTap(withOsd ? osdRecorder : null);
+            // a recording made while the tour flies one of its drones is noted by its exact path (and its OSD copy's),
+            // so the tour's end takes that and nothing else of the pilot's videos
+            v.setRecordingFileListener(file -> {
+                TourTraces t = tourTraces;
+                if (t != null && t.inConnection()) {
+                    t.note(file);
+                    t.note(OsdRecorder.osdFile(file));
+                }
+            });
             v.startRecording(dir);
             logLine("Recording to " + dir + (withOsd ? ", plus a copy with the OSD." : "."));
         } catch (IOException e) {

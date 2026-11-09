@@ -41,6 +41,8 @@ class TourTracesTest {
         Path log = Files.writeString(dir.resolve("link-tour.csv"), "x");
         t.note(log);
         Path tourVideo = Files.writeString(videos.resolve("flight-tour.mkv"), "tour");
+        t.note(tourVideo); // as the recording's file listener does, by its exact path
+        Path ownDuringTour = Files.writeString(videos.resolve("flight-own-same-time.mkv"), "own, not noted");
         Path tourClip = Files.writeString(clips.resolve("MobileZulu").resolve("event.mp4"), "tour");
         Files.writeString(lastPosition, "the tour's flight");
         Path track = Files.writeString(tracks.resolve("track-tour.gpx"), "tour");
@@ -63,6 +65,7 @@ class TourTracesTest {
         List<Path> gone = t.filesToDelete(videos, clips, System.currentTimeMillis());
         assertTrue(gone.containsAll(List.of(log, track, tourVideo, tourClip)), gone.toString());
         assertFalse(gone.contains(ownVideo));
+        assertFalse(gone.contains(ownDuringTour), "only noted recordings go, never one by its time alone");
         assertFalse(gone.contains(ownClip));
         assertFalse(gone.contains(oldZulu), "a clip from before the tour stays");
 
