@@ -297,9 +297,12 @@ class VirtualDroneEndToEndTest {
             byte[] ask = Observe.encodeRequest(config.getKey(), 640, 360, 15, 1000, Observe.FLAG_VIDEO_CONFIG, 0);
             AtomicInteger state = new AtomicInteger(-1);
             boolean config0 = false, keyFrame = false;
+            // 1.0.55: the flight controller's records too - each observation tile's OSD
+            de.droiddrone.pc.FcTelemetry telemetry = new de.droiddrone.pc.FcTelemetry();
+            de.droiddrone.common.FcInfo fc = null; // the drone says which FC it is: its records are read with it
             long end = System.currentTimeMillis() + 10_000, nextAsk = 0;
             byte[] buf = new byte[1500];
-            while (System.currentTimeMillis() < end && !(config0 && keyFrame)) {
+            while (System.currentTimeMillis() < end && !(config0 && keyFrame && telemetry.getBattery() != null && telemetry.getAttitude() != null)) {
                 if (System.currentTimeMillis() >= nextAsk) {
                     nextAsk = System.currentTimeMillis() + 1000;
                     observer.send(new DatagramPacket(ask, ask.length, InetAddress.getLoopbackAddress(), drone.port()));
@@ -314,10 +317,19 @@ class VirtualDroneEndToEndTest {
                 if (type == Observe.STATE) state.set(Observe.decodeState(p.getData(), p.getLength()).state);
                 if (type == UdpCommon.VideoInitialFrame) config0 = true;
                 if (type == UdpCommon.KeyFrame) keyFrame = true;
+                if (type == UdpCommon.FcInfo && p.getLength() >= 11) {
+                    byte[] b = p.getData();
+                    fc = new de.droiddrone.common.FcInfo(b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10]);
+                }
+                if (type == UdpCommon.TelemetryData && p.getLength() > 1 && fc != null) {
+                    telemetry.parse(new de.droiddrone.common.DataReader(java.util.Arrays.copyOfRange(p.getData(), 1, p.getLength()), true), fc);
+                }
             }
             assertEquals(Observe.STREAMING, state.get(), "OBSERVE_STATE: streaming");
             assertTrue(config0, "the video config");
             assertTrue(keyFrame, "a key frame");
+            assertNotNull(telemetry.getAttitude(), "the FC's attitude reaches the observer (the tile's horizon and heading)");
+            assertNotNull(telemetry.getBattery(), "the FC's battery reaches the observer (the tile's battery)");
             observer.send(new DatagramPacket(Observe.encodeStop(config.getKey()), Observe.encodeStop(config.getKey()).length,
                     InetAddress.getLoopbackAddress(), drone.port()));
         }
