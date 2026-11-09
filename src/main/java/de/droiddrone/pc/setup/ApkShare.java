@@ -31,9 +31,9 @@ import java.util.concurrent.Executors;
 public class ApkShare implements AutoCloseable {
     // ---- RELEASE PIN: the phone app this PC app hands out. At every release that ships a new phone app, set both
     // ---- to it: its versionName and the SHA-256 flight-app/build.ps1 printed (the flight-VERSION release's APK).
-    public static final String VERSION = "2.3.0-pc.39";
+    public static final String VERSION = "2.3.0-pc.40";
     /** SHA-256 of the APK built by flight-app/build.ps1 and attached to the flight-VERSION release. */
-    public static final String APK_SHA256 = "5d3dbb6439a9a09c8dc071b89063e5ec97a8c3f757daa58e83b3274cbf3473da";
+    public static final String APK_SHA256 = "2580f889f40ff8358e83c36c37a38027430d53f598367507b1fe5d4b2689e56c";
     // ---- end of the pin
     public static final String APK_NAME = "DRAUPNE-Flight-" + VERSION + ".apk";
     public static final String APK_URL = "https://github.com/MelonNO/draupne-link/releases/download/flight-" + VERSION + "/" + APK_NAME;
