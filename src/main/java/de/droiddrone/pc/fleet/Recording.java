@@ -89,10 +89,11 @@ final class Recording implements AutoCloseable {
     }
 
     /**
-     * The picture at nowMs, scaled into dst (w x h, 0xRRGGBB). Decodes on up to now; at the end it starts again.
+     * The picture at nowMs, scaled into dst (all of it). Decodes on up to now; at the end it starts again. 1.0.53:
+     * straight into dst - a new picture of dst's size each frame and a copy cost 8 MB and 1 - 2.5 ms a 1080p frame.
      * @return false when nothing could be decoded (the caller draws its own picture)
      */
-    synchronized boolean picture(int[] dst, int w, int h, long nowMs) {
+    synchronized boolean picture(BufferedImage dst, long nowMs) {
         if (base < 0) base = nowMs;
         long t = nowMs - base;
         int[] px = Scene.pixels(frame);
@@ -110,15 +111,13 @@ final class Recording implements AutoCloseable {
             shownMs = ms;
         }
         if (shownMs < 0) return false;
-        BufferedImage out = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g = out.createGraphics();
+        Graphics2D g = dst.createGraphics();
         try {
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-            g.drawImage(frame, 0, 0, w, h, null);
+            g.drawImage(frame, 0, 0, dst.getWidth(), dst.getHeight(), null);
         } finally {
             g.dispose();
         }
-        System.arraycopy(Scene.pixels(out), 0, dst, 0, w * h);
         return true;
     }
 

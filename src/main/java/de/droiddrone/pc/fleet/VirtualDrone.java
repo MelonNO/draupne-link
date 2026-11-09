@@ -1091,7 +1091,7 @@ public final class VirtualDrone {
     /** The picture: the recording when one plays, else the scene from the drone's state. */
     private void renderPicture(BufferedImage img, long nowMs) {
         Recording r = recording;
-        if (r != null && r.picture(Scene.pixels(img), img.getWidth(), img.getHeight(), nowMs)) {
+        if (r != null && r.picture(img, nowMs)) {
             scene.paintTargets(img, viewAt(nowMs), nowMs); // a walker, vehicle or light crosses an old flight's picture too
             scene.burnIn(img, "REPLAY"); // an old flight's picture says VIRTUAL too
             return;
@@ -1712,7 +1712,7 @@ public final class VirtualDrone {
             nextAnalysisAt = now + 125;
             if (analysis == null) analysis = new BufferedImage(320, 180, BufferedImage.TYPE_INT_RGB);
             Recording rec = recording;
-            if (rec == null || !rec.picture(Scene.pixels(analysis), 320, 180, now)) scene.render(analysis, view(), now, null, false);
+            if (rec == null || !rec.picture(analysis, now)) scene.render(analysis, view(), now, null, false);
             else scene.paintTargets(analysis, view(), now); // the same picture the video shows, models and all
             int[] size = new int[2];
             int[] px = Scene.pixels(analysis);
