@@ -143,7 +143,7 @@ final class OsdRenderer {
             this.h = h;
             this.layout = layout == null ? OsdLayout.defaults() : layout;
             boundsOut = bounds;
-            unit = h / 720f; // everything scales with the picture
+            unit = Math.max(h / 720f, minUnit); // everything scales with the picture (a tile: not below readable)
             long now = de.droiddrone.pc.MonoClock.ms();
             FcTelemetry t = d.telemetry();
             FcTelemetry.Attitude att = t == null ? null : t.getAttitude();
@@ -173,7 +173,9 @@ final class OsdRenderer {
                 if (attFresh) headingTape(ex, ey, a, att, gps);
             });
             element(OsdElement.BATTERY, (ex, ey, a) -> battery(ex, ey, a, t, fcFresh));
-            element(OsdElement.PING, (ex, ey, a) -> ping(ex, ey, a, d.pingMs(), d.video() == null ? -1 : d.video().pingBaselineMs()));
+            element(OsdElement.PING, (ex, ey, a) -> {
+                if (!observer) ping(ex, ey, a, d.pingMs(), d.video() == null ? -1 : d.video().pingBaselineMs());
+            });
             element(OsdElement.NETWORK, (ex, ey, a) -> network(ex, ey, a, t == null ? null : t.getNetwork()));
             element(OsdElement.VIDEO, (ex, ey, a) -> video(ex, ey, a, d.video()));
             element(OsdElement.PHONE_BATTERY, (ex, ey, a) -> {
@@ -301,6 +303,23 @@ final class OsdRenderer {
     }
 
     private volatile boolean flipX, flipY;
+
+    /**
+     * An observation tile's OSD (1.0.55): nothing flies from here, so no LINK ping and only the warnings that matter
+     * for a drone watched while idle - the link lost, low battery, the phone's battery. Betaflight's FAILSAFE and
+     * arming blocks are normal on a drone nobody flies.
+     */
+    void setObserver(boolean observer) {
+        this.observer = observer;
+    }
+
+    /** The smallest unit (picture height / 720) the OSD is drawn at: a small tile keeps its text readable. */
+    void setMinUnit(float unit) {
+        minUnit = Math.max(0, unit);
+    }
+
+    private volatile boolean observer;
+    private volatile float minUnit;
 
     /**
      * The phone's motion detection (1.0.46): a thin square round each thing that travels through the picture while the
@@ -674,6 +693,10 @@ final class OsdRenderer {
 
     private void warnings(float x, float y, OsdLayout.Align a, Data d, FcTelemetry.Status s, FcTelemetry t, long now) {
         List<String> big = new ArrayList<>();
+        if (observer) {
+            observerWarnings(x, y, a, d, t, now);
+            return;
+        }
         // a spectator says what kind of loss: the pilot's own link, or the pilot gone on purpose (1.0.41)
         if (!d.linkReady()) big.add(d.lostText() != null ? d.lostText() : "LINK LOST");
         else if (d.linkStalled()) big.add("LINK STALL");
@@ -734,6 +757,24 @@ final class OsdRenderer {
         }
         if (d.armSwitchUnknown()) { // the sticks can't arm until Drone setup has read which switch arms
             put("ARM SWITCH NOT READ - RUN DRONE SETUP", x, ly, YELLOW, a);
+        }
+    }
+
+    /** An observation tile's warnings: the link, the drone's battery, the phone's battery; nothing about flying. */
+    private void observerWarnings(float x, float y, OsdLayout.Align a, Data d, FcTelemetry t, long now) {
+        List<String> big = new ArrayList<>(3);
+        if (!d.linkReady()) big.add("LINK LOST");
+        FcTelemetry.Battery b = t == null ? null : t.getBattery();
+        FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
+        if (b != null && b.volts() > 0 && b.cellCountKnown()
+                && b.cellVolts() <= (lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5)) big.add("LOW BATTERY");
+        if (t != null && t.getPhoneBatteryPercent() >= 0 && t.getPhoneBatteryPercent() <= 15 && !t.isPhoneCharging()) big.add("PHONE BATTERY LOW");
+        if (big.isEmpty() || (now / 400) % 2 != 0) return;
+        y = Math.min(y, h - 14 * unit - (big.size() - 1) * 38 * unit);
+        g.setFont(Theme.headingFont(34 * unit));
+        for (String text : big) {
+            put(text, x, y, YELLOW_WARNINGS.contains(text) ? YELLOW : RED, a);
+            y += 38 * unit;
         }
     }
 

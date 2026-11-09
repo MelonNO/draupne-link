@@ -11,7 +11,6 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.util.Locale;
@@ -272,19 +271,8 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
 
     /** The camera picture into this rectangle: as it comes, mirrored (front camera) and/or turned 180 degrees. */
     private void drawPicture(Graphics2D g, BufferedImage img, int x, int y, int w, int h) {
-        boolean flipX = mirror != upsideDown; // turning 180 = flipping both ways; a mirrored picture is already flipped
-        boolean flipY = upsideDown;
-        if (!flipX && !flipY && w == img.getWidth() && h == img.getHeight()) {
-            g.drawImage(img, x, y, null);
-            return;
-        }
-        Object interpolation = g.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
-        if (w != img.getWidth() || h != img.getHeight()) {
-            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        }
-        g.drawImage(img, flipX ? x + w : x, flipY ? y + h : y, flipX ? x : x + w, flipY ? y : y + h,
-                0, 0, img.getWidth(), img.getHeight(), null);
-        if (interpolation != null) g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, interpolation);
+        // turning 180 = flipping both ways; a mirrored picture is already flipped (the same drawing as every other view)
+        CameraTurn.draw(g, img, x, y, w, h, CameraTurn.flipX(mirror, upsideDown), upsideDown);
     }
 
     /**

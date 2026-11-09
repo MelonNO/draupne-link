@@ -1,6 +1,7 @@
 package de.droiddrone.pc.observe;
 
 import de.droiddrone.common.DataReader;
+import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.Observe;
 import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.UdpCommon;
@@ -56,6 +57,11 @@ public final class ObserverLink implements AutoCloseable {
     private volatile Observe.State state;
     private volatile long stateAt, lastPacketAt;
     private volatile AudioConfig audioConfig;
+    /**
+     * The phone's flight controller (phone app pc.43 sends it observers once a second): without it the FC's records
+     * can't be read, so the tile's OSD shows only what needs no FC (1.0.55).
+     */
+    private volatile FcInfo fcInfo;
     private volatile boolean videoConfigured;
     private Thread sender;
 
@@ -95,6 +101,11 @@ public final class ObserverLink implements AutoCloseable {
 
     public FcTelemetry telemetry() {
         return telemetry;
+    }
+
+    /** The phone's flight controller as it said, or null (a phone before pc.43, or none yet). */
+    public FcInfo fcInfo() {
+        return fcInfo;
     }
 
     /** The phone's last OBSERVE_STATE, or null before its first. */
@@ -228,7 +239,14 @@ public final class ObserverLink implements AutoCloseable {
             }
             case UdpCommon.TelemetryData -> {
                 int at = UdpCommon.isPacketNumbered(type) ? 3 : 1;
-                if (len > at) telemetry.parse(new DataReader(java.util.Arrays.copyOfRange(d, at, len), true), null);
+                if (len > at) telemetry.parse(new DataReader(java.util.Arrays.copyOfRange(d, at, len), true), fcInfo);
+            }
+            case UdpCommon.FcInfo -> {
+                // [type][num i16][variant][version major, minor, patch][api protocol, major, minor][platform]
+                if (len < 11) return;
+                DataReader r = new DataReader(java.util.Arrays.copyOfRange(d, 3, len), true);
+                fcInfo = new FcInfo(r.readByte(), r.readByte(), r.readByte(), r.readByte(), r.readByte(), r.readByte(),
+                        r.readByte(), r.readByte());
             }
             case Observe.STATE -> {
                 Observe.State s = Observe.decodeState(d, len);

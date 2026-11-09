@@ -8,10 +8,13 @@ import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
+import javax.swing.JCheckBoxMenuItem;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JSlider;
+import javax.swing.SwingUtilities;
 import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -26,12 +29,19 @@ import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 /**
  * OBSERVATION's grid in the main window's video area (1.0.48): one tile per observed phone - 1, 2x1, 2x2 or 3x2 by
  * count (TileGrid) - each with its number and colour (the same on the map), the drone's name, its live picture (the
  * motion detection's boxes on it), a green frame while its phone hears something, MUTE and volume for its sound, and
  * CONNECT. A click selects a tile (its phone sends the sharp picture), a double-click enlarges it and back.
+ * <p>
+ * 1.0.55 (the pilot): each tile shows its phone's picture the way up set for that phone (CameraTurn - the same as the
+ * main video, the overwatch cards and the clips; right-click a tile to turn it) and the OSD with that drone's own
+ * figures (ObservationOsd), drawn by the pilot's OSD layout.
  */
 final class ObservationGrid extends JPanel {
     /** The tiles' colours, by number: the map draws each phone's cone in its tile's. */
@@ -56,19 +66,54 @@ final class ObservationGrid extends JPanel {
         void hover(int tile);
     }
 
-    /** What a tile shows besides its picture, refreshed by the main window. */
+    /**
+     * What a tile shows besides its picture, refreshed by the main window.
+     * @param osd its OSD now (ObservationOsd.data), or null for none
+     */
     record TileState(String status, boolean speaking, boolean muted, int volume, String headingNote,
-                     List<MotionBoxes.Shown> boxes) {}
+                     List<MotionBoxes.Shown> boxes, OsdRenderer.Data osd) {
+        TileState(String status, boolean speaking, boolean muted, int volume, String headingNote, List<MotionBoxes.Shown> boxes) {
+            this(status, speaking, muted, volume, headingNote, boxes, null);
+        }
+    }
 
     private final Listener listener;
+    private final CameraTurn turn;
+    /** The pilot's OSD layout, and whether the OSD is on at all (F2 / VIDEO > OSD): read at every paint. */
+    private final Supplier<OsdLayout> osdLayout;
+    private final BooleanSupplier osdOn;
+    private final BiConsumer<String, Boolean> turned = (phone, on) -> repaintPhone(phone);
     private final List<Tile> tiles = new ArrayList<>();
     private int enlarged = -1, selected = -1;
 
     ObservationGrid(Listener listener) {
+        this(listener, null, OsdLayout::defaults, () -> false);
+    }
+
+    /** @param turn each phone's way up (null: as it comes) */
+    ObservationGrid(Listener listener, CameraTurn turn, Supplier<OsdLayout> osdLayout, BooleanSupplier osdOn) {
         super(null);
         this.listener = listener;
+        this.turn = turn;
+        this.osdLayout = osdLayout;
+        this.osdOn = osdOn;
         setBackground(Color.BLACK);
         setOpaque(true);
+        if (turn != null) turn.addListener(turned);
+    }
+
+    /** The grid is gone: no more news of turned pictures. */
+    void dispose() {
+        if (turn != null) turn.removeListener(turned);
+    }
+
+    private void repaintPhone(String phone) {
+        for (Tile t : tiles) if (t.phone.equalsIgnoreCase(phone)) t.video.repaint();
+    }
+
+    /** The tile's phone's picture is shown upside down. */
+    boolean upsideDown(int tile) {
+        return turn != null && tile >= 0 && tile < tiles.size() && turn.upsideDown(tiles.get(tile).phone);
     }
 
     static Color colour(int tile) {
@@ -146,7 +191,7 @@ final class ObservationGrid extends JPanel {
     private final class Tile extends JPanel {
         int index;
         final String phone;
-        final TileVideo video = new TileVideo();
+        final TileVideo video;
         final JLabel name;
         final JLabel status = Theme.label(" ", Theme.font(Font.PLAIN, 11.5f), Theme.MUTED);
         final GlyphButton mute = new GlyphButton(GlyphButton.Glyph.SOUND, "Mute");
@@ -159,6 +204,7 @@ final class ObservationGrid extends JPanel {
             super(new BorderLayout());
             this.index = index;
             this.phone = phone;
+            video = new TileVideo(phone, turn, osdLayout, osdOn);
             setBackground(Color.BLACK);
             name = Theme.label((index + 1) + "  " + phone, Theme.headingFont(12.5f), colour(index));
             add(video, BorderLayout.CENTER);
@@ -197,7 +243,18 @@ final class ObservationGrid extends JPanel {
             add(bar, BorderLayout.SOUTH);
             MouseAdapter mouse = new MouseAdapter() {
                 @Override
+                public void mousePressed(MouseEvent e) {
+                    if (e.isPopupTrigger()) turnMenu(e);
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    if (e.isPopupTrigger()) turnMenu(e);
+                }
+
+                @Override
                 public void mouseClicked(MouseEvent e) {
+                    if (SwingUtilities.isRightMouseButton(e)) return;
                     if (e.getClickCount() == 2) listener.enlarge(index);
                     else if (e.getClickCount() == 1) listener.select(index);
                 }
@@ -214,6 +271,17 @@ final class ObservationGrid extends JPanel {
             };
             video.addMouseListener(mouse);
             updateFrame();
+        }
+
+        /** Right-click: this phone's picture upside down or not - everywhere it shows. */
+        private void turnMenu(MouseEvent e) {
+            if (turn == null) return;
+            JPopupMenu menu = new JPopupMenu();
+            JCheckBoxMenuItem item = new JCheckBoxMenuItem("Camera upside down", turn.upsideDown(phone));
+            item.setToolTipText("Turns " + phone + "'s picture 180°, everywhere");
+            item.addActionListener(a -> turn.set(phone, item.isSelected()));
+            menu.add(item);
+            menu.show(e.getComponent(), e.getX(), e.getY());
         }
 
         void setIndex(int i) {
@@ -238,6 +306,7 @@ final class ObservationGrid extends JPanel {
                 updating = false;
             }
             video.boxes = s.boxes() == null ? List.of() : s.boxes();
+            video.osd = s.osd();
             if (s.speaking() != speaking) {
                 speaking = s.speaking();
                 updateFrame();
@@ -252,8 +321,15 @@ final class ObservationGrid extends JPanel {
         }
     }
 
-    /** A tile's picture: the newest decoded one drawn, nothing queued. */
+    /** A tile's picture: the newest decoded one drawn, nothing queued; turned as set for its phone, its OSD over it. */
     private static final class TileVideo extends JComponent implements VideoPipeline.FrameSink {
+        private final String phone;
+        private final CameraTurn turn;
+        private final Supplier<OsdLayout> osdLayout;
+        private final BooleanSupplier osdOn;
+        /** Its own: the renderer keeps per-paint state. */
+        private final OsdRenderer osdRenderer = new OsdRenderer();
+        volatile OsdRenderer.Data osd;
         private final Object lock = new Object();
         private BufferedImage back, ready, front;
         private boolean fresh;
@@ -262,7 +338,13 @@ final class ObservationGrid extends JPanel {
         private volatile int videoWidth = 16, videoHeight = 9;
         volatile List<MotionBoxes.Shown> boxes = List.of();
 
-        TileVideo() {
+        TileVideo(String phone, CameraTurn turn, Supplier<OsdLayout> osdLayout, BooleanSupplier osdOn) {
+            this.phone = phone;
+            this.turn = turn;
+            this.osdLayout = osdLayout;
+            this.osdOn = osdOn;
+            osdRenderer.setObserver(true);
+            osdRenderer.setMinUnit(ObservationOsd.MIN_UNIT);
             setOpaque(true);
             setBackground(Color.BLACK);
             setDoubleBuffered(false);
@@ -346,22 +428,33 @@ final class ObservationGrid extends JPanel {
             }
             int[] f = fitIn(img.getWidth(), img.getHeight(), w, h);
             int x = (w - f[0]) / 2, y = (h - f[1]) / 2;
-            if (mirror) g.drawImage(img, x + f[0], y, -f[0], f[1], null);
-            else g.drawImage(img, x, y, f[0], f[1], null);
-            List<MotionBoxes.Shown> shown = boxes;
-            if (!shown.isEmpty()) {
-                Graphics2D b = (Graphics2D) g.create();
-                try {
-                    b.setStroke(new BasicStroke(1.5f));
-                    for (MotionBoxes.Shown s : shown) {
-                        float bx = mirror ? 1 - s.box().x - s.box().w : s.box().x;
-                        b.setColor(Theme.alpha(Theme.WARN, Math.round(230 * s.alpha())));
-                        b.drawRect(x + Math.round(bx * f[0]), y + Math.round(s.box().y * f[1]),
-                                Math.max(2, Math.round(s.box().w * f[0])), Math.max(2, Math.round(s.box().h * f[1])));
-                    }
-                } finally {
-                    b.dispose();
+            boolean upsideDown = turn != null && turn.upsideDown(phone);
+            boolean flipX = CameraTurn.flipX(mirror, upsideDown), flipY = upsideDown;
+            CameraTurn.draw(g, img, x, y, f[0], f[1], flipX, flipY);
+            OsdRenderer.Data d = osd;
+            if (d != null && osdOn.getAsBoolean() && f[0] >= 200 && f[1] >= 120) {
+                // the OSD draws the motion boxes too, turned with the picture
+                osdRenderer.setPictureFlip(flipX, flipY);
+                osdRenderer.paint(g, x, y, f[0], f[1], d, osdLayout.get());
+                return;
+            }
+            paintBoxes(g, boxes, x, y, f[0], f[1], flipX, flipY);
+        }
+
+        /** The motion boxes where they show on the picture drawn flipped so (no OSD over it). */
+        static void paintBoxes(Graphics2D g, List<MotionBoxes.Shown> shown, int x, int y, int fw, int fh, boolean flipX, boolean flipY) {
+            if (shown.isEmpty()) return;
+            Graphics2D b = (Graphics2D) g.create();
+            try {
+                b.setStroke(new BasicStroke(1.5f));
+                for (MotionBoxes.Shown s : shown) {
+                    float[] r = CameraTurn.box(new float[]{s.box().x, s.box().y, s.box().w, s.box().h}, flipX, flipY);
+                    b.setColor(Theme.alpha(Theme.WARN, Math.round(230 * s.alpha())));
+                    b.drawRect(x + Math.round(r[0] * fw), y + Math.round(r[1] * fh),
+                            Math.max(2, Math.round(r[2] * fw)), Math.max(2, Math.round(r[3] * fh)));
                 }
+            } finally {
+                b.dispose();
             }
         }
     }

@@ -147,6 +147,8 @@ public class MainWindow extends JFrame {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private final PcConfig config;
+    /** Each phone's way up, for every view of its picture (1.0.55). */
+    private final CameraTurn cameraTurn;
     private final Path configFile;
     private final JoystickService service;
     private RcMapper mapper;
@@ -432,7 +434,7 @@ public class MainWindow extends JFrame {
     private JComponent gimbalPanel;
     private final JButton minimizeButton = textButton("MINIMIZE", "Hide sticks and channels");
     private static final String MINIMIZED_KEY = "controllerMinimized";
-    static final String UPSIDE_DOWN_KEY = "videoUpsideDown";
+    static final String UPSIDE_DOWN_KEY = CameraTurn.KEY;
 
     public static void open(PcConfig config, Path configFile, JoystickService service) {
         Theme.install();
@@ -500,6 +502,14 @@ public class MainWindow extends JFrame {
         super("DRAUPNE Link " + AppInfo.version());
         setIconImages(AppIcon.images());
         this.config = config;
+        cameraTurn = new CameraTurn(config, this::save);
+        cameraTurn.addListener((phone, on) -> {
+            // turned elsewhere (a tile, an overwatch card): the main picture too when it is that phone's
+            boolean watching = connection != null ? connection.getLink().isSpectator() : ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
+            if (!watching && phone.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) && videoView.isUpsideDown() != on) {
+                videoView.setUpsideDown(on);
+            }
+        });
         tourHost = new TourHost(config, new TourHooks());
         detection = new DetectionController(config, cameraView, this::save, this::logLine);
         this.configFile = configFile;
@@ -2375,7 +2385,7 @@ public class MainWindow extends JFrame {
         }
         ObservationAudio audio = new ObservationAudio(AlertSound::isPlaying,
                 msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
-        ObservationGrid grid = new ObservationGrid(gridListener());
+        ObservationGrid grid = new ObservationGrid(gridListener(), cameraTurn, videoView::getOsdLayout, videoView::isOsdEnabled);
         grid.setPhones(set.phones());
         // the selected tile's picture: this PC's NORMAL (its camera size at 30 fps, its bitrate limit)
         ObserverLink.Quality sharp = new ObserverLink.Quality(config.getCameraWidth(),
@@ -2485,6 +2495,7 @@ public class MainWindow extends JFrame {
         ObservationGrid grid = observationGrid;
         observationGrid = null;
         hoveredTile = -1;
+        if (grid != null) grid.dispose();
         if (grid != null && grid.getParent() != null) {
             Container parent = grid.getParent();
             parent.remove(grid);
@@ -2542,6 +2553,7 @@ public class MainWindow extends JFrame {
         ObservationGrid grid = observationGrid;
         if (o == null || grid == null) return;
         long now = MonoClock.ms();
+        boolean invertPitch = "true".equalsIgnoreCase(config.getString(OSD_INVERT_PITCH_KEY));
         setPill("OBSERVING " + tileFeeds.size(), Theme.PANEL_2, Theme.TEXT);
         for (int i = tileFeeds.size() - 1; i >= 0; i--) {
             TileFeed f = tileFeeds.get(i);
@@ -2571,8 +2583,9 @@ public class MainWindow extends JFrame {
                     : hd.approximate() ? "heading approximate" : null;
             l.setAudioWanted(o.audioWanted(phone, now));
             ObservationAudio audio = observationAudio;
+            OsdRenderer.Data osd = ObservationOsd.data(l.telemetry(), f.video().stats(), last, invertPitch, now);
             grid.update(i, new ObservationGrid.TileState(status, audio != null && audio.isSpeaking(f.audioId()), o.isMuted(phone),
-                    volumeFor(phone), note, l.telemetry().getMotion().shown(now)));
+                    volumeFor(phone), note, l.telemetry().getMotion().shown(now), osd));
         }
         grid.setSelection(o.set().selected(), o.set().enlarged());
         refreshObservedMap(now);
@@ -3695,15 +3708,14 @@ public class MainWindow extends JFrame {
 
     // ------------------------------------------------------------------ the camera's way up, per phone (1.0.41)
 
-    private static String upsideDownKey(String phone) {
-        return UPSIDE_DOWN_KEY + "." + phone;
-    }
-
     /** The phone's own setting; one never set takes the old PC-wide one (up to 1.0.40). */
     private boolean upsideDownFor(String phone) {
-        String v = phone == null || phone.isEmpty() ? "" : config.getString(upsideDownKey(phone));
-        if (v.isEmpty()) v = config.getString(UPSIDE_DOWN_KEY);
-        return "true".equalsIgnoreCase(v);
+        return cameraTurn.upsideDown(phone);
+    }
+
+    /** Each phone's way up (1.0.55): the tiles, the overwatch cards and clips, previous flights read it too. */
+    CameraTurn cameraTurn() {
+        return cameraTurn;
     }
 
     // ------------------------------------------------------------------ kept flights (1.0.41)
@@ -4779,8 +4791,7 @@ public class MainWindow extends JFrame {
         // watching, the pilot's phone decides (PILOT_VIEW), so nothing is saved
         boolean watching = connection != null ? connection.getLink().isSpectator() : ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
         String phone = config.getString(Names.PHONE_NAME_KEY);
-        if (!watching && !phone.isEmpty()) save(Map.of(upsideDownKey(phone), Boolean.toString(on)));
-        else if (!watching) save(Map.of(UPSIDE_DOWN_KEY, Boolean.toString(on)));
+        if (!watching) cameraTurn.set(phone, on); // every view of that phone's picture turns with it
         logLine(on ? "Picture upside down." : "Picture upright.");
     }
 

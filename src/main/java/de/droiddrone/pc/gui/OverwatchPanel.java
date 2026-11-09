@@ -105,6 +105,8 @@ final class OverwatchPanel extends JPanel {
     /** One line of the clip list, made off the Swing thread: the clip, its picture, its text. */
     record Row(ClipIndex.Clip clip, ImageIcon thumb, String html) {}
     private final Picture player = new Picture();
+    /** Each phone's way up (1.0.55): cards, clips and thumbnails turn as the main video does; null as they come. */
+    private volatile CameraTurn turn;
     private final JButton playButton = Theme.primaryButton("Play");
     private final JSlider seek = new JSlider(0, 1000, 0);
     private final JLabel playTime = Theme.label("-", Theme.monoFont(Font.PLAIN, 11.5f), Theme.MUTED);
@@ -148,6 +150,23 @@ final class OverwatchPanel extends JPanel {
     @Override
     public Dimension getPreferredSize() {
         return new Dimension(PANEL_WIDTH, super.getPreferredSize().height);
+    }
+
+    /** Each phone's way up: the pictures here and the bearings on the map follow it; a change repaints them. */
+    void setCameraTurn(CameraTurn t) {
+        turn = t;
+        player.turn = t;
+        for (Card c : cardByDrone.values()) c.picture.turn = t;
+        if (t != null) t.addListener((phone, on) -> {
+            repaint();
+            clipList.repaint();
+            map.setOverwatchMarks(marks()); // the bearing line turns with the camera
+        });
+    }
+
+    private boolean upsideDown(String drone) {
+        CameraTurn t = turn;
+        return t != null && drone != null && t.upsideDown(drone);
     }
 
     // ------------------------------------------------------------------ the alerts
@@ -240,7 +259,7 @@ final class OverwatchPanel extends JPanel {
             if (at == null || v.shown() == AlertCard.Shown.HIDDEN) continue;
             boolean alert = v.shown() == AlertCard.Shown.CARD && !v.ended();
             OverwatchProtocol.Alert a = v.alert();
-            double bearing = v.pose() != null && a != null ? (v.pose().headingDeg() + a.angleDeg + 360) % 360 : Double.NaN;
+            double bearing = v.pose() != null && a != null ? CameraTurn.bearing(v.pose().headingDeg(), a.angleDeg, upsideDown(v.drone())) : Double.NaN;
             out.add(new MapView.OverwatchMark(v.drone(), at[0], at[1], cone(v.drone(), v.drone(), v.pose()), bearing, alert, false,
                     "OVERWATCH " + v.drone() + (alert ? " - MOTION" : "")));
         }
@@ -284,6 +303,8 @@ final class OverwatchPanel extends JPanel {
         Card(String drone) {
             super(new BorderLayout());
             this.drone = drone;
+            picture.phone = drone;
+            picture.turn = turn;
             setBackground(Theme.PANEL_2);
             setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(MapView.ALERT, 2),
                     BorderFactory.createEmptyBorder(8, 8, 8, 8)));
@@ -382,7 +403,7 @@ final class OverwatchPanel extends JPanel {
             when.setText(v.ended() && v.endedAtWall() > 0 ? start + " - " + clock(v.endedAtWall()) + "  (" + length(v.endedAtWall() - v.alertAtWall()) + ")"
                     : start + "  -  " + length(now - v.alertAtWall()) + " ago" + (v.live() ? "  LIVE" : ""));
             StringBuilder line = new StringBuilder();
-            if (v.pose() != null && a != null) line.append(String.format(Locale.ROOT, "Bearing %03.0f deg", (v.pose().headingDeg() + a.angleDeg + 360) % 360));
+            if (v.pose() != null && a != null) line.append(String.format(Locale.ROOT, "Bearing %03.0f deg", CameraTurn.bearing(v.pose().headingDeg(), a.angleDeg, upsideDown(drone))));
             if (a != null && a.battery <= 100) line.append(line.length() > 0 ? "  -  " : "").append("battery ").append(a.battery).append(" %");
             if (v.preRolls() > 0) line.append(line.length() > 0 ? "  -  " : "").append(v.preRolls()).append(v.preRolls() == 1 ? " picture" : " pictures").append(" before it");
             if (v.clipLine() != null) line.append(line.length() > 0 ? "  -  " : "").append(v.clipLine());
@@ -428,8 +449,14 @@ final class OverwatchPanel extends JPanel {
                 : String.format(Locale.ROOT, "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60);
     }
 
-    /** A picture, scaled to fit (letterboxed), with the detection's box when one is given. */
+    /**
+     * A picture, scaled to fit (letterboxed), with the detection's box when one is given; turned as set for its phone
+     * (1.0.55) - the box with it, since the phone's boxes come in the camera's own coordinates.
+     */
     private static final class Picture extends JComponent {
+        volatile CameraTurn turn;
+        /** Whose picture: a card's drone, or the clip playing. */
+        volatile String phone;
         private volatile BufferedImage image;
         private volatile float[] box;
         private volatile String note = "WAITING FOR PICTURE";
@@ -469,9 +496,11 @@ final class OverwatchPanel extends JPanel {
                 double s = Math.min((double) getWidth() / img.getWidth(), (double) getHeight() / img.getHeight());
                 int w = (int) Math.round(img.getWidth() * s), h = (int) Math.round(img.getHeight() * s);
                 int x = (getWidth() - w) / 2, y = (getHeight() - h) / 2;
-                g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-                g.drawImage(img, x, y, w, h, null);
-                float[] b = box;
+                CameraTurn t = turn;
+                String who = phone;
+                boolean upsideDown = t != null && who != null && t.upsideDown(who);
+                CameraTurn.draw(g, img, x, y, w, h, upsideDown, upsideDown);
+                float[] b = CameraTurn.box(box, upsideDown, upsideDown);
                 if (b != null && b[2] > 0 && b[3] > 0) {
                     g.setColor(MapView.ALERT);
                     g.drawRect(x + Math.round(b[0] * w), y + Math.round(b[1] * h), Math.max(4, Math.round(b[2] * w)), Math.max(4, Math.round(b[3] * h)));
@@ -683,11 +712,35 @@ final class OverwatchPanel extends JPanel {
         @Override
         public Component getListCellRendererComponent(JList<? extends Row> list, Row r, int i, boolean selected, boolean focus) {
             row.setBackground(selected ? Theme.alpha(MapView.ALERT, 70) : Theme.PANEL);
-            thumb.setIcon(r.thumb()); // made on the list's worker: nothing read or decoded here
+            // made on the list's worker: nothing read or decoded here; turned as its drone's picture is now
+            thumb.setIcon(r.thumb() == null ? null : turnedIcon(r.thumb(), upsideDown(r.clip().drone())));
             text.setText(r.html());
             text.setForeground(Theme.TEXT);
             return row;
         }
+    }
+
+    /** The icon as is, or turned 180 degrees (painted so: no copy kept). */
+    static javax.swing.Icon turnedIcon(ImageIcon icon, boolean upsideDown) {
+        if (!upsideDown) return icon;
+        return new javax.swing.Icon() {
+            @Override
+            public void paintIcon(Component c, Graphics g, int x, int y) {
+                BufferedImage img = icon.getImage() instanceof BufferedImage b ? b : null;
+                if (img != null) CameraTurn.draw((Graphics2D) g, img, x, y, img.getWidth(), img.getHeight(), true, true);
+                else icon.paintIcon(c, g, x, y);
+            }
+
+            @Override
+            public int getIconWidth() {
+                return icon.getIconWidth();
+            }
+
+            @Override
+            public int getIconHeight() {
+                return icon.getIconHeight();
+            }
+        };
     }
 
     private ImageIcon thumb(Path p) {
@@ -725,6 +778,7 @@ final class OverwatchPanel extends JPanel {
     private void play(ClipIndex.Clip c) {
         stopPlaying();
         playing = c;
+        player.phone = c.drone();
         paused = false;
         seekTo = -1;
         playButton.setText("Pause");
@@ -742,7 +796,7 @@ final class OverwatchPanel extends JPanel {
         CameraFootprint.Pose p = Double.isNaN(heading) ? null : new CameraFootprint.Pose(c.lat(), c.lon(), nz(c.doubleOf("altM")), heading,
                 nz(c.doubleOf("pitchDeg")), nz(c.doubleOf("rollDeg")), nz(c.doubleOf("tiltDeg")), def(c.doubleOf("hfovDeg"), 70), def(c.doubleOf("vfovDeg"), 42));
         double angle = c.doubleOf("angleDeg");
-        double bearing = p == null || Double.isNaN(angle) ? Double.NaN : (heading + angle + 360) % 360;
+        double bearing = p == null || Double.isNaN(angle) ? Double.NaN : CameraTurn.bearing(heading, angle, upsideDown(c.drone()));
         return new MapView.OverwatchMark(c.drone(), c.lat(), c.lon(), cone(c.drone(), "replay:" + c.id(), p), bearing, false, true,
                 "CLIP " + c.drone() + " " + clock(c.startedAt()));
     }
