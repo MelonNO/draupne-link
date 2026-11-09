@@ -65,4 +65,18 @@ class MotorBeepTest {
         float[] y = seconds(m, 1.0, null);
         assertTrue(rms(y, rate / 10, rate * 9 / 10) < 0.03, "stops when Betaflight stops beeping");
     }
+
+    /** The tour's drones (2026-11-09, the pilot: "remove the drone buzzer sound, keep the birds"): no tune, no beeps. */
+    @Test
+    void aBeeperlessDroneKeepsItsBreezeAndBirdsOnly() {
+        SoundMaker tour = new SoundMaker(11);
+        tour.setBeeperless(true);
+        SoundMaker plain = new SoundMaker(11);
+        plain.setVoices(false);
+        tour.speakNow();
+        float[] a = seconds(tour, 20, "BEEPER");
+        float[] b = seconds(plain, 20, null);
+        assertArrayEquals(b, a, "the same breeze and birds, and nothing more");
+        assertTrue(rms(a, 0, a.length) > 0, "not silent");
+    }
 }

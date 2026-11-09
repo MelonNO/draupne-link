@@ -26,6 +26,23 @@ class NamesTest {
         if (otherPc != null) otherPc.close();
     }
 
+    /**
+     * The tour's virtual pilot PC (2026-11-09): its name was "PilotPC", never filed, so the spectator step waited
+     * forever. Now a free PC name; and though it may have the highest letter, it never takes the naming over.
+     */
+    @Test
+    void theTourPilotPcIsFiledAndNeverTheMaster() throws Exception {
+        Names names = new Names(PcConfig.defaults(), m -> { });
+        String free = names.firstFree(Names.Kind.PC, List.of("PCAlpha"));
+        assertEquals("PCBravo", free);
+        assertTrue(Names.isValidName(free, Names.Kind.PC));
+        names.seen(new Names.Reply(Names.Kind.PC, free, de.droiddrone.pc.fleet.VirtualPilotPc.DEVICE, "1.0.57"), "127.0.0.60", "");
+        assertNotNull(names.get(free), "filed: it shows in the PILOT PC list");
+        assertTrue(names.isMaster("PCAlpha"), "the virtual PC's higher letter doesn't count");
+        names.seen(new Names.Reply(Names.Kind.PC, "PCCharlie", "Desktop", "1.0.57"), "100.64.0.7", "");
+        assertFalse(names.isMaster("PCAlpha"), "a real PC's does");
+    }
+
     @Test
     void lettersNamesAndTheMap() throws Exception {
         assertEquals("MobileAlpha", Names.Kind.PHONE.name(0));

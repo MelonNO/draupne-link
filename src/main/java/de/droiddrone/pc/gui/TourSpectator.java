@@ -27,6 +27,10 @@ final class TourSpectator implements AutoCloseable {
     private Fleet ownFleet;
     private Fleet fleet;
     private VirtualPilotPc pilot;
+    /** The virtual pilot PC's name: a free PC name, chosen at the start (a made-up one was never filed). */
+    private volatile String pilotName;
+    /** Every name this part brought, once up (the pilot PC's own drone is gone again when it observes). */
+    private volatile List<String> traced = List.of();
     private final List<VirtualDrone> watched = new ArrayList<>();
     private volatile boolean started, failed, observing;
 
@@ -42,9 +46,11 @@ final class TourSpectator implements AutoCloseable {
         s.add(new Tour.Step("SPECTATOR", "Another pilot is flying. Select SPECTATOR to watch.", main::tourRoleCombo)
                 .before(this::start).skip(() -> failed).of(Tour.FEATURE_SPECTATOR)
                 .waitFor(main::tourSpectatorRole, "Select SPECTATOR", true));
-        s.add(new Tour.Step("PILOT PC", "Pick " + VirtualPilotPc.NAME + ".", main::tourPhoneCombo).skip(() -> failed).of(Tour.FEATURE_SPECTATOR)
-                .waitFor(() -> VirtualPilotPc.NAME.equalsIgnoreCase(main.config().getString(Names.PHONE_NAME_KEY)),
-                        "Pick " + VirtualPilotPc.NAME, true));
+        // the only pilot PC is picked by itself: the step then passes at once
+        s.add(new Tour.Step("PILOT PC", "Pick the pilot's PC, VIRTUAL.", main::tourPhoneCombo).skip(() -> failed).of(Tour.FEATURE_SPECTATOR)
+                .live(main::tourPhoneCombo)
+                .waitFor(() -> pilotName != null && pilotName.equalsIgnoreCase(main.config().getString(Names.PHONE_NAME_KEY)),
+                        "Pick it", true));
         s.add(new Tour.Step("WATCH", "Press CONNECT.", main::tourConnectButton).skip(() -> failed).of(Tour.FEATURE_SPECTATOR)
                 .waitFor(main::tourSpectating, "Press CONNECT", true));
         s.add(new Tour.Step("MIRROR", "Spectator mirrors the pilot PC: map, fleet and camera feeds. "
@@ -72,16 +78,29 @@ final class TourSpectator implements AutoCloseable {
         }
         fleet = f;
         Fleet use = f;
+        String own = main.nameService().ownName();
+        String name = main.names().firstFree(Names.Kind.PC, own == null ? List.of() : List.of(own));
+        if (name == null) {
+            failed = true;
+            main.logLine("Tour: spectator steps skipped - no free PC name.");
+            return;
+        }
+        pilotName = name;
         Thread t = new Thread(() -> {
             try {
                 double lat = Fleet.DEFAULT_LAT, lon = Fleet.DEFAULT_LON;
-                VirtualPilotPc p = new VirtualPilotPc(use, main.config(), line -> SwingUtilities.invokeLater(() -> main.logLine("Tour: " + line)));
+                VirtualPilotPc p = new VirtualPilotPc(use, main.config(), name, line -> SwingUtilities.invokeLater(() -> main.logLine("Tour: " + line)));
                 pilot = p;
                 for (int i = 0; i < OBSERVED; i++) {
                     double[] at = use.nextPlace(lat, lon);
-                    watched.add(use.add(use.freeName(), at[0], at[1], at[2]));
+                    VirtualDrone d = use.add(use.freeName(), at[0], at[1], at[2]);
+                    d.setBeeperless(true);
+                    watched.add(d);
                 }
                 p.fly(lat + 0.0008, lon + 0.0012);
+                List<String> names = traceNames(p, watched);
+                traced = names;
+                SwingUtilities.invokeLater(() -> main.tourHost().begin(names)); // gone with the tour's clean-up
             } catch (Exception e) {
                 failed = true;
                 SwingUtilities.invokeLater(() -> main.logLine("Tour: no virtual pilot PC - " + e.getMessage()));
@@ -115,13 +134,31 @@ final class TourSpectator implements AutoCloseable {
         return mode != null && mode.mode() == Mirror.OBSERVER;
     }
 
+    /** The names this part brings: the pilot PC's, its own drone's and the observed ones. */
+    private static List<String> traceNames(VirtualPilotPc p, List<VirtualDrone> drones) {
+        List<String> n = new ArrayList<>();
+        if (p != null) {
+            n.add(p.name());
+            VirtualDrone own = p.drone();
+            if (own != null) n.add(own.name());
+        }
+        for (VirtualDrone d : drones) n.add(d.name());
+        return n;
+    }
+
     @Override
     public void close() {
         VirtualPilotPc p = pilot;
         pilot = null;
         Fleet f = fleet;
         List<VirtualDrone> list = List.copyOf(watched);
+        List<String> names = new ArrayList<>(traced);
+        for (String n : traceNames(p, list)) if (!names.contains(n)) names.add(n);
+        if (pilotName != null && !names.contains(pilotName)) names.add(pilotName);
+        traced = List.of();
+        if (!names.isEmpty()) main.tourHost().forget(names); // a spectator link to its pilot PC ends here, cleanly
         watched.clear();
+        pilotName = null;
         Fleet own = ownFleet;
         ownFleet = null;
         started = false;
@@ -131,6 +168,8 @@ final class TourSpectator implements AutoCloseable {
             if (p != null) p.close();
             if (f != null && f != own) for (VirtualDrone d : list) f.remove(d);
             if (own != null) own.close();
+            // after they stopped answering: out of the name map, the PHONE list, the fleet and the map (the X too)
+            if (!names.isEmpty()) SwingUtilities.invokeLater(() -> main.tourHost().forget(names));
         }, "tourPilotPcClose");
         t.setDaemon(true);
         t.start();

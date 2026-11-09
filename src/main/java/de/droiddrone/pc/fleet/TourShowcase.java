@@ -42,6 +42,7 @@ public final class TourShowcase implements AutoCloseable {
             for (ShowScene.Kind k : SCENES) {
                 VirtualDrone d = fleet.addAtLaunch(fleet.freeName(), launch[0], launch[1]);
                 d.showScene(new ShowScene(k, d.fc.northM(), d.fc.eastM(), d.fc.headingDeg()));
+                d.setBeeperless(true);
                 drones.add(d);
             }
             fleet.startHeartbeat();

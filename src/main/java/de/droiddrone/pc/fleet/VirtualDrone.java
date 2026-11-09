@@ -1786,6 +1786,11 @@ public final class VirtualDrone {
         sound.setVoices(on);
     }
 
+    /** No beeping through its motors (the tour's drones); motors, breeze and birds stay. */
+    public void setBeeperless(boolean on) {
+        sound.setBeeperless(on);
+    }
+
     /** A fresh pack, on the ground only. */
     public void newBattery() {
         fc.newBattery();

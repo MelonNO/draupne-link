@@ -22,7 +22,7 @@ import java.util.function.Consumer;
 /**
  * Another pilot's PC in the virtual fleet (1.0.56, the tour's spectator steps: "connect to a simulated other pilot PC
  * flying ... have it change from pilot to observation mode"): DRAUPNE Link's own pilot code without a window, on a
- * loopback address of its own, announced with the drones and named as a PC ({@link #NAME}). Spectators are always
+ * loopback address of its own, announced with the drones and named as a PC (a free PC name, given). Spectators are always
  * allowed here.
  * <ul>
  * <li>{@link #fly}: a virtual drone of its own, flown by a real {@link ControlLink} - an autopilot on the sticks arms
@@ -33,7 +33,6 @@ import java.util.function.Consumer;
  * Built for the tour to drive; nothing here touches a window.
  */
 public final class VirtualPilotPc implements AutoCloseable {
-    public static final String NAME = "PilotPC";
     public static final String DEVICE = "VIRTUAL PC";
     /** Its loopback address: clear of the drones' (127.0.0.11 up, at most {@link Fleet#MAX_DRONES}). */
     public static final String ADDRESS = "127.0.0.60";
@@ -45,6 +44,8 @@ public final class VirtualPilotPc implements AutoCloseable {
     private volatile boolean landing;
 
     private final Fleet fleet;
+    /** Its name: a valid DRAUPNE PC name no PC has, or the name map would never file it. */
+    private final String name;
     private final PcConfig config;
     private final Consumer<String> log;
     private final InetAddress address;
@@ -67,20 +68,26 @@ public final class VirtualPilotPc implements AutoCloseable {
     /**
      * Up at {@link #ADDRESS}, announced with the fleet's drones, idle.
      * @param config DRAUPNE Link's settings (the key); never written
+     * @param name a free PC name (Names.firstFree)
      */
-    public VirtualPilotPc(Fleet fleet, PcConfig config, Consumer<String> log) throws IOException {
+    public VirtualPilotPc(Fleet fleet, PcConfig config, String name, Consumer<String> log) throws IOException {
         this.fleet = fleet;
+        this.name = name;
         this.config = config;
         this.log = log;
         address = InetAddress.getByName(ADDRESS);
-        mirror = new MirrorHost(config.getKey(), () -> true, line -> log.accept(NAME + ": " + line), address);
+        mirror = new MirrorHost(config.getKey(), () -> true, line -> log.accept(name + ": " + line), address);
         DatagramSocket s = new DatagramSocket(0, address);
         port = s.getLocalPort();
         holdPort(s);
         node = new VirtualFleet.Drone(ADDRESS, port);
         fleet.announceExtra(node);
         setMode();
-        log.accept(NAME + ": up at " + ADDRESS + ":" + port);
+        log.accept(name + ": up at " + ADDRESS + ":" + port);
+    }
+
+    public String name() {
+        return name;
     }
 
     public String address() {
@@ -143,7 +150,7 @@ public final class VirtualPilotPc implements AutoCloseable {
     }
 
     private byte[] nameReply() {
-        return Names.reply(config.getKey(), Names.Kind.PC, NAME, DEVICE, AppInfo.version());
+        return Names.reply(config.getKey(), Names.Kind.PC, name, DEVICE, AppInfo.version());
     }
 
     /** A spectator's HELLO while nothing flies: told so (it keeps asking, and joins once it flies). */
@@ -175,7 +182,10 @@ public final class VirtualPilotPc implements AutoCloseable {
         synchronized (portLock) {
             stopObserving();
             if (link != null) return;
-            if (drone == null) drone = fleet.add(fleet.freeName(), lat, lon, 0);
+            if (drone == null) {
+                drone = fleet.add(fleet.freeName(), lat, lon, 0);
+                drone.setBeeperless(true); // the tour's: no motor beeps
+            }
             releasePort();
             grounded = false;
             ControlLink l = new ControlLink(config, drone.address(), drone.port(), port);
@@ -192,7 +202,7 @@ public final class VirtualPilotPc implements AutoCloseable {
             l.enableSpectators(true, 600);
             l.setNameReply(this::nameReply);
             l.setMirrorHost(mirror);
-            l.setEvents(line -> log.accept(NAME + ": " + line));
+            l.setEvents(line -> log.accept(name + ": " + line));
             try {
                 l.start();
             } catch (IOException | RuntimeException e) {
@@ -206,7 +216,7 @@ public final class VirtualPilotPc implements AutoCloseable {
             t.setDaemon(true);
             pilot = t;
             t.start();
-            log.accept(NAME + ": flying " + drone.name());
+            log.accept(name + ": flying " + drone.name());
         }
     }
 
@@ -296,7 +306,7 @@ public final class VirtualPilotPc implements AutoCloseable {
         try {
             holdPort(new DatagramSocket(port, address));
         } catch (IOException e) {
-            log.accept(NAME + ": its port back: " + e.getMessage());
+            log.accept(name + ": its port back: " + e.getMessage());
         }
     }
 
@@ -320,7 +330,7 @@ public final class VirtualPilotPc implements AutoCloseable {
                     @Override
                     public void onVideoFragment(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length) {
                     }
-                }, null, -1, line -> log.accept(NAME + ": " + line));
+                }, null, -1, line -> log.accept(name + ": " + line));
                 o.setTap((data, len) -> mirror.tile(tile, data, len));
                 o.start();
                 links.add(o);
@@ -331,7 +341,7 @@ public final class VirtualPilotPc implements AutoCloseable {
             });
             mode = Mirror.OBSERVER;
             setMode();
-            log.accept(NAME + ": observing " + drones.size() + " drones");
+            log.accept(name + ": observing " + drones.size() + " drones");
         }
     }
 

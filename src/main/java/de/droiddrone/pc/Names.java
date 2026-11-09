@@ -293,7 +293,9 @@ public final class Names {
         int mine = letterOf(ownName);
         if (mine < 0) return false;
         for (Entry e : entries.values()) {
-            if (e.kind() == Kind.PC && e.online() && !e.name().equalsIgnoreCase(ownName) && letterOf(e.name()) > mine) return false;
+            // the tour's virtual pilot PC never takes the naming over
+            boolean virtualPc = de.droiddrone.pc.fleet.VirtualPilotPc.DEVICE.equals(e.device());
+            if (e.kind() == Kind.PC && e.online() && !virtualPc && !e.name().equalsIgnoreCase(ownName) && letterOf(e.name()) > mine) return false;
         }
         return true;
     }

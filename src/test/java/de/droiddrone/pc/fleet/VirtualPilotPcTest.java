@@ -54,7 +54,7 @@ class VirtualPilotPcTest {
         fleet = new Fleet(config, null, log::add);
         VirtualDrone a = fleet.add(fleet.freeName(), Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON, 0);
         VirtualDrone b = fleet.add(fleet.freeName(), Fleet.DEFAULT_LAT + 0.001, Fleet.DEFAULT_LON, 90);
-        pilot = new VirtualPilotPc(fleet, config, log::add);
+        pilot = new VirtualPilotPc(fleet, config, "PCZulu", log::add);
         pilot.fly(Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON + 0.001);
         InetAddress at = InetAddress.getByName(pilot.address());
 

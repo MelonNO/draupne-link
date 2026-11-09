@@ -248,32 +248,37 @@ final class Tour {
         // ---- the LINK card (2026-11-09, the pilot): PILOT mode, a phone, PILOT UAV onto a race, STANDBY, the sleep
         // modes, then OBSERVER with six drones - the tour's own, each with something to see
         BooleanSupplier noShowcase = () -> !finale.showcaseStarted();
-        steps.add(new Step("PILOT MODE", "PILOT: you fly the drone. Pick it here.", main::tourRoleCombo)
-                .transition(main::tourAnimatePilot).needsShowcase().of(FEATURE_MODES));
+        // each mode is selected by the pilot, never by the tour (2026-11-09)
+        steps.add(new Step("PILOT MODE", "PILOT: you fly the drone. Select it here.", main::tourRoleCombo)
+                .needsShowcase().live(main::tourRoleCombo).before(main::tourRoleAwayFromPilot)
+                .waitFor(main::tourPilotRole, "Select PILOT", true).of(FEATURE_MODES));
         steps.add(new Step("PHONE", "Every phone running DRAUPNE Flight. Pick " + RACER + ", a virtual one.",
                 main::tourPhoneCombo).skip(noShowcase).live(main::tourPhoneCombo)
                 .waitFor(() -> finale.racer() != null && finale.racer().equalsIgnoreCase(main.tourChosenPhone()), "Pick it", true)
                 .before(this::nameRacer).of(FEATURE_MODES));
         steps.add(new Step("PILOT UAV", "Connects and flies it. Press it.", main::tourConnectButton).skip(noShowcase)
                 .waitFor(() -> main.tourFlying(finale.racer()), "Press it", true).of(FEATURE_MODES));
-        steps.add(new Step("LIVE", "Its camera, live. A race is on. Watch a moment.", main::tourVideo).skip(noShowcase)
-                .live(main::tourVideo).before(() -> liveSince = System.currentTimeMillis())
-                .waitFor(() -> System.currentTimeMillis() - liveSince > WATCH_MS, "Watch...", false).of(FEATURE_MODES));
+        // its camera live with nothing over it, then STANDBY comes by itself (2026-11-09: no "watch" box to wait on)
         steps.add(new Step("STANDBY", "STANDBY = disconnect. The phone rests, back in 2 s. Press it.", main::tourConnectButton)
-                .skip(noShowcase).waitFor(() -> !main.tourConnected(), "Press it", true).of(FEATURE_MODES));
+                .skip(noShowcase).transition(done -> {
+                    javax.swing.Timer t = new javax.swing.Timer((int) WATCH_MS, e -> done.run());
+                    t.setRepeats(false);
+                    t.start();
+                })
+                .waitFor(() -> !main.tourConnected(), "Press it", true).of(FEATURE_MODES));
         steps.add(new Step("DEEP SLEEP", "Longest battery life in the field. The phone turns its link off and checks in "
                 + "at CHECK EVERY.", main::tourDeepSleepButton).before(this::powerDemo).of(FEATURE_OVERWATCH));
-        steps.add(new Step("CHECK EVERY", "Set Constant: always listening, reached at once.", main::tourCheckEvery)
+        steps.add(new Step("CHECK EVERY", "How often a sleeping phone checks in. Set it to Constant: always listening, reached at once.", main::tourCheckEvery)
                 .live(main::tourCheckEvery).before(() -> {
                     if (checkBefore < 0) checkBefore = main.tourCheckIndex(); // the pilot's own, back at the end
                     main.tourCheckNotConstant();
                 })
-                .waitFor(main::tourCheckConstant, "Set Constant", true).of(FEATURE_OVERWATCH));
+                .waitFor(main::tourCheckConstant, "Set it to Constant", true).of(FEATURE_OVERWATCH));
         steps.add(new Step("OVERWATCH", "Deep sleep, with the camera watching. Movement wakes it at once and warns you.",
                 main::tourOverwatchButton).after(this::powerDemoOff).of(FEATURE_OVERWATCH));
-        steps.add(new Step("OBSERVER MODE", "OBSERVER: up to six idle drones, with sound. Pick it.", main::tourRoleCombo)
+        steps.add(new Step("OBSERVER MODE", "OBSERVER: up to six idle drones, with sound. Select it.", main::tourRoleCombo)
                 .needsShowcase().skip(noShowcase).live(main::tourRoleCombo).before(this::keepObserveSet)
-                .waitFor(main::tourObserverRole, "Pick it", true).of(FEATURE_OBSERVATION));
+                .waitFor(main::tourObserverRole, "Select OBSERVER", true).of(FEATURE_OBSERVATION));
         steps.add(new Step("CHOOSE DRONES", "Tick the six VIRTUAL drones.", main::tourChooseDrones).skip(noShowcase)
                 .before(main::tourScanNames)
                 .waitFor(() -> main.tourObserveChosen(finale.showcaseNames()), "Tick six", true).of(FEATURE_OBSERVATION));
@@ -281,6 +286,9 @@ final class Tour {
                 .waitFor(main::tourObserving, "Press it", true).of(FEATURE_OBSERVATION));
         steps.add(new Step("SOUND", "Each feed has its own sound. Mute one.", main::tourObservationGrid).skip(noShowcase)
                 .live(main::tourObservationGrid).waitFor(main::tourFeedMuted, "Mute one", true).of(FEATURE_OBSERVATION));
+        steps.add(new Step("MUTE AND LISTEN", "Mute any screen; the others play on. Unmute one to listen to it. "
+                + "A green frame shows sound, muted or not.", main::tourObservationGrid).skip(noShowcase)
+                .live(main::tourObservationGrid).of(FEATURE_OBSERVATION));
         steps.add(new Step("STOP OBSERVING", "Press it.", main::tourConnectButton).skip(noShowcase)
                 .waitFor(() -> !main.tourObserving(), "Press it", true).of(FEATURE_OBSERVATION));
         addSpectatorSteps(noShowcase);
@@ -387,9 +395,8 @@ final class Tour {
         if (r != null && s.text.contains(RACER)) s.text = s.text.replace(RACER, r);
     }
 
-    /** The LIVE step: NEXT after this long, so the race is seen (the pilot: "a pause ... to watch the FPV race"). */
+    /** After PILOT UAV: the live camera this long with nothing over it, then STANDBY shows by itself. */
     static final long WATCH_MS = 8000;
-    private long liveSince;
 
     /** The sleep buttons shown while nothing is connected, answering as a demo, for DEEP SLEEP to OVERWATCH. */
     private boolean powerDemo;
@@ -699,8 +706,8 @@ final class Tour {
     private void finished() {
         clearExamplePins();
         powerDemoOff();
+        spectatorPart.close(); // first: its pilot PC and drones stop answering before the clean-up
         finale.close();
-        spectatorPart.close();
         if (observeSetBefore != null) main.tourRestoreObserveSet(observeSetBefore);
         observeSetBefore = null;
         main.tourRestoreRole(roleBefore);

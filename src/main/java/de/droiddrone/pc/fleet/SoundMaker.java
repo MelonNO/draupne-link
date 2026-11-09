@@ -16,8 +16,10 @@ final class SoundMaker {
     private double wind, windSlow;
     private long sample;
     private volatile boolean voices = true;
-    /** No bird and no critter (the tour's drones: only the breeze, the motors and what they hear). */
+    /** No bird and no critter (the finale's drones: only the breeze, the motors and what they hear). */
     private volatile boolean quiet;
+    /** No beeping through the motors - no tune, no Betaflight beeps (the tour's showcase: the pilot, 2026-11-09). */
+    private volatile boolean beeperless;
     /** The motors: the spin-up once at each arming, then the flight's loop. */
     private final SoundSample.Voice spinUp = new SoundSample.Voice(SoundSample.of("fpv-spinup"), false);
     private final SoundSample.Voice flight = new SoundSample.Voice(SoundSample.of("fpv-flight"), true);
@@ -50,9 +52,14 @@ final class SoundMaker {
         voices = on;
     }
 
-    /** Only the breeze and the motors (the tour's drones). */
+    /** Only the breeze and the motors (the finale's drones). */
     void setQuiet(boolean on) {
         quiet = on;
+    }
+
+    /** No motor beeps; the breeze, the birds and the motors stay (the tour's showcase drones). */
+    void setBeeperless(boolean on) {
+        beeperless = on;
     }
 
     /** A voice now (the panel's SPEAK). */
@@ -83,11 +90,9 @@ final class SoundMaker {
             wind += (random.nextGaussian() - wind) * 0.02;
             double v = wind * (0.006 + Math.abs(windSlow) * 0.15);
             v += motors(throttle);
-            if (!quiet) {
-                v += bird(rate);
-                v += voice(rate);
-            }
-            v += betaflightBeeps(rate);
+            if (!quiet) v += bird(rate);
+            if (!quiet && !beeperless) v += voice(rate);
+            if (!beeperless) v += betaflightBeeps(rate);
             out[i] = (float) Math.max(-1, Math.min(1, v));
         }
         return out;

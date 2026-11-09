@@ -4834,53 +4834,9 @@ public class MainWindow extends JFrame {
 
     // ---- the tour's PILOT, STANDBY, sleep and OBSERVER steps (2026-11-09, the pilot)
 
-    /**
-     * The mode drop-down's animation before the PILOT step: it opens, the highlight walks up from the bottom to PILOT,
-     * PILOT is chosen and it closes; done runs after.
-     */
-    void tourAnimatePilot(Runnable done) {
-        int pilot = -1;
-        for (int i = 0; i < roleCombo.getItemCount(); i++) if (ROLE_PILOT.equals(roleCombo.getItemAt(i))) pilot = i;
-        if (pilot < 0 || !roleCombo.isShowing()) {
-            done.run();
-            return;
-        }
-        final int target = pilot;
-        int[] at = {roleCombo.getItemCount() - 1};
-        int[] stage = {0};
-        Timer t = new Timer(420, null);
-        t.addActionListener(e -> {
-            try {
-                if (stage[0] == 0) {
-                    roleCombo.showPopup();
-                    highlight(at[0]);
-                    stage[0] = 1;
-                } else if (stage[0] == 1) {
-                    if (at[0] != target) at[0] += at[0] > target ? -1 : 1;
-                    highlight(at[0]);
-                    if (at[0] == target) stage[0] = 2;
-                } else if (stage[0] == 2) {
-                    roleCombo.setSelectedItem(ROLE_PILOT);
-                    roleCombo.hidePopup();
-                    stage[0] = 3;
-                } else {
-                    t.stop();
-                    done.run();
-                }
-            } catch (RuntimeException ex) {
-                t.stop();
-                roleCombo.hidePopup();
-                done.run();
-            }
-        });
-        t.setInitialDelay(250);
-        t.start();
-    }
-
-    /** The open drop-down's highlight on row i (the animation's). */
-    private void highlight(int i) {
-        Object child = roleCombo.getAccessibleContext().getAccessibleChild(0);
-        if (child instanceof javax.swing.plaf.basic.ComboPopup popup) popup.getList().setSelectedIndex(i);
+    /** Before the PILOT step: the drop-down away from PILOT, so the pilot selects it (the tour never does). */
+    void tourRoleAwayFromPilot() {
+        if (connection == null && observation == null && tourPilotRole()) roleCombo.setSelectedItem(ROLE_OBSERVER);
     }
 
     boolean tourPilotRole() {
