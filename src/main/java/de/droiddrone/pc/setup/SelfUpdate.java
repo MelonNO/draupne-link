@@ -63,7 +63,7 @@ public final class SelfUpdate {
     /** The PowerShell lines that stop the helper (via its Finish) unless the held installer's signature passes. */
     static String signatureCheck(Path installer, String signer) {
         String bad = signer == null ? "($st -ne 'Valid' -and $st -ne 'NotSigned')"
-                : "($st -ne 'Valid' -or $subj -notmatch '" + signer.replace("'", "''") + "')";
+                : "($st -ne 'Valid' -or $subj -notmatch " + Shell.psQuote(signer) + ")";
         return String.join("\n",
                 "$sig = Get-AuthenticodeSignature -LiteralPath " + quote(installer),
                 "$st = [string]$sig.Status; $subj = [string]$sig.SignerCertificate.Subject",
@@ -230,7 +230,7 @@ public final class SelfUpdate {
 
     /** A PowerShell literal string: single quotes, nothing inside expanded. */
     static String quote(Path p) {
-        return "'" + p.toString().replace("'", "''") + "'";
+        return Shell.psQuote(p.toString());
     }
 
     private static MessageDigest sha256() {

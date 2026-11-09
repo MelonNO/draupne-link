@@ -138,6 +138,25 @@ class SetupTest {
         assertEquals("it's 5", r.output().trim());
         assertEquals("'it''s'", Shell.psQuote("it's"));
     }
+
+    /**
+     * Review 1.0.53: PowerShell takes the typographic single quotes as quotes too - a folder named "Kari’s PC" ended the
+     * quoted path and the script (the update helper, the Tailscale install) failed. Each value comes back as it was,
+     * compared by its character codes (the console's code page can't show them all).
+     */
+    @Test
+    void anyQuoteInAValueComesBackAsItWas() {
+        assumeTrue(System.getProperty("os.name", "").startsWith("Windows"));
+        String[] values = {"C:\\Users\\Kari\u2019s PC\\x.msi", "it's", "\u2018a\u2019 \u201ab\u201b", "$env:TEMP `n \"q\"", "''\u2019\u2019"};
+        for (String v : values) {
+            Shell.Result r = Shell.powershell(Duration.ofSeconds(30), "Write-Output ([int[]][char[]]" + Shell.psQuote(v) + " -join ',')");
+            assertTrue(r.ok(), v + ": " + r.output());
+            StringBuilder codes = new StringBuilder();
+            for (char c : v.toCharArray()) codes.append(codes.length() == 0 ? "" : ",").append((int) c);
+            assertEquals(codes.toString(), r.output().trim(), v);
+        }
+        assertTrue(SelfUpdate.quote(Path.of("C:\\Users\\Kari\u2019s PC")).contains("\u2019\u2019"), "the update helper's paths too");
+    }
     @Test
     void windowsToolsRunByFullPath() {
         assumeTrue(System.getProperty("os.name", "").startsWith("Windows"));
