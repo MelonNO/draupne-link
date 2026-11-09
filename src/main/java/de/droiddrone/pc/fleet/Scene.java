@@ -157,6 +157,11 @@ final class Scene {
         return !targets(nowMs).isEmpty();
     }
 
+    /** The drone flying here, every tick: its BTRs flee while it is in the air ({@link BtrScene#threat}). */
+    void threat(double north, double east, boolean airborne, long nowMs) {
+        for (Target t : targets) if (t.btr != null) t.btr.threat(north, east, airborne, nowMs);
+    }
+
     /** The target a drone at this point flies into, taken out of the picture (1.0.52: it is hit); null for none. */
     Target hit(double north, double east, double alt, long nowMs) {
         for (Target t : targets(nowMs)) {

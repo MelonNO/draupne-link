@@ -230,6 +230,23 @@ public final class OverwatchHub implements AutoCloseable {
         });
     }
 
+    /**
+     * The drone gone from this PC altogether (1.0.52: the tour's drones at the tour's end): its watch forgotten, its
+     * card and event taken off, its open files closed. Its clips on disk are the caller's to keep or delete.
+     */
+    public void drop(String drone) {
+        forget(drone);
+        task(() -> {
+            Session s = sessions.remove(drone);
+            if (s != null) {
+                s.closeMedia();
+                if (s.transfer != null) s.transfer.close();
+                s.transfer = null;
+            }
+            publish();
+        });
+    }
+
     public void closeBadge(String drone) {
         task(() -> {
             Session s = sessions.get(drone);

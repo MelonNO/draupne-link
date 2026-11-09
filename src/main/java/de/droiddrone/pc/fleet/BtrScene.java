@@ -385,14 +385,133 @@ final class BtrScene implements Scene.World {
         return startMs;
     }
 
+    // ------------------------------------------------------------------ the escape
+
+    /**
+     * Its flight from the drone (1.0.52, the pilot: "when the drone is airborne get the BTR to try and escape ... in
+     * not just a straight line but in multiple directions"): once the drone flying here is in the air, the vehicle
+     * leaves its patrol and drives away from it - its course away from the drone turned by a zig-zag that changes side
+     * every few seconds, now a dash, now a little slower - and turns back along the edge rather than leaving the area.
+     * The drone down (or gone) for a while: it slows to a stop where it is. Worked out step by step from the moment it
+     * set off; its pose for an earlier time is the latest.
+     */
+    private final Object live = new Object();
+    private boolean escaping;
+    private long liveMs, airborneAtMs, zigUntilMs, burstUntilMs;
+    private double ln, le, lh, lv, ls, zigRad, wantV, threatN, threatE;
+    private final Random er = new Random(4711);
+    /** The area it keeps to: this far from the drone's start point at most (metres). */
+    static final double ESCAPE_RANGE_M = 320;
+    /** The drone counts as flying this long after it was last seen in the air (ms). */
+    static final long CALM_AFTER_MS = 6000;
+    private static final double ESCAPE_ACCEL = 1.8, ESCAPE_BRAKE = 2.2, ESCAPE_TURN = Math.toRadians(30);
+
+    /**
+     * The drone flying here, every tick: where it is and whether it is in the air (armed, above ground). The first time
+     * in the air starts the escape.
+     */
+    void threat(double north, double east, boolean airborne, long nowMs) {
+        synchronized (live) {
+            threatN = north;
+            threatE = east;
+            if (airborne) {
+                if (!escaping && nowMs >= startMs) {
+                    double[] q = pose(nowMs);
+                    ln = q[0];
+                    le = q[1];
+                    lh = Math.toRadians(q[2]);
+                    ls = q[3];
+                    lv = speedAt(nowMs);
+                    liveMs = nowMs;
+                    escaping = true;
+                    zigUntilMs = 0;
+                    burstUntilMs = 0;
+                }
+                airborneAtMs = nowMs;
+            }
+            if (escaping) advance(nowMs);
+        }
+    }
+
+    boolean escaping() {
+        synchronized (live) {
+            return escaping;
+        }
+    }
+
+    /** Steps (TICK_S) up to this time. Under the lock. */
+    private void advance(long nowMs) {
+        long step = Math.round(TICK_S * 1000);
+        while (liveMs + step <= nowMs) {
+            liveMs += step;
+            stepEscape(liveMs, TICK_S);
+        }
+    }
+
+    private void stepEscape(long t, double dt) {
+        boolean flying = t - airborneAtMs < CALM_AFTER_MS;
+        double turnTo = lh;
+        if (flying) {
+            if (t >= zigUntilMs) { // a new leg: the other side, by its own angle, for its own time
+                double side = zigRad >= 0 ? -1 : 1;
+                zigRad = side * Math.toRadians(25 + er.nextDouble() * 40);
+                zigUntilMs = t + 2000 + (long) (er.nextDouble() * 3000);
+            }
+            if (t >= burstUntilMs) {
+                boolean dash = er.nextDouble() < 0.45;
+                wantV = dash ? 10 + er.nextDouble() * 3 : 6 + er.nextDouble() * 2;
+                burstUntilMs = t + 1500 + (long) (er.nextDouble() * (dash ? 2500 : 3500));
+            }
+            double away = Math.atan2(le - threatE, ln - threatN);
+            turnTo = away + zigRad;
+            double fromStart = Math.hypot(ln - originN, le - originE);
+            if (fromStart > ESCAPE_RANGE_M * 0.85) { // the area's edge: along it, on the side away from the drone
+                double out = Math.atan2(le - originE, ln - originN);
+                double a = out + Math.PI / 2, b = out - Math.PI / 2;
+                double inward = (fromStart - ESCAPE_RANGE_M * 0.85) / (ESCAPE_RANGE_M * 0.15); // 0..1+: turn in harder
+                double pick = angleDiff(a, away) < angleDiff(b, away) ? a : b;
+                turnTo = pick + Math.signum(angleDiff2(out + Math.PI, pick)) * Math.min(1, inward) * Math.PI / 3;
+            }
+        } else {
+            wantV = 0; // calm: it stops where it is
+        }
+        double d = Math.atan2(Math.sin(turnTo - lh), Math.cos(turnTo - lh));
+        double maxTurn = ESCAPE_TURN * dt * (lv < 1 ? 0.3 : 1);
+        lh += Math.max(-maxTurn, Math.min(maxTurn, d));
+        lv = lv < wantV ? Math.min(wantV, lv + ESCAPE_ACCEL * dt) : Math.max(wantV, lv - ESCAPE_BRAKE * dt);
+        ln += Math.cos(lh) * lv * dt;
+        le += Math.sin(lh) * lv * dt;
+        ls += lv * dt;
+    }
+
+    private static double angleDiff(double a, double b) {
+        return Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+    }
+
+    private static double angleDiff2(double a, double b) {
+        return Math.atan2(Math.sin(a - b), Math.cos(a - b));
+    }
+
     /** Its speed now, m/s (0 waiting or halted). */
     double speedAt(long nowMs) {
+        synchronized (live) {
+            if (escaping) {
+                advance(nowMs);
+                return lv;
+            }
+        }
         int k = (int) Math.floor((nowMs - startMs) / 1000.0 / TICK_S);
         return k < 0 ? 0 : driveV[Math.min(driveV.length - 1, k)];
     }
 
     /** Where the vehicle is: {north, east, heading degrees, metres driven}. */
     double[] pose(long nowMs) {
+        synchronized (live) {
+            if (escaping) {
+                advance(nowMs);
+                return new double[]{ln, le, Math.toDegrees(lh), ls};
+            }
+        }
         double t = (nowMs - startMs) / 1000.0 / TICK_S;
         double s;
         if (t <= 0) {

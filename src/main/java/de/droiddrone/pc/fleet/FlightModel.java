@@ -101,6 +101,11 @@ public final class FlightModel {
     private double maxAlt, travelled;
     private boolean homeSet;
     private double homeNorth, homeEast;
+    /**
+     * Home stays the launch point through the next arming (1.0.52): a layout drone flew in from there, so the first
+     * arming where it sits continues that flight's home; after its disarm, an arming sets home as Betaflight does.
+     */
+    private boolean homeOnce;
 
     // battery
     private double mahDrawn, amps;
@@ -201,7 +206,7 @@ public final class FlightModel {
         armedAt = nowMs;
         crashed = false;
         lastDisarm = "";
-        if (!homeSet || alt < 0.1) { // Betaflight sets home at arming
+        if (!homeSet || (!homeOnce && alt < 0.1)) { // Betaflight sets home at arming
             homeNorth = north;
             homeEast = east;
             homeSet = true;
@@ -212,6 +217,7 @@ public final class FlightModel {
         if (!armed) return;
         armed = false;
         lastDisarm = why;
+        homeOnce = false; // that flight from the launch point is over: the next arming sets home, as Betaflight does
     }
 
     /** The sticks the FC flies by now: the frame, the held frame, or stage 1's centred sticks with the throttle low. */
@@ -546,7 +552,19 @@ public final class FlightModel {
         alt = 0;
         vn = ve = vz = 0;
         homeSet = false;
+        homeOnce = false;
         return true;
+    }
+
+    /**
+     * Home at this point (1.0.52): the layout's drones flew there from the launch point, so their flight controller's
+     * home is the launch point, kept through the next arming - the PC's LAUNCH comes from it (MSP_COMP_GPS).
+     */
+    public synchronized void setLaunch(double lat, double lon) {
+        homeNorth = (lat - homeLat) * 111_320.0;
+        homeEast = (lon - homeLon) * 111_320.0 * Math.cos(Math.toRadians(homeLat));
+        homeSet = true;
+        homeOnce = true;
     }
 
     public double northM() {

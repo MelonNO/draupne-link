@@ -154,8 +154,7 @@ public final class FleetPanel {
 
     private void addDrone() {
         try {
-            double[] at = fleet.nextPlace(startLat, startLon);
-            addCard(fleet.add(fleet.freeName(), at[0], at[1], at[2]));
+            addCard(fleet.addAtLaunch(fleet.freeName(), startLat, startLon));
         } catch (IOException e) {
             JOptionPane.showMessageDialog(frame, e.getMessage(), "Add drone", JOptionPane.WARNING_MESSAGE);
         }
@@ -177,6 +176,7 @@ public final class FleetPanel {
             for (VirtualDrone d : fleet.drones()) {
                 double[] p = de.droiddrone.pc.fleet.FleetLayout.place(i++, lat, lon);
                 if (!d.moveTo(p[0], p[1])) appendLog(d.name() + ": armed - stays where it is");
+                else d.setLaunch(lat, lon); // they flew from the launch point there
             }
             refresh();
         } catch (RuntimeException e) {
@@ -234,7 +234,7 @@ public final class FleetPanel {
         final JCheckBox night = new JCheckBox("NIGHT");
         final JCheckBox track = new JCheckBox("play its track");
         final JCheckBox newPort = new JCheckBox("new port");
-        final JCheckBox voices = new JCheckBox("voices", true);
+        final JCheckBox voices = new JCheckBox("beeps", true);
 
         Card(VirtualDrone d) {
             drone = d;
@@ -303,7 +303,7 @@ public final class FleetPanel {
                     button("Check now", "Asleep: open the sleep check window now", drone::checkNow),
                     button("Wake", "The phone's hold-to-wake", () -> drone.requestMode(VirtualDrone.NORMAL, 0, "the phone's button"))));
             actions.add(section("OBSERVATION + VIDEO"));
-            actions.add(row(button("Speak", "A voice on its microphone now", drone::speakNow), voices,
+            actions.add(row(button("Beep", "Its motors beep now (its ESC tune)", drone::speakNow), voices,
                     button("New battery", "Full pack (on the ground)", drone::newBattery)));
             actions.add(row(button("Flight file...", "Loop a DRAUPNE Link recording as its camera", this::pickFile), track,
                     button("Generated", "Generated picture again", this::generated), videoLabel));

@@ -1649,6 +1649,7 @@ public class MainWindow extends JFrame {
         linkLogTimer.start();
         updateFlightLayout();
         standbyPhones.remove(target.ip()); // a Connect wakes a standby phone
+        tourNoteConnect(target.name());
         logLine((watch ? "Watching " : "Connecting to ") + target.name() + (target.isVirtual() ? " (VIRTUAL)" : "") + " (" + target.ip() + ":" + de.droiddrone.pc.fleet.VirtualFleet.portOf(target.ip(), port) + ")" + (target.online() ? "" : " - last seen " + Names.agoText(target.lastSeen(), System.currentTimeMillis())));
         setLinkEditable(false);
     }
@@ -1714,6 +1715,7 @@ public class MainWindow extends JFrame {
         sampleLinkLog();
         linkLogTimer.stop();
         if (liveTrack != null) liveTrack.close(pins.list()); // stays for FIND DRONE and the map
+        tourNoteDisconnect();
         keepFlight(liveTrack, liveTrackName); // remembered; shown as the live one until the next connection
         show(lostDroneButton, false);
         if (connection != null) {
@@ -1995,8 +1997,15 @@ public class MainWindow extends JFrame {
     private void lostDrone() {
         // 1.0.52 (the pilot): the drone is down and gone - CRASHED on the map, the fleet and the PHONE list until its
         // phone is heard again or the pilot clears it; FIND DRONE still has its last position
+        // and the link to it ends at once (1.0.52, the pilot: standby): no more waiting for it, no reconnecting, no
+        // link-loss alarms; the LINK card is idle. Its track stays for FIND DRONE and the map; if its phone ever answers
+        // again it is heard as any phone is.
         String name = config.getString(Names.PHONE_NAME_KEY);
-        if (markCrashed(name, "lost")) lostDroneButton.setText("Crashed - find drone");
+        if (connection != null) {
+            logLine("LOST DRONE: link to " + name + " ended.");
+            disconnect();
+        }
+        markCrashed(name, "lost");
         FindDroneDialog d = openFindDrone();
         String mgrs = d.mgrs();
         if (mgrs != null) {
@@ -4947,9 +4956,101 @@ public class MainWindow extends JFrame {
         return (JComponent) getContentPane();
     }
 
-    void tourForget(String drone) {
-        overwatch.forget(drone);
-        lastCell.remove(drone.toLowerCase(Locale.ROOT));
+    /** What the tour's finale leaves on this PC, noted while it runs (null: no finale running). */
+    private TourTraces tourTraces;
+
+    /** The tour's drones are up: from here on what they leave is noted (TourFinale.start). */
+    void tourBegin(java.util.List<String> drones) {
+        Map<String, String> now = new java.util.HashMap<>();
+        for (String k : config.keys()) now.put(k, config.getString(k));
+        java.nio.file.Path lastPosition = null;
+        try {
+            lastPosition = de.droiddrone.pc.map.FlightTrack.defaultDir().resolve("last-position.txt");
+        } catch (IOException ignored) {
+            // no Tracks folder: nothing there to look after
+        }
+        tourTraces = new TourTraces(drones, System.currentTimeMillis(), now, lastPosition);
+    }
+
+    /**
+     * The tour ended, whichever way (1.0.52, the pilot: "clean up all the simulated drones and flights after the
+     * tour"): a link to a tour drone ends, and every trace of the tour's drones goes - the name map and PHONE list, the
+     * fleet rows and map signs, their kept flights, CRASHED marks, queued modes, sleep records, overwatch watches and
+     * cards, the settings that name them, and the files of the tour's flight and events. The pilot's own is untouched.
+     */
+    void tourCleanUp() {
+        TourTraces t = tourTraces;
+        if (t == null) return;
+        Connection c = connection;
+        if (c != null && t.isTour(config.getString(Names.PHONE_NAME_KEY))) disconnect();
+        if (t.inConnection()) t.disconnected(System.currentTimeMillis());
+        java.util.Set<java.nio.file.Path> noted = new java.util.HashSet<>();
+        for (String n : t.names()) {
+            overwatch.drop(n);
+            lastCell.remove(n.toLowerCase(Locale.ROOT));
+            if (crashed.keySet().removeIf(k -> k.equalsIgnoreCase(n))) saveCrashed();
+            if (asleepPhones.values().removeIf(a -> n.equalsIgnoreCase(a.name()))) saveAsleep();
+            standbyPhones.values().removeIf(n::equalsIgnoreCase);
+            if (fleet != null) fleet.cancel(n);
+            de.droiddrone.pc.PossiblyFlying.pc().markDown(n);
+            names.remove(n);
+        }
+        java.nio.file.Path videos = null, clips = null;
+        try {
+            videos = de.droiddrone.pc.AppPaths.videosDir();
+        } catch (IOException ignored) {
+            // no Videos folder: no recordings to look for
+        }
+        clips = overwatch.index().root();
+        java.util.List<java.nio.file.Path> files = t.filesToDelete(videos, clips, System.currentTimeMillis());
+        noted.addAll(files);
+        boolean keptChanged = keptFlights.removeIf(k -> (k.file() != null && noted.contains(k.file()))
+                || t.isTour(k.name()) || t.names().stream().anyMatch(n -> k.name() != null
+                && k.name().toLowerCase(Locale.ROOT).startsWith(n.toLowerCase(Locale.ROOT))));
+        if (keptChanged) saveKeptFlights();
+        Map<String, String> now = new java.util.HashMap<>();
+        for (String k : config.keys()) now.put(k, config.getString(k));
+        Map<String, String> restore = t.settingsToRestore(now);
+        if (!restore.isEmpty()) save(restore);
+        int deleted = 0;
+        for (java.nio.file.Path f : files) {
+            try {
+                if (java.nio.file.Files.deleteIfExists(f)) deleted++;
+            } catch (IOException e) {
+                logLine("Tour: couldn't delete " + shortPath(f) + ": " + e.getMessage());
+            }
+        }
+        try {
+            t.restoreLastPosition();
+        } catch (IOException e) {
+            logLine("Tour: last-position.txt not put back: " + e.getMessage());
+        }
+        tourTraces = null;
+        tourFlights(java.util.List.of());
+        tourUnits(java.util.List.of());
+        if (liveTrack != null && liveTrack.file() != null && noted.contains(liveTrack.file())) {
+            liveTrack = null;
+            track = null;
+        }
+        pushKept();
+        updatePhoneList();
+        logLine("Tour: its drones and flights removed" + (deleted > 0 ? " (" + deleted + " file" + (deleted == 1 ? "" : "s") + ")" : "") + ".");
+    }
+
+    /** A connection to this drone began: the tour's flight's files are noted (its link log now, its track at the end). */
+    private void tourNoteConnect(String drone) {
+        TourTraces t = tourTraces;
+        if (t == null || !t.isTour(drone)) return;
+        t.connected(System.currentTimeMillis());
+        if (linkLog != null) t.note(linkLog.file());
+    }
+
+    /** The connection ends: a tour flight's track is noted. */
+    private void tourNoteDisconnect() {
+        TourTraces t = tourTraces;
+        if (t == null || !t.inConnection()) return;
+        if (liveTrack != null) t.note(liveTrack.file());
+        t.disconnected(System.currentTimeMillis());
     }
 
     /** The tour's drones' flights on the maps, after the kept ones; never saved (empty takes them off). */

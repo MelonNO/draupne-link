@@ -73,6 +73,17 @@ public final class VirtualDrone {
     // ------------------------------------------------------------------ the drone
     final FlightModel fc;
     final LinkImpairment link = new LinkImpairment();
+    /**
+     * Each way, under every link problem the panel sets: 30 ms, so the round trip is 60 ms longer than this PC's
+     * loopback - a virtual drone feels like a real one on 4G / 5G (1.0.52, the pilot).
+     */
+    static final int NET_BASE_ONE_WAY_MS = 30;
+    /** Above this the drone is in the air: a BTR it sees flees (metres). */
+    static final double ESCAPE_ALT_M = 2;
+
+    {
+        link.setBaseMs(NET_BASE_ONE_WAY_MS);
+    }
     final Scene scene;
     final SoundMaker sound;
     private volatile Recording recording;
@@ -984,7 +995,17 @@ public final class VirtualDrone {
         H264Encoder enc = null;
         int frameNum = 0;
         long next = System.nanoTime();
-        BufferedImage img = null;
+        // two pictures: the next one is drawn on its own thread while this one is encoded (1.0.52, the pilot: the
+        // virtual picture's rate was too low - drawing and encoding a 1080p frame one after the other took ~32 ms of
+        // the 33 a frame has at 30 fps; side by side a frame costs the longer of the two)
+        BufferedImage[] img = new BufferedImage[2];
+        int cur = 0;
+        java.util.concurrent.Future<?> ahead = null;
+        java.util.concurrent.ExecutorService painter = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "fleetVideoPaint " + name);
+            t.setDaemon(true);
+            return t;
+        });
         long lastReopen = 0;
         long bytesWindow = 0, windowStart = System.currentTimeMillis();
         try {
@@ -994,11 +1015,16 @@ public final class VirtualDrone {
                 boolean sizeChanged = enc == null || enc.width() != w || enc.height() != h || enc.fps() != fps;
                 boolean rateChanged = enc != null && enc.bitRate() != bps && nowMs - lastReopen >= 1500;
                 if (sizeChanged || rateChanged) {
+                    if (ahead != null) waitFor(ahead); // drawn into a picture of the old size: dropped
+                    ahead = null;
                     if (enc != null) enc.close();
                     enc = new H264Encoder(w, h, fps, bps);
                     lastReopen = nowMs;
                     if (sizeChanged) frameNum = 0; // a restarted stream: frame 1 next
-                    img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+                    if (img[0] == null || img[0].getWidth() != w || img[0].getHeight() != h) {
+                        img[0] = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+                        img[1] = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+                    }
                     sendVideoConfig(enc);
                     keyFrameWanted = true;
                     videoState = w + "x" + h + " " + fps + " fps " + bps / 1000 + " kbit/s";
@@ -1007,10 +1033,14 @@ public final class VirtualDrone {
                     configResend = false;
                     sendVideoConfig(enc);
                 }
-                renderPicture(img, nowMs);
+                if (ahead != null) waitFor(ahead); // this frame's picture, drawn while the last one was encoded
+                else renderPicture(img[cur], nowMs);
+                BufferedImage now = img[cur], following = img[1 - cur];
+                long nextMs = nowMs + 1000L / fps;
+                ahead = painter.submit(() -> renderPicture(following, nextMs));
                 boolean key = keyFrameWanted;
                 keyFrameWanted = false;
-                for (H264Encoder.Packet p : enc.encode(Scene.pixels(img), key)) {
+                for (H264Encoder.Packet p : enc.encode(Scene.pixels(now), key)) {
                     if (gen != videoGen) break;
                     if (frameNum >= Short.MAX_VALUE) frameNum = 1;
                     frameNum++;
@@ -1021,6 +1051,7 @@ public final class VirtualDrone {
                     }
                     bytesWindow += p.data().length;
                 }
+                cur = 1 - cur;
                 if (nowMs - windowStart >= 1000) {
                     sentBitRate = (int) (bytesWindow * 8 * 1000 / Math.max(1, nowMs - windowStart));
                     bytesWindow = 0;
@@ -1035,7 +1066,20 @@ public final class VirtualDrone {
             log.accept("video stopped: " + e.getMessage());
             videoState = "failed: " + e.getMessage();
         } finally {
+            painter.shutdownNow();
             if (enc != null) enc.close();
+        }
+    }
+
+    /** The picture drawn ahead, waited for; a failure there is the video thread's. */
+    private static void waitFor(java.util.concurrent.Future<?> f) {
+        try {
+            f.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable c = e.getCause();
+            throw c instanceof RuntimeException r ? r : new IllegalStateException(c);
         }
     }
 
@@ -1172,7 +1216,7 @@ public final class VirtualDrone {
                     frames = rec.audioFrames(System.currentTimeMillis());
                 } else if (channels == 2) {
                     // the drone's own sound in the middle, each vehicle from where it is
-                    float[] own = sound.next(fc.isArmed() ? fc.throttleOut() : -1);
+                    float[] own = sound.next(fc.isArmed() ? fc.throttleOut() : -1, lastBeep);
                     System.arraycopy(own, 0, left, 0, own.length);
                     System.arraycopy(own, 0, right, 0, own.length);
                     long now = System.currentTimeMillis();
@@ -1188,7 +1232,7 @@ public final class VirtualDrone {
                     }
                     frames = enc.encode(left, right);
                 } else {
-                    frames = enc.encode(sound.next(fc.isArmed() ? fc.throttleOut() : -1));
+                    frames = enc.encode(sound.next(fc.isArmed() ? fc.throttleOut() : -1, lastBeep));
                 }
                 for (byte[] f : frames) {
                     byte[] p = new byte[f.length + 1];
@@ -1439,6 +1483,10 @@ public final class VirtualDrone {
                     fc.step(now, dt);
                 }
                 BtrScene t = target;
+                // in the air, the BTRs it sees try to get away (1.0.52, the pilot)
+                boolean airborne = !broken && fc.isArmed() && fc.altitudeM() > ESCAPE_ALT_M;
+                if (t != null) t.threat(fc.northM(), fc.eastM(), airborne, now);
+                scene.threat(fc.northM(), fc.eastM(), airborne, now);
                 if (t != null && !broken && fc.isArmed() && t.hits(fc.northM(), fc.eastM(), fc.altitudeM(), now)) crashIntoTarget(now, "the BTR");
                 else if (!broken && fc.isArmed()) { // the panel's BTR and soldiers (1.0.52): flown into, the drone breaks and they go
                     Scene.Target hit = scene.hit(fc.northM(), fc.eastM(), fc.altitudeM(), now);
@@ -1850,7 +1898,7 @@ public final class VirtualDrone {
         log.accept("someone walks across close to the camera" + (level > 0 ? " (motion detection " + level + ")" : " - no motion detection asked"));
     }
 
-    /** A "voice" on its microphone now (the panel's SPEAK). */
+    /** Its motors beep now: the ESC tune on its microphone (the panel's BEEP). */
     public void speakNow() {
         sound.speakNow();
     }
@@ -1875,6 +1923,11 @@ public final class VirtualDrone {
     /** Where it looks (degrees clockwise from north). */
     public double headingDeg() {
         return fc.headingDeg();
+    }
+
+    /** Its flight controller's home at the launch point, kept through armings: it flew from there (1.0.52). */
+    public void setLaunch(double lat, double lon) {
+        fc.setLaunch(lat, lon);
     }
 
     /** Puts the disarmed drone on the ground somewhere else (a new start place). */

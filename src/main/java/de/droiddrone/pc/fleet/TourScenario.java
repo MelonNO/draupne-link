@@ -119,6 +119,7 @@ public final class TourScenario implements AutoCloseable {
                 double[] placed = FleetLayout.place(i, launch[0], launch[1]);
                 double[] at = {placed[0], placed[1]};
                 VirtualDrone d = fleet.add(fleet.freeName(), at[0], at[1], placed[2]);
+                d.fc.setLaunch(launch[0], launch[1]); // flew from the launch point: Betaflight's home is there
                 double[] o = OUTSIDE[i];
                 d.setOutside(o[0], (int) o[1], o[2], (int) o[3]);
                 drones.add(d);

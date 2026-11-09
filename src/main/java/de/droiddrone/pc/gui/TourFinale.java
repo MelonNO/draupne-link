@@ -67,6 +67,7 @@ final class TourFinale implements AutoCloseable {
         }
         watcher = scenario.watcher().name();
         for (VirtualDrone d : scenario.drones()) names.add(d.name());
+        main.tourBegin(names);
         List<MapView.Kept> flights = new ArrayList<>();
         for (TourScenario.Flight f : scenario.flights()) flights.add(new MapView.Kept(f.name(), f.points()));
         main.tourFlights(flights);
@@ -148,10 +149,8 @@ final class TourFinale implements AutoCloseable {
     public void close() {
         TourScenario s = scenario;
         scenario = null;
-        if (s != null) {
-            s.close();
-            for (String n : names) main.tourForget(n);
-        }
+        if (s != null) s.close();
+        main.tourCleanUp(); // every trace of the tour's drones and flights (1.0.52, the pilot)
         names.clear();
         main.tourFlights(List.of());
         main.tourUnits(List.of());

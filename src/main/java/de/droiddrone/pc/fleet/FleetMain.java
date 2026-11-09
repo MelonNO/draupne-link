@@ -26,8 +26,7 @@ public final class FleetMain {
         Fleet fleet = new Fleet(config, VirtualFleet.file(), console);
         Runtime.getRuntime().addShutdownHook(new Thread(fleet::close, "fleetClose"));
         for (int i = 0; i < START_DRONES; i++) {
-            double[] at = fleet.nextPlace(Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON);
-            fleet.add(fleet.freeName(), at[0], at[1], at[2]);
+            fleet.addAtLaunch(fleet.freeName(), Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON);
         }
         fleet.startHeartbeat();
         System.out.println("Virtual fleet: " + fleet.drones().size() + " drones up. In DRAUPNE Link they show in the PHONE list as VIRTUAL.");

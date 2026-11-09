@@ -15,6 +15,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * <li>Handover (a cell change): the phone's packets held for a moment and then let go at once, what is sent to it in
  * that moment lost, and a slower path for a while after.</li>
  * </ul>
+ * Under all of it a fixed base delay each way ({@link #setBaseMs}): a virtual drone's link is never better than a
+ * real 4G / 5G path (1.0.52, the pilot: 60 ms round trip on top of the rest).
  */
 public final class LinkImpairment {
     /** After a handover the path is this much slower for {@link #HANDOVER_SLOW_MS}. */
@@ -24,6 +26,8 @@ public final class LinkImpairment {
     private final Random random;
     private volatile double lossPercent;
     private volatile int jitterMs, delayMs, bunchMs;
+    /** Every datagram, both ways, at least this late (ms); kept by {@link #clear()}: it is the network, not a fault. */
+    private volatile int baseMs;
     private volatile long silentUntil, holdUntil, slowUntil;
     private final AtomicLong lost = new AtomicLong(), delayed = new AtomicLong();
 
@@ -41,6 +45,15 @@ public final class LinkImpairment {
         this.jitterMs = Math.max(0, jitterMs);
         this.delayMs = Math.max(0, delayMs);
         this.bunchMs = Math.max(0, bunchMs);
+    }
+
+    /** The fixed one-way delay under everything else (0 = none, the default: tests of the layer itself). */
+    public void setBaseMs(int oneWayMs) {
+        baseMs = Math.max(0, oneWayMs);
+    }
+
+    public int baseMs() {
+        return baseMs;
     }
 
     /** 4G gone for this long from now: nothing either way. */
@@ -77,6 +90,7 @@ public final class LinkImpairment {
         double loss = lossPercent;
         if (loss > 0 && random.nextDouble() * 100 < loss) return lostOne();
         delay += delayMs;
+        delay += baseMs;
         if (nowMs < slowUntil) delay += HANDOVER_EXTRA_MS;
         int jitter = jitterMs;
         if (jitter > 0) delay += random.nextInt(jitter + 1);
@@ -85,7 +99,7 @@ public final class LinkImpairment {
             long at = nowMs + delay;
             delay += (bunch - Math.floorMod(at, bunch)) % bunch; // to the next release
         }
-        if (delay > 0) delayed.incrementAndGet();
+        if (delay > baseMs) delayed.incrementAndGet();
         return delay;
     }
 

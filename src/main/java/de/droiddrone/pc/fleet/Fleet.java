@@ -135,6 +135,17 @@ public final class Fleet implements AutoCloseable {
     }
 
     /**
+     * The next drone at its place round the launch point (lat, lon) ({@link #nextPlace}), its home there: it flew from
+     * the launch point (1.0.52, the pilot: the map's LAUNCH was where each drone stood).
+     */
+    public synchronized VirtualDrone addAtLaunch(String name, double lat, double lon) throws IOException {
+        double[] at = nextPlace(lat, lon);
+        VirtualDrone d = add(name, at[0], at[1], at[2]);
+        d.fc.setLaunch(lat, lon);
+        return d;
+    }
+
+    /**
      * The next drone's start place {lat, lon, heading degrees} with the launch point at (lat, lon): the layout's
      * ({@link FleetLayout}), then near the launch point.
      */

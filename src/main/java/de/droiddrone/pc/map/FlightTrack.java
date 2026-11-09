@@ -112,6 +112,7 @@ public final class FlightTrack {
         if (p.phone()) lastPhonePointAt = now; else lastDronePointAt = now;
         points.add(p);
         if (home == null && armed && (p.phone() || gps.fix() >= 2)) home = p;
+        if (armed && !p.phone()) homeFromFc(gps, p);
         if (writer != null) {
             if (file == null) file = dir.resolve("track-" + LocalDateTime.now().format(FILE) + ".gpx");
             Point h = home, pt = p;
@@ -144,6 +145,27 @@ public final class FlightTrack {
     private static long fixTime(FcTelemetry.PhonePosition phone) {
         return phone.receivedAt() - Math.max(0, phone.ageS()) * 1000L;
     }
+
+    /**
+     * Betaflight's own home, from its distance and direction to home (MSP_COMP_GPS), once known while armed: the launch
+     * where the flight controller set it - not where this PC first saw the drone armed (1.0.52: a reconnect in the air,
+     * or a drone that launched elsewhere and kept its home, put the launch at the wrong place).
+     */
+    private void homeFromFc(FcTelemetry.Gps gps, Point p) {
+        int dist = gps.distanceHomeM();
+        if (dist <= HOME_FROM_FC_MIN_M || gps.fix() < 2) return;
+        double toHome = Math.toRadians(gps.directionHomeDeg());
+        double lat = p.lat() + dist * Math.cos(toHome) / 111_320.0;
+        double lon = p.lon() + dist * Math.sin(toHome) / (111_320.0 * Math.cos(Math.toRadians(p.lat())));
+        if (home != null && homeIsFc && Mercator.distanceM(home.lat(), home.lon(), lat, lon) < HOME_FROM_FC_MIN_M) return;
+        home = new Point(p.timeMs(), lat, lon, home != null ? home.altM() : p.altM(), 0, 0, p.sats(), true, false, 0);
+        homeIsFc = true;
+    }
+
+    /** Below this the FC's home is the point itself (Betaflight sends 0 before a home); a move this big replaces it. */
+    static final int HOME_FROM_FC_MIN_M = 15;
+    /** home came from the flight controller's report, not from the first armed point. */
+    private boolean homeIsFc;
 
     private static Point dronePoint(FcTelemetry.Gps gps, boolean armed) {
         return new Point(gps.receivedAt(), gps.latDeg(), gps.lonDeg(), gps.altM(), gps.speedKmh(), gps.courseDeg(), gps.sats(), armed, false, 0);
