@@ -112,11 +112,19 @@ class BtrSceneTest {
     void theRealRecordingsLoadAndArmingSpinsTheMotorsUp() {
         for (String n : new String[]{"btr-idle", "btr-drive", "fpv-spinup", "fpv-flight"}) {
             SoundSample s = SoundSample.of(n);
-            assertTrue(s.seconds() > 1.5, n + ": " + s.seconds() + " s");
+            assertTrue(s.seconds() > (n.equals("fpv-spinup") ? 1.0 : 1.5), n + ": " + s.seconds() + " s");
             double e = 0;
             for (float v : s.data) e += v * v;
             assertTrue(Math.sqrt(e / s.data.length) > 0.05, n + " is not silence");
         }
+        // the arming is a normal FPV's motors starting, not a whoop's high whine ("sounds like a jet engine", the
+        // pilot): its sound sits low - few zero crossings a second (the whoop cut had about 4 kHz of centroid)
+        SoundSample spin = SoundSample.of("fpv-spinup");
+        assertEquals(22050, spin.rate, 1, "the arming is kept at 22.05 kHz");
+        int crossings = 0;
+        for (int i = 1; i < spin.data.length; i++) if ((spin.data[i - 1] < 0) != (spin.data[i] < 0)) crossings++;
+        double perSecond = crossings / spin.seconds();
+        assertTrue(perSecond < 3000, "the arming sounds low, like a quad's motors: " + Math.round(perSecond) + " zero crossings/s");
         SoundMaker m = new SoundMaker(1);
         m.setQuiet(true);
         double off = 0, on = 0;
