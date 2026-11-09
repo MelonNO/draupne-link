@@ -58,6 +58,8 @@ final class Tour {
         Runnable onNext;
         /** The step needs the tour's drones: they are started (or the pilot's fleet closed first) as it comes up. */
         boolean finale;
+        /** The step needs the six drones of the PILOT and OBSERVER steps: started as it comes up. */
+        boolean showcase;
         /** The pilot must press the lit control (or one of the targets) before NEXT works. */
         boolean press;
         /** Areas the mouse still works over (the header on the menu steps, the map on the map steps). */
@@ -105,6 +107,11 @@ final class Tour {
 
         Step needsFinale() {
             finale = true;
+            return this;
+        }
+
+        Step needsShowcase() {
+            showcase = true;
             return this;
         }
 
@@ -165,9 +172,9 @@ final class Tour {
     /** The features whose steps came after the first tour: a PC that had the tour before them is offered them alone. */
     static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon",
             FEATURE_COVERAGE = "coverage", FEATURE_OVERWATCH = "overwatch", FEATURE_OBSERVATION = "observation",
-            FEATURE_FLEET = "fleet", FEATURE_FLIGHTS = "flights";
+            FEATURE_FLEET = "fleet", FEATURE_FLIGHTS = "flights", FEATURE_MODES = "modes";
     static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE,
-            FEATURE_OVERWATCH, FEATURE_OBSERVATION, FEATURE_FLEET, FEATURE_FLIGHTS);
+            FEATURE_OVERWATCH, FEATURE_OBSERVATION, FEATURE_FLEET, FEATURE_FLIGHTS, FEATURE_MODES);
     /** The features the pilot has been offered a tour of, comma-separated. */
     static final String SEEN_KEY = "tour.seen";
 
@@ -190,7 +197,9 @@ final class Tour {
     private boolean demo;
     /** The tour's drones asked for once: a refusal isn't asked again at every later fleet step. */
     private boolean finaleTried;
-    /** Where the pilot moved the box and how wide it was made: kept for the rest of the tour. */
+    /** The six drones of the PILOT and OBSERVER steps asked for once. */
+    private boolean showcaseTried;
+    /** How wide the pilot made the box: kept for the rest of the tour. */
     private final NoticePlace noticePlace = new NoticePlace();
 
     /** @param only the features to show the steps of (the tour of what is new); null for the whole tour */
@@ -233,19 +242,45 @@ final class Tour {
         steps.add(new Step("BEEPER", "Hold it: the drone beeps, to find it in the grass.", main::tourBeeperButton));
         steps.add(new Step("MUTE", "The phone's microphone. M mutes. Arming mutes it.", main::tourMuteButton));
 
-        // ---- the LINK card: phone, PILOT UAV, sleep, CONNECT AS
-        steps.add(new Step("PHONE", "Every phone running DRAUPNE Flight, by name. Pick one here. Press it.",
-                main::tourPhoneCombo).press().of(FEATURE_NAMES));
-        steps.add(new Step("PILOT UAV", "Connects and flies the chosen drone. Connected, it turns STANDBY MODE: rests it, back "
-                + "in 2 s. A sleeping drone: REGAINING CONTROL IN x MIN, until its check-in.",
-                main::tourConnectButton));
-        steps.add(new Step("DEEP SLEEP / OVERWATCH", "DEEP SLEEP: the phone sleeps and checks in at the interval set in CHECK "
-                + "EVERY. OVERWATCH: the same, with the camera watching; motion calls you. Press one.", main::tourDeepSleepButton)
-                .extra(main::tourCheckEvery)
-                .targets(() -> List.of(main.tourDeepSleepButton(), main.tourOverwatchButton()))
-                .before(() -> main.tourPowerDemo(true)).after(() -> main.tourPowerDemo(false)).of(FEATURE_OVERWATCH));
-        steps.add(new Step("CONNECT AS", "Pilot flies. Spectator watches another PC's flight. Observation shows up to six idle "
-                + "drones with sound.", main::tourRoleCombo).of(FEATURE_OBSERVATION));
+        // ---- the LINK card (2026-11-09, the pilot): PILOT mode, a phone, PILOT UAV onto a race, STANDBY, the sleep
+        // modes, then OBSERVER with six drones - the tour's own, each with something to see
+        BooleanSupplier noShowcase = () -> !finale.showcaseStarted();
+        steps.add(new Step("PILOT MODE", "PILOT: you fly the drone. Pick it here.", main::tourRoleCombo)
+                .transition(main::tourAnimatePilot).needsShowcase().of(FEATURE_MODES));
+        steps.add(new Step("PHONE", "Every phone running DRAUPNE Flight. Pick " + RACER + ", a virtual one.",
+                main::tourPhoneCombo).skip(noShowcase).live(main::tourPhoneCombo)
+                .waitFor(() -> finale.racer() != null && finale.racer().equalsIgnoreCase(main.tourChosenPhone()), "Pick it", true)
+                .before(this::nameRacer).of(FEATURE_MODES));
+        steps.add(new Step("PILOT UAV", "Connects and flies it. Press it.", main::tourConnectButton).skip(noShowcase)
+                .waitFor(() -> main.tourFlying(finale.racer()), "Press it", true).of(FEATURE_MODES));
+        steps.add(new Step("LIVE", "Its camera, live. A race is on. Watch a moment.", main::tourVideo).skip(noShowcase)
+                .live(main::tourVideo).before(() -> liveSince = System.currentTimeMillis())
+                .waitFor(() -> System.currentTimeMillis() - liveSince > WATCH_MS, "Watch...", false).of(FEATURE_MODES));
+        steps.add(new Step("STANDBY", "STANDBY = disconnect. The phone rests, back in 2 s. Press it.", main::tourConnectButton)
+                .skip(noShowcase).waitFor(() -> !main.tourConnected(), "Press it", true).of(FEATURE_MODES));
+        steps.add(new Step("DEEP SLEEP", "Longest battery life in the field. The phone turns its link off and checks in "
+                + "at CHECK EVERY.", main::tourDeepSleepButton).before(this::powerDemo).of(FEATURE_OVERWATCH));
+        steps.add(new Step("CHECK EVERY", "Set Constant: always listening, reached at once.", main::tourCheckEvery)
+                .live(main::tourCheckEvery).before(() -> {
+                    if (checkBefore < 0) checkBefore = main.tourCheckIndex(); // the pilot's own, back at the end
+                    main.tourCheckNotConstant();
+                })
+                .waitFor(main::tourCheckConstant, "Set Constant", true).of(FEATURE_OVERWATCH));
+        steps.add(new Step("OVERWATCH", "Deep sleep, with the camera watching. Movement wakes it at once and warns you.",
+                main::tourOverwatchButton).after(this::powerDemoOff).of(FEATURE_OVERWATCH));
+        steps.add(new Step("OBSERVER MODE", "OBSERVER: up to six idle drones, with sound. Pick it.", main::tourRoleCombo)
+                .needsShowcase().skip(noShowcase).live(main::tourRoleCombo).before(this::keepObserveSet)
+                .waitFor(main::tourObserverRole, "Pick it", true).of(FEATURE_OBSERVATION));
+        steps.add(new Step("CHOOSE DRONES", "Tick the six VIRTUAL drones.", main::tourChooseDrones).skip(noShowcase)
+                .before(main::tourScanNames)
+                .waitFor(() -> main.tourObserveChosen(finale.showcaseNames()), "Tick six", true).of(FEATURE_OBSERVATION));
+        steps.add(new Step("OBSERVE", "Press OBSERVE.", main::tourConnectButton).skip(noShowcase)
+                .waitFor(main::tourObserving, "Press it", true).of(FEATURE_OBSERVATION));
+        steps.add(new Step("SOUND", "Each feed has its own sound. Mute one.", main::tourObservationGrid).skip(noShowcase)
+                .live(main::tourObservationGrid).waitFor(main::tourFeedMuted, "Mute one", true).of(FEATURE_OBSERVATION));
+        steps.add(new Step("STOP OBSERVING", "Press it.", main::tourConnectButton).skip(noShowcase)
+                .waitFor(() -> !main.tourObserving(), "Press it", true).of(FEATURE_OBSERVATION));
+        addSpectatorSteps(noShowcase);
         steps.add(new Step("POP OUT MAP", "The map in its own window. Press it.", main::tourPopMapButton)
                 .before(main::tourHideMapWindow).press());
 
@@ -332,6 +367,50 @@ final class Tour {
         steps.add(finish);
     }
 
+    /**
+     * W4's SPECTATOR steps go here, after STOP OBSERVING and before POP OUT MAP (2026-11-09, the pilot: spectator mode
+     * with a virtual pilot PC flying). Nothing yet.
+     */
+    private void addSpectatorSteps(BooleanSupplier noShowcase) {
+    }
+
+    /** Stands for the racer's name in the PHONE step's text until the six are up ("MobileZulu" then). */
+    private static final String RACER = "the race drone";
+
+    private void nameRacer() {
+        String r = finale.racer();
+        Step s = steps.get(index);
+        if (r != null && s.text.contains(RACER)) s.text = s.text.replace(RACER, r);
+    }
+
+    /** The LIVE step: NEXT after this long, so the race is seen (the pilot: "a pause ... to watch the FPV race"). */
+    static final long WATCH_MS = 8000;
+    private long liveSince;
+
+    /** The sleep buttons shown while nothing is connected, answering as a demo, for DEEP SLEEP to OVERWATCH. */
+    private boolean powerDemo;
+
+    private void powerDemo() {
+        powerDemo = true;
+        main.tourPowerDemo(true);
+    }
+
+    private void powerDemoOff() {
+        if (!powerDemo) return;
+        powerDemo = false;
+        main.tourPowerDemo(false);
+    }
+
+    /** The pilot's own observation choice and mode, put back when the tour is over (the tour picks its own six). */
+    private String observeSetBefore;
+    private Object roleBefore;
+    /** CHECK EVERY as the pilot had it (-1: the step didn't come). */
+    private int checkBefore = -1;
+
+    private void keepObserveSet() {
+        if (observeSetBefore == null) observeSetBefore = main.tourObserveSet();
+    }
+
     /** The slow switch to a MAP TOOLS list, then the step. */
     private Consumer<Runnable> group(MapToolsPanel.Group g) {
         return done -> {
@@ -375,6 +454,19 @@ final class Tour {
             }
         });
         wait.start();
+        return true;
+    }
+
+    /** The six drones up, or why not said (the pilot's own virtual fleet open: asked to close it first). */
+    private boolean startShowcase() {
+        if (finale.showcaseStarted()) return true;
+        if (!finale.startShowcase() && finale.fleetOpen() && closePilotsFleet()) finale.startShowcase();
+        if (!finale.showcaseStarted()) {
+            main.logLine("Tour: no drones for the pilot and observer steps - " + finale.refused());
+            JOptionPane.showMessageDialog(main, "No tour drones: those steps skipped. " + finale.refused(), "Tour",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return false;
+        }
         return true;
     }
 
@@ -477,6 +569,7 @@ final class Tour {
             case FEATURE_OBSERVATION -> "observation";
             case FEATURE_FLEET -> "fleet management";
             case FEATURE_FLIGHTS -> "previous flights";
+            case FEATURE_MODES -> "pilot and observer modes";
             default -> f;
         });
         Object[] options = {"Yes", "Not now"};
@@ -522,6 +615,7 @@ final class Tour {
     private static void run(Tour t, int from) {
         if (current != null) current.end(); // never two at once: each would dim and tick over the other
         current = t;
+        t.roleBefore = t.main.tourRole(); // the mode the pilot had, back at the end
         if (from == 0) t.main.tourExpandController(); // open, so the pilot folds it when asked
         t.main.tourHideSleep(true); // the sleep row shows at its own step (the pilot)
         t.index = from - 1;
@@ -538,6 +632,10 @@ final class Tour {
         generation++;
         for (; index < steps.size(); index++) {
             Step c = steps.get(index);
+            if (c.showcase && !showcaseTried) {
+                showcaseTried = true;
+                startShowcase();
+            }
             if (c.finale && !finaleTried) {
                 finaleTried = true;
                 if (!startFinale() && demo) {
@@ -595,7 +693,13 @@ final class Tour {
     /** Whatever way it ended: the example pins and the tour's drones go, the window is as before. */
     private void finished() {
         clearExamplePins();
+        powerDemoOff();
         finale.close();
+        if (observeSetBefore != null) main.tourRestoreObserveSet(observeSetBefore);
+        observeSetBefore = null;
+        main.tourRestoreRole(roleBefore);
+        if (checkBefore >= 0) main.tourRestoreCheck(checkBefore);
+        checkBefore = -1;
         main.tourHideSleep(false);
         MapWindow m = main.mapWindowIfOpen();
         if (m != null) m.tourWindowedEnd();
@@ -691,19 +795,18 @@ final class Tour {
     }
 
     /**
-     * Where the pilot put the tour's box and how wide it was made (2026-11-09, the pilot: "make it possible to resize
-     * and move the pop up window for the MAP during the tour" - the box sat over the map): kept for the rest of the
-     * tour, the place per window. Double-click the box: back where the tour puts it.
+     * How wide the pilot made the tour's box (its corner): kept for the rest of the tour. Never where it is: the box
+     * stays at what it points to and follows it (2026-11-09, the pilot: "the message pop up should follow the point
+     * they are pointing to" - a box dragged away pointed at nothing).
      */
     static final class NoticePlace {
         int width = TourNotice.WIDTH;
-        final java.util.Map<Component, java.awt.Point> at = new java.util.WeakHashMap<>();
     }
 
     /**
      * The notice: pointer at the control, the text, STEP i OF n, NEXT across the bottom and a cross top right that
      * exits the tour; the rest of the window dims. Centred (the welcome, the finish): a box in the middle, no pointer.
-     * Dragged, it stays where the pilot put it (no pointer then); its bottom right corner makes it wider or narrower.
+     * It stays at its control and follows it as its window moves; its bottom right corner makes it wider or narrower.
      */
     static final class TourNotice extends JComponent {
         static final int WIDTH = 460;
@@ -737,10 +840,8 @@ final class Tour {
         private List<String> lines;
         /** The tip under the text, wrapped; empty for none. */
         private List<String> tipLines;
-        /** Where the pilot put it and how wide (shared by the tour's notices). */
+        /** How wide the pilot made it (shared by the tour's notices). */
         private final NoticePlace spot;
-        /** Placed by the pilot (dragged): no pointer, not following the control. */
-        private boolean moved;
         private final String counter;
         private final JButton next = Theme.primaryButton("Next");
         private final JButton exit = new CloseButton();
@@ -851,38 +952,25 @@ final class Tour {
             tipLines = tip == null || tip.isBlank() ? List.of() : wrap(tip, getFontMetrics(tipFont()), w);
         }
 
-        /** The window it is in (the key of the pilot's place for it): its top component, or null. */
-        private Component window() {
-            Component top = anchor.getParent();
-            if (top == null) return null;
-            while (top.getParent() != null && !(top instanceof Window)) top = top.getParent();
-            return top;
-        }
-
         private boolean inGrip(java.awt.Point p) {
             return p.x >= getWidth() - GRIP && p.y >= getHeight() - GRIP;
         }
 
-        /** The box dragged by the pilot: moved anywhere in the window, or wider/narrower by its corner. */
+        /** The box's corner dragged by the pilot: wider or narrower. The box itself stays at its control. */
         private final class Grab extends MouseAdapter {
             private java.awt.Point from;
-            private Rectangle start;
-            private boolean resizing;
+            private int startWidth;
 
             @Override
             public void mousePressed(MouseEvent e) {
-                if (!SwingUtilities.isLeftMouseButton(e)) return;
+                if (!SwingUtilities.isLeftMouseButton(e) || !inGrip(e.getPoint())) return;
                 from = e.getLocationOnScreen();
-                start = getBounds();
-                resizing = inGrip(e.getPoint());
+                startWidth = getWidth();
             }
 
             @Override
             public void mouseDragged(MouseEvent e) {
-                if (from == null) return;
-                int dx = e.getXOnScreen() - from.x, dy = e.getYOnScreen() - from.y;
-                if (resizing) resizeTo(start.width + dx);
-                else moveTo(start.x + dx, start.y + dy);
+                if (from != null) resizeTo(startWidth + e.getXOnScreen() - from.x);
             }
 
             @Override
@@ -892,23 +980,8 @@ final class Tour {
 
             @Override
             public void mouseMoved(MouseEvent e) {
-                setCursor(java.awt.Cursor.getPredefinedCursor(inGrip(e.getPoint()) ? java.awt.Cursor.SE_RESIZE_CURSOR
-                        : java.awt.Cursor.MOVE_CURSOR));
+                setCursor(inGrip(e.getPoint()) ? java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.SE_RESIZE_CURSOR) : null);
             }
-
-            @Override
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2 && !inGrip(e.getPoint())) home();
-            }
-        }
-
-        /** Moved by the pilot to x, y (the layer's): kept there for the rest of the tour in this window. */
-        void moveTo(int x, int y) {
-            Component w = window();
-            if (w == null) return;
-            spot.at.put(w, new java.awt.Point(x, y));
-            place();
-            repaint();
         }
 
         /** Made this wide by the pilot (within MIN_WIDTH..MAX_WIDTH and the window): kept for the rest of the tour. */
@@ -921,19 +994,6 @@ final class Tour {
             wrapText();
             place();
             repaint();
-        }
-
-        /** Back where the tour puts it (a double-click). */
-        void home() {
-            Component w = window();
-            if (w != null) spot.at.remove(w);
-            place();
-            repaint();
-        }
-
-        /** Tests: where the box is now, and whether it was placed by the pilot. */
-        boolean movedForTest() {
-            return moved;
         }
 
         /** The top of the window's content in the layer: under the title bar, which stays free for moving and resizing the window. */
@@ -1101,6 +1161,16 @@ final class Tour {
             return repaintDim(full);
         }
 
+        /** Tests: what the dim answers FlatLaf's title bar for a point of the layer. */
+        Boolean captionForTest(int x, int y) {
+            return dim.captionAt(new java.awt.Point(x, y));
+        }
+
+        /** Tests: placed again, as each tick does while its control shows. */
+        void placeForTest() {
+            place();
+        }
+
         /** Tests: one tick, as the timer runs it. */
         void tickForTest() {
             tick();
@@ -1138,7 +1208,7 @@ final class Tour {
         }
 
         private int height() {
-            int pointer = centred || moved ? 0 : POINTER;
+            int pointer = centred ? 0 : POINTER;
             return pointer + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 12 + 34 + 4;
         }
 
@@ -1146,9 +1216,6 @@ final class Tour {
         private boolean place() {
             Component layer = getParent();
             if (layer == null) return false;
-            Component win = centred ? null : window();
-            java.awt.Point put = win == null ? null : spot.at.get(win);
-            moved = put != null;
             int width = Math.min(boxWidth(), Math.max(MIN_WIDTH, layer.getWidth()));
             int h = height();
             int topLimit = contentTop(); // the title bar stays free: the window moves and resizes during the tour
@@ -1156,10 +1223,6 @@ final class Tour {
             if (centred) {
                 x = Math.max(0, (layer.getWidth() - width) / 2);
                 y = Math.max(0, (layer.getHeight() - h) / 2);
-                above = false;
-            } else if (moved) {
-                x = put.x;
-                y = put.y;
                 above = false;
             } else {
                 Rectangle a = anchorBounds();
@@ -1172,7 +1235,7 @@ final class Tour {
             y = Math.max(centred ? 0 : topLimit, Math.min(y, layer.getHeight() - h));
             Rectangle r = new Rectangle(x, y, width, h);
             if (!r.equals(getBounds())) setBounds(r);
-            int top = above || centred || moved ? 0 : POINTER;
+            int top = above || centred ? 0 : POINTER;
             int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 8 - PAD;
             next.setBounds(PAD, by, width - 2 * PAD, 30); // across the box: the exit is the cross top right
             exit.setBounds(width - PAD - CLOSE + 6, top + PAD - 6, CLOSE, CLOSE);
@@ -1210,7 +1273,7 @@ final class Tour {
                 } else {
                     g.translate(0, Math.round((above ? 6 : -6) * (1 - easeIn)));
                 }
-                boolean pointer = !centred && !moved;
+                boolean pointer = !centred;
                 int top = above || !pointer ? 0 : POINTER, boxH = h - (pointer ? POINTER : 0) - 1;
                 Rectangle a = anchorBounds();
                 int tipX = a == null ? w / 2 : Math.min(Math.max(a.x + a.width / 2 - getX(), PAD + POINTER), w - PAD - POINTER);
@@ -1391,6 +1454,17 @@ final class Tour {
                 addMouseListener(swallow);
                 addMouseMotionListener(swallow);
                 addMouseWheelListener(swallow);
+                // 2026-11-09 (the pilot: "it is still not possible to move the map window"): FlatLaf's title bar asks
+                // every component over a point, by its bounds and not by contains(), whether it takes the mouse there;
+                // the dim covers the whole window and listens, so the title bar was never a caption - no drag, no
+                // double-click. Over the title bar the dim now says "not mine"; over the content, as before.
+                putClientProperty(com.formdev.flatlaf.FlatClientProperties.COMPONENT_TITLE_BAR_CAPTION,
+                        (java.util.function.Function<java.awt.Point, Boolean>) this::captionAt);
+            }
+
+            /** FlatLaf's question for a point (dim's own): null = not mine, ask the title bar; false = mine. */
+            Boolean captionAt(java.awt.Point p) {
+                return content().contains(p) ? Boolean.FALSE : null;
             }
 
             /** The window's edges, left to the window (resizing) through the dim. */

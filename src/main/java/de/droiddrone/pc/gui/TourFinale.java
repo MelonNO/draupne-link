@@ -1,6 +1,7 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.pc.fleet.TourScenario;
+import de.droiddrone.pc.fleet.TourShowcase;
 import de.droiddrone.pc.fleet.VirtualDrone;
 import de.droiddrone.pc.fleet.VirtualFleet;
 import de.droiddrone.pc.map.CameraFootprint;
@@ -38,9 +39,62 @@ final class TourFinale implements AutoCloseable {
         this.main = main;
     }
 
+    // ---- the six drones of the PILOT and OBSERVER steps (2026-11-09)
+
+    private TourShowcase showcase;
+    private List<String> showcaseNames = List.of();
+
+    /** The six drones up, the racer first (Swing thread); false with {@link #refused()} saying why. */
+    boolean startShowcase() {
+        if (showcase != null) return true;
+        fleetOpen = false;
+        if (!VirtualFleet.announcedNow().isEmpty()) {
+            refused = "Close the virtual fleet first.";
+            fleetOpen = true;
+            return false;
+        }
+        try {
+            showcase = TourShowcase.start(main.config(), VirtualFleet.file(),
+                    line -> SwingUtilities.invokeLater(() -> main.logLine("Tour: " + line)));
+        } catch (java.io.IOException | RuntimeException e) {
+            refused = "The tour's drones didn't start: " + e.getMessage();
+            return false;
+        }
+        showcaseNames = showcase.names();
+        main.tourHost().begin(showcaseNames);
+        main.tourScanNames(); // the PHONE list and observation know them within a second or two
+        refused = null;
+        return true;
+    }
+
+    boolean showcaseStarted() {
+        return showcase != null;
+    }
+
+    /** The race's drone, flown in the PILOT steps; null without the six. */
+    String racer() {
+        TourShowcase s = showcase;
+        return s == null ? null : s.racer().name();
+    }
+
+    /** The six's names (empty without them). */
+    List<String> showcaseNames() {
+        return showcaseNames;
+    }
+
+    /** The six gone (the finale's fleet comes next, or the tour is over): off this PC's lists now, their files at the end. */
+    void closeShowcase() {
+        TourShowcase s = showcase;
+        showcase = null;
+        if (s == null) return;
+        s.close();
+        main.tourHost().forget(showcaseNames);
+    }
+
     /** The four drones, their flights and the units on the map (Swing thread); false with {@link #refused()} saying why. */
     boolean start() {
         if (scenario != null) return true;
+        closeShowcase(); // one fleet of the tour's at a time: both would write the one announcement file
         fleetOpen = false;
         // read now, not the cached list (2026-11-09: a fleet closed a moment ago still counted as open)
         if (!VirtualFleet.announcedNow().isEmpty()) {
@@ -157,6 +211,7 @@ final class TourFinale implements AutoCloseable {
 
     @Override
     public void close() {
+        closeShowcase();
         TourScenario s = scenario;
         scenario = null;
         if (s != null) s.close();
