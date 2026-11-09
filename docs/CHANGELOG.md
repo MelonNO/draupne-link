@@ -2,6 +2,19 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## Unreleased (to be 1.0.54 + phone pc.42)
+
+The rest of the review: the hard-to-maintain parts split up, behaviour kept. Nothing of it run on a drone or a real phone yet.
+
+- **Fixed: a frozen picture after a stream restart.** A held key frame let go late was counted as a backlog; if the decoder took it at that moment, a flush threw the next frames away until the next key frame. (The cause of the flaky `VideoTest` held-key-frame test.)
+- **Overwatch:** the picture that raises an alert is now the last of the pictures before it. They were up to 0.5 s older, so something found as it came in could be in none of them. (The cause of the flaky `OverwatchFleetEndToEndTest`.)
+- **Link timers on real time:** `ReceiverBuffer`'s 4 s timeout, ping and size window, and the phone's MSP polling, count clock milliseconds instead of loop calls (a busy phone stretched 4 s to 6 s or more).
+- **MSP:** one frame reader/writer (`MspFrames`) for the phone and the PC's USB setup; the phone's v1 checksum was summed on signed bytes. A bad checksum over USB now skips one byte instead of losing the stream.
+- **Split up:** `MainWindow` (PowerController, FleetController, TourHost, DetectionController, OsdDataBuilder), `ControlLink` (TierPolicy), `VideoPipeline` (VideoRecording, KeyFrameBackoff), `MapView` (MapProjection and five layers), `DroneSetup` (SetupPlanner), `ModeSwitch.plan` (one slot-clearing helper, a Switches record), phone `Udp` (SessionGate, RcPath, TelemetryRecords in Common), `VirtualDrone` (VirtualVideo, VirtualMotionWatch).
+- **One home for packet codes:** `PacketIds` in Common, used by the PC, the phone and the virtual fleet; one `Bytes` helper for the int fields.
+- New tests: golden tests that pin `ModeSwitch.plan`'s and the setup's output, TierPolicy, PowerController, OsdDataBuilder, MapProjection, SessionGate, RcPath, MspFrames, and more. 990+ tests.
+- The phone build prints the end of Gradle's log when no error line matches.
+
 ## 1.0.53 + phone pc.41
 
 A full review round: every area read, bugs fixed with a test each, perf tests added. Nothing of it run on a drone or a real phone yet.

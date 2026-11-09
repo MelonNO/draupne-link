@@ -6,6 +6,15 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-09, 1.0.53 + phone app 2.3.0-pc.41 released; last flown: 1.0.43)
 
+- **Unreleased on main (2026-11-09, to be 1.0.54 + phone pc.42):** the review's maintainability list done, see CHANGELOG
+  "Unreleased". New homes: gui `PowerController` / `FleetController` / `TourHost` / `DetectionController` /
+  `OsdDataBuilder`, `pc/TierPolicy`, video `VideoRecording` / `KeyFrameBackoff`, gui `MapProjection` + `Map*Layer`,
+  setup `SetupPlanner` (`ModeSwitchGoldenTest` pins every plan), Common `PacketIds` / `Bytes` / `SessionGate` / `RcPath` /
+  `Cadence` / `MspFrames` / `MspPages` / `TelemetryRecords`, fleet `VirtualVideo` / `VirtualMotionWatch`. The phone app
+  changed (timers, MSP, packet codes, pre-roll): a pc.42 APK is needed at the release. Not done: the card layout builder
+  in MainWindow, the drone signs in MapView, observe/overwatch out of Udp. Known flakes under load: SpectatorTest
+  congestion, PaintCostTest, PinsAndFlightsTest (re-run alone).
+
 - **1.0.53 + phone pc.41 (2026-11-09, review round):** see CHANGELOG 1.0.53. The approach
   watch is `flight-app/overlay/Common/.../Looming.java` (called from `MotionDetector.process`, day only, its boxes added
   after the tracks'); its tests `MotionDetectorTest` (woodsEdge, Approacher in `SyntheticScene`), `pc/fleet/ApproachDetectionTest`
@@ -13,7 +22,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   wind in trees and of someone walking at the camera before trusting the false-alarm rate. Not done, ranked in the
   review: MainWindow split (PowerController, FleetController, TourHost, DetectionController...), `TierPolicy` out of
   ControlLink, one shared packet-id class, `SetupPlanner` out of DroneSetup, Udp.java split, tick-counted timers in
-  ReceiverBuffer/Msp to real time.
+  ReceiverBuffer/Msp to real time (all done since, see above).
 
 - **1.0.52 + phone pc.40 (2026-11-09):** fleet management (queued modes over check-ins), the three-button LINK card, previous flights, pins sheet, CRASHED, the setup round (new drone, Betaflight in two steps, orientation/compass check, RESET SETUP), the rebuilt tour with the BTR finale and Overwatch demo, the virtual fleet in the simulation world (BTR, soldier, real sounds), faster motion detection with colour, scaling fixes. Details in CHANGELOG 1.0.52. Untried on hardware: the accelerometer calibration, board alignment APPLY, align_mag, queued modes on real phones, colour detection on a real camera. Known flakes: SpectatorTest congestion, VideoTest held key frame, OverwatchFleetEndToEndTest.lostArmed (re-run alone).
 
