@@ -2,6 +2,21 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.52
+
+With phone app DRAUPNE Flight 2.3.0-pc.40. Nothing of it run on a drone or a real phone yet.
+
+- **Fleet management** (map window, FLEET tab on the right): one slim row per phone (mode sign, drone V/cell, phone %, heard, check-in ring), 10 without scrolling; the selected phone's strip: signal, GPS, temperatures, events, STANDBY / DEEP SLEEP / OVERWATCH / EVERY / PILOT UAV / CLIPS / CANCEL. Modes are queued (`FleetManager`, `FLEET_MODE` 0x58, `fleet.queue`) and sent at the next check-in without connecting; refused while armed or possibly flying. A row click rings the drone and its camera view on the map. pc.40 phones report a status block (battery, signal, GPS, temperature, mode) and, asleep, who and where they are (`FleetProtocol.Where`), so a sleeping phone is listed and drawn from its check-in (`NameService.heardAsleep`).
+- **LINK card:** three buttons - PILOT UAV (STANDBY MODE connected, REGAINING CONTROL IN x MIN while waking), DEEP SLEEP, OVERWATCH ("already in" notice); WAKE removed; the phone's name in big type while connected; ping / telemetry / RC frames rows removed (kept in the link log); the minimap in a MAP card of its own that POP OUT MAP removes; no beep while waiting for a wake; PILOT UAV always flies as Pilot.
+- **Map:** Copy grid on right-click; the bottom figures selectable and copyable; PREVIOUS FLIGHTS (MAP TOOLS > TOOLS) with video, track, telemetry, link quality on one timeline, export, delete; pins as a sheet (NAME, GRID, AMSL, BRG, DIST) with EDIT LIST; OUTLINE / FILL only for rectangles; CRASHED sign.
+- **Crashed drones:** LOST DRONE ends the link at once (standby, no alarms) and marks the drone CRASHED; right-click Mark CRASHED on a lost or unknown drone; a crashed drone leaves the PHONE list, shows no LAST KNOWN and no longer counts as possibly flying; cleared when heard again.
+- **Setup:** SETUP > Set up a new drone (Phone / Drone setup removed); the shortcuts step removed (made at start); Betaflight in two steps (settings; motors and orientation); AVIONICS with GPS + PORT and COMPASS; GPS rescue by default, with GPS / battery detection; ARM and PREARM switches carry their mode alone (other modes taken off, shown before CONFIRM); accelerometer CALIBRATE; a guided orientation check (90 degree poses, a verdict, APPLY for board alignment, align_mag from four headings only with a compass); RESET SETUP (TOOLS > Advanced, settings only); every close of the guide logged with its reason; the phone's USB pop-up as a tick row.
+- **Tour:** rebuilt (welcome, one MENU step, LINK steps split, POP OUT MAP, map before map tools, list switches animated, fleet steps with four drones at fixed grids and their flights, INTEL, the BTR alert, CONNECT, fly into it, DIRECT HIT); repaints only the ring (the lag); resizable; runs in full every time; SETUP > Overwatch demo (Advanced) starts at FLEET; the tour's drones, flights, recordings (by exact path) and settings removed at its end.
+- **Virtual fleet:** the tour's layout by default, LOOK per drone, every world in the simulation style, a realistic BTR (cadnav.com) and a soldier (Quaternius, CC0) that can be crashed into, the BTR fleeing a drone in the air, real recorded sounds (CC0), motor beeps instead of a voice, +60 ms round trip, 30 fps with smooth motion, home at the launch point.
+- **Motion detection:** colour completes brightness; a thing driving a sixth of the picture straight counts from 1 s; slow vehicles found while the detector is young; boxes follow the target (live boxes 10 a second); zero false alarms kept (a benchmark against OpenCV MOG2 / KNN, ViBe and LBSP: ours alone had none).
+- **Screens:** no cut-off text at 125-200 % scaling (ScaleSafeUI), windows fit the screen (ScreenFit), POP OUT MAP always reachable, dropdowns wipe in (and open again), no "//" in any text.
+- **Fixes:** closing the window no longer leaves the process running (dispose before the exit, 5 s watchdog); OverwatchHub.close waits for its clip files; a 5-digit grid reads back as itself; the PC's launch point takes Betaflight's home once armed.
+
 ## 1.0.51
 
 PC app only; phone app stays DRAUPNE Flight 2.3.0-pc.39.

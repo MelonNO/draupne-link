@@ -4,7 +4,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-08, 1.0.51 + phone app 2.3.0-pc.39 released; last flown: 1.0.43)
+## Where things stand (2026-11-09, 1.0.52 + phone app 2.3.0-pc.40 released; last flown: 1.0.43)
+
+- **1.0.52 + phone pc.40 (2026-11-09):** fleet management (queued modes over check-ins), the three-button LINK card, previous flights, pins sheet, CRASHED, the setup round (new drone, Betaflight in two steps, orientation/compass check, RESET SETUP), the rebuilt tour with the BTR finale and Overwatch demo, the virtual fleet in the simulation world (BTR, soldier, real sounds), faster motion detection with colour, scaling fixes. Details in CHANGELOG 1.0.52. Untried on hardware: the accelerometer calibration, board alignment APPLY, align_mag, queued modes on real phones, colour detection on a real camera. Known flakes: SpectatorTest congestion, VideoTest held key frame, OverwatchFleetEndToEndTest.lostArmed (re-run alone).
 
 - **1.0.51 (PC only, 2026-11-08):** README rewritten short and up to date; no visible "4G" left in the PC app (COVERAGE, Net loss, "5G and mobile"). Phone app unchanged (pc.39 pinned).
 

@@ -44,7 +44,7 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 - Kartverket topo, world topo, satellite, OpenStreetMap. MGRS / UTM / degrees. Works offline after **DOWNLOAD AREA**.
 - Every drone on the map with its state: active, asleep, overwatch, lost, unknown. Right-click to fly, watch or copy the grid.
 - **PREVIOUS FLIGHTS:** video, track and telemetry on one timeline, link quality graph, export, delete.
-- **FIND DRONE** / **LOST DRONE** with the MGRS on the clipboard.
+- **FIND DRONE** / **LOST DRONE** with the MGRS on the clipboard. LOST DRONE marks the drone CRASHED.
 - **MAP TOOLS:** ruler with elevation profile, lines, rectangles, arrows, NATO symbols (MIL-STD-2525D / APP-6D), pins list, **RADIO HORIZON**, **GCS SEARCH**, **COVERAGE** (mobile network, estimate from OpenCelliD masts), overwatch **CLIPS**, KML/PNG export and import.
 
 <table>
@@ -78,7 +78,7 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 
 **TOOLS > Advanced** shows rarely needed settings, and **RESET SETUP** (settings only, like a fresh install).
 
-**Tour:** a guided walk through every part, ending with an overwatch alert you fly to.
+**Tour:** a guided walk through every part, ending with an overwatch alert you fly to. **SETUP > Overwatch demo** (Advanced) jumps to that part.
 
 ## Overwatch
 

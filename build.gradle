@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'de.droiddrone.pc'
-version = '1.0.51'
+version = '1.0.52'
 
 repositories {
     mavenCentral()
