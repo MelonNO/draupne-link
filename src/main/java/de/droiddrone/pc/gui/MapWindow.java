@@ -279,6 +279,7 @@ final class MapWindow extends JFrame {
                 d -> { if (main != null) main.overwatchDismiss(d); },
                 d -> { if (main != null) main.overwatch().closeBadge(d); },
                 () -> { if (main != null) main.itsDownResume(this); });
+        if (main != null) overwatchPanel.setCameraTurn(main.cameraTurn()); // each phone's way up (1.0.55)
         fleetPanel = new FleetManagementPanel(new FleetManagementPanel.Actions() {
             @Override
             public void mode(String phone, int mode, int intervalMin) {

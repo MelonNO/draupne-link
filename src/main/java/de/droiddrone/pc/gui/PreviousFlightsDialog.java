@@ -31,7 +31,6 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
-import java.awt.RenderingHints;
 import java.awt.Window;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -114,7 +113,32 @@ final class PreviousFlightsDialog extends JDialog {
         }
         logs = de.droiddrone.pc.AppPaths.dataDir().resolve("logs");
         open = new PreviousFlightsDialog(owner, cache, source, onMap, tracks, videos, logs);
+        open.setCameraTurn(turnOf(owner));
         open.setVisible(true);
+    }
+
+    /** The main window's CameraTurn, found up the owners (the map window's owner is the main window). */
+    static CameraTurn turnOf(Window w) {
+        for (Window o = w; o != null; o = o.getOwner()) if (o instanceof MainWindow m) return m.cameraTurn();
+        return null;
+    }
+
+    /**
+     * Each phone's way up (1.0.55): the recording itself is the camera's picture as it came, so it is turned as its
+     * drone's is set now; the copy with the OSD was turned when it was made, so it plays as it is.
+     */
+    void setCameraTurn(CameraTurn t) {
+        video.turn = t;
+        if (t != null) {
+            java.util.function.BiConsumer<String, Boolean> l = (phone, on) -> video.repaint();
+            t.addListener(l);
+            addWindowListener(new java.awt.event.WindowAdapter() {
+                @Override
+                public void windowClosed(java.awt.event.WindowEvent e) {
+                    t.removeListener(l);
+                }
+            });
+        }
     }
 
     PreviousFlightsDialog(Window owner, TileCache cache, TileSource source, Consumer<Path> onMap, Path tracksDir, Path videosDir, Path logsDir) {
@@ -471,17 +495,20 @@ final class PreviousFlightsDialog extends JDialog {
         @Override
         public void run() {
             ClipPlayer p;
+            Path played = file;
             try {
                 p = new ClipPlayer(file);
             } catch (java.io.IOException e) {
                 try { // the OSD copy may be MPEG-4 (no OpenH264 on that PC): then the recording itself
                     if (fallback == null || fallback.equals(file)) throw e;
                     p = new ClipPlayer(fallback);
+                    played = fallback;
                 } catch (java.io.IOException e2) {
                     video.clearLater("Can't play the video");
                     return;
                 }
             }
+            video.setSource(rawRecording(played, d.flight) ? d.flight.drone() : null);
             try {
                 int w = Math.max(16, Math.min(960, p.width())), h = Math.max(16, (int) Math.round(w * (double) p.height() / Math.max(1, p.width())));
                 int[] buf = new int[w * h];
@@ -546,10 +573,30 @@ final class PreviousFlightsDialog extends JDialog {
         }
     }
 
-    /** The picture, letterboxed; a word when there is none. */
+    /** The file played is the camera's own recording (not the copy with the OSD drawn in, already turned). */
+    static boolean rawRecording(Path played, FlightLibrary.Flight f) {
+        return played != null && f != null && f.video() != null && played.equals(f.video())
+                && (f.osdVideo() == null || !played.equals(f.osdVideo()));
+    }
+
+    /** The picture, letterboxed; a word when there is none; the raw recording turned as its drone's picture is set. */
     static final class VideoPane extends JComponent {
         private BufferedImage image;
         private String note = "";
+        volatile CameraTurn turn;
+        /** The drone whose camera recording plays, or null (the OSD copy, already turned). */
+        private volatile String source;
+
+        void setSource(String drone) {
+            source = drone;
+            repaint();
+        }
+
+        boolean upsideDown() {
+            CameraTurn t = turn;
+            String s = source;
+            return t != null && s != null && t.upsideDown(s);
+        }
 
         VideoPane() {
             setOpaque(true);
@@ -594,8 +641,8 @@ final class PreviousFlightsDialog extends JDialog {
                     if (image != null) {
                         double k = Math.min(getWidth() / (double) image.getWidth(), getHeight() / (double) image.getHeight());
                         int w = (int) Math.round(image.getWidth() * k), h = (int) Math.round(image.getHeight() * k);
-                        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-                        g.drawImage(image, (getWidth() - w) / 2, (getHeight() - h) / 2, w, h, null);
+                        boolean turned = upsideDown();
+                        CameraTurn.draw(g, image, (getWidth() - w) / 2, (getHeight() - h) / 2, w, h, turned, turned);
                         return;
                     }
                 }

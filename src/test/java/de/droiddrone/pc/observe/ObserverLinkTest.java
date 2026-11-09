@@ -120,4 +120,24 @@ class ObserverLinkTest {
             assertFalse(types.contains(UdpCommon.Connect));
         }
     }
+
+    /**
+     * 1.0.55: the tile's OSD reads the phone's flight controller records - only once the phone said which FC it is
+     * (pc.43 sends observers FcInfo once a second): before that FcTelemetry skips them, as it always did.
+     */
+    @Test
+    void theFlightControllersRecordsAreReadOnceTheFcIsKnown() throws Exception {
+        ObserverLink link = new ObserverLink("MobileAlpha", InetAddress.getLoopbackAddress(), 1, "secret", new Video(), null, -1, s -> {});
+        byte[] records = de.droiddrone.pc.fleet.SampleTelemetry.idleDronePacket(false);
+        link.onPacket(records, records.length);
+        assertNull(link.fcInfo());
+        assertNull(link.telemetry().getBattery(), "no FC known: its records not read");
+        byte[] info = de.droiddrone.pc.fleet.SampleTelemetry.fcInfoPacket();
+        link.onPacket(info, info.length);
+        assertNotNull(link.fcInfo());
+        link.onPacket(records, records.length);
+        assertNotNull(link.telemetry().getBattery(), "the tile's battery");
+        assertEquals(16.4, link.telemetry().getBattery().volts(), 0.01);
+        assertNotNull(link.telemetry().getAttitude(), "the tile's horizon and heading");
+    }
 }

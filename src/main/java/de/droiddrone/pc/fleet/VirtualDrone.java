@@ -1364,7 +1364,7 @@ public final class VirtualDrone {
 
     private void tickRun() {
         long last = System.currentTimeMillis();
-        long nextTelemetry = 0, nextStats = 0, nextObserve = 0, nextAudioGate = 0;
+        long nextTelemetry = 0, nextStats = 0, nextObserve = 0, nextAudioGate = 0, nextObserverFcInfo = 0;
         int statsSent = 0, telemetryTick = 0;
         while (running) {
             try {
@@ -1406,7 +1406,14 @@ public final class VirtualDrone {
                 }
                 boolean connected = isConnected() && !asleep && !checking;
                 long telemetryGap = mode == STANDBY ? 1000 : 30;
-                if (now >= nextTelemetry && connected) {
+                // observed with no pilot: the FC's records to the observers too, and once a second what FC it is
+                // (the PC reads the records only knowing it), as phone app pc.43 does (1.0.55)
+                boolean observed = observing && !isConnected() && mode == NORMAL;
+                if (observed && !fcLost && now >= nextObserverFcInfo) {
+                    nextObserverFcInfo = now + 1000;
+                    sendToObservers(TelemetryRecords.fcInfoPacket());
+                }
+                if (now >= nextTelemetry && (connected || observed)) {
                     nextTelemetry = now + telemetryGap;
                     sendTelemetry(now, telemetryTick++, mode == STANDBY);
                 }
@@ -1460,8 +1467,7 @@ public final class VirtualDrone {
             TelemetryRecords.network(out, 4, link.signalPercent(now));
         }
         if (every || tick % 167 == 11) TelemetryRecords.batteryConfig(out, 3.3, 4.3, 3.5);
-        UdpSender sender = udpSender;
-        if (sender != null) sender.sendPacket(p.getData());
+        streamOut(p.getData()); // the pilot, or the observers while only observed
     }
 
     /** The phone's own stats packet, ten times a second (overlay Udp.telemetrySenderRun). */

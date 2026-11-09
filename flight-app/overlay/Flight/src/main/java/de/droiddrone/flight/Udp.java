@@ -158,7 +158,7 @@ public class Udp {
     private volatile boolean observing, observeAudio;
     /** The picture applied for the observers (telemetry thread); null before the first. */
     private Observe.Request observeApplied;
-    private long observeStartTriedMs, observeStepAt, observeDetectionAt, observeRecordAt, observeKeyFrameAt;
+    private long observeStartTriedMs, observeStepAt, observeDetectionAt, observeRecordAt, observeKeyFrameAt, observeFcInfoAt;
     private int observeStep = -1;
     /** No observation within this long of the pilot's last packet, but for that very PC (its "back to the grid"). */
     static final long OBSERVE_AFTER_PILOT_MS = PILOT_ALIVE_MS;
@@ -1807,7 +1807,8 @@ public class Udp {
                     appendTelemetry(buf);
                 }
             }
-            if (telemetryOut.daos.size() > 1) udpSender.sendPacket(telemetryOut.getData());
+            // pc.43: observed with no pilot, the FC's records go to the observers too - each tile's OSD (1.0.55)
+            if (telemetryOut.daos.size() > 1) streamOut(telemetryOut.getData());
         } catch (Exception e) {
             log("sendTelemetryData error: " + e);
         }
@@ -1820,7 +1821,7 @@ public class Udp {
         byte[] r = record.getData();
         if (r.length <= 1) return; // nothing written (no FC info yet, or a record only acted on)
         if (telemetryOut.daos.size() > 1 && telemetryOut.daos.size() + r.length - 1 > TELEMETRY_MAX_BYTES) {
-            udpSender.sendPacket(telemetryOut.getData());
+            streamOut(telemetryOut.getData());
             telemetryOut = new UdpPacketData(UdpCommon.TelemetryData);
         }
         telemetryOut.daos.write(r, 1, r.length - 1);
@@ -1839,6 +1840,12 @@ public class Udp {
     }
 
     private void sendFcInfo(FcInfo fcInfo){
+        byte[] packet = fcInfoPacket(fcInfo);
+        if (packet != null) udpSender.sendPacket(packet);
+    }
+
+    /** The FcInfo packet (the pilot's on asking; observers' once a second, pc.43); null on an error. */
+    private static byte[] fcInfoPacket(FcInfo fcInfo){
         try {
             UdpPacketData packetData = new UdpPacketData(UdpCommon.FcInfo);
             packetData.daos.writeByte(fcInfo.getFcVariant());
@@ -1849,10 +1856,11 @@ public class Udp {
             packetData.daos.writeByte(fcInfo.getApiVersionMajor());
             packetData.daos.writeByte(fcInfo.getApiVersionMinor());
             packetData.daos.writeByte(fcInfo.getPlatformType());
-            udpSender.sendPacket(packetData.getData());
+            return packetData.getData();
         } catch (Exception e) {
             e.printStackTrace();
             log("sendFcInfo error: " + e);
+            return null;
         }
     }
 
@@ -2304,6 +2312,14 @@ public class Udp {
         if (now - observeRecordAt >= 200) {
             observeRecordAt = now;
             sendObserveRecord();
+        }
+        if (now - observeFcInfoAt >= 1000) { // pc.43: the PC reads the FC's records only knowing the FC (each tile's OSD)
+            FcInfo info = msp != null && msp.isInitialized() ? msp.getFcInfo() : mavlink != null && mavlink.isInitialized() ? mavlink.getFcInfo() : null;
+            if (info != null) {
+                observeFcInfoAt = now;
+                byte[] packet = fcInfoPacket(info);
+                if (packet != null) sendToObservers(packet);
+            }
         }
     }
 
