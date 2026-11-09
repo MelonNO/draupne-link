@@ -2,7 +2,7 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## Unreleased (to be 1.0.55 + phone pc.43)
+## 1.0.55 + phone pc.43
 
 The pilot's round of 2026-11-09. Nothing of it run on a drone or a real phone yet.
 

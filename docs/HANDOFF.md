@@ -4,10 +4,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-09, 1.0.54 + phone app 2.3.0-pc.42 released; last flown: 1.0.43)
+## Where things stand (2026-11-09, 1.0.55 + phone app 2.3.0-pc.43 released; last flown: 1.0.43)
 
-- **Unreleased on main (2026-11-09, to be 1.0.55 + phone pc.43, versions not bumped, no APK):** see CHANGELOG
-  "Unreleased". Real-phone motion detection (Common `AnalysisSize`, `MotionWatch` block average), `CameraTurn` (one
+- **1.0.55 + phone pc.43 (2026-11-09):** see CHANGELOG 1.0.55. Real-phone motion detection (Common `AnalysisSize`, `MotionWatch` block average), `CameraTurn` (one
   upside-down setting per phone for every view), `ObservationOsd` (observers get FC records + FcInfo from the phone),
   tour: `virtual-fleet.stop` request file the fleet program honours, BTR on NEXT only, pins sheet closes, movable box.
   1013 tests; phone compiles.
