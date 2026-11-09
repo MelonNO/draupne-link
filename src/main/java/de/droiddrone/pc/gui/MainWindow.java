@@ -4961,6 +4961,14 @@ public class MainWindow extends JFrame {
         return videoView;
     }
 
+    /**
+     * The video area itself, for steps during which the picture gives way to tiles (the spectator's mirror of a pilot
+     * PC that starts observing): the video view left the window then, and the tour read that as its window closed.
+     */
+    JComponent tourVideoArea() {
+        return videoHome() instanceof JComponent c ? c : videoView;
+    }
+
     /** The window's content, for the tour's centred boxes (the welcome, the finish). */
     JComponent tourCentre() {
         return (JComponent) getContentPane();

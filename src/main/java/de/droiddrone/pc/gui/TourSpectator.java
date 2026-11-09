@@ -54,9 +54,9 @@ final class TourSpectator implements AutoCloseable {
         s.add(new Tour.Step("WATCH", "Press CONNECT.", main::tourConnectButton).skip(() -> failed).of(Tour.FEATURE_SPECTATOR)
                 .waitFor(main::tourSpectating, "Press CONNECT", true));
         s.add(new Tour.Step("MIRROR", "Spectator mirrors the pilot PC: map, fleet and camera feeds. "
-                + "If the pilot observes, you see that too.", main::tourVideo).live(main::tourVideo).skip(() -> failed).of(Tour.FEATURE_SPECTATOR));
-        s.add(new Tour.Step("PILOT OBSERVES", "The pilot lands and starts OBSERVATION. Your view follows.", main::tourVideo)
-                .before(this::observe).live(main::tourVideo).skip(() -> failed).of(Tour.FEATURE_SPECTATOR)
+                + "If the pilot observes, you see that too.", main::tourVideoArea).live(main::tourVideoArea).skip(() -> failed).of(Tour.FEATURE_SPECTATOR));
+        s.add(new Tour.Step("PILOT OBSERVES", "The pilot lands and starts OBSERVATION. Your view follows.", main::tourVideoArea)
+                .before(this::observe).live(main::tourVideoArea).skip(() -> failed).of(Tour.FEATURE_SPECTATOR)
                 .waitFor(this::mirroredObserving, "Watch...", false));
         return s;
     }
