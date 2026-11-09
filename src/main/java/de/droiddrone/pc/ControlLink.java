@@ -367,8 +367,18 @@ public class ControlLink {
         this.events = events;
     }
 
+    /**
+     * 1.0.56: the address the link's sockets bind to (call before start): the virtual fleet's pilot PC, on a loopback
+     * address of its own, answers from it. Null (the default): every address, as a real PC.
+     */
+    public void setLocalAddress(InetAddress address) {
+        localAddress = address;
+    }
+
+    private InetAddress localAddress;
+
     public void start() throws IOException {
-        socket = new DatagramSocket(localPort);
+        socket = localAddress == null ? new DatagramSocket(localPort) : new DatagramSocket(localPort, localAddress);
         if (localPort == lastClosedPort) lastClosedPort = -1; // this port is a live session of this PC again
         try {
             socket.setReceiveBufferSize(UdpCommon.packetLength * 300);
@@ -391,7 +401,7 @@ public class ControlLink {
         } else if (spectatorsEnabled) {
             try {
                 host = new SpectatorHost(key, spectatorsAllowed, socket, () -> getState() == State.READY, this::getPing,
-                        msg -> events.accept(msg), this::requestKeyFrame); // a new spectator starts at a key frame
+                        msg -> events.accept(msg), this::requestKeyFrame, localAddress); // a new spectator starts at a key frame
             } catch (IOException e) {
                 log("Spectators can't watch: " + e); // flying works as before
             }
@@ -480,6 +490,13 @@ public class ControlLink {
         overwatchSink = sink;
     }
 
+    /** 1.0.56: where a spectator's MIRROR_HELLO goes while this link holds the port (the window's MirrorHost). */
+    private volatile MirrorHost mirrorHost;
+
+    public void setMirrorHost(MirrorHost m) {
+        mirrorHost = m;
+    }
+
     private void onForeignPacket(DatagramPacket packet) {
         if (packet.getLength() < 1) return;
         if (de.droiddrone.common.OverwatchProtocol.isFromPhone(packet.getData(), packet.getLength())) {
@@ -503,6 +520,11 @@ public class ControlLink {
         if (packet.getData()[0] == Names.NAME_QUERY) {
             java.util.function.Supplier<byte[]> r = nameReply;
             if (r != null) NameService.answer(socket, packet, config.getKey(), r);
+            return;
+        }
+        if (packet.getData()[0] == Mirror.HELLO) { // 1.0.56: a spectator asks for this PC's own view
+            MirrorHost m = mirrorHost;
+            if (m != null) m.onHello(packet, socket);
             return;
         }
         SpectatorHost h = host;

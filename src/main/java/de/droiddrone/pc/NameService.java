@@ -211,6 +211,13 @@ public final class NameService {
         overwatchSink = sink;
     }
 
+    /** 1.0.56: a spectator's MIRROR_HELLO on the link port while no link holds it (the window's MirrorHost). */
+    private volatile MirrorHost mirrorHost;
+
+    public void setMirrorHost(MirrorHost m) {
+        mirrorHost = m;
+    }
+
     /** The link is about to open on the link port: the answering socket lets go of it. */
     public void pause() {
         paused = true;
@@ -452,6 +459,11 @@ public final class NameService {
             if (de.droiddrone.common.OverwatchProtocol.isFromPhone(packet.getData(), packet.getLength())) {
                 ControlLink.OverwatchSink sink = overwatchSink;
                 if (sink != null) sink.offer(packet.getData(), packet.getLength(), packet.getAddress(), packet.getPort());
+                continue;
+            }
+            if (packet.getLength() >= 1 && packet.getData()[0] == Mirror.HELLO) {
+                MirrorHost m = mirrorHost;
+                if (m != null) m.onHello(packet, s);
                 continue;
             }
             answer(s, packet, config.getKey(), this::replyPacket);

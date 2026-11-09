@@ -39,6 +39,10 @@ public final class PacketIds {
     public static final byte SPECTATE_PAUSE = 0x6D;
     public static final byte SPECTATE_PILOT_VIEW = 0x76;
 
+    // spectator <-> pilot PC, the PC's own view (DRAUPNE Link 1.0.56, Mirror): its mode, fleet, map and observation
+    public static final byte MIRROR_HELLO = 0x5A, MIRROR_WELCOME = 0x5B, MIRROR_KEEP = 0x5C, MIRROR_STATE = 0x5D,
+            MIRROR_TILE = 0x5E, MIRROR_BYE = 0x5F;
+
     // PC -> phone video (ControlLink)
     public static final byte KEY_FRAME_REQUEST = 0x6A;
     public static final byte VIDEO_PROFILE = 0x6B;

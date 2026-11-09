@@ -528,6 +528,8 @@ public class MainWindow extends JFrame {
         fleet.setOnTaken(fleets::taken);
         nameService.setFleet(fleet, fleets::hello);
         nameService.setOverwatchSink(overwatch::offer); // the link port while no link holds it (1.0.47)
+        mirror = new MirrorController(new MirrorHooks()); // 1.0.56: spectators see this PC's own view
+        nameService.setMirrorHost(mirror.start());
         startOverwatch();
         power.load(config.getString(ASLEEP_KEY));
         crashed.putAll(parseCrashed(config.getString(CRASHED_KEY)));
@@ -1650,6 +1652,14 @@ public class MainWindow extends JFrame {
         connection.getLink().setForeignSleepHandler(this::onSleepCheck); // another phone's check-in: sleep on
         connection.getLink().setFleetHello(fleets::hello); // and a fleet mode queued for it goes ahead (1.0.52)
         connection.getLink().setOverwatchSink(overwatch::offer); // the link holds the link port now (1.0.47)
+        connection.getLink().setMirrorHost(mirror.mirrorHost()); // and spectators' mirror asks (1.0.56)
+        if (watch && Names.kindOf(target.name()) != Names.Kind.PHONE && target.ip() != null) {
+            try { // watching a PC: its own view too - map, fleet, observation (1.0.56)
+                mirror.watch(InetAddress.getByName(target.ip()), VirtualFleet.portOf(target.ip(), config.getPort()));
+            } catch (IOException e) {
+                logLine("Spectator: no mirror - " + e.getMessage());
+            }
+        }
         power.phoneOverwatching = false;
         // the flight before stays on the map; this one is the live one
         keepFlight(track, liveTrackName);
@@ -1773,6 +1783,7 @@ public class MainWindow extends JFrame {
             connection.close();
         }
         connection = null;
+        mirror.unwatch(); // this PC's own view back (1.0.56)
         setVirtualShown(false);
         stopLiveAudio();
         nameService.resume();
@@ -2262,6 +2273,7 @@ public class MainWindow extends JFrame {
         phoneWatch.shutdownNow();
         nameService.stop();
         overwatch.close();
+        mirror.close();
         if (popOut != null) popOut.dispose();
         if (observation != null) stopObservation();
         backToGrid = false;
@@ -2638,6 +2650,7 @@ public class MainWindow extends JFrame {
             marks.add(new MapView.Observed(i + 1, ObservationGrid.colour(i), p.lat, p.lon, hd.deg(), hd.approximate(), cone,
                     i == hoveredTile, selected, motion));
         }
+        mirror.observed(marks); // the spectators' mirror (1.0.56)
         IntConsumer click = tile -> {
             ObservationSession s = observation;
             if (s != null && s.set().selected() != tile) s.select(tile);
@@ -2653,6 +2666,7 @@ public class MainWindow extends JFrame {
     // ---------------------------------------------------------------- periodic refresh
 
     private void refresh() {
+        mirror.tick(); // 1.0.56: this PC's view to its spectators, or the pilot PC's tiles here
         JoystickService.Snapshot snap = service.getSnapshot();
         refreshJoystickCombo(snap);
         refreshController(snap);
@@ -3904,11 +3918,15 @@ public class MainWindow extends JFrame {
             if (last != null) drones.add(new MapView.NetDrone(name, last.lat(), last.lon(), "CRASHED - LOST " + Names.agoText(e.getValue(), now),
                     MapView.Kind.CRASHED, false, null));
         }
-        miniMap.setNetDrones(drones, this::connectFromMap);
+        // 1.0.56: kept for the spectators' mirror; a spectator shows the pilot PC's drones instead (and flies none)
+        List<MapView.NetDrone> shownDrones = mirror.drones(drones);
+        java.util.function.BiConsumer<String, Boolean> onDrone = mirror.isMirroring() ? (n, w) -> {
+        } : this::connectFromMap;
+        miniMap.setNetDrones(shownDrones, onDrone);
         miniMap.setOnClearCrashed(this::clearCrashedByPilot);
         miniMap.setOnMarkCrashed(n -> markCrashed(n, "marked"));
         if (mapWindow != null) {
-            mapWindow.map().setNetDrones(drones, this::connectFromMap);
+            mapWindow.map().setNetDrones(shownDrones, onDrone);
             mapWindow.map().setOnClearCrashed(this::clearCrashedByPilot);
             mapWindow.map().setOnMarkCrashed(n -> markCrashed(n, "marked"));
         }
@@ -3976,6 +3994,111 @@ public class MainWindow extends JFrame {
         @Override
         public MapWindow mapWindowIfOpened() {
             return mapWindow;
+        }
+
+        @Override
+        public List<FleetCards.Card> fleetShown(List<FleetCards.Card> own) {
+            return mirror.fleetShown(own);
+        }
+    }
+
+    // ------------------------------------------------------------------ SPECTATOR's mirror (1.0.56)
+
+    /** Spectators see this PC's own view; watching a PC, its view here: MirrorController. */
+    private MirrorController mirror;
+
+    MirrorController mirror() {
+        return mirror;
+    }
+
+    private final class MirrorHooks implements MirrorController.Host {
+        @Override
+        public void logLine(String text) {
+            MainWindow.this.logLine(text);
+        }
+
+        @Override
+        public boolean spectatorsAllowed() {
+            return Connection.spectatorsAllowed(config);
+        }
+
+        @Override
+        public String key() {
+            return config.getKey();
+        }
+
+        @Override
+        public int mode() {
+            if (observation != null) return de.droiddrone.pc.Mirror.OBSERVER;
+            Connection c = connection;
+            return c != null && !c.getLink().isSpectator() && !c.getLink().isWatchOnly() ? de.droiddrone.pc.Mirror.PILOT : de.droiddrone.pc.Mirror.IDLE;
+        }
+
+        @Override
+        public String phone() {
+            return config.getString(Names.PHONE_NAME_KEY);
+        }
+
+        @Override
+        public List<TileFeed> tileFeeds() {
+            return observation == null ? List.of() : List.copyOf(tileFeeds);
+        }
+
+        @Override
+        public int selectedTile() {
+            ObservationSession o = observation;
+            return o == null ? -1 : o.set().selected();
+        }
+
+        @Override
+        public int enlargedTile() {
+            ObservationSession o = observation;
+            return o == null ? -1 : o.set().enlarged();
+        }
+
+        @Override
+        public List<FleetCards.Card> fleetCards() {
+            return fleets == null ? null : fleets.cards();
+        }
+
+        @Override
+        public Pins pins() {
+            return pins;
+        }
+
+        @Override
+        public MapGraphics graphics() {
+            return graphics;
+        }
+
+        @Override
+        public Container videoHome() {
+            return MainWindow.this.videoHome();
+        }
+
+        @Override
+        public JComponent videoView() {
+            return videoView;
+        }
+
+        @Override
+        public ObservationGrid newGrid(ObservationGrid.Listener listener) {
+            return new ObservationGrid(listener, cameraTurn, videoView::getOsdLayout, videoView::isOsdEnabled);
+        }
+
+        @Override
+        public MapView miniMap() {
+            return miniMap;
+        }
+
+        @Override
+        public MapWindow mapWindowIfOpened() {
+            return mapWindow;
+        }
+
+        @Override
+        public boolean invertPitch() {
+            return "true".equalsIgnoreCase(config.getString(OSD_INVERT_PITCH_KEY));
         }
     }
 
