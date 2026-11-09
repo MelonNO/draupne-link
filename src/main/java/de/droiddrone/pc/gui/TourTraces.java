@@ -32,6 +32,8 @@ final class TourTraces {
     private final long startedAt;
     /** The settings that name a tour drone, and the chosen phone and its address, as they were when the tour began. */
     private final Map<String, String> before = new HashMap<>();
+    /** Every setting as it was when the tour began: for drones added later ({@link #addDrones}). */
+    private final Map<String, String> initial = new HashMap<>();
     private final Set<Path> files = new LinkedHashSet<>();
     private final List<long[]> windows = new ArrayList<>();
     private long openSince;
@@ -48,6 +50,7 @@ final class TourTraces {
             if (names.add(d.toLowerCase(Locale.ROOT))) spelled.add(d);
         }
         this.startedAt = startedAt;
+        initial.putAll(settings);
         settings.forEach((k, v) -> {
             if (watched(k)) before.put(k, v);
         });
@@ -59,6 +62,25 @@ final class TourTraces {
             // nothing to put back
         }
         lastPositionBefore = b;
+    }
+
+    /**
+     * More of the tour's drones (the finale's after the six of the PILOT and OBSERVER steps): their names, and the
+     * settings naming them as they were when the tour began.
+     */
+    void addDrones(Collection<String> drones) {
+        List<String> added = new ArrayList<>();
+        for (String d : drones) {
+            if (names.add(d.toLowerCase(Locale.ROOT))) {
+                spelled.add(d);
+                added.add(d.toLowerCase(Locale.ROOT));
+            }
+        }
+        initial.forEach((k, v) -> {
+            String key = k.toLowerCase(Locale.ROOT);
+            if (before.containsKey(k)) return;
+            for (String n : added) if (key.contains(n)) before.put(k, v);
+        });
     }
 
     boolean isTour(String drone) {

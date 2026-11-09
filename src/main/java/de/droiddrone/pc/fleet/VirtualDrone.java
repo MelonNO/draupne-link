@@ -1126,6 +1126,7 @@ public final class VirtualDrone {
                         double[] rel = t.btr.relative(view, now);
                         t.sound.add(left, right, rel[0], rel[1], rel[2], t.btr.speedAt(now));
                     }
+                    if (scene.world() instanceof Scene.Sounding heard) heard.addSound(left, right, view, now); // the tour's scenes
                     frames = enc.encode(left, right);
                 } else {
                     frames = enc.encode(sound.next(fc.isArmed() ? fc.throttleOut() : -1, lastBeep));
@@ -1603,6 +1604,14 @@ public final class VirtualDrone {
         events = e;
         targetSound = s == null ? null : new BtrSound(3000L + slot);
         scene.setWorld(s);
+    }
+
+    /**
+     * The tour's six drones (2026-11-09): this drone's camera sees the scene (and its microphone hears it, when it is
+     * {@link Scene.Sounding}); null gives it the usual picture back.
+     */
+    void showScene(Scene.World w) {
+        scene.setWorld(w);
     }
 
     BtrScene target() {

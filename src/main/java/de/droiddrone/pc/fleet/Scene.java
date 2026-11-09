@@ -86,6 +86,12 @@ final class Scene {
         void render(BufferedImage img, View v, long nowMs, boolean analysis);
     }
 
+    /** A world that is heard too (the tour's scenes): its sounds added to the drone's microphone, stereo. */
+    interface Sounding {
+        /** One audio frame: added to left and right, as heard from v. Called on the drone's sound thread only. */
+        void addSound(float[] left, float[] right, View v, long nowMs);
+    }
+
     private volatile World world;
     private volatile String name;
     /** The world it stands in (every virtual drone's, 1.0.52). */

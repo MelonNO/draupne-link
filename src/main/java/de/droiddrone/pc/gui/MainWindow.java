@@ -4598,6 +4598,155 @@ public class MainWindow extends JFrame {
         return checkEveryRow;
     }
 
+    // ---- the tour's PILOT, STANDBY, sleep and OBSERVER steps (2026-11-09, the pilot)
+
+    /**
+     * The mode drop-down's animation before the PILOT step: it opens, the highlight walks up from the bottom to PILOT,
+     * PILOT is chosen and it closes; done runs after.
+     */
+    void tourAnimatePilot(Runnable done) {
+        int pilot = -1;
+        for (int i = 0; i < roleCombo.getItemCount(); i++) if (ROLE_PILOT.equals(roleCombo.getItemAt(i))) pilot = i;
+        if (pilot < 0 || !roleCombo.isShowing()) {
+            done.run();
+            return;
+        }
+        final int target = pilot;
+        int[] at = {roleCombo.getItemCount() - 1};
+        int[] stage = {0};
+        Timer t = new Timer(420, null);
+        t.addActionListener(e -> {
+            try {
+                if (stage[0] == 0) {
+                    roleCombo.showPopup();
+                    highlight(at[0]);
+                    stage[0] = 1;
+                } else if (stage[0] == 1) {
+                    if (at[0] != target) at[0] += at[0] > target ? -1 : 1;
+                    highlight(at[0]);
+                    if (at[0] == target) stage[0] = 2;
+                } else if (stage[0] == 2) {
+                    roleCombo.setSelectedItem(ROLE_PILOT);
+                    roleCombo.hidePopup();
+                    stage[0] = 3;
+                } else {
+                    t.stop();
+                    done.run();
+                }
+            } catch (RuntimeException ex) {
+                t.stop();
+                roleCombo.hidePopup();
+                done.run();
+            }
+        });
+        t.setInitialDelay(250);
+        t.start();
+    }
+
+    /** The open drop-down's highlight on row i (the animation's). */
+    private void highlight(int i) {
+        Object child = roleCombo.getAccessibleContext().getAccessibleChild(0);
+        if (child instanceof javax.swing.plaf.basic.ComboPopup popup) popup.getList().setSelectedIndex(i);
+    }
+
+    boolean tourPilotRole() {
+        return ROLE_PILOT.equals(roleCombo.getSelectedItem());
+    }
+
+    boolean tourObserverRole() {
+        return observerRole();
+    }
+
+    /** The mode chosen now, to put back when the tour is over. */
+    Object tourRole() {
+        return roleCombo.getSelectedItem();
+    }
+
+    void tourRestoreRole(Object role) {
+        if (role == null || role.equals(roleCombo.getSelectedItem())) return;
+        if (observation != null) stopObservation();
+        if (connection == null) roleCombo.setSelectedItem(role);
+    }
+
+    /** The phone chosen under PHONE. */
+    String tourChosenPhone() {
+        return config.getString(Names.PHONE_NAME_KEY);
+    }
+
+    /** Flying (or connecting to) this phone as pilot. */
+    boolean tourFlying(String phone) {
+        Connection c = connection;
+        return c != null && !c.getLink().isSpectator() && phone != null && phone.equalsIgnoreCase(tourChosenPhone());
+    }
+
+    boolean tourConnected() {
+        return connection != null;
+    }
+
+    /** CHECK EVERY says Constant (the phone listens all along). */
+    boolean tourCheckConstant() {
+        return SleepCheck.isAlways(power.checkIntervalMin);
+    }
+
+    /** CHECK EVERY off Constant (to 5 min), so the tour's step has the pilot set it; nothing when it isn't Constant. */
+    void tourCheckNotConstant() {
+        if (!tourCheckConstant()) return;
+        for (int i = 0; i < CHECK_INTERVALS.length; i++) {
+            if (CHECK_INTERVALS[i] == 5 && i < checkIntervalCombo.getItemCount()) checkIntervalCombo.setSelectedIndex(i);
+        }
+    }
+
+    /** CHECK EVERY's choice now (its index), to put back when the tour is over. */
+    int tourCheckIndex() {
+        return checkIntervalCombo.getSelectedIndex();
+    }
+
+    void tourRestoreCheck(int index) {
+        if (index >= 0 && index < checkIntervalCombo.getItemCount() && index != checkIntervalCombo.getSelectedIndex()) {
+            checkIntervalCombo.setSelectedIndex(index);
+        }
+    }
+
+    JComponent tourChooseDrones() {
+        return chooseDronesButton;
+    }
+
+    /** The drones chosen for observation (the setting), to put back when the tour is over. */
+    String tourObserveSet() {
+        return config.getString(ObserveSet.KEY);
+    }
+
+    void tourRestoreObserveSet(String saved) {
+        if (saved == null || saved.equals(config.getString(ObserveSet.KEY))) return;
+        save(Map.of(ObserveSet.KEY, saved));
+        updatePhoneList();
+    }
+
+    /** Every one of these phones is chosen for observation. */
+    boolean tourObserveChosen(List<String> phones) {
+        ObserveSet set = ObserveSet.parse(config.getString(ObserveSet.KEY));
+        for (String p : phones) if (!set.contains(p)) return false;
+        return !phones.isEmpty();
+    }
+
+    boolean tourObserving() {
+        return observation != null;
+    }
+
+    /** One of the observed feeds is muted. */
+    boolean tourFeedMuted() {
+        ObservationSession o = observation;
+        if (o == null) return false;
+        for (String p : o.set().phones()) if (o.isMuted(p)) return true;
+        return false;
+    }
+
+    /** The observation tiles (the video while there are none). */
+    JComponent tourObservationGrid() {
+        ObservationGrid g = observationGrid;
+        return g != null ? g : videoView;
+    }
+
     JComponent tourPopMapButton() {
         return popMapButton;
     }

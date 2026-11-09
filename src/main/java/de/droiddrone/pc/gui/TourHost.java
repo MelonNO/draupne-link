@@ -84,6 +84,10 @@ final class TourHost {
     void begin(List<String> drones) {
         Map<String, String> now = new HashMap<>();
         for (String k : config.keys()) now.put(k, config.getString(k));
+        if (traces != null) { // the finale's drones after the PILOT / OBSERVER steps' six: one tour, one clean-up
+            traces.addDrones(drones);
+            return;
+        }
         Path lastPosition = null;
         try {
             lastPosition = FlightTrack.defaultDir().resolve("last-position.txt");
@@ -91,6 +95,17 @@ final class TourHost {
             // no Tracks folder: nothing there to look after
         }
         traces = new TourTraces(drones, System.currentTimeMillis(), now, lastPosition);
+    }
+
+    /**
+     * These tour drones are gone before the tour ends (the six of the PILOT and OBSERVER steps, closed for the finale's
+     * fleet): a link to one ends, and they leave the name map, the PHONE list and the fleet; their files go at the end.
+     */
+    void forget(List<String> drones) {
+        String linked = host.linkedPhone();
+        if (linked != null && drones.stream().anyMatch(linked::equalsIgnoreCase)) host.disconnect();
+        for (String n : drones) host.forgetDrone(n);
+        host.updatePhoneList();
     }
 
     /**

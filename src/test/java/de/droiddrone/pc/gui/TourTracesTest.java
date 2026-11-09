@@ -99,4 +99,25 @@ class TourTracesTest {
         assertFalse(Files.exists(a));
         assertFalse(Files.exists(b));
     }
+
+    /**
+     * The tour's six drones of the PILOT and OBSERVER steps first, the finale's later (2026-11-09): one tour, one
+     * clean-up - the later drones' settings go back to how they were when the tour began.
+     */
+    @Test
+    void dronesAddedLaterAreCleanedUpAsTheFirst() {
+        Map<String, String> start = new HashMap<>();
+        start.put("audio.muted.MobileWhiskey", "false"); // the pilot's own setting from long ago
+        TourTraces t = new TourTraces(List.of("MobileZulu"), System.currentTimeMillis(), start, null);
+        assertFalse(t.isTour("MobileWhiskey"));
+        t.addDrones(List.of("MobileZulu", "MobileWhiskey"));
+        assertTrue(t.isTour("mobilewhiskey"));
+        assertEquals(List.of("MobileZulu", "MobileWhiskey"), t.names(), "Zulu once");
+        Map<String, String> now = new HashMap<>(start);
+        now.put("audio.muted.MobileWhiskey", "true");
+        now.put("observe.volume.MobileWhiskey", "40");
+        Map<String, String> restore = t.settingsToRestore(now);
+        assertEquals("false", restore.get("audio.muted.MobileWhiskey"), "as when the tour began");
+        assertEquals("", restore.get("observe.volume.MobileWhiskey"), "made by the tour: taken off");
+    }
 }
