@@ -11,6 +11,8 @@ import de.droiddrone.pc.setup.CliWrite;
 import de.droiddrone.pc.setup.GpsSetup;
 import de.droiddrone.pc.setup.ModeSwitch;
 import de.droiddrone.pc.setup.SetupConfirm;
+import de.droiddrone.pc.setup.SetupPlanner;
+import de.droiddrone.pc.setup.SetupPlanner.Gps;
 
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JComponent;
@@ -118,30 +120,6 @@ final class DroneSetup {
         /** The same error this many times running: the USB link itself is stuck. */
         private static final int SAME_ERROR_LIMIT = 3;
         private static final String WITH_WRITE = "Set on <b>Confirm</b>.";
-
-        /**
-         * The GPS question's side of a round.
-         * @param target     the pilot's answer (null = not asked yet: nothing GPS is written)
-         * @param uart       the UART chosen (1 = UART1)
-         * @param compass    the compass wanted
-         * @param onFc       Betaflight's GPS feature is on
-         * @param portNow    the port Betaflight has the GPS function on ("" = none)
-         * @param uarts      the UARTs the board has, as Betaflight lists them (empty = not read)
-         * @param magFound   Betaflight sees a compass
-         * @param calibrated the compass has calibration offsets
-         * @param gpsPending the plan changes the GPS (feature or port); portNote says what the port loses
-         * @param compassPending the plan changes mag_hardware
-         */
-        private record Gps(Boolean target, int uart, boolean compass, boolean onFc, String portNow, List<Integer> uarts,
-                           boolean magFound, boolean calibrated, boolean gpsPending, String portNote, boolean compassPending) {
-            static Gps none(Boolean target, int uart, boolean compass) {
-                return new Gps(target, uart, compass, false, "", List.of(), false, false, false, "", false);
-            }
-
-            boolean wanted() {
-                return Boolean.TRUE.equals(target);
-            }
-        }
 
         /**
          * @param arm        Betaflight's arm switch, or null if ARM isn't on one switch
@@ -1359,169 +1337,61 @@ final class DroneSetup {
                 boolean switchRx = !mspRx && mayApply && !abandoned;
                 if (switchRx) fc.setFeatureMask(BetaflightPlan.mspReceiverMask(featureMask));
                 fc.enterCli();
-                String version = BetaflightPlan.version(fc.command("version"));
-                String board = boardName(fc);
-                // where the arm switch is: the sticks then also wait for it to be off (RcSession). Saved below - after a
-                // write, from Betaflight's modes as written, not as they were before ARM moved
-                String aux = fc.command("aux");
-                ArmSwitch arm = ArmSwitch.fromCli(aux);
-                String rate = fc.command("get serial_update_rate_hz");
-                String forced = fc.command("get force_battery_cell_count");
-                List<BetaflightPlan.Change> plan = new java.util.ArrayList<>(BetaflightPlan.plan(rate, version, forced, cellTarget, cellsOk));
-                if (!mspRx) {
-                    plan.add(0, new BetaflightPlan.Change("Receiver: MSP RX input, now "
-                            + receiverNow, List.of()));
-                }
-                // the GPS as answered: its feature, its port, the compass
-                String serial = gpsWanted.wanted() ? fc.command("serial") : "";
-                Gps gpsRead = gpsWanted;
-                if (gpsWanted.wanted()) {
-                    List<BetaflightPlan.Change> gpsPlan = GpsSetup.gpsPlan(featureMask, serial, fc.command("get gps_auto_baud"), gpsWanted.uart());
-                    plan.addAll(gpsPlan);
-                    String portNote = "";
-                    for (BetaflightPlan.Change c : gpsPlan) {
-                        int at = c.description().indexOf(" (");
-                        if (c.description().startsWith("GPS on UART") && at > 0) portNote = c.description().substring(at + 2, c.description().length() - 1);
-                    }
-                    String magHardware = GpsSetup.magHardware(fc.command("get mag_hardware"));
-                    BetaflightPlan.Change compass = GpsSetup.compassPlan(gpsWanted.compass(), magHardware);
-                    if (compass != null) plan.add(compass);
-                    boolean calibrated = gpsWanted.compass() && magFound && GpsSetup.calibrated(fc.command("get mag_calibration"));
-                    if (gpsWanted.compass() && magFound) rememberCompass(calibrated);
-                    gpsRead = new Gps(gpsWanted.target(), gpsWanted.uart(), gpsWanted.compass(), gpsOnFc, GpsSetup.gpsPortName(serial),
-                            GpsSetup.uarts(serial), magFound, calibrated, !gpsPlan.isEmpty(), portNote, compass != null);
-                } else {
-                    gpsRead = new Gps(gpsWanted.target(), gpsWanted.uart(), gpsWanted.compass(), gpsOnFc, "", List.of(), magFound, false, false, "", false);
-                }
-                // silent unless BEEPER is pressed or the phone is unplugged (Beepers); the button's mode on its AUX (BEEPER_AUX) below
-                BetaflightPlan.Change beepers = Beepers.plan(fc.command("beeper list"), fc.command("beeper"), fc.command("beacon"));
-                if (beepers != null) plan.add(beepers);
-                int beeperTarget = modesOffered == null || modesOffered.contains(ModeSwitch.BEEPER_MODE) ? ModeSwitch.BEEPER_AUX : 0;
-                java.util.Map<ModeSwitch.Mode, String> blocked = new java.util.EnumMap<>(ModeSwitch.Mode.class);
-                String rescueNote = null;
-                String failsafeNote = null;
-                String failsafeProblem = null;
-                // the failsafe, as chosen; the rescue switch only goes on while the failsafe is (or becomes) GPS rescue
-                boolean readFailsafe = rescueTarget > 0 || failsafeTarget != ModeSwitch.Failsafe.KEEP;
-                String failsafe = readFailsafe ? ModeSwitch.Failsafe.current(fc.command("get failsafe_procedure")) : null;
-                boolean rescueNow = "GPS-RESCUE".equals(failsafe);
-                boolean rescueWanted = failsafeTarget == ModeSwitch.Failsafe.GPS_RESCUE
-                        || (rescueNow && failsafeTarget == ModeSwitch.Failsafe.KEEP);
-                List<ModeSwitch.Mode> gpsModes = new java.util.ArrayList<>(modeTarget == null ? List.of() : modeTarget.gpsModes());
-                if ((rescueWanted && rescueTarget > 0 || failsafeTarget == ModeSwitch.Failsafe.GPS_RESCUE)
-                        && !gpsModes.contains(ModeSwitch.Mode.GPS_RESCUE)) {
-                    gpsModes.add(ModeSwitch.Mode.GPS_RESCUE);
-                }
-                if (!gpsModes.isEmpty()) {
-                    for (ModeSwitch.Mode m : gpsModes) {
-                        String tooOld = m.tooOld(version);
-                        if (tooOld != null) {
-                            blocked.put(m, tooOld);
-                        } else if (!gpsWanted.wanted()) {
-                            blocked.put(m, "Needs a GPS: answer <b>Yes</b> under GPS above.");
-                        } else if (!gpsOnFc) {
-                            blocked.put(m, "Turning GPS on; checked after restart.");
-                        } else if (!Boolean.TRUE.equals(gpsFound)) {
-                            blocked.put(m, "No GPS found - see the GPS row.");
-                        }
-                    }
-                }
-                boolean rescueFailsafe = rescueNow && failsafeTarget != ModeSwitch.Failsafe.DROP;
-                if (failsafeTarget == ModeSwitch.Failsafe.GPS_RESCUE && !rescueNow) {
-                    if (blocked.containsKey(ModeSwitch.Mode.GPS_RESCUE)) {
-                        failsafeProblem = blocked.get(ModeSwitch.Mode.GPS_RESCUE);
-                    } else {
-                        plan.add(new BetaflightPlan.Change("Failsafe: GPS rescue", List.of("set failsafe_procedure = GPS-RESCUE")));
-                        rescueFailsafe = true;
-                    }
-                } else if (failsafeTarget == ModeSwitch.Failsafe.DROP && failsafe != null && !"DROP".equals(failsafe)) {
-                    plan.add(new BetaflightPlan.Change("Failsafe: drop", List.of("set failsafe_procedure = DROP")));
-                }
-                int rescueOn = rescueFailsafe ? rescueTarget : 0;
-                // with a GPS, GPS rescue (failsafe or switch) would block arming until the GPS has a fix - indoors too:
-                // always allowed (the pilot's rule), written with the rest
-                if (gpsWanted.wanted()) {
-                    BetaflightPlan.Change withoutFix = GpsSetup.armingWithoutFixPlan(fc.command("get gps_rescue_allow_arming_without_fix"));
-                    if (withoutFix != null) plan.add(withoutFix);
-                }
-                ModeSwitch.Plan modes = modeTarget == null && rescueOn == 0 && armTarget == 0 && prearmTarget == 0 && beeperTarget == 0 ? null
-                        : ModeSwitch.plan(aux, modesOffered, blocked, ModeSwitch.Switches.of(modeTarget).rescue(rescueOn).arm(armTarget).prearm(prearmTarget).beeper(beeperTarget));
-                List<String> replaced = modes == null ? List.of() : modes.replaced();
-                if (modes != null && !modes.commands().isEmpty()) {
-                    List<String> what = new java.util.ArrayList<>();
-                    if (modeTarget != null && modes.problem() == null) what.add("flight modes on AUX" + modeTarget.aux() + ": " + modeTarget.describe());
-                    if (rescueOn > 0 && modes.rescueProblem() == null) what.add("GPS rescue up on AUX" + rescueOn);
-                    if (armTarget > 0 && modes.armProblem() == null) what.add("ARM on AUX" + armTarget);
-                    if (prearmTarget > 0 && modes.prearmProblem() == null) what.add("PREARM on AUX" + prearmTarget);
-                    if (beeperTarget > 0 && modes.commands().stream().anyMatch(c -> c.matches("aux \\d+ " + ModeSwitch.BEEPER_MODE + " .*"))) {
-                        what.add("BEEPER on AUX" + beeperTarget + " (the app's BEEPER button)");
-                    }
-                    plan.add(new BetaflightPlan.Change("Modes: " + String.join("; ", what) + "." + takenOff(replaced), modes.commands()));
-                }
-                boolean apply = mayApply && !plan.isEmpty() && version.startsWith("Betaflight"); // never INAV & co.
+                SetupPlanner.Result r = SetupPlanner.plan(fc::command, new SetupPlanner.Fc(modesOffered, featureMask, magFound, gpsFound),
+                        new SetupPlanner.Wanted(cellTarget, cellsOk, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, gpsWanted));
+                if (r.compassRead() != null) rememberCompass(r.compassRead());
+                // ARM's switch is saved for the sticks - after a write, from Betaflight's modes as written, not as they
+                // were before ARM moved
+                String aux = r.aux();
+                List<BetaflightPlan.Change> plan = r.plan();
+                boolean apply = mayApply && !plan.isEmpty() && r.version().startsWith("Betaflight"); // never INAV & co.
+                java.nio.file.Path backup = null;
+                String refused = null;
+                boolean saved = false;
                 if (apply && abandoned) { // the page was left meanwhile: nothing is written behind the pilot's back
                     fc.exitCli();
                     saveModes(aux);
                     main.logLine("Betaflight: page left while reading - nothing written.");
-                } else {
-                    java.nio.file.Path backup = null;
-                    String refused = null;
-                    boolean saved = false;
-                    if (apply) {
-                        // all or nothing: no backup, no write; a command not taken as sent leaves the CLI without saving
-                        String diff = fc.command("diff all", 20_000); // what it was, before anything changes
-                        if (switchRx) diff = BetaflightPlan.restoreReceiver(diff, featureMask); // but for the receiver, already switched
-                        if (!CliWrite.usableBackup(diff)) main.logLine("Betaflight's \"diff all\" didn't come back whole: " + brief(diff));
-                        backup = CliWrite.usableBackup(diff) ? backup(diff, version) : null;
-                        if (backup == null) {
-                            refused = "Backup failed (see log): nothing written.";
-                        } else {
-                            List<String> commands = new java.util.ArrayList<>();
-                            for (BetaflightPlan.Change c : plan) commands.addAll(c.commands());
-                            CliWrite.Result written = CliWrite.run(fc::command, commands, main::logLine);
-                            if (written.complete()) {
-                                fc.saveAndReboot();
-                                saved = true;
-                                // the ARM switch as written now, for the sticks (RcSession) - not as read before it moved
-                                saveModes(written.auxAfter().isEmpty() ? aux : written.auxAfter());
-                                main.logLine("Betaflight: " + plan.stream().map(BetaflightPlan.Change::description).collect(Collectors.joining("; "))
-                                        + ". Its settings before: " + backup);
-                            } else {
-                                refused = written.stopped() + ". Nothing saved: flight controller unchanged.";
-                            }
-                        }
-                        if (!saved) {
-                            fc.exitCli(); // "exit": Betaflight drops every change since the CLI opened (the receiver's too) and restarts
-                            saveModes(aux);
-                            main.logLine("Betaflight: write stopped, nothing saved - " + refused);
-                        }
+                } else if (apply) {
+                    // all or nothing: no backup, no write; a command not taken as sent leaves the CLI without saving
+                    String diff = fc.command("diff all", 20_000); // what it was, before anything changes
+                    if (switchRx) diff = BetaflightPlan.restoreReceiver(diff, featureMask); // but for the receiver, already switched
+                    if (!CliWrite.usableBackup(diff)) main.logLine("Betaflight's \"diff all\" didn't come back whole: " + brief(diff));
+                    backup = CliWrite.usableBackup(diff) ? backup(diff, r.version()) : null;
+                    if (backup == null) {
+                        refused = "Backup failed (see log): nothing written.";
                     } else {
-                        saveModes(aux);
-                        fc.exitCli(); // Betaflight restarts (nothing changed, or the receiver only in RAM) - which also clears a stale "MSP" arming block
+                        List<String> commands = new java.util.ArrayList<>();
+                        for (BetaflightPlan.Change c : plan) commands.addAll(c.commands());
+                        CliWrite.Result written = CliWrite.run(fc::command, commands, main::logLine);
+                        if (written.complete()) {
+                            fc.saveAndReboot();
+                            saved = true;
+                            // the ARM switch as written now, for the sticks (RcSession) - not as read before it moved
+                            saveModes(written.auxAfter().isEmpty() ? aux : written.auxAfter());
+                            main.logLine("Betaflight: " + plan.stream().map(BetaflightPlan.Change::description).collect(Collectors.joining("; "))
+                                    + ". Its settings before: " + backup);
+                        } else {
+                            refused = written.stopped() + ". Nothing saved: flight controller unchanged.";
+                        }
                     }
-                    return new Read(port.systemName(), version, mspRx, BetaflightPlan.serialRate(rate),
-                            BetaflightPlan.targetSerialRate(version), BetaflightPlan.forcedCells(forced), cellTarget, saved, null, arm, backup, ports,
-                            modeTarget, modes, gpsFound, rescueNote, rescueTarget, failsafe, failsafeTarget, rescueFailsafe,
-                            failsafeProblem, failsafeNote, armTarget, refused, List.copyOf(plan), replaced, board, batteryNow,
-                            ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux), gpsRead, boardId);
+                    if (!saved) {
+                        fc.exitCli(); // "exit": Betaflight drops every change since the CLI opened (the receiver's too) and restarts
+                        saveModes(aux);
+                        main.logLine("Betaflight: write stopped, nothing saved - " + refused);
+                    }
+                } else {
+                    saveModes(aux);
+                    fc.exitCli(); // Betaflight restarts (nothing changed, or the receiver only in RAM) - which also clears a stale "MSP" arming block
                 }
-                return new Read(port.systemName(), version, mspRx, BetaflightPlan.serialRate(rate),
-                        BetaflightPlan.targetSerialRate(version), BetaflightPlan.forcedCells(forced), cellTarget, false, null, arm, null, ports,
-                        modeTarget, modes, gpsFound, rescueNote, rescueTarget, failsafe, failsafeTarget, rescueFailsafe,
-                        failsafeProblem, failsafeNote, armTarget, null, List.copyOf(plan), replaced, board, batteryNow,
-                        ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux), gpsRead, boardId);
+                return new Read(port.systemName(), r.version(), mspRx, BetaflightPlan.serialRate(r.rate()),
+                        BetaflightPlan.targetSerialRate(r.version()), BetaflightPlan.forcedCells(r.forced()), cellTarget, saved, null, r.arm(),
+                        backup, ports, modeTarget, r.modes(), gpsFound, null, rescueTarget, r.failsafe(), failsafeTarget, r.rescueFailsafe(),
+                        r.failsafeProblem(), null, armTarget, refused, plan, r.replaced(), r.board(), batteryNow,
+                        ModeSwitch.armAuxes(aux), receiverNow, cellsOk, prearmTarget, ModeSwitch.prearmAuxes(aux), r.gps(), boardId);
             } catch (IOException e) {
                 return new Read(port.systemName(), e.getMessage(), cellTarget, modeTarget, rescueTarget, failsafeTarget, armTarget, prearmTarget, ports, gpsWanted);
             }
-        }
-
-        /** The board's name and the craft's ("IFLIGHT_BLITZ_F722 - Vanguard"), from the CLI; "" when neither is set. */
-        private static String boardName(BetaflightUsb fc) throws IOException {
-            String board = BetaflightPlan.boardName(fc.command("board_name"));
-            String craft = BetaflightPlan.craftName(fc.command("get craft_name")); // Betaflight 4.4 on
-            if (craft.isEmpty()) craft = BetaflightPlan.craftName(fc.command("name")); // older
-            if (board.isEmpty()) return craft;
-            return craft.isEmpty() ? board : board + " - " + craft;
         }
 
         /** A CLI reply's first line, short, for the log; "(ok)" when Betaflight printed nothing. */
@@ -1555,11 +1425,6 @@ final class DroneSetup {
                 }
             }
             return SetupConfirm.boardId(uid, info);
-        }
-
-        /** " Taken off: ARM on AUX3, BEEPER on AUX2." or "". */
-        private static String takenOff(List<String> replaced) {
-            return replaced.isEmpty() ? "" : " Taken off: " + String.join(", ", replaced) + ".";
         }
 
         /** MSP's four-letter firmware id as a name: INAV, ArduPilot, Cleanflight ... */
@@ -1718,14 +1583,14 @@ final class DroneSetup {
             if (r.armTarget() > 0 && armPlan != null && armPlan.armProblem() != null) {
                 armRow.set(State.WARN, armPlan.armProblem());
             } else if (r.armTarget() > 0 && (r.arm() == null || r.arm().channel() - 3 != r.armTarget())) {
-                armRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE + takenOff(r.replaced())
+                armRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE + SetupPlanner.takenOff(r.replaced())
                         : "Not set - use the Modes tab (<b>By hand</b>).");
             } else if (r.arm() == null) {
                 armRow.set(State.WARN, r.armAuxes().size() > 1
                         ? "On several switches - pick one."
                         : "On no switch - can't arm. Choose one (usually AUX1).");
             } else {
-                armRow.set(okState(), describe(r.arm()) + (r.armTarget() > 0 ? takenOff(lastReplaced) : ""));
+                armRow.set(okState(), describe(r.arm()) + (r.armTarget() > 0 ? SetupPlanner.takenOff(lastReplaced) : ""));
             }
             boolean prearmOnIt = r.prearmAuxes().contains(r.prearmTarget());
             if (r.prearmTarget() > 0 && armPlan != null && armPlan.prearmProblem() != null) {
@@ -1955,13 +1820,13 @@ final class DroneSetup {
                 return true;
             }
             if (!p.isSet()) {
-                modeRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE + takenOff(r.replaced())
+                modeRow.set(pendingWrite ? State.TODO : State.BAD, pendingWrite ? WITH_WRITE + SetupPlanner.takenOff(r.replaced())
                         : "Not set - use the Modes tab (<b>By hand</b>).");
                 return !pendingWrite;
             }
             boolean partly = !p.blocked().isEmpty() || !p.missing().isEmpty();
             StringBuilder text = new StringBuilder(partly ? "Partly set." : setText());
-            text.append(takenOff(lastReplaced));
+            text.append(SetupPlanner.takenOff(lastReplaced));
             for (var b : p.blocked().entrySet()) { // the reason names the mode itself when it is "too old": not twice
                 text.append("<br>");
                 if (!b.getValue().startsWith(b.getKey().title)) text.append("<b>").append(b.getKey().title).append(":</b> ");
