@@ -980,7 +980,9 @@ public final class VirtualDrone {
         int gen = ++videoGen;
         Thread t = new Thread(() -> videoRun(gen), "fleetVideo" + slot);
         t.setDaemon(true);
-        t.setPriority(Thread.MIN_PRIORITY);
+        // a phone's camera has a CPU of its own: at the lowest priority on this PC the picture starved behind the PC's
+        // decoding and recording (13 fps, frames 33/67/100 ms apart, in the pilot's recording)
+        t.setPriority(Thread.NORM_PRIORITY);
         videoThread = t;
         t.start();
     }
@@ -1004,6 +1006,7 @@ public final class VirtualDrone {
         java.util.concurrent.ExecutorService painter = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "fleetVideoPaint " + name);
             t.setDaemon(true);
+            t.setPriority(Thread.NORM_PRIORITY);
             return t;
         });
         long lastReopen = 0;
@@ -1036,8 +1039,10 @@ public final class VirtualDrone {
                 if (ahead != null) waitFor(ahead); // this frame's picture, drawn while the last one was encoded
                 else renderPicture(img[cur], nowMs);
                 BufferedImage now = img[cur], following = img[1 - cur];
-                long nextMs = nowMs + 1000L / fps;
-                ahead = painter.submit(() -> renderPicture(following, nextMs));
+                // the next picture shows the world and the camera at one moment: when its painting starts (the vehicle
+                // placed a frame ahead while the camera was read at the paint's own moment made them disagree by up to
+                // a frame - the vehicle wobbled against the ground)
+                ahead = painter.submit(() -> renderPicture(following, System.currentTimeMillis()));
                 boolean key = keyFrameWanted;
                 keyFrameWanted = false;
                 for (H264Encoder.Packet p : enc.encode(Scene.pixels(now), key)) {
@@ -1087,15 +1092,57 @@ public final class VirtualDrone {
     private void renderPicture(BufferedImage img, long nowMs) {
         Recording r = recording;
         if (r != null && r.picture(Scene.pixels(img), img.getWidth(), img.getHeight(), nowMs)) {
-            scene.paintTargets(img, view(), nowMs); // a walker, vehicle or light crosses an old flight's picture too
+            scene.paintTargets(img, viewAt(nowMs), nowMs); // a walker, vehicle or light crosses an old flight's picture too
             scene.burnIn(img, "REPLAY"); // an old flight's picture says VIRTUAL too
             return;
         }
-        scene.render(img, view(), nowMs, overlayText(nowMs));
+        scene.render(img, viewAt(nowMs), nowMs, overlayText(nowMs));
     }
 
     Scene.View view() {
         return new Scene.View(fc.northM(), fc.eastM(), fc.altitudeM(), fc.rollDeg(), fc.pitchDeg(), fc.headingDeg());
+    }
+
+    /** The drone's pose at the last two ticks, with their times (the tick thread writes, the picture reads). */
+    private record Pose(long atMs, Scene.View v) {}
+
+    private volatile Pose posePrev, poseLast;
+
+    /** After each step of the flight model: its pose now, for the picture's {@link #viewAt}. Tick thread. */
+    private void notePose(long nowMs) {
+        posePrev = poseLast;
+        poseLast = new Pose(nowMs, view());
+    }
+
+    /**
+     * The pose at this moment, carried on from the last tick at the rate of the last two (1.0.52, the pilot: "the BTR
+     * is very jittery"): the model steps every 20-30 ms, the picture comes every 33 ms, so read straight from the model
+     * some pictures moved two steps and some none - the whole picture juddered. At most one tick (40 ms) ahead.
+     */
+    Scene.View viewAt(long nowMs) {
+        Pose a = posePrev, b = poseLast;
+        if (b == null) return view();
+        if (a == null) return b.v();
+        return carryOn(a.atMs(), a.v(), b.atMs(), b.v(), nowMs);
+    }
+
+    /** The pose q (at qMs) carried on to nowMs at the rate from p (at pMs) to q: at most 40 ms ahead, one tick back. */
+    static Scene.View carryOn(long pMs, Scene.View p, long qMs, Scene.View q, long nowMs) {
+        if (qMs <= pMs) return q;
+        double span = (qMs - pMs) / 1000.0;
+        double dt = Math.max(-span, Math.min(0.04, (nowMs - qMs) / 1000.0));
+        double k = dt / span;
+        return new Scene.View(q.north() + (q.north() - p.north()) * k, q.east() + (q.east() - p.east()) * k,
+                q.alt() + (q.alt() - p.alt()) * k, q.rollDeg() + angleStep(p.rollDeg(), q.rollDeg()) * k,
+                q.pitchDeg() + angleStep(p.pitchDeg(), q.pitchDeg()) * k, q.headingDeg() + angleStep(p.headingDeg(), q.headingDeg()) * k);
+    }
+
+    /** From a to b the short way round, degrees. */
+    private static double angleStep(double a, double b) {
+        double d = (b - a) % 360;
+        if (d > 180) d -= 360;
+        if (d < -180) d += 360;
+        return d;
     }
 
     private String overlayText(long nowMs) {
@@ -1482,6 +1529,7 @@ public final class VirtualDrone {
                     feedIdleSticks(now);
                     fc.step(now, dt);
                 }
+                notePose(now);
                 BtrScene t = target;
                 // in the air, the BTRs it sees try to get away (1.0.52, the pilot)
                 boolean airborne = !broken && fc.isArmed() && fc.altitudeM() > ESCAPE_ALT_M;

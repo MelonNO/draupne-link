@@ -399,6 +399,8 @@ final class BtrScene implements Scene.World {
     private boolean escaping;
     private long liveMs, airborneAtMs, zigUntilMs, burstUntilMs;
     private double ln, le, lh, lv, ls, zigRad, wantV, threatN, threatE;
+    /** The step before the last (where, heading radians, metres driven): a moment between the two is drawn between. */
+    private double pn, pe, ph, ps;
     private final Random er = new Random(4711);
     /** The area it keeps to: this far from the drone's start point at most (metres). */
     static final double ESCAPE_RANGE_M = 320;
@@ -423,6 +425,10 @@ final class BtrScene implements Scene.World {
                     ls = q[3];
                     lv = speedAt(nowMs);
                     liveMs = nowMs;
+                    pn = ln;
+                    pe = le;
+                    ph = lh;
+                    ps = ls;
                     escaping = true;
                     zigUntilMs = 0;
                     burstUntilMs = 0;
@@ -439,10 +445,17 @@ final class BtrScene implements Scene.World {
         }
     }
 
-    /** Steps (TICK_S) up to this time. Under the lock. */
+    /**
+     * Steps (TICK_S) until the last one is at or past this time, the one before kept: a moment between them is drawn
+     * between the two (see {@link #pose}). Under the lock.
+     */
     private void advance(long nowMs) {
         long step = Math.round(TICK_S * 1000);
-        while (liveMs + step <= nowMs) {
+        while (liveMs < nowMs) {
+            pn = ln;
+            pe = le;
+            ph = lh;
+            ps = ls;
             liveMs += step;
             stepEscape(liveMs, TICK_S);
         }
@@ -509,7 +522,13 @@ final class BtrScene implements Scene.World {
         synchronized (live) {
             if (escaping) {
                 advance(nowMs);
-                return new double[]{ln, le, Math.toDegrees(lh), ls};
+                // between the step before and the last (TICK_S apart): read straight from the last step, it stood
+                // still for three pictures and jumped a metre on the fourth (1.0.52, the pilot: "the BTR is very
+                // jittery"); carried on by the last turn rate instead, it overshot each zig-zag's change of side
+                double f = 1 - (liveMs - nowMs) / (TICK_S * 1000);
+                f = Math.max(0, Math.min(1, f));
+                double dh = Math.atan2(Math.sin(lh - ph), Math.cos(lh - ph));
+                return new double[]{pn + (ln - pn) * f, pe + (le - pe) * f, Math.toDegrees(ph + dh * f), ps + (ls - ps) * f};
             }
         }
         double t = (nowMs - startMs) / 1000.0 / TICK_S;

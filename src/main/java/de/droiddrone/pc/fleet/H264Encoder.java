@@ -62,12 +62,13 @@ final class H264Encoder implements AutoCloseable {
         enc.gop_size(this.fps * 2);
         enc.max_b_frames(0);
         enc.bit_rate(this.bitRate);
-        enc.thread_count(1);
+        enc.thread_count(1); // two were no faster (1080p: 15 ms on one, 20-22 ms on two)
         enc.flags(enc.flags() | AV_CODEC_FLAG_GLOBAL_HEADER);
-        // the bitrate held as asked (the PC's bitrate control judges what arrives), a picture skipped rather than overshoot
+        // the bitrate held as asked (the PC's bitrate control judges what arrives); never a picture skipped: a phone's
+        // encoder sends every frame, and skipped ones left the virtual picture at 13-18 fps with 33/67/100 ms gaps
         AVDictionary opts = new AVDictionary(null);
         av_dict_set(opts, "rc_mode", "bitrate", 0);
-        av_dict_set(opts, "allow_skip_frames", "1", 0);
+        av_dict_set(opts, "allow_skip_frames", "0", 0);
         int r = avcodec_open2(enc, codec, opts);
         av_dict_free(opts);
         if (r < 0) {
