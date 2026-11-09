@@ -3,6 +3,7 @@ package de.droiddrone.pc;
 import de.droiddrone.common.FleetProtocol;
 import de.droiddrone.common.Observe;
 import de.droiddrone.common.OverwatchProtocol;
+import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.PcAudio;
 import de.droiddrone.common.UdpCommon;
 import org.junit.jupiter.api.Test;
@@ -21,43 +22,19 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * The first byte of every datagram on the link's port says what it is. The codes live in eight classes on the PC, and
- * the phone app and the virtual fleet keep copies of their own (the phone's sources aren't compiled here): no two
- * packets may share a code, and every copy must say what the PC's constant says.
+ * The first byte of every datagram on the link's port says what it is. The codes live in PacketIds, UdpCommon and the
+ * Common protocol classes; the phone app still keeps copies of its own (its sources aren't compiled here): no two
+ * packets may share a code, and every copy must say what PacketIds says.
  */
 class PacketIdsTest {
     /** Every packet code on the link port, by name. */
     static Map<String, Byte> pcCodes() throws Exception {
         Map<String, Byte> c = new LinkedHashMap<>();
-        for (Field f : UdpCommon.class.getFields()) {
-            if (f.getType() == byte.class && Modifier.isStatic(f.getModifiers())) c.put("UdpCommon." + f.getName(), f.getByte(null));
+        for (Class<?> k : new Class<?>[]{UdpCommon.class, PacketIds.class}) {
+            for (Field f : k.getFields()) {
+                if (f.getType() == byte.class && Modifier.isStatic(f.getModifiers())) c.put(k.getSimpleName() + "." + f.getName(), f.getByte(null));
+            }
         }
-        c.put("Spectate.PILOT_QUERY", Spectate.PILOT_QUERY);
-        c.put("Spectate.PILOT_AT", Spectate.PILOT_AT);
-        c.put("Spectate.NO_PILOT", Spectate.NO_PILOT);
-        c.put("Spectate.HELLO", Spectate.HELLO);
-        c.put("Spectate.WELCOME", Spectate.WELCOME);
-        c.put("Spectate.REFUSED", Spectate.REFUSED);
-        c.put("Spectate.STREAM", Spectate.STREAM);
-        c.put("Spectate.BYE", Spectate.BYE);
-        c.put("Spectate.KEEP", Spectate.KEEP);
-        c.put("Spectate.SNAPSHOT", Spectate.SNAPSHOT);
-        c.put("Spectate.PAUSE", Spectate.PAUSE);
-        c.put("Spectate.PILOT_VIEW", Spectate.PILOT_VIEW);
-        c.put("Names.NAME_QUERY", Names.NAME_QUERY);
-        c.put("Names.NAME_REPLY", Names.NAME_REPLY);
-        c.put("Names.NAME_ASSIGN", Names.NAME_ASSIGN);
-        c.put("ControlLink.KEY_FRAME_REQUEST", ControlLink.KEY_FRAME_REQUEST);
-        c.put("ControlLink.VIDEO_PROFILE", ControlLink.VIDEO_PROFILE);
-        c.put("ControlLink.VIDEO_PARITY", ControlLink.VIDEO_PARITY);
-        c.put("ControlLink.POWER_MODE", ControlLink.POWER_MODE);
-        c.put("ControlLink.SLEEP_HELLO", ControlLink.SLEEP_HELLO);
-        c.put("ControlLink.SLEEP_ANSWER", ControlLink.SLEEP_ANSWER);
-        c.put("ControlLink.VIDEO_PARITY_GROUP", ControlLink.VIDEO_PARITY_GROUP);
-        c.put("ControlLink.SET_BITRATE", ControlLink.SET_BITRATE);
-        c.put("ControlLink.REMOTE_UPDATE", ControlLink.REMOTE_UPDATE);
-        c.put("ControlLink.IDLE_STICKS", ControlLink.IDLE_STICKS);
-        c.put("ControlLink.DETECTION_SET", ControlLink.DETECTION_SET);
         c.put("PcAudio.PACKET", PcAudio.PACKET);
         c.put("Observe.OBSERVE", Observe.OBSERVE);
         c.put("Observe.STATE", Observe.STATE);
@@ -84,36 +61,26 @@ class PacketIdsTest {
 
     /** {source file, its constant, the PC's constant it copies}. */
     static final String[][] COPIES = {
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_PILOT_QUERY", "Spectate.PILOT_QUERY"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_PILOT_AT", "Spectate.PILOT_AT"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_NO_PILOT", "Spectate.NO_PILOT"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "NAME_QUERY", "Names.NAME_QUERY"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "NAME_REPLY", "Names.NAME_REPLY"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "NAME_ASSIGN", "Names.NAME_ASSIGN"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "VIDEO_PROFILE", "ControlLink.VIDEO_PROFILE"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "VIDEO_PARITY_GROUP", "ControlLink.VIDEO_PARITY_GROUP"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SET_BITRATE", "ControlLink.SET_BITRATE"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "VIDEO_PARITY", "ControlLink.VIDEO_PARITY"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "KEY_FRAME_REQUEST", "ControlLink.KEY_FRAME_REQUEST"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "PACKET", "ControlLink.POWER_MODE"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "SLEEP_HELLO", "ControlLink.SLEEP_HELLO"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "SLEEP_ANSWER", "ControlLink.SLEEP_ANSWER"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/RemoteUpdate.java", "PACKET", "ControlLink.REMOTE_UPDATE"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/MotionWatch.java", "PACKET", "ControlLink.DETECTION_SET"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "SPECTATE_PILOT_QUERY", "Spectate.PILOT_QUERY"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "SPECTATE_PILOT_AT", "Spectate.PILOT_AT"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "SPECTATE_NO_PILOT", "Spectate.NO_PILOT"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "NAME_QUERY", "Names.NAME_QUERY"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "NAME_REPLY", "Names.NAME_REPLY"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "NAME_ASSIGN", "Names.NAME_ASSIGN"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "KEY_FRAME_REQUEST", "ControlLink.KEY_FRAME_REQUEST"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "VIDEO_PROFILE", "ControlLink.VIDEO_PROFILE"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "VIDEO_PARITY_GROUP", "ControlLink.VIDEO_PARITY_GROUP"},
-            {"src/main/java/de/droiddrone/pc/fleet/VirtualDrone.java", "SET_BITRATE", "ControlLink.SET_BITRATE"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_PILOT_QUERY", "PacketIds.SPECTATE_PILOT_QUERY"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_PILOT_AT", "PacketIds.SPECTATE_PILOT_AT"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_NO_PILOT", "PacketIds.SPECTATE_NO_PILOT"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "NAME_QUERY", "PacketIds.NAME_QUERY"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "NAME_REPLY", "PacketIds.NAME_REPLY"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "NAME_ASSIGN", "PacketIds.NAME_ASSIGN"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "VIDEO_PROFILE", "PacketIds.VIDEO_PROFILE"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "VIDEO_PARITY_GROUP", "PacketIds.VIDEO_PARITY_GROUP"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SET_BITRATE", "PacketIds.SET_BITRATE"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "VIDEO_PARITY", "PacketIds.VIDEO_PARITY"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "KEY_FRAME_REQUEST", "PacketIds.KEY_FRAME_REQUEST"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "PACKET", "PacketIds.POWER_MODE"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "SLEEP_HELLO", "PacketIds.SLEEP_HELLO"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "SLEEP_ANSWER", "PacketIds.SLEEP_ANSWER"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/RemoteUpdate.java", "PACKET", "PacketIds.REMOTE_UPDATE"},
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/MotionWatch.java", "PACKET", "PacketIds.DETECTION_SET"},
     };
 
     @Test
-    void thePhoneAppsAndTheVirtualFleetsCopiesMatch() throws Exception {
+    void thePhoneAppsCopiesMatch() throws Exception {
         Map<String, Byte> pc = pcCodes();
         // the project's root: the test runs in build/test-work
         Path root = Path.of("").toAbsolutePath();

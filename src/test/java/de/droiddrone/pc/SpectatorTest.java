@@ -1,5 +1,6 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.Bytes;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.pc.video.TestStreams;
@@ -371,7 +372,7 @@ class SpectatorTest {
     private static int receiveStream(DatagramSocket viewer, DatagramPacket in) throws java.io.IOException {
         while (true) {
             viewer.receive(in);
-            if (in.getData()[0] == Spectate.STREAM) return Spectate.readInt(in.getData(), 1);
+            if (in.getData()[0] == Spectate.STREAM) return Bytes.readInt(in.getData(), 1);
         }
     }
 
@@ -497,7 +498,7 @@ class SpectatorTest {
                     byte[] d = in.getData();
                     if (d[0] != Spectate.KEEP) continue;
                     int n = d[2] & 0xff;
-                    for (int i = 0; i < n; i++) asked |= Spectate.readInt(d, 3 + 4 * i) == 7;
+                    for (int i = 0; i < n; i++) asked |= Bytes.readInt(d, 3 + 4 * i) == 7;
                 }
                 assertTrue(asked, "packet 7 asked for again");
                 byte[] s = Spectate.stream(7, 70, new byte[]{UdpCommon.TelemetryData, 7}, 2);

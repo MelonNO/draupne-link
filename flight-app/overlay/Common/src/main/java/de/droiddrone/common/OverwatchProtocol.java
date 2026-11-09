@@ -304,14 +304,14 @@ public final class OverwatchProtocol {
             int n = Math.min(FRAGMENT, data.length - offset);
             byte[] p = new byte[HEADER + 13 + n];
             p[0] = PREVIEW;
-            putInt(p, 1, token);
+            Bytes.putInt(p, 1, token);
             p[5] = (byte) (event >> 8);
             p[6] = (byte) event;
             p[7] = (byte) (unit >> 8);
             p[8] = (byte) unit;
             p[9] = (byte) type;
-            putInt(p, 10, data.length);
-            putInt(p, 14, offset);
+            Bytes.putInt(p, 10, data.length);
+            Bytes.putInt(p, 14, offset);
             System.arraycopy(data, offset, p, 18, n);
             out.add(p);
             offset += n;
@@ -325,7 +325,7 @@ public final class OverwatchProtocol {
         int event = ((d[5] & 0xff) << 8) | (d[6] & 0xff);
         int unit = ((d[7] & 0xff) << 8) | (d[8] & 0xff);
         int type = d[9] & 0xff;
-        long total = getInt(d, 10) & 0xffffffffL, offset = getInt(d, 14) & 0xffffffffL;
+        long total = Bytes.readInt(d, 10) & 0xffffffffL, offset = Bytes.readInt(d, 14) & 0xffffffffL;
         int n = len - 18;
         if (offset + n > total) return null;
         return new Fragment(token(d), event, unit, type, total, offset, d, 18, n);
@@ -420,11 +420,11 @@ public final class OverwatchProtocol {
     public static byte[] clipChunk(int token, int event, long offset, byte[] data, int from, int n) {
         byte[] p = new byte[HEADER + 3 + 4 + n];
         p[0] = CLIP;
-        putInt(p, 1, token);
+        Bytes.putInt(p, 1, token);
         p[5] = (byte) (event >> 8);
         p[6] = (byte) event;
         p[7] = CLIP_CHUNK;
-        putInt(p, 8, (int) offset);
+        Bytes.putInt(p, 8, (int) offset);
         System.arraycopy(data, from, p, 12, n);
         return p;
     }
@@ -489,7 +489,7 @@ public final class OverwatchProtocol {
 
     /** A CHUNK's first byte in the clip; its bytes are d[12 .. len). */
     public static long chunkOffset(byte[] d) {
-        return getInt(d, 8) & 0xffffffffL;
+        return Bytes.readInt(d, 8) & 0xffffffffL;
     }
 
     public static final int CHUNK_DATA_AT = 12;
@@ -519,7 +519,7 @@ public final class OverwatchProtocol {
     public static byte[] status(int token, int state, int reason, int battery, int tempDeci) {
         byte[] p = new byte[HEADER + 5];
         p[0] = STATUS;
-        putInt(p, 1, token);
+        Bytes.putInt(p, 1, token);
         p[5] = (byte) state;
         p[6] = (byte) reason;
         p[7] = (byte) clamp(battery, 0, 255);
@@ -545,14 +545,14 @@ public final class OverwatchProtocol {
         p[2] = (byte) clamp(checkIntervalMin, 0, 255);
         p[3] = (byte) clamp(sensitivity, 1, 3);
         p[4] = (byte) flags;
-        putInt(p, 5, token);
+        Bytes.putInt(p, 5, token);
         return p;
     }
 
     /** {sensitivity, flags, token} of a mode 3 request's tail (bytes 3..9), or null when it has none. */
     public static int[] readRequestTail(byte[] d, int offset, int len) {
         if (len - offset < 7) return null;
-        return new int[]{clamp(d[offset] & 0xff, 1, 3), d[offset + 1] & 0xff, getInt(d, offset + 2)};
+        return new int[]{clamp(d[offset] & 0xff, 1, 3), d[offset + 1] & 0xff, Bytes.readInt(d, offset + 2)};
     }
 
     // ------------------------------------------------------------------ helpers
@@ -574,16 +574,5 @@ public final class OverwatchProtocol {
 
     static int clamp(int v, int lo, int hi) {
         return Math.max(lo, Math.min(hi, v));
-    }
-
-    private static void putInt(byte[] p, int at, int v) {
-        p[at] = (byte) (v >> 24);
-        p[at + 1] = (byte) (v >> 16);
-        p[at + 2] = (byte) (v >> 8);
-        p[at + 3] = (byte) v;
-    }
-
-    private static int getInt(byte[] d, int at) {
-        return ((d[at] & 0xff) << 24) | ((d[at + 1] & 0xff) << 16) | ((d[at + 2] & 0xff) << 8) | (d[at + 3] & 0xff);
     }
 }

@@ -1,5 +1,7 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.Bytes;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -231,8 +233,8 @@ final class SpectatorClient implements AutoCloseable {
                 lastFromPilot = now;
                 lastStream = now;
                 pausedAt = 0; // the stream goes on
-                int seq = Spectate.readInt(d, 1);
-                int pilotMs = Spectate.readInt(d, 5);
+                int seq = Bytes.readInt(d, 1);
+                int pilotMs = Bytes.readInt(d, 5);
                 byte[] data = Arrays.copyOfRange(d, Spectate.STREAM_HEADER, len);
                 synchronized (lock) {
                     if (nextSeq >= 0 && seq < nextSeq) return; // played already, or given up on

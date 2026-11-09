@@ -1,5 +1,7 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.PacketIds;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -27,7 +29,8 @@ import java.util.function.Consumer;
  * </pre>
  */
 public final class Names {
-    public static final byte NAME_QUERY = 0x73, NAME_REPLY = 0x74, NAME_ASSIGN = 0x75;
+    public static final byte NAME_QUERY = PacketIds.NAME_QUERY, NAME_REPLY = PacketIds.NAME_REPLY,
+            NAME_ASSIGN = PacketIds.NAME_ASSIGN;
     public static final String[] LETTERS = {"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
             "Juliett", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform",
             "Victor", "Whiskey", "X-ray", "Yankee", "Zulu"};

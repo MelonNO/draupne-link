@@ -1,5 +1,8 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.Bytes;
+import de.droiddrone.common.PacketIds;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -38,18 +41,18 @@ import java.nio.charset.StandardCharsets;
  * 5 its link stalls, 6 its picture is turned upside down (the spectator turns its own the same way).
  */
 final class Spectate {
-    static final byte PILOT_QUERY = 0x60;
-    static final byte PILOT_AT = 0x61;
-    static final byte NO_PILOT = 0x62;
-    static final byte HELLO = 0x63;
-    static final byte WELCOME = 0x64;
-    static final byte REFUSED = 0x65;
-    static final byte STREAM = 0x66;
-    static final byte BYE = 0x67;
-    static final byte KEEP = 0x68;
-    static final byte SNAPSHOT = 0x69;
-    static final byte PAUSE = 0x6D;
-    static final byte PILOT_VIEW = 0x76;
+    static final byte PILOT_QUERY = PacketIds.SPECTATE_PILOT_QUERY;
+    static final byte PILOT_AT = PacketIds.SPECTATE_PILOT_AT;
+    static final byte NO_PILOT = PacketIds.SPECTATE_NO_PILOT;
+    static final byte HELLO = PacketIds.SPECTATE_HELLO;
+    static final byte WELCOME = PacketIds.SPECTATE_WELCOME;
+    static final byte REFUSED = PacketIds.SPECTATE_REFUSED;
+    static final byte STREAM = PacketIds.SPECTATE_STREAM;
+    static final byte BYE = PacketIds.SPECTATE_BYE;
+    static final byte KEEP = PacketIds.SPECTATE_KEEP;
+    static final byte SNAPSHOT = PacketIds.SPECTATE_SNAPSHOT;
+    static final byte PAUSE = PacketIds.SPECTATE_PAUSE;
+    static final byte PILOT_VIEW = PacketIds.SPECTATE_PILOT_VIEW;
 
     /** BYE's reason: the pilot ended its link on purpose (DISCONNECT, or the program closed). */
     static final byte BYE_PILOT_DISCONNECTED = 1;
@@ -164,8 +167,8 @@ final class Spectate {
     static byte[] stream(int seq, int pilotMs, byte[] packet, int len) {
         byte[] out = new byte[STREAM_HEADER + len];
         out[0] = STREAM;
-        putInt(out, 1, seq);
-        putInt(out, 5, pilotMs);
+        Bytes.putInt(out, 1, seq);
+        Bytes.putInt(out, 5, pilotMs);
         System.arraycopy(packet, 0, out, STREAM_HEADER, len);
         return out;
     }
@@ -183,18 +186,7 @@ final class Spectate {
         out[0] = KEEP;
         out[1] = (byte) flags;
         out[2] = (byte) n;
-        for (int i = 0; i < n; i++) putInt(out, 3 + 4 * i, missing[i]);
+        for (int i = 0; i < n; i++) Bytes.putInt(out, 3 + 4 * i, missing[i]);
         return out;
-    }
-
-    static void putInt(byte[] d, int i, int v) {
-        d[i] = (byte) (v >> 24);
-        d[i + 1] = (byte) (v >> 16);
-        d[i + 2] = (byte) (v >> 8);
-        d[i + 3] = (byte) v;
-    }
-
-    static int readInt(byte[] d, int i) {
-        return ((d[i] & 0xff) << 24) | ((d[i + 1] & 0xff) << 16) | ((d[i + 2] & 0xff) << 8) | (d[i + 3] & 0xff);
     }
 }
