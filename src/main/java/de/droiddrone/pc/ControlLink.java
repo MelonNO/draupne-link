@@ -3,6 +3,7 @@ package de.droiddrone.pc;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
+import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
 import de.droiddrone.common.SettingsCommon;
@@ -120,23 +121,23 @@ public class ControlLink {
      */
     static final int CAMERA_FPS = 30;
     /** A frame's parity packet: [0x6C][frame number i16][frame size i32][key frame u8][parity] (phone app pc.15). */
-    static final byte VIDEO_PARITY = 0x6C;
+    static final byte VIDEO_PARITY = PacketIds.VIDEO_PARITY;
     /**
      * The parity of one group of {@link de.droiddrone.pc.video.FrameAssembler#PARITY_GROUP} packets of a frame:
      * [0x71][frame number i16][frame size i32][key frame u8][group u8][parity] (phone app pc.26, asked for by
      * profile bit 1; older PCs drop the packet).
      */
-    static final byte VIDEO_PARITY_GROUP = 0x71;
+    static final byte VIDEO_PARITY_GROUP = PacketIds.VIDEO_PARITY_GROUP;
     /**
      * Sets the phone's bitrate step outright: [0x72][step u8], the index into BitrateControl.STEPS_BPS (phone app
      * pc.26; older apps drop it and get the relative ChangeBitRate instead). A filling uplink queue is answered with
      * one packet to the floor, not one step per second.
      */
-    static final byte SET_BITRATE = 0x72;
+    static final byte SET_BITRATE = PacketIds.SET_BITRATE;
     /** The first phone app build that takes SET_BITRATE, the group parity, the 16-bit stick sequence and profile bit 2. */
     static final int PC26_BUILD = 26;
     /** Asks the phone for a key frame (DRAUPNE Flight 2.3.0-pc.13 on; older apps ignore it). */
-    static final byte KEY_FRAME_REQUEST = 0x6A;
+    static final byte KEY_FRAME_REQUEST = PacketIds.KEY_FRAME_REQUEST;
     /**
      * Key frame requests at most this often. Each answer is the biggest burst there is: at 0.5 s the far link of
      * 2026-11-01 asked 1.3-1.5 times a second and its key frames came damaged in turn.
@@ -186,7 +187,7 @@ public class ControlLink {
      * packet per group of packets instead of one per frame (pc.26), bit 2 = encode H.264 instead of H.265 (pc.26:
      * FFmpeg conceals a damaged H.264 frame from the one before; its H.265 decoder shows the damage).
      */
-    static final byte VIDEO_PROFILE = 0x6B;
+    static final byte VIDEO_PROFILE = PacketIds.VIDEO_PROFILE;
     static final int PROFILE_KEY_FRAMES_TWICE = 1, PROFILE_GROUP_PARITY = 2, PROFILE_AVC = 4;
     /** The bitrate at or under which bad coverage mode goes to the survival tier (after LOW_RES_AFTER_MS). */
     static final int SURVIVAL_BPS = 250_000;
@@ -1050,7 +1051,7 @@ public class ControlLink {
      * SleepCheck.ALWAYS (1.0.50, CHECK EVERY "0 min") is a window that never closes; it goes only to pc.39 on - an older
      * app is sent 1 min instead (sendPowerMode and sendOverwatch see to it).
      */
-    public static final byte POWER_MODE = 0x6E;
+    public static final byte POWER_MODE = PacketIds.POWER_MODE;
     public static final int POWER_NORMAL = 0, POWER_STANDBY = 1, POWER_DEEP_SLEEP = 2;
     /**
      * 1.0.47 (phone app pc.36 on): OVERWATCH SLEEP - deep sleep with the camera and the motion detection on; a
@@ -1063,7 +1064,7 @@ public class ControlLink {
      * [its SHA-256 UTF], unnumbered; the caller repeats it until the phone's PHONE_UPDATE record answers. The phone
      * takes it only for a newer version and with the flight controller known to be disarmed.
      */
-    public static final byte REMOTE_UPDATE = 0x77;
+    public static final byte REMOTE_UPDATE = PacketIds.REMOTE_UPDATE;
 
     public void sendRemoteUpdate(String version, String url, String sha256) {
         if (!running || !isConnected() || spectator != null) return;
@@ -1124,7 +1125,7 @@ public class ControlLink {
      * unknown][charging u8][nextCheckMin u8][mV u16]. This PC answers [0x70][wake u8] at once: 0 while dormant (the
      * phone closes its window and sleeps on, saving the 20 s of listening), 1 after WAKE (it wakes fully).
      */
-    public static final byte SLEEP_HELLO = 0x6F, SLEEP_ANSWER = 0x70;
+    public static final byte SLEEP_HELLO = PacketIds.SLEEP_HELLO, SLEEP_ANSWER = PacketIds.SLEEP_ANSWER;
 
     /**
      * owFlags (pc.36 on; 0 before): OverwatchProtocol.HELLO_OVERWATCH - it overwatches, HELLO_EVENT - an event runs;
@@ -1646,7 +1647,7 @@ public class ControlLink {
      * has come for a moment - so a disarmed drone on the phone never sees its receiver lost, and beeps only when the
      * phone's USB is out. Never while armed: a link lost then is Betaflight's failsafe, as before.
      */
-    public static final byte IDLE_STICKS = 0x78;
+    public static final byte IDLE_STICKS = PacketIds.IDLE_STICKS;
     /** The first phone app build that takes the idle sticks. */
     static final int IDLE_STICKS_MIN_PC_BUILD = 33;
 
@@ -1677,7 +1678,7 @@ public class ControlLink {
      * from the stick thread. The phone switches it off itself 5 s after the last one, and only ever runs it while the
      * flight controller reads DISARMED; what it finds comes back as the DETECTION record (FcTelemetry.getMotion).
      */
-    public static final byte DETECTION_SET = 0x7C;
+    public static final byte DETECTION_SET = PacketIds.DETECTION_SET;
     /** The first phone app build with the motion detection. */
     static final int DETECTION_MIN_PC_BUILD = 35;
     static final long DETECTION_EVERY_MS = 1000;

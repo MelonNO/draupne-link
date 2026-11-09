@@ -28,6 +28,23 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 
+import static de.droiddrone.common.PacketIds.DETECTION_SET;
+import static de.droiddrone.common.PacketIds.IDLE_STICKS;
+import static de.droiddrone.common.PacketIds.KEY_FRAME_REQUEST;
+import static de.droiddrone.common.PacketIds.NAME_ASSIGN;
+import static de.droiddrone.common.PacketIds.NAME_QUERY;
+import static de.droiddrone.common.PacketIds.NAME_REPLY;
+import static de.droiddrone.common.PacketIds.POWER_MODE;
+import static de.droiddrone.common.PacketIds.REMOTE_UPDATE;
+import static de.droiddrone.common.PacketIds.SET_BITRATE;
+import static de.droiddrone.common.PacketIds.SLEEP_ANSWER;
+import static de.droiddrone.common.PacketIds.SLEEP_HELLO;
+import static de.droiddrone.common.PacketIds.SPECTATE_NO_PILOT;
+import static de.droiddrone.common.PacketIds.SPECTATE_PILOT_AT;
+import static de.droiddrone.common.PacketIds.SPECTATE_PILOT_QUERY;
+import static de.droiddrone.common.PacketIds.VIDEO_PARITY_GROUP;
+import static de.droiddrone.common.PacketIds.VIDEO_PROFILE;
+
 /**
  * One virtual drone: DRAUPNE Flight's side of the link (overlay Flight Udp, PowerMode, the observation) in front of a
  * virtual Betaflight ({@link FlightModel}). It speaks the real protocol with the shared Common code - ReceiverBuffer and
@@ -49,11 +66,6 @@ public final class VirtualDrone {
     /** The phone's encoder steps, bit/s (StreamEncoder.baseBitRates). */
     static final int[] STEPS = {150_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000,
             15_000_000, 20_000_000};
-    static final byte SPECTATE_PILOT_QUERY = 0x60, SPECTATE_PILOT_AT = 0x61, SPECTATE_NO_PILOT = 0x62;
-    static final byte NAME_QUERY = 0x73, NAME_REPLY = 0x74, NAME_ASSIGN = 0x75;
-    static final byte KEY_FRAME_REQUEST = 0x6A, VIDEO_PROFILE = 0x6B, VIDEO_PARITY_GROUP = 0x71, SET_BITRATE = 0x72;
-    static final byte POWER_MODE = 0x6E, SLEEP_HELLO = 0x6F, SLEEP_ANSWER = 0x70, REMOTE_UPDATE = 0x77, IDLE_STICKS = 0x78,
-            DETECTION_SET = 0x7C;
     static final short PHONE_UPDATE = 0x40F7;
     public static final int NORMAL = 0, STANDBY = 1, DEEP_SLEEP = 2, OVERWATCH = 3;
     /** The phone's own times (overlay Udp, PowerMode). */

@@ -2,6 +2,7 @@ package de.droiddrone.pc.observe;
 
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.Observe;
+import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FcTelemetry;
@@ -196,7 +197,7 @@ public final class ObserverLink implements AutoCloseable {
     void onPacket(byte[] d, int len) {
         byte type = d[0];
         switch (type) {
-            case UdpCommon.VideoFrame, UdpCommon.KeyFrame, VIDEO_PARITY, VIDEO_PARITY_GROUP -> {
+            case UdpCommon.VideoFrame, UdpCommon.KeyFrame, PacketIds.VIDEO_PARITY, PacketIds.VIDEO_PARITY_GROUP -> {
                 if (videoConfigured) ControlLink.deliverVideo(video, d, len);
             }
             case UdpCommon.VideoInitialFrame -> {
@@ -244,8 +245,6 @@ public final class ObserverLink implements AutoCloseable {
             }
         }
     }
-
-    static final byte VIDEO_PARITY = 0x6C, VIDEO_PARITY_GROUP = 0x71;
 
     /** OBSERVE_STOP twice (a lost one leaves the phone streaming 3 s until it expires us), then the socket closed. */
     @Override

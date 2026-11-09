@@ -1,5 +1,7 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.PacketIds;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -38,18 +40,18 @@ import java.nio.charset.StandardCharsets;
  * 5 its link stalls, 6 its picture is turned upside down (the spectator turns its own the same way).
  */
 final class Spectate {
-    static final byte PILOT_QUERY = 0x60;
-    static final byte PILOT_AT = 0x61;
-    static final byte NO_PILOT = 0x62;
-    static final byte HELLO = 0x63;
-    static final byte WELCOME = 0x64;
-    static final byte REFUSED = 0x65;
-    static final byte STREAM = 0x66;
-    static final byte BYE = 0x67;
-    static final byte KEEP = 0x68;
-    static final byte SNAPSHOT = 0x69;
-    static final byte PAUSE = 0x6D;
-    static final byte PILOT_VIEW = 0x76;
+    static final byte PILOT_QUERY = PacketIds.SPECTATE_PILOT_QUERY;
+    static final byte PILOT_AT = PacketIds.SPECTATE_PILOT_AT;
+    static final byte NO_PILOT = PacketIds.SPECTATE_NO_PILOT;
+    static final byte HELLO = PacketIds.SPECTATE_HELLO;
+    static final byte WELCOME = PacketIds.SPECTATE_WELCOME;
+    static final byte REFUSED = PacketIds.SPECTATE_REFUSED;
+    static final byte STREAM = PacketIds.SPECTATE_STREAM;
+    static final byte BYE = PacketIds.SPECTATE_BYE;
+    static final byte KEEP = PacketIds.SPECTATE_KEEP;
+    static final byte SNAPSHOT = PacketIds.SPECTATE_SNAPSHOT;
+    static final byte PAUSE = PacketIds.SPECTATE_PAUSE;
+    static final byte PILOT_VIEW = PacketIds.SPECTATE_PILOT_VIEW;
 
     /** BYE's reason: the pilot ended its link on purpose (DISCONNECT, or the program closed). */
     static final byte BYE_PILOT_DISCONNECTED = 1;
