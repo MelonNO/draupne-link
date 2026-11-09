@@ -606,6 +606,13 @@ final class Overwatch {
             boolean needKey = true;
             while (gen == senderGen && enc != null) {
                 try {
+                    // pc.44: never beside the live video - the link's sender takes the same queue (left running, this
+                    // took every other frame: a flickering picture). Only in OVERWATCH, where the link's video is stopped.
+                    if (PowerMode.mode() != PowerMode.OVERWATCH) {
+                        needKey = true;
+                        Thread.sleep(100);
+                        continue;
+                    }
                     MediaCodecBuffer b = enc.videoStreamOutputBuffer.poll(100, TimeUnit.MILLISECONDS);
                     if (b == null) continue;
                     if ((b.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {

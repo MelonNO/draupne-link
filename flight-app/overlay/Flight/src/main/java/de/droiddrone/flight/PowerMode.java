@@ -333,7 +333,10 @@ final class PowerMode {
                 break;
             case STANDBY:
                 if (mode == STANDBY) return;
-                if (mode == DEEP_SLEEP) wake(from); // a sleeping phone the PC reached: everything back first
+                // a sleeping phone the PC reached: everything back first. pc.44: overwatch too - it was left watching
+                // (the pilot, 2026-11-09: STANDBY from the fleet, then CONNECT - its preview sender took every other
+                // frame off the live video: half the frames, a flickering, broken picture)
+                if (mode == DEEP_SLEEP || mode == OVERWATCH) wake(from);
                 mode = STANDBY;
                 service.powerStandby(true);
                 event("Standby (" + from + ")");
