@@ -62,6 +62,8 @@ final class Soldier {
         float[] cx, cy, cz, sx, sy, wn, we, wu;
         int[] px = new int[0];
         float[] z = new float[0];
+        /** The sprite laid over the picture, reused (grown when a soldier is drawn bigger). */
+        BufferedImage sprite;
     }
 
     private static final ThreadLocal<Buffers> BUFFERS = ThreadLocal.withInitial(Buffers::new);
@@ -174,10 +176,14 @@ final class Soldier {
                     cb = Math.min(255, (int) ((col & 0xff) * light));
             raster(b, bw, bh, x0, y0, i0, i1, i2, 0xff000000 | cr << 16 | cg << 8 | cb);
         }
-        BufferedImage sprite = new BufferedImage(bw, bh, BufferedImage.TYPE_INT_ARGB);
-        int[] dst = ((DataBufferInt) sprite.getRaster().getDataBuffer()).getData();
-        System.arraycopy(b.px, 0, dst, 0, bw * bh);
-        g.drawImage(sprite, x0, y0, null);
+        if (b.sprite == null || b.sprite.getWidth() < bw || b.sprite.getHeight() < bh) {
+            int sw = Math.max(bw, b.sprite == null ? 0 : b.sprite.getWidth()), sh = Math.max(bh, b.sprite == null ? 0 : b.sprite.getHeight());
+            b.sprite = new BufferedImage(sw, sh, BufferedImage.TYPE_INT_ARGB);
+        }
+        int sw = b.sprite.getWidth();
+        int[] dst = ((DataBufferInt) b.sprite.getRaster().getDataBuffer()).getData();
+        for (int y = 0; y < bh; y++) System.arraycopy(b.px, y * bw, dst, y * sw, bw);
+        g.drawImage(b.sprite, x0, y0, x0 + bw, y0 + bh, 0, 0, bw, bh, null);
     }
 
     /** One flat triangle into the sprite's pixels through its depth buffer. */
