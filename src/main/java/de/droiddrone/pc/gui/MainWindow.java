@@ -2925,77 +2925,18 @@ public class MainWindow extends JFrame {
         VideoPipeline v = video;
         boolean spectator = l.isSpectator();
         RcSession s = spectator ? null : session;
-        boolean ready = l.getState() == (spectator ? ControlLink.State.SPECTATING : ControlLink.State.READY);
-        long sincePicture = videoView.msSincePicture();
-        long sinceStreamStart = videoView.msSinceStreamStart();
-        // a stream (re)start gets a moment for its first picture (a size switch takes up to ~2 s) - but no longer
-        boolean videoFrozen = v != null && v.hasStream() && sincePicture > VIDEO_FROZEN_MS
-                && (sinceStreamStart < 0 || sinceStreamStart > VIDEO_RESTART_GRACE_MS || sincePicture < sinceStreamStart);
-        FcTelemetry.Status st = l.getTelemetry().getStatus();
-        boolean armed = st != null && st.armed() && MonoClock.ms() - st.receivedAt() < 2000;
-        boolean radioFrozen = armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS;
-        String banner = !spectator ? null : l.isWatchOnly() ? "SPECTATOR" : "NOT FLYING - SPECTATOR";
-        // the phone's own word on the sticks (pc.19+): how long ago its last stick frame reached the FC
-        FcTelemetry.PhoneState ps = l.getTelemetry().getPhoneState();
-        long now = MonoClock.ms();
-        int sticksAge = ps == null || now - ps.receivedAt() > 2500 || ps.rcWriteAgeMs() < 0 ? -1
-                : (int) Math.min(65_534, ps.rcWriteAgeMs() + (now - ps.receivedAt()));
-        RcSession.Banner resume = s == null ? null : s.lastResumeBanner();
-        String liveBanner = resume != null && now - resume.at() < RESUME_BANNER_MS ? resume.text() : null;
-        if (liveBanner == null && !spectator && power.wanted == ControlLink.POWER_STANDBY) liveBanner = "STANDBY";
-        if (liveBanner == null && s != null && s.isFrozenStopped()) liveBanner = "RADIO FROZEN - STICKS STOPPED";
-        int lagMs = spectator ? -1 : stickLagMs(l);
-        if (liveBanner == null && lagMs > STICKS_LATE_MS) {
-            liveBanner = String.format(Locale.ROOT, "STICKS %.1f S LATE", lagMs / 1000.0);
-        }
-        boolean linkReady = ready, rcLive = spectator || (s != null && s.isRcEnabled());
-        boolean stalled = l.isLinkStalled(), relayed = l.isRelayed(), armUnknown = s != null && s.isArmSwitchUnknown();
-        String rcWaiting = s == null ? null : s.waitingFor(), hint = osdLinkHint(s);
-        short[] channels = s == null ? null : s.getLastChannels();
-        // watching: the pilot PC's own warnings, as its OSD shows them (1.0.41: RC OFF - NO RADIO there, nothing here)
-        ControlLink.PilotView pv = spectator ? l.getPilotView() : null;
-        if (pv != null) {
-            linkReady = ready && pv.linkReady();
-            rcLive = pv.rcLive();
-            rcWaiting = pv.rcWaiting();
-            radioFrozen = pv.radioFrozen();
-            armUnknown = pv.armSwitchUnknown();
-            relayed = pv.relayed();
-            stalled = pv.linkStalled();
-            if (pv.banner() != null) liveBanner = pv.banner();
-            if (!pv.linkReady()) hint = pv.linkHint();
-            channels = pv.channels();
-        }
-        // watching: say what kind of loss - the pilot gone on purpose, or its own link to the drone lost (1.0.41)
-        String lostText = null;
-        String left = spectator ? l.getPilotLeft() : null;
-        if (left != null) {
-            linkReady = false;
-            lostText = "PILOT DISCONNECTED";
-            hint = "PILOT ENDED ITS LINK" + (left.isEmpty() ? "" : " TO " + left.toUpperCase(Locale.ROOT)) + " - NOT A LINK LOSS";
-        } else if (pv != null && !pv.linkReady()) {
-            lostText = "PILOT LINK LOST";
-        }
-        return new OsdRenderer.Data(true, linkReady, l.getPing(), rcLive,
-                l.isFcLost(), l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString(OSD_INVERT_PITCH_KEY)),
-                hint, channels, false, stalled, videoFrozen, radioFrozen,
-                rcWaiting, v != null && v.recordingFile() != null, banner, spectator && !l.isWatchOnly(),
-                sticksAge, armUnknown, liveBanner, spectator && l.isSpectatorPaused(), relayed,
-                ps != null && now - ps.receivedAt() <= 2500 && ps.rcWriteAgeMs() > OsdRenderer.STICKS_LOST_ALARM_MS, lostText);
+        return OsdDataBuilder.build(new OsdDataBuilder.In(spectator, l.isWatchOnly(),
+                l.getState() == (spectator ? ControlLink.State.SPECTATING : ControlLink.State.READY),
+                v != null && v.hasStream(), videoView.msSincePicture(), videoView.msSinceStreamStart(),
+                l.getTelemetry().getStatus(), l.getTelemetry().getPhoneState(), s != null, s != null && s.isRcEnabled(),
+                s == null ? 0 : s.msSinceInputChanged(), s == null ? null : s.lastResumeBanner(), s != null && s.isFrozenStopped(),
+                s != null && s.isArmSwitchUnknown(), s == null ? null : s.waitingFor(), s == null ? null : s.getLastChannels(),
+                power.wanted == ControlLink.POWER_STANDBY, spectator ? -1 : stickLagMs(l), osdLinkHint(s),
+                spectator ? l.getPilotView() : null, spectator ? l.getPilotLeft() : null, l.getPing(), l.isFcLost(),
+                l.getTelemetry(), v == null ? null : v.stats(), "true".equalsIgnoreCase(config.getString(OSD_INVERT_PITCH_KEY)),
+                v != null && v.recordingFile() != null, spectator && l.isSpectatorPaused(), l.isLinkStalled(), l.isRelayed(),
+                MonoClock.ms()));
     }
-
-    /** A stream (re)start may take this long to show its first picture before VIDEO FROZEN says so. */
-    private static final long VIDEO_RESTART_GRACE_MS = 2500;
-
-    /** How long "LINK BACK - ARMED - STICKS LIVE" stays on the HUD. */
-    private static final long RESUME_BANNER_MS = 3000;
-
-    /** No new picture for this long while the stream runs: VIDEO FROZEN. */
-    private static final long VIDEO_FROZEN_MS = 700;
-    /** Armed and not a single bit of the radio's input changed for this long: RADIO FROZEN? */
-    private static final long RADIO_FROZEN_MS = 5000;
-    /** The sticks reach the phone this much later than the link's usual (phone app pc.31): STICKS LATE. */
-    private static final int STICKS_LATE_MS = 300;
 
     /** The worst stick lateness the phone saw in the last second, in a fresh report; -1 = unknown. */
     private static int stickLagMs(ControlLink link) {
@@ -3045,8 +2986,8 @@ public class MainWindow extends JFrame {
         // a hung radio that still reports itself: the OSD alone is easy to miss with eyes on the picture
         RcSession s = session;
         boolean armed = st != null && st.armed() && MonoClock.ms() - st.receivedAt() < 2000;
-        if (armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS) return "RADIO FROZEN";
-        if (stickLagMs(l) > STICKS_LATE_MS) return "STICKS LATE";
+        if (armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > OsdDataBuilder.RADIO_FROZEN_MS) return "RADIO FROZEN";
+        if (stickLagMs(l) > OsdDataBuilder.STICKS_LATE_MS) return "STICKS LATE";
         return null;
     }
 
