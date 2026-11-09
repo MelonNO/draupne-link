@@ -280,4 +280,20 @@ class MapViewTest {
         assertTrue(repaints[0] > after, "a new report");
         assertEquals(2, map.trackPath().taken(), "the line took in the new point only");
     }
+
+    /** 1.0.56, the pilot: "create an indication that the map is loading". */
+    @Test
+    void loadingMapShowsWhileTilesAreOnTheirWay(@TempDir Path dir) throws Exception {
+        MapView map = new MapView(TileCache.neverLoading(dir));
+        BufferedImage img = new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB);
+        javax.swing.SwingUtilities.invokeAndWait(() -> {
+            map.setSize(400, 300);
+            java.awt.Graphics2D g = img.createGraphics();
+            map.printAll(g); // the tiles are asked for here...
+            map.printAll(g); // ...and are on their way now
+            g.dispose();
+        });
+        assertNotNull(map.loadingChip, "LOADING MAP shows");
+        assertTrue(map.loadingChip.y >= 45 && map.loadingChip.y < 70 && Math.abs(map.loadingChip.getCenterX() - 200) < 2, "top middle, under NO DRONE POSITION: " + map.loadingChip);
+    }
 }

@@ -125,4 +125,24 @@ class TileQueueTest {
         assertTrue(d.isFinished(), "on by itself once landed");
         assertFalse(d.isHeldForFlight());
     }
+
+    /** 1.0.56, the pilot: "an indication that the map is loading" - while a tile a map shows is on its way. */
+    @Test
+    void loadingWhileATileIsOnItsWayAndNotOnceItIsInOrHeld() throws Exception {
+        TileCache c = cache();
+        assertFalse(c.loading(), "nothing asked");
+        Path onDisk = dir.resolve(TileSource.KARTVERKET_TOPO.id).resolve("10").resolve("3").resolve("4.png");
+        Files.createDirectories(onDisk.getParent());
+        ImageIO.write(new BufferedImage(4, 4, BufferedImage.TYPE_INT_RGB), "png", onDisk.toFile());
+        Runnable map = () -> { };
+        c.get(TileSource.KARTVERKET_TOPO, 10, 3, 4, map);
+        assertTrue(c.loading(), "waiting");
+        TileCache.Request r = c.takeNext();
+        assertTrue(c.loading(), "loading");
+        c.load(r);
+        assertFalse(c.loading(), "in");
+        c.get(TileSource.KARTVERKET_TOPO, 10, 7, 7, map);
+        held[0] = true;
+        assertFalse(c.loading(), "held: nothing would come, so nothing says it is coming");
+    }
 }

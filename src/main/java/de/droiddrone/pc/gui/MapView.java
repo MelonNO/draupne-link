@@ -1580,6 +1580,7 @@ class MapView extends JComponent {
 
             paintScale(g, h);
             paintAttribution(g, src, w, h);
+            if (!forPicture && tilesMissing && cache.loading()) paintLoading(g, w);
             if (!forPicture) paintZoomButtons(g, w);
             if (selectStart != null) paintSelection(g);
             g.setColor(Theme.LINE);
@@ -1611,8 +1612,13 @@ class MapView extends JComponent {
         g.drawString(text, box.x + 8, box.y + 2 + fm.getAscent() + 2);
     }
 
+    /** The last paint had a tile on screen not in yet (the LOADING MAP chip). */
+    private boolean tilesMissing;
+
     private void paintTiles(Graphics2D g, TileSource src, MapProjection proj) {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        tilesMissing = false;
+        loadingChip = null;
         int n = 1 << proj.zi();
         int tx0 = (int) Math.floor((proj.wcx() - proj.w() / 2.0 / proj.scale()) / Mercator.TILE), tx1 = (int) Math.floor((proj.wcx() + proj.w() / 2.0 / proj.scale()) / Mercator.TILE);
         int ty0 = (int) Math.floor((proj.wcy() - proj.h() / 2.0 / proj.scale()) / Mercator.TILE), ty1 = (int) Math.floor((proj.wcy() + proj.h() / 2.0 / proj.scale()) / Mercator.TILE);
@@ -1628,6 +1634,7 @@ class MapView extends JComponent {
                     continue;
                 }
                 // not in yet: the parent tile's quarter, blown up, until it is
+                tilesMissing = true;
                 BufferedImage parent = proj.zi() > 0 ? cache.get(src, proj.zi() - 1, Math.floorDiv(Math.floorMod(tx, n), 2), ty / 2, tileReady) : null;
                 if (parent != null) {
                     int px = (Math.floorMod(tx, n) & 1) * parent.getWidth() / 2, py = (ty & 1) * parent.getHeight() / 2;
@@ -2084,6 +2091,45 @@ class MapView extends JComponent {
         g.drawLine(x + px, y - 5, x + px, y);
         g.drawString(label, x, y - 7);
     }
+
+    /**
+     * LOADING MAP (1.0.56, the pilot: "create an indication that the map is loading"): a small chip at the top,
+     * a turning dot in it, while tiles on the screen are still coming; gone with the last of them.
+     */
+    private void paintLoading(Graphics2D g0, int w) {
+        Graphics2D g = (Graphics2D) g0.create();
+        try {
+            String text = LOADING_TEXT;
+            g.setFont(Theme.headingFont(11f));
+            FontMetrics fm = g.getFontMetrics();
+            int dot = 12, pad = 8, tw = fm.stringWidth(text);
+            int bw = pad + dot + 6 + tw + pad, bh = Math.max(dot, fm.getHeight()) + 8;
+            int x = (w - bw) / 2, y = 50; // under NO DRONE POSITION (top middle, y 12-42)
+            g.setColor(BOX);
+            g.fillRect(x, y, bw, bh);
+            g.setColor(Theme.LINE);
+            g.drawRect(x, y, bw - 1, bh - 1);
+            int cx = x + pad + dot / 2, cy = y + bh / 2;
+            g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(Theme.MUTED);
+            g.drawOval(cx - dot / 2, cy - dot / 2, dot, dot);
+            double phase = (System.currentTimeMillis() % 1000) / 1000.0 * Math.PI * 2;
+            g.setColor(Theme.ACCENT);
+            g.drawArc(cx - dot / 2, cy - dot / 2, dot, dot, (int) Math.toDegrees(-phase), 100);
+            g.setColor(Theme.TEXT);
+            g.drawString(text, x + pad + dot + 6, cy - fm.getHeight() / 2 + fm.getAscent());
+            loadingChip = new Rectangle(x, y, bw, bh);
+        } finally {
+            g.dispose();
+        }
+        Rectangle r = loadingChip;
+        repaint(100, r.x, r.y, r.width, r.height); // turns; a tile coming in repaints the whole map (and ends it)
+    }
+
+    /** Where LOADING MAP was last painted (tests). */
+    Rectangle loadingChip;
+
+    static final String LOADING_TEXT = "LOADING MAP";
 
     private void paintAttribution(Graphics2D g, TileSource src, int w, int h) {
         String text = src.attribution + (cache.isOffline() ? "   SAVED TILES ONLY" : "");
