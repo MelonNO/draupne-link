@@ -71,6 +71,7 @@ import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
 import de.droiddrone.common.Observe;
 import de.droiddrone.common.PcAudio;
+import de.droiddrone.common.RcPath;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
 import de.droiddrone.common.SettingsCommon;
@@ -121,17 +122,10 @@ public class Udp {
      */
     private static final long PILOT_ALIVE_MS = Takeover.PILOT_ALIVE_MS;
     /**
-     * The sequence of the last stick frame taken (pc.19: [24][count u8][count x i16][seq u8]; pc.26: [seq u16] from
-     * a PC that knows this build; a PC that knows only the older layout sends none). Only read and written on the
-     * receive thread.
+     * The stick frames' rules (RcPath: the sequence, pc.19 / pc.26, and the lag limit, pc.31), on the receive thread;
+     * the time of the last frame written is read by the idle sticks' thread.
      */
-    private volatile int lastRcSeq = -1; // volatile: the stats thread reports it
-    private boolean rcSeqValid;
-    /**
-     * When the last stick frame was taken; the sequence rule starts over after RC_SEQ_RESET_MS without one. Volatile:
-     * the idle sticks' thread reads it.
-     */
-    private volatile long lastRcTakenMs;
+    private final RcPath rcPath = new RcPath();
     /**
      * pc.33: the idle sticks from DRAUPNE Link 1.0.44 ([0x78][count u8][count x i16], once a second): throttle low,
      * sticks centred, the arm switch off, BEEPER low, the other AUX as the pilot's radio has them. Fed to Betaflight
@@ -177,36 +171,6 @@ public class Udp {
     static final long IDLE_EVERY_MS = 50;
     /** A status read this long after the last stick frame: one that frame's arm switch could have changed is past. */
     static final long IDLE_STATUS_AFTER_MS = 100;
-    /**
-     * No stick frame taken for this long: the next one is taken whatever its sequence. With the 8-bit sequence a
-     * frame 128 or more behind looked newer (a cell handover flushing old packets), and the fresh frames after it
-     * were dropped until the count passed it; with this the loss is bounded.
-     */
-    private static final long RC_SEQ_RESET_MS = 300;
-    /**
-     * pc.31: with the 16-bit sequence a newer frame is always newer, so after RC_SEQ_RESET_MS without one only a
-     * newer frame is taken (before, any - a frame held a second in the network came out as fresh sticks); after
-     * this long anything is (the PC may have started counting again). No frame waits for this: it only refuses.
-     */
-    private static final long RC_SEQ16_FORGET_MS = 1000;
-    /**
-     * pc.31: the stick lag. A pc.31 PC's frame ends [seq u16][sentMs u16][maxLagCs u8]: its send time (ms, low 16
-     * bits of its own monotonic clock) and the most a frame may be late, in 10 ms (0 = never drop). The phone's clock
-     * minus sentMs is the one-way time plus a fixed offset; the smallest over the last two buckets is the best the
-     * link did, and a frame later than that by more than the limit is dropped - sticks seconds old (a 4G queue
-     * flushed) end in Betaflight's failsafe instead of flying the drone late. Buckets of 10 s (20 s seen at most):
-     * long enough that a queue building up isn't taken as the new normal within a few seconds, short enough that a
-     * path that got slower for good (a relay) is learned. Read and written on the receive thread only, but for the
-     * figures the stats thread reports (volatile).
-     */
-    private static final long RC_LAG_BUCKET_MS = 10_000;
-    private int rcLagMinNow = -1, rcLagMinBefore = -1;
-    private long rcLagBucketAt;
-    private volatile int rcLagMs = -1;
-    private volatile int rcLagMaxMs = -1;
-    private volatile int rcLagDropped;
-    /** The last frame carried sentMs: the PC knows the PHONE_RC_LAG record (sent only then). */
-    private volatile boolean rcLagFromPc;
     /** pc.31: when the pilot's Connect last started a session here; a repeat within the second is the same session. */
     private volatile long sessionStartedMs;
     private static final long SAME_SESSION_MS = 1000;
@@ -218,8 +182,6 @@ public class Udp {
     private volatile long videoStartedAtMs;
     /** An opened camera gets this long for its session's first frame before a StartVideo may start it again. */
     private static final long VIDEO_FIRST_FRAME_MS = 4000;
-    /** The channels of the last stick frame, filled in place on the receive thread: no allocation per frame. */
-    private final short[] rcFrame = new short[FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT];
     /** A PC that tried to connect with another key (shown on the screen): its address and when. */
     static volatile String wrongKeyFrom;
     static volatile long wrongKeyAt;
@@ -591,8 +553,8 @@ public class Udp {
                             answerSpectator(receiverPacket, false);
                             continue;
                         }
-                        rcSeqValid = false; // every (re)connect passes here: the PC's stick sequence starts over
-                        resetRcLag();
+                        // every (re)connect passes here: the PC's stick sequence starts over
+                        rcPath.restart(android.os.SystemClock.elapsedRealtime());
                         // pc.22: the PC's answer to this phone's sleep check hello (from the PC it last flew with)
                         if (d[0] == PowerMode.SLEEP_ANSWER) {
                             if (len >= 2 && receiverPacket.getAddress().equals(lastPcIp)) PowerMode.sleepAnswer(d[1] != 0);
@@ -644,54 +606,19 @@ public class Udp {
     };
 
     /**
-     * A stick frame, on the receive thread: [24][count u8][count x i16][seq u8 - pc.19, only from a PC that knows
-     * this app takes it]. With a sequence, a frame older than (or the same as) the last one taken - a late packet
-     * arriving after a newer one - is dropped, except the first after a (re)connect, where the count starts over.
-     * No allocation: the channels are read into {@link #rcFrame} in place.
+     * A stick frame, on the receive thread: taken or dropped by {@link RcPath} (its sequence, its lag), then straight
+     * to the flight controller. No allocation: the channels are read into RcPath's frame in place.
      */
     private void handleRcFrame(byte[] d, int len) {
-        if (len < 2) return;
-        int count = d[1] & 0xff;
-        if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
-        int remaining = len - 2;
         long now = android.os.SystemClock.elapsedRealtime(); // pc.38: was the wall clock (the idle sticks compare it with Msp's)
-        if (remaining == count * 2 + 5) { // pc.31: [seq u16][sentMs u16][maxLagCs u8]
-            int seq = ((d[len - 5] & 0xff) << 8) | (d[len - 4] & 0xff);
-            int sentMs = ((d[len - 3] & 0xff) << 8) | (d[len - 2] & 0xff);
-            int maxLagMs = (d[len - 1] & 0xff) * 10;
-            rcLagFromPc = true;
-            if (!takeSeq16(seq, now)) return;
-            if (tooLate(sentMs, maxLagMs)) return;
-            lastRcSeq = seq;
-            rcSeqValid = true;
-        } else if (remaining == count * 2 + 2) { // pc.26: a 16-bit sequence
-            int seq = ((d[len - 2] & 0xff) << 8) | (d[len - 1] & 0xff);
-            rcLagFromPc = false;
-            if (!takeSeq16(seq, now)) return;
-            lastRcSeq = seq;
-            rcSeqValid = true;
-        } else if (remaining == count * 2 + 1) {
-            int seq = d[len - 1] & 0xff;
-            rcLagFromPc = false;
-            if (rcSeqValid && now - lastRcTakenMs > RC_SEQ_RESET_MS) rcSeqValid = false; // a gap: whatever comes next is newest
-            if (rcSeqValid && (byte) (seq - lastRcSeq) <= 0) return;
-            lastRcSeq = seq;
-            rcSeqValid = true;
-        } else if (remaining == count * 2) {
-            rcLagFromPc = false;
-            lastRcSeq = -1;
-        } else {
-            return;
-        }
-        int at = 2;
-        for (int i = 0; i < count; i++, at += 2) {
-            rcFrame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
-        }
+        int count = rcPath.take(d, len, now);
+        if (count < 0) return;
+        short[] rcFrame = rcPath.frame();
         PcLinkStats.rcIn();
         // pc.38: the frame's time and its write in one step with the idle sticks' check-and-write (rcWriteLock): an
         // idle frame decided on just before can't land in the writer's one slot after this frame and replace it
         synchronized (rcWriteLock) {
-            lastRcTakenMs = now;
+            rcPath.taken(now);
             if (msp.isInitialized()) msp.setRawRc(rcFrame, count);
         }
         if (mavlink.isInitialized()) mavlink.setRcChannelsOverride(java.util.Arrays.copyOf(rcFrame, count));
@@ -702,11 +629,8 @@ public class Udp {
 
     /** The idle sticks, on the receive thread: kept for idleSticksRun (a new array each time, never written after). */
     private void handleIdleSticks(byte[] d, int len) {
-        if (len < 2) return;
-        int count = d[1] & 0xff;
-        if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT || len != 2 + count * 2) return;
-        short[] frame = new short[count];
-        for (int i = 0, at = 2; i < count; i++, at += 2) frame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
+        short[] frame = RcPath.idleFrame(d, len);
+        if (frame == null) return;
         if (idleSticks == null) log("Idle sticks from the PC: fed to the FC while it is disarmed and no sticks come");
         idleSticks = frame;
     }
@@ -730,7 +654,7 @@ public class Udp {
                     boolean feed, refused = false;
                     synchronized (rcWriteLock) {
                         short[] idle = idleSticks;
-                        long lastRc = lastRcTakenMs;
+                        long lastRc = rcPath.lastTakenMs();
                         long now = android.os.SystemClock.elapsedRealtime();
                         feed = idle != null && msp.isInitialized() && now - lastRc >= IDLE_AFTER_MS
                                 && msp.disarmedAfter(lastRc + IDLE_STATUS_AFTER_MS, now);
@@ -814,47 +738,6 @@ public class Udp {
         }
     };
 
-    /** The 16-bit sequence rule: newer than the last frame taken, or anything after RC_SEQ16_FORGET_MS without one. */
-    private boolean takeSeq16(int seq, long now) {
-        if (rcSeqValid && now - lastRcTakenMs > RC_SEQ16_FORGET_MS) rcSeqValid = false;
-        return !rcSeqValid || (short) (seq - lastRcSeq) > 0;
-    }
-
-    /**
-     * The stick lag (pc.31, see RC_LAG_BUCKET_MS): updates the best transit seen with this frame's and says whether
-     * the frame is later than that by more than maxLagMs (0 = no limit). The 16-bit times compare across the wrap.
-     */
-    private boolean tooLate(int sentMs, int maxLagMs) {
-        long nowMs = android.os.SystemClock.elapsedRealtime();
-        int transit = (int) ((nowMs - sentMs) & 0xFFFF);
-        if (nowMs - rcLagBucketAt >= RC_LAG_BUCKET_MS) {
-            rcLagMinBefore = rcLagMinNow;
-            rcLagMinNow = -1;
-            rcLagBucketAt = nowMs;
-        }
-        if (rcLagMinNow < 0 || (short) (transit - rcLagMinNow) < 0) rcLagMinNow = transit;
-        int best = rcLagMinNow;
-        if (rcLagMinBefore >= 0 && (short) (rcLagMinBefore - best) < 0) best = rcLagMinBefore;
-        int lag = Math.max(0, (short) (transit - best));
-        rcLagMs = lag;
-        if (lag > rcLagMaxMs) rcLagMaxMs = lag;
-        if (maxLagMs > 0 && lag > maxLagMs) {
-            rcLagDropped++;
-            return true;
-        }
-        return false;
-    }
-
-    /** A new session: the PC's clock may be another, and the drop count is per session. */
-    private void resetRcLag() {
-        rcLagMinNow = -1;
-        rcLagMinBefore = -1;
-        rcLagBucketAt = android.os.SystemClock.elapsedRealtime();
-        rcLagMs = -1;
-        rcLagMaxMs = -1;
-        rcLagDropped = 0;
-    }
-
     /**
      * A packet from another address or port while a PC is connected. A keyed Connect from the pilot's own address
      * (it started again, on a new port) or from anywhere while the pilot has been silent for {@link #PILOT_ALIVE_MS}
@@ -901,8 +784,7 @@ public class Udp {
         ReceiverBuffer old = receiverBuffer;
         receiverBuffer = new ReceiverBuffer(udpSender, (connectionMode != SettingsCommon.ConnectionMode.overServer), key, null);
         if (old != null) old.close();
-        rcSeqValid = false;
-        resetRcLag();
+        rcPath.restart(android.os.SystemClock.elapsedRealtime());
         idleSticks = null; // pc.38: the new session's PC sends its own within a second; none kept from before (H1)
     }
 
@@ -969,16 +851,15 @@ public class Udp {
                             if (l != null) PcLinkStats.writePhonePositionTo(stats.daos, l);
                         }
                         // pc.19, once a second; pc.26: every time - the PC's NO STICKS AT FC alarm reads the write age
-                        PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), lastRcSeq);
+                        PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), rcPath.lastSeq());
                         // pc.21, once a second and three times when the mode changes; always the last record: a
                         // pc.20 PC stops reading at it
                         if (statsSent % 10 == 7 || PowerMode.burstDue(now)) PowerMode.writeRecordTo(stats.daos);
                         // pc.31, once a second and only to a PC whose stick frames carry their send time (it knows the
                         // record): after every other record, as a PC that doesn't know it stops reading there
-                        if (statsSent % 10 == 3 && rcLagFromPc) {
-                            int maxLag = rcLagMaxMs;
-                            rcLagMaxMs = -1; // the most over the last second
-                            PcLinkStats.writeRcLagTo(stats.daos, rcLagMs, maxLag, rcLagDropped);
+                        if (statsSent % 10 == 3 && rcPath.lagFromPc()) {
+                            int maxLag = rcPath.takeLagMaxMs(); // the most over the last second
+                            PcLinkStats.writeRcLagTo(stats.daos, rcPath.lagMs(), maxLag, rcPath.lagDropped());
                         }
                         // pc.32, twice a second while a remote update runs: in packets with no other last record
                         if (statsSent % 5 == 4 && RemoteUpdate.reportDue()) RemoteUpdate.writeRecordTo(stats.daos);
