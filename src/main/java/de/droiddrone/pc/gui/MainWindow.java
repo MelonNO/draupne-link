@@ -229,8 +229,8 @@ public class MainWindow extends JFrame {
     /** POP OUT MAP: says OVERWATCH while an alert waits and the map window is closed. */
     private JButton popMapButton;
     private boolean overwatchBadge;
-    private final JComboBox<String> checkIntervalCombo = new JComboBox<>(new String[]{"0 min", "1 min", "2 min", "5 min"});
-    /** CHECK EVERY's choices in order; "0 min" is SleepCheck.ALWAYS, always listening (1.0.50). */
+    private final JComboBox<String> checkIntervalCombo = new JComboBox<>(java.util.Arrays.stream(CHECK_INTERVALS).mapToObj(SleepCheck::label).toArray(String[]::new));
+    /** CHECK EVERY's choices in order; "Constant" (was "0 min") is SleepCheck.ALWAYS, always listening (1.0.50). */
     static final int[] CHECK_INTERVALS = {SleepCheck.ALWAYS, 1, 2, 5};
     /** What the modes are doing; wraps to the card (a label would cut the line). */
     private final WrappingText powerStatusText = WrappingText.fitting(" ", Theme.font(Font.PLAIN, 12f), Theme.MUTED);
@@ -238,6 +238,18 @@ public class MainWindow extends JFrame {
     private JPanel powerRow;
     /** CHECK EVERY and its list, under the sleep buttons (the tour lights it with them). */
     private JPanel checkEveryRow;
+    /** DEEP SLEEP / OVERWATCH, and STANDBY before them while the chosen phone sleeps (1.0.56). */
+    private JPanel sleepButtonsRow;
+
+    /** STANDBY in the sleep buttons' row: only for a phone in DEEP SLEEP or OVERWATCH (the pilot's three buttons otherwise). */
+    private void showStandbyButton(boolean on) {
+        JPanel row = sleepButtonsRow;
+        if (row == null || (standbyButton.getParent() == row) == on) return;
+        if (on) row.add(standbyButton, 0);
+        else row.remove(standbyButton);
+        row.revalidate();
+        row.repaint();
+    }
     /** DEEP SLEEP and OVERWATCH, folded away (animated) while the drone is armed: no sleep then. */
     private Fold sleepFold;
 
@@ -249,6 +261,38 @@ public class MainWindow extends JFrame {
         }
     }
     private static final String CHECK_INTERVAL_KEY = "phone.sleepCheckMin";
+    /** CHECK EVERY for OVERWATCH (1.0.56): its own, Constant until chosen. */
+    private static final String OVERWATCH_INTERVAL_KEY = "phone.overwatchCheckMin";
+    /** CHECK EVERY shows (and sets) OVERWATCH's interval: the chosen phone overwatches, or OVERWATCH was pressed last. */
+    private boolean intervalForOverwatch;
+    private boolean fillingInterval;
+
+    /** A saved CHECK EVERY, one of the list's; the mode's default when none (or another) is saved. */
+    private int savedInterval(String key, int mode) {
+        int v;
+        try {
+            v = Integer.parseInt(config.getString(key));
+        } catch (NumberFormatException ignored) {
+            v = PowerController.defaultInterval(mode);
+        }
+        for (int i : CHECK_INTERVALS) if (i == v) return v;
+        return PowerController.defaultInterval(mode);
+    }
+
+    /** CHECK EVERY shows the interval of OVERWATCH (true) or DEEP SLEEP; the list's choice changes nothing. */
+    private void showIntervalFor(boolean overwatchMode) {
+        intervalForOverwatch = overwatchMode;
+        int v = overwatchMode ? power.overwatchIntervalMin : power.checkIntervalMin;
+        int chosen = CHECK_INTERVALS.length - 1;
+        for (int i = 0; i < CHECK_INTERVALS.length; i++) if (CHECK_INTERVALS[i] == v) chosen = i;
+        if (checkIntervalCombo.getSelectedIndex() == chosen) return;
+        fillingInterval = true;
+        try {
+            checkIntervalCombo.setSelectedIndex(chosen);
+        } finally {
+            fillingInterval = false;
+        }
+    }
     /** Crashed drones (CRASHED_KEY): the name as the name map has it -> when LOST DRONE was pressed (wall clock). */
     private final Map<String, Long> crashed = new ConcurrentHashMap<>();
 
@@ -359,11 +403,23 @@ public class MainWindow extends JFrame {
     private boolean fillingPhones;
     private final JButton connectButton = Theme.primaryButton("Connect");
     /** Connect as: pilot (fly) or spectator (watch only). */
-    private final JComboBox<String> roleCombo = new JComboBox<>(new String[]{ROLE_PILOT, ROLE_SPECTATOR, ROLE_OBSERVER});
+    private final JComboBox<String> roleCombo = new JComboBox<>(new String[]{ROLE_PILOT, ROLE_OBSERVER, ROLE_SPECTATOR}); // 1.0.56: the pilot's order
     private static final String ROLE_PILOT = "Pilot - fly the drone";
     private static final String ROLE_SPECTATOR = "Spectator - watch only";
     /** OBSERVATION (1.0.48): up to six idle drones at once in the video area; CONNECT on a tile flies that one. */
     private static final String ROLE_OBSERVER = "Observation - watch idle drones";
+    /** The LINK card's title: the mode CONNECT AS is in (1.0.56, the pilot: not "LINK"). */
+    private final JLabel linkTitle = Theme.sectionTitle("Pilot mode");
+
+    /** "PILOT MODE", "OBSERVER MODE" or "SPECTATOR MODE" for a CONNECT AS choice. */
+    static String linkTitleFor(Object role) {
+        return ROLE_SPECTATOR.equals(role) ? "SPECTATOR MODE" : ROLE_OBSERVER.equals(role) ? "OBSERVER MODE" : "PILOT MODE";
+    }
+
+    private void refreshLinkTitle() {
+        String t = linkTitleFor(roleCombo.getSelectedItem());
+        if (!t.equals(linkTitle.getText())) linkTitle.setText(t);
+    }
     private static final String CONNECT_AS_OBSERVATION = "observation";
     static final String OBSERVE_VOLUME_KEY = "observe.volume";
     private final JButton chooseDronesButton = Theme.secondaryButton("Choose drones");
@@ -952,7 +1008,7 @@ public class MainWindow extends JFrame {
         c.fill = GridBagConstraints.HORIZONTAL;
         c.weightx = 1;
         c.insets = new Insets(0, 0, 6, 0);
-        rows.add(Theme.sectionTitle("Link"), c);
+        rows.add(linkTitle, c); // PILOT MODE, OBSERVER MODE or SPECTATOR MODE (1.0.56, the pilot)
         connectedNameLabel.setToolTipText("The phone this PC is connected to");
         rows.add(folded(connectedNameLabel, 0), c);
         JPanel fields = new JPanel(new GridBagLayout());
@@ -988,8 +1044,10 @@ public class MainWindow extends JFrame {
             boolean observe = observerRole();
             save(Map.of(Connection.CONNECT_AS_KEY, observe ? CONNECT_AS_OBSERVATION : watch ? "spectator" : "pilot"));
             refreshConnectText();
+            refreshLinkTitle();
             updatePhoneList(); // phones to fly, PCs to watch, or the drones to observe
         });
+        refreshLinkTitle();
         fields.add(roleCombo, c);
         c.insets = new Insets(0, 0, 0, 0);
         rows.add(fields, c);
@@ -998,6 +1056,7 @@ public class MainWindow extends JFrame {
         connectButton.addActionListener(e -> {
             if (observation != null) stopObservation();
             else if (connection == null && observerRole()) startObservation();
+            else if (connection == null && alertingChosen() != null) overwatchConnect(alertingChosen()); // as the alert's CONNECT (1.0.56)
             else if (connection == null && asleepChosen() != null) wakeAsleep(); // back at its next check
             else if (connection == null) connect();
             else if (confirmEndWhileArmed("Standby mode")) disconnectToStandby();
@@ -3060,9 +3119,11 @@ public class MainWindow extends JFrame {
         c.insets = new Insets(0, 0, 6, 0);
         // 1.0.52 (the pilot): "There should only ever be three buttons" - PILOT UAV / STANDBY MODE above, these two; no WAKE
         // (PILOT UAV on a sleeping drone wakes it at its next check)
-        JPanel buttons = new JPanel(new GridLayout(1, 2, 6, 0));
+        JPanel buttons = new JPanel(new GridLayout(1, 0, 6, 0));
         buttons.setOpaque(false);
-        standbyButton.setToolTipText("Camera off, GPS and telemetry slowed; link stays");
+        sleepButtonsRow = buttons;
+        // 1.0.56 (the pilot): STANDBY joins them for a phone in DEEP SLEEP or OVERWATCH - queued for its next check
+        standbyButton.setToolTipText("Standby at its next check");
         standbyButton.addActionListener(e -> askPower(ControlLink.POWER_STANDBY));
         deepSleepButton.setToolTipText("Phone sleeps, checking in every CHECK EVERY. Not connected: queued for its next check");
         deepSleepButton.addActionListener(e -> askPower(ControlLink.POWER_DEEP_SLEEP));
@@ -3082,20 +3143,22 @@ public class MainWindow extends JFrame {
         interval.setOpaque(false);
         interval.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
         TacticalCombo.install(checkIntervalCombo);
-        checkIntervalCombo.setToolTipText("<html>How often the sleeping phone wakes to listen for this PC: more often costs a little more power.<br>"
-                + "0 min: it never stops listening - PILOT UAV reaches it at once (phone app pc.39 on; an older one checks every 1 min)</html>");
-        try {
-            power.checkIntervalMin = Integer.parseInt(config.getString(CHECK_INTERVAL_KEY));
-        } catch (NumberFormatException ignored) {
-            power.checkIntervalMin = 5;
-        }
-        int chosen = CHECK_INTERVALS.length - 1;
-        for (int i = 0; i < CHECK_INTERVALS.length; i++) if (CHECK_INTERVALS[i] == power.checkIntervalMin) chosen = i;
-        power.checkIntervalMin = CHECK_INTERVALS[chosen];
-        checkIntervalCombo.setSelectedIndex(chosen);
+        checkIntervalCombo.setToolTipText("<html>How often a sleeping phone listens for this PC. More often: a little more power.<br>"
+                + "Constant: always listening, PILOT UAV reaches it at once. Own setting for OVERWATCH (default Constant)</html>");
+        // 1.0.56 (the pilot): DEEP SLEEP and OVERWATCH each keep their own; OVERWATCH starts at Constant, DEEP SLEEP at 5 min
+        power.checkIntervalMin = savedInterval(CHECK_INTERVAL_KEY, ControlLink.POWER_DEEP_SLEEP);
+        power.overwatchIntervalMin = savedInterval(OVERWATCH_INTERVAL_KEY, ControlLink.POWER_OVERWATCH);
+        showIntervalFor(false);
         checkIntervalCombo.addActionListener(e -> {
-            power.checkIntervalMin = CHECK_INTERVALS[Math.max(0, checkIntervalCombo.getSelectedIndex())];
-            save(Map.of(CHECK_INTERVAL_KEY, Integer.toString(power.checkIntervalMin)));
+            if (fillingInterval) return;
+            int v = CHECK_INTERVALS[Math.max(0, checkIntervalCombo.getSelectedIndex())];
+            if (intervalForOverwatch) {
+                power.overwatchIntervalMin = v;
+                save(Map.of(OVERWATCH_INTERVAL_KEY, Integer.toString(v)));
+            } else {
+                power.checkIntervalMin = v;
+                save(Map.of(CHECK_INTERVAL_KEY, Integer.toString(v)));
+            }
         });
         interval.add(checkIntervalCombo, BorderLayout.CENTER);
         powerRow.add(interval, c);
@@ -3149,12 +3212,14 @@ public class MainWindow extends JFrame {
         if (connection != null && power.phoneAsleep && !connection.getLink().isSpectator()) {
             // waiting for a sleeping phone to wake: another sleep mode instead - let it sleep on, queue the new one
             disconnect();
-            if (!phone.isEmpty()) fleetRequest(phone, mode, power.checkIntervalMin, pressed);
+            if (!phone.isEmpty()) fleetRequest(phone, mode, power.intervalFor(mode), pressed);
+            showIntervalFor(mode == ControlLink.POWER_OVERWATCH);
             return;
         }
         if (connection == null) {
             // 1.0.52 (the pilot): the mode changes without connecting - queued, sent when the phone next listens
-            if (!phone.isEmpty() && !ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) fleetRequest(phone, mode, power.checkIntervalMin, pressed);
+            if (!phone.isEmpty() && !ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) fleetRequest(phone, mode, power.intervalFor(mode), pressed);
+            if (mode != ControlLink.POWER_STANDBY) showIntervalFor(mode == ControlLink.POWER_OVERWATCH);
             return;
         }
         if (fcArmedNow()) {
@@ -3169,9 +3234,11 @@ public class MainWindow extends JFrame {
         power.askedAt = MonoClock.ms();
         power.sentAt = 0;
         int build = connection.getLink().getTelemetry().getPhonePcBuild();
-        power.sentIntervalMin = SleepCheck.forPhone(power.checkIntervalMin, build);
-        if (mode != ControlLink.POWER_STANDBY && power.sentIntervalMin != power.checkIntervalMin) {
-            logLine("CHECK EVERY 0 min needs phone app 2.3.0-pc." + SleepCheck.ALWAYS_MIN_PC_BUILD
+        int wantedInterval = power.intervalFor(mode);
+        if (mode != ControlLink.POWER_STANDBY) showIntervalFor(mode == ControlLink.POWER_OVERWATCH);
+        power.sentIntervalMin = SleepCheck.forPhone(wantedInterval, build);
+        if (mode != ControlLink.POWER_STANDBY && power.sentIntervalMin != wantedInterval) {
+            logLine("CHECK EVERY Constant needs phone app 2.3.0-pc." + SleepCheck.ALWAYS_MIN_PC_BUILD
                     + " (it has " + (build < 0 ? "an older one" : "pc." + build) + "): " + power.sentIntervalMin + " min instead.");
         }
         String listens = PowerController.listensText(power.sentIntervalMin);
@@ -3422,6 +3489,8 @@ public class MainWindow extends JFrame {
         int mode = chosenPowerMode();
         ((TacticalButton) deepSleepButton).setCurrent(mode == ControlLink.POWER_DEEP_SLEEP);
         ((TacticalButton) overwatchButton).setCurrent(mode == ControlLink.POWER_OVERWATCH);
+        // CHECK EVERY follows the mode it is in (1.0.56: OVERWATCH and DEEP SLEEP keep their own)
+        if (mode == ControlLink.POWER_OVERWATCH || mode == ControlLink.POWER_DEEP_SLEEP) showIntervalFor(mode == ControlLink.POWER_OVERWATCH);
         refreshQueued();
     }
 
@@ -3548,7 +3617,8 @@ public class MainWindow extends JFrame {
         }
         if (!shown(powerRow)) show(powerRow, true);
         sleepFold.setShown(true, true);
-        standbyButton.setEnabled(false);
+        standbyButton.setEnabled(true); // 1.0.56 (the pilot): STANDBY at its next check
+        showStandbyButton(true);
         deepSleepButton.setEnabled(true); // another mode is queued for its next check; the same one is said to be on
         overwatchButton.setEnabled(true);
         checkIntervalCombo.setEnabled(true);
@@ -3572,9 +3642,31 @@ public class MainWindow extends JFrame {
         if (shown(powerRow) != on) show(powerRow, on);
         if (!on) return;
         sleepFold.setShown(true, true);
+        int m = chosenPowerMode(); // asleep as its own word or the fleet's says: STANDBY too (1.0.56)
+        boolean sleeping = m == ControlLink.POWER_DEEP_SLEEP || m == ControlLink.POWER_OVERWATCH;
+        standbyButton.setEnabled(sleeping);
+        showStandbyButton(sleeping);
         deepSleepButton.setEnabled(true);
         overwatchButton.setEnabled(true);
         checkIntervalCombo.setEnabled(true);
+    }
+
+    /**
+     * The chosen phone, when its overwatch alert is on the map (1.0.56, the pilot: PILOT UAV on it does what the alert's
+     * CONNECT does - wakes it at once over the overwatch link); null otherwise, or not as pilot.
+     */
+    private String alertingChosen() {
+        if (!ROLE_PILOT.equals(roleCombo.getSelectedItem())) return null;
+        List<String> alerting = new ArrayList<>();
+        for (OverwatchHub.View v : overwatch.views()) alerting.add(v.drone());
+        return alertingDrone(config.getString(Names.PHONE_NAME_KEY), alerting);
+    }
+
+    /** The phone as its alert names it, if one of these alerting drones is it (any case); else null. */
+    static String alertingDrone(String phone, List<String> alerting) {
+        if (phone == null || phone.isEmpty()) return null;
+        for (String d : alerting) if (d.equalsIgnoreCase(phone)) return d;
+        return null;
     }
 
     /** PILOT UAV on a sleeping phone: connect as its pilot; the link answers its next check "wake". */
@@ -3882,6 +3974,15 @@ public class MainWindow extends JFrame {
                 kind = MapView.Kind.ACTIVE;
                 doing = (Boolean.TRUE.equals(p.armed()) ? "ARMED - " : "") + (p.flown() ? "FLOWN" + (pilot == null ? "" : " BY " + pilot) : "IDLE");
             }
+            // a mode queued here shows at once (1.0.56, the pilot): not the question mark while the phone takes it
+            FleetManager.Wanted queuedMode = fleets == null ? null : fleets.manager().wanted(d.name());
+            if (queuedMode != null && !Boolean.TRUE.equals(p.armed())) {
+                FleetCards.Badge b = FleetCards.withQueued(new FleetCards.Badge(kind, ""), queuedMode.mode());
+                if (b.kind() != kind || !b.text().isEmpty()) {
+                    kind = b.kind();
+                    doing = PowerController.modeWord(queuedMode.mode()) + " - QUEUED";
+                }
+            }
             Long crashedAt = crashed.get(d.name());
             if (crashedAt != null && d.at() > crashedAt + 2000) {
                 clearCrashed(d.name(), "heard again"); // its phone answers: not gone after all
@@ -4110,7 +4211,8 @@ public class MainWindow extends JFrame {
                         : "<html>Waking - " + alive + "The phone takes it at its next check, in " + in + ", then its camera starts.</html>");
                 // waiting for it to wake (REGAINING CONTROL): the other sleep mode instead is queued, the same one is
                 // said to be on already
-                standbyButton.setEnabled(false);
+                standbyButton.setEnabled(true); // 1.0.56: STANDBY instead, queued for its next check
+                showStandbyButton(true);
                 deepSleepButton.setEnabled(true);
                 overwatchButton.setEnabled(true);
                 checkIntervalCombo.setEnabled(true);
@@ -4156,6 +4258,7 @@ public class MainWindow extends JFrame {
                     + "OVERWATCH sleeps with the camera watching.</html>");
         }
         boolean idle = ready && power.wanted == ControlLink.POWER_NORMAL && reported <= 0;
+        showStandbyButton(false); // connected: STANDBY MODE is the top button
         standbyButton.setEnabled(idle && !fcArmedNow());
         deepSleepButton.setEnabled(idle && !fcArmedNow());
         overwatchButton.setEnabled(idle && !fcArmedNow());

@@ -87,7 +87,9 @@ final class FleetManagementPanel extends JPanel {
     private final JScrollPane scroll;
     private final JComponent empty;
     private final Map<String, RowView> views = new LinkedHashMap<>();
+    /** CHECK EVERY per phone, chosen or as it slept: DEEP SLEEP's and OVERWATCH's apart (1.0.56: their defaults differ). */
     private final Map<String, Integer> intervals = new HashMap<>();
+    private final Map<String, Integer> overwatchIntervals = new HashMap<>();
     private final Detail detail = new Detail();
     private final JButton standby = button("STANDBY", "Camera off, back in about 2 s at CONNECT");
     private final JButton sleep = button("DEEP SLEEP", "Sleeps; checks in at CHECK EVERY");
@@ -276,8 +278,11 @@ final class FleetManagementPanel extends JPanel {
                 changed = true;
             }
             v.card = c;
-            if (!intervals.containsKey(c.name()) && c.intervalMin() > 0) {
-                for (int i : INTERVALS) if (i == c.intervalMin()) intervals.put(c.name(), i);
+            // as it sleeps now (an awake phone's own number is only its last one: the mode's default goes instead)
+            Map<String, Integer> asItSleeps = "OVERWATCH".equals(c.badge()) && c.queued() == null ? overwatchIntervals
+                    : "ASLEEP".equals(c.badge()) && c.queued() == null ? intervals : null;
+            if (asItSleeps != null && !asItSleeps.containsKey(c.name()) && c.intervalMin() > 0) {
+                for (int i : INTERVALS) if (i == c.intervalMin()) asItSleeps.put(c.name(), i);
             }
         }
         if (views.keySet().retainAll(names)) changed = true;
@@ -318,20 +323,36 @@ final class FleetManagementPanel extends JPanel {
         return v == null ? null : v.card;
     }
 
-    private int interval() {
-        return selected == null ? 5 : intervals.getOrDefault(selected, 5);
+    /** The selected phone's CHECK EVERY for this mode: chosen, as it sleeps, else the mode's default. */
+    private int interval(int mode) {
+        boolean ow = mode == ControlLink.POWER_OVERWATCH;
+        int def = PowerController.defaultInterval(mode);
+        return selected == null ? def : (ow ? overwatchIntervals : intervals).getOrDefault(selected, def);
+    }
+
+    /** The mode EVERY shows and sets: OVERWATCH while the phone overwatches (or is queued to), else DEEP SLEEP. */
+    private int everyMode() {
+        FleetCards.Card c = selectedCard();
+        String now = c == null ? null : c.queued() != null ? c.queued() : c.badge();
+        return "OVERWATCH".equals(now) ? ControlLink.POWER_OVERWATCH : ControlLink.POWER_DEEP_SLEEP;
+    }
+
+    /** EVERY's words: "CONSTANT" (1.0.56: was "EVERY 0M"), else "EVERY 5M". */
+    static String everyText(int intervalMin) {
+        return SleepCheck.isAlways(intervalMin) ? "CONSTANT" : "EVERY " + intervalMin + "M";
     }
 
     private void mode(int mode) {
-        if (selected != null) actions.mode(selected, mode, interval());
+        if (selected != null) actions.mode(selected, mode, interval(mode));
     }
 
     private void nextInterval() {
         if (selected == null) return;
-        int now = interval(), i = 0;
+        int mode = everyMode();
+        int now = interval(mode), i = 0;
         while (i < INTERVALS.length && INTERVALS[i] != now) i++;
         int next = INTERVALS[(i + 1) % INTERVALS.length];
-        intervals.put(selected, next);
+        (mode == ControlLink.POWER_OVERWATCH ? overwatchIntervals : intervals).put(selected, next);
         refreshStrip();
         FleetCards.Card c = selectedCard();
         // a sleeping phone gets the new interval at its next check-in; an awake one keeps it for the next press
@@ -343,7 +364,7 @@ final class FleetManagementPanel extends JPanel {
     /** The strip follows the selected phone: its buttons usable or not, its mode (or the queued one) lit. */
     private void refreshStrip() {
         FleetCards.Card c = selectedCard();
-        every.setText("EVERY " + (SleepCheck.isAlways(interval()) ? "0" : interval()) + "M");
+        every.setText(everyText(interval(everyMode())));
         boolean usable = c != null && c.note() == null;
         String now = c == null ? null : c.queued() != null ? c.queued() : c.badge();
         mark(standby, usable, "STANDBY".equals(now));
