@@ -18,6 +18,9 @@ public class Main {
     private static volatile boolean quit = false;
 
     public static void main(String[] args) throws Exception {
+        // Java2D's Direct3D pipeline hung the window in the driver (D3DRenderQueue.flushBuffer, three times on
+        // 2026-11-09: after a while of video and on coming back from alt-tab); before any AWT class loads
+        if (System.getProperty("sun.java2d.d3d") == null) System.setProperty("sun.java2d.d3d", "false");
         String command = args.length > 0 ? args[0] : "gui";
         // "--after <pid>": started by Reset setup - wait for the old window to have gone (its ports, its settings file)
         for (int i = 1; i + 1 < args.length; i++) {

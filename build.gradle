@@ -119,6 +119,7 @@ tasks.register('packageApp', Exec) {
             '--main-jar', "draupne-link-${version}.jar",
             '--main-class', 'de.droiddrone.pc.Main',
             '--java-options', '-Dfile.encoding=UTF-8',
+            '--java-options', '-Dsun.java2d.d3d=false',
             '--dest', appImageDir
     // the virtual fleet's starter next to the exe (zip and installer): "DRAUPNE Link.exe" fleet
     doLast {
