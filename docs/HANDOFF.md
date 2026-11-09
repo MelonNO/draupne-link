@@ -6,6 +6,16 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-09, 1.0.52 + phone app 2.3.0-pc.40 released; last flown: 1.0.43)
 
+- **Unreleased on main (2026-11-09, review round, to be 1.0.53 + phone pc.41):** see CHANGELOG "Unreleased". The approach
+  watch is `flight-app/overlay/Common/.../Looming.java` (called from `MotionDetector.process`, day only, its boxes added
+  after the tracks'); its tests `MotionDetectorTest` (woodsEdge, Approacher in `SyntheticScene`), `pc/fleet/ApproachDetectionTest`
+  (`Scene.addApproacher`), `MotionDetectorPerfTest`. Tuned on made-up pictures only: check it on real footage of
+  wind in trees and of someone walking at the camera before trusting the false-alarm rate. The phone app changed
+  (Looming, MotionDetector, SavedPacket, Msp standby): a pc.41 APK is needed at the release. Not done, ranked in the
+  review: MainWindow split (PowerController, FleetController, TourHost, DetectionController...), `TierPolicy` out of
+  ControlLink, one shared packet-id class, `SetupPlanner` out of DroneSetup, Udp.java split, tick-counted timers in
+  ReceiverBuffer/Msp to real time.
+
 - **1.0.52 + phone pc.40 (2026-11-09):** fleet management (queued modes over check-ins), the three-button LINK card, previous flights, pins sheet, CRASHED, the setup round (new drone, Betaflight in two steps, orientation/compass check, RESET SETUP), the rebuilt tour with the BTR finale and Overwatch demo, the virtual fleet in the simulation world (BTR, soldier, real sounds), faster motion detection with colour, scaling fixes. Details in CHANGELOG 1.0.52. Untried on hardware: the accelerometer calibration, board alignment APPLY, align_mag, queued modes on real phones, colour detection on a real camera. Known flakes: SpectatorTest congestion, VideoTest held key frame, OverwatchFleetEndToEndTest.lostArmed (re-run alone).
 
 - **1.0.51 (PC only, 2026-11-08):** README rewritten short and up to date; no visible "4G" left in the PC app (COVERAGE, Net loss, "5G and mobile"). Phone app unchanged (pc.39 pinned).

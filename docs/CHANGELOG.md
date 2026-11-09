@@ -2,6 +2,22 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## Unreleased (to be 1.0.53 + phone pc.41)
+
+A full review round: every area read, bugs fixed with a test each, perf tests added. Nothing of it run on a drone or a real phone yet.
+
+- **Motion detection finds someone coming straight at the camera** (the pilot: "a person moving from inside the woods directly towards the camera"): `Looming`, a slow second look at the same pictures - what stays changed and grows smoothly where it stands. Found about 18 m off in the tests (a camouflaged walker in grey, the virtual fleet's soldier on the ground and up a pole); never before. Inside swaying leaves a person can't be told from the leaves by brightness: found once out of them.
+- **No colour in the detection any more** (the pilot: other cameras have none; people and vehicles wear the surroundings' colours): the colour fill and the green score are gone. A car of exactly the ground's brightness is lost over ground of its own brightness.
+- **Drone setup:** ARM moved off the PREARM switch could share a slot with PREARM and be lost; arming without a GPS fix only written where Betaflight has the setting (a refusal stopped the whole write).
+- **Settings:** a key written twice in the file lost its change at the next start.
+- **PowerShell quoting:** a typographic quote in a path broke the updater, Tailscale install and shortcuts.
+- **Link:** resends and gap waits ran on the wall clock (a clock set back stopped every resend; both apps); the name scan too; AUTO went to SHARP on a new link's first tick; a cut overwatch CLIP packet threw on the hub thread.
+- **Video:** a recording that failed at its start stayed open and locked; playback read an unknown heading as -1 degrees; the two known flaky video tests fixed (their timing).
+- **Map / GUI:** the warning beep queued a backlog on a flapping link; a pin name with a line break wiped pins.txt; a control character wiped graphics.kml; windows restored off-screen after monitors moved; profile labels.
+- **Phone:** standby stopped reading the FC's status 8 times in 10 (armed read UNKNOWN, no idle sticks).
+- **Virtual fleet:** cheaper frames (the sky drawn once).
+- New tests: protocol fuzzing, packet-code collisions across apps, link/video/paint/detection performance budgets, map maths, KML, window bounds, and more.
+
 ## 1.0.52
 
 With phone app DRAUPNE Flight 2.3.0-pc.40. Nothing of it run on a drone or a real phone yet.
