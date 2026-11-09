@@ -63,7 +63,8 @@ class OsdRecorderTest {
             pipeline.onVideoFragment(p.keyFrame(), ++n, 0, d.length, d, 0, d.length);
             Thread.sleep(25); // the phone's pace, about
         }
-        Thread.sleep(300);
+        long end = System.currentTimeMillis() + 3000; // the record thread opens the file, the copy's thread starts on it
+        while ((pipeline.recordingFile() == null || !recording[0]) && System.currentTimeMillis() < end) Thread.sleep(5);
         Path raw = pipeline.recordingFile();
         assertNotNull(raw);
         assertTrue(recording[0], "the screen is told to keep the OSD's figures");

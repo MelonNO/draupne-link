@@ -890,15 +890,15 @@ class VideoTest {
         try (VideoPipeline p = new VideoPipeline(screen, () -> 40)) {
             p.onVideoConfig(320, 240, false, false, a.codecConfig());
             feed(p, a, 0, 10, 1);
-            assertTrue(waitFor(() -> screen.presented.get() >= 1, 2000), "the first stream shows");
             assertTrue(waitFor(() -> p.framesDone() >= 10, 5000), "the decode thread is done with the 10 frames");
             int shown = screen.presented.get();
+            assertTrue(shown >= 1, "the first stream shows");
             feed(p, b, 0, 1, 1); // the new stream's key frame 1, before its config
             Thread.sleep(300);
             assertEquals(shown, screen.presented.get(), "not decoded under the old config");
             assertEquals(1, screen.starts.size());
             p.onVideoConfig(160, 120, false, false, b.codecConfig());
-            assertTrue(waitFor(() -> screen.presented.get() > shown, 2000), "the held key frame shows once its config is in");
+            assertTrue(waitFor(() -> screen.presented.get() > shown, 5000), "the held key frame shows once its config is in");
             assertEquals(2, screen.starts.size());
             assertArrayEquals(new int[]{160, 120}, screen.starts.get(1));
         }
@@ -912,16 +912,16 @@ class VideoTest {
         try (VideoPipeline p = new VideoPipeline(screen, () -> 40)) {
             p.onVideoConfig(320, 240, false, false, a.codecConfig());
             feed(p, a, 0, 10, 1);
-            assertTrue(waitFor(() -> screen.presented.get() >= 1, 2000));
             // the decode thread may still be drawing frames 2-10 (T1): waited for until it is done with them - a count
-            // still for 300 ms (settled) wasn't, on a loaded PC
+            // still for 300 ms (settled) wasn't, on a loaded PC; nor was 2 s for the first picture
             assertTrue(waitFor(() -> p.framesDone() >= 10, 5000), "the decode thread is done with the 10 frames");
             int shown = screen.presented.get();
+            assertTrue(shown >= 1, "the first stream shows");
             feed(p, a, 5, 6, 1); // "restarted": key frame 1 again (the same size, so it decodes under the old config)
             Thread.sleep(VideoPipeline.CONFIG_WAIT_MS + 200);
             assertEquals(shown, screen.presented.get(), "held");
             feed(p, a, 6, 7, 2);
-            assertTrue(waitFor(() -> screen.presented.get() > shown, 2000), "released with the next frame");
+            assertTrue(waitFor(() -> screen.presented.get() > shown, 5000), "released with the next frame");
             assertEquals(1, screen.starts.size());
         }
     }
@@ -947,7 +947,7 @@ class VideoTest {
             feed(p, a, 6, 7, 2); // lets the held key frame go, with this frame behind it
             assertEquals(0, p.decoderBehindDrops(), "not taken for a decoder behind");
             screen.gate.countDown();
-            assertTrue(waitFor(() -> screen.presented.get() >= shown + 2, 2000), "frame 10, then the restart's second frame");
+            assertTrue(waitFor(() -> screen.presented.get() >= shown + 2, 5000), "frame 10, then the restart's second frame");
             assertEquals(1, screen.starts.size());
         }
     }

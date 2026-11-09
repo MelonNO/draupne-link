@@ -33,8 +33,7 @@ class StreamRecorderTest {
             byte[] d = p.data();
             pipeline.onVideoFragment(p.keyFrame(), ++n, 0, d.length, d, 0, d.length); // each frame in one packet
         }
-        Thread.sleep(300);
-        Path file = pipeline.recordingFile();
+        Path file = fileOf(pipeline);
         assertNotNull(file, "a file was started at the first key frame");
         pipeline.stopRecording();
         pipeline.close();
@@ -94,13 +93,13 @@ class StreamRecorderTest {
         pipeline.startRecording(dir);
         pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
         short n = 0;
+        long end = System.currentTimeMillis() + 5000;
         for (TestStreams.Packet p : s.packets()) {
             byte[] d = p.data();
             pipeline.onVideoFragment(p.keyFrame(), ++n, 0, d.length, d, 0, d.length);
-            Thread.sleep(15); // paced, so every frame is drawn
+            while (pipeline.framesDone() < n && System.currentTimeMillis() < end) Thread.sleep(2); // one at a time: every frame drawn
         }
-        Thread.sleep(300);
-        Path file = pipeline.recordingFile();
+        Path file = fileOf(pipeline);
         assertNotNull(file);
         pipeline.stopRecording();
         pipeline.close();
@@ -121,6 +120,13 @@ class StreamRecorderTest {
             assertEquals("", cols[2], "no telemetry: empty, not NaN");
         }
         assertTrue(last < 2000, "the MKV's clock: ms from the first key frame, " + last);
+    }
+
+    /** The file being written, once the record thread has opened it (up to 3 s). */
+    private static Path fileOf(VideoPipeline pipeline) throws InterruptedException {
+        long end = System.currentTimeMillis() + 3000;
+        while (pipeline.recordingFile() == null && System.currentTimeMillis() < end) Thread.sleep(5);
+        return pipeline.recordingFile();
     }
 
     /** The frames in an MKV file and its picture width. */
