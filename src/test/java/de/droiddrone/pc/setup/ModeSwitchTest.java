@@ -514,4 +514,60 @@ class ModeSwitchTest {
         assertNotNull(ModeSwitch.readBackProblem(sent, aux("aux 0 0 13 1700 2100 0 0", "aux 1 13 13 1700 2100 0 0")));
         assertNotNull(ModeSwitch.readBackProblem(sent, "# aux\n"), "a slot missing from the list");
     }
+
+    /** The CLI's "aux" text for slots (what Betaflight would list after a write). */
+    private static String listed(List<ModeSwitch.Slot> slots) {
+        StringBuilder sb = new StringBuilder();
+        for (ModeSwitch.Slot s : slots) sb.append(ModeSwitch.auxCommand(s.index(), s.mode(), s.channel(), s.start(), s.end(), 7)).append('\n');
+        return sb.toString();
+    }
+
+    /**
+     * Review 1.0.53: ARM moved off AUX3 to AUX1 while PREARM is put on AUX3 - the old ARM slot was cleared twice (as
+     * "something else on the PREARM switch" and as "ARM on another switch") and counted free twice, so ARM and PREARM
+     * were both written into that one slot: PREARM over ARM, and no ARM switch at all.
+     */
+    @Test
+    void armMovedOffThePrearmSwitchKeepsBothInSlotsOfTheirOwn() {
+        String before = aux("aux 0 0 2 1700 2100 0 0");
+        ModeSwitch.Plan p = ModeSwitch.plan(before, ALL, java.util.Map.of(), null, 0, 1, 3);
+        assertNull(p.armProblem());
+        assertNull(p.prearmProblem());
+        String after = listed(ModeSwitch.after(ModeSwitch.slots(before), p.commands()));
+        assertEquals(Set.of(1), ModeSwitch.armAuxes(after), "ARM on AUX1 after the write: " + p.commands());
+        assertEquals(Set.of(3), ModeSwitch.prearmAuxes(after), "PREARM on AUX3: " + p.commands());
+        assertEquals(1, p.commands().stream().filter(c -> c.equals("aux 0 0 0 900 900 0 0")).count(), "cleared once: " + p.commands());
+    }
+
+    /** Every plan, whatever was read and chosen: each slot is written at most once after its clear, and ARM ends up where chosen. */
+    @Test
+    void noPlanWritesTwoModesIntoOneSlot() {
+        for (int armRead = -1; armRead < 8; armRead++) {
+            for (int prearmRead = -1; prearmRead < 8; prearmRead++) {
+                List<String> lines = new java.util.ArrayList<>();
+                if (armRead >= 0) lines.add("aux 0 0 " + armRead + " 1700 2100 0 0");
+                if (prearmRead >= 0) lines.add("aux 1 36 " + prearmRead + " 1700 2100 0 0");
+                lines.add("aux 2 2 2 1300 1700 0 0");
+                String read = aux(lines.toArray(new String[0]));
+                for (int armAux = 0; armAux <= ModeSwitch.MAX_AUX; armAux++) {
+                    for (int prearmAux = 0; prearmAux <= ModeSwitch.MAX_AUX; prearmAux++) {
+                        for (ModeSwitch modes : new ModeSwitch[]{null, ModeSwitch.DEFAULT}) {
+                            ModeSwitch.Plan p = ModeSwitch.plan(read, ALL, java.util.Map.of(), modes, 4, armAux, prearmAux, ModeSwitch.BEEPER_AUX);
+                            String where = "ARM read " + armRead + ", PREARM read " + prearmRead + ", ARM " + armAux + ", PREARM "
+                                    + prearmAux + ", modes " + modes + ": " + p.commands();
+                            java.util.Map<Integer, Integer> fills = new java.util.HashMap<>();
+                            for (String c : p.commands()) {
+                                ModeSwitch.Slot s = ModeSwitch.slots(c).get(0);
+                                if (s.used()) assertNull(fills.put(s.index(), s.mode()), "slot " + s.index() + " filled twice - " + where);
+                            }
+                            String after = listed(ModeSwitch.after(ModeSwitch.slots(read), p.commands()));
+                            if (armAux > 0 && p.armProblem() == null && p.problem() == null && !p.commands().isEmpty()) {
+                                assertTrue(ModeSwitch.armAuxes(after).contains(armAux), "ARM on AUX" + armAux + " - " + where);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
