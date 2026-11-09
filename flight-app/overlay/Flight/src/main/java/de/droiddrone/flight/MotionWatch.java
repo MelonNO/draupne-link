@@ -23,6 +23,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import de.droiddrone.common.AnalysisSize;
 import de.droiddrone.common.MotionDetector;
 import de.droiddrone.common.MotionRecord;
 import de.droiddrone.common.PacketIds;
@@ -54,7 +55,7 @@ final class MotionWatch {
     static final long REQUEST_FRESH_MS = 5000;
     /** Pictures this far apart at least (8 a second at most). */
     static final long FRAME_EVERY_MS = 125;
-    /** Pictures are taken at most this wide (the detector works at half that). */
+    /** Pictures are taken at most this wide (the detector works at half that); a wider camera picture is averaged down. */
     static final int MAX_WIDTH = 320;
     /** No picture for this long while analysing: the record says NO_PICTURE. */
     static final long NO_PICTURE_MS = 3000;
@@ -171,7 +172,9 @@ final class MotionWatch {
             int iw = image.getWidth(), ih = image.getHeight();
             int step = Math.max(1, (iw + MAX_WIDTH - 1) / MAX_WIDTH);
             size(iw / step & ~1, ih / step & ~1);
-            copyPlane(p[0].getBuffer(), p[0].getRowStride(), p[0].getPixelStride(), step, y, width, height);
+            // pc.43: the luma averaged over each step x step block - a phone with no small picture of the video's shape
+            // gives 1280x720 or more (AnalysisSize), and one pixel in 16 flickers with the lens's stabiliser
+            AnalysisSize.shrink(p[0].getBuffer(), p[0].getRowStride(), p[0].getPixelStride(), step, y, width, height);
             copyPlane(p[1].getBuffer(), p[1].getRowStride(), p[1].getPixelStride(), step, u, width / 2, height / 2);
             copyPlane(p[2].getBuffer(), p[2].getRowStride(), p[2].getPixelStride(), step, v, width / 2, height / 2);
         } catch (RuntimeException e) { // a picture closed under us, a plane of another layout: this one is skipped
@@ -191,7 +194,7 @@ final class MotionWatch {
             try {
                 int step = Math.max(1, (frameWidth + MAX_WIDTH - 1) / MAX_WIDTH);
                 size(frameWidth / step & ~1, frameHeight / step & ~1);
-                copyPlane(frame, frameWidth, 1, step, y, width, height);
+                AnalysisSize.shrink(frame, frameWidth, 1, step, y, width, height); // pc.43: averaged, as the internal camera's
                 // NV21: after the luma, V and U by turns at half size each way
                 ByteBuffer vu = frame.duplicate();
                 vu.position(frameWidth * frameHeight);
