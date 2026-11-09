@@ -190,28 +190,6 @@ public class ControlLink {
      */
     static final byte VIDEO_PROFILE = PacketIds.VIDEO_PROFILE;
     static final int PROFILE_KEY_FRAMES_TWICE = 1, PROFILE_GROUP_PARITY = 2, PROFILE_AVC = 4;
-    /** The bitrate at or under which bad coverage mode goes to the survival tier (after LOW_RES_AFTER_MS). */
-    static final int SURVIVAL_BPS = 250_000;
-    /** Bad coverage mode has to have had this long before the survival tier is judged. */
-    static final long SURVIVAL_AFTER_MS = 5000;
-    /** AUTO goes to bad coverage when the phone's bitrate stays at or under LOW_RES_BPS for LOW_RES_AFTER_MS... */
-    static final int LOW_RES_BPS = 500_000;
-    static final long LOW_RES_AFTER_MS = 5000;
-    /** ...or the link stalls (no pong for STALL_EVENT_MS) STALLS_FOR_ROBUST times within STALLS_WINDOW_MS. */
-    static final long STALL_EVENT_MS = 500;
-    static final int STALLS_FOR_ROBUST = 3;
-    static final long STALLS_WINDOW_MS = 30_000;
-    /** Back to normal after this long calm in bad coverage mode; doubled (up to 5 min) when it had to go back soon. */
-    static final long ROBUST_HOLD_MS = 20_000;
-    private static final long MAX_ROBUST_HOLD_MS = 300_000;
-    /**
-     * AUTO goes to the sharp tier after this long calm (no stall) at the normal top bitrate; doubled (up to 5 min)
-     * when it had to leave the sharp tier within a minute, back to this after a sharp spell that lasted.
-     */
-    static final long SHARP_AFTER_MS = 20_000;
-    /** The sharp tier ends when the phone's bitrate sat under the normal top for this long: the link can't carry it. */
-    static final long SHARP_DROP_MS = 5000;
-
     /** Upstream's Control app asks for the stream every 2.5 s until the codec config arrives. */
     private static final int START_VIDEO_RETRY_MS = 2500;
     /**
@@ -290,23 +268,9 @@ public class ControlLink {
     private final FcTelemetry telemetry = new FcTelemetry();
     private volatile long lastKeyFrameRequest;
     private final AtomicLong keyFrameRequests = new AtomicLong();
-    /** Bad coverage mode or the survival tier (see VideoMode, Tier). */
-    private volatile Tier tier = Tier.NORMAL;
+    /** The video tier and AUTO's choice of it (see VideoMode, Tier). */
+    private final TierPolicy tierPolicy = new TierPolicy();
     private volatile VideoMode videoMode;
-    private long lowRateSince = -1;
-    private long survivalRateSince = -1;
-    private long tierSince;
-    private final java.util.ArrayDeque<Long> stalls = new java.util.ArrayDeque<>();
-    private boolean inStall;
-    private long robustSince;
-    private long lastCalmEnd;
-    private long robustHoldMs = ROBUST_HOLD_MS;
-    private long leftRobustAt = -1;
-    private long sharpHoldMs = SHARP_AFTER_MS;
-    /** Since when the phone's bitrate has been under the normal top (-1: it isn't), for the sharp tier's end. */
-    private long belowTopSince = -1;
-    /** Since when this PC's decoder hasn't kept up with the sharp picture (decodeLoad over 1); -1 = it keeps up. */
-    private long decodeSlowSince = -1;
     private int profileSends;
     private long nextProfileSend;
     private int configResends;
@@ -1248,7 +1212,7 @@ public class ControlLink {
 
     /** The camera width asked for: the sharp tier's, as set, the bad coverage size, or the survival tier's. */
     int cameraWidth() {
-        return switch (tier) {
+        return switch (getTier()) {
             case SHARP -> config.getSharpWidth();
             case NORMAL -> config.getCameraWidth();
             case ROBUST -> Math.min(ROBUST_WIDTH, config.getCameraWidth() * 3 / 4) / 2 * 2;
@@ -1257,7 +1221,7 @@ public class ControlLink {
     }
 
     int cameraHeight() {
-        return switch (tier) {
+        return switch (getTier()) {
             case SHARP -> config.getSharpHeight();
             case NORMAL -> config.getCameraHeight();
             case ROBUST -> Math.min(ROBUST_HEIGHT, config.getCameraHeight() * 3 / 4) / 2 * 2;
@@ -1267,7 +1231,7 @@ public class ControlLink {
 
     /** The camera's frame rate asked for: steady 30, 15 in the survival tier (twice the bits per frame). */
     int cameraFps() {
-        return tier == Tier.SURVIVAL ? SURVIVAL_FPS : CAMERA_FPS;
+        return getTier() == Tier.SURVIVAL ? SURVIVAL_FPS : CAMERA_FPS;
     }
 
     /** SETTINGS > Video, also while connected. */
@@ -1285,14 +1249,14 @@ public class ControlLink {
      * in the sharp tier, else the set limit.
      */
     public int maxBitrateStep() {
-        if (tier == Tier.SURVIVAL) return SURVIVAL_MAX_STEP;
-        if (tier == Tier.ROBUST) return ROBUST_MAX_STEP;
+        if (getTier() == Tier.SURVIVAL) return SURVIVAL_MAX_STEP;
+        if (getTier() == Tier.ROBUST) return ROBUST_MAX_STEP;
         return stepFor(bitrateLimitMbps());
     }
 
     /** The bitrate limit the tier allows, Mbit/s: the sharp tier's or the set one (the config packet carries it). */
     int bitrateLimitMbps() {
-        return tier == Tier.SHARP ? config.getSharpBitrateLimitMbps() : config.getBitrateLimitMbps();
+        return getTier() == Tier.SHARP ? config.getSharpBitrateLimitMbps() : config.getBitrateLimitMbps();
     }
 
     /** The highest step at or under a limit in Mbit/s. */
@@ -1311,7 +1275,7 @@ public class ControlLink {
 
     /** Tests: AUTO's wait before the sharp tier. */
     void setSharpAfterMsForTest(long ms) {
-        sharpHoldMs = ms;
+        tierPolicy.setSharpAfterMs(ms);
     }
 
     /**
@@ -1333,7 +1297,7 @@ public class ControlLink {
         // did the phone really switch? Its new stream says (2026-11-01: a switch back to 720p never happened, and PC
         // and phone disagreed for 3 minutes). If not, the size goes out again
         if (verifyFrom >= 0 && now >= verifyFrom) {
-            boolean switched = videoWidth > 0 && switch (tier) {
+            boolean switched = videoWidth > 0 && switch (getTier()) {
                 case SHARP -> videoWidth >= config.getSharpWidth();
                 case NORMAL -> videoWidth >= config.getCameraWidth()
                         && (config.getSharpWidth() <= config.getCameraWidth() || videoWidth < config.getSharpWidth());
@@ -1352,98 +1316,13 @@ public class ControlLink {
             }
         }
         if (spectator != null) return;
-        // stalls: no pong for STALL_EVENT_MS, counted once each
-        long sincePong = msSinceLastPong();
-        boolean stalled = sincePong > STALL_EVENT_MS;
-        if (stalled && !inStall) stalls.addLast(now);
-        inStall = stalled;
-        while (!stalls.isEmpty() && now - stalls.peekFirst() > STALLS_WINDOW_MS) stalls.pollFirst();
-        if (stalled) lastCalmEnd = now;
-        int bps = telemetry.getPhoneTargetBitRate();
-        lowRateSince = bps > 0 && bps <= LOW_RES_BPS ? (lowRateSince < 0 ? now : lowRateSince) : -1;
-        survivalRateSince = bps > 0 && bps <= SURVIVAL_BPS ? (survivalRateSince < 0 ? now : survivalRateSince) : -1;
-        VideoMode mode = videoMode();
-        int normalTopBps = de.droiddrone.pc.video.BitrateControl.STEPS_BPS[stepFor(config.getBitrateLimitMbps())];
-        belowTopSince = bps > 0 && bps < normalTopBps ? (belowTopSince < 0 ? now : belowTopSince) : -1;
-        Tier want;
-        String why;
-        Tier forced = mode.forced();
-        if (forced != null) { // a tier chosen: held, whatever the link
-            want = forced;
-            why = "VIDEO is " + mode.name();
-        } else if (tier == Tier.SHARP) {
-            // the sharp tier holds while the link carries it: a stall, a relay, or the bitrate under the normal top for
-            // SHARP_DROP_MS (the bitrate control had to step down) ends it - back to the normal picture first
-            boolean cantCarry = belowTopSince >= 0 && now - belowTopSince >= SHARP_DROP_MS;
-            // or this PC can't decode 1080p in real time (software decoding): the picture would drift late
-            VideoListener v = videoListener;
-            boolean slow = v != null && v.decodeLoad() > 1.0;
-            if (!slow) decodeSlowSince = -1;
-            else if (decodeSlowSince < 0) decodeSlowSince = now;
-            boolean cantDecode = decodeSlowSince >= 0 && now - decodeSlowSince >= SHARP_DROP_MS;
-            boolean watched = watched();
-            want = !stalls.isEmpty() || relayed || cantCarry || cantDecode || watched ? Tier.NORMAL : Tier.SHARP;
-            why = !stalls.isEmpty() ? "a stall" : relayed ? "relayed"
-                    : watched ? "a spectator: upload carries the picture"
-                    : cantDecode ? "decoder too slow"
-                    : "under " + normalTopBps / 1_000_000 + " Mbit/s for " + SHARP_DROP_MS / 1000 + " s";
-        } else if (tier == Tier.NORMAL) {
-            boolean lowRate = lowRateSince >= 0 && now - lowRateSince >= LOW_RES_AFTER_MS;
-            boolean stalls3 = stalls.size() >= STALLS_FOR_ROBUST;
-            if (lowRate || stalls3 || relayed) {
-                want = Tier.ROBUST;
-                why = lowRate ? "bitrate at " + bps / 1000 + " kbit/s"
-                        : stalls3 ? stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s" : "relayed";
-                if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) {
-                    robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2); // back too soon: stay longer next time
-                }
-            } else {
-                // calm at the normal top bitrate for sharpHoldMs, no stall in that time: the sharp tier (a phone that
-                // reports no bitrate setting never gets there)
-                boolean atTop = bps >= normalTopBps;
-                boolean calm = now - tierSince >= sharpHoldMs && now - lastCalmEnd >= sharpHoldMs && stalls.isEmpty();
-                want = sharpAvailable() && atTop && calm && !watched() ? Tier.SHARP : Tier.NORMAL;
-                why = "calm at " + normalTopBps / 1_000_000 + " Mbit/s for " + sharpHoldMs / 1000 + " s";
-            }
-        } else if (tier == Tier.ROBUST) {
-            // bad coverage mode isn't enough: the bitrate sits at the bottom or the stalls go on - the survival tier
-            boolean lowRate = survivalRateSince >= 0 && now - survivalRateSince >= LOW_RES_AFTER_MS;
-            boolean stalls3 = stalls.size() >= STALLS_FOR_ROBUST;
-            boolean worse = now - tierSince >= SURVIVAL_AFTER_MS && (lowRate || stalls3);
-            if (worse) {
-                want = Tier.SURVIVAL;
-                why = lowRate ? "still " + bps / 1000 + " kbit/s" : "still " + stalls.size() + " stalls";
-                if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2);
-            } else if (relayed) {
-                want = Tier.ROBUST;
-                why = "relayed";
-            } else {
-                // calm long enough in bad coverage mode: no stall, and the bitrate not struggling under its 1 Mbit/s
-                boolean calm = now - tierSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs
-                        && (bps <= 0 || bps > LOW_RES_BPS);
-                want = calm ? Tier.NORMAL : Tier.ROBUST;
-                why = "calm for " + robustHoldMs / 1000 + " s";
-            }
-        } else {
-            boolean calm = now - tierSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs;
-            want = calm ? Tier.ROBUST : Tier.SURVIVAL;
-            why = "calm for " + robustHoldMs / 1000 + " s";
-        }
-        if (want == tier) return;
-        Tier was = tier;
-        long held = now - tierSince;
-        tier = want;
-        tierSince = now;
-        belowTopSince = -1;
-        if (want.ordinal() > was.ordinal()) { // down
-            stalls.clear();
-            if (was == Tier.SHARP && forced == null) { // left within a minute: the next sharp spell waits longer; a spell that lasted: the usual wait
-                sharpHoldMs = held < 60_000 ? Math.min(MAX_ROBUST_HOLD_MS, sharpHoldMs * 2) : SHARP_AFTER_MS;
-            }
-        } else if (was.ordinal() >= Tier.ROBUST.ordinal()) {
-            leftRobustAt = now;
-        }
-        events.accept(tierMessage(want, was, why));
+        VideoListener v = videoListener;
+        TierPolicy.Link link = new TierPolicy.Link(msSinceLastPong(), telemetry.getPhoneTargetBitRate(),
+                de.droiddrone.pc.video.BitrateControl.STEPS_BPS[stepFor(config.getBitrateLimitMbps())], relayed, watched(),
+                v == null ? 0 : v.decodeLoad(), sharpAvailable());
+        TierPolicy.Change change = tierPolicy.tick(now, videoMode(), link);
+        if (change == null) return;
+        events.accept(tierMessage(change.to(), change.from(), change.why()));
         sendTier(now);
     }
 
@@ -1472,25 +1351,16 @@ public class ControlLink {
      * profile for the tier right after this, before the config.
      */
     private void decideForcedTier(long now) {
-        // a session (re)starts: nothing calm about the link has been seen yet (1.0.53: the calm counted from 0, and a
-        // phone already at the normal top went sharp on the first tick)
-        lastCalmEnd = now;
-        VideoMode mode = videoMode();
-        Tier forced = mode.forced();
-        if (forced != null && tier != forced) {
-            Tier was = tier;
-            tier = forced;
-            tierSince = now;
-            events.accept(tierMessage(forced, was, "VIDEO is " + mode.name()));
+        // a session (re)starts: TierPolicy counts the calm from now, and AUTO starts on the normal picture
+        TierPolicy.Change change = tierPolicy.sessionStart(now, videoMode());
+        if (change != null) {
+            events.accept(tierMessage(change.to(), change.from(), change.why()));
             if (isRobust()) { // its profile (key frames twice, parity) with the first config
                 profileSends = 2;
                 nextProfileSend = now + 700;
             }
             verifyFrom = videoListener == null ? -1 : now + VERIFY_AFTER_MS;
             verifyTries = 0;
-        } else if (forced == null && tier == Tier.SHARP) {
-            tier = Tier.NORMAL; // a new session starts on the normal picture and earns the sharp tier again
-            tierSince = now;
         }
     }
 
@@ -1528,11 +1398,11 @@ public class ControlLink {
 
     /** Bad coverage mode (or the survival tier) is on. */
     public boolean isRobust() {
-        return tier.ordinal() >= Tier.ROBUST.ordinal();
+        return getTier().ordinal() >= Tier.ROBUST.ordinal();
     }
 
     public Tier getTier() {
-        return tier;
+        return tierPolicy.tier();
     }
 
     /**

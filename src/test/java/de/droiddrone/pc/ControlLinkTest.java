@@ -444,7 +444,7 @@ class ControlLinkTest {
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         assertEquals(1280, phone.config.cameraWidth);
-        waitFor(() -> phone.config.cameraWidth == 640, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "640x360");
+        waitFor(() -> phone.config.cameraWidth == 640, (int) TierPolicy.LOW_RES_AFTER_MS + 3000, "640x360");
         assertTrue(link.isRobust());
         waitFor(() -> phone.videoProfile > 0 && (phone.videoProfile & 1) == 1, 2000, "key frames twice");
         assertEquals(ControlLink.ROBUST_MAX_STEP, link.maxBitrateStep(), "up to 1 Mbit/s");
@@ -471,7 +471,7 @@ class ControlLinkTest {
             link.setVideoListener(video, false);
             video.attach(link);
             link.start();
-            waitFor(() -> link.isRobust(), (int) ControlLink.LOW_RES_AFTER_MS + 4000, "switched down");
+            waitFor(() -> link.isRobust(), (int) TierPolicy.LOW_RES_AFTER_MS + 4000, "switched down");
             int after = phone.configs.size();
             waitFor(() -> phone.configs.size() >= after + 2, (int) ControlLink.VERIFY_AFTER_MS + 3000, "sent again");
             assertEquals(240, phone.configs.get(phone.configs.size() - 1).cameraWidth, "the small size again");
@@ -555,7 +555,7 @@ class ControlLinkTest {
         assertEquals(7, link.maxBitrateStep(), "up to 8 Mbit/s");
         assertEquals(0, phone.videoProfile, "no bad coverage flags in the sharp tier");
         phone.silent = true; // a stall: no pong for STALL_EVENT_MS, well under a link loss
-        Thread.sleep(ControlLink.STALL_EVENT_MS + 400);
+        Thread.sleep(TierPolicy.STALL_EVENT_MS + 400);
         phone.silent = false;
         waitFor(() -> link.getTier() == ControlLink.Tier.NORMAL && phone.config.cameraWidth == 1280, 3000, "the normal picture after the stall");
         assertEquals(5, link.maxBitrateStep(), "the set 4 Mbit/s");
@@ -618,8 +618,8 @@ class ControlLinkTest {
         phone.encoderBitRate = 250_000;
         link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
         link.start();
-        waitFor(() -> link.getTier() == ControlLink.Tier.ROBUST, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "bad coverage mode");
-        waitFor(() -> link.getTier() == ControlLink.Tier.SURVIVAL, (int) ControlLink.LOW_RES_AFTER_MS + 3000, "the survival tier");
+        waitFor(() -> link.getTier() == ControlLink.Tier.ROBUST, (int) TierPolicy.LOW_RES_AFTER_MS + 3000, "bad coverage mode");
+        waitFor(() -> link.getTier() == ControlLink.Tier.SURVIVAL, (int) TierPolicy.LOW_RES_AFTER_MS + 3000, "the survival tier");
         waitFor(() -> phone.config.cameraWidth == 480 && phone.config.cameraFpsMax == 15, 3000, "480x270 at 15 fps");
         assertEquals(ControlLink.SURVIVAL_MAX_STEP, link.maxBitrateStep());
         assertEquals(250_000, de.droiddrone.pc.video.BitrateControl.STEPS_BPS[link.maxBitrateStep()], "up to 250 kbit/s");
@@ -752,7 +752,7 @@ class ControlLinkTest {
         link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
-        Thread.sleep(ControlLink.LOW_RES_AFTER_MS + 1000);
+        Thread.sleep(TierPolicy.LOW_RES_AFTER_MS + 1000);
         assertFalse(link.isRobust());
         assertTrue(phone.configs.stream().allMatch(c -> c.cameraWidth == 1280));
     }
