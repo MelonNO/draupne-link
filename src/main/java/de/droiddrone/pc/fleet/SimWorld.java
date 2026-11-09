@@ -45,6 +45,30 @@ final class SimWorld {
         }
     }
 
+    /**
+     * The sky's gradient by picture size and day or night, drawn once (1.0.53: filling it every frame cost 1 ms of a
+     * 720p frame, 2.2 ms of a 1080p one). The pictures are never written after they are made: any thread may draw them.
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<Long, BufferedImage> SKIES = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static BufferedImage sky(int w, int h, boolean night) {
+        long key = (long) w << 32 | (long) h << 1 | (night ? 1 : 0);
+        BufferedImage img = SKIES.get(key);
+        if (img != null) return img;
+        Palette pal = night ? NIGHT : DAY;
+        img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        try {
+            g.setPaint(new GradientPaint(0, 0, pal.skyTop(), 0, h, pal.skyLow()));
+            g.fillRect(0, 0, w, h);
+        } finally {
+            g.dispose();
+        }
+        if (SKIES.size() > 16) SKIES.clear(); // a few sizes are used at a time
+        SKIES.put(key, img);
+        return img;
+    }
+
     /** The haze far things fade into (the vehicle's fog), 0xRRGGBB. */
     static int haze(boolean night) {
         return (night ? NIGHT : DAY).haze().getRGB() & 0xffffff;
@@ -53,8 +77,7 @@ final class SimWorld {
     /** Sky, ground, the grid, the far structures (outlines glowing), a haze at the horizon; fragments unless analysis. */
     void paint(Graphics2D g, Scene.Camera cam, Scene.View v, int w, int h, long nowMs, boolean analysis, boolean night) {
         Palette pal = night ? NIGHT : DAY;
-        g.setPaint(new GradientPaint(0, 0, pal.skyTop(), 0, h, pal.skyLow()));
-        g.fillRect(0, 0, w, h);
+        g.drawImage(sky(w, h, night), 0, 0, null);
         double[] a = cam.horizon(-1), b = cam.horizon(1);
         if (a != null && b != null) {
             double dx = b[0] - a[0], dy = b[1] - a[1];
