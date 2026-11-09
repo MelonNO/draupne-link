@@ -7,7 +7,6 @@ import de.droiddrone.pc.map.Coordinates;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.MapGraphics;
 import de.droiddrone.pc.map.Mercator;
-import de.droiddrone.pc.map.OpenCellId;
 import de.droiddrone.pc.map.RadioHorizon;
 import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
@@ -48,7 +47,9 @@ import java.util.function.Consumer;
  * under a red LAST KNOWN badge with the age, which is the point of the map: the place to start looking. Home is
  * where it armed, with range rings. When the map rests on a place, the levels under it are fetched for offline use
  * (see TileCache.prefetch); hold Alt and drag a box to download that area whole (see MapDownloadDialog). Repaints
- * come from the window's 30 Hz refresh; tiles arrive on their own threads.
+ * come from the window's 30 Hz refresh; tiles arrive on their own threads. Each paint works out one MapProjection and
+ * hands it to the layers: MapTrackLayer (flight lines), MapPlaceLayer (launch point, pins), MapGraphicsLayer (drawings),
+ * MapToolLayer (coverage, search, radio horizon) and GroundViewLayer (camera views, detections, overwatch).
  */
 class MapView extends JComponent {
     private static final double MIN_ZOOM = 2, FIRST_FIX_ZOOM = 16;
