@@ -31,6 +31,8 @@ final class TourFinale implements AutoCloseable {
     private volatile boolean alerted, connected, crashed;
     /** Why it didn't start; null when it did (or hasn't been asked). */
     private String refused;
+    /** It didn't start because the pilot's own virtual fleet runs (the tour then offers to close it). */
+    private boolean fleetOpen;
 
     TourFinale(MainWindow main) {
         this.main = main;
@@ -39,8 +41,11 @@ final class TourFinale implements AutoCloseable {
     /** The four drones, their flights and the units on the map (Swing thread); false with {@link #refused()} saying why. */
     boolean start() {
         if (scenario != null) return true;
-        if (!VirtualFleet.announced().isEmpty()) {
+        fleetOpen = false;
+        // read now, not the cached list (2026-11-09: a fleet closed a moment ago still counted as open)
+        if (!VirtualFleet.announcedNow().isEmpty()) {
             refused = "Close the virtual fleet first.";
+            fleetOpen = true;
             return false;
         }
         try {
@@ -127,6 +132,11 @@ final class TourFinale implements AutoCloseable {
 
     String refused() {
         return refused;
+    }
+
+    /** The last start was refused because the pilot's virtual fleet runs. */
+    boolean fleetOpen() {
+        return fleetOpen;
     }
 
     boolean started() {

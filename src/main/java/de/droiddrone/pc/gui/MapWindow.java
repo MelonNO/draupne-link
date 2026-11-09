@@ -1172,6 +1172,16 @@ final class MapWindow extends JFrame {
         return tools.pins;
     }
 
+    /** The PINS step is over: the pins sheet it opened goes with it (the pilot, 2026-11-09). */
+    void tourClosePins() {
+        if (pinManager != null && pinManager.isDisplayable()) pinManager.dispose();
+    }
+
+    /** Tests: whether the pins sheet is open. */
+    boolean pinsOpenForTest() {
+        return pinManager != null && pinManager.isDisplayable() && pinManager.isVisible();
+    }
+
     javax.swing.JComponent tourDownload() {
         tools.showGroup(MapToolsPanel.Group.DATA, false);
         return tools.download;
