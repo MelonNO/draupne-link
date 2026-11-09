@@ -262,7 +262,10 @@ class TourTest {
     void anUpdateBringsTheFleetAndPreviousFlightsSteps() throws Exception {
         PcConfig config = PcConfig.defaults();
         config.set(Tour.SEEN_KEY, "names,maptools,radiohorizon,coverage,overwatch,observation");
-        assertEquals(List.of(Tour.FEATURE_FLEET, Tour.FEATURE_FLIGHTS), Tour.unseen(config));
+        assertEquals(List.of(Tour.FEATURE_FLEET, Tour.FEATURE_FLIGHTS, Tour.FEATURE_SPECTATOR), Tour.unseen(config));
+        // 1.0.56: a PC that had every tour before the spectator mirror is offered that alone
+        config.set(Tour.SEEN_KEY, "names,maptools,radiohorizon,coverage,overwatch,observation,fleet,flights");
+        assertEquals(List.of(Tour.FEATURE_SPECTATOR), Tour.unseen(config));
         config.set(Tour.SEEN_KEY, String.join(",", Tour.FEATURES));
         assertTrue(Tour.unseen(config).isEmpty());
     }

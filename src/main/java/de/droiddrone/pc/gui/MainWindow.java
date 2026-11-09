@@ -4011,6 +4011,17 @@ public class MainWindow extends JFrame {
         return mirror;
     }
 
+    /** The tour's spectator steps: SPECTATOR is selected under CONNECT AS. */
+    boolean tourSpectatorRole() {
+        return ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
+    }
+
+    /** ...and this PC watches a pilot PC's flight now. */
+    boolean tourSpectating() {
+        Connection c = connection;
+        return c != null && c.getLink().getState() == ControlLink.State.SPECTATING;
+    }
+
     private final class MirrorHooks implements MirrorController.Host {
         @Override
         public void logLine(String text) {

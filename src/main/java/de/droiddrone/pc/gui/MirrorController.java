@@ -253,6 +253,11 @@ final class MirrorController implements AutoCloseable {
         mapsShowingMirror.clear();
     }
 
+    /** The pilot PC's tiles shown here (tests). */
+    List<TileFeed> feedsForTest() {
+        return feeds;
+    }
+
     /** The pilot PC's mode as last mirrored, or null. */
     Mirror.Mode mirroredMode() {
         return mirroredMode;
