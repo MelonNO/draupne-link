@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 
 import de.droiddrone.common.ArmRanges;
+import de.droiddrone.common.Cadence;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DataWriter;
 import de.droiddrone.common.FcInfo;
@@ -212,8 +213,8 @@ public class Msp {
     }
 
     /**
-     * DRAUPNE Link: once a second (standby) or at the usual rate. At 1 Hz the loop below counts five ticks per
-     * second, so the status (the ARM flag, which ends standby) still comes every second, the rest every other.
+     * DRAUPNE Link: once a second (standby) or at the usual rate. In standby the status (the ARM flag, which ends
+     * standby) still comes every second, the rest every other (mspRun's cadences).
      */
     public void setSlowPoll(boolean slow){
         slowPoll = slow;
@@ -293,13 +294,15 @@ public class Msp {
     private final Runnable mspRun = new Runnable() {
         public void run() {
             final int id = threadsId;
-            int timerDiv = 0;
+            // on the clock, not a count of ticks (1.0.53: the standby count once skipped the status for good): the
+            // status every 5 ticks and the rest every 10 at the usual rate, every second and every 2 s in standby
+            final Cadence statusEvery = new Cadence(), restEvery = new Cadence();
             log("Start MSP thread - OK");
             while (id == threadsId) {
                 try {
-                    // 1.0.53: in standby to the next multiple of 5 - a plain += 5 from a count standby began at (3, say)
-                    // went 8, 13, 18 ... and never polled the status (the ARM flag) again until standby ended
-                    timerDiv = slowPoll ? (timerDiv / 5 + 1) * 5 : timerDiv + 1;
+                    boolean slow = slowPoll;
+                    long fastTickMs = 1000 / config.getTelemetryRefreshRate();
+                    long tickMs = slow ? 1000 : fastTickMs;
 
                     if (!isInitialized && isInitialized()) setFcInfo();
                     // DRAUPNE Link: the channel map every tick (10 a second) from the port opening until it is
@@ -315,7 +318,8 @@ public class Msp {
                         continue;
                     }
 
-                    if (timerDiv % 5 == 0) {
+                    long now = android.os.SystemClock.elapsedRealtime();
+                    if (statusEvery.due(now, slow ? 1000 : 5 * fastTickMs, tickMs / 2)) {
                         switch (fcVariant){
                             case FcInfo.FC_VARIANT_INAV:
                                 getInavStatus();
@@ -329,8 +333,7 @@ public class Msp {
                         getAltitude();
                     }
 
-                    if (timerDiv % 10 == 0) {
-                        timerDiv = 0;
+                    if (restEvery.due(now, slow ? 2000 : 10 * fastTickMs, tickMs / 2)) {
                         // pc.31: the mode ids by themselves, not only when the PC asks - without them the ARM flag
                         // can't be read, and every armed guard counts the FC as armed (FcArmedState)
                         if (boxIds == null && (fcVariant == FcInfo.FC_VARIANT_BETAFLIGHT || fcVariant == FcInfo.FC_VARIANT_INAV)) runGetBoxIds = true;
