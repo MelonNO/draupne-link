@@ -28,6 +28,9 @@
  *  found across the number wrap; one lock for the receive and buffer threads. (The Connects in flight after a loss
  *  each restarted the numbering: a pc.31 phone answers only the first, see its Udp.receiverRun - this side still
  *  takes every answer, as an older phone starts a new session on each.)
+ *  The timers (the 4 s session timeout, the ping every 0.5 s, the buffer size's window of one ping) counted calls of
+ *  processTimer, one a millisecond as long as the loop's 1 ms sleep was 1 ms: a busy phone or Windows' timer made
+ *  the 4 s timeout 6 s or more. They count the clock's milliseconds now (at most MAX_STEP_MS a call).
  */
 
 package de.droiddrone.common;
@@ -39,6 +42,7 @@ import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.LongSupplier;
 
 public class ReceiverBuffer {
     private final boolean isServer;
@@ -62,6 +66,14 @@ public class ReceiverBuffer {
     private volatile boolean isConnected;
     private int recoverCounter;
     private final long createdTimestamp;
+    /** The timers' monotonic clock (SavedPacket.nowMs; a test's own) and its reading at the last processTimer. */
+    private final LongSupplier clock;
+    private long timerAtMs;
+    /**
+     * The most one processTimer call counts: a stall of the buffer thread itself (it is the one that counts) is not
+     * the far side's silence, and a packet that came meanwhile still finds its session up.
+     */
+    static final int MAX_STEP_MS = 100;
     /** pc.31: the buffer never counts fewer packets than this (on sparse traffic it settled at 1: no gap waited for). */
     static final int MIN_BUFFER_SIZE = 4;
     /** pc.31: a gap is waited for at least this long (and 1.5 x ping) before it is skipped. */
@@ -76,7 +88,14 @@ public class ReceiverBuffer {
     };
 
     public ReceiverBuffer(UdpSender udpSender, boolean isServer, String controlKey, String viewerKey){
+        this(udpSender, isServer, controlKey, viewerKey, SavedPacket::nowMs);
+    }
+
+    /** With the timers on the given monotonic ms clock (tests). */
+    public ReceiverBuffer(UdpSender udpSender, boolean isServer, String controlKey, String viewerKey, LongSupplier clock){
         this.udpSender = udpSender;
+        this.clock = clock;
+        timerAtMs = clock.getAsLong();
         this.isServer = isServer;
         this.controlKey = controlKey;
         this.viewerKey = viewerKey;
@@ -287,12 +306,16 @@ public class ReceiverBuffer {
         return true;
     }
 
+    /** The timers and the clean-up; called every millisecond or so by the buffer thread. */
     public void processTimer(){
         if (!isActive) return;
+        long now = clock.getAsLong();
+        int elapsed = (int) Math.max(0, Math.min(MAX_STEP_MS, now - timerAtMs));
+        timerAtMs = now;
         bufferCleanup();
-        processLastPacketTimer();
-        processPing();
-        calculateBufferSize();
+        processLastPacketTimer(elapsed);
+        processPing(elapsed);
+        calculateBufferSize(elapsed);
         processRejectedPackets();
     }
 
@@ -318,21 +341,21 @@ public class ReceiverBuffer {
         }
     }
 
-    private void processLastPacketTimer(){
-        if (lastPacketTimer > 0) lastPacketTimer--;
+    private void processLastPacketTimer(int elapsed){
+        if (lastPacketTimer > 0) lastPacketTimer = Math.max(0, lastPacketTimer - elapsed);
     }
 
-    private void processPing(){
+    private void processPing(int elapsed){
         if (!isConnected()) return;
-        pingTimer++;
+        pingTimer += elapsed;
         if (pingTimer >= 500){
             pingTimer = 0;
             udpSender.sendPing(false);
         }
     }
 
-    private void calculateBufferSize(){
-        packetTimer++;
+    private void calculateBufferSize(int elapsed){
+        packetTimer += elapsed;
         if (packetTimer >= pingMs){
             packetTimer = 0;
             int size = Math.round(packetCount * 1.5f) + 1;

@@ -11,6 +11,7 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.SocketTimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,12 +23,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class TransportRobustnessTest {
     private static final InetAddress FAR = InetAddress.getLoopbackAddress();
 
-    /** Upstream's buffer counts its ticks to 4000 with no packet: the session is down, and stays down. */
+    /** 4 s with no packet: the session is down, and stays down. */
     @Test
     void aTimedOutSessionIsNotBroughtBackByAStrayPacket() throws Exception {
         try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
-            ReceiverBuffer server = connectedServer(socket);
-            for (int i = 0; i < 4000; i++) server.processTimer();
+            AtomicLong clock = new AtomicLong();
+            ReceiverBuffer server = connectedServer(socket, clock);
+            tick(server, clock, 4000);
             assertFalse(server.isConnected(), "timed out");
             // any device on the network, no key: before, this revived the session (addPacket read the field)
             server.addPacket(numbered(UdpCommon.MavlinkRawPacket, 0));
@@ -57,8 +59,9 @@ class TransportRobustnessTest {
     @Test
     void aGapIsWaitedForBeforeItIsSkipped() throws Exception {
         try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
-            ReceiverBuffer client = connectedClient(socket);
-            for (int i = 0; i < 1000; i++) client.processTimer(); // ten ping windows with nothing: the size settles
+            AtomicLong clock = new AtomicLong();
+            ReceiverBuffer client = connectedClient(socket, clock);
+            tick(client, clock, 1000); // ten ping windows with nothing: the size settles
             client.addPacket(numbered(UdpCommon.FcInfo, 0));
             assertEquals(1, drain(client));
             client.addPacket(numbered(UdpCommon.FcInfo, 2)); // 1 lost, or only late
@@ -76,8 +79,9 @@ class TransportRobustnessTest {
     @Test
     void theNearestPacketAfterAGapIsFoundAcrossTheWrap() throws Exception {
         try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
-            ReceiverBuffer client = connectedClient(socket);
-            for (int i = 0; i < 1000; i++) client.processTimer();
+            AtomicLong clock = new AtomicLong();
+            ReceiverBuffer client = connectedClient(socket, clock);
+            tick(client, clock, 1000);
             for (int n = 0; n <= 32760; n++) {
                 client.addPacket(numbered(UdpCommon.FcInfo, n));
                 assertNotNull(next(client), "packet " + n);
@@ -121,19 +125,60 @@ class TransportRobustnessTest {
         }
     }
 
-    private static ReceiverBuffer connectedServer(DatagramSocket socket) throws Exception {
+    /**
+     * The timers count the clock's milliseconds, not calls: a session is up while the 4 s have not passed, however
+     * often (or seldom) the buffer thread gets to run - one call a ms counted 6 s and more on a busy phone.
+     */
+    @Test
+    void theTimersCountMillisecondsNotCalls() throws Exception {
+        try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
+            AtomicLong clock = new AtomicLong();
+            ReceiverBuffer server = connectedServer(socket, clock);
+            for (int i = 0; i < 20_000; i++) server.processTimer(); // a fast loop: no time went by
+            assertTrue(server.isConnected(), "20000 calls in no time: still up");
+            for (int i = 0; i < 39; i++) {
+                clock.addAndGet(100); // a slow loop: one call every 100 ms
+                server.processTimer();
+            }
+            assertTrue(server.isConnected(), "3.9 s");
+            clock.addAndGet(100);
+            server.processTimer();
+            assertFalse(server.isConnected(), "4 s");
+        }
+    }
+
+    /** A stall of the buffer thread itself counts at most MAX_STEP_MS: a packet that came meanwhile finds its session. */
+    @Test
+    void aStallOfTheBufferThreadIsNotTheFarSidesSilence() throws Exception {
+        try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
+            AtomicLong clock = new AtomicLong();
+            ReceiverBuffer server = connectedServer(socket, clock);
+            clock.addAndGet(10_000);
+            server.processTimer();
+            assertTrue(server.isConnected());
+        }
+    }
+
+    private static void tick(ReceiverBuffer b, AtomicLong clock, int ms) {
+        for (int i = 0; i < ms; i++) {
+            clock.incrementAndGet();
+            b.processTimer();
+        }
+    }
+
+    private static ReceiverBuffer connectedServer(DatagramSocket socket, AtomicLong clock) throws Exception {
         UdpSender sender = new UdpSender(socket);
-        ReceiverBuffer b = new ReceiverBuffer(sender, true, "DD", "DD");
+        ReceiverBuffer b = new ReceiverBuffer(sender, true, "DD", "DD", clock::get);
         b.addPacket(new DatagramPacket(connect().getData(), connect().getData().length, FAR, 50_000));
         assertTrue(b.isConnected());
         drain(b);
         return b;
     }
 
-    private static ReceiverBuffer connectedClient(DatagramSocket socket) throws Exception {
+    private static ReceiverBuffer connectedClient(DatagramSocket socket, AtomicLong clock) throws Exception {
         UdpSender sender = new UdpSender(socket);
         sender.connect(FAR, 50_000);
-        ReceiverBuffer b = new ReceiverBuffer(sender, false, "DD", "DD");
+        ReceiverBuffer b = new ReceiverBuffer(sender, false, "DD", "DD", clock::get);
         byte[] c = connect().getData();
         b.addPacket(new DatagramPacket(c, c.length, FAR, 50_000));
         assertTrue(b.isConnected());

@@ -71,11 +71,14 @@ import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
 import de.droiddrone.common.Observe;
 import de.droiddrone.common.PcAudio;
+import de.droiddrone.common.RcPath;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
+import de.droiddrone.common.SessionGate;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.Takeover;
 import de.droiddrone.common.TelemetryData;
+import de.droiddrone.common.TelemetryRecords;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.common.UdpPacketData;
 import de.droiddrone.common.UdpSender;
@@ -112,8 +115,8 @@ public class Udp {
     private volatile ReceiverBuffer receiverBuffer;
     private boolean isVideoStarting, isAudioStarting;
     private final Object udpSync = new Object();
-    /** When the pilot PC was last heard from (any packet from its address and port). */
-    private volatile long lastPilotPacketMs;
+    /** Who gets a session (SessionGate): the key, the pilot's Connects, another PC's; when the pilot was last heard. */
+    private final SessionGate gate;
     /**
      * A pilot silent for this long is not announced to a Connect from elsewhere (PILOT_AT): that PC takes over.
      * pc.26: 10 s, was 1 s - a routine 4G fade of 1.5 s handed the drone to any second PC left on its CONNECT
@@ -121,17 +124,10 @@ public class Udp {
      */
     private static final long PILOT_ALIVE_MS = Takeover.PILOT_ALIVE_MS;
     /**
-     * The sequence of the last stick frame taken (pc.19: [24][count u8][count x i16][seq u8]; pc.26: [seq u16] from
-     * a PC that knows this build; a PC that knows only the older layout sends none). Only read and written on the
-     * receive thread.
+     * The stick frames' rules (RcPath: the sequence, pc.19 / pc.26, and the lag limit, pc.31), on the receive thread;
+     * the time of the last frame written is read by the idle sticks' thread.
      */
-    private volatile int lastRcSeq = -1; // volatile: the stats thread reports it
-    private boolean rcSeqValid;
-    /**
-     * When the last stick frame was taken; the sequence rule starts over after RC_SEQ_RESET_MS without one. Volatile:
-     * the idle sticks' thread reads it.
-     */
-    private volatile long lastRcTakenMs;
+    private final RcPath rcPath = new RcPath();
     /**
      * pc.33: the idle sticks from DRAUPNE Link 1.0.44 ([0x78][count u8][count x i16], once a second): throttle low,
      * sticks centred, the arm switch off, BEEPER low, the other AUX as the pilot's radio has them. Fed to Betaflight
@@ -177,39 +173,6 @@ public class Udp {
     static final long IDLE_EVERY_MS = 50;
     /** A status read this long after the last stick frame: one that frame's arm switch could have changed is past. */
     static final long IDLE_STATUS_AFTER_MS = 100;
-    /**
-     * No stick frame taken for this long: the next one is taken whatever its sequence. With the 8-bit sequence a
-     * frame 128 or more behind looked newer (a cell handover flushing old packets), and the fresh frames after it
-     * were dropped until the count passed it; with this the loss is bounded.
-     */
-    private static final long RC_SEQ_RESET_MS = 300;
-    /**
-     * pc.31: with the 16-bit sequence a newer frame is always newer, so after RC_SEQ_RESET_MS without one only a
-     * newer frame is taken (before, any - a frame held a second in the network came out as fresh sticks); after
-     * this long anything is (the PC may have started counting again). No frame waits for this: it only refuses.
-     */
-    private static final long RC_SEQ16_FORGET_MS = 1000;
-    /**
-     * pc.31: the stick lag. A pc.31 PC's frame ends [seq u16][sentMs u16][maxLagCs u8]: its send time (ms, low 16
-     * bits of its own monotonic clock) and the most a frame may be late, in 10 ms (0 = never drop). The phone's clock
-     * minus sentMs is the one-way time plus a fixed offset; the smallest over the last two buckets is the best the
-     * link did, and a frame later than that by more than the limit is dropped - sticks seconds old (a 4G queue
-     * flushed) end in Betaflight's failsafe instead of flying the drone late. Buckets of 10 s (20 s seen at most):
-     * long enough that a queue building up isn't taken as the new normal within a few seconds, short enough that a
-     * path that got slower for good (a relay) is learned. Read and written on the receive thread only, but for the
-     * figures the stats thread reports (volatile).
-     */
-    private static final long RC_LAG_BUCKET_MS = 10_000;
-    private int rcLagMinNow = -1, rcLagMinBefore = -1;
-    private long rcLagBucketAt;
-    private volatile int rcLagMs = -1;
-    private volatile int rcLagMaxMs = -1;
-    private volatile int rcLagDropped;
-    /** The last frame carried sentMs: the PC knows the PHONE_RC_LAG record (sent only then). */
-    private volatile boolean rcLagFromPc;
-    /** pc.31: when the pilot's Connect last started a session here; a repeat within the second is the same session. */
-    private volatile long sessionStartedMs;
-    private static final long SAME_SESSION_MS = 1000;
     /** pc.31: an FC-port config change waiting for the FC to be disarmed (applyDeferredFcConfig). */
     private volatile boolean fcConfigDeferred;
     /** pc.31: a StartVideo queued for the video starter thread, not begun yet. */
@@ -218,8 +181,6 @@ public class Udp {
     private volatile long videoStartedAtMs;
     /** An opened camera gets this long for its session's first frame before a StartVideo may start it again. */
     private static final long VIDEO_FIRST_FRAME_MS = 4000;
-    /** The channels of the last stick frame, filled in place on the receive thread: no allocation per frame. */
-    private final short[] rcFrame = new short[FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT];
     /** A PC that tried to connect with another key (shown on the screen): its address and when. */
     static volatile String wrongKeyFrom;
     static volatile long wrongKeyAt;
@@ -432,6 +393,7 @@ public class Udp {
         this.destIpStr = destIpStr;
         this.port = port;
         this.key = key;
+        this.gate = new SessionGate(key);
         this.connectionMode = connectionMode;
         this.streamEncoder = streamEncoder;
         this.mp4Recorder = mp4Recorder;
@@ -564,26 +526,23 @@ public class Udp {
                         if (!receiverPacket.getAddress().equals(destIp)
                                 || receiverPacket.getPort() != port) continue;
                     }else if (buffer.isConnected()){
+                        long now = android.os.SystemClock.elapsedRealtime();
                         if (receiverPacket.getAddress().equals(udpSender.getIp())
                                 && receiverPacket.getPort() == udpSender.getPort()) {
-                            lastPilotPacketMs = android.os.SystemClock.elapsedRealtime();
                             lastPcIp = udpSender.getIp(); // kept across deep sleep: the check window's hello goes there
                             lastPcPort = udpSender.getPort();
-                            if (d[0] == UdpCommon.Connect && keyMatches(d, len, 4)) {
-                                // pc.31: the Connects in flight after a loss (one every 150 ms) are one new session:
-                                // each made a new one, and each answer restarted the PC's numbering. The first one's
-                                // answer reaches the PC; if it was lost, the PC's Connect a second later is answered
-                                if (android.os.SystemClock.elapsedRealtime() - sessionStartedMs < SAME_SESSION_MS) continue;
+                            SessionGate.Verdict v = gate.fromPilot(d, len, now);
+                            if (v == SessionGate.Verdict.SAME_SESSION) continue; // one of the Connects in flight after a loss
+                            if (v == SessionGate.Verdict.NEW_SESSION) {
                                 // pc.26: the pilot itself asks to connect again - it counts the link as lost (2 s of
                                 // silence from here). A new session now; before, the Connect was dropped until this
                                 // side's own 4 s timer ran out, and the PC sat without its handshake meanwhile
                                 log("The pilot connects again (its link was lost): a new session");
                                 newSession();
-                                sessionStartedMs = android.os.SystemClock.elapsedRealtime();
                                 buffer = receiverBuffer;
                             }
                         } else {
-                            if (!otherPcWhileConnected(receiverPacket, d, len)) continue;
+                            if (!otherPcWhileConnected(receiverPacket, d, len, now)) continue;
                             buffer = receiverBuffer; // the new session
                         }
                     }else{
@@ -591,36 +550,32 @@ public class Udp {
                             answerSpectator(receiverPacket, false);
                             continue;
                         }
-                        rcSeqValid = false; // every (re)connect passes here: the PC's stick sequence starts over
-                        resetRcLag();
+                        long now = android.os.SystemClock.elapsedRealtime();
+                        // every (re)connect passes here: the PC's stick sequence starts over
+                        rcPath.restart(now);
                         // pc.22: the PC's answer to this phone's sleep check hello (from the PC it last flew with)
                         if (d[0] == PowerMode.SLEEP_ANSWER) {
                             if (len >= 2 && receiverPacket.getAddress().equals(lastPcIp)) PowerMode.sleepAnswer(d[1] != 0);
                             continue;
                         }
-                        // pc.31: no session, nothing but a keyed Connect - the dead session's buffer took any packet
-                        // (keyless, from any device on the network) and came back to life on it
-                        if (d[0] != UdpCommon.Connect) continue;
-                        if (!keyMatches(d, len, 4)) {
+                        // pc.31: no session, nothing but a keyed Connect; from another PC than the last pilot's, the
+                        // takeover rule holds on after the 4 s timeout (SessionGate, Takeover)
+                        InetAddress from = receiverPacket.getAddress();
+                        boolean pilotKnown = lastPcIp != null;
+                        boolean sameAddress = from.equals(lastPcIp);
+                        boolean samePc = sameAddress && receiverPacket.getPort() == lastPcPort;
+                        SessionGate.Verdict v = gate.noSession(d, len, pilotKnown, samePc, sameAddress,
+                                () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, now);
+                        if (v == SessionGate.Verdict.DROP) continue;
+                        if (v == SessionGate.Verdict.WRONG_KEY) {
                             noteWrongKey(receiverPacket);
                             continue;
                         }
-                        // pc.31: the session timed out (4 s), but the rule of otherPcWhileConnected holds on: another
-                        // PC takes over only while the FC is known to be disarmed and the pilot has been silent for
-                        // PILOT_ALIVE_MS - a 4G fade of 4 s handed an armed drone to any PC left on CONNECT. pc.38:
-                        // the pilot's address on a new port too (Takeover), unless disarmed or the pilot silent 2 s
-                        InetAddress from = receiverPacket.getAddress();
-                        if (lastPcIp != null && !(from.equals(lastPcIp) && receiverPacket.getPort() == lastPcPort)) {
-                            boolean disarmed = FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
-                            long silent = android.os.SystemClock.elapsedRealtime() - lastPilotPacketMs;
-                            if (!Takeover.allowed(from.equals(lastPcIp), disarmed, silent)) {
-                                answerSpectator(receiverPacket, true); // PILOT_AT the pilot: it can watch
-                                continue;
-                            }
-                            if (!from.equals(lastPcIp)) log("New session from " + from.getHostAddress() + " (the pilot is silent, the FC disarmed)");
+                        if (v == SessionGate.Verdict.SPECTATOR) {
+                            answerSpectator(receiverPacket, true); // PILOT_AT the pilot: it can watch
+                            continue;
                         }
-                        lastPilotPacketMs = android.os.SystemClock.elapsedRealtime(); // heard from: no takeover in its first half second
-                        sessionStartedMs = lastPilotPacketMs;
+                        if (pilotKnown && !sameAddress) log("New session from " + from.getHostAddress() + " (the pilot is silent, the FC disarmed)");
                         idleSticks = null; // pc.38: a new session's PC sends its own within a second; none kept from before
                     }
                     // DRAUPNE Link: sticks straight to the flight controller from here - not through the buffer, a
@@ -644,54 +599,19 @@ public class Udp {
     };
 
     /**
-     * A stick frame, on the receive thread: [24][count u8][count x i16][seq u8 - pc.19, only from a PC that knows
-     * this app takes it]. With a sequence, a frame older than (or the same as) the last one taken - a late packet
-     * arriving after a newer one - is dropped, except the first after a (re)connect, where the count starts over.
-     * No allocation: the channels are read into {@link #rcFrame} in place.
+     * A stick frame, on the receive thread: taken or dropped by {@link RcPath} (its sequence, its lag), then straight
+     * to the flight controller. No allocation: the channels are read into RcPath's frame in place.
      */
     private void handleRcFrame(byte[] d, int len) {
-        if (len < 2) return;
-        int count = d[1] & 0xff;
-        if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
-        int remaining = len - 2;
         long now = android.os.SystemClock.elapsedRealtime(); // pc.38: was the wall clock (the idle sticks compare it with Msp's)
-        if (remaining == count * 2 + 5) { // pc.31: [seq u16][sentMs u16][maxLagCs u8]
-            int seq = ((d[len - 5] & 0xff) << 8) | (d[len - 4] & 0xff);
-            int sentMs = ((d[len - 3] & 0xff) << 8) | (d[len - 2] & 0xff);
-            int maxLagMs = (d[len - 1] & 0xff) * 10;
-            rcLagFromPc = true;
-            if (!takeSeq16(seq, now)) return;
-            if (tooLate(sentMs, maxLagMs)) return;
-            lastRcSeq = seq;
-            rcSeqValid = true;
-        } else if (remaining == count * 2 + 2) { // pc.26: a 16-bit sequence
-            int seq = ((d[len - 2] & 0xff) << 8) | (d[len - 1] & 0xff);
-            rcLagFromPc = false;
-            if (!takeSeq16(seq, now)) return;
-            lastRcSeq = seq;
-            rcSeqValid = true;
-        } else if (remaining == count * 2 + 1) {
-            int seq = d[len - 1] & 0xff;
-            rcLagFromPc = false;
-            if (rcSeqValid && now - lastRcTakenMs > RC_SEQ_RESET_MS) rcSeqValid = false; // a gap: whatever comes next is newest
-            if (rcSeqValid && (byte) (seq - lastRcSeq) <= 0) return;
-            lastRcSeq = seq;
-            rcSeqValid = true;
-        } else if (remaining == count * 2) {
-            rcLagFromPc = false;
-            lastRcSeq = -1;
-        } else {
-            return;
-        }
-        int at = 2;
-        for (int i = 0; i < count; i++, at += 2) {
-            rcFrame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
-        }
+        int count = rcPath.take(d, len, now);
+        if (count < 0) return;
+        short[] rcFrame = rcPath.frame();
         PcLinkStats.rcIn();
         // pc.38: the frame's time and its write in one step with the idle sticks' check-and-write (rcWriteLock): an
         // idle frame decided on just before can't land in the writer's one slot after this frame and replace it
         synchronized (rcWriteLock) {
-            lastRcTakenMs = now;
+            rcPath.taken(now);
             if (msp.isInitialized()) msp.setRawRc(rcFrame, count);
         }
         if (mavlink.isInitialized()) mavlink.setRcChannelsOverride(java.util.Arrays.copyOf(rcFrame, count));
@@ -702,11 +622,8 @@ public class Udp {
 
     /** The idle sticks, on the receive thread: kept for idleSticksRun (a new array each time, never written after). */
     private void handleIdleSticks(byte[] d, int len) {
-        if (len < 2) return;
-        int count = d[1] & 0xff;
-        if (count < 4 || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT || len != 2 + count * 2) return;
-        short[] frame = new short[count];
-        for (int i = 0, at = 2; i < count; i++, at += 2) frame[i] = (short) (((d[at] & 0xff) << 8) | (d[at + 1] & 0xff));
+        short[] frame = RcPath.idleFrame(d, len);
+        if (frame == null) return;
         if (idleSticks == null) log("Idle sticks from the PC: fed to the FC while it is disarmed and no sticks come");
         idleSticks = frame;
     }
@@ -730,7 +647,7 @@ public class Udp {
                     boolean feed, refused = false;
                     synchronized (rcWriteLock) {
                         short[] idle = idleSticks;
-                        long lastRc = lastRcTakenMs;
+                        long lastRc = rcPath.lastTakenMs();
                         long now = android.os.SystemClock.elapsedRealtime();
                         feed = idle != null && msp.isInitialized() && now - lastRc >= IDLE_AFTER_MS
                                 && msp.disarmedAfter(lastRc + IDLE_STATUS_AFTER_MS, now);
@@ -814,83 +731,32 @@ public class Udp {
         }
     };
 
-    /** The 16-bit sequence rule: newer than the last frame taken, or anything after RC_SEQ16_FORGET_MS without one. */
-    private boolean takeSeq16(int seq, long now) {
-        if (rcSeqValid && now - lastRcTakenMs > RC_SEQ16_FORGET_MS) rcSeqValid = false;
-        return !rcSeqValid || (short) (seq - lastRcSeq) > 0;
-    }
-
     /**
-     * The stick lag (pc.31, see RC_LAG_BUCKET_MS): updates the best transit seen with this frame's and says whether
-     * the frame is later than that by more than maxLagMs (0 = no limit). The 16-bit times compare across the wrap.
-     */
-    private boolean tooLate(int sentMs, int maxLagMs) {
-        long nowMs = android.os.SystemClock.elapsedRealtime();
-        int transit = (int) ((nowMs - sentMs) & 0xFFFF);
-        if (nowMs - rcLagBucketAt >= RC_LAG_BUCKET_MS) {
-            rcLagMinBefore = rcLagMinNow;
-            rcLagMinNow = -1;
-            rcLagBucketAt = nowMs;
-        }
-        if (rcLagMinNow < 0 || (short) (transit - rcLagMinNow) < 0) rcLagMinNow = transit;
-        int best = rcLagMinNow;
-        if (rcLagMinBefore >= 0 && (short) (rcLagMinBefore - best) < 0) best = rcLagMinBefore;
-        int lag = Math.max(0, (short) (transit - best));
-        rcLagMs = lag;
-        if (lag > rcLagMaxMs) rcLagMaxMs = lag;
-        if (maxLagMs > 0 && lag > maxLagMs) {
-            rcLagDropped++;
-            return true;
-        }
-        return false;
-    }
-
-    /** A new session: the PC's clock may be another, and the drop count is per session. */
-    private void resetRcLag() {
-        rcLagMinNow = -1;
-        rcLagMinBefore = -1;
-        rcLagBucketAt = android.os.SystemClock.elapsedRealtime();
-        rcLagMs = -1;
-        rcLagMaxMs = -1;
-        rcLagDropped = 0;
-    }
-
-    /**
-     * A packet from another address or port while a PC is connected. A keyed Connect from the pilot's own address
-     * (it started again, on a new port) or from anywhere while the pilot has been silent for {@link #PILOT_ALIVE_MS}
-     * (its session is only still open because the 4 s timeout hasn't run out) starts the new session now: before,
-     * such a PC was told PILOT_AT - the dead session's address - and became a spectator of itself for up to 4 s, a
-     * restarted PC never connecting. Anything else is a spectator's question, or a wrong key. pc.38 (Takeover): the
-     * pilot's address on a new port only while the FC is known DISARMED, or after 2 s of silence from the pilot - a
-     * second DRAUPNE Link on the pilot's PC (or behind its NAT) took an armed drone in the air.
+     * A packet from another address or port while a PC is connected (SessionGate.fromOther): a keyed Connect Takeover
+     * allows starts the new session now; anything else is a spectator's question, or a wrong key.
      * @return true if the packet belongs to a (new) session and is to be taken
      */
-    private boolean otherPcWhileConnected(DatagramPacket packet, byte[] d, int len) {
+    private boolean otherPcWhileConnected(DatagramPacket packet, byte[] d, int len, long now) {
         // armed: the pilot's silence is a fade, not an absence - nobody takes the drone over in the air (pc.31: nor
         // while armed is unknown, nor on a MAVLink FC, which isArmed never saw: FcArmedState)
-        long now = android.os.SystemClock.elapsedRealtime();
-        long silent = now - lastPilotPacketMs;
         boolean disarmed = FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
-        boolean pilotAlive = silent < PILOT_ALIVE_MS || !disarmed;
-        if (d[0] == UdpCommon.Connect) {
-            if (!keyMatches(d, len, 4)) {
-                noteWrongKey(packet);
-                return false;
-            }
-            boolean sameAddress = packet.getAddress().equals(udpSender.getIp());
-            if (Takeover.allowed(sameAddress, disarmed, silent)) {
-                log("New session from " + packet.getAddress().getHostAddress() + ":" + packet.getPort()
-                        + (sameAddress ? " (the pilot's address)" : " (the pilot is silent)"));
-                newSession();
-                sessionStartedMs = now;
-                return true;
-            }
-            if (sameAddress && now - sameAddressRefusedLogMs >= Takeover.SAME_IP_SILENT_MS) {
-                sameAddressRefusedLogMs = now;
-                log("A Connect from the pilot's address on another port (" + packet.getPort() + "): refused, the FC isn't known disarmed and the pilot is heard");
-            }
+        boolean sameAddress = packet.getAddress().equals(udpSender.getIp());
+        SessionGate.Verdict v = gate.fromOther(d, len, sameAddress, disarmed, now);
+        if (v == SessionGate.Verdict.WRONG_KEY) {
+            noteWrongKey(packet);
+            return false;
         }
-        answerSpectator(packet, pilotAlive);
+        if (v == SessionGate.Verdict.NEW_SESSION) {
+            log("New session from " + packet.getAddress().getHostAddress() + ":" + packet.getPort()
+                    + (sameAddress ? " (the pilot's address)" : " (the pilot is silent)"));
+            newSession();
+            return true;
+        }
+        if (v == SessionGate.Verdict.REFUSED && sameAddress && now - sameAddressRefusedLogMs >= Takeover.SAME_IP_SILENT_MS) {
+            sameAddressRefusedLogMs = now;
+            log("A Connect from the pilot's address on another port (" + packet.getPort() + "): refused, the FC isn't known disarmed and the pilot is heard");
+        }
+        answerSpectator(packet, gate.pilotAlive(disarmed, now));
         return false;
     }
 
@@ -901,16 +767,13 @@ public class Udp {
         ReceiverBuffer old = receiverBuffer;
         receiverBuffer = new ReceiverBuffer(udpSender, (connectionMode != SettingsCommon.ConnectionMode.overServer), key, null);
         if (old != null) old.close();
-        rcSeqValid = false;
-        resetRcLag();
+        rcPath.restart(android.os.SystemClock.elapsedRealtime());
         idleSticks = null; // pc.38: the new session's PC sends its own within a second; none kept from before (H1)
     }
 
     /** Whether the key written (UTF) at keyAt - 4 in a Connect, 1 in a PILOT_QUERY - is this phone's. */
     private boolean keyMatches(byte[] d, int len, int keyAt) {
-        if (len < keyAt + 2) return false;
-        int n = ((d[keyAt] & 0xff) << 8) | (d[keyAt + 1] & 0xff);
-        return keyAt + 2 + n <= len && key.equals(new String(d, keyAt + 2, n, java.nio.charset.StandardCharsets.UTF_8));
+        return gate.keyMatches(d, len, keyAt);
     }
 
     /** A PC tried to connect with another key: ReceiverBuffer drops it without a word; the screen says so. */
@@ -969,16 +832,15 @@ public class Udp {
                             if (l != null) PcLinkStats.writePhonePositionTo(stats.daos, l);
                         }
                         // pc.19, once a second; pc.26: every time - the PC's NO STICKS AT FC alarm reads the write age
-                        PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), lastRcSeq);
+                        PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), rcPath.lastSeq());
                         // pc.21, once a second and three times when the mode changes; always the last record: a
                         // pc.20 PC stops reading at it
                         if (statsSent % 10 == 7 || PowerMode.burstDue(now)) PowerMode.writeRecordTo(stats.daos);
                         // pc.31, once a second and only to a PC whose stick frames carry their send time (it knows the
                         // record): after every other record, as a PC that doesn't know it stops reading there
-                        if (statsSent % 10 == 3 && rcLagFromPc) {
-                            int maxLag = rcLagMaxMs;
-                            rcLagMaxMs = -1; // the most over the last second
-                            PcLinkStats.writeRcLagTo(stats.daos, rcLagMs, maxLag, rcLagDropped);
+                        if (statsSent % 10 == 3 && rcPath.lagFromPc()) {
+                            int maxLag = rcPath.takeLagMaxMs(); // the most over the last second
+                            PcLinkStats.writeRcLagTo(stats.daos, rcPath.lagMs(), maxLag, rcPath.lagDropped());
                         }
                         // pc.32, twice a second while a remote update runs: in packets with no other last record
                         if (statsSent % 5 == 4 && RemoteUpdate.reportDue()) RemoteUpdate.writeRecordTo(stats.daos);
@@ -1964,305 +1826,11 @@ public class Udp {
     }
 
     private void fillTelemetryPacketData(TelemetryData buf, UdpPacketData packetData){
-        FcInfo fcInfo = msp.getFcInfo();
         try {
-            if (fcInfo == null && buf.code < FcCommon.DD_TIMERS) return;
-            packetData.daos.writeShort(buf.code);
-            DataReader buffer = new DataReader(buf.data, false);
-            switch (buf.code){
-                case FcCommon.MSP_ATTITUDE: {
-                    packetData.daos.writeShort(buffer.readShort());//roll
-                    packetData.daos.writeShort(buffer.readShort());//pitch
-                    packetData.daos.writeShort(buffer.readShort());//yaw
-                    break;
-                }
-                case FcCommon.MSP_ALTITUDE: {
-                    packetData.daos.writeInt(buffer.readInt());//altitude
-                    packetData.daos.writeShort(buffer.readShort());//altVelocity
-                    if (fcInfo.getFcVariant() == FcInfo.FC_VARIANT_INAV){
-                        packetData.daos.writeInt(buffer.readInt());//altBaro
-                    }
-                    break;
-                }
-                case FcCommon.MSP_ANALOG: {
-                    buffer.readByte();//legacyVoltage
-                    packetData.daos.writeShort(buffer.readShort());//mahDrawn
-                    packetData.daos.writeShort(buffer.readShort());//rssi
-                    packetData.daos.writeShort(buffer.readShort());//amperage
-                    if (fcInfo.getFcVariant() == FcInfo.FC_VARIANT_BETAFLIGHT) {
-                        packetData.daos.writeShort(buffer.readShort());//voltage
-                    }
-                    break;
-                }
-                case FcCommon.MSP_BOXIDS:
-                case FcCommon.MSP_BOXNAMES: {
-                    byte[] data = buffer.getData();
-                    packetData.daos.writeShort(data.length);
-                    packetData.daos.write(data, 0, data.length);
-                    break;
-                }
-                case FcCommon.MSP_BATTERY_CONFIG: {
-                    switch (fcInfo.getFcVariant()){
-                        case FcInfo.FC_VARIANT_INAV:{
-                            buffer.readShort();//voltageScale
-                            buffer.readByte();//voltageSource
-                            buffer.readByte();//configCells
-                            buffer.readShort();//cellDetect
-                            packetData.daos.writeShort(buffer.readShort());//minCellVoltage
-                            packetData.daos.writeShort(buffer.readShort());//maxCellVoltage
-                            packetData.daos.writeShort(buffer.readShort());//warningCellVoltage
-                            buffer.readShort();//currentOffset
-                            buffer.readShort();//currentScale
-                            buffer.readInt();//batteryCapacity
-                            buffer.readInt();//capacityWarning
-                            buffer.readInt();//capacityCritical
-                            buffer.readByte();//capacityUnit
-                            break;
-                        }
-                        case FcInfo.FC_VARIANT_BETAFLIGHT:{
-                            buffer.readByte();//vbatMinCellVoltage - legacy
-                            buffer.readByte();//vbatMaxCellVoltage - legacy
-                            buffer.readByte();//vbatWarningCellVoltage - legacy
-                            buffer.readShort();//batteryCapacity
-                            buffer.readByte();//voltageMeterSource
-                            buffer.readByte();//currentMeterSource
-                            packetData.daos.writeShort(buffer.readShort());//minCellVoltage
-                            packetData.daos.writeShort(buffer.readShort());//maxCellVoltage
-                            packetData.daos.writeShort(buffer.readShort());//warningCellVoltage
-                            break;
-                        }
-                    }
-                    break;
-                }
-                case FcCommon.MSP_OSD_CONFIG: {
-                    packetData.daos.writeShort(SettingsCommon.versionCompatibleCode);
-                    switch (fcInfo.getFcVariant()){
-                        case FcInfo.FC_VARIANT_INAV:{
-                            byte driver = buffer.readByte();
-                            packetData.daos.writeByte(driver);
-                            if (driver == 0) break;
-                            packetData.daos.writeByte(buffer.readByte());//videoSystem
-                            packetData.daos.writeByte(buffer.readByte());//units
-                            packetData.daos.writeByte(buffer.readByte());//rssiAlarm
-                            packetData.daos.writeShort(buffer.readShort());//capacityWarning
-                            packetData.daos.writeShort(buffer.readShort());//timeAlarm
-                            packetData.daos.writeShort(buffer.readShort());//altAlarm
-                            packetData.daos.writeShort(buffer.readShort());//distAlarm
-                            packetData.daos.writeShort(buffer.readShort());//negAltAlarm
-                            int osdItemCount = buffer.getRemaining() / 2;
-                            packetData.daos.writeShort(osdItemCount);
-                            if (osdItemCount == 0) break;
-                            for (int i = 0; i < osdItemCount; i++) {
-                                packetData.daos.writeShort(buffer.readShort());//osdItem
-                            }
-                            break;
-                        }
-                        case FcInfo.FC_VARIANT_BETAFLIGHT:{
-                            buffer.readByte();//osdFlags
-                            packetData.daos.writeByte(buffer.readByte());//videoSystem
-                            packetData.daos.writeByte(buffer.readByte());//units
-                            packetData.daos.writeByte(buffer.readByte());//rssiAlarm
-                            packetData.daos.writeShort(buffer.readShort());//capacityWarning
-                            buffer.readByte();//unused
-                            int osdItemCount = buffer.readUnsignedByteAsInt();
-                            packetData.daos.writeShort(buffer.readShort());//altAlarm
-                            packetData.daos.writeShort(osdItemCount);
-                            if (osdItemCount <= 0) break;
-                            for (int i = 0; i < osdItemCount; i++) {
-                                packetData.daos.writeShort(buffer.readShort());//osdItem
-                            }
-                            int osdStatCount = buffer.readUnsignedByteAsInt();
-                            packetData.daos.writeByte(osdStatCount);
-                            if (osdStatCount > 0){
-                                for (int i = 0; i < osdStatCount; i++) {
-                                    packetData.daos.writeByte(buffer.readByte());//osdStat
-                                }
-                            }
-                            int osdTimerCount = buffer.readUnsignedByteAsInt();
-                            packetData.daos.writeByte(osdTimerCount);
-                            if (osdTimerCount > 0){
-                                for (int i = 0; i < osdTimerCount; i++) {
-                                    packetData.daos.writeShort(buffer.readShort());//osdTimer
-                                }
-                            }
-                            buffer.readShort();//legacyWarnings
-                            packetData.daos.writeByte(buffer.readByte());//osdWarningsCount
-                            packetData.daos.writeInt(buffer.readInt());//enabledWarnings
-                            buffer.readByte();//osdProfileCount
-                            packetData.daos.writeByte(buffer.readByte());//osdSelectedProfile
-                            buffer.readByte();//overlayRadioMode
-                            packetData.daos.writeByte(buffer.readByte());//cameraFrameWidth
-                            packetData.daos.writeByte(buffer.readByte());//cameraFrameHeight
-                            if (buffer.getRemaining() >= 2) { // 1.46
-                                buffer.readShort();//linkQualityAlarm
-                            }
-                            if (buffer.getRemaining() >= 2) { // 1.47
-                                buffer.readShort();//rssiDbmAlarm
-                            }
-                            break;
-                        }
-                    }
-                    break;
-                }
-                case FcCommon.MSP_VTX_CONFIG: {
-                    int vtxDevice = buffer.readUnsignedByteAsInt();
-                    packetData.daos.writeShort(vtxDevice);
-                    if (vtxDevice == FcCommon.VTXDEV_UNKNOWN) break;
-                    packetData.daos.writeByte(buffer.readByte());//band
-                    packetData.daos.writeByte(buffer.readByte());//channel
-                    packetData.daos.writeByte(buffer.readByte());//power
-                    packetData.daos.writeByte(buffer.readByte());//pitMode
-                    if (fcInfo.getFcVariant() == FcInfo.FC_VARIANT_BETAFLIGHT) packetData.daos.writeShort(buffer.readShort());//frequency
-                    packetData.daos.writeByte(buffer.readByte());//deviceIsReady
-                    packetData.daos.writeByte(buffer.readByte());//lowPowerDisarm
-                    break;
-                }
-                case FcCommon.MSP_BATTERY_STATE: {
-                    packetData.daos.writeByte(buffer.readByte());//cellCount
-                    packetData.daos.writeShort(buffer.readShort());//capacity
-                    buffer.readByte();//legacyVoltage
-                    packetData.daos.writeShort(buffer.readShort());//mahDrawn
-                    packetData.daos.writeShort(buffer.readShort());//amperage
-                    packetData.daos.writeByte(buffer.readByte());//batteryState
-                    packetData.daos.writeShort(buffer.readShort());//voltage
-                    break;
-                }
-                case FcCommon.MSP_STATUS: {
-                    packetData.daos.writeShort(buffer.readShort());//cycleTime
-                    packetData.daos.writeShort(buffer.readShort());//i2cErrorCount
-                    packetData.daos.writeShort(buffer.readShort());//sensorStatus
-                    switch (fcInfo.getFcVariant()){
-                        case FcInfo.FC_VARIANT_INAV:{
-                            buffer.readInt();//legacyModeFlags
-                            packetData.daos.writeByte(buffer.readByte());//configProfile
-                            break;
-                        }
-                        case FcInfo.FC_VARIANT_BETAFLIGHT:{
-                            int firstModeFlag = buffer.readInt();
-                            packetData.daos.writeByte(buffer.readByte());//currentPidProfileIndex
-                            packetData.daos.writeShort(buffer.readShort());//averageSystemLoad
-                            buffer.readShort();//unused
-                            byte[] modeFlags;
-                            int modeFlagsSize = buffer.readByte()+4;
-                            packetData.daos.writeByte(modeFlagsSize);
-                            if (modeFlagsSize > 0) {
-                                modeFlags = new byte[modeFlagsSize];
-                                modeFlags[0] = (byte) (firstModeFlag & 0xFF);
-                                modeFlags[1] = (byte) (firstModeFlag >> 8 & 0xFF);
-                                modeFlags[2] = (byte) (firstModeFlag >> 16 & 0xFF);
-                                modeFlags[3] = (byte) (firstModeFlag >> 24 & 0xFF);
-                                for (int i = 4; i < modeFlagsSize; i++) {
-                                    modeFlags[i] = buffer.readByte();
-                                }
-                                for (int i = 0; i < modeFlagsSize; i++) {
-                                    packetData.daos.writeByte(modeFlags[i]);
-                                }
-                            }
-                            buffer.readByte();//armingFlagsCount
-                            packetData.daos.writeInt(buffer.readInt());//armingFlags
-                            packetData.daos.writeByte(buffer.readByte());//configStateFlags
-                            short coreTemperatureCelsius = 0;
-                            if (buffer.getRemaining() >= 2) { // 1.46
-                                coreTemperatureCelsius = buffer.readShort();
-                            }
-                            packetData.daos.writeShort(coreTemperatureCelsius);
-                            break;
-                        }
-                    }
-                    break;
-                }
-                case FcCommon.MSP_COMP_GPS: {
-                    packetData.daos.writeShort(buffer.readShort());//distanceToHome
-                    packetData.daos.writeShort(buffer.readShort());//directionToHome
-                    packetData.daos.writeByte(buffer.readByte());//gpsHeartbeat
-                    break;
-                }
-                case FcCommon.MSP_OSD_CANVAS: {
-                    packetData.daos.writeByte(buffer.readByte());//cols
-                    packetData.daos.writeByte(buffer.readByte());//rows
-                    break;
-                }
-                case FcCommon.MSP2_INAV_STATUS: {
-                    packetData.daos.writeShort(buffer.readShort());//cycleTime
-                    packetData.daos.writeShort(buffer.readShort());//i2cErrorCount
-                    packetData.daos.writeShort(buffer.readShort());//sensorStatus
-                    packetData.daos.writeShort(buffer.readShort());//averageSystemLoad
-                    packetData.daos.writeByte(buffer.readByte());//profiles
-                    packetData.daos.writeInt(buffer.readInt());//armingFlags
-                    int modeFlagsSize = (int)Math.ceil((buffer.getRemaining() - 1) / 4.0);
-                    packetData.daos.writeByte(modeFlagsSize);
-                    if (modeFlagsSize > 0) {
-                        for (int i = 0; i < modeFlagsSize; i++) {
-                            packetData.daos.writeInt(buffer.readInt());//modeFlags
-                        }
-                    }
-                    break;
-                }
-                case FcCommon.MSP2_INAV_ANALOG: {
-                    packetData.daos.writeByte(buffer.readByte());//batteryInfo
-                    packetData.daos.writeShort(buffer.readShort());//voltage
-                    packetData.daos.writeShort(buffer.readShort());//amperage
-                    packetData.daos.writeInt(buffer.readInt());//power
-                    packetData.daos.writeInt(buffer.readInt());//mahDrawn
-                    packetData.daos.writeInt(buffer.readInt());//mwhDrawn
-                    packetData.daos.writeInt(buffer.readInt());//batteryRemainingCapacity
-                    packetData.daos.writeByte(buffer.readByte());//batteryPercentage
-                    packetData.daos.writeShort(buffer.readShort());//rssi
-                    break;
-                }
-                case FcCommon.DD_TIMERS: {
-                    packetData.daos.writeInt(buffer.readInt());//onTime
-                    packetData.daos.writeInt(buffer.readInt());//flyTime
-                    packetData.daos.writeInt(buffer.readInt());//lastArmTime
-                    break;
-                }
-                case FcCommon.DD_PHONE_BATTERY_STATE: {
-                    packetData.daos.writeByte(buffer.readByte());//batteryLevel
-                    packetData.daos.writeBoolean(buffer.readBoolean());//isCharging
-                    break;
-                }
-                case FcCommon.DD_CAMERA_FPS: {
-                    packetData.daos.writeShort(buffer.readShort());//cameraFps
-                    break;
-                }
-                case FcCommon.DD_VIDEO_BIT_RATE: {
-                    packetData.daos.writeFloat(buffer.readFloat());//videoBitRate
-                    break;
-                }
-                case FcCommon.DD_VIDEO_RECORDER_STATE: {
-                    packetData.daos.writeBoolean(buffer.readBoolean());//isRecording
-                    packetData.daos.writeInt(buffer.readInt());//recordingTimeSec
-                    break;
-                }
-                case FcCommon.DD_VIDEO_RECORDER_START_STOP: {
-                    videoStarter.execute(this::startStopRecording); // the muxer's start / stop, off this thread
-                    break;
-                }
-                case FcCommon.DD_NETWORK_STATE: {
-                    packetData.daos.writeByte(buffer.readByte());//networkType
-                    packetData.daos.writeByte(buffer.readByte());//rssi
-                    break;
-                }
-                // already Big Endian encoded, can be written as a whole array
-                case FcCommon.MSP_RAW_GPS:
-                case FcCommon.DD_AP_OSD_CONFIG:
-                case FcCommon.DD_MAVLINK_MODE:
-                case FcCommon.DD_MAVLINK_BATTERY_STATUS:
-                case FcCommon.DD_MAVLINK_SYS_STATUS:
-                case FcCommon.DD_MAVLINK_STATUS_TEXT:
-                case FcCommon.DD_MAVLINK_GPS_RAW_INT:
-                case FcCommon.DD_MAVLINK_GLOBAL_POSITION_INT:
-                case FcCommon.DD_MAVLINK_HOME_POSITION:
-                case FcCommon.DD_MAVLINK_SYSTEM_TIME:
-                case FcCommon.DD_MAVLINK_RC_CHANNELS:
-                case FcCommon.DD_MAVLINK_SCALED_PRESSURE:
-                case FcCommon.DD_AP_VTX_POWER:
-                case FcCommon.DD_MAVLINK_VFR_HUD:
-                case FcCommon.DD_MAVLINK_ATTITUDE: {
-                    packetData.daos.write(buffer.getData());
-                    break;
-                }
+            if (buf.code == FcCommon.DD_VIDEO_RECORDER_START_STOP) {
+                videoStarter.execute(this::startStopRecording); // the muxer's start / stop, off this thread
             }
+            TelemetryRecords.write(buf, msp.getFcInfo(), packetData.daos);
         } catch (Exception e) {
             e.printStackTrace();
             log("fillTelemetryPacketData error: " + e + ", Code: " + buf.code);
@@ -2555,7 +2123,7 @@ public class Udp {
         if (r == null) return;
         long now = System.currentTimeMillis();
         int state;
-        boolean pilotNear = isConnected() || android.os.SystemClock.elapsedRealtime() - lastPilotPacketMs < OBSERVE_AFTER_PILOT_MS
+        boolean pilotNear = isConnected() || gate.silentMs(android.os.SystemClock.elapsedRealtime()) < OBSERVE_AFTER_PILOT_MS
                 && !packet.getAddress().equals(lastPcIp); // pc.38: the pilot's silence on the monotonic clock
         if (pilotNear) state = Observe.REFUSED_PILOT;
         else if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) state = Observe.REFUSED_ARMED;

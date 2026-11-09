@@ -1,6 +1,7 @@
 package de.droiddrone.pc.setup;
 
 import com.fazecast.jSerialComm.SerialPort;
+import de.droiddrone.common.MspFrames;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -145,41 +146,15 @@ public final class BetaflightUsb implements AutoCloseable {
      * other requests are skipped; Betaflight's error answer ("$M!") throws.
      */
     public byte[] msp(int command, byte[] payload) throws IOException {
-        byte[] frame = mspFrame(command, payload);
-        write(frame);
-        MspParser parser = new MspParser();
-        byte[] buf = new byte[256];
-        long end = System.currentTimeMillis() + 1000;
-        while (System.currentTimeMillis() < end) {
-            int n = wire.read(buf);
-            if (n < 0) throw new IOException("The flight controller disconnected");
-            for (int i = 0; i < n; i++) {
-                MspParser.Frame f = parser.feed(buf[i]);
-                if (f == null || f.command() != command) continue;
-                if (f.error()) throw new IOException("The flight controller refused MSP command " + command);
-                return f.payload();
-            }
-        }
-        throw new IOException("No answer from the flight controller - is it running Betaflight?");
+        write(mspFrame(command, payload));
+        byte[] answer = answer(MspFrames.V1, command, 1000, "MSP command " + command);
+        if (answer == null) throw new IOException("No answer from the flight controller - is it running Betaflight?");
+        return answer;
     }
 
-    /** "$M<", size, command, payload, checksum (XOR of size, command and payload). */
+    /** "$M<", size, command, payload, checksum (XOR of size, command and payload): MspFrames, shared with the phone. */
     static byte[] mspFrame(int command, byte[] payload) {
-        int size = payload == null ? 0 : payload.length;
-        if (size > 255 || command < 0 || command > 255) throw new IllegalArgumentException("Not an MSP v1 request");
-        byte[] f = new byte[6 + size];
-        f[0] = '$';
-        f[1] = 'M';
-        f[2] = '<';
-        f[3] = (byte) size;
-        f[4] = (byte) command;
-        int checksum = size ^ command;
-        for (int i = 0; i < size; i++) {
-            f[5 + i] = payload[i];
-            checksum ^= payload[i] & 0xff;
-        }
-        f[5 + size] = (byte) checksum;
-        return f;
+        return MspFrames.v1Request(command, payload);
     }
 
     /**
@@ -188,141 +163,39 @@ public final class BetaflightUsb implements AutoCloseable {
      */
     public byte[] msp2(int command, byte[] payload) throws IOException {
         write(msp2Frame(command, payload));
-        Msp2Parser parser = new Msp2Parser();
-        byte[] buf = new byte[256];
-        long end = System.currentTimeMillis() + 1500;
-        while (System.currentTimeMillis() < end) {
-            int n = wire.read(buf);
-            if (n < 0) throw new IOException("The flight controller disconnected");
-            for (int i = 0; i < n; i++) {
-                MspParser.Frame f = parser.feed(buf[i]);
-                if (f == null || f.command() != command) continue;
-                if (f.error()) throw new IOException("The flight controller refused MSP2 command 0x" + Integer.toHexString(command));
-                return f.payload();
-            }
-        }
-        throw new IOException("No MSP2 answer - Betaflight may be too old");
+        byte[] answer = answer(MspFrames.V2, command, 1500, "MSP2 command 0x" + Integer.toHexString(command));
+        if (answer == null) throw new IOException("No MSP2 answer - Betaflight may be too old");
+        return answer;
     }
 
-    /** "$X<", flag 0, command u16, size u16, payload, CRC-8/DVB-S2 over flag to payload. */
+    /** "$X<", flag 0, command u16, size u16, payload, CRC-8/DVB-S2 over flag to payload: MspFrames. */
     static byte[] msp2Frame(int command, byte[] payload) {
-        int size = payload == null ? 0 : payload.length;
-        if (command < 0 || command > 0xffff || size > 0xffff) throw new IllegalArgumentException("Not an MSP v2 request");
-        byte[] f = new byte[9 + size];
-        f[0] = '$';
-        f[1] = 'X';
-        f[2] = '<';
-        f[3] = 0;
-        f[4] = (byte) command;
-        f[5] = (byte) (command >> 8);
-        f[6] = (byte) size;
-        f[7] = (byte) (size >> 8);
-        if (size > 0) System.arraycopy(payload, 0, f, 8, size);
-        int crc = 0;
-        for (int i = 3; i < 8 + size; i++) crc = crc8DvbS2(crc, f[i]);
-        f[8 + size] = (byte) crc;
-        return f;
+        return MspFrames.v2Request(command, payload);
     }
 
     /** MSP v2's checksum: CRC-8 with polynomial 0xD5 (DVB-S2), from 0, no reflection. */
     static int crc8DvbS2(int crc, byte b) {
-        crc ^= b & 0xff;
-        for (int i = 0; i < 8; i++) crc = (crc & 0x80) != 0 ? ((crc << 1) ^ 0xd5) & 0xff : (crc << 1) & 0xff;
-        return crc;
+        return MspFrames.crc8DvbS2(crc, b);
     }
 
-    /** Puts MSP v2 answers back together ("$X>" / "$X!"); drops anything with a bad checksum. */
-    static final class Msp2Parser {
-        private int state, flag, command, size, index, crc;
-        private boolean error;
-        private byte[] payload;
-
-        MspParser.Frame feed(byte b) {
-            int v = b & 0xff;
-            switch (state) {
-                case 0 -> state = v == '$' ? 1 : 0;
-                case 1 -> state = v == 'X' ? 2 : 0;
-                case 2 -> {
-                    if (v == '>' || v == '!') {
-                        error = v == '!';
-                        crc = 0;
-                        state = 3;
-                    } else {
-                        state = 0;
-                    }
-                }
-                case 3 -> { flag = v; crc = crc8DvbS2(crc, b); state = 4; }
-                case 4 -> { command = v; crc = crc8DvbS2(crc, b); state = 5; }
-                case 5 -> { command |= v << 8; crc = crc8DvbS2(crc, b); state = 6; }
-                case 6 -> { size = v; crc = crc8DvbS2(crc, b); state = 7; }
-                case 7 -> {
-                    size |= v << 8;
-                    crc = crc8DvbS2(crc, b);
-                    payload = new byte[size];
-                    index = 0;
-                    state = size == 0 ? 9 : 8;
-                }
-                case 8 -> {
-                    payload[index++] = b;
-                    crc = crc8DvbS2(crc, b);
-                    if (index == size) state = 9;
-                }
-                case 9 -> {
-                    state = 0;
-                    if (v == crc) return new MspParser.Frame(command, payload, error);
-                }
-                default -> state = 0;
+    /**
+     * The payload of the answer to command in the given MSP version (empty, never null), read for up to timeoutMs, or
+     * null when none came. Answers to other requests are skipped; Betaflight's error answer ("!") throws.
+     */
+    private byte[] answer(byte version, int command, long timeoutMs, String what) throws IOException {
+        MspFrames frames = new MspFrames(version);
+        byte[] buf = new byte[256];
+        long end = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < end) {
+            int n = wire.read(buf);
+            if (n < 0) throw new IOException("The flight controller disconnected");
+            for (MspFrames.Frame f : frames.feed(buf, n)) {
+                if (f.version != version || f.type == MspFrames.REQUEST || f.code != command) continue;
+                if (f.isError()) throw new IOException("The flight controller refused " + what);
+                return f.payload == null ? new byte[0] : f.payload;
             }
-            return null;
         }
-    }
-
-    /** Puts MSP v1 answers back together from bytes as they arrive; drops anything with a bad checksum. */
-    static final class MspParser {
-        record Frame(int command, byte[] payload, boolean error) {}
-
-        private int state, size, command, checksum, index;
-        private boolean error;
-        private byte[] payload;
-
-        Frame feed(byte b) {
-            int v = b & 0xff;
-            switch (state) {
-                case 0 -> state = v == '$' ? 1 : 0;
-                case 1 -> state = v == 'M' ? 2 : 0;
-                case 2 -> {
-                    if (v == '>' || v == '!') {
-                        error = v == '!';
-                        state = 3;
-                    } else {
-                        state = 0;
-                    }
-                }
-                case 3 -> {
-                    size = v;
-                    checksum = v;
-                    state = 4;
-                }
-                case 4 -> {
-                    command = v;
-                    checksum ^= v;
-                    payload = new byte[size];
-                    index = 0;
-                    state = size == 0 ? 6 : 5;
-                }
-                case 5 -> {
-                    payload[index++] = b;
-                    checksum ^= v;
-                    if (index == size) state = 6;
-                }
-                case 6 -> {
-                    state = 0;
-                    if (v == checksum) return new Frame(command, payload, error);
-                }
-                default -> state = 0;
-            }
-            return null;
-        }
+        return null;
     }
 
     // ------------------------------------------------------------------ CLI
