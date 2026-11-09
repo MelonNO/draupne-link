@@ -157,6 +157,18 @@ class SetupTest {
         }
         assertTrue(SelfUpdate.quote(Path.of("C:\\Users\\Kari\u2019s PC")).contains("\u2019\u2019"), "the update helper's paths too");
     }
+
+    /**
+     * The values the PowerShell scripts take without psQuote (PcPrep, WindowsSetup, Tailscale, SelfUpdate: everything
+     * else goes through it) are fixed names, numbers and a hex hash: a rule renamed with a space or a quote is caught here.
+     */
+    @Test
+    void whatTheScriptsTakeUnquotedNeedsNoQuoting() {
+        List<String> names = new java.util.ArrayList<>(WindowsSetup.OLD_RULES);
+        names.add(WindowsSetup.LINK_RULE);
+        names.add(WindowsSetup.APK_RULE);
+        for (String n : names) assertTrue(n.matches("[A-Za-z0-9-]+"), n);
+    }
     @Test
     void windowsToolsRunByFullPath() {
         assumeTrue(System.getProperty("os.name", "").startsWith("Windows"));
