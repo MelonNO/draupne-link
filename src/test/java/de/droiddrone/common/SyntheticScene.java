@@ -79,6 +79,89 @@ final class SyntheticScene {
         }
     }
 
+    /**
+     * Someone walking straight at the camera (1.0.53, the pilot: "a person moving from inside the woods directly towards
+     * the camera"): drawn in perspective from the camera {@link #camHeightM} up, looking level - head, body, swinging arms
+     * and legs, a camouflage pattern of about the ground's brightness - growing as the distance falls, hardly moving
+     * sideways. Trunks nearer than them hide them.
+     */
+    static final class Approacher {
+        final double lateralM, startM, speed, t0, t1;
+        final float luma, contrast;
+        /** Metres a second sideways (right): 0 = straight at the camera. */
+        double driftMps;
+
+        /** lateralM off the camera's axis, startM away, speed m/s, from t0 to t1 s; luma the pattern's mean, contrast its +-. */
+        Approacher(double lateralM, double startM, double speed, double t0, double t1, float luma, float contrast) {
+            this.lateralM = lateralM;
+            this.startM = startM;
+            this.speed = speed;
+            this.t0 = t0;
+            this.t1 = t1;
+            this.luma = luma;
+            this.contrast = contrast;
+        }
+
+        boolean on(double t) {
+            return t >= t0 && t < t1;
+        }
+
+        double distance(double t) {
+            return Math.max(2, startM - speed * (t - t0));
+        }
+
+        double lateral(double t) {
+            return lateralM + driftMps * (t - t0);
+        }
+    }
+
+    /** A tree trunk standing distanceM away, lateralM off the axis, widthM thick, from the ground to the picture's top. */
+    static final class Trunk {
+        final double lateralM, distanceM, widthM;
+        final float luma;
+
+        Trunk(double lateralM, double distanceM, double widthM, float luma) {
+            this.lateralM = lateralM;
+            this.distanceM = distanceM;
+            this.widthM = widthM;
+            this.luma = luma;
+        }
+    }
+
+    final List<Approacher> approachers = new ArrayList<>();
+    final List<Trunk> trunks = new ArrayList<>();
+    /** The perspective approachers and trunks are drawn in: the horizon's row, the focal length (px), the camera's height. */
+    double horizonRow = 72, focalPx = 160, camHeightM = 1.5;
+
+    /** The camera-space box (x, y, w, h, picture pixels) round an approacher at time t. */
+    float[] box(Approacher a, double t) {
+        double d = a.distance(t), s = focalPx / d;
+        double cx = width / 2.0 + a.lateral(t) * s, feet = horizonRow + camHeightM * s;
+        return new float[]{(float) (cx - 0.32 * s), (float) (feet - 1.80 * s), (float) (0.64 * s), (float) (1.80 * s)};
+    }
+
+    /** Whether picture point (x, y) is on the walker at time t: its pattern's luma, or NaN. */
+    private float person(Approacher a, double x, double y, double t) {
+        double d = a.distance(t), s = focalPx / d;
+        double phase = 2 * Math.PI * 0.9 * (t - a.t0);
+        double bob = 0.03 * Math.abs(Math.sin(phase));
+        double sway = 0.04 * Math.sin(phase / 2);
+        double X = (x - width / 2.0) / s - a.lateral(t) - sway, Z = (horizonRow + camHeightM * s - y) / s - bob;
+        boolean on;
+        double ax = Math.abs(X);
+        if (Z > 1.53 && Z < 1.79) on = Math.hypot(X, (Z - 1.66) * 0.9) < 0.12; // head
+        else if (Z >= 0.85 && Z <= 1.53) on = ax <= 0.22 // body
+                || ax <= 0.31 && Z >= 0.8 + 0.12 * Math.abs(Math.sin(phase + (X < 0 ? 0 : Math.PI))) && Z <= 1.45; // arms
+        else if (Z >= 0 && Z < 0.85) { // legs: the one swinging forward lifts its foot
+            double lift = 0.18 * Math.max(0, Math.sin(phase + (X < 0 ? 0 : Math.PI)));
+            on = ax >= 0.02 && ax <= 0.18 && Z >= lift;
+        } else on = false;
+        if (!on) return Float.NaN;
+        // camouflage: blotches fixed to the body, scaling with it
+        float p = (sample(leaves, (X + 0.4) * 12 + MARGIN, (2 - Z) * 12 + MARGIN) - 100) / 40;
+        return a.luma + a.contrast * Math.max(-1, Math.min(1, p));
+    }
+
     /** A cloud's shadow: a soft band darkening the picture by factor, its edge crossing at speed px/s from t0. */
     static final class Shadow {
         final float factor, speed, t0;
@@ -177,6 +260,26 @@ final class SyntheticScene {
                 u = m.u;
                 v = m.v;
             }
+        }
+        // the walkers and the trunks, farthest first (no shake on the scene's own coordinates: they shake with it)
+        double ux = sx - MARGIN, uy = sy - MARGIN;
+        double nearestPerson = Double.MAX_VALUE;
+        for (Approacher a : approachers) {
+            if (!a.on(t)) continue;
+            float p = person(a, ux, uy, t);
+            if (Float.isNaN(p) || a.distance(t) > nearestPerson) continue;
+            nearestPerson = a.distance(t);
+            luma = p;
+            u = 124;
+            v = 126;
+        }
+        for (Trunk k : trunks) {
+            if (k.distanceM > nearestPerson) continue;
+            double s = focalPx / k.distanceM, cx = width / 2.0 + k.lateralM * s;
+            if (Math.abs(ux - cx) > k.widthM * s / 2 || uy > horizonRow + camHeightM * s) continue;
+            luma = k.luma + (sample(leaves, ux * 0.5 + MARGIN, uy * 3 + MARGIN) - 100) * 0.15f;
+            u = 124;
+            v = 132;
         }
         for (Shadow s : shadows) {
             if (t < s.t0) continue;

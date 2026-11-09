@@ -28,7 +28,7 @@ class MotionDetectorTest {
         double firstAt = -1;
         int reports;
         boolean anyNight, anyLight;
-        MotionDetector.Detection last;
+        MotionDetector.Detection first, last;
         double lastAt;
     }
 
@@ -48,7 +48,10 @@ class MotionDetectorTest {
                 r.ids.add(det.id);
                 r.reportsPerId.merge(det.id, 1, Integer::sum);
                 r.reports++;
-                if (r.firstAt < 0) r.firstAt = t;
+                if (r.firstAt < 0) {
+                    r.firstAt = t;
+                    r.first = det;
+                }
                 if (det.light) r.anyLight = true;
                 r.last = det;
                 r.lastAt = t;
@@ -69,6 +72,84 @@ class MotionDetectorTest {
         s.patches.add(new SyntheticScene.Patch(230, 150, 30, 25, 12f, 1.4f, 4.1f)); // a bush, quick
         s.shake = 4;
         return s;
+    }
+
+    /**
+     * The edge of a wood seen from 1.5 m up (1.0.53): the windy woods' foliage swaying in the canopy and the bushes, and
+     * trunks 18 - 45 m away across the middle of the picture, where someone in the wood would walk out.
+     */
+    static SyntheticScene woodsEdge(long seed) {
+        SyntheticScene s = windyWoods(seed);
+        s.patches.add(new SyntheticScene.Patch(120, 40, 40, 22, 9f, 0.8f, 1.1f)); // canopy over the trunks
+        s.patches.add(new SyntheticScene.Patch(200, 82, 18, 10, 6f, 1.1f, 3.3f)); // a bush at the wood's edge
+        double[][] trunks = {{-9, 30, 0.5}, {-5, 22, 0.4}, {-2.2, 38, 0.45}, {1.4, 26, 0.35}, {3.5, 18, 0.5}, {6, 34, 0.4}, {10, 45, 0.6}};
+        for (double[] k : trunks) s.trunks.add(new SyntheticScene.Trunk(k[0], k[1], k[2], 55));
+        return s;
+    }
+
+    /** The detector on a scene without colour (a grey camera): u and v null. */
+    static Run runGrey(SyntheticScene scene, MotionDetector d, double fromS, double toS) {
+        Run r = new Run();
+        for (long i = Math.round(fromS * FPS); i < Math.round(toS * FPS); i++) {
+            double t = i / FPS;
+            byte[][] f = scene.frame(t);
+            MotionDetector.Result res = d.process(f[0], W, H, null, null, Math.round(t * 1000));
+            for (MotionDetector.Detection det : res.detections) {
+                r.ids.add(det.id);
+                r.reportsPerId.merge(det.id, 1, Integer::sum);
+                r.reports++;
+                if (r.firstAt < 0) r.firstAt = t;
+                r.last = det;
+                r.lastAt = t;
+            }
+        }
+        return r;
+    }
+
+    /**
+     * 1.0.53, the pilot: "the movement detection should be able to find a person moving from inside the woods directly
+     * towards the camera", without colour (other cameras have none; people and vehicles are the surroundings' colour).
+     * Someone in camouflage of the ground's brightness walks out of the wood from 45 m straight at a grey camera, hardly
+     * moving sideways - growing, hidden by trunks until past them: found while still 15 m away at least, the box on them.
+     */
+    @Test
+    void someoneWalkingOutOfTheWoodsStraightAtTheCameraIsFound() {
+        for (boolean grey : new boolean[]{true, false}) {
+            SyntheticScene scene = woodsEdge(11);
+            SyntheticScene.Approacher a = new SyntheticScene.Approacher(0.6, 45, 1.4, 25, 52, 90, 30);
+            scene.approachers.add(a);
+            MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
+            Run r = grey ? runGrey(scene, d, 0, 50) : run(scene, d, 0, 50, null);
+            assertTrue(r.firstAt >= 25, (grey ? "grey" : "colour") + ": nothing before the walker: " + r.firstAt + " " + r.reportsPerId);
+            double at = a.distance(r.firstAt);
+            assertTrue(at >= 15, (grey ? "grey" : "colour") + ": found " + String.format("%.1f", at) + " m away (at " + r.firstAt + " s)");
+            float[] truth = scene.box(a, r.lastAt);
+            assertEquals((truth[0] + truth[2] / 2) / W, r.last.centreX(), 0.05, "box centre x on the walker");
+            assertEquals((truth[1] + truth[3] / 2) / H, r.last.centreY(), 0.08, "box centre y on the walker");
+        }
+    }
+
+    /**
+     * As above, but at an angle: out of the wood between the trunks towards the camera and a little across. (Not through
+     * the swaying bush: inside leaves that sway, brightness can't tell a person from the leaves - found once out of them.)
+     */
+    @Test
+    void someoneComingOutOfTheWoodsAtAnAngleIsFound() {
+        SyntheticScene scene = woodsEdge(13);
+        SyntheticScene.Approacher a = new SyntheticScene.Approacher(-6, 40, 1.4, 20, 45, 90, 30);
+        a.driftMps = 0.25; // to the right while coming nearer
+        scene.approachers.add(a);
+        Run r = runGrey(scene, new MotionDetector(MotionDetector.NORMAL), 0, 45);
+        assertTrue(r.firstAt >= 20 && a.distance(r.firstAt) >= 15, "found " + a.distance(r.firstAt) + " m away (" + r.firstAt + " s)");
+    }
+
+    /** The wood's edge in the gale for twenty minutes, without colour: nothing - the growing test must not take leaves. */
+    @Test
+    void theWoodsEdgeInTheWindGivesNoAlarmWithoutColour() {
+        for (int sens = MotionDetector.LOW; sens <= MotionDetector.HIGH; sens++) {
+            Run r = runGrey(woodsEdge(23 + sens), new MotionDetector(sens), 0, sens == MotionDetector.NORMAL ? 1200 : 300);
+            assertEquals(Set.of(), r.ids, "sensitivity " + sens + ": false alarms " + r.reportsPerId);
+        }
     }
 
     @Test
@@ -121,20 +202,21 @@ class MotionDetectorTest {
     }
 
     /**
-     * 1.0.52, the pilot's recording: a red car with the ground's brightness was seen as its wheels and windows only - found
-     * half way across, its box beside it. Its colour now completes it: found within 1.5 s of driving in, the box round all
-     * of it - also while the detector is young (it came in 7 s after the start).
+     * 1.0.52, the pilot's recording: a red car with the ground's brightness was seen as its wheels and windows only. 1.0.52
+     * filled it in by its colour; 1.0.53 takes no colour (the pilot: other cameras have none, and vehicles wear the
+     * surroundings' colours), so a car of exactly the ground's brightness is seen where brightness shows it - against
+     * ground of another brightness: found soon after it drove in (also while the detector is young), the box on it. Over
+     * ground of its own brightness it can't be told from the ground, and the box is lost until it is out of it.
      */
     @Test
-    void aCarOfTheGroundsBrightnessIsFoundEarlyByItsColour() {
+    void aCarOfTheGroundsBrightnessIsFoundEarlyWithoutItsColour() {
         SyntheticScene scene = windyWoods(7);
         // 30 x 12 px, flat, the ground's mean brightness, red (V high), 40 px/s to the right from 7 s
         scene.movers.add(new SyntheticScene.Mover(-30, 120, 30, 12, 40, 0, 7, 16, 108, 110, 190, false));
         Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 12, null); // it is then in the middle
-        assertTrue(r.firstAt >= 7 && r.firstAt <= 8.5 + 0.75, "found soon after it drove in: " + r.firstAt);
-        float[] truth = scene.movers.get(0).at(r.lastAt);
-        assertTrue(r.last.w * W >= 0.7f * truth[2], "the box round the car, not a piece of it: " + r.last.w * W + " px of " + truth[2]);
-        assertEquals((truth[0] + truth[2] / 2) / W, r.last.centreX(), 0.04, "box centre x on the car");
+        assertTrue(r.firstAt >= 7 && r.firstAt <= 9.25, "found soon after it drove in: " + r.firstAt);
+        float[] truth = scene.movers.get(0).at(r.firstAt);
+        assertEquals((truth[0] + truth[2] / 2) / W, r.first.centreX(), truth[2] / 2 / W, "the first box's centre x on the car");
     }
 
     /**

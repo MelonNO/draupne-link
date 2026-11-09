@@ -53,17 +53,24 @@ import java.util.List;
  * a spot and fails this.</li>
  * <li>Vegetation or not: no trained model can be had offline here, so a score from plain statistics - how often the
  * pixels round the blob were foreground in the last ~20 s (leaves flicker in place; something passing does so once),
- * how green it is (both chroma values below grey), how much it turns back and forth or wanders, and how textured the
- * background under it is next to the picture's average. A track over {@link #MAX_VEGETATION} is never reported. For
+ * how much it turns back and forth or wanders, and how textured the background under it is next to the picture's
+ * average. No colour (1.0.53): other cameras have none, and people and vehicles wear the surroundings' colours.
+ * A track over {@link #MAX_VEGETATION} is never reported. For
  * {@link #YOUNG_MS} after the warm-up the flicker map is half known: a longer way and a lower score are asked.</li>
+ * <li>Coming straight at the camera (1.0.53): someone walking head-on hardly moves in the picture - he grows - and the
+ * background above learns a thing that stays in one place within seconds. {@link Looming} looks at the same aligned
+ * pictures slowly: what stays changed against a slow reference and grows steadily where it stands is reported too.</li>
  * </ol>
  * Night: a dark picture (mean luma under {@link #NIGHT_ENTER}) keeps the detector on, but only for points brighter than
  * the background (headlights, torches) - a larger margin, and a blob must also stand {@link #NIGHT_PEAK_OVER_MEAN} over
  * the picture's mean. Sensor noise does not form tracks: it is scattered single pixels, gone by step 4, and never
  * travels.
  *
- * <p>Not thread safe: one thread feeds it. About 1 ms a picture on a PC; no allocation per picture beyond the blobs
- * and tracks found.
+ * <p>By brightness alone (1.0.53): the chroma passed in is not used - other cameras have none, and people and vehicles
+ * wear the surroundings' colours.
+ *
+ * <p>Not thread safe: one thread feeds it. About 1.5 ms a 320 x 180 picture on a PC (MotionDetectorPerfTest), a third
+ * of it the approach watch; no allocation per picture beyond the blobs and tracks found.
  */public final class MotionDetector {
     public static final int OFF = 0, LOW = 1, NORMAL = 2, HIGH = 3;
     /** The working picture is at most this wide: the input is averaged down by a whole factor. */
@@ -89,6 +96,12 @@ import java.util.List;
     /** The vegetation score above which a track is never reported. */
     static final float[] MAX_VEGETATION = {0, 0.4f, 0.45f, 0.55f};
 
+    /**
+     * The vegetation score's parts (1.0.53: no colour any more - a grey camera has none, and a soldier in green
+     * camouflage scored as leaves): how often the ground round it flickered, how it turns back and forth or wanders,
+     * how textured the background under it is.
+     */
+    static final float VEG_FLICKER = 0.35f, VEG_WAY = 0.3f, VEG_TEXTURE = 0.05f;
     /** Mean luma under this: night (light mode); back to day over NIGHT_LEAVE. */
     static final float NIGHT_ENTER = 35, NIGHT_LEAVE = 45;
     /** A blob at night must peak this much over the picture's mean luma. */
@@ -143,16 +156,6 @@ import java.util.List;
     /** Other light changes a 3 x 3 patch by one factor: its pixels' ratios to the background within this of each other. */
     static final float LIGHT_RATIO_SPREAD = 1.5f;
     /**
-     * By day a pixel also counts by its colour (1.0.52, the pilot's recording: a red car on green ground has the
-     * ground's brightness, so only its wheels and windows were seen - late, and a box beside it): |U - U'| + |V - V'|
-     * against the colour background, over this (of 255) by sensitivity. Only with chroma (the phone; the virtual fleet).
-     */
-    static final float[] CHROMA_MARGIN = {0, 24, 18, 14};
-    /** ... within this many working pixels of what the brightness found (colourFill). */
-    static final int COLOUR_REACH = 3;
-    /** ... where the background's brightness varies less than this (grey levels squared). */
-    static final float COLOUR_STILL_VAR = 8 * 8;
-    /**
      * A track that clearly drives through the picture counts early (1.0.52: a car was found half way across): from this
      * age (s), when it went FAST_TRAVEL of the picture's width in a nearly straight line, seen in most pictures - whatever
      * the sensitivity: a big branch swings a tenth of the width one way before it comes back.
@@ -161,6 +164,8 @@ import java.util.List;
     static final float FAST_TRAVEL = 0.15f;
     static final float FAST_STRAIGHT = 0.85f;
     static final float FAST_SEEN = 0.75f;
+    /** The confidence a loomer is reported with (Looming: it grew steadily where it stands). */
+    static final float LOOM_CONFIDENCE = 0.7f;
     /** A proven track not matched for this long ends (an unproven one after TRACK_LOST_MS): a vehicle turning head-on shrinks to nothing for a moment. */
     static final long PROVEN_LOST_MS = 3000;
 
@@ -211,7 +216,7 @@ import java.util.List;
 
     private static final class Blob {
         int count, minX, minY, maxX, maxY;
-        float sumX, sumY, freq, green, texture, peak;
+        float sumX, sumY, freq, texture, peak;
         /** Sums of picture (a) and background (m) values over the blob, for their correlation. */
         double sa, sm, saa, smm, sam;
         int label;
@@ -237,7 +242,7 @@ import java.util.List;
         final ArrayList<float[]> history = new ArrayList<>();
         float ox, oy, maxFromOrigin;
         int minX, minY, maxX, maxY;
-        float flicker, green, textureRatio, vegetation, confidence;
+        float flicker, textureRatio, vegetation, confidence;
         boolean confirmed, light, proven;
         /** It once came back towards where it began (leaves do, at every swing): the slow way never counts for it. */
         boolean cameBack;
@@ -255,13 +260,7 @@ import java.util.List;
 
     private int sensitivity;
     private int inWidth, inHeight, factor, w, h;
-    private float[] cur, aligned, mean, var, sd, freq, green;
-    /** The picture's colour (U, V) per working pixel, and the background's (chromaKnown: learnt since the last restart). */
-    private float[] cu, cv, mu, mv;
-    /** colourFill: the brightness pixels it starts from, and which pixels it looked at this picture (by stamp). */
-    private int[] fillFrom, fillSeen;
-    private int fillStamp;
-    private boolean chromaKnown;
+    private float[] cur, aligned, mean, var, sd, freq;
     /** A slower background: what the ground looked like before the last few seconds (leavesChange). */
     private float[] slow;
     /** The most any pixel within 2 of each flickered (freq): leaves at the far end of a swing sit next to ones that flicker often. */
@@ -270,7 +269,7 @@ import java.util.List;
     private byte[] valid, changed, raw, clean, grown;
     private int[] labels, stack;
     private float[] smallCur, smallMean, hpSmallCur, hpSmallMean, hpCur, hpMean, tmp;
-    private boolean started, night, hasChroma;
+    private boolean started, night;
     private long lastMs, warmUntil;
     /**
      * A track's history keeps its times as floats counted from here (DRAUPNE Link 1.0.50): a float holds a clock's
@@ -288,6 +287,8 @@ import java.util.List;
     /** Blobs under MIN_AREA (2 pixels at least): only a proven track may take one (a far vehicle turning head-on); never a track of their own. */
     private final ArrayList<Blob> small = new ArrayList<>();
     private int nextId = 1;
+    /** Things coming straight at the camera: a slow second look at the same pictures (1.0.53). */
+    private Looming loom;
     /** Tracks keep the figures they were judged by, for describeTracks. */
     boolean debug;
     /** The last shift found, working pixels (for the tests and the log). */
@@ -317,11 +318,19 @@ import java.util.List;
         StringBuilder s = new StringBuilder();
         for (Track t : tracks) {
             float[] p = t.history.get(t.history.size() - 1);
-            s.append(String.format(java.util.Locale.ROOT, "#%d hits %d age %.1f at %.0f,%.0f size %dx%d flick %.2f green %.2f tex %.2f veg %.2f conf %.2f %s%n",
-                    t.id, t.hits, (now - t.first) / 1000f, p[1], p[2], t.maxX - t.minX + 1, t.maxY - t.minY + 1, t.flicker, t.green,
+            s.append(String.format(java.util.Locale.ROOT, "#%d hits %d age %.1f at %.0f,%.0f size %dx%d flick %.2f tex %.2f veg %.2f conf %.2f %s%n",
+                    t.id, t.hits, (now - t.first) / 1000f, p[1], p[2], t.maxX - t.minX + 1, t.maxY - t.minY + 1, t.flicker,
                     t.textureRatio, t.vegetation, t.confidence, t.confirmed ? "CONFIRMED " + t.why : t.why));
         }
+        if (loom != null) s.append(loom.describe());
         return s.toString();
+    }
+
+    /** A new id for a track or a loomer (they wrap at 65535). */
+    private int newId() {
+        int id = nextId;
+        nextId = nextId >= 65535 ? 1 : nextId + 1;
+        return id;
     }
 
     /** How many tracks were started so far (the ids wrap at 65535). */
@@ -340,7 +349,7 @@ import java.util.List;
     /**
      * One picture.
      * @param y      the luma, width x height, rows packed
-     * @param u      the chroma at half size each way ((width / 2) x (height / 2), rows packed), or null: no colour
+     * @param u      the chroma (half size each way), or null: not used since 1.0.53 - the detection is by brightness alone
      * @param v      as u
      * @param timeMs when it was taken (any clock that only goes forward)
      */
@@ -348,10 +357,6 @@ import java.util.List;
         if (epoch == Long.MIN_VALUE || tracks.isEmpty() && timeMs - epoch > REBASE_MS) epoch = timeMs;
         if (width != inWidth || height != inHeight || cur == null) allocate(width, height);
         downsample(y);
-        hasChroma = u != null && v != null && u.length >= (width / 2) * (height / 2) && v.length >= (width / 2) * (height / 2);
-        if (hasChroma) greenness(u, v);
-        if (!hasChroma) chromaKnown = false;
-        else if (started && !chromaKnown) startChroma();
         float dt = !started ? 0.125f : Math.max(0.01f, Math.min(1f, (timeMs - lastMs) / 1000f));
         lastMs = timeMs;
         float lum = average(cur);
@@ -393,6 +398,7 @@ import java.util.List;
                 mean[i] /= gain;
                 slow[i] /= gain;
             }
+            loom.exposure(gain);
             settling = true;
         } else {
             for (int i = 0; i < w * h; i++) aligned[i] *= gain;
@@ -409,7 +415,10 @@ import java.util.List;
             }
             learn(dt, null, true);
             // the tracks' way so far spans a picture that changed as a whole: they start again after it
-            if (timeMs >= warmUntil) tracks.clear();
+            if (timeMs >= warmUntil) {
+                tracks.clear();
+                loom.unsettled();
+            }
             return new Result(Collections.<Detection>emptyList(), night, true, 0);
         }
         settledFor = 0;
@@ -423,6 +432,7 @@ import java.util.List;
             for (Blob b : small) if (b.track != null) blobs.add(b);
         }
         learn(dt, blobs, false);
+        if (!night) loom.update(aligned, valid, sd, near, dt, timeMs, rel(timeMs), sensitivity);
         return new Result(report(timeMs), night, false, tracks.size());
     }
 
@@ -441,14 +451,6 @@ import java.util.List;
         var = new float[n];
         sd = new float[n];
         freq = new float[n];
-        green = new float[n];
-        cu = new float[n];
-        cv = new float[n];
-        mu = new float[n];
-        mv = new float[n];
-        fillFrom = new int[n];
-        fillSeen = new int[n];
-        chromaKnown = false;
         slow = new float[n];
         near = new float[n];
         changed = new byte[n];
@@ -458,6 +460,8 @@ import java.util.List;
         grown = new byte[n];
         labels = new int[n];
         stack = new int[n];
+        loom = new Looming(w, h, this::newId);
+        loom.debug = debug;
         smallCur = new float[(w / 4) * (h / 4)];
         smallMean = new float[(w / 4) * (h / 4)];
         hpSmallCur = new float[(w / 4) * (h / 4)];
@@ -481,39 +485,6 @@ import java.util.List;
                     for (int dx = 0; dx < f; dx++) sum += y[row + dx] & 0xff;
                 }
                 cur[wy * w + wx] = sum * scale;
-            }
-        }
-    }
-
-    /**
-     * How green each working pixel is, 0..1: foliage has both chroma values below grey (U and V under 128; dark leaves
-     * sit round 113 / 116), skin, earth and bark have V above it, blue and grey not both below.
-     */
-    private void greenness(byte[] u, byte[] v) {
-        int cw = inWidth / 2, chh = inHeight / 2;
-        int half = Math.max(1, factor / 2);
-        for (int wy = 0; wy < h; wy++) {
-            for (int wx = 0; wx < w; wx++) {
-                int su = 0, sv = 0, n = 0;
-                int cy0 = (wy * factor) / 2, cx0 = (wx * factor) / 2;
-                for (int dy = 0; dy < half && cy0 + dy < chh; dy++) {
-                    int row = (cy0 + dy) * cw;
-                    for (int dx = 0; dx < half && cx0 + dx < cw; dx++) {
-                        su += u[row + cx0 + dx] & 0xff;
-                        sv += v[row + cx0 + dx] & 0xff;
-                        n++;
-                    }
-                }
-                if (n == 0) {
-                    green[wy * w + wx] = 0;
-                    cu[wy * w + wx] = 128;
-                    cv[wy * w + wx] = 128;
-                    continue;
-                }
-                cu[wy * w + wx] = su / (float) n;
-                cv[wy * w + wx] = sv / (float) n;
-                float below = Math.min(128 - su / (float) n, 128 - sv / (float) n);
-                green[wy * w + wx] = Math.max(0, Math.min(1, (below - 2) / 8));
             }
         }
     }
@@ -543,21 +514,13 @@ import java.util.List;
         System.arraycopy(picture, 0, slow, 0, w * h);
         java.util.Arrays.fill(var, 4 * 4);
         java.util.Arrays.fill(freq, 0);
-        startChroma();
         tracks.clear();
+        loom.restart(picture);
         started = true;
         warmUntil = timeMs + WARM_UP_MS;
         settledFor = 0;
         shiftX = 0;
         shiftY = 0;
-    }
-
-    /** The colour background starts from this picture's colour (or stays unknown without one). */
-    private void startChroma() {
-        chromaKnown = hasChroma;
-        if (!hasChroma) return;
-        System.arraycopy(cu, 0, mu, 0, w * h);
-        System.arraycopy(cv, 0, mv, 0, w * h);
     }
 
     // ------------------------------------------------------------------ 1. the shift
@@ -713,9 +676,6 @@ import java.util.List;
         // strong edge (a vehicle far off on the horizon line) matches a dark neighbour in the 3 x 3 test and was never seen
         boolean steady = Math.abs(shiftX) < STEADY_SHIFT && Math.abs(shiftY) < STEADY_SHIFT;
         float ownMargin = margin * OWN_MARGIN;
-        boolean colour = chromaKnown && !night;
-        float chromaMargin = CHROMA_MARGIN[sensitivity];
-        int ox = Math.round(shiftX), oy = Math.round(shiftY);
         int count = 0;
         for (int yy = 0; yy < h; yy++) {
             for (int xx = 0; xx < w; xx++) {
@@ -752,75 +712,7 @@ import java.util.List;
                 }
             }
         }
-        if (colour) count += colourFill(ox, oy, chromaMargin);
         return count;
-    }
-
-    /**
-     * Colour completes what brightness found (1.0.52): a pixel whose colour differs from the colour background, within
-     * COLOUR_REACH of a brightness foreground pixel, is foreground too - a red car on green ground is the ground's
-     * brightness except its wheels, windows and roof line, and was seen as those bits. Colour alone never starts a blob:
-     * leaves swaying over another colour would.
-     */
-    private int colourFill(int ox, int oy, float margin) {
-        // round each brightness pixel only (as it was before the fill), each pixel looked at once: the cost follows
-        // what moves, not the picture's size
-        int n = w * h, found = 0;
-        for (int i = 0; i < n; i++) if (raw[i] != 0) fillFrom[found++] = i;
-        if (found == 0) return 0;
-        if (++fillStamp == Integer.MAX_VALUE) {
-            java.util.Arrays.fill(fillSeen, 0);
-            fillStamp = 1;
-        }
-        int added = 0, r = COLOUR_REACH;
-        for (int k = 0; k < found; k++) {
-            int cx = fillFrom[k] % w, cy = fillFrom[k] / w;
-            for (int yy = Math.max(1, cy - r); yy <= Math.min(h - 2, cy + r); yy++) {
-                for (int xx = Math.max(1, cx - r); xx <= Math.min(w - 2, cx + r); xx++) {
-                    int i = yy * w + xx;
-                    if (fillSeen[i] == fillStamp) continue;
-                    fillSeen[i] = fillStamp;
-                    // and only on a still background: where leaves sway, the brightness learnt their range, the colour hasn't
-                    if (raw[i] != 0 || valid[i] == 0 || var[i] > COLOUR_STILL_VAR) continue;
-                    if (green[colourAt(xx, yy, ox, oy)] > 0.5f) continue; // the colour of leaves: never filled in
-                    if (!colourChanged(xx, yy, ox, oy, margin)) continue;
-                    // light changes brightness, hardly the colour: not other light
-                    raw[i] = 1;
-                    if (changed[i] == 0) {
-                        changed[i] = 1;
-                        added++;
-                    }
-                }
-            }
-        }
-        return added;
-    }
-
-    /**
-     * Whether the colour here differs from the colour background: the picture's own pixel (the camera's shift rounded)
-     * against every background pixel round it - an edge a pixel off (shake, the colour's half size) still matches.
-     */
-    /** The picture's pixel behind working pixel (xx, yy), the camera's shift rounded (inside the picture). */
-    private int colourAt(int xx, int yy, int ox, int oy) {
-        int sx = Math.max(0, Math.min(w - 1, xx + ox)), sy = Math.max(0, Math.min(h - 1, yy + oy));
-        return sy * w + sx;
-    }
-
-    private boolean colourChanged(int xx, int yy, int ox, int oy, float margin) {
-        int sx = xx + ox, sy = yy + oy;
-        if (sx < 0 || sy < 0 || sx >= w || sy >= h) return false;
-        int c = sy * w + sx;
-        float u = cu[c], v = cv[c];
-        int i = yy * w + xx;
-        if (Math.abs(u - mu[i]) + Math.abs(v - mv[i]) <= margin) return false; // most pixels: done at once
-        for (int dy = -1; dy <= 1; dy++) {
-            int row = (yy + dy) * w + xx;
-            for (int dx = -1; dx <= 1; dx++) {
-                int n = row + dx;
-                if (Math.abs(u - mu[n]) + Math.abs(v - mv[n]) <= margin) return false;
-            }
-        }
-        return true;
     }
 
     /**
@@ -926,7 +818,6 @@ import java.util.List;
                     if (yy < b.minY) b.minY = yy;
                     if (yy > b.maxY) b.maxY = yy;
                     b.freq += near[i];
-                    if (hasChroma) b.green += green[i];
                     if (xx > 0 && yy > 0 && xx < w - 1 && yy < h - 1) {
                         b.texture += Math.abs(mean[i + 1] - mean[i - 1]) + Math.abs(mean[i + w] - mean[i - w]);
                     }
@@ -956,7 +847,6 @@ import java.util.List;
             if (night && b.peak < lumMean + NIGHT_PEAK_OVER_MEAN) continue;
             if (!night && lightChange(b)) continue;
             b.freq /= b.count;
-            b.green /= b.count;
             b.texture /= b.count;
             if (b.count < MIN_AREA[sensitivity]) small.add(b);
             else found.add(b);
@@ -1031,8 +921,7 @@ import java.util.List;
         }
         for (Blob b : blobs) {
             if (b.track != null) continue;
-            Track t = new Track(nextId, now, frames, b);
-            nextId = nextId >= 65535 ? 1 : nextId + 1;
+            Track t = new Track(newId(), now, frames, b);
             tracks.add(t);
             update(t, b, now);
         }
@@ -1122,7 +1011,6 @@ import java.util.List;
         // the blob's look, averaged over the track's life (a third each picture)
         float a = t.hits == 1 ? 1 : 0.3f;
         t.flicker += a * (b.freq - t.flicker);
-        t.green += a * ((hasChroma && !night ? b.green : 0) - t.green);
         float ratio = textureMean > 0.5f ? b.texture / textureMean : 1;
         t.textureRatio += a * (ratio - t.textureRatio);
         judge(t, now, fromOrigin);
@@ -1173,7 +1061,7 @@ import java.util.List;
         // (at most twice: more made every textured thing - a vehicle - look like leaves for the first 20 s, 1.0.52)
         float flicker = Math.min(1, t.flicker / Math.max(0.5f, learnt) / 0.12f);
         float texture = Math.max(0, Math.min(1, (t.textureRatio - 1) / 2));
-        t.vegetation = 0.35f * flicker + 0.3f * t.green + 0.3f * Math.max(oscillation, 1 - straight) + 0.05f * texture;
+        t.vegetation = VEG_FLICKER * flicker + VEG_WAY * Math.max(oscillation, 1 - straight) + VEG_TEXTURE * texture;
         float ageS = (now - t.first) / 1000f;
         // seen in most pictures since it began: leaves at the far end of a gust's swing show now and then, a thing that
         // passes shows all the time
@@ -1194,14 +1082,14 @@ import java.util.List;
         // the young background's stricter look is for what might be leaves; a thing that went that far one way isn't -
         // and its own flicker is its passing (a slow vehicle makes its pixels foreground again and again): its look then
         // without the flicker
-        float wayLook = 0.3f * t.green + 0.3f * Math.max(oscillation, 1 - straight) + 0.05f * texture;
+        float wayLook = VEG_WAY * Math.max(oscillation, 1 - straight) + VEG_TEXTURE * texture;
         if (!t.confirmed && (travels && t.vegetation < maxVeg || (drives || keepsOn) && wayLook < MAX_VEGETATION[sensitivity])) {
             t.confirmed = true;
         }
         if (t.confirmed && t.maxFromOrigin >= PROVEN_TRAVEL * needed) t.proven = true;
         if (t.proven) {
             // it went far: a turn, a loop or a stop doesn't take its box away - only a look of leaves or a shadow's edge
-            float look = 0.35f * flicker + 0.3f * t.green + 0.05f * texture;
+            float look = VEG_FLICKER * flicker + VEG_TEXTURE * texture;
             if (look > maxVeg + 0.15f || wake) t.confirmed = t.proven = false;
             else t.confirmed = true;
         } else if (t.confirmed && ((t.cameBack ? t.vegetation : wayLook) > maxVeg + 0.15f || returning || wake)) {
@@ -1248,7 +1136,6 @@ import java.util.List;
     private List<Detection> report(long now) {
         List<Track> shown = new ArrayList<>();
         for (Track t : tracks) if (t.confirmed && now - t.lastSeen <= REPORT_COAST_MS) shown.add(t);
-        if (shown.isEmpty()) return Collections.emptyList();
         Collections.sort(shown, (a, b) -> Float.compare(b.confidence, a.confidence));
         List<Detection> out = new ArrayList<>();
         for (int i = 0; i < shown.size() && i < MAX_DETECTIONS; i++) {
@@ -1258,7 +1145,18 @@ import java.util.List;
             float x1 = Math.min(w, t.maxX + 2), y1 = Math.min(h, t.maxY + 2);
             out.add(new Detection(t.id, x0 / w, y0 / h, (x1 - x0) / w, (y1 - y0) / h, t.confidence, t.vegetation, t.light));
         }
-        return out;
+        // and what comes straight at the camera, unless a track already boxes it
+        for (Looming.Loomer l : loom.loomers()) {
+            if (!l.confirmed || l.lastSeen != now || out.size() >= MAX_DETECTIONS) continue;
+            float x0 = Math.max(0, l.minX - 1), y0 = Math.max(0, l.minY - 1);
+            float x1 = Math.min(w, l.maxX + 2), y1 = Math.min(h, l.maxY + 2);
+            boolean boxed = false;
+            for (Detection d : out) {
+                if (d.x * w < x1 && (d.x + d.w) * w > x0 && d.y * h < y1 && (d.y + d.h) * h > y0) boxed = true;
+            }
+            if (!boxed) out.add(new Detection(l.id, x0 / w, y0 / h, (x1 - x0) / w, (y1 - y0) / h, LOOM_CONFIDENCE, 0, false));
+        }
+        return out.isEmpty() ? Collections.<Detection>emptyList() : out;
     }
 
     // ------------------------------------------------------------------ the background learns
@@ -1279,7 +1177,6 @@ import java.util.List;
         float aDown = fast ? rate(dt, 3) : rate(dt, 20);
         float aFreq = rate(dt, 20);
         float aSlow = rate(dt, 8), aSlowFg = rate(dt, 30);
-        int ox = Math.round(shiftX), oy = Math.round(shiftY);
         boolean[] confirmed = null;
         if (blobs != null && !blobs.isEmpty()) {
             int maxLabel = 0;
@@ -1295,13 +1192,6 @@ import java.util.List;
             boolean inTrack = fg && labels[i] != 0 && confirmed != null && labels[i] < confirmed.length && confirmed[labels[i]];
             float am = fast ? aMean : inTrack ? aMeanTrack : fg ? aMeanBlob : light ? aMeanLight : aMean;
             mean[i] += am * d;
-            if (chromaKnown) {
-                int c = i + oy * w + ox;
-                if (c >= 0 && c < w * h) {
-                    mu[i] += am * (cu[c] - mu[i]);
-                    mv[i] += am * (cv[c] - mv[i]);
-                }
-            }
             float d2 = Math.min(d * d, fg ? 40 * 40 : 60 * 60);
             if (d2 > var[i]) {
                 if (!light) var[i] += (inTrack ? aUpTrack : fg ? aUpFg : aUp) * (d2 - var[i]);

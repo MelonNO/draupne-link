@@ -147,6 +147,19 @@ final class Scene {
         targets.add(new Target(kind, leftN, leftE, from.headingDeg() + 90, speed, nowMs, nowMs + dur));
     }
 
+    /**
+     * A soldier dist metres in front of the camera, a little to one side, walking straight at it (1.0.53: the detection
+     * must find someone coming head-on, who hardly moves in the picture - he grows).
+     */
+    void addApproacher(View from, long nowMs, double dist, double sideM) {
+        double h = Math.toRadians(from.headingDeg());
+        double n = from.north() + Math.cos(h) * dist + Math.cos(h + Math.PI / 2) * sideM;
+        double e = from.east() + Math.sin(h) * dist + Math.sin(h + Math.PI / 2) * sideM;
+        double speed = 1.4;
+        long dur = (long) ((dist - 3) / speed * 1000); // until 3 m off
+        targets.add(new Target(Kind.WALKER, n, e, from.headingDeg() + 180, speed, nowMs, nowMs + dur));
+    }
+
     /** The targets still crossing (the finished ones go). */
     List<Target> targets(long nowMs) {
         targets.removeIf(t -> nowMs > t.untilMs);
