@@ -9,6 +9,7 @@ import org.bytedeco.ffmpeg.avutil.AVDictionary;
 import org.bytedeco.javacpp.BytePointer;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
 import java.util.function.LongFunction;
@@ -33,7 +34,7 @@ public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable
 
     private record Config(int width, int height, boolean hevc, byte[] codecConfig) {
         boolean sameAs(Config o) {
-            return o != null && width == o.width && height == o.height && hevc == o.hevc && java.util.Arrays.equals(codecConfig, o.codecConfig);
+            return o != null && width == o.width && height == o.height && hevc == o.hevc && Arrays.equals(codecConfig, o.codecConfig);
         }
     }
 

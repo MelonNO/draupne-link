@@ -1,6 +1,9 @@
 package de.droiddrone.pc.video;
 
+import de.droiddrone.common.UdpCommon;
+
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,8 +108,8 @@ public class FrameAssembler {
      * The phone's packet payloads: the first carries FIRST_SEGMENT bytes of the frame, every later one SEGMENT (its
      * header counted as 13 and 9 bytes, upstream's sums). The parity packet (bad coverage mode) is the XOR of them all.
      */
-    static final int FIRST_SEGMENT = de.droiddrone.common.UdpCommon.packetLength - 13;
-    static final int SEGMENT = de.droiddrone.common.UdpCommon.packetLength - 9;
+    static final int FIRST_SEGMENT = UdpCommon.packetLength - 13;
+    static final int SEGMENT = UdpCommon.packetLength - 9;
     /**
      * Group parity (phone app pc.26): the phone sends the XOR of every PARITY_GROUP packets of a frame as one
      * parity packet, so a frame survives one loss per group - a 40-packet key frame on a link losing one packet in
@@ -151,12 +154,12 @@ public class FrameAssembler {
             if (size > 0 && end > size) length = Math.max(0, size - offset); // beyond the frame: not the phone's; clipped
             if (data.length < offset + length) { // before the size is known: a provisional array that grows
                 int grown = Math.max(offset + length, Math.max(PROVISIONAL_BYTES, data.length * 2));
-                data = java.util.Arrays.copyOf(data, Math.min(grown, PLAUSIBLE_FRAME_BYTES + SEGMENT));
+                data = Arrays.copyOf(data, Math.min(grown, PLAUSIBLE_FRAME_BYTES + SEGMENT));
             }
             System.arraycopy(buf, bufOffset, data, offset, length);
             if (count == offsets.length) {
-                offsets = java.util.Arrays.copyOf(offsets, count * 2);
-                lengths = java.util.Arrays.copyOf(lengths, count * 2);
+                offsets = Arrays.copyOf(offsets, count * 2);
+                lengths = Arrays.copyOf(lengths, count * 2);
             }
             offsets[count] = offset;
             lengths[count] = length;
@@ -169,7 +172,7 @@ public class FrameAssembler {
 
         void setSize(int frameSize) {
             size = frameSize;
-            if (data.length != size) data = java.util.Arrays.copyOf(data, size); // zero-fills what hasn't come
+            if (data.length != size) data = Arrays.copyOf(data, size); // zero-fills what hasn't come
             for (int i = 0; i < count; i++) {
                 if (offsets[i] + lengths[i] == size) endReceived = true;
             }
@@ -233,7 +236,7 @@ public class FrameAssembler {
                 }
             }
             if (missing < 0) return false;
-            byte[] rebuilt = java.util.Arrays.copyOf(parity, Math.max(parity.length, SEGMENT));
+            byte[] rebuilt = Arrays.copyOf(parity, Math.max(parity.length, SEGMENT));
             for (int p = from; p < to; p++) {
                 if (p == missing) continue;
                 int off = offsetOf(p), n = Math.min(lengthOf(p), rebuilt.length);
@@ -245,7 +248,7 @@ public class FrameAssembler {
 
         /** The frame's bytes: the array the fragments went into, when it is the frame's size (nearly always). */
         byte[] assemble() {
-            return data.length == size ? data : java.util.Arrays.copyOf(data, size);
+            return data.length == size ? data : Arrays.copyOf(data, size);
         }
     }
 
@@ -274,7 +277,7 @@ public class FrameAssembler {
             frameOne = null;
             streamRestarted = true;
         }
-        if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
+        if (releasedAlready(frameNum)) return null;
         if (!start && tooFarAhead(frameNum)) return null;
         if (offset == 0 && frameSize == length && !pending.containsKey(frameNum)) { // whole frame in one packet
             byte[] data = new byte[length];
@@ -303,16 +306,9 @@ public class FrameAssembler {
 
     public Frame putParity(boolean keyFrame, short frameNum, int frameSize, byte[] buf, int dataOffset, int length, long now) {
         this.now = now;
-        if (frameSize <= 0 || frameSize > PLAUSIBLE_FRAME_BYTES || length <= 0) return null;
-        forgetOldOrder();
-        if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
-        if (tooFarAhead(frameNum)) return null;
-        Pending frame = pending(frameNum, keyFrame, isStreamStart(keyFrame, frameNum));
-        if (frame.size <= 0) {
-            frame.setSize(frameSize);
-            keepToBudget(frameNum);
-        }
-        frame.parity = java.util.Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
+        if (!parityWanted(frameNum, frameSize, length)) return null;
+        Pending frame = parityFor(frameNum, keyFrame, frameSize);
+        frame.parity = Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
         if (frame.recover()) recoveredFrames++;
         return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
     }
@@ -324,21 +320,39 @@ public class FrameAssembler {
      */
     public Frame putParityGroup(boolean keyFrame, short frameNum, int frameSize, int group, byte[] buf, int dataOffset, int length, long now) {
         this.now = now;
-        if (frameSize <= 0 || frameSize > PLAUSIBLE_FRAME_BYTES || length <= 0 || group < 0 || group > 255) return null;
+        if (group < 0 || group > 255 || !parityWanted(frameNum, frameSize, length)) return null;
+        Pending frame = parityFor(frameNum, keyFrame, frameSize);
+        int groups = Math.max(group + 1, (frame.packets() + PARITY_GROUP - 1) / PARITY_GROUP);
+        if (frame.groupParity == null) frame.groupParity = new byte[groups][];
+        else if (frame.groupParity.length < groups) frame.groupParity = Arrays.copyOf(frame.groupParity, groups);
+        frame.groupParity[group] = Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
+        if (frame.recover()) recoveredFrames++;
+        return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
+    }
+
+    /** A frame at or before the last one released: never put together again. */
+    private boolean releasedAlready(short frameNum) {
+        return lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased));
+    }
+
+    /**
+     * The opening checks of a parity packet (either kind): a plausible size, a frame not released already and not too
+     * far ahead. Forgets an old order first, as every put does.
+     */
+    private boolean parityWanted(short frameNum, int frameSize, int length) {
+        if (frameSize <= 0 || frameSize > PLAUSIBLE_FRAME_BYTES || length <= 0) return false;
         forgetOldOrder();
-        if (lastReleased != null && (frameNum == lastReleased || isOlder(frameNum, lastReleased))) return null;
-        if (tooFarAhead(frameNum)) return null;
+        return !releasedAlready(frameNum) && !tooFarAhead(frameNum);
+    }
+
+    /** The frame a parity packet is for, its size set from the packet if no fragment told it yet. */
+    private Pending parityFor(short frameNum, boolean keyFrame, int frameSize) {
         Pending frame = pending(frameNum, keyFrame, isStreamStart(keyFrame, frameNum));
         if (frame.size <= 0) {
             frame.setSize(frameSize);
             keepToBudget(frameNum);
         }
-        int groups = Math.max(group + 1, (frame.packets() + PARITY_GROUP - 1) / PARITY_GROUP);
-        if (frame.groupParity == null) frame.groupParity = new byte[groups][];
-        else if (frame.groupParity.length < groups) frame.groupParity = java.util.Arrays.copyOf(frame.groupParity, groups);
-        frame.groupParity[group] = java.util.Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
-        if (frame.recover()) recoveredFrames++;
-        return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
+        return frame;
     }
 
     private Pending pending(short frameNum, boolean keyFrame, boolean streamStart) {

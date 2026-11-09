@@ -10,9 +10,14 @@ import org.bytedeco.javacpp.BytePointer;
 import de.droiddrone.pc.audio.AudioConfig;
 import de.droiddrone.pc.audio.AudioPts;
 
+import java.io.BufferedWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 
+import static de.droiddrone.common.Log.log;
 import static org.bytedeco.ffmpeg.global.avcodec.*;
 import static org.bytedeco.ffmpeg.global.avformat.*;
 import static org.bytedeco.ffmpeg.global.avutil.*;
@@ -38,7 +43,7 @@ public final class StreamRecorder implements AutoCloseable {
     private long frames;
     private final Path file;
     /** The OSD sidecar (see {@link #writeOsd}), opened with the first row. */
-    private java.io.BufferedWriter osd;
+    private BufferedWriter osd;
     private long osdRows;
 
     /** @param codecConfig the stream's VPS/SPS/PPS as the phone sends them (Annex B) */
@@ -199,11 +204,11 @@ public final class StreamRecorder implements AutoCloseable {
         if (!started) return;
         if (osd == null) {
             String name = file.getFileName().toString().replaceFirst("\\.mkv$", "") + ".csv";
-            osd = java.nio.file.Files.newBufferedWriter(file.resolveSibling(name), java.nio.charset.StandardCharsets.UTF_8);
+            osd = Files.newBufferedWriter(file.resolveSibling(name), StandardCharsets.UTF_8);
             osd.write(OSD_HEADER);
             osd.newLine();
         }
-        osd.write(String.format(java.util.Locale.ROOT, "%d,%d,%s,%s,%s,%d,%d,%d,%s,%s,%s,%d,%s,%s,%s,%d,%s,%s,%d",
+        osd.write(String.format(Locale.ROOT, "%d,%d,%s,%s,%s,%d,%d,%d,%s,%s,%s,%d,%s,%s,%s,%d,%s,%s,%d",
                 Math.max(0, r.arrivedMs() - firstMs), r.pingMs(), num(r.volts(), 2), num(r.cellVolts(), 2), num(r.amps(), 1), r.mahDrawn(),
                 r.sats(), r.fix(), num(r.latDeg(), 6), num(r.lonDeg(), 6), num(r.speedKmh(), 1), r.homeDistanceM(), num(r.altitudeM(), 1),
                 num(r.varioMs(), 1), r.mode() == null ? "" : r.mode().replace(',', ' '), r.armed() ? 1 : 0, num(r.rollDeg(), 1), num(r.pitchDeg(), 1), r.headingDeg()));
@@ -212,7 +217,7 @@ public final class StreamRecorder implements AutoCloseable {
     }
 
     private static String num(double v, int decimals) {
-        return Double.isNaN(v) ? "" : String.format(java.util.Locale.ROOT, "%." + decimals + "f", v);
+        return Double.isNaN(v) ? "" : String.format(Locale.ROOT, "%." + decimals + "f", v);
     }
 
     public long osdRows() {
@@ -224,7 +229,8 @@ public final class StreamRecorder implements AutoCloseable {
         if (osd != null) {
             try {
                 osd.close();
-            } catch (IOException ignored) {
+            } catch (IOException e) { // the CSV may be cut short; the video file is closed all the same
+                log("Recording: OSD figures file: " + e.getMessage());
             }
             osd = null;
         }

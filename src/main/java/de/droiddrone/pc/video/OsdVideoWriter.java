@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.nio.ByteOrder;
 import java.nio.file.Path;
 
+import static de.droiddrone.common.Log.log;
 import static org.bytedeco.ffmpeg.global.avcodec.*;
 import static org.bytedeco.ffmpeg.global.avformat.*;
 import static org.bytedeco.ffmpeg.global.avutil.*;
@@ -174,8 +175,8 @@ public final class OsdVideoWriter implements AutoCloseable {
         try {
             avcodec_send_frame(enc, null); // the encoder's last pictures out
             drain();
-        } catch (IOException ignored) {
-            // a file cut short still plays (MKV)
+        } catch (IOException e) { // a file cut short still plays (MKV)
+            log("OSD recording: last pictures not written: " + e.getMessage());
         }
         av_write_trailer(oc);
         free();
