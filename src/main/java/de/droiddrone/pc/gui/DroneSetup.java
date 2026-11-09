@@ -1440,9 +1440,9 @@ final class DroneSetup {
                 int rescueOn = rescueFailsafe ? rescueTarget : 0;
                 // with a GPS, GPS rescue (failsafe or switch) would block arming until the GPS has a fix - indoors too:
                 // always allowed (the pilot's rule), written with the rest
-                if (gpsWanted.wanted() && !fc.command("get gps_rescue_allow_arming_without_fix").replace(" ", "").contains("=ON")) {
-                    plan.add(new BetaflightPlan.Change("Arming without a GPS fix allowed (gps_rescue_allow_arming_without_fix)",
-                            List.of("set gps_rescue_allow_arming_without_fix = ON")));
+                if (gpsWanted.wanted()) {
+                    BetaflightPlan.Change withoutFix = GpsSetup.armingWithoutFixPlan(fc.command("get gps_rescue_allow_arming_without_fix"));
+                    if (withoutFix != null) plan.add(withoutFix);
                 }
                 ModeSwitch.Plan modes = modeTarget == null && rescueOn == 0 && armTarget == 0 && prearmTarget == 0 && beeperTarget == 0 ? null
                         : ModeSwitch.plan(aux, modesOffered, blocked, modeTarget, rescueOn, armTarget, prearmTarget, beeperTarget);

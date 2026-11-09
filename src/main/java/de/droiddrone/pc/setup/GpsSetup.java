@@ -231,6 +231,21 @@ public final class GpsSetup {
         return changes;
     }
 
+    private static final Pattern ARMING_WITHOUT_FIX = Pattern.compile("gps_rescue_allow_arming_without_fix\\s*=\\s*(\\S+)");
+
+    /**
+     * With a GPS, GPS rescue (failsafe or switch) would block arming until it has a fix - indoors too: always allowed
+     * (the pilot's rule). Null when it is ON already, or when this Betaflight doesn't list the setting (review 1.0.53: a
+     * "set" of a name it doesn't know is refused, and that stopped the whole write).
+     * @param getOutput `get gps_rescue_allow_arming_without_fix`
+     */
+    public static BetaflightPlan.Change armingWithoutFixPlan(String getOutput) {
+        Matcher m = ARMING_WITHOUT_FIX.matcher(getOutput == null ? "" : getOutput);
+        if (BetaflightPlan.refused(getOutput == null ? "" : getOutput) || !m.find() || m.group(1).equalsIgnoreCase("ON")) return null;
+        return new BetaflightPlan.Change("Arming without a GPS fix allowed (gps_rescue_allow_arming_without_fix)",
+                List.of("set gps_rescue_allow_arming_without_fix = ON"));
+    }
+
     /**
      * The compass as chosen: AUTO when wanted (a named chip already set is kept), NONE when not. Null = no change.
      * @param magHardware the value from `get mag_hardware`
