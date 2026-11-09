@@ -23,7 +23,6 @@ import de.droiddrone.pc.JoystickService;
 import de.droiddrone.pc.LinkLog;
 import de.droiddrone.pc.Main;
 import de.droiddrone.pc.MonoClock;
-import de.droiddrone.pc.MotionBoxes;
 import de.droiddrone.pc.NameService;
 import de.droiddrone.pc.Names;
 import de.droiddrone.pc.PcConfig;
@@ -506,6 +505,7 @@ public class MainWindow extends JFrame {
         setIconImages(AppIcon.images());
         this.config = config;
         tourHost = new TourHost(config, new TourHooks());
+        detection = new DetectionController(config, cameraView, this::save, this::logLine);
         this.configFile = configFile;
         this.service = service;
         cameraView.configure(config);
@@ -672,7 +672,7 @@ public class MainWindow extends JFrame {
         menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;",
                 videoView.isUpsideDown(), this::setUpsideDown));
         MenuRows.ChoiceRow motionRow = new MenuRows.ChoiceRow("Motion detection", "Disarmed: what moves, boxed",
-                DETECTION_LEVELS, detectionFor(config.getString(Names.PHONE_NAME_KEY)), this::setDetection);
+                DetectionController.DETECTION_LEVELS, detection.levelFor(config.getString(Names.PHONE_NAME_KEY)), level -> detection.set(level, connection));
         motionRow.setToolTipText("<html>Disarmed: the phone boxes what moves in the picture"
                 + "<br>(people, cars, animals, birds - not swaying trees; lights at night).<br>"
                 + "Direction on the map. Per drone; needs phone app 2.3.0-pc.35.</html>");
@@ -1624,7 +1624,7 @@ public class MainWindow extends JFrame {
         beeperButton.setToolTipText(s.beeperOff() == null ? BEEPER_TIP : s.beeperOff());
         if (!watch && s.beeperOff() != null && !s.beeperOff().equals(RcSession.BEEPER_NOT_SET_UP)) logLine(s.beeperOff() + ".");
         connection.getLink().setMaxStickLagMs(config.getMaxStickLagMs());
-        if (!watch) connection.getLink().setDetection(detectionFor(target.name())); // the drone's own (1.0.46)
+        if (!watch) connection.getLink().setDetection(detection.levelFor(target.name())); // the drone's own (1.0.46)
         // STANDBY / DEEP SLEEP: no sticks, and a WAKE starts with the throttle-low rule (not a radio blip's quick resume)
         service.setInputListener(state -> {
             if (sticksPaused()) s.onPaused(state); else s.onInput(state);
@@ -1851,7 +1851,8 @@ public class MainWindow extends JFrame {
         view = cameraLive.latest();
         if (w != null) w.setCameraView(view);
         miniMap.setCameraView(view);
-        List<DetectionMarks.Mark> marks = c == null ? detectionMarks.marks(now) : detectionMarks(c.getLink().getTelemetry(), now);
+        List<DetectionMarks.Mark> marks = c == null ? detection.marks(now) : detection.marks(c.getLink().getTelemetry(), track,
+                videoView.isMirror() != videoView.isUpsideDown(), videoView.isUpsideDown(), now);
         if (w != null) w.setDetections(marks);
         miniMap.setDetections(marks);
         // the chosen drone put to sleep and on time with its check-ins: its sleep sign, not LAST KNOWN (1.0.50) - and
@@ -1877,61 +1878,8 @@ public class MainWindow extends JFrame {
 
     // ------------------------------------------------------------------ motion detection (1.0.46)
 
-    /** The motion detection's marks on the map: a line along each detection's direction, its estimated ground point. */
-    private final DetectionMarks detectionMarks = new DetectionMarks();
-    private long motionIdsSeen, motionSaidAt;
-
-    /**
-     * The boxes of the phone's latest DETECTION record onto the map: each one's ray from the camera's pose now (the
-     * picture turned as the screen shows it), its mark following it. A new thing seen goes to the log (once in 10 s).
-     */
-    private List<DetectionMarks.Mark> detectionMarks(FcTelemetry t, long now) {
-        MotionBoxes motion = t.getMotion();
-        boolean flipX = videoView.isMirror() != videoView.isUpsideDown(), flipY = videoView.isUpsideDown();
-        CameraFootprint.Pose pose = null;
-        for (MotionBoxes.Shown s : motion.shown(now)) {
-            if (now - s.seenAt() > MotionBoxes.SOLID_MS) continue; // only what the latest record had
-            if (pose == null) pose = cameraView.sittingPose(t, track);
-            if (pose == null) break; // no position or heading: no line to draw
-            double[] uv = DetectionMarks.pictureUv(s.box(), flipX, flipY);
-            detectionMarks.put(s.box().id, s.box().light(), pose.lat(), pose.lon(), cameraView.ray(t, track, uv[0], uv[1]), now);
-        }
-        long ids = motion.newIds();
-        if (ids > motionIdsSeen) {
-            if (now - motionSaidAt > 10_000) {
-                logLine("MOTION: " + (ids - motionIdsSeen) + " new - boxed on the video and map.");
-                motionSaidAt = now;
-            }
-            motionIdsSeen = ids;
-        }
-        return detectionMarks.marks(now);
-    }
-
-    static final String DETECTION_KEY = "detection";
-    static final String[] DETECTION_LEVELS = {"OFF", "LOW", "NORMAL", "HIGH"};
-
-    /** The phone's own motion detection setting (0 off .. 3 high); never set: NORMAL. */
-    private int detectionFor(String phone) {
-        String v = phone == null || phone.isEmpty() ? "" : config.getString(DETECTION_KEY + "." + phone);
-        if (v.isEmpty()) v = config.getString(DETECTION_KEY);
-        for (int i = 0; i < DETECTION_LEVELS.length; i++) if (DETECTION_LEVELS[i].equalsIgnoreCase(v.trim())) return i;
-        return 2;
-    }
-
-    /** VIDEO > Motion detection: saved for the chosen phone (the drone), told to it within a second. */
-    private void setDetection(int level) {
-        String phone = config.getString(Names.PHONE_NAME_KEY);
-        save(Map.of(phone.isEmpty() ? DETECTION_KEY : DETECTION_KEY + "." + phone, DETECTION_LEVELS[level].toLowerCase(Locale.ROOT)));
-        Connection c = connection;
-        if (c != null && !c.getLink().isSpectator()) {
-            c.getLink().setDetection(level);
-            if (!c.getLink().detectionSupported() && c.getLink().getTelemetry().getPhonePcBuild() >= 0) {
-                logLine("Motion detection needs phone app 2.3.0-pc.35: update it.");
-                return;
-            }
-        }
-        logLine(level == 0 ? "Motion detection off." : "Motion detection " + DETECTION_LEVELS[level] + " (while disarmed).");
-    }
+    /** Each drone's motion detection level, and the detections' marks on the maps. */
+    private final DetectionController detection;
 
     /**
      * Connected, with the map not popped out: the minimap follows the drone. (Up to 1.0.38 the connection fields and
@@ -2451,7 +2399,7 @@ public class MainWindow extends JFrame {
                 TileFeed f = new TileFeed(phone, InetAddress.getByName(e.ip()),
                         VirtualFleet.portOf(e.ip(), config.getPort()), config.getKey(), grid.sink(i), audio, sharp, msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
                 feeds.add(f);
-                f.link().setDetection(detectionFor(phone)); // the drone's own setting (1.0.46): boxes on its tile
+                f.link().setDetection(detection.levelFor(phone)); // the drone's own setting (1.0.46): boxes on its tile
                 boolean muted = mutedFor(phone);
                 audio.setMuted(f.audioId(), muted);
                 audio.setVolume(f.audioId(), volumeFor(phone) / 100f);
@@ -4060,7 +4008,7 @@ public class MainWindow extends JFrame {
 
         @Override
         public int detectionFor(String phone) {
-            return MainWindow.this.detectionFor(phone);
+            return detection.levelFor(phone);
         }
 
         @Override
@@ -4227,7 +4175,7 @@ public class MainWindow extends JFrame {
                 if (power.wanted == ControlLink.POWER_OVERWATCH) {
                     // the drone's own motion detection level (OFF counts as NORMAL here: watching is the point), and its
                     // microphone in the clip unless this PC has the drone's sound muted
-                    int level = detectionFor(config.getString(Names.PHONE_NAME_KEY));
+                    int level = detection.levelFor(config.getString(Names.PHONE_NAME_KEY));
                     if (level == 0) level = 2;
                     int flags = mutedFor(config.getString(Names.PHONE_NAME_KEY)) ? 0 : OverwatchProtocol.MODE_FLAG_SOUND;
                     link.sendOverwatch(power.sentIntervalMin, level, flags, overwatchToken);
