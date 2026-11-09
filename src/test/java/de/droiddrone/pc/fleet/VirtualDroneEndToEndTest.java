@@ -282,8 +282,10 @@ class VirtualDroneEndToEndTest {
         long calls = java.util.regex.Pattern.compile("(?<![.\\w])onDetection\\(").matcher(overwatch).results().count(); // not OverwatchEvent's
         assertEquals(2L, calls, "onDetection: its definition and the one call from onPicture (the detector's report)");
         String drone = java.nio.file.Files.readString(dir.resolve("VirtualDrone.java"));
-        assertEquals(1, drone.split("overwatch\\.onPicture\\(", -1).length - 1, "the analysis picture's report is the only input");
-        assertTrue(drone.contains("MotionRecord.of(flags, (float) Scene.HFOV_DEG, r)"), "the report is made from the detector's result");
+        assertFalse(drone.contains("overwatch.onPicture("), "the drone itself feeds overwatch nothing");
+        String watch = java.nio.file.Files.readString(dir.resolve("VirtualMotionWatch.java"));
+        assertEquals(1, watch.split("overwatch\\.onPicture\\(", -1).length - 1, "the analysis picture's report is the only input");
+        assertTrue(watch.contains("MotionRecord.of(flags, (float) Scene.HFOV_DEG, r)"), "the report is made from the detector's result");
     }
 
     @Test

@@ -2,7 +2,6 @@ package de.droiddrone.pc.fleet;
 
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.FcCommon;
-import de.droiddrone.common.MotionDetector;
 import de.droiddrone.common.MotionRecord;
 import de.droiddrone.common.Observe;
 import de.droiddrone.common.PcAudio;
@@ -42,7 +41,6 @@ import static de.droiddrone.common.PacketIds.SLEEP_HELLO;
 import static de.droiddrone.common.PacketIds.SPECTATE_NO_PILOT;
 import static de.droiddrone.common.PacketIds.SPECTATE_PILOT_AT;
 import static de.droiddrone.common.PacketIds.SPECTATE_PILOT_QUERY;
-import static de.droiddrone.common.PacketIds.VIDEO_PARITY_GROUP;
 import static de.droiddrone.common.PacketIds.VIDEO_PROFILE;
 
 /**
@@ -72,7 +70,6 @@ public final class VirtualDrone {
     static final long SAME_SESSION_MS = 1000, RC_SEQ16_FORGET_MS = 1000, IDLE_AFTER_MS = 300, IDLE_EVERY_MS = 50,
             SLEEP_COUNTDOWN_MS = 1000, CHECK_WINDOW_MS = 20_000, HELLO_FIRST_MS = 200, HELLO_GAP_MS = 1500, DETECTION_KEEP_MS = 5000,
             RESTART_MS = 3000;
-    private static final int PARITY_GROUP = 8;
 
     // ------------------------------------------------------------------ who it is
     private final int slot;
@@ -155,7 +152,6 @@ public final class VirtualDrone {
     private volatile int step = 5;
     private volatile boolean keyFramesTwice, groupParity;
     private volatile boolean videoWanted;
-    private volatile boolean keyFrameWanted, configResend;
     private final PcAudio pcAudio = new PcAudio();
     private volatile int detectionLevel;
     private volatile long detectionAskedAt;
@@ -181,17 +177,12 @@ public final class VirtualDrone {
     final VirtualOverwatch overwatch;
 
     // the motion detection (the tick thread)
-    private final MotionDetector detector = new MotionDetector(MotionDetector.NORMAL);
-    private BufferedImage analysis;
-    private long nextAnalysisAt, nextMotionReportAt;
-    private volatile MotionRecord.Report lastMotion;
-    private int lastBoxCount;
+    private final VirtualMotionWatch motion;
 
     // the streams
-    private volatile Thread videoThread, audioThread;
-    private volatile int videoGen, audioGen;
-    private volatile String videoState = "off";
-    private volatile int sentBitRate;
+    private final VirtualVideo video;
+    private volatile Thread audioThread;
+    private volatile int audioGen;
     private volatile boolean audioOn, audioHeld;
     private volatile String lastBeep;
 
@@ -206,6 +197,20 @@ public final class VirtualDrone {
         this.scene = new Scene(this.name.isEmpty() ? "DRONE " + (slot + 1) : this.name, 1000L + slot);
         this.sound = new SoundMaker(2000L + slot);
         this.overwatch = new VirtualOverwatch(this, this.log);
+        this.motion = new VirtualMotionWatch(scene, overwatch);
+        this.video = new VirtualVideo(new VirtualVideo.Drone() {
+            @Override public boolean running() { return running; }
+            @Override public String name() { return name; }
+            @Override public int cameraWidthNow() { return VirtualDrone.this.cameraWidthNow(); }
+            @Override public int cameraHeightNow() { return VirtualDrone.this.cameraHeightNow(); }
+            @Override public int cameraFpsNow() { return VirtualDrone.this.cameraFpsNow(); }
+            @Override public int bitRateNow() { return VirtualDrone.this.bitRateNow(); }
+            @Override public boolean keyFramesTwice() { return keyFramesTwice; }
+            @Override public boolean groupParity() { return groupParity; }
+            @Override public boolean observedOnly() { return observing && !isConnected(); }
+            @Override public void renderPicture(BufferedImage img, long nowMs) { VirtualDrone.this.renderPicture(img, nowMs); }
+            @Override public void streamOut(byte[] data) { VirtualDrone.this.streamOut(data); }
+        }, slot, this.log);
     }
 
     // ------------------------------------------------------------------ start, stop, restart
@@ -255,7 +260,7 @@ public final class VirtualDrone {
     /** Everything stops; the socket closes. */
     void stop() {
         running = false;
-        stopVideo();
+        video.stop();
         stopAudio();
         overwatch.shutdown();
         closeSocket();
@@ -273,7 +278,7 @@ public final class VirtualDrone {
         if (restarting || !running) return;
         restarting = true;
         log.accept("phone app restarts (back in " + RESTART_MS / 1000 + " s)");
-        stopVideo();
+        video.stop();
         stopAudio();
         overwatch.end("the app restarted");
         int keep = port;
@@ -645,16 +650,16 @@ public final class VirtualDrone {
                         return;
                     }
                     videoWanted = true;
-                    if (videoThread == null) startVideo();
-                    else configResend = true; // the stream runs: its config again, then a key frame
-                    keyFrameWanted = true;
+                    if (!video.isOn()) video.start();
+                    else video.resendConfig(); // the stream runs: its config again, then a key frame
+                    video.requestKeyFrame();
                 }
-                case UdpCommon.GetVideoConfig -> configResend = true;
+                case UdpCommon.GetVideoConfig -> video.resendConfig();
                 case UdpCommon.Disconnect -> {
                     log.accept("the PC disconnected");
                     videoWanted = false;
                     pcAudio.forget();
-                    if (!observing) stopVideo();
+                    if (!observing) video.stop();
                 }
                 case UdpCommon.FcInfo -> {
                     if (!fcLost) udpSender.sendPacket(TelemetryRecords.fcInfoPacket());
@@ -681,7 +686,7 @@ public final class VirtualDrone {
                     keyFramesTwice = twice;
                     groupParity = groups;
                 }
-                case KEY_FRAME_REQUEST -> keyFrameWanted = true;
+                case KEY_FRAME_REQUEST -> video.requestKeyFrame();
                 case PcAudio.PACKET -> {
                     PcAudio.Request r = PcAudio.decode(data, data.length);
                     pcAudio.onRequest(r, System.currentTimeMillis());
@@ -876,11 +881,11 @@ public final class VirtualDrone {
         }
         answerObserver(who, state);
         if (state != Observe.STREAMING) return;
-        if (r.videoConfig()) configResend = true;
+        if (r.videoConfig()) video.resendConfig();
         if (r.audioConfig()) audioConfigResend = true;
         if (r.videoConfig() && now - observeKeyFrameAt >= 1000) {
             observeKeyFrameAt = now;
-            keyFrameWanted = true;
+            video.requestKeyFrame();
         }
     }
 
@@ -929,7 +934,7 @@ public final class VirtualDrone {
             if (observing) {
                 observing = false;
                 observeAudio = false;
-                if (!isConnected() || !videoWanted) stopVideo();
+                if (!isConnected() || !videoWanted) video.stop();
                 log.accept("observation: nobody watches now");
             }
             return;
@@ -941,7 +946,7 @@ public final class VirtualDrone {
             log.accept("observation: streaming to observers");
         }
         observeAudio = want.audio();
-        if (videoThread == null) startVideo();
+        if (!video.isOn()) video.start();
     }
 
     private void sendToObservers(byte[] data) {
@@ -987,118 +992,6 @@ public final class VirtualDrone {
     }
 
     // ------------------------------------------------------------------ the video
-
-    private void startVideo() {
-        int gen = ++videoGen;
-        Thread t = new Thread(() -> videoRun(gen), "fleetVideo" + slot);
-        t.setDaemon(true);
-        // a phone's camera has a CPU of its own: at the lowest priority on this PC the picture starved behind the PC's
-        // decoding and recording (13 fps, frames 33/67/100 ms apart, in the pilot's recording)
-        t.setPriority(Thread.NORM_PRIORITY);
-        videoThread = t;
-        t.start();
-    }
-
-    void stopVideo() {
-        videoGen++;
-        videoThread = null;
-        videoState = "off";
-    }
-
-    private void videoRun(int gen) {
-        H264Encoder enc = null;
-        int frameNum = 0;
-        long next = System.nanoTime();
-        // two pictures: the next one is drawn on its own thread while this one is encoded (1.0.52, the pilot: the
-        // virtual picture's rate was too low - drawing and encoding a 1080p frame one after the other took ~32 ms of
-        // the 33 a frame has at 30 fps; side by side a frame costs the longer of the two)
-        BufferedImage[] img = new BufferedImage[2];
-        int cur = 0;
-        java.util.concurrent.Future<?> ahead = null;
-        java.util.concurrent.ExecutorService painter = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "fleetVideoPaint " + name);
-            t.setDaemon(true);
-            t.setPriority(Thread.NORM_PRIORITY);
-            return t;
-        });
-        long lastReopen = 0;
-        long bytesWindow = 0, windowStart = System.currentTimeMillis();
-        try {
-            while (gen == videoGen && running) {
-                int w = cameraWidthNow(), h = cameraHeightNow(), fps = cameraFpsNow(), bps = bitRateNow();
-                long nowMs = System.currentTimeMillis();
-                boolean sizeChanged = enc == null || enc.width() != w || enc.height() != h || enc.fps() != fps;
-                boolean rateChanged = enc != null && enc.bitRate() != bps && nowMs - lastReopen >= 1500;
-                if (sizeChanged || rateChanged) {
-                    if (ahead != null) waitFor(ahead); // drawn into a picture of the old size: dropped
-                    ahead = null;
-                    if (enc != null) enc.close();
-                    enc = new H264Encoder(w, h, fps, bps);
-                    lastReopen = nowMs;
-                    if (sizeChanged) frameNum = 0; // a restarted stream: frame 1 next
-                    if (img[0] == null || img[0].getWidth() != w || img[0].getHeight() != h) {
-                        img[0] = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-                        img[1] = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-                    }
-                    sendVideoConfig(enc);
-                    keyFrameWanted = true;
-                    videoState = w + "x" + h + " " + fps + " fps " + bps / 1000 + " kbit/s";
-                }
-                if (configResend) {
-                    configResend = false;
-                    sendVideoConfig(enc);
-                }
-                if (ahead != null) waitFor(ahead); // this frame's picture, drawn while the last one was encoded
-                else renderPicture(img[cur], nowMs);
-                BufferedImage now = img[cur], following = img[1 - cur];
-                // the next picture shows the world and the camera at one moment: when its painting starts (the vehicle
-                // placed a frame ahead while the camera was read at the paint's own moment made them disagree by up to
-                // a frame - the vehicle wobbled against the ground)
-                ahead = painter.submit(() -> renderPicture(following, System.currentTimeMillis()));
-                boolean key = keyFrameWanted;
-                keyFrameWanted = false;
-                for (H264Encoder.Packet p : enc.encode(Scene.pixels(now), key)) {
-                    if (gen != videoGen) break;
-                    if (frameNum >= Short.MAX_VALUE) frameNum = 1;
-                    frameNum++;
-                    if (p.keyFrame() && observing && !isConnected()) sendVideoConfig(enc);
-                    int copies = p.keyFrame() && keyFramesTwice ? 2 : 1;
-                    for (int c = 0; c < copies; c++) {
-                        sendFragments(p.keyFrame() ? UdpCommon.KeyFrame : UdpCommon.VideoFrame, p.data(), p.keyFrame(), frameNum, fps, gen);
-                    }
-                    bytesWindow += p.data().length;
-                }
-                cur = 1 - cur;
-                if (nowMs - windowStart >= 1000) {
-                    sentBitRate = (int) (bytesWindow * 8 * 1000 / Math.max(1, nowMs - windowStart));
-                    bytesWindow = 0;
-                    windowStart = nowMs;
-                }
-                next += 1_000_000_000L / fps;
-                long wait = next - System.nanoTime();
-                if (wait > 0) LockSupport.parkNanos(wait);
-                else if (wait < -500_000_000L) next = System.nanoTime(); // fell far behind: no catching up in a burst
-            }
-        } catch (IOException | RuntimeException e) {
-            log.accept("video stopped: " + e.getMessage());
-            videoState = "failed: " + e.getMessage();
-        } finally {
-            painter.shutdownNow();
-            if (enc != null) enc.close();
-        }
-    }
-
-    /** The picture drawn ahead, waited for; a failure there is the video thread's. */
-    private static void waitFor(java.util.concurrent.Future<?> f) {
-        try {
-            f.get();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        } catch (java.util.concurrent.ExecutionException e) {
-            Throwable c = e.getCause();
-            throw c instanceof RuntimeException r ? r : new IllegalStateException(c);
-        }
-    }
 
     /** The picture: the recording when one plays, else the scene from the drone's state. */
     private void renderPicture(BufferedImage img, long nowMs) {
@@ -1161,57 +1054,6 @@ public final class VirtualDrone {
         if (fc.isArmed()) return String.format(java.util.Locale.ROOT, "ARMED  %.0f M  %.0f KM/H", fc.altitudeM(), fc.groundSpeedMs() * 3.6);
         FlightModel.Failsafe f = fc.failsafe();
         return f == FlightModel.Failsafe.NONE ? "DISARMED" : "FAILSAFE";
-    }
-
-    private void sendVideoConfig(H264Encoder enc) throws IOException {
-        UdpPacketData p = new UdpPacketData(UdpCommon.VideoInitialFrame);
-        p.daos.writeShort(enc.width());
-        p.daos.writeShort(enc.height());
-        p.daos.writeBoolean(false); // H.264: no H.265 encoder here (a phone without one falls back the same way)
-        p.daos.writeBoolean(false); // the back camera
-        p.daos.write(enc.config());
-        streamOut(p.getData());
-    }
-
-    /**
-     * A frame's packets as the phone sends them ([type][frameNum i16][offset i32][size i32 on the first][data]), spread
-     * over at most half a frame time (a key frame over up to three), with a parity packet per group of 8 when the
-     * profile asks.
-     */
-    private void sendFragments(byte type, byte[] buf, boolean keyFrame, int frameNum, int fps, int gen) throws IOException {
-        int size = buf.length;
-        int packets = Math.max(1, (size + UdpCommon.packetLength - 1) / UdpCommon.packetLength);
-        long frameNs = 1_000_000_000L / Math.max(1, fps);
-        long gapNs = packets <= 2 ? 0 : (keyFrame ? 3 * frameNs : frameNs / 2) / packets;
-        byte[] parity = groupParity ? new byte[UdpCommon.packetLength - 9] : null;
-        int offset = 0, packet = 0;
-        while (offset < size && gen == videoGen) {
-            UdpPacketData p = new UdpPacketData(type);
-            p.daos.writeShort(frameNum);
-            p.daos.writeInt(offset);
-            int header = 9;
-            if (offset == 0) {
-                p.daos.writeInt(size);
-                header += 4;
-            }
-            int n = Math.min(UdpCommon.packetLength - header, size - offset);
-            p.daos.write(buf, offset, n);
-            if (parity != null) for (int i = 0; i < n; i++) parity[i] ^= buf[offset + i];
-            offset += n;
-            streamOut(p.getData());
-            packet++;
-            if (parity != null && (packet % PARITY_GROUP == 0 || offset >= size)) {
-                UdpPacketData q = new UdpPacketData(VIDEO_PARITY_GROUP);
-                q.daos.writeShort(frameNum);
-                q.daos.writeInt(size);
-                q.daos.writeByte(keyFrame ? 1 : 0);
-                q.daos.writeByte((packet - 1) / PARITY_GROUP);
-                q.daos.write(parity, 0, parity.length);
-                streamOut(q.getData());
-                java.util.Arrays.fill(parity, (byte) 0);
-            }
-            if (gapNs > 0 && offset < size) LockSupport.parkNanos(Math.min(gapNs, 5_000_000L));
-        }
     }
 
     // ------------------------------------------------------------------ the sound
@@ -1342,7 +1184,7 @@ public final class VirtualDrone {
                 case STANDBY -> {
                     if (mode != NORMAL) wake(from);
                     mode = STANDBY;
-                    stopVideo();
+                    video.stop();
                     log.accept("standby (" + from + ")");
                     burst();
                 }
@@ -1416,7 +1258,7 @@ public final class VirtualDrone {
                     return;
                 }
                 asleep = true;
-                stopVideo();
+                video.stop();
                 stopAudio();
                 InetSocketAddress pc = lastPcIp == null ? null : new InetSocketAddress(lastPcIp, lastPcPort);
                 closeSocket(); // the link's socket, the FC's port, the GPS: let go
@@ -1618,8 +1460,8 @@ public final class VirtualDrone {
         if (every || tick % 33 == 5) {
             TelemetryRecords.timers(out, fc.onSeconds(now), fc.armedSeconds(now), fc.armedSeconds(now));
             TelemetryRecords.phoneBattery(out, phoneBatteryPercent(), false);
-            TelemetryRecords.cameraFps(out, videoThread == null ? 0 : cameraFpsNow());
-            TelemetryRecords.videoBitRate(out, sentBitRate / 1_000_000f);
+            TelemetryRecords.cameraFps(out, !video.isOn() ? 0 : cameraFpsNow());
+            TelemetryRecords.videoBitRate(out, video.sentBitRate() / 1_000_000f);
             TelemetryRecords.network(out, 4, link.signalPercent(now));
         }
         if (every || tick % 167 == 11) TelemetryRecords.batteryConfig(out, 3.3, 4.3, 3.5);
@@ -1640,7 +1482,7 @@ public final class VirtualDrone {
             TelemetryRecords.phonePosition(out, fc.latDeg(), fc.lonDeg(), (int) Math.round(fc.altitudeM()), 5, fc.groundSpeedMs() * 3.6,
                     (int) Math.round(fc.courseDeg()), 0);
         }
-        int flags = (fcLost ? 0 : TelemetryRecords.STATE_RX_MAP_KNOWN) | (videoThread != null ? TelemetryRecords.STATE_CAMERA_OPEN : 0)
+        int flags = (fcLost ? 0 : TelemetryRecords.STATE_RX_MAP_KNOWN) | (video.isOn() ? TelemetryRecords.STATE_CAMERA_OPEN : 0)
                 | (audioOn ? TelemetryRecords.STATE_AUDIO_ON : 0) | (audioHeld ? TelemetryRecords.STATE_AUDIO_HELD : 0);
         long writeAge = lastRcWriteMs == 0 ? -1 : now - lastRcWriteMs;
         TelemetryRecords.phoneState(out, flags, lastRcSeqReported, writeAge, lastRcWriteMs == 0 ? -1 : 1);
@@ -1707,43 +1549,10 @@ public final class VirtualDrone {
         return level;
     }
 
-    /** Eight pictures a second through the shared MotionDetector while asked and disarmed; the record to the PC. */
+    /** Eight pictures a second through the shared MotionDetector while asked and disarmed (VirtualMotionWatch); the record to the PC. */
     private void motionTick(long now) {
-        int level = detectionWanted(now);
-        if (level <= 0) {
-            if (lastMotion != null) detector.reset();
-            lastMotion = null;
-            return;
-        }
-        boolean armed = !fcDisarmed();
-        MotionRecord.Report report;
-        if (armed) {
-            report = new MotionRecord.Report(MotionRecord.FLAG_ARMED, (float) Scene.HFOV_DEG, List.of());
-            detector.reset();
-        } else if (now >= nextAnalysisAt) {
-            nextAnalysisAt = now + 125;
-            if (analysis == null) analysis = new BufferedImage(320, 180, BufferedImage.TYPE_INT_RGB);
-            Recording rec = recording;
-            if (rec == null || !rec.picture(analysis, now)) scene.render(analysis, view(), now, null, false);
-            else scene.paintTargets(analysis, view(), now); // the same picture the video shows, models and all
-            int[] size = new int[2];
-            int[] px = Scene.pixels(analysis);
-            byte[] y = Scene.luma(px, 320, 180, 320, size);
-            byte[][] uv = Scene.chroma(px, 320, 180); // the colour too, as the phone gives it (1.0.52)
-            detector.setSensitivity(level);
-            MotionDetector.Result r = detector.process(y, size[0], size[1], uv[0], uv[1], now);
-            int flags = MotionRecord.FLAG_ACTIVE | (r.night ? MotionRecord.FLAG_NIGHT : 0) | (r.settling ? MotionRecord.FLAG_SETTLING : 0);
-            report = MotionRecord.of(flags, (float) Scene.HFOV_DEG, r);
-            overwatch.onPicture(analysis, report, now);
-        } else {
-            return;
-        }
-        lastMotion = report;
-        int boxes = report.boxes.size();
-        boolean due = now >= nextMotionReportAt || boxes != lastBoxCount;
-        if (!due) return;
-        nextMotionReportAt = now + (boxes > 0 ? 100 : 1000); // every picture while boxes show: the box keeps up (1.0.52)
-        lastBoxCount = boxes;
+        MotionRecord.Report report = motion.tick(now, detectionWanted(now), fcDisarmed(), view(), recording);
+        if (report == null) return;
         try {
             UdpPacketData p = new UdpPacketData(UdpCommon.TelemetryData);
             MotionRecord.write(p.daos, report);
@@ -1894,7 +1703,7 @@ public final class VirtualDrone {
         Recording old = recording;
         recording = r;
         if (old != null) old.close();
-        keyFrameWanted = true;
+        video.requestKeyFrame();
         if (audioThread != null) stopAudio(); // starts again from the new source
     }
 
@@ -2016,7 +1825,7 @@ public final class VirtualDrone {
         if (link.active(now) && !link.silent(now)) {
             linkText += String.format(java.util.Locale.ROOT, "  (loss %.0f%%, jitter %d ms, bunch %d ms)", link.lossPercent(), link.jitterMs(), link.bunchMs());
         }
-        String asked = (videoThread == null ? "video off" : "video " + videoState) + ", step " + step + (keyFramesTwice ? ", robust" : "")
+        String asked = (!video.isOn() ? "video off" : "video " + video.state()) + ", step " + step + (keyFramesTwice ? ", robust" : "")
                 + (audioOn ? ", sound on" : audioHeld ? ", sound held" : "") + (detectionWanted(now) > 0 ? ", detection " + detectionWanted(now) : "");
         String power = modeName(mode) + (checking ? " (check window)" : asleep ? " (asleep)" : sleepAt != 0 ? " (countdown)" : "")
                 + overwatch.status();
