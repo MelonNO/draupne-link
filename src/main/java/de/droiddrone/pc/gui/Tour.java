@@ -190,7 +190,7 @@ final class Tour {
     private boolean demo;
     /** The tour's drones asked for once: a refusal isn't asked again at every later fleet step. */
     private boolean finaleTried;
-    /** Where the pilot moved the box and how wide it was made: kept for the rest of the tour. */
+    /** How wide the pilot made the box: kept for the rest of the tour. */
     private final NoticePlace noticePlace = new NoticePlace();
 
     /** @param only the features to show the steps of (the tour of what is new); null for the whole tour */
@@ -691,19 +691,18 @@ final class Tour {
     }
 
     /**
-     * Where the pilot put the tour's box and how wide it was made (2026-11-09, the pilot: "make it possible to resize
-     * and move the pop up window for the MAP during the tour" - the box sat over the map): kept for the rest of the
-     * tour, the place per window. Double-click the box: back where the tour puts it.
+     * How wide the pilot made the tour's box (its corner): kept for the rest of the tour. Never where it is: the box
+     * stays at what it points to and follows it (2026-11-09, the pilot: "the message pop up should follow the point
+     * they are pointing to" - a box dragged away pointed at nothing).
      */
     static final class NoticePlace {
         int width = TourNotice.WIDTH;
-        final java.util.Map<Component, java.awt.Point> at = new java.util.WeakHashMap<>();
     }
 
     /**
      * The notice: pointer at the control, the text, STEP i OF n, NEXT across the bottom and a cross top right that
      * exits the tour; the rest of the window dims. Centred (the welcome, the finish): a box in the middle, no pointer.
-     * Dragged, it stays where the pilot put it (no pointer then); its bottom right corner makes it wider or narrower.
+     * It stays at its control and follows it as its window moves; its bottom right corner makes it wider or narrower.
      */
     static final class TourNotice extends JComponent {
         static final int WIDTH = 460;
@@ -737,10 +736,8 @@ final class Tour {
         private List<String> lines;
         /** The tip under the text, wrapped; empty for none. */
         private List<String> tipLines;
-        /** Where the pilot put it and how wide (shared by the tour's notices). */
+        /** How wide the pilot made it (shared by the tour's notices). */
         private final NoticePlace spot;
-        /** Placed by the pilot (dragged): no pointer, not following the control. */
-        private boolean moved;
         private final String counter;
         private final JButton next = Theme.primaryButton("Next");
         private final JButton exit = new CloseButton();
@@ -851,38 +848,25 @@ final class Tour {
             tipLines = tip == null || tip.isBlank() ? List.of() : wrap(tip, getFontMetrics(tipFont()), w);
         }
 
-        /** The window it is in (the key of the pilot's place for it): its top component, or null. */
-        private Component window() {
-            Component top = anchor.getParent();
-            if (top == null) return null;
-            while (top.getParent() != null && !(top instanceof Window)) top = top.getParent();
-            return top;
-        }
-
         private boolean inGrip(java.awt.Point p) {
             return p.x >= getWidth() - GRIP && p.y >= getHeight() - GRIP;
         }
 
-        /** The box dragged by the pilot: moved anywhere in the window, or wider/narrower by its corner. */
+        /** The box's corner dragged by the pilot: wider or narrower. The box itself stays at its control. */
         private final class Grab extends MouseAdapter {
             private java.awt.Point from;
-            private Rectangle start;
-            private boolean resizing;
+            private int startWidth;
 
             @Override
             public void mousePressed(MouseEvent e) {
-                if (!SwingUtilities.isLeftMouseButton(e)) return;
+                if (!SwingUtilities.isLeftMouseButton(e) || !inGrip(e.getPoint())) return;
                 from = e.getLocationOnScreen();
-                start = getBounds();
-                resizing = inGrip(e.getPoint());
+                startWidth = getWidth();
             }
 
             @Override
             public void mouseDragged(MouseEvent e) {
-                if (from == null) return;
-                int dx = e.getXOnScreen() - from.x, dy = e.getYOnScreen() - from.y;
-                if (resizing) resizeTo(start.width + dx);
-                else moveTo(start.x + dx, start.y + dy);
+                if (from != null) resizeTo(startWidth + e.getXOnScreen() - from.x);
             }
 
             @Override
@@ -892,23 +876,8 @@ final class Tour {
 
             @Override
             public void mouseMoved(MouseEvent e) {
-                setCursor(java.awt.Cursor.getPredefinedCursor(inGrip(e.getPoint()) ? java.awt.Cursor.SE_RESIZE_CURSOR
-                        : java.awt.Cursor.MOVE_CURSOR));
+                setCursor(inGrip(e.getPoint()) ? java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.SE_RESIZE_CURSOR) : null);
             }
-
-            @Override
-            public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2 && !inGrip(e.getPoint())) home();
-            }
-        }
-
-        /** Moved by the pilot to x, y (the layer's): kept there for the rest of the tour in this window. */
-        void moveTo(int x, int y) {
-            Component w = window();
-            if (w == null) return;
-            spot.at.put(w, new java.awt.Point(x, y));
-            place();
-            repaint();
         }
 
         /** Made this wide by the pilot (within MIN_WIDTH..MAX_WIDTH and the window): kept for the rest of the tour. */
@@ -921,19 +890,6 @@ final class Tour {
             wrapText();
             place();
             repaint();
-        }
-
-        /** Back where the tour puts it (a double-click). */
-        void home() {
-            Component w = window();
-            if (w != null) spot.at.remove(w);
-            place();
-            repaint();
-        }
-
-        /** Tests: where the box is now, and whether it was placed by the pilot. */
-        boolean movedForTest() {
-            return moved;
         }
 
         /** The top of the window's content in the layer: under the title bar, which stays free for moving and resizing the window. */
@@ -1101,6 +1057,16 @@ final class Tour {
             return repaintDim(full);
         }
 
+        /** Tests: what the dim answers FlatLaf's title bar for a point of the layer. */
+        Boolean captionForTest(int x, int y) {
+            return dim.captionAt(new java.awt.Point(x, y));
+        }
+
+        /** Tests: placed again, as each tick does while its control shows. */
+        void placeForTest() {
+            place();
+        }
+
         /** Tests: one tick, as the timer runs it. */
         void tickForTest() {
             tick();
@@ -1138,7 +1104,7 @@ final class Tour {
         }
 
         private int height() {
-            int pointer = centred || moved ? 0 : POINTER;
+            int pointer = centred ? 0 : POINTER;
             return pointer + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 12 + 34 + 4;
         }
 
@@ -1146,9 +1112,6 @@ final class Tour {
         private boolean place() {
             Component layer = getParent();
             if (layer == null) return false;
-            Component win = centred ? null : window();
-            java.awt.Point put = win == null ? null : spot.at.get(win);
-            moved = put != null;
             int width = Math.min(boxWidth(), Math.max(MIN_WIDTH, layer.getWidth()));
             int h = height();
             int topLimit = contentTop(); // the title bar stays free: the window moves and resizes during the tour
@@ -1156,10 +1119,6 @@ final class Tour {
             if (centred) {
                 x = Math.max(0, (layer.getWidth() - width) / 2);
                 y = Math.max(0, (layer.getHeight() - h) / 2);
-                above = false;
-            } else if (moved) {
-                x = put.x;
-                y = put.y;
                 above = false;
             } else {
                 Rectangle a = anchorBounds();
@@ -1172,7 +1131,7 @@ final class Tour {
             y = Math.max(centred ? 0 : topLimit, Math.min(y, layer.getHeight() - h));
             Rectangle r = new Rectangle(x, y, width, h);
             if (!r.equals(getBounds())) setBounds(r);
-            int top = above || centred || moved ? 0 : POINTER;
+            int top = above || centred ? 0 : POINTER;
             int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 8 - PAD;
             next.setBounds(PAD, by, width - 2 * PAD, 30); // across the box: the exit is the cross top right
             exit.setBounds(width - PAD - CLOSE + 6, top + PAD - 6, CLOSE, CLOSE);
@@ -1210,7 +1169,7 @@ final class Tour {
                 } else {
                     g.translate(0, Math.round((above ? 6 : -6) * (1 - easeIn)));
                 }
-                boolean pointer = !centred && !moved;
+                boolean pointer = !centred;
                 int top = above || !pointer ? 0 : POINTER, boxH = h - (pointer ? POINTER : 0) - 1;
                 Rectangle a = anchorBounds();
                 int tipX = a == null ? w / 2 : Math.min(Math.max(a.x + a.width / 2 - getX(), PAD + POINTER), w - PAD - POINTER);
@@ -1391,6 +1350,17 @@ final class Tour {
                 addMouseListener(swallow);
                 addMouseMotionListener(swallow);
                 addMouseWheelListener(swallow);
+                // 2026-11-09 (the pilot: "it is still not possible to move the map window"): FlatLaf's title bar asks
+                // every component over a point, by its bounds and not by contains(), whether it takes the mouse there;
+                // the dim covers the whole window and listens, so the title bar was never a caption - no drag, no
+                // double-click. Over the title bar the dim now says "not mine"; over the content, as before.
+                putClientProperty(com.formdev.flatlaf.FlatClientProperties.COMPONENT_TITLE_BAR_CAPTION,
+                        (java.util.function.Function<java.awt.Point, Boolean>) this::captionAt);
+            }
+
+            /** FlatLaf's question for a point (dim's own): null = not mine, ask the title bar; false = mine. */
+            Boolean captionAt(java.awt.Point p) {
+                return content().contains(p) ? Boolean.FALSE : null;
             }
 
             /** The window's edges, left to the window (resizing) through the dim. */
