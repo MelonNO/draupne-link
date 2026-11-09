@@ -113,7 +113,13 @@ class OverwatchFleetEndToEndTest {
     private List<BufferedImage> preRolls(String drone) throws Exception {
         List<BufferedImage> out = new ArrayList<>();
         try (Stream<Path> s = Files.list(hub.index().folder(drone))) {
-            for (Path p : s.filter(p -> p.getFileName().toString().contains("-pre-")).sorted().toList()) out.add(ImageIO.read(p.toFile()));
+            for (Path p : s.filter(p -> p.getFileName().toString().contains("-pre-")).sorted().toList()) {
+                try {
+                    out.add(ImageIO.read(p.toFile()));
+                } catch (java.io.IOException e) {
+                    // still being written
+                }
+            }
         }
         return out;
     }
@@ -186,8 +192,11 @@ class OverwatchFleetEndToEndTest {
         assertNotNull(held.held(), "the card says why its live preview waits");
         assertTrue(held.held().startsWith("MobileZulu was lost armed "), held.held());
         assertFalse(held.live(), "no preview while a drone here may be flying");
+        // they come oldest first: the newest, the BTR in them, may still be on the way (a slow machine)
         int redSeen = 0;
-        for (BufferedImage img : preRolls("MobileX-ray")) redSeen = Math.max(redSeen, count(img, OverwatchFleetEndToEndTest::btr));
+        for (long until = System.currentTimeMillis() + 5000; redSeen <= 3 && System.currentTimeMillis() < until; Thread.sleep(100)) {
+            for (BufferedImage img : preRolls("MobileX-ray")) redSeen = Math.max(redSeen, count(img, OverwatchFleetEndToEndTest::btr));
+        }
         // found as it comes in at the edge (1.0.52: about 5 s after it is sent): only part of it in those small pictures
         assertTrue(redSeen > 3, "the BTR is in the pictures before the alert: " + redSeen + " of its pixels at most");
 
