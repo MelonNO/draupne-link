@@ -71,7 +71,7 @@ final class TourFinale implements AutoCloseable {
         return showcase != null;
     }
 
-    /** The race's drone, flown in the PILOT steps; null without the six. */
+    /** The drone team's drone, flown in the PILOT steps; null without the six. */
     String racer() {
         TourShowcase s = showcase;
         return s == null ? null : s.racer().name();

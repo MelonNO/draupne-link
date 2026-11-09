@@ -11,9 +11,10 @@ import java.util.function.Consumer;
 
 /**
  * The tour's six drones for its PILOT and OBSERVER steps (2026-11-09, the pilot: select a virtual phone, PILOT UAV
- * onto an FPV race; then observe six drones, each with something to see): a fleet of their own round the virtual
- * fleet's launch point, announced to DRAUPNE Link like the fleet program's (the PHONE list, observation and the map
- * find them). The first, {@link #racer()}, sees the race ({@link ShowScene.Kind#RACE}); each of the others its own scene.
+ * onto it; then observe six drones, each with something to see; 2026-11-10: tactical scenes): a fleet of their own
+ * round the virtual fleet's launch point, announced to DRAUPNE Link like the fleet program's (the PHONE list,
+ * observation and the map find them). The first, {@link #racer()}, sees the drone team ({@link ShowScene.Kind#DRONES});
+ * each of the others its own scene.
  * Closed before the tour's finale starts its own fleet (both would write the one announcement file), and when the tour
  * ends.
  */
@@ -53,7 +54,7 @@ public final class TourShowcase implements AutoCloseable {
         }
     }
 
-    /** The race's drone: the one the tour has the pilot fly. */
+    /** The drone team's drone: the one the tour has the pilot fly. */
     public VirtualDrone racer() {
         return drones.get(0);
     }
