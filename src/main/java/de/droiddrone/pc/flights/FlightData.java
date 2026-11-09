@@ -73,8 +73,9 @@ public final class FlightData {
                     long t = startMs + Long.parseLong(c[0]);
                     if (t - lastT < 100) continue; // every frame is more than playback needs: 10 a second
                     lastT = t;
+                    double heading = num(c[18]); // -1: the recording had no attitude (VideoPipeline.osdRow) - unknown
                     out.add(new Sample(t, num(c[12]), num(c[10]), num(c[3]), num(c[2]), (int) num(c[11], -1), c[14], "1".equals(c[15]),
-                            num(c[8]), num(c[9]), num(c[18])));
+                            num(c[8]), num(c[9]), heading < 0 ? Double.NaN : heading));
                 } catch (RuntimeException ignored) {
                     // a row cut short: left out
                 }

@@ -138,6 +138,22 @@ public class FlightLibraryTest {
         assertTrue(d.link.stream().filter(FlightData.LinkSample::down).allMatch(l -> l.pingMs() == 900));
     }
 
+    /**
+     * A recording without the FC's attitude writes its heading as -1 (VideoPipeline.osdRow): unknown, not -1 degrees -
+     * before 1.0.53 a flight with a recording and no track drew its marker pointing at -1 degrees (1.0.53 review).
+     */
+    @Test
+    void aRecordingsUnknownHeadingStaysUnknown(@TempDir Path root) throws IOException {
+        Path csv = root.resolve("flight-2026-11-08_14-05-00.csv");
+        Files.writeString(csv, "pts_ms,ping_ms,volts,cell_volts,amps,mah,sats,fix,lat,lon,speed_kmh,home_m,alt_m,vario_ms,mode,armed,roll,pitch,heading\n"
+                + "0,40,16.4,4.10,1.0,10,9,2,59.910000,10.750000,0.0,0,1.0,0.0,ANGLE,1,,,-1\n"
+                + "200,40,16.4,4.10,1.0,10,9,2,59.910000,10.750000,0.0,0,1.0,0.0,ANGLE,1,0.0,0.0,90\n", StandardCharsets.UTF_8);
+        java.util.List<FlightData.Sample> rows = FlightData.readTelemetry(csv, 1_000);
+        assertEquals(2, rows.size());
+        assertTrue(Double.isNaN(rows.get(0).headingDeg()), "-1 is unknown: " + rows.get(0).headingDeg());
+        assertEquals(90, rows.get(1).headingDeg(), 1e-9);
+    }
+
     @Test
     void withoutARecordingTheTrackGivesTheFigures(@TempDir Path root) throws IOException {
         Path tracks = Files.createDirectories(root.resolve("Tracks"));

@@ -51,6 +51,31 @@ class StreamRecorderTest {
         assertEquals(s.packets().size(), frames);
     }
 
+    /**
+     * A file whose start fails after it was opened (here the file listener throws; on a PC, a full disk at its first
+     * frame) is closed, not left open: before 1.0.53 the recorder was lost with the exception and the MKV stayed open -
+     * locked, not even deletable - until the app closed.
+     */
+    @Test
+    void aFileThatFailsAtItsStartIsClosed(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 10, 10);
+        VideoPipeline pipeline = new VideoPipeline(new NoScreen(), () -> 40);
+        java.util.concurrent.atomic.AtomicReference<Path> started = new java.util.concurrent.atomic.AtomicReference<>();
+        pipeline.setRecordingFileListener(f -> {
+            started.set(f);
+            throw new IllegalStateException("the listener fails");
+        });
+        pipeline.startRecording(dir);
+        pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
+        feed(pipeline, s, 0, 3, 1);
+        long end = System.currentTimeMillis() + 3000;
+        while (pipeline.isRecording() && System.currentTimeMillis() < end) Thread.sleep(10);
+        assertFalse(pipeline.isRecording(), "the recording stopped on the error");
+        assertNotNull(started.get(), "a file was opened");
+        Files.delete(started.get()); // an open file can't be deleted on Windows
+        pipeline.close();
+    }
+
     /** A screen the pictures go to, so frames are presented (each one writes a row of the OSD sidecar). */
     private static final class SmallScreen implements VideoPipeline.FrameSink {
         final java.util.concurrent.atomic.AtomicInteger presented = new java.util.concurrent.atomic.AtomicInteger();
