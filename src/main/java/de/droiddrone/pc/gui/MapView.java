@@ -658,7 +658,7 @@ class MapView extends JComponent {
     private void addPin(int x, int y) {
         if (pins == null) return;
         double[] ll = toLatLon(x, y);
-        String name = (String) javax.swing.JOptionPane.showInputDialog(this, "Pin name", "Add pin",
+        String name = (String) Dialogs.input(this, "Pin name", "Add pin",
                 javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, pins.nextName());
         if (name == null) return;
         pins.add(name, ll[0], ll[1]);
@@ -666,7 +666,7 @@ class MapView extends JComponent {
     }
 
     private void renamePin(Pins.Pin pin) {
-        String name = (String) javax.swing.JOptionPane.showInputDialog(this, "New name", "Rename " + pin.name(),
+        String name = (String) Dialogs.input(this, "New name", "Rename " + pin.name(),
                 javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, pin.name());
         if (name == null || name.isBlank()) return;
         pins.rename(pin, name);
@@ -1370,7 +1370,7 @@ class MapView extends JComponent {
     }
 
     private void renameItem(MapGraphics.Item item) {
-        String name = (String) javax.swing.JOptionPane.showInputDialog(this, "New name", "Rename " + item.name(),
+        String name = (String) Dialogs.input(this, "New name", "Rename " + item.name(),
                 javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, item.name());
         if (name == null || name.isBlank() || graphics == null) return;
         graphics.rename(item, name);

@@ -262,7 +262,7 @@ class WizardDialog extends JDialog {
     }
 
     private void askClose() {
-        int answer = javax.swing.JOptionPane.showConfirmDialog(this, "Close the setup? What's done stays done.", "Close setup",
+        int answer = Dialogs.confirm(this, "Close the setup? What's done stays done.", "Close setup",
                 javax.swing.JOptionPane.YES_NO_OPTION, javax.swing.JOptionPane.QUESTION_MESSAGE);
         if (answer == javax.swing.JOptionPane.YES_OPTION) closeAs("Esc");
     }

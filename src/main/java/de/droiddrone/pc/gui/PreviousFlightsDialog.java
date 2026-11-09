@@ -178,7 +178,7 @@ final class PreviousFlightsDialog extends JDialog {
             try {
                 if (this.tracksDir != null) java.awt.Desktop.getDesktop().open(this.tracksDir.toFile());
             } catch (Exception ex) {
-                JOptionPane.showMessageDialog(this, "Can't open the folder: " + ex.getMessage(), "Previous flights", JOptionPane.WARNING_MESSAGE);
+                Dialogs.message(this, "Can't open the folder: " + ex.getMessage(), "Previous flights", JOptionPane.WARNING_MESSAGE);
             }
         });
         leftFoot.add(folder, BorderLayout.SOUTH);
@@ -446,7 +446,7 @@ final class PreviousFlightsDialog extends JDialog {
                 said = "Export failed: " + e.getMessage();
             }
             String msg = said;
-            SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this, msg, "Export", JOptionPane.INFORMATION_MESSAGE));
+            SwingUtilities.invokeLater(() -> Dialogs.message(this, msg, "Export", JOptionPane.INFORMATION_MESSAGE));
         }, "flightExport");
         t.setDaemon(true);
         t.setPriority(Thread.MIN_PRIORITY);
@@ -456,12 +456,12 @@ final class PreviousFlightsDialog extends JDialog {
     private void deleteFlight() {
         if (data == null) return;
         FlightLibrary.Flight f = data.flight;
-        if (JOptionPane.showConfirmDialog(this, "Delete " + f.title() + "? Track, video and log go. Can't be undone.", "Delete flight",
+        if (Dialogs.confirm(this, "Delete " + f.title() + "? Track, video and log go. Can't be undone.", "Delete flight",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
         stopAll(); // the files open for playback first
         data = null;
         List<Path> left = FlightData.delete(f);
-        if (!left.isEmpty()) JOptionPane.showMessageDialog(this, "Couldn't delete " + left.get(0).getFileName() + ".", "Delete flight", JOptionPane.WARNING_MESSAGE);
+        if (!left.isEmpty()) Dialogs.message(this, "Couldn't delete " + left.get(0).getFileName() + ".", "Delete flight", JOptionPane.WARNING_MESSAGE);
         int i = list.getSelectedIndex();
         FlightLibrary.Flight next = i + 1 < model.size() ? model.get(i + 1) : i > 0 ? model.get(i - 1) : null;
         reload(next);

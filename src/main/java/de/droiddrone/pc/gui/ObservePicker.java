@@ -60,7 +60,7 @@ final class ObservePicker {
         }
         if (phones.isEmpty()) panel.add(new JLabel("No phone seen yet: open DRAUPNE Flight, on Tailscale."));
         limit.run();
-        int answer = JOptionPane.showConfirmDialog(owner, panel, "Observation - choose the drones", JOptionPane.OK_CANCEL_OPTION,
+        int answer = Dialogs.confirm(owner, panel, "Observation - choose the drones", JOptionPane.OK_CANCEL_OPTION,
                 JOptionPane.PLAIN_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return null;
         List<String> chosen = new ArrayList<>();

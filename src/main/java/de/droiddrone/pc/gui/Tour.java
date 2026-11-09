@@ -352,7 +352,7 @@ final class Tour {
         if (!finale.start() && finale.fleetOpen() && closePilotsFleet()) finale.start();
         if (!finale.started()) {
             main.logLine("Tour: no drones for the fleet steps - " + finale.refused());
-            JOptionPane.showMessageDialog(main, (demo ? "Demo not started. " : "No tour drones: BTR part skipped. ")
+            Dialogs.message(main, (demo ? "Demo not started. " : "No tour drones: BTR part skipped. ")
                     + finale.refused(), demo ? "Overwatch demo" : "Tour", JOptionPane.INFORMATION_MESSAGE);
             return false;
         }
@@ -381,7 +381,7 @@ final class Tour {
     /** Asks to close the pilot's virtual fleet; closed: true (its drones and announcement gone, up to 8 s). */
     private boolean closePilotsFleet() {
         Object[] options = {"Close it", "Cancel"};
-        int answer = JOptionPane.showOptionDialog(main, "The virtual fleet is open.\nClose it for the tour's drones?",
+        int answer = Dialogs.option(main, "The virtual fleet is open.\nClose it for the tour's drones?",
                 "Virtual fleet", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
         if (answer != JOptionPane.YES_OPTION) return false;
         try {
@@ -480,7 +480,7 @@ final class Tour {
             default -> f;
         });
         Object[] options = {"Yes", "Not now"};
-        int answer = JOptionPane.showOptionDialog(main, "New: " + String.join(", ", what)
+        int answer = Dialogs.option(main, "New: " + String.join(", ", what)
                         + ".\nTour the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
         if (answer == JOptionPane.YES_OPTION) run(new Tour(main, features), 0);
     }
@@ -489,7 +489,7 @@ final class Tour {
     static void offer(MainWindow main) {
         main.save(java.util.Map.of(OFFERED_KEY, "true", SEEN_KEY, String.join(",", FEATURES)));
         Object[] options = {"Yes", "Not now"};
-        int answer = JOptionPane.showOptionDialog(main, "Take a short tour of the window?",
+        int answer = Dialogs.option(main, "Take a short tour of the window?",
                 "Tour", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
         if (answer == JOptionPane.YES_OPTION) start(main);
     }

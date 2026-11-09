@@ -1541,7 +1541,7 @@ public class MainWindow extends JFrame {
         JoystickService.Snapshot snap = service.getSnapshot();
         Window owner = FocusManager.getCurrentManager().getActiveWindow();
         if (snap.selected() == null || snap.state() == null) {
-            JOptionPane.showMessageDialog(owner == null ? this : owner, "Plug in the radio and choose 'USB Joystick (HID)' on it.",
+            Dialogs.message(owner == null ? this : owner, "Plug in the radio and choose 'USB Joystick (HID)' on it.",
                     "No controller", JOptionPane.WARNING_MESSAGE);
             return false;
         }
@@ -1574,14 +1574,14 @@ public class MainWindow extends JFrame {
     private void connect() {
         if (observation != null) return; // CONNECT on a tile stops the observation first
         if (mapper == null) {
-            JOptionPane.showMessageDialog(this, "Controller mapping is not usable: " + mapperError + "\nRun Calibrate first.",
+            Dialogs.message(this, "Controller mapping is not usable: " + mapperError + "\nRun Calibrate first.",
                     "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return;
         }
         boolean watch = ROLE_SPECTATOR.equals(roleCombo.getSelectedItem());
         Names.Entry target = names.get(config.getString(Names.PHONE_NAME_KEY));
         if (target == null || target.kind() != (watch ? Names.Kind.PC : Names.Kind.PHONE) || target.ip() == null || target.ip().isEmpty()) {
-            JOptionPane.showMessageDialog(this, watch ? "Pick the pilot PC first (it needs DRAUPNE Link running)."
+            Dialogs.message(this, watch ? "Pick the pilot PC first (it needs DRAUPNE Link running)."
                     : "Pick the phone first (it needs DRAUPNE Flight open, on Tailscale).", "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -1616,7 +1616,7 @@ public class MainWindow extends JFrame {
             if (video != null) video.close();
             video = null;
             logLine("Connect failed: " + e.getMessage());
-            JOptionPane.showMessageDialog(this, e.getMessage(), "Cannot connect", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, e.getMessage(), "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return;
         }
         session = new RcSession(connection.getLink(), mapper, msg -> SwingUtilities.invokeLater(() -> logLine(msg)),
@@ -1714,12 +1714,12 @@ public class MainWindow extends JFrame {
         String text = "Two devices answer as " + target.name() + ": " + String.join(" and ", ips) + ".\n"
                 + "CONNECT could reach the wrong drone: refused until one is renamed.";
         if (free == null || others.isEmpty()) {
-            JOptionPane.showMessageDialog(this, text + "\nRename one in the NAME MAP.", "Cannot connect", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, text + "\nRename one in the NAME MAP.", "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return true;
         }
         String other = others.get(0);
         String[] options = {"Rename " + other + " to " + free, "Cancel"};
-        int choice = JOptionPane.showOptionDialog(this, text + "\n\n" + target.name() + " in the name map is " + target.ip()
+        int choice = Dialogs.option(this, text + "\n\n" + target.name() + " in the name map is " + target.ip()
                         + (target.detail().isEmpty() ? "" : " (" + target.detail() + ")") + ".\nRename the phone at " + other + " to " + free + "?",
                 "Cannot connect", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[1]);
         if (choice == 0) {
@@ -2105,11 +2105,11 @@ public class MainWindow extends JFrame {
         PossiblyFlying flag = PossiblyFlying.pc();
         String why = flag.reason();
         if (!flag.resumable()) {
-            if (why != null) JOptionPane.showMessageDialog(parent, why + ".\nA link here says armed: waits until DISARMED.", "It's down - resume", JOptionPane.INFORMATION_MESSAGE);
+            if (why != null) Dialogs.message(parent, why + ".\nA link here says armed: waits until DISARMED.", "It's down - resume", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         String[] options = {"It's down - resume", "Cancel"};
-        int choice = JOptionPane.showOptionDialog(parent, why + ".\n\nIs that drone on the ground (disarmed or found)?\n"
+        int choice = Dialogs.option(parent, why + ".\n\nIs that drone on the ground (disarmed or found)?\n"
                         + "Downloads resume. Nothing is sent to any drone.",
                 "It's down - resume", JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[1]);
         if (choice != 0) return;
@@ -2284,7 +2284,7 @@ public class MainWindow extends JFrame {
         if (result == null) return;
         logLine("Last update: " + result);
         if (!result.startsWith("OK")) {
-            JOptionPane.showMessageDialog(this, "<html>The last update did not install:<br>" + result
+            Dialogs.message(this, "<html>The last update did not install:<br>" + result
                     + "<br><br>Press UPDATE again, or get the installer from the release page.</html>",
                     "Update", JOptionPane.WARNING_MESSAGE);
         }
@@ -2382,7 +2382,7 @@ public class MainWindow extends JFrame {
             else set.add(e.name());
         }
         if (set.size() == 0) {
-            JOptionPane.showMessageDialog(this, "None of the chosen drones can be observed now (see the log).",
+            Dialogs.message(this, "None of the chosen drones can be observed now (see the log).",
                     "Observation", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
@@ -2416,7 +2416,7 @@ public class MainWindow extends JFrame {
             }
             audio.close();
             logLine("Observation failed: " + ex.getMessage());
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Cannot observe", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, ex.getMessage(), "Cannot observe", JOptionPane.WARNING_MESSAGE);
             return;
         }
         tileFeeds.clear();
@@ -2523,7 +2523,7 @@ public class MainWindow extends JFrame {
         ObservationSession o = observation;
         if (o == null) return;
         if (mapper == null) { // the streams stay: nothing could fly yet
-            JOptionPane.showMessageDialog(this, "Controller mapping is not usable: " + mapperError + "\nRun Calibrate first.",
+            Dialogs.message(this, "Controller mapping is not usable: " + mapperError + "\nRun Calibrate first.",
                     "Cannot connect", JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -2543,7 +2543,7 @@ public class MainWindow extends JFrame {
     /** After a flight that began on the grid: the same set again, if the pilot wants. */
     private void offerBackToGrid() {
         if (connection != null || observation != null) return;
-        int answer = JOptionPane.showConfirmDialog(this, "Back to the grid, same drones?", "Observation",
+        int answer = Dialogs.confirm(this, "Back to the grid, same drones?", "Observation",
                 JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
         if (answer != JOptionPane.YES_OPTION) return;
         roleCombo.setSelectedItem(ROLE_OBSERVER);
@@ -2800,22 +2800,19 @@ public class MainWindow extends JFrame {
                     + "): it can't update itself."
                     : "This release has no checkable installer.";
             logLine("Update: " + why + " Opening the release page.");
-            JOptionPane.showMessageDialog(this, "<html>" + why + "<br><br>The release page opens: download the "
+            Dialogs.message(this, "<html>" + why + "<br><br>The release page opens: download the "
                     + "installer and run it (close DRAUPNE Link first).</html>", "Update", JOptionPane.INFORMATION_MESSAGE);
             PcSetupWizard.openInBrowser(this, r.pageUrl());
             return;
         }
         if (connection != null) {
             logLine("Update: refused while connected - disconnect first.");
-            JOptionPane.showMessageDialog(this, "<html>Connected to the drone.<br><br>Updating closes DRAUPNE Link: "
+            Dialogs.message(this, "<html>Connected to the drone.<br><br>Updating closes DRAUPNE Link: "
                     + "the sticks would stop.<br>STANDBY MODE first, then UPDATE.</html>",
                     "Update", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        int answer = JOptionPane.showConfirmDialog(this, "<html>Update to DRAUPNE Link " + r.version() + " now?<br><br>"
-                        + "It downloads, closes, installs (Windows asks once) and restarts.<br>"
-                        + "Settings stay.</html>",
-                "Update", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+        int answer = Dialogs.confirm(this, updateQuestion(r.version()), "Update", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
         updating = true;
         updateButton.setText("DOWNLOADING");
@@ -2846,11 +2843,17 @@ public class MainWindow extends JFrame {
         t.start();
     }
 
+    static String updateQuestion(String version) {
+        return "<html>Update to DRAUPNE Link " + version + " now?<br><br>"
+                + "It downloads, closes, installs (Windows asks once) and restarts.<br>"
+                + "Settings stay.</html>";
+    }
+
     private void updateFailed(UpdateCheck.Release r, String why) {
         updating = false;
         updateButton.setText("UPDATE " + r.version());
         logLine("Update failed: " + why);
-        int answer = JOptionPane.showConfirmDialog(this, "<html>The update didn't work: " + why
+        int answer = Dialogs.confirm(this, "<html>The update didn't work: " + why
                         + "<br><br>Open the release page?</html>",
                 "Update", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (answer == JOptionPane.YES_OPTION) PcSetupWizard.openInBrowser(this, r.pageUrl());
@@ -3113,7 +3116,7 @@ public class MainWindow extends JFrame {
         boolean maybeFlying = !fresh && lastArmedAt != 0 && now - lastArmedAt < LOST_DRONE_WINDOW_MS;
         if (!armed && !maybeFlying) return true;
         String[] options = {"Keep flying", action};
-        int choice = JOptionPane.showOptionDialog(this,
+        int choice = Dialogs.option(this,
                 (armed ? "The drone is ARMED." : "The drone was armed moments ago and may still be flying.")
                         + "\n" + action + " stops the sticks: Betaflight failsafe takes over (GPS rescue, land or drop, as set).",
                 action + " while armed?", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
@@ -3377,7 +3380,7 @@ public class MainWindow extends JFrame {
         boolean same = c != null && !c.getLink().isSpectator() && drone.equalsIgnoreCase(flown);
         if (!same && c != null && PossiblyFlying.now()) {
             // armed now or within the lost-drone window: never a click away from cutting this PC's own sticks
-            JOptionPane.showMessageDialog(this, "This PC flies another drone (or did moments ago: it may still be flying).\n"
+            Dialogs.message(this, "This PC flies another drone (or did moments ago: it may still be flying).\n"
                     + "Land it, press STANDBY MODE, then PILOT UAV on " + drone + ".", "Overwatch", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
@@ -3779,7 +3782,7 @@ public class MainWindow extends JFrame {
         };
         Runnable clear = () -> {
             int n = list.size();
-            if (JOptionPane.showConfirmDialog(this, "Take all " + n + " earlier flight" + (n == 1 ? "" : "s") + " off the map?\n"
+            if (Dialogs.confirm(this, "Take all " + n + " earlier flight" + (n == 1 ? "" : "s") + " off the map?\n"
                     + "Files are kept.", "Earlier flights", JOptionPane.YES_NO_OPTION) != JOptionPane.YES_OPTION) return;
             keptFlights.removeIf(k -> live == null || !live.equals(k.file()));
             saveKeptFlights();
@@ -3977,14 +3980,14 @@ public class MainWindow extends JFrame {
     private void connectFromMap(String phone, boolean watch) {
         toPilotWindow();
         if (observation != null && watch) {
-            JOptionPane.showMessageDialog(this, "Observing: STOP OBSERVING first.", "Observing", JOptionPane.INFORMATION_MESSAGE);
+            Dialogs.message(this, "Observing: STOP OBSERVING first.", "Observing", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         // 1.0.52 (the pilot: "PILOT UAV needs to put the connect as to pilot"): every PILOT UAV - fleet, map, alert -
         // flies: an observation (no sticks, streams only) ends first and CONNECT AS goes to Pilot below
         if (observation != null) stopObservation();
         if (connection != null) {
-            JOptionPane.showMessageDialog(this, "Connected: STANDBY MODE first, then PILOT UAV on " + phone + ".",
+            Dialogs.message(this, "Connected: STANDBY MODE first, then PILOT UAV on " + phone + ".",
                     "Connected", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
@@ -3993,7 +3996,7 @@ public class MainWindow extends JFrame {
             NameService.DronePosition d = nameService.dronePositions().stream().filter(x -> x.name().equals(phone)).findFirst().orElse(null);
             target = d == null || d.position().pilotIp().isEmpty() ? null : names.nameAt(d.position().pilotIp());
             if (target == null) {
-                JOptionPane.showMessageDialog(this, "The PC flying " + phone + " isn't in the name map yet.", "Watch", JOptionPane.INFORMATION_MESSAGE);
+                Dialogs.message(this, "The PC flying " + phone + " isn't in the name map yet.", "Watch", JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
         }
@@ -4298,7 +4301,7 @@ public class MainWindow extends JFrame {
         String status = link.spectatorStatus();
         String who = status != null && status.contains("(") ? status.substring(status.indexOf('(') + 1, status.indexOf(')')) : "another PC";
         logLine("YOU ARE NOT FLYING: " + who + " is the pilot. This PC is a spectator - sticks not sent.");
-        SwingUtilities.invokeLater(() -> JOptionPane.showMessageDialog(this,
+        SwingUtilities.invokeLater(() -> Dialogs.message(this,
                 "<html><div style='width:420px'><b style='font-size:16px;color:#ff5a4f'>You are not flying.</b><br><br>"
                         + "Another PC (" + who + ") is already the pilot.<br><br>"
                         + "This PC is a <b>spectator</b>: video and OSD only, a little behind. Your "
@@ -4365,16 +4368,16 @@ public class MainWindow extends JFrame {
             return;
         }
         if (version == null || UpdateCheck.isNewer(REMOTE_UPDATE_MIN_PHONE, version)) {
-            JOptionPane.showMessageDialog(this, "The phone runs " + (version == null ? "an old phone app" : version) + ": can't update it from here.\n"
+            Dialogs.message(this, "The phone runs " + (version == null ? "an old phone app" : version) + ": can't update it from here.\n"
                     + "Update once on the phone (SETUP > Set up a new drone).\n"
                     + "From " + REMOTE_UPDATE_MIN_PHONE + " on, UPDATE PHONE APP works.", "Update phone app", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         if (!UpdateCheck.isNewer(newest, version)) {
-            JOptionPane.showMessageDialog(this, "The phone already runs " + version + ".", "Update phone app", JOptionPane.INFORMATION_MESSAGE);
+            Dialogs.message(this, "The phone already runs " + version + ".", "Update phone app", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
-        int answer = JOptionPane.showConfirmDialog(this, "Update the phone to DRAUPNE Flight " + newest + "?\n\n"
+        int answer = Dialogs.confirm(this, "Update the phone to DRAUPNE Flight " + newest + "?\n\n"
                 + "The phone downloads (~23 MB) and installs it; the link drops briefly.\n"
                 + "Disarmed only - keep the drone on the ground.", "Update phone app", JOptionPane.YES_NO_OPTION);
         if (answer != JOptionPane.YES_OPTION) return;

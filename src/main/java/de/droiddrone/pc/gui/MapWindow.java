@@ -210,7 +210,7 @@ final class MapWindow extends JFrame {
         tools.importButton.addActionListener(e -> importKml());
         tools.clearAll.addActionListener(e -> { // 1.0.37: the pins and the measurement go too (the pilot)
             if (graphics.isEmpty() && pins.list().isEmpty() && !map.hasMeasurement()) return;
-            int answer = javax.swing.JOptionPane.showConfirmDialog(this, "Clear all drawings, symbols, pins and measurements?",
+            int answer = Dialogs.confirm(this, "Clear all drawings, symbols, pins and measurements?",
                     "Clear all", javax.swing.JOptionPane.OK_CANCEL_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE);
             if (answer != javax.swing.JOptionPane.OK_OPTION) return;
             graphics.clear();
@@ -473,7 +473,7 @@ final class MapWindow extends JFrame {
         try {
             dir = java.nio.file.Files.createDirectories(java.nio.file.Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports"));
         } catch (java.io.IOException e) {
-            javax.swing.JOptionPane.showMessageDialog(this, "No Exports folder: " + e.getMessage(), "Export", javax.swing.JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, "No Exports folder: " + e.getMessage(), "Export", javax.swing.JOptionPane.WARNING_MESSAGE);
             return;
         }
         String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm"));
@@ -514,10 +514,10 @@ final class MapWindow extends JFrame {
             shot.centreOn((south + north) / 2, (west + east) / 2, zoom);
             javax.imageio.ImageIO.write(shot.picture(Math.max(64, w), Math.max(64, h)), "png", png.toFile());
             String line = "Exported " + items.size() + " drawings and " + inBox.size() + " pins: " + kml + " and " + png.getFileName();
-            javax.swing.JOptionPane.showMessageDialog(this, "<html>Saved:<br>" + kml + "<br>" + png + "</html>", "Export", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+            Dialogs.message(this, "<html>Saved:<br>" + kml + "<br>" + png + "</html>", "Export", javax.swing.JOptionPane.INFORMATION_MESSAGE);
             System.out.println(line);
         } catch (java.io.IOException | RuntimeException e) {
-            javax.swing.JOptionPane.showMessageDialog(this, "Export failed: " + e.getMessage(), "Export", javax.swing.JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, "Export failed: " + e.getMessage(), "Export", javax.swing.JOptionPane.WARNING_MESSAGE);
         }
     }
 
@@ -553,21 +553,21 @@ final class MapWindow extends JFrame {
                 map.centreOn((s + n) / 2, (w + e) / 2, Math.max(map.zoom(), 12));
                 syncFollow();
             }
-            javax.swing.JOptionPane.showMessageDialog(this, parsed.items().size() + " drawings and symbols, " + parsed.pins().size() + " pins imported.",
+            Dialogs.message(this, parsed.items().size() + " drawings and symbols, " + parsed.pins().size() + " pins imported.",
                     "Import", javax.swing.JOptionPane.INFORMATION_MESSAGE);
         } catch (java.io.IOException | RuntimeException e) {
-            javax.swing.JOptionPane.showMessageDialog(this, "Import failed: " + e.getMessage(), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, "Import failed: " + e.getMessage(), "Import", javax.swing.JOptionPane.WARNING_MESSAGE);
         }
     }
 
     /** PLACE AT: a position typed or pasted in any format the map writes; a point of the drawing on, else a symbol. */
     private void placeAtPosition() {
-        String text = (String) javax.swing.JOptionPane.showInputDialog(this,
+        String text = (String) Dialogs.input(this,
                 "MGRS (32V PN 35026 85877), UTM or lat, lon", "Place at", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, "");
         if (text == null || text.isBlank()) return;
         double[] ll = Coordinates.parse(text);
         if (ll == null) {
-            javax.swing.JOptionPane.showMessageDialog(this, "Unreadable position: " + text, "Place at", javax.swing.JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, "Unreadable position: " + text, "Place at", javax.swing.JOptionPane.WARNING_MESSAGE);
             return;
         }
         map.placeAt(ll[0], ll[1]);
@@ -769,7 +769,7 @@ final class MapWindow extends JFrame {
         String text = "<html>COVERAGE needs a free OpenCelliD access token.<br>Register at https://opencellid.org and copy the "
                 + "Access Token<br>from your account page. Saved in the settings file.<br><br>"
                 + "1,000 requests a day; each 1.8 km box takes two, once a month.</html>";
-        Object answer = javax.swing.JOptionPane.showInputDialog(this, text, "OpenCelliD key", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, coverageKey);
+        Object answer = Dialogs.input(this, text, "OpenCelliD key", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, coverageKey);
         if (answer == null) return;
         coverageKey = answer.toString().trim();
         saver.accept(Map.of(COVERAGE_KEY, coverageKey));
@@ -1319,7 +1319,7 @@ final class MapWindow extends JFrame {
         box.add(hint, BorderLayout.SOUTH);
         Object[] options = {"Go", "Go and pin", "Cancel"};
         while (true) {
-            int answer = javax.swing.JOptionPane.showOptionDialog(this, box, "Go to position", javax.swing.JOptionPane.DEFAULT_OPTION,
+            int answer = Dialogs.option(this, box, "Go to position", javax.swing.JOptionPane.DEFAULT_OPTION,
                     javax.swing.JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
             if (answer != 0 && answer != 1) return;
             double[] ll = Coordinates.parse(field.getText());
@@ -1354,14 +1354,14 @@ final class MapWindow extends JFrame {
         try {
             FlightTrack t = FlightTrack.read(file);
             if (t.isEmpty()) {
-                javax.swing.JOptionPane.showMessageDialog(this, "No positions in " + file.getFileName() + ".", "Previous flights", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+                Dialogs.message(this, "No positions in " + file.getFileName() + ".", "Previous flights", javax.swing.JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
             map.setOldTrack(t.points(), trackTitle(file.getFileName().toString()));
             map.fitOldTrack();
             syncFollow();
         } catch (java.io.IOException e) {
-            javax.swing.JOptionPane.showMessageDialog(this, "Can't read " + file.getFileName() + ": " + e.getMessage(), "Previous flights", javax.swing.JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(this, "Can't read " + file.getFileName() + ": " + e.getMessage(), "Previous flights", javax.swing.JOptionPane.WARNING_MESSAGE);
         }
     }
 

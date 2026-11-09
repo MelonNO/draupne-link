@@ -1174,7 +1174,7 @@ final class DroneSetup {
         private void showByHand() {
             javax.swing.JLabel text = new javax.swing.JLabel("<html><div style='width:520px'>" + manualHtml + "</div></html>");
             text.setFont(Theme.font(java.awt.Font.PLAIN, 14f));
-            javax.swing.JOptionPane.showMessageDialog(javax.swing.SwingUtilities.getWindowAncestor(usb), text,
+            Dialogs.message(javax.swing.SwingUtilities.getWindowAncestor(usb), text,
                     "Betaflight settings by hand", javax.swing.JOptionPane.INFORMATION_MESSAGE);
         }
 

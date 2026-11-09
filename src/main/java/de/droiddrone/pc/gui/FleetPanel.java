@@ -156,13 +156,13 @@ public final class FleetPanel {
         try {
             addCard(fleet.addAtLaunch(fleet.freeName(), startLat, startLon));
         } catch (IOException e) {
-            JOptionPane.showMessageDialog(frame, e.getMessage(), "Add drone", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(frame, e.getMessage(), "Add drone", JOptionPane.WARNING_MESSAGE);
         }
     }
 
     private void pickPlace() {
         String now = de.droiddrone.pc.map.Coordinates.format(de.droiddrone.pc.map.Coordinates.Format.MGRS, startLat, startLon);
-        String s = (String) JOptionPane.showInputDialog(frame, "Start place - MGRS, UTM or lat, lon:",
+        String s = (String) Dialogs.input(frame, "Start place - MGRS, UTM or lat, lon:",
                 "Start place", JOptionPane.QUESTION_MESSAGE, null, null, now);
         if (s == null) return;
         double[] at = de.droiddrone.pc.map.Coordinates.parse(s);
@@ -180,7 +180,7 @@ public final class FleetPanel {
             }
             refresh();
         } catch (RuntimeException e) {
-            JOptionPane.showMessageDialog(frame, "Not a position. Use MGRS (" + Fleet.DEFAULT_PLACE + "), UTM or lat, lon.", "Start place", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(frame, "Not a position. Use MGRS (" + Fleet.DEFAULT_PLACE + "), UTM or lat, lon.", "Start place", JOptionPane.WARNING_MESSAGE);
         }
     }
 
@@ -350,12 +350,12 @@ public final class FleetPanel {
         /** LOOK (1.0.52, the pilot): where the camera looks - degrees, or a grid it looks at. */
         private void look() {
             String now = String.valueOf(Math.round(drone.headingDeg()) % 360);
-            String s = (String) JOptionPane.showInputDialog(frame, "Look: degrees (0-359), or a grid to look at:", "Look",
+            String s = (String) Dialogs.input(frame, "Look: degrees (0-359), or a grid to look at:", "Look",
                     JOptionPane.QUESTION_MESSAGE, null, null, now);
             if (s == null) return;
             Double heading = lookHeading(s, drone.position());
             if (heading == null) {
-                JOptionPane.showMessageDialog(frame, "Not a direction. Use degrees, MGRS, UTM or lat, lon.", "Look", JOptionPane.WARNING_MESSAGE);
+                Dialogs.message(frame, "Not a direction. Use degrees, MGRS, UTM or lat, lon.", "Look", JOptionPane.WARNING_MESSAGE);
                 return;
             }
             if (!drone.lookTo(heading)) appendLog(drone.name() + ": armed - looks where it flies");
@@ -363,22 +363,22 @@ public final class FleetPanel {
         }
 
         private void rename() {
-            String s = (String) JOptionPane.showInputDialog(frame, "DRAUPNE name (MobileAlpha ... MobileZulu):", "Rename",
+            String s = (String) Dialogs.input(frame, "DRAUPNE name (MobileAlpha ... MobileZulu):", "Rename",
                     JOptionPane.QUESTION_MESSAGE, null, null, drone.name());
             if (s == null) return;
             s = s.trim();
             if (!de.droiddrone.pc.Names.isValidName(s, de.droiddrone.pc.Names.Kind.PHONE)) {
-                JOptionPane.showMessageDialog(frame, "Not a DRAUPNE name. Use Mobile + a letter word, like MobileYankee.", "Rename", JOptionPane.WARNING_MESSAGE);
+                Dialogs.message(frame, "Not a DRAUPNE name. Use Mobile + a letter word, like MobileYankee.", "Rename", JOptionPane.WARNING_MESSAGE);
                 return;
             }
             if (fleet.nameTaken(s)) {
-                JOptionPane.showMessageDialog(frame, s + " is already in the name map (a known phone).\n"
+                Dialogs.message(frame, s + " is already in the name map (a known phone).\n"
                         + "Virtual drones can't use it.", "Rename", JOptionPane.WARNING_MESSAGE);
                 return;
             }
             for (VirtualDrone o : fleet.drones()) {
                 if (o != drone && o.name().equalsIgnoreCase(s)) {
-                    JOptionPane.showMessageDialog(frame, "Another virtual drone has that name.", "Rename", JOptionPane.WARNING_MESSAGE);
+                    Dialogs.message(frame, "Another virtual drone has that name.", "Rename", JOptionPane.WARNING_MESSAGE);
                     return;
                 }
             }
@@ -398,7 +398,7 @@ public final class FleetPanel {
             try {
                 videoLabel.setText("plays " + drone.playRecording(file, track.isSelected()));
             } catch (IOException | RuntimeException e) {
-                JOptionPane.showMessageDialog(frame, "Can't play " + file.getFileName() + ": " + e.getMessage(), "Flight file", JOptionPane.WARNING_MESSAGE);
+                Dialogs.message(frame, "Can't play " + file.getFileName() + ": " + e.getMessage(), "Flight file", JOptionPane.WARNING_MESSAGE);
             }
         }
 

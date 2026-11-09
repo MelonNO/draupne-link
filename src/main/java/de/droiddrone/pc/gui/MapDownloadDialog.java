@@ -141,7 +141,7 @@ final class MapDownloadDialog extends JDialog {
 
         refresh.setRepeats(true);
         setArea(area, shown, zoom);
-        pack();
+        Dialogs.repack(this); // an HTML status: its real height (Dialogs)
         setLocationRelativeTo(owner);
     }
 
@@ -231,7 +231,7 @@ final class MapDownloadDialog extends JDialog {
             status.setForeground(Theme.WARN);
         }
         start.setEnabled(download == null || download.isFinished());
-        pack();
+        Dialogs.repack(this); // an HTML status: its real height (Dialogs)
     }
 
     private static String sizeText(long kb) {
@@ -266,7 +266,7 @@ final class MapDownloadDialog extends JDialog {
         status.setForeground(Theme.MUTED);
         refresh.start();
         refresh();
-        pack();
+        Dialogs.repack(this); // an HTML status: its real height (Dialogs)
     }
 
     private void togglePause() {
@@ -312,7 +312,7 @@ final class MapDownloadDialog extends JDialog {
         pause.setText("PAUSE");
         for (JButton b : new JButton[]{hide, pause, cancel}) b.setVisible(false);
         start.setEnabled(true);
-        pack();
+        Dialogs.repack(this); // an HTML status: its real height (Dialogs)
         String refused = "";
         if (!d.refused().isEmpty()) {
             StringBuilder names = new StringBuilder();
