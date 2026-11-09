@@ -1,5 +1,7 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.Bytes;
+
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
@@ -289,7 +291,7 @@ final class SpectatorHost implements AutoCloseable {
                 } else if (buf[0] == Spectate.KEEP && len >= 3) {
                     if ((buf[1] & Spectate.FLAG_NEED_SNAPSHOT) != 0) sendSnapshot(v);
                     int n = Math.min(buf[2] & 0xff, (len - 3) / 4);
-                    for (int i = 0; i < n; i++) resend(v, Spectate.readInt(buf, 3 + 4 * i));
+                    for (int i = 0; i < n; i++) resend(v, Bytes.readInt(buf, 3 + 4 * i));
                 }
             } catch (IOException e) {
                 if (running) log("Spectator receive error: " + e);
@@ -307,7 +309,7 @@ final class SpectatorHost implements AutoCloseable {
         }
         if (v.resends >= RESEND_BUDGET || paused || s < resendFrom) return;
         byte[] p = ring.get(s & (RING - 1));
-        if (p == null || Spectate.readInt(p, 1) != s) return; // too old: overwritten
+        if (p == null || Bytes.readInt(p, 1) != s) return; // too old: overwritten
         v.resends++;
         send(p, v);
     }

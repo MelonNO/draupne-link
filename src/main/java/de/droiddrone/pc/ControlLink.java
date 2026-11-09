@@ -1,5 +1,6 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.Bytes;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
@@ -670,20 +671,20 @@ public class ControlLink {
     public static void deliverVideo(VideoListener listener, byte[] d, int len) {
         if (listener == null || len < 7) return;
         if (d[0] == VIDEO_PARITY) {
-            if (len > 8) listener.onVideoParity(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), readInt(d, 3), d, 8, len - 8);
+            if (len > 8) listener.onVideoParity(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), Bytes.readInt(d, 3), d, 8, len - 8);
             return;
         }
         if (d[0] == VIDEO_PARITY_GROUP) {
-            if (len > 9) listener.onVideoParityGroup(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), readInt(d, 3), d[8] & 0xff, d, 9, len - 9);
+            if (len > 9) listener.onVideoParityGroup(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), Bytes.readInt(d, 3), d[8] & 0xff, d, 9, len - 9);
             return;
         }
         short frameNum = (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff));
-        int offset = readInt(d, 3);
+        int offset = Bytes.readInt(d, 3);
         int frameSize = 0;
         int header = 7;
         if (offset == 0) {
             if (len < 11) return;
-            frameSize = readInt(d, 7);
+            frameSize = Bytes.readInt(d, 7);
             header = 11;
         }
         listener.onVideoFragment(d[0] == UdpCommon.KeyFrame, frameNum, offset, frameSize, d, header, len - header);
@@ -701,10 +702,6 @@ public class ControlLink {
         if (c != null && l != null) l.onAudioFrame(c, java.util.Arrays.copyOfRange(d, 1, len), MonoClock.ms());
         SpectatorHost h = host;
         if (forward && h != null) h.forward(d, len);
-    }
-
-    private static int readInt(byte[] d, int i) {
-        return ((d[i] & 0xff) << 24) | ((d[i + 1] & 0xff) << 16) | ((d[i + 2] & 0xff) << 8) | (d[i + 3] & 0xff);
     }
 
     private void bufferRun() {

@@ -1,5 +1,6 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.common.Bytes;
 import de.droiddrone.common.PacketIds;
 
 import java.io.ByteArrayOutputStream;
@@ -166,8 +167,8 @@ final class Spectate {
     static byte[] stream(int seq, int pilotMs, byte[] packet, int len) {
         byte[] out = new byte[STREAM_HEADER + len];
         out[0] = STREAM;
-        putInt(out, 1, seq);
-        putInt(out, 5, pilotMs);
+        Bytes.putInt(out, 1, seq);
+        Bytes.putInt(out, 5, pilotMs);
         System.arraycopy(packet, 0, out, STREAM_HEADER, len);
         return out;
     }
@@ -185,18 +186,7 @@ final class Spectate {
         out[0] = KEEP;
         out[1] = (byte) flags;
         out[2] = (byte) n;
-        for (int i = 0; i < n; i++) putInt(out, 3 + 4 * i, missing[i]);
+        for (int i = 0; i < n; i++) Bytes.putInt(out, 3 + 4 * i, missing[i]);
         return out;
-    }
-
-    static void putInt(byte[] d, int i, int v) {
-        d[i] = (byte) (v >> 24);
-        d[i + 1] = (byte) (v >> 16);
-        d[i + 2] = (byte) (v >> 8);
-        d[i + 3] = (byte) v;
-    }
-
-    static int readInt(byte[] d, int i) {
-        return ((d[i] & 0xff) << 24) | ((d[i + 1] & 0xff) << 16) | ((d[i + 2] & 0xff) << 8) | (d[i + 3] & 0xff);
     }
 }
