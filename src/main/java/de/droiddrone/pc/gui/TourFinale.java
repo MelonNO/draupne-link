@@ -197,6 +197,17 @@ final class TourFinale implements AutoCloseable {
         return scenario != null;
     }
 
+    /**
+     * The tour's virtual fleet while its drones run - the six of the showcase, or the finale's - else null (the
+     * spectator steps, which come right after the showcase's, put their pilot PC in it).
+     */
+    de.droiddrone.pc.fleet.Fleet fleet() {
+        TourScenario s = scenario;
+        if (s != null) return s.fleet();
+        TourShowcase c = showcase;
+        return c == null ? null : c.fleet();
+    }
+
     boolean alerted() {
         return alerted;
     }

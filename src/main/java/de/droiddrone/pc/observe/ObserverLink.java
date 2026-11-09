@@ -82,6 +82,38 @@ public final class ObserverLink implements AutoCloseable {
         this.events = events;
     }
 
+    /** 1.0.56: each packet the phone sends, for the spectators' mirror (MirrorHost.tile: a copy into a queue). */
+    public interface Tap {
+        void packet(byte[] d, int len);
+    }
+
+    private volatile Tap tap;
+
+    public void setTap(Tap t) {
+        tap = t;
+    }
+
+    /**
+     * 1.0.56: a spectator's tile - the pilot PC's observed phone, its packets relayed (MirrorClient): never started,
+     * no socket; fed with {@link #offer}; its asks for a key frame or config go to ask (the pilot PC asks the phone).
+     */
+    public static ObserverLink relayed(String phone, ControlLink.VideoListener video, ObservationAudio audio, int audioId,
+                                       Consumer<String> events, Runnable ask) {
+        ObserverLink l = new ObserverLink(phone, InetAddress.getLoopbackAddress(), 0, "", video, audio, audioId, events);
+        l.relayAsk = ask;
+        l.running = true;
+        return l;
+    }
+
+    private Runnable relayAsk;
+
+    /** A relayed packet (a spectator's tile): as if the phone had sent it here. */
+    public void offer(byte[] d, int len) {
+        if (!running || len < 1) return;
+        lastPacketAt = MonoClock.ms();
+        onPacket(d, len);
+    }
+
     public void start() throws IOException {
         socket = new DatagramSocket();
         socket.setReceiveBufferSize(UdpCommon.packetLength * 300);
@@ -153,6 +185,11 @@ public final class ObserverLink implements AutoCloseable {
     }
 
     private void askNow(int flags) {
+        Runnable relay = relayAsk;
+        if (relay != null) { // a spectator's tile: the pilot PC asks its phone
+            if (flags != 0) relay.run();
+            return;
+        }
         askFlags.getAndUpdate(f -> f | flags);
         Thread s = sender;
         if (s != null) s.interrupt();
@@ -196,6 +233,8 @@ public final class ObserverLink implements AutoCloseable {
                 if (len < 1) continue;
                 lastPacketAt = MonoClock.ms();
                 onPacket(buf, len);
+                Tap t = tap;
+                if (t != null) t.packet(buf, len);
             } catch (IOException e) {
                 if (running) log("Observe " + phone + " receive: " + e.getMessage());
             } catch (RuntimeException e) {
@@ -269,6 +308,10 @@ public final class ObserverLink implements AutoCloseable {
     public void close() {
         if (!running) return;
         running = false;
+        if (relayAsk != null) { // a spectator's tile: no socket, no phone to tell
+            if (audio != null) audio.removeSource(audioId);
+            return;
+        }
         byte[] stop = Observe.encodeStop(key);
         try {
             socket.send(new DatagramPacket(stop, stop.length, ip, port));

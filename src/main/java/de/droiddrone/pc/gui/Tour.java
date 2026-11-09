@@ -172,9 +172,9 @@ final class Tour {
     /** The features whose steps came after the first tour: a PC that had the tour before them is offered them alone. */
     static final String FEATURE_NAMES = "names", FEATURE_MAP_TOOLS = "maptools", FEATURE_RADIO_HORIZON = "radiohorizon",
             FEATURE_COVERAGE = "coverage", FEATURE_OVERWATCH = "overwatch", FEATURE_OBSERVATION = "observation",
-            FEATURE_FLEET = "fleet", FEATURE_FLIGHTS = "flights", FEATURE_MODES = "modes";
+            FEATURE_FLEET = "fleet", FEATURE_FLIGHTS = "flights", FEATURE_MODES = "modes", FEATURE_SPECTATOR = "spectator";
     static final List<String> FEATURES = List.of(FEATURE_NAMES, FEATURE_MAP_TOOLS, FEATURE_RADIO_HORIZON, FEATURE_COVERAGE,
-            FEATURE_OVERWATCH, FEATURE_OBSERVATION, FEATURE_FLEET, FEATURE_FLIGHTS, FEATURE_MODES);
+            FEATURE_OVERWATCH, FEATURE_OBSERVATION, FEATURE_FLEET, FEATURE_FLIGHTS, FEATURE_MODES, FEATURE_SPECTATOR);
     /** The features the pilot has been offered a tour of, comma-separated. */
     static final String SEEN_KEY = "tour.seen";
 
@@ -185,6 +185,8 @@ final class Tour {
     private static Tour current;
 
     private final MainWindow main;
+    /** The spectator steps' virtual pilot PC (1.0.56). */
+    private final TourSpectator spectatorPart;
     private final List<Step> steps = new ArrayList<>();
     private int index = -1;
     private int tries;
@@ -206,6 +208,7 @@ final class Tour {
     private Tour(MainWindow main, java.util.Collection<String> only) {
         this.main = main;
         finale = new TourFinale(main);
+        spectatorPart = new TourSpectator(main, finale::fleet);
         retry.setRepeats(false);
         buildSteps();
         if (only != null) steps.removeIf(s -> s.feature == null || !only.contains(s.feature));
@@ -368,10 +371,11 @@ final class Tour {
     }
 
     /**
-     * W4's SPECTATOR steps go here, after STOP OBSERVING and before POP OUT MAP (2026-11-09, the pilot: spectator mode
-     * with a virtual pilot PC flying). Nothing yet.
+     * SPECTATOR (1.0.56), right after STOP OBSERVING as the pilot asked: another pilot PC (the virtual fleet's, in the
+     * showcase's fleet), mirrored here. TourSpectator skips its steps when it can't start one.
      */
     private void addSpectatorSteps(BooleanSupplier noShowcase) {
+        steps.addAll(spectatorPart.steps());
     }
 
     /** Stands for the racer's name in the PHONE step's text until the six are up ("MobileZulu" then). */
@@ -463,7 +467,7 @@ final class Tour {
         if (!finale.startShowcase() && finale.fleetOpen() && closePilotsFleet()) finale.startShowcase();
         if (!finale.showcaseStarted()) {
             main.logLine("Tour: no drones for the pilot and observer steps - " + finale.refused());
-            JOptionPane.showMessageDialog(main, "No tour drones: those steps skipped. " + finale.refused(), "Tour",
+            Dialogs.message(main, "No tour drones: those steps skipped. " + finale.refused(), "Tour",
                     JOptionPane.INFORMATION_MESSAGE);
             return false;
         }
@@ -570,6 +574,7 @@ final class Tour {
             case FEATURE_FLEET -> "fleet management";
             case FEATURE_FLIGHTS -> "previous flights";
             case FEATURE_MODES -> "pilot and observer modes";
+            case FEATURE_SPECTATOR -> "spectator mirror";
             default -> f;
         });
         Object[] options = {"Yes", "Not now"};
@@ -695,6 +700,7 @@ final class Tour {
         clearExamplePins();
         powerDemoOff();
         finale.close();
+        spectatorPart.close();
         if (observeSetBefore != null) main.tourRestoreObserveSet(observeSetBefore);
         observeSetBefore = null;
         main.tourRestoreRole(roleBefore);

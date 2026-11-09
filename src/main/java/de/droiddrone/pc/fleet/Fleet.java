@@ -188,11 +188,25 @@ public final class Fleet implements AutoCloseable {
         log((d.name().isEmpty() ? "Virtual drone " + (d.slot() + 1) : d.name()) + ": removed");
     }
 
+    /** 1.0.56: other loopback nodes announced with the drones (the virtual pilot PC: VirtualPilotPc). */
+    private final List<VirtualFleet.Drone> extraNodes = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    public void announceExtra(VirtualFleet.Drone node) {
+        extraNodes.add(node);
+        announce();
+    }
+
+    public void withdrawExtra(VirtualFleet.Drone node) {
+        extraNodes.remove(node);
+        announce();
+    }
+
     /** The file written now: every drone's address and port, and the heartbeat. */
     public void announce() {
         if (announceFile == null || closed) return;
         List<VirtualFleet.Drone> list = new ArrayList<>();
         for (VirtualDrone d : drones) list.add(new VirtualFleet.Drone(d.address().getHostAddress(), d.port()));
+        list.addAll(extraNodes);
         synchronized (fileLock) {
             if (closed) return;
             try {

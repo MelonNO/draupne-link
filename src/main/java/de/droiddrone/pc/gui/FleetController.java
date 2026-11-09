@@ -49,6 +49,11 @@ final class FleetController {
 
         /** The map window, or null before it was first opened (never opens it). */
         MapWindow mapWindowIfOpened();
+
+        /** 1.0.56: the cards to show - a spectator shows the pilot PC's (the mirror). */
+        default List<FleetCards.Card> fleetShown(List<FleetCards.Card> own) {
+            return own;
+        }
     }
 
     private final FleetManager fleet;
@@ -170,6 +175,12 @@ final class FleetController {
     void refresh() {
         MapWindow w = host.mapWindowIfOpened();
         if (fleet == null || w == null || !w.isShown()) return;
+        w.setFleet(host.fleetShown(cards()));
+    }
+
+    /** Every phone's card now (null: no fleet); also for the spectators' mirror (1.0.56), map window open or not. */
+    List<FleetCards.Card> cards() {
+        if (fleet == null) return null;
         long now = System.currentTimeMillis();
         if (now - fleetClipsAt > 15_000) {
             fleetClipsAt = now;
@@ -263,6 +274,6 @@ final class FleetController {
                     heardAt <= 0 ? -1 : now - heardAt, signal, fix, sats, events, clips == null ? 0 : clips[1], phoneTemp, fcTemp,
                     wanted == null ? null : FleetManager.modeName(wanted.mode()), note));
         }
-        w.setFleet(cards);
+        return cards;
     }
 }

@@ -250,6 +250,11 @@ public final class TourScenario implements AutoCloseable {
     }
 
     /** All four, in {@link #PLACES}' order. */
+    /** The fleet its drones run in (the tour's spectator steps add their pilot PC to it). */
+    public Fleet fleet() {
+        return fleet;
+    }
+
     public List<VirtualDrone> drones() {
         return drones;
     }

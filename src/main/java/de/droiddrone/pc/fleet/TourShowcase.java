@@ -61,6 +61,11 @@ public final class TourShowcase implements AutoCloseable {
         return List.copyOf(drones);
     }
 
+    /** Its fleet (the tour's spectator steps put their virtual pilot PC in it). */
+    public Fleet fleet() {
+        return fleet;
+    }
+
     public List<String> names() {
         List<String> out = new ArrayList<>();
         for (VirtualDrone d : drones) out.add(d.name());

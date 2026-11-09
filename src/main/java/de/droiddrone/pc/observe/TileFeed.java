@@ -44,6 +44,19 @@ public final class TileFeed implements ObservationSession.Feed {
 
     private final int audioId;
 
+    /** 1.0.56: a spectator's tile - the pilot PC's stream relayed (MirrorClient), fed through {@link #link()}.offer. */
+    private TileFeed(String phone, VideoPipeline.FrameSink sink, ObservationAudio audio, Consumer<String> events, Runnable ask) {
+        this.sharp = ObserverLink.Quality.GRID;
+        video = new VideoPipeline(sink, () -> -1);
+        video.observe(ask, ask);
+        audioId = audio == null ? -1 : audio.addSource();
+        link = ObserverLink.relayed(phone, video, audio, audioId, events, ask);
+    }
+
+    public static TileFeed relayed(String phone, VideoPipeline.FrameSink sink, ObservationAudio audio, Consumer<String> events, Runnable ask) {
+        return new TileFeed(phone, sink, audio, events, ask);
+    }
+
     public int audioId() {
         return audioId;
     }
