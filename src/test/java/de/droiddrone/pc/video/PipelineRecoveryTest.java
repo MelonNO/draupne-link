@@ -198,11 +198,11 @@ class PipelineRecoveryTest {
             });
             p.onVideoConfig(320, 240, false, false, stream.codecConfig());
             short num = 0;
+            long end = System.currentTimeMillis() + 3000;
             for (int i = 0; i < 20; i++) {
                 feed(p, stream.packets().get(i), ++num);
-                Thread.sleep(10);
+                while (p.framesDone() <= i && System.currentTimeMillis() < end) Thread.sleep(2); // one at a time
             }
-            long end = System.currentTimeMillis() + 3000;
             while (sink.presented.get() < 20 && System.currentTimeMillis() < end) Thread.sleep(20);
             assertEquals(20, sink.presented.get(), "from key frame 1 on, with the second decoder");
             assertEquals(2, made.get());
@@ -251,11 +251,11 @@ class PipelineRecoveryTest {
             p.setKeyFrameSender(keyRequests::incrementAndGet);
             p.onVideoConfig(320, 240, false, false, new byte[0]); // no SPS/PPS: nothing decodes
             short num = 0;
+            long end = System.currentTimeMillis() + 3000;
             for (int i = 0; i < 20; i++) {
                 feed(p, stream.packets().get(i), ++num);
-                Thread.sleep(33);
+                while (p.framesDone() <= i && System.currentTimeMillis() < end) Thread.sleep(2); // one at a time
             }
-            long end = System.currentTimeMillis() + 2000;
             while (configRequests.get() == 0 && System.currentTimeMillis() < end) Thread.sleep(20);
             assertTrue(configRequests.get() >= 1, "the config was asked for");
             assertTrue(keyRequests.get() >= 1, "and a key frame");

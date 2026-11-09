@@ -3,8 +3,8 @@ package de.droiddrone.pc.video;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.BinaryBitmap;
 import com.google.zxing.EncodeHintType;
-import com.google.zxing.ReaderException;
 import com.google.zxing.RGBLuminanceSource;
+import com.google.zxing.ReaderException;
 import com.google.zxing.WriterException;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.common.HybridBinarizer;
@@ -13,6 +13,7 @@ import com.google.zxing.qrcode.QRCodeWriter;
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 
 import java.util.ArrayDeque;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -167,7 +168,7 @@ public final class LatencyMeter implements AutoCloseable {
     @Override
     public String toString() {
         Result r = result;
-        return r.count() == 0 ? "no readings" : String.format(java.util.Locale.ROOT,
+        return r.count() == 0 ? "no readings" : String.format(Locale.ROOT,
                 "median %.0f ms (min %.0f, max %.0f, %d readings)", r.medianMs(), r.minMs(), r.maxMs(), r.count());
     }
 }

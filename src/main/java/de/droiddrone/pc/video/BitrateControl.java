@@ -1,5 +1,8 @@
 package de.droiddrone.pc.video;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 /**
  * Decides when to ask the phone's encoder for a lower or higher bitrate (it steps through 0.15 (phone app pc.26),
  * 0.25, 0.5, 1, 2, 4, 6 Mbit/s). Lower when the link is in real trouble - frames going missing, a long gap, the
@@ -101,7 +104,7 @@ public class BitrateControl {
      * The requests decided under the lock, sent after it is let go (1.0.49): a packet sent while holding it kept the
      * Swing thread waiting in step() / baselinePingMs() (the HUD's figures) for the socket.
      */
-    private final java.util.ArrayList<Runnable> toSend = new java.util.ArrayList<>();
+    private final ArrayList<Runnable> toSend = new ArrayList<>();
 
     public BitrateControl(Sink sink) {
         this.sink = sink;
@@ -296,8 +299,8 @@ public class BitrateControl {
     /** The ping of the moment: the median of the last TYPICAL_PINGS pongs; -1 before the first. */
     private int typical() {
         if (recentCount == 0) return -1;
-        int[] sorted = java.util.Arrays.copyOf(recentPings, recentCount);
-        java.util.Arrays.sort(sorted);
+        int[] sorted = Arrays.copyOf(recentPings, recentCount);
+        Arrays.sort(sorted);
         return sorted[recentCount / 2];
     }
 

@@ -2,7 +2,9 @@ package de.droiddrone.pc.video;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -122,7 +124,7 @@ public final class Klv {
      * codes ("//NOR"; the object country as UTF-16, as ST 0102.12 asks), and the set's version.
      */
     static byte[] security(String country) {
-        String cc = country == null || !country.matches("[A-Za-z]{3}") ? "XXX" : country.toUpperCase(java.util.Locale.ROOT);
+        String cc = country == null || !country.matches("[A-Za-z]{3}") ? "XXX" : country.toUpperCase(Locale.ROOT);
         ByteArrayOutputStream s = new ByteArrayOutputStream(40);
         item(s, 1, new byte[]{UNCLASSIFIED});
         item(s, 2, new byte[]{ISO3166_THREE_LETTER});
@@ -159,7 +161,7 @@ public final class Klv {
         while (at[0] < to) {
             int tag = readBer(b, at); // tags are BER-OID; every one used here is under 128
             int n = readBer(b, at);
-            out.put(tag, java.util.Arrays.copyOfRange(b, at[0], at[0] + n));
+            out.put(tag, Arrays.copyOfRange(b, at[0], at[0] + n));
             at[0] += n;
         }
         return out;
