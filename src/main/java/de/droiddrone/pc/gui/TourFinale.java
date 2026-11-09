@@ -67,10 +67,10 @@ final class TourFinale implements AutoCloseable {
         }
         watcher = scenario.watcher().name();
         for (VirtualDrone d : scenario.drones()) names.add(d.name());
-        main.tourBegin(names);
+        main.tourHost().begin(names);
         List<MapView.Kept> flights = new ArrayList<>();
         for (TourScenario.Flight f : scenario.flights()) flights.add(new MapView.Kept(f.name(), f.points()));
-        main.tourFlights(flights);
+        main.tourHost().flights(flights);
         main.tourUnits(TourScenario.units());
         // each drone's pack as this PC read it when it landed
         for (int i = 0; i < scenario.drones().size(); i++) {
@@ -150,9 +150,9 @@ final class TourFinale implements AutoCloseable {
         TourScenario s = scenario;
         scenario = null;
         if (s != null) s.close();
-        main.tourCleanUp(); // every trace of the tour's drones and flights (1.0.52, the pilot)
+        main.tourHost().cleanUp(); // every trace of the tour's drones and flights (1.0.52, the pilot)
         names.clear();
-        main.tourFlights(List.of());
+        main.tourHost().flights(List.of());
         main.tourUnits(List.of());
     }
 }

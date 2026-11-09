@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.stream.Stream;
 
 /**
@@ -144,6 +145,22 @@ final class TourTraces {
     }
 
     /** last-position.txt back as it was before the tour's flight (taken off when there was none). */
+    /**
+     * Deletes these files (the tour's, from {@link #filesToDelete}); one that won't go is told and the rest go on.
+     * @return how many were there and went
+     */
+    static int delete(List<Path> files, BiConsumer<Path, IOException> failed) {
+        int deleted = 0;
+        for (Path f : files) {
+            try {
+                if (Files.deleteIfExists(f)) deleted++;
+            } catch (IOException e) {
+                failed.accept(f, e);
+            }
+        }
+        return deleted;
+    }
+
     void restoreLastPosition() throws IOException {
         if (!flown || lastPosition == null) return;
         if (lastPositionBefore == null) Files.deleteIfExists(lastPosition);
