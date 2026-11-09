@@ -649,19 +649,20 @@ public class InternalCamera implements Camera{
     }
 
     /**
-     * pc.35: the smallest YUV size of the video's shape at least 240 wide (320 or so on most phones), at most 720; null
-     * when the camera lists none of that shape - a box on a picture of another shape would be off on the video.
+     * pc.35: the smallest YUV size of the video's shape at least 240 wide (Common AnalysisSize; pc.43: no upper limit -
+     * a phone with 16:9 only at 1280x720 and up had none, and no motion detection); null when the camera lists none of
+     * that shape - a box on a picture of another shape would be off on the video.
      */
     static Size pickAnalysisSize(Size[] sizes, Size video) {
-        if (sizes == null || video == null || video.getHeight() <= 0) return null;
-        double aspect = (double) video.getWidth() / video.getHeight();
-        Size best = null;
-        for (Size s : sizes) {
-            if (s.getWidth() < 240 || s.getWidth() > 720) continue;
-            if (Math.abs((double) s.getWidth() / Math.max(1, s.getHeight()) - aspect) > 0.03) continue;
-            if (best == null || s.getWidth() < best.getWidth()) best = s;
+        if (sizes == null || video == null) return null;
+        int[][] all = new int[sizes.length][];
+        for (int i = 0; i < sizes.length; i++) all[i] = new int[]{sizes[i].getWidth(), sizes[i].getHeight()};
+        int[] p = de.droiddrone.common.AnalysisSize.pick(all, video.getWidth(), video.getHeight());
+        if (p == null) {
+            log("Motion detection: the camera lists no YUV size of the video's shape (" + video.getWidth() + "x" + video.getHeight() + ")");
+            return null;
         }
-        return best;
+        return new Size(p[0], p[1]);
     }
 
     /**

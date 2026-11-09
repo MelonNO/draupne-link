@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import de.droiddrone.common.MotionRecord;
 import de.droiddrone.pc.CameraView;
 import de.droiddrone.pc.Connection;
 import de.droiddrone.pc.DetectionMarks;
@@ -68,6 +69,19 @@ final class DetectionController {
         log.accept(level == 0 ? "Motion detection off." : "Motion detection " + DETECTION_LEVELS[level] + " (while disarmed).");
     }
 
+    private boolean noPictureSaid;
+
+    /**
+     * pc.43: the phone says its camera gives the detection no picture (up to pc.42 every 16:9 video on a phone with no
+     * small 16:9 size): said once, again only after a picture came. Unseen before - detection just never found anything.
+     */
+    void sayNoPicture(MotionRecord.Report r) {
+        if (r == null || !r.active()) return;
+        boolean none = (r.flags & MotionRecord.FLAG_NO_PICTURE) != 0;
+        if (none && !noPictureSaid) log.accept("Motion detection: no picture from this camera. Update the phone app.");
+        noPictureSaid = none;
+    }
+
     /** The marks as they stand (no link: no new ones), fading as they age. */
     List<DetectionMarks.Mark> marks(long now) {
         return detectionMarks.marks(now);
@@ -87,6 +101,7 @@ final class DetectionController {
             double[] uv = DetectionMarks.pictureUv(s.box(), flipX, flipY);
             detectionMarks.put(s.box().id, s.box().light(), pose.lat(), pose.lon(), cameraView.ray(t, track, uv[0], uv[1]), now);
         }
+        sayNoPicture(motion.last());
         long ids = motion.newIds();
         if (ids > motionIdsSeen) {
             if (now - motionSaidAt > 10_000) {
