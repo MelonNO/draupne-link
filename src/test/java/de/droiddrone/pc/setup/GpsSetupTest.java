@@ -173,4 +173,15 @@ class GpsSetupTest {
         List<BetaflightPlan.Change> plan = GpsSetup.gpsPlan(GPS_ON, serial, AUTO_BAUD_ON, 3);
         assertEquals(List.of("serial SOFT1 0 115200 57600 0 115200", "serial UART3 2 115200 57600 0 115200"), plan.get(0).commands());
     }
+
+    /** Review 1.0.53: a Betaflight without the setting answered ###ERROR, the "set" went into the write and stopped all of it. */
+    @Test
+    void armingWithoutAFixIsOnlyWrittenWhereBetaflightHasTheSetting() {
+        assertEquals(List.of("set gps_rescue_allow_arming_without_fix = ON"),
+                GpsSetup.armingWithoutFixPlan("gps_rescue_allow_arming_without_fix = OFF\nAllowed values: OFF, ON\n").commands());
+        assertNull(GpsSetup.armingWithoutFixPlan("gps_rescue_allow_arming_without_fix = ON\nAllowed values: OFF, ON\n"), "already on");
+        assertNull(GpsSetup.armingWithoutFixPlan("gps_rescue_allow_arming_without_fix = on"), "any case");
+        assertNull(GpsSetup.armingWithoutFixPlan("###ERROR IN get: NO MATCHES FOR 'gps_rescue_allow_arming_without_fix'###"), "not in this Betaflight");
+        assertNull(GpsSetup.armingWithoutFixPlan(""), "no answer");
+    }
 }

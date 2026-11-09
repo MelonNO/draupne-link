@@ -16,6 +16,20 @@ class PcConfigTest {
     @TempDir
     Path dir;
 
+    /**
+     * Review 1.0.53: a key twice in the file (a hand edit, a copied block) - save changed the first line only, and the
+     * next start read the last, so the change seemed never to save (an ARM switch, a channel mapping).
+     */
+    @Test
+    void aKeyTwiceInTheFileIsChangedEverywhere() throws Exception {
+        Path file = dir.resolve(PcConfig.FILE_NAME);
+        Files.write(file, List.of("aux1=button0", "# a block copied in", "aux1=button1"), StandardCharsets.UTF_8);
+        PcConfig config = PcConfig.load(file);
+        assertEquals("button1", config.getString("aux1"), "the last line counts when read");
+        config.save(file, Map.of("aux1", "axis5"));
+        assertEquals("axis5", PcConfig.load(file).getString("aux1"), "saved: " + Files.readAllLines(file, StandardCharsets.UTF_8));
+    }
+
     @Test
     void saveStartsFromTemplateAndKeepsComments() throws Exception {
         Path file = dir.resolve(PcConfig.FILE_NAME);

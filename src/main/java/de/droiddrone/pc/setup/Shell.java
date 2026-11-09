@@ -121,8 +121,18 @@ public final class Shell {
         return Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
     }
 
-    /** Quotes a value for a single-quoted PowerShell string. */
+    /**
+     * Quotes a value for a single-quoted PowerShell string. PowerShell takes the typographic single quotes (U+2018 -
+     * U+201B) as quotes too, so each is doubled like ' (review 1.0.53: a folder such as "Kari’s PC" ended the string,
+     * and the script - the update helper, the Tailscale install - failed).
+     */
     public static String psQuote(String value) {
-        return "'" + value.replace("'", "''") + "'";
+        StringBuilder out = new StringBuilder(value.length() + 2).append('\'');
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '\'' || (c >= '‘' && c <= '‛')) out.append(c);
+            out.append(c);
+        }
+        return out.append('\'').toString();
     }
 }

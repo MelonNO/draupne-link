@@ -523,7 +523,9 @@ public record ModeSwitch(int aux, Mode low, Mode middle, Mode high) {
         if (armChannel >= 0) {
             boolean armThere = false;
             for (Slot s : slots) {
-                if (!s.used() || s.mode() != MODE_ARM) continue;
+                // (an ARM on the PREARM switch chosen here is cleared above already: twice, its slot was free twice and
+                // two modes went into it - PREARM over ARM, review 1.0.53)
+                if (!s.used() || s.mode() != MODE_ARM || cleared.contains(s.index())) continue;
                 if (s.channel() == armChannel) {
                     armThere = true; // its own range stays: the pilot's switch may arm low
                     continue;

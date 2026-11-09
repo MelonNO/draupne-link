@@ -182,8 +182,10 @@ public class PcConfig {
         for (int i = 0; i < lines.size(); i++) {
             String[] kv = parseLine(lines.get(i));
             if (kv == null) continue;
-            if (pending.containsKey(kv[0])) {
-                lines.set(i, line(kv[0], pending.remove(kv[0])));
+            if (updates.containsKey(kv[0])) {
+                // every line of the key (a hand edit may have it twice: the last is the one read)
+                lines.set(i, line(kv[0], updates.get(kv[0])));
+                pending.remove(kv[0]);
             } else if (lines.get(i).indexOf('\\') >= 0 && !lines.get(i).trim().equals(line(kv[0], kv[1]))) {
                 lines.set(i, line(kv[0], kv[1])); // a raw line from before 1.0.49: escaped now, as it was read
             }
