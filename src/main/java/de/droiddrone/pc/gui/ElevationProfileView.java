@@ -77,12 +77,10 @@ final class ElevationProfileView extends JComponent {
                 return;
             }
             double lo = range[0], hi = range[1];
-            if (hi - lo < 2) { // a flat line: some room so the curve isn't glued to an edge
-                hi += 1;
-                lo -= 1;
-            }
-            double pad = (hi - lo) * 0.08;
-            double yLo = lo - pad, yHi = hi + pad;
+            // a flat line: some room so the curve isn't glued to an edge (the labels keep the real lowest and highest)
+            double room = hi - lo < 2 ? 1 : 0;
+            double pad = (hi - lo + 2 * room) * 0.08;
+            double yLo = lo - room - pad, yHi = hi + room + pad;
             Path2D line = new Path2D.Double(), fill = new Path2D.Double();
             boolean open = false;
             double lastX = left;

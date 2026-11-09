@@ -26,6 +26,8 @@ final class AlertSound {
     private volatile boolean enabled = true;
     private String current; // the warning sounding now, or null
     private long lastPlayed;
+    /** A new warning came while a beep was too recent or still playing: it beeps once it may. */
+    private boolean owed;
     /** A beep is playing (1.0.45: the phone's live sound is lowered meanwhile, so the warning is heard). */
     private static volatile boolean playing;
 
@@ -42,17 +44,46 @@ final class AlertSound {
         return enabled;
     }
 
-    /** Called from the window's refresh (Swing thread) with the warning shown now, or null. */
+    /** Two beeps start at least this far apart, a new warning or not. */
+    static final long MIN_GAP_MS = 700;
+    /** The beep, and where it plays (tests count instead, at once). */
+    Runnable beeper = AlertSound::beep;
+    java.util.concurrent.Executor beepOn = player;
+    /** A beep waits or plays: another isn't queued behind it. */
+    private final java.util.concurrent.atomic.AtomicBoolean pending = new java.util.concurrent.atomic.AtomicBoolean();
+
+    /**
+     * Called from the window's refresh (Swing thread) with the warning shown now, or null. A new warning beeps at once,
+     * one that stays every REPEAT_MS - but never closer than MIN_GAP_MS, and never queued behind one not yet played: a
+     * link flapping between LINK STALL and nothing (weak 5G) made each return "new", the beeps piled up behind each other
+     * and went on, and the phone's sound stayed lowered, long after the link was back.
+     */
     void update(String warning, long now) {
         if (warning == null) {
             current = null;
+            owed = false;
             return;
         }
         boolean fresh = !warning.equals(current);
         current = warning;
-        if (!enabled || (!fresh && now - lastPlayed < REPEAT_MS)) return;
+        if (!enabled) return;
+        boolean due = fresh || owed || now - lastPlayed >= REPEAT_MS;
+        if (!due) return;
+        // a new warning held back by the gap (LINK LOST just after LINK STALL) beeps as soon as the gap allows
+        if (now - lastPlayed < MIN_GAP_MS || !pending.compareAndSet(false, true)) {
+            owed = true;
+            return;
+        }
+        owed = false;
         lastPlayed = now;
-        player.execute(AlertSound::beep);
+        Runnable b = beeper;
+        beepOn.execute(() -> {
+            try {
+                b.run();
+            } finally {
+                pending.set(false);
+            }
+        });
     }
 
     /**

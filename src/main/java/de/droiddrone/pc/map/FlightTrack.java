@@ -263,7 +263,7 @@ public final class FlightTrack {
     }
 
     static String xml(String text) {
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return Kml.xml(text); // the same rules: a GPX other programs can open
     }
 
     private void write(Path f, Point p) throws IOException {

@@ -76,4 +76,21 @@ class PinsTest {
         assertTrue(wpt < gpx.indexOf(" <trk>"), "waypoints before the track, as GPX wants");
         assertTrue(gpx.trim().endsWith("</gpx>"));
     }
+
+    /**
+     * A pin imported from someone's KML whose name runs over two lines (or a tab) is kept on one line of pins.txt: a
+     * line break in it split the pin, and at the next start the half without numbers moved the whole file aside as broken.
+     */
+    @Test
+    void aNameWithALineBreakIsSavedOnOneLine(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("pins.txt");
+        Pins pins = new Pins(file);
+        pins.add("Road\r\nblock\tnorth", 59.9, 10.7);
+        pins.rename(pins.add("Car", 59.8, 10.6), "Car\nwest");
+        Pins again = new Pins(file);
+        assertNull(again.brokenMovedTo(), "the file is read whole");
+        assertEquals(2, again.list().size());
+        assertEquals("Road block north", again.list().get(0).name());
+        assertEquals("Car west", again.list().get(1).name());
+    }
 }

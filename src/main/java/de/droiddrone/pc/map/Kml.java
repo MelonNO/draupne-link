@@ -95,8 +95,10 @@ public final class Kml {
         }
     }
 
+    /** Text for XML: escaped, and the characters XML 1.0 can't hold left out (a pasted control character made the file unreadable). */
     static String xml(String text) {
-        return text == null ? "" : text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return text == null ? "" : text.replaceAll("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\uFFFE\\uFFFF]", "")
+                .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     /** Reads a KML text: DRAUPNE's items by their ExtendedData, anybody's lines, polygons and points otherwise. */
