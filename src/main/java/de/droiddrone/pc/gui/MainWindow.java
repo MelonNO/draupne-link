@@ -59,6 +59,7 @@ import de.droiddrone.pc.setup.Tailscale;
 import de.droiddrone.pc.setup.UpdateCheck;
 import de.droiddrone.pc.video.LatencyMeter;
 import de.droiddrone.pc.video.StanagStream;
+import de.droiddrone.pc.gui.PowerController.Asleep;
 import de.droiddrone.pc.video.VideoPipeline;
 
 import javax.swing.BorderFactory;
@@ -223,8 +224,6 @@ public class MainWindow extends JFrame {
             new ClipIndex(ClipIndex.defaultRoot()));
     /** The token of the OVERWATCH request being made (the phone's overwatch packets carry it). */
     private int overwatchToken;
-    /** The phone said OVERWATCH and the link dropped: it watches, and this PC keeps quiet as in deep sleep. */
-    private volatile boolean phoneOverwatching;
     /** The drones put to overwatch, for the hub after a restart: name|token|pose;... */
     static final String OVERWATCH_KEY = "overwatch.watched";
     /** POP OUT MAP: says OVERWATCH while an alert waits and the map window is closed. */
@@ -249,60 +248,10 @@ public class MainWindow extends JFrame {
             powerStatusText.setHtml(h.isBlank() ? "&nbsp;" : h);
         }
     }
-    /** The mode this PC asked for (ControlLink.POWER_*); the phone's PHONE_POWER record says what it is in. */
-    private volatile int powerWanted = ControlLink.POWER_NORMAL; // read on the stick thread (sticksPaused)
-    private long powerSentAt, powerAskedAt;
-    /** The phone said DEEP SLEEP and the link dropped: it sleeps, and this PC keeps quiet (ControlLink.setDormant). */
-    private volatile boolean phoneAsleep;
-    /**
-     * Waiting for a sleeping phone (DEEP SLEEP / OVERWATCH) to wake: no warning beep until the link is READY once (the
-     * pilot, 1.0.51: the countdown to its check-in is no link loss).
-     */
-    private volatile boolean awaitingWake;
-    /** When the phone went to sleep: its listening windows come every check interval from then on. */
-    private long sleepStartAt;
-    private int checkIntervalMin = 5;
-    /** The interval asked of the phone with the last sleep: CHECK EVERY, or 1 min for "0 min" to an app older than pc.39. */
-    private int sentIntervalMin = 5;
     private static final String CHECK_INTERVAL_KEY = "phone.sleepCheckMin";
-    /** The last "still here" from the sleeping phone that went to the log (one line per check). */
-    private long lastHelloLogged;
-    /**
-     * A phone left in deep sleep when this PC disconnected, or heard checking in while no link was open (1.0.41; the
-     * pilot: "if a pilot sets a phone to deep sleep then disconnects there is no way to remotely wake it up"). It stays
-     * on the LINK card with WAKE; its check-ins are answered "sleep on" (NameService) until WAKE connects, and the link
-     * then answers the next one "wake". Kept in the settings, so it outlives a restart. Wall-clock times.
-     */
-    record Asleep(String name, String ip, long since, int intervalMin, boolean overwatch) {
-        Asleep(String name, String ip, long since, int intervalMin) {
-            this(name, ip, since, intervalMin, false);
-        }
-
-        /** What it is doing, for the lists: OVERWATCH (1.0.47) or DEEP SLEEP. */
-        String mode() {
-            return overwatch ? "OVERWATCH" : "DEEP SLEEP";
-        }
-
-        /** CHECK EVERY "0 min" (1.0.50, phone pc.39): its listening window never closes - WAKE and CONNECT reach it at once. */
-        boolean listening() {
-            return SleepCheck.isAlways(intervalMin);
-        }
-    }
-    /** How long a sleeping phone that answers name queries may go without a check-in before it counts as woken on the phone. */
-    private static long awakeAfterMs(Asleep a) {
-        return a.listening() ? 150_000 : 60_000; // always listening: it answers queries all along, and says hello once a minute
-    }
-    /** Every phone known to be asleep, by address; and its last check-in heard (receivedAt: wall clock). */
-    private final Map<String, Asleep> asleepPhones = new ConcurrentHashMap<>();
     /** Crashed drones (CRASHED_KEY): the name as the name map has it -> when LOST DRONE was pressed (wall clock). */
     private final Map<String, Long> crashed = new ConcurrentHashMap<>();
-    private final Map<String, ControlLink.SleepHello> asleepHellos = new ConcurrentHashMap<>();
-    /** An always-listening phone's hello last logged (wall ms): its hellos come once a minute, the log hears one in ten. */
-    private final Map<String, Long> listeningLogged = new ConcurrentHashMap<>();
 
-    private long lastListeningLogged(String ip) {
-        return listeningLogged.getOrDefault(ip, 0L);
-    }
     /**
      * Earlier flights kept on the map until removed (1.0.41): when this PC connects again, the flight before stays; a
      * spectator's flight ends when the pilot moves to another phone. Saved (name>file|...), read back at the start.
@@ -357,8 +306,8 @@ public class MainWindow extends JFrame {
      * air); the disarm then gives the sound back. A press of MUTE meanwhile makes it the pilot's own choice again.
      */
     private boolean audioAutoMuted;
-    /** When this window started (wall ms): a sleeping phone gets one check-in interval from here before it is late. */
-    private final long startedAtWall = System.currentTimeMillis();
+    /** The power modes and the phones asleep (started now: a sleeping phone gets one check-in interval from here). */
+    private final PowerController power = new PowerController(new PowerHost(), System::currentTimeMillis);
     /** The drone read armed at the last refresh (for the arming's auto-mute). */
     private boolean audioSawArmed;
     /** A virtual drone's arming mute comes this long after it (1.0.52): its motors spinning up are heard. */
@@ -569,7 +518,7 @@ public class MainWindow extends JFrame {
         nameService.setFleet(fleet, this::fleetHello);
         nameService.setOverwatchSink(overwatch::offer); // the link port while no link holds it (1.0.47)
         startOverwatch();
-        for (Asleep a : parseAsleep(config.getString(ASLEEP_KEY))) asleepPhones.put(a.ip(), a);
+        power.load(config.getString(ASLEEP_KEY));
         crashed.putAll(parseCrashed(config.getString(CRASHED_KEY)));
         loadKeptFlights();
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
@@ -1471,9 +1420,9 @@ public class MainWindow extends JFrame {
             phoneList = list;
             phoneCombo.removeAllItems();
             for (Names.Entry e : list) {
-                Asleep sleeping = e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
+                Asleep sleeping = e.ip() == null || kind != Names.Kind.PHONE ? null : power.asleep(e.ip());
                 phoneCombo.addItem(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + (kind == Names.Kind.PHONE && crashed.containsKey(e.name()) ? "   CRASHED"
-                        : sleeping != null ? "   " + sleeping.mode() + " " + checkText(sleeping, now)
+                        : sleeping != null ? "   " + sleeping.mode() + " " + power.checkText(sleeping, now)
                         : e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
             }
             if (list.isEmpty()) phoneCombo.addItem(kind == Names.Kind.PHONE ? "No phone seen yet" : "No pilot PC seen yet");
@@ -1486,11 +1435,11 @@ public class MainWindow extends JFrame {
             return;
         }
         Names.Entry e = at < 0 ? null : list.get(at);
-        Asleep chosenAsleep = e == null || e.ip() == null || kind != Names.Kind.PHONE ? null : asleepPhones.get(e.ip());
+        Asleep chosenAsleep = e == null || e.ip() == null || kind != Names.Kind.PHONE ? null : power.asleep(e.ip());
         String hint = chosenAsleep != null
                 ? e.name() + (chosenAsleep.overwatch() ? " overwatches" : " is in deep sleep") + (chosenAsleep.listening()
                         ? ", listening: PILOT UAV brings it back at once."
-                        : ": it checks for this PC in " + clock(nextCheck(chosenAsleep, now) - now) + ". PILOT UAV brings it back then.")
+                        : ": it checks for this PC in " + PowerController.clock(power.nextCheck(chosenAsleep, now) - now) + ". PILOT UAV brings it back then.")
                 : e == null
                 ? (kind == Names.Kind.PHONE ? "Open DRAUPNE Flight on the phone, on Tailscale: it shows up here by itself."
                         : "A PC running DRAUPNE Link on your Tailscale network shows up here by itself.")
@@ -1680,9 +1629,9 @@ public class MainWindow extends JFrame {
             if (sticksPaused()) s.onPaused(state); else s.onInput(state);
         });
         if (!watch && WindowsTuning.keepAwake(true)) logLine("PC and screen stay awake while connected.");
-        powerWanted = ControlLink.POWER_NORMAL;
-        phoneAsleep = false;
-        awaitingWake = false;
+        power.wanted = ControlLink.POWER_NORMAL;
+        power.phoneAsleep = false;
+        power.awaitingWake = false;
         lastState = null;
         lastStateText = null;
         lastSpectators = 0;
@@ -1690,28 +1639,28 @@ public class MainWindow extends JFrame {
         connection.getLink().setForeignSleepHandler(this::onSleepCheck); // another phone's check-in: sleep on
         connection.getLink().setFleetHello(this::fleetHello); // and a fleet mode queued for it goes ahead (1.0.52)
         connection.getLink().setOverwatchSink(overwatch::offer); // the link holds the link port now (1.0.47)
-        phoneOverwatching = false;
+        power.phoneOverwatching = false;
         // the flight before stays on the map; this one is the live one
         keepFlight(track, liveTrackName);
         liveTrackName = flightName(watch ? null : target.name());
         watchedPhone = null;
         if (!watch) videoView.setUpsideDown(upsideDownFor(target.name())); // the phone's own way up (1.0.41)
         setVirtualShown(!watch && target.isVirtual());
-        Asleep sleeping = target.ip() == null ? null : asleepPhones.get(target.ip());
-        ControlLink.SleepHello lastCheck = sleeping == null ? null : asleepHellos.get(sleeping.ip());
-        if (sleeping != null && target.online() && (lastCheck == null || System.currentTimeMillis() - lastCheck.receivedAt() > awakeAfterMs(sleeping))
-                && System.currentTimeMillis() - sleeping.since() > awakeAfterMs(sleeping)) {
-            clearAsleep(sleeping.ip()); // it answers name queries and hasn't checked in for a minute: woken on the phone
+        Asleep sleeping = target.ip() == null ? null : power.asleep(target.ip());
+        ControlLink.SleepHello lastCheck = sleeping == null ? null : power.hello(sleeping.ip());
+        if (sleeping != null && target.online() && (lastCheck == null || System.currentTimeMillis() - lastCheck.receivedAt() > PowerController.awakeAfterMs(sleeping))
+                && System.currentTimeMillis() - sleeping.since() > PowerController.awakeAfterMs(sleeping)) {
+            power.clear(sleeping.ip()); // it answers name queries and hasn't checked in for a minute: woken on the phone
             sleeping = null;
         }
         if (!watch && sleeping != null && sleeping.ip().equals(target.ip())) {
             // the phone sleeps: PILOT UAV wakes it - now when it listens all along, else at its next check (1.0.52: no
             // WAKE button, and no connection that keeps quiet)
-            phoneAsleep = true;
-            awaitingWake = true;
-            phoneOverwatching = sleeping.overwatch();
-            sleepStartAt = MonoClock.ms() - (System.currentTimeMillis() - sleeping.since());
-            sentIntervalMin = sleeping.intervalMin();
+            power.phoneAsleep = true;
+            power.awaitingWake = true;
+            power.phoneOverwatching = sleeping.overwatch();
+            power.sleepStartAt = MonoClock.ms() - (System.currentTimeMillis() - sleeping.since());
+            power.sentIntervalMin = sleeping.intervalMin();
             if (sleeping.listening()) {
                 logLine(sleeping.name() + " is listening: wakes now.");
             } else {
@@ -1783,12 +1732,12 @@ public class MainWindow extends JFrame {
     }
 
     private void disconnect() {
-        if (phoneAsleep && connection != null && !connection.getLink().isSpectator()) {
+        if (power.phoneAsleep && connection != null && !connection.getLink().isSpectator()) {
             String name = config.getString(Names.PHONE_NAME_KEY), ip = config.getString(IP_KEY);
             if (!ip.isEmpty()) {
-                long since = System.currentTimeMillis() - (MonoClock.ms() - sleepStartAt);
-                rememberAsleep(new Asleep(name, ip, since, sentIntervalMin, phoneOverwatching));
-                logLine(name + (phoneOverwatching ? " overwatches on: alerts still come to the map." : " sleeps on.")
+                long since = System.currentTimeMillis() - (MonoClock.ms() - power.sleepStartAt);
+                power.remember(new Asleep(name, ip, since, power.sentIntervalMin, power.phoneOverwatching));
+                logLine(name + (power.phoneOverwatching ? " overwatches on: alerts still come to the map." : " sleeps on.")
                         + " PILOT UAV brings it back.");
             }
         }
@@ -1797,10 +1746,10 @@ public class MainWindow extends JFrame {
         updatePhoneButton.setText("Update phone app");
         updatePhoneButton.setEnabled(true);
         WindowsTuning.keepAwake(false);
-        powerWanted = ControlLink.POWER_NORMAL;
-        phoneAsleep = false;
-        awaitingWake = false;
-        phoneOverwatching = false;
+        power.wanted = ControlLink.POWER_NORMAL;
+        power.phoneAsleep = false;
+        power.awaitingWake = false;
+        power.phoneOverwatching = false;
         if (powerRow != null) show(powerRow, false);
         sampleLinkLog();
         linkLogTimer.stop();
@@ -1909,16 +1858,16 @@ public class MainWindow extends JFrame {
         // position): LAST KNOWN is only for a drone nothing newer is known of (the pilot)
         String livePhone = config.getString(Names.PHONE_NAME_KEY);
         String liveIp = names.ipOf(livePhone);
-        Asleep sleeping = liveIp == null ? null : asleepPhones.get(liveIp);
-        boolean liveAsleep = sleeping != null && checkInOverdue(sleeping, System.currentTimeMillis()) <= 0;
+        Asleep sleeping = liveIp == null ? null : power.asleep(liveIp);
+        boolean liveAsleep = sleeping != null && power.checkInOverdue(sleeping, System.currentTimeMillis()) <= 0;
         if (isCrashed(livePhone)) liveAsleep = true; // CRASHED (1.0.52): its crash sign stands at the last point, never LAST KNOWN
         FlightTrack.Point lastFix = track == null ? null : track.last();
         if (!liveAsleep && lastFix != null && livePhone != null && !livePhone.isEmpty()) liveAsleep = heardSince(livePhone, liveIp, lastFix.timeMs());
         // the pilot put it to sleep a moment ago: it goes quiet on purpose before the connection ends (the pilot: "they
         // know where it is as they put it in overwatch") - no LAST KNOWN in between either
-        if (!liveAsleep && connection != null && !connection.getLink().isSpectator() && (phoneAsleep
-                || powerWanted == ControlLink.POWER_DEEP_SLEEP || powerWanted == ControlLink.POWER_OVERWATCH
-                || powerWanted == ControlLink.POWER_STANDBY)) liveAsleep = true;
+        if (!liveAsleep && connection != null && !connection.getLink().isSpectator() && (power.phoneAsleep
+                || power.wanted == ControlLink.POWER_DEEP_SLEEP || power.wanted == ControlLink.POWER_OVERWATCH
+                || power.wanted == ControlLink.POWER_STANDBY)) liveAsleep = true;
         if (w != null) w.map().setLiveAsleep(liveAsleep);
         miniMap.setLiveAsleep(liveAsleep);
         if (w != null) w.update(track, gps, heading, fcLost, connected);
@@ -2429,7 +2378,7 @@ public class MainWindow extends JFrame {
         ObserveSet current = ObserveSet.parse(config.getString(ObserveSet.KEY));
         List<Names.Entry> phones = names.list(Names.Kind.PHONE);
         Set<String> asleep = new HashSet<>();
-        for (Names.Entry e : phones) if (e.ip() != null && asleepPhones.containsKey(e.ip())) asleep.add(e.name());
+        for (Names.Entry e : phones) if (e.ip() != null && power.isAsleep(e.ip())) asleep.add(e.name());
         List<String> chosen = ObservePicker.pick(this, phones, current, observeRefusals(phones), asleep);
         if (chosen == null) return;
         ObserveSet next = new ObserveSet();
@@ -2671,7 +2620,7 @@ public class MainWindow extends JFrame {
                 status = "NOT STREAMING: " + Observe.stateName(st.state);
             } else if (last == 0) {
                 Names.Entry e = names.get(phone);
-                status = e != null && e.ip() != null && asleepPhones.containsKey(e.ip()) ? "DEEP SLEEP - joins at next check-in"
+                status = e != null && e.ip() != null && power.isAsleep(e.ip()) ? "DEEP SLEEP - joins at next check-in"
                         : "Asking the phone...";
             } else if (now - last > ObserverLink.SILENT_MS) {
                 status = "NO SIGNAL for " + (now - last) / 1000 + " s";
@@ -2744,7 +2693,6 @@ public class MainWindow extends JFrame {
             mapWindow.map().repaint();
         }
     }
-
 
     // ---------------------------------------------------------------- periodic refresh
 
@@ -3060,7 +3008,7 @@ public class MainWindow extends JFrame {
                 : (int) Math.min(65_534, ps.rcWriteAgeMs() + (now - ps.receivedAt()));
         RcSession.Banner resume = s == null ? null : s.lastResumeBanner();
         String liveBanner = resume != null && now - resume.at() < RESUME_BANNER_MS ? resume.text() : null;
-        if (liveBanner == null && !spectator && powerWanted == ControlLink.POWER_STANDBY) liveBanner = "STANDBY";
+        if (liveBanner == null && !spectator && power.wanted == ControlLink.POWER_STANDBY) liveBanner = "STANDBY";
         if (liveBanner == null && s != null && s.isFrozenStopped()) liveBanner = "RADIO FROZEN - STICKS STOPPED";
         int lagMs = spectator ? -1 : stickLagMs(l);
         if (liveBanner == null && lagMs > STICKS_LATE_MS) {
@@ -3153,7 +3101,7 @@ public class MainWindow extends JFrame {
         if (c == null) return null;
         ControlLink l = c.getLink();
         if (l.isSpectator()) return null; // watching: no sticks to lose, no alarm
-        if (quietWhileWaking(awaitingWake, l.getState())) return null;
+        if (PowerController.quietWhileWaking(power.awaitingWake, l.getState())) return null;
         if (l.getState() != ControlLink.State.READY) return "LINK LOST";
         if (l.isLinkStalled()) return "LINK STALL";
         if (l.isFcLost()) return "NO FLIGHT CONTROLLER";
@@ -3166,11 +3114,6 @@ public class MainWindow extends JFrame {
         if (armed && s != null && s.isRcEnabled() && s.msSinceInputChanged() > RADIO_FROZEN_MS) return "RADIO FROZEN";
         if (stickLagMs(l) > STICKS_LATE_MS) return "STICKS LATE";
         return null;
-    }
-
-    /** Waiting for a sleeping phone's check-in, and since until its link is READY: no beep (disarmed only, as sleep is). */
-    static boolean quietWhileWaking(boolean awaitingWake, ControlLink.State state) {
-        return awaitingWake && state != ControlLink.State.READY;
     }
 
     /** Under LINK LOST on the OSD: the reason, when Tailscale knows it; else that the sticks still go out. */
@@ -3245,17 +3188,17 @@ public class MainWindow extends JFrame {
         checkIntervalCombo.setToolTipText("<html>How often the sleeping phone wakes to listen for this PC: more often costs a little more power.<br>"
                 + "0 min: it never stops listening - PILOT UAV reaches it at once (phone app pc.39 on; an older one checks every 1 min)</html>");
         try {
-            checkIntervalMin = Integer.parseInt(config.getString(CHECK_INTERVAL_KEY));
+            power.checkIntervalMin = Integer.parseInt(config.getString(CHECK_INTERVAL_KEY));
         } catch (NumberFormatException ignored) {
-            checkIntervalMin = 5;
+            power.checkIntervalMin = 5;
         }
         int chosen = CHECK_INTERVALS.length - 1;
-        for (int i = 0; i < CHECK_INTERVALS.length; i++) if (CHECK_INTERVALS[i] == checkIntervalMin) chosen = i;
-        checkIntervalMin = CHECK_INTERVALS[chosen];
+        for (int i = 0; i < CHECK_INTERVALS.length; i++) if (CHECK_INTERVALS[i] == power.checkIntervalMin) chosen = i;
+        power.checkIntervalMin = CHECK_INTERVALS[chosen];
         checkIntervalCombo.setSelectedIndex(chosen);
         checkIntervalCombo.addActionListener(e -> {
-            checkIntervalMin = CHECK_INTERVALS[Math.max(0, checkIntervalCombo.getSelectedIndex())];
-            save(Map.of(CHECK_INTERVAL_KEY, Integer.toString(checkIntervalMin)));
+            power.checkIntervalMin = CHECK_INTERVALS[Math.max(0, checkIntervalCombo.getSelectedIndex())];
+            save(Map.of(CHECK_INTERVAL_KEY, Integer.toString(power.checkIntervalMin)));
         });
         interval.add(checkIntervalCombo, BorderLayout.CENTER);
         powerRow.add(interval, c);
@@ -3303,18 +3246,18 @@ public class MainWindow extends JFrame {
         String phone = config.getString(Names.PHONE_NAME_KEY);
         int current = chosenPowerMode();
         if (current == mode && mode != ControlLink.POWER_STANDBY) {
-            new LockedNotice(pressed, videoView, "ALREADY " + modeWord(mode), phone + " is already in " + modeWord(mode) + ".").pop();
+            new LockedNotice(pressed, videoView, "ALREADY " + PowerController.modeWord(mode), phone + " is already in " + PowerController.modeWord(mode) + ".").pop();
             return;
         }
-        if (connection != null && phoneAsleep && !connection.getLink().isSpectator()) {
+        if (connection != null && power.phoneAsleep && !connection.getLink().isSpectator()) {
             // waiting for a sleeping phone to wake: another sleep mode instead - let it sleep on, queue the new one
             disconnect();
-            if (!phone.isEmpty()) fleetRequest(phone, mode, checkIntervalMin, pressed);
+            if (!phone.isEmpty()) fleetRequest(phone, mode, power.checkIntervalMin, pressed);
             return;
         }
         if (connection == null) {
             // 1.0.52 (the pilot): the mode changes without connecting - queued, sent when the phone next listens
-            if (!phone.isEmpty() && !ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) fleetRequest(phone, mode, checkIntervalMin, pressed);
+            if (!phone.isEmpty() && !ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) fleetRequest(phone, mode, power.checkIntervalMin, pressed);
             return;
         }
         if (fcArmedNow()) {
@@ -3325,26 +3268,20 @@ public class MainWindow extends JFrame {
         if (!confirmEndWhileArmed(mode == ControlLink.POWER_STANDBY ? "STANDBY"
                 : mode == ControlLink.POWER_OVERWATCH ? "OVERWATCH" : "DEEP SLEEP")) return;
         if (mode == ControlLink.POWER_OVERWATCH && !prepareOverwatch(pressed)) return;
-        powerWanted = mode;
-        powerAskedAt = MonoClock.ms();
-        powerSentAt = 0;
+        power.wanted = mode;
+        power.askedAt = MonoClock.ms();
+        power.sentAt = 0;
         int build = connection.getLink().getTelemetry().getPhonePcBuild();
-        sentIntervalMin = SleepCheck.forPhone(checkIntervalMin, build);
-        if (mode != ControlLink.POWER_STANDBY && sentIntervalMin != checkIntervalMin) {
+        power.sentIntervalMin = SleepCheck.forPhone(power.checkIntervalMin, build);
+        if (mode != ControlLink.POWER_STANDBY && power.sentIntervalMin != power.checkIntervalMin) {
             logLine("CHECK EVERY 0 min needs phone app 2.3.0-pc." + SleepCheck.ALWAYS_MIN_PC_BUILD
-                    + " (it has " + (build < 0 ? "an older one" : "pc." + build) + "): " + sentIntervalMin + " min instead.");
+                    + " (it has " + (build < 0 ? "an older one" : "pc." + build) + "): " + power.sentIntervalMin + " min instead.");
         }
-        String listens = listensText(sentIntervalMin);
+        String listens = PowerController.listensText(power.sentIntervalMin);
         logLine(mode == ControlLink.POWER_STANDBY ? "STANDBY asked: camera off; PILOT UAV brings it back."
                 : mode == ControlLink.POWER_OVERWATCH ? "OVERWATCH asked: sleeps with the camera watching; motion calls the map window. "
                 + listens + "."
                 : "DEEP SLEEP asked: drops the link and sleeps. " + listens + ".");
-    }
-
-    /** "Checks in every 5 min", or "Always listening" (0 min). */
-    private static String listensText(int intervalMin) {
-        return SleepCheck.isAlways(intervalMin) ? "Always listening: PILOT UAV reaches it at once"
-                : "Checks in every " + intervalMin + " min";
     }
 
     // ------------------------------------------------------------------ OVERWATCH SLEEP (1.0.47)
@@ -3472,9 +3409,9 @@ public class MainWindow extends JFrame {
         logLine("OVERWATCH: " + drone + " went to deep sleep - " + PowerFloor.describe(reason)
                 + (batteryPercent >= 0 && batteryPercent <= 100 ? " (battery " + batteryPercent + " %)" : "") + ". PILOT UAV brings it back.");
         String ip = names.ipOf(drone);
-        Asleep a = ip == null ? null : asleepPhones.get(ip);
-        if (a != null && a.overwatch()) rememberAsleep(new Asleep(a.name(), a.ip(), a.since(), a.intervalMin(), false));
-        if (connection != null && phoneOverwatching && drone.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) phoneOverwatching = false;
+        Asleep a = ip == null ? null : power.asleep(ip);
+        if (a != null && a.overwatch()) power.remember(new Asleep(a.name(), a.ip(), a.since(), a.intervalMin(), false));
+        if (connection != null && power.phoneOverwatching && drone.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) power.phoneOverwatching = false;
     }
 
     /** POP OUT MAP says OVERWATCH while an alert waits and the map window is closed (the pilot: nothing pops up). */
@@ -3497,8 +3434,8 @@ public class MainWindow extends JFrame {
         List<OverwatchPanel.Watching> watching = new ArrayList<>();
         List<MapView.OverwatchMark> miniMarks = new ArrayList<>();
         long wall = System.currentTimeMillis();
-        for (Asleep a : asleepPhones.values()) {
-            if (!a.overwatch() || checkInOverdue(a, wall) > 0) continue;
+        for (Asleep a : power.allAsleep()) {
+            if (!a.overwatch() || power.checkInOverdue(a, wall) > 0) continue;
             for (OverwatchHub.Watched wd : overwatch.watched()) {
                 if (!wd.drone().equalsIgnoreCase(a.name()) || wd.pose() == null) continue;
                 watching.add(new OverwatchPanel.Watching(wd.drone(), wd.pose()));
@@ -3563,7 +3500,7 @@ public class MainWindow extends JFrame {
         }
         if (c != null) disconnect();
         String ip = names.ipOf(drone);
-        if (ip != null && asleepPhones.containsKey(ip)) clearAsleep(ip); // woken now, not at its next check
+        if (ip != null && power.isAsleep(ip)) power.clear(ip); // woken now, not at its next check
         connectFromMap(drone, false);
     }
 
@@ -3577,45 +3514,6 @@ public class MainWindow extends JFrame {
     }
 
     // ------------------------------------------------------------------ phones asleep while no link is open
-
-    /** The saved "name|ip|since|interval;...". */
-    private static List<Asleep> parseAsleep(String saved) {
-        List<Asleep> out = new ArrayList<>();
-        if (saved == null || saved.isBlank()) return out;
-        for (String one : saved.split(";")) {
-            String[] p = one.split("\\|");
-            try {
-                if ((p.length == 4 || p.length == 5) && !p[1].isBlank()) {
-                    out.add(new Asleep(p[0], p[1], Long.parseLong(p[2]), Integer.parseInt(p[3]), p.length == 5 && "ow".equals(p[4])));
-                }
-            } catch (NumberFormatException ignored) {
-                // a broken entry: left out
-            }
-        }
-        return out;
-    }
-
-    private void saveAsleep() {
-        StringBuilder b = new StringBuilder();
-        for (Asleep a : asleepPhones.values()) {
-            if (b.length() > 0) b.append(';');
-            b.append(a.name()).append('|').append(a.ip()).append('|').append(a.since()).append('|').append(a.intervalMin());
-            if (a.overwatch()) b.append("|ow");
-        }
-        String v = b.toString();
-        SwingUtilities.invokeLater(() -> save(Map.of(ASLEEP_KEY, v)));
-    }
-
-    private void rememberAsleep(Asleep a) {
-        asleepPhones.put(a.ip(), a);
-        saveAsleep();
-    }
-
-    private void clearAsleep(String ip) {
-        if (ip == null || asleepPhones.remove(ip) == null) return;
-        asleepHellos.remove(ip);
-        saveAsleep();
-    }
 
     /** The phone chosen in the PHONE list, if it is asleep; null otherwise (or as a spectator). */
     /**
@@ -3636,7 +3534,7 @@ public class MainWindow extends JFrame {
      */
     private int chosenPowerMode() {
         Connection c = connection;
-        int mode = shownPowerMode(c == null ? null : c.getLink(), asleepChosen(), phoneAsleep, phoneOverwatching);
+        int mode = PowerController.shownPowerMode(c == null ? null : c.getLink(), asleepChosen(), power.phoneAsleep, power.phoneOverwatching);
         if (mode >= 0 || c != null) return mode;
         String ip = config.getString(IP_KEY), phone = config.getString(Names.PHONE_NAME_KEY);
         if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()) || phone.isEmpty()) return -1;
@@ -3646,78 +3544,34 @@ public class MainWindow extends JFrame {
         return -1;
     }
 
-    static String modeWord(int mode) {
-        return mode == ControlLink.POWER_OVERWATCH ? "OVERWATCH" : mode == ControlLink.POWER_DEEP_SLEEP ? "DEEP SLEEP"
-                : mode == ControlLink.POWER_STANDBY ? "STANDBY" : "NORMAL";
-    }
-
     /** A mode queued for the chosen phone: one short line under the sleep buttons. */
     private final JLabel queuedLine = Theme.label(" ", Theme.headingFont(11f), Theme.WARN);
 
     private void refreshQueued() {
         FleetManager.Wanted w = fleet == null || connection != null ? null : fleet.wanted(config.getString(Names.PHONE_NAME_KEY));
-        String text = w == null ? null : "QUEUED: " + modeWord(w.mode()) + " (AT CHECK-IN)";
+        String text = w == null ? null : "QUEUED: " + PowerController.modeWord(w.mode()) + " (AT CHECK-IN)";
         if (text != null && !text.equals(queuedLine.getText())) queuedLine.setText(text);
         if (shown(queuedLine) != (text != null)) show(queuedLine, text != null);
     }
 
-    /**
-     * The LINK card's top button (1.0.52, the pilot: "only ever three buttons"): PILOT UAV to fly; STANDBY MODE while
-     * connected (the phone is left in standby); REGAINING CONTROL IN x MIN while a sleeping phone is waited for (pressing
-     * it lets the phone sleep on). Watching and observing keep their own words.
-     */
-    static String connectText(boolean connected, boolean spectatorLink, boolean observing, boolean observerRole, boolean spectatorRole,
-                              boolean waitingForWake, long wakeInMs) {
-        if (observing) return "STOP OBSERVING";
-        if (!connected) return observerRole ? "OBSERVE" : spectatorRole ? "WATCH" : "PILOT UAV";
-        if (spectatorLink) return "STOP WATCHING";
-        if (waitingForWake) {
-            if (wakeInMs < 0) return "REGAINING CONTROL...";
-            return "REGAINING CONTROL IN " + Math.max(1, (wakeInMs + 59_999) / 60_000) + " MIN";
-        }
-        return "STANDBY MODE";
-    }
-
     /** How long until the waited-for sleeping phone checks in (ms), or -1 when it listens all along or is unknown. */
     private long wakeInMs() {
-        if (!phoneAsleep || SleepCheck.isAlways(sentIntervalMin)) return -1;
-        long now = MonoClock.ms();
-        long interval = SleepCheck.checkInMinutes(sentIntervalMin) * 60_000L;
-        if (interval <= 0) return -1;
-        long next = sleepStartAt + interval;
-        ControlLink.SleepHello h = connection == null ? null : connection.getLink().getSleepHello();
-        if (h != null && h.receivedAt() >= sleepStartAt - 5000 && h.nextCheckMin() > 0) {
-            next = h.receivedAt() + SleepCheck.checkInMinutes(h.nextCheckMin()) * 60_000L;
-        }
-        while (next < now) next += interval;
-        return next - now;
+        return power.wakeInMs(MonoClock.ms(), connection == null ? null : connection.getLink().getSleepHello());
     }
 
     private void refreshConnectText() {
         Connection c = connection;
-        String text = connectText(c != null, c != null && c.getLink().isSpectator(), observation != null, observerRole(),
-                ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()), c != null && phoneAsleep, wakeInMs());
+        String text = PowerController.connectText(c != null, c != null && c.getLink().isSpectator(), observation != null, observerRole(),
+                ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()), c != null && power.phoneAsleep, wakeInMs());
         if (!text.equals(connectButton.getText())) connectButton.setText(text);
-    }
-
-    /** The mode the chosen phone is in now, or -1 when unknown. */
-    static int shownPowerMode(ControlLink link, Asleep chosenAsleep, boolean asleep, boolean overwatching) {
-        if (link == null) {
-            return chosenAsleep == null ? -1 : chosenAsleep.overwatch() ? ControlLink.POWER_OVERWATCH : ControlLink.POWER_DEEP_SLEEP;
-        }
-        if (link.isSpectator()) return -1;
-        if (asleep) return overwatching ? ControlLink.POWER_OVERWATCH : ControlLink.POWER_DEEP_SLEEP;
-        FcTelemetry.PhonePower pp = link.getTelemetry().getPhonePower();
-        return pp == null ? -1 : pp.mode();
     }
 
     private Asleep asleepChosen() {
         if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) return null;
         String ip = config.getString(IP_KEY);
-        return ip.isEmpty() ? null : asleepPhones.get(ip);
+        return ip.isEmpty() ? null : power.asleep(ip);
     }
 
-    /** When this sleeping phone checks for this PC next (wall clock). */
     /**
      * The drone was heard of after wallMs (a track point's time): its phone's position in a name reply, an overwatch
      * alert from it, or a sleep check. Then the map shows that newer word, not LAST KNOWN.
@@ -3729,59 +3583,13 @@ public class MainWindow extends JFrame {
         for (OverwatchHub.View v : overwatch.views()) {
             if (v.drone().equalsIgnoreCase(phone) && v.alertAtWall() > wallMs) return true;
         }
-        ControlLink.SleepHello h = ip == null ? null : asleepHellos.get(ip);
+        ControlLink.SleepHello h = ip == null ? null : power.hello(ip);
         return h != null && h.receivedAt() > wallMs;
-    }
-
-    /** When this PC last heard a sleeping phone: its last check-in, else when it went to sleep (wall ms). */
-    private long lastHeardAsleep(Asleep a) {
-        ControlLink.SleepHello h = asleepHellos.get(a.ip());
-        return h != null ? Math.max(h.receivedAt(), a.since()) : a.since();
-    }
-
-    /**
-     * How long a sleeping phone is past the time it should have checked in by (ms; 0 or less: on time). "Late" is a
-     * whole check-in missed and a minute more: the check it said it would make, then one interval of grace. A PC
-     * started meanwhile gives it one interval from its own start before calling it late. Always listening (CHECK EVERY
-     * 0 min) counts as a check every minute - it says hello once a minute.
-     */
-    long checkInOverdue(Asleep a, long now) {
-        return checkInOverdue(a, asleepHellos.get(a.ip()), startedAtWall, now);
-    }
-
-    static long checkInOverdue(Asleep a, ControlLink.SleepHello h, long startedAtWall, long now) {
-        long interval = SleepCheck.checkInMinutes(a.intervalMin()) * 60_000L;
-        long expected = h != null && h.nextCheckMin() > 0
-                ? h.receivedAt() + SleepCheck.checkInMinutes(h.nextCheckMin()) * 60_000L : a.since() + interval;
-        expected = Math.max(expected, startedAtWall + interval);
-        return now - (expected + interval + 60_000L);
-    }
-
-    private long nextCheck(Asleep a, long now) {
-        ControlLink.SleepHello h = asleepHellos.get(a.ip());
-        long interval = SleepCheck.checkInMinutes(a.intervalMin()) * 60_000L;
-        long next = h != null && h.nextCheckMin() > 0
-                ? h.receivedAt() + SleepCheck.checkInMinutes(h.nextCheckMin()) * 60_000L : a.since() + interval;
-        while (next < now) next += interval;
-        return next;
-    }
-
-    /** For the lists: the countdown to its next check, or "listening" (always listening: no countdown). */
-    private String checkText(Asleep a, long now) {
-        return a.listening() ? "listening" : clock(nextCheck(a, now) - now);
-    }
-
-    private static String clock(long ms) {
-        long left = Math.max(0, ms) / 1000;
-        return String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
     }
 
     /**
      * A sleeping phone's check-in that isn't this PC's link's own phone (the name service's thread with no link open,
-     * or the link's for another phone): remembered for the LINK card and the PHONE list, and answered "sleep on" - WAKE
-     * connects, and the link answers the next one "wake". A phone not known to be asleep is taken as asleep when it is
-     * one of ours (it went to sleep under an older version, or before a restart).
-     * @return false (sleep on), or null for a phone that isn't ours (no answer)
+     * or the link's for another phone): listed and drawn, then {@link PowerController#checkIn} remembers and answers it.
      */
     private Boolean onSleepCheck(String ip, byte[] d) {
         // pc.40: who and where it is - listed and drawn even when no scan reached it before it slept (the tour's drones)
@@ -3794,46 +3602,38 @@ public class MainWindow extends JFrame {
                 if (nameService.heardAsleep(ip, where, mode)) SwingUtilities.invokeLater(this::updatePhoneList);
             }
         }
-        Asleep a = asleepPhones.get(ip);
-        if (a == null) {
-            String name = names.nameAt(ip);
-            if (name == null || Names.kindOf(name) != Names.Kind.PHONE) return null;
-            a = new Asleep(name, ip, System.currentTimeMillis(), Math.max(1, d[3] & 0xff),
-                    d.length >= 7 && (d[6] & OverwatchProtocol.HELLO_OVERWATCH) != 0);
-            rememberAsleep(a);
+        return power.checkIn(ip, d);
+    }
+
+    /** The asleep book's way back into the window: the log and the settings on the Swing thread. */
+    private final class PowerHost implements PowerController.Host {
+        @Override
+        public String nameAt(String ip) {
+            return names.nameAt(ip);
         }
-        ControlLink.SleepHello h = ControlLink.SleepHello.read(d, d.length, System.currentTimeMillis());
-        if (h.nextCheckMin() > 0 && h.nextCheckMin() != a.intervalMin()) { // the phone's own word: listening, or its interval
-            a = new Asleep(a.name(), a.ip(), a.since(), h.nextCheckMin(), a.overwatch());
-            rememberAsleep(a);
+
+        @Override
+        public boolean observed(String name) {
+            return observedNames.contains(name);
         }
-        if (d.length >= 7 && h.overwatch() != a.overwatch()) { // into overwatch, or out of it by itself (the floor, 1.0.47)
-            Asleep was = a;
-            a = new Asleep(a.name(), a.ip(), a.since(), a.intervalMin(), h.overwatch());
-            rememberAsleep(a);
-            if (was.overwatch()) {
-                String why = h.floorReason() != 0 ? PowerFloor.describe(h.floorReason()) : "it left overwatch";
-                SwingUtilities.invokeLater(() -> logLine("OVERWATCH ended on " + was.name() + ": " + why + " - now in deep sleep."));
-            }
-        }
-        ControlLink.SleepHello before = asleepHellos.put(ip, h);
-        if (observedNames.contains(a.name())) { // OBSERVATION (1.0.48): it joins the grid at its check-in
-            String name = a.name();
+
+        @Override
+        public void observedCheckIn(String ip, String name) {
             SwingUtilities.invokeLater(() -> {
-                clearAsleep(ip);
+                power.clear(ip);
                 logLine(name + " checked in: woken for observation.");
             });
-            return true;
         }
-        // one line per check window; always listening (a hello a minute), one line in ten minutes
-        long quiet = a.listening() ? 10 * 60_000L : 20_000;
-        if (before == null || h.receivedAt() - before.receivedAt() > quiet || a.listening() && h.receivedAt() - lastListeningLogged(ip) > quiet) {
-            if (a.listening()) listeningLogged.put(ip, h.receivedAt());
-            String line = a.name() + (a.overwatch() ? " overwatching" : " asleep") + ": battery " + (h.batteryPercent() >= 0 ? h.batteryPercent() + " %" : "unknown")
-                    + (h.charging() ? ", charging" : "") + (a.listening() ? ", listening." : ", next check in " + h.nextCheckMin() + " min.");
+
+        @Override
+        public void logLater(String line) {
             SwingUtilities.invokeLater(() -> logLine(line));
         }
-        return false;
+
+        @Override
+        public void saveAsleep(String saved) {
+            SwingUtilities.invokeLater(() -> save(Map.of(ASLEEP_KEY, saved)));
+        }
     }
 
     /** Not connected, the chosen phone asleep: the power row stays, with when it checks next and WAKE. */
@@ -3841,12 +3641,12 @@ public class MainWindow extends JFrame {
         Asleep a = asleepChosen();
         if (powerRow == null || a == null) return;
         long now = System.currentTimeMillis();
-        ControlLink.SleepHello h = asleepHellos.get(a.ip());
+        ControlLink.SleepHello h = power.hello(a.ip());
         // it answers the name service's queries, and hasn't checked in for a minute: it is awake (woken on the phone)
         Names.Entry e = names.get(a.name());
-        if (e != null && e.online() && (h == null || now - h.receivedAt() > awakeAfterMs(a)) && now - a.since() > awakeAfterMs(a)) {
+        if (e != null && e.online() && (h == null || now - h.receivedAt() > PowerController.awakeAfterMs(a)) && now - a.since() > PowerController.awakeAfterMs(a)) {
             logLine(a.name() + " is awake again.");
-            clearAsleep(a.ip());
+            power.clear(a.ip());
             return;
         }
         if (!shown(powerRow)) show(powerRow, true);
@@ -3862,7 +3662,7 @@ public class MainWindow extends JFrame {
                     + (h.batteryPercent() >= 0 ? ", battery " + h.batteryPercent() + " %" : "") + (h.charging() ? " (charging)" : "") + ". ";
         }
         powerStatus.setText("<html>" + a.name() + " is in " + a.mode() + ". " + alive + (a.listening() ? "It is listening: PILOT UAV brings it back at once.</html>"
-                : "Next check in " + clock(nextCheck(a, now) - now) + ". PILOT UAV brings it back then.</html>"));
+                : "Next check in " + PowerController.clock(power.nextCheck(a, now) - now) + ". PILOT UAV brings it back then.</html>"));
     }
 
     /**
@@ -4149,7 +3949,7 @@ public class MainWindow extends JFrame {
             Names.Position p = d.position();
             long age = now - d.at() + p.ageS() * 1000L;
             String ip = names.ipOf(d.name());
-            Asleep sleeping = ip == null ? null : asleepPhones.get(ip);
+            Asleep sleeping = ip == null ? null : power.asleep(ip);
             String pilot = p.pilotIp().isEmpty() ? null : names.nameAt(p.pilotIp());
             // 1.0.50 (the pilot): asleep and overwatching drones get signs of their own, never the lost one's - until
             // they miss their check-ins, then they are unknown; a drone gone quiet while flown or armed is lost
@@ -4170,13 +3970,13 @@ public class MainWindow extends JFrame {
                 doing = age > 120_000 ? "STANDBY - NOT HEARD " + Names.agoText(now - age, now).toUpperCase(Locale.ROOT) + " - UNKNOWN"
                         : "STANDBY - CONNECT wakes it";
             } else if (sleeping != null) {
-                long overdue = checkInOverdue(sleeping, now);
+                long overdue = power.checkInOverdue(sleeping, now);
                 if (overdue > 0) {
                     kind = MapView.Kind.UNKNOWN;
-                    doing = sleeping.mode() + " - MISSED CHECK-IN, NOT HEARD " + Names.agoText(lastHeardAsleep(sleeping), now).toUpperCase(Locale.ROOT) + " - UNKNOWN";
+                    doing = sleeping.mode() + " - MISSED CHECK-IN, NOT HEARD " + Names.agoText(power.lastHeard(sleeping), now).toUpperCase(Locale.ROOT) + " - UNKNOWN";
                 } else {
                     kind = sleeping.overwatch() ? MapView.Kind.OVERWATCH : MapView.Kind.ASLEEP;
-                    doing = sleeping.mode() + (sleeping.listening() ? " - LISTENING" : " - check in " + clock(nextCheck(sleeping, now) - now));
+                    doing = sleeping.mode() + (sleeping.listening() ? " - LISTENING" : " - check in " + PowerController.clock(power.nextCheck(sleeping, now) - now));
                 }
             } else if (age > 30_000) {
                 boolean wasFlying = Boolean.TRUE.equals(p.armed()) || p.flown();
@@ -4216,7 +4016,7 @@ public class MainWindow extends JFrame {
             mapWindow.map().setOnClearCrashed(this::clearCrashedByPilot);
             mapWindow.map().setOnMarkCrashed(n -> markCrashed(n, "marked"));
         }
-        if (!asleepPhones.isEmpty() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
+        if (!power.noneAsleep() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
     }
 
     // ------------------------------------------------------------------ FLEET MANAGEMENT (1.0.52)
@@ -4244,11 +4044,11 @@ public class MainWindow extends JFrame {
             String ip = names.ipOf(w.phone());
             if (ip == null) return;
             if (w.mode() == ControlLink.POWER_STANDBY) {
-                clearAsleep(ip);
+                power.clear(ip);
                 standbyPhones.put(ip, w.phone());
             } else {
                 standbyPhones.remove(ip);
-                rememberAsleep(new Asleep(w.phone(), ip, System.currentTimeMillis(), w.intervalMin(), w.mode() == ControlLink.POWER_OVERWATCH));
+                power.remember(new Asleep(w.phone(), ip, System.currentTimeMillis(), w.intervalMin(), w.mode() == ControlLink.POWER_OVERWATCH));
             }
             logLine(w.phone() + " is in " + FleetManager.modeName(w.mode()) + " (fleet).");
             refreshFleet();
@@ -4344,8 +4144,8 @@ public class MainWindow extends JFrame {
         for (Names.Entry e : names.list(Names.Kind.PHONE)) {
             String id = e.name().toLowerCase(Locale.ROOT);
             boolean here = live != null && connectedTo(e.name());
-            Asleep sleeping = e.ip() == null ? null : asleepPhones.get(e.ip());
-            ControlLink.SleepHello hello = e.ip() == null ? null : asleepHellos.get(e.ip());
+            Asleep sleeping = e.ip() == null ? null : power.asleep(e.ip());
+            ControlLink.SleepHello hello = e.ip() == null ? null : power.hello(e.ip());
             FleetManager.Heard heard = fleet.heard(e.name());
             NameService.DronePosition pos = positions.get(id);
             long heardAt = Math.max(e.lastSeen(), Math.max(hello == null ? 0 : hello.receivedAt(), heard == null ? 0 : heard.at()));
@@ -4355,7 +4155,7 @@ public class MainWindow extends JFrame {
             long saidAge = st != null ? now - heard.at() : pos != null ? now - pos.at() : -1;
             boolean wasFlying = pos != null && (Boolean.TRUE.equals(pos.position().armed()) || pos.position().flown());
             FleetCards.Badge badge = FleetCards.badge(here, sleeping != null, sleeping != null && sleeping.overwatch(),
-                    sleeping == null ? 0 : checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),
+                    sleeping == null ? 0 : power.checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),
                     said, saidAge, e.online() || now - heardAt < 30_000, wasFlying);
             if (crashed.containsKey(e.name()) && !here) badge = new FleetCards.Badge(MapView.Kind.CRASHED, "CRASHED");
             // the drone's battery per cell: live here, else what this PC last read
@@ -4382,7 +4182,7 @@ public class MainWindow extends JFrame {
             int interval = st != null && st.intervalMin > 0 ? st.intervalMin : 0;
             if (sleeping != null) {
                 interval = sleeping.intervalMin();
-                next = sleeping.listening() ? FleetCards.LISTENING : nextCheck(sleeping, now) - now;
+                next = sleeping.listening() ? FleetCards.LISTENING : power.nextCheck(sleeping, now) - now;
             }
             int signal = st == null ? -1 : st.signal, fix = st == null ? -1 : st.gpsFix, sats = st == null ? -1 : st.sats;
             if (here && live.getGps() != null) {
@@ -4451,13 +4251,13 @@ public class MainWindow extends JFrame {
 
     /** Back to normal on this PC's own link (an overwatch card's CONNECT on the drone this PC waits for). */
     private void wakePhone() {
-        powerWanted = ControlLink.POWER_NORMAL;
-        powerAskedAt = MonoClock.ms();
-        powerSentAt = 0;
-        if (connection != null && phoneAsleep) {
+        power.wanted = ControlLink.POWER_NORMAL;
+        power.askedAt = MonoClock.ms();
+        power.sentAt = 0;
+        if (connection != null && power.phoneAsleep) {
             connection.getLink().setDormant(false);
-            logLine(SleepCheck.isAlways(sentIntervalMin) ? "Waking: the phone is listening: now."
-                    : "Waking: at the phone's next check (within " + sentIntervalMin + " min).");
+            logLine(SleepCheck.isAlways(power.sentIntervalMin) ? "Waking: the phone is listening: now."
+                    : "Waking: at the phone's next check (within " + power.sentIntervalMin + " min).");
         } else {
             logLine("Back to normal asked.");
         }
@@ -4471,56 +4271,56 @@ public class MainWindow extends JFrame {
         boolean ready = link.getState() == ControlLink.State.READY;
         if (!shown(powerRow)) show(powerRow, true);
         sleepFold.setShown(!fcArmedNow(), true); // armed: the two sleep buttons slide away; disarmed: they slide back
-        if (powerWanted != ControlLink.POWER_NORMAL && fcArmedNow()) {
-            powerWanted = ControlLink.POWER_NORMAL;
-            powerSentAt = 0;
+        if (power.wanted != ControlLink.POWER_NORMAL && fcArmedNow()) {
+            power.wanted = ControlLink.POWER_NORMAL;
+            power.sentAt = 0;
             logLine("Drone armed: sleep cancelled, phone woken.");
         }
         // the phone said DEEP SLEEP (or OVERWATCH, 1.0.47), then the link went: it sleeps now, and this PC must not wake
         // it until WAKE
-        boolean sleepMode = powerWanted == ControlLink.POWER_DEEP_SLEEP || powerWanted == ControlLink.POWER_OVERWATCH;
-        if (sleepMode && reported == powerWanted && !phoneAsleep && !link.isConnected()) {
-            phoneAsleep = true;
-            awaitingWake = true;
-            phoneOverwatching = powerWanted == ControlLink.POWER_OVERWATCH;
-            sleepStartAt = pp.receivedAt() + pp.sleepInS() * 1000L;
+        boolean sleepMode = power.wanted == ControlLink.POWER_DEEP_SLEEP || power.wanted == ControlLink.POWER_OVERWATCH;
+        if (sleepMode && reported == power.wanted && !power.phoneAsleep && !link.isConnected()) {
+            power.phoneAsleep = true;
+            power.awaitingWake = true;
+            power.phoneOverwatching = power.wanted == ControlLink.POWER_OVERWATCH;
+            power.sleepStartAt = pp.receivedAt() + pp.sleepInS() * 1000L;
             link.setDormant(true);
-            logLine(phoneOverwatching ? "Phone overwatches: motion shows in the map window. "
-                    + listensText(sentIntervalMin) + "; PILOT UAV brings it back."
-                    : "Phone in deep sleep. " + listensText(sentIntervalMin) + "; PILOT UAV brings it back.");
+            logLine(power.phoneOverwatching ? "Phone overwatches: motion shows in the map window. "
+                    + PowerController.listensText(power.sentIntervalMin) + "; PILOT UAV brings it back."
+                    : "Phone in deep sleep. " + PowerController.listensText(power.sentIntervalMin) + "; PILOT UAV brings it back.");
             autoDisconnect(link, "asleep"); // 1.0.50, the pilot: the sleep buttons end the connection by themselves
         }
-        if (phoneAsleep) {
+        if (power.phoneAsleep) {
             if (link.isConnected()) {
-                phoneAsleep = false;
-                phoneOverwatching = false;
-                powerWanted = ControlLink.POWER_NORMAL;
-                powerSentAt = 0;
+                power.phoneAsleep = false;
+                power.phoneOverwatching = false;
+                power.wanted = ControlLink.POWER_NORMAL;
+                power.sentAt = 0;
                 link.setDormant(false);
                 link.restartVideo();
                 logLine("Phone awake.");
-                clearAsleep(config.getString(IP_KEY));
+                power.clear(config.getString(IP_KEY));
             } else {
-                boolean always = SleepCheck.isAlways(sentIntervalMin);
-                long interval = SleepCheck.checkInMinutes(sentIntervalMin) * 60_000L;
-                long next = sleepStartAt + interval;
+                boolean always = SleepCheck.isAlways(power.sentIntervalMin);
+                long interval = SleepCheck.checkInMinutes(power.sentIntervalMin) * 60_000L;
+                long next = power.sleepStartAt + interval;
                 // the phone's own word from its last check (pc.22): when the next one is, and its battery
                 ControlLink.SleepHello hello = link.getSleepHello();
                 String alive = "";
-                if (hello != null && hello.receivedAt() >= sleepStartAt - 5000 && phoneOverwatching && !hello.overwatch()
-                        && hello.receivedAt() != lastHelloLogged) {
-                    phoneOverwatching = false; // the floor: it left overwatch for deep sleep by itself (1.0.47)
+                if (hello != null && hello.receivedAt() >= power.sleepStartAt - 5000 && power.phoneOverwatching && !hello.overwatch()
+                        && hello.receivedAt() != power.lastHelloLogged) {
+                    power.phoneOverwatching = false; // the floor: it left overwatch for deep sleep by itself (1.0.47)
                     logLine("OVERWATCH ended on the phone: " + (hello.floorReason() != 0 ? PowerFloor.describe(hello.floorReason())
                             : "it left overwatch") + " - now in deep sleep.");
                 }
-                if (hello != null && hello.receivedAt() >= sleepStartAt - 5000) {
+                if (hello != null && hello.receivedAt() >= power.sleepStartAt - 5000) {
                     if (hello.nextCheckMin() > 0) next = hello.receivedAt() + SleepCheck.checkInMinutes(hello.nextCheckMin()) * 60_000L;
                     long ago = (now - hello.receivedAt()) / 1000;
                     alive = "Heard " + (ago < 60 ? ago + " s" : ago / 60 + " min") + " ago"
                             + (hello.batteryPercent() >= 0 ? ", battery " + hello.batteryPercent() + " %" : "")
                             + (hello.charging() ? " (charging)" : "") + ". ";
-                    if (hello.receivedAt() != lastHelloLogged) {
-                        lastHelloLogged = hello.receivedAt();
+                    if (hello.receivedAt() != power.lastHelloLogged) {
+                        power.lastHelloLogged = hello.receivedAt();
                         logLine("Phone asleep: battery " + (hello.batteryPercent() >= 0 ? hello.batteryPercent() + " %" : "unknown")
                                 + (hello.charging() ? ", charging" : "") + (SleepCheck.isAlways(hello.nextCheckMin())
                                 ? ", listening." : ", next check in " + hello.nextCheckMin() + " min."));
@@ -4530,9 +4330,9 @@ public class MainWindow extends JFrame {
                 long left = (next - now) / 1000;
                 String in = String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
                 powerStatus.setText(link.isDormant()
-                        ? "<html>" + (phoneOverwatching ? "OVERWATCH - its camera watches; an alert shows in the map window. " : "DEEP SLEEP - ") + alive
+                        ? "<html>" + (power.phoneOverwatching ? "OVERWATCH - its camera watches; an alert shows in the map window. " : "DEEP SLEEP - ") + alive
                         + (always ? "The phone is listening for this PC.</html>"
-                        : "The phone checks for this PC every " + sentIntervalMin + " min; next check in " + in + ".</html>")
+                        : "The phone checks for this PC every " + power.sentIntervalMin + " min; next check in " + in + ".</html>")
                         : always ? "<html>Waking - " + alive + "The phone is listening: it wakes now, then its camera starts.</html>"
                         : "<html>Waking - " + alive + "The phone takes it at its next check, in " + in + ", then its camera starts.</html>");
                 // waiting for it to wake (REGAINING CONTROL): the other sleep mode instead is queued, the same one is
@@ -4544,23 +4344,23 @@ public class MainWindow extends JFrame {
             }
             return;
         }
-        if (ready && powerWanted != reported) {
-            if (now - powerSentAt >= 200) {
-                if (powerWanted == ControlLink.POWER_OVERWATCH) {
+        if (ready && power.wanted != reported) {
+            if (now - power.sentAt >= 200) {
+                if (power.wanted == ControlLink.POWER_OVERWATCH) {
                     // the drone's own motion detection level (OFF counts as NORMAL here: watching is the point), and its
                     // microphone in the clip unless this PC has the drone's sound muted
                     int level = detectionFor(config.getString(Names.PHONE_NAME_KEY));
                     if (level == 0) level = 2;
                     int flags = mutedFor(config.getString(Names.PHONE_NAME_KEY)) ? 0 : OverwatchProtocol.MODE_FLAG_SOUND;
-                    link.sendOverwatch(sentIntervalMin, level, flags, overwatchToken);
+                    link.sendOverwatch(power.sentIntervalMin, level, flags, overwatchToken);
                 } else {
-                    link.sendPowerMode(powerWanted, powerWanted == ControlLink.POWER_NORMAL ? checkIntervalMin : sentIntervalMin);
+                    link.sendPowerMode(power.wanted, power.wanted == ControlLink.POWER_NORMAL ? power.checkIntervalMin : power.sentIntervalMin);
                 }
-                powerSentAt = now;
+                power.sentAt = now;
             }
-            if (pp == null && powerAskedAt != 0 && now - powerAskedAt > 10_000) {
+            if (pp == null && power.askedAt != 0 && now - power.askedAt > 10_000) {
                 powerStatus.setText("<html>The phone app doesn't answer: STANDBY and DEEP SLEEP need DRAUPNE Flight 2.3.0-pc.21 or newer (tap its Update available line).</html>");
-            } else if (powerWanted != ControlLink.POWER_NORMAL || reported > 0) {
+            } else if (power.wanted != ControlLink.POWER_NORMAL || reported > 0) {
                 powerStatus.setText("Asking the phone...");
             } else {
                 powerStatus.setText(" ");
@@ -4569,7 +4369,7 @@ public class MainWindow extends JFrame {
             powerStatus.setText(" ");
         } else if (reported == ControlLink.POWER_STANDBY) {
             powerStatus.setText("<html>STANDBY - the phone's camera is off, its GPS and telemetry slowed, its screen dimmed. No sticks are sent.</html>");
-            if (powerWanted == ControlLink.POWER_STANDBY && !link.isSpectator()) { // 1.0.50: STANDBY ends the connection too
+            if (power.wanted == ControlLink.POWER_STANDBY && !link.isSpectator()) { // 1.0.50: STANDBY ends the connection too
                 String ip = config.getString(IP_KEY);
                 if (!ip.isEmpty()) standbyPhones.put(ip, config.getString(Names.PHONE_NAME_KEY));
                 autoDisconnect(link, "standby");
@@ -4582,7 +4382,7 @@ public class MainWindow extends JFrame {
             powerStatus.setText("<html>Before take-off: STANDBY saves power and is back in 2 s; DEEP SLEEP saves more and is back at the phone's next check; "
                     + "OVERWATCH sleeps with the camera watching.</html>");
         }
-        boolean idle = ready && powerWanted == ControlLink.POWER_NORMAL && reported <= 0;
+        boolean idle = ready && power.wanted == ControlLink.POWER_NORMAL && reported <= 0;
         standbyButton.setEnabled(idle && !fcArmedNow());
         deepSleepButton.setEnabled(idle && !fcArmedNow());
         overwatchButton.setEnabled(idle && !fcArmedNow());
@@ -4597,9 +4397,9 @@ public class MainWindow extends JFrame {
      */
     private void disconnectToStandby() {
         Connection c = connection;
-        if (c != null && !c.getLink().isSpectator() && !phoneAsleep && !fcArmedNow() && c.getLink().getState() == ControlLink.State.READY
+        if (c != null && !c.getLink().isSpectator() && !power.phoneAsleep && !fcArmedNow() && c.getLink().getState() == ControlLink.State.READY
                 && c.getLink().getTelemetry().getPhonePcBuild() >= 21) {
-            for (int i = 0; i < 3; i++) c.getLink().sendPowerMode(ControlLink.POWER_STANDBY, checkIntervalMin);
+            for (int i = 0; i < 3; i++) c.getLink().sendPowerMode(ControlLink.POWER_STANDBY, power.checkIntervalMin);
             String ip = config.getString(IP_KEY);
             if (!ip.isEmpty()) standbyPhones.put(ip, config.getString(Names.PHONE_NAME_KEY));
             logLine("Phone in standby: CONNECT wakes it in ~2 s.");
@@ -4631,7 +4431,7 @@ public class MainWindow extends JFrame {
 
     /** In STANDBY no sticks go out: the session sees "no radio" and, on waking, waits for a low throttle again. */
     private boolean sticksPaused() {
-        return powerWanted != ControlLink.POWER_NORMAL || phoneAsleep;
+        return power.sticksPaused();
     }
 
     private void refreshLink() {
@@ -4680,20 +4480,20 @@ public class MainWindow extends JFrame {
             videoView.setIdleText("Spectator: waiting for the pilot PC...");
         } else if (state == ControlLink.State.SPECTATING && !video.hasStream()) {
             videoView.setIdleText("Spectator: waiting for the pilot's video...");
-        } else if (phoneAsleep) {
+        } else if (power.phoneAsleep) {
             videoView.setIdleText(!link.isDormant() ? "Waking the phone at its next check..."
-                    : phoneOverwatching ? "OVERWATCH - alerts in the map window"
+                    : power.phoneOverwatching ? "OVERWATCH - alerts in the map window"
                     : "DEEP SLEEP");
         } else if (state != ControlLink.State.READY && state != ControlLink.State.SPECTATING) {
             videoView.setIdleText("Waiting for the link...");
-        } else if (powerWanted == ControlLink.POWER_STANDBY) {
+        } else if (power.wanted == ControlLink.POWER_STANDBY) {
             videoView.setIdleText("STANDBY - camera off");
         } else if (!video.hasStream()) {
             videoView.setIdleText("Starting the phone's camera...");
         } else {
             videoView.setIdleText("Waiting for the first key frame...");
         }
-        if (state == ControlLink.State.READY && !phoneAsleep) awaitingWake = false;
+        if (state == ControlLink.State.READY && !power.phoneAsleep) power.awaitingWake = false;
         switch (state) {
             case READY -> {
                 // M14 (1.0.49): green only while the phone is heard - not for the 2 s before the link counts as lost
@@ -4966,8 +4766,8 @@ public class MainWindow extends JFrame {
                     + "and is recorded. Under 20 % battery or too hot: deep sleep.</html>";
             case ControlLink.POWER_STANDBY -> "<html>STANDBY - camera off, GPS and telemetry slowed. PILOT UAV: back in ~2 s.</html>";
             case ControlLink.POWER_DEEP_SLEEP -> "<html>DEEP SLEEP - drops the link and sleeps, "
-                    + (SleepCheck.isAlways(checkIntervalMin) ? "always listening. PILOT UAV: at once.</html>"
-                    : "checking in every " + checkIntervalMin + " min. PILOT UAV: at its next check.</html>");
+                    + (SleepCheck.isAlways(power.checkIntervalMin) ? "always listening. PILOT UAV: at once.</html>"
+                    : "checking in every " + power.checkIntervalMin + " min. PILOT UAV: at its next check.</html>");
             default -> "<html>Back to normal: camera, GPS, sticks.</html>";
         };
         powerStatus.setText(demo);
@@ -5029,7 +4829,6 @@ public class MainWindow extends JFrame {
         return popMapButton;
     }
 
-
     /** The map window closed, so the pilot opens it with POP OUT MAP when the tour asks. */
     void tourHideMapWindow() {
         if (mapWindow != null && mapWindow.isVisible()) toggleMapWindow();
@@ -5088,7 +4887,7 @@ public class MainWindow extends JFrame {
             overwatch.drop(n);
             lastCell.remove(n.toLowerCase(Locale.ROOT));
             if (crashed.keySet().removeIf(k -> k.equalsIgnoreCase(n))) saveCrashed();
-            if (asleepPhones.values().removeIf(a -> n.equalsIgnoreCase(a.name()))) saveAsleep();
+            power.forgetNamed(n);
             standbyPhones.values().removeIf(n::equalsIgnoreCase);
             if (fleet != null) fleet.cancel(n);
             PossiblyFlying.pc().markDown(n);
