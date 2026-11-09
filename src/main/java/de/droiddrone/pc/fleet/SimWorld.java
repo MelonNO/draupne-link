@@ -51,7 +51,7 @@ final class SimWorld {
      */
     private static final java.util.concurrent.ConcurrentHashMap<Long, BufferedImage> SKIES = new java.util.concurrent.ConcurrentHashMap<>();
 
-    private static BufferedImage sky(int w, int h, boolean night) {
+    static BufferedImage sky(int w, int h, boolean night) {
         long key = (long) w << 32 | (long) h << 1 | (night ? 1 : 0);
         BufferedImage img = SKIES.get(key);
         if (img != null) return img;
