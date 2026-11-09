@@ -33,6 +33,12 @@ public final class VirtualFleet {
     public static final long HEARTBEAT_MS = 2000;
     /** ...and a file older than this is a fleet that ended without tidying up: ignored. */
     public static final long STALE_MS = 10_000;
+    /**
+     * Beside {@link #FILE}: DRAUPNE Link asks the fleet program to end (the tour's Overwatch demo needs the loopback
+     * drones to itself). The fleet program looks for it every {@link #STOP_POLL_MS} and ends as its window's close does.
+     */
+    public static final String STOP_FILE = "virtual-fleet.stop";
+    public static final long STOP_POLL_MS = 300;
     /** The first virtual phone's loopback address is 127.0.0.FIRST_HOST, the next one up, and so on. */
     public static final int FIRST_HOST = 11;
 
@@ -71,6 +77,50 @@ public final class VirtualFleet {
             cachedAt = now;
             everRead = true;
             return cached;
+        }
+    }
+
+    /** As {@link #announced()}, but read from the file now, not up to {@link #CACHE_MS} old (a fleet just closed). */
+    public static List<Drone> announcedNow() {
+        synchronized (cacheLock) {
+            everRead = false;
+        }
+        return announced();
+    }
+
+    /** The stop request's file. */
+    public static Path stopFile() {
+        return AppPaths.dataDir().resolve(STOP_FILE);
+    }
+
+    /** Asks a running fleet program to end (it takes its drones and its announcement with it). */
+    public static void requestStop() throws IOException {
+        requestStop(stopFile());
+    }
+
+    static void requestStop(Path stop) throws IOException {
+        Files.createDirectories(stop.getParent());
+        Files.writeString(stop, Long.toString(System.currentTimeMillis()), StandardCharsets.UTF_8);
+    }
+
+    /**
+     * The fleet program's side: true once a stop was asked (the request is taken away). A request left from before the
+     * program started (an older fleet that never read it) doesn't count: see {@link #clearStop}.
+     */
+    public static boolean stopRequested(Path stop) {
+        try {
+            return Files.deleteIfExists(stop);
+        } catch (IOException e) {
+            return Files.exists(stop);
+        }
+    }
+
+    /** At the fleet program's start: an old request is not for this one. */
+    public static void clearStop(Path stop) {
+        try {
+            Files.deleteIfExists(stop);
+        } catch (IOException ignored) {
+            // asked again if it matters
         }
     }
 
@@ -151,6 +201,9 @@ public final class VirtualFleet {
             Files.deleteIfExists(file);
         } catch (IOException ignored) {
             // stale within STALE_MS anyway
+        }
+        synchronized (cacheLock) {
+            everRead = false; // in this program (the tour's own fleet): gone at once, not up to CACHE_MS later
         }
     }
 }

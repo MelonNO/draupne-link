@@ -137,6 +137,39 @@ class TourScenarioTest {
         waitFor(() -> alerted.get() == second.watcher(), 40_000, "the second run's alert\n" + String.join("\n", log));
     }
 
+    /**
+     * The pilot (2026-11-09): "when the tour is reentered or the overwatch tour is reentered the BTR part actually
+     * starts as it now only works once". A pilot who knows the tour clicks through FLEET, THE ROWS, MODES and THE EYES
+     * in a few seconds, so the BTR is sent before the drones are even in OVERWATCH (the window waits up to 4 s for
+     * their names first). On a second run in the same program, sent that early, the watcher still finds it. (The
+     * cause in the pilot's log was another: the pilot's own virtual fleet was open, and the tour's drones were refused.)
+     */
+    @Test
+    void aBtrSentBeforeTheModesStillAlertsOnASecondRun() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        TourScenario first = TourScenario.start(config, null, log::add, new TourScenario.Listener() { });
+        first.driveInNow();
+        first.close();
+
+        AtomicReference<VirtualDrone> alerted = new AtomicReference<>();
+        TourScenario second = TourScenario.start(config, null, log::add, new TourScenario.Listener() {
+            @Override
+            public void overwatchAlert(VirtualDrone w) {
+                alerted.set(w);
+            }
+        });
+        closing.add(second);
+        second.driveInNow(); // NEXT on THE EYES, before the modes went out
+        Thread.sleep(4000); // the window's wait for the names
+        DatagramSocket pc = new DatagramSocket(0, InetAddress.getLoopbackAddress());
+        closing.add(pc);
+        java.util.Map<String, Integer> tokens = new java.util.HashMap<>();
+        for (VirtualDrone d : second.overwatchers()) tokens.put(d.name(), 0x7a11 + tokens.size());
+        second.placeModes(new InetSocketAddress(InetAddress.getLoopbackAddress(), pc.getLocalPort()), tokens, 2);
+        waitFor(() -> alerted.get() == second.watcher(), TourScenario.DRIVE_IN_AFTER_MS + 40_000,
+                "the alert of a BTR sent before the modes");
+    }
+
     @Test
     void armedInTheBtrsWayTheDroneIsHitBreaksAndItsLinkGoesSilent() throws Exception {
         AtomicReference<VirtualDrone> connected = new AtomicReference<>(), crashed = new AtomicReference<>();

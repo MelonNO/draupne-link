@@ -52,8 +52,12 @@ final class Tour {
         String text;
         /** What is lit; null = a centred box (the welcome, the finish) over the main window. */
         Supplier<JComponent> anchor;
-        /** Done as the step comes up; and undone (after) when it is over. */
+        /** Done as the step comes up; and undone (after) when it is over, however it ends. */
         Runnable before, after;
+        /** Done when the pilot moves on from it (NEXT, or on by itself) - never when the tour closes there. */
+        Runnable onNext;
+        /** The step needs the tour's drones: they are started (or the pilot's fleet closed first) as it comes up. */
+        boolean finale;
         /** The pilot must press the lit control (or one of the targets) before NEXT works. */
         boolean press;
         /** Areas the mouse still works over (the header on the menu steps, the map on the map steps). */
@@ -91,6 +95,16 @@ final class Tour {
 
         Step after(Runnable r) {
             after = r;
+            return this;
+        }
+
+        Step onNext(Runnable r) {
+            onNext = r;
+            return this;
+        }
+
+        Step needsFinale() {
+            finale = true;
             return this;
         }
 
@@ -172,6 +186,12 @@ final class Tour {
     private TourNotice notice;
     private final Timer retry = new Timer(150, e -> show());
     private final TourFinale finale;
+    /** SETUP > Overwatch demo: without the tour's drones there is nothing to show, so it ends. */
+    private boolean demo;
+    /** The tour's drones asked for once: a refusal isn't asked again at every later fleet step. */
+    private boolean finaleTried;
+    /** Where the pilot moved the box and how wide it was made: kept for the rest of the tour. */
+    private final NoticePlace noticePlace = new NoticePlace();
 
     /** @param only the features to show the steps of (the tour of what is new); null for the whole tour */
     private Tour(MainWindow main, java.util.Collection<String> only) {
@@ -259,7 +279,8 @@ final class Tour {
                 + "These three are examples. Press it.", () -> main.mapWindow().tourPins()).before(() -> {
                     main.mapWindow().map().showExamplePins(true);
                     examplePins = true;
-                }).press().live(map));
+                }).after(() -> main.mapWindow().tourClosePins()) // the pins sheet goes with its step (the pilot, 2026-11-09)
+                .press().live(map));
         steps.add(new Step("TOOLS", "RULER: lengths, bearings, height profile. RADIO HORIZON and GCS SEARCH are for traditional "
                 + "radios, not 5G. GO TO: centre on a grid. CLIPS: overwatch events. PREVIOUS FLIGHTS: replay.",
                 () -> main.mapWindow().tourRuler())
@@ -278,7 +299,7 @@ final class Tour {
         BooleanSupplier noDrones = () -> !finale.started();
         steps.add(new Step("FLEET", "Every phone at a glance; modes changed without connecting. Press it.",
                 () -> main.mapWindow().tourFleetTab()).transition(done -> main.mapWindow().tourSwitch(null, done))
-                .before(this::startFinale).press().live(map).reopen(main::showMapWindow).of(FEATURE_FLEET));
+                .before(main::showMapWindow).needsFinale().press().live(map).reopen(main::showMapWindow).of(FEATURE_FLEET));
         steps.add(new Step("THE ROWS", "A row a phone: mode sign, drone V/cell, phone %, last heard, ring to next check-in. "
                 + "Click one: it shows on the map.", () -> main.mapWindow().tourFleetRows()).live(map).reopen(main::showMapWindow)
                 .of(FEATURE_FLEET));
@@ -286,7 +307,7 @@ final class Tour {
                 + "check-in, without connecting. PILOT UAV flies it.", () -> main.mapWindow().tourFleetStrip()).live(map)
                 .reopen(main::showMapWindow).of(FEATURE_FLEET));
         steps.add(new Step("THE EYES", "Eyes are drones on OVERWATCH; the cones are what they see. Anything entering a "
-                + "cone alerts you.", map).before(this::showTourArea).after(this::driveIn).live(map).skip(noDrones)
+                + "cone alerts you.", map).before(this::showTourArea).onNext(this::driveIn).live(map).skip(noDrones)
                 .reopen(main::showMapWindow).of(FEATURE_FLEET));
         steps.add(new Step("INTEL", "Enemy movement reported near the drones. Attack may come soon. Stand by.",
                 () -> main.mapWindow().tourFleetRows()).live(map).skip(noDrones).reopen(main::showMapWindow)
@@ -319,12 +340,21 @@ final class Tour {
         };
     }
 
-    private void startFinale() {
+    /**
+     * The tour's drones up (true), or why not said. 2026-11-09 (the pilot: "the overwatch demo is broken, the flight
+     * paths are gone, the launch point is gone..."): with the pilot's own virtual fleet open the drones were refused
+     * with a line in the log only, and the steps ran on an empty map. Now the pilot is asked to close the fleet, and a
+     * refusal is said where it can be seen.
+     */
+    private boolean startFinale() {
         main.showMapWindow(); // the Overwatch demo starts here, the map window maybe closed
-        if (finale.started()) return;
-        if (!finale.start()) {
+        if (finale.started()) return true;
+        if (!finale.start() && finale.fleetOpen() && closePilotsFleet()) finale.start();
+        if (!finale.started()) {
             main.logLine("Tour: no drones for the fleet steps - " + finale.refused());
-            return;
+            JOptionPane.showMessageDialog(main, (demo ? "Demo not started. " : "No tour drones: BTR part skipped. ")
+                    + finale.refused(), demo ? "Overwatch demo" : "Tour", JOptionPane.INFORMATION_MESSAGE);
+            return false;
         }
         showTourArea();
         // 1.0.52 (the pilot: "only Zulu shows at once, Whiskey after a while"): asleep, a drone answers no name
@@ -345,6 +375,57 @@ final class Tour {
             }
         });
         wait.start();
+        return true;
+    }
+
+    /** Asks to close the pilot's virtual fleet; closed: true (its drones and announcement gone, up to 8 s). */
+    private boolean closePilotsFleet() {
+        Object[] options = {"Close it", "Cancel"};
+        int answer = JOptionPane.showOptionDialog(main, "The virtual fleet is open.\nClose it for the tour's drones?",
+                "Virtual fleet", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
+        if (answer != JOptionPane.YES_OPTION) return false;
+        try {
+            de.droiddrone.pc.fleet.VirtualFleet.requestStop();
+        } catch (java.io.IOException e) {
+            main.logLine("Virtual fleet: can't ask it to close: " + e.getMessage());
+            return false;
+        }
+        java.awt.Cursor was = main.getCursor();
+        main.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.WAIT_CURSOR));
+        boolean gone;
+        try {
+            gone = waitUntil(() -> de.droiddrone.pc.fleet.VirtualFleet.announcedNow().isEmpty(), 8000);
+        } finally {
+            main.setCursor(was);
+        }
+        main.logLine(gone ? "Virtual fleet closed for the tour." : "Virtual fleet didn't close: close its window.");
+        return gone;
+    }
+
+    /** Waits off the Swing thread (the window keeps painting) until ok, at most ms; whether it came. */
+    static boolean waitUntil(BooleanSupplier ok, long ms) {
+        java.awt.SecondaryLoop loop = java.awt.Toolkit.getDefaultToolkit().getSystemEventQueue().createSecondaryLoop();
+        java.util.concurrent.atomic.AtomicBoolean came = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread t = new Thread(() -> {
+            long end = System.currentTimeMillis() + ms;
+            try {
+                while (System.currentTimeMillis() < end) {
+                    if (ok.getAsBoolean()) {
+                        came.set(true);
+                        return;
+                    }
+                    Thread.sleep(200);
+                }
+            } catch (InterruptedException ignored) {
+                // over
+            } finally {
+                loop.exit();
+            }
+        }, "tourWait");
+        t.setDaemon(true);
+        t.start();
+        loop.enter();
+        return came.get();
     }
 
     /** The BTR sets off at the pilot's NEXT on the eyes. */
@@ -424,6 +505,7 @@ final class Tour {
      */
     static void demo(MainWindow main) {
         Tour t = new Tour(main, null);
+        t.demo = true;
         run(t, Math.max(0, t.fleetStepIndex()));
     }
 
@@ -449,11 +531,22 @@ final class Tour {
     private void next() {
         if (notice != null) notice.dismiss();
         notice = null;
+        movedOn();
         after();
         index++;
         tries = 0;
         generation++;
-        while (index < steps.size() && steps.get(index).skip != null && steps.get(index).skip.getAsBoolean()) index++;
+        for (; index < steps.size(); index++) {
+            Step c = steps.get(index);
+            if (c.finale && !finaleTried) {
+                finaleTried = true;
+                if (!startFinale() && demo) {
+                    end("no tour drones");
+                    return;
+                }
+            }
+            if (c.skip == null || !c.skip.getAsBoolean()) break;
+        }
         if (index >= steps.size()) {
             finished();
             return;
@@ -482,9 +575,12 @@ final class Tour {
 
     /** EXIT TOUR, or a window gone: over, cleanly. */
     private void end() {
+        end(notice != null && notice.endReason != null ? notice.endReason : "a new tour started");
+    }
+
+    private void end(String why) {
         if (index >= 0 && index < steps.size()) {
             // said in the log, so a tour that "skipped" its end can be told from one that was closed
-            String why = notice != null && notice.endReason != null ? notice.endReason : "a new tour started";
             main.logLine("Tour: ended at step " + (index + 1) + " (" + steps.get(index).title + "): " + why + ".");
         }
         if (notice != null) notice.dismiss();
@@ -502,6 +598,19 @@ final class Tour {
         finale.close();
         main.tourHideSleep(false);
         if (current == this) current = null;
+    }
+
+    /**
+     * The pilot moved on from the step: what it starts on NEXT (the BTR at THE EYES). Not on the tour's end: closed
+     * there (the X), it sent the BTR off as the drones were being removed (the log, 2026-11-09).
+     */
+    private void movedOn() {
+        if (index < 0 || index >= steps.size() || steps.get(index).onNext == null) return;
+        try {
+            steps.get(index).onNext.run();
+        } catch (RuntimeException e) {
+            main.logLine("Tour: step " + (index + 1) + " could not go on: " + e);
+        }
     }
 
     /** The step that is over undoes what it set up (the sleep buttons' demo, the open flights window). */
@@ -560,7 +669,7 @@ final class Tour {
             }
         }
         boolean centred = s.legend || s.finish;
-        notice = new TourNotice(anchor, s, index + 1, steps.size(), this::next, this::end, centred, targets);
+        notice = new TourNotice(anchor, s, index + 1, steps.size(), this::next, this::end, centred, targets, noticePlace);
         if (s.live != null) {
             try {
                 notice.setLive(s.live.get());
@@ -579,11 +688,26 @@ final class Tour {
     }
 
     /**
+     * Where the pilot put the tour's box and how wide it was made (2026-11-09, the pilot: "make it possible to resize
+     * and move the pop up window for the MAP during the tour" - the box sat over the map): kept for the rest of the
+     * tour, the place per window. Double-click the box: back where the tour puts it.
+     */
+    static final class NoticePlace {
+        int width = TourNotice.WIDTH;
+        final java.util.Map<Component, java.awt.Point> at = new java.util.WeakHashMap<>();
+    }
+
+    /**
      * The notice: pointer at the control, the text, STEP i OF n, NEXT across the bottom and a cross top right that
      * exits the tour; the rest of the window dims. Centred (the welcome, the finish): a box in the middle, no pointer.
+     * Dragged, it stays where the pilot put it (no pointer then); its bottom right corner makes it wider or narrower.
      */
     static final class TourNotice extends JComponent {
-        private static final int WIDTH = 460;
+        static final int WIDTH = 460;
+        /** The narrowest and widest the pilot can make it. */
+        static final int MIN_WIDTH = 320, MAX_WIDTH = 900;
+        /** The resize grip in the bottom right corner. */
+        private static final int GRIP = 14;
         private static final int PAD = 12;
         private static final int POINTER = 8;
         private static final int GAP = 6;
@@ -606,9 +730,14 @@ final class Tour {
 
         private final JComponent anchor;
         private final String title;
-        private final List<String> lines;
+        private final String text, tip;
+        private List<String> lines;
         /** The tip under the text, wrapped; empty for none. */
-        private final List<String> tipLines;
+        private List<String> tipLines;
+        /** Where the pilot put it and how wide (shared by the tour's notices). */
+        private final NoticePlace spot;
+        /** Placed by the pilot (dragged): no pointer, not following the control. */
+        private boolean moved;
         private final String counter;
         private final JButton next = Theme.primaryButton("Next");
         private final JButton exit = new CloseButton();
@@ -649,7 +778,15 @@ final class Tour {
 
         TourNotice(JComponent anchor, Step s, int step, int of, Runnable onNext, Runnable onEnd, boolean centred,
                    List<JComponent> targets) {
+            this(anchor, s, step, of, onNext, onEnd, centred, targets, new NoticePlace());
+        }
+
+        TourNotice(JComponent anchor, Step s, int step, int of, Runnable onNext, Runnable onEnd, boolean centred,
+                   List<JComponent> targets, NoticePlace spot) {
             this.anchor = anchor;
+            this.spot = spot;
+            this.text = s.text;
+            this.tip = s.tip;
             this.title = s.title;
             this.onEnd = onEnd;
             this.centred = centred;
@@ -662,8 +799,7 @@ final class Tour {
             counter = s.finish || s.legend ? "" : "STEP " + step + " OF " + of;
             setOpaque(false);
             setLayout(null);
-            lines = wrap(s.text, getFontMetrics(textFont()), WIDTH - 2 * PAD);
-            tipLines = s.tip == null || s.tip.isBlank() ? List.of() : wrap(s.tip, getFontMetrics(tipFont()), WIDTH - 2 * PAD);
+            wrapText();
             next.setText(step == of ? "Done" : s.legend ? "Start" : "Next");
             next.addActionListener(e -> onNext.run());
             exit.addActionListener(e -> {
@@ -673,6 +809,11 @@ final class Tour {
             exit.setVisible(step != of);
             add(next);
             add(exit);
+            if (!centred) {
+                MouseAdapter grab = new Grab();
+                addMouseListener(grab);
+                addMouseMotionListener(grab);
+            }
             waitingForPress = s.press;
             waitingForEvent = s.waitFor != null;
             if (waitingForEvent) {
@@ -695,6 +836,110 @@ final class Tour {
 
         void setExtra(JComponent extra) {
             this.extra = extra;
+        }
+
+        private int boxWidth() {
+            return centred ? WIDTH : spot.width;
+        }
+
+        private void wrapText() {
+            int w = boxWidth() - 2 * PAD;
+            lines = wrap(text, getFontMetrics(textFont()), w);
+            tipLines = tip == null || tip.isBlank() ? List.of() : wrap(tip, getFontMetrics(tipFont()), w);
+        }
+
+        /** The window it is in (the key of the pilot's place for it): its top component, or null. */
+        private Component window() {
+            Component top = anchor.getParent();
+            if (top == null) return null;
+            while (top.getParent() != null && !(top instanceof Window)) top = top.getParent();
+            return top;
+        }
+
+        private boolean inGrip(java.awt.Point p) {
+            return p.x >= getWidth() - GRIP && p.y >= getHeight() - GRIP;
+        }
+
+        /** The box dragged by the pilot: moved anywhere in the window, or wider/narrower by its corner. */
+        private final class Grab extends MouseAdapter {
+            private java.awt.Point from;
+            private Rectangle start;
+            private boolean resizing;
+
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (!SwingUtilities.isLeftMouseButton(e)) return;
+                from = e.getLocationOnScreen();
+                start = getBounds();
+                resizing = inGrip(e.getPoint());
+            }
+
+            @Override
+            public void mouseDragged(MouseEvent e) {
+                if (from == null) return;
+                int dx = e.getXOnScreen() - from.x, dy = e.getYOnScreen() - from.y;
+                if (resizing) resizeTo(start.width + dx);
+                else moveTo(start.x + dx, start.y + dy);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                from = null;
+            }
+
+            @Override
+            public void mouseMoved(MouseEvent e) {
+                setCursor(java.awt.Cursor.getPredefinedCursor(inGrip(e.getPoint()) ? java.awt.Cursor.SE_RESIZE_CURSOR
+                        : java.awt.Cursor.MOVE_CURSOR));
+            }
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && !inGrip(e.getPoint())) home();
+            }
+        }
+
+        /** Moved by the pilot to x, y (the layer's): kept there for the rest of the tour in this window. */
+        void moveTo(int x, int y) {
+            Component w = window();
+            if (w == null) return;
+            spot.at.put(w, new java.awt.Point(x, y));
+            place();
+            repaint();
+        }
+
+        /** Made this wide by the pilot (within MIN_WIDTH..MAX_WIDTH and the window): kept for the rest of the tour. */
+        void resizeTo(int width) {
+            Component layer = getParent();
+            int max = Math.min(MAX_WIDTH, layer == null ? MAX_WIDTH : Math.max(MIN_WIDTH, layer.getWidth() - 8));
+            int w = Math.max(MIN_WIDTH, Math.min(max, width));
+            if (w == spot.width) return;
+            spot.width = w;
+            wrapText();
+            place();
+            repaint();
+        }
+
+        /** Back where the tour puts it (a double-click). */
+        void home() {
+            Component w = window();
+            if (w != null) spot.at.remove(w);
+            place();
+            repaint();
+        }
+
+        /** Tests: where the box is now, and whether it was placed by the pilot. */
+        boolean movedForTest() {
+            return moved;
+        }
+
+        /** The top of the window's content in the layer: under the title bar, which stays free for moving and resizing the window. */
+        private int contentTop() {
+            JRootPane root = SwingUtilities.getRootPane(this);
+            Component layer = getParent();
+            if (root == null || layer == null || root.getContentPane().getParent() == null) return 0;
+            java.awt.Container cp = root.getContentPane();
+            return Math.max(0, SwingUtilities.convertPoint(cp.getParent(), cp.getX(), cp.getY(), layer).y);
         }
 
         /** The control was pressed (a press step): when it then goes from the window, the step moves on at once. */
@@ -890,7 +1135,7 @@ final class Tour {
         }
 
         private int height() {
-            int pointer = centred ? 0 : POINTER;
+            int pointer = centred || moved ? 0 : POINTER;
             return pointer + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 12 + 34 + 4;
         }
 
@@ -898,25 +1143,36 @@ final class Tour {
         private boolean place() {
             Component layer = getParent();
             if (layer == null) return false;
+            Component win = centred ? null : window();
+            java.awt.Point put = win == null ? null : spot.at.get(win);
+            moved = put != null;
+            int width = Math.min(boxWidth(), Math.max(MIN_WIDTH, layer.getWidth()));
             int h = height();
+            int topLimit = contentTop(); // the title bar stays free: the window moves and resizes during the tour
             int x, y;
             if (centred) {
-                x = Math.max(0, (layer.getWidth() - WIDTH) / 2);
+                x = Math.max(0, (layer.getWidth() - width) / 2);
                 y = Math.max(0, (layer.getHeight() - h) / 2);
+                above = false;
+            } else if (moved) {
+                x = put.x;
+                y = put.y;
                 above = false;
             } else {
                 Rectangle a = anchorBounds();
                 if (a == null) return false;
-                x = Math.max(0, Math.min(a.x + a.width / 2 - WIDTH / 2, layer.getWidth() - WIDTH));
-                above = a.y + a.height + GAP + h > layer.getHeight() && a.y - GAP - h >= 0;
+                x = a.x + a.width / 2 - width / 2;
+                above = a.y + a.height + GAP + h > layer.getHeight() && a.y - GAP - h >= topLimit;
                 y = above ? a.y - GAP - h : a.y + a.height + GAP;
             }
-            Rectangle r = new Rectangle(x, Math.max(0, Math.min(y, layer.getHeight() - h)), WIDTH, h);
+            x = Math.max(0, Math.min(x, layer.getWidth() - width));
+            y = Math.max(centred ? 0 : topLimit, Math.min(y, layer.getHeight() - h));
+            Rectangle r = new Rectangle(x, y, width, h);
             if (!r.equals(getBounds())) setBounds(r);
-            int top = above || centred ? 0 : POINTER;
+            int top = above || centred || moved ? 0 : POINTER;
             int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 8 - PAD;
-            next.setBounds(PAD, by, WIDTH - 2 * PAD, 30); // across the box: the exit is the cross top right
-            exit.setBounds(WIDTH - PAD - CLOSE + 6, top + PAD - 6, CLOSE, CLOSE);
+            next.setBounds(PAD, by, width - 2 * PAD, 30); // across the box: the exit is the cross top right
+            exit.setBounds(width - PAD - CLOSE + 6, top + PAD - 6, CLOSE, CLOSE);
             return true;
         }
 
@@ -951,19 +1207,20 @@ final class Tour {
                 } else {
                     g.translate(0, Math.round((above ? 6 : -6) * (1 - easeIn)));
                 }
-                int top = above || centred ? 0 : POINTER, boxH = h - (centred ? 0 : POINTER) - 1;
+                boolean pointer = !centred && !moved;
+                int top = above || !pointer ? 0 : POINTER, boxH = h - (pointer ? POINTER : 0) - 1;
                 Rectangle a = anchorBounds();
                 int tipX = a == null ? w / 2 : Math.min(Math.max(a.x + a.width / 2 - getX(), PAD + POINTER), w - PAD - POINTER);
                 Path2D box = new Path2D.Float();
                 box.moveTo(0, top);
-                if (!above && !centred) {
+                if (!above && pointer) {
                     box.lineTo(tipX - POINTER, top);
                     box.lineTo(tipX, 0);
                     box.lineTo(tipX + POINTER, top);
                 }
                 box.lineTo(w - 1, top);
                 box.lineTo(w - 1, top + boxH);
-                if (above && !centred) {
+                if (above && pointer) {
                     box.lineTo(tipX + POINTER, top + boxH);
                     box.lineTo(tipX, top + boxH + POINTER);
                     box.lineTo(tipX - POINTER, top + boxH);
@@ -1005,6 +1262,12 @@ final class Tour {
                     }
                 }
                 if (legend) paintLegend(g, y + 8);
+                if (!centred) { // the grip: drag the corner to make the box wider or narrower
+                    g.setColor(Theme.MUTED);
+                    g.setStroke(new BasicStroke(1.2f));
+                    int gx = w - 3, gy = top + boxH - 2;
+                    for (int i = 1; i <= 3; i++) g.drawLine(gx - 3 * i, gy, gx, gy - 3 * i);
+                }
             } finally {
                 g.dispose();
             }

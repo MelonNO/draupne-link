@@ -25,11 +25,35 @@ public final class FleetMain {
         java.util.function.Consumer<String> console = line -> System.out.println(line);
         Fleet fleet = new Fleet(config, VirtualFleet.file(), console);
         Runtime.getRuntime().addShutdownHook(new Thread(fleet::close, "fleetClose"));
+        VirtualFleet.clearStop(VirtualFleet.stopFile()); // an old request isn't for this fleet
         for (int i = 0; i < START_DRONES; i++) {
             fleet.addAtLaunch(fleet.freeName(), Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON);
         }
         fleet.startHeartbeat();
+        watchForStop(VirtualFleet.stopFile());
         System.out.println("Virtual fleet: " + fleet.drones().size() + " drones up. In DRAUPNE Link they show in the PHONE list as VIRTUAL.");
         SwingUtilities.invokeLater(() -> de.droiddrone.pc.gui.FleetPanel.open(fleet, configFile));
+    }
+
+    /**
+     * DRAUPNE Link's stop request (the Overwatch demo, 2026-11-09): the program ends as closing its window does - the
+     * shutdown hook closes the fleet and takes its announcement away.
+     */
+    private static void watchForStop(Path stop) {
+        Thread t = new Thread(() -> {
+            while (true) {
+                try {
+                    Thread.sleep(VirtualFleet.STOP_POLL_MS);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (VirtualFleet.stopRequested(stop)) {
+                    System.out.println("Virtual fleet: DRAUPNE Link asked it to close.");
+                    System.exit(0);
+                }
+            }
+        }, "fleetStopWatch");
+        t.setDaemon(true);
+        t.start();
     }
 }

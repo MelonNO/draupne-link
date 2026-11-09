@@ -158,6 +158,97 @@ class TourTest {
         assertEquals("its window was closed", m.endReason, "and says why");
     }
 
+    private static java.awt.event.MouseEvent mouse(JComponent c, int id, int x, int y, int clicks) {
+        Rectangle b = c.getBounds();
+        return new java.awt.event.MouseEvent(c, id, System.currentTimeMillis(), java.awt.event.InputEvent.BUTTON1_DOWN_MASK,
+                x, y, b.x + x, b.y + y, clicks, false, java.awt.event.MouseEvent.BUTTON1);
+    }
+
+    /**
+     * The pilot (2026-11-09): "make it possible to resize and move the pop up window for the MAP during the tour" - the
+     * box sat over the map. Dragged, it stays where it was put, for the next steps too; its corner makes it wider (the
+     * text wraps to fewer lines); a double-click puts it back under its control.
+     */
+    @Test
+    void theBoxMovesAndResizesByMouseAndKeepsItForTheNextSteps() {
+        JLayeredPane layer = window(1366, 768);
+        JButton anchor = new JButton("MAP TYPE");
+        anchor.setBounds(100, 100, 120, 30);
+        layer.add(anchor, JLayeredPane.DEFAULT_LAYER);
+        Tour.NoticePlace place = new Tour.NoticePlace();
+        Tour.Step step = new Tour.Step("MAP TYPE", "Topo, paper map, satellite or OpenStreetMap. Viewed areas are kept "
+                + "offline. Press it and pick one of the four pictures for the map under the drone. The topo map is the "
+                + "default in Norway; satellite pictures show the ground as it looks from the air, OpenStreetMap the rest "
+                + "of the world.", () -> anchor);
+        Tour.TourNotice n = new Tour.TourNotice(anchor, step, 3, 30, () -> { }, () -> { }, false, null, place);
+        n.attachForTest(layer, 10_000);
+        Rectangle under = n.getBounds();
+        assertEquals(136, under.y, "first under its control: 100 + 30 + gap");
+        assertFalse(n.movedForTest());
+
+        // drag the box by its body
+        n.dispatchEvent(mouse(n, java.awt.event.MouseEvent.MOUSE_PRESSED, 40, 30, 1));
+        n.dispatchEvent(mouse(n, java.awt.event.MouseEvent.MOUSE_DRAGGED, 540, 330, 1));
+        n.dispatchEvent(mouse(n, java.awt.event.MouseEvent.MOUSE_RELEASED, 540, 330, 1));
+        assertTrue(n.movedForTest(), "placed by the pilot");
+        assertEquals(under.x + 500, n.getX());
+        assertEquals(under.y + 300, n.getY());
+        n.tickForTest();
+        assertEquals(under.y + 300, n.getY(), "the tour's tick leaves it where it was put");
+
+        // wider by its corner: fewer lines, so lower
+        int h = n.getHeight();
+        Rectangle b = n.getBounds();
+        n.dispatchEvent(mouse(n, java.awt.event.MouseEvent.MOUSE_PRESSED, b.width - 4, b.height - 4, 1));
+        n.dispatchEvent(mouse(n, java.awt.event.MouseEvent.MOUSE_DRAGGED, b.width - 4 + 300, b.height - 4, 1));
+        n.dispatchEvent(mouse(n, java.awt.event.MouseEvent.MOUSE_RELEASED, b.width - 4 + 300, b.height - 4, 1));
+        assertEquals(b.width + 300, n.getWidth(), "wider by the drag");
+        assertTrue(n.getHeight() < h, "the text on fewer lines: " + n.getHeight() + " < " + h);
+        n.resizeTo(10);
+        assertEquals(Tour.TourNotice.MIN_WIDTH, n.getWidth(), "never narrower than readable");
+        n.resizeTo(b.width + 300);
+
+        // the next step's box: same place, same width
+        n.dismiss();
+        JButton other = new JButton("COORDINATES");
+        other.setBounds(400, 60, 120, 30);
+        layer.add(other, JLayeredPane.DEFAULT_LAYER);
+        Tour.TourNotice m = new Tour.TourNotice(other, new Tour.Step("COORDINATES", "MGRS, UTM or degrees.", () -> other),
+                4, 30, () -> { }, () -> { }, false, null, place);
+        m.attachForTest(layer, 10_000);
+        assertEquals(new java.awt.Point(under.x + 500, under.y + 300), m.getLocation(), "where the pilot put the last one");
+        assertEquals(b.width + 300, m.getWidth(), "as wide as the pilot made it");
+
+        // a double-click: back under its control
+        m.dispatchEvent(mouse(m, java.awt.event.MouseEvent.MOUSE_CLICKED, 40, 30, 2));
+        assertFalse(m.movedForTest());
+        assertEquals(96, m.getY(), "under COORDINATES again: 60 + 30 + gap");
+    }
+
+    /**
+     * The window's title bar stays free during the tour (moving and resizing the map window): the box is never put over
+     * it, by the tour or by a drag.
+     */
+    @Test
+    void theBoxNeverGoesOverTheTitleBar() {
+        javax.swing.JRootPane root = new javax.swing.JRootPane();
+        javax.swing.JMenuBar bar = new javax.swing.JMenuBar(); // stands in for the title bar above the content
+        bar.setPreferredSize(new java.awt.Dimension(10, 40));
+        root.setJMenuBar(bar);
+        root.setSize(1366, 768);
+        root.doLayout();
+        root.getLayeredPane().doLayout();
+        JButton anchor = new JButton("FOLLOW");
+        anchor.setBounds(20, 690, 120, 30); // near the bottom: no room under it, so the box goes above
+        root.getContentPane().setLayout(null);
+        root.getContentPane().add(anchor);
+        Tour.Step step = new Tour.Step("MOVING AROUND", "Drag to pan, wheel to zoom.", () -> anchor);
+        Tour.TourNotice n = new Tour.TourNotice(anchor, step, 15, 30, () -> { }, () -> { }, false, null);
+        n.attachForTest(root.getLayeredPane(), 10_000);
+        n.moveTo(300, -50);
+        assertEquals(40, n.getY(), "dragged up: stops under the title bar");
+    }
+
     /** SETUP > Overwatch demo starts at the FLEET step, which every whole tour has, in front of the finale's steps. */
     @Test
     void theOverwatchDemoStartsAtTheFleetStep() {

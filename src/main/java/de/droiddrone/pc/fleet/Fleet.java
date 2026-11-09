@@ -43,6 +43,8 @@ public final class Fleet implements AutoCloseable {
     private final List<VirtualDrone> drones = new CopyOnWriteArrayList<>();
     private final FlightModel.Setup setup = new FlightModel.Setup();
     private volatile boolean closed;
+    /** The announcement's write and its withdrawal one at a time: a heartbeat mid-write never brings the file back after close. */
+    private final Object fileLock = new Object();
     private Thread heartbeat;
 
     /**
@@ -191,10 +193,13 @@ public final class Fleet implements AutoCloseable {
         if (announceFile == null || closed) return;
         List<VirtualFleet.Drone> list = new ArrayList<>();
         for (VirtualDrone d : drones) list.add(new VirtualFleet.Drone(d.address().getHostAddress(), d.port()));
-        try {
-            VirtualFleet.write(announceFile, list, System.currentTimeMillis());
-        } catch (IOException e) {
-            log("Fleet: can't announce the drones (" + e.getMessage() + ") - DRAUPNE Link won't find them");
+        synchronized (fileLock) {
+            if (closed) return;
+            try {
+                VirtualFleet.write(announceFile, list, System.currentTimeMillis());
+            } catch (IOException e) {
+                log("Fleet: can't announce the drones (" + e.getMessage() + ") - DRAUPNE Link won't find them");
+            }
         }
     }
 
@@ -219,10 +224,12 @@ public final class Fleet implements AutoCloseable {
     @Override
     public synchronized void close() {
         if (closed) return;
-        closed = true;
+        synchronized (fileLock) {
+            closed = true;
+            if (announceFile != null) VirtualFleet.withdraw(announceFile);
+        }
         if (heartbeat != null) heartbeat.interrupt();
         for (VirtualDrone d : drones) d.stop();
         drones.clear();
-        if (announceFile != null) VirtualFleet.withdraw(announceFile);
     }
 }
