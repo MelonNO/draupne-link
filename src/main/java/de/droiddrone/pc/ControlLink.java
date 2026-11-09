@@ -1474,6 +1474,9 @@ public class ControlLink {
      * profile for the tier right after this, before the config.
      */
     private void decideForcedTier(long now) {
+        // a session (re)starts: nothing calm about the link has been seen yet (1.0.53: the calm counted from 0, and a
+        // phone already at the normal top went sharp on the first tick)
+        lastCalmEnd = now;
         VideoMode mode = videoMode();
         Tier forced = mode.forced();
         if (forced != null && tier != forced) {
