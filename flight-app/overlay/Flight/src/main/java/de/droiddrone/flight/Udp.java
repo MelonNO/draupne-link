@@ -70,6 +70,7 @@ import de.droiddrone.common.Log;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
 import de.droiddrone.common.Observe;
+import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.PcAudio;
 import de.droiddrone.common.RcPath;
 import de.droiddrone.common.ReceiverBuffer;
@@ -136,7 +137,7 @@ public class Udp {
      * when told to (BEEPER) or when the phone's USB is out. Kept while the app runs (the PC sends them again within a
      * second of every session); static, as the Udp of a deep sleep's wake is a new one.
      */
-    static final byte IdleSticks = 0x78;
+    static final byte IdleSticks = PacketIds.IDLE_STICKS;
     private static volatile short[] idleSticks;
     /**
      * pc.34: the live audio for DRAUPNE Link 1.0.45 (PcAudio: AUDIO [0x79], again every second from the PC). The
@@ -188,7 +189,7 @@ public class Udp {
     /** A StartVideo refused in standby or deep sleep was logged (once, not every 2.5 s). */
     private boolean videoRefusedSaid;
     // spectator mode (DRAUPNE Link Spectate.java): codes clear of upstream's packet names
-    private static final byte SPECTATE_PILOT_QUERY = 0x60;
+    private static final byte SPECTATE_PILOT_QUERY = PacketIds.SPECTATE_PILOT_QUERY;
     /**
      * DRAUPNE names (pc.28), from DRAUPNE Link 1.0.35: NAME_QUERY [0x73][key UTF] is answered with NAME_REPLY
      * [0x74][key UTF][0 = phone][name UTF][device UTF][version UTF] (the name "" while this phone has none);
@@ -200,7 +201,7 @@ public class Udp {
      * [age s u16][armed u8: 0 no, 1 yes, 2 unknown][flown u8: a PC flies it][n u8][the pilot PC's address n bytes].
      * An older PC stops reading after the version and never sees it.
      */
-    static final byte NAME_QUERY = 0x73, NAME_REPLY = 0x74, NAME_ASSIGN = 0x75;
+    static final byte NAME_QUERY = PacketIds.NAME_QUERY, NAME_REPLY = PacketIds.NAME_REPLY, NAME_ASSIGN = PacketIds.NAME_ASSIGN;
 
     private void answerName(DatagramPacket packet, byte[] d, int len) {
         if (!keyMatches(d, len, 1)) return;
@@ -296,8 +297,8 @@ public class Udp {
         out.writeByte(PowerMode.mode()); // pc.39: what it is doing (0 normal, 1 standby, 2 deep sleep, 3 overwatch), for every PC's map
     }
 
-    private static final byte SPECTATE_PILOT_AT = 0x61;
-    private static final byte SPECTATE_NO_PILOT = 0x62;
+    private static final byte SPECTATE_PILOT_AT = PacketIds.SPECTATE_PILOT_AT;
+    private static final byte SPECTATE_NO_PILOT = PacketIds.SPECTATE_NO_PILOT;
     /**
      * DRAUPNE Link: starting the camera and encoder runs here, not on the thread that handles the PC's packets - that
      * one also passes the sticks to the flight controller and answers pings. In 2.3.0-pc.13 a video start that hung
@@ -319,7 +320,7 @@ public class Udp {
      * DRAUPNE Link: the PC's video profile, [0x6B][flags]: bit 0 = bad coverage mode - key frames sent twice, and
      * after every frame a parity packet (VIDEO_PARITY) from which the PC rebuilds any one lost packet of it.
      */
-    private static final byte VIDEO_PROFILE = 0x6B;
+    private static final byte VIDEO_PROFILE = PacketIds.VIDEO_PROFILE;
     private volatile boolean keyFramesTwice;
     /** Profile bit 1 (pc.26): a parity packet per group of PARITY_GROUP packets instead of one per frame. */
     private volatile boolean groupParity;
@@ -332,10 +333,10 @@ public class Udp {
      * zero-padded to the longest] (pc.26). Packets of a frame are grouped PARITY_GROUP at a time: any one lost
      * packet per group is rebuilt by the PC, where one parity over a 40-packet key frame rarely saved it.
      */
-    private static final byte VIDEO_PARITY_GROUP = 0x71;
+    private static final byte VIDEO_PARITY_GROUP = PacketIds.VIDEO_PARITY_GROUP;
     static final int PARITY_GROUP = 8;
     /** [0x72][step u8] (pc.26): the PC sets the encoder's bitrate step outright (StreamEncoder.baseBitRates). */
-    private static final byte SET_BITRATE = 0x72;
+    private static final byte SET_BITRATE = PacketIds.SET_BITRATE;
     /**
      * The video watchdog (pc.26): the encoder gave no output for this long while the stream should run - the camera
      * was taken away (heat, another app) or the encoder died - so the camera and encoder are started again. Before,
@@ -352,7 +353,7 @@ public class Udp {
      * the longest]. A weak 4G link (2026-11-01) lost a packet in about one frame of five, at random: with this the PC
      * rebuilds it instead of showing a broken picture. About one packet more per frame.
      */
-    private static final byte VIDEO_PARITY = 0x6C;
+    private static final byte VIDEO_PARITY = PacketIds.VIDEO_PARITY;
 
     /** XORs a packet's payload into the frame's parity. */
     private static void addParity(byte[] parity, byte[] buf, int offset, int length) {
@@ -378,7 +379,7 @@ public class Udp {
         streamOut(packetData.getData());
     }
     /** DRAUPNE Link: the PC asks for a key frame (one arrived damaged or lost). */
-    private static final byte KEY_FRAME_REQUEST = 0x6A;
+    private static final byte KEY_FRAME_REQUEST = PacketIds.KEY_FRAME_REQUEST;
     /** Answers go out from here: the receive thread, which carries the sticks, never waits on a send. One for the app. */
     private static final ExecutorService spectatorAnswers = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "spectatorAnswers");

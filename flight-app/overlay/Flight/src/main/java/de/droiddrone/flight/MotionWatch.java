@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.droiddrone.common.MotionDetector;
 import de.droiddrone.common.MotionRecord;
+import de.droiddrone.common.PacketIds;
 
 import static de.droiddrone.common.Logcat.log;
 
@@ -48,7 +49,7 @@ import static de.droiddrone.common.Logcat.log;
  * alert.
  */
 final class MotionWatch {
-    static final byte PACKET = 0x7C;
+    static final byte PACKET = PacketIds.DETECTION_SET;
     /** The PC sends DETECTION_SET once a second: silent this long, detection is off. */
     static final long REQUEST_FRESH_MS = 5000;
     /** Pictures this far apart at least (8 a second at most). */

@@ -23,8 +23,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The first byte of every datagram on the link's port says what it is. The codes live in PacketIds, UdpCommon and the
- * Common protocol classes; the phone app still keeps copies of its own (its sources aren't compiled here): no two
- * packets may share a code, and every copy must say what PacketIds says.
+ * Common protocol classes; the phone app names them under its own names (its sources aren't compiled here): no two
+ * packets may share a code, and every phone name must stand for the code PacketIds gives it.
  */
 class PacketIdsTest {
     /** Every packet code on the link port, by name. */
@@ -59,8 +59,9 @@ class PacketIdsTest {
         assertEquals(List.of(), clashes);
     }
 
-    /** {source file, its constant, the PC's constant it copies}. */
+    /** {source file, its constant, the PC's constant it stands for}. */
     static final String[][] COPIES = {
+            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "IdleSticks", "PacketIds.IDLE_STICKS"},
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_PILOT_QUERY", "PacketIds.SPECTATE_PILOT_QUERY"},
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_PILOT_AT", "PacketIds.SPECTATE_PILOT_AT"},
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SPECTATE_NO_PILOT", "PacketIds.SPECTATE_NO_PILOT"},
@@ -88,13 +89,17 @@ class PacketIdsTest {
         List<String> wrong = new ArrayList<>();
         for (String[] c : COPIES) {
             String src = Files.readString(root.resolve(c[0]));
-            Matcher m = Pattern.compile("\\b" + c[1] + "\\s*=\\s*(0x[0-9A-Fa-f]+|\\d+)\\s*[;,]").matcher(src);
+            Matcher m = Pattern.compile("\\b" + c[1] + "\\s*=\\s*(0x[0-9A-Fa-f]+|\\d+|PacketIds\\.\\w+)\\s*[;,]").matcher(src);
             if (!m.find()) {
                 wrong.add(c[0] + ": " + c[1] + " not found");
                 continue;
             }
-            int v = Integer.decode(m.group(1));
-            if ((byte) v != pc.get(c[2])) wrong.add(String.format("%s: %s = 0x%02X, %s = 0x%02X", c[0], c[1], v, c[2], pc.get(c[2])));
+            String v = m.group(1);
+            if (v.startsWith("PacketIds.")) {
+                if (!v.equals(c[2])) wrong.add(c[0] + ": " + c[1] + " = " + v + ", should be " + c[2]);
+            } else if ((byte) (int) Integer.decode(v) != pc.get(c[2])) {
+                wrong.add(String.format("%s: %s = %s, %s = 0x%02X", c[0], c[1], v, c[2], pc.get(c[2])));
+            }
         }
         assertEquals(List.of(), wrong);
     }

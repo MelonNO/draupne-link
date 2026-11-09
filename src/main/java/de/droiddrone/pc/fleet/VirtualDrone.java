@@ -607,7 +607,6 @@ public final class VirtualDrone {
     // ------------------------------------------------------------------ the session's packets (the buffer thread)
 
     private void bufferRun(int gen) {
-        long lastTick = System.currentTimeMillis();
         while (running && gen == threadsGen) {
             try {
                 ReceiverBuffer b = receiverBuffer;
@@ -617,11 +616,7 @@ public final class VirtualDrone {
                 }
                 SavedPacket packet;
                 while ((packet = b.getNextPacket()) != null) processData(packet.data);
-                // the buffer counts its timeouts in calls (one a millisecond on the phone): as many as ms went by
-                long now = System.currentTimeMillis();
-                int ticks = (int) Math.min(50, Math.max(0, now - lastTick));
-                lastTick = now;
-                for (int i = 0; i < ticks; i++) b.processTimer();
+                b.processTimer(); // its timers count the clock's milliseconds (1.0.54), not calls
                 Thread.sleep(2);
             } catch (InterruptedException e) {
                 return;

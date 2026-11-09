@@ -18,6 +18,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 
 import de.droiddrone.common.GuardedCopy;
+import de.droiddrone.common.PacketIds;
 
 import static de.droiddrone.common.Logcat.log;
 
@@ -31,7 +32,7 @@ import static de.droiddrone.common.Logcat.log;
  * app opens again by itself ({@link AppReplacedReceiver}) and listens for the PC, which reconnects.
  */
 final class RemoteUpdate {
-    static final byte PACKET = 0x77;
+    static final byte PACKET = PacketIds.REMOTE_UPDATE;
     /** What the record says (PHONE_UPDATE). */
     static final int IDLE = 0, DOWNLOADING = 1, INSTALLING = 2, TAP_NEEDED = 3, FAILED = 4, REFUSED_ARMED = 5, CURRENT = 6;
     /** A state other than IDLE is reported this long after it last changed (the PC shows the last one). */

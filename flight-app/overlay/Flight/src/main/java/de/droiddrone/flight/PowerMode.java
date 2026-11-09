@@ -22,6 +22,7 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.PowerManager;
 
+import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.SleepCheck;
 
 import java.io.DataOutputStream;
@@ -64,9 +65,9 @@ final class PowerMode {
     /** pc.36: overwatch sleep (OverwatchProtocol.MODE). */
     static final int OVERWATCH = de.droiddrone.common.OverwatchProtocol.MODE;
     /** PC to phone, unnumbered like StartVideo: [0x6E][mode u8][checkIntervalMin u8]. */
-    static final byte PACKET = 0x6E;
+    static final byte PACKET = PacketIds.POWER_MODE;
     /** pc.22: the sleep check's "still here" to the PC, and the PC's answer (0 = sleep on, 1 = wake). */
-    static final byte SLEEP_HELLO = 0x6F, SLEEP_ANSWER = 0x70;
+    static final byte SLEEP_HELLO = PacketIds.SLEEP_HELLO, SLEEP_ANSWER = PacketIds.SLEEP_ANSWER;
     /**
      * The "still here" goes out this soon after the window opens and then this often for the whole window (pc.30:
      * three in the first second often went nowhere - a Tailscale tunnel that slept with the phone drops the first
