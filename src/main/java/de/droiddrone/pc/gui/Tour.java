@@ -75,6 +75,8 @@ final class Tour {
         boolean legend;
         /** The finish: its burst. */
         boolean finish;
+        /** Its window gone (closed, hidden): opened again instead of the tour ending - the map window's steps. */
+        Runnable reopen;
 
         Step(String title, String text, Supplier<JComponent> anchor) {
             this.title = title;
@@ -137,6 +139,11 @@ final class Tour {
 
         Step of(String f) {
             feature = f;
+            return this;
+        }
+
+        Step reopen(Runnable r) {
+            reopen = r;
             return this;
         }
     }
@@ -271,19 +278,22 @@ final class Tour {
         BooleanSupplier noDrones = () -> !finale.started();
         steps.add(new Step("FLEET", "Every phone at a glance; modes changed without connecting. Press it.",
                 () -> main.mapWindow().tourFleetTab()).transition(done -> main.mapWindow().tourSwitch(null, done))
-                .before(this::startFinale).press().live(map).of(FEATURE_FLEET));
+                .before(this::startFinale).press().live(map).reopen(main::showMapWindow).of(FEATURE_FLEET));
         steps.add(new Step("THE ROWS", "A row a phone: mode sign, drone V/cell, phone %, last heard, ring to next check-in. "
-                + "Click one: it shows on the map.", () -> main.mapWindow().tourFleetRows()).live(map).of(FEATURE_FLEET));
-        steps.add(new Step("MODES", "STANDBY, DEEP SLEEP, OVERWATCH and EVERY reach the phone at its next "
-                + "check-in, without connecting. PILOT UAV flies it.", () -> main.mapWindow().tourFleetStrip()).live(map).of(FEATURE_FLEET));
-        steps.add(new Step("THE EYES", "Eyes are drones on OVERWATCH; the cones are what they see. Anything entering a "
-                + "cone alerts you.", map).before(this::showTourArea).after(finale::driveIn).live(map).skip(noDrones)
+                + "Click one: it shows on the map.", () -> main.mapWindow().tourFleetRows()).live(map).reopen(main::showMapWindow)
                 .of(FEATURE_FLEET));
+        steps.add(new Step("MODES", "STANDBY, DEEP SLEEP, OVERWATCH and EVERY reach the phone at its next "
+                + "check-in, without connecting. PILOT UAV flies it.", () -> main.mapWindow().tourFleetStrip()).live(map)
+                .reopen(main::showMapWindow).of(FEATURE_FLEET));
+        steps.add(new Step("THE EYES", "Eyes are drones on OVERWATCH; the cones are what they see. Anything entering a "
+                + "cone alerts you.", map).before(this::showTourArea).after(this::driveIn).live(map).skip(noDrones)
+                .reopen(main::showMapWindow).of(FEATURE_FLEET));
         steps.add(new Step("INTEL", "Enemy movement reported near the eyes. Attack may come soon. Stand by.",
-                () -> main.mapWindow().tourFleetRows()).live(map).skip(noDrones)
+                () -> main.mapWindow().tourFleetRows()).live(map).skip(noDrones).reopen(main::showMapWindow)
                 .waitFor(finale::alerted, "Standing by...", true).of(FEATURE_FLEET));
         steps.add(new Step("ALERT", "It saw something. Press CONNECT on the alert.", () -> main.mapWindow().tourAlertCards())
-                .live(map).skip(noDrones).waitFor(finale::connected, "Press CONNECT", true).of(FEATURE_FLEET));
+                .live(map).skip(noDrones).reopen(main::showMapWindow).waitFor(finale::connected, "Press CONNECT", true)
+                .of(FEATURE_FLEET));
         steps.add(new Step("FLY", "Hear it? It comes from where it is. Arm, fly to it and hit it.", main::tourVideo)
                 .before(() -> {
                     main.toFront();
@@ -310,6 +320,7 @@ final class Tour {
     }
 
     private void startFinale() {
+        main.showMapWindow(); // the Overwatch demo starts here, the map window maybe closed
         if (finale.started()) return;
         if (!finale.start()) {
             main.logLine("Tour: no drones for the fleet steps - " + finale.refused());
@@ -334,6 +345,13 @@ final class Tour {
             }
         });
         wait.start();
+    }
+
+    /** The BTR sets off at the pilot's NEXT on the eyes. */
+    private void driveIn() {
+        if (!finale.started()) return;
+        finale.driveIn();
+        main.logLine("Tour: the BTR sets off.");
     }
 
     /** The map on the tour's drones, their flights and the units, before anything moves. */
@@ -383,7 +401,7 @@ final class Tour {
         Object[] options = {"Yes", "Not now"};
         int answer = JOptionPane.showOptionDialog(main, "New: " + String.join(", ", what)
                         + ".\nTour the new parts?", "What's new", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE, null, options, options[0]);
-        if (answer == JOptionPane.YES_OPTION) run(new Tour(main, features));
+        if (answer == JOptionPane.YES_OPTION) run(new Tour(main, features), 0);
     }
 
     /** Asks first; the tour runs on yes. The whole tour counts every feature as seen. */
@@ -397,14 +415,34 @@ final class Tour {
 
     static void start(MainWindow main) {
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
-        run(new Tour(main, null));
+        run(new Tour(main, null), 0);
     }
 
-    private static void run(Tour t) {
+    /**
+     * SETUP > Overwatch demo (TOOLS > Advanced, 1.0.52, the pilot): the tour from its FLEET step - the four drones,
+     * the eyes, the BTR, the alert, CONNECT, the flight and the hit - with the same clean-up at the end.
+     */
+    static void demo(MainWindow main) {
+        Tour t = new Tour(main, null);
+        run(t, Math.max(0, t.fleetStepIndex()));
+    }
+
+    /** The FLEET step's index: where the Overwatch demo starts. */
+    int fleetStepIndex() {
+        return fleetStepIndex(steps);
+    }
+
+    static int fleetStepIndex(List<Step> steps) {
+        for (int i = 0; i < steps.size(); i++) if ("FLEET".equals(steps.get(i).title)) return i;
+        return -1;
+    }
+
+    private static void run(Tour t, int from) {
         if (current != null) current.end(); // never two at once: each would dim and tick over the other
         current = t;
-        t.main.tourExpandController(); // open, so the pilot folds it when asked
+        if (from == 0) t.main.tourExpandController(); // open, so the pilot folds it when asked
         t.main.tourHideSleep(true); // the sleep row shows at its own step (the pilot)
+        t.index = from - 1;
         t.next();
     }
 
@@ -444,6 +482,11 @@ final class Tour {
 
     /** EXIT TOUR, or a window gone: over, cleanly. */
     private void end() {
+        if (index >= 0 && index < steps.size()) {
+            // said in the log, so a tour that "skipped" its end can be told from one that was closed
+            String why = notice != null && notice.endReason != null ? notice.endReason : "a new tour started";
+            main.logLine("Tour: ended at step " + (index + 1) + " (" + steps.get(index).title + "): " + why + ".");
+        }
         if (notice != null) notice.dismiss();
         notice = null;
         after();
@@ -615,6 +658,7 @@ final class Tour {
             this.targets = targets;
             this.waitFor = s.waitFor;
             this.auto = s.auto;
+            this.reopen = s.reopen;
             counter = s.finish || s.legend ? "" : "STEP " + step + " OF " + of;
             setOpaque(false);
             setLayout(null);
@@ -622,7 +666,10 @@ final class Tour {
             tipLines = s.tip == null || s.tip.isBlank() ? List.of() : wrap(s.tip, getFontMetrics(tipFont()), WIDTH - 2 * PAD);
             next.setText(step == of ? "Done" : s.legend ? "Start" : "Next");
             next.addActionListener(e -> onNext.run());
-            exit.addActionListener(e -> onEnd.run());
+            exit.addActionListener(e -> {
+                endReason = "closed with the X";
+                onEnd.run();
+            });
             exit.setVisible(step != of);
             add(next);
             add(exit);
@@ -652,6 +699,11 @@ final class Tour {
 
         /** The control was pressed (a press step): when it then goes from the window, the step moves on at once. */
         private boolean pressDone;
+        /** Why the tour ended from this notice (the X, a closed window), for the log; null = not from here. */
+        String endReason;
+        /** The step's window gone: opened again once instead of ending the tour (null: ends it). */
+        private final Runnable reopen;
+        private boolean reopened;
 
         private void pressed() {
             if (!waitingForPress) return;
@@ -726,7 +778,15 @@ final class Tour {
                 long hidden = System.currentTimeMillis() - notShowingSince;
                 Window w = SwingUtilities.getWindowAncestor(anchor);
                 boolean windowGone = w == null || !w.isDisplayable() || !w.isVisible();
-                if (windowGone && hidden > WINDOW_GONE_MS) onEnd.run(); // its window was closed: the tour is over
+                if (windowGone && hidden > WINDOW_GONE_MS && reopen != null && !reopened) {
+                    // the map window's steps: its window opened again, never the fleet part lost to a closed map
+                    reopened = true;
+                    notShowingSince = 0;
+                    reopen.run();
+                } else if (windowGone && hidden > WINDOW_GONE_MS) {
+                    endReason = "its window was closed";
+                    onEnd.run(); // its window was closed: the tour is over
+                }
                 else if (!windowGone && hidden > HIDDEN_MS && next.isEnabled()) next.doClick(); // only the control went (folded away): move on
                 return;
             }
@@ -796,6 +856,11 @@ final class Tour {
         /** Tests: one tick, as the timer runs it. */
         void tickForTest() {
             tick();
+        }
+
+        /** Tests: its control has been gone this long. */
+        void goneForTest(long ms) {
+            notShowingSince = System.currentTimeMillis() - ms;
         }
 
         /** Tests: the lit control pressed. */

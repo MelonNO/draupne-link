@@ -55,7 +55,11 @@ public final class Fleet implements AutoCloseable {
         this.announceFile = announceFile;
         this.base = log;
         java.util.HashSet<String> taken = new java.util.HashSet<>();
-        for (String k : config.keys()) if (k.startsWith("name.")) taken.add(k.substring(5).toLowerCase(Locale.ROOT));
+        // an empty entry is a name the map removed (Names.remove saves ""): free again - the tour's clean-up leaves
+        // one per drone, and the next tour took the next letters down (Victor, Uniform ...) instead of Zulu again
+        for (String k : config.keys()) {
+            if (k.startsWith("name.") && !config.getString(k).isBlank()) taken.add(k.substring(5).toLowerCase(Locale.ROOT));
+        }
         namesTaken = taken;
     }
 

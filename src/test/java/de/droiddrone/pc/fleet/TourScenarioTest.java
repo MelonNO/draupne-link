@@ -106,6 +106,37 @@ class TourScenarioTest {
         waitFor(() -> alerted.get() == s.watcher(), 2000, "the listener heard of it");
     }
 
+    /**
+     * The pilot: SETUP > Tour again skipped the BTR part. A second scenario after the first's clean-up (its names left
+     * as removed entries in the name map) takes the same four names again and its watcher still alerts on the BTR.
+     */
+    @Test
+    void aSecondRunAfterTheFirstsCleanUpHasTheSameDronesAndAlertsAgain() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        TourScenario first = TourScenario.start(config, null, log::add, new TourScenario.Listener() { });
+        List<String> names = first.drones().stream().map(VirtualDrone::name).toList();
+        first.close();
+        for (String n : names) config.set("name." + n, ""); // what the tour's clean-up leaves (Names.remove)
+
+        AtomicReference<VirtualDrone> alerted = new AtomicReference<>();
+        TourScenario second = TourScenario.start(config, null, log::add, new TourScenario.Listener() {
+            @Override
+            public void overwatchAlert(VirtualDrone w) {
+                alerted.set(w);
+            }
+        });
+        closing.add(second);
+        assertEquals(names, second.drones().stream().map(VirtualDrone::name).toList(), "the same four drones again");
+        DatagramSocket pc = new DatagramSocket(0, InetAddress.getLoopbackAddress());
+        closing.add(pc);
+        java.util.Map<String, Integer> tokens = new java.util.HashMap<>();
+        for (VirtualDrone d : second.overwatchers()) tokens.put(d.name(), 0x5ec0 + tokens.size());
+        second.placeModes(new InetSocketAddress(InetAddress.getLoopbackAddress(), pc.getLocalPort()), tokens, 2);
+        waitFor(() -> second.overwatchers().stream().allMatch(d -> d.mode() == VirtualDrone.OVERWATCH), 3000, "the modes");
+        second.driveInNow();
+        waitFor(() -> alerted.get() == second.watcher(), 40_000, "the second run's alert\n" + String.join("\n", log));
+    }
+
     @Test
     void armedInTheBtrsWayTheDroneIsHitBreaksAndItsLinkGoesSilent() throws Exception {
         AtomicReference<VirtualDrone> connected = new AtomicReference<>(), crashed = new AtomicReference<>();

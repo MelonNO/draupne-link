@@ -127,6 +127,46 @@ class TourTest {
         assertEquals(1, nexts[0], "connected: on, though the card is gone");
     }
 
+    /**
+     * The pilot: a second tour "skips" the BTR part. A fleet step whose window is gone (the map window closed or
+     * hidden) ended the whole tour after 3 s, silently; now it opens its window again, and an end says why in the log.
+     */
+    @Test
+    void aFleetStepWithItsWindowGoneOpensItAgainInsteadOfEndingTheTour() {
+        JLayeredPane layer = window(1366, 768);
+        JButton rows = new JButton("rows");
+        rows.setBounds(1000, 100, 300, 200);
+        layer.add(rows);
+        int[] reopened = {0}, ended = {0};
+        Tour.Step step = new Tour.Step("INTEL", "Stand by.", () -> rows).reopen(() -> reopened[0]++)
+                .waitFor(() -> false, "Standing by...", true);
+        Tour.TourNotice n = new Tour.TourNotice(rows, step, 31, 35, () -> { }, () -> ended[0]++, false, null);
+        n.attachForTest(layer, 10_000);
+        n.tickForTest(); // no window: gone
+        n.goneForTest(3500);
+        n.tickForTest();
+        assertEquals(1, reopened[0], "its window opened again");
+        assertEquals(0, ended[0], "the tour goes on");
+
+        Tour.Step plain = new Tour.Step("MENU", "Press it.", () -> rows);
+        Tour.TourNotice m = new Tour.TourNotice(rows, plain, 2, 35, () -> { }, () -> ended[0]++, false, null);
+        m.attachForTest(layer, 10_000);
+        m.tickForTest();
+        m.goneForTest(3500);
+        m.tickForTest();
+        assertEquals(1, ended[0], "a step without a window to reopen ends the tour, as before");
+        assertEquals("its window was closed", m.endReason, "and says why");
+    }
+
+    /** SETUP > Overwatch demo starts at the FLEET step, which every whole tour has, in front of the finale's steps. */
+    @Test
+    void theOverwatchDemoStartsAtTheFleetStep() {
+        List<Tour.Step> steps = List.of(new Tour.Step("GUIDED TOUR", "", () -> null), new Tour.Step("DATA", "", () -> null),
+                new Tour.Step("FLEET", "", () -> null), new Tour.Step("THE ROWS", "", () -> null));
+        assertEquals(2, Tour.fleetStepIndex(steps));
+        assertEquals(-1, Tour.fleetStepIndex(List.of(new Tour.Step("MENU", "", () -> null))));
+    }
+
     @Test
     void anUpdateBringsTheFleetAndPreviousFlightsSteps() throws Exception {
         PcConfig config = PcConfig.defaults();

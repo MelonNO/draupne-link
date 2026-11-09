@@ -592,6 +592,9 @@ public class MainWindow extends JFrame {
         }
         menu.addSeparator();
         addMenuItem(menu, "Tour", "Buttons and map, one by one", () -> Tour.start(this));
+        if (advanced) { // hidden under TOOLS > Advanced (1.0.52, the pilot)
+            addMenuItem(menu, "Overwatch demo", "The tour's fleet part: alert, connect, hit the BTR", () -> Tour.demo(this));
+        }
         return menu;
     }
 
