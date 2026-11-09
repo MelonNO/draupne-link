@@ -1,5 +1,7 @@
 package de.droiddrone.pc.audio;
 
+import de.droiddrone.common.VoiceActivity;
+
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.SourceDataLine;

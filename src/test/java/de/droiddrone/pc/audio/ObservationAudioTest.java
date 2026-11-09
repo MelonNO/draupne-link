@@ -1,5 +1,7 @@
 package de.droiddrone.pc.audio;
 
+import de.droiddrone.common.VoiceActivity;
+
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -58,6 +60,16 @@ class ObservationAudioTest {
         assertEquals(VoiceActivity.SILENCE_DB, VoiceActivity.levelDb(new float[1024], 0, 1024));
         assertEquals(-3.0, VoiceActivity.levelDb(tone(1, 4800), 0, 4800), 0.1, "a full sine: -3 dBFS");
         assertEquals(-23.0, VoiceActivity.levelDb(tone(0.1, 4800), 0, 4800), 0.1);
+        // pc.45: the phone's microphone, 16-bit little-endian PCM - the same level
+        float[] t = tone(0.1, 4800);
+        byte[] pcm = new byte[t.length * 2];
+        for (int i = 0; i < t.length; i++) {
+            int v = Math.round(t[i] * 32767);
+            pcm[2 * i] = (byte) v;
+            pcm[2 * i + 1] = (byte) (v >> 8);
+        }
+        assertEquals(-23.0, VoiceActivity.levelDbPcm16(pcm, pcm.length), 0.1);
+        assertEquals(VoiceActivity.SILENCE_DB, VoiceActivity.levelDbPcm16(new byte[2048], 2048));
     }
 
     @Test
