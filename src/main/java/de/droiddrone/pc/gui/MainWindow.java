@@ -2658,7 +2658,7 @@ public class MainWindow extends JFrame {
             l.setAudioWanted(o.audioWanted(phone, now));
             ObservationAudio audio = observationAudio;
             OsdRenderer.Data osd = ObservationOsd.data(l.telemetry(), f.video().stats(), last, invertPitch, now);
-            grid.update(i, new ObservationGrid.TileState(status, audio != null && audio.isSpeaking(f.audioId()), o.isMuted(phone),
+            grid.update(i, new ObservationGrid.TileState(status, ObservationSession.speaking(audio, f.audioId(), l, now), o.isMuted(phone),
                     volumeFor(phone), note, l.telemetry().getMotion().shown(now), osd));
         }
         grid.setSelection(o.set().selected(), o.set().enlarged());

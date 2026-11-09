@@ -42,7 +42,8 @@ import java.util.Map;
  * frame, bit 2 = send the sound's config again; detection = the motion detection's sensitivity (0 off .. 3 high).
  * An observer silent for {@link #OBSERVER_EXPIRES_MS} is dropped.</li>
  * <li>{@code OBSERVE_STATE [0x51][state u8][width u16][height u16][fps u8][observers u8]} phone to PC, the answer to
- * every OBSERVE (and once when observation ends): STREAMING, or why not.</li>
+ * every OBSERVE (and once when observation ends): STREAMING, or why not. pc.45 appends {@code [flags u8]} (an older
+ * PC reads the first 8 bytes and ignores it): bit 0 = {@link #STATE_SOUND_HEARD}.</li>
  * <li>{@code OBSERVE_STOP [0x52][key UTF]} PC to phone: this observer leaves (CONNECT on a tile stops every stream at
  * once, the pilot's own included). Answered with STOPPED.</li>
  * </ul>
@@ -50,6 +51,11 @@ import java.util.Map;
  * VIDEO_PARITY_GROUP, AudioInitialFrame, AudioFrame) and a TelemetryData packet with record {@link #RECORD} (and the
  * motion detection's 0x40FA when asked for), sent from the phone's link port to each observer's address and port,
  * only while no pilot is connected. 0x53-0x57 and record 0x40FF are reserved for observation and unused.
+ * <p>
+ * DRAUPNE Flight pc.45: the speaking highlight of a muted tile. A tile muted for 10 s asks no sound (it saves the
+ * phone's upload); while nobody asks for it, the phone listens to its microphone itself (VoiceActivity, nothing
+ * encoded, nothing sent) and says what it hears in OBSERVE_STATE's flags: sent at once when it starts or ends, and
+ * every {@link #HEARD_REPORT_MS} while it lasts (an observer holds it {@link #HEARD_HOLD_MS}).
  * <p>
  * Compiled into both apps (the PC's tests run it). Java 11: the phone app's language level.
  */
@@ -59,6 +65,11 @@ public final class Observe {
     public static final short RECORD = 0x40FE;
 
     public static final int FLAG_AUDIO = 1, FLAG_VIDEO_CONFIG = 2, FLAG_AUDIO_CONFIG = 4;
+
+    /** OBSERVE_STATE's flags (pc.45): the phone hears something (only reported to observers that asked no sound). */
+    public static final int STATE_SOUND_HEARD = 1;
+    /** While heard, OBSERVE_STATE goes again this often; an observer holds the last "heard" this long. */
+    public static final long HEARD_REPORT_MS = 250, HEARD_HOLD_MS = 1000;
 
     /** OBSERVE_STATE's states. */
     public static final int STREAMING = 0, REFUSED_PILOT = 1, ENDED_PILOT = 2, REFUSED_FULL = 3, REFUSED_POWER = 4, STOPPED = 5,
@@ -178,24 +189,62 @@ public final class Observe {
 
     public static final class State {
         public final int state, width, height, fps, observers;
+        /** pc.45's flags; 0 from an older phone. */
+        public final int flags;
 
         public State(int state, int width, int height, int fps, int observers) {
+            this(state, width, height, fps, observers, 0);
+        }
+
+        public State(int state, int width, int height, int fps, int observers, int flags) {
             this.state = state;
             this.width = width;
             this.height = height;
             this.fps = fps;
             this.observers = observers;
+            this.flags = flags;
+        }
+
+        public boolean soundHeard() {
+            return (flags & STATE_SOUND_HEARD) != 0;
         }
     }
 
     public static byte[] encodeState(int state, int width, int height, int fps, int observers) {
+        return encodeState(state, width, height, fps, observers, 0);
+    }
+
+    /** pc.45: with the flags byte. */
+    public static byte[] encodeState(int state, int width, int height, int fps, int observers, int flags) {
         return new byte[]{STATE, (byte) state, (byte) (width >> 8), (byte) width, (byte) (height >> 8), (byte) height,
-                (byte) clamp(fps, 0, 255), (byte) clamp(observers, 0, 255)};
+                (byte) clamp(fps, 0, 255), (byte) clamp(observers, 0, 255), (byte) flags};
     }
 
     public static State decodeState(byte[] d, int len) {
         if (d == null || len < 8 || d[0] != STATE) return null;
-        return new State(d[1] & 0xff, ((d[2] & 0xff) << 8) | (d[3] & 0xff), ((d[4] & 0xff) << 8) | (d[5] & 0xff), d[6] & 0xff, d[7] & 0xff);
+        return new State(d[1] & 0xff, ((d[2] & 0xff) << 8) | (d[3] & 0xff), ((d[4] & 0xff) << 8) | (d[5] & 0xff), d[6] & 0xff, d[7] & 0xff,
+                len >= 9 ? d[8] & 0xff : 0);
+    }
+
+    /**
+     * pc.45: when the phone says "heard" (or no longer) to its observers: at once on a change, and every
+     * {@link #HEARD_REPORT_MS} while heard. Not thread-safe: one caller (the phone's observation tick).
+     */
+    public static final class HeardReport {
+        private boolean sent;
+        private long sentAt;
+
+        /** @return an OBSERVE_STATE is due now */
+        public boolean due(boolean heard, long now) {
+            if (heard == sent && (!heard || now - sentAt < HEARD_REPORT_MS)) return false;
+            sent = heard;
+            sentAt = now;
+            return true;
+        }
+
+        public void reset() {
+            sent = false;
+        }
     }
 
     /** The phone's encoder steps, bit/s (StreamEncoder's table; BitrateControl.STEPS_BPS on the PC). */

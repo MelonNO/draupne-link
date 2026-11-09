@@ -2,6 +2,10 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## Unreleased (phone pc.45)
+
+- **A muted observation tile still lights when its drone hears something.** After 10 s muted the phone sends no sound (it saves its upload); now it listens to its microphone itself and only says "sound heard" (a byte after `OBSERVE_STATE`, which older PCs ignore). Older phones behave as before. The virtual drone does the same.
+
 ## 1.0.56 + phone pc.44
 
 The pilot's test of 1.0.55 on a real phone (indoors), and the pilot's next round. Nothing of it run on a drone or a real phone yet.

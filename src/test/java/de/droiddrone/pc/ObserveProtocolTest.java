@@ -63,6 +63,36 @@ class ObserveProtocolTest {
         assertNull(Observe.decodeState(st, 7));
     }
 
+    /** pc.45: the flags byte after the eight an older PC reads; an older phone's eight read as no flags. */
+    @Test
+    void stateCarriesSoundHeardInAByteOlderPcsIgnore() {
+        byte[] st = Observe.encodeState(Observe.STREAMING, 640, 360, 15, 1, Observe.STATE_SOUND_HEARD);
+        assertEquals(9, st.length);
+        Observe.State s = Observe.decodeState(st, st.length);
+        assertTrue(s.soundHeard());
+        assertEquals(640, s.width);
+        assertEquals(1, s.observers);
+        Observe.State old = Observe.decodeState(st, 8); // what a PC before it reads: the same, the byte unseen
+        assertEquals(Observe.STREAMING, old.state);
+        assertFalse(old.soundHeard());
+        assertFalse(Observe.decodeState(Observe.encodeState(Observe.STREAMING, 640, 360, 15, 1, 0), 9).soundHeard());
+        byte[] older = java.util.Arrays.copyOf(st, 8); // an older phone's
+        assertEquals(0, Observe.decodeState(older, older.length).flags);
+    }
+
+    /** pc.45: "heard" goes at once, again every HEARD_REPORT_MS while it lasts, and its end once. */
+    @Test
+    void heardIsReportedOnChangeAndRepeatedWhileItLasts() {
+        Observe.HeardReport r = new Observe.HeardReport();
+        assertFalse(r.due(false, 0), "quiet from the start: nothing to say");
+        assertTrue(r.due(true, 100), "heard: at once");
+        assertFalse(r.due(true, 100 + Observe.HEARD_REPORT_MS - 1));
+        assertTrue(r.due(true, 100 + Observe.HEARD_REPORT_MS), "and again while it lasts");
+        assertTrue(r.due(false, 400), "its end at once");
+        assertFalse(r.due(false, 5000), "then nothing");
+        assertTrue(Observe.HEARD_REPORT_MS * 3 <= Observe.HEARD_HOLD_MS, "a lost report or two doesn't blink the ring");
+    }
+
     @Test
     void recordRoundTripThroughTheTelemetry() throws Exception {
         Observe.Position p = new Observe.Position(Observe.POS_VALID | Observe.FC_COMPASS, 59.9123456, 10.7543210, 123, 4,

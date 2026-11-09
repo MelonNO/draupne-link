@@ -56,6 +56,8 @@ public final class ObserverLink implements AutoCloseable {
     private volatile long lastAskAt, lastConfigAskAt, lastAudioAskAt;
     private volatile Observe.State state;
     private volatile long stateAt, lastPacketAt;
+    /** pc.45: the phone's last "sound heard" (MonoClock), 0 = none or it said quiet since. */
+    private volatile long soundHeardAt;
     private volatile AudioConfig audioConfig;
     /**
      * The phone's flight controller (phone app pc.43 sends it observers once a second): without it the FC's records
@@ -152,6 +154,15 @@ public final class ObserverLink implements AutoCloseable {
 
     public long stateAt() {
         return stateAt;
+    }
+
+    /**
+     * The phone says it hears something (pc.45, a muted tile: it listens instead of sending the sound), held
+     * {@link Observe#HEARD_HOLD_MS} after its last such word. Never from an older phone.
+     */
+    public boolean soundHeard(long now) {
+        long at = soundHeardAt;
+        return at != 0 && now - at <= Observe.HEARD_HOLD_MS;
     }
 
     /** The tile's picture; a change is asked for at once. */
@@ -293,6 +304,7 @@ public final class ObserverLink implements AutoCloseable {
                 Observe.State before = state;
                 state = s;
                 stateAt = MonoClock.ms();
+                soundHeardAt = s.soundHeard() ? stateAt : 0;
                 if (s.state != Observe.STREAMING && (before == null || before.state != s.state)) {
                     events.accept(phone + ": no observation - " + Observe.stateName(s.state) + ".");
                 }

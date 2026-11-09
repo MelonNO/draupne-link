@@ -335,6 +335,54 @@ class VirtualDroneEndToEndTest {
         }
     }
 
+    /**
+     * pc.45: an observer that asks no sound (a tile muted 10 s) gets no sound - not one audio packet - but its
+     * OBSERVE_STATE says when the drone hears something (the tile's speaking highlight).
+     */
+    @Test
+    void aMutedObserverGetsSoundHeardAndNoSound() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        startDrone(config);
+        try (DatagramSocket observer = new DatagramSocket(0, InetAddress.getLoopbackAddress())) {
+            observer.setSoTimeout(200);
+            byte[] ask = Observe.encodeRequest(config.getKey(), 640, 360, 15, 1000, 0, 0); // no FLAG_AUDIO
+            boolean heard = false;
+            int audioPackets = 0;
+            long end = System.currentTimeMillis() + 15_000, nextAsk = 0, nextSpeak = System.currentTimeMillis() + 1000;
+            byte[] buf = new byte[1500];
+            while (System.currentTimeMillis() < end && !heard) {
+                long now = System.currentTimeMillis();
+                if (now >= nextAsk) {
+                    nextAsk = now + 1000;
+                    observer.send(new DatagramPacket(ask, ask.length, InetAddress.getLoopbackAddress(), drone.port()));
+                }
+                if (now >= nextSpeak) { // the drone "speaks" (its motors' tune), well over its breeze
+                    nextSpeak = now + 2000;
+                    drone.speakNow();
+                }
+                DatagramPacket p = new DatagramPacket(buf, buf.length);
+                try {
+                    observer.receive(p);
+                } catch (SocketTimeoutException e) {
+                    continue;
+                }
+                byte type = p.getData()[0];
+                if (type == UdpCommon.AudioFrame || type == UdpCommon.AudioInitialFrame) audioPackets++;
+                if (type == Observe.STATE) {
+                    Observe.State st = Observe.decodeState(p.getData(), p.getLength());
+                    assertEquals(9, p.getLength(), "the flags byte");
+                    heard = st.state == Observe.STREAMING && st.soundHeard();
+                }
+            }
+            assertTrue(heard, "OBSERVE_STATE said: sound heard\n" + String.join("\n", log));
+            assertEquals(0, audioPackets, "muted: no sound sent");
+            assertTrue(log.stream().anyMatch(l -> l.contains("listening only")), "it listened");
+            assertFalse(log.stream().anyMatch(l -> l.contains("live audio to the PC: on")), "and never sent");
+            observer.send(new DatagramPacket(Observe.encodeStop(config.getKey()), Observe.encodeStop(config.getKey()).length,
+                    InetAddress.getLoopbackAddress(), drone.port()));
+        }
+    }
+
     /** What the PC's video pipeline would put on screen. */
     static final class Sink implements VideoPipeline.FrameSink {
         final int[] pixels = new int[320 * 180];

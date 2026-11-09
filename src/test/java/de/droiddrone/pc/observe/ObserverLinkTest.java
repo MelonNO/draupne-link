@@ -122,6 +122,32 @@ class ObserverLinkTest {
     }
 
     /**
+     * pc.45: a muted tile's ring lights on the phone's "sound heard", held HEARD_HOLD_MS after its last report and
+     * dark at once on a quiet one; an older phone's state never lights it.
+     */
+    @Test
+    void theRingLightsOnThePhonesSoundHeard() {
+        ObserverLink link = new ObserverLink("MobileAlpha", InetAddress.getLoopbackAddress(), 1, "secret", new Video(), null, -1, s -> {});
+        byte[] older = Observe.encodeState(Observe.STREAMING, 640, 360, 15, 1);
+        link.onPacket(older, older.length);
+        long now = de.droiddrone.pc.MonoClock.ms();
+        assertFalse(link.soundHeard(now));
+        assertFalse(ObservationSession.speaking(null, -1, link, now), "nothing heard, here or there");
+        byte[] heard = Observe.encodeState(Observe.STREAMING, 640, 360, 15, 1, Observe.STATE_SOUND_HEARD);
+        link.onPacket(heard, heard.length);
+        long at = link.stateAt();
+        assertTrue(link.soundHeard(at));
+        assertTrue(ObservationSession.speaking(null, -1, link, at), "muted, no sound here: the phone's word lights it");
+        assertTrue(link.soundHeard(at + Observe.HEARD_HOLD_MS), "held");
+        assertFalse(link.soundHeard(at + Observe.HEARD_HOLD_MS + 1), "then dark (reports stopped)");
+        link.onPacket(heard, heard.length);
+        byte[] quiet = Observe.encodeState(Observe.STREAMING, 640, 360, 15, 1, 0);
+        link.onPacket(quiet, quiet.length);
+        assertFalse(link.soundHeard(link.stateAt()), "quiet: dark at once");
+        assertFalse(ObservationSession.speaking(null, -1, null, now));
+    }
+
+    /**
      * 1.0.55: the tile's OSD reads the phone's flight controller records - only once the phone said which FC it is
      * (pc.43 sends observers FcInfo once a second): before that FcTelemetry skips them, as it always did.
      */
