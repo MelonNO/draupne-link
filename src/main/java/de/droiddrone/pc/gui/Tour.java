@@ -288,7 +288,7 @@ final class Tour {
         steps.add(new Step("THE EYES", "Eyes are drones on OVERWATCH; the cones are what they see. Anything entering a "
                 + "cone alerts you.", map).before(this::showTourArea).after(this::driveIn).live(map).skip(noDrones)
                 .reopen(main::showMapWindow).of(FEATURE_FLEET));
-        steps.add(new Step("INTEL", "Enemy movement reported near the eyes. Attack may come soon. Stand by.",
+        steps.add(new Step("INTEL", "Enemy movement reported near the drones. Attack may come soon. Stand by.",
                 () -> main.mapWindow().tourFleetRows()).live(map).skip(noDrones).reopen(main::showMapWindow)
                 .waitFor(finale::alerted, "Standing by...", true).of(FEATURE_FLEET));
         steps.add(new Step("ALERT", "It saw something. Press CONNECT on the alert.", () -> main.mapWindow().tourAlertCards())
