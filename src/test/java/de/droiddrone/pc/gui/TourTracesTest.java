@@ -85,4 +85,18 @@ class TourTracesTest {
         t.restoreLastPosition();
         assertTrue(Files.exists(lastPosition), "not the tour's: no tour flight happened");
     }
+
+    @Test
+    void theFilesGoAndOneThatWontIsToldWhileTheRestGoOn(@TempDir Path dir) throws Exception {
+        Path a = Files.writeString(dir.resolve("a.mkv"), "a");
+        Path b = Files.writeString(dir.resolve("b.mkv"), "b");
+        Path full = Files.createDirectories(dir.resolve("full"));
+        Files.writeString(full.resolve("inside"), "x"); // a folder with something in it can't be deleted
+        List<Path> failed = new java.util.ArrayList<>();
+        int deleted = TourTraces.delete(List.of(a, full, dir.resolve("gone.mkv"), b), (f, e) -> failed.add(f));
+        assertEquals(2, deleted, "a missing file isn't counted");
+        assertEquals(List.of(full), failed);
+        assertFalse(Files.exists(a));
+        assertFalse(Files.exists(b));
+    }
 }
