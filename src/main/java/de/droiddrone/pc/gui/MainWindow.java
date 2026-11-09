@@ -3676,6 +3676,16 @@ public class MainWindow extends JFrame {
      * @return false (sleep on), or null for a phone that isn't ours (no answer)
      */
     private Boolean onSleepCheck(String ip, byte[] d) {
+        // pc.40: who and where it is - listed and drawn even when no scan reached it before it slept (the tour's drones)
+        if (d.length >= 8 + de.droiddrone.common.FleetProtocol.STATUS_BYTES) {
+            de.droiddrone.common.FleetProtocol.Where where = de.droiddrone.common.FleetProtocol.Where.read(d,
+                    8 + de.droiddrone.common.FleetProtocol.STATUS_BYTES, d.length, config.getKey());
+            if (where != null && !where.name.equalsIgnoreCase(nameService.ownName())) {
+                ControlLink.SleepHello said = ControlLink.SleepHello.read(d, d.length, System.currentTimeMillis());
+                int mode = said.status() != null && said.status().mode >= 0 ? said.status().mode : said.overwatch() ? 3 : 2;
+                if (nameService.heardAsleep(ip, where, mode)) SwingUtilities.invokeLater(this::updatePhoneList);
+            }
+        }
         Asleep a = asleepPhones.get(ip);
         if (a == null) {
             String name = names.nameAt(ip);

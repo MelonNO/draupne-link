@@ -281,6 +281,24 @@ public class Udp {
     /** The FC's GPS fix younger than this is where the drone is; else the phone's own position, younger than PHONE_FIX_MS. */
     private static final long FC_FIX_MS = 10_000, PHONE_FIX_MS = 120_000;
 
+    /**
+     * pc.40: the check-in's name and position. Asleep the drone stands still, so the last fix counts whatever its age:
+     * the FC's GPS, else the phone's own.
+     */
+    private de.droiddrone.common.FleetProtocol.Where sleepWhere() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (msp != null && msp.gpsFixAt != 0) {
+            return new de.droiddrone.common.FleetProtocol.Where(MainActivity.phoneName(), 1, msp.gpsLatE7 / 1e7, msp.gpsLonE7 / 1e7,
+                    (int) Math.min(65_535, (now - msp.gpsFixAt) / 1000));
+        }
+        android.location.Location l = PhoneLocation.last();
+        if (l != null) {
+            return new de.droiddrone.common.FleetProtocol.Where(MainActivity.phoneName(), 2, l.getLatitude(), l.getLongitude(),
+                    (int) Math.min(65_535, PhoneLocation.ageMs(l) / 1000));
+        }
+        return new de.droiddrone.common.FleetProtocol.Where(MainActivity.phoneName(), 0, 0, 0, 0);
+    }
+
     /** pc.32: where this drone is, for the PCs' map (see answerName). */
     private void writePosition(java.io.DataOutputStream out) throws java.io.IOException {
         out.writeByte(1);
@@ -1193,10 +1211,9 @@ public class Udp {
         // pc.36: two bytes more - overwatching / an event runs, and why it left overwatch by itself (an older PC reads six)
         byte[] head = {PowerMode.SLEEP_HELLO, (byte) Math.min(255, Math.max(0, batteryPercent)), (byte) (charging ? 1 : 0),
                 (byte) Math.min(255, nextCheckMin), (byte) (milliVolts >> 8), (byte) milliVolts, (byte) owFlags, (byte) floorReason};
-        // pc.40: then the fleet status block (an older PC reads eight)
-        byte[] status = fleetStatus().bytes();
-        byte[] d = java.util.Arrays.copyOf(head, head.length + status.length);
-        System.arraycopy(status, 0, d, head.length, status.length);
+        // pc.40: then the fleet status block (an older PC reads eight), then who and where it is, so a PC whose name
+        // scan never reached it (asleep since) lists it and draws it
+        byte[] d = de.droiddrone.common.FleetProtocol.hello(head, fleetStatus(), sleepWhere(), key);
         try {
             s.send(new DatagramPacket(d, d.length, ip, lastPcPort));
             return true;

@@ -173,6 +173,25 @@ public final class NameService {
         return new ArrayList<>(positions.values());
     }
 
+    /**
+     * A sleeping phone's check-in with its name and position (pc.40, FleetProtocol.Where; the key already checked): the
+     * phone is listed and drawn as a name reply would - also one asleep since before any scan reached it (the tour's
+     * drones). Its device and version stay what a reply said. powerMode as Names.Position's.
+     * @return true when the phone is new to the list or at another address (the PHONE list then needs filling again)
+     */
+    public boolean heardAsleep(String ip, de.droiddrone.common.FleetProtocol.Where w, int powerMode) {
+        if (w == null || Names.kindOf(w.name) != Names.Kind.PHONE) return false;
+        boolean virtual = VirtualFleet.isVirtual(ip);
+        Names.Entry old = names.get(w.name);
+        Names.Position p = w.hasPosition()
+                ? new Names.Position(w.source == 1, w.lat, w.lon, w.ageS, Boolean.FALSE, false, "", powerMode) : null;
+        Names.Reply reply = new Names.Reply(Names.Kind.PHONE, w.name, old == null ? "" : old.device(), old == null ? "" : old.version(), p);
+        String moved = names.seen(reply, ip, virtual ? VIRTUAL_HOST : old == null ? "" : old.host());
+        if (moved != null) log.accept("Names: " + w.name + " now at " + ip + " (was " + moved + ").");
+        if (p != null) positions.put(w.name, new DronePosition(w.name, p, System.currentTimeMillis()));
+        return old == null || !ip.equals(old.ip());
+    }
+
     /** The host name the name map files a virtual drone under. */
     static final String VIRTUAL_HOST = "virtual fleet";
     /** Where the virtual fleet's drones are (VirtualFleet.announced: none while no fleet runs; a fake in tests). */

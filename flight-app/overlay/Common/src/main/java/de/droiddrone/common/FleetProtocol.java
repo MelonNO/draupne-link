@@ -104,6 +104,78 @@ public final class FleetProtocol {
         }
     }
 
+    static final int WHERE_VERSION = 1;
+    /** The status block's length on the wire. */
+    public static final int STATUS_BYTES = 14;
+
+    /**
+     * Who and where a sleeping phone is, after the status block of its check-in (pc.40, the pilot: a phone put to sleep
+     * before any PC's name scan reached it - the tour's drones - was answered but never listed or drawn):
+     * [version][key UTF][name UTF][position source u8: 0 none, 1 FC, 2 phone][lat i32 e7][lon i32 e7][age s u16]. A
+     * sleeping phone doesn't move, so its last fix is kept whatever its age. An older PC stops reading before it.
+     */
+    public static final class Where {
+        public final String name;
+        /** 0 none, 1 the FC's GPS, 2 the phone's own. */
+        public final int source;
+        public final double lat, lon;
+        public final int ageS;
+
+        public Where(String name, int source, double lat, double lon, int ageS) {
+            this.name = name;
+            this.source = source;
+            this.lat = lat;
+            this.lon = lon;
+            this.ageS = ageS;
+        }
+
+        public boolean hasPosition() {
+            return source != 0;
+        }
+
+        public byte[] bytes(String key) {
+            try {
+                ByteArrayOutputStream b = new ByteArrayOutputStream();
+                DataOutputStream out = new DataOutputStream(b);
+                out.writeByte(WHERE_VERSION);
+                out.writeUTF(key);
+                out.writeUTF(name);
+                out.writeByte(source);
+                out.writeInt(source == 0 ? 0 : (int) Math.round(lat * 1e7));
+                out.writeInt(source == 0 ? 0 : (int) Math.round(lon * 1e7));
+                out.writeShort(Math.max(0, Math.min(65_535, ageS)));
+                return b.toByteArray();
+            } catch (IOException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        /** The block at offset with this key, or null: none, another key, a version unknown here. */
+        public static Where read(byte[] d, int offset, int len, String key) {
+            if (offset >= len) return null;
+            try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(d, offset, len - offset))) {
+                if (in.readUnsignedByte() != WHERE_VERSION || !in.readUTF().equals(key)) return null;
+                String name = in.readUTF();
+                int source = in.readUnsignedByte();
+                double lat = in.readInt() / 1e7, lon = in.readInt() / 1e7;
+                int age = in.readUnsignedShort();
+                if (name.isEmpty()) return null;
+                return new Where(name, source > 2 ? 0 : source, lat, lon, age);
+            } catch (IOException e) {
+                return null;
+            }
+        }
+    }
+
+    /** A check-in: head, status block and the Where block in one, for the phone and the virtual fleet. */
+    public static byte[] hello(byte[] head, Status status, Where where, String key) {
+        byte[] s = status.bytes(), w = where == null ? new byte[0] : where.bytes(key);
+        byte[] d = java.util.Arrays.copyOf(head, head.length + s.length + w.length);
+        System.arraycopy(s, 0, d, head.length, s.length);
+        System.arraycopy(w, 0, d, head.length + s.length, w.length);
+        return d;
+    }
+
     /** How a phone is doing, as it says at its check-in and in its name reply. UNKNOWN where it doesn't know. */
     public static final class Status {
         public final int batteryPercent;

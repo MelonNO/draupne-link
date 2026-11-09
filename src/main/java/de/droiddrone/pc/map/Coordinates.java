@@ -118,7 +118,10 @@ public final class Coordinates {
         char col = COLUMNS[(u.zone() - 1) % 3].charAt(Math.max(0, Math.min(7, e100 - 1)));
         char row = ROWS.charAt(Math.floorMod(n100 + (u.zone() % 2 == 0 ? 5 : 0), 20));
         double unit = Math.pow(10, 5 - digits);
-        long e = (long) Math.floor(u.easting() % 100_000 / unit), nn = (long) Math.floor(u.northing() % 100_000 / unit);
+        // a millimetre's grace: a grid read in and written back stays itself (its corner came back as 49557.9999)
+        long max = (long) Math.pow(10, digits) - 1;
+        long e = Math.min(max, (long) Math.floor((u.easting() % 100_000 + 1e-3) / unit)),
+                nn = Math.min(max, (long) Math.floor((u.northing() % 100_000 + 1e-3) / unit));
         return String.format(Locale.ROOT, "%d%c %c%c %0" + digits + "d %0" + digits + "d", u.zone(), u.band(), col, row, e, nn);
     }
 

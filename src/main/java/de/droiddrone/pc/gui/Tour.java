@@ -290,11 +290,11 @@ final class Tour {
                     main.tourSoundOn();
                 }).live(main::tourVideo).skip(noDrones).waitFor(finale::crashed, "Hit the BTR", true).of(FEATURE_FLEET));
 
-        Step finish = new Step("TOUR COMPLETE", "You're ready to fly for real. SETUP > Tour shows this again.", centre).before(() -> {
+        Step finish = new Step("TOUR COMPLETE", "You've completed the tour. SETUP > Tour shows it again.", centre).before(() -> {
             main.toFront();
             if (finale.crashed()) {
                 steps.get(index).title = "DIRECT HIT";
-                steps.get(index).text = "You're ready to fly for real.";
+                steps.get(index).text = "You've completed the tour. You're ready to fly for real.";
             }
         });
         finish.finish = true;
@@ -1143,7 +1143,7 @@ final class Tour {
             /**
              * The finish (1.0.52, the pilot: a new one): a hit. The window's four corner brackets close in on the box
              * and a reticle narrows on its middle (0.9 s); then the impact - a white flash ring and shards flying out -
-             * and after it a slow radar sweep behind the box, the brackets breathing on its corners.
+             * and the brackets breathing on its corners (no radar sweep: the pilot).
              */
             private void paintBurst(Graphics2D g, long now) {
                 Rectangle box = TourNotice.this.getBounds();
@@ -1193,23 +1193,6 @@ final class Tour {
                         g.draw(new java.awt.geom.Line2D.Double(cx + Math.cos(a) * d, cy + Math.sin(a) * d,
                                 cx + Math.cos(a) * (d + len), cy + Math.sin(a) * (d + len)));
                     }
-                }
-                if (hit > 600) { // then a slow sweep behind the box
-                    double ang = (hit - 600) / 1600.0 * 2 * Math.PI;
-                    double r = Math.max(box.width, box.height) * 0.9 + 60;
-                    float fade = (float) Math.min(1, (hit - 600) / 800.0);
-                    for (int i = 0; i < 24; i++) { // the trail: wedges fading behind the line
-                        g.setColor(Theme.alpha(Theme.ACCENT, Math.round(fade * 70 * (1 - i / 24f))));
-                        g.fill(new java.awt.geom.Arc2D.Double(cx - r, cy - r, 2 * r, 2 * r, -Math.toDegrees(ang - i * 0.035),
-                                Math.toDegrees(0.036), java.awt.geom.Arc2D.PIE));
-                    }
-                    g.setColor(Theme.alpha(Theme.ACCENT, Math.round(fade * 200)));
-                    g.setStroke(new BasicStroke(2f));
-                    g.draw(new java.awt.geom.Line2D.Double(cx, cy, cx + Math.cos(ang) * r, cy + Math.sin(ang) * r));
-                    g.setColor(Theme.alpha(Theme.ACCENT, Math.round(fade * 90)));
-                    g.setStroke(new BasicStroke(1.5f));
-                    g.draw(new Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r));
-                    g.draw(new Ellipse2D.Double(cx - r * 0.6, cy - r * 0.6, 1.2 * r, 1.2 * r));
                 }
             }
 

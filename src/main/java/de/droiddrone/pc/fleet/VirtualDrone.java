@@ -1294,6 +1294,7 @@ public final class VirtualDrone {
 
     /** Placed by the tour: its first check-in comes as soon as it is asleep, then every interval. Under powerLock. */
     private boolean checkInAtOnce;
+    static final long TOUR_FIRST_CHECK_MS = 1000;
 
     /** The panel's CHECK NOW: the next check window opens now (the phone's alarm, early). */
     public void checkNow() {
@@ -1317,7 +1318,8 @@ public final class VirtualDrone {
                 InetSocketAddress pc = lastPcIp == null ? null : new InetSocketAddress(lastPcIp, lastPcPort);
                 closeSocket(); // the link's socket, the FC's port, the GPS: let go
                 // always listening (pc.39): no alarm - the window opens shortly (the PC's link quiet by then) and stays
-                nextCheckAt = now + (always() || checkInAtOnce ? SleepCheck.ALWAYS_OPEN_AFTER_MS : checkIntervalMin * 60_000L);
+                // the tour's drones (never linked, nothing to let go quiet) check in within a second: listed at once
+                nextCheckAt = now + (checkInAtOnce ? TOUR_FIRST_CHECK_MS : always() ? SleepCheck.ALWAYS_OPEN_AFTER_MS : checkIntervalMin * 60_000L);
                 checkInAtOnce = false;
                 if (mode == OVERWATCH) overwatch.begin(pc);
                 log.accept(modeName(mode) + (always() ? ": always listening for the PC in " + SleepCheck.ALWAYS_OPEN_AFTER_MS / 1000 + " s"
@@ -1365,10 +1367,9 @@ public final class VirtualDrone {
         int mv = 3700 + pct * 5;
         byte[] head = {SLEEP_HELLO, (byte) pct, 0, (byte) Math.min(255, checkIntervalMin), (byte) (mv >> 8), (byte) mv,
                 (byte) overwatch.helloFlags(), 0};
-        byte[] status = fleetStatus().bytes(); // pc.40
-        byte[] d = java.util.Arrays.copyOf(head, head.length + status.length);
-        System.arraycopy(status, 0, d, head.length, status.length);
-        sendRaw(d, new InetSocketAddress(ip, lastPcPort));
+        // pc.40: the status block, then who and where it is (as the phone's Udp.sleepWhere)
+        de.droiddrone.common.FleetProtocol.Where where = new de.droiddrone.common.FleetProtocol.Where(name, 1, fc.latDeg(), fc.lonDeg(), 0);
+        sendRaw(de.droiddrone.common.FleetProtocol.hello(head, fleetStatus(), where, key), new InetSocketAddress(ip, lastPcPort));
     }
 
     // ------------------------------------------------------------------ fleet management (pc.40, FleetProtocol)
