@@ -17,6 +17,8 @@ class PipelineRecoveryTest {
         final CountDownLatch held = new CountDownLatch(1);
         /** The decode thread has made its decoder (taken the config). */
         final CountDownLatch started = new CountDownLatch(1);
+        /** The decode thread is held in targetSize with its first picture. */
+        final CountDownLatch holding = new CountDownLatch(1);
         volatile boolean hold = true;
 
         @Override
@@ -27,6 +29,7 @@ class PipelineRecoveryTest {
         @Override
         public int[] targetSize() {
             if (hold) {
+                holding.countDown();
                 try {
                     held.await(10, TimeUnit.SECONDS);
                 } catch (InterruptedException ignored) {
@@ -79,13 +82,15 @@ class PipelineRecoveryTest {
             p.onVideoConfig(320, 240, false, false, stream.codecConfig());
             assertTrue(sink.started.await(5, TimeUnit.SECONDS), "the decoder is made");
             feed(p, stream.packets().get(0), (short) 1);
-            Thread.sleep(200); // the decode thread sits in targetSize with frame 1
+            // the decode thread sits in targetSize with frame 1 (waited for: a fixed 200 ms sleep was too short under
+            // load - frame 1 still queued was then cut with the backlog, 11 shown instead of 12)
+            assertTrue(sink.holding.await(5, TimeUnit.SECONDS), "frame 1 is held");
             for (int i = 1; i < 35; i++) feed(p, stream.packets().get(i), (short) (i + 1));
             sink.hold = false;
             sink.held.countDown();
             long end = System.currentTimeMillis() + 5000;
-            while (sink.presented.get() < 12 && System.currentTimeMillis() < end) Thread.sleep(20);
-            int shown = VideoTest.settled(sink.presented);
+            while (p.framesDone() < 12 && System.currentTimeMillis() < end) Thread.sleep(20); // 1, then 25-35
+            int shown = sink.presented.get();
             assertEquals(12, shown, "frame 1, then 25-35");
         }
     }
@@ -103,7 +108,9 @@ class PipelineRecoveryTest {
             p.onVideoConfig(320, 240, false, false, stream.codecConfig());
             assertTrue(sink.started.await(5, TimeUnit.SECONDS));
             feed(p, stream.packets().get(0), (short) 1);
-            Thread.sleep(200); // the decode thread sits in targetSize with frame 1
+            // the decode thread sits in targetSize with frame 1 (waited for: a fixed 200 ms sleep was too short under
+            // load - frame 1 still queued was then cut with the backlog, 11 shown instead of 12)
+            assertTrue(sink.holding.await(5, TimeUnit.SECONDS), "frame 1 is held");
             for (int i = 1; i < 45; i++) feed(p, stream.packets().get(i), (short) (i + 1));
             assertTrue(p.queuedForDecoder() <= VideoPipeline.MAX_BACKLOG, "cut back: " + p.queuedForDecoder());
             sink.hold = false;

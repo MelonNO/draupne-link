@@ -251,6 +251,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile long shownArrivedMs;
 
     // decode-thread statistics
+    /** Frames the decode thread is done with - decoded and drawn, or passed over (tests wait for it, not for a pause). */
+    private volatile long framesDone;
     private volatile int shownFps;
     private volatile double decodeMs;
     private volatile double convertMs;
@@ -532,6 +534,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         return ageDrops;
     }
 
+    /** Frames the decode thread is done with (tests). */
+    long framesDone() {
+        return framesDone;
+    }
+
     /** What waits for the decoder (tests). */
     int queuedForDecoder() {
         return queue.size();
@@ -604,8 +611,10 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         int shown = 0;
         int noPictureRun = 0;
         long shownWindow = MonoClock.ms();
+        long taken = 0;
         try {
             while (running) {
+                framesDone = taken; // back here: every frame taken so far is done with
                 Object item;
                 try {
                     item = queue.poll(200, TimeUnit.MILLISECONDS);
@@ -640,6 +649,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         continue;
                     }
                     FrameAssembler.Frame frame = (FrameAssembler.Frame) item;
+                    taken++;
                     // no decoder (it could not be made at the config): tried again at each key frame, in software
                     // after a GPU failure - before, nothing was shown until the next config
                     if (decoder == null && frame.keyFrame() && decoderConfig != null) decoder = makeDecoder(decoderConfig);
@@ -1068,18 +1078,30 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             if (c == null || !f.keyFrame()) return null; // a file starts at a key frame
             java.nio.file.Path file = newFile(dir);
             de.droiddrone.pc.audio.AudioConfig sound = audioTrackForNewFile();
-            recorder = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
-            recordFile = file;
-            java.util.function.Consumer<java.nio.file.Path> started = fileListener;
-            if (started != null) started.accept(file);
-            log("Recording to " + file + (sound == null ? "" : " (with phone sound if sent)"));
-            tapOpen = true;
-            tap(t -> t.fileStarted(file, c.hevc(), c.width(), c.height(), c.codecConfig()));
-            if (sound != null) tap(t -> t.audioTrack(sound));
+            StreamRecorder opened = new StreamRecorder(file, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
+            try {
+                recordFile = file;
+                java.util.function.Consumer<java.nio.file.Path> started = fileListener;
+                if (started != null) started.accept(file);
+                log("Recording to " + file + (sound == null ? "" : " (with phone sound if sent)"));
+                tapOpen = true;
+                tap(t -> t.fileStarted(file, c.hevc(), c.width(), c.height(), c.codecConfig()));
+                if (sound != null) tap(t -> t.audioTrack(sound));
+                writeInto(opened, f);
+            } catch (java.io.IOException | RuntimeException e) {
+                // the caller never gets it (1.0.53): closed here, or the file stayed open - and locked - for good
+                opened.close();
+                throw e;
+            }
+            return opened;
         }
+        writeInto(recorder, f);
+        return recorder;
+    }
+
+    private void writeInto(StreamRecorder recorder, RecFrame f) throws java.io.IOException {
         recorder.write(f.data(), f.keyFrame(), f.arrivedMs());
         if (tapOpen) tap(t -> t.frame(f.data(), f.keyFrame(), f.arrivedMs()));
-        return recorder;
     }
 
     /** flight-(date)_(time).mkv; a second file within the same second gets -2, -3 ... (it overwrote the first). */

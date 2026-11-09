@@ -856,27 +856,6 @@ class VideoTest {
         return condition.getAsBoolean();
     }
 
-    /**
-     * The count once it has stood still for SETTLE_MS (at most 5 s): the decode thread works on after the frames are
-     * handed over, and a count read while it does is a race in the test, not a fault of the pipeline (T1, 1.0.49).
-     */
-    static int settled(java.util.concurrent.atomic.AtomicInteger count) throws InterruptedException {
-        int last = count.get();
-        long stillSince = System.currentTimeMillis();
-        for (long end = stillSince + 5000; System.currentTimeMillis() < end; Thread.sleep(10)) {
-            int now = count.get();
-            if (now != last) {
-                last = now;
-                stillSince = System.currentTimeMillis();
-            } else if (System.currentTimeMillis() - stillSince >= SETTLE_MS) {
-                break;
-            }
-        }
-        return last;
-    }
-
-    static final long SETTLE_MS = 300;
-
     /** H8: a one-packet P-frame lost whole: a key frame is asked for with the next frame (before 1.0.49: nothing). */
     @Test
     void aLostOnePacketFrameAsksForAKeyFrame() throws Exception {
@@ -912,6 +891,7 @@ class VideoTest {
             p.onVideoConfig(320, 240, false, false, a.codecConfig());
             feed(p, a, 0, 10, 1);
             assertTrue(waitFor(() -> screen.presented.get() >= 1, 2000), "the first stream shows");
+            assertTrue(waitFor(() -> p.framesDone() >= 10, 5000), "the decode thread is done with the 10 frames");
             int shown = screen.presented.get();
             feed(p, b, 0, 1, 1); // the new stream's key frame 1, before its config
             Thread.sleep(300);
@@ -933,7 +913,10 @@ class VideoTest {
             p.onVideoConfig(320, 240, false, false, a.codecConfig());
             feed(p, a, 0, 10, 1);
             assertTrue(waitFor(() -> screen.presented.get() >= 1, 2000));
-            int shown = settled(screen.presented); // the decode thread may still be drawing frames 2-10 (T1)
+            // the decode thread may still be drawing frames 2-10 (T1): waited for until it is done with them - a count
+            // still for 300 ms (settled) wasn't, on a loaded PC
+            assertTrue(waitFor(() -> p.framesDone() >= 10, 5000), "the decode thread is done with the 10 frames");
+            int shown = screen.presented.get();
             feed(p, a, 5, 6, 1); // "restarted": key frame 1 again (the same size, so it decodes under the old config)
             Thread.sleep(VideoPipeline.CONFIG_WAIT_MS + 200);
             assertEquals(shown, screen.presented.get(), "held");
