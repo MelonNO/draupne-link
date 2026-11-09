@@ -4,14 +4,12 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-09, 1.0.53 + phone app 2.3.0-pc.41 released; last flown: 1.0.43)
+## Where things stand (2026-11-09, 1.0.54 + phone app 2.3.0-pc.42 released; last flown: 1.0.43)
 
-- **Unreleased on main (2026-11-09, to be 1.0.54 + phone pc.42):** the review's maintainability list done, see CHANGELOG
-  "Unreleased". New homes: gui `PowerController` / `FleetController` / `TourHost` / `DetectionController` /
+- **1.0.54 + phone pc.42 (2026-11-09):** the review's maintainability list done, see CHANGELOG 1.0.54. New homes: gui `PowerController` / `FleetController` / `TourHost` / `DetectionController` /
   `OsdDataBuilder`, `pc/TierPolicy`, video `VideoRecording` / `KeyFrameBackoff`, gui `MapProjection` + `Map*Layer`,
   setup `SetupPlanner` (`ModeSwitchGoldenTest` pins every plan), Common `PacketIds` / `Bytes` / `SessionGate` / `RcPath` /
-  `Cadence` / `MspFrames` / `MspPages` / `TelemetryRecords`, fleet `VirtualVideo` / `VirtualMotionWatch`. The phone app
-  changed (timers, MSP, packet codes, pre-roll): a pc.42 APK is needed at the release. Not done: the card layout builder
+  `Cadence` / `MspFrames` / `MspPages` / `TelemetryRecords`, fleet `VirtualVideo` / `VirtualMotionWatch`. Not done: the card layout builder
   in MainWindow, the drone signs in MapView, observe/overwatch out of Udp. Known flakes under load: SpectatorTest
   congestion, PaintCostTest, PinsAndFlightsTest (re-run alone).
 

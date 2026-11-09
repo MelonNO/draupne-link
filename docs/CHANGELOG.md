@@ -2,7 +2,7 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## Unreleased (to be 1.0.54 + phone pc.42)
+## 1.0.54 + phone pc.42
 
 The rest of the review: the hard-to-maintain parts split up, behaviour kept. Nothing of it run on a drone or a real phone yet.
 
