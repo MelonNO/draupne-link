@@ -96,7 +96,7 @@ public class UdpSender {
 
     private void timerRun() {
         ArrayList<Short> keysToRemove = new ArrayList<>();
-        long time = System.currentTimeMillis();
+        long time = SavedPacket.nowMs(); // 1.0.53: the stamps' clock, not the wall clock
         for (ConcurrentHashMap.Entry<Short, SavedPacket> entry : savedPackets.entrySet()) {
             short key = entry.getKey();
             SavedPacket packet = entry.getValue();
@@ -150,7 +150,7 @@ public class UdpSender {
 
     /** A send error, logged at most every ERROR_LOG_GAP_MS (a dead network fails every packet). */
     private void sendError(String what, Exception e) {
-        long now = System.currentTimeMillis();
+        long now = SavedPacket.nowMs();
         synchronized (packetNumberLock) {
             errorsSinceLog++;
             if (now - lastErrorLogMs < ERROR_LOG_GAP_MS) return;

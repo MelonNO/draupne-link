@@ -32,7 +32,7 @@ dependencies {
 
 // Compile upstream's platform-neutral protocol code straight from the pinned submodule,
 // so our wire format is the phone app's wire format. The four excluded Common files need Android;
-// Server/src is upstream's relay, which we can host in-process (RelayHost). UdpSender and ReceiverBuffer come
+// Server/src is upstream's relay, which we can host in-process (RelayHost). UdpSender, ReceiverBuffer and SavedPacket come
 // from flight-app/overlay/Common instead: the same patched copies the phone app is built with (the resend timer
 // that died after the first reconnect, see the files' headers).
 sourceSets {
@@ -46,7 +46,7 @@ sourceSets {
             exclude '**/common/MediaCommon.java'
             exclude '**/common/TelephonyService.java'
             exclude '**/common/Logcat.java'
-            exclude { it.file.path.contains('upstream') && (it.name == 'UdpSender.java' || it.name == 'ReceiverBuffer.java') }
+            exclude { it.file.path.contains('upstream') && (it.name == 'UdpSender.java' || it.name == 'ReceiverBuffer.java' || it.name == 'SavedPacket.java') }
         }
     }
 }
