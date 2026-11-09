@@ -520,6 +520,24 @@ class ControlLinkTest {
     }
 
     /**
+     * The calm that earns the sharp tier is counted from the session's start (1.0.53): the tier's start time and the
+     * last stall began at 0, so a phone already at the normal top went sharp on the first tick - an 8 Mbit/s burst on
+     * a link nobody had judged yet.
+     */
+    @Test
+    void autoWaitsTheWholeCalmBeforeTheSharpTier() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.encoderBitRate = 4_000_000; // at the normal top from the start
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.setSharpAfterMsForTest(4000);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        Thread.sleep(2000); // telemetry with the bitrate has come, half the calm has passed
+        assertEquals(ControlLink.Tier.NORMAL, link.getTier(), "not sharp before the calm has lasted");
+        waitFor(() -> link.getTier() == ControlLink.Tier.SHARP, 6000, "sharp once it has");
+    }
+
+    /**
      * AUTO earns the sharp tier (1.0.34): calm at the normal top bitrate, no stall, for SHARP_AFTER_MS - then the
      * sharp size and limit go out. A stall ends it at once: back to the normal picture, from where bad coverage mode
      * is judged as before.

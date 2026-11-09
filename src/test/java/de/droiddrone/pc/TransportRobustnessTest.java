@@ -37,6 +37,22 @@ class TransportRobustnessTest {
         }
     }
 
+    /**
+     * 1.0.53: the resend timer and the gap wait compare against the packets' stamps, which were the wall clock - a
+     * time sync setting it back stopped every resend and gap skip until it caught up. They are on the monotonic clock
+     * now, as everything else on the link (MonoClock, UdpSender.pingClockMs).
+     */
+    @Test
+    void savedPacketsAreStampedOnTheMonotonicClock() {
+        long before = System.nanoTime() / 1_000_000;
+        SavedPacket p = new SavedPacket(UdpCommon.FcInfo, (short) 0, new byte[]{UdpCommon.FcInfo, 0, 0}, FAR, 1);
+        long after = System.nanoTime() / 1_000_000;
+        assertTrue(p.timestampCreated >= before && p.timestampCreated <= after, "stamped on nanoTime's ms: " + p.timestampCreated);
+        assertEquals(p.timestampCreated, p.timestamp);
+        long now = SavedPacket.nowMs();
+        assertTrue(now >= after && now - after < 1000, "the clock the comparisons use");
+    }
+
     /** On sparse traffic the buffer size averaged down to 1: every gap was skipped at once, never asked for. */
     @Test
     void aGapIsWaitedForBeforeItIsSkipped() throws Exception {

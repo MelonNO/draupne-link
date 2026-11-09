@@ -76,6 +76,28 @@ class OverwatchHubTest {
         return out;
     }
 
+    /**
+     * A CLIP packet cut short (a phone's datagram cut by the network, or a broken sender): ignored, no throw - the
+     * hub's thread caught it, but skipped its tick and logged an index error for each one.
+     */
+    @Test
+    void aCutClipPacketIsIgnoredWithoutAThrow() throws Exception {
+        OverwatchHub hub = hub();
+        receive(hub, alert(TOKEN, 1, 1));
+        byte[] chunk = new byte[40];
+        chunk[0] = OverwatchProtocol.CLIP;
+        chunk[1] = (byte) (TOKEN >> 24);
+        chunk[2] = (byte) (TOKEN >> 16);
+        chunk[3] = (byte) (TOKEN >> 8);
+        chunk[4] = (byte) TOKEN;
+        chunk[6] = 1;
+        chunk[7] = (byte) OverwatchProtocol.CLIP_CHUNK;
+        for (int n = 5; n < OverwatchProtocol.CHUNK_DATA_AT; n++) {
+            byte[] cut = java.util.Arrays.copyOf(chunk, n);
+            assertDoesNotThrow(() -> receive(hub, cut), n + " bytes");
+        }
+    }
+
     @Test
     void aStrangersAlertIsNotAnswered() throws Exception {
         OverwatchHub hub = hub();

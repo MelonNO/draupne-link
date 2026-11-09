@@ -237,7 +237,7 @@ public final class NameService {
         long nextScan = 0;
         while (running) {
             try {
-                long now = System.currentTimeMillis();
+                long now = MonoClock.ms(); // 1.0.53: a clock set back held every scan until it caught up
                 if (now >= nextScan || scanNow > 0) {
                     scanNow = 0;
                     nextScan = now + SCAN_MS;
@@ -293,10 +293,10 @@ public final class NameService {
                     // an address that can't be reached: no entry
                 }
             }
-            long end = System.currentTimeMillis() + REPLY_WAIT_MS;
+            long end = MonoClock.ms() + REPLY_WAIT_MS; // 1.0.53: on the wall clock, a clock set back kept this loop going as long
             byte[] buf = new byte[512];
             DatagramPacket packet = new DatagramPacket(buf, buf.length);
-            while (System.currentTimeMillis() < end) {
+            while (MonoClock.ms() < end) {
                 try {
                     socket.receive(packet);
                 } catch (SocketTimeoutException e) {

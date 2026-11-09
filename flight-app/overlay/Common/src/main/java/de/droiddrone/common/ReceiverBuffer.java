@@ -193,7 +193,7 @@ public class ReceiverBuffer {
                 return packet;
             }
             if (numberedBuffer.isEmpty()) return null;
-            long now = System.currentTimeMillis();
+            long now = SavedPacket.nowMs(); // 1.0.53: the stamps' clock
             short first = -1;
             int nearest = Integer.MAX_VALUE;
             long oldest = Long.MAX_VALUE; // the gap is as old as the oldest packet waiting behind it
@@ -298,7 +298,7 @@ public class ReceiverBuffer {
 
     private void bufferCleanup(){
         ArrayList<Short> keysToRemove = new ArrayList<>();
-        long currentTime = System.currentTimeMillis();
+        long currentTime = SavedPacket.nowMs(); // 1.0.53: the stamps' clock
         for (ConcurrentHashMap.Entry<Short, Long> entry : lastRequestedPackets.entrySet()) {
             short key = entry.getKey();
             long time = entry.getValue();
