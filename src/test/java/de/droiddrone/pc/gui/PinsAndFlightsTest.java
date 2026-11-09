@@ -240,6 +240,7 @@ class PinsAndFlightsTest {
             });
         } finally {
             SwingUtilities.invokeAndWait(d::dispose);
+            SwingUtilities.invokeAndWait(() -> {}); // windowClosed (queued by dispose) stops playback: files shut before @TempDir goes
         }
     }
 }

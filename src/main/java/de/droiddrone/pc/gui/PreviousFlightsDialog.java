@@ -387,8 +387,16 @@ final class PreviousFlightsDialog extends JDialog {
         play.setText("Play");
         if (audio != null) audio.close();
         audio = null;
-        if (player != null) player.stopPlayer();
+        Player old = player;
         player = null;
+        if (old != null) {
+            old.stopPlayer();
+            try { // its file closed before another opens or the window goes (Windows keeps an open file)
+                old.join(500);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /** 15 a second: the figures, the bar's playhead, the map's marker, the end. */
