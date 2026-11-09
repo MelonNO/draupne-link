@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## Unreleased (to be 1.0.56 + phone pc.44)
+
+The pilot's test of 1.0.55 on a real phone (MobileAlpha, indoors). Nothing of it run on a real phone yet.
+
+- **Fixed: motion detection found nobody close to the camera** (the pilot: "filming myself and moving", and pointed at himself in OVERWATCH: nothing). Someone a metre or two off covers much of the picture: the camera's exposure follows them, which the detector read as exposure steps that threw its tracks away; a change over a quarter of the picture read as the whole picture changing (not judged); and the travel rules, made for leaves 30 m off, take neither a crossing in a second nor someone moving in place. Now the exposure is the pixels' most common factor and the background follows it picture by picture, the camera's shake is measured on the room only, one big change with the room clean round it is judged, and a big solid thing where the picture was calm, hiding the ground's detail (a shadow keeps it), is boxed within 0.6 s however it moves (`MotionDetector` in Common: both apps). A shadow's edge is told by the ground behind it (darker or brighter, its detail still there). Made-up scenes: a close crossing found in 0.75 s (never before), someone walking up and standing there found and kept boxed, a wave found in 1 s, someone walking off in 2.25 s (4.6 s before); the wind, shake, exposure, shadow, knock and night scenes stay quiet. A leafy branch right in front of the lens still raises alarms through the old travel rules, as before.
+- **Fixed: flickering, broken live video after overwatch.** STANDBY sent to a phone in OVERWATCH left overwatch running; after CONNECT its preview sender took every other frame off the live video (half the frames reached the PC). STANDBY now ends overwatch first, and that sender reads the video only in OVERWATCH.
+
 ## 1.0.55 + phone pc.43
 
 The pilot's round of 2026-11-09. Nothing of it run on a drone or a real phone yet.

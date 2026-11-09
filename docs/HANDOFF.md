@@ -6,6 +6,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 
 ## Where things stand (2026-11-09, 1.0.55 + phone app 2.3.0-pc.43 released; last flown: 1.0.43)
 
+- **Unreleased on main (2026-11-09, to be 1.0.56 + phone pc.44, versions not bumped, no APK):** see CHANGELOG "Unreleased". Close-up motion detection in Common `MotionDetector` (histogram-peak exposure gain the background follows while something big is in view, room-only shift with a hold, `oneThingInFront`, `NEAR_*` rule with the ground's band detail, a shadow's edge told by the detail behind it in `leavesChange`; tests in `MotionDetectorTest` "close to the camera"). Known, not new: a leafy branch right in front of the lens raises alarms through the old travel rules; overwatch STANDBY / preview sender fix (`PowerMode`, `Overwatch`, 0791721).
+
 - **1.0.55 + phone pc.43 (released 2026-11-09; flight-2.3.0-pc.43 SHA-256 fb6412c8..., signer d910997f...2eb9, pinned in `ApkShare`; release run 42649582108 green first try, 16 min):** see CHANGELOG 1.0.55. Real-phone motion detection (Common `AnalysisSize`, `MotionWatch` block average), `CameraTurn` (one
   upside-down setting per phone for every view), `ObservationOsd` (observers get FC records + FcInfo from the phone),
   tour: `virtual-fleet.stop` request file the fleet program honours, BTR on NEXT only, pins sheet closes, movable box.

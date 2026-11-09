@@ -60,6 +60,14 @@ import java.util.List;
  * <li>Coming straight at the camera (1.0.53): someone walking head-on hardly moves in the picture - he grows - and the
  * background above learns a thing that stays in one place within seconds. {@link Looming} looks at the same aligned
  * pictures slowly: what stays changed against a slow reference and grows steadily where it stands is reported too.</li>
+ * <li>Close to the camera (1.0.56, the pilot filming himself found nothing): someone a metre or two off crosses the
+ * picture in a second, or stands in it and moves in place, and fills much of it - the travel rules take neither, the
+ * camera's exposure follows them, and the change looked like the picture changing as a whole. Now: the exposure is the
+ * most common factor over the pixels (not their sums) and the background follows it picture by picture; the camera's
+ * shift is measured on the room, not on what moves; a big change packed in one piece with the room clean round it is
+ * judged; and a big solid thing where the picture was calm, hiding the ground's detail (a shadow keeps it), is reported
+ * within 0.6 s whichever way it moves ({@link #NEAR_AREA}). With the exposure now right, a shadow's edge shows as a local
+ * change that travels: it is told by the ground behind it - darker or brighter, its detail still there.</li>
  * </ol>
  * Night: a dark picture (mean luma under {@link #NIGHT_ENTER}) keeps the detector on, but only for points brighter than
  * the background (headlights, torches) - a larger margin, and a blob must also stand {@link #NIGHT_PEAK_OVER_MEAN} over
@@ -120,6 +128,8 @@ import java.util.List;
     static final float WAKE_CHANGED = 0.5f;
     /** ... by this many grey levels at least (or 3 standard deviations) from the slow background. */
     static final float WAKE_MIN_DIFF = 12;
+    /** ... or the ground behind is this much darker or brighter (a factor's distance from 1), its detail correlating this well with what was there (1.0.56). */
+    static final float WAKE_LIGHT_STEP = 0.15f, WAKE_LIGHT_DETAIL = 0.3f;
     /** For this long after the warm-up the background is young (the flicker map half known): a longer way is asked. */
     static final long YOUNG_MS = 20_000;
     /** A track must have been seen in this share of the pictures since it began. */
@@ -168,6 +178,43 @@ import java.util.List;
     static final float LOOM_CONFIDENCE = 0.7f;
     /** A proven track not matched for this long ends (an unproven one after TRACK_LOST_MS): a vehicle turning head-on shrinks to nothing for a moment. */
     static final long PROVEN_LOST_MS = 3000;
+    /**
+     * Something close to the camera (DRAUPNE Link 1.0.56, the pilot: "filming myself and moving" found nothing): a big
+     * solid thing where the picture had been calm. It crosses the picture in a second or two, or stays and moves in place
+     * (an arm waving) - the travel rules, made for leaves 30 m off, take neither. At least this share of the picture,
+     */
+    static final float NEAR_AREA = 0.01f;
+    /** ... its box at least this full, */
+    static final float NEAR_FILL = 0.3f;
+    /** ... seen in this share of the pictures since it began, for this long at least (s), */
+    static final float NEAR_SEEN = 0.8f, NEAR_AGE_S = 0.6f;
+    /**
+     * ... where it began and round it the picture flickered at most this often (freq, scaled by how much of the flicker
+     * map is learnt): leaves flicker in place for ever, a wall doesn't,
+     */
+    static final float NEAR_CALM = 0.04f;
+    /** ... a ring this wide round its box (working pixels) for that, */
+    static final int NEAR_RING = 4;
+    /**
+     * ... and not the same ground in other light: its brightness against the background's varies across it by at least
+     * this much (a coefficient of variation; a shadow over flat ground darkens it by one factor).
+     */
+    static final float NEAR_RATIO_SPREAD = 0.2f;
+    /**
+     * ... or, where the ground has fine detail (NEAR_DETAIL_MIN_SD), that detail no longer shows through it: the
+     * picture's and the background's correlate under this. A shadow, a patch of sun - however soft - keep it.
+     */
+    static final float NEAR_DETAIL_SHOWS = 0.2f, NEAR_DETAIL_MIN_SD = 1.5f;
+    /** The confidence a close thing is reported with. */
+    static final float NEAR_CONFIDENCE = 0.6f;
+    /**
+     * A picture where more than GLOBAL_CHANGE_FRACTION changed is still judged when the change is one thing in front of
+     * the camera: in grid cells of this many working pixels, at least NEAR_IN_FULL of the change lies in cells it fills
+     * (NEAR_FULL_CELL of their pixels), and at least NEAR_CLEAN_CELLS of the cells are clean (under NEAR_CLEAN_CELL) - the
+     * room behind it. A shake's or a misjudged exposure's change spreads thin over every cell.
+     */
+    static final int NEAR_CELL = 10;
+    static final float NEAR_FULL_CELL = 0.4f, NEAR_IN_FULL = 0.6f, NEAR_CLEAN_CELL = 0.05f, NEAR_CLEAN_CELLS = 0.08f;
 
     /** A box round something that travels, in the input picture's own coordinates, 0..1. */
     public static final class Detection {
@@ -219,6 +266,12 @@ import java.util.List;
         float sumX, sumY, freq, texture, peak;
         /** Sums of picture (a) and background (m) values over the blob, for their correlation. */
         double sa, sm, saa, smm, sam;
+        /** Sums of the picture's brightness over the background's ((a + 4) / (m + 4)), for its spread (1.0.56). */
+        double sq, sqq;
+        /** Pixels deep inside it (interior): the detail's sums are theirs - at the edge the band sees the ground round it. */
+        int interior;
+        /** Sums of the fine detail of picture (a) and background (m), for their correlation (1.0.56). */
+        double da, dm, daa, dmm, dam;
         int label;
         Track track;
 
@@ -244,6 +297,12 @@ import java.util.List;
         int minX, minY, maxX, maxY;
         float flicker, textureRatio, vegetation, confidence;
         boolean confirmed, light, proven;
+        /** 1.0.56: confirmed as a thing close to the camera (NEAR_AREA): kept while seen, unless it turns out leaves. */
+        boolean near;
+        /** The flicker where it began (the calm before it), and its blob's last area, fill and brightness spread. */
+        float startFlicker = -1, area, fill, ratioSpread;
+        /** How well the ground's fine detail still shows through it (correlation; NaN: the ground has none to show). */
+        float detail = Float.NaN;
         /** It once came back towards where it began (leaves do, at every swing): the slow way never counts for it. */
         boolean cameBack;
         /** The last judgement's figures (describeTracks). */
@@ -267,8 +326,12 @@ import java.util.List;
     private float[] near;
     /** changed: the picture differs from the background here, whatever the cause (raw: and it isn't other light). */
     private byte[] valid, changed, raw, clean, grown;
+    /** 1.0.56: pixels not foreground in the last picture (the room), where the camera's shift is measured. */
+    private byte[] still, stillSmall;
+    /** Summed table of clean (w + 1 by h + 1), for interior. */
+    private int[] cleanSum;
     private int[] labels, stack;
-    private float[] smallCur, smallMean, hpSmallCur, hpSmallMean, hpCur, hpMean, tmp;
+    private float[] smallCur, smallMean, hpSmallCur, hpSmallMean, hpCur, hpMean, tmp, hpAligned, hpBack, bandA, hpSlow;
     private boolean started, night;
     private long lastMs, warmUntil;
     /**
@@ -333,6 +396,9 @@ import java.util.List;
         return id;
     }
 
+    /** Tracks confirmed as close to the camera so far (1.0.56; for the tests). */
+    int nearMade;
+
     /** How many tracks were started so far (the ids wrap at 65535). */
     int tracksMade() {
         return nextId - 1;
@@ -381,13 +447,7 @@ import java.util.List;
         }
 
         // 2. exposure: the picture's brightness matched to the background's
-        double sumMean = 0, sumCur = 0;
-        for (int i = 0; i < w * h; i++) {
-            if (valid[i] == 0) continue;
-            sumMean += mean[i];
-            sumCur += aligned[i];
-        }
-        float gain = (float) (sumMean / Math.max(1, sumCur));
+        float gain = gain();
         boolean settling = timeMs < warmUntil;
         if (gain < 0.33f || gain > 3f) { // more than a step: a new scene
             restart(aligned, timeMs);
@@ -400,13 +460,32 @@ import java.util.List;
             }
             loom.exposure(gain);
             settling = true;
+        } else if (gainFromPeak) {
+            // 1.0.56: the background follows the exposure picture by picture. Matching only the picture to it, the
+            // camera following someone close by (2 - 3 % a picture) added up to a "step" within a second, and every step
+            // threw the tracks away - the one on them too. Now only a jump between two pictures is a step.
+            for (int i = 0; i < w * h; i++) {
+                mean[i] /= gain;
+                slow[i] /= gain;
+            }
+            loom.exposure(gain);
         } else {
             for (int i = 0; i < w * h; i++) aligned[i] *= gain;
         }
 
         // 3. foreground
+        // the detail of picture and background a few pixels across (1.0.56): a shadow keeps the ground's, a thing in
+        // front hides it (a band, not the finest grain: a shaken picture is aligned to a fraction of a pixel only)
+        if (!night) {
+            band(aligned, hpAligned);
+            band(mean, hpBack);
+            band(slow, hpSlow);
+        }
         int fg = foreground();
-        if (fg > validCount * GLOBAL_CHANGE_FRACTION) settling = true;
+        lastFg = fg / (float) Math.max(1, validCount);
+        // more than a share changed: the picture as a whole (shake, a shadow) - unless it is one thing in front of the
+        // camera with the room still there round it (1.0.56)
+        if (fg > validCount * GLOBAL_CHANGE_FRACTION && (night || !oneThingInFront(fg))) settling = true;
         if (settling) {
             settledFor += timeMs < warmUntil ? 0 : dt;
             if (settledFor > RELEARN_AFTER_S) {
@@ -468,6 +547,13 @@ import java.util.List;
         hpSmallMean = new float[(w / 4) * (h / 4)];
         hpCur = new float[n];
         hpMean = new float[n];
+        hpAligned = new float[n];
+        bandA = new float[n];
+        hpSlow = new float[n];
+        still = new byte[n];
+        cleanSum = new int[(w + 1) * (h + 1)];
+        stillSmall = new byte[(w / 4) * (h / 4)];
+        hpBack = new float[n];
         tmp = new float[n];
         started = false;
         tracks.clear();
@@ -534,6 +620,27 @@ import java.util.List;
      */
     private void estimateShift() {
         int sw = w / 4, sh = h / 4;
+        // 1.0.56: measured on the room only - what was foreground in the last picture (a person close by, filling half
+        // of it and moving 10 px a picture) pulled the answer along with it, and the room no longer matched
+        byte[] m = null, ms = null;
+        int usable = 0;
+        for (int i = 0; i < w * h; i++) {
+            still[i] = (byte) (raw[i] == 0 && grown[i] == 0 ? 1 : 0);
+            usable += still[i];
+        }
+        if (usable < w * h * 15 / 100 || usable > w * h * 75 / 100) {
+            // nearly all moving, or little (leaves, a passer-by far off): the whole picture, as before
+        } else {
+            m = still;
+            ms = stillSmall;
+            for (int yy = 0; yy < sh; yy++) {
+                for (int xx = 0; xx < sw; xx++) {
+                    int n = 0;
+                    for (int dy = 0; dy < 4; dy++) for (int dx = 0; dx < 4; dx++) n += still[(yy * 4 + dy) * w + xx * 4 + dx];
+                    stillSmall[yy * sw + xx] = (byte) (n >= 12 ? 1 : 0);
+                }
+            }
+        }
         reduce(cur, smallCur, sw, sh);
         reduce(mean, smallMean, sw, sh);
         highPass(smallCur, hpSmallCur, sw, sh, 1);
@@ -544,7 +651,7 @@ import java.util.List;
         float best = Float.MAX_VALUE;
         for (int dy = -COARSE_RANGE; dy <= COARSE_RANGE; dy++) {
             for (int dx = -COARSE_RANGE; dx <= COARSE_RANGE; dx++) {
-                float c = cost(hpSmallCur, hpSmallMean, sw, sh, dx, dy, 1);
+                float c = cost(hpSmallCur, hpSmallMean, sw, sh, dx, dy, 1, ms);
                 if (c < best) {
                     best = c;
                     bx = dx;
@@ -557,7 +664,7 @@ import java.util.List;
         int cx = fx, cy = fy;
         for (int dy = -3; dy <= 3; dy++) {
             for (int dx = -3; dx <= 3; dx++) {
-                float c = cost(hpCur, hpMean, w, h, fx + dx, fy + dy, 2);
+                float c = cost(hpCur, hpMean, w, h, fx + dx, fy + dy, 2, m);
                 if (c < best) {
                     best = c;
                     cx = fx + dx;
@@ -566,12 +673,41 @@ import java.util.List;
             }
         }
         // the fraction from every pixel (the search took every other one)
-        best = cost(hpCur, hpMean, w, h, cx, cy, 1);
-        float l = cost(hpCur, hpMean, w, h, cx - 1, cy, 1), r = cost(hpCur, hpMean, w, h, cx + 1, cy, 1);
-        float t = cost(hpCur, hpMean, w, h, cx, cy - 1, 1), b = cost(hpCur, hpMean, w, h, cx, cy + 1, 1);
+        best = cost(hpCur, hpMean, w, h, cx, cy, 1, m);
+        // 1.0.56: the last shift held unless the new one is clearly better - over a room with little fine detail the
+        // costs lie close together and the answer wandered (a few pixels a picture, then a whole picture judged off)
+        int px = Math.round(shiftX), py = Math.round(shiftY);
+        if (m != null && usable < w * h * 8 / 10 && (px != cx || py != cy)) {
+            float held = cost(hpCur, hpMean, w, h, px, py, 1, m);
+            if (held <= best * SHIFT_HOLD) {
+                cx = px;
+                cy = py;
+                best = held;
+            }
+        }
+        float l = cost(hpCur, hpMean, w, h, cx - 1, cy, 1, m), r = cost(hpCur, hpMean, w, h, cx + 1, cy, 1, m);
+        float t = cost(hpCur, hpMean, w, h, cx, cy - 1, 1, m), b = cost(hpCur, hpMean, w, h, cx, cy + 1, 1, m);
         shiftX = cx + fraction(l, best, r);
         shiftY = cy + fraction(t, best, b);
     }
+
+    /** At least 80 % of the 7 x 7 round (x, y) foreground (clean): deep enough inside a blob for its detail. */
+    private boolean interior(int x, int y) {
+        int x0 = Math.max(0, x - 3), y0 = Math.max(0, y - 3), x1 = Math.min(w, x + 4), y1 = Math.min(h, y + 4);
+        int W1 = w + 1;
+        int n = cleanSum[y1 * W1 + x1] - cleanSum[y0 * W1 + x1] - cleanSum[y1 * W1 + x0] + cleanSum[y0 * W1 + x0];
+        return n >= 0.8f * (x1 - x0) * (y1 - y0);
+    }
+
+    /** dst = src smoothed over 3 x 3, less its average over 7 x 7: the detail a few pixels across (bandA as scratch). */
+    private void band(float[] src, float[] dst) {
+        highPass(src, bandA, w, h, 1);
+        for (int i = 0; i < w * h; i++) bandA[i] = src[i] - bandA[i];
+        highPass(bandA, dst, w, h, 3);
+    }
+
+    /** A new shift must cost less than the last one's cost over this (SHIFT_HOLD) to be taken. */
+    static final float SHIFT_HOLD = 1.05f;
 
     /** dst = src less its average over (2r + 1)^2 round each pixel (a box, cut at the edges). */
     private void highPass(float[] src, float[] dst, int cw, int ch, int r) {
@@ -619,7 +755,7 @@ import java.util.List;
     }
 
     /** Mean capped absolute difference of a(x + d) and b(x), every step-th pixel each way. */
-    private static float cost(float[] a, float[] b, int cw, int ch, int dx, int dy, int step) {
+    private static float cost(float[] a, float[] b, int cw, int ch, int dx, int dy, int step, byte[] mask) {
         int x0 = Math.max(0, -dx), x1 = Math.min(cw, cw - dx);
         int y0 = Math.max(0, -dy), y1 = Math.min(ch, ch - dy);
         if (x1 - x0 < cw / 2 || y1 - y0 < ch / 2) return Float.MAX_VALUE;
@@ -628,6 +764,7 @@ import java.util.List;
         for (int yy = y0; yy < y1; yy += step) {
             int rowB = yy * cw, rowA = (yy + dy) * cw + dx;
             for (int xx = x0; xx < x1; xx += step) {
+                if (mask != null && mask[rowB + xx] == 0) continue; // (1.0.56: the room only)
                 float d = Math.abs(a[rowA + xx] - b[rowB + xx]);
                 s += d < 20 ? d : 20;
                 n++;
@@ -663,6 +800,129 @@ import java.util.List;
         }
         return count;
     }
+
+    /**
+     * The factor that brings the picture to the background's brightness (background over picture). 1.0.56: the most
+     * common factor over the pixels (a histogram's peak), not the factor of their sums - a big dark or bright thing in
+     * front of the camera (someone close by) moved the sums as an exposure step would, and the background was rescaled
+     * under it. The camera's exposure moves every pixel by one factor: they pile up in one place of the histogram, the
+     * thing's own pixels spread. The sums' factor when no clear peak stands out (a flat or noisy picture).
+     */
+    private float gain() {
+        double sumMean = 0, sumCur = 0;
+        java.util.Arrays.fill(gainBins, 0);
+        int n = 0;
+        for (int i = 0; i < w * h; i++) {
+            if (valid[i] == 0) continue;
+            sumMean += mean[i];
+            sumCur += aligned[i];
+            if ((i & 1) != 0) continue; // every other pixel is plenty for the histogram
+            float r = (mean[i] + 4) / (aligned[i] + 4);
+            int bin = (int) ((r - GAIN_LOW) / GAIN_BIN);
+            if (bin >= 0 && bin < gainBins.length) gainBins[bin]++;
+            n++;
+        }
+        float sums = (float) (sumMean / Math.max(1, sumCur));
+        int best = 0;
+        for (int b = 1; b < gainBins.length; b++) if (gainBins[b] > gainBins[best]) best = b;
+        int lo = Math.max(0, best - 2), hi = Math.min(gainBins.length - 1, best + 2), peak = 0;
+        double sum = 0;
+        for (int b = lo; b <= hi; b++) {
+            peak += gainBins[b];
+            sum += gainBins[b] * (GAIN_LOW + (b + 0.5) * GAIN_BIN);
+        }
+        boolean found = !night && n > 0 && peak >= GAIN_PEAK * n;
+        gainFromPeak = false;
+        if (found) {
+            peakAt = lastMs;
+            float mode = (float) (sum / peak);
+            // the sums' factor while the two agree (the picture changed as a whole, or not at all), and unless something
+            // big was in the last picture: as before
+            if (Math.abs(mode - sums) <= GAIN_DISAGREE || lastFg < GAIN_BIG_THING) return sums;
+            gainFromPeak = true;
+            return mode;
+        }
+        // no peak while there was one moments ago: something big in front (the room's share too small to stand out),
+        // not the camera's exposure - that moves every pixel by one factor, a peak of its own
+        return !night && lastFg >= GAIN_BIG_THING && lastMs - peakAt <= PEAK_HOLD_MS ? 1f : sums;
+    }
+
+    /** The gain histogram: factors from GAIN_LOW in steps of GAIN_BIN (0.33 - 3, past which the scene starts again). */
+    static final float GAIN_LOW = 0.3f, GAIN_BIN = 0.01f;
+    /** The peak (five bins) must hold this share of the pixels to be taken. */
+    static final float GAIN_PEAK = 0.15f;
+    /** The peak's factor is taken over the sums' only when they differ by more than this (something big in front). */
+    static final float GAIN_DISAGREE = 0.04f;
+    /** ... and only while at least this share of the last picture was foreground (the sums' factor is fine otherwise). */
+    static final float GAIN_BIG_THING = 0.1f;
+    /** The share of the last picture that was foreground. */
+    private float lastFg;
+
+    /** The last gain came from the histogram's peak (the exposure's own factor), not from the sums. */
+    private boolean gainFromPeak;
+    /** When the gain last came from a peak; for PEAK_HOLD_MS after it, no peak means no exposure change. */
+    private long peakAt = Long.MIN_VALUE / 2;
+    static final long PEAK_HOLD_MS = 2000;
+    private final int[] gainBins = new int[(int) ((3.1f - GAIN_LOW) / GAIN_BIN)];
+
+    /**
+     * More than GLOBAL_CHANGE_FRACTION of the picture changed: one thing in front of the camera (1.0.56) rather than the
+     * picture as a whole? The change not other light, packed into the grid cells it fills, the room still clean round
+     * it (NEAR_CELL). A shake's change lies thin along every edge; a misjudged exposure leaves no cell clean.
+     */
+    private boolean oneThingInFront(int changedCount) {
+        int cw = (w + NEAR_CELL - 1) / NEAR_CELL, ch = (h + NEAR_CELL - 1) / NEAR_CELL;
+        if (cellRaw == null || cellRaw.length != cw * ch) cellRaw = new int[cw * ch];
+        java.util.Arrays.fill(cellRaw, -1);
+        int raws = 0, inFull = 0, clean = 0, cells = 0;
+        for (int cy = 0; cy < ch; cy++) {
+            for (int cx = 0; cx < cw; cx++) {
+                int v = 0, r = 0;
+                for (int yy = cy * NEAR_CELL; yy < Math.min(h, (cy + 1) * NEAR_CELL); yy++) {
+                    for (int xx = cx * NEAR_CELL; xx < Math.min(w, (cx + 1) * NEAR_CELL); xx++) {
+                        int i = yy * w + xx;
+                        v += valid[i];
+                        r += raw[i];
+                    }
+                }
+                if (v < NEAR_CELL * NEAR_CELL / 2) continue; // the border
+                cells++;
+                raws += r;
+                if (r >= NEAR_FULL_CELL * v) {
+                    inFull += r;
+                    cellRaw[cy * cw + cx] = r;
+                } else if (r < NEAR_CLEAN_CELL * v) clean++;
+            }
+        }
+        if (cells == 0 || raws < 0.7f * changedCount || inFull < NEAR_IN_FULL * raws || clean < NEAR_CLEAN_CELLS * cells) return false;
+        // one thing: the filled cells one piece (a camera knocked further than the shift search reaches leaves the room
+        // changed in pieces all over)
+        int best = 0;
+        int[] queue = new int[cw * ch];
+        for (int start = 0; start < cw * ch; start++) {
+            if (cellRaw[start] < 0) continue;
+            int sum = 0, head = 0, tail = 0;
+            queue[tail++] = start;
+            sum += cellRaw[start];
+            cellRaw[start] = -1;
+            while (head < tail) {
+                int c = queue[head++], cx = c % cw, cy = c / cw;
+                int[] next = {cx > 0 ? c - 1 : -1, cx < cw - 1 ? c + 1 : -1, cy > 0 ? c - cw : -1, cy < ch - 1 ? c + cw : -1};
+                for (int n : next) {
+                    if (n < 0 || cellRaw[n] < 0) continue;
+                    sum += cellRaw[n];
+                    cellRaw[n] = -1;
+                    queue[tail++] = n;
+                }
+            }
+            best = Math.max(best, sum);
+        }
+        return best >= NEAR_ONE_PIECE * inFull;
+    }
+
+    /** The share of the filled cells' change the largest piece of them must hold. */
+    static final float NEAR_ONE_PIECE = 0.85f;
+    private int[] cellRaw;
 
     // ------------------------------------------------------------------ 3. foreground
 
@@ -782,6 +1042,14 @@ import java.util.List;
                 if (n >= 2) clean[i] = 1;
             }
         }
+        // how much of each pixel's 7 x 7 is foreground (a summed table of clean, rows and columns)
+        for (int yy = 0; yy < h; yy++) {
+            int run = 0;
+            for (int xx = 0; xx < w; xx++) {
+                run += clean[yy * w + xx];
+                cleanSum[(yy + 1) * (w + 1) + xx + 1] = cleanSum[yy * (w + 1) + xx + 1] + run;
+            }
+        }
         // grown by a pixel, so the pieces of one thing (legs, a car's windows) join
         java.util.Arrays.fill(grown, (byte) 0);
         for (int yy = 1; yy < h - 1; yy++) {
@@ -828,6 +1096,18 @@ import java.util.List;
                     b.saa += a * a;
                     b.smm += m * m;
                     b.sam += a * m;
+                    double q = (a + 4) / (m + 4);
+                    b.sq += q;
+                    b.sqq += q * q;
+                    if (interior(xx, yy)) {
+                        float da = hpAligned[i], dm = hpBack[i];
+                        b.interior++;
+                        b.da += da;
+                        b.dm += dm;
+                        b.daa += da * da;
+                        b.dmm += dm * dm;
+                        b.dam += da * dm;
+                    }
                 }
                 for (int dy = -1; dy <= 1; dy++) {
                     int ny = yy + dy;
@@ -843,7 +1123,8 @@ import java.util.List;
                     }
                 }
             }
-            if (b.count < 2 || b.count > w * h / 4) continue;
+            // (1.0.56: a thing close to the camera may fill most of the picture - a whole-picture change never comes here)
+            if (b.count < 2 || b.count > w * h * 95 / 100) continue;
             if (night && b.peak < lumMean + NIGHT_PEAK_OVER_MEAN) continue;
             if (!night && lightChange(b)) continue;
             b.freq /= b.count;
@@ -859,6 +1140,13 @@ import java.util.List;
      * texture closely, only darker or brighter. Something in front of the ground hides that texture. Only where there
      * is texture to follow (a flat sky says nothing either way).
      */
+    /**
+     * 1.0.56: the ground's detail (a few pixels across) still shows through the blob - a shadow or a patch of sun
+     * however soft its edge, which lightChange's one factor misses. Something in front of the ground hides it.
+     */
+    /** A blob with at least this many interior pixels has its detail measured (NEAR_DETAIL_SHOWS). */
+    static final int DETAIL_MIN_PIXELS = 30;
+
     private static boolean lightChange(Blob b) {
         int n = b.count;
         double va = b.saa / n - (b.sa / n) * (b.sa / n), vm = b.smm / n - (b.sm / n) * (b.sm / n);
@@ -1013,6 +1301,16 @@ import java.util.List;
         t.flicker += a * (b.freq - t.flicker);
         float ratio = textureMean > 0.5f ? b.texture / textureMean : 1;
         t.textureRatio += a * (ratio - t.textureRatio);
+        // 1.0.56, a thing close to the camera: how big and solid, how calm the place was before it
+        t.area = b.count;
+        t.fill = b.count / (float) ((b.maxX - b.minX + 1) * (b.maxY - b.minY + 1));
+        double qm = b.sq / b.count;
+        t.ratioSpread = (float) (Math.sqrt(Math.max(0, b.sqq / b.count - qm * qm)) / Math.max(1e-6, qm));
+        int n = Math.max(1, b.interior);
+        double va = b.daa / n - (b.da / n) * (b.da / n), vm = b.dmm / n - (b.dm / n) * (b.dm / n);
+        t.detail = b.interior < DETAIL_MIN_PIXELS ? Float.NaN : vm < NEAR_DETAIL_MIN_SD * NEAR_DETAIL_MIN_SD || va <= 1e-6 ? Float.NaN
+                : (float) ((b.dam / n - (b.da / n) * (b.dm / n)) / Math.sqrt(va * vm));
+        if (t.hits <= 3) t.startFlicker = Math.max(t.startFlicker, Math.max(b.freq, ringFlicker(b)));
         judge(t, now, fromOrigin);
     }
 
@@ -1055,6 +1353,8 @@ import java.util.List;
         boolean returning = t.maxFromOrigin > needed * 0.5f && fromOrigin < 0.6f * t.maxFromOrigin;
         if (returning) t.cameBack = true; // (a thing coming in at the edge grows: its centre jitters, it doesn't come back)
         boolean wake = leavesChange(t, now);
+        // 1.0.56: a shadow's edge - not confirmed on that (shadeBehind)
+        boolean shade = !t.confirmed && shadeBehind;
         float oscillation = Math.min(1, reversals / 3f);
         // the flicker's average started from 0 at the end of the warm-up: scaled up while it is young (its bias)
         float learnt = (float) (1 - Math.exp(-Math.max(0, now - warmUntil) / 20_000.0));
@@ -1067,17 +1367,17 @@ import java.util.List;
         // passes shows all the time
         boolean seen = t.hits >= 5 && t.hits >= MIN_SEEN * (frames - t.firstFrame + 1);
         boolean travels = ageS >= MIN_AGE_S[sensitivity] && seen && net >= needed
-                && straight >= MIN_STRAIGHT[sensitivity] && steady && !returning && !wake;
+                && straight >= MIN_STRAIGHT[sensitivity] && steady && !returning && !wake && !shade;
         // or it plainly drives through: far, straight, one way, seen in nearly every picture - early
         boolean drives = ageS >= FAST_AGE_S[sensitivity] && t.hits >= 5 && t.hits >= FAST_SEEN * (frames - t.firstFrame + 1)
                 && net >= Math.max(FAST_TRAVEL * w, size) && straight >= FAST_STRAIGHT && steady
-                && reversals == 0 && !returning && !wake;
+                && reversals == 0 && !returning && !wake && !shade;
         // or it goes its way slowly but never back (a long vehicle at walking pace covers half its length in 2 s only
         // later): its way from where it began, in the window's direction - leaves come back at every swing
         float gx = newest[1] - t.ox, gy = newest[2] - t.oy;
         boolean keepsOn = ageS >= MIN_AGE_S[sensitivity] && seen && !t.cameBack && fromOrigin >= needed
                 && net >= MIN_TRAVEL[sensitivity] * 0.5f && cos(ux, uy, gx, gy) > 0.8f
-                && straight >= MIN_STRAIGHT[sensitivity] && steady && reversals == 0 && !returning && !wake;
+                && straight >= MIN_STRAIGHT[sensitivity] && steady && reversals == 0 && !returning && !wake && !shade;
         float maxVeg = MAX_VEGETATION[sensitivity] * (now - warmUntil < YOUNG_MS ? 0.5f : 1);
         // the young background's stricter look is for what might be leaves; a thing that went that far one way isn't -
         // and its own flicker is its passing (a slow vehicle makes its pixels foreground again and again): its look then
@@ -1085,6 +1385,32 @@ import java.util.List;
         float wayLook = VEG_WAY * Math.max(oscillation, 1 - straight) + VEG_TEXTURE * texture;
         if (!t.confirmed && (travels && t.vegetation < maxVeg || (drives || keepsOn) && wayLook < MAX_VEGETATION[sensitivity])) {
             t.confirmed = true;
+        }
+        // 1.0.56: or it is close to the camera - big, solid, where the picture was calm, not other light, seen nearly
+        // all the time: confirmed whichever way it moves (across in a second, or in place)
+        float calm = NEAR_CALM * Math.max(0.05f, learnt);
+        // not the same ground in other light: its fine detail hidden where it has some, else its brightness uneven
+        boolean thing = Float.isNaN(t.detail) ? t.ratioSpread >= NEAR_RATIO_SPREAD : t.detail < NEAR_DETAIL_SHOWS;
+        boolean nearNow = !night && !wake && !shade && t.area >= NEAR_AREA * w * h && t.fill >= NEAR_FILL && thing
+                && t.startFlicker >= 0 && t.startFlicker <= calm;
+        if (!t.confirmed && nearNow && ageS >= NEAR_AGE_S && t.hits >= 4
+                && t.hits >= NEAR_SEEN * (frames - t.firstFrame + 1)) {
+            t.confirmed = t.near = true;
+            nearMade++;
+        }
+        // a close thing that went far is a proven track like any other (a vehicle turning keeps its box that way)
+        if (t.near && t.maxFromOrigin >= PROVEN_TRAVEL * needed) {
+            t.near = false;
+            t.proven = true;
+        }
+        if (t.near) {
+            // kept while it is seen: it may sway and come back as it likes - only leaves' flicker or a shadow's edge
+            // takes it away
+            if (wake || VEG_FLICKER * flicker > maxVeg + 0.15f) t.confirmed = t.near = false;
+            else t.confirmed = true;
+            if (debug) t.why = String.format(java.util.Locale.ROOT, "NEAR area %.0f fill %.2f spread %.2f detail %.2f calm %.3f/%.3f", t.area, t.fill, t.ratioSpread, t.detail, t.startFlicker, calm);
+            t.confidence = NEAR_CONFIDENCE;
+            return;
         }
         if (t.confirmed && t.maxFromOrigin >= PROVEN_TRAVEL * needed) t.proven = true;
         if (t.proven) {
@@ -1096,11 +1422,30 @@ import java.util.List;
             t.confirmed = false;
         }
         if (debug) {
-            t.why = String.format(java.util.Locale.ROOT, "net %.1f/%.1f straight %.2f steady %b rev %d returning %b wake %b",
-                    net, needed, straight, steady, reversals, returning, wake);
+            t.why = String.format(java.util.Locale.ROOT, "net %.1f/%.1f straight %.2f steady %b rev %d returning %b wake %b | area %.0f fill %.2f spread %.2f detail %.2f calm %.3f/%.3f",
+                    net, needed, straight, steady, reversals, returning, wake, t.area, t.fill, t.ratioSpread, t.detail, t.startFlicker, calm);
         }
         float reach = Math.min(1, net / (2 * needed));
         t.confidence = Math.max(0, Math.min(1, (0.5f * reach + 0.5f * straight) * (1 - 0.5f * t.vegetation)));
+    }
+
+    /**
+     * How often the picture flickered (freq) in a ring NEAR_RING wide round the blob's box, on average: next to swaying
+     * leaves it is high (a gust carries them a little further than before), round a thing in a room it is low.
+     */
+    private float ringFlicker(Blob b) {
+        int x0 = Math.max(0, b.minX - NEAR_RING), x1 = Math.min(w - 1, b.maxX + NEAR_RING);
+        int y0 = Math.max(0, b.minY - NEAR_RING), y1 = Math.min(h - 1, b.maxY + NEAR_RING);
+        double sum = 0;
+        int n = 0;
+        for (int yy = y0; yy <= y1; yy++) {
+            for (int xx = x0; xx <= x1; xx++) {
+                if (xx >= b.minX && xx <= b.maxX && yy >= b.minY && yy <= b.maxY) continue;
+                sum += freq[yy * w + xx];
+                n++;
+            }
+        }
+        return n == 0 ? 0 : (float) (sum / n);
     }
 
     /**
@@ -1110,6 +1455,7 @@ import java.util.List;
      * and the new one overlap too much to tell.
      */
     private boolean leavesChange(Track t, long now) {
+        shadeBehind = false;
         float[] old = null;
         for (float[] p : t.history) {
             if (rel(now) - p[0] < WAKE_AFTER_MS) break;
@@ -1117,17 +1463,42 @@ import java.util.List;
         }
         if (old == null) return false;
         float[] last = t.history.get(t.history.size() - 1);
-        int behind = 0, still = 0;
+        int behind = 0, still = 0, qn = 0;
+        double qs = 0, da = 0, dm = 0, daa = 0, dmm = 0, dam = 0;
         for (int yy = (int) old[4]; yy <= (int) old[6]; yy++) {
             for (int xx = (int) old[3]; xx <= (int) old[5]; xx++) {
                 if (xx >= last[3] - 1 && xx <= last[5] + 1 && yy >= last[4] - 1 && yy <= last[6] + 1) continue;
                 behind++;
                 int i = yy * w + xx;
                 if (valid[i] != 0 && Math.abs(aligned[i] - slow[i]) > Math.max(WAKE_MIN_DIFF, 3 * sd[i])) still++;
+                if (valid[i] != 0 && !night) {
+                    double q = (aligned[i] + 4) / (slow[i] + 4), a = hpAligned[i], m = hpSlow[i];
+                    qn++;
+                    qs += q;
+                    da += a;
+                    dm += m;
+                    daa += a * a;
+                    dmm += m * m;
+                    dam += a * m;
+                }
             }
         }
-        return behind >= 6 && still > WAKE_CHANGED * behind;
+        if (behind >= 6 && still > WAKE_CHANGED * behind) return true;
+        // 1.0.56: or the ground behind is darker or brighter, its detail what it was - a shadow's edge (the edge passing
+        // just raised those pixels' variance, so the test above no longer counts them). Ground uncovered by something
+        // passing matches what was there; where someone stood from the start, the wall's detail isn't theirs.
+        if (qn < 6 || night) return false;
+        double va = daa / qn - (da / qn) * (da / qn), vm = dmm / qn - (dm / qn) * (dm / qn);
+        if (vm < NEAR_DETAIL_MIN_SD * NEAR_DETAIL_MIN_SD || va <= 1e-6) return false;
+        double corr = (dam / qn - (da / qn) * (dm / qn)) / Math.sqrt(va * vm);
+        // (kept apart from the wake: it only keeps a track from being confirmed - behind a vehicle that halted, the slow
+        // background half learnt it, and a box it had must not go)
+        shadeBehind = Math.abs(qs / qn - 1) >= WAKE_LIGHT_STEP && corr >= WAKE_LIGHT_DETAIL;
+        return false;
     }
+
+    /** The last leavesChange found the ground behind in other light, its detail still there (1.0.56). */
+    private boolean shadeBehind;
     private static float cos(float ax, float ay, float bx, float by) {
         float n = (float) (Math.hypot(ax, ay) * Math.hypot(bx, by));
         return n <= 1e-6f ? 0 : (ax * bx + ay * by) / n;

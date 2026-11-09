@@ -25,6 +25,9 @@ final class SyntheticScene {
     /** The picture's brightness factor at a time (s). */
     java.util.function.DoubleUnaryOperator gain = t -> 1;
     float noiseSigma = 2;
+    /** The camera knocked: the whole picture moved by this (pixels, x and y) at a time (s), on top of the shake. */
+    java.util.function.DoubleFunction<double[]> shove = t -> null;
+    private double shoveX, shoveY;
     /** A clear sky over the picture's top rows (0: none): flat and bright, a little lighter towards the top. */
     int skyRows;
     /** Night: the landscape this dark (a factor), hot pixels here and there. */
@@ -53,6 +56,8 @@ final class SyntheticScene {
     static final class Mover {
         final float x0, y0, w, h, vx, vy, t0, t1, luma, u, v;
         final boolean textured;
+        /** Where its top left is at a time (s), instead of the straight line: {x, y}. */
+        java.util.function.DoubleFunction<float[]> path;
 
         Mover(float x0, float y0, float w, float h, float vx, float vy, float t0, float t1, float luma, float u, float v, boolean textured) {
             this.x0 = x0;
@@ -75,6 +80,10 @@ final class SyntheticScene {
 
         /** The box at time t, in the picture's coordinates (no shake): x, y, w, h. */
         float[] at(double t) {
+            if (path != null) {
+                float[] p = path.apply(t);
+                return new float[]{p[0], p[1], w, h};
+            }
             return new float[]{(float) (x0 + vx * (t - t0)), (float) (y0 + vy * (t - t0)), w, h};
         }
     }
@@ -227,7 +236,7 @@ final class SyntheticScene {
 
     /** What the picture shows at (x, y) at time t: luma, u, v. */
     private void look(double x, double y, double t, float[] out) {
-        double sx = x + MARGIN + shakeX, sy = y + MARGIN + shakeY;
+        double sx = x + MARGIN + shakeX + shoveX, sy = y + MARGIN + shakeY + shoveY;
         float luma = sample(ground, sx, sy), u = 128 + (luma > 140 ? 4 : -2), v = 128 + (luma > 120 ? 6 : 2);
         if (sy - MARGIN < skyRows) {
             luma = (float) (200 - 0.3 * (sy - MARGIN));
@@ -301,6 +310,9 @@ final class SyntheticScene {
             shakeX = Math.max(-shake, Math.min(shake, shakeX));
             shakeY = Math.max(-shake, Math.min(shake, shakeY));
         }
+        double[] knock = shove.apply(t);
+        shoveX = knock == null ? 0 : knock[0];
+        shoveY = knock == null ? 0 : knock[1];
         if (Double.isNaN(firstShakeX)) {
             firstShakeX = shakeX;
             firstShakeY = shakeY;

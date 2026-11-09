@@ -328,6 +328,150 @@ class MotionDetectorTest {
         assertTrue(d.process(f[0], W, H, null, null, 1000).settling, "warming up (and without colour)");
     }
 
+    // ------------------------------------------------------------------ close to the camera (1.0.56)
+
+    /**
+     * A room as a phone on a table sees it: textured walls and things, the phone trembling a little, nothing else
+     * moving.
+     */
+    static SyntheticScene room(long seed) {
+        SyntheticScene s = new SyntheticScene(W, H, seed);
+        s.shake = 0.6f;
+        return s;
+    }
+
+    /** The share of the picture a mover covers at a time. */
+    static double cover(SyntheticScene.Mover m, double t) {
+        if (!m.on(t)) return 0;
+        float[] b = m.at(t);
+        double x0 = Math.max(0, b[0]), x1 = Math.min(W, b[0] + b[2]), y0 = Math.max(0, b[1]), y1 = Math.min(H, b[1] + b[3]);
+        return Math.max(0, x1 - x0) * Math.max(0, y1 - y0) / (W * H);
+    }
+
+    /** Whether a detection's box overlaps the mover's (picture coordinates, 0..1) at a time. */
+    static boolean on(MotionDetector.Detection d, SyntheticScene.Mover m, double t) {
+        float[] b = m.at(t);
+        float x0 = Math.max(0, b[0]) / W, x1 = Math.min(W, b[0] + b[2]) / W, y0 = Math.max(0, b[1]) / H, y1 = Math.min(H, b[1] + b[3]) / H;
+        return d.x < x1 && d.x + d.w > x0 && d.y < y1 && d.y + d.h > y0;
+    }
+
+    /**
+     * 1.0.56, the pilot (phone pc.43, indoors): "filming myself and moving" - nothing was found. Someone 1.5 m from the
+     * camera crosses its picture in about 2 s and covers 40 % of it, the exposure following them: found in 1.2 s, the
+     * box on them. Before, the travel rules asked 2 s of a straight way and the big change read as the whole picture
+     * changing - never found.
+     */
+    @Test
+    void someoneCrossingCloseToTheCameraIsFound() {
+        for (float luma : new float[]{55, 205}) {
+            SyntheticScene scene = room(7);
+            SyntheticScene.Mover p = new SyntheticScene.Mover(-130, 5, 130, 175, 200, 0, 10, 13, luma, 128, 128, true);
+            scene.movers.add(p);
+            scene.gain = t -> 1 + (luma < 128 ? 0.3 : -0.25) * cover(p, t);
+            Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 16, null);
+            assertTrue(r.firstAt >= 10 && r.firstAt <= 11.2, "luma " + luma + ": found at " + r.firstAt + " " + r.reportsPerId);
+            assertTrue(on(r.first, p, r.firstAt), "luma " + luma + ": the box on them");
+        }
+    }
+
+    /**
+     * Someone walks up to the camera (overwatch: the pilot pointed it at himself) and stands in front of it, filling 60 %
+     * of the picture and moving a little: found as they come in, and still boxed while they stand there.
+     */
+    @Test
+    void someoneWalkingUpToTheCameraAndStandingThereIsFound() {
+        SyntheticScene scene = room(8);
+        SyntheticScene.Mover p = new SyntheticScene.Mover(-200, 0, 200, 175, 0, 0, 10, 40, 60, 128, 128, true);
+        p.path = t -> new float[]{(float) (t < 11.5 ? -200 + 173 * (t - 10) : 60 + 6 * Math.sin(2 * Math.PI * 0.5 * t)), 0};
+        scene.movers.add(p);
+        scene.gain = t -> 1 + 0.3 * cover(p, t);
+        MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
+        Run r = run(scene, d, 0, 13, null);
+        assertTrue(r.firstAt >= 10 && r.firstAt <= 11.5, "found as they came in: " + r.firstAt + " " + r.reportsPerId);
+        Run standing = run(scene, d, 13, 16, null);
+        assertTrue(standing.reports >= 0.8 * 3 * FPS, "boxed while standing there: " + standing.reports);
+        assertTrue(on(standing.last, p, standing.lastAt), "the box on them");
+    }
+
+    /**
+     * Someone sitting in view from the start (learnt as the room) waves at the camera, the hand and forearm beside them
+     * against the room: found within 2 s, the box on the arm.
+     */
+    @Test
+    void someoneSittingInViewWhoWavesIsFound() {
+        SyntheticScene scene = room(9);
+        scene.movers.add(new SyntheticScene.Mover(95, 15, 130, 165, 0, 0, 0, 60, 60, 128, 128, true));
+        SyntheticScene.Mover arm = new SyntheticScene.Mover(0, 0, 40, 25, 0, 0, 10, 60, 90, 128, 128, true);
+        arm.path = t -> new float[]{(float) (245 + 30 * Math.sin(2 * Math.PI * t)), (float) (30 + 15 * Math.cos(2 * Math.PI * t))};
+        scene.movers.add(arm);
+        Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 14, null);
+        assertTrue(r.firstAt >= 10 && r.firstAt <= 12, "found at " + r.firstAt + " " + r.reportsPerId);
+        assertTrue(on(r.first, arm, r.firstAt), "the box on the arm");
+    }
+
+    /**
+     * Someone in view from the start (learnt as the room) gets up and walks off at a slow pace: found within 2.5 s of
+     * starting to move (before 1.0.56: 4.6 s).
+     */
+    @Test
+    void someoneInViewWhoWalksOffIsFound() {
+        SyntheticScene scene = room(5);
+        SyntheticScene.Mover p = new SyntheticScene.Mover(90, 5, 130, 170, 0, 0, 0, 40, 60, 128, 128, true);
+        p.path = t -> new float[]{(float) (t < 12 ? 90 : 90 + 30 * (t - 12)), 5};
+        scene.movers.add(p);
+        Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 20, null);
+        assertTrue(r.firstAt >= 12 && r.firstAt <= 14.5, "found at " + r.firstAt + " " + r.reportsPerId);
+    }
+
+    /**
+     * A leafy branch right in front of the camera, filling much of the picture and swaying in gusts, the camera shaking:
+     * the close-up rule (1.0.56) never takes it - it asks for a place that was calm before, and leaves flicker in place.
+     * (The travel rules, made for trees 30 m off, do raise alarms on a branch this close: they did before 1.0.56 as well
+     * - about as many in these scenes. Not solved here: keep foliage out of the picture's near part.)
+     */
+    @Test
+    void aBranchCloseToTheCameraIsNeverTakenForSomethingClose() {
+        for (long seed : new long[]{51, 53}) {
+            for (int sens = MotionDetector.NORMAL; sens <= MotionDetector.HIGH; sens++) {
+                SyntheticScene scene = new SyntheticScene(W, H, seed);
+                scene.patches.add(new SyntheticScene.Patch(110, 80, 110, 70, 20f, 0.5f, 0.7f));
+                scene.patches.add(new SyntheticScene.Patch(280, 30, 50, 40, 24f, 0.9f, 2.3f));
+                scene.shake = 3;
+                MotionDetector d = new MotionDetector(sens);
+                run(scene, d, 0, 180, null);
+                assertEquals(0, d.nearMade, "seed " + seed + ", sensitivity " + sens + ": taken for something close");
+            }
+        }
+    }
+
+    /** The windy woods and the wood's edge: the close-up rule takes nothing there either. */
+    @Test
+    void theWoodsAreNeverTakenForSomethingClose() {
+        for (int sens = MotionDetector.LOW; sens <= MotionDetector.HIGH; sens++) {
+            MotionDetector d = new MotionDetector(sens);
+            run(woodsEdge(23 + sens), d, 0, 300, null);
+            assertEquals(0, d.nearMade, "sensitivity " + sens);
+        }
+    }
+
+    /** The camera knocked: moved a little and left so, then moved far (past what the shift search reaches): nothing. */
+    @Test
+    void aKnockedCameraGivesNoAlarm() {
+        SyntheticScene scene = room(61);
+        scene.shove = t -> t < 20 ? null : t < 40 ? new double[]{7, -4} : new double[]{-45, 20};
+        Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 60, null);
+        assertEquals(Set.of(), r.ids, "false alarms " + r.reportsPerId);
+    }
+
+    /** A room's light switched on and off (the exposure follows a little late): nothing. */
+    @Test
+    void aRoomsLightSwitchedOnAndOffGivesNoAlarm() {
+        SyntheticScene scene = room(62);
+        scene.gain = t -> t < 15 ? 1 : t < 15.25 ? 1.9 : t < 30 ? 1.5 : t < 30.25 ? 0.75 : 1;
+        Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 45, null);
+        assertEquals(Set.of(), r.ids, "false alarms " + r.reportsPerId);
+    }
+
     @Test
     void theRecordCarriesTheBoxesBothWays() throws Exception {
         List<MotionRecord.Box> boxes = List.of(
