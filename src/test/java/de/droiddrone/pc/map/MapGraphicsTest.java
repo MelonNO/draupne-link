@@ -128,4 +128,19 @@ class MapGraphicsTest {
         again.clear();
         assertTrue(new MapGraphics(file).isEmpty());
     }
+
+    /**
+     * A name with a character XML can't hold (a control character pasted into the name box) is written without it: it
+     * made graphics.kml unreadable, and the next start moved every drawing aside.
+     */
+    @Test
+    void aNameXmlCantHoldStillLeavesAReadableFile(@TempDir Path dir) {
+        Path file = dir.resolve("graphics.kml");
+        MapGraphics g = new MapGraphics(file);
+        g.add(MapGraphics.Item.line("Road\u0001block\u0000", List.of(A, B), 0xffffff, 2));
+        MapGraphics again = new MapGraphics(file);
+        assertNull(again.brokenMovedTo(), "the file reads");
+        assertEquals(1, again.list().size());
+        assertEquals("Roadblock", again.list().get(0).name());
+    }
 }

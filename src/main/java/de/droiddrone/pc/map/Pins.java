@@ -79,16 +79,24 @@ public final class Pins {
     }
 
     public synchronized Pin add(String name, double lat, double lon) {
-        Pin p = new Pin(name == null || name.isBlank() ? nextName() : name.trim(), lat, lon);
+        Pin p = new Pin(name == null || name.isBlank() ? nextName() : oneLine(name), lat, lon);
         pins.add(p);
         save();
         return p;
     }
 
+    /**
+     * A name on one line: pins.txt keeps a pin a line, its parts split by tabs - a KML's name over two lines split the
+     * pin, and the next start moved the whole file aside as broken.
+     */
+    static String oneLine(String name) {
+        return name.replaceAll("[\\t\\r\\n]+", " ").trim();
+    }
+
     public synchronized Pin rename(Pin pin, String name) {
         int i = pins.indexOf(pin);
         if (i < 0 || name == null || name.isBlank()) return pin;
-        Pin renamed = new Pin(name.trim(), pin.lat(), pin.lon());
+        Pin renamed = new Pin(oneLine(name), pin.lat(), pin.lon());
         pins.set(i, renamed);
         save();
         return renamed;
