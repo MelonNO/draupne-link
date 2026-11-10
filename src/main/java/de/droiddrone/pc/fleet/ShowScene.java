@@ -27,8 +27,7 @@ import java.util.Random;
  * <li>{@link Kind#MORTAR}: a mortar with its crew and ammunition under a camouflage net, firing: the round held to the
  * muzzle and dropped, the crew ducks, flash and smoke, the next round.</li>
  * <li>{@link Kind#HIDE}: a BTR-80 under a net at the treeline, its engine idling; an observation post on a rise -
- * sandbags, one prone with binoculars, one on the radio - and a sentry walking his beat beside the hide (not across
- * its front: there, camouflage against camouflage, he was a few pixels the net's colour and never found).</li>
+ * sandbags, one prone with binoculars, one on the radio - and a sentry walking his beat across its front.</li>
  * </ul>
  * Models: /model/tactical.bin.gz and the FPV drone ({@link Raster3D}, THIRD-PARTY.md). What stands still is drawn once
  * for as long as the camera stays where it is (a drone sitting on the ground), and only what moves each picture. The
@@ -63,6 +62,11 @@ final class ShowScene implements Scene.World, Scene.Sounding {
      *               out BACK_M in front of it
      */
     ShowScene(Kind kind, double droneN, double droneE, double headingDeg, long epochMs) {
+        this(kind, droneN, droneE, headingDeg, epochMs, REAL_TREES_M);
+    }
+
+    /** @param realTreesM trees and bushes this near the action stay real (REAL_TREES_M; a test asks for more) */
+    ShowScene(Kind kind, double droneN, double droneE, double headingDeg, long epochMs, double realTreesM) {
         this.kind = kind;
         double hr = Math.toRadians(headingDeg);
         this.originN = droneN + BACK_M * Math.cos(hr);
@@ -88,7 +92,7 @@ final class ShowScene implements Scene.World, Scene.Sounding {
             Put p = statics.get(i);
             if ((p.mesh().flags() & Raster3D.CARD) == 0) continue;
             double d = nearest(action, p.ahead(), p.right());
-            if (d < REAL_TREES_M) {
+            if (d < realTreesM) {
                 real.add(new double[]{p.ahead(), p.right()});
                 continue;
             }
@@ -1005,7 +1009,7 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     // ------------------------------------------------------------------ HIDE: a BTR under a net, an OP on a rise
 
     static final double RISE_AHEAD = 9, RISE_RIGHT = 5, RISE_R = 5.5, RISE_H = 0.9;
-    static final double[] SENTRY_FROM = {13.0, -16}, SENTRY_TO = {13.0, -6};
+    static final double[] SENTRY_FROM = {15.5, -12}, SENTRY_TO = {15.5, 0};
     /** The BTR in its hide: where, which way its nose points (the net set back so the nose shows). */
     static final double BTR_AHEAD = 19.5, BTR_RIGHT = -5, BTR_HEADING = 200;
 

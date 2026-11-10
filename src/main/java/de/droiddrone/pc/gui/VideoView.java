@@ -11,6 +11,7 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
 import java.util.Locale;
@@ -45,6 +46,9 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     private Supplier<VideoPipeline.Stats> stats = () -> null;
     private String idleText = "Not connected";
     private final OsdRenderer osd = new OsdRenderer();
+    /** Where the picture (or the HUD's area while there is none) was last drawn; the detection areas over it (1.0.58). */
+    private volatile Rectangle pictureRect = new Rectangle();
+    private DetectionAreaLayer areaLayer;
     private volatile boolean osdEnabled = true;
     private volatile OsdLayout osdLayout = OsdLayout.defaults();
     /** When the newest picture was handed over, and the smoothed wait until Swing painted it (shown in the stats). */
@@ -230,17 +234,20 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             paintSkeleton(g, w, h, data != null && data.connected());
             if (!skeletonTimer.isRunning()) skeletonTimer.start();
         }
+        // the HUD sits on the picture (letterboxed area), or the 16:9 area while there is no picture yet
+        int[] t = target;
+        int ow = shown != null ? shown[0] : t[0] > 0 ? t[0] : w;
+        int oh = shown != null ? shown[1] : t[1] > 0 ? t[1] : h;
+        pictureRect = new Rectangle((w - ow) / 2, (h - oh) / 2, ow, oh);
         if (data != null && data.connected()) {
-            // the HUD sits on the picture (letterboxed area), or the 16:9 area while there is no picture yet
-            int[] t = target;
-            int ow = shown != null ? shown[0] : t[0] > 0 ? t[0] : w;
-            int oh = shown != null ? shown[1] : t[1] > 0 ? t[1] : h;
             osd.setDisplayMs(displayMs);
             osd.setPictureFlip(mirror != upsideDown, upsideDown); // the motion boxes turn with the picture
             osd.paint(g, (w - ow) / 2, (h - oh) / 2, ow, oh, data, osdLayout);
         } else {
             paintStats(g);
         }
+        DetectionAreaLayer areas = areaLayer;
+        if (areas != null) areas.paint(g, pictureRect, mirror != upsideDown, upsideDown);
         notePainted();
     }
 
@@ -306,6 +313,21 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     long msSinceStreamStart() {
         long at = streamStartedAt;
         return at == 0 ? -1 : System.currentTimeMillis() - at;
+    }
+
+    /** The detection areas drawn over the picture (1.0.58). */
+    void setAreaLayer(DetectionAreaLayer layer) {
+        areaLayer = layer;
+    }
+
+    /** Where the picture was last drawn (empty before the first paint). */
+    Rectangle pictureRect() {
+        return pictureRect;
+    }
+
+    /** The picture is drawn mirrored left to right (a mirror turned upside down is not). */
+    boolean pictureFlipX() {
+        return mirror != upsideDown;
     }
 
     boolean isUpsideDown() {

@@ -201,6 +201,148 @@ class MotionDetectorTest {
         assertEquals(cy, r.last.centreY(), 0.08, "box centre y");
     }
 
+    /** Boxes over the scene's swaying foliage (its reach included), at this sensitivity: what the user would draw. */
+    static DetectionAreas foliage(SyntheticScene s, int level) {
+        List<DetectionAreas.Area> l = new java.util.ArrayList<>();
+        for (SyntheticScene.Patch p : s.patches) {
+            if (p.amplitude <= 0) continue;
+            // (SyntheticScene: a ragged edge up to 1.15 of the ellipse, the sway up to 1.3 x the amplitude, 0.4 of it up and down)
+            float rx = p.rx * 1.15f + 1.3f * p.amplitude + 2, ry = p.ry * 1.15f + 0.52f * p.amplitude + 2;
+            l.add(new DetectionAreas.Area((p.cx - rx) / W, (p.cy - ry) / H, 2 * rx / W, 2 * ry / H, level));
+        }
+        return DetectionAreas.of(l);
+    }
+
+    /**
+     * A sentry in camouflage of the net's grain, a little darker than it (30 grey levels, as the tour's sentry is against
+     * the BTR's net), walking his beat in front of it (see below).
+     */
+    static SyntheticScene.Mover sentry(SyntheticScene scene) {
+        scene.patches.add(new SyntheticScene.Patch(160, 95, 70, 20, 0, 0, 0)); // the net: leaves that don't move
+        SyntheticScene.Mover m = new SyntheticScene.Mover(0, 0, 4, 14, 0, 0, 0, 1e6f, 70, 124, 126, false);
+        m.camo = 0.7f;
+        m.path = t -> {
+            double c = t % SENTRY_CYCLE;
+            double f = c < SENTRY_LEG ? c / SENTRY_LEG : c < SENTRY_LEG + 3 ? 1 : c < 2 * SENTRY_LEG + 3 ? 1 - (c - SENTRY_LEG - 3) / SENTRY_LEG : 0;
+            return new float[]{(float) (120 + SENTRY_BEAT_PX * f), 88};
+        };
+        scene.movers.add(m);
+        return m;
+    }
+
+    /** His beat (px), clear of the swaying leaves, at 1.2 m/s (9.6 px/s some 20 m off). */
+    static final double SENTRY_BEAT_PX = 56, SENTRY_LEG = SENTRY_BEAT_PX / 9.6, SENTRY_CYCLE = 2 * (SENTRY_LEG + 3);
+
+    static boolean walking(double t) {
+        double c = t % SENTRY_CYCLE;
+        return c < SENTRY_LEG || c >= SENTRY_LEG + 3 && c < 2 * SENTRY_LEG + 3;
+    }
+
+    /**
+     * 1.0.58, the pilot: the motion detection missed the sentry by the camouflaged BTR and the infantry on patrol - "real
+     * life does not have a white background". A sentry in camouflage of the net's grain, 4 x 14 px (a man some 20 m off),
+     * walking his 56 px beat in front of a camouflage net and back at 1.2 m/s, 3 s at each end, the camera on the ground
+     * trembling a little, the woods round him in the gale - boxed OFF, as the user would (on HIGH, leaves a gust starts
+     * after a calm look like someone walking): on HIGH boxed in over half the pictures while he walks, both ways and every time
+     * round, and nothing boxed anywhere else. On NORMAL (as up to 1.0.57) he is hardly ever found.
+     */
+    @Test
+    void onHighACamouflagedSentryWalkingHisBeatInFrontOfANetIsFound() {
+        for (int sens : new int[]{MotionDetector.HIGH, MotionDetector.NORMAL}) {
+            SyntheticScene scene = windyWoods(17);
+            scene.shake = 0.3f;
+            DetectionAreas leaves = foliage(scene, MotionDetector.OFF);
+            SyntheticScene.Mover sentry = sentry(scene);
+            MotionDetector d = new MotionDetector(sens);
+            d.setAreas(leaves);
+            int walking = 0, boxed = 0;
+            for (long i = 0; i < Math.round(90 * FPS); i++) {
+                double t = i / FPS;
+                byte[][] f = scene.frame(t);
+                MotionDetector.Result res = d.process(f[0], W, H, null, null, Math.round(t * 1000));
+                float[] at = sentry.at(t);
+                float cx = (at[0] + 2) / W, cy = (at[1] + 7) / H;
+                boolean on = false;
+                for (MotionDetector.Detection det : res.detections) {
+                    boolean his = Math.abs(det.centreX() - cx) < 0.04 && Math.abs(det.centreY() - cy) < 0.08;
+                    assertTrue(his, String.format("sensitivity %d at %.1f s: a box away from the sentry: %.2f, %.2f (he is at %.2f, %.2f)",
+                            sens, t, det.centreX(), det.centreY(), cx, cy));
+                    on = true;
+                }
+                if (t < 25 || !walking(t)) continue;
+                walking++;
+                if (on) boxed++;
+            }
+            if (sens == MotionDetector.HIGH) assertTrue(boxed > 0.5 * walking, "on HIGH the sentry boxed in " + boxed + " of " + walking + " pictures while he walked");
+            else assertTrue(boxed < 0.1 * walking, "on NORMAL as before: boxed in " + boxed + " of " + walking);
+        }
+    }
+
+    /**
+     * 1.0.58: the price of HIGH, and what areas are for. The camera still on the ground in the gale, no one there: with
+     * the foliage boxed LOW or OFF nothing in five minutes; the same unboxed raises alarms - leaves a gust starts after a
+     * calm travel like someone walking for a few seconds.
+     */
+    @Test
+    void onHighTheSwayingLeavesBoxedLowOrOffGiveNoAlarm() {
+        int unboxed = 0;
+        for (long seed : new long[]{5, 17}) {
+            for (int level : new int[]{MotionDetector.LOW, MotionDetector.OFF}) {
+                SyntheticScene scene = windyWoods(seed);
+                scene.shake = 0;
+                MotionDetector d = new MotionDetector(MotionDetector.HIGH);
+                d.setAreas(foliage(scene, level));
+                Run r = run(scene, d, 0, 300, null);
+                assertEquals(Set.of(), r.ids, "seed " + seed + ", leaves boxed " + DetectionAreas.word(level) + ": false alarms " + r.reportsPerId);
+            }
+            SyntheticScene scene = windyWoods(seed);
+            scene.shake = 0;
+            unboxed += run(scene, new MotionDetector(MotionDetector.HIGH), 0, 300, null).ids.size();
+        }
+        assertTrue(unboxed > 0, "unboxed, HIGH finds the leaves a gust starts (what the areas are for)");
+    }
+
+    /** 1.0.58: someone walking through an OFF area is never boxed there, and boxed soon after leaving it. */
+    @Test
+    void nothingIsReportedFromAnOffArea() {
+        SyntheticScene scene = windyWoods(5);
+        scene.movers.add(new SyntheticScene.Mover(20, 95, 10, 26, 18, 1, 10, 25, 70, 140, 122, true));
+        MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
+        d.setAreas(DetectionAreas.of(List.of(new DetectionAreas.Area(0, 0.4f, 0.5f, 0.6f, MotionDetector.OFF))));
+        boolean inside = false;
+        double firstAt = -1;
+        for (long i = 0; i < Math.round(25 * FPS); i++) {
+            double t = i / FPS;
+            byte[][] f = scene.frame(t);
+            for (MotionDetector.Detection det : d.process(f[0], W, H, null, null, Math.round(t * 1000)).detections) {
+                if (det.centreX() < 0.5f && det.centreY() > 0.4f) inside = true;
+                if (firstAt < 0) firstAt = t;
+            }
+        }
+        assertFalse(inside, "a box inside the OFF area");
+        // the walker's middle crosses x = 160 px (the area's edge) at about 17.5 s: found within 3 s of leaving it
+        assertTrue(firstAt >= 17 && firstAt <= 22, "found once out of the OFF area: " + firstAt);
+    }
+
+    /** 1.0.58: the areas travel to the phone after DETECTION_SET's sensitivity byte, and into the settings and back. */
+    @Test
+    void theAreasGoOverTheWireAndIntoTheSettings() {
+        DetectionAreas a = DetectionAreas.of(List.of(new DetectionAreas.Area(0.1f, 0.2f, 0.3f, 0.4f, MotionDetector.OFF),
+                new DetectionAreas.Area(0.9f, 0.9f, -0.5f, -0.2f, MotionDetector.HIGH)));
+        byte[] block = a.encode();
+        assertEquals(1 + 2 * DetectionAreas.AREA_BYTES, block.length);
+        assertEquals(a, DetectionAreas.read(new DataReader(block, true)));
+        assertEquals(0.4f, a.list().get(1).x, 1e-6, "a box drawn backwards is turned round");
+        assertEquals(a, DetectionAreas.parse(a.toText()));
+        assertEquals(DetectionAreas.NONE, DetectionAreas.read(new DataReader(new byte[]{0}, true)), "n = 0 clears them");
+        assertEquals(null, DetectionAreas.read(new DataReader(new byte[0], true)), "no block: kept as they are");
+        assertEquals(null, DetectionAreas.read(new DataReader(java.util.Arrays.copyOf(block, block.length - 1), true)), "cut short: kept");
+        List<DetectionAreas.Area> many = new java.util.ArrayList<>();
+        for (int k = 0; k < 12; k++) many.add(new DetectionAreas.Area(0, 0, 0.1f, 0.1f, 1));
+        assertEquals(DetectionAreas.MAX, DetectionAreas.of(many).list().size());
+        assertEquals(DetectionAreas.NONE, DetectionAreas.parse("junk;0,0,1"));
+    }
+
     /**
      * 1.0.52, the pilot's recording: a red car with the ground's brightness was seen as its wheels and windows only. 1.0.52
      * filled it in by its colour; 1.0.53 takes no colour (the pilot: other cameras have none, and vehicles wear the

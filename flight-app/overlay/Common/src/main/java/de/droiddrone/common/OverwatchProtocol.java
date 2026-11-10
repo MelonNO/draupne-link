@@ -539,7 +539,14 @@ public final class OverwatchProtocol {
 
     /** The OVERWATCH request: {@code [0x6E][3][checkIntervalMin u8][sensitivity u8][flags u8][token u32]}. */
     public static byte[] request(byte powerModeCode, int checkIntervalMin, int sensitivity, int flags, int token) {
-        byte[] p = new byte[10];
+        return request(powerModeCode, checkIntervalMin, sensitivity, flags, token, null);
+    }
+
+    /** As above, the detection areas after the token (pc.46; an older phone stops reading at the token). */
+    public static byte[] request(byte powerModeCode, int checkIntervalMin, int sensitivity, int flags, int token, DetectionAreas areas) {
+        byte[] tail = areas == null ? new byte[0] : areas.encode();
+        byte[] p = new byte[10 + tail.length];
+        System.arraycopy(tail, 0, p, 10, tail.length);
         p[0] = powerModeCode;
         p[1] = MODE;
         p[2] = (byte) clamp(checkIntervalMin, 0, 255);

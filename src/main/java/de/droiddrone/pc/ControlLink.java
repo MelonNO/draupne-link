@@ -2,6 +2,7 @@ package de.droiddrone.pc;
 
 import de.droiddrone.common.Bytes;
 import de.droiddrone.common.DataReader;
+import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.PacketIds;
@@ -1080,7 +1081,8 @@ public class ControlLink {
      */
     public void sendOverwatch(int checkIntervalMin, int sensitivity, int flags, int token) {
         if (!running || !isConnected() || spectator != null) return;
-        udpSender.sendPacket(de.droiddrone.common.OverwatchProtocol.request(POWER_MODE, intervalForPhone(checkIntervalMin), sensitivity, flags, token));
+        udpSender.sendPacket(de.droiddrone.common.OverwatchProtocol.request(POWER_MODE, intervalForPhone(checkIntervalMin), sensitivity, flags, token,
+                detectionAreas));
     }
 
     /**
@@ -1573,6 +1575,8 @@ public class ControlLink {
     static final long DETECTION_EVERY_MS = 1000;
     private volatile int detection;
     private long detectionSentAt;
+    /** 1.0.58: the areas with a sensitivity of their own, after the level (a phone older than pc.46 reads the level only). */
+    private volatile DetectionAreas detectionAreas = DetectionAreas.NONE;
 
     /** 0 off, 1 low, 2 normal, 3 high (MotionDetector's); told to the phone within a second. */
     public void setDetection(int sensitivity) {
@@ -1582,6 +1586,16 @@ public class ControlLink {
 
     public int getDetection() {
         return detection;
+    }
+
+    /** The detection areas (null: none), told to the phone within a second and with the overwatch request. */
+    public void setDetectionAreas(DetectionAreas areas) {
+        detectionAreas = areas == null ? DetectionAreas.NONE : areas;
+        detectionSentAt = 0;
+    }
+
+    public DetectionAreas getDetectionAreas() {
+        return detectionAreas;
     }
 
     /** The phone app takes DETECTION_SET (a phone of pc.35 or newer). */
@@ -1594,7 +1608,12 @@ public class ControlLink {
         if (!detectionSupported() || now - detectionSentAt < DETECTION_EVERY_MS) return;
         detectionSentAt = now;
         try {
-            socket.send(new DatagramPacket(new byte[]{DETECTION_SET, (byte) detection}, 2, remoteIp, remotePort));
+            byte[] areas = detectionAreas.encode();
+            byte[] p = new byte[2 + areas.length];
+            p[0] = DETECTION_SET;
+            p[1] = (byte) detection;
+            System.arraycopy(areas, 0, p, 2, areas.length);
+            socket.send(new DatagramPacket(p, p.length, remoteIp, remotePort));
         } catch (IOException e) {
             // again in a second
         }

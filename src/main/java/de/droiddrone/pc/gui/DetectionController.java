@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.MotionRecord;
 import de.droiddrone.pc.CameraView;
 import de.droiddrone.pc.Connection;
@@ -24,6 +25,8 @@ import java.util.function.Predicate;
 final class DetectionController {
     static final String DETECTION_KEY = "detection";
     static final String[] DETECTION_LEVELS = {"OFF", "LOW", "NORMAL", "HIGH"};
+    /** 1.0.58: each drone's detection areas (DetectionAreas.toText), "detectionAreas.<phone>". */
+    static final String AREAS_KEY = "detectionAreas";
 
     private final PcConfig config;
     private final CameraView cameraView;
@@ -67,6 +70,22 @@ final class DetectionController {
             }
         }
         log.accept(level == 0 ? "Motion detection off." : "Motion detection " + DETECTION_LEVELS[level] + " (while disarmed).");
+    }
+
+    /** The drone's detection areas (1.0.58), in its camera's own picture; none set: none. */
+    DetectionAreas areasFor(String phone) {
+        String v = phone == null || phone.isEmpty() ? config.getString(AREAS_KEY) : config.getString(AREAS_KEY + "." + phone);
+        return DetectionAreas.parse(v);
+    }
+
+    /**
+     * VIDEO > Detection areas: saved for the chosen phone (the drone), told to it within a second.
+     * @param c this PC's link, or null
+     */
+    void setAreas(DetectionAreas areas, Connection c) {
+        String phone = config.getString(Names.PHONE_NAME_KEY);
+        save.test(Map.of(phone.isEmpty() ? AREAS_KEY : AREAS_KEY + "." + phone, areas.toText()));
+        if (c != null && !c.getLink().isSpectator()) c.getLink().setDetectionAreas(areas);
     }
 
     private boolean noPictureSaid;

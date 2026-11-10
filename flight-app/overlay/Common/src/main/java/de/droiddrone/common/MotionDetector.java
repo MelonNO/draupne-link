@@ -74,6 +74,22 @@ import java.util.List;
  * the picture's mean. Sensor noise does not form tracks: it is scattered single pixels, gone by step 4, and never
  * travels.
  *
+ * <p>HIGH (1.0.58, the pilot: the sentry by the camouflaged BTR and the infantry on patrol were never found - "real
+ * life does not have a white background"): a man some 20 m off is two working pixels wide, and averaged down his
+ * camouflage is the net's or the treeline's. On HIGH, with the camera steady, what changed is also judged on the fine
+ * picture (the input at twice the working size): a working pixel with {@link #FINE_OF_FOUR} of its four fine ones
+ * changed is changed. A pixel is also tested against its own background shifted by at most half a pixel (not only
+ * against any neighbour's). The camera's shift is measured on calm pixels only (leaves swaying below the foreground
+ * line pulled it a fifth of a pixel off, enough to hide him). The fine background's variance grows slowly from a one-off excursion (someone passing once:
+ * the next one passing there is still seen), as before once it comes again within {@link #ONE_OFF_REPEAT_MS} (leaves).
+ * A confirmed track that went far one way for {@link #LEG_MS} without coming back is proven (a sentry stops and turns at
+ * the end of his beat), and a confirmed track's own pixels don't count as flicker. The price: leaves that a gust starts
+ * swinging after a calm look like someone walking for a few seconds - areas ({@link #setAreas}) take them out.
+ *
+ * <p>Areas (1.0.58): boxes on the picture, each with its own sensitivity (OFF, LOW, NORMAL, HIGH; a later one over an
+ * earlier one), the rest at the sensitivity set. What a pixel is tested by is its area's; a blob's and a track's rules
+ * are those where it is; nothing is reported from an OFF area.
+ *
  * <p>By brightness alone (1.0.53): the chroma passed in is not used - other cameras have none, and people and vehicles
  * wear the surroundings' colours.
  *
@@ -215,6 +231,18 @@ import java.util.List;
      */
     static final int NEAR_CELL = 10;
     static final float NEAR_FULL_CELL = 0.4f, NEAR_IN_FULL = 0.6f, NEAR_CLEAN_CELL = 0.05f, NEAR_CLEAN_CELLS = 0.08f;
+    /** HIGH (1.0.58): a working pixel with this many of its four fine pixels changed is changed. */
+    static final int FINE_OF_FOUR = 2;
+    /** HIGH, the camera steady: the half-pixel own test's margin, times the day margin. */
+    static final float HALF_MARGIN = 0.4f;
+    /** HIGH: an excursion is a pixel this many standard deviations off its fine background. */
+    static final float EXCURSION_K = 2;
+    /** ... one within this of the one before, or lasting this long, grows the variance as before; a one-off this much as fast. */
+    static final long ONE_OFF_REPEAT_MS = 3000, ONE_OFF_LASTS_MS = 1500;
+    static final float ONE_OFF_GROWTH = 0.1f;
+    /** HIGH: a confirmed track that went this many times its way from where it began, this long, never back, is proven. */
+    static final float LEG_FAR = 2;
+    static final long LEG_MS = 3000;
 
     /** A box round something that travels, in the input picture's own coordinates, 0..1. */
     public static final class Detection {
@@ -294,6 +322,8 @@ import java.util.List;
         /** Positions: time ms, x, y, then the box (min x, min y, max x, max y; working pixels), oldest first, the last TRAVEL_WINDOW_MS + 1 s. */
         final ArrayList<float[]> history = new ArrayList<>();
         float ox, oy, maxFromOrigin;
+        /** When it was furthest from where it began (1.0.58). */
+        long farAt;
         int minX, minY, maxX, maxY;
         float flicker, textureRatio, vegetation, confidence;
         boolean confirmed, light, proven;
@@ -333,6 +363,18 @@ import java.util.List;
     private int[] labels, stack;
     private float[] smallCur, smallMean, hpSmallCur, hpSmallMean, hpCur, hpMean, tmp, hpAligned, hpBack, bandA, hpSlow;
     private boolean started, night;
+    /** The areas (1.0.58) and each working pixel's sensitivity from them (0 = OFF). */
+    private DetectionAreas areas = DetectionAreas.NONE;
+    private byte[] levelAt;
+    /** Some pixel is HIGH: the fine picture is kept (fineNow), learnt since (fineLive). */
+    private boolean anyHigh, fineNow, fineLive;
+    /** The fine picture (1.0.58): the input averaged by half the factor, twice the working size each way; 0 wide when the input is too small. */
+    private int fw, fh, fineFactor;
+    private float[] fcur, faligned, fmean, fvar, fsd;
+    private byte[] fvalid, fraw, fchanged;
+    /** Per fine pixel: when its last excursion began, since when it lasts, whether it is in one, whether that came soon after another. */
+    private long[] excAt, excSince;
+    private byte[] inExc, excAgain;
     private long lastMs, warmUntil;
     /**
      * A track's history keeps its times as floats counted from here (DRAUPNE Link 1.0.50): a float holds a clock's
@@ -363,7 +405,41 @@ import java.util.List;
 
     /** LOW, NORMAL or HIGH; anything else is NORMAL. Takes at once, the background kept. */
     public void setSensitivity(int sensitivity) {
-        this.sensitivity = sensitivity >= LOW && sensitivity <= HIGH ? sensitivity : NORMAL;
+        int s = sensitivity >= LOW && sensitivity <= HIGH ? sensitivity : NORMAL;
+        if (s == this.sensitivity) return;
+        this.sensitivity = s;
+        buildLevels();
+    }
+
+    /** Areas with a sensitivity of their own (null: none). Takes at once, the background kept. */
+    public void setAreas(DetectionAreas areas) {
+        DetectionAreas a = areas == null ? DetectionAreas.NONE : areas;
+        if (a.equals(this.areas)) return;
+        this.areas = a;
+        buildLevels();
+    }
+
+    public DetectionAreas getAreas() {
+        return areas;
+    }
+
+    /** levelAt from the sensitivity and the areas, a later area over an earlier one. */
+    private void buildLevels() {
+        if (levelAt == null) return;
+        java.util.Arrays.fill(levelAt, (byte) sensitivity);
+        for (DetectionAreas.Area a : areas.list()) {
+            int x0 = Math.max(0, (int) Math.floor(a.x * w)), x1 = Math.min(w, (int) Math.ceil((a.x + a.w) * w));
+            int y0 = Math.max(0, (int) Math.floor(a.y * h)), y1 = Math.min(h, (int) Math.ceil((a.y + a.h) * h));
+            for (int yy = y0; yy < y1; yy++) java.util.Arrays.fill(levelAt, yy * w + x0, yy * w + Math.max(x0, x1), (byte) a.level);
+        }
+        anyHigh = false;
+        for (byte l : levelAt) if (l == HIGH) anyHigh = true;
+    }
+
+    /** The sensitivity at a working pixel (clamped into the picture). */
+    private int levelAt(float x, float y) {
+        int xx = Math.max(0, Math.min(w - 1, (int) x)), yy = Math.max(0, Math.min(h - 1, (int) y));
+        return levelAt[yy * w + xx];
     }
 
     public int getSensitivity() {
@@ -422,6 +498,8 @@ import java.util.List;
     public Result process(byte[] y, int width, int height, byte[] u, byte[] v, long timeMs) {
         if (epoch == Long.MIN_VALUE || tracks.isEmpty() && timeMs - epoch > REBASE_MS) epoch = timeMs;
         if (width != inWidth || height != inHeight || cur == null) allocate(width, height);
+        fineNow = fw > 0 && anyHigh;
+        if (!fineNow) fineLive = false;
         downsample(y);
         float dt = !started ? 0.125f : Math.max(0.01f, Math.min(1f, (timeMs - lastMs) / 1000f));
         lastMs = timeMs;
@@ -431,6 +509,7 @@ import java.util.List;
             restart(cur, timeMs);
             return new Result(Collections.<Detection>emptyList(), night, true, 0);
         }
+        if (fineNow && !fineLive) seedFine();
 
         // 1. wind shake: the shift against the background, taken out
         textureMean = texture(mean);
@@ -441,6 +520,7 @@ import java.util.List;
             shiftY = 0;
         }
         int validCount = warp(shiftX, shiftY);
+        if (fineNow) warpFine(2 * shiftX, 2 * shiftY);
         if (validCount < w * h / 3) { // shifted too far to compare: start again from this picture
             restart(cur, timeMs);
             return new Result(Collections.<Detection>emptyList(), night, true, 0);
@@ -458,6 +538,7 @@ import java.util.List;
                 mean[i] /= gain;
                 slow[i] /= gain;
             }
+            if (fineNow) for (int i = 0; i < fw * fh; i++) fmean[i] /= gain;
             loom.exposure(gain);
             settling = true;
         } else if (gainFromPeak) {
@@ -468,9 +549,11 @@ import java.util.List;
                 mean[i] /= gain;
                 slow[i] /= gain;
             }
+            if (fineNow) for (int i = 0; i < fw * fh; i++) fmean[i] /= gain;
             loom.exposure(gain);
         } else {
             for (int i = 0; i < w * h; i++) aligned[i] *= gain;
+            if (fineNow) for (int i = 0; i < fw * fh; i++) faligned[i] *= gain;
         }
 
         // 3. foreground
@@ -511,7 +594,7 @@ import java.util.List;
             for (Blob b : small) if (b.track != null) blobs.add(b);
         }
         learn(dt, blobs, false);
-        if (!night) loom.update(aligned, valid, sd, near, dt, timeMs, rel(timeMs), sensitivity);
+        if (!night) loom.update(aligned, valid, sd, near, dt, timeMs, rel(timeMs), levelAt);
         return new Result(report(timeMs), night, false, tracks.size());
     }
 
@@ -555,12 +638,57 @@ import java.util.List;
         stillSmall = new byte[(w / 4) * (h / 4)];
         hpBack = new float[n];
         tmp = new float[n];
+        levelAt = new byte[n];
+        buildLevels();
+        // the fine picture: only when the input is an even number of times the working picture
+        fw = fh = 0;
+        fineLive = false;
+        if (factor >= 2 && factor % 2 == 0) {
+            fineFactor = factor / 2;
+            fw = w * 2;
+            fh = h * 2;
+            int fn = fw * fh;
+            fcur = new float[fn];
+            faligned = new float[fn];
+            fmean = new float[fn];
+            fvar = new float[fn];
+            fsd = new float[fn];
+            fvalid = new byte[fn];
+            fraw = new byte[fn];
+            fchanged = new byte[fn];
+            excAt = new long[fn];
+            excSince = new long[fn];
+            inExc = new byte[fn];
+            excAgain = new byte[fn];
+        }
         started = false;
         tracks.clear();
     }
 
     /** The luma averaged over factor x factor blocks. */
     private void downsample(byte[] y) {
+        if (fineNow) {
+            // the fine picture, and the working one from it (the same block averages)
+            int f = fineFactor;
+            float scale = 1f / (f * f);
+            for (int fy = 0; fy < fh; fy++) {
+                for (int fx = 0; fx < fw; fx++) {
+                    int sum = 0;
+                    for (int dy = 0; dy < f; dy++) {
+                        int row = (fy * f + dy) * inWidth + fx * f;
+                        for (int dx = 0; dx < f; dx++) sum += y[row + dx] & 0xff;
+                    }
+                    fcur[fy * fw + fx] = sum * scale;
+                }
+            }
+            for (int wy = 0; wy < h; wy++) {
+                for (int wx = 0; wx < w; wx++) {
+                    int i = 2 * wy * fw + 2 * wx;
+                    cur[wy * w + wx] = (fcur[i] + fcur[i + 1] + fcur[i + fw] + fcur[i + fw + 1]) / 4;
+                }
+            }
+            return;
+        }
         int f = factor;
         float scale = 1f / (f * f);
         for (int wy = 0; wy < h; wy++) {
@@ -596,6 +724,13 @@ import java.util.List;
     }
 
     private void restart(float[] picture, long timeMs) {
+        if (fineNow) {
+            System.arraycopy(picture == cur ? fcur : faligned, 0, fmean, 0, fw * fh);
+            java.util.Arrays.fill(fvar, 4 * 4);
+            java.util.Arrays.fill(excAt, Long.MIN_VALUE / 2);
+            java.util.Arrays.fill(inExc, (byte) 0);
+            fineLive = true;
+        }
         System.arraycopy(picture, 0, mean, 0, w * h);
         System.arraycopy(picture, 0, slow, 0, w * h);
         java.util.Arrays.fill(var, 4 * 4);
@@ -607,6 +742,20 @@ import java.util.List;
         settledFor = 0;
         shiftX = 0;
         shiftY = 0;
+    }
+
+    /** HIGH came on with the background learnt: the fine one starts from it (each fine pixel its working pixel's). */
+    private void seedFine() {
+        for (int fy = 0; fy < fh; fy++) {
+            for (int fx = 0; fx < fw; fx++) {
+                int i = fy * fw + fx, parent = (fy / 2) * w + fx / 2;
+                fmean[i] = mean[parent];
+                fvar[i] = var[parent];
+            }
+        }
+        java.util.Arrays.fill(excAt, Long.MIN_VALUE / 2);
+        java.util.Arrays.fill(inExc, (byte) 0);
+        fineLive = true;
     }
 
     // ------------------------------------------------------------------ 1. the shift
@@ -628,7 +777,29 @@ import java.util.List;
             still[i] = (byte) (raw[i] == 0 && grown[i] == 0 ? 1 : 0);
             usable += still[i];
         }
-        if (usable < w * h * 15 / 100 || usable > w * h * 75 / 100) {
+        // HIGH (1.0.58): measured on what is calm - leaves swaying below the foreground line (their background varies,
+        // or they flickered lately) pulled the answer a fifth of a pixel off a camera standing still, and the fine
+        // picture, judged without the 3 x 3 test's slack, was off by half a pixel everywhere
+        // (only once the camera has stood still a while: shaken, every edge varies too, and without them the answer wanders)
+        int calm = 0;
+        if (anyHigh && stillness < STEADY_SHIFT) {
+            for (int i = 0; i < w * h; i++) {
+                if (still[i] != 0 && sd[i] <= SHIFT_CALM_SD && near[i] <= SHIFT_CALM_FLICKER) calm++;
+            }
+        }
+        if (calm >= w * h * 15 / 100) {
+            for (int i = 0; i < w * h; i++) still[i] = (byte) (still[i] != 0 && sd[i] <= SHIFT_CALM_SD && near[i] <= SHIFT_CALM_FLICKER ? 1 : 0);
+            usable = calm;
+            m = still;
+            ms = stillSmall;
+            for (int yy = 0; yy < sh; yy++) {
+                for (int xx = 0; xx < sw; xx++) {
+                    int n = 0;
+                    for (int dy = 0; dy < 4; dy++) for (int dx = 0; dx < 4; dx++) n += still[(yy * 4 + dy) * w + xx * 4 + dx];
+                    stillSmall[yy * sw + xx] = (byte) (n >= 12 ? 1 : 0);
+                }
+            }
+        } else if (usable < w * h * 15 / 100 || usable > w * h * 75 / 100) {
             // nearly all moving, or little (leaves, a passer-by far off): the whole picture, as before
         } else {
             m = still;
@@ -689,7 +860,12 @@ import java.util.List;
         float t = cost(hpCur, hpMean, w, h, cx, cy - 1, 1, m), b = cost(hpCur, hpMean, w, h, cx, cy + 1, 1, m);
         shiftX = cx + fraction(l, best, r);
         shiftY = cy + fraction(t, best, b);
+        stillness += STILLNESS_RATE * (Math.max(Math.abs(shiftX), Math.abs(shiftY)) - stillness);
     }
+
+    /** How far the camera has moved a picture lately (working pixels, smoothed): under STEADY_SHIFT it stands still. */
+    private float stillness = 1;
+    static final float STILLNESS_RATE = 0.2f;
 
     /** At least 80 % of the 7 x 7 round (x, y) foreground (clean): deep enough inside a blob for its detail. */
     private boolean interior(int x, int y) {
@@ -705,6 +881,9 @@ import java.util.List;
         for (int i = 0; i < w * h; i++) bandA[i] = src[i] - bandA[i];
         highPass(bandA, dst, w, h, 3);
     }
+
+    /** HIGH (1.0.58): the shift is measured where the background varies by at most this (grey levels) and flickered at most this often. */
+    static final float SHIFT_CALM_SD = 6, SHIFT_CALM_FLICKER = 0.05f;
 
     /** A new shift must cost less than the last one's cost over this (SHIFT_HOLD) to be taken. */
     static final float SHIFT_HOLD = 1.05f;
@@ -928,14 +1107,11 @@ import java.util.List;
 
     /** Marks raw[] foreground pixels; returns how many. */
     private int foreground() {
-        float k = K_SIGMA[sensitivity];
-        float margin = night ? MIN_DIFF_NIGHT[sensitivity] : MIN_DIFF_DAY[sensitivity];
         float floor = night ? 5f : 2.5f;
         for (int i = 0; i < w * h; i++) sd[i] = Math.max(floor, (float) Math.sqrt(var[i]));
         // a steady camera: a pixel also counts against its own background alone, by a wider margin - a small thing on a
         // strong edge (a vehicle far off on the horizon line) matches a dark neighbour in the 3 x 3 test and was never seen
         boolean steady = Math.abs(shiftX) < STEADY_SHIFT && Math.abs(shiftY) < STEADY_SHIFT;
-        float ownMargin = margin * OWN_MARGIN;
         int count = 0;
         for (int yy = 0; yy < h; yy++) {
             for (int xx = 0; xx < w; xx++) {
@@ -943,10 +1119,16 @@ import java.util.List;
                 raw[i] = 0;
                 changed[i] = 0;
                 if (valid[i] == 0) continue;
+                // the sensitivity of the area it lies in (1.0.58): an OFF area is never foreground
+                int lv = levelAt[i];
+                if (lv == OFF) continue;
+                float k = K_SIGMA[lv];
+                float margin = night ? MIN_DIFF_NIGHT[lv] : MIN_DIFF_DAY[lv];
                 float a = aligned[i];
                 if (steady && !night) {
                     float own = Math.abs(a - mean[i]) - k * sd[i];
-                    if (own > ownMargin) {
+                    // HIGH: against its own background a fraction of a pixel off too, not only against any neighbour's
+                    if (own > margin * OWN_MARGIN || lv == HIGH && halfLeast(mean, sd, w, i, a, k) > margin * HALF_MARGIN) {
                         count++;
                         changed[i] = 1;
                         if (!otherLight(xx, yy)) raw[i] = 1;
@@ -972,7 +1154,108 @@ import java.util.List;
                 }
             }
         }
+        if (fineNow) {
+            if (steady && !night) {
+                count += fineForeground();
+            } else {
+                java.util.Arrays.fill(fraw, (byte) 0);
+                java.util.Arrays.fill(fchanged, (byte) 0);
+            }
+        }
         return count;
+    }
+
+    /**
+     * HIGH, the camera steady (1.0.58): the same tests on the fine picture where the working pixel is HIGH; a working
+     * pixel with FINE_OF_FOUR of its four fine pixels changed is changed too. Returns how many it added.
+     */
+    private int fineForeground() {
+        float k = K_SIGMA[HIGH], margin = MIN_DIFF_DAY[HIGH];
+        for (int i = 0; i < fw * fh; i++) fsd[i] = Math.max(2.5f, (float) Math.sqrt(fvar[i]));
+        for (int yy = 0; yy < fh; yy++) {
+            for (int xx = 0; xx < fw; xx++) {
+                int i = yy * fw + xx;
+                fraw[i] = 0;
+                fchanged[i] = 0;
+                if (fvalid[i] == 0 || levelAt[(yy / 2) * w + xx / 2] != HIGH) continue;
+                float a = faligned[i];
+                boolean hit = Math.abs(a - fmean[i]) - k * fsd[i] > margin * OWN_MARGIN
+                        || halfLeast(fmean, fsd, fw, i, a, k) > margin * HALF_MARGIN;
+                if (!hit) {
+                    float least = Float.MAX_VALUE;
+                    for (int dy = -1; dy <= 1 && least > margin; dy++) {
+                        int row = (yy + dy) * fw + xx;
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int q = row + dx;
+                            float score = Math.abs(a - fmean[q]) - k * fsd[q];
+                            if (score < least) least = score;
+                        }
+                    }
+                    hit = least > margin;
+                }
+                if (!hit) continue;
+                fchanged[i] = 1;
+                if (!otherLight(faligned, fmean, fw, xx, yy)) fraw[i] = 1;
+            }
+        }
+        int added = 0;
+        for (int wy = 0; wy < h; wy++) {
+            for (int wx = 0; wx < w; wx++) {
+                int i = wy * w + wx;
+                if (valid[i] == 0 || changed[i] != 0 || levelAt[i] != HIGH) continue;
+                int f = 2 * wy * fw + 2 * wx;
+                if (fchanged[f] + fchanged[f + 1] + fchanged[f + fw] + fchanged[f + fw + 1] < FINE_OF_FOUR) continue;
+                changed[i] = 1;
+                added++;
+                if (fraw[f] + fraw[f + 1] + fraw[f + fw] + fraw[f + fw + 1] >= FINE_OF_FOUR) raw[i] = 1;
+            }
+        }
+        return added;
+    }
+
+    /**
+     * The least of |a - background| - k sd over the background (m, sd; cw wide) shifted by at most half a pixel each way
+     * round pixel i (1.0.58): the camera steady, the picture is aligned to a fraction of a pixel - a small thing on a
+     * busy background matches some neighbour in the 3 x 3 test, but not its own place.
+     */
+    private static float halfLeast(float[] m, float[] sd, int cw, int i, float a, float k) {
+        float c = m[i], l = m[i - 1], r = m[i + 1], u = m[i - cw], d = m[i + cw];
+        float sc = sd[i], sl = sd[i - 1], sr = sd[i + 1], su = sd[i - cw], sn = sd[i + cw];
+        float least = Math.abs(a - c) - k * sc;
+        least = Math.min(least, Math.abs(a - (c + l) / 2) - k * (sc + sl) / 2);
+        least = Math.min(least, Math.abs(a - (c + r) / 2) - k * (sc + sr) / 2);
+        least = Math.min(least, Math.abs(a - (c + u) / 2) - k * (sc + su) / 2);
+        least = Math.min(least, Math.abs(a - (c + d) / 2) - k * (sc + sn) / 2);
+        least = Math.min(least, Math.abs(a - (c + l + u + m[i - cw - 1]) / 4) - k * (sc + sl + su + sd[i - cw - 1]) / 4);
+        least = Math.min(least, Math.abs(a - (c + r + u + m[i - cw + 1]) / 4) - k * (sc + sr + su + sd[i - cw + 1]) / 4);
+        least = Math.min(least, Math.abs(a - (c + l + d + m[i + cw - 1]) / 4) - k * (sc + sl + sn + sd[i + cw - 1]) / 4);
+        least = Math.min(least, Math.abs(a - (c + r + d + m[i + cw + 1]) / 4) - k * (sc + sr + sn + sd[i + cw + 1]) / 4);
+        return least;
+    }
+
+    /** warp on the fine picture (1.0.58; the working shift times two). */
+    private void warpFine(float sx, float sy) {
+        for (int yy = 0; yy < fh; yy++) {
+            float fy = yy + sy;
+            int iy = (int) Math.floor(fy);
+            float ty = fy - iy;
+            for (int xx = 0; xx < fw; xx++) {
+                int i = yy * fw + xx;
+                float fx = xx + sx;
+                int ix = (int) Math.floor(fx);
+                float tx = fx - ix;
+                if (ix < 0 || iy < 0 || ix + 1 >= fw || iy + 1 >= fh || xx == 0 || yy == 0 || xx == fw - 1 || yy == fh - 1) {
+                    fvalid[i] = 0;
+                    faligned[i] = fmean[i];
+                    continue;
+                }
+                int s = iy * fw + ix;
+                float top = fcur[s] + (fcur[s + 1] - fcur[s]) * tx;
+                float bottom = fcur[s + fw] + (fcur[s + fw + 1] - fcur[s + fw]) * tx;
+                faligned[i] = top + (bottom - top) * ty;
+                fvalid[i] = 1;
+            }
+        }
     }
 
     /**
@@ -982,12 +1265,17 @@ import java.util.List;
      * two can't be told apart, and it stays foreground.
      */
     private boolean otherLight(int xx, int yy) {
+        return otherLight(aligned, mean, w, xx, yy);
+    }
+
+    /** otherLight on a picture and its background cw wide (the working or the fine one). */
+    private static boolean otherLight(float[] pic, float[] back, int cw, int xx, int yy) {
         float sa = 0, sm = 0, saa = 0, smm = 0, sam = 0;
         float least = Float.MAX_VALUE, most = 0;
         for (int dy = -1; dy <= 1; dy++) {
-            int row = (yy + dy) * w + xx;
+            int row = (yy + dy) * cw + xx;
             for (int dx = -1; dx <= 1; dx++) {
-                float a = aligned[row + dx], m = mean[row + dx];
+                float a = pic[row + dx], m = back[row + dx];
                 sa += a;
                 sm += m;
                 saa += a * a;
@@ -1129,7 +1417,7 @@ import java.util.List;
             if (!night && lightChange(b)) continue;
             b.freq /= b.count;
             b.texture /= b.count;
-            if (b.count < MIN_AREA[sensitivity]) small.add(b);
+            if (b.count < MIN_AREA[Math.max(LOW, levelAt(b.cx(), b.cy()))]) small.add(b);
             else found.add(b);
         }
         return found;
@@ -1295,7 +1583,10 @@ import java.util.List;
         t.history.add(new float[]{rel(now), b.cx(), b.cy(), b.minX, b.minY, b.maxX, b.maxY});
         while (t.history.size() > 2 && rel(now) - t.history.get(0)[0] > TRAVEL_WINDOW_MS + 1000) t.history.remove(0);
         float fromOrigin = (float) Math.hypot(b.cx() - t.ox, b.cy() - t.oy);
-        t.maxFromOrigin = Math.max(t.maxFromOrigin, fromOrigin);
+        if (fromOrigin > t.maxFromOrigin) {
+            t.maxFromOrigin = fromOrigin;
+            t.farAt = now;
+        }
         // the blob's look, averaged over the track's life (a third each picture)
         float a = t.hits == 1 ? 1 : 0.3f;
         t.flicker += a * (b.freq - t.flicker);
@@ -1316,6 +1607,14 @@ import java.util.List;
 
     /** Whether the track travels, its vegetation score, its confidence; confirms it, or takes the confirmation back. */
     private void judge(Track t, long now, float fromOrigin) {
+        // the rules of the area it is in (1.0.58): never confirmed in an OFF area
+        float[] at = t.history.get(t.history.size() - 1);
+        int sensitivity = levelAt(at[1], at[2]);
+        if (sensitivity == OFF) {
+            t.confirmed = t.proven = t.near = false;
+            t.confidence = 0;
+            return;
+        }
         // positions a quarter second apart at least: the jitter of a blob's centre doesn't add to the way gone
         List<float[]> pts = new ArrayList<>();
         for (float[] p : t.history) {
@@ -1413,6 +1712,11 @@ import java.util.List;
             return;
         }
         if (t.confirmed && t.maxFromOrigin >= PROVEN_TRAVEL * needed) t.proven = true;
+        // HIGH (1.0.58): or it went far one way for seconds without ever coming back - a sentry walking his beat, who
+        // stops and turns at its end; leaves swing back within a second or two
+        if (sensitivity == HIGH && t.confirmed && !t.cameBack && t.maxFromOrigin >= LEG_FAR * needed && t.farAt - t.first >= LEG_MS) {
+            t.proven = true;
+        }
         if (t.proven) {
             // it went far: a turn, a loop or a stop doesn't take its box away - only a look of leaves or a shadow's edge
             float look = VEG_FLICKER * flicker + VEG_TEXTURE * texture;
@@ -1506,7 +1810,10 @@ import java.util.List;
 
     private List<Detection> report(long now) {
         List<Track> shown = new ArrayList<>();
-        for (Track t : tracks) if (t.confirmed && now - t.lastSeen <= REPORT_COAST_MS) shown.add(t);
+        for (Track t : tracks) {
+            float[] p = t.history.get(t.history.size() - 1);
+            if (t.confirmed && now - t.lastSeen <= REPORT_COAST_MS && levelAt(p[1], p[2]) != OFF) shown.add(t);
+        }
         Collections.sort(shown, (a, b) -> Float.compare(b.confidence, a.confidence));
         List<Detection> out = new ArrayList<>();
         for (int i = 0; i < shown.size() && i < MAX_DETECTIONS; i++) {
@@ -1519,6 +1826,7 @@ import java.util.List;
         // and what comes straight at the camera, unless a track already boxes it
         for (Looming.Loomer l : loom.loomers()) {
             if (!l.confirmed || l.lastSeen != now || out.size() >= MAX_DETECTIONS) continue;
+            if (levelAt((l.minX + l.maxX) / 2f, (l.minY + l.maxY) / 2f) == OFF) continue;
             float x0 = Math.max(0, l.minX - 1), y0 = Math.max(0, l.minY - 1);
             float x1 = Math.min(w, l.maxX + 2), y1 = Math.min(h, l.maxY + 2);
             boolean boxed = false;
@@ -1569,8 +1877,55 @@ import java.util.List;
             } else {
                 var[i] += aDown * (d2 - var[i]);
             }
-            if (!fast) freq[i] += aFreq * ((raw[i] != 0 ? 1 : 0) - freq[i]);
+            // (HIGH, 1.0.58: a confirmed thing standing there is not flicker - a sentry at the end of his beat)
+            boolean flick = raw[i] != 0 && !(inTrack && levelAt[i] == HIGH);
+            if (!fast) freq[i] += aFreq * ((flick ? 1 : 0) - freq[i]);
             slow[i] += (fg ? aSlowFg : aSlow) * (aligned[i] - slow[i]);
+        }
+        if (fineNow) learnFine(fast, confirmed, aMean, aMeanBlob, aMeanTrack, aMeanLight, aUp, aUpFg, aUpTrack, aDown);
+    }
+
+    /**
+     * The fine background learns as the working one (1.0.58), a pixel foreground when it or its working pixel is, but
+     * its variance grows at ONE_OFF_GROWTH from a one-off excursion: someone passing once leaves it as it was, and the
+     * next one passing there - the next man of a patrol, the sentry coming back - is still seen. An excursion again
+     * within ONE_OFF_REPEAT_MS (leaves), or one that lasts, grows it as before.
+     */
+    private void learnFine(boolean fast, boolean[] confirmed, float aMean, float aMeanBlob, float aMeanTrack, float aMeanLight,
+                           float aUp, float aUpFg, float aUpTrack, float aDown) {
+        long now = lastMs;
+        for (int yy = 0; yy < fh; yy++) {
+            for (int xx = 0; xx < fw; xx++) {
+                int i = yy * fw + xx;
+                if (fvalid[i] == 0) continue;
+                int parent = (yy / 2) * w + xx / 2;
+                float d = faligned[i] - fmean[i];
+                boolean fg = !fast && (fraw[i] != 0 || raw[parent] != 0);
+                boolean light = !fast && !fg && fchanged[i] != 0;
+                boolean inTrack = fg && labels[parent] != 0 && confirmed != null && labels[parent] < confirmed.length && confirmed[labels[parent]];
+                float am = fast ? aMean : inTrack ? aMeanTrack : fg ? aMeanBlob : light ? aMeanLight : aMean;
+                fmean[i] += am * d;
+                float growth = 1;
+                if (!fast) {
+                    if (Math.abs(d) > EXCURSION_K * Math.max(2.5f, (float) Math.sqrt(fvar[i]))) {
+                        if (inExc[i] == 0) {
+                            inExc[i] = 1;
+                            excAgain[i] = (byte) (now - excAt[i] < ONE_OFF_REPEAT_MS ? 1 : 0);
+                            excAt[i] = now;
+                            excSince[i] = now;
+                        }
+                        if (excAgain[i] == 0 && now - excSince[i] <= ONE_OFF_LASTS_MS) growth = ONE_OFF_GROWTH;
+                    } else {
+                        inExc[i] = 0;
+                    }
+                }
+                float d2 = Math.min(d * d, fg ? 40 * 40 : 60 * 60);
+                if (d2 > fvar[i]) {
+                    if (!light) fvar[i] += growth * (inTrack ? aUpTrack : fg ? aUpFg : aUp) * (d2 - fvar[i]);
+                } else {
+                    fvar[i] += aDown * (d2 - fvar[i]);
+                }
+            }
         }
     }
     private static float rate(float dt, float tauS) {

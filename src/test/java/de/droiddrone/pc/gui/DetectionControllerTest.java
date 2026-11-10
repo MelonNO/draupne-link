@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.pc.Names;
 import de.droiddrone.pc.PcConfig;
 import org.junit.jupiter.api.Test;
@@ -53,6 +54,36 @@ class DetectionControllerTest {
         d.set(0, null);
         assertEquals(Map.of("detection", "off"), saved.get(1), "no phone chosen: the setting for all");
         assertEquals("Motion detection off.", log.get(1));
+    }
+
+    /** 1.0.58: each drone's detection areas, saved as text in its camera's own picture and read back the same. */
+    @Test
+    void eachDroneHasItsOwnAreas() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        config.set(Names.PHONE_NAME_KEY, "MobileAlpha");
+        DetectionController d = controller(config);
+        assertTrue(d.areasFor("MobileAlpha").isEmpty(), "none set: none");
+        DetectionAreas a = DetectionAreas.of(List.of(new DetectionAreas.Area(0.5f, 0.1f, 0.25f, 0.3f, 1)));
+        d.setAreas(a, null);
+        assertEquals(List.of(Map.of("detectionAreas.MobileAlpha", "0.5000,0.1000,0.2500,0.3000,low")), saved);
+        assertEquals(a, d.areasFor("MobileAlpha"));
+        assertTrue(d.areasFor("MobileBravo").isEmpty(), "another drone's are its own");
+        assertEquals(2, d.levelFor("MobileAlpha"), "the level is not touched");
+    }
+
+    /** 1.0.58: a box drawn on a mirrored, upside-down picture is kept where the camera sees it, and drawn back there. */
+    @Test
+    void anAreaDrawnOnATurnedPictureIsTheCamerasOwn() {
+        java.awt.Rectangle r = new java.awt.Rectangle(100, 50, 400, 200);
+        java.awt.Point p = new java.awt.Point(100, 50), q = new java.awt.Point(200, 100); // the screen's top left quarter
+        DetectionAreas.Area plain = DetectionAreaLayer.toCamera(p, q, r, false, false, 0);
+        assertEquals(0, plain.x, 1e-4);
+        assertEquals(0, plain.y, 1e-4);
+        DetectionAreas.Area turned = DetectionAreaLayer.toCamera(q, p, r, true, true, 0);
+        assertEquals(0.75f, turned.x, 1e-4, "mirrored: the camera's right");
+        assertEquals(0.75f, turned.y, 1e-4, "upside down: the camera's bottom");
+        assertEquals(0.25f, turned.w, 1e-4);
+        assertEquals(new java.awt.Rectangle(100, 50, 100, 50), DetectionAreaLayer.toScreen(turned, r, true, true), "drawn back where it was drawn");
     }
 
     @Test

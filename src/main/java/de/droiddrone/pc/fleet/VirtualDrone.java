@@ -1,6 +1,7 @@
 package de.droiddrone.pc.fleet;
 
 import de.droiddrone.common.DataReader;
+import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.MotionRecord;
 import de.droiddrone.common.Observe;
@@ -697,6 +698,7 @@ public final class VirtualDrone {
                         int level = buffer.readUnsignedByteAsInt();
                         if (level != detectionLevel) log.accept("motion detection " + (level == 0 ? "off" : "sensitivity " + level) + " (the PC)");
                         detectionLevel = level;
+                        detectionAreas(DetectionAreas.read(buffer)); // 1.0.58: the areas after it, as the phone takes them
                         detectionAskedAt = System.currentTimeMillis();
                     }
                 }
@@ -714,6 +716,7 @@ public final class VirtualDrone {
                         int sensitivity = buffer.readUnsignedByteAsInt();
                         int flags = buffer.readUnsignedByteAsInt();
                         int token = buffer.readInt();
+                        detectionAreas(DetectionAreas.read(buffer));
                         overwatch.configure(sensitivity, flags, token);
                     }
                     requestMode(m, interval, "the PC");
@@ -1593,6 +1596,13 @@ public final class VirtualDrone {
     }
 
     // ------------------------------------------------------------------ the motion detection (MotionWatch's part)
+
+    /** New detection areas (null: none came, the ones known stay), as the phone keeps them (MotionWatch.areas). */
+    private void detectionAreas(DetectionAreas a) {
+        if (a == null || a.equals(motion.areas())) return;
+        log.accept("motion detection: " + a + " (the PC)");
+        motion.setAreas(a);
+    }
 
     /** The level asked for now: the pilot's DETECTION_SET within 5 s, an observer's, or overwatch's; 0 none. */
     private int detectionWanted(long now) {

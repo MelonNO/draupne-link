@@ -56,6 +56,11 @@ final class SyntheticScene {
     static final class Mover {
         final float x0, y0, w, h, vx, vy, t0, t1, luma, u, v;
         final boolean textured;
+        /**
+         * Camouflage (1.0.58): over 0, its pattern is the leaves' (a net's, a treeline's), this strong, round its luma -
+         * of the leaves' own brightness and grain, it differs from them only in where its blotches lie.
+         */
+        float camo;
         /** Where its top left is at a time (s), instead of the straight line: {x, y}. */
         java.util.function.DoubleFunction<float[]> path;
 
@@ -265,7 +270,8 @@ final class SyntheticScene {
             float[] b = m.at(t);
             double mx = sx - MARGIN, my = sy - MARGIN;
             if (mx >= b[0] && mx < b[0] + b[2] && my >= b[1] && my < b[1] + b[3]) {
-                luma = m.textured ? m.luma + (sample(ground, mx - b[0] + 3, my - b[1] + 3) - 110) * 0.4f : m.luma;
+                luma = m.camo > 0 ? m.luma + (sample(leaves, (mx - b[0]) * 0.8 + 7, (my - b[1]) * 0.8 + 7) - 100) * m.camo
+                        : m.textured ? m.luma + (sample(ground, mx - b[0] + 3, my - b[1] + 3) - 110) * 0.4f : m.luma;
                 u = m.u;
                 v = m.v;
             }

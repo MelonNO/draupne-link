@@ -129,6 +129,8 @@ final class Looming {
     }
 
     private final int w, h;
+    /** The detector's sensitivity per pixel (1.0.58), as the last update gave it. */
+    private byte[] levels;
     private final float[] ref, allow, memory, leafy, persist, held, around, tmp, prev;
     private final byte[] on, wasOn, mask;
     private final int[] labels, stack;
@@ -196,14 +198,15 @@ final class Looming {
      * @param valid   where it is (1) or off the edge after the shift
      * @param sd      the detector's standard deviation per pixel (its background's: leaves' sway learnt in seconds)
      * @param near    the detector's flicker map (how often round each pixel was foreground lately)
+     * @param levels  each pixel's sensitivity (1.0.58: the detector's areas; 0 off)
      */
-    void update(float[] aligned, byte[] valid, float[] sd, float[] near, float dt, long now, float relNow, int sensitivity) {
+    void update(float[] aligned, byte[] valid, float[] sd, float[] near, float dt, long now, float relNow, byte[] levels) {
+        this.levels = levels;
         frames++;
         if (restarted) {
             restarted = false;
             settledAt = now + SETTLE_MS;
         }
-        float k = K_SIGMA[sensitivity], margin = MARGIN[sensitivity];
         float aRef = rate(dt, REF_TAU_S), aPersist = rate(dt, PERSIST_TAU_S);
         float fade = (float) Math.exp(-dt / MEMORY_TAU_S), rise = rate(dt, MEMORY_RISE_S);
         // around: the most any pixel within FREEZE_REACH was steadily changed (the last picture's, made at its end): a
@@ -235,7 +238,8 @@ final class Looming {
                 float a = aligned[i];
                 // what the shake left over moves an edge by a fraction of a pixel: the reference's slope times that
                 float slope = Math.max(Math.abs(ref[i + 1] - ref[i - 1]), Math.abs(ref[i + w] - ref[i - w])) / 2;
-                float score = Math.abs(a - ref[i]) - k * allow[i] - margin - ALIGN_ERROR * slope;
+                int lv = levels[i]; // its area's sensitivity: never on in an OFF area
+                float score = lv == 0 ? -1 : Math.abs(a - ref[i]) - K_SIGMA[lv] * allow[i] - MARGIN[lv] - ALIGN_ERROR * slope;
                 if (score > 0 && !sameGround(aligned, i)) on[i] = 1;
                 persist[i] += aPersist * (on[i] - persist[i]);
                 // the reference's noise: from pixels that come and go (a swing), never from one that stays changed
@@ -258,7 +262,7 @@ final class Looming {
         for (int i = 0; i < w * h; i++) {
             mask[i] = (byte) (persist[i] >= PERSIST_ON ? 2 : on[i] != 0 && around[i] >= PERSIST_ON ? 1 : 0);
         }
-        follow(blobs(aligned, near), now, relNow, sensitivity);
+        follow(blobs(aligned, near), now, relNow);
         System.arraycopy(aligned, 0, prev, 0, w * h);
     }
 
@@ -348,7 +352,7 @@ final class Looming {
         return found;
     }
 
-    private void follow(List<int[]> blobs, long now, float relNow, int sensitivity) {
+    private void follow(List<int[]> blobs, long now, float relNow) {
         boolean[] taken = new boolean[blobs.size()];
         for (Loomer l : loomers) {
             // the blob that overlaps its last box most (grown by 2)
@@ -377,7 +381,7 @@ final class Looming {
         for (int i = loomers.size() - 1; i >= 0; i--) {
             Loomer l = loomers.get(i);
             if (now - l.lastSeen > LOST_MS) loomers.remove(i);
-            else if (l.lastSeen == now) judge(l, now, relNow, sensitivity);
+            else if (l.lastSeen == now) judge(l, now, relNow, Math.max(1, levels[Math.min(h - 1, (l.minY + l.maxY) / 2) * w + Math.min(w - 1, (l.minX + l.maxX) / 2)]));
         }
         while (loomers.size() > 40) loomers.remove(0); // a busy picture: the oldest go
     }

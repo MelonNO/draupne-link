@@ -566,6 +566,15 @@ public class MainWindow extends JFrame {
         });
         tourHost = new TourHost(config, new TourHooks());
         detection = new DetectionController(config, cameraView, this::save, this::logLine);
+        // the detection areas over the video (1.0.58): the chosen drone's, saved and sent as they change
+        areaLayer = new DetectionAreaLayer(videoView, () -> detection.areasFor(config.getString(Names.PHONE_NAME_KEY)),
+                a -> {
+                    detection.setAreas(a, connection);
+                    logLine("Motion detection: " + a + ".");
+                    videoView.repaint();
+                });
+        videoView.setAreaLayer(areaLayer);
+        areaLayer.setShown(detection.levelFor(config.getString(Names.PHONE_NAME_KEY)) > 0);
         this.configFile = configFile;
         this.service = service;
         cameraView.configure(config);
@@ -738,11 +747,17 @@ public class MainWindow extends JFrame {
         menu.add(new MenuRows.SwitchRow("Camera upside down", "Turns the picture 180&deg;",
                 videoView.isUpsideDown(), this::setUpsideDown));
         MenuRows.ChoiceRow motionRow = new MenuRows.ChoiceRow("Motion detection", "Disarmed: what moves, boxed",
-                DetectionController.DETECTION_LEVELS, detection.levelFor(config.getString(Names.PHONE_NAME_KEY)), level -> detection.set(level, connection));
+                DetectionController.DETECTION_LEVELS, detection.levelFor(config.getString(Names.PHONE_NAME_KEY)), level -> {
+                    detection.set(level, connection);
+                    areaLayer.setShown(level > 0);
+                });
         motionRow.setToolTipText("<html>Disarmed: the phone boxes what moves in the picture"
                 + "<br>(people, cars, animals, birds - not swaying trees; lights at night).<br>"
-                + "Direction on the map. Per drone; needs phone app 2.3.0-pc.35.</html>");
+                + "HIGH also finds camouflage, but may box leaves in gusts: box them LOW or OFF with Detection areas.<br>"
+                + "Direction on the map. Per drone; needs phone app 2.3.0-pc.35 (HIGH, areas: pc.46).</html>");
         if (advanced) menu.add(motionRow); // TOOLS > Advanced
+        if (advanced) menu.add(new MenuRows.SwitchRow("Detection areas", "Draw boxes with their own sensitivity",
+                areaLayer.isEditing(), areaLayer::setEditing));
         if (advanced) menu.add(new MenuRows.SwitchRow("Camera view on the map", "What the camera sees, on the maps",
                 cameraOnMap, on -> {
                     cameraOnMap = on;
@@ -1689,7 +1704,10 @@ public class MainWindow extends JFrame {
         beeperButton.setToolTipText(s.beeperOff() == null ? BEEPER_TIP : s.beeperOff());
         if (!watch && s.beeperOff() != null && !s.beeperOff().equals(RcSession.BEEPER_NOT_SET_UP)) logLine(s.beeperOff() + ".");
         connection.getLink().setMaxStickLagMs(config.getMaxStickLagMs());
-        if (!watch) connection.getLink().setDetection(detection.levelFor(target.name())); // the drone's own (1.0.46)
+        if (!watch) {
+            connection.getLink().setDetection(detection.levelFor(target.name())); // the drone's own (1.0.46)
+            connection.getLink().setDetectionAreas(detection.areasFor(target.name())); // and its areas (1.0.58)
+        }
         // STANDBY / DEEP SLEEP: no sticks, and a WAKE starts with the throttle-low rule (not a radio blip's quick resume)
         service.setInputListener(state -> {
             if (sticksPaused()) s.onPaused(state); else s.onInput(state);
@@ -1954,6 +1972,7 @@ public class MainWindow extends JFrame {
 
     /** Each drone's motion detection level, and the detections' marks on the maps. */
     private final DetectionController detection;
+    private final DetectionAreaLayer areaLayer;
 
     /**
      * Connected, with the map not popped out: the minimap follows the drone. (Up to 1.0.38 the connection fields and

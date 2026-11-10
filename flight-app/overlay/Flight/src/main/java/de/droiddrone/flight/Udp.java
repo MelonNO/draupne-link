@@ -65,6 +65,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import de.droiddrone.common.DataReader;
+import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.FleetProtocol;
@@ -1400,8 +1401,12 @@ public class Udp {
             }
             case MotionWatch.PACKET:
             {
-                // pc.35: [0x7C][sensitivity u8: 0 off, 1 low, 2 normal, 3 high], once a second while the PC wants it
-                if (buffer.getRemaining() > 0) MotionWatch.request(buffer.readUnsignedByteAsInt());
+                // pc.35: [0x7C][sensitivity u8: 0 off, 1 low, 2 normal, 3 high], once a second while the PC wants it;
+                // pc.46: then the areas with a sensitivity of their own (DetectionAreas; none from an older PC)
+                if (buffer.getRemaining() > 0) {
+                    int sensitivity = buffer.readUnsignedByteAsInt();
+                    MotionWatch.request(sensitivity, DetectionAreas.read(buffer));
+                }
                 break;
             }
             case RemoteUpdate.PACKET:
@@ -1424,6 +1429,7 @@ public class Udp {
                     int sensitivity = buffer.readUnsignedByteAsInt();
                     int flags = buffer.readUnsignedByteAsInt();
                     int token = buffer.readInt();
+                    MotionWatch.areas(DetectionAreas.read(buffer)); // pc.46: the detection areas after it (none from an older PC)
                     Overwatch.configure(sensitivity, flags, token);
                 }
                 PowerMode.request(mode, intervalMin, "PC");

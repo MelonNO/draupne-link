@@ -4,11 +4,13 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 
 ## Unreleased
 
-The pilot's round after 1.0.57 (PC only: the phone app is unchanged, pc.45 stays). Not run in the real window yet.
+The pilot's round after 1.0.57, with phone app pc.46 (the motion detection runs on the phone). Not run in the real window or on a phone yet.
 
 - **Tour scenes look like a drone's camera, not CCTV.** Each tour drone sits on the grass 4 m further back, its lens just over the ground: the near grass out of focus, blades in front of the lens, a wide lens bending and darkening the corners.
 - **Every scene's background like the convoy's.** Only trees right at the action stay real; the treelines behind are the memory's light ghosts.
-- **The patrol and the sentry by the BTR are found by the motion detection.** They had walked in front of dark trees and the BTR's net, camouflage on camouflage a few pixels wide. Now they stand against the light ghosts, and the sentry walks beside the hide. The detection itself is unchanged (two tried tweaks raised alarms in wind).
+- **Motion detection HIGH finds camouflage** (phone pc.46). A camouflaged man some 20 m off is two pixels wide at the half-size picture the detection worked at, and his pattern averaged into the net or treeline behind him. On HIGH, with the camera still, it also judges the full picture, tests each pixel against its own place half a pixel either way, measures the camera's shake on calm pixels only, and lets someone passing once not make the next one there harder to see. A track that walked one way for seconds keeps its box when it stops or turns. Tour scenes with the real dark treeline behind them: the patrol boxed in all pictures (4 % on NORMAL), the sentry crossing the BTR's front in 94 % (none on NORMAL). The price: on HIGH, leaves a gust starts after a calm can be boxed. LOW and NORMAL are as before. About 2 ms a picture on a PC (1.5 before).
+- **Detection areas** (VIDEO > Detection areas, TOOLS > Advanced; phone pc.46): drag boxes on the video, each with its own sensitivity - OFF or LOW over a bush that always moves, HIGH over a hide while the rest stays NORMAL. Per drone, kept in the camera's own picture (they turn with a turned or mirrored picture), sent with the detection level and the overwatch request; the phone keeps them. An older phone ignores them.
+- **The tour's overwatch drones detect on HIGH**, and the sentry walks his beat across the BTR's front again (the light background was no fix: "real life does not have a white background").
 - **Tour: the six drones to tick are marked** in the observation picker (first, bold, TOUR, a red bar) while CHOOSE DRONES is up.
 
 ## 1.0.57 + phone pc.45

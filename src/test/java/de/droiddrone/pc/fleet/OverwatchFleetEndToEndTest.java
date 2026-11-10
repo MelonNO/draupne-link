@@ -1,5 +1,6 @@
 package de.droiddrone.pc.fleet;
 
+import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.MonoClock;
@@ -253,6 +254,31 @@ class OverwatchFleetEndToEndTest {
         waitFor(() -> !l.getTelemetry().getMotion().shown(MonoClock.ms()).isEmpty(), 8000, "boxes on the PC's video");
         assertTrue(zulu.scene.hasTargets(System.currentTimeMillis()), "while the walker still crosses");
         assertTrue(log.stream().anyMatch(s -> s.contains("a walker crosses the picture (motion detection 2)")), String.join("\n", log));
+    }
+
+    /**
+     * 1.0.58: the PC's detection areas reach the drone's detector after DETECTION_SET's level - the whole picture OFF,
+     * a walker crossing gets no box; the areas cleared, he does.
+     */
+    @Test
+    void anOffAreaSentByThePcKeepsTheWalkerUnboxed() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        VirtualDrone zulu = drone(config, "MobileZulu", Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON);
+        moveAway(zulu);
+        ControlLink l = link(config, zulu);
+        l.setDetection(2);
+        l.setDetectionAreas(DetectionAreas.of(List.of(new DetectionAreas.Area(0, 0, 1, 1, 0))));
+        waitFor(() -> log.stream().anyMatch(s -> s.contains("motion detection: 1 area (the PC)")), 3000, "the area reached the drone");
+        Thread.sleep(3500); // its warm-up
+        zulu.addTarget("walker");
+        long until = System.currentTimeMillis() + 6000;
+        while (System.currentTimeMillis() < until) {
+            assertTrue(l.getTelemetry().getMotion().shown(MonoClock.ms()).isEmpty(), "a box from an OFF area");
+            Thread.sleep(100);
+        }
+        l.setDetectionAreas(DetectionAreas.NONE);
+        waitFor(() -> log.stream().anyMatch(s -> s.contains("motion detection: no areas (the PC)")), 3000, "the areas cleared");
+        waitFor(() -> !l.getTelemetry().getMotion().shown(MonoClock.ms()).isEmpty(), 10000, "boxes once the area is gone");
     }
 
     /** The PC's stick frames, 50 a second: throttle low, AUX1 at armValue. */

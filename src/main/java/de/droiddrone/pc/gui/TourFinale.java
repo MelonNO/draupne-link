@@ -150,7 +150,8 @@ final class TourFinale implements AutoCloseable {
             CameraFootprint.Pose pose = new CameraFootprint.Pose(p[0], p[1], 0.5, p[2], 0, 0, 0, p[3], p[3] * 9 / 16);
             tokens.put(d.name(), main.tourWatch(d.name(), pose));
         }
-        scenario.placeModes(new InetSocketAddress(InetAddress.getLoopbackAddress(), main.tourLinkPort()), tokens, 2);
+        // HIGH (1.0.58): the patrol and the sentry by the camouflaged BTR are camouflage on camouflage, found on HIGH only
+        scenario.placeModes(new InetSocketAddress(InetAddress.getLoopbackAddress(), main.tourLinkPort()), tokens, 3);
     }
 
     /** The BTR sets off (the eyes' step, at the pilot's NEXT). */

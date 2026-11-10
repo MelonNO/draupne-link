@@ -24,6 +24,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.droiddrone.common.AnalysisSize;
+import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.MotionDetector;
 import de.droiddrone.common.MotionRecord;
 import de.droiddrone.common.PacketIds;
@@ -90,6 +91,25 @@ final class MotionWatch {
     private MotionWatch() {
     }
 
+    /**
+     * pc.46: the areas with a sensitivity of their own (the PC's DETECTION_SET after its byte, or its overwatch
+     * request): kept until new ones come, also while overwatch sleeps.
+     */
+    private static volatile DetectionAreas areas = DetectionAreas.NONE;
+
+    /** The PC's DETECTION_SET; areas null when it carried none (an older PC): the ones known are kept. */
+    static void request(int s, DetectionAreas a) {
+        areas(a);
+        request(s);
+    }
+
+    /** New areas (null: none came, the ones known stay). */
+    static void areas(DetectionAreas a) {
+        if (a == null || a.equals(areas)) return;
+        log("Motion detection: " + a);
+        areas = a;
+    }
+
     /** The PC's DETECTION_SET. */
     static void request(int s) {
         if (s != sensitivity) log("Motion detection " + (s == 0 ? "off" : "asked for: " + new String[]{"", "low", "normal", "high"}[Math.min(3, s)]));
@@ -153,11 +173,17 @@ final class MotionWatch {
             sensitivitySet = s;
             analysis.execute(() -> detector.setSensitivity(s));
         }
+        DetectionAreas a = areas;
+        if (a != areasSet) {
+            areasSet = a;
+            analysis.execute(() -> detector.setAreas(a));
+        }
         armedPause = wanted() && !disarmed;
     }
 
     private static volatile boolean armedPause;
     private static int sensitivitySet; // the telemetry thread's own
+    private static DetectionAreas areasSet; // as sensitivitySet
 
     /** A picture is wanted now: analysing, the last one done, the time come. Cheap: the camera's threads ask it per frame. */
     static boolean wantFrame() {

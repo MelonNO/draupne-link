@@ -1,5 +1,6 @@
 package de.droiddrone.pc.fleet;
 
+import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.MotionDetector;
 import de.droiddrone.common.MotionRecord;
 
@@ -13,6 +14,16 @@ import java.util.List;
  */
 final class VirtualMotionWatch {
     private final MotionDetector detector = new MotionDetector(MotionDetector.NORMAL);
+    /** The detection areas the PC sent (1.0.58), kept as the phone keeps them. */
+    private volatile DetectionAreas areas = DetectionAreas.NONE;
+
+    void setAreas(DetectionAreas a) {
+        areas = a == null ? DetectionAreas.NONE : a;
+    }
+
+    DetectionAreas areas() {
+        return areas;
+    }
     private final Scene scene;
     private final VirtualOverwatch overwatch;
     private BufferedImage analysis;
@@ -49,6 +60,7 @@ final class VirtualMotionWatch {
             byte[] y = Scene.luma(px, 320, 180, 320, size);
             byte[][] uv = Scene.chroma(px, 320, 180); // the colour too, as the phone gives it (1.0.52)
             detector.setSensitivity(level);
+            detector.setAreas(areas);
             MotionDetector.Result r = detector.process(y, size[0], size[1], uv[0], uv[1], now);
             int flags = MotionRecord.FLAG_ACTIVE | (r.night ? MotionRecord.FLAG_NIGHT : 0) | (r.settling ? MotionRecord.FLAG_SETTLING : 0);
             report = MotionRecord.of(flags, (float) Scene.HFOV_DEG, r);
