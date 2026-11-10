@@ -2408,7 +2408,7 @@ public class MainWindow extends JFrame {
         List<Names.Entry> phones = names.list(Names.Kind.PHONE);
         Set<String> asleep = new HashSet<>();
         for (Names.Entry e : phones) if (e.ip() != null && power.isAsleep(e.ip())) asleep.add(e.name());
-        List<String> chosen = ObservePicker.pick(this, phones, current, observeRefusals(phones), asleep);
+        List<String> chosen = ObservePicker.pick(this, phones, current, observeRefusals(phones), asleep, tourMarked);
         if (chosen == null) return;
         ObserveSet next = new ObserveSet();
         chosen.forEach(next::add);
@@ -4899,6 +4899,21 @@ public class MainWindow extends JFrame {
 
     JComponent tourChooseDrones() {
         return chooseDronesButton;
+    }
+
+    /** The tour's drones, marked in the observation picker while its CHOOSE DRONES step is up (empty otherwise). */
+    private volatile Set<String> tourMarked = Set.of();
+
+    void tourMarkDrones(java.util.Collection<String> drones) {
+        tourMarked = Set.copyOf(drones);
+    }
+
+    void tourUnmarkDrones() {
+        tourMarked = Set.of();
+    }
+
+    Set<String> tourMarkedDrones() {
+        return tourMarked;
     }
 
     /** The drones chosen for observation (the setting), to put back when the tour is over. */

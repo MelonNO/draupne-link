@@ -279,8 +279,12 @@ final class Tour {
         steps.add(new Step("OBSERVER MODE", "OBSERVER: up to six idle drones, with sound. Select it.", main::tourRoleCombo)
                 .needsShowcase().skip(noShowcase).live(main::tourRoleCombo).before(this::keepObserveSet)
                 .waitFor(main::tourObserverRole, "Select OBSERVER", true).of(FEATURE_OBSERVATION));
-        steps.add(new Step("CHOOSE DRONES", "Tick the six VIRTUAL drones.", main::tourChooseDrones).skip(noShowcase)
-                .before(main::tourScanNames)
+        // the six marked TOUR in the picker while the step is up (2026-11-10, the pilot)
+        steps.add(new Step("CHOOSE DRONES", "Tick the six marked TOUR.", main::tourChooseDrones).skip(noShowcase)
+                .before(() -> {
+                    main.tourScanNames();
+                    main.tourMarkDrones(finale.showcaseNames());
+                }).after(main::tourUnmarkDrones)
                 .waitFor(() -> main.tourObserveChosen(finale.showcaseNames()), "Tick six", true).of(FEATURE_OBSERVATION));
         steps.add(new Step("OBSERVE", "Press OBSERVE.", main::tourConnectButton).skip(noShowcase)
                 .waitFor(main::tourObserving, "Press it", true).of(FEATURE_OBSERVATION));
@@ -708,6 +712,7 @@ final class Tour {
         powerDemoOff();
         spectatorPart.close(); // first: its pilot PC and drones stop answering before the clean-up
         finale.close();
+        main.tourUnmarkDrones();
         if (observeSetBefore != null) main.tourRestoreObserveSet(observeSetBefore);
         observeSetBefore = null;
         main.tourRestoreRole(roleBefore);
