@@ -10,8 +10,12 @@ import java.util.Random;
  * tactical army related. Make everything in a realistic style"): what each one's camera sees, in front of where it
  * stands - a field, tracks, treelines and a far forest, textured models lit by a low sun, their shadows - in a
  * simulated memory ({@link SimVoid}, 2026-11-10, the pilot: "push it much further"): the real land an island round
- * the action, breaking into tiles at its edge, on a white floor with a glowing grid under a white void; the trees near
- * the action real, the others white ghosts of blocks; fragments drifting up, now and then a glitch:
+ * the action, breaking into tiles at its edge, on a white floor with a glowing grid under a white void; only the trees
+ * right at the action real, the treelines behind it white ghosts of blocks, as in the convoy's (2026-11-10, the
+ * pilot: every scene's background like that one); fragments drifting up, now and then a glitch. Seen as a drone sees
+ * it (2026-11-10, the pilot: it looked like a CCTV camera, not a drone): set down on the grass BACK_M back, its lens
+ * just over the ground - the near grass out of focus, blades in front of it, the wide lens bending the picture
+ * ({@link DroneLens}):
  * <ul>
  * <li>{@link Kind#DRONES}: a drone team at a treeline - operators kneeling by their UAZ, crates, a radio and an antenna
  * mast - its quads (the pilot's FPV model in its own colours, and a recon quad) taking off one after another, flying a
@@ -23,11 +27,13 @@ import java.util.Random;
  * <li>{@link Kind#MORTAR}: a mortar with its crew and ammunition under a camouflage net, firing: the round held to the
  * muzzle and dropped, the crew ducks, flash and smoke, the next round.</li>
  * <li>{@link Kind#HIDE}: a BTR-80 under a net at the treeline, its engine idling; an observation post on a rise -
- * sandbags, one prone with binoculars, one on the radio - and a sentry walking his beat.</li>
+ * sandbags, one prone with binoculars, one on the radio - and a sentry walking his beat beside the hide (not across
+ * its front: there, camouflage against camouflage, he was a few pixels the net's colour and never found).</li>
  * </ul>
  * Models: /model/tactical.bin.gz and the FPV drone ({@link Raster3D}, THIRD-PARTY.md). What stands still is drawn once
- * for as long as the camera stays where it is (a drone on its post), and only what moves each picture. The motion
- * detection's picture gets it without the fragments and the screen effects: only what really travels moves in it.
+ * for as long as the camera stays where it is (a drone sitting on the ground), and only what moves each picture. The
+ * motion detection's picture gets it without the fragments, the screen effects and the darkened corners: only what
+ * really travels moves in it.
  * {@link #addSound} mixes what is heard: the quads, the engines, the mortar.
  */
 final class ShowScene implements Scene.World, Scene.Sounding {
@@ -35,7 +41,7 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     enum Kind { DRONES, CONVOY, PATROL, CHECKPOINT, MORTAR, HIDE }
 
     private final Kind kind;
-    /** Where the drone stood and looked when the scene was made: the scene's frame. */
+    /** The scene's frame: BACK_M in front of where the drone stood when it was made, the way it looked. */
     private final double originN, originE, headingDeg;
     private final long epochMs;
     /** What never moves (drawn once a camera position), and the ground's tracks. */
@@ -48,14 +54,19 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     /** The fragments drifting up from the island's edge and the ghosts ({@link SimVoid#fragments}). */
     private final double[][] fragments;
 
-    ShowScene(Kind kind, double originN, double originE, double headingDeg) {
-        this(kind, originN, originE, headingDeg, System.currentTimeMillis());
+    ShowScene(Kind kind, double droneN, double droneE, double headingDeg) {
+        this(kind, droneN, droneE, headingDeg, System.currentTimeMillis());
     }
 
-    ShowScene(Kind kind, double originN, double originE, double headingDeg, long epochMs) {
+    /**
+     * @param droneN where the drone stands (m north), as droneE (m east), headingDeg the way it looks: the scene is laid
+     *               out BACK_M in front of it
+     */
+    ShowScene(Kind kind, double droneN, double droneE, double headingDeg, long epochMs) {
         this.kind = kind;
-        this.originN = originN;
-        this.originE = originE;
+        double hr = Math.toRadians(headingDeg);
+        this.originN = droneN + BACK_M * Math.cos(hr);
+        this.originE = droneE + BACK_M * Math.sin(hr);
         this.headingDeg = headingDeg;
         this.epochMs = epochMs;
         List<double[][]> tracks = new ArrayList<>();
@@ -69,19 +80,24 @@ final class ShowScene implements Scene.World, Scene.Sounding {
         }
         ground = groundMap(tracks);
         List<double[]> action = action();
-        List<double[]> edge = new ArrayList<>(), tops = new ArrayList<>();
-        memory = island(action, edge);
-        // the trees and bushes away from the action become ghosts, breaking up more the further they are from it
+        List<double[]> edge = new ArrayList<>(), tops = new ArrayList<>(), real = new ArrayList<>();
+        // the trees and bushes away from the action become ghosts, breaking up more the further they are from it; only
+        // the ones right at it stay real (2026-11-10, the pilot: every scene's background like the convoy's - the
+        // treelines behind the patrol and the hide were real and dark, the memory hardly showed)
         for (int i = statics.size() - 1; i >= 0; i--) {
             Put p = statics.get(i);
             if ((p.mesh().flags() & Raster3D.CARD) == 0) continue;
             double d = nearest(action, p.ahead(), p.right());
-            if (d < REAL_TREES_M) continue;
+            if (d < REAL_TREES_M) {
+                real.add(new double[]{p.ahead(), p.right()});
+                continue;
+            }
             statics.remove(i);
             float gone = (float) (0.15 + 0.5 * Math.min(1, (d - ISLAND_M) / 50));
             ghosts.add(new Ghost(p, SimVoid.hash((int) Math.round(p.ahead() * 10) * 92821 + (int) Math.round(p.right() * 10)), gone));
             tops.add(new double[]{p.ahead(), p.right(), p.mesh().height() * p.scale()});
         }
+        memory = island(action, real, edge);
         fragments = SimVoid.fragments(4700 + kind.ordinal(), edge, tops);
     }
 
@@ -91,7 +107,11 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     /** The real land reaches this far (m) from the action, then breaks up into the floor. */
     static final double ISLAND_M = 13;
     /** Trees and bushes this near the action (m) stay real. */
-    static final double REAL_TREES_M = 6;
+    static final double REAL_TREES_M = 4;
+    /** A real tree stands on real land this far round it (m). */
+    static final double TREE_LAND_M = 4;
+    /** The drone stands this far behind the scene's frame (m): the action 13 - 23 m off, as a drone set down to watch. */
+    static final double BACK_M = 4;
     /** The action's places along a road count this far out from the drone (m): further the road is the floor's. */
     static final double ROAD_IN_M = 38;
 
@@ -127,17 +147,20 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     }
 
     /**
-     * The island: each metre cell (in the scene's frame) real land within about ISLAND_M of the action, the edge ragged
-     * by whole cells; a band of light-blue tiles just past it, a few scattered further out (lifting off: their middles
-     * go to edge, where the fragments start); the floor beyond.
+     * The island: each metre cell (in the scene's frame) real land within about ISLAND_M of the action, of the ground
+     * between it and the drone and TREE_LAND_M of a real tree, the edge ragged by whole cells; a band of light-blue tiles
+     * just past it, a few scattered further out (lifting off: their middles go to edge, where the fragments start); the
+     * floor beyond.
      */
-    private Raster3D.Memory island(List<double[]> action, List<double[]> edge) {
+    private Raster3D.Memory island(List<double[]> action, List<double[]> trees, List<double[]> edge) {
+        List<double[]> seeds = new ArrayList<>(action);
+        for (double a = -BACK_M; a <= 0; a += 2) seeds.add(new double[]{a, 0});
         int a0 = -40, r0 = -120, na = 180, nr = 240;
         byte[] land = new byte[na * nr];
         for (int i = 0; i < na; i++) {
             for (int j = 0; j < nr; j++) {
                 double ahead = a0 + i + 0.5, right = r0 + j + 0.5;
-                double d = nearest(action, ahead, right);
+                double d = Math.min(nearest(seeds, ahead, right), nearest(trees, ahead, right) + ISLAND_M - TREE_LAND_M);
                 if (d > ISLAND_M + 6) continue;
                 int h = SimVoid.hash((a0 + i) * 73856093 ^ (r0 + j) * 19349663);
                 double s = d + ((h & 0xff) / 255.0 - 0.5) * 2.4;
@@ -189,13 +212,21 @@ final class ShowScene implements Scene.World, Scene.Sounding {
 
     // ------------------------------------------------------------------ the picture
 
-    /** A drone on the ground looks from this high, this much down: as on a mast over its post (the scene in view). */
-    static final double MAST_M = 3.2, MAST_PITCH_DEG = -6;
+    /**
+     * A drone set down on the grass (2026-11-10, the pilot: it looked like a CCTV camera on its mast, not a drone): its
+     * camera this high over the ground, tilted up as an FPV camera is, the frame resting a little crooked.
+     */
+    static final double GROUND_EYE_M = 0.12, UPTILT_DEG = 5, REST_ROLL_DEG = 1.2;
 
-    /** The camera's view: a drone sitting on the ground sees from its mast; one in the air, from where it flies. */
+    /**
+     * The camera's view: on the ground from just over the grass; lifting off, it goes over into the drone's own view by
+     * 1 m (no jump); in the air, from where it flies.
+     */
     static Scene.View eye(Scene.View v) {
         if (v.alt() >= 1) return v;
-        return new Scene.View(v.north(), v.east(), MAST_M, v.rollDeg(), v.pitchDeg() + MAST_PITCH_DEG, v.headingDeg());
+        double k = 1 - Math.max(0, v.alt());
+        return new Scene.View(v.north(), v.east(), v.alt() - (Scene.Camera.EYE_M - GROUND_EYE_M) * k, v.rollDeg() + REST_ROLL_DEG * k,
+                v.pitchDeg() + UPTILT_DEG * k, v.headingDeg());
     }
 
     /** What stands still, drawn for one camera position and picture size (each painting thread its own). */
@@ -239,6 +270,13 @@ final class ShowScene implements Scene.World, Scene.Sounding {
                 double[] q = at(p.ahead(), p.right());
                 Raster3D.ghost(f, cam, p.mesh(), q[0], q[1], p.up(), p.scale(), g.seed(), g.gone());
             }
+            // sitting on the ground: the grass near the lens out of focus, and blades right in front of it (sinking
+            // away as the drone lifts off)
+            if (drone.alt() < 0.05) {
+                double[] far = cam.cam(cam.cn + 1000 * Math.cos(Math.toRadians(v.headingDeg())), cam.ce + 1000 * Math.sin(Math.toRadians(v.headingDeg())), cam.cu);
+                DroneLens.defocus(f.px, w, h, cam.cy + cam.f * far[1] / far[2]);
+            }
+            DroneLens.grass(f, 991 + kind.ordinal(), Math.max(0, drone.alt()));
             if (b.px == null || b.px.length != w * h) {
                 b.px = new int[w * h];
                 b.depth = new float[w * h];
@@ -254,10 +292,9 @@ final class ShowScene implements Scene.World, Scene.Sounding {
         List<Puff> puffs = new ArrayList<>();
         moving(puts, puffs, t);
         draw(f, cam, puts, puffs);
-        if (!analysis) {
-            SimVoid.drawFragments(f, cam, fragments, t, this::at);
-            SimVoid.screen(img, nowMs);
-        }
+        if (!analysis) SimVoid.drawFragments(f, cam, fragments, t, this::at);
+        DroneLens.apply(f.px, w, h, !analysis);
+        if (!analysis) SimVoid.screen(img, nowMs);
     }
 
     private void draw(Raster3D.Frame f, Scene.Camera cam, List<Put> puts, List<Puff> puffs) {
@@ -968,7 +1005,7 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     // ------------------------------------------------------------------ HIDE: a BTR under a net, an OP on a rise
 
     static final double RISE_AHEAD = 9, RISE_RIGHT = 5, RISE_R = 5.5, RISE_H = 0.9;
-    static final double[] SENTRY_FROM = {15.5, -12}, SENTRY_TO = {15.5, 0};
+    static final double[] SENTRY_FROM = {13.0, -16}, SENTRY_TO = {13.0, -6};
     /** The BTR in its hide: where, which way its nose points (the net set back so the nose shows). */
     static final double BTR_AHEAD = 19.5, BTR_RIGHT = -5, BTR_HEADING = 200;
 

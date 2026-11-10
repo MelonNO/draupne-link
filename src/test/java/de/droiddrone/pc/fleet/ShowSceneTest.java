@@ -196,14 +196,36 @@ class ShowSceneTest {
     }
 
     @Test
-    void aDroneOnTheGroundLooksFromItsMastOneInTheAirFromWhereItIs() {
-        Scene.View ground = new Scene.View(1, 2, 0.1, 0, 0, 40);
+    void aDroneOnTheGroundLooksFromJustOverTheGrassOneInTheAirFromWhereItIs() {
+        Scene.View ground = new Scene.View(1, 2, 0, 0, 0, 40);
         Scene.View eye = ShowScene.eye(ground);
-        assertEquals(ShowScene.MAST_M, eye.alt());
-        assertEquals(ShowScene.MAST_PITCH_DEG, eye.pitchDeg());
+        assertEquals(ShowScene.GROUND_EYE_M, new Scene.Camera(eye, 320, 180).cu, 1e-9, "the lens just over the grass, not on a mast");
+        assertEquals(ShowScene.UPTILT_DEG, eye.pitchDeg(), 1e-9, "tilted up, as an FPV camera");
         assertEquals(40, eye.headingDeg());
+        // lifting off it goes over into the drone's own view, no jump
+        Scene.View nearlyUp = ShowScene.eye(new Scene.View(1, 2, 0.999, 0, 0, 40));
+        assertEquals(0.999, nearlyUp.alt(), 1e-3);
+        assertEquals(0, nearlyUp.pitchDeg(), 0.01);
         Scene.View flying = new Scene.View(1, 2, 12, 5, -20, 40);
         assertSame(flying, ShowScene.eye(flying));
+    }
+
+    @Test
+    void theDroneSitsOnRealLandItsGrassInFrontOfTheLens() {
+        // BACK_M behind the scene, on the island's land - not on the memory's white floor - with blades of grass in view
+        Scene.View v = new Scene.View(0, 0, 0, 0, 0, 30);
+        for (ShowScene.Kind k : ShowScene.Kind.values()) {
+            BufferedImage img = picture(new ShowScene(k, 0, 0, 30, 0), v, 4000, true);
+            int c = img.getRGB(W / 2, H * 3 / 4);
+            int r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
+            assertTrue(g > b + 15 && g > r && g < 200, k + ": grass under the drone, not the floor: " + Integer.toHexString(c & 0xffffff));
+            int dark = 0;
+            for (int x = 0; x < W; x++) {
+                int p = img.getRGB(x, H - 2);
+                if ((p >> 8 & 0xff) < 90) dark++;
+            }
+            assertTrue(dark > W / 20, k + ": blades along the bottom (" + dark + " px)");
+        }
     }
 
     @Test

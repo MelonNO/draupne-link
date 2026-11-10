@@ -370,6 +370,8 @@ final class Scene {
 
     /** The drone's camera: world (north, east, up) to the picture. */
     static final class Camera {
+        /** The camera sits this far over the drone's altitude. */
+        static final double EYE_M = 0.3;
         final double cn, ce, cu;
         final double[][] r; // world -> camera (x right, y down, z forward)
         final double f, cx, cy;
@@ -380,7 +382,7 @@ final class Scene {
             this.h = h;
             cn = v.north();
             ce = v.east();
-            cu = v.alt() + 0.3;
+            cu = v.alt() + EYE_M;
             f = w / 2.0 / Math.tan(Math.toRadians(HFOV_DEG / 2));
             cx = w / 2.0;
             cy = h / 2.0;
