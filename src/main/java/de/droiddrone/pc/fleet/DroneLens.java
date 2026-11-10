@@ -5,7 +5,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * What makes a tour drone's picture read as a drone's camera and not a CCTV camera on a mast (2026-11-10, the pilot):
- * the drone sits on the grass, so a few blades right in front of the lens stand out of focus along the bottom; and the
+ * the drone sits on the ground, so a few blades right in front of the lens stand out of focus along the bottom (few:
+ * the pilot, "less grass" - it sits on the memory's floor); and the
  * wide FPV lens bends the picture a little towards its corners (barrel) and darkens them.
  * <p>
  * The blades stand still (drawn with what is kept per camera position, nearer than anything, so nothing that moves
@@ -23,7 +24,7 @@ final class DroneLens {
     // ------------------------------------------------------------------ the grass in front of the lens
 
     /** Blades along the bottom of the picture. */
-    private static final int BLADES = 46;
+    private static final int BLADES = 6;
 
     /**
      * The blades in front of a drone on the ground: soft dark-green strokes rising from below the picture's bottom,

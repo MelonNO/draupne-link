@@ -937,7 +937,7 @@ final class Raster3D {
                             int rr = (int) (((c >> 16) & 0xff) * k + hr * fog), gg = (int) (((c >> 8) & 0xff) * k + hg * fog), bb = (int) ((c & 0xff) * k + hb * fog);
                             c = (rr > 255 ? 255 : rr) << 16 | (gg > 255 ? 255 : gg) << 8 | (bb > 255 ? 255 : bb);
                         }
-                        px[row + x] = memory(c, st, fa, fr, pa, pr, fog);
+                        px[row + x] = memory(c, st, fa, fr + (float) GRID_SHIFT_M, pa, pr, fog);
                     }
                 } else {
                     // the horizon crosses the span: pixel by pixel
@@ -957,7 +957,7 @@ final class Raster3D {
                             int rr = (int) (((c >> 16) & 0xff) * k + hr * fog), gg = (int) (((c >> 8) & 0xff) * k + hg * fog), bb = (int) ((c & 0xff) * k + hb * fog);
                             c = Math.min(255, rr) << 16 | Math.min(255, gg) << 8 | Math.min(255, bb);
                         }
-                        px[row + x] = memory(c, st, (float) a[6], (float) a[7], (float) a[8], (float) a[9], fog);
+                        px[row + x] = memory(c, st, (float) a[6], (float) a[7] + (float) GRID_SHIFT_M, (float) a[8], (float) a[9], fog);
                     }
                     haveB = groundAt(cam, map, mem, look, d0n, d0e, d0u, dxn, dxe, dxu, x1, grass, levels, b);
                 }
@@ -971,6 +971,12 @@ final class Raster3D {
 
     /** The floor's grid: thin lines every GRID_M metres, brighter ones every GRID_MAJOR_M (they reach the horizon). */
     static final double GRID_M = 2, GRID_MAJOR_M = 8;
+    /**
+     * The grid's lines shifted this far across the scene's frame (2026-11-10): a drone on the floor sits on the frame's
+     * axis, and a line under its lens was one streak from the bottom of the picture to the horizon. Now the nearest
+     * line runs 1 m beside it, the nearest bright one 3 m.
+     */
+    static final double GRID_SHIFT_M = 5;
 
     /**
      * The memory at a ground pixel: the land as drawn (c), an edge tile (light blue, its rim lit) or the white floor

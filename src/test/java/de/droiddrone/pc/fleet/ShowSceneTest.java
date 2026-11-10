@@ -211,20 +211,21 @@ class ShowSceneTest {
     }
 
     @Test
-    void theDroneSitsOnRealLandItsGrassInFrontOfTheLens() {
-        // BACK_M behind the scene, on the island's land - not on the memory's white floor - with blades of grass in view
+    void theDroneSitsOnTheMemorysFloorAFewBladesInFrontOfTheLens() {
+        // the pilot: "less grass and more of the simulated areas" - BACK_M behind the scene, on the white floor (the
+        // real land only round the action), a few blades of grass in view, not a row of them
         Scene.View v = new Scene.View(0, 0, 0, 0, 0, 30);
         for (ShowScene.Kind k : ShowScene.Kind.values()) {
             BufferedImage img = picture(new ShowScene(k, 0, 0, 30, 0), v, 4000, true);
             int c = img.getRGB(W / 2, H * 3 / 4);
             int r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
-            assertTrue(g > b + 15 && g > r && g < 200, k + ": grass under the drone, not the floor: " + Integer.toHexString(c & 0xffffff));
+            assertTrue(r > 180 && g > 180 && b > 180, k + ": the floor under the drone, not grass: " + Integer.toHexString(c & 0xffffff));
             int dark = 0;
             for (int x = 0; x < W; x++) {
                 int p = img.getRGB(x, H - 2);
-                if ((p >> 8 & 0xff) < 90) dark++;
+                if ((p >> 8 & 0xff) < 150) dark++;
             }
-            assertTrue(dark > W / 20, k + ": blades along the bottom (" + dark + " px)");
+            assertTrue(dark > 0 && dark < W / 3, k + ": a few blades along the bottom (" + dark + " px)");
         }
     }
 

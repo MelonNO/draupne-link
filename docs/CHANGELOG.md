@@ -2,6 +2,12 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## Unreleased
+
+PC only (the phone app is unchanged, pc.46 stays).
+
+- **Tour scenes: less grass, more of the simulated memory.** The real land is only a small island right under the action (4 m round it, was 13); the drone sits on the white floor with its grid, a few blades in front of the lens (was a row). The grid's lines run beside the drone, not one under its lens to the horizon.
+
 ## 1.0.58 + phone pc.46
 
 The pilot's round after 1.0.57. Nothing of it run in the real window, on a drone or a real phone yet.
