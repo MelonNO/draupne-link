@@ -2,9 +2,9 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## Unreleased
+## 1.0.60 + phone pc.47
 
-Phone app 2.3.0-pc.47 with it.
+With the phone app **DRAUPNE Flight 2.3.0-pc.47** (update the phones). Not tried in the real window or on a phone yet.
 
 - **DEMO mode (SETUP > Demo mode, in place of the Overwatch demo):** every virtual drone with its scene up at once in PILOT mode, nothing dimmed or in the way (real phones work alongside): the six scene drones to fly or observe, and a virtual pilot PC flying to watch as SPECTATOR - a card on the video switches it to observing and back. FLEET MANAGEMENT gets SET UP SCENARIO (four drones out: three overwatching, one asleep, with their views and flights), START SCENARIO once overwatch has settled, SCENARIO AGAIN; a crash leaves everything as it is. SETUP > End demo takes it all away, settings included. A DEMO badge in the header meanwhile.
 - **Map signs by mode, as confirmed:** arrow = piloted, diamond = standby, moon = deep sleep, eye = overwatch (lost: red triangle, crashed: grey square). Standby no longer shows the deep-sleep moon.
