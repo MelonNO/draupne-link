@@ -2,6 +2,15 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## Unreleased
+
+The pilot's round after 1.0.57 (PC only: the phone app is unchanged, pc.45 stays). Not run in the real window yet.
+
+- **Tour scenes look like a drone's camera, not CCTV.** Each tour drone sits on the grass 4 m further back, its lens just over the ground: the near grass out of focus, blades in front of the lens, a wide lens bending and darkening the corners.
+- **Every scene's background like the convoy's.** Only trees right at the action stay real; the treelines behind are the memory's light ghosts.
+- **The patrol and the sentry by the BTR are found by the motion detection.** They had walked in front of dark trees and the BTR's net, camouflage on camouflage a few pixels wide. Now they stand against the light ghosts, and the sentry walks beside the hide. The detection itself is unchanged (two tried tweaks raised alarms in wind).
+- **Tour: the six drones to tick are marked** in the observation picker (first, bold, TOUR, a red bar) while CHOOSE DRONES is up.
+
 ## 1.0.57 + phone pc.45
 
 The pilot's tour round after 1.0.56. Nothing of it run on a drone or a real phone yet.
