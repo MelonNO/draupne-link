@@ -9,8 +9,9 @@ import java.util.Random;
  * The tour's six drones' pictures (2026-11-09; 2026-11-10, the pilot: "Make the activities more serious. Make them
  * tactical army related. Make everything in a realistic style"): what each one's camera sees, in front of where it
  * stands - a field, tracks, treelines and a far forest, textured models lit by a low sun, their shadows - in a
- * simulated memory ({@link SimVoid}, 2026-11-10): a white void for a sky, the far land fading and breaking up into it
- * over a faint grid, fragments drifting up, now and then a glitch:
+ * simulated memory ({@link SimVoid}, 2026-11-10, the pilot: "push it much further"): the real land an island round
+ * the action, breaking into tiles at its edge, on a white floor with a glowing grid under a white void; the trees near
+ * the action real, the others white ghosts of blocks; fragments drifting up, now and then a glitch:
  * <ul>
  * <li>{@link Kind#DRONES}: a drone team at a treeline - operators kneeling by their UAZ, crates, a radio and an antenna
  * mast - its quads (the pilot's FPV model in its own colours, and a recon quad) taking off one after another, flying a
@@ -40,7 +41,11 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     /** What never moves (drawn once a camera position), and the ground's tracks. */
     private final List<Put> statics = new ArrayList<>();
     private final Raster3D.GroundMap ground;
-    /** The fragments drifting up where the world ends ({@link SimVoid#fragments}). */
+    /** The trees and bushes away from the action, drawn as the memory's ghosts of them (after everything solid). */
+    private final List<Ghost> ghosts = new ArrayList<>();
+    /** The island of real land round the action on the memory's floor. */
+    private final Raster3D.Memory memory;
+    /** The fragments drifting up from the island's edge and the ghosts ({@link SimVoid#fragments}). */
     private final double[][] fragments;
 
     ShowScene(Kind kind, double originN, double originE, double headingDeg) {
@@ -63,7 +68,89 @@ final class ShowScene implements Scene.World, Scene.Sounding {
             case HIDE -> hideLayout(tracks);
         }
         ground = groundMap(tracks);
-        fragments = SimVoid.fragments(4700 + kind.ordinal());
+        List<double[]> action = action();
+        List<double[]> edge = new ArrayList<>(), tops = new ArrayList<>();
+        memory = island(action, edge);
+        // the trees and bushes away from the action become ghosts, breaking up more the further they are from it
+        for (int i = statics.size() - 1; i >= 0; i--) {
+            Put p = statics.get(i);
+            if ((p.mesh().flags() & Raster3D.CARD) == 0) continue;
+            double d = nearest(action, p.ahead(), p.right());
+            if (d < REAL_TREES_M) continue;
+            statics.remove(i);
+            float gone = (float) (0.15 + 0.5 * Math.min(1, (d - ISLAND_M) / 50));
+            ghosts.add(new Ghost(p, SimVoid.hash((int) Math.round(p.ahead() * 10) * 92821 + (int) Math.round(p.right() * 10)), gone));
+            tops.add(new double[]{p.ahead(), p.right(), p.mesh().height() * p.scale()});
+        }
+        fragments = SimVoid.fragments(4700 + kind.ordinal(), edge, tops);
+    }
+
+    /** A tree or bush drawn as a ghost: its pattern, how much of its top is gone (0..1). */
+    private record Ghost(Put put, int seed, float gone) {}
+
+    /** The real land reaches this far (m) from the action, then breaks up into the floor. */
+    static final double ISLAND_M = 13;
+    /** Trees and bushes this near the action (m) stay real. */
+    static final double REAL_TREES_M = 6;
+    /** The action's places along a road count this far out from the drone (m): further the road is the floor's. */
+    static final double ROAD_IN_M = 38;
+
+    /** Where the action is (ahead, right): everything placed but the trees and bushes, and where things move. */
+    private List<double[]> action() {
+        List<double[]> out = new ArrayList<>();
+        for (Put p : statics) if ((p.mesh().flags() & Raster3D.CARD) == 0) out.add(new double[]{p.ahead(), p.right()});
+        switch (kind) {
+            case DRONES -> {
+                for (double[] pad : PADS) out.add(pad);
+            }
+            case CONVOY -> {
+                for (double d = 0; d <= road.length; d += 2) if (Math.hypot(road.at(d)[0], road.at(d)[1]) < ROAD_IN_M) out.add(road.at(d));
+            }
+            case PATROL -> {
+                for (double x = 0; x <= PATROL_SPAN; x += 2) out.add(new double[]{PATROL_AHEAD, PATROL_FROM + x});
+            }
+            case CHECKPOINT -> {
+                for (double d = 0; d <= chicane.length; d += 2) if (Math.hypot(chicane.at(d)[0], chicane.at(d)[1]) < ROAD_IN_M) out.add(chicane.at(d));
+            }
+            case MORTAR -> out.add(new double[]{M_AHEAD, M_RIGHT});
+            case HIDE -> {
+                for (double x = 0; x <= 1; x += 0.25) out.add(new double[]{SENTRY_FROM[0] + (SENTRY_TO[0] - SENTRY_FROM[0]) * x, SENTRY_FROM[1] + (SENTRY_TO[1] - SENTRY_FROM[1]) * x});
+            }
+        }
+        return out;
+    }
+
+    private static double nearest(List<double[]> pts, double ahead, double right) {
+        double best = Double.MAX_VALUE;
+        for (double[] q : pts) best = Math.min(best, (q[0] - ahead) * (q[0] - ahead) + (q[1] - right) * (q[1] - right));
+        return Math.sqrt(best);
+    }
+
+    /**
+     * The island: each metre cell (in the scene's frame) real land within about ISLAND_M of the action, the edge ragged
+     * by whole cells; a band of light-blue tiles just past it, a few scattered further out (lifting off: their middles
+     * go to edge, where the fragments start); the floor beyond.
+     */
+    private Raster3D.Memory island(List<double[]> action, List<double[]> edge) {
+        int a0 = -40, r0 = -120, na = 180, nr = 240;
+        byte[] land = new byte[na * nr];
+        for (int i = 0; i < na; i++) {
+            for (int j = 0; j < nr; j++) {
+                double ahead = a0 + i + 0.5, right = r0 + j + 0.5;
+                double d = nearest(action, ahead, right);
+                if (d > ISLAND_M + 6) continue;
+                int h = SimVoid.hash((a0 + i) * 73856093 ^ (r0 + j) * 19349663);
+                double s = d + ((h & 0xff) / 255.0 - 0.5) * 2.4;
+                double h2 = (h >>> 8 & 0xff) / 255.0;
+                if (s < ISLAND_M) {
+                    land[i * nr + j] = Raster3D.Memory.LAND;
+                } else if (s < ISLAND_M + 1.3 || (s < ISLAND_M + 3.5 && h2 < 0.3)) {
+                    land[i * nr + j] = Raster3D.Memory.EDGE;
+                    edge.add(new double[]{ahead, right});
+                }
+            }
+        }
+        return new Raster3D.Memory(originN, originE, headingDeg, land, a0, r0, na, nr);
     }
 
     Kind kind() {
@@ -139,11 +226,19 @@ final class ShowScene implements Scene.World, Scene.Sounding {
             System.arraycopy(b.depth, 0, f.depth, 0, w * h);
         } else {
             SimVoid.sky(f.px, w, h, cam);
-            Raster3D.ground(f, cam, Raster3D.groundTexture("ground-grass"), Raster3D.groundTexture("ground-dirt"), ground);
+            Raster3D.ground(f, cam, Raster3D.groundTexture("ground-grass"), Raster3D.groundTexture("ground-dirt"), ground, memory);
             // nearest first: what is hidden behind them fails the depth test before its texture is read
             List<Put> near = new ArrayList<>(statics);
             near.sort((x, y) -> Double.compare(camDist(cam, x), camDist(cam, y)));
             draw(f, cam, near, List.of());
+            // the ghosts, half see-through to the void and the land: after everything solid, the nearest first
+            List<Ghost> ghostsNear = new ArrayList<>(ghosts);
+            ghostsNear.sort((x, y) -> Double.compare(camDist(cam, x.put()), camDist(cam, y.put())));
+            for (Ghost g : ghostsNear) {
+                Put p = g.put();
+                double[] q = at(p.ahead(), p.right());
+                Raster3D.ghost(f, cam, p.mesh(), q[0], q[1], p.up(), p.scale(), g.seed(), g.gone());
+            }
             if (b.px == null || b.px.length != w * h) {
                 b.px = new int[w * h];
                 b.depth = new float[w * h];

@@ -21,8 +21,8 @@ import java.util.zip.GZIPInputStream;
  * holes (trees, nets), fading with distance into the memory's white ({@link SimVoid}) - and the FPV drone of Drone
  * setup &gt; Orientation (/model/fpv-drone.bin.gz, its texture baked into a colour per triangle, its mesh thinned for
  * the video's speed) in its own colours. Under them the ground ({@link #ground}: a textured field and tracks, per
- * pixel, breaking up into the void with distance), shadows cast along the sun and soft puffs (smoke, dust, a muzzle
- * flash). Seen through the drone's {@link Scene.Camera}.
+ * pixel), shadows cast along the sun and soft puffs (smoke, dust, a muzzle flash); the land an island on the memory's
+ * floor ({@link Memory}), far trees its ghosts ({@link #ghost}). Seen through the drone's {@link Scene.Camera}.
  * <p>
  * Model axes: x forward, y left, z up, metres. Placed by north, east, up, heading (clockwise from north), pitch (nose
  * up +), roll (right side down +) and a scale. One {@link Frame} per thread and picture size: the video's and the
@@ -434,6 +434,8 @@ final class Raster3D {
         int[] px;
         // per vertex: camera space, picture, light (front / back)
         float[] cx = new float[0], cy, cz, sx, sy, lf, lb, wx, wy, wz, nx, ny, nz;
+        /** A ghost's blocks ({@link #ghost}). */
+        float[] blocks = new float[256];
 
         Frame(int w, int h) {
             this.w = w;
@@ -487,15 +489,10 @@ final class Raster3D {
     static final float GROUND_LIGHT = 0.92f;
     private static final float TERRAIN_K = GROUND_LIGHT / (AMBIENT + DIRECT * (float) 0.70);
     /**
-     * The memory fog (2026-11-10, the tour's scenes in a simulated memory): nothing fades to FOG_FROM_M, then far
-     * things go white, 1 - e^(-((d - from) / FOG_M)^1.4) - the action stays clear, the treelines pale, the far forest
-     * nearly gone.
+     * The memory's fog (2026-11-10): nothing fades to FOG_FROM_M, then things go into the void's white,
+     * 1 - e^(-((d - from) / FOG_M)^1.4) - the island round the action clear, the floor white to the horizon.
      */
-    static final double FOG_FROM_M = 20, FOG_M = 16;
-    /** Trees fall apart into blocks from DISSOLVE_FROM_M, all gone at DISSOLVE_TO_M (the far forest mostly). */
-    static final double DISSOLVE_FROM_M = 32, DISSOLVE_TO_M = 100;
-    /** The ground's cells dissolve into the void's floor from GROUND_FROM_M, all of them by GROUND_TO_M. */
-    static final double GROUND_FROM_M = 24, GROUND_TO_M = 58;
+    static final double FOG_FROM_M = 40, FOG_M = 45;
 
     /** The mesh at north, east, up, as {@link #draw(Frame, Scene.Camera, Mesh, int, int, float, double, double, double, double, double, double, double, int)} in its frame 0. */
     static void draw(Frame f, Scene.Camera cam, Mesh m, double n, double e, double u, double headingDeg, double pitchDeg,
@@ -586,7 +583,7 @@ final class Raster3D {
         }
         int[] tri = m.tri(), rgb = m.rgb();
         boolean textured = m.uv() != null;
-        int haze = SimVoid.VOID;
+        int haze = SimVoid.HORIZON;
         for (int t = 0, q = 0; t < tri.length; t += 3, q++) {
             int a = tri[t], b = tri[t + 1], c = tri[t + 2];
             if (f.cz[a] < NEAR_M || f.cz[b] < NEAR_M || f.cz[c] < NEAR_M) continue;
@@ -657,15 +654,8 @@ final class Raster3D {
         float iz = (float) (1 / mid[2]);
         float fog = (float) fogOf(mid[2]);
         float light = (AMBIENT + DIRECT * 0.55f) * (1 - fog);
-        int haze = SimVoid.VOID;
+        int haze = SimVoid.HORIZON;
         float hr = ((haze >> 16) & 0xff) * fog, hg = ((haze >> 8) & 0xff) * fog, hb = (haze & 0xff) * fog;
-        // a tree falls apart into blocks of about 0.7 m, its top first (a little even near: a memory half built, not a
-        // bush), more with distance; those about to go half white
-        float near = hgt > 5 ? 0.16f * (float) Math.max(0, Math.min(1, (mid[2] - 12) / 20)) : 0;
-        float gone = near + (1 - near) * (float) Math.max(0, Math.min(1, (mid[2] - DISSOLVE_FROM_M) / (DISSOLVE_TO_M - DISSOLVE_FROM_M)));
-        int nu = Math.max(2, (int) Math.round(Math.abs(w) / 0.7)), nv = Math.max(3, (int) Math.round(hgt / 0.7));
-        int seed = SimVoid.hash((int) Math.round(n * 7) * 92821 + (int) Math.round(e * 7));
-        int er = (SimVoid.EDGE >> 16) & 0xff, eg = (SimVoid.EDGE >> 8) & 0xff, eb = SimVoid.EDGE & 0xff;
         // texture coordinates as linear functions of the pixel: v from the top (0) to the foot (1), u across
         double a2 = al * al, h2 = 2 * half * half;
         double vx = -ax / a2, vy = -ay / a2, v0 = 1 + (fx * ax + fy * ay) / a2;
@@ -683,21 +673,89 @@ final class Raster3D {
                 if (iz <= depth[i]) continue;
                 int t = tex[(int) (vv * th) * tw + (int) (uu * tw)];
                 if (t >>> 24 == 0) continue;
-                float keepIt = 2;
-                if (gone > 0) {
-                    int hs = SimVoid.hash(seed + (int) (uu * nu) * 73856093 + (int) (vv * nv) * 19349663) & 0xff;
-                    keepIt = hs * (0.7f / 255) + (float) vv * 0.3f - gone;
-                    if (keepIt < 0) continue; // gone: the void shows
-                }
                 depth[i] = iz;
                 int rr = (int) (((t >> 16) & 0xff) * light + hr), gg = (int) (((t >> 8) & 0xff) * light + hg), bb = (int) ((t & 0xff) * light + hb);
-                if (keepIt < 0.045f) {
-                    // half built: going white and blue
-                    rr = (rr + er) / 2;
-                    gg = (gg + eg) / 2;
-                    bb = (bb + eb) / 2;
-                }
                 out[i] = (rr > 255 ? 255 : rr) << 16 | (gg > 255 ? 255 : gg) << 8 | (bb > 255 ? 255 : bb);
+            }
+        }
+    }
+
+    /** A ghost's blocks: about this size (m) near. */
+    static final double GHOST_BLOCK_M = 0.55;
+
+    /**
+     * A ghost's block (bu, bv of nu x nv; bv 0 at the top): -1 if there is none (the texture clear at its middle, or
+     * gone: its top breaks up first, more by gone), else how far it is from going (those about to go are brighter).
+     */
+    private static float ghostBlock(int[] gtex, int gw, int gh, int nu, int nv, int bu, int bv, int seed, float gone) {
+        if (bu < 0 || bv < 0 || bu >= nu || bv >= nv) return -1;
+        if (gtex[(int) ((bv + 0.5) / nv * gh) * gw + (int) ((bu + 0.5) / nu * gw)] >>> 24 == 0) return -1;
+        float keep = (SimVoid.hash(seed + bu * 73856093 + bv * 19349663) & 0xff) * (0.75f / 255) + (bv + 0.5f) / nv * 0.5f - gone;
+        return keep < 0 ? -1 : keep;
+    }
+
+    /**
+     * A tree card as the memory's ghost of it (2026-11-10): white blocks with light-blue lit rims where the texture is
+     * solid, half see-through to what was drawn before it (the void, the floor, the land: the ghosts come after
+     * everything else that stands still, nearest first, each pixel once); its top breaking up into the void, more so
+     * by gone (0..1). seed: the tree's own pattern.
+     */
+    static void ghost(Frame f, Scene.Camera cam, Mesh m, double n, double e, double u, double scale, int seed, float gone) {
+        float[] p = m.p();
+        double w = Math.abs(p[4] - p[1]) * scale, hgt = p[8] * scale;
+        double[] foot = cam.cam(n, e, u), top = cam.cam(n, e, u + hgt), mid = cam.cam(n, e, u + hgt / 2);
+        if (mid[2] < 1 || foot[2] < 0.5 || top[2] < 0.5) return;
+        double fx = cam.cx + cam.f * foot[0] / foot[2], fy = cam.cy + cam.f * foot[1] / foot[2];
+        double tx = cam.cx + cam.f * top[0] / top[2], ty = cam.cy + cam.f * top[1] / top[2];
+        double ax = fx - tx, ay = fy - ty, al = Math.hypot(ax, ay);
+        if (al < 1) return;
+        double half = w / 2 * cam.f / mid[2];
+        double px = ay / al * half, py = -ax / al * half; // across, to the card's +u side
+        // blocks about GHOST_BLOCK_M square (bigger further away: a block stays several pixels), each there if the
+        // texture is solid at its middle (read at a coarse level)
+        double block = GHOST_BLOCK_M * Math.max(1, mid[2] / 25);
+        int nu = Math.max(2, (int) Math.round(w / block)), nv = Math.max(3, (int) Math.round(hgt / block));
+        Texture tx0 = m.textures()[0];
+        int gl = 0;
+        while (gl + 1 < tx0.level().length && tx0.w()[gl + 1] >= nu * 2 && tx0.h()[gl + 1] >= nv * 2) gl++;
+        int[] gtex = tx0.level()[gl];
+        int gw = tx0.w()[gl], gh = tx0.h()[gl];
+        if (f.blocks.length < nu * nv) f.blocks = new float[Math.max(nu * nv, f.blocks.length * 2)];
+        float[] keeps = f.blocks;
+        for (int bv = 0; bv < nv; bv++) {
+            for (int bu = 0; bu < nu; bu++) keeps[bv * nu + bu] = ghostBlock(gtex, gw, gh, nu, nv, bu, bv, seed, gone);
+        }
+        // each block a square on the picture round its middle (upright: the camera's small rolls leave them square)
+        double bw = 2 * half / nu, bh = al / nv;
+        float iz = (float) (1 / mid[2]);
+        float[] depth = f.depth;
+        int[] out = f.px;
+        for (int bv = 0; bv < nv; bv++) {
+            for (int bu = 0; bu < nu; bu++) {
+                float keep = keeps[bv * nu + bu];
+                if (keep < 0) continue;
+                double vc = (bv + 0.5) / nv, uc = (bu + 0.5) / nu * 2 - 1;
+                double cx = tx + ax * vc + px * uc, cy = ty + ay * vc + py * uc;
+                int x0 = (int) Math.round(cx - bw / 2), x1 = (int) Math.round(cx + bw / 2) - 1;
+                int y0 = (int) Math.round(cy - bh / 2), y1 = (int) Math.round(cy + bh / 2) - 1;
+                if (x1 < 0 || y1 < 0 || x0 >= f.w || y0 >= f.h || x1 < x0 || y1 < y0) continue;
+                // its rims: lit where the silhouette ends (no block next to it), faint inside
+                boolean left = bu == 0 || keeps[bv * nu + bu - 1] < 0, right = bu == nu - 1 || keeps[bv * nu + bu + 1] < 0;
+                boolean up = bv == 0 || keeps[(bv - 1) * nu + bu] < 0, down = bv == nv - 1 || keeps[(bv + 1) * nu + bu] < 0;
+                int body = keep < 0.08f ? 225 : 165;
+                for (int y = Math.max(0, y0); y <= Math.min(f.h - 1, y1); y++) {
+                    int row = y * f.w;
+                    boolean rowRim = y == y0 || y == y1, rowOuter = (y == y0 && up) || (y == y1 && down);
+                    for (int x = Math.max(0, x0); x <= Math.min(f.w - 1, x1); x++) {
+                        int i = row + x;
+                        if (iz <= depth[i]) continue;
+                        int c = blend(out[i], SimVoid.GHOST, body);
+                        if (rowOuter || (x == x0 && left) || (x == x1 && right)) c = blend(c, SimVoid.RIM, 205);
+                        else if (rowRim || x == x0 || x == x1) c = blend(c, SimVoid.RIM, 45);
+                        out[i] = c;
+                        depth[i] = iz; // what is behind it stays behind (each pixel drawn once: the ghosts nearest first)
+                    }
+                }
             }
         }
     }
@@ -809,20 +867,40 @@ final class Raster3D {
     static final double GROUND_TILE_M = 4;
 
     /**
-     * The ground under the horizon: grass, and dirt where the map says (blended), lighter and darker where its tone
-     * says, the textures' mip level by distance, fading into the memory's white, further out its 1 m cells dissolving
-     * one by one into the void's floor, a faint grid every 4 m over it all, strongest where the land ends
-     * ({@link #memory}); the depth left at 0 (the ground is behind everything on it). Worked out exactly every
-     * {@link #SPAN} pixels along a row and stepped in between (along a row of a level camera the ground's distance
-     * does not change: the stepping is exact then; rolled, close to it).
+     * The memory round a scene (2026-11-10, the pilot: the tour's scenes in an "Animus style environment"): the
+     * realistic land is an island round the action on a white floor, a glowing grid on the floor lined up with the
+     * scene. land: one cell a metre square in the scene's frame (metres ahead / right of its origin along its heading;
+     * cells from a0 / r0, na x nr): {@link #LAND}, {@link #EDGE} (a tile glowing light blue where the land breaks up)
+     * or 0 (the floor).
      */
-    static void ground(Frame f, Scene.Camera cam, Texture grass, Texture dirt, GroundMap map) {
+    record Memory(double originN, double originE, double headingDeg, byte[] land, int a0, int r0, int na, int nr) {
+        static final byte LAND = 2, EDGE = 1;
+
+        int at(int ahead, int right) {
+            int i = ahead - a0, j = right - r0;
+            return i < 0 || j < 0 || i >= na || j >= nr ? 0 : land[i * nr + j];
+        }
+    }
+
+    /**
+     * The ground under the horizon: on the land grass, and dirt where the map says (blended), lighter and darker where
+     * its tone says, the textures' mip level by distance; round it the memory's floor ({@link #memory}); both fading
+     * into the void's white with distance; the depth left at 0 (the ground is behind everything on it). Worked out
+     * exactly every {@link #SPAN} pixels along a row and stepped in between (along a row of a level camera the ground's
+     * distance does not change: the stepping is exact then; rolled, close to it).
+     */
+    static void ground(Frame f, Scene.Camera cam, Texture grass, Texture dirt, GroundMap map, Memory mem) {
         double[][] r = cam.r;
-        int haze = SimVoid.VOID;
+        int haze = SimVoid.HORIZON;
         float hr = (haze >> 16) & 0xff, hg = (haze >> 8) & 0xff, hb = haze & 0xff;
         int levels = Math.min(grass.level().length, dirt.level().length);
         int[] px = f.px;
-        double[] a = new double[7], b = new double[7];
+        // the camera's look against the scene's axes: how a pixel's footprint falls across the grid's two sets of lines
+        double hd = Math.toRadians(mem.headingDeg()), ch = Math.cos(hd), sh = Math.sin(hd);
+        double fl = Math.hypot(r[2][0], r[2][1]);
+        double cphi = fl < 1e-3 ? 1 : (r[2][0] * ch + r[2][1] * sh) / fl, sphi = fl < 1e-3 ? 0 : (-r[2][0] * sh + r[2][1] * ch) / fl;
+        double[] look = {ch, sh, cphi, sphi};
+        double[] a = new double[10], b = new double[10];
         for (int y = 0; y < f.h; y++) {
             double v = (y + 0.5 - cam.cy) / cam.f;
             // the ray through (x, y): D0 + x * Dx in the world
@@ -830,54 +908,58 @@ final class Raster3D {
             double d0e = r[1][1] * v + r[2][1] - r[0][1] * (cam.cx - 0.5) / cam.f, dxe = r[0][1] / cam.f;
             double d0u = r[1][2] * v + r[2][2] - r[0][2] * (cam.cx - 0.5) / cam.f, dxu = r[0][2] / cam.f;
             int row = y * f.w;
-            boolean haveA = groundAt(cam, map, d0n, d0e, d0u, dxn, dxe, dxu, 0, grass, levels, a);
+            boolean haveA = groundAt(cam, map, mem, look, d0n, d0e, d0u, dxn, dxe, dxu, 0, grass, levels, a);
             for (int x0 = 0; x0 < f.w; x0 += SPAN) {
                 int x1 = Math.min(f.w, x0 + SPAN);
-                boolean haveB = groundAt(cam, map, d0n, d0e, d0u, dxn, dxe, dxu, x1, grass, levels, b);
+                boolean haveB = groundAt(cam, map, mem, look, d0n, d0e, d0u, dxn, dxe, dxu, x1, grass, levels, b);
                 if (haveA && haveB) {
-                    // {texel u, texel v (level 0), level, light, fog, dirt, dissolved}: stepped across the span
+                    // {texel u, texel v (level 0), level, light, fog, dirt, ahead, right, footprints}: stepped across the span
                     int lev = (int) Math.min(a[2], b[2]);
                     int tw = grass.w()[lev], th = grass.h()[lev];
-                    int cs = Math.max(0, Integer.numberOfTrailingZeros(tw) - 2);
-                    float lines = GRID_BY_SIZE[Math.min(GRID_BY_SIZE.length - 1, Integer.numberOfTrailingZeros(tw))];
                     double sc = (double) tw / grass.w()[0];
                     int n = x1 - x0;
                     int iu = (int) ((a[0] * sc + WRAP_GROUND) * 256), iv = (int) ((a[1] * sc + WRAP_GROUND) * 256);
                     int su = (int) ((b[0] - a[0]) * sc * 256 / n), sv = (int) ((b[1] - a[1]) * sc * 256 / n);
                     float k = (float) a[3], sk = (float) ((b[3] - a[3]) / n), fog = (float) a[4], sf = (float) ((b[4] - a[4]) / n);
                     float wd = (float) a[5], sw = (float) ((b[5] - a[5]) / n);
-                    float p = (float) a[6], sp = (float) ((b[6] - a[6]) / n);
+                    float fa = (float) a[6], sa = (float) ((b[6] - a[6]) / n), fr = (float) a[7], sr = (float) ((b[7] - a[7]) / n);
+                    float pa = (float) a[8], spa = (float) ((b[8] - a[8]) / n), pr = (float) a[9], spr = (float) ((b[9] - a[9]) / n);
                     int[] gt = grass.level()[lev], dt = dirt.level()[lev];
                     int mu = tw - 1, mv = th - 1;
-                    for (int x = x0; x < x1; x++, iu += su, iv += sv, k += sk, fog += sf, wd += sw, p += sp) {
-                        int tu = iu >> 8, tv = iv >> 8;
-                        int idx = (tv & mv) * tw + (tu & mu);
-                        int c = gt[idx];
-                        int w = (int) wd;
-                        if (w > 0) c = blend(c, dt[idx], w);
-                        int rr = (int) (((c >> 16) & 0xff) * k + hr * fog), gg = (int) (((c >> 8) & 0xff) * k + hg * fog), bb = (int) ((c & 0xff) * k + hb * fog);
-                        c = (rr > 255 ? 255 : rr) << 16 | (gg > 255 ? 255 : gg) << 8 | (bb > 255 ? 255 : bb);
-                        px[row + x] = memory(c, tu, tv, cs, mu, mv, p, fog, lines);
+                    for (int x = x0; x < x1; x++, iu += su, iv += sv, k += sk, fog += sf, wd += sw, fa += sa, fr += sr, pa += spa, pr += spr) {
+                        int st = mem.at((int) Math.floor(fa), (int) Math.floor(fr));
+                        int c = 0;
+                        if (st == Memory.LAND) {
+                            int idx = ((iv >> 8) & mv) * tw + ((iu >> 8) & mu);
+                            c = gt[idx];
+                            int w = (int) wd;
+                            if (w > 0) c = blend(c, dt[idx], w);
+                            int rr = (int) (((c >> 16) & 0xff) * k + hr * fog), gg = (int) (((c >> 8) & 0xff) * k + hg * fog), bb = (int) ((c & 0xff) * k + hb * fog);
+                            c = (rr > 255 ? 255 : rr) << 16 | (gg > 255 ? 255 : gg) << 8 | (bb > 255 ? 255 : bb);
+                        }
+                        px[row + x] = memory(c, st, fa, fr, pa, pr, fog);
                     }
                 } else {
                     // the horizon crosses the span: pixel by pixel
                     for (int x = x0; x < x1; x++) {
-                        if (!groundAt(cam, map, d0n, d0e, d0u, dxn, dxe, dxu, x, grass, levels, a)) continue;
-                        int lev = (int) a[2];
-                        int tw = grass.w()[lev], th = grass.h()[lev];
-                        double sc = (double) tw / grass.w()[0];
-                        int tu = (int) (a[0] * sc + WRAP_GROUND), tv = (int) (a[1] * sc + WRAP_GROUND);
-                        int idx = (tv & (th - 1)) * tw + (tu & (tw - 1));
-                        int c = grass.level()[lev][idx];
-                        if (a[5] >= 1) c = blend(c, dirt.level()[lev][idx], (int) a[5]);
-                        float k = (float) a[3], fog = (float) a[4];
-                        int rr = (int) (((c >> 16) & 0xff) * k + hr * fog), gg = (int) (((c >> 8) & 0xff) * k + hg * fog), bb = (int) ((c & 0xff) * k + hb * fog);
-                        c = Math.min(255, rr) << 16 | Math.min(255, gg) << 8 | Math.min(255, bb);
-                        int cs = Math.max(0, Integer.numberOfTrailingZeros(tw) - 2);
-                        float lines = GRID_BY_SIZE[Math.min(GRID_BY_SIZE.length - 1, Integer.numberOfTrailingZeros(tw))];
-                        px[row + x] = memory(c, tu, tv, cs, tw - 1, th - 1, (float) a[6], fog, lines);
+                        if (!groundAt(cam, map, mem, look, d0n, d0e, d0u, dxn, dxe, dxu, x, grass, levels, a)) continue;
+                        int st = mem.at((int) Math.floor(a[6]), (int) Math.floor(a[7]));
+                        float fog = (float) a[4];
+                        int c = 0;
+                        if (st == Memory.LAND) {
+                            int lev = (int) a[2];
+                            int tw = grass.w()[lev], th = grass.h()[lev];
+                            double sc = (double) tw / grass.w()[0];
+                            int idx = (((int) (a[1] * sc + WRAP_GROUND)) & (th - 1)) * tw + (((int) (a[0] * sc + WRAP_GROUND)) & (tw - 1));
+                            c = grass.level()[lev][idx];
+                            if (a[5] >= 1) c = blend(c, dirt.level()[lev][idx], (int) a[5]);
+                            float k = (float) a[3];
+                            int rr = (int) (((c >> 16) & 0xff) * k + hr * fog), gg = (int) (((c >> 8) & 0xff) * k + hg * fog), bb = (int) ((c & 0xff) * k + hb * fog);
+                            c = Math.min(255, rr) << 16 | Math.min(255, gg) << 8 | Math.min(255, bb);
+                        }
+                        px[row + x] = memory(c, st, (float) a[6], (float) a[7], (float) a[8], (float) a[9], fog);
                     }
-                    haveB = groundAt(cam, map, d0n, d0e, d0u, dxn, dxe, dxu, x1, grass, levels, b);
+                    haveB = groundAt(cam, map, mem, look, d0n, d0e, d0u, dxn, dxe, dxu, x1, grass, levels, b);
                 }
                 double[] tmp = a;
                 a = b;
@@ -887,38 +969,54 @@ final class Raster3D {
         }
     }
 
+    /** The floor's grid: thin lines every GRID_M metres, brighter ones every GRID_MAJOR_M (they reach the horizon). */
+    static final double GRID_M = 2, GRID_MAJOR_M = 8;
+
     /**
-     * The memory over a ground pixel c (texel tu, tv at its level, the wrap added; cells of 2^cs texels, tiles of mu + 1):
-     * its 1 m cell gone into the void's floor once p (0 near .. 1 far) passes the cell's own share, about to go: light
-     * blue; the grid's line on a tile's edge, faint on the land, strongest where it ends, fading into the white.
+     * The memory at a ground pixel: the land as drawn (c), an edge tile (light blue, its rim lit) or the white floor
+     * (whiter and bluer with distance: fog), and over the floor and tiles the grid's glowing lines - their width from
+     * the pixel's footprint across them (pa, pr metres), thinned out where they would crowd. fa, fr: where, in the
+     * scene's metres.
      */
-    private static int memory(int c, int tu, int tv, int cs, int mu, int mv, float p, float fog, float lines) {
-        int pi = Math.min(255, (int) (p * 255));
-        if (pi > 0) {
-            int hs = SimVoid.hash(((tu - WRAP_GROUND) >> cs) * 73856093 ^ ((tv - WRAP_GROUND) >> cs) * 19349663) & 0xff;
-            if (hs < pi) c = VOID_FLOOR[Math.min(255, (int) (fog * 255))];
-            else if (hs < pi + Math.min(28, pi)) c = blend(c, SimVoid.EDGE, 170);
+    private static int memory(int c, int st, float fa, float fr, float pa, float pr, float fog) {
+        int fi = Math.min(255, (int) (fog * 255));
+        if (st == Memory.EDGE) {
+            int ia = (int) Math.floor(fa), ir = (int) Math.floor(fr);
+            float ua = fa - ia, ur = fr - ir, rimA = Math.max(0.05f, pa * 1.3f), rimR = Math.max(0.05f, pr * 1.3f);
+            boolean rim = ua < rimA || ua > 1 - rimA || ur < rimR || ur > 1 - rimR;
+            int hs = SimVoid.hash(ia * 73856093 ^ ir * 19349663) & 0xff;
+            c = rim ? SimVoid.RIM : blend(SimVoid.TILE, 0xf6fbff, hs * 3 / 4);
+            c = blend(c, SimVoid.HORIZON, fi);
+        } else if (st != Memory.LAND) {
+            c = VOID_FLOOR[fi];
         }
-        if (lines > 0 && ((tu & mu) == 0 || (tv & mv) == 0)) {
-            int a = (int) (GRID_A[pi] * lines * (1 - fog * 0.75f));
-            if (a > 0) c = blend(c, SimVoid.GRID, a);
-        }
-        return c;
+        if (st == Memory.LAND) return c; // the land as it is
+        float g = Math.max(line(fa, pa, (float) GRID_M, 0.5f, 0.55f), line(fr, pr, (float) GRID_M, 0.5f, 0.55f));
+        g = Math.max(g, Math.max(line(fa, pa, (float) GRID_MAJOR_M, 2.2f, 0.9f), line(fr, pr, (float) GRID_MAJOR_M, 2.2f, 0.9f)));
+        g *= 1 - fog * 0.55f;
+        return g > 0.004f ? blend(c, SimVoid.GRID, (int) (g * 255)) : c;
     }
 
-    /** The void's floor by fog (0..255): light grey near, the void's white far. */
+    /**
+     * How much of a line every spacing metres covers a pixel at x (metres) whose footprint across the lines is p
+     * metres: a thin line about a pixel wide with a soft glow, strength at most; none once a pixel spans more than
+     * crowd metres (the lines would run together).
+     */
+    private static float line(float x, float p, float spacing, float crowd, float strength) {
+        if (p >= crowd) return 0;
+        float m = x / spacing;
+        float d = Math.abs(m - (float) Math.floor(m + 0.5f)) * spacing; // metres to the nearest line
+        float w = Math.max(p, 0.01f);
+        float cov = Math.max(0, 1 - d / (w * 0.9f)) + 0.22f * Math.max(0, 1 - d / (w * 3.5f));
+        float fade = Math.min(1, (crowd - p) / (crowd * 0.6f));
+        return Math.min(1, cov) * strength * fade;
+    }
+
+    /** The void's floor by fog (0..255): white near, the horizon's light blue far. */
     private static final int[] VOID_FLOOR = new int[256];
-    /** The grid's strength (0..255) by how far the ground is dissolved (0..255). */
-    private static final float[] GRID_A = new float[256];
-    /** The grid's lines kept by the tile's size in texels at its level (log2): too few texels a tile and they would crowd. */
-    private static final float[] GRID_BY_SIZE = {0, 0, 0, 0.35f, 0.7f, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
     static {
-        for (int i = 0; i < 256; i++) {
-            VOID_FLOOR[i] = SimVoid.mix(SimVoid.FLOOR, SimVoid.VOID, i / 255.0);
-            double p = i / 255.0;
-            GRID_A[i] = (float) (255 * Math.min(0.85, 0.17 + 0.45 * Math.exp(-Math.pow((p - 0.5) / 0.3, 2)) + (p > 0.5 ? 0.35 : 0.35 * p / 0.5)));
-        }
+        for (int i = 0; i < 256; i++) VOID_FLOOR[i] = SimVoid.mix(SimVoid.FLOOR, SimVoid.HORIZON, i / 255.0);
     }
 
     /** Pixels worked out exactly along a row of the ground; those between are stepped. */
@@ -927,11 +1025,12 @@ final class Raster3D {
     private static final int WRAP_GROUND = 1 << 16;
 
     /**
-     * The ground seen at pixel x of a row: out = {texel u, texel v at level 0, level, light, fog, dirt 0..255,
-     * dissolved 0..1}; false for the sky (or too far to wrap).
+     * The ground seen at pixel x of a row: out = {texel u, texel v at level 0, level, light, fog, dirt 0..255, metres
+     * ahead and right in the scene's frame, a pixel's footprint across the grid's lines of each (metres)}; false for
+     * the sky (or too far to wrap). look: the scene's heading's cos, sin; the camera's look against it, cos, sin.
      */
-    private static boolean groundAt(Scene.Camera cam, GroundMap map, double d0n, double d0e, double d0u, double dxn,
-                                    double dxe, double dxu, int x, Texture grass, int levels, double[] out) {
+    private static boolean groundAt(Scene.Camera cam, GroundMap map, Memory mem, double[] look, double d0n, double d0e,
+                                    double d0u, double dxn, double dxe, double dxu, int x, Texture grass, int levels, double[] out) {
         double du = d0u + x * dxu;
         if (du > -1e-4) return false;
         double t = -cam.cu / du;
@@ -942,7 +1041,8 @@ final class Raster3D {
         double u = ge * texPerM, v = gn * texPerM;
         if (Math.abs(u) > WRAP_GROUND / 2.0 || Math.abs(v) > WRAP_GROUND / 2.0) return false;
         // texels a pixel there, spread over the slant: the texture's level (each halves them)
-        double texels = dist / cam.f / Math.max(0.25, -du / len) * texPerM;
+        double slant = Math.max(0.02, -du / len);
+        double texels = dist / cam.f / Math.max(0.25, slant) * texPerM;
         int lev = texels <= 1.5 ? 0 : Math.min(levels - 1, Math.getExponent((float) (texels / 1.5)) + 1);
         int tone = map == null ? 128 << 8 : map.sample(map.tone(), gn, ge, 128 << 8);
         double fog = fogOf(dist);
@@ -952,11 +1052,17 @@ final class Raster3D {
         out[3] = GROUND_LIGHT * (0.75 + tone / 131072.0) * (1 - fog);
         out[4] = fog;
         out[5] = map == null ? 0 : map.sample(map.dirt(), gn, ge, 0) / 256.0;
-        out[6] = Math.max(0, Math.min(1, (dist - GROUND_FROM_M) / (GROUND_TO_M - GROUND_FROM_M)));
+        double rn = gn - mem.originN(), re = ge - mem.originE();
+        out[6] = rn * look[0] + re * look[1];
+        out[7] = -rn * look[1] + re * look[0];
+        // a pixel's footprint: along the look (stretched by the slant), across it
+        double along = dist / cam.f / slant, across = dist / cam.f;
+        out[8] = Math.hypot(along * look[2], across * look[3]);
+        out[9] = Math.hypot(along * look[3], across * look[2]);
         return true;
     }
 
-    /** The memory fog's share by distance, every half metre to 2 km (exp is dear per pixel). */
+    /** The fog's share by distance, every half metre to 2 km (exp is dear per pixel). */
     private static final float[] FOG = new float[4096];
 
     static {
@@ -1011,7 +1117,7 @@ final class Raster3D {
         double bx = cam.cx + cam.f * sideC[0] / sideC[2] - sx, by = cam.cy + cam.f * sideC[1] / sideC[2] - sy;
         double rx = Math.max(Math.abs(ax), Math.abs(bx)), ry = Math.max(Math.abs(ay), Math.abs(by));
         if (rx < 1 || ry < 0.5) return;
-        dark *= 1 - fogOf(c[2]); // none on the white far away
+        dark *= 1 - fogOf(c[2]); // none in the white far away
         if (dark < 0.01) return;
         int x0 = Math.max(0, (int) (sx - rx)), x1 = Math.min(f.w - 1, (int) (sx + rx));
         int y0 = Math.max(0, (int) (sy - ry)), y1 = Math.min(f.h - 1, (int) (sy + ry));
