@@ -2,9 +2,9 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## Unreleased
+## 1.0.59
 
-PC only (the phone app is unchanged, pc.46 stays).
+PC only (the phone app is unchanged, pc.46 stays). The pilot's round after 1.0.58; not tried in the real window yet.
 
 - **The floor's grid runs beside the drone**, not one line under its lens to the horizon. (Less grass was tried for an hour and taken back: the drone sits on the grass again.)
 - **Scenes: no scan lines, no glitches** (the screen effects are gone from every virtual picture).
