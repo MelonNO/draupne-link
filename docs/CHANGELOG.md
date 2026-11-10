@@ -6,7 +6,16 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 
 PC only (the phone app is unchanged, pc.46 stays).
 
-- **Tour scenes: less grass, more of the simulated memory.** The real land is only a small island right under the action (4 m round it, was 13); the drone sits on the white floor with its grid, a few blades in front of the lens (was a row). The grid's lines run beside the drone, not one under its lens to the horizon.
+- **The floor's grid runs beside the drone**, not one line under its lens to the horizon. (Less grass was tried for an hour and taken back: the drone sits on the grass again.)
+- **Scenes: no scan lines, no glitches** (the screen effects are gone from every virtual picture).
+- **Fewer squares in the background:** the ghost trees' blocks twice the size and only their outline lit; the floor's grid every 4 m (bright every 16 m), was 2 and 8.
+- **Camouflage nets on the ground:** their skirts are pegged at the edge (were 0.43 m up, so the nets floated seen from a drone on the ground).
+- **Sharper virtual picture:** the lens bend reads between pixels; it doubled every ninth row and column near the middle.
+- **No "old phone app" warning on virtual drones:** they report the phone app this PC hands out (were fixed at pc.40).
+- **Observation tiles: smaller OSD** (0.7 of the full OSD's size for the tile, at least 0.4; was at least 0.65).
+- **Tour: the sixth observed drone shows its picture.** The drone flown in the PILOT steps was still in STANDBY and refused to be observed; the tour wakes it.
+- **POP OUT MAP opens the map full screen**, in the tour too (the tour no longer makes it smaller).
+- **Space no longer opens SETUP's menu with MENU shut:** the buttons behind MENU take no keyboard focus while it is shut.
 
 ## 1.0.58 + phone pc.46
 

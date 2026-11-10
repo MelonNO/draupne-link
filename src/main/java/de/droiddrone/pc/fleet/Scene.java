@@ -220,7 +220,6 @@ final class Scene {
             g.dispose();
         }
         paintTargets(img, v, nowMs);
-        if (burnIn) SimWorld.effects(img, nowMs);
     }
 
     /**

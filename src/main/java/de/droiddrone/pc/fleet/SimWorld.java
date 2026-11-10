@@ -12,9 +12,9 @@ import java.util.Random;
 
 /**
  * The virtual drones' world (1.0.52, the pilot: every environment in the tour's style): drawn like a computer
- * simulation - a pale sky and ground, a faint data grid, glowing outlines of far structures, floating fragments, and
- * on the video scan lines and now and then a glitch. Real-looking things (the BTR, the soldier) move in it. At NIGHT
- * the same world, dark. The motion detection's picture gets the world without fragments and screen effects, so only
+ * simulation - a pale sky and ground, a faint data grid, glowing outlines of far structures, floating fragments (no
+ * scan lines or glitches since 2026-11-10, the pilot). Real-looking things (the BTR, the soldier) move in it. At NIGHT
+ * the same world, dark. The motion detection's picture gets the world without fragments, so only
  * what really travels moves in it. First drawn for the tour's BTR scene, now every virtual drone's.
  */
 final class SimWorld {
@@ -190,39 +190,6 @@ final class SimWorld {
             cam.line(g, p[0], p[1], 0, n[0], n[1], 0);
             cam.line(g, p[0], p[1], s[4], n[0], n[1], s[4]);
             cam.line(g, p[0], p[1], 0, p[0], p[1], s[4]);
-        }
-    }
-
-    /** The simulation's screen: faint scan lines, and now and then a glitch band (the video only). */
-    static void effects(BufferedImage img, long nowMs) {
-        int w = img.getWidth(), h = img.getHeight();
-        int[] px = Scene.pixels(img);
-        int every = Math.max(2, h / 240);
-        for (int y = 0; y < h; y += every) {
-            int o = y * w;
-            for (int x = 0; x < w; x++) {
-                int c = px[o + x];
-                px[o + x] = (c & 0xff000000) | ((((c >> 16) & 0xff) * 243 >> 8) << 16) | ((((c >> 8) & 0xff) * 245 >> 8) << 8) | ((c & 0xff) * 250 >> 8);
-            }
-        }
-        // a glitch: about every 5 s for 0.18 s, a band of rows slips sideways with a cyan cast
-        long cycle = 5300, at = nowMs % cycle;
-        if (at < 180) {
-            Random r = new Random(nowMs / cycle * 31 + at / 60);
-            int bands = 1 + r.nextInt(2);
-            for (int k = 0; k < bands; k++) {
-                int y0 = r.nextInt(Math.max(1, h - h / 10)), bh = Math.max(2, h / 60 + r.nextInt(Math.max(1, h / 25)));
-                int shift = (r.nextBoolean() ? 1 : -1) * (w / 80 + r.nextInt(Math.max(1, w / 40)));
-                int[] row = new int[w];
-                for (int y = y0; y < Math.min(h, y0 + bh); y++) {
-                    System.arraycopy(px, y * w, row, 0, w);
-                    for (int x = 0; x < w; x++) {
-                        int c = row[Math.floorMod(x - shift, w)];
-                        int rr = ((c >> 16) & 0xff) * 200 >> 8, gg = Math.min(255, (((c >> 8) & 0xff) * 240 >> 8) + 12), bb = Math.min(255, (c & 0xff) + 30);
-                        px[y * w + x] = 0xff000000 | (rr << 16) | (gg << 8) | bb;
-                    }
-                }
-            }
         }
     }
 }

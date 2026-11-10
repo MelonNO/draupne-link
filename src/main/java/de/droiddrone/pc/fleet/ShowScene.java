@@ -9,13 +9,14 @@ import java.util.Random;
  * The tour's six drones' pictures (2026-11-09; 2026-11-10, the pilot: "Make the activities more serious. Make them
  * tactical army related. Make everything in a realistic style"): what each one's camera sees, in front of where it
  * stands - a field, tracks, treelines and a far forest, textured models lit by a low sun, their shadows - in a
- * simulated memory ({@link SimVoid}, 2026-11-10, the pilot: "push it much further"; later "less grass and more of the
- * simulated areas"): the real land only a small island right under the action, breaking into tiles at its edge, on a
+ * simulated memory ({@link SimVoid}, 2026-11-10, the pilot: "push it much further"; "less grass", then "reintroduce
+ * the grass"): the real land an island round the action and back to the drone, breaking into tiles at its edge, on a
  * white floor with a glowing grid under a white void; only the trees
  * right at the action real, the treelines behind it white ghosts of blocks, as in the convoy's (2026-11-10, the
- * pilot: every scene's background like that one); fragments drifting up, now and then a glitch. Seen as a drone sees
- * it (2026-11-10, the pilot: it looked like a CCTV camera, not a drone): set down on the memory's floor BACK_M back,
- * its lens just over it - the near floor out of focus, a few blades in front of it, the wide lens bending the picture
+ * pilot: every scene's background like that one); fragments drifting up (no scan lines or glitches since 2026-11-10,
+ * the pilot), camouflage nets pegged to the ground ({@link Raster3D#groundSkirts}). Seen as a drone sees
+ * it (2026-11-10, the pilot: it looked like a CCTV camera, not a drone): set down on the grass BACK_M back, its lens
+ * just over the ground - the near grass out of focus, blades in front of it, the wide lens bending the picture
  * ({@link DroneLens}):
  * <ul>
  * <li>{@link Kind#DRONES}: a drone team at a treeline - operators kneeling by their UAZ, crates, a radio and an antenna
@@ -32,7 +33,7 @@ import java.util.Random;
  * </ul>
  * Models: /model/tactical.bin.gz and the FPV drone ({@link Raster3D}, THIRD-PARTY.md). What stands still is drawn once
  * for as long as the camera stays where it is (a drone sitting on the ground), and only what moves each picture. The
- * motion detection's picture gets it without the fragments, the screen effects and the darkened corners: only what
+ * motion detection's picture gets it without the fragments and the darkened corners: only what
  * really travels moves in it.
  * {@link #addSound} mixes what is heard: the quads, the engines, the mortar.
  */
@@ -109,12 +110,12 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     /** A tree or bush drawn as a ghost: its pattern, how much of its top is gone (0..1). */
     private record Ghost(Put put, int seed, float gone) {}
 
-    /** The real land reaches this far (m) from the action, then breaks up into the floor (13 up to 1.0.58: the pilot, less grass). */
-    static final double ISLAND_M = 4;
+    /** The real land reaches this far (m) from the action, then breaks up into the floor (4 for an hour: the pilot, then "reintroduce the grass"). */
+    static final double ISLAND_M = 13;
     /** Trees and bushes this near the action (m) stay real. */
     static final double REAL_TREES_M = 4;
     /** A real tree stands on real land this far round it (m). */
-    static final double TREE_LAND_M = 2.5;
+    static final double TREE_LAND_M = 4;
     /** The drone stands this far behind the scene's frame (m): the action 13 - 23 m off, as a drone set down to watch. */
     static final double BACK_M = 4;
     /** The action's places along a road count this far out from the drone (m): further the road is the floor's. */
@@ -152,13 +153,14 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     }
 
     /**
-     * The island: each metre cell (in the scene's frame) real land within about ISLAND_M of the action and TREE_LAND_M
-     * of a real tree (the drone stands on the floor), the edge ragged by whole cells; a band of light-blue tiles
+     * The island: each metre cell (in the scene's frame) real land within about ISLAND_M of the action, of the ground
+     * between it and the drone and TREE_LAND_M of a real tree, the edge ragged by whole cells; a band of light-blue tiles
      * just past it, a few scattered further out (lifting off: their middles go to edge, where the fragments start); the
      * floor beyond.
      */
     private Raster3D.Memory island(List<double[]> action, List<double[]> trees, List<double[]> edge) {
         List<double[]> seeds = new ArrayList<>(action);
+        for (double a = -BACK_M; a <= 0; a += 2) seeds.add(new double[]{a, 0});
         int a0 = -40, r0 = -120, na = 180, nr = 240;
         byte[] land = new byte[na * nr];
         for (int i = 0; i < na; i++) {
@@ -217,7 +219,7 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     // ------------------------------------------------------------------ the picture
 
     /**
-     * A drone set down on the ground (2026-11-10, the pilot: it looked like a CCTV camera on its mast, not a drone): its
+     * A drone set down on the grass (2026-11-10, the pilot: it looked like a CCTV camera on its mast, not a drone): its
      * camera this high over the ground, tilted up as an FPV camera is, the frame resting a little crooked.
      */
     static final double GROUND_EYE_M = 0.12, UPTILT_DEG = 5, REST_ROLL_DEG = 1.2;
@@ -298,7 +300,6 @@ final class ShowScene implements Scene.World, Scene.Sounding {
         draw(f, cam, puts, puffs);
         if (!analysis) SimVoid.drawFragments(f, cam, fragments, t, this::at);
         DroneLens.apply(f.px, w, h, !analysis);
-        if (!analysis) SimVoid.screen(img, nowMs);
     }
 
     private void draw(Raster3D.Frame f, Scene.Camera cam, List<Put> puts, List<Puff> puffs) {

@@ -35,6 +35,20 @@ class SlideMenuTest {
     }
 
     @Test
+    void shutTheItemsTakeNoKeyboardFocus() {
+        // the pilot (2026-11-10): Space in the main window opened SETUP's menu with MENU shut
+        JButton main = new JButton("MENU"), setup = new JButton("SETUP");
+        SlideMenu menu = new SlideMenu(main);
+        menu.addItem(setup);
+        assertFalse(setup.isFocusable(), "shut: SETUP behind the edge can't have the focus, so Space can't press it");
+        menu.setOpen(true);
+        assertTrue(setup.isFocusable(), "open: the keyboard reaches it");
+        menu.setOpen(false);
+        assertFalse(setup.isFocusable());
+        assertTrue(main.isFocusable(), "MENU itself always");
+    }
+
+    @Test
     void aMenusWipeIsInFrontOfTheToursNoticeLikeTheMenuItself() {
         // the pilot (1.0.39): the wipe went behind the tour's notice and jumped in front when the menu took over
         assertTrue(TacticalCombo.GHOST_LAYER > Tour.NOTICE_LAYER, "the wipe over the notice");

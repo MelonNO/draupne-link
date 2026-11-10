@@ -11,8 +11,14 @@ import de.droiddrone.pc.video.VideoPipeline;
  * Nothing flies from the grid, so there are no sticks, no ping, no arming warnings (see OsdRenderer.setObserver).
  */
 final class ObservationOsd {
-    /** The text keeps at least this unit (picture height / 720) on a small tile: 15 px figures at 10 px. */
-    static final float MIN_UNIT = 0.65f;
+    /**
+     * A tile's OSD is this much smaller than the pilot's on a picture of its size (2026-11-10, the pilot: "in Observing
+     * mode the OSD items are the same size, have the icons and text be scaled down"; was at least 0.65 of the full
+     * size, as big as a tile's picture allowed).
+     */
+    static final float SCALE = 0.7f;
+    /** The text keeps at least this unit (picture height / 720) on a small tile: 15 px figures at 6 px. */
+    static final float MIN_UNIT = 0.4f;
 
     private ObservationOsd() {
     }

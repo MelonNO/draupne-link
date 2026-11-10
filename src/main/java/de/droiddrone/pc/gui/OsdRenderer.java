@@ -143,7 +143,7 @@ final class OsdRenderer {
             this.h = h;
             this.layout = layout == null ? OsdLayout.defaults() : layout;
             boundsOut = bounds;
-            unit = Math.max(h / 720f, minUnit); // everything scales with the picture (a tile: not below readable)
+            unit = Math.max(h / 720f * scale, minUnit); // everything scales with the picture (a tile: smaller, not below readable)
             long now = de.droiddrone.pc.MonoClock.ms();
             FcTelemetry t = d.telemetry();
             FcTelemetry.Attitude att = t == null ? null : t.getAttitude();
@@ -317,6 +317,13 @@ final class OsdRenderer {
     void setMinUnit(float unit) {
         minUnit = Math.max(0, unit);
     }
+
+    /** The OSD this much the size it is drawn at on a picture this size (an observation tile: smaller). */
+    void setScale(float scale) {
+        this.scale = scale > 0 ? scale : 1;
+    }
+
+    private volatile float scale = 1;
 
     private volatile boolean observer;
     private volatile float minUnit;

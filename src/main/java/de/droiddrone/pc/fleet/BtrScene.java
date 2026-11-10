@@ -20,8 +20,8 @@ import java.util.zip.GZIPInputStream;
  * The tour's finale scene (the pilot, 2026-11-08): a BTR on patrol in front of a virtual drone in overwatch. The
  * vehicle is drawn real - its own textures, lit by a low sun, its wheels turning, a shadow on the ground - in a world
  * drawn like a computer simulation: a pale sky and ground, a faint data grid, glowing outlines of far structures,
- * floating fragments, scan lines and now and then a glitch. The motion detection's picture gets the world and the
- * vehicle without the screen effects, so only the vehicle travels in it.
+ * floating fragments. The motion detection's picture gets the world and the vehicle, so only the vehicle travels in
+ * it.
  * <p>
  * Software raster with a depth buffer (DroneModelView's way), one thread per picture (the video's, the detection's,
  * overwatch's preview's each have their own buffers). Its route (1.0.52, the pilot: "more realistic of a military
@@ -596,7 +596,6 @@ final class BtrScene implements Scene.World {
             g.dispose();
         }
         renderVehicle(img, v, nowMs, false);
-        if (!analysis) SimWorld.effects(img, nowMs);
     }
 
     /**

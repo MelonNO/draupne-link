@@ -424,6 +424,7 @@ final class Tour {
 
     private void keepObserveSet() {
         if (observeSetBefore == null) observeSetBefore = main.tourObserveSet();
+        finale.wakeShowcase(); // the racer is still in STANDBY from the PILOT steps: it would refuse to be observed
     }
 
     /** The slow switch to a MAP TOOLS list, then the step. */
@@ -719,8 +720,6 @@ final class Tour {
         if (checkBefore >= 0) main.tourRestoreCheck(checkBefore);
         checkBefore = -1;
         main.tourHideSleep(false);
-        MapWindow m = main.mapWindowIfOpen();
-        if (m != null) m.tourWindowedEnd();
         if (current == this) current = null;
     }
 
@@ -808,7 +807,6 @@ final class Tour {
                 // the one control then
             }
         }
-        if (anchor != null && SwingUtilities.getWindowAncestor(anchor) instanceof MapWindow m) m.tourWindowed();
         if (!notice.pop()) retry.restart();
     }
 

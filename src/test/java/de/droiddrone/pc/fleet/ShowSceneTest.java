@@ -211,21 +211,21 @@ class ShowSceneTest {
     }
 
     @Test
-    void theDroneSitsOnTheMemorysFloorAFewBladesInFrontOfTheLens() {
-        // the pilot: "less grass and more of the simulated areas" - BACK_M behind the scene, on the white floor (the
-        // real land only round the action), a few blades of grass in view, not a row of them
+    void theDroneSitsOnRealLandItsGrassInFrontOfTheLens() {
+        // BACK_M behind the scene, on the island's land - not on the memory's white floor - with blades of grass in view
+        // (the pilot, 2026-11-10: "reintroduce the grass" after an hour on the floor)
         Scene.View v = new Scene.View(0, 0, 0, 0, 0, 30);
         for (ShowScene.Kind k : ShowScene.Kind.values()) {
             BufferedImage img = picture(new ShowScene(k, 0, 0, 30, 0), v, 4000, true);
             int c = img.getRGB(W / 2, H * 3 / 4);
             int r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
-            assertTrue(r > 180 && g > 180 && b > 180, k + ": the floor under the drone, not grass: " + Integer.toHexString(c & 0xffffff));
+            assertTrue(g > b + 15 && g > r && g < 200, k + ": grass under the drone, not the floor: " + Integer.toHexString(c & 0xffffff));
             int dark = 0;
             for (int x = 0; x < W; x++) {
                 int p = img.getRGB(x, H - 2);
-                if ((p >> 8 & 0xff) < 150) dark++;
+                if ((p >> 8 & 0xff) < 90) dark++;
             }
-            assertTrue(dark > 0 && dark < W / 3, k + ": a few blades along the bottom (" + dark + " px)");
+            assertTrue(dark > W / 20, k + ": blades along the bottom (" + dark + " px)");
         }
     }
 
@@ -249,5 +249,45 @@ class ShowSceneTest {
             for (int j = 0; j < l.length; j++) e += l[j] * l[j] + r[j] * r[j];
         }
         return e;
+    }
+
+    @Test
+    void theCamouflageNetsArePeggedToTheGround() {
+        // the pilot (2026-11-10): "a lot of the camo nets are floating" - exported, the lowest edge was 0.43 m up
+        for (String name : new String[]{"net-small", "net-large"}) {
+            float[] p = Raster3D.model(name).p();
+            float x0 = Float.MAX_VALUE, x1 = -Float.MAX_VALUE, y0 = Float.MAX_VALUE, y1 = -Float.MAX_VALUE, top = 0;
+            for (int i = 0; i < p.length; i += 3) {
+                x0 = Math.min(x0, p[i]);
+                x1 = Math.max(x1, p[i]);
+                y0 = Math.min(y0, p[i + 1]);
+                y1 = Math.max(y1, p[i + 1]);
+                top = Math.max(top, p[i + 2]);
+            }
+            int edge = 0;
+            for (int i = 0; i < p.length; i += 3) {
+                boolean onEdge = p[i] - x0 < 1e-3 || x1 - p[i] < 1e-3 || p[i + 1] - y0 < 1e-3 || y1 - p[i + 1] < 1e-3;
+                if (!onEdge) continue;
+                edge++;
+                assertTrue(p[i + 2] <= 0.05f, name + ": its edge on the ground, not " + p[i + 2] + " m up");
+            }
+            assertTrue(edge > 40, name + ": its outline found (" + edge + ")");
+            assertTrue(top > 2, name + ": still held up on its poles in the middle (" + top + " m)");
+        }
+    }
+
+    @Test
+    void theLensBendBlendsNeighboursInsteadOfDoublingPixels() {
+        // the pilot (2026-11-10): "in the sim the resolution is very low" - nearest-pixel reading doubled rows
+        int w = 320, h = 180;
+        int[] px = new int[w * h];
+        for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) px[y * w + x] = x % 2 == 0 ? 0xffffff : 0x000000;
+        DroneLens.apply(px, w, h, false);
+        int between = 0;
+        for (int x = 100; x < 220; x++) {
+            int g = px[(h / 2) * w + x] >> 8 & 0xff;
+            if (g > 40 && g < 215) between++;
+        }
+        assertTrue(between > 30, "stripes read between pixels near the middle: " + between + " of 120 in between");
     }
 }

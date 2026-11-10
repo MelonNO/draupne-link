@@ -60,8 +60,11 @@ import static de.droiddrone.common.PacketIds.VIDEO_PROFILE;
  * telemetry at the phone's rates. What differs is said where it does.
  */
 public final class VirtualDrone {
-    /** What it says it is: the newest phone app, so the PC uses every packet layout it knows. */
-    public static final String VERSION = "2.3.0-pc.40";
+    /**
+     * What it says it is: the newest phone app, so the PC uses every packet layout it knows - the one this PC hands out
+     * (was a fixed pc.40, and the PC warned "old phone app" on every virtual drone).
+     */
+    public static final String VERSION = de.droiddrone.pc.setup.ApkShare.VERSION;
     public static final String DEVICE = "VIRTUAL DRONE";
     /** The phone's encoder steps, bit/s (StreamEncoder.baseBitRates). */
     static final int[] STEPS = {150_000, 250_000, 500_000, 1_000_000, 2_000_000, 4_000_000, 6_000_000, 8_000_000, 10_000_000,

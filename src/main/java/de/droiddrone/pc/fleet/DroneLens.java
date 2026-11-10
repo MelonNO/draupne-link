@@ -5,8 +5,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * What makes a tour drone's picture read as a drone's camera and not a CCTV camera on a mast (2026-11-10, the pilot):
- * the drone sits on the ground, so a few blades right in front of the lens stand out of focus along the bottom (few:
- * the pilot, "less grass" - it sits on the memory's floor); and the
+ * the drone sits on the grass, so blades right in front of the lens stand out of focus along the bottom (a few for an
+ * hour of 2026-11-10, then the pilot: "reintroduce the grass"); and the
  * wide FPV lens bends the picture a little towards its corners (barrel) and darkens them.
  * <p>
  * The blades stand still (drawn with what is kept per camera position, nearer than anything, so nothing that moves
@@ -24,7 +24,7 @@ final class DroneLens {
     // ------------------------------------------------------------------ the grass in front of the lens
 
     /** Blades along the bottom of the picture. */
-    private static final int BLADES = 6;
+    private static final int BLADES = 46;
 
     /**
      * The blades in front of a drone on the ground: soft dark-green strokes rising from below the picture's bottom,
@@ -152,8 +152,11 @@ final class DroneLens {
 
     // ------------------------------------------------------------------ the lens
 
-    /** Per picture size: where each pixel is taken from, and how much of it is left (of 256) at the corners. */
-    private record Map(int[] from, short[] keep) {}
+    /**
+     * Per picture size: where each pixel is taken from - the top left of the four it is read between, and how far
+     * towards the right and the lower ones (of 256) - and how much of it is left (of 256) at the corners.
+     */
+    private record Map(int[] from, byte[] fx, byte[] fy, short[] keep) {}
 
     private static final ConcurrentHashMap<Long, Map> MAPS = new ConcurrentHashMap<>();
     private static final ThreadLocal<int[]> COPY = ThreadLocal.withInitial(() -> new int[0]);
@@ -161,6 +164,7 @@ final class DroneLens {
     private static Map map(int w, int h) {
         return MAPS.computeIfAbsent((long) w << 32 | h, key -> {
             int[] from = new int[w * h];
+            byte[] fxs = new byte[w * h], fys = new byte[w * h];
             short[] keep = new short[w * h];
             double cx = w / 2.0, cy = h / 2.0, half = Math.hypot(cx, cy);
             for (int y = 0; y < h; y++) {
@@ -169,18 +173,26 @@ final class DroneLens {
                     double rr = dx * dx + dy * dy;
                     // taken from nearer the middle: the middle drawn larger, the corners where they were
                     double s = 1 - BARREL + BARREL * rr;
-                    int sx = Math.max(0, Math.min(w - 1, (int) (cx + dx * s * half)));
-                    int sy = Math.max(0, Math.min(h - 1, (int) (cy + dy * s * half)));
-                    from[y * w + x] = sy * w + sx;
+                    double sx = Math.max(0, Math.min(w - 1.001, cx + dx * s * half - 0.5));
+                    double sy = Math.max(0, Math.min(h - 1.001, cy + dy * s * half - 0.5));
+                    int ix = Math.min(w - 2, (int) sx), iy = Math.min(h - 2, (int) sy);
+                    from[y * w + x] = iy * w + ix;
+                    fxs[y * w + x] = (byte) Math.min(255, (int) Math.round((sx - ix) * 256));
+                    fys[y * w + x] = (byte) Math.min(255, (int) Math.round((sy - iy) * 256));
                     keep[y * w + x] = (short) Math.round(256 * (1 - VIGNETTE * rr * rr));
                 }
             }
-            return new Map(from, keep);
+            return new Map(from, fxs, fys, keep);
         });
     }
 
-    /** The lens on a picture: bent; darkened at the corners unless it is the motion detection's picture. */
+    /**
+     * The lens on a picture: bent, each pixel read between the four it falls among (2026-11-10, the pilot: "in the sim
+     * the resolution is very low" - read from the nearest one, every ninth row and column near the middle came twice,
+     * and edges stepped); darkened at the corners unless it is the motion detection's picture.
+     */
     static void apply(int[] px, int w, int h, boolean darken) {
+        if (w < 2 || h < 2) return;
         Map m = map(w, h);
         int[] copy = COPY.get();
         if (copy.length < w * h) {
@@ -189,18 +201,27 @@ final class DroneLens {
         }
         System.arraycopy(px, 0, copy, 0, w * h);
         int[] from = m.from();
-        if (!darken) {
-            for (int i = 0; i < w * h; i++) px[i] = copy[from[i]];
-            return;
-        }
+        byte[] fxs = m.fx(), fys = m.fy();
         short[] keep = m.keep();
         for (int i = 0; i < w * h; i++) {
-            int c = copy[from[i]], k = keep[i];
+            int o = from[i], fx = fxs[i] & 0xff, fy = fys[i] & 0xff;
+            int a = copy[o], b = copy[o + 1], c = copy[o + w], d = copy[o + w + 1];
+            int top = mix(a, b, fx), bottom = mix(c, d, fx), v = mix(top, bottom, fy);
+            int k = darken ? keep[i] : 256;
             if (k >= 256) {
-                px[i] = c;
+                px[i] = v;
                 continue;
             }
-            px[i] = ((c >> 16 & 0xff) * k >> 8) << 16 | ((c >> 8 & 0xff) * k >> 8) << 8 | (c & 0xff) * k >> 8;
+            px[i] = ((v >> 16 & 0xff) * k >> 8) << 16 | ((v >> 8 & 0xff) * k >> 8) << 8 | (v & 0xff) * k >> 8;
         }
+    }
+
+    /** p towards q by t of 256, red and blue at once. */
+    private static int mix(int p, int q, int t) {
+        if (t == 0 || p == q) return p & 0xffffff;
+        int u = 256 - t;
+        int rb = (((p & 0xff00ff) * u + (q & 0xff00ff) * t) >>> 8) & 0xff00ff;
+        int g = (((p & 0xff00) * u + (q & 0xff00) * t) >>> 8) & 0xff00;
+        return rb | g;
     }
 }

@@ -155,7 +155,8 @@ final class Raster3D {
             for (int t = 0; t < ntri; t++) tex[t] = (byte) ((tex[t] & 0xff) - lo);
             int[] rgb = new int[ntri];
             for (int t = 0; t < ntri; t++) rgb[t] = average(own[tex[t]]);
-            out.put(name, new Mesh(frames[0], tri, rgb, uv, tex, own, nf > 1 ? frames : null, normals, flags, hull(frames[0])));
+            Mesh mesh = new Mesh(frames[0], tri, rgb, uv, tex, own, nf > 1 ? frames : null, normals, flags, hull(frames[0]));
+            out.put(name, name.startsWith("net-") ? groundSkirts(mesh) : mesh);
         }
         return out;
     }
@@ -227,6 +228,35 @@ final class Raster3D {
             }
         }
         return n;
+    }
+
+    /** A net's skirts slope down over this much (metres) from its edge: as tools/model/export_tactical.py made them. */
+    static final float NET_SKIRT_M = 1.8f;
+
+    /**
+     * A camouflage net with its skirts down to the ground (2026-11-10, the pilot: "a lot of the camo nets are floating.
+     * make sure the environment is created for the new view"). Exported, the skirts came down to a third of the height
+     * over them - the lowest edge 0.43 m up - which from a drone sitting on the ground showed as a roof hanging in
+     * the air. Each height in the skirt band is taken from the exported slope (0.35 + 0.65 k^1.3 of the full height,
+     * k = the way in from the edge over NET_SKIRT_M) to k^1.1: pegged at the edge, as nets are, unchanged further in.
+     */
+    static Mesh groundSkirts(Mesh m) {
+        float[] p = m.p().clone();
+        float x0 = Float.MAX_VALUE, x1 = -Float.MAX_VALUE, y0 = Float.MAX_VALUE, y1 = -Float.MAX_VALUE;
+        for (int i = 0; i < p.length; i += 3) {
+            x0 = Math.min(x0, p[i]);
+            x1 = Math.max(x1, p[i]);
+            y0 = Math.min(y0, p[i + 1]);
+            y1 = Math.max(y1, p[i + 1]);
+        }
+        for (int i = 0; i < p.length; i += 3) {
+            float edge = Math.min(Math.min(p[i] - x0, x1 - p[i]), Math.min(p[i + 1] - y0, y1 - p[i + 1]));
+            float k = Math.max(0, Math.min(1, edge / NET_SKIRT_M));
+            if (k >= 1) continue;
+            double was = 0.35 + 0.65 * Math.pow(k, 1.3), now = Math.pow(k, 1.1);
+            p[i + 2] = (float) Math.max(0.02, p[i + 2] / was * now);
+        }
+        return new Mesh(p, m.tri(), m.rgb(), m.uv(), m.tex(), m.textures(), null, m.normals(), m.flags(), hull(p));
     }
 
     /** The footprint's convex hull (x y pairs, anticlockwise) and, last, the height: for the shadow. */
@@ -680,8 +710,12 @@ final class Raster3D {
         }
     }
 
-    /** A ghost's blocks: about this size (m) near. */
-    static final double GHOST_BLOCK_M = 0.55;
+    /**
+     * A ghost's blocks: about this size (m) near. Was 0.55; the pilot (2026-11-10): "make the simulation background have
+     * less squares" - a quarter as many, and only the silhouette's rims drawn (each block's own faint outline made a
+     * grid of small squares over every ghost).
+     */
+    static final double GHOST_BLOCK_M = 1.1;
 
     /**
      * A ghost's block (bu, bv of nu x nv; bv 0 at the top): -1 if there is none (the texture clear at its middle, or
@@ -745,13 +779,12 @@ final class Raster3D {
                 int body = keep < 0.08f ? 225 : 165;
                 for (int y = Math.max(0, y0); y <= Math.min(f.h - 1, y1); y++) {
                     int row = y * f.w;
-                    boolean rowRim = y == y0 || y == y1, rowOuter = (y == y0 && up) || (y == y1 && down);
+                    boolean rowOuter = (y == y0 && up) || (y == y1 && down);
                     for (int x = Math.max(0, x0); x <= Math.min(f.w - 1, x1); x++) {
                         int i = row + x;
                         if (iz <= depth[i]) continue;
                         int c = blend(out[i], SimVoid.GHOST, body);
                         if (rowOuter || (x == x0 && left) || (x == x1 && right)) c = blend(c, SimVoid.RIM, 205);
-                        else if (rowRim || x == x0 || x == x1) c = blend(c, SimVoid.RIM, 45);
                         out[i] = c;
                         depth[i] = iz; // what is behind it stays behind (each pixel drawn once: the ghosts nearest first)
                     }
@@ -969,12 +1002,15 @@ final class Raster3D {
         }
     }
 
-    /** The floor's grid: thin lines every GRID_M metres, brighter ones every GRID_MAJOR_M (they reach the horizon). */
-    static final double GRID_M = 2, GRID_MAJOR_M = 8;
+    /**
+     * The floor's grid: thin lines every GRID_M metres, brighter ones every GRID_MAJOR_M (they reach the horizon). Was
+     * 2 and 8; the pilot (2026-11-10): "less squares".
+     */
+    static final double GRID_M = 4, GRID_MAJOR_M = 16;
     /**
      * The grid's lines shifted this far across the scene's frame (2026-11-10): a drone on the floor sits on the frame's
      * axis, and a line under its lens was one streak from the bottom of the picture to the horizon. Now the nearest
-     * line runs 1 m beside it, the nearest bright one 3 m.
+     * line runs 1 m beside it, the nearest bright one 5 m.
      */
     static final double GRID_SHIFT_M = 5;
 
@@ -997,8 +1033,8 @@ final class Raster3D {
             c = VOID_FLOOR[fi];
         }
         if (st == Memory.LAND) return c; // the land as it is
-        float g = Math.max(line(fa, pa, (float) GRID_M, 0.5f, 0.55f), line(fr, pr, (float) GRID_M, 0.5f, 0.55f));
-        g = Math.max(g, Math.max(line(fa, pa, (float) GRID_MAJOR_M, 2.2f, 0.9f), line(fr, pr, (float) GRID_MAJOR_M, 2.2f, 0.9f)));
+        float g = Math.max(line(fa, pa, (float) GRID_M, 1f, 0.55f), line(fr, pr, (float) GRID_M, 1f, 0.55f));
+        g = Math.max(g, Math.max(line(fa, pa, (float) GRID_MAJOR_M, 4.4f, 0.9f), line(fr, pr, (float) GRID_MAJOR_M, 4.4f, 0.9f)));
         g *= 1 - fog * 0.55f;
         return g > 0.004f ? blend(c, SimVoid.GRID, (int) (g * 255)) : c;
     }

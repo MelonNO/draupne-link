@@ -11,12 +11,12 @@ import java.util.Random;
  * glowing light-blue grid lined up with the scene, out to the horizon; above, a white void with a light-blue haze where
  * the floor meets it ({@link Raster3D#ground}). The trees near the action stay real, the others are ghosts of white
  * blocks with lit rims breaking up at the top ({@link Raster3D#ghost}). Cubes and shards drift up from the island's
- * edge and from the ghosts; a faint scan-line shimmer, and every 8-15 s a short glitch. All drawn here, nothing
- * copied: no logos, no text.
+ * edge and from the ghosts. No scan lines and no glitches since 2026-11-10 (the pilot: "remove the scan lines on the
+ * screen in addition to the random glitches"). All drawn here, nothing copied: no logos, no text.
  * <p>
  * What stands still (the void, the floor, the grid, the edge, the ghosts) is part of the picture kept per camera
- * position and of the motion detection's picture alike - it never moves. What moves (the fragments, the shimmer, the
- * glitch) is drawn on the video only, after the scene, so the motion detection sees only what really travels.
+ * position and of the motion detection's picture alike - it never moves. What moves (the fragments) is drawn on the
+ * video only, after the scene, so the motion detection sees only what really travels.
  */
 final class SimVoid {
     private SimVoid() {}
@@ -155,77 +155,6 @@ final class SimVoid {
                     break;
                 }
             }
-        }
-    }
-
-    // ------------------------------------------------------------------ the screen: scan lines, a shimmer, the glitch
-
-    /** A glitch comes once in each of these (ms), somewhere in its first GLITCH_SPREAD_MS: 8-15 s apart. */
-    static final long GLITCH_CYCLE_MS = 11_500, GLITCH_SPREAD_MS = 3_500, GLITCH_MS = 340;
-
-    /** When the glitch of the cycle that holds nowMs starts (ms). */
-    static long glitchAt(long nowMs) {
-        long k = Math.floorDiv(nowMs, GLITCH_CYCLE_MS);
-        return k * GLITCH_CYCLE_MS + (hash((int) k * 31 + 7) & 0x7fffffff) % GLITCH_SPREAD_MS;
-    }
-
-    /**
-     * The video's screen: faint scan lines and a soft band of light sliding down the picture (6 s a pass); in a glitch
-     * (every 8-15 s, a third of a second, changing every 70 ms) the colours split about 7 px apart, three to five
-     * slices of rows slip sideways and a white band flashes across.
-     */
-    static void screen(BufferedImage img, long nowMs) {
-        int w = img.getWidth(), h = img.getHeight();
-        int[] px = Scene.pixels(img);
-        int every = Math.max(2, h / 240);
-        int band = Math.max(4, h / 10);
-        int mid = (int) (Math.floorMod(nowMs, 6000L) * (h + 2 * band) / 6000) - band;
-        for (int y = 0; y < h; y++) {
-            // the scan lines a few percent darker, the band a few percent lighter
-            int dark = y % every == 0 ? 10 : 0;
-            int light = Math.abs(y - mid) < band ? (int) (16 * (1 + Math.cos(Math.PI * (y - mid) / band))) : 0;
-            if (dark == 0 && light == 0) continue;
-            int o = y * w;
-            for (int x = 0; x < w; x++) {
-                int c = px[o + x];
-                int r = c >> 16 & 0xff, g = c >> 8 & 0xff, b = c & 0xff;
-                r = r - (r * dark >> 8) + ((255 - r) * light >> 8);
-                g = g - (g * dark >> 8) + ((255 - g) * light >> 8);
-                b = b - (b * dark >> 8) + ((255 - b) * light >> 8);
-                px[o + x] = r << 16 | g << 8 | b;
-            }
-        }
-        long since = nowMs - glitchAt(nowMs);
-        if (since < 0 || since >= GLITCH_MS) return;
-        Random r = new Random(glitchAt(nowMs) * 31 + since / 70);
-        // the colours split: red from the right, blue from the left
-        int d = Math.max(2, w / 180);
-        int[] line = new int[w];
-        for (int y = 0; y < h; y++) {
-            int o = y * w;
-            System.arraycopy(px, o, line, 0, w);
-            for (int x = 0; x < w; x++) {
-                int rr = line[Math.min(w - 1, x + d)] & 0xff0000, gg = line[x] & 0xff00, bb = line[Math.max(0, x - d)] & 0xff;
-                px[o + x] = rr | gg | bb;
-            }
-        }
-        // slices slip sideways
-        int slices = 3 + r.nextInt(3);
-        for (int k = 0; k < slices; k++) {
-            int y0 = r.nextInt(Math.max(1, h - h / 12)), bh = Math.max(2, h / 90 + r.nextInt(Math.max(1, h / 18)));
-            int shift = (r.nextBoolean() ? 1 : -1) * (w / 70 + r.nextInt(Math.max(1, w / 22)));
-            for (int y = y0; y < Math.min(h, y0 + bh); y++) {
-                int o = y * w;
-                System.arraycopy(px, o, line, 0, w);
-                for (int x = 0; x < w; x++) px[o + x] = line[Math.floorMod(x - shift, w)];
-            }
-        }
-        // a white band flashes
-        int fy = r.nextInt(h), fh = Math.max(2, h / 30);
-        for (int y = Math.max(0, fy - fh); y < Math.min(h, fy + fh); y++) {
-            double k = 0.6 * (1 - Math.abs(y - fy) / (double) fh);
-            int o = y * w;
-            for (int x = 0; x < w; x++) px[o + x] = mix(px[o + x], 0xf4faff, k);
         }
     }
 }

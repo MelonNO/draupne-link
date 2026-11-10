@@ -59,6 +59,15 @@ public final class TourShowcase implements AutoCloseable {
         return drones.get(0);
     }
 
+    /**
+     * Each of the six back in normal mode (2026-11-10, the pilot: "in the tour with the observation mode the virtual
+     * drone 6 is stuck at waiting for picture"): the racer, put in STANDBY a few steps before, refused to be observed -
+     * as a real phone does - so its tile waited for good.
+     */
+    public void wakeAll(String from) {
+        for (VirtualDrone d : drones) if (d.mode() != VirtualDrone.NORMAL) d.requestMode(VirtualDrone.NORMAL, 0, from);
+    }
+
     public List<VirtualDrone> drones() {
         return List.copyOf(drones);
     }

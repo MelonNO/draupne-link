@@ -167,6 +167,7 @@ class CameraTurnTest {
         OsdRenderer tile = new OsdRenderer();
         tile.setObserver(true);
         tile.setMinUnit(ObservationOsd.MIN_UNIT);
+        tile.setScale(ObservationOsd.SCALE);
         Map<OsdElement, Rectangle2D> shown = new EnumMap<>(OsdElement.class);
         g = img.createGraphics();
         tile.paint(g, 0, 0, 640, 360, d, layout, shown);
@@ -178,7 +179,8 @@ class CameraTurnTest {
         assertTrue(main.containsKey(OsdElement.WARNINGS), "the pilot's OSD warns of FAILSAFE: " + main.keySet());
         assertFalse(shown.containsKey(OsdElement.WARNINGS), "FAILSAFE and arming blocks are normal on an idle drone");
         Rectangle2D a = main.get(OsdElement.BATTERY), b = shown.get(OsdElement.BATTERY);
-        assertTrue(b.getHeight() > a.getHeight(), "a small tile keeps its text readable");
+        assertTrue(b.getHeight() < a.getHeight(), "a tile's OSD is scaled down: " + b.getHeight() + " vs " + a.getHeight());
+        assertTrue(b.getHeight() >= a.getHeight() * ObservationOsd.MIN_UNIT / (360 / 720f) * 0.8, "but not below readable");
     }
 
     @Test
@@ -193,6 +195,7 @@ class CameraTurnTest {
             OsdRenderer r = new OsdRenderer();
             r.setObserver(true);
             r.setMinUnit(ObservationOsd.MIN_UNIT);
+            r.setScale(ObservationOsd.SCALE);
             tiles.add(r);
         }
         Runnable all = () -> {

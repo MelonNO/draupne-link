@@ -35,6 +35,7 @@ final class SlideMenu extends JPanel {
     /** Added at the right: the first added sits nearest the MENU button. */
     void addItem(JButton item) {
         items.add(item);
+        item.setFocusable(open);
         add(item);
     }
 
@@ -45,6 +46,9 @@ final class SlideMenu extends JPanel {
     void setOpen(boolean open) {
         if (this.open == open) return;
         this.open = open;
+        // shut, the buttons behind MENU take no keyboard focus (2026-11-10, the pilot: Space in the main window
+        // opened SETUP's menu with MENU shut - the hidden SETUP button had the focus)
+        for (JButton item : items) item.setFocusable(open);
         lastTick = System.currentTimeMillis();
         if (!timer.isRunning()) timer.start();
     }

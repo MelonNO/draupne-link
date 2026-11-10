@@ -2054,6 +2054,9 @@ public class MainWindow extends JFrame {
             return;
         }
         mapIdleUpdatedAt = 0;
+        // full screen each time it pops out (2026-11-10, the pilot: "make the map be default full screen"); the
+        // window's normal size is kept for its restore button
+        w.setExtendedState(w.getExtendedState() | JFrame.MAXIMIZED_BOTH);
         w.setVisible(true);
         w.toFront();
         refreshMap();

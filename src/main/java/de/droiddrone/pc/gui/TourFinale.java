@@ -82,6 +82,12 @@ final class TourFinale implements AutoCloseable {
         return showcaseNames;
     }
 
+    /** The six in normal mode, observable (the OBSERVER steps; the racer was put in STANDBY before). */
+    void wakeShowcase() {
+        TourShowcase s = showcase;
+        if (s != null) s.wakeAll("the tour");
+    }
+
     /** The six gone (the finale's fleet comes next, or the tour is over): off this PC's lists now, their files at the end. */
     void closeShowcase() {
         TourShowcase s = showcase;

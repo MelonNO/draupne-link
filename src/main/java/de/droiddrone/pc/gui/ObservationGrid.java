@@ -345,6 +345,7 @@ final class ObservationGrid extends JPanel {
             this.osdOn = osdOn;
             osdRenderer.setObserver(true);
             osdRenderer.setMinUnit(ObservationOsd.MIN_UNIT);
+            osdRenderer.setScale(ObservationOsd.SCALE);
             setOpaque(true);
             setBackground(Color.BLACK);
             setDoubleBuffered(false);
