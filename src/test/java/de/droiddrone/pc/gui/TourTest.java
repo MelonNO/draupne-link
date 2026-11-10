@@ -104,6 +104,37 @@ class TourTest {
         assertEquals(1, nexts[0], "pressed and gone: the next step at once");
     }
 
+    /**
+     * No room above or below what the step lights (PREVIOUS FLIGHTS' window): the box goes beside it, never over it
+     * (2026-11-10, the pilot: "make it possible so that the pop up is shown below or to the side").
+     */
+    @Test
+    void noRoomAboveOrBelowPutsTheBoxBesideIt() {
+        JLayeredPane layer = window(1920, 1040);
+        JButton flights = onScreen("PREVIOUS FLIGHTS");
+        flights.setBounds(16, 60, 1380, 960);
+        layer.add(flights);
+        Tour.TourNotice n = new Tour.TourNotice(flights, new Tour.Step("PREVIOUS FLIGHTS", "On one timeline.", () -> flights),
+                20, 33, () -> { }, () -> { }, false, null);
+        n.attachForTest(layer, 10_000);
+        assertFalse(n.getBounds().intersects(flights.getBounds()), "beside, not over: " + n.getBounds());
+        assertTrue(n.getX() > flights.getX() + flights.getWidth(), "on its right, where the room is: " + n.getBounds());
+        assertTrue(n.getX() + n.getWidth() <= layer.getWidth(), "inside the window");
+    }
+
+    /** The flights window makes room for the box beside it inside the map window, never under its least size. */
+    @Test
+    void theFlightsWindowMakesRoomForTheBox() {
+        Rectangle owner = new Rectangle(0, 0, 1920, 1040);
+        Rectangle r = Tour.roomBeside(owner, new java.awt.Dimension(1280, 760), new java.awt.Dimension(900, 600), 460);
+        assertTrue(owner.x + owner.width - (r.x + r.width) >= 460 + 12, "room on the right for the box: " + r);
+        assertEquals(1280, r.width, "wide as it was when that fits");
+        Rectangle small = Tour.roomBeside(new Rectangle(0, 0, 1366, 728), new java.awt.Dimension(1280, 728),
+                new java.awt.Dimension(900, 600), 460);
+        assertEquals(900, small.width, "narrowed to make room, not under its least size: " + small);
+        assertTrue(small.x >= 0 && small.y >= 0, "inside the map window: " + small);
+    }
+
     /** A control that counts as on screen, without a window shown (an off-screen control counts as gone). */
     private static JButton onScreen(String text) {
         return new JButton(text) {

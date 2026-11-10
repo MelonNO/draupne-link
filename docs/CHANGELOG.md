@@ -6,6 +6,9 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 
 - **The tour no longer freezes at MOVING AROUND:** a deadlock between the window's title bar and the tour's dimmed layer (the mouse over the title bar while the map relaid itself) froze the whole program.
 - **Tour: MAP TOOLS moves on once pressed**, no NEXT.
+- **Tour: PREVIOUS FLIGHTS' box beside its window**, not over it (the window moves over to make room).
+- **Tour scenes: the BTR finale's world behind the action** - pale sky, grey-blue floor, a grid every 10 m (50 m bright), far glowing outlines - instead of the wall of white blocks.
+- **BTR finale: more round the patrol** - treelines behind and beside the route, a truck under a net with its stores, a sandbagged post with a mast, hedgehogs, barriers and wire, a UAZ behind the drone. Nothing on its road or in front of it in the watching drone's picture.
 
 ## 1.0.59
 

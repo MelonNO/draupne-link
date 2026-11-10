@@ -213,6 +213,94 @@ final class Tour {
     private boolean showcaseTried;
     /** How wide the pilot made the box: kept for the rest of the tour. */
     private final NoticePlace noticePlace = new NoticePlace();
+    /** PREVIOUS FLIGHTS: its window's stand-in in the map window, while the step shows. */
+    private Stand flightsStand;
+
+    /** PREVIOUS FLIGHTS' lit area: the flights window, by its stand-in in the window it is in front of. */
+    private JComponent flightsStand() {
+        Window d = PreviousFlightsDialog.tourWindow();
+        if (d == null) return null;
+        if (flightsStand == null || flightsStand.front != d) {
+            if (flightsStand != null) flightsStand.leave();
+            flightsStand = Stand.over(d);
+        }
+        return flightsStand;
+    }
+
+    /**
+     * Where a window in front of owner goes so the tour's box (boxWidth wide) fits beside it inside owner: at owner's
+     * left, as wide as leaves the room (never under its least size), its height kept, centred up and down.
+     */
+    static Rectangle roomBeside(Rectangle owner, java.awt.Dimension size, java.awt.Dimension least, int boxWidth) {
+        int margin = 16;
+        int w = Math.max(least.width, Math.min(size.width, owner.width - boxWidth - 3 * margin));
+        int h = Math.max(least.height, Math.min(size.height, owner.height - 2 * margin));
+        int x = owner.x + Math.max(0, Math.min(margin, owner.width - w));
+        int y = owner.y + Math.max(0, (owner.height - h) / 2);
+        return new Rectangle(x, y, w, h);
+    }
+
+    /**
+     * Stands in, in its owner's window, for a window in front of it: the same place, nothing drawn, no mouse (the tour
+     * lights it and puts its box beside it, in the owner where there is room). Showing only while that window shows.
+     */
+    static final class Stand extends JComponent {
+        final Window front;
+        private final JLayeredPane layer;
+        private final java.awt.event.ComponentListener follow = new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentMoved(java.awt.event.ComponentEvent e) {
+                follow();
+            }
+
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                follow();
+            }
+        };
+
+        private Stand(Window front, JLayeredPane layer) {
+            this.front = front;
+            this.layer = layer;
+            setOpaque(false);
+        }
+
+        /** For front, in its owner's window; null when it has none with a layered pane. */
+        static Stand over(Window front) {
+            if (!(front.getOwner() instanceof javax.swing.RootPaneContainer owner)) return null;
+            Stand s = new Stand(front, owner.getLayeredPane());
+            s.layer.add(s, JLayeredPane.DEFAULT_LAYER);
+            front.addComponentListener(s.follow);
+            front.getOwner().addComponentListener(s.follow);
+            s.follow();
+            return s;
+        }
+
+        /** Where front lies, in the layer's coordinates. */
+        void follow() {
+            if (!front.isShowing() || !layer.isShowing()) return;
+            Point p = front.getLocationOnScreen();
+            SwingUtilities.convertPointFromScreen(p, layer);
+            setBounds(p.x, p.y, front.getWidth(), front.getHeight());
+        }
+
+        void leave() {
+            front.removeComponentListener(follow);
+            if (front.getOwner() != null) front.getOwner().removeComponentListener(follow);
+            layer.remove(this);
+            layer.repaint();
+        }
+
+        @Override
+        public boolean isShowing() {
+            return front.isShowing() && super.isShowing();
+        }
+
+        @Override
+        public boolean contains(int x, int y) {
+            return false; // never takes the mouse
+        }
+    }
 
     /** @param only the features to show the steps of (the tour of what is new); null for the whole tour */
     private Tour(MainWindow main, java.util.Collection<String> only) {
@@ -346,10 +434,21 @@ final class Tour {
                 () -> main.mapWindow().tourRuler())
                 .extra(() -> main.mapWindow().tourToolsEnd()).transition(group(MapToolsPanel.Group.TOOLS)).live(map)
                 .of(FEATURE_MAP_TOOLS));
+        // the box beside the window, not over it (2026-11-10, the pilot: "the pop up is shown on top of the window, make
+        // it possible so that the pop up is shown below or to the side"): the window moves over to make room, and a
+        // stand-in for it in the map window is what the step lights
         steps.add(new Step("PREVIOUS FLIGHTS", "Each flight's video, track, height, speed, battery and link on one timeline. "
-                + "EXPORT or DELETE.", PreviousFlightsDialog::tourList)
-                .extra(PreviousFlightsDialog::tourTimeline).before(() -> main.mapWindow().tourOpenPreviousFlights())
-                .after(PreviousFlightsDialog::tourClose).of(FEATURE_FLIGHTS));
+                + "EXPORT or DELETE.", this::flightsStand).before(() -> {
+                    main.mapWindow().tourOpenPreviousFlights();
+                    Window d = PreviousFlightsDialog.tourWindow();
+                    if (d != null && d.getOwner() != null) {
+                        d.setBounds(roomBeside(d.getOwner().getBounds(), d.getSize(), d.getMinimumSize(), noticePlace.width));
+                    }
+                }).after(() -> {
+                    PreviousFlightsDialog.tourClose();
+                    if (flightsStand != null) flightsStand.leave();
+                    flightsStand = null;
+                }).of(FEATURE_FLIGHTS));
         steps.add(new Step("DATA", "EXPORT a box: PNG and KML for Google Earth, ATAK / WinTAK and QGIS. IMPORT their KML. "
                 + "DOWNLOAD AREA keeps maps offline. CLEAR ALL empties the map.", () -> main.mapWindow().tourExport())
                 .extra(() -> main.mapWindow().tourDataEnd()).transition(group(MapToolsPanel.Group.DATA)).live(map)
@@ -882,6 +981,8 @@ final class Tour {
         private long shownAt;
         private long nudgeAt = -1;
         private boolean above;
+        /** Beside the control (no room above or below it): no pointer. */
+        private boolean side;
         private long notShowingSince;
         /** NEXT is locked until the control was pressed: a mouse button let go over it (or its button fired). */
         private boolean waitingForPress;
@@ -1262,14 +1363,25 @@ final class Tour {
                 Rectangle a = anchorBounds();
                 if (a == null) return false;
                 x = a.x + a.width / 2 - width / 2;
-                above = a.y + a.height + GAP + h > layer.getHeight() && a.y - GAP - h >= topLimit;
+                boolean below = a.y + a.height + GAP + h <= layer.getHeight();
+                above = !below && a.y - GAP - h >= topLimit;
                 y = above ? a.y - GAP - h : a.y + a.height + GAP;
+                side = false;
+                if (!below && !above) {
+                    // no room above or below: beside it, right or left, not over it (PREVIOUS FLIGHTS' window)
+                    int right = a.x + a.width + GAP, left = a.x - GAP - width;
+                    if (right + width <= layer.getWidth() || left >= 0) {
+                        side = true;
+                        x = right + width <= layer.getWidth() ? right : left;
+                        y = a.y + a.height / 2 - h / 2;
+                    }
+                }
             }
             x = Math.max(0, Math.min(x, layer.getWidth() - width));
             y = Math.max(centred ? 0 : topLimit, Math.min(y, layer.getHeight() - h));
             Rectangle r = new Rectangle(x, y, width, h);
             if (!r.equals(getBounds())) setBounds(r);
-            int top = above || centred ? 0 : POINTER;
+            int top = above || side || centred ? 0 : POINTER;
             int by = top + 2 * PAD + titleHeight() + 6 + lines.size() * lineHeight() + tipHeight() + legendHeight() + 8 - PAD;
             next.setBounds(PAD, by, width - 2 * PAD, 30); // across the box: the exit is the cross top right
             exit.setBounds(width - PAD - CLOSE + 6, top + PAD - 6, CLOSE, CLOSE);
@@ -1307,8 +1419,8 @@ final class Tour {
                 } else {
                     g.translate(0, Math.round((above ? 6 : -6) * (1 - easeIn)));
                 }
-                boolean pointer = !centred;
-                int top = above || !pointer ? 0 : POINTER, boxH = h - (pointer ? POINTER : 0) - 1;
+                boolean pointer = !centred && !side;
+                int top = above || !pointer ? 0 : POINTER, boxH = h - (centred ? 0 : POINTER) - 1;
                 Rectangle a = anchorBounds();
                 int tipX = a == null ? w / 2 : Math.min(Math.max(a.x + a.width / 2 - getX(), PAD + POINTER), w - PAD - POINTER);
                 Path2D box = new Path2D.Float();

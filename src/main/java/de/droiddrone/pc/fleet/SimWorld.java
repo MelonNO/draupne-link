@@ -141,6 +141,12 @@ final class SimWorld {
         }
     }
 
+    /** The far structures alone, over a picture already drawn (the tour's six scenes: the finale's look). */
+    void paintStructures(Graphics2D g, Scene.Camera cam, int w) {
+        float px = Math.max(1f, w / 640f);
+        for (double[] s : structures) structure(g, cam, s, px, DAY);
+    }
+
     /** A far block {north, east, width, depth, height, turn}: its faces filled pale, its edges glowing. */
     private static void structure(Graphics2D g, Scene.Camera cam, double[] s, float px, Palette pal) {
         double c = Math.cos(s[5]), sn = Math.sin(s[5]);

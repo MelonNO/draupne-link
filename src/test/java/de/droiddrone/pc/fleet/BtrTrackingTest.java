@@ -20,12 +20,17 @@ class BtrTrackingTest {
         return Math.max(r, Math.max(g, b)) < 150 && b < g + 10;
     }
 
-    /** The vehicle's true box, 0..1, or null when it is out of the picture. */
-    private static float[] truth(BufferedImage img) {
+    /**
+     * The vehicle's true box, 0..1, or null when it is out of the picture: its colour, changed against the picture
+     * without it (the trees round the patrol are dark too, 2026-11-10).
+     */
+    private static float[] truth(BufferedImage img, BufferedImage without) {
         int x0 = Integer.MAX_VALUE, y0 = Integer.MAX_VALUE, x1 = -1, y1 = -1;
         for (int y = 0; y < img.getHeight(); y++) {
             for (int x = 0; x < img.getWidth(); x++) {
-                if (!vehicle(img.getRGB(x, y))) continue;
+                int p = img.getRGB(x, y), q = without.getRGB(x, y);
+                int d = Math.abs((p >> 16 & 255) - (q >> 16 & 255)) + Math.abs((p >> 8 & 255) - (q >> 8 & 255)) + Math.abs((p & 255) - (q & 255));
+                if (!vehicle(p) || d <= 24) continue;
                 x0 = Math.min(x0, x);
                 y0 = Math.min(y0, y);
                 x1 = Math.max(x1, x);
@@ -54,6 +59,8 @@ class BtrTrackingTest {
         s.driveFrom(t0 + drive);
         Scene.View v = new Scene.View(-back, 0, alt, 0, 0, 0);
         BufferedImage img = new BufferedImage(320, 180, BufferedImage.TYPE_INT_RGB);
+        BufferedImage without = new BufferedImage(320, 180, BufferedImage.TYPE_INT_RGB);
+        s.render(without, v, t0, true, false); // nothing else moves in the detection's picture
         MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
         int seen = 0, boxed = 0, on = 0;
         long lockedAt = -1;
@@ -62,7 +69,7 @@ class BtrTrackingTest {
             int[] size = new int[2];
             byte[] y = Scene.luma(Scene.pixels(img), 320, 180, 320, size);
             MotionDetector.Result r = d.process(y, size[0], size[1], null, null, t0 + t);
-            float[] tr = truth(img);
+            float[] tr = truth(img, without);
             if (t < drive) {
                 assertTrue(r.detections.isEmpty(), "nothing before the vehicle drives in (" + t + " ms)");
                 continue;

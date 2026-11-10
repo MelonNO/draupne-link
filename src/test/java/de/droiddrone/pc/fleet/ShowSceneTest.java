@@ -47,11 +47,13 @@ class ShowSceneTest {
             new SimWorld(0, 0).paint(empty.createGraphics(), new Scene.Camera(v, W, H), v, W, H, 1000, true, false);
             BufferedImage a = picture(s, v, 1000, true);
             assertTrue(changed(empty, a) > W * H / 4, k + ": its land and models are in the picture (" + changed(empty, a) + " px)");
-            // through a minute: most half seconds something moves (a convoy comes and goes, a patrol halts)
+            // through a minute: most half seconds something moves (a convoy comes and goes, a patrol halts). 40 px: the
+            // mortar's crew alone changes about 50 against the finale's smooth sky (2026-11-10: 60 was set when smoke
+            // drifted over the ghost blocks' edges)
             int moving = 0, tries = 12;
             for (int i = 0; i < tries; i++) {
                 long t = 1000 + i * 5000L;
-                if (changed(picture(s, v, t, true), picture(s, v, t + 500, true)) > 60) moving++;
+                if (changed(picture(s, v, t, true), picture(s, v, t + 500, true)) > 40) moving++;
             }
             assertTrue(moving >= tries / 2, k + ": something moved in " + moving + " of " + tries + " half seconds");
             if (dir != null) {
@@ -289,5 +291,26 @@ class ShowSceneTest {
             if (g > 40 && g < 215) between++;
         }
         assertTrue(between > 30, "stripes read between pixels near the middle: " + between + " of 120 in between");
+    }
+
+    /**
+     * Behind the action the BTR finale's world, not a wall of white ghost blocks (2026-11-10, the pilot: the "simulation
+     * wall" "more similar to the btr simulation finale"): the top of the picture its pale grey-blue sky - not white, not
+     * light blue.
+     */
+    @Test
+    void behindTheActionTheFinalesWorldNotAWallOfBlocks() {
+        for (ShowScene.Kind k : new ShowScene.Kind[]{ShowScene.Kind.PATROL, ShowScene.Kind.HIDE, ShowScene.Kind.CONVOY}) {
+            BufferedImage img = picture(new ShowScene(k, 0, 0, 30, 0), new Scene.View(0, 0, 0, 0, 0, 30), 12_000, true);
+            int sky = 0, all = 0;
+            for (int y = 0; y < H / 3; y++) {
+                for (int x = 0; x < W; x++) {
+                    int p = img.getRGB(x, y), r = p >> 16 & 255, b = p & 255;
+                    all++;
+                    if (r <= 250 && b - r <= 18) sky++;
+                }
+            }
+            assertTrue(sky > all * 0.9, k + ": the finale's sky above the action, " + sky + " of " + all);
+        }
     }
 }

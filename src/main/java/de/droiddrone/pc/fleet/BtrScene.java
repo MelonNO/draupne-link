@@ -196,6 +196,8 @@ final class BtrScene implements Scene.World {
     private final SimWorld env;
     /** The road it drives, every ROUTE_STEP_M along it: north and east. */
     private final double[] routeN, routeE;
+    /** What stands round its patrol (2026-11-10, the pilot: "more stuff around in it, but keep it realistic military"). */
+    private final BtrSurroundings around;
     /** Its drive, every TICK_S from the start: the distance along the road and the speed then. */
     private final float[] driveS, driveV;
 
@@ -236,6 +238,7 @@ final class BtrScene implements Scene.World {
         double[][] road = road(way);
         routeN = road[0];
         routeE = road[1];
+        around = new BtrSurroundings(north, east, headingDeg, routeN, routeE);
         float[][] d = drive(way, road[2]);
         driveS = d[0];
         driveV = d[1];
@@ -586,16 +589,31 @@ final class BtrScene implements Scene.World {
 
     @Override
     public void render(BufferedImage img, Scene.View v, long nowMs, boolean analysis) {
+        render(img, v, nowMs, analysis, true);
+    }
+
+    /** As render; without the vehicle (and its shadow) for tests: what the picture is without it. */
+    void render(BufferedImage img, Scene.View v, long nowMs, boolean analysis, boolean withVehicle) {
         int w = img.getWidth(), h = img.getHeight();
         Scene.Camera cam = new Scene.Camera(v, w, h);
+        double[] q = pose(nowMs);
         Graphics2D g = img.createGraphics();
         try {
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             env.paint(g, cam, v, w, h, nowMs, analysis, false);
+            if (withVehicle) shadow(g, cam, q);
         } finally {
             g.dispose();
         }
-        renderVehicle(img, v, nowMs, false);
+        // what stands round it, through a depth buffer the vehicle then respects (it drives behind the trees)
+        Raster3D.Frame f = Raster3D.frame(img);
+        around.draw(f, cam, SimWorld.haze(false));
+        if (withVehicle) vehicle(f.px, w, h, cam, v, q, 1f, SimWorld.haze(false), f.depth);
+    }
+
+    /** What stands round its patrol (tests). */
+    BtrSurroundings surroundings() {
+        return around;
     }
 
     /**
@@ -613,7 +631,7 @@ final class BtrScene implements Scene.World {
         } finally {
             g.dispose();
         }
-        vehicle(Scene.pixels(img), w, h, cam, v, q, night ? 0.32f : 1f, SimWorld.haze(night));
+        vehicle(Scene.pixels(img), w, h, cam, v, q, night ? 0.32f : 1f, SimWorld.haze(night), null);
         if (night) headlights(img, cam, q);
     }
 
@@ -665,7 +683,8 @@ final class BtrScene implements Scene.World {
     }
 
     /** The vehicle, textured and lit, into the picture's pixels through a depth buffer. */
-    private void vehicle(int[] px, int w, int h, Scene.Camera cam, Scene.View v, double[] q, float lightScale, int haze) {
+    /** @param depth what is drawn already (Raster3D's: 1 / distance, 0 = nothing), in front of which it is hidden; or null */
+    private void vehicle(int[] px, int w, int h, Scene.Camera cam, Scene.View v, double[] q, float lightScale, int haze, float[] depth) {
         Buffers b = buffers.get();
         int nv = m.u().length;
         if (b.w != w || b.h != h) {
@@ -683,7 +702,8 @@ final class BtrScene implements Scene.World {
         // quick out: the whole vehicle behind the camera or far off the picture
         double[] centre = cam.cam(q[0], q[1], 1.2);
         if (centre[2] < -6) return;
-        Arrays.fill(b.z, Float.MAX_VALUE);
+        if (depth == null) Arrays.fill(b.z, Float.MAX_VALUE);
+        else for (int i = 0; i < b.z.length; i++) b.z[i] = depth[i] > 0 ? 1 / depth[i] : Float.MAX_VALUE;
         double hd = Math.toRadians(q[2]), c = Math.cos(hd), s = Math.sin(hd);
         float[] p = m.p();
         double spin = q[3];

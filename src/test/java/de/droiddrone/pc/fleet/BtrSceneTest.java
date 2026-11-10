@@ -25,9 +25,21 @@ class BtrSceneTest {
         return Math.max(r, Math.max(g, b)) < 150 && b < g + 10;
     }
 
-    private static int count(BufferedImage img) {
+    /**
+     * The vehicle's pixels: its colour, and changed against the same picture without it (the trees round the patrol
+     * are dark too, 2026-11-10).
+     */
+    private static int count(BtrScene s, Scene.View v, long t, BufferedImage img) {
+        BufferedImage without = new BufferedImage(img.getWidth(), img.getHeight(), BufferedImage.TYPE_INT_RGB);
+        s.render(without, v, t, false, false);
         int n = 0;
-        for (int y = 0; y < img.getHeight(); y++) for (int x = 0; x < img.getWidth(); x++) if (vehicle(img.getRGB(x, y))) n++;
+        for (int y = 0; y < img.getHeight(); y++) {
+            for (int x = 0; x < img.getWidth(); x++) {
+                int p = img.getRGB(x, y), q = without.getRGB(x, y);
+                int d = Math.abs((p >> 16 & 255) - (q >> 16 & 255)) + Math.abs((p >> 8 & 255) - (q >> 8 & 255)) + Math.abs((p & 255) - (q & 255));
+                if (vehicle(p) && d > 24) n++;
+            }
+        }
         return n;
     }
 
@@ -51,11 +63,13 @@ class BtrSceneTest {
         BufferedImage img = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB);
         s.render(img, v, t0 - 1000, false);
         shot(img, "btr-waiting.png");
-        assertTrue(count(img) < 30, "waiting out of the picture: " + count(img));
+        int waiting = count(s, v, t0 - 1000, img);
+        assertTrue(waiting < 30, "waiting out of the picture: " + waiting);
         for (long t : new long[]{9000, 15000, 24000, 36000}) {
             s.render(img, v, t0 + t, false);
             shot(img, "btr-video-" + t + ".png");
-            assertTrue(count(img) > 250, "the vehicle at " + t + " ms: " + count(img) + " pixels");
+            int n = count(s, v, t0 + t, img);
+            assertTrue(n > 250, "the vehicle at " + t + " ms: " + n + " pixels");
         }
         int pale = 0;
         for (int x = 0; x < 1280; x += 8) if ((img.getRGB(x, 20) & 0xff) > 200) pale++;
@@ -211,5 +225,34 @@ class BtrSceneTest {
             for (float x : l) e += x * x;
         }
         return e;
+    }
+
+    /**
+     * Realistic military things round the patrol (2026-11-10, the pilot: "more stuff around in it, but keep it
+     * realistic military"): treelines and models, none on the vehicle's road.
+     */
+    @Test
+    void thingsStandRoundThePatrolNoneOnItsRoad() {
+        BtrScene s = new BtrScene(0, 0, 0, 0);
+        java.util.List<BtrSurroundings.Prop> props = s.surroundings().props();
+        long models = props.stream().filter(p -> (p.mesh().flags() & Raster3D.CARD) == 0).count();
+        assertTrue(props.size() > 100, "treelines and models: " + props.size());
+        assertTrue(models > 20, "vehicles, nets, obstacles, stores: " + models);
+        double nearest = Double.MAX_VALUE;
+        for (long t = 0; t < 30 * 60_000; t += 500) {
+            double[] q = s.pose(t);
+            for (BtrSurroundings.Prop p : props) nearest = Math.min(nearest, Math.hypot(p.n() - q[0], p.e() - q[1]));
+        }
+        assertTrue(nearest >= BtrSurroundings.ROAD_CLEAR_M - 2.5, "nothing on its road: the nearest " + nearest + " m");
+    }
+
+    /** In the watching drone's picture nothing above knee height stands in front of the route: the vehicle is never hidden. */
+    @Test
+    void nothingInThePictureHidesTheRoute() {
+        BtrScene s = new BtrScene(0, 0, 0, 0); // looking north: ahead = north, right = east
+        for (BtrSurroundings.Prop p : s.surroundings().props()) {
+            boolean inFront = p.n() > 0 && p.n() < 120 && Math.abs(p.e()) < p.n() * 1.1;
+            if (inFront) assertTrue(p.mesh().height() * p.scale() <= 0.4, "low in front of the route: " + p);
+        }
     }
 }

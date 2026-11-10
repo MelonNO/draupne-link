@@ -10,11 +10,12 @@ import java.util.Random;
  * tactical army related. Make everything in a realistic style"): what each one's camera sees, in front of where it
  * stands - a field, tracks, treelines and a far forest, textured models lit by a low sun, their shadows - in a
  * simulated memory ({@link SimVoid}, 2026-11-10, the pilot: "push it much further"; "less grass", then "reintroduce
- * the grass"): the real land an island round the action and back to the drone, breaking into tiles at its edge, on a
- * white floor with a glowing grid under a white void; only the trees
- * right at the action real, the treelines behind it white ghosts of blocks, as in the convoy's (2026-11-10, the
- * pilot: every scene's background like that one); fragments drifting up (no scan lines or glitches since 2026-11-10,
- * the pilot), camouflage nets pegged to the ground ({@link Raster3D#groundSkirts}). Seen as a drone sees
+ * the grass"): the real land an island round the action and back to the drone, breaking into tiles at its edge, on
+ * the BTR finale's floor - grey-blue, its grid every 10 m, a pale sky, far structures with glowing edges
+ * ({@link SimWorld}; 2026-11-10, the pilot: the "simulation wall" "more similar to the btr simulation finale" - the
+ * treelines away from the action were a wall of white ghost blocks, now they are gone); only the trees right at the
+ * action real; fragments drifting up (no scan lines or glitches since 2026-11-10, the pilot), camouflage nets pegged
+ * to the ground ({@link Raster3D#groundSkirts}). Seen as a drone sees
  * it (2026-11-10, the pilot: it looked like a CCTV camera, not a drone): set down on the grass BACK_M back, its lens
  * just over the ground - the near grass out of focus, blades in front of it, the wide lens bending the picture
  * ({@link DroneLens}):
@@ -48,11 +49,11 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     /** What never moves (drawn once a camera position), and the ground's tracks. */
     private final List<Put> statics = new ArrayList<>();
     private final Raster3D.GroundMap ground;
-    /** The trees and bushes away from the action, drawn as the memory's ghosts of them (after everything solid). */
-    private final List<Ghost> ghosts = new ArrayList<>();
+    /** The far structures round the scene, as the BTR finale's ({@link SimWorld}). */
+    private final SimWorld far;
     /** The island of real land round the action on the memory's floor. */
     private final Raster3D.Memory memory;
-    /** The fragments drifting up from the island's edge and the ghosts ({@link SimVoid#fragments}). */
+    /** The fragments drifting up from the island's edge ({@link SimVoid#fragments}). */
     private final double[][] fragments;
 
     ShowScene(Kind kind, double droneN, double droneE, double headingDeg) {
@@ -86,29 +87,20 @@ final class ShowScene implements Scene.World, Scene.Sounding {
         }
         ground = groundMap(tracks);
         List<double[]> action = action();
-        List<double[]> edge = new ArrayList<>(), tops = new ArrayList<>(), real = new ArrayList<>();
-        // the trees and bushes away from the action become ghosts, breaking up more the further they are from it; only
-        // the ones right at it stay real (2026-11-10, the pilot: every scene's background like the convoy's - the
-        // treelines behind the patrol and the hide were real and dark, the memory hardly showed)
+        List<double[]> edge = new ArrayList<>(), real = new ArrayList<>();
+        // only the trees and bushes right at the action stay; the treelines away from it are gone: the floor and the
+        // far structures behind, as the BTR finale's (2026-11-10, the pilot: the "simulation wall" of ghost blocks
+        // "more similar to the btr simulation finale")
         for (int i = statics.size() - 1; i >= 0; i--) {
             Put p = statics.get(i);
             if ((p.mesh().flags() & Raster3D.CARD) == 0) continue;
-            double d = nearest(action, p.ahead(), p.right());
-            if (d < realTreesM) {
-                real.add(new double[]{p.ahead(), p.right()});
-                continue;
-            }
-            statics.remove(i);
-            float gone = (float) (0.15 + 0.5 * Math.min(1, (d - ISLAND_M) / 50));
-            ghosts.add(new Ghost(p, SimVoid.hash((int) Math.round(p.ahead() * 10) * 92821 + (int) Math.round(p.right() * 10)), gone));
-            tops.add(new double[]{p.ahead(), p.right(), p.mesh().height() * p.scale()});
+            if (nearest(action, p.ahead(), p.right()) < realTreesM) real.add(new double[]{p.ahead(), p.right()});
+            else statics.remove(i);
         }
         memory = island(action, real, edge);
-        fragments = SimVoid.fragments(4700 + kind.ordinal(), edge, tops);
+        fragments = SimVoid.fragments(4700 + kind.ordinal(), edge, List.of());
+        far = new SimWorld(originN, originE);
     }
-
-    /** A tree or bush drawn as a ghost: its pattern, how much of its top is gone (0..1). */
-    private record Ghost(Put put, int seed, float gone) {}
 
     /** The real land reaches this far (m) from the action, then breaks up into the floor (4 for an hour: the pilot, then "reintroduce the grass"). */
     static final double ISLAND_M = 13;
@@ -264,18 +256,18 @@ final class ShowScene implements Scene.World, Scene.Sounding {
         } else {
             SimVoid.sky(f.px, w, h, cam);
             Raster3D.ground(f, cam, Raster3D.groundTexture("ground-grass"), Raster3D.groundTexture("ground-dirt"), ground, memory);
+            // the far structures on the floor (hundreds of metres off: behind everything drawn after them)
+            java.awt.Graphics2D g = img.createGraphics();
+            try {
+                g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+                far.paintStructures(g, cam, w);
+            } finally {
+                g.dispose();
+            }
             // nearest first: what is hidden behind them fails the depth test before its texture is read
             List<Put> near = new ArrayList<>(statics);
             near.sort((x, y) -> Double.compare(camDist(cam, x), camDist(cam, y)));
             draw(f, cam, near, List.of());
-            // the ghosts, half see-through to the void and the land: after everything solid, the nearest first
-            List<Ghost> ghostsNear = new ArrayList<>(ghosts);
-            ghostsNear.sort((x, y) -> Double.compare(camDist(cam, x.put()), camDist(cam, y.put())));
-            for (Ghost g : ghostsNear) {
-                Put p = g.put();
-                double[] q = at(p.ahead(), p.right());
-                Raster3D.ghost(f, cam, p.mesh(), q[0], q[1], p.up(), p.scale(), g.seed(), g.gone());
-            }
             // sitting on the ground: the grass near the lens out of focus, and blades right in front of it (sinking
             // away as the drone lifts off)
             if (drone.alt() < 0.05) {

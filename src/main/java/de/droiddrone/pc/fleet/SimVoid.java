@@ -7,11 +7,11 @@ import java.util.Random;
 /**
  * The tour's six scenes' surroundings (2026-11-10, the pilot: "make the realistic scenes be in an Animus style
  * environment", then "push it much further"): the realistic land, models and people are an island in a reconstructed
- * memory. Round the action the real ground; at its edge it breaks into light-blue tiles; beyond, a white floor with a
- * glowing light-blue grid lined up with the scene, out to the horizon; above, a white void with a light-blue haze where
- * the floor meets it ({@link Raster3D#ground}). The trees near the action stay real, the others are ghosts of white
- * blocks with lit rims breaking up at the top ({@link Raster3D#ghost}). Cubes and shards drift up from the island's
- * edge and from the ghosts. No scan lines and no glitches since 2026-11-10 (the pilot: "remove the scan lines on the
+ * memory. Round the action the real ground; at its edge it breaks into tiles; beyond, the BTR finale's floor
+ * (2026-11-10, the pilot: "more similar to the btr simulation finale" - it was white, light blue and a wall of ghost
+ * blocks): grey-blue with its grid lined up with the scene, out to the horizon; above, a pale sky with the haze where
+ * the floor meets it ({@link Raster3D#ground}), and the finale's far structures ({@link SimWorld}). The trees near the
+ * action stay real, the others are gone. Cubes and shards drift up from the island's edge. No scan lines and no glitches since 2026-11-10 (the pilot: "remove the scan lines on the
  * screen in addition to the random glitches"). All drawn here, nothing copied: no logos, no text.
  * <p>
  * What stands still (the void, the floor, the grid, the edge, the ghosts) is part of the picture kept per camera
@@ -21,10 +21,13 @@ import java.util.Random;
 final class SimVoid {
     private SimVoid() {}
 
-    /** The void above (white), the haze where the floor meets it (light blue), the floor near (white, a little grey). */
-    static final int VOID = 0xfdfeff, HORIZON = 0xdfedf8, FLOOR = 0xf1f4f7;
-    /** The grid's lines; an edge tile's face and its lit rim; a ghost's blocks. */
-    static final int GRID = 0x3fa6ec, TILE = 0xcbe7fa, RIM = 0x55b5f2, GHOST = 0xdcedfa;
+    /**
+     * The void above, the haze where the floor meets it, the floor near: the BTR finale's ({@link SimWorld}'s day
+     * palette, 2026-11-10, the pilot: "make it more similar to the btr simulation finale" - was white and light blue).
+     */
+    static final int VOID = 0xeef2f6, HORIZON = 0xdde4ec, FLOOR = 0xc7d0d9;
+    /** The grid's lines (the finale's); an edge tile's face and its lit rim (the finale's glowing edge); a ghost's blocks. */
+    static final int GRID = 0x5f7f9f, TILE = 0xd3dce5, RIM = 0x8fd8ff, GHOST = 0xdcedfa;
 
     /** The void's colour by sin(elevation), every 1/256 from -0.25 to 0.75. */
     private static final int[] SKY = new int[256];

@@ -466,6 +466,12 @@ final class Raster3D {
         float[] cx = new float[0], cy, cz, sx, sy, lf, lb, wx, wy, wz, nx, ny, nz;
         /** A ghost's blocks ({@link #ghost}). */
         float[] blocks = new float[256];
+        /**
+         * How things fade with distance (every half metre) and into what: the memory's (FOG, the void's haze) unless
+         * a scene sets its own for this picture (the BTR finale: far less, into its haze). Reset by begin.
+         */
+        float[] fog = FOG;
+        int haze = SimVoid.HORIZON;
 
         Frame(int w, int h) {
             this.w = w;
@@ -477,6 +483,8 @@ final class Raster3D {
         void begin(BufferedImage img) {
             px = ((DataBufferInt) img.getRaster().getDataBuffer()).getData();
             Arrays.fill(depth, 0f);
+            fog = FOG;
+            haze = SimVoid.HORIZON;
         }
 
         void room(int nv) {
@@ -613,7 +621,7 @@ final class Raster3D {
         }
         int[] tri = m.tri(), rgb = m.rgb();
         boolean textured = m.uv() != null;
-        int haze = SimVoid.HORIZON;
+        int haze = f.haze;
         for (int t = 0, q = 0; t < tri.length; t += 3, q++) {
             int a = tri[t], b = tri[t + 1], c = tri[t + 2];
             if (f.cz[a] < NEAR_M || f.cz[b] < NEAR_M || f.cz[c] < NEAR_M) continue;
@@ -643,7 +651,7 @@ final class Raster3D {
                 lb = f.lb[b];
                 lc = f.lb[c];
             }
-            float fog = (float) fogOf((f.cz[a] + f.cz[b] + f.cz[c]) / 3);
+            float fog = (float) fogOf(f.fog, (f.cz[a] + f.cz[b] + f.cz[c]) / 3);
             if (textured) {
                 fillTextured(f, m, q, a, b, c, la, lb, lc, fog, haze);
             } else {
@@ -682,9 +690,9 @@ final class Raster3D {
         int[] tex = tx0.level()[level];
         int tw = tx0.w()[level], th = tx0.h()[level];
         float iz = (float) (1 / mid[2]);
-        float fog = (float) fogOf(mid[2]);
+        float fog = (float) fogOf(f.fog, mid[2]);
         float light = (AMBIENT + DIRECT * 0.55f) * (1 - fog);
-        int haze = SimVoid.HORIZON;
+        int haze = f.haze;
         float hr = ((haze >> 16) & 0xff) * fog, hg = ((haze >> 8) & 0xff) * fog, hb = (haze & 0xff) * fog;
         // texture coordinates as linear functions of the pixel: v from the top (0) to the foot (1), u across
         double a2 = al * al, h2 = 2 * half * half;
@@ -1003,14 +1011,15 @@ final class Raster3D {
     }
 
     /**
-     * The floor's grid: thin lines every GRID_M metres, brighter ones every GRID_MAJOR_M (they reach the horizon). Was
-     * 2 and 8; the pilot (2026-11-10): "less squares".
+     * The floor's grid: faint lines every GRID_M metres, stronger ones every GRID_MAJOR_M, as the BTR finale's
+     * ({@link SimWorld}). Was 2 and 8, then 4 and 16 (the pilot, 2026-11-10: "less squares"), now 10 and 50 (the pilot:
+     * "more similar to the btr simulation finale").
      */
-    static final double GRID_M = 4, GRID_MAJOR_M = 16;
+    static final double GRID_M = 10, GRID_MAJOR_M = 50;
     /**
      * The grid's lines shifted this far across the scene's frame (2026-11-10): a drone on the floor sits on the frame's
      * axis, and a line under its lens was one streak from the bottom of the picture to the horizon. Now the nearest
-     * line runs 1 m beside it, the nearest bright one 5 m.
+     * line runs 5 m beside it.
      */
     static final double GRID_SHIFT_M = 5;
 
@@ -1033,8 +1042,8 @@ final class Raster3D {
             c = VOID_FLOOR[fi];
         }
         if (st == Memory.LAND) return c; // the land as it is
-        float g = Math.max(line(fa, pa, (float) GRID_M, 1f, 0.55f), line(fr, pr, (float) GRID_M, 1f, 0.55f));
-        g = Math.max(g, Math.max(line(fa, pa, (float) GRID_MAJOR_M, 4.4f, 0.9f), line(fr, pr, (float) GRID_MAJOR_M, 4.4f, 0.9f)));
+        float g = Math.max(line(fa, pa, (float) GRID_M, 2.5f, 0.3f), line(fr, pr, (float) GRID_M, 2.5f, 0.3f));
+        g = Math.max(g, Math.max(line(fa, pa, (float) GRID_MAJOR_M, 12f, 0.45f), line(fr, pr, (float) GRID_MAJOR_M, 12f, 0.45f)));
         g *= 1 - fog * 0.55f;
         return g > 0.004f ? blend(c, SimVoid.GRID, (int) (g * 255)) : c;
     }
@@ -1112,8 +1121,19 @@ final class Raster3D {
     }
 
     private static double fogOf(double dist) {
+        return fogOf(FOG, dist);
+    }
+
+    private static double fogOf(float[] table, double dist) {
         int i = (int) (dist * 2);
-        return FOG[i < 0 ? 0 : Math.min(FOG.length - 1, i)];
+        return table[i < 0 ? 0 : Math.min(table.length - 1, i)];
+    }
+
+    /** A fog every half metre to 2 km: 1 - e^(-d / k) (the BTR finale's, as its vehicle's). */
+    static float[] fogTable(double k) {
+        float[] t = new float[4096];
+        for (int i = 0; i < t.length; i++) t[i] = (float) (1 - Math.exp(-i * 0.5 / k));
+        return t;
     }
 
     private static int blend(int a, int b, int w) {
@@ -1145,7 +1165,7 @@ final class Raster3D {
             pts[(k + i) * 2] = wn + cn;
             pts[(k + i) * 2 + 1] = we + ce;
         }
-        groundPolygon(f, cam, convex(pts), SHADOW * (1 - fogOf(cam.cam(n, e, 0)[2])));
+        groundPolygon(f, cam, convex(pts), SHADOW * (1 - fogOf(f.fog, cam.cam(n, e, 0)[2])));
     }
 
     /** A soft round shadow on the ground (radius metres, how dark 0..1): something in the air, a tree's crown. */
@@ -1159,7 +1179,7 @@ final class Raster3D {
         double bx = cam.cx + cam.f * sideC[0] / sideC[2] - sx, by = cam.cy + cam.f * sideC[1] / sideC[2] - sy;
         double rx = Math.max(Math.abs(ax), Math.abs(bx)), ry = Math.max(Math.abs(ay), Math.abs(by));
         if (rx < 1 || ry < 0.5) return;
-        dark *= 1 - fogOf(c[2]); // none in the white far away
+        dark *= 1 - fogOf(f.fog, c[2]); // none in the haze far away
         if (dark < 0.01) return;
         int x0 = Math.max(0, (int) (sx - rx)), x1 = Math.min(f.w - 1, (int) (sx + rx));
         int y0 = Math.max(0, (int) (sy - ry)), y1 = Math.min(f.h - 1, (int) (sy + ry));
