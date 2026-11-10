@@ -1126,6 +1126,13 @@ public class ControlLink {
             return (owFlags & de.droiddrone.common.OverwatchProtocol.HELLO_OVERWATCH) != 0;
         }
 
+        /** pc.47: an overwatching phone that says its motion detection gets no pictures (an older one says nothing). */
+        public boolean watchesBlind() {
+            int f = owFlags;
+            return (f & de.droiddrone.common.OverwatchProtocol.HELLO_OVERWATCH) != 0 && (f & de.droiddrone.common.OverwatchProtocol.HELLO_PICTURES) != 0
+                    && (f & de.droiddrone.common.OverwatchProtocol.HELLO_ANALYSING) == 0;
+        }
+
         /**
          * The hello's bytes: [0x6F][battery][charging][nextCheckMin][mV u16], then (pc.36) [owFlags][floorReason], then
          * (pc.40) the fleet status block (FleetProtocol.Status; null without it).

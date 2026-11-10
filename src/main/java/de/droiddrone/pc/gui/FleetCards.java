@@ -33,10 +33,30 @@ final class FleetCards {
      * @param fcTempC       the flight controller's core temperature, {@link #NO_TEMP}
      * @param queued        "DEEP SLEEP" and so on while a mode waits for the phone, else null
      * @param note          why its buttons can't be used now (short), else null
+     * @param queuedAgoMs   since that mode was queued (2026-11-10, the pilot: "inform the user for how long since that
+     *                      command was cued"), -1 none or unknown
      */
     record Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
                 boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
-                int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note) {}
+                int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note, long queuedAgoMs) {
+        Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
+             boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
+             int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note) {
+            this(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs, signal,
+                    gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, -1);
+        }
+
+        /** The queued mode's sign, or null. */
+        MapView.Kind queuedKind() {
+            if (queued == null) return null;
+            return switch (queued) {
+                case "STANDBY" -> MapView.Kind.STANDBY;
+                case "DEEP SLEEP" -> MapView.Kind.ASLEEP;
+                case "OVERWATCH" -> MapView.Kind.OVERWATCH;
+                default -> null;
+            };
+        }
+    }
 
     /** A card's badge: the map's sign and its word. */
     record Badge(MapView.Kind kind, String text) {}
@@ -54,10 +74,10 @@ final class FleetCards {
             if (overdueMs > 0) return new Badge(MapView.Kind.UNKNOWN, "UNKNOWN");
             return overwatch ? new Badge(MapView.Kind.OVERWATCH, "OVERWATCH") : new Badge(MapView.Kind.ASLEEP, "ASLEEP");
         }
-        if (standby) return new Badge(heardRecently ? MapView.Kind.ASLEEP : MapView.Kind.UNKNOWN, heardRecently ? "STANDBY" : "UNKNOWN");
+        if (standby) return new Badge(heardRecently ? MapView.Kind.STANDBY : MapView.Kind.UNKNOWN, heardRecently ? "STANDBY" : "UNKNOWN");
         if (saidMode >= 1 && saidMode <= 3 && saidAgeMs >= 0 && saidAgeMs <= 30_000) {
             return switch (saidMode) {
-                case 1 -> new Badge(MapView.Kind.ASLEEP, "STANDBY");
+                case 1 -> new Badge(MapView.Kind.STANDBY, "STANDBY");
                 case 2 -> new Badge(MapView.Kind.ASLEEP, "ASLEEP");
                 default -> new Badge(MapView.Kind.OVERWATCH, "OVERWATCH");
             };
@@ -67,18 +87,22 @@ final class FleetCards {
     }
 
     /**
-     * A mode queued for the phone shows at once (1.0.56, the pilot: "OVERWATCH ... just puts the phone in the question
-     * mark"): its sign and word, until the phone's own word follows. Not over this PC's link, a lost or crashed drone.
-     * @param queuedMode the queued mode (ControlLink.POWER_*), -1 none
+     * A queued mode never changes the sign (2026-11-10, the pilot: "The modes should only be as follows when confirmed
+     * changed"; 1.0.56 showed it at once): it goes beside it, an arrow to its own sign ({@link MapView#paintQueued}).
+     * Shown for a phone that can still take it: not over this PC's link, nor for a lost or crashed drone.
      */
-    static Badge withQueued(Badge b, int queuedMode) {
-        if (queuedMode < 1 || queuedMode > 3) return b;
-        if (b.kind() == MapView.Kind.LOST || b.kind() == MapView.Kind.CRASHED || "CONNECTED".equals(b.text())) return b;
-        return switch (queuedMode) {
-            case 1 -> new Badge(MapView.Kind.ASLEEP, "STANDBY");
-            case 2 -> new Badge(MapView.Kind.ASLEEP, "ASLEEP");
-            default -> new Badge(MapView.Kind.OVERWATCH, "OVERWATCH");
-        };
+    static boolean showsQueued(Badge b) {
+        return b.kind() != MapView.Kind.LOST && b.kind() != MapView.Kind.CRASHED && !"CONNECTED".equals(b.text());
+    }
+
+    /** "now", "40s", "12m", "3h": since a mode was queued; "" unknown. */
+    static String queuedAgo(long ms) {
+        if (ms < 0) return "";
+        long s = ms / 1000;
+        if (s < 5) return "now";
+        if (s < 60) return s + "s";
+        if (s < 3600) return s / 60 + "m";
+        return s / 3600 + "h";
     }
 
     /** "0:20 ago", "12 min ago", "3 h ago", or "-". */

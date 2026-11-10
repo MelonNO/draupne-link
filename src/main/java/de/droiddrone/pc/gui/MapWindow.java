@@ -299,6 +299,7 @@ final class MapWindow extends JFrame {
             @Override
             public void picked(String phone) {
                 showDrone(phone);
+                if (main != null) main.pickedOnMap(phone); // and in the PHONE list, not connected (2026-11-10)
             }
 
             @Override
@@ -990,6 +991,17 @@ final class MapWindow extends JFrame {
 
     void setFleet(java.util.List<FleetCards.Card> cards) {
         fleetPanel.setCards(cards);
+    }
+
+    /** DEMO mode's strip in FLEET MANAGEMENT (null: none); FLEET slides out to show it. */
+    void setDemoStrip(javax.swing.JComponent strip) {
+        fleetPanel.setDemoStrip(strip);
+    }
+
+    /** The phone picked elsewhere (the PHONE list, the map): its FLEET row selected too (2026-11-10, the pilot). */
+    void selectFleet(String phone) {
+        String row = fleetPanel.rowName(phone);
+        if (row != null && !row.equals(fleetPanel.selected())) fleetPanel.select(row);
     }
 
     private javax.swing.JComponent fleetPanelComponent() {

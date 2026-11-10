@@ -535,6 +535,15 @@ public class InternalCamera implements Camera{
             // pc.35: the phone won't take the motion detection's stream beside the video: the video without it, now
             // and from here on (a USB camera or another phone may still do)
             List<Surface> targets = sessionTargets;
+            Surface extra = extraTarget;
+            if (sessionAnalysis != null && targets != null && camera != null && extra != null && targets.contains(extra)) {
+                // pc.47: an overwatch event's session (video, recording and the detection's picture) refused: this event
+                // records without the picture, but it is not refused for good - the watching after it needs it, and its
+                // own session (the picture alone) worked (was: never again, so a phone saw its first event only)
+                log("Overwatch: the camera refused the detection's picture beside the recording: this event records without it");
+                createSession(targets, null);
+                return;
+            }
             if (sessionAnalysis != null && targets != null && camera != null) {
                 log("The camera refused the motion detection's picture: the video goes on without it");
                 analysisRefusedFor = config.getCameraId();

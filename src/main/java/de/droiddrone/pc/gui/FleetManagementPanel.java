@@ -31,10 +31,13 @@ import java.util.Map;
 /**
  * FLEET MANAGEMENT (1.0.52, the pilot; made compact the same day: "it must be possible to view 10 phones without
  * scrolling"): a thin FLEET tab at the map window's right edge; pressed, a list slides out - one slim row per phone:
- * its sign (the mode), its name, a queued mode in yellow, the drone's volts per cell and the phone's battery with thin
- * gauges, when it was heard, and a ring running down to its next check-in. A click selects a row; one strip at the
- * bottom shows that phone's details (signal, GPS, temperatures, events, why not) and the buttons that queue STANDBY,
- * DEEP SLEEP or OVERWATCH without connecting (FleetManager: sent when the phone next listens). Rows shrink to
+ * its sign (the mode, as confirmed), its name, a queued mode as a yellow arrow to its sign with how long ago it was
+ * queued, the drone's volts per cell and the phone's battery with thin gauges, when it was heard, and a ring running
+ * down to its next check-in. A click selects a row; one strip at the bottom shows that phone's details (signal, GPS,
+ * temperatures, events, why not) and its modes - PILOTED, STANDBY, OVERWATCH, DEEP SLEEP, the one it is in with grey
+ * text (pressed: it shakes, not possible), a queued one yellow (pressed again: dropped) - then CLIPS and how often it
+ * checks in, a list (2026-11-10, the pilot's layout). Not connected the modes are queued (FleetManager: sent when the
+ * phone next listens); the phone this PC flies takes them as the LINK card's buttons do. Rows shrink to
  * {@link #MIN_ROW} before the list scrolls. The cards come once a second from the main window ({@link #setCards});
  * painting them is all this does on the Swing thread.
  */
@@ -91,13 +94,14 @@ final class FleetManagementPanel extends JPanel {
     private final Map<String, Integer> intervals = new HashMap<>();
     private final Map<String, Integer> overwatchIntervals = new HashMap<>();
     private final Detail detail = new Detail();
+    private final JButton fly = button("PILOTED", "Connect and fly it (a sleeping one at its next check)");
     private final JButton standby = button("STANDBY", "Camera off, back in about 2 s at CONNECT");
-    private final JButton sleep = button("DEEP SLEEP", "Sleeps; checks in at CHECK EVERY");
     private final JButton watch = button("OVERWATCH", "Sleeps with the camera watching for motion");
-    private final JButton every = button("", "How often it checks in. Changes a sleeping phone at its next check-in");
+    private final JButton sleep = button("DEEP SLEEP", "Sleeps; checks in at CHECK EVERY");
+    /** How often it checks in: a list, not a button (2026-11-10, the pilot). */
+    private final javax.swing.JComboBox<String> every = new javax.swing.JComboBox<>();
     private final JButton clips = button("CLIPS", "Its overwatch clips");
-    private final JButton cancel = button("CANCEL", "Drop the queued mode");
-    private final JButton fly = button("PILOT UAV", "Connect and fly it (a sleeping one at its next check)");
+    private boolean fillingEvery;
     private final Timer slide = new Timer(15, e -> tick());
     private String selected;
     private boolean open;
@@ -120,6 +124,7 @@ final class FleetManagementPanel extends JPanel {
         scroll.getViewport().setScrollMode(javax.swing.JViewport.SIMPLE_SCROLL_MODE);
         scroll.getViewport().setBackground(Theme.PANEL_2);
         JPanel head = new JPanel(new BorderLayout());
+        this.head = head;
         head.setBackground(Theme.PANEL_2);
         head.setBorder(BorderFactory.createEmptyBorder(8, 8, 0, 8));
         head.add(new JComponent() {
@@ -155,36 +160,40 @@ final class FleetManagementPanel extends JPanel {
         }, BorderLayout.CENTER);
         empty = Theme.label("No phones yet.", Theme.font(java.awt.Font.PLAIN, 12f), Theme.MUTED);
         empty.setBorder(BorderFactory.createEmptyBorder(6, 2, 6, 2));
-        // the modes and EVERY over PILOT UAV (1.0.52, the pilot: "connect to the drone from the fleet management tab"),
-        // CLIPS and CANCEL
+        // 2026-11-10 (the pilot): four modes at the top - PILOTED, STANDBY, OVERWATCH, DEEP SLEEP - then CLIPS and the
+        // check-in list
         JPanel modes = new JPanel(new GridLayout(1, 4, 4, 0));
         modes.setOpaque(false);
+        modes.add(fly);
         modes.add(standby);
-        modes.add(sleep);
         modes.add(watch);
-        modes.add(every);
-        JPanel more = new JPanel(new GridLayout(1, 3, 4, 0));
+        modes.add(sleep);
+        JPanel more = new JPanel(new GridLayout(1, 2, 4, 0));
         more.setOpaque(false);
-        more.add(fly);
         more.add(clips);
-        more.add(cancel);
+        TacticalCombo.install(every);
+        for (int i : INTERVALS) every.addItem(everyText(i));
+        every.setFont(Theme.headingFont(10f));
+        every.setToolTipText("How often it checks in. Changes a sleeping phone at its next check-in");
+        every.setFocusable(false);
+        more.add(every);
         JPanel buttons = new JPanel(new GridLayout(2, 1, 0, 3));
         buttons.setOpaque(false);
         buttons.add(modes);
         buttons.add(more);
-        fly.addActionListener(e -> {
-            if (selected != null) actions.connect(selected);
-        });
-        standby.addActionListener(e -> mode(ControlLink.POWER_STANDBY));
-        sleep.addActionListener(e -> mode(ControlLink.POWER_DEEP_SLEEP));
-        watch.addActionListener(e -> mode(ControlLink.POWER_OVERWATCH));
+        fly.addActionListener(e -> pressed(fly, -1));
+        standby.addActionListener(e -> pressed(standby, ControlLink.POWER_STANDBY));
+        sleep.addActionListener(e -> pressed(sleep, ControlLink.POWER_DEEP_SLEEP));
+        watch.addActionListener(e -> pressed(watch, ControlLink.POWER_OVERWATCH));
         clips.addActionListener(e -> {
-            if (selected != null) actions.clips(selected);
+            if (selected == null) return;
+            FleetCards.Card c = selectedCard();
+            if (c != null && c.events() == 0) NotPossible.say(clips, "NO CLIPS", "No overwatch clips of " + selected + " yet.");
+            else actions.clips(selected);
         });
-        cancel.addActionListener(e -> {
-            if (selected != null) actions.cancel(selected);
+        every.addActionListener(e -> {
+            if (!fillingEvery) chooseInterval(every.getSelectedIndex());
         });
-        every.addActionListener(e -> nextInterval());
         JPanel strip = new JPanel(new BorderLayout(0, 4));
         strip.setBackground(Theme.PANEL);
         strip.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, Theme.LINE),
@@ -219,6 +228,23 @@ final class FleetManagementPanel extends JPanel {
 
     boolean isOpen() {
         return open;
+    }
+
+    private JPanel head;
+    private JComponent demoStrip;
+
+    /** DEMO mode's strip at the top of the list (its scenario's button), or null to take it away. */
+    void setDemoStrip(JComponent strip) {
+        if (strip == demoStrip) return;
+        if (demoStrip != null) head.remove(demoStrip);
+        demoStrip = strip;
+        if (strip != null) head.add(strip, BorderLayout.NORTH);
+        head.revalidate();
+        head.repaint();
+    }
+
+    JComponent demoStrip() {
+        return demoStrip;
     }
 
     /** The selected phone's details and buttons (the tour points at it). */
@@ -311,6 +337,12 @@ final class FleetManagementPanel extends JPanel {
         return selected;
     }
 
+    /** The row's own name for a phone, any case; null when it has none. */
+    String rowName(String phone) {
+        for (String n : views.keySet()) if (n.equalsIgnoreCase(phone)) return n;
+        return null;
+    }
+
     void select(String phone) {
         if (!views.containsKey(phone)) return;
         selected = phone;
@@ -342,16 +374,53 @@ final class FleetManagementPanel extends JPanel {
         return SleepCheck.isAlways(intervalMin) ? "CONSTANT" : "EVERY " + intervalMin + "M";
     }
 
-    private void mode(int mode) {
-        if (selected != null) actions.mode(selected, mode, interval(mode));
+    /**
+     * A mode button pressed (mode -1: PILOTED). The one it is in: not possible, it shakes and says so. The queued one:
+     * dropped. Else asked for (queued, or at once for the phone this PC flies).
+     */
+    private void pressed(JButton b, int mode) {
+        if (selected == null) return;
+        FleetCards.Card c = selectedCard();
+        if (c == null) return;
+        if (c.note() != null) {
+            NotPossible.say(b, "NOT NOW", c.note());
+            return;
+        }
+        if (isCurrent(c, mode)) {
+            String word = mode < 0 ? "PILOTED" : PowerController.modeWord(mode);
+            NotPossible.say(b, "ALREADY " + word, selected + " is " + (mode < 0 ? "flown from this PC" : "in " + word) + " already.");
+            return;
+        }
+        if (mode >= 0 && isQueued(c, mode)) {
+            actions.cancel(selected);
+            return;
+        }
+        if (mode < 0) actions.connect(selected);
+        else actions.mode(selected, mode, interval(mode));
     }
 
-    private void nextInterval() {
-        if (selected == null) return;
+    /** The mode it is in, as confirmed: PILOTED (-1) while this PC flies it, else its badge's. */
+    static boolean isCurrent(FleetCards.Card c, int mode) {
+        if (c == null) return false;
+        return switch (mode) {
+            case -1 -> "CONNECTED".equals(c.badge());
+            case ControlLink.POWER_STANDBY -> "STANDBY".equals(c.badge());
+            case ControlLink.POWER_DEEP_SLEEP -> "ASLEEP".equals(c.badge()) || "DEEP SLEEP".equals(c.badge());
+            case ControlLink.POWER_OVERWATCH -> "OVERWATCH".equals(c.badge());
+            default -> false;
+        };
+    }
+
+    static boolean isQueued(FleetCards.Card c, int mode) {
+        return c != null && c.queued() != null && c.queued().equals(de.droiddrone.pc.FleetManager.modeName(mode));
+    }
+
+    /** The check-in list's choice (the index into INTERVALS). */
+    private void chooseInterval(int index) {
+        if (selected == null || index < 0 || index >= INTERVALS.length) return;
         int mode = everyMode();
-        int now = interval(mode), i = 0;
-        while (i < INTERVALS.length && INTERVALS[i] != now) i++;
-        int next = INTERVALS[(i + 1) % INTERVALS.length];
+        int next = INTERVALS[index];
+        if (next == interval(mode)) return;
         (mode == ControlLink.POWER_OVERWATCH ? overwatchIntervals : intervals).put(selected, next);
         refreshStrip();
         FleetCards.Card c = selectedCard();
@@ -361,29 +430,45 @@ final class FleetManagementPanel extends JPanel {
         }
     }
 
-    /** The strip follows the selected phone: its buttons usable or not, its mode (or the queued one) lit. */
+    /**
+     * The strip follows the selected phone: the mode it is in with grey text, a queued one yellow, the others red; every
+     * button stays pressable (a press that can't do anything shakes, 2026-11-10).
+     */
     private void refreshStrip() {
         FleetCards.Card c = selectedCard();
-        every.setText(everyText(interval(everyMode())));
-        boolean usable = c != null && c.note() == null;
-        String now = c == null ? null : c.queued() != null ? c.queued() : c.badge();
-        mark(standby, usable, "STANDBY".equals(now));
-        mark(sleep, usable, "DEEP SLEEP".equals(now) || "ASLEEP".equals(now));
-        mark(watch, usable, "OVERWATCH".equals(now));
-        every.setEnabled(usable);
-        clips.setEnabled(c != null && c.events() > 0);
-        fly.setEnabled(c != null && !"CONNECTED".equals(c.badge()));
-        fly.setBackground(Theme.BG);
-        fly.setForeground(Theme.ACCENT);
-        cancel.setEnabled(c != null && c.queued() != null);
+        int at = 0, now = interval(everyMode());
+        while (at < INTERVALS.length - 1 && INTERVALS[at] != now) at++;
+        if (every.getSelectedIndex() != at) {
+            fillingEvery = true;
+            try {
+                every.setSelectedIndex(at);
+            } finally {
+                fillingEvery = false;
+            }
+        }
+        every.setEnabled(c != null && c.note() == null);
+        mark(fly, c, -1);
+        mark(standby, c, ControlLink.POWER_STANDBY);
+        mark(watch, c, ControlLink.POWER_OVERWATCH);
+        mark(sleep, c, ControlLink.POWER_DEEP_SLEEP);
+        clips.setEnabled(c != null);
+        clips.setForeground(c != null && c.events() > 0 ? Theme.ACCENT : Theme.MUTED);
         detail.repaint();
     }
 
-    /** The mode it is in (or is queued for) stands out: lit red, the others plain. */
-    private static void mark(JButton b, boolean enabled, boolean current) {
-        b.setEnabled(enabled);
-        b.setBackground(current ? Theme.ACCENT : Theme.BG);
-        b.setForeground(current ? Theme.BG : Theme.ACCENT);
+    /** A mode button's look: grey text for the mode it is in, yellow for a queued one, red for the rest. */
+    private static void mark(JButton b, FleetCards.Card c, int mode) {
+        b.setEnabled(c != null);
+        b.setBackground(Theme.BG);
+        boolean current = isCurrent(c, mode), queued = mode >= 0 && isQueued(c, mode);
+        b.setForeground(current ? Theme.MUTED : queued ? Theme.WARN : Theme.ACCENT);
+        b.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(current ? Theme.LINE : queued ? Theme.WARN : Theme.ACCENT, 1),
+                BorderFactory.createEmptyBorder(2, 1, 2, 1)));
+        String tip = current ? "It is in this mode" : queued ? "Queued: press again to drop it" : null;
+        if (tip != null) b.setToolTipText(tip);
+        else b.setToolTipText(mode < 0 ? "Connect and fly it (a sleeping one at its next check)"
+                : mode == ControlLink.POWER_STANDBY ? "Camera off, back in about 2 s at CONNECT"
+                : mode == ControlLink.POWER_OVERWATCH ? "Sleeps with the camera watching for motion" : "Sleeps; checks in at CHECK EVERY");
     }
 
     private static JButton button(String text, String tip) {
@@ -398,14 +483,7 @@ final class FleetManagementPanel extends JPanel {
     }
 
     static Color kindColor(MapView.Kind k) {
-        return switch (k) {
-            case ACTIVE -> new Color(0x4fc3f7);
-            case ASLEEP -> new Color(0x9fa8da);
-            case OVERWATCH -> new Color(0x4db6ac);
-            case LOST -> new Color(0xef5350);
-            case UNKNOWN -> Theme.MUTED;
-            case CRASHED -> MapView.CRASHED_COLOR;
-        };
+        return MapView.kindColor(k); // the map's (2026-11-10: one set of signs and colours)
     }
 
     // ------------------------------------------------------------------ the list
@@ -565,8 +643,9 @@ final class FleetManagementPanel extends JPanel {
             g.setColor(Theme.WARN);
             g.drawString("V", NAME_X + fm.stringWidth(name) + 3, base);
         }
-        // the queued mode: a yellow arrow and its short word
-        if (c.queued() != null) {
+        // the queued mode: a yellow arrow to its sign, and how long ago it was queued (2026-11-10, the pilot)
+        MapView.Kind q = c.queuedKind();
+        if (q != null) {
             g.setColor(Theme.WARN);
             java.awt.geom.Path2D arrow = new java.awt.geom.Path2D.Double();
             arrow.moveTo(QUEUED_X, cy - 4);
@@ -574,8 +653,14 @@ final class FleetManagementPanel extends JPanel {
             arrow.lineTo(QUEUED_X, cy + 4);
             arrow.closePath();
             g.fill(arrow);
+            AffineTransform before = g.getTransform();
+            g.translate(QUEUED_X + 13, cy);
+            g.scale(s * 0.75, s * 0.75);
+            MapView.paintNetSign(g, q, kindColor(q), 0, 0);
+            g.setTransform(before);
             g.setFont(Theme.headingFont(8f));
-            g.drawString(shortMode(c.queued()), QUEUED_X + 9, cy + g.getFontMetrics().getAscent() / 2 - 1);
+            g.setColor(Theme.WARN);
+            g.drawString(FleetCards.queuedAgo(c.queuedAgoMs()), QUEUED_X + 20, cy + g.getFontMetrics().getAscent() / 2 - 1);
         }
         // the drone's volts per cell and the phone's battery: a number over a thin gauge
         g.setFont(Theme.headingFont(10f));
@@ -700,7 +785,7 @@ final class FleetManagementPanel extends JPanel {
         g.drawString(c.badge(), x, fm.getAscent());
         x += bf.stringWidth(c.badge()) + 10;
         String right = c.note() != null ? c.note().toUpperCase(Locale.ROOT)
-                : c.queued() != null ? "QUEUED: " + c.queued()
+                : c.queued() != null ? "QUEUED: " + c.queued() + (c.queuedAgoMs() >= 0 ? " " + FleetCards.ago(c.queuedAgoMs()).toUpperCase(Locale.ROOT) : "")
                 : c.nextCheckMs() == FleetCards.LISTENING ? "LISTENING"
                 : c.nextCheckMs() >= 0 ? "NEXT CHECK " + FleetCards.countdown(c.nextCheckMs()) : "";
         right = fit(right, bf, w - x);

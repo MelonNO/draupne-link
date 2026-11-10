@@ -159,10 +159,13 @@ public class MainActivity extends Activity {
         bWake.setText(R.string.dd_power_wake);
         PowerMode.request(PowerMode.NORMAL, 0, "WAKE button");
     };
-    private TextView tvPowerMode, tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery;
+    private TextView tvPowerMode, tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery, tvSilent;
     /** pc.28: Data Saver, and the radios before flying - checked here, not listed in the PC's guide any more. */
     private TextView tvDataSaver, tvRadios;
     private long checksAt;
+
+    /** pc.47: the service starts this soon after the app opens - under the boot animation's black, before its pieces fly. */
+    static final long BOOT_START_MS = 300;
 
     @Override
     protected void onCreate(Bundle savedInstanceState){
@@ -245,6 +248,9 @@ public class MainActivity extends Activity {
         tvPowerExact.setOnClickListener(v -> askExactAlarms());
         tvPowerBattery = findViewById(R.id.tvPowerBattery);
         tvPowerBattery.setOnClickListener(v -> askNoBatteryOptimisation());
+        // pc.47: the phone silent while the app works - Android asks for Do Not Disturb access first
+        tvSilent = findViewById(R.id.tvSilent);
+        tvSilent.setOnClickListener(v -> openSetting(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS, false));
         tvDataSaver = findViewById(R.id.tvDataSaver);
         tvDataSaver.setOnClickListener(v -> openSetting(android.provider.Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS, true));
         tvRadios = findViewById(R.id.tvRadios);
@@ -302,10 +308,13 @@ public class MainActivity extends Activity {
         tvVersion.setText(getResources().getString(R.string.version, MainActivity.versionName));
         if (!DDService.isRunning){ // pc.28: the phone always listens for the PC once the app is open
             // DRAUPNE Link: on the UI thread (it updates the screen), and only with the permissions the service needs
-            // - without them its camera / microphone start fails on Android 14
+            // - without them its camera / microphone start fails on Android 14. pc.47 (the pilot: "The boot animation
+            // ... jumps after it is finished"): at 0.3 s, not 3 s - the running service adds the power row and changes
+            // the status lines, and at 3 s that moved the cards just as the animation handed over to them; now it
+            // happens under the black, before the mark's pieces fly to the cards (BootRevealView, from 1.06 s)
             new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(() -> {
                 if (!isFinishing() && !DDService.isRunning && checkPermissions()) startStopService();
-            }, 3000);
+            }, BOOT_START_MS);
         }
         handleUsbAttached(getIntent()); // opened by the flight controller being plugged in
     }
@@ -375,6 +384,9 @@ public class MainActivity extends Activity {
         tvPowerAdmin.setVisibility(admin ? View.GONE : View.VISIBLE);
         tvPowerExact.setVisibility(PowerMode.canExactAlarms(this) ? View.GONE : View.VISIBLE);
         tvPowerBattery.setVisibility(PowerMode.ignoresBatteryOptimisation(this) ? View.GONE : View.VISIBLE);
+        boolean silentAllowed = Silent.allowed(this);
+        tvSilent.setVisibility(silentAllowed ? View.GONE : View.VISIBLE);
+        if (silentAllowed && DDService.isRunning) Silent.on(this); // allowed just now (back from the setting)
         updateChecks();
     }
 

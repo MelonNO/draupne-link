@@ -88,6 +88,7 @@ final class MirrorCodec {
                 out.writeUTF(s(c.queued()));
                 out.writeUTF(s(c.note()));
             }
+            for (FleetCards.Card c : list) out.writeLong(c.queuedAgoMs()); // 2026-11-10: after the list, for older readers
         });
     }
 
@@ -114,6 +115,14 @@ final class MirrorCodec {
                 out.add(new FleetCards.Card(name, virtual, kind, badge, cell, cellAge, pct, charging, next, interval, heard, signal,
                         fix, sats, events, lastEvent, phoneTemp, fcTemp, n(queued), n(note)));
             }
+            if (in.available() >= 8L * n) { // a newer pilot PC: since each mode was queued
+                for (int i = 0; i < n; i++) {
+                    FleetCards.Card c = out.get(i);
+                    out.set(i, new FleetCards.Card(c.name(), c.virtual(), c.kind(), c.badge(), c.cellVolts(), c.cellAgeMs(), c.phonePercent(),
+                            c.charging(), c.nextCheckMs(), c.intervalMin(), c.heardAgoMs(), c.signal(), c.gpsFix(), c.sats(), c.events(),
+                            c.lastEventWall(), c.phoneTempDeci(), c.fcTempC(), c.queued(), c.note(), in.readLong()));
+                }
+            }
             return out;
         });
     }
@@ -133,6 +142,8 @@ final class MirrorCodec {
                 out.writeBoolean(d.flown());
                 out.writeUTF(s(d.pilot()));
             }
+            // 2026-11-10: each one's queued mode after the list (255 none), for older readers
+            for (MapView.NetDrone d : list) out.writeByte(d.queued() == null ? 255 : d.queued().ordinal());
         });
     }
 
@@ -148,6 +159,13 @@ final class MirrorCodec {
                 boolean flown = in.readBoolean();
                 String pilot = in.readUTF();
                 out.add(new MapView.NetDrone(name, lat, lon, state, kind, flown, n(pilot)));
+            }
+            if (in.available() >= n) { // a newer pilot PC: the queued modes
+                for (int i = 0; i < n; i++) {
+                    int q = in.readUnsignedByte();
+                    MapView.NetDrone was = out.get(i);
+                    if (q != 255) out.set(i, new MapView.NetDrone(was.name(), was.lat(), was.lon(), was.state(), was.kind(), was.flown(), was.pilot(), kind(q)));
+                }
             }
             return out;
         });

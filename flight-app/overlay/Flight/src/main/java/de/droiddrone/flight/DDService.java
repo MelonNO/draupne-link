@@ -123,6 +123,7 @@ public class DDService extends Service {
         goForeground(true);
         acquireWakeLock();
         running = this;
+        Silent.on(this); // pc.47: no rings or buzzing on the drone's phone while it works
 
         if (cameraManager == null) cameraManager = new CameraManager(this, MainActivity.config);
         if (audioSource == null) audioSource = new AudioSource(this);
@@ -228,6 +229,7 @@ public class DDService extends Service {
         Overwatch.shutdown(); // pc.36: the camera, the event's recorder, the overwatch socket
         PowerMode.stop(); // no alarm left behind; the mode is normal for the next start
         PhoneLocation.stop();
+        Silent.off(this); // pc.47: the phone's own ringer mode back
         closeAll();
         releaseWakeLock();
         mainHandler.removeCallbacksAndMessages(null);

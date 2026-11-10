@@ -185,6 +185,11 @@ final class MotionWatch {
     private static int sensitivitySet; // the telemetry thread's own
     private static DetectionAreas areasSet; // as sensitivitySet
 
+    /** pc.47: the detection runs and had a picture within the last ms (overwatch's hello says so to the PC). */
+    static boolean analysing(long ms) {
+        return active && System.currentTimeMillis() - lastFrameAt < ms;
+    }
+
     /** A picture is wanted now: analysing, the last one done, the time come. Cheap: the camera's threads ask it per frame. */
     static boolean wantFrame() {
         return active && !busy.get() && System.currentTimeMillis() - takenAt >= FRAME_EVERY_MS;

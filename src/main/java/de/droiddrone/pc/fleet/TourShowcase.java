@@ -24,10 +24,13 @@ public final class TourShowcase implements AutoCloseable {
 
     private final Fleet fleet;
     private final List<VirtualDrone> drones;
+    /** Its own fleet (closed with it), or a shared one (DEMO mode: only its drones go). */
+    private final boolean ownsFleet;
 
-    private TourShowcase(Fleet fleet, List<VirtualDrone> drones) {
+    private TourShowcase(Fleet fleet, List<VirtualDrone> drones, boolean ownsFleet) {
         this.fleet = fleet;
         this.drones = drones;
+        this.ownsFleet = ownsFleet;
     }
 
     /**
@@ -38,18 +41,35 @@ public final class TourShowcase implements AutoCloseable {
     public static TourShowcase start(PcConfig config, Path announceFile, Consumer<String> log) throws IOException {
         Fleet fleet = new Fleet(config, announceFile, log);
         try {
-            double[] launch = Coordinates.parse(FleetLayout.LAUNCH);
-            List<VirtualDrone> drones = new ArrayList<>();
+            TourShowcase s = new TourShowcase(fleet, addSix(fleet), true);
+            fleet.startHeartbeat();
+            return s;
+        } catch (IOException | RuntimeException e) {
+            fleet.close();
+            throw e;
+        }
+    }
+
+    /** The six in a fleet that runs already (DEMO mode's, with the other demo drones): closing takes only these. */
+    public static TourShowcase startIn(Fleet fleet) throws IOException {
+        List<VirtualDrone> drones = addSix(fleet);
+        fleet.announce();
+        return new TourShowcase(fleet, drones, false);
+    }
+
+    private static List<VirtualDrone> addSix(Fleet fleet) throws IOException {
+        double[] launch = Coordinates.parse(FleetLayout.LAUNCH);
+        List<VirtualDrone> drones = new ArrayList<>();
+        try {
             for (ShowScene.Kind k : SCENES) {
                 VirtualDrone d = fleet.addAtLaunch(fleet.freeName(), launch[0], launch[1]);
                 d.showScene(new ShowScene(k, d.fc.northM(), d.fc.eastM(), d.fc.headingDeg()));
                 d.setBeeperless(true);
                 drones.add(d);
             }
-            fleet.startHeartbeat();
-            return new TourShowcase(fleet, drones);
+            return drones;
         } catch (IOException | RuntimeException e) {
-            fleet.close();
+            for (VirtualDrone d : drones) fleet.remove(d);
             throw e;
         }
     }
@@ -85,6 +105,7 @@ public final class TourShowcase implements AutoCloseable {
 
     @Override
     public void close() {
-        fleet.close();
+        if (ownsFleet) fleet.close();
+        else for (VirtualDrone d : drones) fleet.remove(d);
     }
 }

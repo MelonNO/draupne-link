@@ -204,6 +204,18 @@
                 android:textSize="14sp"
                 android:visibility="gone" />
 
+            <!-- pc.47: the phone silent while the app works (Do Not Disturb access) -->
+            <TextView
+                android:id="@+id/tvSilent"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="@string/dd_silent_line"
+                android:textColor="@color/dd_warn"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
             <!-- pc.28: the phone checks what the setup guide used to list - Data Saver, and before flying the radios -->
             <TextView
                 android:id="@+id/tvDataSaver"

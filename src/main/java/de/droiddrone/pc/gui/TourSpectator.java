@@ -34,10 +34,44 @@ final class TourSpectator implements AutoCloseable {
     private final List<VirtualDrone> watched = new ArrayList<>();
     private volatile boolean started, failed, observing;
 
+    /** What its log lines start with ("Tour: ", DEMO mode's "Demo: "). */
+    private final String prefix;
+
     /** @param tourFleet the tour's own virtual fleet while it runs (its drones' announcement), or null */
     TourSpectator(MainWindow main, Supplier<Fleet> tourFleet) {
+        this(main, tourFleet, "Tour: ");
+    }
+
+    TourSpectator(MainWindow main, Supplier<Fleet> tourFleet, String prefix) {
         this.main = main;
         this.tourFleet = tourFleet;
+        this.prefix = prefix;
+    }
+
+    /** The virtual pilot PC's name once chosen, else null. */
+    String pilotName() {
+        return pilotName;
+    }
+
+    /** It observes now (switched by {@link #observe}, back by {@link #flyAgain}). */
+    boolean observing() {
+        return observing;
+    }
+
+    /** The virtual pilot lands its observation and flies again (DEMO mode's card; a thread: the take-off takes a moment). */
+    void flyAgain() {
+        VirtualPilotPc p = pilot;
+        if (p == null || !observing) return;
+        observing = false;
+        Thread t = new Thread(() -> {
+            try {
+                p.fly(Fleet.DEFAULT_LAT + 0.0008, Fleet.DEFAULT_LON + 0.0012);
+            } catch (Exception e) {
+                SwingUtilities.invokeLater(() -> main.logLine(prefix + "the virtual pilot can't fly - " + e.getMessage()));
+            }
+        }, "tourPilotPcFly");
+        t.setDaemon(true);
+        t.start();
     }
 
     /** The steps, in order, for the end of the tour. */
@@ -62,17 +96,17 @@ final class TourSpectator implements AutoCloseable {
     }
 
     /** The virtual pilot PC up and flying (a thread of its own: binding and take-off take a moment). */
-    private void start() {
+    void start() {
         if (started) return;
         started = true;
         Fleet f = tourFleet == null ? null : tourFleet.get();
         if (f == null) {
             if (!VirtualFleet.announcedNow().isEmpty()) { // the pilot's own fleet: not written over
                 failed = true;
-                main.logLine("Tour: spectator steps skipped - close the virtual fleet first.");
+                main.logLine(prefix + "spectator steps skipped - close the virtual fleet first.");
                 return;
             }
-            ownFleet = new Fleet(main.config(), VirtualFleet.file(), line -> SwingUtilities.invokeLater(() -> main.logLine("Tour: " + line)));
+            ownFleet = new Fleet(main.config(), VirtualFleet.file(), line -> SwingUtilities.invokeLater(() -> main.logLine(prefix + line)));
             ownFleet.startHeartbeat();
             f = ownFleet;
         }
@@ -82,14 +116,14 @@ final class TourSpectator implements AutoCloseable {
         String name = main.names().firstFree(Names.Kind.PC, own == null ? List.of() : List.of(own));
         if (name == null) {
             failed = true;
-            main.logLine("Tour: spectator steps skipped - no free PC name.");
+            main.logLine(prefix + "spectator steps skipped - no free PC name.");
             return;
         }
         pilotName = name;
         Thread t = new Thread(() -> {
             try {
                 double lat = Fleet.DEFAULT_LAT, lon = Fleet.DEFAULT_LON;
-                VirtualPilotPc p = new VirtualPilotPc(use, main.config(), name, line -> SwingUtilities.invokeLater(() -> main.logLine("Tour: " + line)));
+                VirtualPilotPc p = new VirtualPilotPc(use, main.config(), name, line -> SwingUtilities.invokeLater(() -> main.logLine(prefix + line)));
                 pilot = p;
                 for (int i = 0; i < OBSERVED; i++) {
                     double[] at = use.nextPlace(lat, lon);
@@ -103,7 +137,7 @@ final class TourSpectator implements AutoCloseable {
                 SwingUtilities.invokeLater(() -> main.tourHost().begin(names)); // gone with the tour's clean-up
             } catch (Exception e) {
                 failed = true;
-                SwingUtilities.invokeLater(() -> main.logLine("Tour: no virtual pilot PC - " + e.getMessage()));
+                SwingUtilities.invokeLater(() -> main.logLine(prefix + "no virtual pilot PC - " + e.getMessage()));
             }
         }, "tourPilotPc");
         t.setDaemon(true);
@@ -111,7 +145,7 @@ final class TourSpectator implements AutoCloseable {
     }
 
     /** The virtual pilot lands and observes its drones (a thread: the landing takes a few seconds). */
-    private void observe() {
+    void observe() {
         VirtualPilotPc p = pilot;
         if (p == null || observing) return;
         observing = true;
@@ -120,7 +154,7 @@ final class TourSpectator implements AutoCloseable {
             try {
                 p.observe(list);
             } catch (Exception e) {
-                SwingUtilities.invokeLater(() -> main.logLine("Tour: the virtual pilot can't observe - " + e.getMessage()));
+                SwingUtilities.invokeLater(() -> main.logLine(prefix + "the virtual pilot can't observe - " + e.getMessage()));
             }
         }, "tourPilotPcObserve");
         t.setDaemon(true);
@@ -128,7 +162,7 @@ final class TourSpectator implements AutoCloseable {
     }
 
     /** This PC shows the pilot PC's observation (its tiles in the video area). */
-    private boolean mirroredObserving() {
+    boolean mirroredObserving() {
         MirrorController m = main.mirror();
         Mirror.Mode mode = m == null ? null : m.mirroredMode();
         return mode != null && mode.mode() == Mirror.OBSERVER;

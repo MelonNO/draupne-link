@@ -341,6 +341,8 @@ public class MainWindow extends JFrame {
     private final GlyphButton popOutButton = new GlyphButton(GlyphButton.Glyph.POP_OUT, "Pop out video");
     private final GlyphButton fullScreenButton = new GlyphButton(GlyphButton.Glyph.FULL_SCREEN, "Full screen");
     private final GlyphButton beeperButton = new GlyphButton(GlyphButton.Glyph.BEEPER, "Beeper");
+    /** Detection areas on the video (2026-11-10, the pilot: a button with MUTE and BEEPER, no longer in VIDEO's menu). */
+    private final GlyphButton areasButton = new GlyphButton(GlyphButton.Glyph.AREAS, "Detection areas");
     /** MUTE (1.0.45): the phone's live sound on this PC, on or off; per phone (AUDIO_MUTED_KEY). */
     private final GlyphButton muteButton = new GlyphButton(GlyphButton.Glyph.SOUND, "Mute");
     static final String AUDIO_MUTED_KEY = "audio.muted";
@@ -374,6 +376,46 @@ public class MainWindow extends JFrame {
     private JComponent mapCard;
     /** The header with MENU and its slide-out: the tour keeps it clear while it walks the menu. */
     private JComponent headerPanel;
+    /** DEMO mode while it runs, else null. */
+    private DemoMode demo;
+    private final JLabel demoBadge = Theme.label("DEMO", Theme.headingFont(13f), Theme.BG);
+
+    boolean demoRunning() {
+        return demo != null;
+    }
+
+    /** This PC watches that pilot PC as SPECTATOR now (DEMO mode's card). */
+    boolean demoWatching(String pilotPc) {
+        Connection c = connection;
+        return c != null && c.getLink().isSpectator() && pilotPc.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY));
+    }
+
+    /** SETUP > Demo mode: in PILOT mode (2026-11-10, the pilot), the drones up, the badge on, FLEET's strip in. */
+    private void startDemo() {
+        if (demo != null) return;
+        if (Tour.running()) {
+            Dialogs.message(this, "End the tour first.", "Demo", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (connection == null && observation == null) roleCombo.setSelectedItem(ROLE_PILOT);
+        DemoMode d = new DemoMode(this);
+        if (!d.start()) return;
+        demo = d;
+        demoBadge.setVisible(true);
+        if (mapWindow != null) mapWindow.setDemoStrip(d.strip());
+        updatePhoneList();
+    }
+
+    /** SETUP > End demo: everything it brought gone, as the tour's clean-up does. */
+    private void endDemo() {
+        DemoMode d = demo;
+        if (d == null) return;
+        demo = null;
+        demoBadge.setVisible(false);
+        if (mapWindow != null) mapWindow.setDemoStrip(null);
+        d.close();
+        updatePhoneList();
+    }
     /** The LOG card: the boot animation grows a piece of the mark into it. */
     private JComponent logCard;
     /** The controller card's height while it folds or unfolds (MINIMIZE / EXPAND); -1 = its own. */
@@ -704,9 +746,9 @@ public class MainWindow extends JFrame {
         }
         menu.addSeparator();
         addMenuItem(menu, "Tour", "Buttons and map, one by one", () -> Tour.start(this));
-        if (advanced) { // hidden under TOOLS > Advanced (1.0.52, the pilot)
-            addMenuItem(menu, "Overwatch demo", "The tour's fleet part: alert, connect, hit the BTR", () -> Tour.demo(this));
-        }
+        // DEMO mode (2026-11-10, the pilot; it takes the Overwatch demo's place): everything virtual up, nothing in the way
+        if (demo == null) addMenuItem(menu, "Demo mode", "Every virtual drone and scene up, to show what it does", this::startDemo);
+        else addMenuItem(menu, "End demo", "Every demo drone and what it left gone", this::endDemo);
         return menu;
     }
 
@@ -753,11 +795,10 @@ public class MainWindow extends JFrame {
                 });
         motionRow.setToolTipText("<html>Disarmed: the phone boxes what moves in the picture"
                 + "<br>(people, cars, animals, birds - not swaying trees; lights at night).<br>"
-                + "HIGH also finds camouflage, but may box leaves in gusts: box them LOW or OFF with Detection areas.<br>"
+                + "HIGH also finds camouflage, but may box leaves in gusts: box them LOW or OFF with the areas button by the video.<br>"
                 + "Direction on the map. Per drone; needs phone app 2.3.0-pc.35 (HIGH, areas: pc.46).</html>");
         if (advanced) menu.add(motionRow); // TOOLS > Advanced
-        if (advanced) menu.add(new MenuRows.SwitchRow("Detection areas", "Draw boxes with their own sensitivity",
-                areaLayer.isEditing(), areaLayer::setEditing));
+        // Detection areas: a button beside the video now (2026-11-10, the pilot: "Remove it from the settings")
         if (advanced) menu.add(new MenuRows.SwitchRow("Camera view on the map", "What the camera sees, on the maps",
                 cameraOnMap, on -> {
                     cameraOnMap = on;
@@ -968,6 +1009,12 @@ public class MainWindow extends JFrame {
         titles.setOpaque(false);
         titles.add(Theme.label("DRAUPNE", Theme.headingFont(22f), Theme.TEXT));
         titles.add(Theme.label("LINK", Theme.headingFont(22f), Theme.ACCENT));
+        demoBadge.setOpaque(true);
+        demoBadge.setBackground(Theme.WARN);
+        demoBadge.setBorder(BorderFactory.createEmptyBorder(3, 10, 3, 10));
+        demoBadge.setToolTipText("DEMO mode: virtual drones. SETUP > End demo");
+        demoBadge.setVisible(false);
+        titles.add(demoBadge);
         header.add(titles, BorderLayout.WEST);
         statePill.setOpaque(true);
         statePill.setFont(Theme.headingFont(12f));
@@ -1296,6 +1343,16 @@ public class MainWindow extends JFrame {
         muteButton.addActionListener(e -> toggleMute());
         muteButton.setToolTipText(muteTip(null));
         videoBar.add(muteButton);
+        videoBar.add(Box.createVerticalStrut(4));
+        // detection areas: on, a drag on the picture draws a box with its own sensitivity; right-click one to change it
+        areasButton.setAlignmentX(CENTER_ALIGNMENT);
+        areasButton.setToolTipText("<html>Detection areas: boxes on the picture with their own sensitivity.<br>"
+                + "On: drag to draw one, right-click one to change or delete it. Again: done.</html>");
+        areasButton.addActionListener(e -> {
+            areaLayer.setEditing(!areaLayer.isEditing());
+            areasButton.setSelected(areaLayer.isEditing());
+        });
+        videoBar.add(areasButton);
         videoBar.add(Box.createVerticalGlue());
         video.add(videoBar, BorderLayout.EAST);
         videoView.setToolTipText("Double-click: video only    F11: full screen    F2: OSD    M: sound");
@@ -1530,11 +1587,27 @@ public class MainWindow extends JFrame {
         phoneHint.setText("<html>" + hint + "</html>");
     }
 
+    /**
+     * A phone picked on the map (its sign, or its FLEET row; 2026-11-10, the pilot): not connected, as pilot, it is the
+     * PHONE list's choice too; its FLEET row is selected either way.
+     */
+    void pickedOnMap(String phone) {
+        if (mapWindow != null) mapWindow.selectFleet(phone);
+        boolean pilot = !observerRole() && !ROLE_SPECTATOR.equals(roleCombo.getSelectedItem()) && observation == null;
+        if (connection != null || !pilot || phone == null) return;
+        for (int i = 0; i < phoneList.size(); i++) {
+            if (!phoneList.get(i).name().equalsIgnoreCase(phone)) continue;
+            if (phoneCombo.getSelectedIndex() != i) phoneCombo.setSelectedIndex(i); // chooses it (the list's listener)
+            return;
+        }
+    }
+
     /** The list's choice: saved by name, its address with it. */
     private void choosePhone() {
         int i = phoneCombo.getSelectedIndex();
         if (i < 0 || i >= phoneList.size()) return;
         Names.Entry e = phoneList.get(i);
+        if (mapWindow != null && e.kind() == Names.Kind.PHONE) mapWindow.selectFleet(e.name()); // FLEET follows (2026-11-10)
         if (!e.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) || !String.valueOf(e.ip()).equals(config.getIp())) {
             save(Map.of(Names.PHONE_NAME_KEY, e.name(), IP_KEY, e.ip() == null ? "" : e.ip()));
             if (connection == null && e.kind() == Names.Kind.PHONE) videoView.setUpsideDown(upsideDownFor(e.name()));
@@ -2012,6 +2085,7 @@ public class MainWindow extends JFrame {
             mapWindow.setPreferPhone(preferPhone);
             mapWindow.map().setVirtualDrone(videoView.isVirtual()); // a virtual drone flown now: its map says so too
             mapWindow.setOnShownChanged(this::updateFlightLayout);
+            if (demo != null) mapWindow.setDemoStrip(demo.strip());
             pushKept();
             refreshNetwork();
             mapWindow.bindKey(KeyStroke.getKeyStroke(KeyEvent.VK_F3, 0), this::toggleMapWindow); // F3 there too
@@ -2345,6 +2419,7 @@ public class MainWindow extends JFrame {
 
     /** @param beforeExit run once the settings are written and before the app exits (Reset setup), or null */
     private void shutdown(Runnable beforeExit) {
+        if (demo != null) endDemo(); // its settings put back before they are written out
         phoneWatch.shutdownNow();
         nameService.stop();
         overwatch.close();
@@ -3239,7 +3314,13 @@ public class MainWindow extends JFrame {
         String phone = config.getString(Names.PHONE_NAME_KEY);
         int current = chosenPowerMode();
         if (current == mode && mode != ControlLink.POWER_STANDBY) {
+            NotPossible.shake(pressed);
             new LockedNotice(pressed, videoView, "ALREADY " + PowerController.modeWord(mode), phone + " is already in " + PowerController.modeWord(mode) + ".").pop();
+            return;
+        }
+        if (connection != null && !connection.getLink().isSpectator() && !power.phoneAsleep && !powerIdle(connection.getLink())) {
+            NotPossible.shake(pressed);
+            new LockedNotice(pressed, videoView, "WAIT", "The phone is changing mode.").pop();
             return;
         }
         if (connection != null && power.phoneAsleep && !connection.getLink().isSpectator()) {
@@ -3256,6 +3337,7 @@ public class MainWindow extends JFrame {
             return;
         }
         if (fcArmedNow()) {
+            NotPossible.shake(pressed);
             new LockedNotice(pressed, videoView, "ARMED", "No sleep while the drone is armed: disarm first.").pop();
             return;
         }
@@ -3984,10 +4066,10 @@ public class MainWindow extends JFrame {
             int said = p.powerMode(); // pc.39: what the phone said it was doing at the last scan that heard it
             if (standbyName == null && sleeping == null && said >= 1 && said <= 3 && age <= 30_000) {
                 // put to sleep by another PC (or by this one, forgotten): its own word, while it is heard
-                kind = said == 3 ? MapView.Kind.OVERWATCH : MapView.Kind.ASLEEP;
+                kind = said == 3 ? MapView.Kind.OVERWATCH : said == 1 ? MapView.Kind.STANDBY : MapView.Kind.ASLEEP;
                 doing = (said == 1 ? "STANDBY" : said == 2 ? "DEEP SLEEP" : "OVERWATCH") + " (the phone says)";
             } else if (standbyName != null) {
-                kind = age > 120_000 ? MapView.Kind.UNKNOWN : MapView.Kind.ASLEEP;
+                kind = age > 120_000 ? MapView.Kind.UNKNOWN : MapView.Kind.STANDBY; // its own sign (was the moon: "jumps to deep sleep")
                 doing = age > 120_000 ? "STANDBY - NOT HEARD " + Names.agoText(now - age, now).toUpperCase(Locale.ROOT) + " - UNKNOWN"
                         : "STANDBY - CONNECT wakes it";
             } else if (sleeping != null) {
@@ -4007,14 +4089,13 @@ public class MainWindow extends JFrame {
                 kind = MapView.Kind.ACTIVE;
                 doing = (Boolean.TRUE.equals(p.armed()) ? "ARMED - " : "") + (p.flown() ? "FLOWN" + (pilot == null ? "" : " BY " + pilot) : "IDLE");
             }
-            // a mode queued here shows at once (1.0.56, the pilot): not the question mark while the phone takes it
+            // a mode queued here: the sign stays as confirmed, an arrow to the queued one beside it (2026-11-10, the pilot)
             FleetManager.Wanted queuedMode = fleets == null ? null : fleets.manager().wanted(d.name());
+            MapView.Kind queued = null;
             if (queuedMode != null && !Boolean.TRUE.equals(p.armed())) {
-                FleetCards.Badge b = FleetCards.withQueued(new FleetCards.Badge(kind, ""), queuedMode.mode());
-                if (b.kind() != kind || !b.text().isEmpty()) {
-                    kind = b.kind();
-                    doing = PowerController.modeWord(queuedMode.mode()) + " - QUEUED";
-                }
+                queued = MapView.queuedKind(queuedMode.mode());
+                if (queued != null) doing += " - " + PowerController.modeWord(queuedMode.mode()) + " QUEUED "
+                        + FleetCards.queuedAgo(queuedMode.queuedAt() <= 0 ? -1 : now - queuedMode.queuedAt()).toUpperCase(Locale.ROOT);
             }
             Long crashedAt = crashed.get(d.name());
             if (crashedAt != null && d.at() > crashedAt + 2000) {
@@ -4022,9 +4103,11 @@ public class MainWindow extends JFrame {
             } else if (crashedAt != null) {
                 kind = MapView.Kind.CRASHED;
                 doing = "CRASHED - LOST " + Names.agoText(crashedAt, now);
+                queued = null;
             }
+            if (kind == MapView.Kind.LOST) queued = null;
             String state = (VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + doing;
-            drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot));
+            drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot, queued));
         }
         // a crashed drone the network has no position of (the one flown here): at its track's last point
         for (Map.Entry<String, Long> e : crashed.entrySet()) {
@@ -4044,10 +4127,12 @@ public class MainWindow extends JFrame {
         } : this::connectFromMap;
         miniMap.setNetDrones(shownDrones, onDrone);
         miniMap.setOnClearCrashed(this::clearCrashedByPilot);
+        miniMap.setOnDronePicked(this::pickedOnMap);
         miniMap.setOnMarkCrashed(n -> markCrashed(n, "marked"));
         if (mapWindow != null) {
             mapWindow.map().setNetDrones(shownDrones, onDrone);
             mapWindow.map().setOnClearCrashed(this::clearCrashedByPilot);
+            mapWindow.map().setOnDronePicked(this::pickedOnMap);
             mapWindow.map().setOnMarkCrashed(n -> markCrashed(n, "marked"));
         }
         if (!power.noneAsleep() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
@@ -4066,6 +4151,21 @@ public class MainWindow extends JFrame {
 
     /** A card's button: the mode queued for the phone - or refused, said beside the button. */
     void fleetRequest(String phone, int mode, int intervalMin, JComponent near) {
+        if (connection != null && !connection.getLink().isSpectator() && connectedTo(phone)) {
+            // the phone this PC flies (2026-11-10, the pilot: "If connected to a phone in pilot mode, it is not possible to
+            // select standby from the map"): as the LINK card's STANDBY MODE, DEEP SLEEP and OVERWATCH
+            if (mode == ControlLink.POWER_STANDBY) {
+                if (fcArmedNow()) {
+                    new LockedNotice(near, near, "ARMED", "No standby while the drone is armed: disarm first.").pop();
+                    return;
+                }
+                if (confirmEndWhileArmed("Standby mode")) disconnectToStandby();
+                refreshConnectText();
+            } else {
+                askPower(mode);
+            }
+            return;
+        }
         if (fleets != null) fleets.request(phone, mode, intervalMin, near);
     }
 
@@ -4290,6 +4390,31 @@ public class MainWindow extends JFrame {
         }
     }
 
+    /** Connected and settled: in NORMAL, nothing asked, the link ready (a mode can be asked for). */
+    private boolean powerIdle(ControlLink link) {
+        FcTelemetry.PhonePower pp = link.getTelemetry().getPhonePower();
+        int reported = pp == null ? -1 : pp.mode();
+        return link.getState() == ControlLink.State.READY && power.wanted == ControlLink.POWER_NORMAL && reported <= 0;
+    }
+
+    /**
+     * DEEP SLEEP and OVERWATCH as FLEET's buttons (2026-11-10, the pilot): grey text and outline for the mode the chosen
+     * phone is in, red for the other. STANDBY MODE, STANDBY and PILOT UAV stay as they were.
+     */
+    private void markModeButtons() {
+        int m = chosenPowerMode();
+        markModeButton(deepSleepButton, m == ControlLink.POWER_DEEP_SLEEP);
+        markModeButton(overwatchButton, m == ControlLink.POWER_OVERWATCH);
+    }
+
+    private static void markModeButton(JButton b, boolean current) {
+        Color fg = current ? Theme.MUTED : Theme.ACCENT;
+        if (fg.equals(b.getForeground())) return;
+        b.setForeground(fg);
+        b.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(current ? Theme.LINE : Theme.ACCENT, 1),
+                BorderFactory.createEmptyBorder(7, 16, 7, 16)));
+    }
+
     /** Once a refresh while connected: keeps asking until the phone is in the mode wanted, and says where things are. */
     private void refreshPower(ControlLink link) {
         long now = MonoClock.ms();
@@ -4297,7 +4422,9 @@ public class MainWindow extends JFrame {
         int reported = pp == null ? -1 : pp.mode();
         boolean ready = link.getState() == ControlLink.State.READY;
         if (!shown(powerRow)) show(powerRow, true);
-        sleepFold.setShown(!fcArmedNow(), true); // armed: the two sleep buttons slide away; disarmed: they slide back
+        // 2026-11-10 (the pilot: "always show all buttons in pilot mode"): they stay while armed too - a press then
+        // shakes and says why (was: folded away while armed)
+        sleepFold.setShown(true, true);
         if (power.wanted != ControlLink.POWER_NORMAL && fcArmedNow()) {
             power.wanted = ControlLink.POWER_NORMAL;
             power.sentAt = 0;
@@ -4413,8 +4540,8 @@ public class MainWindow extends JFrame {
         boolean idle = ready && power.wanted == ControlLink.POWER_NORMAL && reported <= 0;
         showStandbyButton(false); // connected: STANDBY MODE is the top button
         standbyButton.setEnabled(idle && !fcArmedNow());
-        deepSleepButton.setEnabled(idle && !fcArmedNow());
-        overwatchButton.setEnabled(idle && !fcArmedNow());
+        deepSleepButton.setEnabled(true); // a press that can't (armed, changing mode) shakes and says why
+        overwatchButton.setEnabled(true);
         checkIntervalCombo.setEnabled(idle);
     }
 
@@ -4466,6 +4593,7 @@ public class MainWindow extends JFrame {
     private void refreshLink() {
         refreshPhone();
         refreshConnectText(); // the wake countdown
+        markModeButtons();
         if (connection == null) {
             videoView.setIdleText("Not connected");
             if (tourSleepHidden && !tourPowerDemo) {

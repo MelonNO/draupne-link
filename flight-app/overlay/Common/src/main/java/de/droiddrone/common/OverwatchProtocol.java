@@ -83,6 +83,13 @@ public final class OverwatchProtocol {
     public static final int MODE_FLAG_SOUND = 1;
     /** The sleep hello's added byte (pc.36): bit 0 overwatching, bit 1 an event runs. Then the floor's reason. */
     public static final int HELLO_OVERWATCH = 1, HELLO_EVENT = 2;
+    /**
+     * pc.47 (2026-11-10, the pilot: someone walked past 5 m in front of a phone overwatching on HIGH and no alert came):
+     * HELLO_PICTURES - this phone says whether its motion detection gets pictures; HELLO_ANALYSING - it analysed one in
+     * the last {@link #ANALYSING_MS}. A PC logs a phone that watches without pictures.
+     */
+    public static final int HELLO_PICTURES = 4, HELLO_ANALYSING = 8;
+    public static final long ANALYSING_MS = 10_000;
 
     /** The bytes of a preview fragment or a clip chunk: a datagram stays under the link's 1100. */
     public static final int FRAGMENT = 1024;

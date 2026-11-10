@@ -13,7 +13,7 @@ import java.awt.geom.Path2D;
  * room from the picture as possible. The text is kept as its name (the tour, the tooltip) and never painted.
  */
 final class GlyphButton extends JButton {
-    enum Glyph { POP_OUT, VIDEO_BACK, FULL_SCREEN, BEEPER, SOUND, MUTED }
+    enum Glyph { POP_OUT, VIDEO_BACK, FULL_SCREEN, BEEPER, SOUND, MUTED, AREAS }
 
     private static final int SIZE = 30;
     private Glyph glyph;
@@ -41,11 +41,12 @@ final class GlyphButton extends JButton {
     protected void paintComponent(Graphics graphics) {
         Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
         try {
-            boolean hot = getModel().isRollover() || getModel().isPressed();
+            boolean lit = isSelected(); // a switch that is on (AREAS while drawing)
+            boolean hot = getModel().isRollover() || getModel().isPressed() || lit;
             Color line = hot ? Theme.ACCENT : Theme.LINE;
             Color ink = hot ? Theme.ACCENT : Theme.TEXT;
             int w = getWidth(), h = getHeight();
-            g.setColor(getModel().isPressed() ? Theme.alpha(Theme.ACCENT, 60) : Theme.PANEL_2);
+            g.setColor(getModel().isPressed() || lit ? Theme.alpha(Theme.ACCENT, 60) : Theme.PANEL_2);
             g.fillRoundRect(0, 0, w - 1, h - 1, 6, 6);
             g.setColor(line);
             g.setStroke(new BasicStroke(1f));
@@ -87,6 +88,14 @@ final class GlyphButton extends JButton {
                     bell.closePath();
                     g.draw(bell);
                     g.drawArc(cx - 2, h - m - 3, 4, 4, 180, 180);
+                }
+                case AREAS -> {
+                    // detection areas (2026-11-10, beside MUTE): a dashed box drawn on the picture, a pen at its corner
+                    g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, new float[]{3f, 2.5f}, 0f));
+                    g.drawRect(m - 1, m + 1, w - 2 * m - 2, h - 2 * m - 4);
+                    g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.drawLine(w - m - 5, h - m - 1, w - m + 2, h - m - 8);
+                    g.fillPolygon(new int[]{w - m - 6, w - m - 3, w - m - 6}, new int[]{h - m, h - m, h - m - 3}, 3);
                 }
                 case SOUND, MUTED -> {
                     // the live sound (1.0.45): a filled loudspeaker, unlike the beeper's outline one; muted: a cross

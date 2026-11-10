@@ -227,8 +227,6 @@ final class FleetController {
                     sleeping == null ? 0 : power.checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),
                     said, saidAge, e.online() || now - heardAt < 30_000, wasFlying);
             if (crashed.containsKey(e.name()) && !here) badge = new FleetCards.Badge(MapView.Kind.CRASHED, "CRASHED");
-            FleetManager.Wanted queuedNow = fleet.wanted(e.name());
-            if (!here) badge = FleetCards.withQueued(badge, queuedNow == null ? -1 : queuedNow.mode());
             // the drone's battery per cell: live here, else what this PC last read
             double cell = Double.NaN;
             long cellAge = -1;
@@ -266,13 +264,15 @@ final class FleetController {
             int[] views = alerts.get(id);
             int events = (int) Math.max(clips == null ? 0 : clips[0], views == null ? 0 : views[0]);
             FleetManager.Wanted wanted = fleet.wanted(e.name());
+            if (wanted != null && !FleetCards.showsQueued(badge)) wanted = null;
             int build = fleet.pcBuild(e.name());
             if (build < 0) build = FleetProtocol.pcBuild(e.version());
-            String note = here ? "Connected: use the LINK card"
-                    : build >= 0 && build < FleetProtocol.MIN_PC_BUILD ? "Needs phone app pc." + FleetProtocol.MIN_PC_BUILD : null;
+            // the phone this PC flies takes its modes too (2026-11-10, the pilot: "not possible to select standby from the map")
+            String note = !here && build >= 0 && build < FleetProtocol.MIN_PC_BUILD ? "Needs phone app pc." + FleetProtocol.MIN_PC_BUILD : null;
             cards.add(new FleetCards.Card(e.name(), e.isVirtual(), badge.kind(), badge.text(), cell, cellAge, pct, charging, next, interval,
                     heardAt <= 0 ? -1 : now - heardAt, signal, fix, sats, events, clips == null ? 0 : clips[1], phoneTemp, fcTemp,
-                    wanted == null ? null : FleetManager.modeName(wanted.mode()), note));
+                    wanted == null ? null : FleetManager.modeName(wanted.mode()), note,
+                    wanted == null || wanted.queuedAt() <= 0 ? -1 : Math.max(0, now - wanted.queuedAt())));
         }
         return cards;
     }

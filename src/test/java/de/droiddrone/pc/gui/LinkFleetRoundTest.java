@@ -14,27 +14,11 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 1.0.56, the pilot's LINK and fleet round: a queued mode shows at once (not the question mark), OVERWATCH checks in
+ * 1.0.56, the pilot's LINK and fleet round (a queued mode at once on the sign: undone 2026-11-10, ModesRoundTest), OVERWATCH checks in
  * Constant by default and DEEP SLEEP every 5 min, "0 min" reads Constant, PILOT UAV on an alerting drone, the LINK
  * card titled by its mode, the modes in the pilot's order.
  */
 class LinkFleetRoundTest {
-    @Test
-    void aQueuedModeShowsAtOnceNotTheQuestionMark() {
-        FleetCards.Badge unknown = new FleetCards.Badge(MapView.Kind.UNKNOWN, "UNKNOWN");
-        FleetCards.Badge b = FleetCards.withQueued(unknown, ControlLink.POWER_OVERWATCH);
-        assertEquals(MapView.Kind.OVERWATCH, b.kind(), "OVERWATCH pressed: its sign at once");
-        assertEquals("OVERWATCH", b.text());
-        assertEquals("ASLEEP", FleetCards.withQueued(new FleetCards.Badge(MapView.Kind.ACTIVE, "ACTIVE"), ControlLink.POWER_DEEP_SLEEP).text());
-        assertEquals("STANDBY", FleetCards.withQueued(new FleetCards.Badge(MapView.Kind.OVERWATCH, "OVERWATCH"), ControlLink.POWER_STANDBY).text(),
-                "STANDBY queued for an overwatching phone");
-        assertSame(unknown, FleetCards.withQueued(unknown, -1), "nothing queued: as it was");
-        FleetCards.Badge lost = new FleetCards.Badge(MapView.Kind.LOST, "LOST");
-        assertSame(lost, FleetCards.withQueued(lost, ControlLink.POWER_OVERWATCH), "a lost drone stays lost");
-        FleetCards.Badge here = new FleetCards.Badge(MapView.Kind.ACTIVE, "CONNECTED");
-        assertSame(here, FleetCards.withQueued(here, ControlLink.POWER_DEEP_SLEEP), "this PC's link says it");
-    }
-
     @Test
     void overwatchChecksInConstantlyByDefaultDeepSleepEveryFiveMinutes() {
         assertEquals(SleepCheck.ALWAYS, PowerController.defaultInterval(ControlLink.POWER_OVERWATCH));
@@ -83,7 +67,19 @@ class LinkFleetRoundTest {
                 "an awake phone's own 5 min is not OVERWATCH's choice: Constant");
         assertArrayEquals(new int[]{ControlLink.POWER_DEEP_SLEEP, 5}, sent.get(1));
         SwingUtilities.invokeAndWait(() -> panel[0].setCards(List.of(card("MobileAlpha", "OVERWATCH", SleepCheck.ALWAYS, null))));
-        SwingUtilities.invokeAndWait(() -> assertNotNull(find(panel[0], "CONSTANT"), "EVERY shows OVERWATCH's interval"));
+        SwingUtilities.invokeAndWait(() -> assertEquals("CONSTANT", everyShown(panel[0]), "EVERY shows OVERWATCH's interval"));
+    }
+
+    /** The check-in list's choice (a list since 2026-11-10, was a button). */
+    private static String everyShown(Container c) {
+        for (Component k : c.getComponents()) {
+            if (k instanceof javax.swing.JComboBox<?> box) return String.valueOf(box.getSelectedItem());
+            if (k instanceof Container inner) {
+                String s = everyShown(inner);
+                if (s != null) return s;
+            }
+        }
+        return null;
     }
 
     @Test

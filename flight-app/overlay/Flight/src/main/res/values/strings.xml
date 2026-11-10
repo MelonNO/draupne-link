@@ -107,6 +107,7 @@ TO UNLOCK</string>
     <string name="dd_power_admin_why">Turns the screen off in deep sleep.</string>
     <string name="dd_power_exact_line">Exact alarms off: sleep checks may come late. Tap to allow.</string>
     <string name="dd_power_battery_line">Battery optimisation on: sleep checks may miss the PC. Tap to turn off.</string>
+    <string name="dd_silent_line">Notifications may ring or buzz. Tap: allow Do Not Disturb to keep the phone silent.</string>
     <string name="dd_label_this_phone">THIS PHONE</string>
     <string name="dd_phone_copied">Copied %1$s</string>
     <string name="dd_phone_no_name">No name yet - the PC gives one. Tap to pick.</string>

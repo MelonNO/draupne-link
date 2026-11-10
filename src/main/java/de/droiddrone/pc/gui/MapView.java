@@ -102,7 +102,11 @@ class MapView extends JComponent {
      * @param kind   which sign it gets (1.0.50, the pilot: a drone put to sleep must never look like a lost one)
      * @param pilot  the PC that flies it (to watch through), or null
      */
-    record NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot) {
+    record NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot, Kind queued) {
+        NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot) {
+            this(name, lat, lon, state, kind, flown, pilot, null);
+        }
+
         /** Not heard from as it should be (asleep, lost or unknown): its name in grey. */
         boolean stale() {
             return kind != Kind.ACTIVE;
@@ -110,14 +114,33 @@ class MapView extends JComponent {
     }
 
     /**
-     * What a drone on the map is doing, each with a sign of its own: ACTIVE (heard now: a diamond), ASLEEP (STANDBY or
-     * DEEP SLEEP on time with its check-ins: a moon), OVERWATCH (on time: an eye), LOST (it went quiet while flown or
-     * armed: a red diamond with "!"), UNKNOWN (quiet while idle, or asleep but its check-ins overdue: a grey "?").
+     * What a drone on the map is doing, each with a sign of its own (2026-11-10, the pilot: "Moon = Deep sleep, eye =
+     * overwatch, Diamond = Standby, Arrow = Piloted drone", as confirmed - a mode only queued shows as an arrow to its
+     * sign): ACTIVE (heard now, awake: an arrow), STANDBY (a diamond), ASLEEP (DEEP SLEEP on time with its check-ins: a
+     * moon), OVERWATCH (on time: an eye), LOST (it went quiet while flown or armed: a red triangle with "!"), UNKNOWN
+     * (quiet while idle, or asleep but its check-ins overdue: a grey "?"), CRASHED (1.0.52: LOST DRONE pressed for it -
+     * down and gone, until it is heard again or cleared: a grey square with an X). STANDBY last: the spectators' mirror
+     * sends the ordinal, and an older PC reads one it doesn't know as UNKNOWN.
      */
-    /** CRASHED (1.0.52): LOST DRONE pressed for it - down and gone, until it is heard again or cleared. */
-    enum Kind { ACTIVE, ASLEEP, OVERWATCH, LOST, UNKNOWN, CRASHED }
+    enum Kind { ACTIVE, ASLEEP, OVERWATCH, LOST, UNKNOWN, CRASHED, STANDBY }
+
+    /** A queued mode's sign (ControlLink.POWER_*: 1 standby, 2 deep sleep, 3 overwatch), else null. */
+    static Kind queuedKind(int mode) {
+        return switch (mode) {
+            case 1 -> Kind.STANDBY;
+            case 2 -> Kind.ASLEEP;
+            case 3 -> Kind.OVERWATCH;
+            default -> null;
+        };
+    }
 
     private List<NetDrone> netDrones = List.of();
+    /** A left click on a drone's sign: its name (the main window picks it); null: nothing. */
+    private java.util.function.Consumer<String> onDronePicked;
+
+    void setOnDronePicked(java.util.function.Consumer<String> c) {
+        onDronePicked = c;
+    }
     /** The other drone under the mouse: only its name and state are written out (1.0.50, the pilot); null: none. */
     private volatile String hoveredNet;
     /** Right-click on a drone: its name, and true to watch it (through its pilot PC), false to connect and fly. */
@@ -397,6 +420,13 @@ class MapView extends JComponent {
                 }
                 if (tool == Tool.NONE && e.getClickCount() == 2 && pickUpAt(e.getX(), e.getY())) return;
                 if (tool == Tool.NONE && e.getClickCount() == 1 && clickObserved(e.getX(), e.getY())) return;
+                if (tool == Tool.NONE && e.getClickCount() == 1 && onDronePicked != null) {
+                    NetDrone picked = netDroneAt(e.getX(), e.getY());
+                    if (picked != null) { // 2026-11-10 (the pilot): picked on the map, picked in the PHONE list and FLEET
+                        onDronePicked.accept(picked.name());
+                        return;
+                    }
+                }
                 if (zoomInButton.contains(e.getPoint())) zoomBy(1);
                 else if (zoomOutButton.contains(e.getPoint())) zoomBy(-1);
                 else if (e.getClickCount() == 2) fitTrack();
@@ -1650,7 +1680,20 @@ class MapView extends JComponent {
 
     /** The asleep drones' moon, the overwatching ones' eye: blue-violet and teal, never the lost red or the unknown grey. */
     static final Color ASLEEP_COLOR = new Color(0x9fa8da), OVERWATCH_COLOR = new Color(0x4db6ac), LOST_COLOR = new Color(0xef5350);
-    static final Color CRASHED_COLOR = new Color(0x8a8a8a);
+    static final Color CRASHED_COLOR = new Color(0x8a8a8a), STANDBY_COLOR = new Color(0x9ccc65);
+
+    /** A sign's colour (the flown one aside: the map draws it yellow). */
+    static Color kindColor(Kind k) {
+        return switch (k) {
+            case ACTIVE -> new Color(0x4fc3f7);
+            case STANDBY -> STANDBY_COLOR;
+            case ASLEEP -> ASLEEP_COLOR;
+            case OVERWATCH -> OVERWATCH_COLOR;
+            case LOST -> LOST_COLOR;
+            case UNKNOWN -> Theme.MUTED;
+            case CRASHED -> CRASHED_COLOR;
+        };
+    }
 
     // ---- the drone picked in FLEET MANAGEMENT (1.0.52, the pilot: "make the drone be highlighted in the map, if the
     // drone has a FOV sector, make this also be highlighted")
@@ -1734,15 +1777,9 @@ class MapView extends JComponent {
         for (NetDrone d : netDrones) {
             Point2D s = proj.toScreen(d.lat(), d.lon());
             if (s.getX() < -40 || s.getY() < -40 || s.getX() > proj.w() + 40 || s.getY() > proj.h() + 40) continue;
-            Color c = switch (d.kind()) {
-                case ACTIVE -> d.flown() ? Theme.WARN : new Color(0x4fc3f7);
-                case ASLEEP -> ASLEEP_COLOR;
-                case OVERWATCH -> OVERWATCH_COLOR;
-                case LOST -> LOST_COLOR;
-                case UNKNOWN -> Theme.MUTED;
-                case CRASHED -> CRASHED_COLOR;
-            };
+            Color c = d.kind() == Kind.ACTIVE && d.flown() ? Theme.WARN : kindColor(d.kind());
             paintNetSign(g, d.kind(), c, s.getX(), s.getY());
+            if (d.queued() != null) paintQueued(g, d.queued(), s.getX(), s.getY());
             if (!d.name().equals(hoveredNet)) continue; // the sign alone; its name and state while the mouse is on it
             g.setFont(Theme.headingFont(11f));
             FontMetrics fm = g.getFontMetrics();
@@ -1762,30 +1799,75 @@ class MapView extends JComponent {
     }
 
     /**
-     * One drone's sign, 18 px across: a diamond (ACTIVE), a diamond with "!" (LOST), a circle with "?" (UNKNOWN), a
-     * circle with a crescent moon (ASLEEP) or an eye (OVERWATCH), a grey diamond with an X (CRASHED) - told apart by
-     * shape as well as colour.
+     * A queued mode, beside the sign at x, y: a yellow arrow from it to the mode's sign, smaller (2026-11-10, the pilot:
+     * "When a mode is cued but not set make a arrow ... from the current mode symbol to the set mode symbol").
+     */
+    static void paintQueued(Graphics2D g, Kind to, double x, double y) {
+        double ax = x + 11, bx = x + 19;
+        g.setColor(new Color(0, 0, 0, 150));
+        g.setStroke(new BasicStroke(3.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(new java.awt.geom.Line2D.Double(ax, y, bx, y));
+        g.setColor(Theme.WARN);
+        g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(new java.awt.geom.Line2D.Double(ax, y, bx - 2, y));
+        Path2D head = new Path2D.Double();
+        head.moveTo(bx + 2, y);
+        head.lineTo(bx - 3, y - 3.5);
+        head.lineTo(bx - 3, y + 3.5);
+        head.closePath();
+        g.fill(head);
+        java.awt.geom.AffineTransform saved = g.getTransform();
+        g.translate(bx + 11, y);
+        g.scale(0.72, 0.72);
+        paintNetSign(g, to, kindColor(to), 0, 0);
+        g.setTransform(saved);
+    }
+
+    /**
+     * One drone's sign, 18 px across, told apart by shape as well as colour: an arrow (ACTIVE: awake, flown), a diamond
+     * (STANDBY), a circle with a crescent moon (ASLEEP: deep sleep) or an eye (OVERWATCH), a red triangle with "!"
+     * (LOST), a circle with "?" (UNKNOWN), a grey square with an X (CRASHED).
      */
     static void paintNetSign(Graphics2D g, Kind kind, Color c, double x, double y) { // also the fleet cards' badge (1.0.52)
         java.awt.Shape body;
-        if (kind == Kind.ACTIVE || kind == Kind.LOST || kind == Kind.CRASHED) {
-            Path2D diamond = new Path2D.Double();
-            diamond.moveTo(x, y - 9);
-            diamond.lineTo(x + 9, y);
-            diamond.lineTo(x, y + 9);
-            diamond.lineTo(x - 9, y);
-            diamond.closePath();
-            body = diamond;
-        } else {
-            body = new java.awt.geom.Ellipse2D.Double(x - 9, y - 9, 18, 18);
+        boolean solid = kind == Kind.ACTIVE || kind == Kind.STANDBY || kind == Kind.LOST || kind == Kind.CRASHED;
+        switch (kind) {
+            case ACTIVE -> { // an arrow, pointing up: the drone in flight
+                Path2D arrow = new Path2D.Double();
+                arrow.moveTo(x, y - 9.5);
+                arrow.lineTo(x + 7.5, y + 8);
+                arrow.lineTo(x, y + 4);
+                arrow.lineTo(x - 7.5, y + 8);
+                arrow.closePath();
+                body = arrow;
+            }
+            case STANDBY -> {
+                Path2D diamond = new Path2D.Double();
+                diamond.moveTo(x, y - 9);
+                diamond.lineTo(x + 9, y);
+                diamond.lineTo(x, y + 9);
+                diamond.lineTo(x - 9, y);
+                diamond.closePath();
+                body = diamond;
+            }
+            case LOST -> {
+                Path2D triangle = new Path2D.Double();
+                triangle.moveTo(x, y - 9.5);
+                triangle.lineTo(x + 9.5, y + 7.5);
+                triangle.lineTo(x - 9.5, y + 7.5);
+                triangle.closePath();
+                body = triangle;
+            }
+            case CRASHED -> body = new java.awt.geom.Rectangle2D.Double(x - 7.5, y - 7.5, 15, 15);
+            default -> body = new java.awt.geom.Ellipse2D.Double(x - 9, y - 9, 18, 18);
         }
         g.setStroke(new BasicStroke(3f));
         g.setColor(new Color(0, 0, 0, 150));
         g.draw(body);
-        g.setColor(Theme.alpha(c, kind == Kind.ACTIVE || kind == Kind.LOST || kind == Kind.CRASHED ? 200 : 90));
+        g.setColor(Theme.alpha(c, solid ? 200 : 90));
         g.fill(body);
-        g.setColor(kind == Kind.ACTIVE ? Color.WHITE : c);
-        g.setStroke(new BasicStroke(kind == Kind.ACTIVE ? 1.2f : 1.6f));
+        g.setColor(kind == Kind.ACTIVE || kind == Kind.STANDBY ? Color.WHITE : c);
+        g.setStroke(new BasicStroke(kind == Kind.ACTIVE || kind == Kind.STANDBY ? 1.2f : 1.6f));
         g.draw(body);
         switch (kind) {
             case ASLEEP -> { // a crescent moon: a disc with a disc taken out of its right side
@@ -1812,11 +1894,12 @@ class MapView extends JComponent {
                 g.draw(new java.awt.geom.Line2D.Double(x + 3.8, y - 3.8, x - 3.8, y + 3.8));
             }
             case LOST, UNKNOWN -> {
-                g.setFont(Theme.headingFont(12f));
+                g.setFont(Theme.headingFont(kind == Kind.LOST ? 11f : 12f));
                 FontMetrics fm = g.getFontMetrics();
                 String mark = kind == Kind.LOST ? "!" : "?";
                 g.setColor(Color.WHITE);
-                g.drawString(mark, (float) (x - fm.stringWidth(mark) / 2.0), (float) (y + fm.getAscent() / 2.0 - 1.5));
+                double my = kind == Kind.LOST ? y + 2.5 : y; // the triangle's middle sits low
+                g.drawString(mark, (float) (x - fm.stringWidth(mark) / 2.0), (float) (my + fm.getAscent() / 2.0 - 1.5));
             }
             default -> {
             }

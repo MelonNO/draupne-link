@@ -96,11 +96,22 @@ public final class TourScenario implements AutoCloseable {
     private final BtrScene btr;
     private final List<Flight> flights;
 
+    /** Its own fleet (closed with it), or a shared one (DEMO mode: only its drones go). */
+    private boolean ownsFleet = true;
+
     private TourScenario(Fleet fleet, List<VirtualDrone> drones, BtrScene btr, List<Flight> flights) {
         this.fleet = fleet;
         this.drones = drones;
         this.btr = btr;
         this.flights = flights;
+    }
+
+    /** The four in a fleet that runs already (DEMO mode's, with the other demo drones): closing takes only these. */
+    public static TourScenario startIn(Fleet fleet, Listener listener) throws IOException {
+        TourScenario s = setUp(fleet, listener);
+        s.ownsFleet = false;
+        fleet.announce();
+        return s;
     }
 
     /**
@@ -111,6 +122,19 @@ public final class TourScenario implements AutoCloseable {
     public static TourScenario start(PcConfig config, Path announceFile, Consumer<String> log, Listener listener) throws IOException {
         Fleet fleet = new Fleet(config, announceFile, log);
         try {
+            TourScenario s = setUp(fleet, listener);
+            fleet.startHeartbeat();
+            return s;
+        } catch (IOException | RuntimeException e) {
+            fleet.close();
+            throw e;
+        }
+    }
+
+    /** The four drones, their flights and the BTR, in fleet (the caller starts its heartbeat or has). */
+    private static TourScenario setUp(Fleet fleet, Listener listener) throws IOException {
+        List<VirtualDrone> made = new ArrayList<>();
+        try {
             double[] launch = Coordinates.parse(LAUNCH);
             List<VirtualDrone> drones = new ArrayList<>();
             List<Flight> flights = new ArrayList<>();
@@ -119,6 +143,7 @@ public final class TourScenario implements AutoCloseable {
                 double[] placed = FleetLayout.place(i, launch[0], launch[1]);
                 double[] at = {placed[0], placed[1]};
                 VirtualDrone d = fleet.add(fleet.freeName(), at[0], at[1], placed[2]);
+                made.add(d);
                 d.fc.setLaunch(launch[0], launch[1]); // flew from the launch point: Betaflight's home is there
                 double[] o = OUTSIDE[i];
                 d.setOutside(o[0], (int) o[1], o[2], (int) o[3]);
@@ -147,10 +172,9 @@ public final class TourScenario implements AutoCloseable {
                     l.crashed(d);
                 }
             });
-            fleet.startHeartbeat();
             return new TourScenario(fleet, List.copyOf(drones), btr, List.copyOf(flights));
         } catch (IOException | RuntimeException e) {
-            fleet.close();
+            for (VirtualDrone d : made) fleet.remove(d);
             throw e;
         }
     }
@@ -322,6 +346,7 @@ public final class TourScenario implements AutoCloseable {
 
     @Override
     public void close() {
-        fleet.close();
+        if (ownsFleet) fleet.close();
+        else for (VirtualDrone d : drones) fleet.remove(d);
     }
 }

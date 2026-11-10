@@ -126,7 +126,8 @@ final class Overwatch {
     static int helloFlags() {
         Overwatch o = current;
         if (o == null || !o.watching) return 0;
-        return OverwatchProtocol.HELLO_OVERWATCH | (o.event.isActive() ? OverwatchProtocol.HELLO_EVENT : 0);
+        return OverwatchProtocol.HELLO_OVERWATCH | (o.event.isActive() ? OverwatchProtocol.HELLO_EVENT : 0)
+                | OverwatchProtocol.HELLO_PICTURES | (MotionWatch.analysing(OverwatchProtocol.ANALYSING_MS) ? OverwatchProtocol.HELLO_ANALYSING : 0);
     }
 
     static boolean isWatching() {

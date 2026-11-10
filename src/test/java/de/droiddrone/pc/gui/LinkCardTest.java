@@ -34,8 +34,10 @@ class LinkCardTest {
         assertEquals("STOP OBSERVING", PowerController.connectText(false, false, true, true, false, false, -1));
         assertEquals("STANDBY MODE", PowerController.connectText(true, false, false, false, false, false, -1));
         assertEquals("STOP WATCHING", PowerController.connectText(true, true, false, false, true, false, -1));
-        assertEquals("REGAINING CONTROL IN 3 MIN", PowerController.connectText(true, false, false, false, false, true, 150_000));
-        assertEquals("REGAINING CONTROL IN 1 MIN", PowerController.connectText(true, false, false, false, false, true, 5_000));
+        // in seconds (2026-11-10, the pilot: "Make the regaining control timer count down with seconds")
+        assertEquals("REGAINING CONTROL IN 2:30", PowerController.connectText(true, false, false, false, false, true, 150_000));
+        assertEquals("REGAINING CONTROL IN 0:05", PowerController.connectText(true, false, false, false, false, true, 5_000));
+        assertEquals("REGAINING CONTROL IN 0:01", PowerController.connectText(true, false, false, false, false, true, 200));
         assertEquals("REGAINING CONTROL...", PowerController.connectText(true, false, false, false, false, true, -1), "always listening");
     }
 

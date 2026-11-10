@@ -287,6 +287,13 @@ final class PowerController {
             host.observedCheckIn(ip, a.name());
             return true;
         }
+        // pc.47: an overwatching phone whose camera gives its motion detection no pictures sees nothing - said at once
+        // and when it changes, not in ten minutes
+        boolean blind = h.watchesBlind(), wasBlind = before != null && before.watchesBlind();
+        if (blind != wasBlind && (blind || before != null)) {
+            host.logLater(a.name() + (blind ? ": OVERWATCH SEES NOTHING - its camera gives the motion detection no pictures. PILOT UAV and OVERWATCH again."
+                    : ": overwatch's camera gives pictures again."));
+        }
         // one line per check window; always listening (a hello a minute), one line in ten minutes
         long quiet = a.listening() ? 10 * 60_000L : 20_000;
         if (before == null || h.receivedAt() - before.receivedAt() > quiet
@@ -323,7 +330,7 @@ final class PowerController {
 
     /**
      * The LINK card's top button (1.0.52, the pilot: "only ever three buttons"): PILOT UAV to fly; STANDBY MODE while
-     * connected (the phone is left in standby); REGAINING CONTROL IN x MIN while a sleeping phone is waited for (pressing
+     * connected (the phone is left in standby); REGAINING CONTROL IN m:ss while a sleeping phone is waited for (pressing
      * it lets the phone sleep on). Watching and observing keep their own words.
      */
     static String connectText(boolean connected, boolean spectatorLink, boolean observing, boolean observerRole, boolean spectatorRole,
@@ -333,7 +340,9 @@ final class PowerController {
         if (spectatorLink) return "STOP WATCHING";
         if (waitingForWake) {
             if (wakeInMs < 0) return "REGAINING CONTROL...";
-            return "REGAINING CONTROL IN " + Math.max(1, (wakeInMs + 59_999) / 60_000) + " MIN";
+            // counting down in seconds (2026-11-10, the pilot; was whole minutes)
+            long s = Math.max(1, (wakeInMs + 999) / 1000);
+            return "REGAINING CONTROL IN " + s / 60 + ":" + String.format(java.util.Locale.ROOT, "%02d", s % 60);
         }
         return "STANDBY MODE";
     }

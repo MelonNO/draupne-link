@@ -6,6 +6,7 @@ import de.droiddrone.pc.map.Coordinates;
 import de.droiddrone.pc.overwatch.AlertCard;
 import de.droiddrone.pc.overwatch.ClipIndex;
 import de.droiddrone.pc.overwatch.ClipPlayer;
+import de.droiddrone.pc.overwatch.ClipTimeline;
 import de.droiddrone.pc.overwatch.OverwatchHub;
 
 import javax.imageio.ImageIO;
@@ -573,8 +574,19 @@ final class OverwatchPanel extends JPanel {
         controls.add(playButton, BorderLayout.WEST);
         seek.setOpaque(false);
         seek.addChangeListener(e -> {
-            if (settingSeek || seek.getValueIsAdjusting() || durationMs <= 0) return;
-            seekTo = seek.getValue() * durationMs / 1000; // where the pilot let go of it
+            if (settingSeek || durationMs <= 0) return;
+            long at = seek.getValue() * durationMs / 1000;
+            playTime.setText(length(at) + " / " + length(durationMs)); // the time under the thumb while it is dragged
+            if (!seek.getValueIsAdjusting()) seekTo = at; // where the pilot let go of it
+        });
+        // a click on the bar goes to that place (a slider's own click only steps towards it)
+        seek.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                if (seek.getUI() instanceof javax.swing.plaf.basic.BasicSliderUI ui && SwingUtilities.isLeftMouseButton(e)) {
+                    seek.setValue(ui.valueForXPosition(e.getX()));
+                }
+            }
         });
         controls.add(seek, BorderLayout.CENTER);
         controls.add(playTime, BorderLayout.EAST);
@@ -821,7 +833,10 @@ final class OverwatchPanel extends JPanel {
         playing = c;
         player.phone = c.drone();
         paused = false;
+        atEnd = false;
+        durationMs = 0;
         seekTo = -1;
+        playTime.setText("0:00");
         playButton.setText("Pause");
         replay = replayMark(c);
         map.setOverwatchMarks(marks());
@@ -865,84 +880,131 @@ final class OverwatchPanel extends JPanel {
             playSelected();
             return;
         }
-        paused = !paused;
+        if (atEnd) { // PLAY at the end: from the start again
+            atEnd = false;
+            seekTo = 0;
+            paused = false;
+        } else {
+            paused = !paused;
+        }
         playButton.setText(paused ? "Play" : "Pause");
     }
 
-    /** On the player's thread: the pictures before the alert (half a second each), then the clip at its own pace. */
+    /** The playback reached the end of the clip (it waits there, paused). */
+    private volatile boolean atEnd;
+
+    /**
+     * On the player's thread: the clip as one video (2026-11-10, the pilot) - the pictures before the alert
+     * ({@link ClipTimeline#PRE_MS} each), then the video's parts, on one clock: the time shows from the first moment, the
+     * bar reaches every part of it, PAUSE stops the clock, the end waits (PLAY: from the start).
+     */
     private void runPlayback(int gen, ClipIndex.Clip c) {
         try {
             List<Path> pre = c.preRoll();
             List<Path> videos = c.parts(); // pc.38: the event's 60 s segments, in order, as one clip
             if (videos.isEmpty() && c.video() != null) videos = List.of(c.video());
-            for (Path p : pre) {
-                if (gen != playGen || seekTo >= 0) break;
-                while (paused && gen == playGen) sleep(50);
-                BufferedImage img = ImageIO.read(p.toFile());
-                if (img != null) post(gen, img, "BEFORE THE ALERT", -1);
-                sleep(500);
-            }
-            if (videos.isEmpty()) {
-                post(gen, null, "No video: only the pictures before the alert", -1);
-                return;
-            }
-            // where each part starts on the event's one timeline
-            long[] base = new long[videos.size() + 1];
+            long[] partMs = new long[videos.size()];
             for (int i = 0; i < videos.size(); i++) {
                 try (ClipPlayer probe = new ClipPlayer(videos.get(i))) {
-                    base[i + 1] = base[i] + Math.max(0, probe.durationMs());
+                    partMs[i] = Math.max(0, probe.durationMs());
                 }
             }
-            durationMs = base[videos.size()];
-            int k = 0;
-            ClipPlayer player = new ClipPlayer(videos.get(0));
+            ClipTimeline line = new ClipTimeline(pre.size(), partMs);
+            durationMs = line.totalMs();
+            atEnd = false;
+            if (line.totalMs() <= 0) {
+                post(gen, null, "Nothing to play", -1);
+                return;
+            }
+            BufferedImage[] pictures = new BufferedImage[pre.size()];
+            ClipPlayer player = null;
+            int part = -1, shownPicture = -1;
+            int[] pixels = null;
+            int w = 0, h = 0;
+            long pos = 0, wallStart = System.currentTimeMillis();
+            boolean seekVideo = false;
+            post(gen, null, null, 0);
             try {
-                int w = Math.min(1280, Math.max(16, player.width())), h = Math.max(16, Math.round(player.height() * (float) w / Math.max(1, player.width())));
-                int[] pixels = new int[w * h];
-                long wallStart = System.currentTimeMillis();
-                long pos = 0;
                 while (gen == playGen) {
                     long to = seekTo;
                     if (to >= 0) {
                         seekTo = -1;
-                        int want = 0;
-                        while (want < videos.size() - 1 && to >= base[want + 1]) want++;
-                        if (want != k) {
-                            player.close();
-                            k = want;
-                            player = new ClipPlayer(videos.get(k));
-                        }
-                        player.seek(to - base[k]);
-                        pos = to;
-                        wallStart = System.currentTimeMillis() - to;
+                        pos = Math.max(0, Math.min(line.totalMs(), to));
+                        wallStart = System.currentTimeMillis() - pos;
+                        shownPicture = -1;
+                        seekVideo = true;
+                        atEnd = false;
                     }
                     if (paused) {
-                        sleep(50);
+                        sleep(40);
                         wallStart = System.currentTimeMillis() - pos; // the clock stands still while paused
                         continue;
                     }
+                    ClipTimeline.At at = line.at(pos);
+                    if (at.end()) {
+                        if (!atEnd) {
+                            atEnd = true;
+                            paused = true;
+                            post(gen, null, null, line.totalMs());
+                            SwingUtilities.invokeLater(() -> {
+                                if (gen == playGen) playButton.setText("Play");
+                            });
+                        }
+                        continue;
+                    }
+                    if (at.picture() >= 0) { // a picture from before the alert, on the clock
+                        if (at.picture() != shownPicture) {
+                            if (pictures[at.picture()] == null) pictures[at.picture()] = ImageIO.read(pre.get(at.picture()).toFile());
+                            shownPicture = at.picture();
+                            post(gen, pictures[at.picture()], null, pos);
+                        } else {
+                            post(gen, null, null, pos);
+                        }
+                        sleep(40);
+                        pos = System.currentTimeMillis() - wallStart;
+                        continue;
+                    }
+                    shownPicture = -1;
+                    if (player == null || part != at.part()) {
+                        if (player != null) player.close();
+                        part = at.part();
+                        player = new ClipPlayer(videos.get(part));
+                        if (pixels == null) {
+                            w = Math.min(1280, Math.max(16, player.width()));
+                            h = Math.max(16, Math.round(player.height() * (float) w / Math.max(1, player.width())));
+                            pixels = new int[w * h];
+                        }
+                        seekVideo = at.offsetMs() > 60;
+                    }
+                    if (seekVideo) {
+                        player.seek(at.offsetMs());
+                        seekVideo = false;
+                    }
                     long t = player.next(pixels, w, h);
-                    if (t < 0 && k < videos.size() - 1) { // the next part goes on where this one ended
+                    if (t < 0) { // this part is over: its last picture stays until the clock reaches its end, then on
+                        long next = line.partStartMs(part + 1);
                         player.close();
-                        k++;
-                        player = new ClipPlayer(videos.get(k));
+                        player = null;
+                        while (gen == playGen && seekTo < 0 && !paused && System.currentTimeMillis() - wallStart < next) sleep(20);
+                        if (gen != playGen || seekTo >= 0 || paused) continue;
+                        pos = next;
                         continue;
                     }
-                    if (t < 0) {
-                        post(gen, null, "END", durationMs);
-                        while (gen == playGen && seekTo < 0) sleep(100); // the slider can start it again
-                        continue;
+                    long at2 = line.partStartMs(part) + t;
+                    // the picture's time come (a short wait at a time, so a seek or PAUSE is taken at once)
+                    while (gen == playGen && seekTo < 0 && !paused) {
+                        long wait = wallStart + at2 - System.currentTimeMillis();
+                        if (wait <= 0) break;
+                        sleep(Math.min(wait, 40));
                     }
-                    t += base[k];
-                    pos = t;
-                    long wait = wallStart + t - System.currentTimeMillis();
-                    if (wait > 0) sleep(Math.min(wait, 1000));
+                    if (gen != playGen || seekTo >= 0) continue;
+                    pos = at2;
                     BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
                     System.arraycopy(pixels, 0, ((DataBufferInt) img.getRaster().getDataBuffer()).getData(), 0, pixels.length);
-                    post(gen, img, null, t);
+                    post(gen, img, null, pos);
                 }
             } finally {
-                player.close();
+                if (player != null) player.close();
             }
         } catch (IOException | RuntimeException e) {
             post(gen, null, "Can't play: " + e.getMessage(), -1);
@@ -953,7 +1015,7 @@ final class OverwatchPanel extends JPanel {
         SwingUtilities.invokeLater(() -> {
             if (gen != playGen) return;
             if (img != null) player.setImage(img, null);
-            if (posMs >= 0 && durationMs > 0) {
+            if (posMs >= 0 && durationMs > 0 && !seek.getValueIsAdjusting()) { // not under the pilot's drag
                 settingSeek = true;
                 seek.setValue((int) Math.min(1000, posMs * 1000 / durationMs));
                 settingSeek = false;

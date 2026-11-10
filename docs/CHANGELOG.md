@@ -4,6 +4,21 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 
 ## Unreleased
 
+Phone app 2.3.0-pc.47 with it.
+
+- **DEMO mode (SETUP > Demo mode, in place of the Overwatch demo):** every virtual drone with its scene up at once in PILOT mode, nothing dimmed or in the way (real phones work alongside): the six scene drones to fly or observe, and a virtual pilot PC flying to watch as SPECTATOR - a card on the video switches it to observing and back. FLEET MANAGEMENT gets SET UP SCENARIO (four drones out: three overwatching, one asleep, with their views and flights), START SCENARIO once overwatch has settled, SCENARIO AGAIN; a crash leaves everything as it is. SETUP > End demo takes it all away, settings included. A DEMO badge in the header meanwhile.
+- **Map signs by mode, as confirmed:** arrow = piloted, diamond = standby, moon = deep sleep, eye = overwatch (lost: red triangle, crashed: grey square). Standby no longer shows the deep-sleep moon.
+- **A queued mode:** a yellow arrow from the sign to the queued mode's sign, on the map and in FLEET, with how long ago it was queued.
+- **FLEET's buttons:** PILOTED, STANDBY, OVERWATCH, DEEP SLEEP on top - the mode it is in in grey (pressed: it shakes, not possible), a queued one in yellow (pressed again: dropped); CLIPS and a CHECK EVERY list under them.
+- **The phone this PC flies takes STANDBY (and the others) from FLEET** too.
+- **LINK card:** DEEP SLEEP and OVERWATCH always there (armed too: a press shakes and says why), the current one in grey.
+- **Detection areas: a button by the video**, under MUTE (no longer in the VIDEO menu).
+- **Picking a phone on the map** (or in FLEET) picks it in the PHONE list when not connected; picking it in the PHONE list selects its FLEET row.
+- **Overwatch clips play as one video:** the pictures before the alert, then the video, on one clock (time so far / the whole clip's); the bar moves to any moment of it (a click goes there), PAUSE stops the clock, PLAY at the end starts it again.
+- **REGAINING CONTROL counts down in seconds** (IN 2:30).
+- **Overwatch that sees nothing is said:** a phone (pc.47) tells in its check-ins whether its motion detection gets pictures; the log says at once when an overwatching phone's camera gives none. A camera that refuses the detection's picture during an event's recording no longer loses it for good (it did: only the first event was ever seen).
+- **Phone:** silent and without vibration while the app works (asks for Do Not Disturb access once); the boot animation no longer jumps at its end (the service starts under it, at 0.3 s).
+
 - **The tour no longer freezes at MOVING AROUND:** a deadlock between the window's title bar and the tour's dimmed layer (the mouse over the title bar while the map relaid itself) froze the whole program.
 - **Tour: MAP TOOLS moves on once pressed**, no NEXT.
 - **Tour: PREVIOUS FLIGHTS' box beside its window**, not over it (the window moves over to make room).

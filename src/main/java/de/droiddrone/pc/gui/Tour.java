@@ -713,7 +713,16 @@ final class Tour {
         if (answer == JOptionPane.YES_OPTION) start(main);
     }
 
+    /** A tour runs now (DEMO mode waits for it to end). */
+    static boolean running() {
+        return current != null;
+    }
+
     static void start(MainWindow main) {
+        if (main.demoRunning()) { // both would put out the same virtual drones and clean up after each other
+            Dialogs.message(main, "End the demo first (SETUP > End demo).", "Tour", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
         main.save(java.util.Map.of(SEEN_KEY, String.join(",", FEATURES)));
         run(new Tour(main, null), 0);
     }
@@ -723,6 +732,7 @@ final class Tour {
      * the eyes, the BTR, the alert, CONNECT, the flight and the hit - with the same clean-up at the end.
      */
     static void demo(MainWindow main) {
+        if (main.demoRunning()) return;
         Tour t = new Tour(main, null);
         t.demo = true;
         run(t, Math.max(0, t.fleetStepIndex()));

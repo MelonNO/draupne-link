@@ -77,7 +77,7 @@ class FleetCardsTest {
     static List<FleetCards.Card> ten() {
         List<FleetCards.Card> cards = new ArrayList<>(sample());
         String[] names = {"MobileDelta", "MobileEcho", "MobileFoxtrot", "MobileGolf", "MobileHotel", "MobileIndia", "MobileJuliett"};
-        MapView.Kind[] kinds = {MapView.Kind.ACTIVE, MapView.Kind.ASLEEP, MapView.Kind.LOST, MapView.Kind.OVERWATCH,
+        MapView.Kind[] kinds = {MapView.Kind.ACTIVE, MapView.Kind.STANDBY, MapView.Kind.LOST, MapView.Kind.OVERWATCH,
                 MapView.Kind.ASLEEP, MapView.Kind.ACTIVE, MapView.Kind.ASLEEP};
         String[] badges = {"ACTIVE", "STANDBY", "LOST", "OVERWATCH", "ASLEEP", "CONNECTED", "ASLEEP"};
         for (int i = 0; i < names.length; i++) {
@@ -162,8 +162,8 @@ class FleetCardsTest {
         row.dispatchEvent(new java.awt.event.MouseEvent(row, java.awt.event.MouseEvent.MOUSE_PRESSED, 0, 0, 5, 5, 1, false));
         assertEquals(java.util.List.of("MobileBravo"), picked);
         assertEquals("MobileBravo", p.selected());
-        javax.swing.JButton fly = findButton(p, "PILOT UAV");
-        assertNotNull(fly, "PILOT UAV in the strip");
+        javax.swing.JButton fly = findButton(p, "PILOTED"); // 2026-11-10: PILOT UAV is FLEET's PILOTED mode
+        assertNotNull(fly, "PILOTED in the strip");
         fly.doClick();
         assertEquals(java.util.List.of("MobileBravo"), flown);
 
