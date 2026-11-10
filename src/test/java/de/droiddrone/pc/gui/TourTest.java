@@ -248,6 +248,44 @@ class TourTest {
         assertEquals(Boolean.FALSE, n.captionForTest(300, 300), "over the content: the dim's");
     }
 
+    /**
+     * FlatLaf asks the dim about the title bar from the AWT-Windows thread; the answer must not wait for the AWT lock
+     * (2026-11-10, the pilot: "the program freezes in the moving around step" - the event thread held the lock in
+     * validate() and waited on that thread for the cursor, which waited on the lock in getLocationOnScreen: frozen).
+     */
+    @Test
+    void theTitleBarQuestionNeverWaitsForTheAwtLock() throws Exception {
+        javax.swing.JFrame frame = new javax.swing.JFrame(); // never shown
+        try {
+            javax.swing.JRootPane root = frame.getRootPane();
+            javax.swing.JMenuBar bar = new javax.swing.JMenuBar();
+            bar.setPreferredSize(new java.awt.Dimension(10, 40));
+            root.setJMenuBar(bar);
+            root.setSize(1366, 768);
+            root.doLayout();
+            root.getLayeredPane().doLayout();
+            JButton anchor = new JButton("FOLLOW");
+            anchor.setBounds(20, 690, 120, 30);
+            root.getContentPane().setLayout(null);
+            root.getContentPane().add(anchor);
+            Tour.TourNotice n = new Tour.TourNotice(anchor, new Tour.Step("MOVING AROUND", "Drag to pan.", () -> anchor),
+                    15, 30, () -> { }, () -> { }, false, null);
+            n.attachForTest(root.getLayeredPane(), 10_000);
+            java.util.concurrent.CompletableFuture<Boolean[]> answer = new java.util.concurrent.CompletableFuture<>();
+            Thread ask = new Thread(() -> answer.complete(new Boolean[]{n.captionForTest(300, 20), n.captionForTest(300, 300)}),
+                    "AWT-Windows stand-in");
+            ask.setDaemon(true);
+            synchronized (frame.getTreeLock()) { // as validate() holds it on the event thread
+                ask.start();
+                Boolean[] got = answer.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertNull(got[0], "over the title bar: not mine");
+                assertEquals(Boolean.FALSE, got[1], "over the content: the dim's");
+            }
+        } finally {
+            frame.dispose();
+        }
+    }
+
     /** SETUP > Overwatch demo starts at the FLEET step, which every whole tour has, in front of the finale's steps. */
     @Test
     void theOverwatchDemoStartsAtTheFleetStep() {

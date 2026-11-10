@@ -2,6 +2,10 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## Unreleased
+
+- **The tour no longer freezes at MOVING AROUND:** a deadlock between the window's title bar and the tour's dimmed layer (the mouse over the title bar while the map relaid itself) froze the whole program.
+
 ## 1.0.59
 
 PC only (the phone app is unchanged, pc.46 stays). The pilot's round after 1.0.58; not tried in the real window yet.

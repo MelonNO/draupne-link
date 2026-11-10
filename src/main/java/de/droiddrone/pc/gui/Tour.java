@@ -15,6 +15,7 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.Window;
 import java.awt.event.MouseAdapter;
@@ -1497,7 +1498,23 @@ final class Tour {
                 Component layer = getParent();
                 if (root == null || layer == null || root.getContentPane().getParent() == null) return all;
                 java.awt.Container cp = root.getContentPane();
-                return SwingUtilities.convertRectangle(cp.getParent(), cp.getBounds(), layer).intersection(all);
+                // 2026-11-10 (the pilot: "the program freezes in the moving around step"): FlatLaf asks captionAt from
+                // the AWT-Windows thread (the title bar's hit test). SwingUtilities.convertRectangle goes through the
+                // window's getLocationOnScreen, which takes the AWT tree lock - while the event thread held that lock
+                // in validate() and waited on the AWT-Windows thread for the cursor: both stuck for good. The offsets
+                // summed up the parents need no lock.
+                Point c = inRoot(cp, root), l = inRoot(layer, root);
+                return new Rectangle(c.x - l.x, c.y - l.y, cp.getWidth(), cp.getHeight()).intersection(all);
+            }
+
+            /** c's top left in root's coordinates, by its parents' offsets (no AWT lock: safe off the event thread). */
+            private static Point inRoot(Component c, Component root) {
+                int x = 0, y = 0;
+                for (Component k = c; k != null && k != root; k = k.getParent()) {
+                    x += k.getX();
+                    y += k.getY();
+                }
+                return new Point(x, y);
             }
 
             @Override
