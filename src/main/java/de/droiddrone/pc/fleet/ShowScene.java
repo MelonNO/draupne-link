@@ -1,6 +1,5 @@
 package de.droiddrone.pc.fleet;
 
-import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
@@ -9,8 +8,9 @@ import java.util.Random;
 /**
  * The tour's six drones' pictures (2026-11-09; 2026-11-10, the pilot: "Make the activities more serious. Make them
  * tactical army related. Make everything in a realistic style"): what each one's camera sees, in front of where it
- * stands - a field, tracks, treelines and a far forest, textured models lit by a low sun, their shadows - with the
- * virtual fleet's sky, haze and screen effects ({@link SimWorld}):
+ * stands - a field, tracks, treelines and a far forest, textured models lit by a low sun, their shadows - in a
+ * simulated memory ({@link SimVoid}, 2026-11-10): a white void for a sky, the far land fading and breaking up into it
+ * over a faint grid, fragments drifting up, now and then a glitch:
  * <ul>
  * <li>{@link Kind#DRONES}: a drone team at a treeline - operators kneeling by their UAZ, crates, a radio and an antenna
  * mast - its quads (the pilot's FPV model in its own colours, and a recon quad) taking off one after another, flying a
@@ -26,8 +26,8 @@ import java.util.Random;
  * </ul>
  * Models: /model/tactical.bin.gz and the FPV drone ({@link Raster3D}, THIRD-PARTY.md). What stands still is drawn once
  * for as long as the camera stays where it is (a drone on its post), and only what moves each picture. The motion
- * detection's picture gets it without the screen effects. {@link #addSound} mixes what is heard: the quads, the
- * engines, the mortar.
+ * detection's picture gets it without the fragments and the screen effects: only what really travels moves in it.
+ * {@link #addSound} mixes what is heard: the quads, the engines, the mortar.
  */
 final class ShowScene implements Scene.World, Scene.Sounding {
     /** What a drone sees. */
@@ -40,6 +40,8 @@ final class ShowScene implements Scene.World, Scene.Sounding {
     /** What never moves (drawn once a camera position), and the ground's tracks. */
     private final List<Put> statics = new ArrayList<>();
     private final Raster3D.GroundMap ground;
+    /** The fragments drifting up where the world ends ({@link SimVoid#fragments}). */
+    private final double[][] fragments;
 
     ShowScene(Kind kind, double originN, double originE, double headingDeg) {
         this(kind, originN, originE, headingDeg, System.currentTimeMillis());
@@ -61,6 +63,7 @@ final class ShowScene implements Scene.World, Scene.Sounding {
             case HIDE -> hideLayout(tracks);
         }
         ground = groundMap(tracks);
+        fragments = SimVoid.fragments(4700 + kind.ordinal());
     }
 
     Kind kind() {
@@ -135,12 +138,7 @@ final class ShowScene implements Scene.World, Scene.Sounding {
             System.arraycopy(b.px, 0, f.px, 0, w * h);
             System.arraycopy(b.depth, 0, f.depth, 0, w * h);
         } else {
-            Graphics2D g = img.createGraphics();
-            try {
-                g.drawImage(SimWorld.sky(w, h, false), 0, 0, null);
-            } finally {
-                g.dispose();
-            }
+            SimVoid.sky(f.px, w, h, cam);
             Raster3D.ground(f, cam, Raster3D.groundTexture("ground-grass"), Raster3D.groundTexture("ground-dirt"), ground);
             // nearest first: what is hidden behind them fails the depth test before its texture is read
             List<Put> near = new ArrayList<>(statics);
@@ -161,7 +159,10 @@ final class ShowScene implements Scene.World, Scene.Sounding {
         List<Puff> puffs = new ArrayList<>();
         moving(puts, puffs, t);
         draw(f, cam, puts, puffs);
-        if (!analysis) SimWorld.effects(img, nowMs);
+        if (!analysis) {
+            SimVoid.drawFragments(f, cam, fragments, t, this::at);
+            SimVoid.screen(img, nowMs);
+        }
     }
 
     private void draw(Raster3D.Frame f, Scene.Camera cam, List<Put> puts, List<Puff> puffs) {
