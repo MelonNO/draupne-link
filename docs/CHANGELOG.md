@@ -2,9 +2,23 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## Unreleased (phone pc.45)
+## 1.0.57 + phone pc.45
 
+The pilot's tour round after 1.0.56. Nothing of it run on a drone or a real phone yet.
+
+- **Fixed: the window froze** after the tour's video had played a while, and on coming back from alt-tab (the sound went on). It hung in Java2D's Direct3D pipeline (`D3DRenderQueue.flushBuffer`); Direct3D is now off (`sun.java2d.d3d=false`, in `Main` and the installed app). The 1:1 video copy got faster (1.2 ms against 2.8 ms at 1080p), a turned picture 1.3 ms slower.
 - **A muted observation tile still lights when its drone hears something.** After 10 s muted the phone sends no sound (it saves its upload); now it listens to its microphone itself and only says "sound heard" (a byte after `OBSERVE_STATE`, which older PCs ignore). Older phones behave as before. The virtual drone does the same.
+- **Map: every map type is auto.** Kartverket's topo and paper maps give way to the world topo where the view's middle is outside Norway. No AUTO entry any more; an old AUTO setting reads as topo.
+- **Tour:**
+  - the user selects PILOT, OBSERVER and SPECTATOR (nothing selected for them);
+  - no LIVE box: the video plays, then STANDBY shows by itself;
+  - CHECK EVERY says to set it to Constant;
+  - new MUTE AND LISTEN before STOP OBSERVING;
+  - fixed: the spectator part stuck at PILOT PC (the virtual pilot PC's name was never filed; it now takes a free PC name and is never the naming master);
+  - fixed: the tour ended at MIRROR when the mirrored observation tiles took the video's place;
+  - closing with the X (or the end) removes every tour drone and the virtual pilot PC from the name map, PHONE list, fleet manager and map;
+  - the tour's drones make no beeper noise (motors, wind and birds stay).
+- **Tour scenes realistic and tactical**, in a simulated-memory look (a real island round the action in a white void with a light-blue grid, distant trees as voxel ghosts, glitches on the video only, never in the motion detection's picture): a drone team launching recon quads (the FPV model in its own colours), a convoy (BTR-80, Urals, UAZ), a foot patrol, a checkpoint, a mortar position, a vehicle hide with an OP. Free models, credits in `THIRD-PARTY.md` (`model/tactical.bin.gz`, `tools/model/export_tactical.py`); the Kenney props are gone. A drone behind a ghost tree is hidden by it.
 
 ## 1.0.56 + phone pc.44
 
