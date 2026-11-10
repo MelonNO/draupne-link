@@ -5,6 +5,7 @@ Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The relea
 ## Unreleased
 
 - **The tour no longer freezes at MOVING AROUND:** a deadlock between the window's title bar and the tour's dimmed layer (the mouse over the title bar while the map relaid itself) froze the whole program.
+- **Tour: MAP TOOLS moves on once pressed**, no NEXT.
 
 ## 1.0.59
 

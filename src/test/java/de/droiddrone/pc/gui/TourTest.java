@@ -104,6 +104,50 @@ class TourTest {
         assertEquals(1, nexts[0], "pressed and gone: the next step at once");
     }
 
+    /** A control that counts as on screen, without a window shown (an off-screen control counts as gone). */
+    private static JButton onScreen(String text) {
+        return new JButton(text) {
+            @Override
+            public boolean isShowing() {
+                return true;
+            }
+        };
+    }
+
+    /** MAP TOOLS moves on once pressed, no NEXT (2026-11-10, the pilot: "dont make the user press next"). */
+    @Test
+    void mapToolsMovesOnOncePressed() {
+        JLayeredPane layer = window(1366, 768);
+        JButton tools = onScreen("MAP TOOLS");
+        tools.setBounds(1200, 100, 140, 40);
+        layer.add(tools);
+        int[] nexts = {0};
+        Tour.Step step = new Tour.Step("MAP TOOLS", "Drawing, tools and data. Press it.", () -> tools).pressMovesOn();
+        Tour.TourNotice n = new Tour.TourNotice(tools, step, 20, 33, () -> nexts[0]++, () -> { }, false, null);
+        n.attachForTest(layer, 10_000);
+        n.tickForTest();
+        assertEquals(0, nexts[0], "not pressed: the step waits");
+        n.pressForTest();
+        n.tickForTest();
+        assertEquals(1, nexts[0], "pressed: on by itself");
+    }
+
+    /** An ordinary press step still waits for NEXT once pressed (its control still there). */
+    @Test
+    void aPressStepStillWaitsForNext() {
+        JLayeredPane layer = window(1366, 768);
+        JButton follow = onScreen("FOLLOW");
+        follow.setBounds(1200, 100, 140, 40);
+        layer.add(follow);
+        int[] nexts = {0};
+        Tour.Step step = new Tour.Step("FOLLOW", "Press it.", () -> follow).press();
+        Tour.TourNotice n = new Tour.TourNotice(follow, step, 20, 33, () -> nexts[0]++, () -> { }, false, null);
+        n.attachForTest(layer, 10_000);
+        n.pressForTest();
+        n.tickForTest();
+        assertEquals(0, nexts[0], "pressed: NEXT now works, the step stays");
+    }
+
     /**
      * The alert step (the pilot: "the tour alert is still saying to press connect"): CONNECT closes the alert card it
      * points at, and a step whose control was gone never looked at what it waited for. Now the wait comes first.

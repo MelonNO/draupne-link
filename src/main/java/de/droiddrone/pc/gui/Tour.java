@@ -63,6 +63,8 @@ final class Tour {
         boolean showcase;
         /** The pilot must press the lit control (or one of the targets) before NEXT works. */
         boolean press;
+        /** Pressed: on by itself, no NEXT (MAP TOOLS, the pilot 2026-11-10: "dont make the user press next"). */
+        boolean pressMovesOn;
         /** Areas the mouse still works over (the header on the menu steps, the map on the map steps). */
         Supplier<JComponent> live;
         /** A second control lit with the first: the box covers both and everything between. */
@@ -118,6 +120,13 @@ final class Tour {
 
         Step press() {
             press = true;
+            return this;
+        }
+
+        /** As press(), and the press moves the tour on by itself. */
+        Step pressMovesOn() {
+            press = true;
+            pressMovesOn = true;
             return this;
         }
 
@@ -317,7 +326,7 @@ final class Tour {
 
         // ---- MAP TOOLS: DRAW, TOOLS, DATA, each list folding into the next before its step
         steps.add(new Step("MAP TOOLS", "Drawing, tools and data. Press it.", () -> main.mapWindow().tourTools())
-                .press().live(map).of(FEATURE_MAP_TOOLS));
+                .pressMovesOn().live(map).of(FEATURE_MAP_TOOLS));
         steps.add(new Step("DRAW", "LINE, RECTANGLE, ARROW: colour and width first. OUTLINE / FILL for rectangles. "
                 + "Right-click a drawing to rename or remove.", () -> main.mapWindow().tourDraw())
                 .extra(() -> main.mapWindow().tourDrawEnd(true)).transition(group(MapToolsPanel.Group.DRAW))
@@ -869,6 +878,7 @@ final class Tour {
         private final List<JComponent> targets;
         private final BooleanSupplier waitFor;
         private final boolean auto;
+        private final boolean pressMovesOn;
         private long shownAt;
         private long nudgeAt = -1;
         private boolean above;
@@ -916,6 +926,7 @@ final class Tour {
             this.targets = targets;
             this.waitFor = s.waitFor;
             this.auto = s.auto;
+            this.pressMovesOn = s.pressMovesOn;
             this.reopen = s.reopen;
             counter = s.finish || s.legend ? "" : "STEP " + step + " OF " + of;
             setOpaque(false);
@@ -1089,6 +1100,12 @@ final class Tour {
             if (waitingForEvent && auto && waitFor.getAsBoolean()) {
                 waitingForEvent = false;
                 next.setEnabled(true);
+                next.doClick();
+                return;
+            }
+            // pressed, and the step moves on by itself: the tick after the press, so the control's own action (on the
+            // same release) has run first
+            if (pressMovesOn && pressDone && next.isEnabled()) {
                 next.doClick();
                 return;
             }
