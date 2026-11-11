@@ -155,6 +155,17 @@ public final class NameService {
     private volatile FleetManager fleet;
     /** 1.0.64: how often each address is asked (the scan's thread). */
     private final ScanPace pace = new ScanPace();
+    /** 1.0.64: the power mode each address said in its last own answer (any thread reads; the scan writes). */
+    private final java.util.Map<String, Integer> saidMode = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 1.0.64: check-ins heard since the last scan ({mono ms, power mode}); the scan's thread files them in its pace. */
+    private final java.util.Map<String, long[]> heardHellos = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** The power mode this address said when it last answered itself ({@link Names#POWER_UNKNOWN}: never, or an older phone). */
+    public int saidMode(String ip) {
+        Integer m = ip == null ? null : saidMode.get(ip);
+        return m == null ? Names.POWER_UNKNOWN : m;
+    }
     private volatile java.util.function.BiFunction<String, byte[], byte[]> fleetHello;
 
     public void setFleet(FleetManager fleet, java.util.function.BiFunction<String, byte[], byte[]> onHello) {
@@ -215,6 +226,8 @@ public final class NameService {
         String moved = names.seen(reply, ip, virtual ? VIRTUAL_HOST : old == null ? "" : old.host());
         if (moved != null) log.accept("Names: " + w.name + " now at " + ip + " (was " + moved + ").");
         if (p != null) positions.put(w.name, keepHeading(new DronePosition(w.name, p, System.currentTimeMillis(), headingDeg)));
+        saidMode.put(ip, powerMode);
+        heardHellos.put(ip, new long[]{MonoClock.ms(), powerMode});
         return old == null || !ip.equals(old.ip());
     }
 
@@ -321,6 +334,10 @@ public final class NameService {
             byte[] query = Names.query(key);
             long now = MonoClock.ms();
             Set<String> asked = new HashSet<>(), allOnline = new HashSet<>();
+            for (String ip : new ArrayList<>(heardHellos.keySet())) { // 1.0.64: check-ins since the last scan
+                long[] h = heardHellos.remove(ip);
+                if (h != null) pace.heard(ip, h[0], (int) h[1], 0);
+            }
             FleetManager fm = fleet;
             for (Tailscale.Peer p : online) {
                 allOnline.add(p.ip());
@@ -348,8 +365,9 @@ public final class NameService {
                 if (reply == null) continue;
                 String ip = packet.getAddress().getHostAddress();
                 onlineIps.add(ip);
-                pace.answered(ip, MonoClock.ms(), reply.status() != null ? reply.status().mode : reply.powerMode(),
-                        reply.status() != null ? reply.status().intervalMin : 0, reply.name());
+                int said = reply.status() != null ? reply.status().mode : reply.powerMode();
+                saidMode.put(ip, said);
+                pace.answered(ip, MonoClock.ms(), said, reply.status() != null ? reply.status().intervalMin : 0, reply.name());
                 String host = "";
                 for (Tailscale.Peer p : online) if (p.ip().equals(ip)) host = p.hostName();
                 if (reply.name().isEmpty()) {

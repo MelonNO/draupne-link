@@ -214,7 +214,7 @@ public final class OverwatchHub implements AutoCloseable {
             if (s == null) return;
             s.card.dismiss(now());
             send(s, OverwatchProtocol.command(s.token, s.event, OverwatchProtocol.CMD_DISMISS));
-            log(drone + ": alert dismissed; silent until motion ends (max 10 min).");
+            log(drone + ": alert dismissed; silent until new motion.");
             publish();
         });
     }
@@ -314,8 +314,20 @@ public final class OverwatchHub implements AutoCloseable {
 
     private void handle(byte[] d, InetAddress from, int port) {
         int token = OverwatchProtocol.token(d);
-        Watched w = byToken.get(token);
-        if (w == null) return; // not a drone this PC put to overwatch (another PC's, or an old token)
+        Watched known0 = byToken.get(token);
+        if (known0 == null) {
+            // 1.0.64 (the pilot: alerts go to "every pc"; phone app pc.50 sends them to each PC that knows it): an
+            // alert of an overwatch another PC set, from a phone of ours at its own address - taken up here too
+            // (the alert names the phone). Anything else with a token not known: dropped, as before.
+            if (d[0] != OverwatchProtocol.ALERT || token == 0) return;
+            OverwatchProtocol.Alert a = OverwatchProtocol.readAlert(d, d.length);
+            java.util.function.BiPredicate<String, InetAddress> known = ourPhone;
+            if (a == null || a.name == null || a.name.isEmpty() || known == null || !known.test(a.name, from)) return;
+            watch(a.name, token, null);
+            known0 = byToken.get(token);
+            log(a.name + ": overwatch set by another PC - its alerts come here too.");
+        }
+        final Watched w = known0;
         Session s = sessions.computeIfAbsent(w.drone(), k -> new Session(w));
         if (s.token != token) s.blindSaid = false; // a new overwatch (a new token): its camera's word is new too
         s.token = token;
@@ -333,11 +345,38 @@ public final class OverwatchHub implements AutoCloseable {
         }
     }
 
+    /** 1.0.64: whether this name is a phone of ours at this address (the name map); null: no foreign alert is taken. */
+    private volatile java.util.function.BiPredicate<String, InetAddress> ourPhone;
+
+    public void setOurPhone(java.util.function.BiPredicate<String, InetAddress> known) {
+        ourPhone = known;
+    }
+
+    /** Tests: the wall clock (an alert's start is the phone's wall time). */
+    long wallOverride = -1;
+
+    private long wallNow() {
+        return wallOverride >= 0 ? wallOverride : System.currentTimeMillis();
+    }
+
+    /**
+     * 1.0.64: an alert that reached this PC late (the phone tells an unacknowledged one on after its event, pc.50):
+     * ", 4 min ago" - nothing for one that is fresh (under 90 s, the clocks' difference included).
+     */
+    static String lateText(long startedAtWall, long nowWall) {
+        long ago = nowWall - startedAtWall;
+        if (ago < 90_000) return "";
+        return ", " + (ago < 3_600_000 ? ago / 60_000 + " min" : ago / 3_600_000 + " h") + " ago (the alert came late)";
+    }
+
     private void onAlert(Session s, OverwatchProtocol.Alert a, long now) {
         if (a == null) return;
         send(s, OverwatchProtocol.command(s.token, a.event, OverwatchProtocol.CMD_ACK));
-        boolean newEvent = a.event != s.event || s.id == null;
+        // 1.0.64: its start time too - a phone's next overwatch counts its events from 1 again, and "event 1" after
+        // an earlier event 1 was acknowledged and never shown (no ring, no card)
+        boolean newEvent = a.event != s.event || s.id == null || s.alert == null || s.alert.startedAt != a.startedAt;
         if (newEvent) {
+            s.card.forget();
             s.closeMedia();
             s.id = null;
             s.endedSaid = false;
@@ -357,7 +396,7 @@ public final class OverwatchHub implements AutoCloseable {
         boolean news = s.card.onAlert(a.event, a.alertNo, now);
         if (news) {
             log(s.drone() + ": MOTION " + (a.light() ? "(a light) " : "") + "- overwatch alert"
-                    + (a.alertNo > 0 ? " again (still moving 10 min after dismiss)" : "") + ".");
+                    + (a.alertNo > 0 ? " again (new motion after dismiss)" : "") + lateText(a.startedAt, wallNow()) + ".");
             Listener l = listener;
             if (l != null) l.onNews(s.drone());
         }

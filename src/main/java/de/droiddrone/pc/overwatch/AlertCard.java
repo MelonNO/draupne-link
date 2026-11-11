@@ -22,6 +22,12 @@ public final class AlertCard {
     private long endedAt = -1, dismissedAt = -1;
     private boolean badgeClosed;
 
+    /** The next alert is a new event whatever its number (the phone's numbering started over). */
+    public void forget() {
+        event = -1;
+        alertNo = -1;
+    }
+
     /**
      * An ALERT came (resends too).
      * @return true when it is news - a new event, or the same one alerting again after a dismiss - so the caller

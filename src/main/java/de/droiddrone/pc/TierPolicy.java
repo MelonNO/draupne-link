@@ -35,6 +35,8 @@ final class TierPolicy {
     /** Back to normal after this long calm in bad coverage mode; doubled (up to 5 min) when it had to go back soon. */
     static final long ROBUST_HOLD_MS = 20_000;
     static final long MAX_ROBUST_HOLD_MS = 300_000;
+    /** The normal picture held this long since bad coverage: the next bad spell's hold starts short again. */
+    static final long HOLD_FORGET_MS = 600_000;
     /**
      * AUTO goes to the sharp tier after this long calm (no stall) at the normal top bitrate; doubled (up to 5 min)
      * when it had to leave the sharp tier within a minute, back to this after a sharp spell that lasted.
@@ -145,6 +147,8 @@ final class TierPolicy {
                         : stalls3 ? stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s" : "relayed";
                 if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) {
                     robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2); // back too soon: stay longer next time
+                } else if (leftRobustAt >= 0 && now - leftRobustAt >= HOLD_FORGET_MS) {
+                    robustHoldMs = ROBUST_HOLD_MS; // 1.0.64: a long good spell since - the hold only ever grew (5 min for the rest of the flight)
                 }
             } else {
                 // calm at the normal top bitrate for sharpHoldMs, no stall in that time: the sharp tier (a phone that

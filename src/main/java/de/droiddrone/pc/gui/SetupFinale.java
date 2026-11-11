@@ -117,7 +117,7 @@ final class SetupFinale extends JComponent {
                 g.drawString(s, (w - fm.stringWidth(s)) / 2f, y);
                 g.setFont(Theme.font(java.awt.Font.PLAIN, 14f));
                 fm = g.getFontMetrics();
-                String s2 = "Press CONNECT when drone and phone are ready.";
+                String s2 = "Press PILOT UAV when drone and phone are ready.";
                 g.setColor(Theme.MUTED);
                 g.drawString(s2, (w - fm.stringWidth(s2)) / 2f, y + 30);
             }

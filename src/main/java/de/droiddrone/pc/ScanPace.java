@@ -35,7 +35,7 @@ final class ScanPace {
     static final long WINDOW_EARLY_MS = 10_000, WINDOW_LATE_MS = 30_000;
 
     private static final class Entry {
-        long askedAt = Long.MIN_VALUE / 2, answeredAt = Long.MIN_VALUE / 2;
+        long askedAt = Long.MIN_VALUE / 2, answeredAt = Long.MIN_VALUE / 2, heardAt = Long.MIN_VALUE / 2;
         int missed;
         boolean resting;
         long holdMs;
@@ -60,7 +60,11 @@ final class ScanPace {
         Entry e = byIp.get(ip);
         if (e == null) return true;
         if (e.mode == DEEP_SLEEP || e.mode == OVERWATCH) {
-            if (e.intervalMin <= 0 || SleepCheck.isAlways(e.intervalMin)) return now - e.askedAt >= SLOW_ASK_MS;
+            if (e.intervalMin <= 0 || SleepCheck.isAlways(e.intervalMin)) {
+                // 1.0.64: its own hello came lately (one a minute while it listens): that is its answer - a query
+                // of this PC's own woke its radio a second time each minute
+                return now - e.heardAt >= HEARD_QUIET_MS && now - e.askedAt >= SLOW_ASK_MS;
+            }
             long period = e.intervalMin * 60_000L, since = now - e.answeredAt;
             long phase = Math.floorMod(since, period);
             boolean near = since >= period - WINDOW_EARLY_MS && (phase >= period - WINDOW_EARLY_MS || phase <= WINDOW_LATE_MS);
@@ -90,6 +94,27 @@ final class ScanPace {
         e.mode = powerMode;
         e.intervalMin = intervalMin;
         e.holdMs = e.resting ? holdMs(intervalMin) : 0;
+    }
+
+    /** A listening sleeper whose hello came within this long isn't asked: the next hello is due a minute after. */
+    static final long HEARD_QUIET_MS = 75_000;
+
+    /**
+     * 1.0.64: its check-in (the sleep hello, with its mode) reached this PC: as good as an answer to a query - and a
+     * better mark of when a timed sleeper's window opens.
+     */
+    void heard(String ip, long now, int powerMode, int intervalMin) {
+        Entry e = byIp.computeIfAbsent(ip, k -> new Entry());
+        e.heardAt = now;
+        e.askedAt = Math.max(e.askedAt, now); // nothing to ask: it just said it all
+        e.answeredAt = now;
+        e.missed = 0;
+        if (rests(powerMode)) {
+            e.resting = true;
+            e.mode = powerMode;
+            if (intervalMin > 0) e.intervalMin = intervalMin;
+            e.holdMs = holdMs(e.intervalMin);
+        }
     }
 
     /** The name it last answered with, or null. */

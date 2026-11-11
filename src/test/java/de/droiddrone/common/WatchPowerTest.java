@@ -18,6 +18,21 @@ class WatchPowerTest {
             {1088, 1088}, {960, 960}, {960, 720}, {720, 720}, {720, 480}, {640, 480}, {352, 288}, {320, 240}, {176, 144}};
     static final int[][] XCOVER6_FPS = {{15, 15}, {15, 24}, {24, 24}, {15, 30}, {30, 30}};
 
+    /**
+     * pc.50: an overwatch event's start and end change the camera's session; "not started" for that moment was a stop,
+     * and the start after it learnt the picture anew - whoever stood at the drone became background.
+     */
+    @Test
+    void aSessionChangeIsNotAStopOfTheDetection() {
+        assertFalse(WatchRun.runs(true, false, false, true, 100), "never started: not running yet");
+        assertTrue(WatchRun.runs(true, true, false, true, 0), "started");
+        assertTrue(WatchRun.runs(true, false, true, true, 300), "the session changes: the same run");
+        assertTrue(WatchRun.runs(true, false, true, true, 2600), "a camera opened again by the watchdog too");
+        assertFalse(WatchRun.runs(true, false, true, true, WatchRun.GAP_MS), "stopped for good: a stop");
+        assertFalse(WatchRun.runs(true, false, true, false, 300), "another camera: a new start");
+        assertFalse(WatchRun.runs(false, true, true, true, 0), "armed, or not asked for: off at once");
+    }
+
     @Test
     void thePilotsPhoneWatchesAt320x240Cut169() {
         assertArrayEquals(new int[]{1280, 720}, AnalysisSize.pick(XCOVER6, 1280, 720), "the video's own shape: what it had");

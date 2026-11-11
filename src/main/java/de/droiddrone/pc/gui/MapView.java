@@ -112,7 +112,12 @@ class MapView extends JComponent {
     void setAirspace(java.util.List<de.droiddrone.pc.map.Airspace> areas, String attribution) {
         airspace = areas == null ? java.util.List.of() : java.util.List.copyOf(areas);
         airspaceAttribution = attribution;
-        if (airspaceInfo != null && !airspace.contains(airspaceInfo)) airspaceInfo = null;
+        // 1.0.64: by its id - NOTAMs are read anew at every publish (each minute, each view rest), so "the same
+        // area" was never the same object and a NOTAM's info box closed by itself within the minute
+        if (airspaceInfo != null) {
+            final String shown = airspaceInfo.id();
+            airspaceInfo = airspace.stream().filter(a -> a.id().equals(shown)).findFirst().orElse(null);
+        }
         repaint();
     }
 

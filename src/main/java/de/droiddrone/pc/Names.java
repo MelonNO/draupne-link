@@ -278,6 +278,27 @@ public final class Names {
         return true;
     }
 
+    /**
+     * 1.0.64: the settings kept per phone ("videoUpsideDown.MobileAlpha", its mute, detection level and areas, volume,
+     * compass) under the new name after a rename - they stayed under the old one, so a renamed phone's upside-down
+     * picture was the wrong way up again and its detection areas were gone.
+     * @return what to save: each "key.from" emptied and written as "key.to" (never the name map's own entries)
+     */
+    public static Map<String, String> movedSettings(java.util.Collection<String> keys, java.util.function.Function<String, String> value,
+                                                    String from, String to) {
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        if (from == null || to == null || from.isEmpty() || from.equalsIgnoreCase(to)) return out;
+        String end = "." + from.toLowerCase(Locale.ROOT);
+        for (String k : keys) {
+            if (k.startsWith(PREFIX) || !k.toLowerCase(Locale.ROOT).endsWith(end) || k.length() == end.length()) continue;
+            String v = value.apply(k);
+            if (v == null || v.isEmpty()) continue;
+            out.put(k, "");
+            out.put(k.substring(0, k.length() - from.length()) + to, v);
+        }
+        return out;
+    }
+
     public synchronized void remove(String name) {
         if (name == null) return;
         Entry e = entries.remove(name.toLowerCase(Locale.ROOT));

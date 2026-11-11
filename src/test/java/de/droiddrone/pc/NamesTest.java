@@ -16,6 +16,24 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** DRAUPNE names (1.0.35): the letters, the map, the packets, and the service that asks the network. */
 class NamesTest {
+    /** 1.0.64: a renamed phone keeps its own settings (they stayed under the old name). */
+    @Test
+    void aRenamedPhonesSettingsGoWithIt() {
+        Map<String, String> cfg = new HashMap<>();
+        cfg.put("videoUpsideDown.MobileAlpha", "true");
+        cfg.put("detectionAreas.mobilealpha", "0.1,0.1,0.5,0.5,3");
+        cfg.put("videoUpsideDown.MobileBravo", "false");
+        cfg.put("name.MobileAlpha", "phone|100.64.0.5");
+        cfg.put("audio.muted.MobileAlpha", "");
+        cfg.put("phoneName", "MobileAlpha");
+        Map<String, String> moved = Names.movedSettings(cfg.keySet(), cfg::get, "MobileAlpha", "MobileDelta");
+        assertEquals("true", moved.get("videoUpsideDown.MobileDelta"));
+        assertEquals("", moved.get("videoUpsideDown.MobileAlpha"), "the old one emptied");
+        assertEquals("0.1,0.1,0.5,0.5,3", moved.get("detectionAreas.MobileDelta"), "whatever the case it was saved in");
+        assertEquals(4, moved.size(), "nothing of another phone, the name map or an unset one");
+        assertTrue(Names.movedSettings(cfg.keySet(), cfg::get, "MobileAlpha", "mobilealpha").isEmpty());
+    }
+
     private FakeDevice phone, otherPc;
     private NameService service;
 

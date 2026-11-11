@@ -213,6 +213,7 @@ public class Udp {
         if (!keyMatches(d, len, 1)) return;
         // pc.50: the PCs that ask who this phone is hear its sleep notice too
         namedBy.put(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
+        knownPcs.put(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
         try {
             if (d[0] == NAME_ASSIGN) {
                 java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(d, 1, len - 1));
@@ -223,23 +224,27 @@ public class Udp {
                     log("This phone is " + name + " now (named by the PC at " + packet.getAddress().getHostAddress() + ")");
                 }
             }
-            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
-            java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
-            out.writeByte(NAME_REPLY);
-            out.writeUTF(key);
-            out.writeByte(0);
-            out.writeUTF(MainActivity.phoneName());
-            out.writeUTF(MainActivity.deviceName());
-            out.writeUTF(MainActivity.versionName == null ? "" : MainActivity.versionName);
-            writePosition(out);
-            fleetStatus().writeTo(out); // pc.40: how this phone is doing, for the PCs' fleet cards
-            byte[] r = bytes.toByteArray();
-            // pc.31: from the answer thread - this is the receive thread, and a full send buffer (video) held the sticks
-            final DatagramPacket reply = new DatagramPacket(r, r.length, packet.getAddress(), packet.getPort());
+            // pc.31: sent from the answer thread - this is the receive thread, and a full send buffer (video) held the
+            // sticks. pc.50: built there too - the status block asks Android for the battery, the heat and the mobile
+            // signal (calls into system services), every 5 s per PC, with the stick frames waiting behind them
+            final InetAddress to = packet.getAddress();
+            final int toPort = packet.getPort();
             final DatagramSocket s = socket;
+            PowerMode.replyWhileAsleep(); // listening in deep sleep: awake until the answer has left
             spectatorAnswers.execute(() -> {
                 try {
-                    s.send(reply);
+                    java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+                    java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+                    out.writeByte(NAME_REPLY);
+                    out.writeUTF(key);
+                    out.writeByte(0);
+                    out.writeUTF(MainActivity.phoneName());
+                    out.writeUTF(MainActivity.deviceName());
+                    out.writeUTF(MainActivity.versionName == null ? "" : MainActivity.versionName);
+                    writePosition(out);
+                    fleetStatus().writeTo(out); // pc.40: how this phone is doing, for the PCs' fleet cards
+                    byte[] r = bytes.toByteArray();
+                    s.send(new DatagramPacket(r, r.length, to, toPort));
                 } catch (Exception e) {
                     log("answerName send error: " + e);
                 }
@@ -521,7 +526,9 @@ public class Udp {
                     }
                     // pc.50: listening in deep sleep holds no wake lock - anything but a name query (answered above, at
                     // once) keeps the phone awake long enough to be handled (a Connect, the PC's answer, a fleet mode)
-                    PowerMode.packetWhileAsleep();
+                    // (pc.50, later: only what can concern a sleeping phone - a stray or unknown packet took the 3 s too)
+                    if (d[0] == UdpCommon.Connect || d[0] == PowerMode.SLEEP_ANSWER || d[0] == FleetProtocol.MODE
+                            || d[0] == Observe.OBSERVE || d[0] == Observe.STOP || d[0] == SPECTATE_PILOT_QUERY) PowerMode.packetWhileAsleep();
                     // pc.40: a PC's fleet management asks for a power mode - in any state but a pilot session
                     if (d[0] == FleetProtocol.MODE) {
                         onFleetMode(receiverPacket, d, len);
@@ -837,14 +844,17 @@ public class Udp {
             while (id == udpThreadsId) {
                 try {
                     long now = System.currentTimeMillis();
-                    if (now >= nextTelemetry) {
-                        nextTelemetry = now + TELEMETRY_TICK_MS;
+                    // pc.50: the schedules on the monotonic clock - a network time correction that set the phone's
+                    // clock back X s stopped the telemetry, the stats and the motion tick for X s (FC LOST on the PC)
+                    long mono = android.os.SystemClock.elapsedRealtime();
+                    if (mono >= nextTelemetry) {
+                        nextTelemetry = mono + TELEMETRY_TICK_MS;
                         sendTelemetryData();
                     }
-                    if (now >= nextMotion) {
+                    if (mono >= nextMotion) {
                         // pc.35: the motion detection runs while asked for, the FC DISARMED and the camera running -
                         // checked every 0.1 s, connected or not (it stops within that of arming)
-                        nextMotion = now + 100;
+                        nextMotion = mono + 100;
                         observeTick(now); // pc.37: before the detection, which an observer may ask for
                         MotionWatch.tick(FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, cameraManager.getCamera());
                         boolean pilot = isConnected();
@@ -856,8 +866,8 @@ public class Udp {
                             else sendToObservers(motion.getData());
                         }
                     }
-                    if (now >= nextStats && isConnected()) {
-                        nextStats = now + 100;
+                    if (mono >= nextStats && isConnected()) {
+                        nextStats = mono + 100;
                         UdpPacketData stats = new UdpPacketData(UdpCommon.TelemetryData);
                         stats.daos.writeShort(PcLinkStats.CODE);
                         PcLinkStats.writeTo(stats.daos);
@@ -873,7 +883,7 @@ public class Udp {
                         PcLinkStats.writePhoneStateTo(stats.daos, phoneStateFlags(), rcPath.lastSeq());
                         // pc.21, once a second and three times when the mode changes; always the last record: a
                         // pc.20 PC stops reading at it
-                        if (statsSent % 10 == 7 || PowerMode.burstDue(now)) PowerMode.writeRecordTo(stats.daos);
+                        if (statsSent % 10 == 7 || PowerMode.burstDue(mono)) PowerMode.writeRecordTo(stats.daos);
                         // pc.31, once a second and only to a PC whose stick frames carry their send time (it knows the
                         // record): after every other record, as a PC that doesn't know it stops reading there
                         if (statsSent % 10 == 3 && rcPath.lagFromPc()) {
@@ -1118,6 +1128,29 @@ public class Udp {
     private final java.util.Map<InetAddress, Long> namedBy = new java.util.concurrent.ConcurrentHashMap<>();
     static final long NOTICE_PC_MS = 120_000;
     static final int NOTICE_PCS = 10;
+    /**
+     * pc.50 (the pilot: overwatch alerts go to "every pc"): the PCs that asked this phone's name in the last day - a
+     * sleeping phone is asked only round its check-ins, so the notice's two minutes would mostly find nobody.
+     */
+    private final java.util.Map<InetAddress, Long> knownPcs = new java.util.concurrent.ConcurrentHashMap<>();
+    static final long ALERT_PC_MS = 24 * 3600_000L;
+
+    /** The PCs an overwatch alert goes to: the one that set it (its own port) first, then the known ones at the link port. */
+    java.util.List<java.net.InetSocketAddress> alertPcs() {
+        java.util.LinkedHashMap<InetAddress, Integer> to = new java.util.LinkedHashMap<>();
+        if (lastPcIp != null) to.put(lastPcIp, lastPcPort);
+        long now = android.os.SystemClock.elapsedRealtime();
+        knownPcs.values().removeIf(at -> now - at > ALERT_PC_MS);
+        java.util.List<java.util.Map.Entry<InetAddress, Long>> newest = new java.util.ArrayList<>(knownPcs.entrySet());
+        newest.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+        for (java.util.Map.Entry<InetAddress, Long> e : newest) {
+            if (to.size() >= NOTICE_PCS) break;
+            to.putIfAbsent(e.getKey(), port);
+        }
+        java.util.List<java.net.InetSocketAddress> out = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<InetAddress, Integer> e : to.entrySet()) out.add(new java.net.InetSocketAddress(e.getKey(), e.getValue()));
+        return out;
+    }
 
     /** pc.50: a pilot or observers use the heading sensor (it stays on after the sleep notice). */
     boolean headingInUse() {
@@ -1312,6 +1345,9 @@ public class Udp {
                     camera.setExtraTarget(null);
                     camera.setWatchOnly(false);
                     camera.close();
+                    // pc.50: an event's session without overwatch's own recorder (past the clip's cap, or the recorder
+                    // didn't start) had started the on-phone recorder's idle encoder; it ran on after overwatch
+                    mp4Recorder.close();
                     return;
                 }
                 overwatchCameraOwner = ++cameraOwner;

@@ -163,8 +163,8 @@ public class StreamEncoder {
             return null;
         }
         bitRateCounter = 0;
-        bitRateTimestamp = System.currentTimeMillis();
-        lastBitrateReduceTs = System.currentTimeMillis();
+        bitRateTimestamp = android.os.SystemClock.elapsedRealtime();
+        lastBitrateReduceTs = android.os.SystemClock.elapsedRealtime();
         lastBitRateMbs = 0;
         if (config.getBitrateLimit() != 0){
             while (getTargetBitRate() > config.getBitrateLimit() && bitRateIndex > 0){
@@ -299,7 +299,7 @@ public class StreamEncoder {
             while (isListening && id == listenThreadId) {
                 try {
                     byte[] buf = audioSource.getBufferData(MediaCommon.streamAudioConsumerId);
-                    long now = System.currentTimeMillis();
+                    long now = android.os.SystemClock.elapsedRealtime();
                     AudioFormat format = audioSource.getAudioFormat();
                     if (buf == null || format == null) {
                         if (id == listenThreadId) soundHeard = voice.isActive(now);
@@ -429,7 +429,7 @@ public class StreamEncoder {
                 }
             }
         }else{
-            long currentMs = System.currentTimeMillis();
+            long currentMs = android.os.SystemClock.elapsedRealtime();
             if (currentMs < lastBitrateReduceTs + 1000) return;
             lastBitrateReduceTs = currentMs;
             if (bitRateIndex > 0) {
@@ -456,7 +456,7 @@ public class StreamEncoder {
             while (index > 0 && baseBitRates[index] > config.getBitrateLimit()) index--;
         }
         if (index == bitRateIndex) return;
-        if (index < bitRateIndex) lastBitrateReduceTs = System.currentTimeMillis();
+        if (index < bitRateIndex) lastBitrateReduceTs = android.os.SystemClock.elapsedRealtime();
         bitRateIndex = index;
         encoderBitrateChange = true;
     }
@@ -464,7 +464,7 @@ public class StreamEncoder {
     /** A key frame now (the PC got one damaged); at most every 0.3 s, every 1 s with intra refresh (it heals anyway). */
     public void requestKeyFrame(){
         MediaCodec encoder = videoEncoder;
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         if (encoder == null || !isVideoEncoderInitialized || now - lastKeyFrameRequest < (intraRefresh ? 1000 : 300)) return;
         lastKeyFrameRequest = now;
         try {
@@ -481,7 +481,7 @@ public class StreamEncoder {
     }
 
     public void setLockIncreaseBitrate(boolean lockIncreaseBitrate){
-        long current = System.currentTimeMillis();
+        long current = android.os.SystemClock.elapsedRealtime();
         if (!lockIncreaseBitrate && lockIncreaseBitrateTs > current - 2000) return;
         this.lockIncreaseBitrate = lockIncreaseBitrate;
         if (lockIncreaseBitrate) lockIncreaseBitrateTs = current;
@@ -498,7 +498,7 @@ public class StreamEncoder {
     }
 
     public float getBitRate(){// MBit/s
-        long current = System.currentTimeMillis();
+        long current = android.os.SystemClock.elapsedRealtime();
         float timeSec = (current - bitRateTimestamp) / 1000f;
         if (timeSec < 0.2f && lastBitRateMbs > 0) return lastBitRateMbs;
         float bitRate = (bitRateCounter * 8) / timeSec / 1000000f;

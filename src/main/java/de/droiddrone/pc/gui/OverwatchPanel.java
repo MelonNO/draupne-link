@@ -395,7 +395,7 @@ final class OverwatchPanel extends JPanel {
             setMinimized(false);
             // a plain close in the corner (1.0.50, the pilot): the same as DISMISS - the card goes until a new alert
             JButton closeCard = Theme.secondaryButton("X");
-            closeCard.setToolTipText("Close (= DISMISS): preview stops, drone silent until motion ends (max 10 min)");
+            closeCard.setToolTipText("Close (= DISMISS): preview stops, drone silent until new motion");
             closeCard.addActionListener(e -> onDismiss.accept(drone));
             JPanel headRow = new JPanel(new BorderLayout(6, 0));
             headRow.setOpaque(false);
@@ -431,7 +431,7 @@ final class OverwatchPanel extends JPanel {
             connect.setToolTipText("Wake the drone and connect as pilot");
             connect.addActionListener(e -> onConnect.accept(drone));
             JButton dismiss = Theme.secondaryButton("Dismiss");
-            dismiss.setToolTipText("Preview stops, drone silent until motion ends (max 10 min)");
+            dismiss.setToolTipText("Preview stops, drone silent until new motion");
             dismiss.addActionListener(e -> onDismiss.accept(drone));
             JButton clips = Theme.secondaryButton("Clips");
             clips.setToolTipText("This drone's clips");
@@ -998,6 +998,8 @@ final class OverwatchPanel extends JPanel {
             ClipPlayer player = null;
             int part = -1, shownPicture = -1;
             int[] pixels = null;
+            BufferedImage[] ring = new BufferedImage[3];
+            int turn = 0;
             int w = 0, h = 0;
             long pos = 0, wallStart = System.currentTimeMillis();
             boolean seekVideo = false;
@@ -1077,7 +1079,12 @@ final class OverwatchPanel extends JPanel {
                     }
                     if (gen != playGen || seekTo >= 0) continue;
                     pos = at2;
-                    BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+                    // 1.0.64: three pictures by turns (one shown, one on its way, one filled) - a new full-size picture
+                    // per frame was about 110 MB of garbage a second at 1280x720, its collection felt in the live video
+                    BufferedImage img = ring[turn = (turn + 1) % ring.length];
+                    if (img == null || img.getWidth() != w || img.getHeight() != h) {
+                        img = ring[turn] = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+                    }
                     System.arraycopy(pixels, 0, ((DataBufferInt) img.getRaster().getDataBuffer()).getData(), 0, pixels.length);
                     post(gen, img, null, pos);
                 }

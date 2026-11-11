@@ -144,7 +144,7 @@ final class RcCheckDialog extends JDialog {
         bars.setValues(ch, 8);
         ControlLink link = main.activeLink();
         if (link == null) {
-            output.set(State.PENDING, "Not connected - press CONNECT in the main window.");
+            output.set(State.PENDING, "Not connected - press PILOT UAV in the main window.");
             for (CheckRow r : new CheckRow[]{received, throttle, arm, modes}) r.set(State.PENDING, "Needs a connection.");
             blockers.setHtml("");
             return;

@@ -60,7 +60,10 @@ final class RelayGate {
         boolean known = pingMs >= 0 && usual != Long.MAX_VALUE;
         boolean high = known && pingMs > usual + CONGESTION_MS;
         boolean low = known && pingMs <= usual + RECOVERED_MS;
-        highSince = high ? (highSince == 0 ? now : highSince) : 0;
+        // 1.0.64: a ping that stops being known after it was high (the upload so full that the pings are dropped, not
+        // just late) is still high - it reset the count, and the worst congestion never paused the relay. An unknown
+        // ping alone starts nothing.
+        if (known || highSince == 0) highSince = high ? (highSince == 0 ? now : highSince) : 0;
         lowSince = low ? (lowSince == 0 ? now : lowSince) : 0;
         if (!watched) {
             boolean was = paused;

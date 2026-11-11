@@ -34,6 +34,25 @@ class RelayGateTest {
         assertEquals(50, g.usual(), "twenty seconds of congestion is not the usual");
     }
 
+    /**
+     * 1.0.64: the upload so full that the pings are dropped, not just late - the ping goes high, then unknown. The
+     * unknown ping reset the count, and the relay was never paused in the worst of it.
+     */
+    @Test
+    void aPingThatGoesHighAndThenMissingStillPauses() {
+        RelayGate g = new RelayGate();
+        feed(g, 50, 20_000, true);
+        feed(g, 600, 300, true); // high for a moment
+        assertFalse(g.paused());
+        int[] seen = feed(g, -1, 1500, true); // then no pongs at all
+        assertEquals(1, seen[0], "paused: the ping went high and never came back");
+        assertTrue(g.paused());
+        seen = feed(g, -1, 10_000, true);
+        assertEquals(0, seen[1], "and stays paused while nothing is known");
+        seen = feed(g, 55, 10_000, true);
+        assertEquals(1, seen[1], "on again once it has recovered");
+    }
+
     @Test
     void itGoesOnOnceThePingHasRecoveredAndAPauseSoonAfterWaitsLonger() {
         RelayGate g = new RelayGate();

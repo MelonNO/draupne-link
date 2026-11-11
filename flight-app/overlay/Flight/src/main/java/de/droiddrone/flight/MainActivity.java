@@ -363,15 +363,17 @@ public class MainActivity extends Activity {
                 case PowerMode.DEEP_SLEEP:
                 case PowerMode.OVERWATCH: // pc.36: the same checks; the mode line says it watches
                     long next = PowerMode.nextCheckAt();
+                    // pc.50: overwatch says OVERWATCH (it read "Deep sleep" and SLEEPING: its camera is watching)
+                    boolean ow = mode == PowerMode.OVERWATCH;
                     if (always) {
-                        tvNetworkStatus.setText(R.string.dd_status_listening);
-                        setPill(R.string.dd_pill_sleeping, getColor(R.color.dd_panel_2), colorMuted);
+                        tvNetworkStatus.setText(ow ? R.string.dd_status_overwatch_listening : R.string.dd_status_listening);
+                        setPill(ow ? R.string.dd_pill_overwatch : R.string.dd_pill_sleeping, getColor(R.color.dd_panel_2), colorMuted);
                     } else if (PowerMode.isChecking()) {
                         tvNetworkStatus.setText(R.string.dd_status_checking);
-                        setPill(R.string.dd_pill_checking, getColor(R.color.dd_panel_2), colorWarn);
+                        setPill(ow ? R.string.dd_pill_overwatch : R.string.dd_pill_checking, getColor(R.color.dd_panel_2), colorWarn);
                     } else if (next != 0) {
-                        tvNetworkStatus.setText(getString(R.string.dd_status_sleeping, PowerMode.time(this, next)));
-                        setPill(R.string.dd_pill_sleeping, getColor(R.color.dd_panel_2), colorMuted);
+                        tvNetworkStatus.setText(getString(ow ? R.string.dd_status_overwatch : R.string.dd_status_sleeping, PowerMode.time(this, next)));
+                        setPill(ow ? R.string.dd_pill_overwatch : R.string.dd_pill_sleeping, getColor(R.color.dd_panel_2), colorMuted);
                     } else {
                         tvNetworkStatus.setText(R.string.dd_status_sleep_soon);
                         setPill(R.string.dd_pill_sleeping, getColor(R.color.dd_panel_2), colorMuted);
@@ -1208,6 +1210,9 @@ public class MainActivity extends Activity {
             if (requestCode == 1) log("Storage permission denied!");
             if (requestCode == 2) log("Audio permission denied!");
             if (requestCode == 3) log("Phone state permission denied!");
+            // pc.50: said on the screen - START did nothing and gave no reason (after "don't ask again", for good)
+            String what = requestCode == 0 ? "Camera" : requestCode == 1 ? "Storage" : requestCode == 2 ? "Microphone" : requestCode == 3 ? "Phone state" : null;
+            if (what != null) android.widget.Toast.makeText(this, getString(R.string.dd_permission_refused, what), android.widget.Toast.LENGTH_LONG).show();
         }
     }
 }

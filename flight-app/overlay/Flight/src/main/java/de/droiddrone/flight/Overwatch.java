@@ -182,6 +182,35 @@ final class Overwatch {
     private ScheduledFuture<?> ticking;
     private DatagramSocket socket;
     private InetSocketAddress pc;
+    /**
+     * pc.50 (the pilot: "every pc"): every PC an alert goes to - the one that set overwatch first, then each PC that
+     * asked this phone's name in the last day (Udp.alertPcs, at their link ports). The alert, the motion's end and the
+     * camera's word go to all; the pictures before the alert to each that acknowledges; the preview to each that asks;
+     * the clips to the PC that set overwatch.
+     */
+    private volatile List<InetSocketAddress> pcs = java.util.Collections.emptyList();
+    /** The PCs that have this event's alert, its end, its pictures before the alert; and when each last asked for the preview. */
+    private final java.util.Set<java.net.InetAddress> alertHave = java.util.concurrent.ConcurrentHashMap.newKeySet(),
+            endedHave = java.util.concurrent.ConcurrentHashMap.newKeySet(), preRolled = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Map<java.net.InetAddress, Long> previewFor = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Every PC told has it (nobody to tell: yes). */
+    private boolean allHave(java.util.Set<java.net.InetAddress> have) {
+        for (InetSocketAddress a : pcs) if (!have.contains(a.getAddress())) return false;
+        return true;
+    }
+
+    /** To every PC told that doesn't have it yet (have null: to all). */
+    private void sendToAll(byte[] p, java.util.Set<java.net.InetAddress> have) {
+        for (InetSocketAddress a : pcs) if (have == null || !have.contains(a.getAddress())) sendTo(a, p);
+    }
+
+    /** Where a PC that sent a command is told: its link port (as the list has it), else the commanding PC's port. */
+    private InetSocketAddress addressOf(java.net.InetAddress from) {
+        for (InetSocketAddress a : pcs) if (a.getAddress().equals(from)) return a;
+        InetSocketAddress c = pc;
+        return from == null ? c : c == null ? null : new InetSocketAddress(from, c.getPort());
+    }
     private volatile boolean watching, closed;
     private final OverwatchEvent event = new OverwatchEvent();
     private final PreRoll preRoll = new PreRoll();
@@ -198,7 +227,7 @@ final class Overwatch {
 
     // ---- the event (worker thread)
     private OverwatchProtocol.Alert alert;
-    private boolean alertAcked, preRollSent;
+    // (pc.50: who has the alert and the pictures before it is kept per PC - alertHave, preRolled)
     private long alertSentAt;
     /** pc.50: when this alert was first sent, and when the head clip was first announced (their resends slow down). */
     private long alertAskedAt, announcedAt;
@@ -217,8 +246,12 @@ final class Overwatch {
     // ---- the motion's end, until the PC has it
     private int endedEvent = -1;
     private long endedAtWall, endedSentAt;
-    private boolean endedAcked, endedClip;
-    private int endedSends;
+    private boolean endedClip;
+    /** pc.50: MOTION ENDED was first said then (its resends slow down and stop, OverwatchProtocol.endedDue). */
+    private long endedSaidAt;
+    /** pc.50: the alert of an event that ended before the PC acknowledged it - it goes on (OverwatchProtocol.missedDue). */
+    private OverwatchProtocol.Alert missed;
+    private long missedSince, missedSentAt;
     // ---- clips waiting for the PC (pc.38: on disk, in the store)
     private final ClipStore store;
     private volatile long infoSentAt;
@@ -238,13 +271,18 @@ final class Overwatch {
         this.udp = udp;
         this.audioSource = audio;
         this.store = clips(service);
+        event.continueFrom(lastEvent); // pc.50: the numbering goes on - a PC left open took "event 1" again for a repeat
     }
+
+    /** pc.50: the last event's number, across this app's overwatches. */
+    private static volatile int lastEvent;
 
     // ------------------------------------------------------------------ watching
 
     private void watch(int[] where) {
         pc = udp.lastPcAddress();
-        if (pc == null) log("Overwatch: no PC to call (this phone hasn't flown with one since the app started) - it watches and records anyway");
+        pcs = udp.alertPcs();
+        if (pcs.isEmpty()) log("Overwatch: no PC to call (this phone hasn't flown with one since the app started) - it watches and records anyway");
         if (!openSocket()) log("Overwatch: no socket - alerts can't go out");
         if (where != null) position = where;
         positionAt = SystemClock.elapsedRealtime();
@@ -272,6 +310,7 @@ final class Overwatch {
             endEvent(); // the clip so far is kept and goes to the PC later
             event.abandon();
         }
+        missed = null; // the PC that woke it is there now
         stopSender();
         udp.overwatchCamera(false);
         log("Overwatch: stopped (" + why + ")");
@@ -323,14 +362,21 @@ final class Overwatch {
             closeServing();
             infoSentAt = 0;
         }
-        if (event.isActive() && !event.isSilenced(mono) && !alertAcked && now - alertSentAt >= OverwatchProtocol.resendEvery(now - alertAskedAt,
+        if (event.isActive() && !event.isSilenced(mono) && !allHave(alertHave) && now - alertSentAt >= OverwatchProtocol.resendEvery(now - alertAskedAt,
                 OverwatchProtocol.ALERT_RESEND_MS, OverwatchProtocol.ALERT_SLOW_AFTER_MS, OverwatchProtocol.ALERT_SLOW_MS)) sendAlert(now);
         previewing = eventVideo && event.isActive() && !event.isSilenced(mono) && previewWantedAt >= 0
                 && mono - previewWantedAt < OverwatchProtocol.PREVIEW_FRESH_MS;
-        if (endedEvent >= 0 && !endedAcked && now - endedSentAt >= 1000 && endedSends < 120) { // 2 min at most
-            endedSends++;
+        if (endedEvent >= 0 && !allHave(endedHave) && OverwatchProtocol.endedDue(now - endedSaidAt, now - endedSentAt)) {
             endedSentAt = now;
-            send(OverwatchProtocol.clipEnded(token, endedEvent, endedAtWall, endedClip));
+            sendToAll(OverwatchProtocol.clipEnded(token, endedEvent, endedAtWall, endedClip), endedHave);
+        }
+        // pc.50: the alert the PC never had, its event over - still told, slowly
+        if (missed != null && !event.isActive()) {
+            if (now - missedSince >= OverwatchProtocol.MISSED_FOR_MS) missed = null;
+            else if (OverwatchProtocol.missedDue(now - missedSince, now - missedSentAt)) {
+                missedSentAt = now;
+                sendToAll(OverwatchProtocol.alert(missed), alertHave);
+            }
         }
         ClipStore.Clip head = store.head();
         // pc.38: a new head is announced at once - the PC's asks name the event alone, and an event's segments share it
@@ -347,10 +393,10 @@ final class Overwatch {
             statusLeft--;
             statusSentAt = now;
             int[] r = service.batteryReadings();
-            send(OverwatchProtocol.status(token, statusState, statusReason, r[0] < 0 ? 255 : r[0], r[3] == PowerFloor.UNKNOWN ? 0 : r[3]));
+            sendToAll(OverwatchProtocol.status(token, statusState, statusReason, r[0] < 0 ? 255 : r[0], r[3] == PowerFloor.UNKNOWN ? 0 : r[3]), null);
         }
-        if (!watching && recorder == null && hashing.get() == 0 && store.head() == null && (endedEvent < 0 || endedAcked || endedSends >= 120)
-                && statusLeft == 0) closeSocket();
+        if (!watching && recorder == null && hashing.get() == 0 && store.head() == null
+                && (endedEvent < 0 || allHave(endedHave) || now - endedSaidAt >= OverwatchProtocol.ENDED_FOR_MS) && statusLeft == 0) closeSocket();
     }
 
     /** pc.49: 5 s without a picture opens the camera again ({@link CameraWatchdog}); the PC is told why. */
@@ -387,7 +433,7 @@ final class Overwatch {
         statusReason = reason;
         statusLeft = 5;
         statusSentAt = 0;
-        send(OverwatchProtocol.status(token, OverwatchProtocol.STATE_DROPPED, reason, Math.max(0, battery), tempDeci == PowerFloor.UNKNOWN ? 0 : tempDeci));
+        sendToAll(OverwatchProtocol.status(token, OverwatchProtocol.STATE_DROPPED, reason, Math.max(0, battery), tempDeci == PowerFloor.UNKNOWN ? 0 : tempDeci), null);
         PowerMode.floorDrop(reason);
     }
 
@@ -417,7 +463,7 @@ final class Overwatch {
         final java.util.List<float[]> boxes = new java.util.ArrayList<>();
         for (MotionDetector.Detection d : r.detections) boxes.add(new float[]{d.x, d.y, d.w, d.h, d.light ? 1 : 0});
         worker.execute(() -> {
-            if (previewing) sendUnit(OverwatchProtocol.UNIT_BOXES, OverwatchProtocol.boxesUnit(wallMs, boxes));
+            if (previewing) sendUnit(OverwatchProtocol.UNIT_BOXES, OverwatchProtocol.boxesUnit(wallMs, boxes), null);
         });
     }
 
@@ -445,23 +491,26 @@ final class Overwatch {
     private void onDetection(MotionRecord.Box box, boolean night, float hfov) {
         if (!watching) return;
         long now = System.currentTimeMillis(), mono = SystemClock.elapsedRealtime();
-        OverwatchEvent.Action a = event.onDetection(mono);
+        OverwatchEvent.Action a = event.onDetection(mono, box.x + box.w / 2, box.y + box.h / 2);
         if (a == OverwatchEvent.Action.START) {
+            lastEvent = event.event();
             alert = makeAlert(box, night, hfov, now);
-            alertAcked = false;
+            pcs = udp.alertPcs(); // a PC that came since the watch began hears of it too
+            alertHave.clear();
+            preRolled.clear();
+            previewFor.clear();
             alertAskedAt = now;
-            preRollSent = false;
             eventPreRoll = preRoll.snapshot(now);
             previewWantedAt = -1;
             sendAlert(now);
             startRecording(now);
-            log("Overwatch: MOTION - event " + event.event() + (pc == null ? "" : ", calling the PC"));
+            log("Overwatch: MOTION - event " + event.event() + (pcs.isEmpty() ? "" : ", calling " + pcs.size() + " PC" + (pcs.size() == 1 ? "" : "s")));
         } else if (a == OverwatchEvent.Action.ALERT_AGAIN) {
             alert = makeAlert(box, night, hfov, alert == null ? now : alert.startedAt);
-            alertAcked = false;
+            alertHave.clear();
             alertAskedAt = now;
             sendAlert(now);
-            log("Overwatch: still moving 10 min after the dismiss - the alert again");
+            log("Overwatch: new motion after the dismiss (or still moving 10 min after it) - the alert again");
         }
     }
 
@@ -477,11 +526,12 @@ final class Overwatch {
 
     private void sendAlert(long now) {
         alertSentAt = now;
-        if (alert != null) send(OverwatchProtocol.alert(alert));
+        if (alert != null) sendToAll(OverwatchProtocol.alert(alert), alertHave);
     }
 
-    private void sendPreRoll() {
-        preRollSent = true;
+    private void sendPreRoll(java.net.InetAddress to) {
+        if (to == null) return;
+        preRolled.add(to);
         List<PreRoll.Frame> frames = eventPreRoll;
         if (frames == null) return;
         for (PreRoll.Frame f : frames) {
@@ -490,7 +540,7 @@ final class Overwatch {
                 DataOutputStream out = new DataOutputStream(b);
                 out.writeLong(f.atMs);
                 out.write(f.jpeg);
-                sendUnit(OverwatchProtocol.UNIT_PREROLL, b.toByteArray());
+                sendUnit(OverwatchProtocol.UNIT_PREROLL, b.toByteArray(), to);
             } catch (IOException ignored) {
             }
         }
@@ -626,10 +676,19 @@ final class Overwatch {
         finishClip();
         endedEvent = event.event();
         endedAtWall = System.currentTimeMillis();
-        endedAcked = false;
+        endedHave.clear();
         endedClip = hadRecorder; // its last segment may still be hashing
-        endedSends = 0;
+        endedSaidAt = endedAtWall;
         endedSentAt = 0;
+        // pc.50: never acknowledged (and not dismissed - that is an answer): the alert goes on after its event
+        if (!allHave(alertHave) && alert != null && watching) {
+            missed = alert;
+            missedSince = endedAtWall;
+            missedSentAt = endedAtWall;
+            log("Overwatch: the PC never had this alert - it is told on, every " + OverwatchProtocol.MISSED_EVERY_MS / 1000 + " s");
+        } else {
+            missed = null;
+        }
         log("Overwatch: the motion ended (event " + endedEvent + ")");
     }
 
@@ -653,10 +712,11 @@ final class Overwatch {
                     // took every other frame: a flickering picture). Only in OVERWATCH, where the link's video is stopped.
                     if (PowerMode.mode() != PowerMode.OVERWATCH) {
                         needKey = true;
-                        Thread.sleep(100);
+                        Thread.sleep(500);
                         continue;
                     }
-                    MediaCodecBuffer b = enc.videoStreamOutputBuffer.poll(100, TimeUnit.MILLISECONDS);
+                    // pc.50: 1 s (was 0.1 s: ten wake-ups a second all night with no event; a frame ends the wait at once)
+                    MediaCodecBuffer b = enc.videoStreamOutputBuffer.poll(1000, TimeUnit.MILLISECONDS);
                     if (b == null) continue;
                     if ((b.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                         videoConfig = b.data;
@@ -674,10 +734,10 @@ final class Overwatch {
                             continue;
                         }
                         byte[] cfg = videoConfig;
-                        if (cfg != null) sendUnit(OverwatchProtocol.UNIT_CONFIG, cfg);
+                        if (cfg != null) sendUnit(OverwatchProtocol.UNIT_CONFIG, cfg, null);
                         needKey = false;
                     }
-                    sendUnit(key ? OverwatchProtocol.UNIT_KEY_FRAME : OverwatchProtocol.UNIT_FRAME, b.data);
+                    sendUnit(key ? OverwatchProtocol.UNIT_KEY_FRAME : OverwatchProtocol.UNIT_FRAME, b.data, null);
                 } catch (InterruptedException e) {
                     return;
                 } catch (RuntimeException e) {
@@ -694,39 +754,66 @@ final class Overwatch {
         sender = null;
     }
 
-    private synchronized void sendUnit(int type, byte[] data) {
+    /** A unit in its fragments: to one PC (the pictures before the alert), or - to null - to every PC that asks for the preview now. */
+    private synchronized void sendUnit(int type, byte[] data, java.net.InetAddress to) {
+        java.util.List<InetSocketAddress> targets = new java.util.ArrayList<>();
+        if (to != null) {
+            InetSocketAddress a = addressOf(to);
+            if (a != null) targets.add(a);
+        } else {
+            long mono = SystemClock.elapsedRealtime();
+            for (java.util.Map.Entry<java.net.InetAddress, Long> e : previewFor.entrySet()) {
+                InetSocketAddress a = mono - e.getValue() < OverwatchProtocol.PREVIEW_FRESH_MS ? addressOf(e.getKey()) : null;
+                if (a != null) targets.add(a);
+            }
+        }
+        if (targets.isEmpty()) return;
         int u = unit = (unit + 1) & 0xffff;
         List<byte[]> parts = OverwatchProtocol.fragments(token, event.event(), u, type, data);
         for (int i = 0; i < parts.size(); i++) {
-            send(parts.get(i));
+            for (InetSocketAddress a : targets) sendTo(a, parts.get(i));
             if (i % 8 == 7) SystemClock.sleep(1); // a key frame's 60 packets not all in one burst
         }
     }
 
     // ------------------------------------------------------------------ the PC's commands
 
-    private void onCommand(OverwatchProtocol.Command c) {
+    private void onCommand(OverwatchProtocol.Command c, java.net.InetAddress from) {
         long mono = SystemClock.elapsedRealtime();
         int ev = event.event();
         switch (c.cmd) {
             case OverwatchProtocol.CMD_ACK:
                 if (c.event == ev && event.isActive()) {
-                    if (!alertAcked) log("Overwatch: the PC has the alert");
-                    alertAcked = true;
-                    if (!preRollSent) sendPreRoll();
+                    if (alertHave.add(from)) log("Overwatch: the PC at " + from.getHostAddress() + " has the alert");
+                    if (!preRolled.contains(from)) sendPreRoll(from);
+                } else if (missed != null && c.event == missed.event) { // pc.50: late, its event over
+                    if (alertHave.add(from)) {
+                        log("Overwatch: the PC at " + from.getHostAddress() + " has the alert now, " + (System.currentTimeMillis() - missedSince) / 1000
+                                + " s after the motion ended");
+                    }
+                    if (allHave(alertHave)) missed = null;
+                    if (!preRolled.contains(from)) sendPreRoll(from);
+                    if (endedEvent == c.event) { // and that it ended, again from the start
+                        endedHave.remove(from);
+                        endedSaidAt = System.currentTimeMillis();
+                        endedSentAt = 0;
+                    }
                 }
                 break;
             case OverwatchProtocol.CMD_PREVIEW:
-                if (c.event == ev) previewWantedAt = mono;
+                if (c.event == ev) {
+                    previewWantedAt = mono;
+                    previewFor.put(from, mono);
+                }
                 break;
             case OverwatchProtocol.CMD_PREROLL:
-                if (c.event == ev) sendPreRoll();
+                if (c.event == ev) sendPreRoll(from);
                 break;
             case OverwatchProtocol.CMD_DISMISS:
                 if (c.event == ev && event.isActive()) {
                     event.dismiss(mono);
                     previewWantedAt = -1;
-                    log("Overwatch: dismissed by the PC - silent until the motion ends (10 min at most)");
+                    log("Overwatch: dismissed by the PC - silent until new motion (10 min at most)");
                 }
                 break;
             case OverwatchProtocol.CMD_CONNECT:
@@ -736,7 +823,7 @@ final class Overwatch {
                 }
                 break;
             case OverwatchProtocol.CMD_ENDED_ACK:
-                if (c.event == endedEvent) endedAcked = true;
+                if (c.event == endedEvent) endedHave.add(from);
                 break;
             case OverwatchProtocol.CMD_CLIP_GET:
                 serveChunks(c);
@@ -835,8 +922,9 @@ final class Overwatch {
                 p.setLength(buf.length);
                 s.receive(p);
                 OverwatchProtocol.Command c = OverwatchProtocol.readCommand(p.getData(), p.getLength());
-                if (c == null || c.token != token || token == 0) continue; // only the PC that asked, by its token
-                worker.execute(() -> onCommand(c));
+                if (c == null || c.token != token || token == 0) continue; // only a PC that has this overwatch's token
+                final java.net.InetAddress from = p.getAddress();
+                worker.execute(() -> onCommand(c, from));
             } catch (IOException e) {
                 if (!s.isClosed()) log("Overwatch receive error: " + e);
             } catch (RuntimeException e) {
@@ -845,9 +933,13 @@ final class Overwatch {
         }
     }
 
+    /** To the PC that set overwatch (the clips are its). */
     private void send(byte[] p) {
+        sendTo(pc, p);
+    }
+
+    private void sendTo(InetSocketAddress to, byte[] p) {
         DatagramSocket s = socket;
-        InetSocketAddress to = pc;
         if (s == null || to == null || s.isClosed()) return;
         try {
             s.send(new DatagramPacket(p, p.length, to));

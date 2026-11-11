@@ -53,8 +53,12 @@ public final class SleepCheck {
         return intervalMin == ALWAYS;
     }
 
-    /** pc.50: a timed window's hellos after its first {@link #ALWAYS_HELLO_BURST_MS}: this far apart (was 1.5 s all along). */
-    public static final long WINDOW_HELLO_LATER_MS = 5_000;
+    /**
+     * pc.50: a timed window's hellos after its first {@link #ALWAYS_HELLO_BURST_MS}: this far apart (was 1.5 s all
+     * along). 3 s, not 5: the task runs every 1.5 s (0.2, 1.7, 3.2, 4.7 s), and at 5 s apart the next fell on 9.2 s -
+     * 4.5 s after the last, so it never went and a 10 s window sent four. Now a fifth at 7.7 s, 2.3 s before it closes.
+     */
+    public static final long WINDOW_HELLO_LATER_MS = 3_000;
 
     /**
      * pc.50: whether the window's hello task (every 1.5 s) sends one now. A timed window: 1.5 s apart for the first 5 s

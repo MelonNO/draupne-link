@@ -124,6 +124,27 @@ public final class OverwatchProtocol {
     public static long resendEvery(long unansweredMs, long fastMs, long slowAfterMs, long slowMs) {
         return unansweredMs < slowAfterMs ? fastMs : slowMs;
     }
+
+    /**
+     * pc.50: an alert the PC never acknowledged outlives its event (a walk-past ends 30 s after the last motion; a
+     * network gap or a PC that was off for that long lost the alert for good - only the clip came later, silently). It
+     * goes on every {@link #MISSED_EVERY_MS} for {@link #MISSED_FOR_MS}, and the motion's end is said again once it is
+     * acknowledged.
+     */
+    public static final long MISSED_EVERY_MS = 15_000, MISSED_FOR_MS = 30 * 60_000L;
+
+    /** pc.50: whether an unacknowledged alert of an event that ended goes again now. */
+    public static boolean missedDue(long sinceEndedMs, long sinceSentMs) {
+        return sinceEndedMs < MISSED_FOR_MS && sinceSentMs >= MISSED_EVERY_MS;
+    }
+
+    /** pc.50: MOTION ENDED goes every second for 30 s, then every 5 s, 10 min in all (was every second for 2 min). */
+    public static final long ENDED_FOR_MS = 10 * 60_000L;
+
+    public static boolean endedDue(long sinceEndedMs, long sinceSentMs) {
+        return sinceEndedMs < ENDED_FOR_MS && sinceSentMs >= resendEvery(sinceEndedMs, ALERT_RESEND_MS, ALERT_SLOW_AFTER_MS, ALERT_SLOW_MS);
+    }
+
     /** The phone streams the preview while the PC's last CMD_PREVIEW is younger than this. */
     public static final long PREVIEW_FRESH_MS = 3000;
     /** A header the PC's receive threads look at: an overwatch packet from any phone. */

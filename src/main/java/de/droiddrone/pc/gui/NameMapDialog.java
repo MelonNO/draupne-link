@@ -195,6 +195,8 @@ final class NameMapDialog extends JDialog {
         if (answer != JOptionPane.OK_OPTION) return;
         String to = (String) pick.getSelectedItem();
         if (to == null || !names.rename(e.name(), to)) return;
+        Map<String, String> moved = Names.movedSettings(config.keys(), config::getString, e.name(), to); // 1.0.64: its own settings go with it
+        if (!moved.isEmpty()) saver.accept(moved);
         if (e.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) saver.accept(Map.of(Names.PHONE_NAME_KEY, to));
         service.assign(e.ip(), to);
         fill();

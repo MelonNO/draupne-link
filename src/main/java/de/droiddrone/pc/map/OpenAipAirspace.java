@@ -94,7 +94,48 @@ public final class OpenAipAirspace {
         if (!mayFetch) return "zoom in to fetch areas";
         if (held.getAsBoolean()) return "saved areas only: a drone may be flying";
         if (!network) return "offline: saved areas only";
+        if (failWord != null && key.trim().equals(failKey)) return failWord;
         return "some areas not fetched";
+    }
+
+    /**
+     * 1.0.64: why the last fetch failed, said on the status line (a refused key, too many requests and no network all
+     * read "some areas not fetched"), and no fetch again before {@link #failUntil} - every view rest asked each
+     * missing box again, 16 requests at a time, also with a key openAIP refuses (a refused key: not until it changes).
+     */
+    private String failWord, failKey;
+    private long failUntil;
+    static final long RETRY_OFFLINE_MS = 60_000, RETRY_BUSY_MS = 5 * 60_000L, RETRY_ERROR_MS = 2 * 60_000L;
+
+    /** A fetch's answer: the box's JSON, or the HTTP status that came instead (0: no answer at all). */
+    record Fetched(String json, int status) {}
+
+    /** Tests: what answers a fetch instead of openAIP. */
+    interface Fetcher {
+        Fetched fetch(int lat, int lon, String key);
+    }
+
+    Fetcher fetcher = this::fetch;
+
+    private void failed(int status, String key, long now) {
+        failKey = key.trim();
+        if (status == 401 || status == 403) {
+            failWord = "openAIP refuses the key (Key...)";
+            failUntil = Long.MAX_VALUE; // until another key is given
+        } else if (status == 429) {
+            failWord = "openAIP: too many requests - in 5 min again";
+            failUntil = now + RETRY_BUSY_MS;
+        } else if (status == 0) {
+            failWord = "offline: saved areas only";
+            failUntil = now + RETRY_OFFLINE_MS;
+        } else {
+            failWord = "openAIP answers " + status + " - saved areas only";
+            failUntil = now + RETRY_ERROR_MS;
+        }
+    }
+
+    private boolean mayAsk(String key, long now) {
+        return failWord == null || !key.trim().equals(failKey) || now >= failUntil;
     }
 
     private List<Airspace> box(int lat, int lon, String key, boolean mayFetch, long now) {
@@ -106,8 +147,11 @@ public final class OpenAipAirspace {
         } catch (IOException e) {
             fresh = false;
         }
-        if (!fresh && mayFetch && key != null && !key.isBlank() && network && !held.getAsBoolean()) {
-            String json = fetch(lat, lon, key);
+        if (!fresh && mayFetch && key != null && !key.isBlank() && network && !held.getAsBoolean() && mayAsk(key, now)) {
+            Fetched got = fetcher.fetch(lat, lon, key);
+            String json = got.json();
+            if (json == null) failed(got.status(), key, now);
+            else failWord = null;
             if (json != null) {
                 try {
                     write(f, json.getBytes(StandardCharsets.UTF_8));
@@ -132,7 +176,7 @@ public final class OpenAipAirspace {
     }
 
     /** One box's restricted, danger and prohibited areas from openAIP, every page: one JSON array of items, or null. */
-    private String fetch(int lat, int lon, String key) {
+    private Fetched fetch(int lat, int lon, String key) {
         JsonArray all = new JsonArray();
         for (int page = 1; page <= 10; page++) {
             String url = API + "?bbox=" + lon + "," + lat + "," + (lon + 1) + "," + (lat + 1) + "&type=" + TYPE_RESTRICTED + "&type=" + TYPE_DANGER
@@ -141,21 +185,21 @@ public final class OpenAipAirspace {
                 HttpRequest r = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(20)).header("User-Agent", userAgent)
                         .header("Accept", "application/json").header("x-openaip-api-key", key.trim()).GET().build();
                 HttpResponse<String> resp = http.send(r, HttpResponse.BodyHandlers.ofString());
-                if (resp.statusCode() != 200) return null;
+                if (resp.statusCode() != 200) return new Fetched(null, resp.statusCode());
                 JsonObject o = JsonParser.parseString(resp.body()).getAsJsonObject();
                 if (o.has("items")) all.addAll(o.getAsJsonArray("items"));
                 int pages = o.has("totalPages") ? o.get("totalPages").getAsInt() : 1;
                 if (page >= pages) break;
             } catch (IOException | RuntimeException e) {
-                return null;
+                return new Fetched(null, 0);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return null;
+                return new Fetched(null, 0);
             }
         }
         JsonObject saved = new JsonObject();
         saved.add("items", all);
-        return saved.toString();
+        return new Fetched(saved.toString(), 200);
     }
 
     /** openAIP's answer (or a saved box: {"items": [...]}) as areas; the types not kept here left out. */
