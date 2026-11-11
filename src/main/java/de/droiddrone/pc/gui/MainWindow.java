@@ -666,6 +666,10 @@ public class MainWindow extends JFrame {
         reloadSettings();
         logLine("DRAUPNE Link " + AppInfo.version() + ". Phone app: DRAUPNE Flight " + ApkShare.VERSION
                 + " (protocol " + SettingsCommon.versionCompatibleCode + "). Settings: " + shortPath(configFile));
+        if (System.getProperty("jpackage.app-path") != null && !SelfUpdate.runsInstalled() && SelfUpdate.installedApp() != null) {
+            // 1.0.64: a copy from Downloads (or a zip) beside the installed one - which one is open, said
+            logLine("This copy runs from " + AppInfo.runningFrom() + ". The installed one: " + SelfUpdate.installedApp() + " (desktop shortcut).");
+        }
 
         videoView.setOsdSource(this::osdData);
         videoView.setOsdLayout(OsdLayout.load(config::getString));
@@ -2999,6 +3003,9 @@ public class MainWindow extends JFrame {
             PcSetupWizard.openInBrowser(this, r.pageUrl());
             return;
         }
+        if (!SelfUpdate.runsInstalled()) { // 1.0.64: a copy elsewhere updates the installed one, which starts after
+            logLine("Update: this copy runs from " + AppInfo.runningFrom() + "; the installed one (" + app + ") is updated and starts.");
+        }
         if (connection != null) {
             logLine("Update: refused while connected - disconnect first.");
             Dialogs.message(this, "<html>Connected to the drone.<br><br>Updating closes DRAUPNE Link: "
@@ -3704,7 +3711,16 @@ public class MainWindow extends JFrame {
             if (where != null && !where.name.equalsIgnoreCase(nameService.ownName())) {
                 ControlLink.SleepHello said = ControlLink.SleepHello.read(d, d.length, System.currentTimeMillis());
                 int mode = said.status() != null && said.status().mode >= 0 ? said.status().mode : said.overwatch() ? 3 : 2;
-                if (nameService.heardAsleep(ip, where, mode)) SwingUtilities.invokeLater(this::updatePhoneList);
+                // 1.0.64 / phone pc.50: its sleep notice says where its camera looks (none when Android calls it unreliable)
+                FleetProtocol.Notice notice = FleetProtocol.Notice.read(d, d.length, config.getKey());
+                double heading = notice != null && notice.headingUsable() ? notice.headingDeg : Double.NaN;
+                if (nameService.heardAsleep(ip, where, mode, heading)) SwingUtilities.invokeLater(this::updatePhoneList);
+                if (mode == 3 && !Double.isNaN(heading) && where.hasPosition()) {
+                    String name = where.name;
+                    SwingUtilities.invokeLater(() -> {
+                        if (fleets != null) fleets.noticeHeading(name, where.lat, where.lon, heading);
+                    });
+                }
             }
         }
         return power.checkIn(ip, d);
@@ -4131,7 +4147,7 @@ public class MainWindow extends JFrame {
             }
             if (kind == MapView.Kind.LOST) queued = null;
             String state = (VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + doing;
-            drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot, queued));
+            drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot, queued, d.headingDeg()));
         }
         // a crashed drone the network has no position of (the one flown here): at its track's last point
         for (Map.Entry<String, Long> e : crashed.entrySet()) {
@@ -4481,6 +4497,7 @@ public class MainWindow extends JFrame {
                 power.wanted = ControlLink.POWER_NORMAL;
                 power.sentAt = 0;
                 link.setDormant(false);
+                link.setHoldConnects(false);
                 link.restartVideo();
                 logLine("Phone awake.");
                 power.clear(config.getString(IP_KEY));
@@ -4511,6 +4528,9 @@ public class MainWindow extends JFrame {
                 // the same countdown as REGAINING CONTROL and FLEET's card: from the newest check-in heard (2026-11-11)
                 long next = power.nextCheckMono(now, System.currentTimeMillis(), hello);
                 long left = Math.max(0, next - now) / 1000;
+                // 1.0.64: waking it, the Connects go only round its expected check-in, not every 0.5 s till then
+                boolean anchored = hello != null && hello.receivedAt() >= power.sleepStartAt - 5000; // its own check-in heard: the window known
+                link.setHoldConnects(anchored && PowerController.holdConnects(power.awaitingWake, always, power.sentIntervalMin, now, next));
                 String in = String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
                 powerStatus.setText(link.isDormant()
                         ? "<html>" + (power.phoneOverwatching ? "OVERWATCH - its camera watches; an alert shows in the map window. " : "DEEP SLEEP - ") + alive

@@ -2,6 +2,25 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.64 + phone pc.50 (not released yet)
+
+With the phone app **DRAUPNE Flight 2.3.0-pc.50** (update the phones). Not tried on a drone yet.
+
+- **Sleep notice:** a phone going to standby, deep sleep or overwatch tells the PC that asked, and every PC that asked its name lately, its name, position, heading (where its camera looks, or the FC's yaw when it has a compass; none when Android calls the compass unreliable), battery, mode and the time to its next check - three times in its countdown (1 s from the link, 3 s from FLEET so the heading sensor settles). The PC logs it, counts the next check from it, and draws the sleeping drone's heading on the map; FLEET's overwatch gets a camera view from it.
+- **Listening deep sleep lets the phone sleep:** no wake lock after its first 5 s; the minute's hello comes from an alarm, and an incoming packet keeps it awake 3 s to be handled. A CONNECT may take a few seconds.
+- **Check windows 10 s** (were 20); hellos 1.5 s apart for 5 s, then 5 s apart. The PCs' name scans ask a sleeping phone only round its expected check-in (a listening one once a minute; a resting one stays listed for its interval plus 2 min, at least 5 min), and PILOT UAV's Connects to a timed sleeper go only round its check-in.
+- **Overwatch pre-roll:** one picture a second while quiet, two from a detection on.
+- **AIRSPACE** (MAP TOOLS > TOOLS): R-areas, D-areas (openAIP, a free key) and NOTAMs pasted from IPPC.no, each on / off and kept on the map while on; a click on one shows its limits and times. Not in exported pictures.
+- **Previous flights** moved to MAP TOOLS > DATA.
+- The MAVLink UDP bridge closes at sleep; overwatch's tick ends even without its socket.
+
+- **Overwatch power (measured on an XCover6 Pro before: quiet overwatch 440 mA by day, 785-1030 mA in the dark; the camera HAL at 1.6 cores for a 1280x720 30 fps picture of which 8 a second were used at 320x180):** overwatch's picture alone is now the smallest YUV size whose centred cut is the video's view (320x240 cut to 320x180 there; `AnalysisSize.pickWatch`), at the camera's lowest frame-rate range (15) with no OIS and no edge work. The detector gets the same 320x180 at 7.5 a second.
+- **Resting phones wake less:** in standby, deep sleep and overwatch with nobody connected, the link's buffer loop runs every 20 ms (was 1 ms; 62 % of a core in standby) and its other loops every 0.5 s; the microphone isn't opened at the app's start any more (it recorded for nobody through standby); the session's idle on-phone recording encoder (1080p, 20 Mbit/s) is closed with the video (it lived on into overwatch); PhoneHeading stops at sleep.
+- **Resends slow down unanswered:** an alert every 1 s for 30 s, then every 5 s; a clip's INFO every 5 s for a minute, then every minute.
+- **Clips list scrolls** with the alert cards above it, and each card minimizes to its title line (-/+).
+- **UPDATE from any copy:** a copy outside Program Files (a zip, Downloads) updates the installed one and starts it; the release page only when none is installed. The start log says which copy runs.
+- **Shortcuts checked, not only found:** after an update and at the installed app's start, a "DRAUPNE Link" shortcut leading to nothing or to another DRAUPNE Link.exe (a lone launcher: "error opening ...\app\DRAUPNE Link.cfg") is pointed at the installed app; a copy elsewhere makes no shortcut while an installed one exists.
+
 ## 1.0.63 + phone pc.49
 
 With the phone app **DRAUPNE Flight 2.3.0-pc.49** (update the phones). Not tried on a drone yet.

@@ -43,6 +43,37 @@ class SelfUpdateTest {
         assertTrue(strict.contains("$lock.Close(); Finish"), "a refusal lets go of the file and starts the old app again");
     }
 
+    /**
+     * 1.0.64, a pilot after an update: "if they try to manually open the program from inside its installed folder they
+     * get ... this copy is not the installed one (runs from the user's download folder)". A copy elsewhere updates
+     * the installed one; the release page only when none is installed.
+     */
+    @Test
+    void aCopyElsewhereUpdatesTheInstalledOne() {
+        String pf = "C:\\Program Files";
+        Path installed = Path.of(pf, "DRAUPNE Link", "DRAUPNE Link.exe");
+        assertEquals(installed, SelfUpdate.installedApp(installed.toString(), pf, p -> false), "the installed one itself");
+        String downloads = "C:\\Users\\pilot\\Downloads\\DRAUPNE-Link-1.0.62-windows\\DRAUPNE Link\\DRAUPNE Link.exe";
+        assertEquals(installed, SelfUpdate.installedApp(downloads, pf, installed::equals), "from Downloads: the installed one");
+        assertNull(SelfUpdate.installedApp(downloads, pf, p -> false), "none installed: the release page");
+        assertNull(SelfUpdate.installedApp(null, pf, p -> true), "a development run: the release page");
+    }
+
+    /** 1.0.64: which "DRAUPNE Link" shortcuts the installed copy points at itself. */
+    @Test
+    void aShortcutToNothingOrAnotherCopyIsRepaired() {
+        Path launcher = Path.of("C:\\Program Files\\DRAUPNE Link\\DRAUPNE Link.exe");
+        java.util.function.Predicate<Path> there = p -> !p.toString().contains("Gone");
+        assertFalse(WindowsSetup.needsRepair("c:\\program files\\draupne link\\draupne link.exe", launcher, there), "here already");
+        assertTrue(WindowsSetup.needsRepair("C:\\Users\\pilot\\OneDrive\\Desktop\\DRAUPNE Link.exe", launcher, there),
+                "a lone launcher copied to the desktop: 'error opening ...\\app\\DRAUPNE Link.cfg'");
+        assertTrue(WindowsSetup.needsRepair("C:\\Users\\pilot\\Downloads\\x\\DRAUPNE Link.exe", launcher, there), "a copy in Downloads");
+        assertTrue(WindowsSetup.needsRepair("C:\\Gone\\DRAUPNE Link.exe", launcher, there), "leads to nothing");
+        assertTrue(WindowsSetup.needsRepair("", launcher, there), "no target");
+        assertFalse(WindowsSetup.needsRepair("C:\\Tools\\my-draupne.bat", launcher, there), "the pilot's own: left");
+        assertFalse(WindowsSetup.needsRepair(null, launcher, there), "unreadable: left");
+    }
+
     /** 1.0.56, the pilot: "when updating ... check if the user already has a desktop shortcut, and if they don't add one". */
     @Test
     void anUpdateMakesADesktopShortcutOnlyWhenThereIsNone() throws Exception {
@@ -51,8 +82,12 @@ class SelfUpdateTest {
         int ok = script.indexOf("{ EnsureShortcut; Finish ('OK installed");
         assertTrue(ok > script.indexOf("$p = Start-Process -FilePath"), "after a good install, before the app starts again");
         String fn = script.substring(script.indexOf("function EnsureShortcut"), script.indexOf("function Finish"));
-        int check = fn.indexOf("if ((Test-Path -LiteralPath $shared) -or (Test-Path -LiteralPath $own))");
-        assertTrue(check > 0 && check < fn.indexOf("CreateShortcut"), "both desktops looked at before one is made: " + fn);
+        int check = fn.indexOf("foreach ($l in @($shared, $own))");
+        assertTrue(check > 0 && check < fn.indexOf("$s = $wsh.CreateShortcut($own)"), "both desktops looked at before one is made: " + fn);
+        // 1.0.64: one that is there is checked and pointed at the installed app when it leads to another DRAUPNE Link.exe or nothing
+        assertTrue(fn.contains("$t -ieq $a") && fn.contains("-ine 'DRAUPNE Link.exe'") && fn.contains("desktop shortcut repaired"), fn);
+        assertTrue(fn.indexOf("if ((Test-Path -LiteralPath $shared) -or (Test-Path -LiteralPath $own)) { return }") < fn.indexOf("$s = $wsh.CreateShortcut($own)"),
+                "a new one only when there is none: " + fn);
         assertTrue(fn.contains("'DRAUPNE Link.lnk'"), fn);
         // the whole helper is valid PowerShell (parsed only, nothing run)
         if (System.getProperty("os.name", "").startsWith("Windows")) {

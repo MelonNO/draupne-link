@@ -77,6 +77,16 @@ final class MapToolsPanel extends JPanel {
     final JButton coverageKey = Theme.secondaryButton("Key...");
     final JButton coverageImport = Theme.secondaryButton("Import...");
     final JLabel coverageStatus = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.TEXT);
+    /**
+     * 1.0.64 (the pilot: "displaying D-areas and NOTAMS and R-areas in the map... a toggleable menu under tools"):
+     * AIRSPACE - each on / off and kept on the map while on (also when TOOLS folds); openAIP's key; NOTAMs pasted.
+     */
+    final JButton rAreas = Theme.secondaryButton("R-areas");
+    final JButton dAreas = Theme.secondaryButton("D-areas");
+    final JButton notams = Theme.secondaryButton("NOTAMs");
+    final JButton airspaceKey = Theme.secondaryButton("Key...");
+    final JButton notamPaste = Theme.secondaryButton("Paste...");
+    final JLabel airspaceStatus = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.TEXT);
     final JButton line = Theme.secondaryButton("Line");
     final JButton rectangle = Theme.secondaryButton("Rectangle");
     final JButton arrow = Theme.secondaryButton("Arrow");
@@ -87,7 +97,10 @@ final class MapToolsPanel extends JPanel {
     final JButton goTo = Theme.secondaryButton("Go to");
     /** 1.0.47: the overwatch clips, per drone (the map window's clip list). */
     final JButton clips = Theme.secondaryButton("Clips");
-    /** 1.0.52 (the pilot): PREVIOUS FLIGHTS lives here only - not in the map's top bar or the main TOOLS menu. */
+    /**
+     * 1.0.52 (the pilot): PREVIOUS FLIGHTS lives here only - not in the map's top bar or the main TOOLS menu; 1.0.64 (the
+     * pilot: "move prev flights from tools to Data"): in DATA, not TOOLS.
+     */
     final JButton flights = Theme.secondaryButton("Previous flights");
     final JButton download = Theme.secondaryButton("Download area");
     final JButton export = Theme.secondaryButton("Export...");
@@ -161,8 +174,8 @@ final class MapToolsPanel extends JPanel {
             bodies.put(g, body);
         }
         groupTabs.get(Group.DRAW).setToolTipText("Lines, boxes, arrows, NATO symbols, eraser, pins");
-        groupTabs.get(Group.TOOLS).setToolTipText("Ruler, radio horizon, GCS search, go to, clips, previous flights. Results show only while open");
-        groupTabs.get(Group.DATA).setToolTipText("Export, import, offline maps, clear all");
+        groupTabs.get(Group.TOOLS).setToolTipText("Ruler, radio horizon, GCS search, coverage, airspace, go to, clips. Results show only while open; airspace stays");
+        groupTabs.get(Group.DATA).setToolTipText("Previous flights, export, import, offline maps, clear all");
         clip.add(strip, BorderLayout.WEST);
         scroll = new javax.swing.JScrollPane(bodies.get(Group.DRAW), javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED,
                 javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
@@ -311,19 +324,36 @@ final class MapToolsPanel extends JPanel {
         row(body, coverage);
         slideRow(body, coverageFields);
 
+        section(body, "AIRSPACE");
+        rAreas.setToolTipText("<html>Restricted and prohibited areas (openAIP). Stays on the map until pressed again.<br>"
+                + "Community data: the AIP and NOTAMs are the official word</html>");
+        dAreas.setToolTipText("Danger areas (openAIP). Stays on the map until pressed again");
+        notams.setToolTipText("NOTAMs pasted from IPPC.no: active ones solid, those starting within a day dashed");
+        airspaceKey.setToolTipText("openAIP API key (free at openaip.net)");
+        notamPaste.setToolTipText("Paste NOTAM text from IPPC.no; Clear all");
+        row(body, rAreas);
+        row(body, dAreas);
+        row(body, notams);
+        JPanel airspaceRow = new JPanel(new GridLayout(1, 2, 6, 0));
+        airspaceRow.setOpaque(false);
+        airspaceRow.add(small(airspaceKey));
+        airspaceRow.add(small(notamPaste));
+        row(body, airspaceRow);
+        row(body, airspaceStatus);
+
         section(body, "MAP");
         row(body, goTo);
 
         section(body, "OVERWATCH");
         clips.setToolTipText("Overwatch event clips: play with the camera view on the map");
         row(body, clips);
-
-        section(body, "FLIGHTS");
-        flights.setToolTipText("Play back, show on map, export");
-        row(body, flights);
     }
 
     private void buildData(JPanel body) {
+        section(body, "FLIGHTS");
+        flights.setToolTipText("Play back, show on map, export");
+        row(body, flights);
+
         section(body, "DATA");
         export.setToolTipText("Drag a box: PNG + KML to Documents\\DRAUPNE Link\\Exports");
         importButton.setToolTipText("Load a KML (DRAUPNE, Google Earth, ATAK)");
@@ -385,6 +415,13 @@ final class MapToolsPanel extends JPanel {
     }
 
     /** The coverage button lit and its fields out while it is on. */
+    /** AIRSPACE's three toggles lit as they are. */
+    void setAirspaceLit(boolean r, boolean d, boolean n) {
+        lit(rAreas, r);
+        lit(dAreas, d);
+        lit(notams, n);
+    }
+
     void setCoverageOn(boolean on) {
         lit(coverage, on);
         coverageFields.setOpen(on);
@@ -608,9 +645,9 @@ final class MapToolsPanel extends JPanel {
         return echelonCombo;
     }
 
-    /** The last of the TOOLS list (PREVIOUS FLIGHTS), for lighting the whole list. */
+    /** The last of the TOOLS list (CLIPS), for lighting the whole list. */
     JComponent tourToolsEnd() {
-        return flights;
+        return clips;
     }
 
     /** The last of the DATA list. */

@@ -86,15 +86,33 @@ public final class SelfUpdate {
     }
 
     /**
-     * This app as installed by the installer (Program Files), or null: a development run or the portable zip, which
-     * the installer would not replace (those get the release page instead).
+     * The installed app UPDATE replaces and starts again, or null (a development run, or a copy with no installed one
+     * on the PC: those get the release page). The copy running when it is in Program Files; 1.0.64: else the installed
+     * one, where the installer always puts it - a pilot who started a copy from Downloads (the zip, or the folder they
+     * took for the installed one) got "this copy is not the installed one" and the release page, though DRAUPNE Link
+     * was installed.
      */
     public static Path installedApp() {
-        String app = System.getProperty("jpackage.app-path");
-        String programFiles = System.getenv("ProgramFiles");
-        if (app == null || programFiles == null) return null;
-        Path p = Path.of(app).toAbsolutePath();
-        return p.startsWith(Path.of(programFiles)) ? p : null;
+        return installedApp(System.getProperty("jpackage.app-path"), System.getenv("ProgramFiles"), Files::isRegularFile);
+    }
+
+    static Path installedApp(String running, String programFiles, java.util.function.Predicate<Path> exists) {
+        if (running == null || programFiles == null) return null;
+        Path p = Path.of(running).toAbsolutePath();
+        if (p.startsWith(Path.of(programFiles))) return p;
+        Path installed = installedLauncher(programFiles);
+        return exists.test(installed) ? installed : null;
+    }
+
+    /** Where the installer puts the app: it offers no folder choice (build.gradle packageInstaller). */
+    public static Path installedLauncher(String programFiles) {
+        return Path.of(programFiles, "DRAUPNE Link", "DRAUPNE Link.exe");
+    }
+
+    /** Whether the copy running is the installed one (Program Files). */
+    public static boolean runsInstalled() {
+        String app = System.getProperty("jpackage.app-path"), programFiles = System.getenv("ProgramFiles");
+        return app != null && programFiles != null && Path.of(app).toAbsolutePath().startsWith(Path.of(programFiles));
     }
 
     /** Into %TEMP%\DraupneLink-update; progress is reported about once per percent. */
@@ -215,9 +233,20 @@ public final class SelfUpdate {
                 "  }",
                 "  $shared = Join-Path ([Environment]::GetFolderPath('CommonDesktopDirectory')) '" + SHORTCUT + "'",
                 "  $own = Join-Path ([Environment]::GetFolderPath('Desktop')) '" + SHORTCUT + "'",
-                "  if ((Test-Path -LiteralPath $shared) -or (Test-Path -LiteralPath $own)) { Note 'desktop shortcut there'; return }",
-                "  if (-not (Test-Path -LiteralPath $a)) { Note 'no desktop shortcut, and no app to point one at'; return }",
-                "  $s = (New-Object -ComObject WScript.Shell).CreateShortcut($own)",
+                "  if (-not (Test-Path -LiteralPath $a)) { Note 'no app to point a desktop shortcut at'; return }",
+                // 1.0.64: a shortcut there is checked, not only found - one pointing at a copy that can't start (a lone
+                // DRAUPNE Link.exe: "error opening ...\app\DRAUPNE Link.cfg") or at another copy is pointed here
+                "  $wsh = New-Object -ComObject WScript.Shell",
+                "  foreach ($l in @($shared, $own)) {",
+                "    if (-not (Test-Path -LiteralPath $l)) { continue }",
+                "    $x = $wsh.CreateShortcut($l); $t = [string]$x.TargetPath",
+                "    if ($t -ieq $a) { Note ('desktop shortcut there: ' + $l); continue }",
+                "    if ($t -and (Test-Path -LiteralPath $t) -and (Split-Path -Leaf $t) -ine 'DRAUPNE Link.exe') { Note ('desktop shortcut left, it points at ' + $t); continue }",
+                "    $x.TargetPath = $a; $x.WorkingDirectory = Split-Path -Parent $a",
+                "    try { $x.Save(); Note ('desktop shortcut repaired (was ' + $t + '): ' + $l) } catch { Note ('desktop shortcut could not be repaired: ' + $l) }",
+                "  }",
+                "  if ((Test-Path -LiteralPath $shared) -or (Test-Path -LiteralPath $own)) { return }",
+                "  $s = $wsh.CreateShortcut($own)",
                 "  $s.TargetPath = $a",
                 "  $s.WorkingDirectory = Split-Path -Parent $a",
                 "  $s.Description = 'DRAUPNE Link ground station'",

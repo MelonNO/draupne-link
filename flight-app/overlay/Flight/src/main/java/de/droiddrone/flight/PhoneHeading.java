@@ -42,6 +42,16 @@ final class PhoneHeading {
     /** A reading older than this is no heading. */
     static final long STALE_MS = 3000;
     static volatile boolean frontCamera;
+    /** pc.50: kept on until then (elapsedRealtime) for the sleep notice's reading, whoever else stops it. */
+    private static volatile long keepUntil;
+
+    static void keepFor(long ms) {
+        keepUntil = android.os.SystemClock.elapsedRealtime() + ms;
+    }
+
+    static boolean kept() {
+        return android.os.SystemClock.elapsedRealtime() < keepUntil;
+    }
 
     private PhoneHeading() {
     }

@@ -430,9 +430,13 @@ final class Tour {
                 }).after(() -> main.mapWindow().tourClosePins()) // the pins sheet goes with its step (the pilot, 2026-11-09)
                 .press().live(map));
         steps.add(new Step("TOOLS", "RULER: lengths, bearings, height profile. RADIO HORIZON and GCS SEARCH are for traditional "
-                + "radios, not 5G. GO TO: centre on a grid. CLIPS: overwatch events. PREVIOUS FLIGHTS: replay.",
+                + "radios, not 5G. AIRSPACE: R-, D-areas and NOTAMs. GO TO: centre on a grid. CLIPS: overwatch events.",
                 () -> main.mapWindow().tourRuler())
                 .extra(() -> main.mapWindow().tourToolsEnd()).transition(group(MapToolsPanel.Group.TOOLS)).live(map)
+                .of(FEATURE_MAP_TOOLS));
+        steps.add(new Step("DATA", "PREVIOUS FLIGHTS: replay. EXPORT a box: PNG and KML for Google Earth, ATAK / WinTAK and QGIS. "
+                + "IMPORT their KML. DOWNLOAD AREA keeps maps offline. CLEAR ALL empties the map.", () -> main.mapWindow().tourExport())
+                .extra(() -> main.mapWindow().tourDataEnd()).transition(group(MapToolsPanel.Group.DATA)).live(map)
                 .of(FEATURE_MAP_TOOLS));
         // the box beside the window, not over it (2026-11-10, the pilot: "the pop up is shown on top of the window, make
         // it possible so that the pop up is shown below or to the side"): the window moves over to make room, and a
@@ -449,10 +453,6 @@ final class Tour {
                     if (flightsStand != null) flightsStand.leave();
                     flightsStand = null;
                 }).of(FEATURE_FLIGHTS));
-        steps.add(new Step("DATA", "EXPORT a box: PNG and KML for Google Earth, ATAK / WinTAK and QGIS. IMPORT their KML. "
-                + "DOWNLOAD AREA keeps maps offline. CLEAR ALL empties the map.", () -> main.mapWindow().tourExport())
-                .extra(() -> main.mapWindow().tourDataEnd()).transition(group(MapToolsPanel.Group.DATA)).live(map)
-                .of(FEATURE_MAP_TOOLS));
 
         // ---- FLEET MANAGEMENT, with three drones of the tour's own, and the finale
         BooleanSupplier noDrones = () -> !finale.started();

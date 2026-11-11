@@ -75,8 +75,12 @@ final class PowerMode {
      */
     static final long HELLO_FIRST_MS = 200, HELLO_GAP_MS = 1500;
     static final int DEFAULT_CHECK_MIN = 5;
-    /** How long the socket listens for the PC's Connect after an alarm. */
-    static final long CHECK_WINDOW_MS = 20_000;
+    /**
+     * How long the socket listens for the PC's Connect after an alarm. pc.50: 10 s (was 20) - a PC that wants the
+     * phone answers its first hellos (0.2, 1.7, 3.2, 4.7 s; 9.7 s), and the PCs time their Connects and scans to the
+     * check-in it announced before sleeping; half the window's time awake.
+     */
+    static final long CHECK_WINDOW_MS = 10_000;
     /**
      * When the mode changes the PHONE_POWER record goes three times, this far apart; the three before deep sleep
      * carry sleepInS 3, 2, 1, and the sleep begins at {@link #SLEEP_COUNTDOWN_MS} - the burst has left by then.
@@ -84,6 +88,11 @@ final class PowerMode {
     static final long BURST_GAP_MS = 300;
     static final int BURST_COUNT = 3;
     static final long SLEEP_COUNTDOWN_MS = 1000;
+    /**
+     * pc.50: a FLEET command's countdown - its heading sensor starts cold (no pilot had it on), and the sleep notice
+     * should carry a settled reading. The link's stays 1 s (its sensor runs while the pilot is connected).
+     */
+    static final long FLEET_COUNTDOWN_MS = 3000;
     /** How long a window's wake lock outlasts the time it is asked for. */
     private static final long WINDOW_LOCK_SPARE_MS = 10_000;
     /** How often the check window looks whether the PC has connected. */
@@ -116,6 +125,10 @@ final class PowerMode {
     private long windowOpenedAt;
     /** When the last hello of this window went (worker thread). */
     private long lastHelloAt;
+    /** pc.50: listening in deep sleep - the opening burst is over, the processor may sleep (worker thread). */
+    private boolean burstDone;
+    /** pc.50: the minute's hello from the alarm, and a packet's handling while the processor sleeps: this long awake. */
+    private static final long HELLO_LOCK_MS = 5000, PACKET_LOCK_MS = 3000;
     // the burst of records after a change; guarded by this
     private int burstLeft;
     private long nextBurstAt;
@@ -173,6 +186,23 @@ final class PowerMode {
     /** pc.39: CHECK EVERY "0 min" - the listening window stays open. */
     private boolean always() {
         return SleepCheck.isAlways(checkIntervalMin);
+    }
+
+    /**
+     * pc.50 (the pilot chose it: "let it sleep"): listening in deep sleep holds no wake lock after its opening burst -
+     * the window lock was renewed for 70 s with every minute's hello, so the processor never slept. The minute's hello
+     * comes from an alarm; an incoming packet wakes the phone and holds it {@link #PACKET_LOCK_MS} for its handling (a
+     * CONNECT may take a few seconds; the PC sends it again). Overwatch keeps its lock: its camera needs the processor.
+     */
+    private boolean alarmHellos() {
+        return always() && mode == DEEP_SLEEP;
+    }
+
+    /** pc.50: a packet came while listening in deep sleep (Udp's receive thread): awake long enough to handle it. */
+    static void packetWhileAsleep() {
+        PowerMode p = current;
+        if (p == null || !p.alarmHellos() || !p.checking || !p.burstDone) return;
+        p.acquireWindowLock(p.service, PACKET_LOCK_MS);
     }
 
     /** Asleep and always listening (pc.39): the status card and the notification say so instead of a next check. */
@@ -275,9 +305,23 @@ final class PowerMode {
             log("Sleep check alarm: the service isn't running, nothing to wake");
             return;
         }
+        if (p.alarmHellos() && p.checking) { // pc.50: listening in deep sleep - the minute's hello
+            p.acquireWindowLock(context, HELLO_LOCK_MS);
+            p.worker.execute(p::alarmHello);
+            return;
+        }
         // the lock now, on the receiver's thread: the system's own grace ends with onReceive
         p.acquireWindowLock(context);
         p.worker.execute(p::openWindow);
+    }
+
+    /** pc.50: the alarm's hello while listening in deep sleep, and the next one set; the lock lapses by itself. */
+    private void alarmHello() {
+        if (!alarmHellos() || !checking) return;
+        long now = System.currentTimeMillis();
+        lastHelloAt = now;
+        service.powerHello(checkIntervalMin);
+        scheduleAlarm(service, now + SleepCheck.ALWAYS_HELLO_MS);
     }
 
     /** Whether a record of the burst after a mode change is due now (the stats sender asks every 0.1 s). */
@@ -341,6 +385,7 @@ final class PowerMode {
                 service.powerStandby(true);
                 event("Standby (" + from + ")");
                 burst();
+                scheduleNotices(SLEEP_COUNTDOWN_MS);
                 break;
             case DEEP_SLEEP:
                 if (mode == DEEP_SLEEP) return;
@@ -352,23 +397,55 @@ final class PowerMode {
                     break;
                 }
                 mode = DEEP_SLEEP;
-                sleepAt = System.currentTimeMillis() + SLEEP_COUNTDOWN_MS;
-                event("Deep sleep in " + SLEEP_COUNTDOWN_MS / 1000 + " s (" + from + "), " + checksText());
+                long deepIn = countdown(from);
+                sleepAt = System.currentTimeMillis() + deepIn;
+                event("Deep sleep in " + deepIn / 1000 + " s (" + from + "), " + checksText());
                 burst();
                 cancelPending();
-                pending = worker.schedule(this::fallAsleep, SLEEP_COUNTDOWN_MS, TimeUnit.MILLISECONDS);
+                pending = worker.schedule(this::fallAsleep, deepIn, TimeUnit.MILLISECONDS);
+                scheduleNotices(deepIn);
                 break;
             case OVERWATCH:
                 if (mode == OVERWATCH) return;
                 if (mode != NORMAL) wake(from); // from standby or deep sleep: everything back first, then down again
                 mode = OVERWATCH;
-                sleepAt = System.currentTimeMillis() + SLEEP_COUNTDOWN_MS;
-                event("Overwatch in " + SLEEP_COUNTDOWN_MS / 1000 + " s (" + from + "), " + checksText());
+                long owIn = countdown(from);
+                sleepAt = System.currentTimeMillis() + owIn;
+                event("Overwatch in " + owIn / 1000 + " s (" + from + "), " + checksText());
                 burst();
                 cancelPending();
-                pending = worker.schedule(this::fallAsleep, SLEEP_COUNTDOWN_MS, TimeUnit.MILLISECONDS);
+                pending = worker.schedule(this::fallAsleep, owIn, TimeUnit.MILLISECONDS);
+                scheduleNotices(owIn);
                 break;
         }
+    }
+
+    private static long countdown(String from) {
+        return from != null && from.startsWith("PC fleet") ? FLEET_COUNTDOWN_MS : SLEEP_COUNTDOWN_MS;
+    }
+
+    /**
+     * pc.50, the sleep notice (the pilot: "a device reports position, heading, battery percentages, Name, time until
+     * next check and switched mode before starting to sleep"): the heading sensor on through the countdown, and the
+     * notice at 30, 60 and 90 % of it - three, as the hellos are, for a tunnel that drops one.
+     */
+    private void scheduleNotices(long countdownMs) {
+        PhoneHeading.keepFor(countdownMs + 500);
+        PhoneHeading.start(service);
+        final int target = mode;
+        for (int i = 1; i <= 3; i++) {
+            final boolean last = i == 3;
+            worker.schedule(() -> sendNotice(target, last), countdownMs * 3 * i / 10, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void sendNotice(int target, boolean last) {
+        if (mode != target || asleep || checking) return; // changed, or already asleep
+        long now = System.currentTimeMillis();
+        int nextInS = target == STANDBY || always() ? 0
+                : (int) ((Math.max(0, sleepAt - now) + checkIntervalMin * 60_000L) / 1000);
+        service.powerNotice(target, target == STANDBY ? 0 : checkIntervalMin, nextInS);
+        if (last && target == STANDBY) service.headingAfterNotice();
     }
 
     private String checksText() {
@@ -456,13 +533,20 @@ final class PowerMode {
         // or wakes the phone. Always listening (pc.39): as in a window's first seconds, then once a minute, the
         // window's wake lock renewed with each
         lastHelloAt = 0;
+        burstDone = false;
         helloPending = worker.scheduleAtFixedRate(() -> {
             if (!checking) return;
             long now = System.currentTimeMillis();
-            if (always()) {
-                if (now - windowOpenedAt > SleepCheck.ALWAYS_HELLO_BURST_MS && now - lastHelloAt < SleepCheck.ALWAYS_HELLO_MS) return;
-                acquireWindowLock(service, SleepCheck.ALWAYS_HELLO_MS + WINDOW_LOCK_SPARE_MS);
+            boolean byAlarm = alarmHellos();
+            if (byAlarm && !burstDone && now - windowOpenedAt > SleepCheck.ALWAYS_HELLO_BURST_MS) {
+                // pc.50: the burst is over - the minute's hellos come from the alarm, and the processor may sleep
+                burstDone = true;
+                scheduleAlarm(service, lastHelloAt + SleepCheck.ALWAYS_HELLO_MS);
+                releaseWindowLock();
+                return;
             }
+            if (!SleepCheck.helloDue(always(), byAlarm, now - windowOpenedAt, lastHelloAt == 0 ? Long.MAX_VALUE : now - lastHelloAt)) return;
+            if (always() && !byAlarm) acquireWindowLock(service, SleepCheck.ALWAYS_HELLO_MS + WINDOW_LOCK_SPARE_MS);
             lastHelloAt = now;
             service.powerHello(checkIntervalMin);
         }, HELLO_FIRST_MS, HELLO_GAP_MS, TimeUnit.MILLISECONDS);

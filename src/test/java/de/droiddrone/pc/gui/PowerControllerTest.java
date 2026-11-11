@@ -222,6 +222,38 @@ class PowerControllerTest {
         assertEquals(5 * MIN - later, power.nextCheck(power.asleep(ip), wall + later) - (wall + later));
     }
 
+    /** 1.0.64 / phone pc.50: the sleep notice - asleep from now, its next check counted from now, said once of three. */
+    @Test
+    void theSleepNoticeIsKnownAtOnce() {
+        byte[] n = de.droiddrone.pc.SleepNoticeTest.notice(81, 2, 5, 0,
+                new de.droiddrone.common.FleetProtocol.Notice(90, de.droiddrone.common.FleetProtocol.Notice.HEADING_PHONE, 3, 5, 301));
+        assertEquals(Boolean.FALSE, power.checkIn("100.64.0.5", n));
+        power.checkIn("100.64.0.5", n);
+        power.checkIn("100.64.0.5", n);
+        PowerController.Asleep a = power.asleep("100.64.0.5");
+        assertEquals(T0, a.since(), "asleep from the notice, not from its first check-in");
+        assertEquals(5, a.intervalMin());
+        assertFalse(a.overwatch());
+        assertEquals("5:00", power.checkText(a, T0), "its next check counts from now");
+        assertEquals(List.of("MobileAlpha: deep sleep, next check 5:00, battery 81 %."), host.logs);
+        assertTrue(host.saves.size() > 0, "kept across a restart");
+
+        wall += 30_000; // an overwatch notice later
+        power.checkIn("100.64.0.5", de.droiddrone.pc.SleepNoticeTest.notice(80, 3, 255, OverwatchProtocol.HELLO_OVERWATCH,
+                new de.droiddrone.common.FleetProtocol.Notice(Double.NaN, 0, -1, -1, 0)));
+        assertTrue(power.asleep("100.64.0.5").overwatch());
+        assertEquals("MobileAlpha: overwatch, listening, battery 80 %.", host.logs.get(1));
+
+        // standby: said, not asleep (it stays reachable)
+        power.clear("100.64.0.5");
+        wall += 30_000;
+        assertNull(power.checkIn("100.64.0.5", de.droiddrone.pc.SleepNoticeTest.notice(79, 1, 0, 0,
+                new de.droiddrone.common.FleetProtocol.Notice(Double.NaN, 0, -1, -1, 0))));
+        assertNull(power.asleep("100.64.0.5"));
+        assertEquals("MobileAlpha: standby, battery 79 %.", host.logs.get(2));
+        assertNull(power.checkIn("100.64.0.1", n), "not one of ours");
+    }
+
     @Test
     void theWakeCountdownFollowsTheLastHello() {
         assertEquals(-1, power.wakeInMs(0, null), "not asleep");

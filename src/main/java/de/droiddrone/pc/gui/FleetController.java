@@ -175,6 +175,18 @@ final class FleetController {
         refresh();
     }
 
+    /**
+     * 1.0.64: a phone FLEET put to overwatch that this PC never flew had no camera view on the map; its sleep notice says
+     * where it looks - a view from that (a camera level, the usual picture angles) where there was none.
+     */
+    void noticeHeading(String phone, double lat, double lon, double headingDeg) {
+        for (OverwatchHub.Watched w : overwatch.watched()) {
+            if (!w.drone().equalsIgnoreCase(phone) || w.pose() != null) continue;
+            overwatch.watch(w.drone(), w.token(), new CameraFootprint.Pose(lat, lon, 1.5, headingDeg, 0, 0, 0, 70, 40));
+            host.saveWatched();
+        }
+    }
+
     void cancel(String phone) {
         if (fleet == null) return;
         fleet.cancel(phone);

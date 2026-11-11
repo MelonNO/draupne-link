@@ -189,7 +189,23 @@ final class MapWindow extends JFrame {
         tools.coverageHeight.addActionListener(e -> coverageChoiceChanged());
         tools.coverageKey.addActionListener(e -> askCoverageKey());
         tools.coverageImport.addActionListener(e -> importCells());
-        map.setOnViewRested(this::coverageView);
+        // AIRSPACE (1.0.64): its toggles and key from the settings file; fetched each time the view rests, shown while on
+        airspaceKey = config == null ? "" : config.getString(AIRSPACE_KEY);
+        showR = config != null && "true".equals(config.getString(AIRSPACE_R));
+        showD = config != null && "true".equals(config.getString(AIRSPACE_D));
+        showN = config != null && "true".equals(config.getString(AIRSPACE_N));
+        tools.setAirspaceLit(showR, showD, showN);
+        tools.rAreas.addActionListener(e -> setAirspace(!showR, showD, showN));
+        tools.dAreas.addActionListener(e -> setAirspace(showR, !showD, showN));
+        tools.notams.addActionListener(e -> setAirspace(showR, showD, !showN));
+        tools.airspaceKey.addActionListener(e -> askAirspaceKey());
+        tools.notamPaste.addActionListener(e -> pasteNotams());
+        map.setOnViewRested(area -> {
+            coverageView(area);
+            airspaceView(area);
+        });
+        airspaceTimer.start(); // a NOTAM comes into force or ends on its own time
+        javax.swing.SwingUtilities.invokeLater(() -> airspaceView(map.visibleArea()));
         // the pilot: the tools' overlays (radio horizon, search, measurement) show only while TOOLS is out; closed, they hide (still there until crossed out)
         // and their tool ends, so a click cannot move a mast that is not on screen
         tools.onGroupChanged(() -> {
@@ -698,6 +714,158 @@ final class MapWindow extends JFrame {
         });
     }
 
+    // ---- AIRSPACE (1.0.64): openAIP's R-, P- and D-areas (a key), NOTAMs pasted from IPPC.no; on a thread of its own
+
+    static final String AIRSPACE_KEY = "map.airspace.key", AIRSPACE_R = "map.airspace.r", AIRSPACE_D = "map.airspace.d",
+            AIRSPACE_N = "map.airspace.notam";
+    private final de.droiddrone.pc.map.OpenAipAirspace airspaceData =
+            new de.droiddrone.pc.map.OpenAipAirspace(de.droiddrone.pc.map.OpenAipAirspace.defaultDir());
+    private final java.util.concurrent.ExecutorService airspaceWork = java.util.concurrent.Executors.newSingleThreadExecutor(r -> daemon(r, "airspace"));
+    private volatile String airspaceKey = "";
+    private boolean showR, showD, showN;
+    private volatile java.util.List<de.droiddrone.pc.map.Airspace> openAip = java.util.List.of();
+    private volatile String airspaceNote;
+    private final javax.swing.Timer airspaceTimer = new javax.swing.Timer(60_000, e -> publishAirspace());
+
+    private void setAirspace(boolean r, boolean d, boolean n) {
+        showR = r;
+        showD = d;
+        showN = n;
+        tools.setAirspaceLit(r, d, n);
+        saver.accept(Map.of(AIRSPACE_R, Boolean.toString(r), AIRSPACE_D, Boolean.toString(d), AIRSPACE_N, Boolean.toString(n)));
+        airspaceView(map.visibleArea());
+    }
+
+    /** The view rested (or a toggle changed): openAIP's areas for it fetched or read, then shown. */
+    private void airspaceView(double[] area) {
+        if (!showR && !showD) {
+            openAip = java.util.List.of();
+            airspaceNote = null;
+            publishAirspace();
+            return;
+        }
+        if (area == null) return;
+        String key = airspaceKey;
+        airspaceWork.execute(() -> {
+            de.droiddrone.pc.map.OpenAipAirspace.Answer a = airspaceData.areas(area, key);
+            openAip = a.areas();
+            airspaceNote = a.note();
+            javax.swing.SwingUtilities.invokeLater(this::publishAirspace);
+        });
+        publishAirspace(); // the NOTAMs at once
+    }
+
+    /** The areas the toggles want, onto the map; the counts in AIRSPACE's status line. */
+    private void publishAirspace() {
+        java.util.List<de.droiddrone.pc.map.Airspace> shown = new java.util.ArrayList<>();
+        int r = 0, d = 0, n = 0;
+        for (de.droiddrone.pc.map.Airspace a : openAip) {
+            boolean restricted = a.kind() != de.droiddrone.pc.map.Airspace.Kind.DANGER;
+            if (restricted ? !showR : !showD) continue;
+            shown.add(a);
+            if (restricted) r++;
+            else d++;
+        }
+        boolean fromOpenAip = !shown.isEmpty();
+        if (showN) {
+            java.time.Instant now = java.time.Instant.now();
+            for (de.droiddrone.pc.map.NotamParser.Notam notam : savedNotams()) {
+                if (notam.overAt(now)) continue;
+                if (!notam.activeAt(now) && notam.start() != null && notam.start().isAfter(now.plus(java.time.Duration.ofDays(1)))) continue;
+                shown.add(de.droiddrone.pc.map.NotamParser.toAirspace(notam, now));
+                n++;
+            }
+        }
+        // the larger first: a small area (a NOTAM in a D-area) is drawn over it
+        shown.sort((a, b) -> Double.compare(spread(b), spread(a)));
+        map.setAirspace(shown, fromOpenAip ? de.droiddrone.pc.map.OpenAipAirspace.ATTRIBUTION : null);
+        StringBuilder line = new StringBuilder();
+        if (showR) line.append("R ").append(r);
+        if (showD) line.append(line.length() > 0 ? ", " : "").append("D ").append(d);
+        if (showN) line.append(line.length() > 0 ? ", " : "").append("NOTAM ").append(n);
+        String note = (showR || showD) ? airspaceNote : null;
+        if (note != null) line.append(line.length() > 0 ? "<br>" : "").append(note);
+        tools.airspaceStatus.setText(line.length() == 0 ? " " : "<html>" + line + "</html>");
+    }
+
+    private static double spread(de.droiddrone.pc.map.Airspace a) {
+        double minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+        for (double[] p : a.ring()) {
+            minLat = Math.min(minLat, p[0]);
+            maxLat = Math.max(maxLat, p[0]);
+            minLon = Math.min(minLon, p[1]);
+            maxLon = Math.max(maxLon, p[1]);
+        }
+        return (maxLat - minLat) * (maxLon - minLon);
+    }
+
+    private void askAirspaceKey() {
+        String text = "<html>R- and D-areas come from openAIP: a free API key.<br>Register at https://www.openaip.net, then "
+                + "create a key<br>under your profile's API clients. Saved in the settings file.<br><br>"
+                + "Community data under CC BY-NC: the AIP and NOTAMs are the official word.</html>";
+        Object answer = Dialogs.input(this, text, "openAIP key", javax.swing.JOptionPane.PLAIN_MESSAGE, null, null, airspaceKey);
+        if (answer == null) return;
+        airspaceKey = answer.toString().trim();
+        saver.accept(Map.of(AIRSPACE_KEY, airspaceKey));
+        airspaceView(map.visibleArea());
+    }
+
+    /** %APPDATA%\DraupneLink\airspace\notams.txt: the NOTAMs pasted, as pasted; those over are dropped when it is written. */
+    static java.nio.file.Path notamFile() {
+        return de.droiddrone.pc.map.OpenAipAirspace.defaultDir().resolve("notams.txt");
+    }
+
+    private java.util.List<de.droiddrone.pc.map.NotamParser.Notam> savedNotams() {
+        try {
+            java.nio.file.Path f = notamFile();
+            if (!java.nio.file.Files.isRegularFile(f)) return java.util.List.of();
+            return de.droiddrone.pc.map.NotamParser.parse(java.nio.file.Files.readString(f));
+        } catch (java.io.IOException e) {
+            return java.util.List.of();
+        }
+    }
+
+    /** NOTAMs pasted from IPPC.no: added to those kept (by id), or all cleared. */
+    private void pasteNotams() {
+        javax.swing.JTextArea area = new javax.swing.JTextArea(16, 60);
+        area.setLineWrap(true);
+        javax.swing.JPanel box = new javax.swing.JPanel(new java.awt.BorderLayout(0, 6));
+        box.add(new javax.swing.JLabel("<html>Paste NOTAMs from IPPC.no (one or many). Each needs its Q) line;<br>"
+                + "its area comes from the points or radius in E), else the Q) circle.</html>"), java.awt.BorderLayout.NORTH);
+        box.add(new javax.swing.JScrollPane(area), java.awt.BorderLayout.CENTER);
+        Object[] options = {"Add", "Clear all", "Cancel"};
+        int choice = Dialogs.option(this, box, "NOTAMs", javax.swing.JOptionPane.DEFAULT_OPTION,
+                javax.swing.JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
+        java.time.Instant now = java.time.Instant.now();
+        java.util.List<de.droiddrone.pc.map.NotamParser.Notam> kept = new java.util.ArrayList<>();
+        if (choice == 0) {
+            java.util.List<de.droiddrone.pc.map.NotamParser.Notam> added = de.droiddrone.pc.map.NotamParser.parse(area.getText());
+            java.util.Set<String> ids = new java.util.HashSet<>();
+            for (de.droiddrone.pc.map.NotamParser.Notam a : added) ids.add(a.id());
+            for (de.droiddrone.pc.map.NotamParser.Notam old : savedNotams()) {
+                if (!old.overAt(now) && (old.id().isEmpty() || !ids.contains(old.id()))) kept.add(old);
+            }
+            kept.addAll(added);
+            int blocks = area.getText().toUpperCase(java.util.Locale.ROOT).split("Q\\)", -1).length - 1;
+            tools.airspaceStatus.setText("<html>" + added.size() + " NOTAM" + (added.size() == 1 ? "" : "s") + " added"
+                    + (blocks > added.size() ? "<br>" + (blocks - added.size()) + " without an area left out" : "") + "</html>");
+            if (!showN && !added.isEmpty()) {
+                setAirspace(showR, showD, true);
+            }
+        } else if (choice != 1) {
+            return;
+        }
+        try {
+            StringBuilder text = new StringBuilder();
+            for (de.droiddrone.pc.map.NotamParser.Notam k : kept) text.append(k.raw()).append("\n\n");
+            java.nio.file.Files.createDirectories(notamFile().getParent());
+            java.nio.file.Files.writeString(notamFile(), text.toString());
+        } catch (java.io.IOException e) {
+            tools.airspaceStatus.setText("NOTAMs not saved: " + e.getMessage());
+        }
+        publishAirspace();
+    }
+
     // ---- 4G COVERAGE (1.0.44): the cells and the terrain load and the estimate is worked out on a thread of its own
 
     static final String COVERAGE_KEY = "map.coverage.key", COVERAGE_OPERATOR = "map.coverage.operator", COVERAGE_HEIGHT = "map.coverage.heightM";
@@ -1130,7 +1298,7 @@ final class MapWindow extends JFrame {
         PreviousFlightsDialog.show(this, cache, map.source(), this::showOldTrackOrClear);
     }
 
-    /** PREVIOUS FLIGHTS in MAP TOOLS > TOOLS. */
+    /** PREVIOUS FLIGHTS in MAP TOOLS > DATA (1.0.64; was TOOLS). */
     javax.swing.JComponent tourPreviousFlights() {
         return tools.flights;
     }

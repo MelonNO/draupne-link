@@ -211,6 +211,8 @@ public class Udp {
 
     private void answerName(DatagramPacket packet, byte[] d, int len) {
         if (!keyMatches(d, len, 1)) return;
+        // pc.50: the PCs that ask who this phone is hear its sleep notice too
+        namedBy.put(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
         try {
             if (d[0] == NAME_ASSIGN) {
                 java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(d, 1, len - 1));
@@ -517,6 +519,9 @@ public class Udp {
                         answerName(receiverPacket, d, len);
                         continue;
                     }
+                    // pc.50: listening in deep sleep holds no wake lock - anything but a name query (answered above, at
+                    // once) keeps the phone awake long enough to be handled (a Connect, the PC's answer, a fleet mode)
+                    PowerMode.packetWhileAsleep();
                     // pc.40: a PC's fleet management asks for a power mode - in any state but a pilot session
                     if (d[0] == FleetProtocol.MODE) {
                         onFleetMode(receiverPacket, d, len);
@@ -598,6 +603,9 @@ public class Udp {
                         continue;
                     }
                     buffer.addPacket(receiverPacket);
+                    synchronized (packetSignal) {
+                        packetSignal.notifyAll(); // pc.50: the buffer thread waits for it while resting
+                    }
                 } catch (Exception e) {
                     log("Receiver error: " + e);
                 }
@@ -650,7 +658,7 @@ public class Udp {
             boolean feeding = false, refusedSaid = false;
             while (id == udpThreadsId) {
                 try {
-                    Thread.sleep(IDLE_EVERY_MS);
+                    Thread.sleep(dormantFcClosed() ? DORMANT_LOOP_MS : IDLE_EVERY_MS);
                     boolean feed, refused = false;
                     synchronized (rcWriteLock) {
                         short[] idle = idleSticks;
@@ -689,7 +697,7 @@ public class Udp {
             final int id = udpThreadsId;
             while (id == udpThreadsId) {
                 try {
-                    Thread.sleep(AUDIO_GATE_MS);
+                    Thread.sleep(dormant() ? DORMANT_LOOP_MS : AUDIO_GATE_MS);
                     long now = System.currentTimeMillis();
                     boolean observed = observing && observeAudio && !isConnected(); // pc.37: an observer wants the sound
                     boolean wanted = pcAudio.wanted(now) || observed;
@@ -876,7 +884,7 @@ public class Udp {
                         if (statsSent % 5 == 4 && RemoteUpdate.reportDue()) RemoteUpdate.writeRecordTo(stats.daos);
                         udpSender.sendPacket(stats.getData());
                     }
-                    Thread.sleep(10);
+                    Thread.sleep(dormant() ? DORMANT_LOOP_MS : 10);
                 } catch (Exception e) {
                     log("Telemetry thread error: " + e);
                 }
@@ -896,7 +904,14 @@ public class Udp {
                         if (packet != null) processData(packet);
                     }while (packet != null);
                     receiverBuffer.processTimer();
-                    Thread.sleep(1);
+                    if (dormant()) {
+                        // pc.50: resting with no session - nothing to time, so wait for a packet (was 20 ms polls)
+                        synchronized (packetSignal) {
+                            packetSignal.wait(DORMANT_BUFFER_MS);
+                        }
+                    } else {
+                        Thread.sleep(1);
+                    }
                 } catch (Exception e) {
                     if (packet != null) {
                         log("Receiver buffer error: " + e + ", packetName: " + packet.packetName);
@@ -1009,8 +1024,11 @@ public class Udp {
         videoSenderThreadId++;
         audioSenderThreadId++;
         streamEncoder.close();
-        if (mp4Recorder.isRecording()) mp4Recorder.close();
         cameraManager.getCamera().close();
+        // pc.50: closed recording or not, after the camera (its session lets go of the surface first): a session's idle
+        // 1080p / 20 Mbit/s recorder encoder (upstream's on-phone recording, made at every start) lived on into
+        // overwatch and sleep - 12 min in the pilot's log, its codec thread waking 70 times a second
+        mp4Recorder.close();
     }
 
     private void stopAudioStream(){
@@ -1096,6 +1114,68 @@ public class Udp {
      * The sleeping phone's "still here" (pc.22): [0x6F][battery % u8][charging u8][nextCheckMin u8][mV u16] to the
      * PC's last address; it answers whether to sleep on or wake. Nothing to send to before the first flight.
      */
+    /** pc.50: the PCs that asked this phone's name lately (when), for its sleep notice; at most NOTICE_PCS. */
+    private final java.util.Map<InetAddress, Long> namedBy = new java.util.concurrent.ConcurrentHashMap<>();
+    static final long NOTICE_PC_MS = 120_000;
+    static final int NOTICE_PCS = 10;
+
+    /** pc.50: a pilot or observers use the heading sensor (it stays on after the sleep notice). */
+    boolean headingInUse() {
+        return isConnected() || observing;
+    }
+
+    /**
+     * pc.50, the sleep notice (FleetProtocol.Notice): a check-in flagged OverwatchProtocol.HELLO_NOTICE with where the
+     * camera looks and when the next check is, to the PC that asked for the mode and to every PC that asked this
+     * phone's name in the last 2 min (at their link port). Sent from the link's socket, still open in the countdown.
+     * @return whether it went to anyone
+     */
+    public boolean sendSleepNotice(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, int owFlags, int nextCheckInS) {
+        DatagramSocket s = socket;
+        if (s == null || s.isClosed()) return false;
+        byte[] head = {PowerMode.SLEEP_HELLO, (byte) Math.min(255, Math.max(0, batteryPercent)), (byte) (charging ? 1 : 0),
+                (byte) Math.min(255, nextCheckMin), (byte) (milliVolts >> 8), (byte) milliVolts,
+                (byte) (owFlags | de.droiddrone.common.OverwatchProtocol.HELLO_NOTICE), (byte) PowerMode.floorReason()};
+        byte[] d = de.droiddrone.common.FleetProtocol.hello(head, fleetStatus(), sleepWhere(), noticeOf(nextCheckInS), key);
+        java.util.LinkedHashMap<InetAddress, Integer> to = new java.util.LinkedHashMap<>();
+        if (lastPcIp != null) to.put(lastPcIp, lastPcPort);
+        long now = android.os.SystemClock.elapsedRealtime();
+        namedBy.values().removeIf(at -> now - at > NOTICE_PC_MS);
+        for (InetAddress pc : namedBy.keySet()) {
+            if (to.size() >= NOTICE_PCS) break;
+            to.putIfAbsent(pc, port);
+        }
+        boolean sent = false;
+        for (java.util.Map.Entry<InetAddress, Integer> e : to.entrySet()) {
+            try {
+                s.send(new DatagramPacket(d, d.length, e.getKey(), e.getValue()));
+                sent = true;
+            } catch (Exception ex) {
+                log("Sleep notice to " + e.getKey().getHostAddress() + ": " + ex);
+            }
+        }
+        return sent;
+    }
+
+    /**
+     * pc.50: the heading for the notice - the FC's yaw when it has a compass (most drones have none), else where the
+     * phone's camera looks (Observe.cameraAzimuthDeg: well defined with the phone on its side, lens forward), else none.
+     */
+    private de.droiddrone.common.FleetProtocol.Notice noticeOf(int nextCheckInS) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        int sensors = msp == null ? -1 : msp.sensorStatus;
+        if (sensors >= 0 && (sensors & Msp.SENSOR_MAG) != 0 && msp.attitudeAt != 0 && now - msp.attitudeAt < 2000) {
+            return new de.droiddrone.common.FleetProtocol.Notice(msp.attitudeYawDeg, de.droiddrone.common.FleetProtocol.Notice.HEADING_FC,
+                    3, -1, nextCheckInS);
+        }
+        double az = PhoneHeading.azimuthDeg();
+        if (!Double.isNaN(az)) {
+            return new de.droiddrone.common.FleetProtocol.Notice(az, de.droiddrone.common.FleetProtocol.Notice.HEADING_PHONE,
+                    PhoneHeading.accuracy(), PhoneHeading.errorDeg(), nextCheckInS);
+        }
+        return new de.droiddrone.common.FleetProtocol.Notice(Double.NaN, de.droiddrone.common.FleetProtocol.Notice.HEADING_NONE, -1, -1, nextCheckInS);
+    }
+
     public boolean sendSleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, int owFlags, int floorReason) {
         InetAddress ip = lastPcIp;
         DatagramSocket s = socket;
@@ -1114,6 +1194,27 @@ public class Udp {
             return false;
         }
     }
+
+    /**
+     * pc.50: resting (standby, deep sleep, overwatch) with no pilot and no observer - the link's loops, which standby
+     * and "listening" keep running all along, slow down: the buffer thread waits for a packet instead of polling every
+     * 1 ms (the receive thread wakes it), the telemetry and audio-gate loops go from 10-50 ms to 0.5 s; idle sticks
+     * too, where the FC's port is closed. About 1100 wake-ups a second became about 6 (in standby the buffer loop alone
+     * took 62 % of a core).
+     */
+    private boolean dormant() {
+        return PowerMode.mode() != PowerMode.NORMAL && !observing && !isConnected();
+    }
+
+    /** As dormant, and the FC's port closed (deep sleep, overwatch): standby feeds the FC idle sticks at full pace. */
+    private boolean dormantFcClosed() {
+        int m = PowerMode.mode();
+        return (m == PowerMode.DEEP_SLEEP || m == PowerMode.OVERWATCH) && dormant();
+    }
+
+    /** pc.50: resting, the buffer thread waits this long at most for a packet (woken by the receive thread at once). */
+    static final long DORMANT_BUFFER_MS = 1000, DORMANT_LOOP_MS = 500;
+    private final Object packetSignal = new Object();
 
     public boolean isConnected(){
         ReceiverBuffer buffer = receiverBuffer;
@@ -2420,7 +2521,7 @@ public class Udp {
         if (pilot != pilotHeading) {
             pilotHeading = pilot;
             if (pilot) PhoneHeading.start(context);
-            else if (!observing) PhoneHeading.stop(context);
+            else if (!observing && !PhoneHeading.kept()) PhoneHeading.stop(context); // pc.50: not under the sleep notice
         }
         if (pilot && now - pilotRecordAt >= 200) {
             pilotRecordAt = now;

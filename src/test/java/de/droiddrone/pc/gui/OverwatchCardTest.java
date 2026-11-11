@@ -14,6 +14,7 @@ import javax.swing.SwingUtilities;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -44,6 +45,7 @@ class OverwatchCardTest {
 
     private static BufferedImage paint(OverwatchPanel p) throws Exception {
         SwingUtilities.invokeAndWait(() -> {
+            forget(p);
             p.setSize(p.getPreferredSize().width, PANEL_H);
             layout(p);
         });
@@ -56,9 +58,20 @@ class OverwatchCardTest {
         return img;
     }
 
+    /** Every layout's sizes forgotten first: off screen nothing is ever valid, so a change's revalidate stops at once. */
+    private static void forget(Container c) {
+        c.invalidate();
+        for (Component k : c.getComponents()) if (k instanceof Container cc) forget(cc);
+    }
+
     private static void layout(Container c) {
+        forget(c);
+        layoutTree(c);
+    }
+
+    private static void layoutTree(Container c) {
         c.doLayout();
-        for (Component k : c.getComponents()) if (k instanceof Container cc) layout(cc);
+        for (Component k : c.getComponents()) if (k instanceof Container cc) layoutTree(cc);
     }
 
     private static int count(BufferedImage img, int rgb) {
@@ -85,7 +98,7 @@ class OverwatchCardTest {
         SwingUtilities.invokeAndWait(() -> p.setViews(List.of(view(preRoll(), why))));
         assertTrue(p.getPreferredSize().height > 300, "a card, not a bar: " + p.getPreferredSize());
         BufferedImage img = paint(p);
-        Component card = ((Container) p.getComponent(0)).getComponent(0);
+        Component card = p.cardsBox().getComponent(0);
         assertTrue(card.getWidth() >= OverwatchPanel.PANEL_WIDTH - 10, "the card is the panel's width: " + card.getWidth());
         assertTrue(count(img, SKY) > 10_000, "the pre-roll picture is painted: " + count(img, SKY));
         String all = String.join("\n", texts(p, new ArrayList<>()));
@@ -106,8 +119,74 @@ class OverwatchCardTest {
         String all = String.join("\n", texts(p, new ArrayList<>()));
         assertFalse(all.toLowerCase().contains("resume"), all);
         assertFalse(all.contains("PAUSED"), all);
-        Component card = ((Container) p.getComponent(0)).getComponent(0);
+        Component card = p.cardsBox().getComponent(0);
         assertTrue(card.getHeight() > 250, "the picture's room is there while it comes: " + card.getHeight());
+    }
+
+    private static OverwatchHub.View viewOf(String drone, long at) {
+        OverwatchProtocol.Alert a = new OverwatchProtocol.Alert(1, 1, 0, 0, at, 0.47f, 0.38f, 0.06f, 0.2f, 0, 90,
+                611429110, 106897877, 0, 91, drone);
+        return new OverwatchHub.View(drone, AlertCard.Shown.CARD, false, at, -1, preRoll(), a, null, null, false, null, 8);
+    }
+
+    /** 1.0.64, the pilot: "minimize the picture so only the drone name is listed". */
+    @Test
+    void aMinimizedCardIsItsNameAlone(@TempDir Path dir) throws Exception {
+        MapView map = new MapView(new TileCache(dir, "test", false));
+        OverwatchPanel p = new OverwatchPanel(map, new ClipIndex(dir), null, () -> de.droiddrone.pc.map.Coordinates.Format.MGRS,
+                d -> { }, d -> { }, d -> { }, () -> { });
+        SwingUtilities.invokeAndWait(() -> p.setViews(List.of(view(preRoll(), null))));
+        paint(p);
+        int full = p.cardsBox().getComponent(0).getHeight();
+        SwingUtilities.invokeAndWait(() -> p.minimize("MobileX-ray", true));
+        BufferedImage img = paint(p);
+        Component card = p.cardsBox().getComponent(0);
+        assertTrue(card.getHeight() < 70 && card.getHeight() < full / 4, "a line, not a card: " + card.getHeight() + " (was " + full + ")");
+        assertEquals(0, count(img, SKY), "no picture");
+        String all = String.join(" | ", texts(p, new ArrayList<>()));
+        assertTrue(all.contains("MOTION - MobileX-ray"), all);
+        assertFalse(all.contains("CONNECT") || all.contains("ago"), all);
+        assertTrue(all.contains("+"), "the way back: " + all);
+
+        SwingUtilities.invokeAndWait(() -> p.setViews(List.of(view(preRoll(), null)))); // the next refresh keeps it so
+        paint(p);
+        assertTrue(p.cardsBox().getComponent(0).getHeight() < 70);
+        SwingUtilities.invokeAndWait(() -> p.minimize("MobileX-ray", false));
+        img = paint(p);
+        assertEquals(full, p.cardsBox().getComponent(0).getHeight());
+        assertTrue(count(img, SKY) > 10_000);
+    }
+
+    /** 1.0.64, the pilot: "it should be possible to scroll in the clips menu" - cards pushed the clip list off the window. */
+    @Test
+    void cardsAndTheClipListScrollTogether(@TempDir Path dir) throws Exception {
+        MapView map = new MapView(new TileCache(dir, "test", false));
+        OverwatchPanel p = new OverwatchPanel(map, new ClipIndex(dir), null, () -> de.droiddrone.pc.map.Coordinates.Format.MGRS,
+                d -> { }, d -> { }, d -> { }, () -> { });
+        long now = System.currentTimeMillis();
+        SwingUtilities.invokeAndWait(() -> {
+            p.setViews(List.of(viewOf("MobileAlpha", now - 9000), viewOf("MobileBravo", now - 6000), viewOf("MobileCharlie", now - 3000)));
+            p.openClips("MobileAlpha");
+        });
+        paint(p);
+        javax.swing.JScrollPane sp = (javax.swing.JScrollPane) p.getComponent(0);
+        java.awt.Component column = sp.getViewport().getView();
+        assertTrue(column.getHeight() > PANEL_H, "three cards and the list are taller than the window: " + column.getHeight());
+        javax.swing.JScrollBar bar = sp.getVerticalScrollBar();
+        assertTrue(bar.isVisible() && bar.getMaximum() - bar.getVisibleAmount() > 0, "and they scroll");
+        Component library = ((Container) column).getComponent(1);
+        assertTrue(library.isVisible() && library.getY() >= PANEL_H - 50, "the list was below the window: " + library.getY());
+        SwingUtilities.invokeAndWait(() -> bar.setValue(bar.getMaximum()));
+        Rectangle seen = sp.getViewport().getViewRect();
+        assertTrue(seen.y + seen.height >= library.getY() + library.getHeight() - 1, "scrolled down, the whole list shows: " + seen + " " + library.getBounds());
+        Component card = p.cardsBox().getComponent(0);
+        assertTrue(card.getWidth() >= OverwatchPanel.PANEL_WIDTH - 10, "the cards keep their width beside the bar: " + card.getWidth());
+
+        SwingUtilities.invokeAndWait(() -> {
+            for (String d : List.of("MobileAlpha", "MobileBravo", "MobileCharlie")) p.minimize(d, true);
+        });
+        paint(p);
+        assertTrue(column.getHeight() <= sp.getViewport().getHeight(), "minimized, it all fits: " + column.getHeight());
     }
 
     /** 1.0.52: the box follows the thing - the phone's boxes now; the alert's box only on the pictures from the alert. */

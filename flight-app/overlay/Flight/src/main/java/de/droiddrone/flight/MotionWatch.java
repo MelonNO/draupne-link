@@ -147,6 +147,14 @@ final class MotionWatch {
         hfovDeg = deg;
     }
 
+    /** pc.50: the video's shape - a picture of another shape is cut to it (InternalCamera, at each camera start). */
+    private static volatile int videoWidth, videoHeight;
+
+    static void setVideoShape(int w, int h) {
+        videoWidth = w;
+        videoHeight = h;
+    }
+
     /** The camera's angle across the picture, degrees (0 = unknown): for overwatch's alert (pc.36) and the observers' map (pc.37). */
     static float fieldOfView() {
         return hfovDeg;
@@ -200,14 +208,19 @@ final class MotionWatch {
         if (!wantFrame() || !busy.compareAndSet(false, true)) return;
         try {
             Image.Plane[] p = image.getPlanes();
-            int iw = image.getWidth(), ih = image.getHeight();
+            // pc.50: overwatch's own picture may be of another shape (320x240 for a 16:9 video): its centred cut is the
+            // video's view, so the detector gets the same 320x180 as from the video's own 16:9 picture
+            int[] cut = AnalysisSize.centreCrop(image.getWidth(), image.getHeight(), videoWidth, videoHeight);
+            int iw = cut[2], ih = cut[3];
             int step = Math.max(1, (iw + MAX_WIDTH - 1) / MAX_WIDTH);
             size(iw / step & ~1, ih / step & ~1);
             // pc.43: the luma averaged over each step x step block - a phone with no small picture of the video's shape
             // gives 1280x720 or more (AnalysisSize), and one pixel in 16 flickers with the lens's stabiliser
-            AnalysisSize.shrink(p[0].getBuffer(), p[0].getRowStride(), p[0].getPixelStride(), step, y, width, height);
-            copyPlane(p[1].getBuffer(), p[1].getRowStride(), p[1].getPixelStride(), step, u, width / 2, height / 2);
-            copyPlane(p[2].getBuffer(), p[2].getRowStride(), p[2].getPixelStride(), step, v, width / 2, height / 2);
+            AnalysisSize.shrink(p[0].getBuffer(), cut[1] * p[0].getRowStride() + cut[0] * p[0].getPixelStride(), p[0].getRowStride(),
+                    p[0].getPixelStride(), step, y, width, height);
+            int cx = cut[0] / 2, cy = cut[1] / 2;
+            copyPlane(p[1].getBuffer(), cy * p[1].getRowStride() + cx * p[1].getPixelStride(), p[1].getRowStride(), p[1].getPixelStride(), step, u, width / 2, height / 2);
+            copyPlane(p[2].getBuffer(), cy * p[2].getRowStride() + cx * p[2].getPixelStride(), p[2].getRowStride(), p[2].getPixelStride(), step, v, width / 2, height / 2);
         } catch (RuntimeException e) { // a picture closed under us, a plane of another layout: this one is skipped
             busy.set(false);
             return;
@@ -230,10 +243,10 @@ final class MotionWatch {
                 ByteBuffer vu = frame.duplicate();
                 vu.position(frameWidth * frameHeight);
                 ByteBuffer chroma = vu.slice();
-                copyPlane(chroma, frameWidth, 2, step, v, width / 2, height / 2);
+                copyPlane(chroma, 0, frameWidth, 2, step, v, width / 2, height / 2);
                 ByteBuffer uOnly = chroma.duplicate();
                 uOnly.position(1);
-                copyPlane(uOnly.slice(), frameWidth, 2, step, u, width / 2, height / 2);
+                copyPlane(uOnly.slice(), 0, frameWidth, 2, step, u, width / 2, height / 2);
             } catch (RuntimeException e) {
                 busy.set(false);
                 return;
@@ -253,10 +266,10 @@ final class MotionWatch {
     }
 
     /** Every step-th pixel of a plane each way into a packed out x oh array. */
-    private static void copyPlane(ByteBuffer src, int rowStride, int pixelStride, int step, byte[] dst, int ow, int oh) {
+    private static void copyPlane(ByteBuffer src, int offset, int rowStride, int pixelStride, int step, byte[] dst, int ow, int oh) {
         int limit = src.limit();
         for (int yy = 0; yy < oh; yy++) {
-            int row = yy * step * rowStride;
+            int row = offset + yy * step * rowStride;
             int o = yy * ow;
             for (int xx = 0; xx < ow; xx++) {
                 int at = row + xx * step * pixelStride;
