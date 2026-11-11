@@ -2,6 +2,15 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.61
+
+PC only; the phone app stays **DRAUPNE Flight 2.3.0-pc.47**.
+
+- **DEMO: SET UP SCENARIO works.** It said "at most 12 virtual drones": the other pilot's three extra drones made 14. It now observes three of the six scene drones (convoy, patrol, mortar), so no drone without a scene is in the demo.
+- **DEMO: the six take mixed modes** a few seconds in, shuffled each time: STANDBY, DEEP SLEEP (listening or checking every 1-2 min), one idle. No overwatch: an alert would give the scenario away.
+- **DEMO: OBSERVATION has the six chosen** (the set before comes back at END DEMO). A standby or sleeping demo drone observed here, or by the other pilot, is woken at once.
+- **Every virtual drone's batteries vary:** pack 3.85-4.18 V a cell, phone 28-97 %. The other pilot takes off on a full pack.
+
 ## 1.0.60 + phone pc.47
 
 With the phone app **DRAUPNE Flight 2.3.0-pc.47** (update the phones). Not tried in the real window or on a phone yet.

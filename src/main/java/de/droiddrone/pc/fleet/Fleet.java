@@ -134,10 +134,30 @@ public final class Fleet implements AutoCloseable {
         FlightModel.Setup s = copy(setup);
         VirtualDrone d = new VirtualDrone(slot, name, key, address, lat, lon, headingDeg, s, this::log);
         d.start(0);
+        varyBatteries(d, variety);
         drones.add(d);
         announce();
         log((name.isEmpty() ? "Virtual drone " + (slot + 1) : name) + ": up at " + address.getHostAddress() + ":" + d.port());
         return d;
+    }
+
+    /** Each new drone's batteries drawn from this (2026-11-10, the pilot: every one at 92 % and full looked staged). */
+    private final java.util.Random variety = new java.util.Random();
+
+    /** The pack per cell at rest, V: from a used pack to a full one; above the warning even under load. */
+    static final double PACK_LOW_V = 3.85, PACK_FULL_V = 4.18;
+    /** The phone, %. */
+    static final int PHONE_LOW = 28, PHONE_HIGH = 97;
+
+    /**
+     * Batteries as a fleet in the field has them: some packs full, some flown; phones from low to nearly full; the
+     * phones' temperature with them (a charged phone in the sun runs warm). The tour scenario's drones set their own.
+     */
+    static void varyBatteries(VirtualDrone d, java.util.Random r) {
+        double pack = r.nextDouble() < 0.35 ? PACK_FULL_V - 0.04 * r.nextDouble() : PACK_LOW_V + (PACK_FULL_V - PACK_LOW_V) * r.nextDouble();
+        int phone = PHONE_LOW + r.nextInt(PHONE_HIGH - PHONE_LOW + 1);
+        double temp = 24 + 12 * r.nextDouble();
+        d.setBatteries(pack, phone, temp);
     }
 
     /**

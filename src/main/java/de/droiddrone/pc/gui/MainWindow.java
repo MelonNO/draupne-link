@@ -2554,6 +2554,14 @@ public class MainWindow extends JFrame {
                     "Observation", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
+        if (demo != null) { // its sleeping and standby drones woken at once; this PC's word that they sleep goes with it
+            for (String p : demo.observing(set.phones())) {
+                String ip = names.ipOf(p);
+                if (ip == null) continue;
+                power.clear(ip);
+                standbyPhones.remove(ip);
+            }
+        }
         ObservationAudio audio = new ObservationAudio(AlertSound::isPlaying,
                 msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
         ObservationGrid grid = new ObservationGrid(gridListener(), cameraTurn, videoView::getOsdLayout, videoView::isOsdEnabled);
@@ -5069,6 +5077,14 @@ public class MainWindow extends JFrame {
     /** The drones chosen for observation (the setting), to put back when the tour is over. */
     String tourObserveSet() {
         return config.getString(ObserveSet.KEY);
+    }
+
+    /** DEMO mode: these are OBSERVATION's chosen drones (its end puts the set before back). */
+    void demoObserve(List<String> phones) {
+        ObserveSet s = new ObserveSet();
+        for (String p : phones) if (s.size() < ObserveSet.MAX) s.add(p);
+        save(Map.of(ObserveSet.KEY, s.encode()));
+        updatePhoneList();
     }
 
     void tourRestoreObserveSet(String saved) {

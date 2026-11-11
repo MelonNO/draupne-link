@@ -1587,6 +1587,16 @@ public final class VirtualDrone {
     private volatile int phoneStartPercent = 92, phoneTempDeci = 310, signalBars = 3;
 
     /**
+     * Its batteries as found (2026-11-10, the pilot: "realistic and variable battery values"): the drone's pack at this
+     * rest voltage per cell, the phone at this percentage and temperature. The pack on the ground only, as useTo.
+     */
+    void setBatteries(double restCellVolts, int phonePercent, double phoneTempC) {
+        fc.useTo(restCellVolts);
+        phoneStartPercent = phonePercent;
+        phoneTempDeci = (int) Math.round(phoneTempC * 10);
+    }
+
+    /**
      * As if out in the field for hours (the tour's drones): the drone's pack at this rest voltage per cell after its
      * flight, the phone at this battery, temperature and signal; only the breeze and the motors in its microphone.
      */
@@ -1693,11 +1703,16 @@ public final class VirtualDrone {
      * Refused like the PC's request while the FC isn't known disarmed.
      */
     void placeInMode(InetSocketAddress pc, int wanted, int intervalMin, int sensitivity, int flags, int overwatchToken) {
+        placeInMode(pc, wanted, intervalMin, sensitivity, flags, overwatchToken, "the tour");
+    }
+
+    /** As the tour's, said to come from {@code from} ("the demo"). */
+    void placeInMode(InetSocketAddress pc, int wanted, int intervalMin, int sensitivity, int flags, int overwatchToken, String from) {
         checkInAtOnce = true; // the tour: the PC's lists show it asleep at once, not at its first check in minutes
         lastPcIp = pc.getAddress();
         lastPcPort = pc.getPort();
         if (wanted == OVERWATCH) overwatch.configure(sensitivity, flags, overwatchToken);
-        requestMode(wanted, intervalMin, "the tour");
+        requestMode(wanted, intervalMin, from);
     }
 
     /** Overwatch's first alert of an event (VirtualOverwatch). */

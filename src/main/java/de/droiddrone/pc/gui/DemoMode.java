@@ -16,6 +16,7 @@ import javax.swing.Timer;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.Point;
+import java.util.List;
 
 /**
  * DEMO mode (2026-11-10, the pilot: "a DEMO mode where the main purpose is to use it to demo what capabilities this SW
@@ -23,7 +24,9 @@ import java.awt.Point;
  * nothing in the way - the pilot shows PILOT, OBSERVER and SPECTATOR mode as they like, a real phone's feed too.
  * <ul>
  * <li>At the start, in one virtual fleet: the tour's six with their scenes ({@link TourFinale#startShowcase}), and a
- * virtual pilot PC flying ({@link TourSpectator}) with the three drones it observes when asked. Watching it as
+ * virtual pilot PC flying ({@link TourSpectator}) that observes three of the six when asked. The six take varied modes
+ * a few seconds in (STANDBY, DEEP SLEEP, idle; batteries vary for every virtual drone), and are OBSERVATION's chosen
+ * drones - one observed here is woken at once. Watching it as
  * SPECTATOR brings a card ({@link Card}) that switches it to observing and back - the card takes no other click.</li>
  * <li>FLEET MANAGEMENT gets a strip ({@link #strip}): SET UP SCENARIO puts out the tour's four - three overwatching,
  * one asleep - with their camera views, flights and units on the map; once the overwatch has settled, START SCENARIO
@@ -56,7 +59,9 @@ final class DemoMode implements AutoCloseable {
     DemoMode(MainWindow main) {
         this.main = main;
         parts = new TourFinale(main, () -> fleet, PREFIX);
-        otherPilot = new TourSpectator(main, () -> fleet, PREFIX);
+        // it observes three of the six (the pilot: no drones without anything to see; three more were also over the
+        // fleet's 12 with the scenario's four: "at most 12 virtual drones" at SET UP SCENARIO)
+        otherPilot = new TourSpectator(main, () -> fleet, PREFIX, parts::forOtherPilot);
         strip.setOpaque(false);
         strip.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Theme.LINE),
                 BorderFactory.createEmptyBorder(0, 0, 8, 0)));
@@ -86,6 +91,11 @@ final class DemoMode implements AutoCloseable {
         }
         otherPilot.start();
         main.tourScanNames();
+        // OBSERVATION finds the six (the pilot: "no drones show at all" - the set chosen before, gone or other drones)
+        observeSetBefore = main.tourObserveSet();
+        main.demoObserve(parts.showcaseNames());
+        startedAt = System.currentTimeMillis();
+        sixPlaced = false;
         tick.start();
         main.logLine("DEMO: six drones with scenes and a virtual pilot PC are up. FLEET in the map window: the scenario.");
         return true;
@@ -142,8 +152,27 @@ final class DemoMode implements AutoCloseable {
         main.logLine(PREFIX + "scenario set up: three drones overwatching, one asleep.");
     }
 
+    /** OBSERVATION's chosen drones before the demo, put back at its end. */
+    private String observeSetBefore;
+    private long startedAt;
+    private boolean sixPlaced;
+    private final java.util.Random variety = new java.util.Random();
+
+    /**
+     * This PC observes these: the six among them woken now, as a real phone is at its check-in - the demo doesn't
+     * wait minutes for one (standby ones too, which a real phone refuses until woken).
+     */
+    List<String> observing(java.util.Collection<String> phones) {
+        return parts.wakeShowcase(phones);
+    }
+
     private void tick() {
         long now = System.currentTimeMillis();
+        if (!sixPlaced && now - startedAt >= PLACE_AFTER_MS) { // the PHONE list and the map know them by now
+            sixPlaced = true;
+            List<String> said = parts.placeShowcaseModes(variety);
+            if (!said.isEmpty()) main.logLine(PREFIX + String.join(", ", said) + ".");
+        }
         if (stage == Stage.SETTING_UP && now - setUpAt >= PLACE_AFTER_MS) {
             parts.placeModes();
             placedAt = now;
@@ -198,6 +227,8 @@ final class DemoMode implements AutoCloseable {
         card.hideCard();
         otherPilot.close();
         parts.close(); // the six, the four, their traces and settings (TourHost.cleanUp), flights and units
+        if (observeSetBefore != null) main.tourRestoreObserveSet(observeSetBefore);
+        observeSetBefore = null;
         Fleet f = fleet;
         fleet = null;
         stage = Stage.NONE;

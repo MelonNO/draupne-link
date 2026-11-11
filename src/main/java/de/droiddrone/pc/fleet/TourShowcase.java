@@ -88,6 +88,62 @@ public final class TourShowcase implements AutoCloseable {
         for (VirtualDrone d : drones) if (d.mode() != VirtualDrone.NORMAL) d.requestMode(VirtualDrone.NORMAL, 0, from);
     }
 
+    /** Their scenes' drones the demo's other pilot observes: the convoy, the patrol, the mortar - something moves in each. */
+    static final ShowScene.Kind[] OTHER_PILOT_WATCHES = {ShowScene.Kind.CONVOY, ShowScene.Kind.PATROL, ShowScene.Kind.MORTAR};
+
+    public List<VirtualDrone> forOtherPilot() {
+        List<VirtualDrone> out = new ArrayList<>();
+        for (ShowScene.Kind k : OTHER_PILOT_WATCHES) out.add(drones.get(java.util.Arrays.asList(SCENES).indexOf(k)));
+        return out;
+    }
+
+    /**
+     * DEMO mode's modes (2026-11-10, the pilot: "realistic and variable ... modes. Now all spawn with the piloted icon"):
+     * shuffled each time over the six - two in STANDBY, two in DEEP SLEEP (always listening or checking every 1 or 2
+     * min), one idle, the sixth either. No OVERWATCH: their scenes move, and an alert before START SCENARIO would give
+     * the surprise away (the scenario's four overwatch).
+     * @param pc this PC's link (where the sleepers check in)
+     * @return each drone's name and what it was put in, for the log
+     */
+    public List<String> placeDemoModes(java.net.InetSocketAddress pc, java.util.Random r) {
+        List<Integer> modes = new ArrayList<>(List.of(VirtualDrone.STANDBY, VirtualDrone.STANDBY, VirtualDrone.DEEP_SLEEP,
+                VirtualDrone.DEEP_SLEEP, VirtualDrone.NORMAL, r.nextBoolean() ? VirtualDrone.STANDBY : VirtualDrone.DEEP_SLEEP));
+        java.util.Collections.shuffle(modes, r);
+        int[] every = {0, 1, 2};
+        List<String> said = new ArrayList<>();
+        for (int i = 0; i < drones.size() && i < modes.size(); i++) {
+            VirtualDrone d = drones.get(i);
+            int m = modes.get(i);
+            switch (m) {
+                case VirtualDrone.STANDBY -> {
+                    d.requestMode(VirtualDrone.STANDBY, 0, "the demo");
+                    said.add(d.name() + " STANDBY");
+                }
+                case VirtualDrone.DEEP_SLEEP -> {
+                    int e = every[r.nextInt(every.length)];
+                    d.placeInMode(pc, VirtualDrone.DEEP_SLEEP, e, 0, 0, 0, "the demo");
+                    said.add(d.name() + " DEEP SLEEP");
+                }
+                default -> said.add(d.name() + " idle");
+            }
+        }
+        return said;
+    }
+
+    /** These of the six back in normal mode now (DEMO mode's observation: as woken at their check-in, at once). */
+    public List<String> wake(java.util.Collection<String> names, String from) {
+        List<String> woken = new ArrayList<>();
+        for (VirtualDrone d : drones) {
+            if (d.mode() == VirtualDrone.NORMAL) continue;
+            for (String n : names) {
+                if (!n.equalsIgnoreCase(d.name())) continue;
+                d.requestMode(VirtualDrone.NORMAL, 0, from);
+                woken.add(d.name());
+            }
+        }
+        return woken;
+    }
+
     public List<VirtualDrone> drones() {
         return List.copyOf(drones);
     }

@@ -185,6 +185,7 @@ public final class VirtualPilotPc implements AutoCloseable {
             if (drone == null) {
                 drone = fleet.add(fleet.freeName(), lat, lon, 0);
                 drone.setBeeperless(true); // the tour's: no motor beeps
+                drone.newBattery(); // a pilot takes off on a full pack (the fleet's varied ones: some are flown)
             }
             releasePort();
             grounded = false;
@@ -314,6 +315,8 @@ public final class VirtualPilotPc implements AutoCloseable {
 
     /** OBSERVER mode: the flight ended, these drones observed and their streams passed to the spectators. */
     public void observe(List<VirtualDrone> drones) throws IOException {
+        // asleep or in standby (DEMO mode's drones have modes): woken as this pilot's PC wakes one it wants to watch
+        for (VirtualDrone d : drones) if (d.mode() != VirtualDrone.NORMAL) d.requestMode(VirtualDrone.NORMAL, 0, name);
         land();
         synchronized (portLock) {
             stopFlying();

@@ -68,7 +68,7 @@ final class TourFinale implements AutoCloseable {
             showcase = shared != null ? TourShowcase.startIn(shared.get()) : TourShowcase.start(main.config(), VirtualFleet.file(),
                     line -> SwingUtilities.invokeLater(() -> main.logLine(prefix + line)));
         } catch (java.io.IOException | RuntimeException e) {
-            refused = "The tour's drones didn't start: " + e.getMessage();
+            refused = (shared != null ? "The demo drones" : "The tour's drones") + " didn't start: " + e.getMessage();
             return false;
         }
         showcaseNames = showcase.names();
@@ -97,6 +97,25 @@ final class TourFinale implements AutoCloseable {
     void wakeShowcase() {
         TourShowcase s = showcase;
         if (s != null) s.wakeAll("the tour");
+    }
+
+    /** These of the six awake now (DEMO mode: observed here, as if at their check-in). */
+    List<String> wakeShowcase(java.util.Collection<String> phones) {
+        TourShowcase s = showcase;
+        return s == null ? List.of() : s.wake(phones, "observed");
+    }
+
+    /** DEMO mode: the six in varied modes, checking in here; each one's mode for the log (empty without the six). */
+    List<String> placeShowcaseModes(java.util.Random r) {
+        TourShowcase s = showcase;
+        if (s == null) return List.of();
+        return s.placeDemoModes(new InetSocketAddress(InetAddress.getLoopbackAddress(), main.tourLinkPort()), r);
+    }
+
+    /** The three of the six the demo's other pilot observes (empty without them). */
+    List<VirtualDrone> forOtherPilot() {
+        TourShowcase s = showcase;
+        return s == null ? List.of() : s.forOtherPilot();
     }
 
     /** The six gone (the finale's fleet comes next, or the tour is over): off this PC's lists now, their files at the end. */
@@ -140,7 +159,7 @@ final class TourFinale implements AutoCloseable {
             scenario = shared != null ? TourScenario.startIn(shared.get(), heard) : TourScenario.start(main.config(), VirtualFleet.file(),
                     line -> SwingUtilities.invokeLater(() -> main.logLine(prefix + line)), heard);
         } catch (java.io.IOException | RuntimeException e) {
-            refused = "The tour's drones didn't start: " + e.getMessage();
+            refused = (shared != null ? "The demo drones" : "The tour's drones") + " didn't start: " + e.getMessage();
             return false;
         }
         watcher = scenario.watcher().name();

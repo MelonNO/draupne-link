@@ -43,10 +43,21 @@ final class TourSpectator implements AutoCloseable {
     }
 
     TourSpectator(MainWindow main, Supplier<Fleet> tourFleet, String prefix) {
+        this(main, tourFleet, prefix, null);
+    }
+
+    /**
+     * @param observeThese the drones it observes, up already (DEMO mode: three of the six with scenes - the pilot: no
+     *                     drones without anything to see); null: three of its own, made at the start (the tour)
+     */
+    TourSpectator(MainWindow main, Supplier<Fleet> tourFleet, String prefix, Supplier<List<VirtualDrone>> observeThese) {
         this.main = main;
         this.tourFleet = tourFleet;
         this.prefix = prefix;
+        this.observeThese = observeThese;
     }
+
+    private final Supplier<List<VirtualDrone>> observeThese;
 
     /** The virtual pilot PC's name once chosen, else null. */
     String pilotName() {
@@ -125,7 +136,7 @@ final class TourSpectator implements AutoCloseable {
                 double lat = Fleet.DEFAULT_LAT, lon = Fleet.DEFAULT_LON;
                 VirtualPilotPc p = new VirtualPilotPc(use, main.config(), name, line -> SwingUtilities.invokeLater(() -> main.logLine(prefix + line)));
                 pilot = p;
-                for (int i = 0; i < OBSERVED; i++) {
+                for (int i = 0; observeThese == null && i < OBSERVED; i++) {
                     double[] at = use.nextPlace(lat, lon);
                     VirtualDrone d = use.add(use.freeName(), at[0], at[1], at[2]);
                     d.setBeeperless(true);
@@ -149,7 +160,7 @@ final class TourSpectator implements AutoCloseable {
         VirtualPilotPc p = pilot;
         if (p == null || observing) return;
         observing = true;
-        List<VirtualDrone> list = List.copyOf(watched);
+        List<VirtualDrone> list = observeThese != null ? List.copyOf(observeThese.get()) : List.copyOf(watched);
         Thread t = new Thread(() -> {
             try {
                 p.observe(list);
