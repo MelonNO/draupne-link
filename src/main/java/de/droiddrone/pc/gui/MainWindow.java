@@ -21,6 +21,7 @@ import de.droiddrone.pc.FleetManager;
 import de.droiddrone.pc.Joystick;
 import de.droiddrone.pc.JoystickService;
 import de.droiddrone.pc.LinkLog;
+import de.droiddrone.pc.LiveHeading;
 import de.droiddrone.pc.Main;
 import de.droiddrone.pc.MonoClock;
 import de.droiddrone.pc.NameService;
@@ -317,6 +318,11 @@ public class MainWindow extends JFrame {
     static final String CRASHED_KEY = "drone.crashed";
     private long pilotViewSentAt;
     private long mapIdleUpdatedAt;
+    /** The way the drone this PC flew looked when last connected (-1: not known), and which drone (1.0.62). */
+    private String lastHeadingPhone;
+    private int lastHeading = -1;
+    /** Its camera's pose then, standing (null: not known). */
+    private volatile CameraFootprint.Pose lastPose;
     static final String MAIN_BOUNDS_KEY = "mainWindow";
     private final MapWindow.Bounds mainBounds = new MapWindow.Bounds(this);
     private final Timer saveMainBounds = new Timer(800, e -> saveMainBounds());
@@ -1994,15 +2000,24 @@ public class MainWindow extends JFrame {
         FcTelemetry.Gps gps = null;
         int heading = -1;
         boolean fcLost = false, connected = false;
+        String phoneNow = config.getString(Names.PHONE_NAME_KEY);
         if (c == null) {
             if (now - mapIdleUpdatedAt < 1000) return;
             mapIdleUpdatedAt = now;
+            // the way it looked when last heard: a drone standing still (asleep, overwatching) still looks there
+            if (phoneNow != null && phoneNow.equalsIgnoreCase(lastHeadingPhone)) heading = lastHeading;
         } else {
             ControlLink link = c.getLink();
             FcTelemetry t = link.getTelemetry();
-            FcTelemetry.Attitude att = t.getAttitude();
             gps = t.getGps();
-            heading = att != null && now - att.receivedAt() < 2000 ? att.headingDeg() : -1;
+            // 1.0.62: the FC's yaw with a compass, else the phone's sensor (pc.48), else none - never the gyro's drift
+            double h = LiveHeading.of(t);
+            heading = Double.isNaN(h) ? -1 : (int) Math.round(h) % 360;
+            if (!link.isSpectator()) {
+                lastHeadingPhone = phoneNow;
+                lastHeading = heading;
+                lastPose = cameraView.sittingPose(t, track); // FLEET's OVERWATCH on it later: its view (null: unknown)
+            }
             fcLost = link.isFcLost();
             ControlLink.State state = link.getState();
             connected = state == ControlLink.State.READY || state == ControlLink.State.SPECTATING;
@@ -4227,6 +4242,11 @@ public class MainWindow extends JFrame {
         @Override
         public List<FleetCards.Card> fleetShown(List<FleetCards.Card> own) {
             return mirror.fleetShown(own);
+        }
+
+        @Override
+        public CameraFootprint.Pose lastPose(String phone) {
+            return phone != null && phone.equalsIgnoreCase(lastHeadingPhone) ? lastPose : null;
         }
     }
 

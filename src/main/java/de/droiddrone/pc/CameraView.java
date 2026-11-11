@@ -77,13 +77,15 @@ public final class CameraView {
         FcTelemetry.Attitude att = t.getAttitude();
         long now = System.currentTimeMillis();
         if (last == null || att == null || now - last.timeMs() > positionStaleMs || MonoClock.ms() - att.receivedAt() > STALE_MS) return null;
+        double heading = LiveHeading.of(t); // 1.0.62: without a compass the FC's yaw is drift - the phone's, or none
+        if (Double.isNaN(heading)) return null;
         double ground = groundAtLaunch(track);
         FcTelemetry.Altitude baro = t.getAltitude();
         double alt;
         if (!Double.isNaN(ground) && baro != null) alt = ground + baro.meters();
         else alt = last.altM(); // the GPS's height above the sea
         double pitch = invertPitch ? att.pitchDeg() : -att.pitchDeg(); // Betaflight: nose down positive
-        return new CameraFootprint.Pose(last.lat(), last.lon(), alt, att.headingDeg(), pitch, att.rollDeg(),
+        return new CameraFootprint.Pose(last.lat(), last.lon(), alt, heading, pitch, att.rollDeg(),
                 tiltDeg, hfovDeg, vfovDeg());
     }
 

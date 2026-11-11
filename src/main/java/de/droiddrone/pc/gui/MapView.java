@@ -2037,6 +2037,20 @@ class MapView extends JComponent {
     /** A ray that meets no ground is drawn this far (the camera's reach on the ground, CameraFootprint). */
     static final double DETECTION_LINE_M = CameraFootprint.MAX_RANGE_M;
 
+    /** Moving at least this fast (km/h), the GPS course says where it goes; slower it is only the fix's wander. */
+    static final double COURSE_KMH = 4;
+
+    /**
+     * The arrow's way (-1: none known, a round mark): the heading MainWindow gives (the FC's compass or the phone's
+     * sensor; when no longer connected, the last one) - unless the drone moves on a stale link, then its GPS course.
+     * 1.0.62: a GPS course of a drone standing still, or Betaflight's yaw without a compass, pointed anywhere.
+     */
+    static int arrowHeading(int headingDeg, boolean stale, FlightTrack.Point last) {
+        boolean moving = last.speedKmh() >= COURSE_KMH;
+        if (headingDeg >= 0 && !(stale && moving)) return headingDeg;
+        return moving ? last.courseDeg() : -1;
+    }
+
     private void paintDrone(Graphics2D g, FlightTrack.Point last, MapProjection proj) {
         Point2D c = proj.toScreen(last.lat(), last.lon());
         if (liveAsleep && !connected) { // asleep on time, or heard of since: its newer sign says so, never LAST KNOWN
@@ -2050,16 +2064,22 @@ class MapView extends JComponent {
         paintAccuracy(g, last, c);
         long age = System.currentTimeMillis() - last.timeMs();
         boolean stale = age > STALE_MS || (fcLost && !last.phone()) || !connected;
-        int heading = headingDeg >= 0 && !stale && !last.phone() ? headingDeg : last.courseDeg();
+        int heading = arrowHeading(headingDeg, stale, last);
         AffineTransform saved = g.getTransform();
         g.translate(c.getX(), c.getY());
-        g.rotate(Math.toRadians(heading));
-        Path2D arrow = new Path2D.Double();
-        arrow.moveTo(0, -13);
-        arrow.lineTo(8.5, 10);
-        arrow.lineTo(0, 5.5);
-        arrow.lineTo(-8.5, 10);
-        arrow.closePath();
+        java.awt.Shape arrow;
+        if (heading < 0) { // which way it looks isn't known: a round mark, never a wrong way (1.0.62)
+            arrow = new Ellipse2D.Double(-8, -8, 16, 16);
+        } else {
+            g.rotate(Math.toRadians(heading));
+            Path2D a = new Path2D.Double();
+            a.moveTo(0, -13);
+            a.lineTo(8.5, 10);
+            a.lineTo(0, 5.5);
+            a.lineTo(-8.5, 10);
+            a.closePath();
+            arrow = a;
+        }
         g.setColor(new Color(0, 0, 0, 140));
         g.setStroke(new BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.draw(arrow);

@@ -54,6 +54,25 @@ final class FleetController {
         default List<FleetCards.Card> fleetShown(List<FleetCards.Card> own) {
             return own;
         }
+
+        /** The phone's camera pose when this PC was last connected to it, standing (null: none known). */
+        default CameraFootprint.Pose lastPose(String phone) {
+            return null;
+        }
+    }
+
+    /** The drone stands this far (m) from where its known pose was: that view is gone, none rather than a wrong one. */
+    static final double MOVED_M = 25;
+
+    /**
+     * FLEET's OVERWATCH: the camera's view for the map - from this PC's last connection to it, else from its last
+     * overwatch - and none when the drone now stands elsewhere (1.0.62: the old view pointed where it no longer looks).
+     */
+    static CameraFootprint.Pose overwatchPose(CameraFootprint.Pose lastConnected, CameraFootprint.Pose lastWatched, Names.Position now) {
+        CameraFootprint.Pose p = lastConnected != null ? lastConnected : lastWatched;
+        if (p == null || now == null) return p;
+        double dn = (now.lat() - p.lat()) * 111_320.0, de = (now.lon() - p.lon()) * 111_320.0 * Math.cos(Math.toRadians(p.lat()));
+        return Math.hypot(dn, de) > MOVED_M ? null : p;
     }
 
     private final FleetManager fleet;
@@ -144,8 +163,9 @@ final class FleetController {
             do {
                 owToken = new SecureRandom().nextInt();
             } while (owToken == 0);
-            CameraFootprint.Pose pose = null;
-            for (OverwatchHub.Watched w : overwatch.watched()) if (w.drone().equalsIgnoreCase(phone)) pose = w.pose();
+            CameraFootprint.Pose watched = null;
+            for (OverwatchHub.Watched w : overwatch.watched()) if (w.drone().equalsIgnoreCase(phone)) watched = w.pose();
+            CameraFootprint.Pose pose = overwatchPose(host.lastPose(phone), watched, pos == null ? null : pos.position());
             overwatch.watch(phone, owToken, pose);
             host.saveWatched();
         }

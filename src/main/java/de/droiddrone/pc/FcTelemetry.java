@@ -300,6 +300,8 @@ public class FcTelemetry {
     /** The phone has read the mode IDs from the FC (and passed them on); see ControlLink. */
     private volatile boolean hasBoxIds;
     private volatile Status status;
+    /** MSP_STATUS' sensor bits (-1 before the first): bit 2 a compass. */
+    private volatile int sensors = -1;
     private volatile Battery battery;
     private final CellCount cellCount = new CellCount();
     private volatile int cameraFps = -1;
@@ -400,7 +402,8 @@ public class FcTelemetry {
                 battery = battery(volts / 100.0, cells, mah, amps / 100.0);
             }
             case FcCommon.MSP_STATUS -> {
-                skip(b, 6); // cycleTime, i2cErrors, sensors
+                skip(b, 4); // cycleTime, i2cErrors
+                sensors = b.readShort() & 0xffff;
                 if (inav) {
                     b.readByte();
                 } else {
@@ -727,6 +730,14 @@ public class FcTelemetry {
     void forgetBoxNames() {
         boxNames = List.of();
     }
+
+    /** The flight controller has a compass (MSP_STATUS' sensors), or null before the first status. */
+    public Boolean fcCompass() {
+        int s = sensors;
+        return s < 0 ? null : (s & SENSOR_MAG) != 0;
+    }
+
+    static final int SENSOR_MAG = 4;
 
     /** null until the first MSP_STATUS arrives. */
     public Status getStatus() {

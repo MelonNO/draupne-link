@@ -72,6 +72,19 @@ class VirtualDroneEndToEndTest {
         sticks.start();
     }
 
+    /** 1.0.62: a virtual drone's yaw is true - it says it has a compass, and the map's heading is its own. */
+    @Test
+    void theMapsHeadingIsTheVirtualDronesOwn() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        startDrone(config);
+        assertTrue(drone.lookTo(123));
+        startLink(config, null);
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY");
+        FcTelemetry t = link.getTelemetry();
+        waitFor(() -> Boolean.TRUE.equals(t.fcCompass()) && t.getAttitude() != null, 5000, "status and attitude");
+        assertEquals(123, de.droiddrone.pc.LiveHeading.of(t), 1);
+    }
+
     @Test
     void connectsSendsTelemetryArmsOnTheSticksAndFailsSafeOnA4gLoss() throws Exception {
         PcConfig config = PcConfig.defaults();

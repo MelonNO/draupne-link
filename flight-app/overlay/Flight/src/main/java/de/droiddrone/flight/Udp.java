@@ -2290,13 +2290,14 @@ public class Udp {
         }
         DDService service = DDService.instance();
         android.content.Context context = service == null ? null : service.getApplicationContext();
+        pilotHeadingTick(now, context);
         if (want == null) {
             observeHeard.reset();
             if (observing) {
                 observing = false;
                 observeAudio = false;
                 observeApplied = null;
-                PhoneHeading.stop(context);
+                if (!isConnected()) PhoneHeading.stop(context); // pc.48: a pilot gets the heading too
                 if (!isConnected()) { // nobody watches: the camera and encoder off, as after a pilot's Disconnect
                     videoInitialFrame = null;
                     videoStarter.execute(() -> {
@@ -2379,8 +2380,38 @@ public class Udp {
         streamEncoder.setBitRateIndex(Observe.stepFor(w.maxKbps));
     }
 
+    private boolean pilotHeading;
+    private long pilotRecordAt;
+
+    /**
+     * pc.48 (the pilot: the map's arrow and the overwatch view pointed the wrong way): a pilot PC gets the observer
+     * record too, five times a second. A flight controller without a compass has a yaw that is only the gyro's drift
+     * since power-up; the phone's own sensor is the heading then. The sensor runs while a pilot is connected.
+     */
+    private void pilotHeadingTick(long now, android.content.Context context) {
+        boolean pilot = isConnected();
+        if (pilot != pilotHeading) {
+            pilotHeading = pilot;
+            if (pilot) PhoneHeading.start(context);
+            else if (!observing) PhoneHeading.stop(context);
+        }
+        if (pilot && now - pilotRecordAt >= 200) {
+            pilotRecordAt = now;
+            Camera camera = cameraManager.getCamera();
+            if (camera != null) PhoneHeading.frontCamera = camera.isFrontFacing();
+            byte[] record = observeRecord();
+            if (record != null) udpSender.sendPacket(record);
+        }
+    }
+
     /** The observer record (Observe.RECORD) in a TelemetryData packet of its own, to every observer. */
     private void sendObserveRecord() {
+        byte[] record = observeRecord();
+        if (record != null) sendToObservers(record);
+    }
+
+    /** The observer record in a TelemetryData packet of its own (pc.48: to a pilot too), or null. */
+    private byte[] observeRecord() {
         try {
             long now = android.os.SystemClock.elapsedRealtime();
             int flags = 0, alt = 0, age = 0;
@@ -2417,9 +2448,10 @@ public class Udp {
                     PhoneHeading.accuracy(), PhoneHeading.errorDeg(), MotionWatch.fieldOfView());
             UdpPacketData packet = new UdpPacketData(UdpCommon.TelemetryData);
             Observe.writeRecord(packet.daos, p);
-            sendToObservers(packet.getData());
+            return packet.getData();
         } catch (Exception e) {
             log("Observer record error: " + e);
+            return null;
         }
     }
 

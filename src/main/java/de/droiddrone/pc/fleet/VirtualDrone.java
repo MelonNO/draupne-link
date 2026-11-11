@@ -1505,7 +1505,8 @@ public final class VirtualDrone {
         boolean every = slow; // standby: all of them, once a second
         TelemetryRecords.attitude(out, fc.rollDeg(), fc.pitchDeg(), fc.headingDeg());
         if (every || tick % 3 == 0) {
-            TelemetryRecords.status(out, TelemetryRecords.SENSOR_ACC | TelemetryRecords.SENSOR_GYRO | TelemetryRecords.SENSOR_GPS,
+            TelemetryRecords.status(out, TelemetryRecords.SENSOR_ACC | TelemetryRecords.SENSOR_GYRO | TelemetryRecords.SENSOR_GPS
+                            | TelemetryRecords.SENSOR_MAG, // 1.0.62: its yaw is true - the map takes it as a compass heading
                     fc.modeFlags(now), fc.blockers(now), 12, 38);
             TelemetryRecords.altitude(out, fc.altitudeM(), fc.varioMs());
         }
