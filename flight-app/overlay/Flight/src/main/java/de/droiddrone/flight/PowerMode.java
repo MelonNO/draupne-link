@@ -77,7 +77,7 @@ final class PowerMode {
     static final int DEFAULT_CHECK_MIN = 5;
     /**
      * How long the socket listens for the PC's Connect after an alarm. pc.50: 10 s (was 20) - a PC that wants the
-     * phone answers its first hellos (0.2, 1.7, 3.2, 4.7 s; 9.7 s), and the PCs time their Connects and scans to the
+     * phone answers its first hellos (0.2, 1.7, 3.2, 4.7 s; 7.7 s), and the PCs time their Connects and scans to the
      * check-in it announced before sleeping; half the window's time awake.
      */
     static final long CHECK_WINDOW_MS = 10_000;
@@ -126,9 +126,9 @@ final class PowerMode {
     /** When the last hello of this window went (worker thread). */
     private long lastHelloAt;
     /** pc.50: listening in deep sleep - the opening burst is over, the processor may sleep (worker thread). */
-    private boolean burstDone;
+    private volatile boolean burstDone;
     /** pc.50: the minute's hello from the alarm, and a packet's handling while the processor sleeps: this long awake. */
-    private static final long HELLO_LOCK_MS = 5000, PACKET_LOCK_MS = 3000;
+    private static final long HELLO_LOCK_MS = 2500, PACKET_LOCK_MS = 3000; // (was 5 s) the hello and the tunnel's handshake; the PC's answer brings its own lock
     // the burst of records after a change; guarded by this
     private int burstLeft;
     private long nextBurstAt;
@@ -138,6 +138,8 @@ final class PowerMode {
     private ScheduledFuture<?> helloPending;
     /** Keeps the CPU up through a check window: the alarm's own grace is only about 10 s. */
     private PowerManager.WakeLock windowLock;
+    /** Until when the window lock is asked for (elapsedRealtime ms); guarded by this. */
+    private long lockUntil;
 
     private PowerMode(DDService service) {
         this.service = service;
@@ -203,6 +205,15 @@ final class PowerMode {
         PowerMode p = current;
         if (p == null || !p.alarmHellos() || !p.checking || !p.burstDone) return;
         p.acquireWindowLock(p.service, PACKET_LOCK_MS);
+    }
+
+    /** pc.50: a name query's answer is built and sent on another thread: awake this long for it. */
+    private static final long REPLY_LOCK_MS = 1000;
+
+    static void replyWhileAsleep() {
+        PowerMode p = current;
+        if (p == null || !p.alarmHellos() || !p.checking || !p.burstDone) return;
+        p.acquireWindowLock(p.service, REPLY_LOCK_MS);
     }
 
     /** Asleep and always listening (pc.39): the status card and the notification say so instead of a next check. */
@@ -468,10 +479,10 @@ final class PowerMode {
             if (asleep) service.powerListen(); // the socket open again
             asleep = false;
             checking = false;
-            releaseWindowLock();
         }
         if (wasStandby || wasDeep) {
-            service.powerWake(wasDown);
+            service.powerWake(wasDown); // takes the service's lock
+            if (wasDeep) releaseWindowLock(); // pc.50: after it - it went first, a moment with no lock at all
             event("Awake (" + from + ")");
         } else {
             event("Normal mode (" + from + ")");
@@ -489,6 +500,7 @@ final class PowerMode {
             wake("FC " + FcArmedState.name(armed)); // mode 0 goes back to the PC, as a refusal does
             return;
         }
+        FcArmedState.closedDisarmed(); // pc.50: read disarmed just now; its port closes next
         sleepAt = 0;
         asleep = true;
         if (always()) {
@@ -613,6 +625,10 @@ final class PowerMode {
                 windowLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DRAUPNE:sleepCheck");
                 windowLock.setReferenceCounted(false);
             }
+            // pc.50: never shortened - asking again resets the timeout, and a 1 s ask (a name reply) cut a Connect's 3 s
+            long until = android.os.SystemClock.elapsedRealtime() + timeoutMs;
+            if (windowLock.isHeld() && until <= lockUntil) return;
+            lockUntil = until;
             windowLock.acquire(timeoutMs);
         } catch (Exception e) {
             log("Sleep check wake lock error: " + e);
@@ -621,6 +637,7 @@ final class PowerMode {
 
     private synchronized void releaseWindowLock() {
         try {
+            lockUntil = 0;
             if (windowLock != null && windowLock.isHeld()) windowLock.release();
         } catch (Exception e) {
             log("Sleep check wake lock release error: " + e);

@@ -140,6 +140,100 @@ class OverwatchHubTest {
         assertTrue(commandsSent().isEmpty());
     }
 
+    /**
+     * 1.0.64: the phone's next overwatch counts its events from 1 again. With this PC left open, "event 1, alert 0"
+     * after an earlier event 1 was acknowledged (so the phone stopped sending) and treated as a repeat: no ring, no
+     * card. Its start time tells them apart, under the same token or a new one.
+     */
+    @Test
+    void theNextOverwatchsFirstAlertIsNewsThoughItsNumberRepeats() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 1, 0));
+        hub.dismiss("MobileAlpha");
+        assertEquals(1, news.size());
+        // woken, flown, put to overwatch again: event 1 once more, an hour later
+        hub.nowOverride = 3_600_000;
+        receive(hub, alertAt(TOKEN, 1, 0, STARTED + 3_600_000));
+        assertEquals(2, news.size(), "the second overwatch's first alert rings");
+        assertEquals(AlertCard.Shown.CARD, hub.views().get(0).shown(), "and opens its card");
+        assertEquals(2, hub.index().clips("MobileAlpha").size(), "an event of its own");
+        receive(hub, alertAt(TOKEN, 1, 0, STARTED + 3_600_000)); // its resend: no news
+        assertEquals(2, news.size());
+        // and under a new token
+        hub.watch("MobileAlpha", TOKEN + 1, null);
+        receive(hub, alertAt(TOKEN + 1, 1, 0, STARTED + 7_200_000));
+        assertEquals(3, news.size());
+    }
+
+    /** pc.50's phone tells an alert on after its event when no PC acknowledged it: news here, said to be late. */
+    @Test
+    void anAlertThatComesLateIsNewsAndSaysSo() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        hub.wallOverride = STARTED + 4 * 60_000 + 5000;
+        receive(hub, alert(TOKEN, 7, 0));
+        assertEquals(List.of("MobileAlpha"), news);
+        assertTrue(commandsSent().contains(OverwatchProtocol.CMD_ACK));
+        assertTrue(logs.stream().anyMatch(l -> l.contains("MOTION") && l.contains("4 min ago")), logs.toString());
+        assertEquals("", OverwatchHub.lateText(STARTED, STARTED + 20_000), "a fresh one says nothing");
+        assertTrue(OverwatchProtocol.missedDue(60_000, OverwatchProtocol.MISSED_EVERY_MS));
+        assertFalse(OverwatchProtocol.missedDue(60_000, 5000), "every 15 s");
+        assertFalse(OverwatchProtocol.missedDue(OverwatchProtocol.MISSED_FOR_MS, 60_000), "30 min at most");
+        assertTrue(OverwatchProtocol.endedDue(10_000, 1000), "MOTION ENDED: every second at first");
+        assertFalse(OverwatchProtocol.endedDue(60_000, 1000), "then every 5 s");
+        assertTrue(OverwatchProtocol.endedDue(60_000, 5000));
+        assertFalse(OverwatchProtocol.endedDue(OverwatchProtocol.ENDED_FOR_MS, 5000), "10 min in all");
+    }
+
+    /**
+     * 1.0.64, the pilot: alerts go to every PC. A phone (pc.50) tells each PC that knows it; a PC that didn't set the
+     * overwatch takes the alert up when it names a phone of its own, from that phone's address - and nothing else.
+     */
+    @Test
+    void anAlertOfAnOverwatchAnotherPcSetIsTakenUpForAPhoneOfOurs() throws Exception {
+        OverwatchHub hub = new OverwatchHub(new ClipIndex(dir), sent::add);
+        hub.setListener(new OverwatchHub.Listener() {
+            @Override
+            public void onNews(String drone) {
+                news.add(drone);
+            }
+
+            @Override
+            public void onDropped(String drone, int reason, int batteryPercent, int tempDeci) {
+            }
+
+            @Override
+            public void onClips(String drone) {
+            }
+
+            @Override
+            public void log(String line) {
+                logs.add(line);
+            }
+        });
+        hub.nowOverride = 1000;
+        int foreign = 0x7777;
+        receive(hub, alert(foreign, 3, 0));
+        assertTrue(news.isEmpty(), "no name map asked: not taken");
+        hub.setOurPhone((name, from) -> false);
+        receive(hub, alert(foreign, 3, 0));
+        assertTrue(news.isEmpty() && sent.isEmpty(), "not a phone of ours: dropped without a word");
+        hub.setOurPhone((name, from) -> name.equals("MobileAlpha") && from.isLoopbackAddress());
+        receive(hub, alert(foreign, 3, 0));
+        assertEquals(List.of("MobileAlpha"), news, "a phone of ours: the alert rings here too");
+        OverwatchProtocol.Command ack = OverwatchProtocol.readCommand(sent.get(0), sent.get(0).length);
+        assertEquals(OverwatchProtocol.CMD_ACK, ack.cmd);
+        assertEquals(foreign, ack.token, "answered with that overwatch's token");
+        assertEquals(1, hub.views().size());
+        assertTrue(logs.stream().anyMatch(l -> l.contains("another PC")), logs.toString());
+    }
+
+    private static byte[] alertAt(int token, int event, int no, long startedAt) {
+        return OverwatchProtocol.alert(new OverwatchProtocol.Alert(token, event, no, 0, startedAt, 0.4f, 0.4f, 0.1f, 0.2f, 5f, 70f,
+                599_000_000, 107_000_000, 30, 80, "MobileAlpha"));
+    }
+
     @Test
     void thePicturesBeforeTheAlertAreKeptAndShown() throws Exception {
         OverwatchHub hub = hub();

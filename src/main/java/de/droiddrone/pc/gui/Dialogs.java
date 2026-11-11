@@ -20,6 +20,9 @@ final class Dialogs {
     /** The dialog for a pane, sized to show all of it; not shown yet. */
     static JDialog dialog(Component parent, JOptionPane pane, String title) {
         JDialog d = pane.createDialog(parent, title);
+        // 1.0.64: modal to its own window only - a box left open on the map window (Go to, Place at, a NOTAM paste, an
+        // export's "Saved") blocked the main window too: STANDBY MODE, LOST DRONE and IT'S DOWN took no click
+        if (parent != null) d.setModalityType(java.awt.Dialog.ModalityType.DOCUMENT_MODAL);
         fit(d, parent);
         return d;
     }

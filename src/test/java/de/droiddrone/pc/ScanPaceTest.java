@@ -105,11 +105,45 @@ class ScanPaceTest {
         assertTrue(p.due(PC, 20_000), "gone from the network: forgotten");
     }
 
+    /**
+     * 1.0.64: a listening sleeper says hello once a minute; this PC's own query, a minute after its last one and not
+     * with the hello, woke the phone's radio a second time each minute. A hello heard is its answer.
+     */
+    @Test
+    void aListeningSleepersHelloIsItsAnswer() {
+        ScanPace p = new ScanPace();
+        p.asked(PHONE, 0);
+        p.answered(PHONE, 100, ScanPace.DEEP_SLEEP, SleepCheck.ALWAYS, "MobileAlpha");
+        for (long t = 30_000; t < 600_000; t += 60_000) { // its hellos, every minute
+            p.heard(PHONE, t, ScanPace.DEEP_SLEEP, 0);
+            for (long scan = t + 5000; scan < t + 60_000; scan += 5000) assertFalse(p.due(PHONE, scan), "not asked while its hellos come: " + scan);
+        }
+        assertTrue(p.held(600_000).contains(PHONE), "and online by them");
+        assertTrue(p.due(PHONE, 570_000 + ScanPace.HEARD_QUIET_MS), "its hello missing: asked");
+        // a timed sleeper's hello marks its window
+        p.asked(PC, 0);
+        p.answered(PC, 1000, ScanPace.DEEP_SLEEP, 5, "MobileBravo");
+        p.heard(PC, 301_000, ScanPace.DEEP_SLEEP, 0);
+        assertFalse(p.due(PC, 400_000));
+        assertTrue(p.due(PC, 301_000 + 292_000), "round the check-in after the one heard");
+    }
+
     @Test
     void windowHellos() {
         assertTrue(SleepCheck.helloDue(false, false, 4000, 1500), "the burst: every 1.5 s");
-        assertFalse(SleepCheck.helloDue(false, false, 6000, 1500), "then 5 s apart");
-        assertTrue(SleepCheck.helloDue(false, false, 9000, 5000));
+        assertFalse(SleepCheck.helloDue(false, false, 6200, 1500), "then 3 s apart");
+        assertTrue(SleepCheck.helloDue(false, false, 7700, 3000), "the fifth at 7.7 s (5 s apart, the 9.2 s one never went)");
+        // a 10 s window as the phone's task runs it (every 1.5 s from 0.2 s): five hellos
+        int sent = 0;
+        long last = -1;
+        for (long t = 200; t < 10_000; t += 1500) {
+            if (SleepCheck.helloDue(false, false, t, last < 0 ? Long.MAX_VALUE : t - last)) {
+                sent++;
+                last = t;
+            }
+        }
+        assertEquals(5, sent);
+        assertEquals(7700, last);
         assertFalse(SleepCheck.helloDue(true, false, 30_000, 25_000), "listening: a minute");
         assertTrue(SleepCheck.helloDue(true, false, 70_000, 60_000));
         assertFalse(SleepCheck.helloDue(true, true, 70_000, 60_000), "listening in deep sleep: the alarm's");

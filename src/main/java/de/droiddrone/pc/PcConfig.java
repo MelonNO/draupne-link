@@ -196,9 +196,26 @@ public class PcConfig {
         }
         // whole, then moved into place: a crash or a power cut mid-write never leaves half a settings file
         Path tmp = file.resolveSibling(file.getFileName() + ".part");
-        Files.write(tmp, lines, StandardCharsets.UTF_8);
-        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        // 1.0.64: this run has the change whatever the disk says (it was lost from memory too when the write failed),
+        // and the move is tried again: on Windows a virus scanner or an editor holding the file a moment refuses it
         updates.forEach(props::setProperty);
+        Files.write(tmp, lines, StandardCharsets.UTF_8);
+        IOException last = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                return;
+            } catch (IOException e) {
+                last = e;
+                try {
+                    Thread.sleep(40);
+                } catch (InterruptedException i) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        throw last;
     }
 
     private static String line(String key, String value) {

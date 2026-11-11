@@ -756,6 +756,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     /** A key frame from the phone soon (the link limits how often too; nothing while watching or not connected). */
     private void requestKeyFrame() {
+        // 1.0.64: not while the link is down - the link drops the request then, but it counted as sent here: after an
+        // outage the first frames come before the handshake, their request was spent on nothing, and the next one
+        // was allowed 1.5-6 s later (a smeared picture until the phone's own next key frame)
+        ControlLink l = link;
+        if (l != null && !l.isConnected()) return;
         if (keyFrames.shouldSend(MonoClock.ms())) keyFrameSender.run();
     }
 

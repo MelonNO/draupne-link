@@ -18,7 +18,7 @@ final class ResetSetup {
 
     static void ask(MainWindow main) {
         if (main.isLinkActive()) {
-            Dialogs.message(main, "DISCONNECT first.", "Reset setup", JOptionPane.WARNING_MESSAGE);
+            Dialogs.message(main, "STANDBY MODE first.", "Reset setup", JOptionPane.WARNING_MESSAGE);
             return;
         }
         int answer = Dialogs.confirm(main, QUESTION, "Reset setup", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);

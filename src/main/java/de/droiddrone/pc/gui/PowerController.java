@@ -262,6 +262,23 @@ final class PowerController {
         return a.listening() ? 150_000 : 60_000; // always listening: it answers queries all along, and says hello once a minute
     }
 
+    /** An answer to a name query this fresh is the phone's own, not one the scan holds for a resting phone. */
+    static final long ANSWER_FRESH_MS = 20_000;
+
+    /**
+     * A phone filed asleep that was woken on the phone itself: it answers name queries now, and hasn't checked in (nor
+     * gone to sleep) for {@link #awakeAfterMs}. 1.0.64: "answers now" is a real answer within {@link #ANSWER_FRESH_MS}
+     * - the scan keeps a resting phone online between its check-ins (ScanPace), and that alone made every timed
+     * sleeper "awake again" a minute after each check-in, its sleep state and countdown gone. And never when that
+     * answer itself said deep sleep or overwatch (saidMode; a PC the phone's hellos don't go to hears only those).
+     */
+    static boolean wokenOnThePhone(Asleep a, de.droiddrone.pc.Names.Entry e, ControlLink.SleepHello h, int saidMode, long now) {
+        if (a == null || e == null || !e.online() || now - e.lastSeen() > ANSWER_FRESH_MS) return false;
+        if (saidMode == 2 || saidMode == 3) return false; // PowerMode's DEEP_SLEEP, OVERWATCH
+        long quiet = awakeAfterMs(a);
+        return (h == null || now - h.receivedAt() > quiet) && now - a.since() > quiet;
+    }
+
     /** When this PC last heard a sleeping phone: its last check-in, else when it went to sleep (wall ms). */
     long lastHeard(Asleep a) {
         ControlLink.SleepHello h = asleepHellos.get(a.ip());

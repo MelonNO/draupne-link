@@ -127,12 +127,32 @@ class OverwatchLogicTest {
         e.dismiss(1000);
         assertTrue(e.isSilenced(1000));
         long t = 1000;
-        for (; t < 1000 + OverwatchEvent.DISMISS_CAP_MS; t += 10_000) {
-            assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t), "still moving, still silent at " + t);
+        for (; t < 1000 + OverwatchEvent.DISMISS_CAP_MS; t += 1000) { // the same thing, moving on without a pause
+            assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.5f, 0.5f), "still moving, still silent at " + t);
         }
-        assertEquals(OverwatchEvent.Action.ALERT_AGAIN, e.onDetection(t), "10 min after the dismiss it alerts again");
+        assertEquals(OverwatchEvent.Action.ALERT_AGAIN, e.onDetection(t, 0.5f, 0.5f), "10 min after the dismiss it alerts again");
         assertEquals(1, e.alertNo());
         assertFalse(e.isSilenced(t));
+    }
+
+    /**
+     * pc.50, the pilot: "new motion can alert again" - a dismissed event hid whatever came next for up to 10 min.
+     * New is motion after 5 s of none, or far from where the last was; not within 10 s of the dismiss.
+     */
+    @Test
+    void newMotionAfterADismissAlertsAgain() {
+        OverwatchEvent e = new OverwatchEvent();
+        e.onDetection(0, 0.2f, 0.5f);
+        e.dismiss(1000);
+        assertEquals(OverwatchEvent.Action.NONE, e.onDetection(2000, 0.9f, 0.5f), "right after the dismiss: nothing, wherever it is");
+        long t = 3000;
+        for (; t < 20_000; t += 500) assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.2f + t / 200_000f, 0.5f), "the dismissed one walking on");
+        assertEquals(OverwatchEvent.Action.ALERT_AGAIN, e.onDetection(t, 0.85f, 0.4f), "something else, far from it");
+        assertEquals(1, e.alertNo());
+        e.dismiss(t);
+        t += 12_000; // quiet for 12 s (the event still runs: under 30 s)
+        assertEquals(OverwatchEvent.Action.ALERT_AGAIN, e.onDetection(t, 0.85f, 0.4f), "motion again after a pause");
+        assertEquals(2, e.alertNo());
     }
 
     @Test

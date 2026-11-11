@@ -576,7 +576,7 @@ final class PhoneGuideWizard {
                 return;
             }
             if (main.isLinkActive()) {
-                setLink(State.WARN, "Main window is connected. Press DISCONNECT there.");
+                setLink(State.WARN, "Main window is connected. Press STANDBY MODE there.");
                 nextStart = System.currentTimeMillis() + 1000;
                 return;
             }

@@ -439,6 +439,7 @@ public class ControlLink {
                     continue;
                 }
                 lastReceivedAt = MonoClock.ms();
+                if (packet.getLength() > 0 && d[0] == UdpCommon.Connect) connectAnsweredAt = lastReceivedAt; // it hears us again
                 if (handleVideoFragment(packet)) continue;
                 if (packet.getLength() > 0 && d[0] == UdpCommon.AudioFrame) { // unnumbered: the queue adds nothing
                     if (isConnected()) onAudioFrame(d, packet.getLength(), true);
@@ -745,7 +746,8 @@ public class ControlLink {
                 long now = MonoClock.ms();
                 boolean connected = isConnected();
                 if (wasConnected && !connected) {
-                    log("Link lost, reconnecting..." + (everReady ? " Sticks still sent." : ""));
+                    log(phoneHearsNothing(now) ? "The phone hears nothing from here (it still sends): reconnecting. Sticks still sent."
+                            : "Link lost, reconnecting..." + (everReady ? " Sticks still sent." : ""));
                     lostAt = now;
                     configReceived = false;
                     // kept: the flight controller's state (for FC_STATE_KEEP_MS, see below) and the video config -
@@ -1691,8 +1693,24 @@ public class ControlLink {
 
     public boolean isConnected() {
         if (receiverBuffer == null || !receiverBuffer.isConnected()) return false;
-        long last = lastReceivedAt;
-        return last == 0 || MonoClock.ms() - last <= LINK_LOST_MS;
+        long last = lastReceivedAt, now = MonoClock.ms();
+        return (last == 0 || now - last <= LINK_LOST_MS) && !phoneHearsNothing(now);
+    }
+
+    /**
+     * 1.0.64: pongs came on this link and then none for this long while the phone's telemetry and video go on: the
+     * phone hears nothing from here, and its own session has timed out (4 s) - from then on it takes nothing but a
+     * Connect, and every stick frame is dropped. Its telemetry kept this side "connected", so no Connect was ever sent:
+     * video and a red LINK STALL until a DISCONNECT by hand. Now it counts as a link loss, and the Connects go out.
+     */
+    static final long PONG_LOST_MS = 4500;
+    /** When the phone last answered a Connect (MonoClock.ms): the new session's pongs get {@link #PONG_LOST_MS} to come. */
+    private volatile long connectAnsweredAt;
+
+    private boolean phoneHearsNothing(long now) {
+        long pong = lastPingTimestamp, ready = readyAt;
+        if (ready == 0 || pong <= ready || spectator != null) return false; // only once pongs came on this link
+        return now - Math.max(pong, connectAnsweredAt) > PONG_LOST_MS;
     }
 
     /**
@@ -1755,7 +1773,7 @@ public class ControlLink {
         PilotView view = c.pilotView();
         if (left != null) {
             return "SPECTATOR: pilot PC disconnected" + (left.isEmpty() ? "" : " from " + left) + " on purpose - not a link loss. "
-                    + (watchOnly ? "Waiting for a pilot." : "Nobody flies: DISCONNECT, CONNECT to fly from here.");
+                    + (watchOnly ? "Waiting for a pilot." : "Nobody flies: STANDBY MODE, then PILOT UAV to fly from here.");
         }
         if (c.phase() == SpectatorClient.Phase.WATCHING && view != null && !view.linkReady()) {
             return "SPECTATOR: " + who + " LINK LOST to " + (phone == null ? "the drone" : phone) + ", reconnecting.";
@@ -1769,7 +1787,7 @@ public class ControlLink {
             case REFUSED_FULL -> "SPECTATOR: " + who + " has " + SpectatorHost.MAX_SPECTATORS + " spectators - waiting for a place.";
             case REFUSED_OFF -> "SPECTATOR: " + who + " allows no spectators.";
             case NO_PILOT -> watchOnly ? "SPECTATOR: nobody flies yet - waiting for a pilot."
-                    : "SPECTATOR: nobody flies. DISCONNECT, CONNECT to fly from here.";
+                    : "SPECTATOR: nobody flies. STANDBY MODE, then PILOT UAV to fly from here.";
         };
     }
 

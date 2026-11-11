@@ -222,7 +222,7 @@ public class Serial {
      * worse than none. The device going lets the probe start over.
      */
     private void checkPermissionState() {
-        if (status == STATUS_USB_PERMISSION_REQUESTED && System.currentTimeMillis() - permissionRequestedAt > PERMISSION_WAIT_MS) {
+        if (status == STATUS_USB_PERMISSION_REQUESTED && android.os.SystemClock.elapsedRealtime() - permissionRequestedAt > PERMISSION_WAIT_MS) {
             log("USB permission: no answer in " + PERMISSION_WAIT_MS / 1000 + " s, counted as denied");
             status = STATUS_USB_PERMISSION_DENIED;
         }
@@ -260,12 +260,12 @@ public class Serial {
                 }
                 synchronized (initSignal) {
                     if (id != threadsId) return;
-                    initSignal.wait(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
+                    initSignal.wait(android.os.SystemClock.elapsedRealtime() < fastRetryUntil ? FAST_RETRY_MS : 2000);
                 }
             } catch (Exception e) {
                 log("Serial init thread error: " + e);
                 try {
-                    Thread.sleep(System.currentTimeMillis() < fastRetryUntil ? FAST_RETRY_MS : 2000);
+                    Thread.sleep(android.os.SystemClock.elapsedRealtime() < fastRetryUntil ? FAST_RETRY_MS : 2000);
                 } catch (InterruptedException ignored) {
                 }
             }
@@ -342,7 +342,7 @@ public class Serial {
             pendingIntent = PendingIntent.getBroadcast(context, 0, intent, PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_UPDATE_CURRENT);
         }
         status = STATUS_USB_PERMISSION_REQUESTED;
-        permissionRequestedAt = System.currentTimeMillis();
+        permissionRequestedAt = android.os.SystemClock.elapsedRealtime();
         manager.requestPermission(driver.getDevice(), pendingIntent);
         return false;
     }
@@ -508,7 +508,7 @@ public class Serial {
     private void lostDevice(int id, String why) {
         if (id != threadsId) return; // pc.31: a newer init is already under way
         log("Flight controller USB link lost (" + why + "): reconnecting");
-        fastRetryUntil = System.currentTimeMillis() + FAST_RETRY_FOR_MS;
+        fastRetryUntil = android.os.SystemClock.elapsedRealtime() + FAST_RETRY_FOR_MS;
         if (msp != null && mavlink != null) initialize(msp, mavlink);
     }
 
@@ -595,7 +595,7 @@ public class Serial {
                 }
                 byte[] other = pendingMsp.poll();
                 if (other != null) {
-                    if (System.currentTimeMillis() < slowUntil) {
+                    if (android.os.SystemClock.elapsedRealtime() < slowUntil) {
                         PcLinkStats.skipped();
                     } else {
                         write(other, requestWriteTimeoutMs, false);
@@ -638,7 +638,7 @@ public class Serial {
         }
         long ms = (System.nanoTime() - start) / 1_000_000;
         PcLinkStats.write(ms, timedOut);
-        if (ms > slowWriteMs) slowUntil = System.currentTimeMillis() + slowBackoffMs;
+        if (ms > slowWriteMs) slowUntil = android.os.SystemClock.elapsedRealtime() + slowBackoffMs;
         if (isRc && written) PcLinkStats.rcOut();
     }
 

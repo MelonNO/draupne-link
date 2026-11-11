@@ -84,7 +84,7 @@ public class InternalCamera implements Camera{
     private HandlerThread handlerThread;
     private CaptureRequest.Builder mCaptureRequest;
     private CameraCaptureSession mCameraCaptureSession;
-    private boolean isStarted;
+    private volatile boolean isStarted; // pc.50: read by the motion tick on other threads
     /** openCamera was called and the device hasn't answered yet (pc.26: a config change waits for it). */
     private volatile boolean isOpening;
     /** pc.35: the motion detection's picture: its size (the video's shape, about 320 wide; null: none), reader, thread. */

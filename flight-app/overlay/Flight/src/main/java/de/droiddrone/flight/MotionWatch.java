@@ -165,8 +165,13 @@ final class MotionWatch {
      * stops the camera's analysis picture the moment one of them goes.
      */
     static void tick(boolean disarmed, Camera camera) {
-        boolean run = wanted() && disarmed && camera != null && camera.isStarted();
+        // pc.50: a session change (an overwatch event's start or end) is not a stop - see WatchRun
+        boolean ready = wanted() && disarmed && camera != null;
+        boolean started = ready && camera.isStarted();
+        long mono = android.os.SystemClock.elapsedRealtime();
+        if (started) startedAt = mono;
         Camera was = activeCamera;
+        boolean run = de.droiddrone.common.WatchRun.runs(ready, started, active, was == camera, mono - startedAt);
         if (was != null && was != camera) was.setAnalysis(false); // the camera was replaced (USB <-> internal)
         if (camera != null) camera.setAnalysis(run); // the camera does nothing when it is already so
         activeCamera = run ? camera : null;
@@ -190,6 +195,8 @@ final class MotionWatch {
     }
 
     private static volatile boolean armedPause;
+    /** pc.50: when the camera was last seen started (monotonic ms). */
+    private static volatile long startedAt;
     private static int sensitivitySet; // the telemetry thread's own
     private static DetectionAreas areasSet; // as sensitivitySet
 

@@ -18,6 +18,32 @@ class PowerControllerTest {
     private static final long T0 = 1_800_000_000_000L;
     private static final long MIN = 60_000L;
 
+    /**
+     * 1.0.64: the scan keeps a resting phone "online" between its check-ins - a timed sleeper was taken for woken on
+     * the phone a minute after every check-in (online, no hello for a minute), its sleep state and countdown dropped.
+     */
+    @Test
+    void aSleeperHeldOnlineBetweenCheckInsIsNotAwake() {
+        PowerController.Asleep a = new PowerController.Asleep("MobileAlpha", "100.64.0.9", T0, 5);
+        ControlLink.SleepHello hello = new ControlLink.SleepHello(80, false, 5, 3900, T0 + 5 * MIN);
+        // its own answer came in the check window; 90 s later it is only held online
+        de.droiddrone.pc.Names.Entry held = new de.droiddrone.pc.Names.Entry("MobileAlpha", de.droiddrone.pc.Names.Kind.PHONE, "100.64.0.9", "", "", "",
+                T0 + 5 * MIN, true);
+        long now = T0 + 5 * MIN + 90_000;
+        assertFalse(PowerController.wokenOnThePhone(a, held, hello, de.droiddrone.pc.Names.POWER_UNKNOWN, now), "held online, not heard: still asleep");
+        // answering right now and no check-in for a minute: woken on the phone
+        de.droiddrone.pc.Names.Entry fresh = new de.droiddrone.pc.Names.Entry("MobileAlpha", de.droiddrone.pc.Names.Kind.PHONE, "100.64.0.9", "", "", "",
+                now - 2000, true);
+        assertTrue(PowerController.wokenOnThePhone(a, fresh, hello, de.droiddrone.pc.Names.POWER_UNKNOWN, now));
+        assertTrue(PowerController.wokenOnThePhone(a, fresh, hello, 0, now), "and it says normal mode");
+        // ...unless that answer itself says deep sleep or overwatch (a PC its hellos don't go to)
+        assertFalse(PowerController.wokenOnThePhone(a, fresh, null, 2, now));
+        assertFalse(PowerController.wokenOnThePhone(a, fresh, null, 3, now));
+        // a check-in within the minute: asleep, as ever
+        assertFalse(PowerController.wokenOnThePhone(a, fresh, new ControlLink.SleepHello(80, false, 5, 3900, now - 10_000), 0, now));
+        assertFalse(PowerController.wokenOnThePhone(a, fresh.withOnline(false), hello, 0, now));
+    }
+
     /** A host that keeps what it is told. */
     private static final class Host implements PowerController.Host {
         final List<String> logs = new ArrayList<>();

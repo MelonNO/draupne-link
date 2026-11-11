@@ -59,6 +59,37 @@ class AirspaceTest {
                 .areas(new double[]{50, 60, 0, 20}, "key").note());
     }
 
+    /**
+     * 1.0.64: a refused key, too many requests and no network all read "some areas not fetched", and every view rest
+     * asked each missing box again (up to 16 requests at a time) whatever openAIP had just said.
+     */
+    @Test
+    void aFailedFetchSaysWhyAndIsNotRepeatedAtOnce(@TempDir Path dir) {
+        OpenAipAirspace data = new OpenAipAirspace(dir, "test", true, () -> false);
+        int[] asked = {0};
+        int[] status = {429};
+        data.fetcher = (lat, lon, key) -> {
+            asked[0]++;
+            return new OpenAipAirspace.Fetched(status[0] == 200 ? OPENAIP : null, status[0]);
+        };
+        double[] view = {59.5, 59.6, 10.2, 11.3}; // two boxes
+        assertEquals("openAIP: too many requests - in 5 min again", data.areas(view, "key").note());
+        assertEquals(1, asked[0], "the second box isn't asked after the first was turned away");
+        data.areas(view, "key");
+        assertEquals(1, asked[0], "nor at the next view rest");
+        status[0] = 401;
+        assertEquals("openAIP refuses the key (Key...)", data.areas(view, "other").note(), "another key is tried");
+        assertEquals(2, asked[0]);
+        data.areas(view, "other");
+        assertEquals(2, asked[0], "a refused key is not tried again");
+        status[0] = 0;
+        assertEquals("offline: saved areas only", data.areas(view, "third").note());
+        status[0] = 200;
+        OpenAipAirspace.Answer ok = data.areas(view, "fourth");
+        assertNull(ok.note());
+        assertEquals(2, ok.areas().size());
+    }
+
     /** As IPPC.no shows them: a D-area activated (its Q) circle), a polygon in E), a radius in E), PERM, EST. */
     static final String PASTED = """
             A1234/26 NOTAMN
@@ -120,6 +151,35 @@ class AirspaceTest {
         assertTrue(later.later(), "not started yet: dashed");
         assertEquals("NOTAM A1234/26", later.info().get(0));
         assertTrue(later.info().get(1).contains("12 Nov 07:00Z - 12 Nov 16:00Z"), later.info().toString());
+    }
+
+    /**
+     * 1.0.64: a NOTAMR took the id of the NOTAM it replaces (the last id before Q)), a NOTAMC was drawn for ever as
+     * the cancelled one's circle, a FIR-wide Q-line (radius 999) tinted the whole map and took every click, and an
+     * estimated end (EST) removed the NOTAM when it passed.
+     */
+    @Test
+    void replacementsCancellationsWideCirclesAndEstimatedEnds() {
+        String text = "(A1235/26 NOTAMR A1234/26\n"
+                + "Q) ENOR/QRDCA/IV/BO/W/000/040/6012N01107E005\n"
+                + "A) ENOR B) 2611120700 C) 2611121600 EST\n"
+                + "E) DANGER AREA ACTIVATED.)\n\n"
+                + "(A1236/26 NOTAMC A1200/26\n"
+                + "Q) ENOR/QRDXX/IV/NBO/W/000/999/6012N01107E005\n"
+                + "A) ENOR B) 2611120700\n"
+                + "E) CANCELLED.)\n\n"
+                + "(A1237/26 NOTAMN\n"
+                + "Q) ENOR/QWULW/IV/BO/W/000/999/6455N01400E999\n"
+                + "A) ENOR B) 2611120700 C) 2611301600\n"
+                + "E) UNMANNED AIRCRAFT ACTIVITY WITHIN THE FIR.)\n";
+        List<NotamParser.Notam> n = NotamParser.parse(text);
+        assertEquals(1, n.size(), "the cancellation and the FIR-wide one have no area to draw");
+        NotamParser.Notam r = n.get(0);
+        assertEquals("A1235/26", r.id(), "its own id, not the one it replaces");
+        assertTrue(r.endEstimated());
+        assertFalse(r.overAt(Instant.parse("2026-11-13T00:00:00Z")), "an estimated end doesn't remove it");
+        assertTrue(NotamParser.toAirspace(r, Instant.parse("2026-11-12T08:00:00Z")).info().get(1).contains("EST"));
+        assertEquals(List.of("A1234/26", "A1200/26"), NotamParser.replaced(text), "the saved ones that go");
     }
 
     @Test

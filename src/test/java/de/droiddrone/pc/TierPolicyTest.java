@@ -216,6 +216,18 @@ class TierPolicyTest {
         assertEquals("calm for 20 s", last.why());
     }
 
+    /** 1.0.64: the doubled hold never came down again - after a few quick returns it was 5 min for the rest of the link. */
+    @Test
+    void aLongGoodSpellForgetsTheDoubledHold() {
+        toRobust();
+        assertEquals(Tier.NORMAL, run(ROBUST_HOLD_MS + TICK, bps(1_000_000)));
+        assertEquals(Tier.ROBUST, run(LOW_RES_AFTER_MS + 2 * TICK, bps(500_000)), "back within a minute: the hold is 40 s now");
+        assertEquals(Tier.NORMAL, run(2 * ROBUST_HOLD_MS + 2 * TICK, bps(1_000_000)));
+        run(TierPolicy.HOLD_FORGET_MS + TICK, VideoMode.NORMAL, bps(1_000_000)); // ten good minutes on the normal picture
+        assertEquals(Tier.ROBUST, run(LOW_RES_AFTER_MS + 2 * TICK, bps(500_000)));
+        assertEquals(Tier.NORMAL, run(ROBUST_HOLD_MS + 2 * TICK, bps(1_000_000)), "20 s again, not 40");
+    }
+
     @Test
     void backToBadCoverageSoonDoublesTheHold() {
         toRobust();

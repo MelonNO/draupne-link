@@ -44,6 +44,25 @@ public final class OverwatchEvent {
      * (the alert once more, the same event); NONE: part of the running event.
      */
     public Action onDetection(long now) {
+        return onDetection(now, Float.NaN, Float.NaN);
+    }
+
+    /**
+     * pc.50 (the pilot: "new motion can alert again"): a dismissed event was silent for up to 10 min whatever moved -
+     * a second person arriving while the dismissed dog still wandered raised nothing. Now motion that is new alerts
+     * again: it starts after {@link #NEW_AFTER_QUIET_MS} without any, or far ({@link #NEW_FAR} of the picture) from
+     * where the last was - never within {@link #NEW_MIN_AFTER_DISMISS_MS} of the dismiss itself.
+     * @param cx,cy the middle of the detection's box, 0..1 of the picture (NaN: not known)
+     */
+    public static final long NEW_AFTER_QUIET_MS = 5000, NEW_MIN_AFTER_DISMISS_MS = 10_000;
+    public static final float NEW_FAR = 0.3f;
+    private float lastX = Float.NaN, lastY = Float.NaN;
+
+    public Action onDetection(long now, float cx, float cy) {
+        long quiet = now - lastDetectionAt;
+        boolean far = !Float.isNaN(cx) && !Float.isNaN(lastX) && Math.hypot(cx - lastX, cy - lastY) > NEW_FAR;
+        lastX = cx;
+        lastY = cy;
         if (!active) {
             active = true;
             event = (event + 1) & 0xffff;
@@ -56,7 +75,8 @@ public final class OverwatchEvent {
             return Action.START;
         }
         lastDetectionAt = now;
-        if (dismissedAt >= 0 && now - dismissedAt >= DISMISS_CAP_MS) {
+        boolean newMotion = now - dismissedAt >= NEW_MIN_AFTER_DISMISS_MS && (quiet >= NEW_AFTER_QUIET_MS || far);
+        if (dismissedAt >= 0 && (now - dismissedAt >= DISMISS_CAP_MS || newMotion)) {
             dismissedAt = -1;
             alertNo = (alertNo + 1) & 0xff;
             return Action.ALERT_AGAIN;

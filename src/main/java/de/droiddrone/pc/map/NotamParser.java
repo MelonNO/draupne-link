@@ -18,15 +18,18 @@ import java.util.regex.Pattern;
  * <li>else a circle where E) gives a radius round a point ("PSN 595500N 0104500E RADIUS 2NM"),</li>
  * <li>else the Q-line's circle (its centre and radius in NM).</li>
  * </ul>
- * B) and C) are its times (UTC, YYMMDDhhmm; C) PERM never ends, EST is taken as said). Pure (tests).
+ * B) and C) are its times (UTC, YYMMDDhhmm; C) PERM never ends; an EST end is an estimate - the NOTAM stays until it
+ * is replaced, cancelled or removed). A NOTAMR / NOTAMC names the one it replaces or cancels ({@link #replaced});
+ * a NOTAMC has no area of its own. A Q-line circle of {@link #WIDE_NM} or more (999: "the whole FIR") is not an
+ * area to draw. Pure (tests).
  */
 public final class NotamParser {
     private NotamParser() {
     }
 
     /** One NOTAM: its area, times (end null: permanent) and text. */
-    public record Notam(String id, List<double[]> ring, Instant start, Instant end, String lower, String upper, String text,
-                        String schedule, String raw) {
+    public record Notam(String id, List<double[]> ring, Instant start, Instant end, boolean endEstimated, String lower, String upper,
+                        String text, String schedule, String raw) {
         /** In force at now. */
         public boolean activeAt(Instant now) {
             return (start == null || !now.isBefore(start)) && (end == null || now.isBefore(end));
@@ -34,12 +37,26 @@ public final class NotamParser {
 
         /** Over at now (gone from the map and the saved list). */
         public boolean overAt(Instant now) {
-            return end != null && !now.isBefore(end);
+            return end != null && !endEstimated && !now.isBefore(end);
         }
     }
 
     private static final Pattern ID = Pattern.compile("\\b([A-Z]\\d{4}/\\d{2})\\b");
-    private static final Pattern QLINE = Pattern.compile("Q\\)\\s*([A-Z]{4})/([A-Z]{5})/[^/]*/[^/]*/[^/]*/(\\d{3})/(\\d{3})/(\\d{4}[NS]\\d{5}[EW])(\\d{3})");
+    /** "A1235/26 NOTAMR A1234/26", "A1236/26 NOTAMC A1234/26": this NOTAM's id, its kind, the id it replaces or cancels. */
+    private static final Pattern HEAD = Pattern.compile("\\b([A-Z]\\d{4}/\\d{2})\\s+NOTAM([NRC])(?:\\s+([A-Z]\\d{4}/\\d{2}))?");
+    /** A Q-line radius this wide (NM) covers a FIR, not a place: not drawn. */
+    static final int WIDE_NM = 100;
+
+    /** The ids the pasted text replaces or cancels (NOTAMR, NOTAMC): saved ones of these ids go. */
+    public static List<String> replaced(String text) {
+        List<String> out = new ArrayList<>();
+        if (text == null) return out;
+        Matcher m = HEAD.matcher(text.toUpperCase(Locale.ROOT));
+        while (m.find()) if (m.group(3) != null && !m.group(2).equals("N")) out.add(m.group(3));
+        return out;
+    }
+
+    private static final Pattern QLINE =Pattern.compile("Q\\)\\s*([A-Z]{4})/([A-Z]{5})/[^/]*/[^/]*/[^/]*/(\\d{3})/(\\d{3})/(\\d{4}[NS]\\d{5}[EW])(\\d{3})");
     private static final Pattern FIELD_B = Pattern.compile("\\bB\\)\\s*(\\d{10})");
     private static final Pattern FIELD_C = Pattern.compile("\\bC\\)\\s*(\\d{10}|PERM)\\s*(EST)?");
     private static final Pattern FIELD_D = Pattern.compile("\\bD\\)\\s*(.*?)(?=\\s+[EFG]\\)|$)", Pattern.DOTALL);
@@ -61,9 +78,12 @@ public final class NotamParser {
         Matcher q = Pattern.compile("Q\\)").matcher(t);
         while (q.find()) {
             int back = Math.max(0, q.start() - 60);
-            Matcher id = ID.matcher(t.substring(back, q.start()));
+            String before = t.substring(back, q.start());
+            Matcher id = ID.matcher(before);
             int at = q.start();
             while (id.find()) at = back + id.start();
+            Matcher head = HEAD.matcher(before); // its own id, not the one it replaces (which comes after it)
+            while (head.find()) at = back + head.start();
             starts.add(at);
         }
         for (int i = 0; i < starts.size(); i++) {
@@ -78,6 +98,8 @@ public final class NotamParser {
     static Notam one(String block) {
         Matcher idm = ID.matcher(block);
         String id = idm.find() ? idm.group(1) : "";
+        Matcher head = HEAD.matcher(block);
+        if (!id.isEmpty() && head.find() && head.start() == idm.start() && head.group(2).equals("C")) return null; // a cancellation: no area
         Matcher qm = QLINE.matcher(block);
         String e = group(FIELD_E, block).replaceAll("\\s+", " ").trim();
         List<double[]> ring = area(e);
@@ -85,7 +107,8 @@ public final class NotamParser {
         if (qm.find()) {
             if (ring == null) {
                 double[] c = point(qm.group(5));
-                if (c != null) ring = Airspace.circle(c[0], c[1], Integer.parseInt(qm.group(6)) * 1852.0);
+                int nm = Integer.parseInt(qm.group(6));
+                if (c != null && nm > 0 && nm < WIDE_NM) ring = Airspace.circle(c[0], c[1], nm * 1852.0);
             }
             lower = "FL" + Integer.parseInt(qm.group(3));
             upper = "FL" + Integer.parseInt(qm.group(4));
@@ -98,9 +121,13 @@ public final class NotamParser {
         Instant start = time(group(FIELD_B, block));
         Matcher cm = FIELD_C.matcher(block);
         Instant end = null;
-        if (cm.find() && !cm.group(1).equals("PERM")) end = time(cm.group(1));
+        boolean est = false;
+        if (cm.find() && !cm.group(1).equals("PERM")) {
+            end = time(cm.group(1));
+            est = cm.group(2) != null;
+        }
         String schedule = group(FIELD_D, block).replaceAll("\\s+", " ").trim();
-        return new Notam(id, ring, start, end, lower, upper, e, schedule, block);
+        return new Notam(id, ring, start, end, est, lower, upper, e, schedule, block);
     }
 
     /** E)'s area: three or more points a polygon; one point and a radius a circle; else null. */
@@ -158,7 +185,7 @@ public final class NotamParser {
         List<String> info = new ArrayList<>();
         info.add("NOTAM " + n.id());
         DateTimeFormatter f = DateTimeFormatter.ofPattern("dd MMM HH:mm'Z'", Locale.ROOT).withZone(ZoneOffset.UTC);
-        info.add((n.start() == null ? "?" : f.format(n.start())) + " - " + (n.end() == null ? "PERM" : f.format(n.end()))
+        info.add((n.start() == null ? "?" : f.format(n.start())) + " - " + (n.end() == null ? "PERM" : f.format(n.end()) + (n.endEstimated() ? " EST" : ""))
                 + (n.schedule().isEmpty() ? "" : "  " + n.schedule()));
         if (!n.lower().isEmpty() || !n.upper().isEmpty()) info.add(n.lower() + " - " + n.upper());
         String text = n.text();

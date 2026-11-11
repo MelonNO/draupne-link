@@ -61,6 +61,15 @@ final class FcArmedState {
         return state;
     }
 
+    /**
+     * pc.50: the FC was just read DISARMED and its port is closed on purpose (deep sleep, overwatch): "seen armed
+     * lately" is forgotten. It made overwatch begun within a minute of a disarm read UNKNOWN - the motion detection
+     * paused, and the camera's watchdog called the watch blind.
+     */
+    static void closedDisarmed() {
+        lastArmedMs = 0;
+    }
+
     static String name(int state) {
         switch (state) {
             case DISARMED: return "disarmed";

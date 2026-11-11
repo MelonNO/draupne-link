@@ -503,6 +503,9 @@ public class MainWindow extends JFrame {
     private final JButton updatePhoneButton = Theme.secondaryButton("Update phone app");
     /** The remote update asked for: when, and the version; 0 = none. */
     private long remoteUpdateAskedAt, remoteUpdateSentAt;
+    /** How the last phone update ended, and until when the card says so (MonoClock ms). */
+    private String phoneUpdateSaid = "";
+    private long phoneUpdateSaidUntil;
     private String remoteUpdateVersion;
     private FcTelemetry.PhoneUpdate lastPhoneUpdate;
     /** Phone apps from this one on take a remote update. */
@@ -1578,7 +1581,10 @@ public class MainWindow extends JFrame {
         } finally {
             fillingPhones = false;
         }
-        if (at < 0 && !list.isEmpty() && connection == null) {
+        // 1.0.64: not when the chosen drone is only off the list for being marked CRASHED - the first other phone was
+        // chosen and saved without a word, and the next PILOT UAV went to another drone
+        boolean chosenCrashed = kind == Names.Kind.PHONE && chosen != null && crashed.keySet().stream().anyMatch(chosen::equalsIgnoreCase);
+        if (at < 0 && !list.isEmpty() && connection == null && !chosenCrashed) {
             choosePhone(); // the first one seen: taken, so CONNECT just works
             return;
         }
@@ -1823,8 +1829,7 @@ public class MainWindow extends JFrame {
         setVirtualShown(!watch && target.isVirtual());
         Asleep sleeping = target.ip() == null ? null : power.asleep(target.ip());
         ControlLink.SleepHello lastCheck = sleeping == null ? null : power.hello(sleeping.ip());
-        if (sleeping != null && target.online() && (lastCheck == null || System.currentTimeMillis() - lastCheck.receivedAt() > PowerController.awakeAfterMs(sleeping))
-                && System.currentTimeMillis() - sleeping.since() > PowerController.awakeAfterMs(sleeping)) {
+        if (sleeping != null && PowerController.wokenOnThePhone(sleeping, target, lastCheck, saidModeOf(sleeping.ip()), System.currentTimeMillis())) {
             power.clear(sleeping.ip()); // it answers name queries and hasn't checked in for a minute: woken on the phone
             sleeping = null;
         }
@@ -3054,6 +3059,11 @@ public class MainWindow extends JFrame {
         updating = false;
         updateButton.setText("UPDATE " + r.version());
         logLine("Update failed: " + why);
+        // 1.0.64: no box over a flight - the download runs in the background, and the pilot may have connected since
+        if (connection != null || PossiblyFlying.now()) {
+            logLine("Release page: " + r.pageUrl());
+            return;
+        }
         int answer = Dialogs.confirm(this, "<html>The update didn't work: " + why
                         + "<br><br>Open the release page?</html>",
                 "Update", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
@@ -3466,6 +3476,11 @@ public class MainWindow extends JFrame {
                 // a broken entry: left out
             }
         }
+        // 1.0.64: an alert of an overwatch another PC set is taken up when it names a phone of ours, from its own address
+        overwatch.setOurPhone((name, from) -> {
+            Names.Entry e = names.get(name);
+            return e != null && e.kind() == Names.Kind.PHONE && from != null && from.getHostAddress().equals(e.ip());
+        });
         overwatch.setListener(new OverwatchHub.Listener() {
             @Override
             public void onNews(String drone) {
@@ -3757,6 +3772,11 @@ public class MainWindow extends JFrame {
         }
     }
 
+    /** The power mode a phone said in its last own answer to the name service (Names.POWER_UNKNOWN: not known). */
+    private int saidModeOf(String ip) {
+        return nameService == null ? Names.POWER_UNKNOWN : nameService.saidMode(ip);
+    }
+
     /** Not connected, the chosen phone asleep: the power row stays, with when it checks next and WAKE. */
     private void refreshAsleep() {
         Asleep a = asleepChosen();
@@ -3765,7 +3785,7 @@ public class MainWindow extends JFrame {
         ControlLink.SleepHello h = power.hello(a.ip());
         // it answers the name service's queries, and hasn't checked in for a minute: it is awake (woken on the phone)
         Names.Entry e = names.get(a.name());
-        if (e != null && e.online() && (h == null || now - h.receivedAt() > PowerController.awakeAfterMs(a)) && now - a.since() > PowerController.awakeAfterMs(a)) {
+        if (PowerController.wokenOnThePhone(a, e, h, saidModeOf(a.ip()), now)) {
             logLine(a.name() + " is awake again.");
             power.clear(a.ip());
             return;
@@ -4111,7 +4131,7 @@ public class MainWindow extends JFrame {
             } else if (standbyName != null) {
                 kind = age > 120_000 ? MapView.Kind.UNKNOWN : MapView.Kind.STANDBY; // its own sign (was the moon: "jumps to deep sleep")
                 doing = age > 120_000 ? "STANDBY - NOT HEARD " + Names.agoText(now - age, now).toUpperCase(Locale.ROOT) + " - UNKNOWN"
-                        : "STANDBY - CONNECT wakes it";
+                        : "STANDBY - PILOT UAV wakes it";
             } else if (sleeping != null) {
                 long overdue = power.checkInOverdue(sleeping, now);
                 if (overdue > 0) {
@@ -4607,7 +4627,7 @@ public class MainWindow extends JFrame {
             for (int i = 0; i < 3; i++) c.getLink().sendPowerMode(ControlLink.POWER_STANDBY, power.checkIntervalMin);
             String ip = config.getString(IP_KEY);
             if (!ip.isEmpty()) standbyPhones.put(ip, config.getString(Names.PHONE_NAME_KEY));
-            logLine("Phone in standby: CONNECT wakes it in ~2 s.");
+            logLine("Phone in standby: PILOT UAV wakes it in ~2 s.");
         }
         disconnect();
     }
@@ -4624,7 +4644,7 @@ public class MainWindow extends JFrame {
             autoDisconnecting = false;
             Connection c = connection;
             if (c == null || c.getLink() != link || fcArmedNow()) return;
-            logLine(why.equals("standby") ? "STANDBY: disconnected; CONNECT wakes the phone (~2 s)."
+            logLine(why.equals("standby") ? "STANDBY: disconnected; PILOT UAV wakes the phone (~2 s)."
                     : "Disconnected: the phone sleeps (PILOT UAV brings it back).");
             disconnect();
         });
@@ -4767,7 +4787,12 @@ public class MainWindow extends JFrame {
             setLabel(phoneBatteryValue, battery + "%" + (t.isPhoneCharging() ? " charging" : ""),
                     battery < 20 ? Theme.BAD : battery < 40 ? Theme.WARN : Theme.OK);
         }
-        if (old) {
+        // 1.0.64: how a phone update ended stays 10 s - the next refresh (33 ms later) wrote over it, so "update failed",
+        // "Disarm first" and "doesn't answer" were never read
+        boolean updateSaid = MonoClock.ms() < phoneUpdateSaidUntil;
+        if (updateSaid) {
+            phoneAppWarning.setHtml(phoneUpdateSaid);
+        } else if (old) {
             phoneAppWarning.setHtml("Old phone app" + (version == null ? "" : " (" + version + ")")
                     + "; newest is " + newest + ". Update: UPDATE PHONE APP or SETUP &gt; Set up a new drone.");
             if (!phoneAppWarned) {
@@ -4776,8 +4801,8 @@ public class MainWindow extends JFrame {
                         + "; newest is " + newest + ".");
             }
         }
-        if (shown(phoneAppWarning) != old) {
-            show(phoneAppWarning, old);
+        if (shown(phoneAppWarning) != (old || updateSaid)) {
+            show(phoneAppWarning, old || updateSaid);
             phoneAppWarning.getParent().revalidate();
         }
         boolean pilot = connection != null && !connection.getLink().isSpectator();
@@ -4882,6 +4907,8 @@ public class MainWindow extends JFrame {
         if (over) {
             if (!answered) logLine("No answer to the update: phone app older than " + REMOTE_UPDATE_MIN_PHONE + ".");
             remoteUpdateAskedAt = 0;
+            phoneUpdateSaid = text;
+            phoneUpdateSaidUntil = now + 10_000;
         }
     }
 

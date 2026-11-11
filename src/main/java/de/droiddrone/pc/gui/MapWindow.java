@@ -92,8 +92,11 @@ final class MapWindow extends JFrame {
     /** The least width of one of the figures under the map (an MGRS position in full). */
     static final int STAT_MIN_WIDTH = 190;
     /** The overwatch drone's pulse on the map: repaints while an alert is on. */
+    private int pulseTick;
     private final javax.swing.Timer pulse = new javax.swing.Timer(40, e -> {
-        if (overwatchPulsing() && isShowing()) map().repaint();
+        // 1.0.64: 6 a second, not 25, while a drone here may be flying - the whole map was painted 25 times a second
+        // beside the live video for as long as an alert showed
+        if (overwatchPulsing() && isShowing() && (!de.droiddrone.pc.PossiblyFlying.now() || (pulseTick++ & 3) == 0)) map().repaint();
     });
 
     MapWindow(JFrame owner, TileCache cache, Elevation elevation, Pins pins, MapGraphics graphics, TileSource source, Coordinates.Format format, String savedBounds,
@@ -842,8 +845,11 @@ final class MapWindow extends JFrame {
             java.util.List<de.droiddrone.pc.map.NotamParser.Notam> added = de.droiddrone.pc.map.NotamParser.parse(area.getText());
             java.util.Set<String> ids = new java.util.HashSet<>();
             for (de.droiddrone.pc.map.NotamParser.Notam a : added) ids.add(a.id());
+            ids.addAll(de.droiddrone.pc.map.NotamParser.replaced(area.getText())); // 1.0.64: those a NOTAMR / NOTAMC names go
+            java.util.Set<String> texts = new java.util.HashSet<>(); // 1.0.64: one without an id pasted again is the same one
+            for (de.droiddrone.pc.map.NotamParser.Notam a : added) texts.add(a.raw());
             for (de.droiddrone.pc.map.NotamParser.Notam old : savedNotams()) {
-                if (!old.overAt(now) && (old.id().isEmpty() || !ids.contains(old.id()))) kept.add(old);
+                if (!old.overAt(now) && (old.id().isEmpty() ? !texts.contains(old.raw()) : !ids.contains(old.id()))) kept.add(old);
             }
             kept.addAll(added);
             int blocks = area.getText().toUpperCase(java.util.Locale.ROOT).split("Q\\)", -1).length - 1;
@@ -854,6 +860,12 @@ final class MapWindow extends JFrame {
             }
         } else if (choice != 1) {
             return;
+        } else { // 1.0.64: asked first - "Clear all" sits beside "Add" and took every saved NOTAM at one click
+            int saved = savedNotams().size();
+            if (saved == 0) return;
+            if (Dialogs.confirm(this, "Remove all " + saved + " saved NOTAMs?", "NOTAMs", javax.swing.JOptionPane.YES_NO_OPTION,
+                    javax.swing.JOptionPane.WARNING_MESSAGE) != javax.swing.JOptionPane.YES_OPTION) return;
+            tools.airspaceStatus.setText("NOTAMs removed");
         }
         try {
             StringBuilder text = new StringBuilder();

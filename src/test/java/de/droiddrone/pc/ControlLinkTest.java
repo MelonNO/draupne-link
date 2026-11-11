@@ -662,6 +662,38 @@ class ControlLinkTest {
         assertNotNull(link.getFcInfo());
     }
 
+    /**
+     * 1.0.64: the phone hears nothing from the PC for more than its 4 s session timeout while its own telemetry still
+     * reaches the PC (one direction dead: the PC's upload clogged, a tunnel re-routing one way first). The phone then
+     * takes nothing but a Connect - and the PC, kept "connected" by that telemetry, never sent one: video and LINK
+     * STALL, every stick frame dropped, until a DISCONNECT by hand. Pongs gone that long is a link loss now.
+     */
+    @Test
+    void aPhoneThatHearsNothingForSecondsIsConnectedToAgainByItself() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.phoneStateFlags = 0; // it has telemetry to send
+        phone.telemetryWithoutSession = true; // as the real phone sends it
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> link.getPing() >= 0, 3000, "pongs on this link");
+        Thread.sleep(300); // pongs after READY
+        short[] sticks = {1500, 1500, 1500, 1400, 2000};
+        phone.deaf = true;
+        waitFor(() -> !phone.receiverBuffer.isConnected(), 7000, "the phone's own session times out");
+        waitFor(() -> !link.isConnected(), ControlLink.PONG_LOST_MS + 2500, "no pong for seconds is a link loss, telemetry or not");
+        int connects = phone.connects.get();
+        Thread.sleep(500);
+        assertTrue(phone.connects.get() > connects, "the Connects go out");
+        phone.deaf = false;
+        waitFor(() -> link.getState() == ControlLink.State.READY, 3000, "READY again by itself");
+        int frames = phone.rcFrames.size();
+        assertTrue(link.sendRc(sticks));
+        waitFor(() -> phone.rcFrames.size() > frames, 2000, "and the sticks reach the phone");
+        Thread.sleep(ControlLink.PONG_LOST_MS + 500);
+        assertEquals(ControlLink.State.READY, link.getState(), "and it stays up");
+    }
+
     /** The link comes back and the video never stopped: the stream is not asked for again (no encoder restart). */
     @Test
     void aReconnectLeavesARunningStreamAlone() throws Exception {
@@ -804,6 +836,10 @@ class ControlLinkTest {
         volatile int phoneStateFlags = -1;
         /** Gone quiet: drops everything that comes in and sends nothing, like a phone whose 4G is gone. */
         volatile boolean silent;
+        /** Hears nothing (its downlink dead) but still sends; its session times out by itself after 4 s. */
+        volatile boolean deaf;
+        /** Its telemetry goes out with or without a session, as the real phone's does (Udp.sendTelemetryData). */
+        volatile boolean telemetryWithoutSession;
         /** The sequence byte of every RC frame that carried one (pc.19 layout), in order. */
         final List<Integer> rcSeqs = new CopyOnWriteArrayList<>();
         /** Key frame requests received (pc.13 on). */
@@ -901,7 +937,7 @@ class ControlLinkTest {
                         String v = appVersion;
                         int bps = encoderBitRate;
                         int flags = phoneStateFlags;
-                        if ((v != null || bps > 0 || flags >= 0) && receiverBuffer.isConnected() && !silent) {
+                        if ((v != null || bps > 0 || flags >= 0) && (receiverBuffer.isConnected() || telemetryWithoutSession && udpSender.isActive()) && !silent) {
                             UdpPacketData d = new UdpPacketData(UdpCommon.TelemetryData);
                             if (v != null) {
                                 byte[] name = v.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -942,7 +978,7 @@ class ControlLinkTest {
                             sleepAnswers.add((int) packet.getData()[1]);
                             continue;
                         }
-                        if (silent) continue;
+                        if (silent || deaf) continue;
                         // like DRAUPNE Flight's Udp.receiverRun in direct mode: once a PC is connected, nothing from
                         // another one gets in; a second PC asking is told where the first one is
                         if (!viaRelay && receiverBuffer.isConnected()) {

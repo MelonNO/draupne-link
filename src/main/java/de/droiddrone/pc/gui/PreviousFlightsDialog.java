@@ -245,6 +245,7 @@ final class PreviousFlightsDialog extends JDialog {
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosed(java.awt.event.WindowEvent e) {
+                tick.stop(); // 1.0.64: it ran on (15 a second) and kept this window, its map and its flight in memory
                 stopAll();
             }
         });
