@@ -45,7 +45,6 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 import de.droiddrone.common.FcInfo;
-import de.droiddrone.common.MediaCommon;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.SettingsCommon;
 
@@ -127,8 +126,8 @@ public class DDService extends Service {
 
         if (cameraManager == null) cameraManager = new CameraManager(this, MainActivity.config);
         if (audioSource == null) audioSource = new AudioSource(this);
-        if (MainActivity.config.isRecordAudio()) audioSource.initialize(MediaCommon.mp4AudioConsumerId);
-        if (MainActivity.config.isSendAudioStream()) audioSource.initialize(MediaCommon.streamAudioConsumerId);
+        // pc.50: the microphone isn't opened here any more - the live audio, the recorders and the listening open it when
+        // they need it; opened here it recorded for nobody (3.6 h through a standby in the pilot's phone's log)
         if (streamEncoder == null) streamEncoder = new StreamEncoder(cameraManager, audioSource, MainActivity.config);
         if (mp4Recorder == null) mp4Recorder = new Mp4Recorder(cameraManager, this, audioSource, MainActivity.config);
         this.getExternalMediaDirs();
@@ -319,6 +318,8 @@ public class DDService extends Service {
      * foreground with its types: Android would end it otherwise, and the wake needs them back anyway.
      */
     void powerSleep(long nextCheckAt) {
+        PhoneHeading.stop(this); // pc.50: the link's thread that stops it goes with the socket
+        closeMavlinkBridge();
         udp.stopVideo();
         fcInfo = null;
         serial.close();
@@ -333,6 +334,18 @@ public class DDService extends Service {
         powerSleepOn(nextCheckAt);
         releaseWakeLock();
         lockScreen();
+    }
+
+    /**
+     * pc.50: the MAVLink UDP bridge (a MAVLink FC with the bridge on) went on through sleep - its buffer thread polls
+     * every 1 ms; the main timer opens it again after the wake, as at the start.
+     */
+    private void closeMavlinkBridge() {
+        try {
+            if (mavlinkUdpBridge != null && mavlinkUdpBridge.isInitialized()) mavlinkUdpBridge.close();
+        } catch (RuntimeException e) {
+            log("MAVLink bridge close: " + e);
+        }
     }
 
     /** Between checks: the notification says when the next one is (pc.39: or that it always listens). */
@@ -354,6 +367,8 @@ public class DDService extends Service {
      */
     void powerOverwatch(long nextCheckAt) {
         int[] position = udp.positionNow();
+        PhoneHeading.stop(this); // pc.50: the link's thread that stops it goes with the socket
+        closeMavlinkBridge();
         udp.stopVideo();
         fcInfo = null;
         serial.close();
@@ -436,6 +451,36 @@ public class DDService extends Service {
     }
 
     /** The sleep check's "still here" to the PC: the battery as Android reports it. */
+    /**
+     * pc.50: the sleep notice in the countdown to a power-saving mode - battery, mode (in the status block), name and
+     * position, heading, the next check (Udp.sendSleepNotice).
+     */
+    void powerNotice(int mode, int intervalMin, int nextCheckInS) {
+        int percent = 255;
+        boolean charging = false;
+        int mV = 0;
+        try {
+            android.os.BatteryManager bm = (android.os.BatteryManager) getSystemService(BATTERY_SERVICE);
+            if (bm != null) percent = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY);
+            android.content.Intent b = registerReceiver(null, new android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED));
+            if (b != null) {
+                charging = b.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0;
+                mV = b.getIntExtra(android.os.BatteryManager.EXTRA_VOLTAGE, 0);
+            }
+        } catch (Exception ignored) {
+            // unknown then
+        }
+        int flags = mode == PowerMode.OVERWATCH ? de.droiddrone.common.OverwatchProtocol.HELLO_OVERWATCH : 0;
+        if (!udp.sendSleepNotice(percent < 0 ? 255 : percent, charging, intervalMin, mV, flags, nextCheckInS)) {
+            log("Sleep notice: no PC to tell");
+        }
+    }
+
+    /** pc.50: the heading sensor off after the notice, unless a pilot or observers use it. */
+    void headingAfterNotice() {
+        if (!udp.headingInUse()) PhoneHeading.stop(this);
+    }
+
     void powerHello(int nextCheckMin) {
         int percent = 255;
         try {
@@ -476,9 +521,7 @@ public class DDService extends Service {
     void powerWake(boolean fromSleep) {
         acquireWakeLock();
         if (fromSleep) { // what deep sleep stopped, back: the telemetry thread, the microphone, the timer
-            phoneTelemetry.initialize();
-            if (MainActivity.config.isRecordAudio()) audioSource.initialize(MediaCommon.mp4AudioConsumerId);
-            if (MainActivity.config.isSendAudioStream()) audioSource.initialize(MediaCommon.streamAudioConsumerId);
+            phoneTelemetry.initialize(); // pc.50: the microphone as at the start - when something needs it
             startMainTimer();
         }
         msp.setSlowPoll(false);

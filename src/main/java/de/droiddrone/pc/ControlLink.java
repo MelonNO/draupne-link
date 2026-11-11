@@ -767,7 +767,7 @@ public class ControlLink {
                 }
                 if (versionMismatch) {
                     Thread.sleep(1000);
-                } else if (!connected && dormant) {
+                } else if (!connected && (dormant || holdConnects)) {
                     Thread.sleep(250); // the phone sleeps on purpose: a Connect in its listening window would wake it
                 } else if (!connected) {
                     boolean phoneHoldsOldSession = now - ownSessionNamedAt < RECENT_SESSION_MS;
@@ -1096,6 +1096,18 @@ public class ControlLink {
         if (dormant) log("Phone in DEEP SLEEP: quiet until it is woken.");
     }
 
+    /**
+     * 1.0.64 (the pilot: "for deep sleep and overwatch phones no command from the PC's need to be faster than the check
+     * every interval"): PILOT UAV on a phone that checks in every few minutes sent a Connect every 0.5 s until its
+     * window - each one woke its radio for nothing. Held, the Connects wait for the expected check-in (the window sets
+     * it each refresh); its hello is answered "wake" all the same.
+     */
+    private volatile boolean holdConnects;
+
+    public void setHoldConnects(boolean hold) {
+        holdConnects = hold;
+    }
+
     public boolean isDormant() {
         return dormant;
     }
@@ -1154,6 +1166,11 @@ public class ControlLink {
     private void onSleepHello(byte[] d, int len) {
         if (len < 6) return;
         sleepHello = SleepHello.read(d, len, MonoClock.ms());
+        // 1.0.64 / phone pc.50: this link's own phone's sleep notice (in its countdown) goes where every other's does
+        if (len >= 7 && (d[6] & de.droiddrone.common.OverwatchProtocol.HELLO_NOTICE) != 0 && remoteIp != null) {
+            java.util.function.BiFunction<String, byte[], Boolean> h = foreignSleepHandler;
+            if (h != null) h.apply(remoteIp.getHostAddress(), java.util.Arrays.copyOf(d, len));
+        }
         java.util.function.BiFunction<String, byte[], byte[]> f = fleetHello;
         byte[] mode = f == null || remoteIp == null ? null : f.apply(remoteIp.getHostAddress(), java.util.Arrays.copyOf(d, len));
         if (mode != null) udpSender.sendPacket(mode); // a fleet mode queued for this dormant phone: ahead of the answer

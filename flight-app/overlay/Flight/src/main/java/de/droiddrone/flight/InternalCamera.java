@@ -90,6 +90,14 @@ public class InternalCamera implements Camera{
     /** pc.35: the motion detection's picture: its size (the video's shape, about 320 wide; null: none), reader, thread. */
     private Size analysisSize;
     private ImageReader analysisReader;
+    /**
+     * pc.50, overwatch's picture alone: its own small size (320x240 cut to 16:9 where the camera has no small 16:9) and
+     * the lowest frame-rate range (15) - it ran 1280x720 at 30 fps for 8 pictures a second of 320x180. Null: as video.
+     */
+    private Size watchSize;
+    private Range<Integer> watchRange;
+    /** The other size's reader, kept: a reader is never closed while a session switching away may still fill it. */
+    private ImageReader spareReader;
     private HandlerThread analysisThread;
     /** The analysis surface of the session being made or running; null when it has none. */
     private volatile Surface sessionAnalysis;
@@ -117,7 +125,7 @@ public class InternalCamera implements Camera{
      */
     @Override
     public boolean canWatchOnly() {
-        return analysisSize != null;
+        return analysisSize != null || watchSize != null;
     }
 
     /** pc.49: what took the pictures away (OverwatchProtocol BLIND_); 0 since the last open. */
@@ -365,11 +373,17 @@ public class InternalCamera implements Camera{
      * on this camera, or the camera refused it before. A reader of the same size is kept from session to session.
      */
     private Surface analysisSurface(boolean alone) {
-        Size size = analysisSize;
+        Size size = alone && watchSize != null ? watchSize : analysisSize;
         if (size == null || !alone && config.getCameraId().equals(analysisRefusedFor)) return null; // pc.49: alone, always tried
         try {
-            if (analysisReader == null || analysisReader.getWidth() != size.getWidth() || analysisReader.getHeight() != size.getHeight()) {
-                if (analysisReader != null) analysisReader.close(); // the session that had it is stopped already
+            if (analysisReader != null && !fits(analysisReader, size) && spareReader != null && fits(spareReader, size)) {
+                ImageReader r = analysisReader; // pc.50: overwatch's and the video's sizes by turns - the other one kept
+                analysisReader = spareReader;
+                spareReader = r;
+            }
+            if (analysisReader == null || !fits(analysisReader, size)) {
+                if (spareReader != null) spareReader.close(); // two sessions back: long gone
+                spareReader = analysisReader;
                 if (analysisThread == null || !analysisThread.isAlive()) {
                     analysisThread = new HandlerThread("motionFrames", android.os.Process.THREAD_PRIORITY_BACKGROUND);
                     analysisThread.start();
@@ -393,6 +407,10 @@ public class InternalCamera implements Camera{
             log("Motion detection's picture not made: " + e);
             return null;
         }
+    }
+
+    private static boolean fits(ImageReader r, Size size) {
+        return r.getWidth() == size.getWidth() && r.getHeight() == size.getHeight();
     }
 
     /** The capture session: the encoder's (and recorder's) surfaces shared, and the analysis surface on its own. */
@@ -669,13 +687,26 @@ public class InternalCamera implements Camera{
         if (frameRate.getLower() <= 0 || frameRate.getLower() > 60 || frameRate.getUpper() <= 0 || frameRate.getUpper() > 240){
             frameRate = targetFrameRange;
         }
-        frameRate = supportedRange(characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES), frameRate);
+        Range<Integer>[] fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES);
+        frameRate = supportedRange(fpsRanges, frameRate);
         log("Min FPS: "+frameRate.getLower()+", Max FPS: "+frameRate.getUpper());
+        watchRange = null; // pc.50: overwatch's own, the lowest listed from 10 up
+        if (fpsRanges != null) {
+            int[][] all = new int[fpsRanges.length][];
+            for (int i = 0; i < fpsRanges.length; i++) all[i] = new int[]{fpsRanges[i].getLower(), fpsRanges[i].getUpper()};
+            int[] w = de.droiddrone.common.AnalysisSize.watchFps(all);
+            if (w != null) watchRange = new Range<>(w[0], w[1]);
+        }
         cameraResolution = new Size(width, height);
         log("cameraResolution - Width: " + cameraResolution.getWidth() + ", Height: " + cameraResolution.getHeight());
         // pc.35: the motion detection's small picture, the video's shape (so a box on it is a box on the video), and
         // the angle the picture spans across (the boxes' angles off the camera's axis)
-        analysisSize = configurationMap == null ? null : pickAnalysisSize(configurationMap.getOutputSizes(ImageFormat.YUV_420_888), cameraResolution);
+        Size[] yuv = configurationMap == null ? null : configurationMap.getOutputSizes(ImageFormat.YUV_420_888);
+        analysisSize = yuv == null ? null : pickAnalysisSize(yuv, cameraResolution);
+        watchSize = yuv == null ? null : pickWatchSize(yuv, cameraResolution);
+        MotionWatch.setVideoShape(width, height);
+        if (watchSize != null) log("Overwatch picture: " + watchSize.getWidth() + "x" + watchSize.getHeight()
+                + (watchRange == null ? "" : " at " + watchRange.getLower() + "-" + watchRange.getUpper() + " fps"));
         SizeF sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
         float focal = fLengths != null && fLengths.length > 0 ? fLengths[0] : 0;
         MotionWatch.setFieldOfView(fieldOfView(sensor == null ? 0 : sensor.getWidth(), sensor == null ? 0 : sensor.getHeight(), focal,
@@ -698,6 +729,15 @@ public class InternalCamera implements Camera{
             return null;
         }
         return new Size(p[0], p[1]);
+    }
+
+    /** pc.50: overwatch's picture alone (Common AnalysisSize.pickWatch); null: none. */
+    static Size pickWatchSize(Size[] sizes, Size video) {
+        if (sizes == null || video == null) return null;
+        int[][] all = new int[sizes.length][];
+        for (int i = 0; i < sizes.length; i++) all[i] = new int[]{sizes[i].getWidth(), sizes[i].getHeight()};
+        int[] p = de.droiddrone.common.AnalysisSize.pickWatch(all, video.getWidth(), video.getHeight());
+        return p == null ? null : new Size(p[0], p[1]);
     }
 
     /**
@@ -770,7 +810,10 @@ public class InternalCamera implements Camera{
     private void configureCamera(CaptureRequest.Builder captureRequest){
         captureRequest.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
         captureRequest.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
-        captureRequest.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, frameRate);
+        // pc.50: overwatch's picture alone at the camera's lowest range (15 here, not the video's 30): half the frames for
+        // the same 8 analysed a second, and up to 66 ms exposure at night; no stabiliser, no edge work for a 320 px picture
+        boolean alone = watchOnly;
+        captureRequest.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, alone && watchRange != null ? watchRange : frameRate);
         captureRequest.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0.0f);
         captureRequest.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF);
         captureRequest.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO);
@@ -778,12 +821,13 @@ public class InternalCamera implements Camera{
         captureRequest.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF);
         captureRequest.set(CaptureRequest.HOT_PIXEL_MODE, CameraMetadata.HOT_PIXEL_MODE_OFF);
         captureRequest.set(CaptureRequest.JPEG_QUALITY, (byte)95);
-        captureRequest.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON);
+        captureRequest.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, alone ? CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF
+                : CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON);
         if (Build.VERSION.SDK_INT >= 28) {
             captureRequest.set(CaptureRequest.STATISTICS_OIS_DATA_MODE, CameraMetadata.STATISTICS_OIS_DATA_MODE_OFF);
         }
         captureRequest.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_FAST);
-        captureRequest.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_FAST);
+        captureRequest.set(CaptureRequest.EDGE_MODE, alone ? CameraMetadata.EDGE_MODE_OFF : CameraMetadata.EDGE_MODE_FAST);
         captureRequest.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, CameraMetadata.STATISTICS_FACE_DETECT_MODE_OFF);
         captureRequest.set(CaptureRequest.SHADING_MODE, CameraMetadata.SHADING_MODE_FAST);
         captureRequest.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_OFF);
@@ -881,6 +925,10 @@ public class InternalCamera implements Camera{
         if (analysisReader != null) {
             analysisReader.close();
             analysisReader = null;
+        }
+        if (spareReader != null) {
+            spareReader.close();
+            spareReader = null;
         }
         if (analysisThread != null) {
             analysisThread.quitSafely();

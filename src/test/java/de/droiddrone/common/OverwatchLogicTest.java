@@ -44,7 +44,7 @@ class OverwatchLogicTest {
             }
             if (now == t + 1_250) assertEquals(now, lastAt, "the picture that found it is in");
         }
-        assertEquals(7, added, "two a second plus the one that found it, no more while it stays found");
+        assertEquals(6, added, "pc.50: one a second while quiet, the one that found it, then two a second while it stays found");
         // a detection flickering on and off every picture adds one picture at most every FIRST_MIN_MS
         r.clear();
         added = 0;

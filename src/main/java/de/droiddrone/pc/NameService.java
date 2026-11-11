@@ -153,6 +153,8 @@ public final class NameService {
      * phone's check-in (address, hello bytes) - the same, sent ahead of the answer. Null hooks: nothing sent.
      */
     private volatile FleetManager fleet;
+    /** 1.0.64: how often each address is asked (the scan's thread). */
+    private final ScanPace pace = new ScanPace();
     private volatile java.util.function.BiFunction<String, byte[], byte[]> fleetHello;
 
     public void setFleet(FleetManager fleet, java.util.function.BiFunction<String, byte[], byte[]> onHello) {
@@ -164,7 +166,26 @@ public final class NameService {
      * Where each phone's drone is (phone app pc.32 on: its NAME_REPLY says), by the phone's name, as of the last scan
      * that heard it; for the map's view of every drone on the network. at = when it was heard (wall clock).
      */
-    public record DronePosition(String name, Names.Position position, long at) {}
+    /**
+     * A drone's last place; headingDeg (1.0.64, NaN none) where its camera looked as it went to sleep (the phone's
+     * sleep notice), kept while it stays within {@link #HEADING_KEPT_M} of there.
+     */
+    public record DronePosition(String name, Names.Position position, long at, double headingDeg) {
+        public DronePosition(String name, Names.Position position, long at) {
+            this(name, position, at, Double.NaN);
+        }
+    }
+
+    static final double HEADING_KEPT_M = 25;
+
+    /** p with the heading this drone had, when it had one and hasn't moved (a later reply carries none). */
+    private DronePosition keepHeading(DronePosition p) {
+        DronePosition old = positions.get(p.name());
+        if (old == null || Double.isNaN(old.headingDeg()) || !Double.isNaN(p.headingDeg())) return p;
+        double dn = (p.position().lat() - old.position().lat()) * 111_320.0;
+        double de = (p.position().lon() - old.position().lon()) * 111_320.0 * Math.cos(Math.toRadians(p.position().lat()));
+        return Math.hypot(dn, de) > HEADING_KEPT_M ? p : new DronePosition(p.name(), p.position(), p.at(), old.headingDeg());
+    }
 
     private final java.util.Map<String, DronePosition> positions = new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -180,6 +201,11 @@ public final class NameService {
      * @return true when the phone is new to the list or at another address (the PHONE list then needs filling again)
      */
     public boolean heardAsleep(String ip, de.droiddrone.common.FleetProtocol.Where w, int powerMode) {
+        return heardAsleep(ip, w, powerMode, Double.NaN);
+    }
+
+    /** As above, with where its camera looks (its sleep notice; NaN none). */
+    public boolean heardAsleep(String ip, de.droiddrone.common.FleetProtocol.Where w, int powerMode, double headingDeg) {
         if (w == null || Names.kindOf(w.name) != Names.Kind.PHONE) return false;
         boolean virtual = VirtualFleet.isVirtual(ip);
         Names.Entry old = names.get(w.name);
@@ -188,7 +214,7 @@ public final class NameService {
         Names.Reply reply = new Names.Reply(Names.Kind.PHONE, w.name, old == null ? "" : old.device(), old == null ? "" : old.version(), p);
         String moved = names.seen(reply, ip, virtual ? VIRTUAL_HOST : old == null ? "" : old.host());
         if (moved != null) log.accept("Names: " + w.name + " now at " + ip + " (was " + moved + ").");
-        if (p != null) positions.put(w.name, new DronePosition(w.name, p, System.currentTimeMillis()));
+        if (p != null) positions.put(w.name, keepHeading(new DronePosition(w.name, p, System.currentTimeMillis(), headingDeg)));
         return old == null || !ip.equals(old.ip());
     }
 
@@ -293,7 +319,16 @@ public final class NameService {
         try (DatagramSocket socket = new DatagramSocket()) {
             socket.setSoTimeout(100);
             byte[] query = Names.query(key);
+            long now = MonoClock.ms();
+            Set<String> asked = new HashSet<>(), allOnline = new HashSet<>();
+            FleetManager fm = fleet;
             for (Tailscale.Peer p : online) {
+                allOnline.add(p.ip());
+                // 1.0.64 (ScanPace): a resting or silent phone seldom - a standby one at once while FLEET has a mode waiting for it
+                String known = pace.name(p.ip());
+                if (!pace.due(p.ip(), now) && (fm == null || known == null || fm.wanted(known) == null || !pace.mayHurry(p.ip()))) continue;
+                pace.asked(p.ip(), now);
+                asked.add(p.ip());
                 try {
                     socket.send(new DatagramPacket(query, query.length, InetAddress.getByName(p.ip()), ports.getOrDefault(p.ip(), port)));
                 } catch (IOException ignored) {
@@ -313,6 +348,8 @@ public final class NameService {
                 if (reply == null) continue;
                 String ip = packet.getAddress().getHostAddress();
                 onlineIps.add(ip);
+                pace.answered(ip, MonoClock.ms(), reply.status() != null ? reply.status().mode : reply.powerMode(),
+                        reply.status() != null ? reply.status().intervalMin : 0, reply.name());
                 String host = "";
                 for (Tailscale.Peer p : online) if (p.ip().equals(ip)) host = p.hostName();
                 if (reply.name().isEmpty()) {
@@ -324,7 +361,7 @@ public final class NameService {
                 if (!claimed.contains(ip)) claimed.add(ip);
                 if (claimed.size() > 1) continue; // a second device with this name: not filed (M3) - see duplicates()
                 if (reply.kind() == Names.Kind.PHONE && reply.position() != null) {
-                    positions.put(reply.name(), new DronePosition(reply.name(), reply.position(), System.currentTimeMillis()));
+                    positions.put(reply.name(), keepHeading(new DronePosition(reply.name(), reply.position(), System.currentTimeMillis())));
                 }
                 String moved = names.seen(reply, ip, host);
                 if (moved != null) log.accept("Names: " + reply.name() + " now at " + ip + " (was " + moved + ").");
@@ -338,6 +375,9 @@ public final class NameService {
                     }
                 }
             }
+            for (String ip : asked) if (!onlineIps.contains(ip)) pace.unanswered(ip);
+            pace.retain(allOnline);
+            for (String ip : pace.held(MonoClock.ms())) if (allOnline.contains(ip)) onlineIps.add(ip); // resting: kept between check-ins
             names.onlineOnly(onlineIps);
             noteDuplicates(claims);
             // this PC's own name: the first PC letter nobody else online has

@@ -102,9 +102,37 @@ class MapView extends JComponent {
      * @param kind   which sign it gets (1.0.50, the pilot: a drone put to sleep must never look like a lost one)
      * @param pilot  the PC that flies it (to watch through), or null
      */
-    record NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot, Kind queued) {
+    // ---- 1.0.64: AIRSPACE (R-, P-, D-areas, NOTAMs): drawn while on, whatever tool is out; a click shows what one is
+
+    private java.util.List<de.droiddrone.pc.map.Airspace> airspace = java.util.List.of();
+    private String airspaceAttribution;
+    private de.droiddrone.pc.map.Airspace airspaceInfo;
+    private java.awt.Point airspaceInfoAt;
+
+    void setAirspace(java.util.List<de.droiddrone.pc.map.Airspace> areas, String attribution) {
+        airspace = areas == null ? java.util.List.of() : java.util.List.copyOf(areas);
+        airspaceAttribution = attribution;
+        if (airspaceInfo != null && !airspace.contains(airspaceInfo)) airspaceInfo = null;
+        repaint();
+    }
+
+    java.util.List<de.droiddrone.pc.map.Airspace> airspace() {
+        return airspace;
+    }
+
+    /** The area whose box shows (a click on it), or null. */
+    de.droiddrone.pc.map.Airspace airspaceInfo() {
+        return airspaceInfo;
+    }
+
+    record NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot, Kind queued,
+                    double headingDeg) {
         NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot) {
             this(name, lat, lon, state, kind, flown, pilot, null);
+        }
+
+        NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot, Kind queued) {
+            this(name, lat, lon, state, kind, flown, pilot, queued, Double.NaN);
         }
 
         /** Not heard from as it should be (asleep, lost or unknown): its name in grey. */
@@ -426,6 +454,16 @@ class MapView extends JComponent {
                         onDronePicked.accept(picked.name());
                         return;
                     }
+                }
+                if (tool == Tool.NONE && e.getClickCount() == 1 && !zoomInButton.contains(e.getPoint()) && !zoomOutButton.contains(e.getPoint())
+                        && (airspaceInfo != null || !airspace.isEmpty())) {
+                    // 1.0.64: what this area is - a click elsewhere closes the box
+                    de.droiddrone.pc.map.Airspace hit = MapAirspaceLayer.at(airspace, projection(), e.getX(), e.getY());
+                    boolean was = airspaceInfo != null;
+                    airspaceInfo = hit;
+                    airspaceInfoAt = e.getPoint();
+                    repaint();
+                    if (hit != null || was) return;
                 }
                 if (zoomInButton.contains(e.getPoint())) zoomBy(1);
                 else if (zoomOutButton.contains(e.getPoint())) zoomBy(-1);
@@ -1584,6 +1622,7 @@ class MapView extends JComponent {
             MapProjection proj = MapProjection.of(centerLat, centerLon, zoom, src.maxZoom, w, h);
             paintTiles(g, src, proj);
             if (coverageOn && !forPicture && toolOverlaysShown) MapToolLayer.paintCoverage(g, coverage, coverageImage, coverageStatus, proj); // under the other tools
+            if (!airspace.isEmpty() && !forPicture) MapAirspaceLayer.paint(g, airspace, proj); // 1.0.64: on while toggled, TOOLS out or not
             if (searchArea != null && !forPicture && toolOverlaysShown) searchCross = MapToolLayer.paintSearch(g, searchArea, search, searchImage, searchStatus, proj);
             if (horizonMast != null && !forPicture && toolOverlaysShown) horizonCross = MapToolLayer.paintHorizon(g, horizonMast, horizon, horizonShape, horizonStatus, proj); // over the heat map
 
@@ -1607,6 +1646,7 @@ class MapView extends JComponent {
             if (!forPicture) GroundViewLayer.paintOverwatch(g, overwatchMarks, proj);
             if (!forPicture && highlighted != null) paintHighlight(g, proj);
 
+            paintAirspaceTop(g, proj);
             paintScale(g, h);
             paintAttribution(g, src, w, h);
             if (!forPicture && tilesMissing && cache.loading()) paintLoading(g, w);
@@ -1643,6 +1683,21 @@ class MapView extends JComponent {
 
     /** The last paint had a tile on screen not in yet (the LOADING MAP chip). */
     private boolean tilesMissing;
+
+    /** 1.0.64: the clicked area's box, and openAIP's attribution while its areas show. */
+    private void paintAirspaceTop(Graphics2D g, MapProjection proj) {
+        if (forPicture) return;
+        if (airspaceInfo != null && airspaceInfoAt != null) MapAirspaceLayer.paintInfo(g, airspaceInfo, airspaceInfoAt.x, airspaceInfoAt.y, proj.w(), proj.h());
+        if (airspaceAttribution != null && !airspace.isEmpty()) {
+            g.setFont(Theme.font(java.awt.Font.PLAIN, 10.5f));
+            java.awt.FontMetrics fm = g.getFontMetrics();
+            int tw = fm.stringWidth(airspaceAttribution) + 8;
+            g.setColor(BOX);
+            g.fillRect(4, 4, tw, fm.getHeight() + 2);
+            g.setColor(Theme.MUTED);
+            g.drawString(airspaceAttribution, 8, 5 + fm.getAscent());
+        }
+    }
 
     private void paintTiles(Graphics2D g, TileSource src, MapProjection proj) {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
@@ -1778,6 +1833,7 @@ class MapView extends JComponent {
             Point2D s = proj.toScreen(d.lat(), d.lon());
             if (s.getX() < -40 || s.getY() < -40 || s.getX() > proj.w() + 40 || s.getY() > proj.h() + 40) continue;
             Color c = d.kind() == Kind.ACTIVE && d.flown() ? Theme.WARN : kindColor(d.kind());
+            if (!Double.isNaN(d.headingDeg())) paintNetHeading(g, c, s.getX(), s.getY(), d.headingDeg());
             paintNetSign(g, d.kind(), c, s.getX(), s.getY());
             if (d.queued() != null) paintQueued(g, d.queued(), s.getX(), s.getY());
             if (!d.name().equals(hoveredNet)) continue; // the sign alone; its name and state while the mouse is on it
@@ -1796,6 +1852,28 @@ class MapView extends JComponent {
                 g.drawString(line2, bx + 5, by + fm.getHeight() + fm.getAscent());
             }
         }
+    }
+
+    /**
+     * 1.0.64: where a resting drone's camera looks (its sleep notice): a short pointer out of its sign, so the pilot sees
+     * which way it faces before waking it.
+     */
+    static void paintNetHeading(Graphics2D g, Color c, double x, double y, double headingDeg) {
+        double a = Math.toRadians(headingDeg);
+        double dx = Math.sin(a), dy = -Math.cos(a);
+        double x0 = x + dx * 10, y0 = y + dy * 10, x1 = x + dx * 22, y1 = y + dy * 22;
+        g.setColor(new Color(0, 0, 0, 150));
+        g.setStroke(new BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(new java.awt.geom.Line2D.Double(x0, y0, x1, y1));
+        g.setColor(c);
+        g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(new java.awt.geom.Line2D.Double(x0, y0, x1, y1));
+        Path2D head = new Path2D.Double();
+        head.moveTo(x1 + dx * 5, y1 + dy * 5);
+        head.lineTo(x1 - dy * 4, y1 + dx * 4);
+        head.lineTo(x1 + dy * 4, y1 - dx * 4);
+        head.closePath();
+        g.fill(head);
     }
 
     /**

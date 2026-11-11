@@ -141,16 +141,65 @@ final class OverwatchPanel extends JPanel {
         setOpaque(false);
         cards.setLayout(new BoxLayout(cards, BoxLayout.Y_AXIS));
         cards.setOpaque(false);
-        add(cards, BorderLayout.NORTH);
         buildLibrary();
         library.setVisible(false);
-        add(library, BorderLayout.CENTER);
+        // 1.0.64, the pilot: "it should be possible to scroll in the clips menu" - a few cards pushed the clip list off
+        // the bottom of the window with no way to it: the cards and the list scroll together now
+        Column column = new Column();
+        column.add(cards, BorderLayout.NORTH);
+        column.add(library, BorderLayout.CENTER);
+        scroll = new JScrollPane(column, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(BorderFactory.createEmptyBorder());
+        scroll.setOpaque(false);
+        scroll.getViewport().setOpaque(false);
+        scroll.getVerticalScrollBar().setUnitIncrement(24);
+        add(scroll, BorderLayout.CENTER);
         setVisible(false);
+    }
+
+    private final JScrollPane scroll;
+
+    /** The cards above the clip list: the window's height while they fit, taller (scrolling) when not. */
+    private static final class Column extends JPanel implements javax.swing.Scrollable {
+        Column() {
+            super(new BorderLayout(0, 10));
+            setOpaque(false);
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(java.awt.Rectangle visible, int orientation, int direction) {
+            return 24;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(java.awt.Rectangle visible, int orientation, int direction) {
+            return Math.max(24, visible.height - 48);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return getParent() instanceof javax.swing.JViewport vp && getPreferredSize().height <= vp.getHeight();
+        }
+    }
+
+    /** The cards' column (tests). */
+    JPanel cardsBox() {
+        return cards;
     }
 
     @Override
     public Dimension getPreferredSize() {
-        return new Dimension(PANEL_WIDTH, super.getPreferredSize().height);
+        return new Dimension(PANEL_WIDTH + scroll.getVerticalScrollBar().getPreferredSize().width, super.getPreferredSize().height);
     }
 
     /** Each phone's way up: the pictures here and the bearings on the map follow it; a change repaints them. */
@@ -286,6 +335,12 @@ final class OverwatchPanel extends JPanel {
         if (any != isVisible()) setVisible(any);
     }
 
+    /** A drone's card minimized or not (tests: as its button does). */
+    void minimize(String drone, boolean on) {
+        Card c = cardByDrone.get(drone);
+        if (c != null) c.setMinimized(on);
+    }
+
     /** One drone's alert: the full card, or its badge. */
     private final class Card extends JPanel {
         private final String drone;
@@ -300,6 +355,27 @@ final class OverwatchPanel extends JPanel {
         private final JPanel badge = new JPanel(new BorderLayout(6, 0));
         private final JLabel badgeText = Theme.label(" ", Theme.headingFont(11.5f), Theme.WARN);
         private AlertCard.Shown state;
+        private final JPanel head = new JPanel(new GridLayout(0, 1, 0, 2));
+        private final JPanel foot = new JPanel(new BorderLayout(0, 6));
+        private final JButton fold = Theme.secondaryButton("-");
+        private boolean minimized;
+
+        /** Minimized: the title line alone (what moved, which drone); the picture, the times and the buttons hidden. */
+        void setMinimized(boolean on) {
+            minimized = on;
+            if (on) head.remove(when);
+            else if (when.getParent() != head) head.add(when);
+            picture.setVisible(!on);
+            foot.setVisible(!on);
+            fold.setText(on ? "+" : "-");
+            fold.setToolTipText(on ? "Show picture" : "Minimize: name only");
+            revalidate();
+            repaint();
+        }
+
+        boolean minimized() {
+            return minimized;
+        }
 
         Card(String drone) {
             super(new BorderLayout());
@@ -311,10 +387,12 @@ final class OverwatchPanel extends JPanel {
                     BorderFactory.createEmptyBorder(8, 8, 8, 8)));
             setAlignmentX(LEFT_ALIGNMENT);
             full.setOpaque(false);
-            JPanel head = new JPanel(new GridLayout(2, 1, 0, 2));
             head.setOpaque(false);
             head.add(title);
             head.add(when);
+            // 1.0.64, the pilot: "minimize the picture so only the drone name is listed"
+            fold.addActionListener(e -> setMinimized(!minimized));
+            setMinimized(false);
             // a plain close in the corner (1.0.50, the pilot): the same as DISMISS - the card goes until a new alert
             JButton closeCard = Theme.secondaryButton("X");
             closeCard.setToolTipText("Close (= DISMISS): preview stops, drone silent until motion ends (max 10 min)");
@@ -322,14 +400,14 @@ final class OverwatchPanel extends JPanel {
             JPanel headRow = new JPanel(new BorderLayout(6, 0));
             headRow.setOpaque(false);
             headRow.add(head, BorderLayout.CENTER);
-            JPanel closeBox = new JPanel(new BorderLayout());
+            JPanel closeBox = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
             closeBox.setOpaque(false);
-            closeBox.add(closeCard, BorderLayout.NORTH);
+            closeBox.add(fold);
+            closeBox.add(closeCard);
             headRow.add(closeBox, BorderLayout.EAST);
             full.add(headRow, BorderLayout.NORTH);
             picture.setPreferredSize(new Dimension(PANEL_WIDTH - 20, (PANEL_WIDTH - 20) * 9 / 16));
             full.add(picture, BorderLayout.CENTER);
-            JPanel foot = new JPanel(new BorderLayout(0, 6));
             foot.setOpaque(false);
             JPanel lines = new JPanel(new BorderLayout(0, 4));
             lines.setOpaque(false);

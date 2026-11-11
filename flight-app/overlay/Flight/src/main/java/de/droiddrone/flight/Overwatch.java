@@ -200,6 +200,8 @@ final class Overwatch {
     private OverwatchProtocol.Alert alert;
     private boolean alertAcked, preRollSent;
     private long alertSentAt;
+    /** pc.50: when this alert was first sent, and when the head clip was first announced (their resends slow down). */
+    private long alertAskedAt, announcedAt;
     private List<PreRoll.Frame> eventPreRoll;
     private volatile long previewWantedAt = -1;
     private volatile boolean previewing;
@@ -321,7 +323,8 @@ final class Overwatch {
             closeServing();
             infoSentAt = 0;
         }
-        if (event.isActive() && !event.isSilenced(mono) && !alertAcked && now - alertSentAt >= OverwatchProtocol.ALERT_RESEND_MS) sendAlert(now);
+        if (event.isActive() && !event.isSilenced(mono) && !alertAcked && now - alertSentAt >= OverwatchProtocol.resendEvery(now - alertAskedAt,
+                OverwatchProtocol.ALERT_RESEND_MS, OverwatchProtocol.ALERT_SLOW_AFTER_MS, OverwatchProtocol.ALERT_SLOW_MS)) sendAlert(now);
         previewing = eventVideo && event.isActive() && !event.isSilenced(mono) && previewWantedAt >= 0
                 && mono - previewWantedAt < OverwatchProtocol.PREVIEW_FRESH_MS;
         if (endedEvent >= 0 && !endedAcked && now - endedSentAt >= 1000 && endedSends < 120) { // 2 min at most
@@ -331,7 +334,9 @@ final class Overwatch {
         }
         ClipStore.Clip head = store.head();
         // pc.38: a new head is announced at once - the PC's asks name the event alone, and an event's segments share it
-        if (head != null && (head != announced || now - infoSentAt >= 5000 && now - chunksAskedAt >= 5000)) {
+        if (head != null && (head != announced || now - chunksAskedAt >= OverwatchProtocol.INFO_EVERY_MS && now - infoSentAt >= OverwatchProtocol.resendEvery(
+                now - Math.max(announcedAt, chunksAskedAt), OverwatchProtocol.INFO_EVERY_MS, OverwatchProtocol.INFO_SLOW_AFTER_MS, OverwatchProtocol.INFO_SLOW_MS))) {
+            if (head != announced) announcedAt = now;
             infoSentAt = now;
             announced = head;
             store.offered(head);
@@ -444,6 +449,7 @@ final class Overwatch {
         if (a == OverwatchEvent.Action.START) {
             alert = makeAlert(box, night, hfov, now);
             alertAcked = false;
+            alertAskedAt = now;
             preRollSent = false;
             eventPreRoll = preRoll.snapshot(now);
             previewWantedAt = -1;
@@ -453,6 +459,7 @@ final class Overwatch {
         } else if (a == OverwatchEvent.Action.ALERT_AGAIN) {
             alert = makeAlert(box, night, hfov, alert == null ? now : alert.startedAt);
             alertAcked = false;
+            alertAskedAt = now;
             sendAlert(now);
             log("Overwatch: still moving 10 min after the dismiss - the alert again");
         }
@@ -850,8 +857,8 @@ final class Overwatch {
     }
 
     private void closeSocket() {
-        if (socket == null) return;
-        socket.close();
+        if (closed) return; // pc.50: and with no socket (it never opened) the 0.1 s tick still ends - it ran on for ever
+        if (socket != null) socket.close();
         socket = null;
         if (ticking != null) ticking.cancel(false);
         ticking = null;

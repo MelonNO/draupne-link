@@ -105,11 +105,25 @@ public final class OverwatchProtocol {
      * the last {@link #ANALYSING_MS}. A PC logs a phone that watches without pictures.
      */
     public static final int HELLO_PICTURES = 4, HELLO_ANALYSING = 8;
+    /** pc.50: this check-in is the sleep notice, sent in the countdown to a power-saving mode (FleetProtocol.Notice after the Where block). */
+    public static final int HELLO_NOTICE = 16;
     public static final long ANALYSING_MS = 10_000;
 
     /** The bytes of a preview fragment or a clip chunk: a datagram stays under the link's 1100. */
     public static final int FRAGMENT = 1024;
     public static final long ALERT_RESEND_MS = 1000;
+    /**
+     * pc.50: a PC that doesn't answer (gone, or its path down) is asked less often - the radio woke every second for a
+     * whole event, and every 5 s for ever for a clip nobody fetched: the alert every 1 s for 30 s, then every 5 s; a
+     * clip's INFO every 5 s for 1 min, then every minute.
+     */
+    public static final long ALERT_SLOW_AFTER_MS = 30_000, ALERT_SLOW_MS = 5000, INFO_EVERY_MS = 5000, INFO_SLOW_AFTER_MS = 60_000,
+            INFO_SLOW_MS = 60_000;
+
+    /** pc.50: how long between resends, unanswered this long. */
+    public static long resendEvery(long unansweredMs, long fastMs, long slowAfterMs, long slowMs) {
+        return unansweredMs < slowAfterMs ? fastMs : slowMs;
+    }
     /** The phone streams the preview while the PC's last CMD_PREVIEW is younger than this. */
     public static final long PREVIEW_FRESH_MS = 3000;
     /** A header the PC's receive threads look at: an overwatch packet from any phone. */

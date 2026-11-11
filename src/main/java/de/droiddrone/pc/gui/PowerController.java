@@ -156,6 +156,21 @@ final class PowerController {
      * The link's hello from the waited-for phone, kept as its last check-in too (wall clock), so FLEET's card counts
      * from the same one as the LINK card.
      */
+    /**
+     * 1.0.64: whether the link holds its Connects back while waking a phone that checks in every intervalMin: yes
+     * except from {@link #CONNECT_EARLY_MS} before its expected check-in to {@link #CONNECT_LATE_MS} after it (its window
+     * opens late by up to its own length, and an alarm drifts). Listening, or not waking it: never held.
+     * @param next the expected check-in (nextCheckMono), past now
+     */
+    static boolean holdConnects(boolean awaitingWake, boolean listening, int intervalMin, long now, long next) {
+        if (!awaitingWake || listening || intervalMin <= 0 || next <= 0) return false;
+        long period = intervalMin * 60_000L;
+        boolean near = now >= next - CONNECT_EARLY_MS || now <= next - period + CONNECT_LATE_MS;
+        return !near;
+    }
+
+    static final long CONNECT_EARLY_MS = 5000, CONNECT_LATE_MS = 40_000;
+
     void linkHello(String ip, ControlLink.SleepHello h, long now, long wallNow) {
         if (ip == null || h == null) return;
         long wallAt = wallNow - (now - h.receivedAt());
@@ -291,6 +306,40 @@ final class PowerController {
         return String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
     }
 
+    /** When each phone's sleep notice was last said (it comes three times). */
+    private final Map<String, Long> noticeSaid = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 1.0.64 / phone pc.50, the sleep notice (FleetProtocol.Notice, in the phone's countdown): it sleeps from now, its
+     * next check counts from now, its battery and mode are known at once - not at its first check-in, N minutes on.
+     * Standby isn't asleep (it stays reachable): only said. Said once per notice (three come).
+     * @return false (sleep on - the phone takes no answer in its countdown), or null for a phone that isn't ours
+     */
+    private Boolean notice(String ip, byte[] d) {
+        Asleep old = asleepPhones.get(ip);
+        String name = old != null ? old.name() : host.nameAt(ip);
+        if (name == null || Names.kindOf(name) != Names.Kind.PHONE) return null;
+        long now = wall.getAsLong();
+        ControlLink.SleepHello h = ControlLink.SleepHello.read(d, d.length, now);
+        int mode = h.status() != null && h.status().mode >= 0 ? h.status().mode : h.overwatch() ? 3 : 2;
+        Long said = noticeSaid.put(ip, now);
+        boolean say = said == null || now - said > 20_000;
+        String battery = h.batteryPercent() >= 0 ? ", battery " + h.batteryPercent() + " %" : "";
+        if (mode == 1) { // standby
+            if (say) host.logLater(name + ": standby" + battery + ".");
+            return null;
+        }
+        boolean overwatch = mode == 3;
+        Asleep a = new Asleep(name, ip, old != null && say == false ? old.since() : now, Math.max(1, d[3] & 0xff), overwatch);
+        remember(a);
+        asleepHellos.put(ip, h); // the countdown from now
+        if (say) {
+            host.logLater(name + (overwatch ? ": overwatch" : ": deep sleep") + (a.listening() ? ", listening" : ", next check " + checkText(a, now))
+                    + battery + ".");
+        }
+        return false;
+    }
+
     /**
      * A sleeping phone's check-in that isn't this PC's link's own phone (the name service's thread with no link open,
      * or the link's for another phone): remembered for the LINK card and the PHONE list, and answered "sleep on" - WAKE
@@ -299,6 +348,7 @@ final class PowerController {
      * @return false (sleep on), true (wake: observation wants it), or null for a phone that isn't ours (no answer)
      */
     Boolean checkIn(String ip, byte[] d) {
+        if (d.length >= 7 && (d[6] & OverwatchProtocol.HELLO_NOTICE) != 0) return notice(ip, d);
         Asleep a = asleepPhones.get(ip);
         if (a == null) {
             String name = host.nameAt(ip);

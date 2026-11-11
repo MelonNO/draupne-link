@@ -30,6 +30,12 @@ import java.util.List;
 public final class PreRoll {
     public static final long KEEP_MS = 5000;
     public static final long EVERY_MS = 500;
+    /**
+     * pc.50: while nothing moves, one a second (half the JPEG work all night); two a second again from a detection on,
+     * and for {@link #KEEP_MS} after one. Still five pictures before an alert.
+     */
+    public static final long QUIET_EVERY_MS = 1000;
+    private long lastDetectedAt = Long.MIN_VALUE / 2;
     /** A picture of 320 x 180 at the quality used is 5-12 KB; this is room for twice the 10 of 5 s. */
     public static final int MAX_BYTES = 256 * 1024;
 
@@ -62,7 +68,9 @@ public final class PreRoll {
     public synchronized boolean due(long now, boolean detected) {
         boolean first = detected && !detectedBefore;
         detectedBefore = detected;
-        return due(now) || first && now - lastAddedAt >= FIRST_MIN_MS;
+        if (detected) lastDetectedAt = now;
+        long every = now - lastDetectedAt <= KEEP_MS ? EVERY_MS : QUIET_EVERY_MS;
+        return now - lastAddedAt >= every || first && now - lastAddedAt >= FIRST_MIN_MS;
     }
 
     public synchronized void add(long now, byte[] jpeg) {
@@ -87,6 +95,7 @@ public final class PreRoll {
         frames.clear();
         bytes = 0;
         lastAddedAt = Long.MIN_VALUE / 2;
+        lastDetectedAt = Long.MIN_VALUE / 2;
         detectedBefore = false;
     }
 

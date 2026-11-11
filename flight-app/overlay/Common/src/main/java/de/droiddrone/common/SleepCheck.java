@@ -53,6 +53,24 @@ public final class SleepCheck {
         return intervalMin == ALWAYS;
     }
 
+    /** pc.50: a timed window's hellos after its first {@link #ALWAYS_HELLO_BURST_MS}: this far apart (was 1.5 s all along). */
+    public static final long WINDOW_HELLO_LATER_MS = 5_000;
+
+    /**
+     * pc.50: whether the window's hello task (every 1.5 s) sends one now. A timed window: 1.5 s apart for the first 5 s
+     * (a tunnel that slept drops the first packets), then 5 s apart - 7 a window instead of 14, the radio quieter. Always
+     * listening: the same burst, then once a minute; in deep sleep (the processor sleeping, pc.50) the minute's hello
+     * comes from an alarm instead - never from this task.
+     * @param sinceOpenMs since the window opened
+     * @param sinceLastMs since the last hello (Long.MAX_VALUE: none yet)
+     * @param alarmHellos the minute's hellos come from the alarm
+     */
+    public static boolean helloDue(boolean always, boolean alarmHellos, long sinceOpenMs, long sinceLastMs) {
+        if (sinceOpenMs <= ALWAYS_HELLO_BURST_MS) return true;
+        if (!always) return sinceLastMs >= WINDOW_HELLO_LATER_MS;
+        return !alarmHellos && sinceLastMs >= ALWAYS_HELLO_MS;
+    }
+
     /**
      * The interval to send a phone app of this build (FcTelemetry.pcBuild; -1 unknown): {@link #ALWAYS} only to pc.39
      * on, {@link #FALLBACK_MIN} to anything older or not known; minutes as they are.

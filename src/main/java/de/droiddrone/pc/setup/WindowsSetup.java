@@ -172,10 +172,65 @@ public final class WindowsSetup {
      * the Swing thread.
      */
     public static void ensureShortcuts(Path launcher, Path workingDir) {
+        ensureShortcuts(launcher, workingDir, SelfUpdate.runsInstalled(), SelfUpdate.installedApp() != null, null);
+    }
+
+    /**
+     * 1.0.64 (a pilot after an update: the desktop shortcut said "error opening ...\OneDrive\Desktop\app\DRAUPNE
+     * Link.cfg", and the copy they found from it ran from Downloads): the installed copy also checks where its
+     * shortcuts point, and points one here that leads to nothing, to a copy that can't start, or to another copy of
+     * DRAUPNE Link. A copy that isn't the installed one never makes shortcuts to itself while an installed one exists.
+     * @param installed this copy is the installed one (Program Files)
+     * @param installedExists an installed copy exists (this one or another)
+     * @param log where a repair is said, or null
+     */
+    static void ensureShortcuts(Path launcher, Path workingDir, boolean installed, boolean installedExists, java.util.function.Consumer<String> log) {
         if (launcher == null) return;
         for (Path lnk : List.of(desktopShortcut(), startMenuShortcut())) {
-            if (!exists(lnk)) createShortcut(lnk, launcher, workingDir);
+            if (!exists(lnk)) {
+                if (installed || !installedExists) createShortcut(lnk, launcher, workingDir);
+                continue;
+            }
+            if (!installed) continue;
+            String target = shortcutTarget(lnk);
+            if (!needsRepair(target, launcher, Files::exists)) continue;
+            boolean ok = createShortcut(lnk, launcher, workingDir).ok();
+            String line = "Shortcut " + lnk.getFileName() + (ok ? " repaired" : " could not be repaired") + " (pointed at "
+                    + (target == null || target.isBlank() ? "nothing" : target) + ").";
+            if (log != null) log.accept(line);
+            else de.droiddrone.pc.AppLog.line(line);
         }
+    }
+
+    /**
+     * Whether a "DRAUPNE Link" shortcut with this target should point at the installed launcher instead: it leads to
+     * nothing, or to another DRAUPNE Link.exe (a copy in Downloads, a lone launcher copied out of its folder). One the
+     * pilot pointed at something else that is there is left alone; an unreadable one (null) too.
+     */
+    static boolean needsRepair(String target, Path launcher, java.util.function.Predicate<Path> exists) {
+        if (target == null) return false;
+        String t = target.trim();
+        if (t.isEmpty()) return true;
+        if (t.equalsIgnoreCase(launcher.toString())) return false;
+        Path p;
+        try {
+            p = Path.of(t);
+        } catch (RuntimeException e) {
+            return true;
+        }
+        if (!exists.test(p)) return true;
+        Path name = p.getFileName();
+        return name != null && name.toString().equalsIgnoreCase("DRAUPNE Link.exe");
+    }
+
+    /** A shortcut's target, or null when it can't be read. */
+    static String shortcutTarget(Path lnk) {
+        Shell.Result r = Shell.powershell(Duration.ofSeconds(15),
+                "(New-Object -ComObject WScript.Shell).CreateShortcut(" + Shell.psQuote(lnk.toString()) + ").TargetPath");
+        if (!r.ok() || r.output() == null) return null;
+        String out = r.output().strip();
+        int nl = out.lastIndexOf('\n');
+        return nl < 0 ? out : out.substring(nl + 1).strip();
     }
 
     public static boolean exists(Path path) {

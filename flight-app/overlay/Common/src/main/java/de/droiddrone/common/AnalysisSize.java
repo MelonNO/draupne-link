@@ -46,16 +46,79 @@ public final class AnalysisSize {
         return best == null ? null : new int[]{best[0], best[1]};
     }
 
+    /** pc.50: overwatch's own picture is at least this wide where it shows the video's view. */
+    public static final int WATCH_WIDTH = 320;
+
+    /**
+     * pc.50, overwatch's picture alone (the watch-only session): the YUV size with the fewest pixels whose centred cut
+     * to the video's shape is at least {@link #WATCH_WIDTH} wide - any shape, since every stream of a session is a
+     * centred crop of the same region (Camera2), so the cut is the video's view. The pilot's phone lists 16:9 only from
+     * 1280x720: overwatch asked the camera for 1280x720 at 30 fps (its HAL at 1.6 cores in the dark) to use 320x180 of
+     * it; now 320x240, cut to 320x180. Today's {@link #pick} when it has fewer pixels, or nothing else fits.
+     * @return {width, height}, or null as pick
+     */
+    public static int[] pickWatch(int[][] sizes, int videoWidth, int videoHeight) {
+        int[] same = pick(sizes, videoWidth, videoHeight);
+        if (sizes == null || videoWidth <= 0 || videoHeight <= 0) return same;
+        int[] best = same;
+        long bestPixels = same == null ? Long.MAX_VALUE : (long) same[0] * same[1];
+        for (int[] s : sizes) {
+            if (s == null || s.length < 2 || s[0] <= 0 || s[1] <= 0) continue;
+            int[] cut = centreCrop(s[0], s[1], videoWidth, videoHeight);
+            if (cut[2] < WATCH_WIDTH) continue;
+            long pixels = (long) s[0] * s[1];
+            if (pixels < bestPixels) {
+                bestPixels = pixels;
+                best = new int[]{s[0], s[1]};
+            }
+        }
+        return best;
+    }
+
+    /**
+     * The centred part of a w x h picture with the video's shape: {x, y, width, height}, even numbers (the chroma
+     * planes are half size). A picture of the video's shape is whole.
+     */
+    public static int[] centreCrop(int w, int h, int videoWidth, int videoHeight) {
+        if (videoWidth <= 0 || videoHeight <= 0 || w <= 0 || h <= 0) return new int[]{0, 0, w, h};
+        double aspect = (double) videoWidth / videoHeight, own = (double) w / h;
+        if (Math.abs(own - aspect) <= SHAPE_TOLERANCE) return new int[]{0, 0, w, h};
+        int cw = w, ch = h;
+        if (own > aspect) cw = (int) Math.round(h * aspect) & ~1;
+        else ch = (int) Math.round(w / aspect) & ~1;
+        return new int[]{(w - cw) / 2 & ~1, (h - ch) / 2 & ~1, cw, ch};
+    }
+
+    /**
+     * pc.50: the frame-rate range for overwatch's picture alone - the lowest top the camera lists from 10 up (the
+     * detector takes 8 pictures a second), the steadiest of those; null: none, keep the video's.
+     * @param ranges each {lower, upper}
+     */
+    public static int[] watchFps(int[][] ranges) {
+        if (ranges == null) return null;
+        int[] best = null;
+        for (int[] r : ranges) {
+            if (r == null || r.length < 2 || r[1] < 10 || r[0] <= 0 || r[0] > r[1]) continue;
+            if (best == null || r[1] < best[1] || r[1] == best[1] && r[0] > best[0]) best = r;
+        }
+        return best == null ? null : new int[]{best[0], best[1]};
+    }
+
     /**
      * A plane of a camera picture made step times smaller each way into a packed ow x oh array: each output pixel the
      * mean of its step x step block (one in a step x step block would alias fine texture into flicker as the lens's
      * stabiliser moves it - foreground to the detector). Step 1 copies. Bytes past the buffer's limit count as 0.
      */
     public static void shrink(java.nio.ByteBuffer src, int rowStride, int pixelStride, int step, byte[] dst, int ow, int oh) {
+        shrink(src, 0, rowStride, pixelStride, step, dst, ow, oh);
+    }
+
+    /** pc.50: from offset on (the first byte of a centred cut). */
+    public static void shrink(java.nio.ByteBuffer src, int offset, int rowStride, int pixelStride, int step, byte[] dst, int ow, int oh) {
         int limit = src.limit();
         if (step <= 1) {
             for (int yy = 0; yy < oh; yy++) {
-                int row = yy * rowStride, o = yy * ow;
+                int row = offset + yy * rowStride, o = yy * ow;
                 for (int xx = 0; xx < ow; xx++) {
                     int at = row + xx * pixelStride;
                     dst[o + xx] = at < limit ? src.get(at) : 0;
@@ -69,7 +132,7 @@ public final class AnalysisSize {
             for (int xx = 0; xx < ow; xx++) {
                 int sum = 0;
                 for (int j = 0; j < step; j++) {
-                    int row = (yy * step + j) * rowStride + xx * step * pixelStride;
+                    int row = offset + (yy * step + j) * rowStride + xx * step * pixelStride;
                     for (int i = 0; i < step; i++) {
                         int at = row + i * pixelStride;
                         if (at < limit) sum += src.get(at) & 0xff;

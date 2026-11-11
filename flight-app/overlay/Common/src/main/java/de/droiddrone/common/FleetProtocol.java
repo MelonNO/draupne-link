@@ -169,11 +169,89 @@ public final class FleetProtocol {
 
     /** A check-in: head, status block and the Where block in one, for the phone and the virtual fleet. */
     public static byte[] hello(byte[] head, Status status, Where where, String key) {
+        return hello(head, status, where, null, key);
+    }
+
+    /** pc.50: and the sleep notice's block after the Where block (needs one). */
+    public static byte[] hello(byte[] head, Status status, Where where, Notice notice, String key) {
         byte[] s = status.bytes(), w = where == null ? new byte[0] : where.bytes(key);
-        byte[] d = java.util.Arrays.copyOf(head, head.length + s.length + w.length);
+        byte[] n = notice == null || where == null ? new byte[0] : notice.bytes();
+        byte[] d = java.util.Arrays.copyOf(head, head.length + s.length + w.length + n.length);
         System.arraycopy(s, 0, d, head.length, s.length);
         System.arraycopy(w, 0, d, head.length + s.length, w.length);
+        System.arraycopy(n, 0, d, head.length + s.length + w.length, n.length);
         return d;
+    }
+
+    /**
+     * pc.50, the sleep notice (the pilot: "a device reports position, heading, battery percentages, name, time until
+     * next check and switched mode before starting to sleep"): sent three times in the countdown to a power-saving
+     * mode, as a check-in whose owFlags carry {@link OverwatchProtocol#HELLO_NOTICE}, with this block after the Where
+     * block: [version][heading deci-degrees i16, -1 none][source u8: 0 none, 1 the FC with a compass, 2 the phone's
+     * camera direction][accuracy u8: Android's 0-3, 255 unknown][error degrees u8, 255 unknown][next check in s i32:
+     * 0 listening or standby]. An older PC stops reading before it.
+     */
+    public static final class Notice {
+        static final int VERSION = 1;
+        public static final int HEADING_NONE = 0, HEADING_FC = 1, HEADING_PHONE = 2;
+        /** Degrees from north, or NaN. */
+        public final double headingDeg;
+        public final int headingSource, accuracy, errorDeg, nextCheckInS;
+
+        public Notice(double headingDeg, int headingSource, int accuracy, int errorDeg, int nextCheckInS) {
+            boolean has = !Double.isNaN(headingDeg) && headingSource != HEADING_NONE;
+            this.headingDeg = has ? ((headingDeg % 360) + 360) % 360 : Double.NaN;
+            this.headingSource = has ? headingSource : HEADING_NONE;
+            this.accuracy = accuracy;
+            this.errorDeg = errorDeg;
+            this.nextCheckInS = Math.max(0, nextCheckInS);
+        }
+
+        /** A heading to show: one there, and not one Android itself calls unreliable (accuracy 0). */
+        public boolean headingUsable() {
+            return !Double.isNaN(headingDeg) && !(headingSource == HEADING_PHONE && accuracy == 0);
+        }
+
+        byte[] bytes() {
+            try {
+                ByteArrayOutputStream b = new ByteArrayOutputStream();
+                DataOutputStream out = new DataOutputStream(b);
+                out.writeByte(VERSION);
+                out.writeShort(Double.isNaN(headingDeg) ? -1 : (int) Math.round(headingDeg * 10) % 3600);
+                out.writeByte(headingSource);
+                out.writeByte(accuracy < 0 ? 255 : Math.min(254, accuracy));
+                out.writeByte(errorDeg < 0 ? 255 : Math.min(254, errorDeg));
+                out.writeInt(nextCheckInS);
+                return b.toByteArray();
+            } catch (IOException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+
+        /**
+         * The notice of a check-in d (len bytes; its Where block at offset, this key), or null: no notice flag, no Where
+         * block, none after it.
+         */
+        public static Notice read(byte[] d, int len, String key) {
+            int whereAt = 8 + STATUS_BYTES;
+            if (d == null || len <= whereAt || (d[6] & OverwatchProtocol.HELLO_NOTICE) == 0) return null;
+            try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(d, whereAt, len - whereAt))) {
+                if (in.readUnsignedByte() != WHERE_VERSION || !in.readUTF().equals(key)) return null;
+                in.readUTF(); // the name
+                in.readUnsignedByte();
+                in.readInt();
+                in.readInt();
+                in.readUnsignedShort();
+                if (in.available() < 10 || in.readUnsignedByte() != VERSION) return null;
+                int deci = in.readShort();
+                int source = in.readUnsignedByte(), acc = in.readUnsignedByte(), err = in.readUnsignedByte();
+                int next = in.readInt();
+                return new Notice(deci < 0 ? Double.NaN : deci / 10.0, source > 2 ? HEADING_NONE : source, acc == 255 ? -1 : acc,
+                        err == 255 ? -1 : err, next);
+            } catch (IOException e) {
+                return null;
+            }
+        }
     }
 
     /** How a phone is doing, as it says at its check-in and in its name reply. UNKNOWN where it doesn't know. */
