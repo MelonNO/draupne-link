@@ -111,9 +111,23 @@ public class InternalCamera implements Camera{
         watchOnly = on;
     }
 
+    /**
+     * pc.49: the picture alone is asked for even when the camera once refused it beside a video (analysisRefusedFor):
+     * that says nothing of a session with it alone, and overwatch then watched with no picture until the app restarted.
+     */
     @Override
     public boolean canWatchOnly() {
-        return analysisSize != null && !config.getCameraId().equals(analysisRefusedFor);
+        return analysisSize != null;
+    }
+
+    /** pc.49: what took the pictures away (OverwatchProtocol BLIND_); 0 since the last open. */
+    private volatile int trouble;
+
+    @Override
+    public int blindReason() {
+        if (trouble != 0) return trouble;
+        if (!isOpened) return de.droiddrone.common.OverwatchProtocol.BLIND_CLOSED;
+        return de.droiddrone.common.OverwatchProtocol.BLIND_NO_FRAMES;
     }
 
     @Override
@@ -265,6 +279,7 @@ public class InternalCamera implements Camera{
             camera = cameraDevice;
             isOpened = true;
             isOpening = false;
+            trouble = 0;
             log("Camera device opened.");
             startPreview();
         }
@@ -292,6 +307,7 @@ public class InternalCamera implements Camera{
             isOpening = false;
             isStarted = false;
             mCameraCaptureSession = null;
+            trouble = de.droiddrone.common.OverwatchProtocol.BLIND_LOST;
             if (camera == cameraDevice) camera = null;
             try {
                 cameraDevice.close();
@@ -311,7 +327,7 @@ public class InternalCamera implements Camera{
     @Override
     public void startPreview() {
         if (watchOnly) { // pc.36: overwatch - the motion detection's picture and nothing else
-            Surface analysis = analysisSurface();
+            Surface analysis = analysisSurface(true);
             if (analysis == null) {
                 log("Overwatch: this camera gives no analysis picture - nothing to watch with");
                 return;
@@ -341,16 +357,16 @@ public class InternalCamera implements Camera{
             }
         }
         sessionTargets = targets;
-        createSession(targets, analysisSurface());
+        createSession(targets, analysisSurface(false));
     }
 
     /**
      * pc.35: the motion detection's reader surface for a new session, or null: no small picture of the video's shape
      * on this camera, or the camera refused it before. A reader of the same size is kept from session to session.
      */
-    private Surface analysisSurface() {
+    private Surface analysisSurface(boolean alone) {
         Size size = analysisSize;
-        if (size == null || config.getCameraId().equals(analysisRefusedFor)) return null;
+        if (size == null || !alone && config.getCameraId().equals(analysisRefusedFor)) return null; // pc.49: alone, always tried
         try {
             if (analysisReader == null || analysisReader.getWidth() != size.getWidth() || analysisReader.getHeight() != size.getHeight()) {
                 if (analysisReader != null) analysisReader.close(); // the session that had it is stopped already
@@ -506,6 +522,7 @@ public class InternalCamera implements Camera{
             synchronized (requestLock) {
                 mCaptureRequest = captureRequest;
                 mCameraCaptureSession = cameraCaptureSession;
+                if (trouble == de.droiddrone.common.OverwatchProtocol.BLIND_SESSION) trouble = 0;
                 configureCamera(captureRequest);
                 if (streamEncoderSurface != null && !watchOnly) captureRequest.addTarget(streamEncoderSurface);
                 Surface extra = extraTarget;
@@ -532,6 +549,11 @@ public class InternalCamera implements Camera{
         @Override
         public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession){
             log("CameraCaptureSession - onConfigureFailed");
+            if (watchOnly) { // pc.49: overwatch's session (the picture alone) refused - not marked for good; its watchdog tries again
+                trouble = de.droiddrone.common.OverwatchProtocol.BLIND_SESSION;
+                log("Overwatch: the camera refused its session");
+                return;
+            }
             // pc.35: the phone won't take the motion detection's stream beside the video: the video without it, now
             // and from here on (a USB camera or another phone may still do)
             List<Surface> targets = sessionTargets;

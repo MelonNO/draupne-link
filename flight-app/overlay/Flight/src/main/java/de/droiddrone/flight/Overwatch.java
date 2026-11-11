@@ -36,6 +36,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import de.droiddrone.common.CameraWatchdog;
 import de.droiddrone.common.ClipStore;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MotionDetector;
@@ -190,6 +191,10 @@ final class Overwatch {
     private long floorCheckAt;
     private int droppedReason, statusLeft;
     private long statusSentAt;
+    /** pc.49: what the STATUS being sent says (STATE_DROPPED, or the camera's STATE_BLIND / STATE_WATCHING). */
+    private int statusState = OverwatchProtocol.STATE_DROPPED, statusReason;
+    /** pc.49: the camera's watchdog (the worker thread). */
+    private final CameraWatchdog cameraWatchdog = new CameraWatchdog();
 
     // ---- the event (worker thread)
     private OverwatchProtocol.Alert alert;
@@ -244,6 +249,7 @@ final class Overwatch {
         floor.reset();
         preRoll.clear();
         droppedReason = 0;
+        cameraWatchdog.reset();
         MotionWatch.overwatch(sensitivity);
         MotionWatch.setSink(this::onPicture);
         udp.overwatchCamera(true);
@@ -281,6 +287,7 @@ final class Overwatch {
         long now = System.currentTimeMillis(), mono = SystemClock.elapsedRealtime();
         if (watching) {
             MotionWatch.tick(service.fcArmedState() == FcArmedState.DISARMED, service.camera());
+            watchdog(mono);
             if (mono >= floorCheckAt) {
                 floorCheckAt = mono + PowerFloor.CHECK_MS;
                 int[] r = service.batteryReadings();
@@ -335,16 +342,44 @@ final class Overwatch {
             statusLeft--;
             statusSentAt = now;
             int[] r = service.batteryReadings();
-            send(OverwatchProtocol.status(token, OverwatchProtocol.STATE_DROPPED, droppedReason, r[0] < 0 ? 255 : r[0], r[3] == PowerFloor.UNKNOWN ? 0 : r[3]));
+            send(OverwatchProtocol.status(token, statusState, statusReason, r[0] < 0 ? 255 : r[0], r[3] == PowerFloor.UNKNOWN ? 0 : r[3]));
         }
         if (!watching && recorder == null && hashing.get() == 0 && store.head() == null && (endedEvent < 0 || endedAcked || endedSends >= 120)
                 && statusLeft == 0) closeSocket();
+    }
+
+    /** pc.49: 5 s without a picture opens the camera again ({@link CameraWatchdog}); the PC is told why. */
+    private void watchdog(long mono) {
+        CameraWatchdog.Action a = cameraWatchdog.tick(mono, MotionWatch.analysing(MotionWatch.NO_PICTURE_MS), eventVideo);
+        if (a == CameraWatchdog.Action.NONE) return;
+        if (a == CameraWatchdog.Action.SAY_BACK) {
+            log("Overwatch: the camera gives pictures again");
+            tellStatus(OverwatchProtocol.STATE_WATCHING, 0);
+            return;
+        }
+        Camera c = service.camera();
+        int reason = c == null ? OverwatchProtocol.BLIND_CLOSED : c.blindReason();
+        log("Overwatch: no pictures for " + cameraWatchdog.blindFor(mono) / 1000 + " s (" + OverwatchProtocol.describeBlind(reason)
+                + ") - the camera opened again (" + cameraWatchdog.reopens() + ")");
+        if (a == CameraWatchdog.Action.REOPEN_AND_SAY_BLIND) tellStatus(OverwatchProtocol.STATE_BLIND, reason);
+        udp.overwatchCameraAgain();
+    }
+
+    /** pc.49: the camera's word to the PC - never over the floor's drop, which goes first. */
+    private void tellStatus(int state, int reason) {
+        if (statusLeft > 0 && statusState == OverwatchProtocol.STATE_DROPPED) return;
+        statusState = state;
+        statusReason = reason;
+        statusLeft = 3;
+        statusSentAt = 0;
     }
 
     /** The floor: deep sleep now, and the PC told why. */
     private void dropToDeepSleep(int reason, int battery, int tempDeci) {
         log("Overwatch: " + PowerFloor.describe(reason) + " (battery " + battery + " %, " + tempDeci / 10.0 + " C) - deep sleep instead");
         droppedReason = reason;
+        statusState = OverwatchProtocol.STATE_DROPPED;
+        statusReason = reason;
         statusLeft = 5;
         statusSentAt = 0;
         send(OverwatchProtocol.status(token, OverwatchProtocol.STATE_DROPPED, reason, Math.max(0, battery), tempDeci == PowerFloor.UNKNOWN ? 0 : tempDeci));

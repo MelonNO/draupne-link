@@ -53,6 +53,11 @@ public interface Camera {
     default void setExtraTarget(android.view.Surface surface) {
     }
 
+    /** pc.49: why overwatch gets no pictures from it (an OverwatchProtocol BLIND_ code). */
+    default int blindReason() {
+        return isStarted() ? de.droiddrone.common.OverwatchProtocol.BLIND_NO_FRAMES : de.droiddrone.common.OverwatchProtocol.BLIND_CLOSED;
+    }
+
     boolean initialize(StreamEncoder streamEncoder, Mp4Recorder mp4Recorder);
     boolean openCamera();
     int getCurrentFps();

@@ -1,6 +1,7 @@
 package de.droiddrone.pc.gui;
 
 import de.droiddrone.common.DetectionAreas;
+import de.droiddrone.common.MotionRecord;
 import de.droiddrone.pc.Names;
 import de.droiddrone.pc.PcConfig;
 import org.junit.jupiter.api.Test;
@@ -54,6 +55,33 @@ class DetectionControllerTest {
         d.set(0, null);
         assertEquals(Map.of("detection", "off"), saved.get(1), "no phone chosen: the setting for all");
         assertEquals("Motion detection off.", log.get(1));
+    }
+
+    /**
+     * 1.0.63: the pilot's log said "no picture from this camera. Update the phone app." at every SHARP step - the
+     * camera's session rebuilt for the new size. Said only when it lasts 3 s; again only after a picture came.
+     */
+    @Test
+    void aMomentWithoutAPictureIsNotSaid() throws Exception {
+        DetectionController d = controller(PcConfig.defaults());
+        MotionRecord.Report none = new MotionRecord.Report(MotionRecord.FLAG_ACTIVE | MotionRecord.FLAG_NO_PICTURE, 70, List.of());
+        MotionRecord.Report seen = new MotionRecord.Report(MotionRecord.FLAG_ACTIVE, 70, List.of());
+        d.sayNoPicture(none, 1000);
+        d.sayNoPicture(none, 2000);
+        d.sayNoPicture(seen, 2500);
+        d.sayNoPicture(none, 3500);
+        d.sayNoPicture(none, 6000);
+        assertTrue(log.isEmpty(), log.toString());
+        d.sayNoPicture(none, 6500);
+        assertEquals(List.of("Motion detection: no picture from this camera. Update the phone app."), log);
+        d.sayNoPicture(none, 20_000);
+        assertEquals(1, log.size(), "once");
+        d.sayNoPicture(seen, 21_000);
+        d.sayNoPicture(none, 22_000);
+        d.sayNoPicture(none, 25_000);
+        assertEquals(2, log.size(), "again after a picture came");
+        d.sayNoPicture(null, 30_000);
+        d.sayNoPicture(new MotionRecord.Report(0, 70, List.of()), 30_000);
     }
 
     /** 1.0.58: each drone's detection areas, saved as text in its camera's own picture and read back the same. */

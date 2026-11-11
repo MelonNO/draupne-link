@@ -28,7 +28,7 @@ class OverwatchHubTest {
     Path dir;
 
     private final List<byte[]> sent = new ArrayList<>();
-    private final List<String> news = new ArrayList<>(), dropped = new ArrayList<>();
+    private final List<String> news = new ArrayList<>(), dropped = new ArrayList<>(), logs = new ArrayList<>();
 
     private OverwatchHub hub() {
         OverwatchHub hub = new OverwatchHub(new ClipIndex(dir), sent::add);
@@ -49,6 +49,7 @@ class OverwatchHubTest {
 
             @Override
             public void log(String line) {
+                logs.add(line);
             }
         });
         hub.watch("MobileAlpha", TOKEN, new CameraFootprint.Pose(59.9, 10.7, 120, 45, 0, 0, 10, 70, 40));
@@ -455,6 +456,23 @@ class OverwatchHubTest {
         receive(hub, st);
         assertEquals(List.of("MobileAlpha:" + PowerFloor.REASON_BATTERY), dropped);
         assertEquals(2, commandsSent().stream().filter(c -> c == OverwatchProtocol.CMD_STATUS_ACK).count());
+    }
+
+    /** Phone app pc.49: its overwatch camera gave no pictures and the phone opens it again - said once, and when it's back. */
+    @Test
+    void aBlindCameraIsToldOnceAndItsReturnOnce() throws Exception {
+        OverwatchHub hub = hub();
+        byte[] blind = OverwatchProtocol.status(TOKEN, OverwatchProtocol.STATE_BLIND, OverwatchProtocol.BLIND_LOST, 80, 300);
+        receive(hub, blind);
+        receive(hub, blind);
+        assertEquals(List.of("MobileAlpha: overwatch camera stopped (camera taken away). Phone restarts it."), logs);
+        byte[] back = OverwatchProtocol.status(TOKEN, OverwatchProtocol.STATE_WATCHING, 0, 80, 300);
+        receive(hub, back);
+        receive(hub, back);
+        assertEquals("MobileAlpha: overwatch camera back.", logs.get(1));
+        assertEquals(2, logs.size());
+        assertTrue(dropped.isEmpty());
+        assertEquals(4, commandsSent().stream().filter(c -> c == OverwatchProtocol.CMD_STATUS_ACK).count(), "each one acknowledged");
     }
 
     @Test

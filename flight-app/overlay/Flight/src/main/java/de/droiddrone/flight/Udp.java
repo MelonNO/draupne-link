@@ -1234,6 +1234,33 @@ public class Udp {
     }
 
     /**
+     * pc.49: overwatch's watchdog - its camera gave no pictures (taken away, its session refused, stuck): closed and
+     * opened again for the picture alone. Never a camera a pilot's video or an observer took since (M19).
+     */
+    void overwatchCameraAgain() {
+        try {
+            videoStarter.execute(() -> {
+                try {
+                    if (overwatchCameraOwner != cameraOwner) return;
+                    Camera camera = cameraManager.getCamera();
+                    camera.close();
+                    if (!camera.initialize(streamEncoder, mp4Recorder)) {
+                        log("Overwatch: the camera can't be started");
+                        return;
+                    }
+                    camera.setExtraTarget(null);
+                    camera.setWatchOnly(camera.canWatchOnly());
+                    if (!camera.openCamera()) log("Overwatch: the camera didn't open");
+                } catch (RuntimeException e) {
+                    log("Overwatch camera error: " + e);
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            log("Overwatch: no camera thread to open it again");
+        }
+    }
+
+    /**
      * An overwatch event's video, on the video starter thread: on - the session again with the stream encoder (the
      * PC's live preview, H.264 at 1 Mbit/s) and the event's recorder beside the analysis picture; off - back to the
      * analysis picture alone. The encoder's frames are Overwatch's to send (no video sender runs here).

@@ -115,15 +115,54 @@ final class PowerController {
      * @param hello the link's last sleep hello, or null
      */
     long wakeInMs(long now, ControlLink.SleepHello hello) {
+        return wakeInMs(now, System.currentTimeMillis(), hello);
+    }
+
+    long wakeInMs(long now, long wallNow, ControlLink.SleepHello hello) {
         if (!phoneAsleep || SleepCheck.isAlways(sentIntervalMin)) return -1;
+        long next = nextCheckMono(now, wallNow, hello);
+        return next < 0 ? -1 : next - now;
+    }
+
+    /** The phone PILOT UAV waits for (its IP), or null: its check-in heard before the link opened counts too. */
+    volatile String awaitedIp;
+
+    /**
+     * When the waited-for phone checks in next (MonoClock), or -1 (always listening, no interval). One answer for the
+     * LINK card's button and line and FLEET's card (2026-11-11, the pilot: they differed after this PC had been off the
+     * internet and the phone had checked in once before PILOT UAV): the newest check-in heard - the link's own hello
+     * or the one the name service took with no link open - else the windows every interval from the sleep's start.
+     * @param linkHello the link's last sleep hello (MonoClock), or null
+     */
+    long nextCheckMono(long now, long wallNow, ControlLink.SleepHello linkHello) {
         long interval = SleepCheck.checkInMinutes(sentIntervalMin) * 60_000L;
-        if (interval <= 0) return -1;
-        long next = sleepStartAt + interval;
-        if (hello != null && hello.receivedAt() >= sleepStartAt - 5000 && hello.nextCheckMin() > 0) {
-            next = hello.receivedAt() + SleepCheck.checkInMinutes(hello.nextCheckMin()) * 60_000L;
+        if (SleepCheck.isAlways(sentIntervalMin) || interval <= 0) return -1;
+        long next = sleepStartAt + interval, heardAt = Long.MIN_VALUE;
+        if (linkHello != null && linkHello.receivedAt() >= sleepStartAt - 5000 && linkHello.nextCheckMin() > 0) {
+            heardAt = linkHello.receivedAt();
+            next = heardAt + SleepCheck.checkInMinutes(linkHello.nextCheckMin()) * 60_000L;
+        }
+        String ip = awaitedIp;
+        ControlLink.SleepHello before = ip == null ? null : asleepHellos.get(ip);
+        if (before != null && before.nextCheckMin() > 0) {
+            long at = now - (wallNow - before.receivedAt()); // heard with no link open: wall clock
+            if (at >= sleepStartAt - 5000 && at > heardAt) next = at + SleepCheck.checkInMinutes(before.nextCheckMin()) * 60_000L;
         }
         while (next < now) next += interval;
-        return next - now;
+        return next;
+    }
+
+    /**
+     * The link's hello from the waited-for phone, kept as its last check-in too (wall clock), so FLEET's card counts
+     * from the same one as the LINK card.
+     */
+    void linkHello(String ip, ControlLink.SleepHello h, long now, long wallNow) {
+        if (ip == null || h == null) return;
+        long wallAt = wallNow - (now - h.receivedAt());
+        ControlLink.SleepHello before = asleepHellos.get(ip);
+        if (before != null && before.receivedAt() >= wallAt - 1000) return;
+        asleepHellos.put(ip, new ControlLink.SleepHello(h.batteryPercent(), h.charging(), h.nextCheckMin(), h.milliVolts(), wallAt,
+                h.owFlags(), h.floorReason(), h.status()));
     }
 
     // ------------------------------------------------------------------ phones asleep while no link is open

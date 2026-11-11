@@ -1831,6 +1831,7 @@ public class MainWindow extends JFrame {
             power.awaitingWake = true;
             power.phoneOverwatching = sleeping.overwatch();
             power.sleepStartAt = MonoClock.ms() - (System.currentTimeMillis() - sleeping.since());
+            power.awaitedIp = sleeping.ip(); // its check-in heard before this link counts for the countdown
             power.sentIntervalMin = sleeping.intervalMin();
             if (sleeping.listening()) {
                 logLine(sleeping.name() + " is listening: wakes now.");
@@ -4466,6 +4467,7 @@ public class MainWindow extends JFrame {
             power.awaitingWake = true;
             power.phoneOverwatching = power.wanted == ControlLink.POWER_OVERWATCH;
             power.sleepStartAt = pp.receivedAt() + pp.sleepInS() * 1000L;
+            power.awaitedIp = config.getString(IP_KEY);
             link.setDormant(true);
             logLine(power.phoneOverwatching ? "Phone overwatches: motion shows in the map window. "
                     + PowerController.listensText(power.sentIntervalMin) + "; PILOT UAV brings it back."
@@ -4484,8 +4486,6 @@ public class MainWindow extends JFrame {
                 power.clear(config.getString(IP_KEY));
             } else {
                 boolean always = SleepCheck.isAlways(power.sentIntervalMin);
-                long interval = SleepCheck.checkInMinutes(power.sentIntervalMin) * 60_000L;
-                long next = power.sleepStartAt + interval;
                 // the phone's own word from its last check (pc.22): when the next one is, and its battery
                 ControlLink.SleepHello hello = link.getSleepHello();
                 String alive = "";
@@ -4496,7 +4496,7 @@ public class MainWindow extends JFrame {
                             : "it left overwatch") + " - now in deep sleep.");
                 }
                 if (hello != null && hello.receivedAt() >= power.sleepStartAt - 5000) {
-                    if (hello.nextCheckMin() > 0) next = hello.receivedAt() + SleepCheck.checkInMinutes(hello.nextCheckMin()) * 60_000L;
+                    power.linkHello(power.awaitedIp, hello, now, System.currentTimeMillis()); // FLEET's card counts from it too
                     long ago = (now - hello.receivedAt()) / 1000;
                     alive = "Heard " + (ago < 60 ? ago + " s" : ago / 60 + " min") + " ago"
                             + (hello.batteryPercent() >= 0 ? ", battery " + hello.batteryPercent() + " %" : "")
@@ -4508,8 +4508,9 @@ public class MainWindow extends JFrame {
                                 ? ", listening." : ", next check in " + hello.nextCheckMin() + " min."));
                     }
                 }
-                while (next < now) next += interval;
-                long left = (next - now) / 1000;
+                // the same countdown as REGAINING CONTROL and FLEET's card: from the newest check-in heard (2026-11-11)
+                long next = power.nextCheckMono(now, System.currentTimeMillis(), hello);
+                long left = Math.max(0, next - now) / 1000;
                 String in = String.format(Locale.ROOT, "%d:%02d", left / 60, left % 60);
                 powerStatus.setText(link.isDormant()
                         ? "<html>" + (power.phoneOverwatching ? "OVERWATCH - its camera watches; an alert shows in the map window. " : "DEEP SLEEP - ") + alive

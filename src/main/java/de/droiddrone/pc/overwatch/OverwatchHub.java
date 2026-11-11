@@ -317,6 +317,7 @@ public final class OverwatchHub implements AutoCloseable {
         Watched w = byToken.get(token);
         if (w == null) return; // not a drone this PC put to overwatch (another PC's, or an old token)
         Session s = sessions.computeIfAbsent(w.drone(), k -> new Session(w));
+        if (s.token != token) s.blindSaid = false; // a new overwatch (a new token): its camera's word is new too
         s.token = token;
         s.watched = w;
         s.from = from;
@@ -629,6 +630,14 @@ public final class OverwatchHub implements AutoCloseable {
     private void onStatus(Session s, int[] st) {
         if (st == null) return;
         send(s, OverwatchProtocol.command(s.token, 0, OverwatchProtocol.CMD_STATUS_ACK));
+        // phone app pc.49: its camera gave no pictures and it opens it again by itself; then pictures again - once each
+        if (st[0] == OverwatchProtocol.STATE_BLIND && !s.blindSaid) {
+            s.blindSaid = true;
+            log(s.drone() + ": overwatch camera stopped (" + OverwatchProtocol.describeBlind(st[1]) + "). Phone restarts it.");
+        } else if (st[0] == OverwatchProtocol.STATE_WATCHING && s.blindSaid) {
+            s.blindSaid = false;
+            log(s.drone() + ": overwatch camera back.");
+        }
         if (st[0] != OverwatchProtocol.STATE_DROPPED || s.droppedSaid) return;
         s.droppedSaid = true;
         Listener l = listener;
@@ -813,7 +822,7 @@ public final class OverwatchHub implements AutoCloseable {
         float[][] boxes;
         long boxesAt = Long.MIN_VALUE / 2;
         int preRollSaved;
-        boolean endedSaid, droppedSaid;
+        boolean endedSaid, droppedSaid, blindSaid;
         Transfer transfer;
 
         Session(Watched w) {

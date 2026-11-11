@@ -6,6 +6,7 @@ import de.droiddrone.pc.CameraView;
 import de.droiddrone.pc.Connection;
 import de.droiddrone.pc.DetectionMarks;
 import de.droiddrone.pc.FcTelemetry;
+import de.droiddrone.pc.MonoClock;
 import de.droiddrone.pc.MotionBoxes;
 import de.droiddrone.pc.Names;
 import de.droiddrone.pc.PcConfig;
@@ -89,16 +90,34 @@ final class DetectionController {
     }
 
     private boolean noPictureSaid;
+    private long noPictureSince = -1;
+    /**
+     * 1.0.63: a change of video size rebuilds the camera's session - the phone says "no picture" for a moment. Said
+     * only when it lasts this long (it was said at every SHARP step, with "update the phone app").
+     */
+    static final long NO_PICTURE_SAY_MS = 3000;
 
     /**
      * pc.43: the phone says its camera gives the detection no picture (up to pc.42 every 16:9 video on a phone with no
      * small 16:9 size): said once, again only after a picture came. Unseen before - detection just never found anything.
      */
     void sayNoPicture(MotionRecord.Report r) {
+        sayNoPicture(r, MonoClock.ms());
+    }
+
+    void sayNoPicture(MotionRecord.Report r, long now) {
         if (r == null || !r.active()) return;
         boolean none = (r.flags & MotionRecord.FLAG_NO_PICTURE) != 0;
-        if (none && !noPictureSaid) log.accept("Motion detection: no picture from this camera. Update the phone app.");
-        noPictureSaid = none;
+        if (!none) {
+            noPictureSince = -1;
+            noPictureSaid = false;
+            return;
+        }
+        if (noPictureSince < 0) noPictureSince = now;
+        if (!noPictureSaid && now - noPictureSince >= NO_PICTURE_SAY_MS) {
+            noPictureSaid = true;
+            log.accept("Motion detection: no picture from this camera. Update the phone app.");
+        }
     }
 
     /** The marks as they stand (no link: no new ones), fading as they age. */

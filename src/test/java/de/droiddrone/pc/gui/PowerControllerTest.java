@@ -185,6 +185,43 @@ class PowerControllerTest {
         assertTrue(power.sticksPaused());
     }
 
+    /**
+     * 2026-11-11, the pilot: "the time remaining in the map and in the main screen when trying to connect is
+     * mismatched after the computer has been disconnected from the internet and the phone gave one status before
+     * pressing PILOT". The main screen counted from the sleep's start; FLEET's card from that check-in.
+     */
+    @Test
+    void theLinkCardAndFleetCountFromTheSameCheckIn() {
+        String ip = "100.64.0.5";
+        PowerController.Asleep a = new PowerController.Asleep("MobileAlpha", ip, T0, 5);
+        power.remember(a);
+        // offline a while; the phone's windows drifted: it checks in at 13.5 min, next in 5
+        wall = T0 + 13 * MIN + 30_000;
+        power.checkIn(ip, hello(70, 5, 0, 0));
+        a = power.asleep(ip);
+        long mono = 50_000_000; // MonoClock has its own zero
+        // PILOT UAV half a minute later, as MainWindow sets it up
+        wall += 30_000;
+        mono += 30_000;
+        power.phoneAsleep = true;
+        power.sentIntervalMin = a.intervalMin();
+        power.sleepStartAt = mono - (wall - a.since());
+        power.awaitedIp = ip;
+        long fleet = power.nextCheck(a, wall) - wall;
+        assertEquals(4 * MIN + 30_000, fleet, "FLEET: 5 min from its check-in");
+        assertEquals(fleet, power.wakeInMs(mono, wall, null), "the LINK card: the same, not the sleep's old windows");
+        assertEquals(mono + fleet, power.nextCheckMono(mono, wall, null));
+
+        // its next check-in comes on the link: both follow it
+        mono += 4 * MIN + 30_000;
+        wall += 4 * MIN + 30_000;
+        ControlLink.SleepHello onLink = new ControlLink.SleepHello(69, false, 5, 3900, mono);
+        power.linkHello(ip, onLink, mono, wall);
+        long later = 20_000;
+        assertEquals(5 * MIN - later, power.wakeInMs(mono + later, wall + later, onLink));
+        assertEquals(5 * MIN - later, power.nextCheck(power.asleep(ip), wall + later) - (wall + later));
+    }
+
     @Test
     void theWakeCountdownFollowsTheLastHello() {
         assertEquals(-1, power.wakeInMs(0, null), "not asleep");

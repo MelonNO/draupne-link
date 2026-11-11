@@ -75,8 +75,24 @@ public final class OverwatchProtocol {
     /** The most boxes a BOXES unit carries. */
     public static final int MAX_BOXES = 4;
     public static final int CLIP_INFO = 0, CLIP_CHUNK = 1, CLIP_ENDED = 2, CLIP_NONE = 3;
-    /** STATUS states: still overwatching; left for deep sleep by itself. */
-    public static final int STATE_WATCHING = 1, STATE_DROPPED = 2;
+    /**
+     * STATUS states: still overwatching; left for deep sleep by itself; (pc.49) its camera gives no pictures, the
+     * phone opens it again by itself (reason: a BLIND_ code) - STATE_WATCHING follows when pictures come again.
+     */
+    public static final int STATE_WATCHING = 1, STATE_DROPPED = 2, STATE_BLIND = 3;
+    /** STATE_BLIND reasons (pc.49). */
+    public static final int BLIND_UNKNOWN = 0, BLIND_CLOSED = 1, BLIND_LOST = 2, BLIND_SESSION = 3, BLIND_NO_FRAMES = 4;
+
+    /** A STATE_BLIND reason, short. */
+    public static String describeBlind(int reason) {
+        switch (reason) {
+            case BLIND_CLOSED: return "camera closed";
+            case BLIND_LOST: return "camera taken away";
+            case BLIND_SESSION: return "camera refused";
+            case BLIND_NO_FRAMES: return "camera gives no frames";
+            default: return "no pictures";
+        }
+    }
     /** ALERT flags. */
     public static final int ALERT_LIGHT = 1, ALERT_NIGHT = 2, ALERT_AGAIN = 4;
     /** POWER_MODE flags for mode 3: bit 0 = the clip records the phone's microphone. */
