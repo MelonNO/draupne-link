@@ -2,6 +2,15 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.62 + phone pc.48
+
+With the phone app **DRAUPNE Flight 2.3.0-pc.48** (update the phones). Not tried on a drone yet.
+
+- **Heading on the map from a compass only:** without a compass, Betaflight's yaw is drift since power-up, and the map's arrow and the overwatch view took it as the heading. Now: the FC's yaw when it has a compass, else the phone's own compass (pc.48 sends it to the pilot's PC, not only to observers), else no heading: a round mark and no view.
+- **A drone no longer connected keeps its last heading** on the map; the GPS course is used only while it moves.
+- **FLEET's OVERWATCH:** the view from this PC's last connection to the drone, else its last overwatch; none where the drone now stands more than 25 m away.
+- **Virtual drones report a compass** (their heading is exact): the demo is unchanged.
+
 ## 1.0.61
 
 PC only; the phone app stays **DRAUPNE Flight 2.3.0-pc.47**.
