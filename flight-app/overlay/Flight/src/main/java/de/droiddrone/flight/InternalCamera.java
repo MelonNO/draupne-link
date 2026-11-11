@@ -528,7 +528,11 @@ public class InternalCamera implements Camera{
                 Surface extra = extraTarget;
                 if (extra != null && !watchOnly && sessionTargets != null && sessionTargets.contains(extra)) captureRequest.addTarget(extra); // pc.36
                 Surface analysis = sessionAnalysis;
-                if (analysis != null && analysisOn) captureRequest.addTarget(analysis); // pc.35: MotionWatch analyses
+                // pc.35: MotionWatch analyses. pc.49: a watch-only session's picture always - MotionWatch turns the picture
+                // off while the camera isn't started, and a watch-only camera starts only with it: when its 0.1 s tick
+                // came between startPreview and here (Foxtrot 2026-11-11: 143 ms), the request had no target, the
+                // session never started and overwatch saw nothing - the pilot's "it warns sometimes"
+                if (analysis != null && (analysisOn || watchOnly)) captureRequest.addTarget(analysis);
                 try{
                     cameraCaptureSession.setRepeatingRequest(captureRequest.build(), captureCallback, new Handler(handlerThread.getLooper()));
                     cameraFrameCounter = 0;
