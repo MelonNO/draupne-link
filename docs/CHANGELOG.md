@@ -2,6 +2,15 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.63 + phone pc.49
+
+With the phone app **DRAUPNE Flight 2.3.0-pc.49** (update the phones). Not tried on a drone yet.
+
+- **Overwatch sometimes saw nothing (the cause, from Foxtrot's log):** MotionWatch switches the picture off while the camera isn't started, and a watch-only camera starts only with its picture. When its 0.1 s tick fell between the session's start and its configuration (143 ms there), the request had no target ("Each request must have at least one Surface target"), the camera never started and overwatch never alerted. A watch-only session now always has its picture.
+- **Overwatch's camera watchdog:** a camera lost in overwatch (taken away with the screen off, or its picture-only session refused) was never opened again: overwatch watched blind until PILOT UAV and OVERWATCH again (the pilot: boxed 5 m off while connected, no warning in overwatch). The phone now opens it again after 5 s without a picture, then after 15, 30, 60 and every 120 s, and tells the PC once (STATUS state 3, a reason) and once when pictures are back. A camera that once refused the picture beside a video still tries the picture alone in overwatch.
+- **One wake countdown:** the LINK card counted from the sleep's start, FLEET from the phone's last check-in; after the PC was offline they differed. Both now count from the newest check-in.
+- **"No picture from this camera. Update the phone app."** only after 3 s: a change of video size rebuilds the camera's session for a moment.
+
 ## 1.0.62 + phone pc.48
 
 With the phone app **DRAUPNE Flight 2.3.0-pc.48** (update the phones). Not tried on a drone yet.
