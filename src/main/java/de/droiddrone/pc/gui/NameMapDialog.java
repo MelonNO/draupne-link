@@ -194,11 +194,10 @@ final class NameMapDialog extends JDialog {
                 "Rename", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (answer != JOptionPane.OK_OPTION) return;
         String to = (String) pick.getSelectedItem();
-        if (to == null || !names.rename(e.name(), to)) return;
-        Map<String, String> moved = Names.movedSettings(config.keys(), config::getString, e.name(), to); // 1.0.64: its own settings go with it
-        if (!moved.isEmpty()) saver.accept(moved);
-        if (e.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) saver.accept(Map.of(Names.PHONE_NAME_KEY, to));
-        service.assign(e.ip(), to);
+        // 1.0.64: the map, the phone's own settings, the chosen phone and the phone's word in one place (NameService.rename):
+        // the phone is told again until it answers with the name, and the old name comes back when it never does - it
+        // was one packet, and when it was lost both names sat at one address
+        if (to == null || !service.rename(e.ip(), e.name(), to)) return;
         fill();
         onChanged.run();
     }

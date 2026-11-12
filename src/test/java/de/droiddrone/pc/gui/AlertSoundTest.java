@@ -85,4 +85,29 @@ class AlertSoundTest {
         for (long t = 0; t < 5000; t += 33) s.update("LINK LOST", t);
         assertEquals(0, beeps.get());
     }
+
+    /**
+     * 1.0.64: Warning sounds off (the stick warnings' beep) silenced the overwatch ring too - an alert came without a
+     * sound. The ring has its own switch, on unless turned off.
+     */
+    @Test
+    void theOverwatchRingHasItsOwnSwitch() {
+        AtomicInteger beeps = new AtomicInteger(), rings = new AtomicInteger();
+        AlertSound s = counted(beeps);
+        s.ringer = rings::incrementAndGet;
+        s.ringOn = Runnable::run;
+        assertTrue(s.isRingEnabled(), "on by default");
+        s.setEnabled(false); // LINK > Warning sounds off
+        s.ring();
+        assertEquals(1, rings.get(), "the warning beep's switch doesn't mute an overwatch alert");
+        s.setRingEnabled(false); // LINK > Overwatch ring off
+        s.ring();
+        assertEquals(1, rings.get());
+        s.setEnabled(true);
+        s.update("LINK LOST", 10_000);
+        assertEquals(1, beeps.get(), "and the ring's switch doesn't mute the warnings");
+        s.ring();
+        assertEquals(1, rings.get());
+        assertNotEquals(AlertSound.KEY, AlertSound.RING_KEY);
+    }
 }

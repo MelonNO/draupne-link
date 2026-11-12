@@ -39,6 +39,9 @@ final class OsdDataBuilder {
      * @param pilotView watching: the pilot PC's own warnings, or null; pilotLeft its BYE (null none, "" no phone named)
      * @param stats the video's figures, or null
      * @param now MonoClock
+     * @param awaitingWake 1.0.64: PILOT UAV waits for a sleeping phone (the link not READY since)
+     * @param wakeInMs until its next check-in; -1: it listens all along, or unknown
+     * @param tier the video tier now, or null (watching: the pilot PC's isn't known here)
      */
     record In(boolean spectator, boolean watchOnly, boolean ready, boolean hasStream, long sincePicture, long sinceStreamStart,
               FcTelemetry.Status status, FcTelemetry.PhoneState phoneState, boolean session, boolean rcEnabled,
@@ -46,7 +49,37 @@ final class OsdDataBuilder {
               String rcWaiting, short[] channels, boolean standbyWanted, int lagMs, String linkHint,
               ControlLink.PilotView pilotView, String pilotLeft, int ping, boolean fcLost, FcTelemetry telemetry,
               VideoPipeline.Stats stats, boolean invertPitch, boolean recording, boolean spectatorPaused,
-              boolean linkStalled, boolean relayed, long now) {
+              boolean linkStalled, boolean relayed, long now, boolean awaitingWake, long wakeInMs, ControlLink.Tier tier) {
+        /** Up to 1.0.63: nobody waited for, no tier. */
+        In(boolean spectator, boolean watchOnly, boolean ready, boolean hasStream, long sincePicture, long sinceStreamStart,
+           FcTelemetry.Status status, FcTelemetry.PhoneState phoneState, boolean session, boolean rcEnabled,
+           long msSinceInputChanged, RcSession.Banner resume, boolean frozenStopped, boolean armSwitchUnknown,
+           String rcWaiting, short[] channels, boolean standbyWanted, int lagMs, String linkHint,
+           ControlLink.PilotView pilotView, String pilotLeft, int ping, boolean fcLost, FcTelemetry telemetry,
+           VideoPipeline.Stats stats, boolean invertPitch, boolean recording, boolean spectatorPaused,
+           boolean linkStalled, boolean relayed, long now) {
+            this(spectator, watchOnly, ready, hasStream, sincePicture, sinceStreamStart, status, phoneState, session, rcEnabled,
+                    msSinceInputChanged, resume, frozenStopped, armSwitchUnknown, rcWaiting, channels, standbyWanted, lagMs, linkHint,
+                    pilotView, pilotLeft, ping, fcLost, telemetry, stats, invertPitch, recording, spectatorPaused, linkStalled, relayed,
+                    now, false, -1, null);
+        }
+    }
+
+    /**
+     * 1.0.64: what the OSD says while a sleeping phone is waited for (it blinked LINK LOST in red through the whole
+     * countdown): "WAKING - 4:12" to its next check-in, "WAKING" when it listens all along or the time isn't known.
+     */
+    static String wakingText(long wakeInMs) {
+        if (wakeInMs < 0) return "WAKING";
+        long s = Math.max(1, (wakeInMs + 999) / 1000); // as the button's REGAINING CONTROL IN counts
+        return "WAKING - " + s / 60 + ":" + String.format(Locale.ROOT, "%02d", s % 60);
+    }
+
+    /** 1.0.64: the tier's tag by the video's figures - the menu's words (ROBUST, SURVIVAL); nothing at NORMAL or SHARP. */
+    static String tierTag(ControlLink.Tier tier) {
+        if (tier == ControlLink.Tier.ROBUST) return "ROBUST";
+        if (tier == ControlLink.Tier.SURVIVAL) return "SURVIVAL";
+        return null;
     }
 
     static OsdRenderer.Data build(In in) {
@@ -100,11 +133,15 @@ final class OsdDataBuilder {
         } else if (pv != null && !pv.linkReady()) {
             lostText = "PILOT LINK LOST";
         }
+        // 1.0.64: the pilot's own wait for a sleeping phone - no LINK LOST, no "reconnecting" under it
+        String waking = !spectator && in.awaitingWake() && !linkReady ? wakingText(in.wakeInMs()) : null;
+        if (waking != null) hint = null;
         return new OsdRenderer.Data(true, linkReady, in.ping(), rcLive,
                 in.fcLost(), in.telemetry(), in.stats(), in.invertPitch(),
                 hint, channels, false, stalled, videoFrozen, radioFrozen,
                 rcWaiting, in.recording(), banner, spectator && !in.watchOnly(),
                 sticksAge, armUnknown, liveBanner, spectator && in.spectatorPaused(), relayed,
-                ps != null && now - ps.receivedAt() <= 2500 && ps.rcWriteAgeMs() > OsdRenderer.STICKS_LOST_ALARM_MS, lostText);
+                ps != null && now - ps.receivedAt() <= 2500 && ps.rcWriteAgeMs() > OsdRenderer.STICKS_LOST_ALARM_MS, lostText,
+                waking, spectator || !in.ready() ? null : tierTag(in.tier()));
     }
 }

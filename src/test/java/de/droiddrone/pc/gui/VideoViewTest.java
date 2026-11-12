@@ -97,6 +97,13 @@ class VideoViewTest {
         assertTrue(view.msSinceStreamStart() >= 0 && view.msSinceStreamStart() < 1000);
     }
 
+    /** 1.0.64: the no-picture animation ran 25 times a second with its window minimized, for nothing. */
+    @Test
+    void theNoPictureAnimationRestsWhileItsWindowIsMinimized() {
+        assertEquals(40, VideoView.skeletonDelay(false), "in sight: as before");
+        assertTrue(VideoView.skeletonDelay(true) >= 400, "minimized: only a look for the window's return");
+    }
+
     @Test
     void mirroredFrontCameraTurnsToo() {
         assertEquals(RED, at(show(true, false), 14, 1), "mirrored: top-right");

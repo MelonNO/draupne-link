@@ -185,7 +185,8 @@ public class DDService extends Service {
                 return;
             }
         }
-        if (location) PhoneLocation.start(getApplicationContext());
+        // pc.50: not asleep - a second start (the location grant) switched the GPS back on in deep sleep and overwatch
+        if (location && !PowerMode.isSleepMode()) PhoneLocation.start(getApplicationContext());
     }
 
     private void acquireWakeLock() {
@@ -208,10 +209,34 @@ public class DDService extends Service {
         wakeLock = null;
     }
 
+    /**
+     * pc.50: the processor stays up this long after the service's wake lock goes for a sleep. The lock went at once,
+     * while the camera's close was only queued on another thread - and overwatch's "left for deep sleep" to the PCs
+     * (five, a second apart) had sent one: with the processor asleep the camera stayed open and the PC showed OVERWATCH
+     * until the next check. Timed: it lets go by itself.
+     */
+    private static final long CLOSING_AWAKE_MS = 6000;
+    private PowerManager.WakeLock closingLock;
+
+    private synchronized void stayAwakeToClose() {
+        try {
+            if (closingLock == null) {
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                if (pm == null) return;
+                closingLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "DRAUPNE:closing");
+                closingLock.setReferenceCounted(false); // asked again, the time starts over; one timed release ends it
+            }
+            closingLock.acquire(CLOSING_AWAKE_MS);
+        } catch (Exception e) {
+            log("Closing wake lock error: " + e);
+        }
+    }
+
     /** The flight controller was plugged in (MainActivity got USB_DEVICE_ATTACHED): look for it now, if not on it. */
     public static void usbDeviceAttached() {
         DDService s = running;
         if (s == null || s.serial == null) return;
+        if (PowerMode.isSleepMode()) return; // pc.50: asleep the FC's port is closed on purpose; the wake opens it
         int status = s.serial.getStatus();
         if (status == Serial.STATUS_SERIAL_PORT_OPENED) return;
         log("USB device attached: looking for the flight controller");
@@ -332,6 +357,7 @@ public class DDService extends Service {
         stopMainTimer();
         isConnected = false;
         powerSleepOn(nextCheckAt);
+        stayAwakeToClose(); // pc.50: the video's stop above is only queued - the camera closes on its own thread
         releaseWakeLock();
         lockScreen();
     }
@@ -387,6 +413,8 @@ public class DDService extends Service {
     /** pc.36: overwatch becomes deep sleep (the floor, or the PC's DEEP SLEEP): the camera closes, the wake lock goes. */
     void overwatchToDeepSleep(long nextCheckAt) {
         Overwatch.end("deep sleep instead");
+        // pc.50: Overwatch.end only queues the camera's close, and the floor's word to the PCs goes on for 5 s
+        stayAwakeToClose();
         releaseWakeLock();
         if (nextCheckAt > 0 || PowerMode.isAlwaysListening()) powerSleepOn(nextCheckAt);
     }
@@ -502,7 +530,7 @@ public class DDService extends Service {
         }
         // pc.36: overwatching (and an event running), and why overwatch gave way to deep sleep by itself
         if (!udp.sendSleepHello(percent < 0 ? 255 : percent, charging, nextCheckMin, mV, Overwatch.helloFlags(), PowerMode.floorReason())) {
-            log("Sleep check: no PC address to say hello to");
+            log("Sleep check: no hello to the PC of the last link (no address, or it didn't go)");
         }
     }
 

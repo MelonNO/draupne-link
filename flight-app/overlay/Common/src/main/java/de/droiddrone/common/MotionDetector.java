@@ -93,6 +93,11 @@ import java.util.List;
  * <p>By brightness alone (1.0.53): the chroma passed in is not used - other cameras have none, and people and vehicles
  * wear the surroundings' colours.
  *
+ * <p>pc.50, from a review: the exposure at night is that of the middle half of the picture's cells (a torch or a
+ * headlight's beam moved the sums and read as a step on most pictures - nightGain); the ends of a thin upright line are
+ * foreground on LOW and NORMAL (someone 40 m off, one pixel wide); {@link Looming} looks slowly too (someone coming at
+ * 0.5 m/s).
+ *
  * <p>Not thread safe: one thread feeds it. About 1.5 ms a 320 x 180 picture on a PC (MotionDetectorPerfTest), a third
  * of it the approach watch; no allocation per picture beyond the blobs and tracks found.
  */public final class MotionDetector {
@@ -1002,6 +1007,7 @@ import java.util.List;
             n++;
         }
         float sums = (float) (sumMean / Math.max(1, sumCur));
+        if (night) return nightGain(sums); // pc.50: not the sums - a light in the dark moves them as an exposure step would
         int best = 0;
         for (int b = 1; b < gainBins.length; b++) if (gainBins[b] > gainBins[best]) best = b;
         int lo = Math.max(0, best - 2), hi = Math.min(gainBins.length - 1, best + 2), peak = 0;
@@ -1026,6 +1032,72 @@ import java.util.List;
         return !night && lastFg >= GAIN_BIG_THING && lastMs - peakAt <= PEAK_HOLD_MS ? 1f : sums;
     }
 
+    /**
+     * pc.50, the gain at night: the picture in cells (NIGHT_CELL working pixels square), each with the factor of its own
+     * sums; the gain is the factor of the sums of the middle half of them - the quarter with the lowest factors and the
+     * quarter with the highest left out. In the dark the picture's sum is small: at a mean luma of 10 a torch on 0.3 %
+     * of the pixels is 8 % of it, so a torch that swings or the ground in a headlight's beam was an "exposure step" on
+     * most pictures - the background rescaled, the picture not judged, the tracks thrown away - and night mode lost the
+     * very lights it is for. A light changes the few cells it lies in, the camera's exposure every cell. (Not the day's
+     * histogram over the pixels: the ratio of two small numbers is mostly noise; a cell's sums are a hundred pixels',
+     * and the middle half's some seven thousand.) Cells black in both pictures say nothing; a picture nearly all black
+     * (a light alone in it) has no exposure to follow: 1. The sums' factor when the picture is too small for cells.
+     */
+    private float nightGain(float sums) {
+        gainFromPeak = false;
+        int cw = w / NIGHT_CELL, ch = h / NIGHT_CELL;
+        if (cw * ch < NIGHT_MIN_CELLS) return sums;
+        if (cellGain == null || cellGain.length != cw * ch) {
+            cellGain = new float[cw * ch];
+            cellSorted = new float[cw * ch];
+            cellMean = new float[cw * ch];
+            cellCur = new float[cw * ch];
+        }
+        int n = 0, cells = 0;
+        for (int cy = 0; cy < ch; cy++) {
+            for (int cx = 0; cx < cw; cx++) {
+                float m = 0, c = 0;
+                int v = 0;
+                for (int yy = cy * NIGHT_CELL; yy < (cy + 1) * NIGHT_CELL; yy++) {
+                    int row = yy * w + cx * NIGHT_CELL;
+                    for (int i = row; i < row + NIGHT_CELL; i++) {
+                        if (valid[i] == 0) continue;
+                        m += mean[i];
+                        c += aligned[i];
+                        v++;
+                    }
+                }
+                if (v < NIGHT_CELL * NIGHT_CELL / 2) continue; // the border after a shift
+                cells++;
+                if (m + c < 2 * NIGHT_CELL_LUMA * v) continue; // black in both
+                cellMean[n] = m;
+                cellCur[n] = c;
+                cellGain[n] = cellSorted[n] = m / Math.max(c, 1e-3f);
+                n++;
+            }
+        }
+        if (cells < NIGHT_MIN_CELLS) return sums;
+        if (n < NIGHT_MIN_CELLS) return 1;
+        java.util.Arrays.sort(cellSorted, 0, n);
+        float low = cellSorted[n / 4], high = cellSorted[n - 1 - n / 4];
+        double m = 0, c = 0;
+        for (int k = 0; k < n; k++) {
+            if (cellGain[k] < low || cellGain[k] > high) continue;
+            m += cellMean[k];
+            c += cellCur[k];
+        }
+        // the background follows it picture by picture, as the day's peak: only matched to the picture, the factor sat
+        // 2 - 4 % off 1 (the cells left out differ from the background's), half way to a step
+        gainFromPeak = true;
+        return (float) (m / Math.max(1e-3, c));
+    }
+
+    /** The night gain's cells: this many working pixels square, the fewest of them a picture must have (and not black), */
+    static final int NIGHT_CELL = 10, NIGHT_MIN_CELLS = 24;
+    /** ... a cell black when its mean luma, background and picture, is under this. */
+    static final float NIGHT_CELL_LUMA = 1;
+    private float[] cellGain, cellSorted, cellMean, cellCur;
+
     /** The gain histogram: factors from GAIN_LOW in steps of GAIN_BIN (0.33 - 3, past which the scene starts again). */
     static final float GAIN_LOW = 0.3f, GAIN_BIN = 0.01f;
     /** The peak (five bins) must hold this share of the pixels to be taken. */
@@ -1037,7 +1109,7 @@ import java.util.List;
     /** The share of the last picture that was foreground. */
     private float lastFg;
 
-    /** The last gain came from the histogram's peak (the exposure's own factor), not from the sums. */
+    /** The last gain came from the histogram's peak (the exposure's own factor; pc.50: or the night's cells), not from the sums. */
     private boolean gainFromPeak;
     /** When the gain last came from a peak; for PEAK_HOLD_MS after it, no peak means no exposure change. */
     private long peakAt = Long.MIN_VALUE / 2;
@@ -1318,6 +1390,12 @@ import java.util.List;
             }
         }
     }
+
+    /** pc.50: raw pixel i (row yy, one foreground neighbour) ends an upright run of three foreground pixels at least. */
+    private boolean upright(int i, int yy) {
+        return raw[i - w] != 0 && yy >= 2 && raw[i - 2 * w] != 0 || raw[i + w] != 0 && yy < h - 2 && raw[i + 2 * w] != 0;
+    }
+
     private List<Blob> blobs() {
         nearMax(freq, near, 2);
         // sensor noise: a foreground pixel needs two foreground neighbours
@@ -1328,6 +1406,12 @@ import java.util.List;
                 if (raw[i] == 0 || xx == 0 || yy == 0 || xx == w - 1 || yy == h - 1) continue;
                 int n = raw[i - w - 1] + raw[i - w] + raw[i - w + 1] + raw[i - 1] + raw[i + 1] + raw[i + w - 1] + raw[i + w] + raw[i + w + 1];
                 if (n >= 2) clean[i] = 1;
+                // pc.50: or the end of a thin upright line, three pixels tall at least (its one neighbour straight above
+                // or below it, the next beyond that foreground too). Someone 40 m off is one pixel wide and five tall: the
+                // rule took both his ends, three were left, and NORMAL (MIN_AREA 4) never made a blob of him. Upright
+                // only, and by day: people stand, grass and twigs sway sideways, the night's noise is single pixels.
+                // Not on HIGH: it finds him on the fine picture, and in a gale this made it one more track of leaves
+                else if (n == 1 && !night && levelAt[i] != HIGH && upright(i, yy)) clean[i] = 1;
             }
         }
         // how much of each pixel's 7 x 7 is foreground (a summed table of clean, rows and columns)
@@ -1505,10 +1589,10 @@ import java.util.List;
             Track tr = tracks.get(i);
             if (now - tr.lastSeen > (tr.proven ? PROVEN_LOST_MS : TRACK_LOST_MS)) tracks.remove(i);
         }
-        // a busy picture: the oldest unconfirmed tracks go first, past 60
-        for (int i = 0; tracks.size() > 60 && i < tracks.size(); ) {
+        // a busy picture (rain, snow, leaves): past 60 the newest unconfirmed tracks go first. pc.50: it was the oldest -
+        // the ones nearest to being confirmed, so a person's track could be dropped again and again before it counted
+        for (int i = tracks.size() - 1; tracks.size() > 60 && i >= 0; i--) {
             if (!tracks.get(i).confirmed) tracks.remove(i);
-            else i++;
         }
     }
 

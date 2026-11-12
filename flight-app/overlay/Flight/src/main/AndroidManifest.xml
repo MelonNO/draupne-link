@@ -36,6 +36,10 @@
     <!-- DRAUPNE Link (pc.21): deep sleep's checks for the PC on time (Android 12+ asks the pilot), the screen lit
          over the lock screen when the PC wakes the phone, and the network usable during a check in doze -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- pc.50: Android 14 denies SCHEDULE_EXACT_ALARM to a newly installed app until the pilot allows it, and the checks
+         came late (inexact alarms). USE_EXACT_ALARM (Android 13 on) is granted at install; AlarmManager's
+         canScheduleExactAlarms is true with either, so Android 12 goes on with the one above -->
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- pc.47: the phone silent while the app works (Silent) -->

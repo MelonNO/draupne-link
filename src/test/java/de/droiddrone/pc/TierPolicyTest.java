@@ -216,6 +216,19 @@ class TierPolicyTest {
         assertEquals("calm for 20 s", last.why());
     }
 
+    /** 1.0.64: a link lost for seconds again and again never had its three stalls - a stall was a late pong on a link that was up. */
+    @Test
+    void linkLossesCountAsStalls() {
+        p.sessionStart(now, VideoMode.AUTO);
+        assertEquals(Tier.NORMAL, run(2000, bps(1_000_000)));
+        for (int i = 0; i < 2; i++) {
+            p.outage(now);
+            assertEquals(Tier.NORMAL, run(3000, bps(1_000_000)), "one or two losses: not yet");
+        }
+        p.outage(now);
+        assertEquals(Tier.ROBUST, run(2 * TICK, bps(1_000_000)), "the third within 30 s: bad coverage mode");
+    }
+
     /** 1.0.64: the doubled hold never came down again - after a few quick returns it was 5 min for the rest of the link. */
     @Test
     void aLongGoodSpellForgetsTheDoubledHold() {
@@ -243,6 +256,99 @@ class TierPolicyTest {
         assertEquals(Tier.SURVIVAL, run(SURVIVAL_AFTER_MS + TICK, bps(200_000)));
         assertEquals(Tier.SURVIVAL, run(ROBUST_HOLD_MS - 2 * TICK, bps(200_000)));
         assertEquals(Tier.ROBUST, run(4 * TICK, bps(200_000)), "calm (no stall): one tier up, whatever the bitrate");
+    }
+
+    /**
+     * 1.0.64: up from the survival tier the bitrate still sits at that tier's 250 kbit/s - 5 s later that read as
+     * "bad coverage mode isn't enough" and it went straight down again, the hold doubling each time.
+     */
+    @Test
+    void upFromSurvivalIsntSentBackDownWhileTheBitrateStillSitsAtItsTop() {
+        toRobust();
+        assertEquals(Tier.SURVIVAL, run(SURVIVAL_AFTER_MS + 2 * TICK, bps(200_000)));
+        assertEquals(Tier.ROBUST, run(ROBUST_HOLD_MS + 2 * TICK, bps(250_000)), "calm: one tier up");
+        assertEquals(Tier.SURVIVAL, last.from());
+        assertEquals(Tier.ROBUST, run(TierPolicy.UP_SETTLE_MS, bps(250_000)), "the bitrate control has its time to raise the rate");
+        assertNull(last, "no bounce");
+        assertEquals(Tier.ROBUST, run(LOW_RES_AFTER_MS - 4 * TICK, bps(250_000)), "then the usual 5 s");
+        assertEquals(Tier.SURVIVAL, run(4 * TICK, bps(250_000)), "still at the bottom: it really can't carry it");
+        assertEquals("still 250 kbit/s", last.why());
+    }
+
+    /** 1.0.64: and with the raise landed, bad coverage mode stays - on to the normal picture after the calm. */
+    @Test
+    void upFromSurvivalStaysOnceTheBitrateRises() {
+        toRobust();
+        assertEquals(Tier.SURVIVAL, run(SURVIVAL_AFTER_MS + 2 * TICK, bps(200_000)));
+        assertEquals(Tier.ROBUST, run(ROBUST_HOLD_MS + 2 * TICK, bps(250_000)));
+        assertEquals(Tier.ROBUST, run(6000, bps(250_000)), "6 s at the old top: no way back down yet");
+        assertEquals(Tier.ROBUST, run(TierPolicy.UP_SETTLE_MS, bps(500_000)), "the raise landed");
+        assertNull(last);
+    }
+
+    /** 1.0.64: every tier is judged on its own time - the counts of the tier before are forgotten at the change. */
+    @Test
+    void theLowRateCountStartsAgainInEveryTier() {
+        toSharp();
+        // 5 s under the top at 500 kbit/s: the sharp tier ends; that same 5 s was the normal picture's low-rate wait too
+        assertEquals(Tier.NORMAL, run(SHARP_DROP_MS + TICK, bps(500_000)));
+        assertEquals(Tier.SHARP, last.from());
+        assertEquals(Tier.NORMAL, run(LOW_RES_AFTER_MS - 3 * TICK, bps(500_000)), "the normal picture has its own 5 s");
+        assertEquals(Tier.ROBUST, run(4 * TICK, bps(500_000)));
+    }
+
+    /** 1.0.64: three stalls from before the way up (up to 30 s old) sent bad coverage mode straight down again. */
+    @Test
+    void stallsFromBeforeTheWayUpDontSendItBackDown() {
+        toRobust();
+        assertEquals(Tier.SURVIVAL, run(SURVIVAL_AFTER_MS + 2 * TICK, bps(200_000)));
+        stalls(3);
+        assertEquals(Tier.ROBUST, run(ROBUST_HOLD_MS + 2 * TICK, bps(500_000)), "20 s without a stall: one tier up");
+        assertEquals(Tier.ROBUST, run(SURVIVAL_AFTER_MS + 2000, bps(500_000)), "the old stalls are still in the 30 s window, and don't count");
+        assertNull(last);
+        run(TierPolicy.STALLS_WINDOW_MS, bps(500_000));
+        stalls(3);
+        assertEquals(Tier.SURVIVAL, p.tier(), "three new ones do");
+    }
+
+    static TierPolicy.Link loss(double share, int bps) {
+        return new TierPolicy.Link(20, bps, TOP, false, false, 0.3, true, share);
+    }
+
+    /**
+     * 1.0.64: steady loss with a normal ping - the bitrate control stops at 1 Mbit/s, so the low-rate rule never fires,
+     * no pong is late: AUTO stayed on the normal picture (no parity, single key frames) with most frames damaged.
+     */
+    @Test
+    void framesLostForFiveSecondsGoToBadCoverageAndHoldItWhileTheyLast() {
+        p.sessionStart(now, VideoMode.AUTO);
+        assertEquals(Tier.NORMAL, run(TierPolicy.LOSSY_AFTER_MS - TICK, loss(0.3, 1_000_000)), "not before 5 s");
+        assertEquals(Tier.ROBUST, run(2 * TICK, loss(0.3, 1_000_000)));
+        assertEquals("30 % of frames damaged", last.why());
+        assertEquals(Tier.ROBUST, run(3 * ROBUST_HOLD_MS, loss(0.3, 1_000_000)), "no way back while it lasts");
+        assertEquals(Tier.ROBUST, run(ROBUST_HOLD_MS - 2 * TICK, loss(0, 1_000_000)), "nor before the calm after it");
+        assertEquals(Tier.NORMAL, run(4 * TICK, loss(0, 1_000_000)));
+        assertEquals("calm for 20 s", last.why());
+    }
+
+    @Test
+    void aShortBurstOfLossOrALittleLossChangesNothing() {
+        p.sessionStart(now, VideoMode.AUTO);
+        assertEquals(Tier.NORMAL, run(60_000, loss(0.08, 2_000_000)), "under 10 %");
+        for (int i = 0; i < 5; i++) {
+            run(TierPolicy.LOSSY_AFTER_MS - TICK, loss(0.5, 2_000_000));
+            assertEquals(Tier.NORMAL, run(1000, loss(0, 2_000_000)), "4.95 s of it, then clean: the count starts again");
+        }
+    }
+
+    /** 1.0.64: frames lost within the wait count against the calm the sharp tier needs, as a stall does. */
+    @Test
+    void lossRestartsTheWaitForSharp() {
+        p.sessionStart(now, VideoMode.AUTO);
+        run(SHARP_AFTER_MS - 3000, calm());
+        run(2000, loss(0.3, TOP));
+        assertEquals(Tier.NORMAL, run(SHARP_AFTER_MS - 2 * TICK, calm()), "20 s without loss first");
+        assertEquals(Tier.SHARP, run(4 * TICK, calm()));
     }
 
     @Test

@@ -21,10 +21,17 @@ import java.util.TreeMap;
  * written, so the file's length is always where to go on from, after a lost window, a pause or a restart of the
  * PC. When the last byte is in, the whole file's SHA-256 must be the phone's; then it gets its name and the phone may
  * delete its copy. A mismatch starts over from nothing, twice at most.
+ * <p>
+ * 1.0.64: a window is asked for again only after {@link #RETRY_MS} without a chunk, and then only its gaps. It was
+ * asked again 1.5 s after the ask whatever had come since, whole from the first gap: on a slow uplink (a window takes
+ * longer than that) the phone sent every window twice or more.
  */
 public final class ClipTransfer implements AutoCloseable {
     public static final int WINDOW = 64;
-    /** A window not complete this long after it was asked for is asked for again from its first gap. */
+    /**
+     * A window not complete, and nothing of it come for this long, is asked for again: from its first gap to its last
+     * (1.0.64; the phone's serving takes a start and a count, so what lies between two gaps comes again with them).
+     */
     public static final long RETRY_MS = 1500;
     static final int CHUNK = OverwatchProtocol.FRAGMENT;
 
@@ -41,6 +48,8 @@ public final class ClipTransfer implements AutoCloseable {
     private long confirmed;
     private long askedEnd;
     private long askedAt = Long.MIN_VALUE / 2;
+    /** 1.0.64: when the last chunk of use came, and the latest time this transfer was told. */
+    private long progressAt = Long.MIN_VALUE / 2, clock = Long.MIN_VALUE / 2;
     private long mismatches;
     private boolean checked, failed;
 
@@ -64,8 +73,17 @@ public final class ClipTransfer implements AutoCloseable {
      * window asked for is still coming.
      */
     public long[] next(long now, boolean paused) {
+        clock = Math.max(clock, now);
         if (paused || failed || complete()) return null;
-        if (confirmed < askedEnd && now - askedAt < RETRY_MS) return null;
+        if (confirmed < askedEnd) {
+            // the window asked for is still coming while its chunks come: a slow uplink is no loss
+            if (now - Math.max(askedAt, progressAt) < RETRY_MS) return null;
+            // nothing for a while: what is missing of it, from the first gap to the last
+            long last = askedEnd - 1 - (askedEnd - 1) % CHUNK;
+            while (last > confirmed && pending.containsKey(last)) last -= CHUNK;
+            askedAt = now;
+            return new long[]{confirmed, (int) ((last - confirmed) / CHUNK) + 1};
+        }
         long end = Math.min(size, confirmed + (long) WINDOW * CHUNK);
         askedEnd = end;
         askedAt = now;
@@ -75,8 +93,15 @@ public final class ClipTransfer implements AutoCloseable {
 
     /** A CHUNK came. Out of the window, a repeat, or the wrong length: dropped. */
     public void onChunk(long offset, byte[] d, int from, int n) throws IOException {
+        onChunk(offset, d, from, n, clock);
+    }
+
+    /** As above; now (1.0.64): when it came, for "nothing came for RETRY_MS". */
+    public void onChunk(long offset, byte[] d, int from, int n, long now) throws IOException {
+        clock = Math.max(clock, now);
         if (offset < confirmed || offset >= confirmed + (long) WINDOW * CHUNK || offset % CHUNK != 0) return;
         if (n != Math.min(CHUNK, size - offset) || pending.containsKey(offset)) return;
+        progressAt = clock;
         pending.put(offset, Arrays.copyOfRange(d, from, from + n));
         byte[] next;
         while ((next = pending.remove(confirmed)) != null) {
@@ -145,6 +170,7 @@ public final class ClipTransfer implements AutoCloseable {
         confirmed = 0;
         askedEnd = 0;
         askedAt = Long.MIN_VALUE / 2;
+        progressAt = Long.MIN_VALUE / 2;
         pending.clear();
         return Result.MISMATCH;
     }

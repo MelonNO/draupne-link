@@ -80,6 +80,14 @@ public class ControlLink {
         default double decodeLoad() {
             return 0;
         }
+
+        /**
+         * 1.0.64: the share of the last seconds' frames that came lost, damaged or rebuilt from parity, 0-1 (0 = none,
+         * or unknown): AUTO goes to bad coverage mode on it (TierPolicy.LOSSY_FRAMES).
+         */
+        default double frameLossRatio() {
+            return 0;
+        }
     }
 
     /**
@@ -216,6 +224,12 @@ public class ControlLink {
     static final long CONFIG_RETRY_MS = 250;
     /** The session thread's tick while connecting: a Connect answered is followed by the Config within this. */
     private static final long SESSION_TICK_MS = 50;
+    /**
+     * The mode names are asked for this often until they come (1.0.64: was 2 s). Their answer rides an unnumbered
+     * telemetry packet, and without them the armed state is unknown - which the sticks' start now waits for
+     * (RcSession.FC_READ_WAIT_MS): on a link that loses packets 2 s a try left that wait too little.
+     */
+    static final long BOX_NAMES_RETRY_MS = 1000;
 
     private final PcConfig config;
     private final InetAddress remoteIp;
@@ -274,6 +288,9 @@ public class ControlLink {
     private volatile VideoMode videoMode;
     private int profileSends;
     private long nextProfileSend;
+    /** The profile goes this many times more after a session's first config, the first this soon after it. */
+    static final int PROFILE_REPEATS = 2;
+    static final long PROFILE_REPEAT_MS = 150;
     private int configResends;
     private long nextConfigResend;
     /** The picture width of the phone's last video stream (its VideoInitialFrame); 0 before the first. */
@@ -509,9 +526,16 @@ public class ControlLink {
         if (packet.getLength() >= 6 && packet.getData()[0] == SLEEP_HELLO) {
             java.util.function.BiFunction<String, byte[], Boolean> h = foreignSleepHandler;
             byte[] hello = java.util.Arrays.copyOf(packet.getData(), packet.getLength());
-            NameService.sendFleetMode(socket, packet, fleetHello, hello);
-            Boolean wake = h == null ? null : h.apply(packet.getAddress().getHostAddress(), hello);
-            if (wake != null) {
+            String from = packet.getAddress().getHostAddress();
+            java.util.function.BiFunction<String, byte[], byte[]> f = fleetHello;
+            byte[] mode = f == null ? null : f.apply(from, hello); // a fleet mode queued for this phone
+            try {
+                if (mode != null) socket.send(new DatagramPacket(mode, mode.length, packet.getAddress(), packet.getPort()));
+            } catch (IOException ignored) {
+                // again at its next hello
+            }
+            Boolean wake = h == null ? null : h.apply(from, hello);
+            if (wake != null && sleepAnswerDue(mode != null, wake)) {
                 try {
                     socket.send(new DatagramPacket(new byte[]{SLEEP_ANSWER, (byte) (wake ? 1 : 0)}, 2, packet.getAddress(), packet.getPort()));
                 } catch (IOException ignored) {
@@ -716,6 +740,7 @@ public class ControlLink {
                 // also while the phone isn't heard, once the link has been up: on a one-way outage (the phone's
                 // uplink dead, its downlink fine) the pings keep the phone's session alive for the sticks
                 if (isConnected() || everReady && !dormant && spectator == null) udpSender.sendPing(true);
+                repeatKeyFrameRequest(); // 1.0.64: on this tick, never a wait on the thread that asked
                 // 20 a second: the bitrate control watches the ping for queueing on the uplink, and the link log
                 // sees stalls of 0.1 s and more (where Betaflight flags RXLOSS) as the age of the last pong
                 Thread.sleep(50);
@@ -756,11 +781,16 @@ public class ControlLink {
                 if (!wasConnected && connected) audioRequest.newSession(); // the audio request goes out at once
                 if (!wasConnected && connected && lostAt > 0) {
                     log("Link back after " + (now - lostAt) + " ms.");
+                    tierPolicy.outage(now); // 1.0.64: a loss counts for AUTO as a stall does
                     refreshFc = fcInfo != null;
                     reconnectedAt = now;
                     videoCheckAt = videoListener != null && videoConfigReceived ? now + VIDEO_CHECK_MS : 0;
                 }
                 wasConnected = connected;
+                if (connected) { // the next loss starts its Connects at once
+                    connectRoundAt = 0;
+                    connectRoundLen = 0;
+                }
                 if (!connected && lostAt > 0 && fcInfo != null && now - lostAt > FC_STATE_KEEP_MS) {
                     log("No link for " + FC_STATE_KEEP_MS / 1000 + " s: FC state is re-read on reconnect.");
                     fcInfo = null;
@@ -775,7 +805,13 @@ public class ControlLink {
                     boolean phoneHoldsOldSession = now - ownSessionNamedAt < RECENT_SESSION_MS;
                     long every = phoneHoldsOldSession ? OWN_SESSION_RETRY_MS
                             : lostAt > 0 && now - lostAt < RECONNECT_FAST_MS ? CONNECT_FAST_MS : CONNECT_MS;
-                    if (now - lastConnect >= every) {
+                    long sinceRound = connectRoundAt == 0 ? Long.MAX_VALUE : now - connectRoundAt;
+                    if (now - lastConnect >= every && !connectHeld(sinceRound, connectRoundLen)) {
+                        if (sinceRound >= connectRoundLen) { // a new round begins (see SLOW_PATH_PING_MS)
+                            long pong = lastPingTimestamp;
+                            connectRoundAt = now;
+                            connectRoundLen = connectRoundMs(pingMs, pong == 0 ? Long.MAX_VALUE : now - pong);
+                        }
                         sendConnect();
                         lastConnect = now;
                     }
@@ -786,6 +822,11 @@ public class ControlLink {
                         sendProfile(); // the phone keeps its profile across sessions (pc.26): told every time, normal too
                         sendConfig();
                         lastConfig = now;
+                        // 1.0.64: and again once the config is taken (adjustResolution sends them). The profile is
+                        // unnumbered and went once per config: lost while the config's resend got through, the phone
+                        // kept the last session's flags (key frames twice, parity, H.264) under a PC on the normal picture
+                        profileSends = Math.max(profileSends, PROFILE_REPEATS);
+                        nextProfileSend = now + PROFILE_REPEAT_MS;
                     }
                     Thread.sleep(SESSION_TICK_MS);
                 } else {
@@ -827,7 +868,7 @@ public class ControlLink {
                     if (fcInfo == null && now - lastFcInfoRequest >= 1000) {
                         sendRequest(UdpCommon.FcInfo);
                         lastFcInfoRequest = now;
-                    } else if (fcInfo != null && !telemetry.hasBoxNames() && now - lastModesRequest >= 2000) {
+                    } else if (fcInfo != null && !telemetry.hasBoxNames() && now - lastModesRequest >= BOX_NAMES_RETRY_MS) {
                         sendRequest(UdpCommon.BoxNames); // names of the flight modes, to read MSP_STATUS mode flags
                         lastModesRequest = now;
                     } else if (fcInfo != null && !telemetry.hasBoxIds() && now - lastModesRequest >= 2000) {
@@ -845,6 +886,41 @@ public class ControlLink {
                 log("Session thread error: " + e);
             }
         }
+    }
+
+    /**
+     * 1.0.64: Connects on a slow path. The phone takes the Connects of one second as one session
+     * (SessionGate.SAME_SESSION_MS) and starts a new one on any after it; this side starts its numbering over at each
+     * answer. With a round trip over a second the Connects kept going out (every 150 ms) until the first answer was
+     * back, the late ones each made a session more, and the handshake started over with every one. So where the last
+     * ping was over SLOW_PATH_PING_MS, the Connects go in a round: as ever for CONNECT_BURST_MS, then none until the
+     * answer has had its time - 1.5 round trips, SLOW_PATH_WAIT_MAX_MS at most. A fast path gets them as before.
+     * <p>
+     * And never past PHONE_SESSION_MS after that last pong: that long the phone keeps its session by itself and takes
+     * the sticks without a Connect, so the wait keeps no sticks from a drone. Once it may have let go, every Connect
+     * goes at full pace (in practice the round is the first one after a loss, which is seen 2 s after the last packet).
+     */
+    static final int SLOW_PATH_PING_MS = 700;
+    static final long CONNECT_BURST_MS = 600;
+    static final long SLOW_PATH_WAIT_MAX_MS = 2000;
+    /** The phone's session timeout (ReceiverBuffer's disconnectTimeMs): without a packet from here it lets go then. */
+    static final long PHONE_SESSION_MS = 4000;
+    /** When the Connects' current round began (session thread; 0 = none since the link was last up), and how long it lasts (0: no wait). */
+    private long connectRoundAt;
+    private long connectRoundLen;
+
+    /**
+     * How long a round of Connects beginning now lasts, the last ping pingMs and its pong pongAgeMs old: 0 on a path
+     * not known slow (no wait between Connects).
+     */
+    static long connectRoundMs(int pingMs, long pongAgeMs) {
+        if (pingMs <= SLOW_PATH_PING_MS) return 0;
+        return Math.max(0, Math.min(Math.min(SLOW_PATH_WAIT_MAX_MS, pingMs * 3L / 2), PHONE_SESSION_MS - pongAgeMs));
+    }
+
+    /** No Connect now: the round's burst is over and its answer may still be on the way. */
+    static boolean connectHeld(long sinceRoundMs, long roundMs) {
+        return sinceRoundMs >= CONNECT_BURST_MS && sinceRoundMs < roundMs;
     }
 
     /** The Connect, sent on this thread (upstream's sendConnect starts a thread per call). */
@@ -1176,7 +1252,18 @@ public class ControlLink {
         java.util.function.BiFunction<String, byte[], byte[]> f = fleetHello;
         byte[] mode = f == null || remoteIp == null ? null : f.apply(remoteIp.getHostAddress(), java.util.Arrays.copyOf(d, len));
         if (mode != null) udpSender.sendPacket(mode); // a fleet mode queued for this dormant phone: ahead of the answer
-        udpSender.sendPacket(new byte[]{SLEEP_ANSWER, (byte) (dormant ? 0 : 1)});
+        boolean wake = !dormant;
+        if (sleepAnswerDue(mode != null, wake)) udpSender.sendPacket(new byte[]{SLEEP_ANSWER, (byte) (wake ? 1 : 0)});
+    }
+
+    /**
+     * 1.0.64: no "sleep on" for a hello that got a fleet mode. The answer closes the phone's window at once: with the
+     * mode packet lost and the answer through, the mode waited a whole check interval more. Unanswered, the phone's
+     * next hellos of the same window (1.5 s apart) get the mode again, and "sleep on" once it shows the mode taken.
+     * "Wake" goes as ever.
+     */
+    static boolean sleepAnswerDue(boolean modeSent, boolean wake) {
+        return wake || !modeSent;
     }
 
     /** Asks the phone's encoder for a lower or higher bitrate (upstream steps through a fixed list of rates). */
@@ -1369,7 +1456,7 @@ public class ControlLink {
         VideoListener v = videoListener;
         TierPolicy.Link link = new TierPolicy.Link(msSinceLastPong(), telemetry.getPhoneTargetBitRate(),
                 de.droiddrone.pc.video.BitrateControl.STEPS_BPS[stepFor(config.getBitrateLimitMbps())], relayed, watched(),
-                v == null ? 0 : v.decodeLoad(), sharpAvailable());
+                v == null ? 0 : v.decodeLoad(), sharpAvailable(), v == null ? 0 : v.frameLossRatio());
         TierPolicy.Change change = tierPolicy.tick(now, videoMode(), link);
         if (change == null) return;
         events.accept(tierMessage(change.to(), change.from(), change.why()));
@@ -1377,20 +1464,20 @@ public class ControlLink {
     }
 
     /** What the log says when the tier changes. */
-    private String tierMessage(Tier want, Tier was, String why) {
+    private String tierMessage(Tier want, Tier was, String why) { // 1.0.64: the tiers by the VIDEO menu's names (the OSD's tag too)
         return switch (want) {
-            case SHARP -> "Video: sharp (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", max "
+            case SHARP -> "Video: SHARP (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", max "
                     + config.getSharpBitrateLimitMbps() + " Mbit/s.";
             case ROBUST -> was.ordinal() < Tier.ROBUST.ordinal()
-                    ? "Video: bad coverage mode (" + why + "): " + cameraWidth() + "x" + cameraHeight()
+                    ? "Video: ROBUST (" + why + "): " + cameraWidth() + "x" + cameraHeight()
                             + ", max 1 Mbit/s, key frames doubled."
-                    : "Video: bad coverage mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
-            case SURVIVAL -> "Video: survival tier (" + why + "): " + cameraWidth() + "x" + cameraHeight() + " at " + cameraFps()
+                    : "Video: ROBUST again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
+            case SURVIVAL -> "Video: SURVIVAL (" + why + "): " + cameraWidth() + "x" + cameraHeight() + " at " + cameraFps()
                     + " fps, max 250 kbit/s.";
             case NORMAL -> was == Tier.SHARP
-                    ? "Video: normal (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", max "
+                    ? "Video: NORMAL (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ", max "
                             + config.getBitrateLimitMbps() + " Mbit/s."
-                    : "Video: normal mode again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
+                    : "Video: NORMAL again (" + why + "): " + cameraWidth() + "x" + cameraHeight() + ".";
         };
     }
 
@@ -1463,12 +1550,32 @@ public class ControlLink {
         long now = MonoClock.ms();
         if (!running || spectator != null || !isConnected() || now - lastKeyFrameRequest < KEY_FRAME_REQUEST_MS) return;
         lastKeyFrameRequest = now;
+        if (sendKeyFrameRequest()) keyFrameRequests.incrementAndGet();
+        keyFrameRepeats.set(KEY_FRAME_REPEATS);
+    }
+
+    /**
+     * 1.0.64: a key frame request goes this many times more, a ping tick (50 ms) apart. It went once, unnumbered, and
+     * counted as sent: lost on the way - on the very link that just damaged a frame - the next was 1.5-6 s off. The
+     * phone makes one key frame per 300 ms whatever comes (StreamEncoder.requestKeyFrame), so the copies cost nothing.
+     */
+    static final int KEY_FRAME_REPEATS = 2;
+    private final java.util.concurrent.atomic.AtomicInteger keyFrameRepeats = new java.util.concurrent.atomic.AtomicInteger();
+
+    private boolean sendKeyFrameRequest() {
         try {
             socket.send(new DatagramPacket(new byte[]{KEY_FRAME_REQUEST}, 1, remoteIp, remotePort));
-            keyFrameRequests.incrementAndGet();
+            return true;
         } catch (IOException e) {
-            // the next damaged frame asks again
+            return false; // the next damaged frame asks again
         }
+    }
+
+    /** The ping thread's tick: one more copy of the last key frame request while some are due. */
+    private void repeatKeyFrameRequest() {
+        if (keyFrameRepeats.get() <= 0) return;
+        keyFrameRepeats.decrementAndGet();
+        if (spectator == null && isConnected()) sendKeyFrameRequest();
     }
 
     public long getKeyFrameRequests() {
@@ -1673,6 +1780,19 @@ public class ControlLink {
     }
 
     /**
+     * 1.0.64: nothing says the phone hears this PC now - the link has been up and isn't READY, or pongs came on it and
+     * none has for PONG_SILENCE_MS (one way only, perhaps: its telemetry may still arrive). The sticks go out all the
+     * same (see {@link #sendRc}); a phone that gets none feeds Betaflight the idle sticks once it reads DISARMED, arm
+     * switch off - and the next live frame can arm. RcSession's cue to watch what the flight controller says.
+     */
+    public boolean sticksUnheard() {
+        if (!running || !everReady || spectator != null || dormant || versionMismatch) return false;
+        if (getState() != State.READY) return true;
+        long pong = lastPingTimestamp; // 0: a path that carries no pongs says nothing either way
+        return pong != 0 && MonoClock.ms() - Math.max(pong, readyAt) > PONG_SILENCE_MS;
+    }
+
+    /**
      * Upstream Flight Msp.processRxMap reorders channels to Betaflight's channel map (8 entries), but silently skips
      * the reordering when a frame has fewer than 8 channels - with any map other than AETR1234 the sticks would then
      * land on the wrong channels. So frames are always at least 8 long; extra AUX channels idle at 1000.
@@ -1709,8 +1829,11 @@ public class ControlLink {
 
     private boolean phoneHearsNothing(long now) {
         long pong = lastPingTimestamp, ready = readyAt;
-        if (ready == 0 || pong <= ready || spectator != null) return false; // only once pongs came on this link
-        return now - Math.max(pong, connectAnsweredAt) > PONG_LOST_MS;
+        // only a phone that has answered a ping on this link (some path may carry none: that isn't a loss) - at any time:
+        // 1.0.64, before only after the last READY, so the way to the phone dying right after a (re)connect, before
+        // its first pong, was never seen (the old pongs didn't count, and no new one came)
+        if (ready == 0 || pong == 0 || spectator != null) return false;
+        return now - Math.max(pong, Math.max(connectAnsweredAt, ready)) > PONG_LOST_MS;
     }
 
     /**
@@ -1894,6 +2017,10 @@ public class ControlLink {
         return maxTelemetryGapNs.getAndSet(0) / 1_000_000;
     }
 
+    /** The Disconnect goes this often, this far apart (see {@link #close}). */
+    static final int DISCONNECT_SENDS = 3;
+    static final long DISCONNECT_GAP_MS = 20;
+
     /** Tells the Flight app we are leaving (it stops streaming), then closes the socket. */
     public void close() {
         if (!running) {
@@ -1901,7 +2028,16 @@ public class ControlLink {
             return;
         }
         try {
-            if (isConnected()) udpSender.sendPacket(new UdpPacketData(UdpCommon.Disconnect).getData());
+            if (isConnected()) {
+                // 1.0.64: three times, 20 ms apart - it went once, unnumbered: lost, the phone streamed on to nobody
+                // until its own 4 s timeout. On the caller's thread (the window's, never the sticks'): the port must
+                // be free when this returns - the name service and a reconnect bind it at once
+                byte[] bye = new UdpPacketData(UdpCommon.Disconnect).getData();
+                for (int i = 0; i < DISCONNECT_SENDS; i++) {
+                    if (i > 0) java.util.concurrent.locks.LockSupport.parkNanos(DISCONNECT_GAP_MS * 1_000_000L);
+                    udpSender.sendPacket(bye);
+                }
+            }
         } catch (IOException e) {
             log("sendDisconnect error: " + e);
         }

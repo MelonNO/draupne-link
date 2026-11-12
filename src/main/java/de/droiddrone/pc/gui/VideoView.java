@@ -76,8 +76,16 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             synchronized (lock) {
                 noPicture = front == null && ready == null;
             }
-            if (noPicture && isShowing() && meter == null) repaint();
-            else skeletonTimer.stop();
+            if (noPicture && isShowing() && meter == null) {
+                // 1.0.64: its window minimized (isShowing stays true there), nothing is drawn: it ran on 25 times a
+                // second for nothing - now a look twice a second for the window's return
+                boolean minimized = minimized();
+                int delay = skeletonDelay(minimized);
+                if (skeletonTimer.getDelay() != delay) skeletonTimer.setDelay(delay);
+                if (!minimized) repaint();
+            } else {
+                skeletonTimer.stop();
+            }
         });
         addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override
@@ -90,6 +98,17 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
                 updateTarget();
             }
         });
+    }
+
+    /** The no-picture animation's step (ms): 25 a second in sight, a look twice a second while its window is minimized. */
+    static int skeletonDelay(boolean minimized) {
+        return minimized ? 500 : 40;
+    }
+
+    /** The window this view is in (the main one, the pop-out, full screen) sits minimized in the taskbar. */
+    private boolean minimized() {
+        java.awt.Window w = javax.swing.SwingUtilities.getWindowAncestor(this);
+        return w instanceof java.awt.Frame f && (f.getExtendedState() & java.awt.Frame.ICONIFIED) != 0;
     }
 
     /** Moved into another window (pop-out, full screen): the next frame converts at the new size, not the old one's. */

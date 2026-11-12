@@ -13,6 +13,7 @@ package de.droiddrone.flight;
 
 import android.media.Image;
 import android.os.Process;
+import android.os.SystemClock;
 
 import com.serenegiant.libuvccamera.IFrameCallback;
 
@@ -49,13 +50,17 @@ import static de.droiddrone.common.Logcat.log;
  * <p>pc.36, overwatch sleep: {@link Overwatch} asks for it itself ({@link #overwatch}), ticks it from its own thread
  * (the link's telemetry thread is gone then) and takes each analysed picture ({@link Sink}) for the pre-roll and the
  * alert.
+ *
+ * <p>pc.50: every interval here counts by SystemClock.elapsedRealtime (it was the wall clock: a time correction
+ * backwards by T made the detector take no picture for T while {@link #analysing} said all was well). The wall time
+ * goes only where the PC is told when something was ({@link Sink}).
  */
 final class MotionWatch {
     static final byte PACKET = PacketIds.DETECTION_SET;
     /** The PC sends DETECTION_SET once a second: silent this long, detection is off. */
     static final long REQUEST_FRESH_MS = 5000;
-    /** Pictures this far apart at least (8 a second at most). */
-    static final long FRAME_EVERY_MS = 125;
+    /** Pictures about this far apart (8 a second); the gate itself follows the camera's frame rate ({@link #setFrameRate}). */
+    static final long FRAME_EVERY_MS = de.droiddrone.common.WatchRun.FRAME_EVERY_MS;
     /** Pictures are taken at most this wide (the detector works at half that); a wider camera picture is averaged down. */
     static final int MAX_WIDTH = 320;
     /** No picture for this long while analysing: the record says NO_PICTURE. */
@@ -114,11 +119,11 @@ final class MotionWatch {
     static void request(int s) {
         if (s != sensitivity) log("Motion detection " + (s == 0 ? "off" : "asked for: " + new String[]{"", "low", "normal", "high"}[Math.min(3, s)]));
         sensitivity = Math.max(0, Math.min(3, s));
-        requestedAt = System.currentTimeMillis();
+        requestedAt = SystemClock.elapsedRealtime();
     }
 
     static boolean wanted() {
-        return overwatch > 0 || sensitivity > 0 && System.currentTimeMillis() - requestedAt < REQUEST_FRESH_MS;
+        return overwatch > 0 || sensitivity > 0 && SystemClock.elapsedRealtime() - requestedAt < REQUEST_FRESH_MS;
     }
 
     /**
@@ -131,10 +136,18 @@ final class MotionWatch {
 
     private static volatile int overwatch;
 
+    /** pc.50: the detector is overwatch's now - every camera session then gives it the watch's own picture (InternalCamera). */
+    static boolean forOverwatch() {
+        return overwatch > 0;
+    }
+
     /** pc.36: what overwatch does with each analysed picture (the pre-roll, the alert); called on the analysis thread. */
     interface Sink {
-        /** The picture (I420 planes, w x h, reused after this returns) and what the detector made of it. */
-        void onPicture(byte[] y, byte[] u, byte[] v, int w, int h, MotionDetector.Result r, long wallMs);
+        /**
+         * The picture (I420 planes, w x h, reused after this returns) and what the detector made of it.
+         * @param wallMs when it came, for the PC; monoMs the same moment on elapsedRealtime, for intervals (pc.50)
+         */
+        void onPicture(byte[] y, byte[] u, byte[] v, int w, int h, MotionDetector.Result r, long wallMs, long monoMs);
     }
 
     private static volatile Sink sink;
@@ -155,6 +168,38 @@ final class MotionWatch {
         videoHeight = h;
     }
 
+    /** pc.50: the next picture is taken when the last is this old (WatchRun.frameGateMs of the session's frame rate). */
+    private static volatile long frameGate = de.droiddrone.common.WatchRun.frameGateMs(0);
+
+    /** pc.50: the frame rate of the camera's session (each session says it; 0: not known). */
+    static void setFrameRate(int fps) {
+        frameGate = de.droiddrone.common.WatchRun.frameGateMs(fps);
+    }
+
+    /**
+     * pc.50: the camera stamps its pictures on elapsedRealtime (Camera2's SENSOR_INFO_TIMESTAMP_SOURCE is REALTIME):
+     * the detector then counts by when a picture was taken, not by when this thread got to it. Any other source (its
+     * base isn't known, and may differ after the camera is opened again) keeps the arrival time.
+     */
+    private static volatile boolean sensorClock;
+    /** A picture's stamp older than this on arrival (or from the future) isn't that clock after all. */
+    private static final long SENSOR_OLDEST_MS = 1000;
+
+    static void setSensorClock(boolean realtime) {
+        sensorClock = realtime;
+    }
+
+    private static long pictureTime(Image image, long arrival) {
+        if (!sensorClock) return arrival;
+        long sensor = image.getTimestamp() / 1_000_000;
+        if (sensor > arrival + 5 || arrival - sensor > SENSOR_OLDEST_MS) { // off until the camera starts again: no hopping between clocks
+            sensorClock = false;
+            log("Motion detection: the camera's picture times aren't the phone's clock (" + (arrival - sensor) + " ms off) - counted as they come");
+            return arrival;
+        }
+        return Math.min(sensor, arrival);
+    }
+
     /** The camera's angle across the picture, degrees (0 = unknown): for overwatch's alert (pc.36) and the observers' map (pc.37). */
     static float fieldOfView() {
         return hfovDeg;
@@ -162,13 +207,14 @@ final class MotionWatch {
 
     /**
      * Every 0.1 s from the telemetry thread: analysing while asked for, the FC DISARMED and the camera running;
-     * stops the camera's analysis picture the moment one of them goes.
+     * stops the camera's analysis picture the moment one of them goes. (pc.50: from overwatch's own thread it comes
+     * twice a second while that only watches - nothing here counts finer than WatchRun's seconds.)
      */
     static void tick(boolean disarmed, Camera camera) {
         // pc.50: a session change (an overwatch event's start or end) is not a stop - see WatchRun
         boolean ready = wanted() && disarmed && camera != null;
         boolean started = ready && camera.isStarted();
-        long mono = android.os.SystemClock.elapsedRealtime();
+        long mono = SystemClock.elapsedRealtime();
         if (started) startedAt = mono;
         Camera was = activeCamera;
         boolean run = de.droiddrone.common.WatchRun.runs(ready, started, active, was == camera, mono - startedAt);
@@ -177,7 +223,7 @@ final class MotionWatch {
         activeCamera = run ? camera : null;
         if (run != active) {
             active = run;
-            activeSince = System.currentTimeMillis();
+            activeSince = mono;
             log(run ? "Motion detection on (disarmed, camera running)" : "Motion detection paused" + (disarmed ? "" : " - the FC isn't known to be disarmed"));
             if (run) analysis.execute(detector::reset); // a new start learns the picture again
         }
@@ -202,17 +248,20 @@ final class MotionWatch {
 
     /** pc.47: the detection runs and had a picture within the last ms (overwatch's hello says so to the PC). */
     static boolean analysing(long ms) {
-        return active && System.currentTimeMillis() - lastFrameAt < ms;
+        return active && SystemClock.elapsedRealtime() - lastFrameAt < ms;
     }
 
-    /** A picture is wanted now: analysing, the last one done, the time come. Cheap: the camera's threads ask it per frame. */
-    static boolean wantFrame() {
-        return active && !busy.get() && System.currentTimeMillis() - takenAt >= FRAME_EVERY_MS;
+    /** A picture taken at this time is wanted: analysing, the last one done, the time come. Cheap: the camera's threads ask it per frame. */
+    private static boolean wantFrame(long at) {
+        return active && !busy.get() && at - takenAt >= frameGate;
     }
 
     /** From the internal camera's ImageReader thread: a YUV_420_888 picture, copied smaller at once (the caller closes it). */
     static void offer(Image image) {
-        if (!wantFrame() || !busy.compareAndSet(false, true)) return;
+        final long arrival = SystemClock.elapsedRealtime();
+        final long at = pictureTime(image, arrival);
+        // pc.50: the gate counts from picture to picture (it counted from the end of the last copy to this call)
+        if (!wantFrame(at) || !busy.compareAndSet(false, true)) return;
         try {
             Image.Plane[] p = image.getPlanes();
             // pc.50: overwatch's own picture may be of another shape (320x240 for a 16:9 video): its centred cut is the
@@ -232,7 +281,7 @@ final class MotionWatch {
             busy.set(false);
             return;
         }
-        analyse();
+        analyse(at, arrival);
     }
 
     /**
@@ -241,7 +290,8 @@ final class MotionWatch {
      */
     static IFrameCallback uvcFrames(final int frameWidth, final int frameHeight) {
         return frame -> {
-            if (!wantFrame() || !busy.compareAndSet(false, true)) return;
+            final long arrival = SystemClock.elapsedRealtime();
+            if (!wantFrame(arrival) || !busy.compareAndSet(false, true)) return;
             try {
                 int step = Math.max(1, (frameWidth + MAX_WIDTH - 1) / MAX_WIDTH);
                 size(frameWidth / step & ~1, frameHeight / step & ~1);
@@ -258,7 +308,7 @@ final class MotionWatch {
                 busy.set(false);
                 return;
             }
-            analyse();
+            analyse(arrival, arrival);
         };
     }
 
@@ -285,18 +335,18 @@ final class MotionWatch {
         }
     }
 
-    private static void analyse() {
-        final long now = System.currentTimeMillis();
-        final long at = android.os.SystemClock.elapsedRealtime(); // the picture's time, not when it is looked at
-        takenAt = now;
-        lastFrameAt = now;
+    /** @param at the picture's time, for the detector and the gate; arrival: when it came (both elapsedRealtime ms) */
+    private static void analyse(final long at, final long arrival) {
+        final long wall = System.currentTimeMillis(); // for the PC only
+        takenAt = at;
+        lastFrameAt = arrival;
         analysis.execute(() -> {
             try {
                 MotionDetector.Result r = detector.process(y, width, height, u, v, at);
                 lastResult = r;
-                resultAt = System.currentTimeMillis();
+                resultAt = SystemClock.elapsedRealtime();
                 Sink k = sink;
-                if (k != null) k.onPicture(y, u, v, width, height, r, now); // pc.36: before the buffers are reused
+                if (k != null) k.onPicture(y, u, v, width, height, r, wall, arrival); // pc.36: before the buffers are reused
             } catch (RuntimeException e) {
                 log("Motion detection error: " + e);
             } finally {
@@ -308,7 +358,7 @@ final class MotionWatch {
     /** A record is due: asked for, and boxes to show REPORT_BOXES_MS after the last, else once a second. */
     static boolean reportDue() {
         if (!wanted()) return false;
-        long now = System.currentTimeMillis();
+        long now = SystemClock.elapsedRealtime();
         MotionDetector.Result r = lastResult;
         boolean boxes = active && r != null && !r.detections.isEmpty() && now - resultAt < 1000;
         if (boxes && resultAt != sentResultAt && now - sentAt >= REPORT_BOXES_MS) return true;
@@ -317,7 +367,7 @@ final class MotionWatch {
 
     /** The DETECTION record (its own packet: an older PC stops reading at it). */
     static void writeRecordTo(DataOutputStream out) throws IOException {
-        long now = System.currentTimeMillis();
+        long now = SystemClock.elapsedRealtime();
         sentAt = now;
         sentResultAt = resultAt;
         int flags = 0;

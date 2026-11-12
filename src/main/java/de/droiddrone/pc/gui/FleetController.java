@@ -29,6 +29,10 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * FLEET MANAGEMENT (1.0.52) out of MainWindow: modes queued for phones without connecting (FleetManager), sent ahead
  * of a sleeping phone's check-in answer, and the FLEET tab's cards in the map window.
+ * <p>
+ * 1.0.64: it also ties the books together (it holds them all): each phone's own answer to the name scan goes to the
+ * sleep book ({@link PowerController#nameReply}), its check-ins pace the scan, a rename moves what is kept by name, and
+ * a queued OVERWATCH's token takes over in the hub only once the phone took it.
  */
 final class FleetController {
     /** What the fleet needs from the window. */
@@ -102,6 +106,119 @@ final class FleetController {
         this.standbyPhones = standbyPhones;
         this.crashed = crashed;
         this.host = host;
+        // 1.0.64: the books follow each other
+        if (nameService != null && power != null) {
+            nameService.setPhoneReplies(this::phoneReply);
+            power.setCheckIns(nameService::heardCheckIn);
+        }
+        if (power != null) {
+            power.setBuildOf(this::buildOf);
+            if (fleet != null) power.setOwnToken(fleet::ownToken);
+        }
+        if (fleet != null) {
+            fleet.setOnDropped(this::dropped);
+            fleet.setPilotHere(this::connectedTo);
+            fleet.setCheckEvery(phone -> {
+                String ip = names.ipOf(phone);
+                Asleep a = ip == null || power == null ? null : power.asleep(ip);
+                return a == null ? 0 : a.intervalMin();
+            });
+        }
+        if (names != null) names.onRenamed(this::renamed);
+    }
+
+    /** The phone app's build by its name: FLEET's word, else the name map's version (-1 unknown). */
+    private int buildOf(String phone) {
+        int build = fleet == null ? -1 : fleet.pcBuild(phone);
+        if (build >= 0) return build;
+        Names.Entry e = names.get(phone);
+        return e == null ? -1 : FleetProtocol.pcBuild(e.version());
+    }
+
+    /**
+     * 1.0.64: a phone's own answer to the name scan (the scan's thread), for any phone: the sleep book follows it
+     * (asleep elsewhere: a check-in heard; awake: no longer asleep here), and a standby this PC left it in is over once
+     * it says another mode - it stayed STANDBY on the map while another PC flew it.
+     */
+    void phoneReply(String ip, Names.Reply reply, int mode) {
+        expectQueued(reply.name());
+        power.nameReply(ip, reply.name(), mode, reply.status());
+        if (mode == 1 || !standbyPhones.containsKey(ip)) {
+            notStandbySaid.remove(ip);
+            return;
+        }
+        if (mode != 0 && mode != 2 && mode != 3) return;
+        // said twice, a scan apart: one answer may have left the phone just before it took the standby
+        long now = System.currentTimeMillis();
+        Long first = notStandbySaid.putIfAbsent(ip, now);
+        if (first != null && now - first >= NOT_STANDBY_AFTER_MS) {
+            standbyPhones.remove(ip);
+            notStandbySaid.remove(ip);
+        }
+    }
+
+    /** Phones in a standby this PC left them in that said another mode, and when they first did (wall ms). */
+    private final Map<String, Long> notStandbySaid = new ConcurrentHashMap<>();
+    static final long NOT_STANDBY_AFTER_MS = 3000;
+
+    /**
+     * 1.0.64: a queued OVERWATCH's token is expected by the hub before the mode can go out (the scan's and the link's
+     * threads come here just ahead of it): one queued before a restart is, the hub keeps no queue of its own.
+     */
+    private void expectQueued(String phone) {
+        FleetManager.Wanted w = fleet == null || phone == null || phone.isEmpty() ? null : fleet.wanted(phone);
+        if (w == null || w.mode() != ControlLink.POWER_OVERWATCH || w.owToken() == 0 || overwatch.expected(w.owToken())) return;
+        overwatch.expect(phone, w.owToken(), poseFor(phone));
+    }
+
+    /**
+     * 1.0.64: a phone was renamed (the name map; any thread): what is kept by its name goes with it - its queued mode,
+     * its sleep record, its overwatch token and open alert, its last cell reading.
+     */
+    void renamed(String from, String to) {
+        if (fleet != null) fleet.rename(from, to);
+        if (power != null) power.renamed(from, to);
+        if (overwatch != null) overwatch.rename(from, to);
+        double[] cell = lastCell.remove(from.toLowerCase(Locale.ROOT));
+        if (cell != null) lastCell.put(to.toLowerCase(Locale.ROOT), cell);
+        onSwing(() -> {
+            host.saveWatched();
+            refresh();
+        });
+    }
+
+    private static void onSwing(Runnable r) {
+        if (SwingUtilities.isEventDispatchThread()) r.run();
+        else SwingUtilities.invokeLater(r);
+    }
+
+    /** 1.0.64: a queued mode left the queue untaken (any thread): a queued OVERWATCH's token is forgotten - the one in force stays. */
+    void dropped(FleetManager.Wanted w) {
+        if (w.mode() == ControlLink.POWER_OVERWATCH && w.owToken() != 0 && overwatch != null) overwatch.unexpect(w.owToken());
+        onSwing(this::refresh);
+    }
+
+    /**
+     * 1.0.64, the one question for the lists: what is wrong with this drone's overwatch - BLIND (its camera gives the
+     * motion detection no pictures), DROPPED (it left overwatch for deep sleep by itself), or NONE. Of a phone asleep in
+     * this PC's book only; the newer of the hub's word (its STATUS, at once) and its check-ins' (PowerController).
+     * Any thread.
+     */
+    OverwatchHub.Trouble overwatchTrouble(String phone) {
+        OverwatchHub.Word w = overwatchWord(phone);
+        return w == null ? OverwatchHub.Trouble.NONE : w.trouble();
+    }
+
+    /** As above with its reason (PowerFloor's for DROPPED, OverwatchProtocol's BLIND_ code or 0 for BLIND) and when; null: nothing said. */
+    OverwatchHub.Word overwatchWord(String phone) {
+        String ip = phone == null ? null : names.ipOf(phone);
+        Asleep a = ip == null ? null : power.asleep(ip);
+        if (a == null) return null;
+        OverwatchHub.Word hub = overwatch.word(phone), hello = power.watchWord(ip);
+        if (hub != null && hub.at() < a.since() - 5000) hub = null; // of a sleep before this one
+        OverwatchHub.Word w = hub == null ? hello : hello == null || hub.at() >= hello.at() ? hub : hello;
+        if (w != null && w.trouble() == OverwatchHub.Trouble.BLIND && !a.overwatch()) return null; // it overwatches no more
+        return w;
     }
 
     FleetManager manager() {
@@ -113,13 +230,25 @@ final class FleetController {
         String name = names.nameAt(ip);
         FleetManager f = fleet;
         if (name == null || f == null) return null;
+        expectQueued(name);
         long now = System.currentTimeMillis();
-        return f.onHello(name, ControlLink.SleepHello.read(hello, hello.length, now), now);
+        byte[] mode = f.onHello(name, ControlLink.SleepHello.read(hello, hello.length, now), now);
+        if (mode != null && power != null) power.modeWent(ip); // 1.0.64: no "sleep on" behind it (PowerController.checkIn)
+        return mode;
     }
 
     /** The phone took a queued mode: the lists follow at once, not at its next word. */
     void taken(FleetManager.Wanted w) {
+        boolean overwatching = w.mode() == ControlLink.POWER_OVERWATCH && w.owToken() != 0;
+        if (overwatching && !overwatch.taken(w.owToken())) {
+            // 1.0.64: its token is the one in force from now. Not expected: queued before a restart - or in force
+            // already, by the phone's own packets
+            boolean inForce = false;
+            for (OverwatchHub.Watched known : overwatch.watched()) if (known.token() == w.owToken()) inForce = true;
+            if (!inForce) overwatch.watch(w.phone(), w.owToken(), poseFor(w.phone()));
+        }
         SwingUtilities.invokeLater(() -> {
+            if (overwatching) host.saveWatched();
             String ip = names.ipOf(w.phone());
             if (ip == null) return;
             if (w.mode() == ControlLink.POWER_STANDBY) {
@@ -143,12 +272,15 @@ final class FleetController {
     /** A card's button: the mode queued for the phone - or refused, said beside the button. */
     void request(String phone, int mode, int intervalMin, JComponent near) {
         if (fleet == null) return;
-        NameService.DronePosition pos = null;
-        for (NameService.DronePosition d : nameService.dronePositions()) if (d.name().equalsIgnoreCase(phone)) pos = d;
+        NameService.DronePosition pos = positionOf(phone);
         String reason = PossiblyFlying.reasonNow();
         boolean flyingHere = PossiblyFlying.now() && (connectedTo(phone)
                 || reason != null && reason.toLowerCase(Locale.ROOT).contains(phone.toLowerCase(Locale.ROOT)));
-        String no = FleetManager.refusal(pos == null ? null : pos.position().armed(), flyingHere, connectedTo(phone), fleet.pcBuild(phone));
+        // 1.0.64: not for a drone another PC flies - the phone refuses the mode while that pilot's link holds, and took
+        // it the moment the link dropped
+        boolean flownElsewhere = !connectedTo(phone) && fleet.flown(phone, System.currentTimeMillis());
+        String no = FleetManager.refusal(phone, pos == null ? null : pos.position().armed(), flyingHere, connectedTo(phone), flownElsewhere,
+                fleet.pcBuild(phone));
         if (no != null) {
             new LockedNotice(near, near, "NOT NOW", no).pop();
             return;
@@ -163,11 +295,9 @@ final class FleetController {
             do {
                 owToken = new SecureRandom().nextInt();
             } while (owToken == 0);
-            CameraFootprint.Pose watched = null;
-            for (OverwatchHub.Watched w : overwatch.watched()) if (w.drone().equalsIgnoreCase(phone)) watched = w.pose();
-            CameraFootprint.Pose pose = overwatchPose(host.lastPose(phone), watched, pos == null ? null : pos.position());
-            overwatch.watch(phone, owToken, pose);
-            host.saveWatched();
+            // 1.0.64: expected, not in force - the phone alerts with the token it has until it takes this one (taken);
+            // put in force at once, an alert meanwhile lost the camera's view and both tokens
+            overwatch.expect(phone, owToken, poseFor(phone));
         }
         fleet.queue(phone, mode, intervalMin, sensitivity, flags, owToken, System.currentTimeMillis());
         host.logLine("Fleet: " + FleetManager.modeName(mode) + " queued for " + phone + " - sent when it listens.");
@@ -180,11 +310,22 @@ final class FleetController {
      * where it looks - a view from that (a camera level, the usual picture angles) where there was none.
      */
     void noticeHeading(String phone, double lat, double lon, double headingDeg) {
-        for (OverwatchHub.Watched w : overwatch.watched()) {
-            if (!w.drone().equalsIgnoreCase(phone) || w.pose() != null) continue;
-            overwatch.watch(w.drone(), w.token(), new CameraFootprint.Pose(lat, lon, 1.5, headingDeg, 0, 0, 0, 70, 40));
-            host.saveWatched();
-        }
+        // 1.0.64: also a token still expected (the notice can come before FLEET hears the mode was taken)
+        if (overwatch.poseIfNone(phone, new CameraFootprint.Pose(lat, lon, 1.5, headingDeg, 0, 0, 0, 70, 40))) host.saveWatched();
+    }
+
+    private NameService.DronePosition positionOf(String phone) {
+        NameService.DronePosition pos = null;
+        for (NameService.DronePosition d : nameService.dronePositions()) if (d.name().equalsIgnoreCase(phone)) pos = d;
+        return pos;
+    }
+
+    /** The camera's view for a new overwatch of this phone ({@link #overwatchPose}): from the last connection, else its last overwatch. */
+    private CameraFootprint.Pose poseFor(String phone) {
+        CameraFootprint.Pose watched = null;
+        for (OverwatchHub.Watched w : overwatch.watched()) if (w.drone().equalsIgnoreCase(phone)) watched = w.pose();
+        NameService.DronePosition pos = positionOf(phone);
+        return overwatchPose(host.lastPose(phone), watched, pos == null ? null : pos.position());
     }
 
     void cancel(String phone) {
@@ -254,6 +395,9 @@ final class FleetController {
             FleetProtocol.Status st = heard == null ? null : heard.status();
             int said = st != null && st.mode >= 0 ? st.mode : pos != null ? pos.position().powerMode() : -1;
             long saidAge = st != null ? now - heard.at() : pos != null ? now - pos.at() : -1;
+            // 1.0.64: a resting phone is asked once a minute, not every scan, and the badge calls a word older than 30 s
+            // old - a phone another PC put to standby read STANDBY and ACTIVE by turns. Fresh for its mode: fresh
+            if (said >= 1 && said <= 3 && saidAge > 30_000 && saidAge <= NameService.saidFreshMs(said)) saidAge = 30_000;
             boolean wasFlying = pos != null && (Boolean.TRUE.equals(pos.position().armed()) || pos.position().flown());
             FleetCards.Badge badge = FleetCards.badge(here, sleeping != null, sleeping != null && sleeping.overwatch(),
                     sleeping == null ? 0 : power.checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),

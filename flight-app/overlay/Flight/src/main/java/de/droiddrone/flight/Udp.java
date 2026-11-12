@@ -50,6 +50,11 @@
  *  no session. A pilot's session ends the observation at once (ENDED_PILOT).
  *  pc.45: observers that all muted the sound get "sound heard" in OBSERVE_STATE instead (Observe.STATE_SOUND_HEARD):
  *  the microphone listened to (StreamEncoder.startListening), nothing encoded or sent.
+ *  pc.50 (review): no idle sticks after the PC's sticks stopped on an armed drone, or with ARM on (RcPath.IdleGuard) -
+ *  they ended Betaflight's lockout after a failsafe; the buffer thread waits for a packet in standby with the PC
+ *  connected too; the PC silent: the encoder to its lowest step, and after a minute on a disarmed drone the camera off
+ *  (pcSilentTick); no second copy of a key frame once a newer one waits; the sleep check's hello to every PC that
+ *  knows this phone; a new session from the same PC keeps the stick lag's baseline.
  */
 
 package de.droiddrone.flight;
@@ -142,6 +147,13 @@ public class Udp {
      */
     static final byte IdleSticks = PacketIds.IDLE_STICKS;
     private static volatile short[] idleSticks;
+    /**
+     * pc.50: whether they may be fed at all, by the PC's last stick frame (RcPath.IdleGuard): not after the sticks
+     * stopped on an armed drone, nor after a frame with ARM on - "arm switch off" from here ended Betaflight's lockout
+     * after a failsafe, and the pilot's frames (ARM still on) armed the drone on the ground when the link came back.
+     * Static with the idle sticks: it outlives a session and a restarted link.
+     */
+    private static final RcPath.IdleGuard idleGuard = new RcPath.IdleGuard();
     /**
      * pc.34: the live audio for DRAUPNE Link 1.0.45 (PcAudio: AUDIO [0x79], again every second from the PC). The
      * microphone streams while the PC asks and the FC reads DISARMED - never in the air. audioGateRun decides every
@@ -540,12 +552,12 @@ public class Udp {
                         continue;
                     }
                     ReceiverBuffer buffer = receiverBuffer;
+                    final long now = android.os.SystemClock.elapsedRealtime();
                     // check IP & port
                     if (connectionMode == SettingsCommon.ConnectionMode.overServer){
                         if (!receiverPacket.getAddress().equals(destIp)
                                 || receiverPacket.getPort() != port) continue;
                     }else if (buffer.isConnected()){
-                        long now = android.os.SystemClock.elapsedRealtime();
                         if (receiverPacket.getAddress().equals(udpSender.getIp())
                                 && receiverPacket.getPort() == udpSender.getPort()) {
                             lastPcIp = udpSender.getIp(); // kept across deep sleep: the check window's hello goes there
@@ -557,7 +569,7 @@ public class Udp {
                                 // silence from here). A new session now; before, the Connect was dropped until this
                                 // side's own 4 s timer ran out, and the PC sat without its handshake meanwhile
                                 log("The pilot connects again (its link was lost): a new session");
-                                newSession();
+                                newSession(true);
                                 buffer = receiverBuffer;
                             }
                         } else {
@@ -569,9 +581,6 @@ public class Udp {
                             answerSpectator(receiverPacket, false);
                             continue;
                         }
-                        long now = android.os.SystemClock.elapsedRealtime();
-                        // every (re)connect passes here: the PC's stick sequence starts over
-                        rcPath.restart(now);
                         // pc.22: the PC's answer to this phone's sleep check hello (from the PC it last flew with)
                         if (d[0] == PowerMode.SLEEP_ANSWER) {
                             if (len >= 2 && receiverPacket.getAddress().equals(lastPcIp)) PowerMode.sleepAnswer(d[1] != 0);
@@ -595,8 +604,12 @@ public class Udp {
                             continue;
                         }
                         if (pilotKnown && !sameAddress) log("New session from " + from.getHostAddress() + " (the pilot is silent, the FC disarmed)");
+                        // every (re)connect passes here: the PC's stick sequence starts over (pc.50: here, at the
+                        // Connect taken, not at every packet - and the same PC's lag baseline is kept, RcPath.restart)
+                        rcPath.restart(now, samePc);
                         idleSticks = null; // pc.38: a new session's PC sends its own within a second; none kept from before
                     }
+                    pcHeardAtMs = now; // pc.50: a packet of the session - the video's dead-man counts from it (pcSilentTick)
                     // DRAUPNE Link: sticks straight to the flight controller from here - not through the buffer, a
                     // polling thread and a hand-over (the frame is unnumbered and never acknowledged, so the buffer
                     // had nothing to do with it). The session stays alive on the PC's pings (20 a second)
@@ -611,7 +624,10 @@ public class Udp {
                     }
                     buffer.addPacket(receiverPacket);
                     synchronized (packetSignal) {
-                        packetSignal.notifyAll(); // pc.50: the buffer thread waits for it while resting
+                        // pc.50: the buffer thread waits for it while resting; the flag, so that a packet added
+                        // between its last look and its wait isn't slept through
+                        packetWaiting = true;
+                        packetSignal.notifyAll();
                     }
                 } catch (Exception e) {
                     log("Receiver error: " + e);
@@ -634,7 +650,11 @@ public class Udp {
         // idle frame decided on just before can't land in the writer's one slot after this frame and replace it
         synchronized (rcWriteLock) {
             rcPath.taken(now);
-            if (msp.isInitialized()) msp.setRawRc(rcFrame, count);
+            boolean fc = msp.isInitialized();
+            if (fc) msp.setRawRc(rcFrame, count);
+            // pc.50: after the write (nothing ahead of the frame) - what the FC read as this frame came, and the
+            // frame's channels, for the idle sticks' guard: only a fresh DISARMED counts
+            idleGuard.frame(rcFrame, count, fc && msp.armedState(now) == FcArmedState.DISARMED);
         }
         if (mavlink.isInitialized()) mavlink.setRcChannelsOverride(java.util.Arrays.copyOf(rcFrame, count));
     }
@@ -658,15 +678,20 @@ public class Udp {
      * lets go of the flight controller's port and closes this Udp. pc.38: and only when Betaflight's own ARM ranges
      * (MSP_MODE_RANGES) say the frame can't arm - unread, or ARM on a channel the frame doesn't carry: none; the idle
      * sticks of a session before are forgotten at every new one; checked and written under rcWriteLock.
+     * pc.50: and only while the PC's last stick frame came at a disarmed FC with ARM off (idleGuard) - after a link
+     * lost in the air the drone is disarmed by Betaflight's failsafe, and "arm switch off" from here would end its
+     * lockout for the pilot, whose own switch is still on.
      */
     private final Runnable idleSticksRun = new Runnable() {
         public void run() {
             final int id = udpThreadsId;
             boolean feeding = false, refusedSaid = false;
+            int heldSaid = RcPath.IdleGuard.FEED;
             while (id == udpThreadsId) {
                 try {
                     Thread.sleep(dormantFcClosed() ? DORMANT_LOOP_MS : IDLE_EVERY_MS);
                     boolean feed, refused = false;
+                    int held = RcPath.IdleGuard.FEED;
                     synchronized (rcWriteLock) {
                         short[] idle = idleSticks;
                         long lastRc = rcPath.lastTakenMs();
@@ -677,10 +702,21 @@ public class Udp {
                             feed = false;
                             refused = true;
                         }
+                        if (feed) {
+                            held = idleGuard.check(msp::idleMayArm);
+                            feed = held == RcPath.IdleGuard.FEED;
+                        }
                         if (feed) msp.setRawRc(idle, idle.length);
                     }
                     if (refused && !refusedSaid) log("Idle sticks refused: by Betaflight's own ARM ranges they could arm (or the ranges aren't read yet)");
                     refusedSaid = refused;
+                    if (held != heldSaid && held != RcPath.IdleGuard.FEED) {
+                        log("Idle sticks held back: " + (held == RcPath.IdleGuard.HELD_FC_ARMED
+                                ? "the FC was armed (or not known disarmed) at the PC's last stick frame"
+                                : "the PC's last stick frame had ARM on")
+                                + " - no ARM off from here before the pilot's own sticks say it");
+                    }
+                    heldSaid = held;
                     if (feed != feeding) log(feed ? "Idle sticks to the FC (disarmed, no sticks from the PC)" : "Idle sticks stopped");
                     feeding = feed;
                 } catch (InterruptedException e) {
@@ -705,7 +741,9 @@ public class Udp {
             while (id == udpThreadsId) {
                 try {
                     Thread.sleep(dormant() ? DORMANT_LOOP_MS : AUDIO_GATE_MS);
-                    long now = System.currentTimeMillis();
+                    // pc.50: the monotonic clock (PcAudio's "wanted until", the retry gaps): a time correction that set
+                    // the phone's clock back kept the microphone on for as long, forward cut the sound off
+                    long now = android.os.SystemClock.elapsedRealtime();
                     boolean observed = observing && observeAudio && !isConnected(); // pc.37: an observer wants the sound
                     boolean wanted = pcAudio.wanted(now) || observed;
                     boolean disarmed = wanted && FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
@@ -794,7 +832,7 @@ public class Udp {
         if (v == SessionGate.Verdict.NEW_SESSION) {
             log("New session from " + packet.getAddress().getHostAddress() + ":" + packet.getPort()
                     + (sameAddress ? " (the pilot's address)" : " (the pilot is silent)"));
-            newSession();
+            newSession(false);
             return true;
         }
         if (v == SessionGate.Verdict.REFUSED && sameAddress && now - sameAddressRefusedLogMs >= Takeover.SAME_IP_SILENT_MS) {
@@ -807,12 +845,15 @@ public class Udp {
 
     private long sameAddressRefusedLogMs;
 
-    /** A new receiver session: the next Connect taken starts it (ReceiverBuffer.addPacket). */
-    private void newSession() {
+    /**
+     * A new receiver session: the next Connect taken starts it (ReceiverBuffer.addPacket).
+     * @param samePc pc.50: the pilot's own PC again (its address and port): its stick lag's baseline is kept
+     */
+    private void newSession(boolean samePc) {
         ReceiverBuffer old = receiverBuffer;
         receiverBuffer = new ReceiverBuffer(udpSender, (connectionMode != SettingsCommon.ConnectionMode.overServer), key, null);
         if (old != null) old.close();
-        rcPath.restart(android.os.SystemClock.elapsedRealtime());
+        rcPath.restart(android.os.SystemClock.elapsedRealtime(), samePc);
         idleSticks = null; // pc.38: the new session's PC sends its own within a second; none kept from before (H1)
     }
 
@@ -830,6 +871,17 @@ public class Udp {
         wrongKeyAt = now;
     }
 
+    private volatile long senderErrorSaidAt;
+
+    /** A sender loop's error, in the log at most every 5 s (a loop that fails fails every frame). */
+    private void senderError(String which, Exception e) {
+        if (e instanceof InterruptedException) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - senderErrorSaidAt < 5000) return;
+        senderErrorSaidAt = now;
+        log(which + " sender error: " + e);
+    }
+
     /** The telemetry records are gathered this long and go out in one datagram (pc.26; was one per 10 ms tick). */
     private static final long TELEMETRY_TICK_MS = 30;
 
@@ -843,7 +895,6 @@ public class Udp {
             int statsSent = 0;
             while (id == udpThreadsId) {
                 try {
-                    long now = System.currentTimeMillis();
                     // pc.50: the schedules on the monotonic clock - a network time correction that set the phone's
                     // clock back X s stopped the telemetry, the stats and the motion tick for X s (FC LOST on the PC)
                     long mono = android.os.SystemClock.elapsedRealtime();
@@ -855,8 +906,13 @@ public class Udp {
                         // pc.35: the motion detection runs while asked for, the FC DISARMED and the camera running -
                         // checked every 0.1 s, connected or not (it stops within that of arming)
                         nextMotion = mono + 100;
-                        observeTick(now); // pc.37: before the detection, which an observer may ask for
-                        MotionWatch.tick(FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, cameraManager.getCamera());
+                        // pc.37: before the detection, which an observer may ask for (pc.50: its intervals on the
+                        // monotonic clock, as onObserve's - a clock set forward expired every observer at once)
+                        observeTick(mono);
+                        pcSilentTick(mono); // pc.50: the video's dead-man, after the observers are known
+                        // pc.50: not while overwatch watches - it ticks the detection itself, and in a check window (or
+                        // listening all along) two threads set the same switches by turns
+                        if (!Overwatch.isWatching()) MotionWatch.tick(FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, cameraManager.getCamera());
                         boolean pilot = isConnected();
                         if ((pilot || observing) && MotionWatch.reportDue()) {
                             // its own packet: a PC that doesn't know the record stops reading there and loses nothing
@@ -914,10 +970,13 @@ public class Udp {
                         if (packet != null) processData(packet);
                     }while (packet != null);
                     receiverBuffer.processTimer();
-                    if (dormant()) {
-                        // pc.50: resting with no session - nothing to time, so wait for a packet (was 20 ms polls)
+                    long rest = bufferRestMs();
+                    if (rest > 0) {
+                        // pc.50: resting - wait for a packet (was 20 ms polls with no session, 1 ms with one); one
+                        // that came since the queue was last looked at is taken at once
                         synchronized (packetSignal) {
-                            packetSignal.wait(DORMANT_BUFFER_MS);
+                            if (!packetWaiting) packetSignal.wait(rest);
+                            packetWaiting = false;
                         }
                     } else {
                         Thread.sleep(1);
@@ -1039,6 +1098,86 @@ public class Udp {
         // 1080p / 20 Mbit/s recorder encoder (upstream's on-phone recording, made at every start) lived on into
         // overwatch and sleep - 12 min in the pilot's log, its codec thread waking 70 times a second
         mp4Recorder.close();
+    }
+
+    // ---- pc.50: the video's dead-man
+
+    /** When a packet of the session last came from the PC (the receive thread's clock; 0: none yet). */
+    private volatile long pcHeardAtMs;
+    /** The PC silent for this long: the encoder to the lowest step of its tier, until the PC is heard again. */
+    static final long PC_SILENT_FLOOR_MS = 1000;
+    /** Silent for this long, its session timed out and the FC DISARMED: the camera and the encoder stop. */
+    static final long PC_SILENT_STOP_MS = 60_000;
+    /**
+     * The lowest step: the survival tier's 150 kbit/s under the weak-reception profile (its small picture), else 1
+     * Mbit/s - the floor the PC itself keeps to for the normal picture (BitrateControl.FLOOR_STEP).
+     */
+    private static final int SILENT_STEP_WEAK = 0, SILENT_STEP_NORMAL = 3;
+    /** For this silence: the stop was queued (taken back on the starter thread if it found the camera in use); "it records" was said. */
+    private volatile boolean pcSilentStopped;
+    private boolean pcSilentRecordingSaid;
+
+    /**
+     * pc.50, every 0.1 s on the telemetry thread: the PC gone silent, the stream went on at the last bitrate it had
+     * asked for, for ever - into a link that may carry nothing any more, with the camera and the encoder at work for
+     * nobody (the session's timeout stops no sender). Silent for PC_SILENT_FLOOR_MS: the lowest step (the PC can't
+     * ask for it); heard again: the step it had asked for is back (StreamEncoder.holdAtFloor / releaseFloor), and
+     * its own SET_BITRATE counts from there. Silent for PC_SILENT_STOP_MS with the session timed out and the FC
+     * reading DISARMED: the camera and encoder off, as after a Disconnect - the PC's StartVideo starts them again.
+     * Never while the FC is armed or unknown (a pilot whose packets don't get through may still see the picture),
+     * never the observers' stream or overwatch's camera, never while the phone records for the pilot.
+     */
+    private void pcSilentTick(long mono) {
+        try {
+            long heardAt = pcHeardAtMs;
+            if (heardAt == 0) return; // no PC yet
+            long silent = mono - heardAt;
+            if (silent <= PC_SILENT_FLOOR_MS) {
+                silentFloorOff();
+                pcSilentStopped = false;
+                pcSilentRecordingSaid = false;
+                return;
+            }
+            // the pilot's stream only (standby and the sleeps have none)
+            if (observing || PowerMode.mode() != PowerMode.NORMAL || Overwatch.isWatching() || overwatchCameraOwner == cameraOwner) return;
+            if (streamEncoder.isVideoEncoderInitialized() && streamEncoder.holdAtFloor(keyFramesTwice || groupParity ? SILENT_STEP_WEAK : SILENT_STEP_NORMAL)) {
+                log("PC silent for " + silent + " ms: video down to " + streamEncoder.getTargetBitRate() / 1000 + " kbit/s until it is heard again");
+            }
+            if (silent <= PC_SILENT_STOP_MS || pcSilentStopped || isConnected()) return;
+            if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) return;
+            Camera camera = cameraManager.getCamera();
+            boolean running = streamEncoder.isVideoEncoderInitialized()
+                    || camera != null && (camera.isStarted() || camera.isOpened(config.getCameraId()));
+            if (!running || videoStartBusy() != null) return;
+            if (mp4Recorder.isRecording()) {
+                if (!pcSilentRecordingSaid) log("PC silent for " + silent / 1000 + " s: the phone records, the camera stays on");
+                pcSilentRecordingSaid = true;
+                return;
+            }
+            pcSilentStopped = true;
+            log("PC silent for " + silent / 1000 + " s, the FC disarmed: camera and video off (its StartVideo starts them again)");
+            videoStarter.execute(() -> {
+                // in turn with a StartVideo: not if the PC came back, observers or overwatch took the camera, or the FC
+                // armed meanwhile
+                if (isConnected() || observing || Overwatch.isWatching() || overwatchCameraOwner == cameraOwner
+                        || android.os.SystemClock.elapsedRealtime() - pcHeardAtMs <= PC_SILENT_STOP_MS
+                        || FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED || mp4Recorder.isRecording()) {
+                    log("Camera and video left on after all: the PC is back, the camera is in use or the FC isn't known disarmed");
+                    pcSilentStopped = false; // looked at again at the next tick
+                    return;
+                }
+                videoInitialFrame = null;
+                pcAudio.forget();
+                stopAudioVideo();
+            });
+        } catch (RuntimeException e) {
+            log("Video dead-man error: " + e);
+        }
+    }
+
+    /** pc.50: the PC is heard - the step it had asked for is back, said once (the tick, or its own bitrate packet first). */
+    private void silentFloorOff() {
+        if (streamEncoder.releaseFloor()) log("PC heard again: video back to " + streamEncoder.getTargetBitRate() / 1000 + " kbit/s");
     }
 
     private void stopAudioStream(){
@@ -1209,23 +1348,35 @@ public class Udp {
         return new de.droiddrone.common.FleetProtocol.Notice(Double.NaN, de.droiddrone.common.FleetProtocol.Notice.HEADING_NONE, -1, -1, nextCheckInS);
     }
 
+    /**
+     * pc.50: and to the other PCs that know this phone (alertPcs: asked its name in the last day), at their link port -
+     * the hello went to the PC that last flew or set it only, so no other PC ever saw a sleeping phone check in, and
+     * none could reach it in its window (FLEET_MODE). Only that first PC's answer counts (receiverRun).
+     * @return whether it went to the PC this phone last flew with (or that set its mode)
+     */
     public boolean sendSleepHello(int batteryPercent, boolean charging, int nextCheckMin, int milliVolts, int owFlags, int floorReason) {
         InetAddress ip = lastPcIp;
         DatagramSocket s = socket;
-        if (ip == null || s == null || s.isClosed()) return false;
+        if (s == null || s.isClosed()) return false;
+        java.util.List<java.net.InetSocketAddress> pcs = alertPcs(); // that PC first, then the others, each address once
+        if (pcs.isEmpty()) return false;
         // pc.36: two bytes more - overwatching / an event runs, and why it left overwatch by itself (an older PC reads six)
         byte[] head = {PowerMode.SLEEP_HELLO, (byte) Math.min(255, Math.max(0, batteryPercent)), (byte) (charging ? 1 : 0),
                 (byte) Math.min(255, nextCheckMin), (byte) (milliVolts >> 8), (byte) milliVolts, (byte) owFlags, (byte) floorReason};
         // pc.40: then the fleet status block (an older PC reads eight), then who and where it is, so a PC whose name
         // scan never reached it (asleep since) lists it and draws it
         byte[] d = de.droiddrone.common.FleetProtocol.hello(head, fleetStatus(), sleepWhere(), key);
-        try {
-            s.send(new DatagramPacket(d, d.length, ip, lastPcPort));
-            return true;
-        } catch (Exception e) {
-            log("Sleep hello error: " + e);
-            return false;
+        boolean sent = false;
+        for (java.net.InetSocketAddress pc : pcs) {
+            boolean own = ip != null && pc.getAddress().equals(ip);
+            try {
+                s.send(new DatagramPacket(d, d.length, pc));
+                if (own) sent = true;
+            } catch (Exception e) {
+                if (own) log("Sleep hello error: " + e); // the others: a dead network fails them all the same
+            }
         }
+        return sent;
     }
 
     /**
@@ -1247,7 +1398,26 @@ public class Udp {
 
     /** pc.50: resting, the buffer thread waits this long at most for a packet (woken by the receive thread at once). */
     static final long DORMANT_BUFFER_MS = 1000, DORMANT_LOOP_MS = 500;
+    /**
+     * pc.50: resting with the PC connected (standby keeps the session), it waits this long at most: the session's
+     * timers are counted by this thread (ReceiverBuffer.processTimer: the 4 s timeout, its ping, a gap's wait - at most
+     * 100 ms a call), so not the dormant second. Resends have a timer of their own (UdpSender), acknowledgements and
+     * pongs go out as the packet is taken.
+     */
+    static final long RESTING_BUFFER_MS = 20;
     private final Object packetSignal = new Object();
+    /** Under packetSignal: a packet was buffered since the buffer thread last waited. */
+    private boolean packetWaiting;
+
+    /**
+     * pc.50: how long the buffer thread may wait for a packet; 0 in normal mode (and observed): it polls every 1 ms as
+     * ever. Standby with the PC connected was left out of the rest (dormant() asks for no session), and that is where
+     * standby is spent: the loop went on at 1000 passes a second there.
+     */
+    private long bufferRestMs() {
+        if (PowerMode.mode() == PowerMode.NORMAL || observing) return 0;
+        return isConnected() ? RESTING_BUFFER_MS : DORMANT_BUFFER_MS;
+    }
 
     public boolean isConnected(){
         ReceiverBuffer buffer = receiverBuffer;
@@ -1423,9 +1593,19 @@ public class Udp {
             }
             camera.setExtraTarget(on ? recorder : null);
             camera.setWatchOnly(!on && camera.canWatchOnly());
+            // pc.50: the event's session starts without the preview's pictures; Overwatch asks for them with the PC
+            camera.setStreamTarget(!(on && recorder != null));
             if (camera instanceof InternalCamera) {
                 if (recorder == null) {
-                    if (!((InternalCamera) camera).stopSessionAndWait(1500)) log("Overwatch: the camera's session took over 1.5 s to close");
+                    boolean gone = ((InternalCamera) camera).stopSessionAndWait(1500);
+                    if (!gone) log("Overwatch: the camera's session took over 1.5 s to close");
+                    // pc.50: back to the analysis picture alone, the on-phone recorder's idle encoder goes too, as in
+                    // overwatchCamera(off): an event's session without overwatch's own recorder (past the clip's cap,
+                    // or the recorder didn't start) had started it (startPreview), and it ran until overwatch ended.
+                    // Only with the session gone (its surface is the camera's until then), and before the next
+                    // session, which makes its own if it needs one. The camera is overwatch's here (the owner check
+                    // above): no pilot's video, no recording of a pilot's
+                    if (!on && gone) mp4Recorder.close();
                 } else {
                     ((InternalCamera) camera).stopSession();
                 }
@@ -1497,6 +1677,7 @@ public class Udp {
             }
             case SET_BITRATE:
             {
+                silentFloorOff(); // pc.50: the PC is heard (setBitRateIndex ends the hold too; here it is said)
                 if (buffer.getRemaining() > 0) streamEncoder.setBitRateIndex(buffer.readUnsignedByteAsInt());
                 break;
             }
@@ -1511,7 +1692,7 @@ public class Udp {
                 // pc.34: [0x79][on u8][kbps u8][flags u8] from DRAUPNE Link 1.0.45, again every second; audioGateRun
                 // acts on it. Flags bit 0: the PC missed the stream's config - sent again
                 PcAudio.Request r = PcAudio.decode(packet.data, packet.data.length);
-                pcAudio.onRequest(r, System.currentTimeMillis());
+                pcAudio.onRequest(r, android.os.SystemClock.elapsedRealtime()); // pc.50: the gate's clock (audioGateRun)
                 if (r != null && r.resendConfig && streamEncoder.isAudioSending()) sendAudioInitialFrame(null);
                 break;
             }
@@ -1560,6 +1741,7 @@ public class Udp {
             case UdpCommon.ChangeBitRate:
             {
                 boolean increase = buffer.readBoolean();
+                silentFloorOff(); // pc.50: its step counts from the one it had asked for, not from the dead-man's floor
                 streamEncoder.changeBitRate(increase);
                 break;
             }
@@ -1673,8 +1855,11 @@ public class Udp {
                 int resCode = config.processReceivedConfig(buffer);
                 if (resCode == 0) {
                     sendConfigReceived();
-                    final boolean sizeOnly = oldId != null && oldId.equals(config.getCameraId()) && oldFpsMin == config.getCameraFpsMin()
-                            && oldFpsMax == config.getCameraFpsMax() && oldUsb == config.isUseUsbCamera();
+                    // pc.50: the frame rate may change with the size - the change on the open camera starts the camera's
+                    // settings, the encoder and the session anew, and each takes the rate from the config. Asking for the
+                    // same rate sent every switch between bad coverage's 30 and survival's 15 pictures a second the long
+                    // way: the camera closed and opened, 1.5-2.6 s without a picture each time, on a link already failing
+                    final boolean sizeOnly = oldId != null && oldId.equals(config.getCameraId()) && oldUsb == config.isUseUsbCamera();
                     // pc.26: the camera part on the video starter thread, in line with StartVideo and the watchdog
                     // (two threads restarted the encoder at once before); the rest at once, on a thread of its own
                     Thread t1 = new Thread(() -> {
@@ -1744,11 +1929,11 @@ public class Udp {
                 || mp4Recorder.isRecording() || isCameraRestarting) return false;
         isCameraRestarting = true;
         try {
-            long start = System.currentTimeMillis();
+            long start = android.os.SystemClock.elapsedRealtime();
             boolean isHevc = wantedHevc(); // pc.26: the profile's codec, not the one running (bad coverage mode: H.264)
             ((InternalCamera) camera).stopSession();
             startVideoStream(isHevc); // initialize (the new size), then on the open camera: a new encoder and session
-            log("Picture size changed on the open camera in " + (System.currentTimeMillis() - start) + " ms");
+            log("Picture size changed on the open camera in " + (android.os.SystemClock.elapsedRealtime() - start) + " ms");
         } catch (RuntimeException e) {
             log("Picture size change error: " + e);
         } finally {
@@ -1938,7 +2123,7 @@ public class Udp {
                         streamEncoder.changeBitRate(false);
                     }
                 } catch (Exception e) {
-                    // do nothing
+                    senderError("Video", e); // pc.50: said (it was swallowed: frames lost with no word of why)
                 }
             }
         }
@@ -1952,7 +2137,7 @@ public class Udp {
                 try {
                     // pc.34: a stream for DRAUPNE Link's AUDIO runs while its gate allows it (upstream's Control
                     // app sets sendAudioStream instead, which DRAUPNE Link leaves off)
-                    if (!config.isSendAudioStream() && !pcAudio.wanted(System.currentTimeMillis()) && !(observing && observeAudio)){
+                    if (!config.isSendAudioStream() && !pcAudio.wanted(android.os.SystemClock.elapsedRealtime()) && !(observing && observeAudio)){
                         streamEncoder.stopAudioEncoder();
                         break;
                     }
@@ -1964,7 +2149,7 @@ public class Udp {
                         sendAudioFrame(buf.data); // pc.34: not one frame once the gate says no (armed)
                     }
                 } catch (Exception e) {
-                    // do nothing
+                    senderError("Audio", e);
                 }
             }
         }
@@ -2106,28 +2291,61 @@ public class Udp {
         // pc.37: observers have no acknowledged config - it goes again ahead of every key frame (about 60 bytes)
         if (observing && !isConnected()) sendVideoInitialFrame(null);
         // DRAUPNE Link: in bad coverage mode the whole key frame goes twice: a packet the 4G uplink dropped from the
-        // first copy usually comes in the second (the PC waits for it)
+        // first copy usually comes in the second (the PC waits for it).
+        // pc.50: the second copy holds up the frames behind it for as long again (paced at about the bitrate, see
+        // packetGapNs). It can't go after them: the PC lets a key frame with a gap out, damaged, as soon as a later
+        // frame is whole, and drops what comes for it after that (FrameAssembler.retireOlder / releasedAlready) - a
+        // late copy would mend nothing. And no faster: that is the burst pc.31 took out (the pongs behind it, a
+        // "spike" to the PC's bitrate control). So only this: no second copy, or no more of it, once a newer key
+        // frame waits in the queue - that one needs nothing of this one
         int copies = keyFramesTwice ? 2 : 1;
+        int sent = 0;
         long socketNs = 0;
         long start = System.nanoTime();
         for (int copy = 0; copy < copies; copy++) {
-            socketNs += sendFragments(UdpCommon.KeyFrame, buf, true, copy == 0 && keyFramesTwice, num, senderId);
+            if (copy > 0 && newerKeyFrameQueued()) break;
+            socketNs += sendFragments(UdpCommon.KeyFrame, buf, true, copy == 0 && keyFramesTwice, num, senderId, copy > 0);
+            sent++;
         }
+        if (sent < copies) secondCopySkipped();
         // the plain frames queued behind this key frame drain at four times the bitrate: the sender loop's queue
         // check waits for that (twice the time the key frame was spread over; pc.31: at least as long as it took,
         // as bad coverage mode paces it at about the bitrate)
         long frameNs = 1_000_000_000L / Math.max(1, cameraManager.getCamera().getCurrentFps());
         long now = System.nanoTime();
-        queueJudgeAfterNs = now + Math.max(2L * KEY_FRAME_TIMES * copies * frameNs, now - start);
+        queueJudgeAfterNs = now + Math.max(2L * KEY_FRAME_TIMES * Math.max(1, sent) * frameNs, now - start);
         processFrameSendTime(socketNs / 1_000_000);
+    }
+
+    /** pc.50: a newer key frame waits in the encoder's queue (at most 30 frames; weakly consistent, as the queue). */
+    private boolean newerKeyFrameQueued() {
+        for (MediaCodecBuffer queued : streamEncoder.videoStreamOutputBuffer) {
+            if ((queued.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) return true;
+        }
+        return false;
+    }
+
+    private int secondCopiesSkipped;
+    private long secondCopySaidAt;
+
+    /** pc.50: a second copy left out or cut short (video sender thread); in the log at most every 30 s, with the count. */
+    private void secondCopySkipped() {
+        secondCopiesSkipped++;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - secondCopySaidAt < 30_000) return;
+        secondCopySaidAt = now;
+        log("Key frame's second copy left out " + secondCopiesSkipped + " time(s): a newer key frame was waiting");
+        secondCopiesSkipped = 0;
     }
 
     /**
      * A frame's packets, paced (packetGapNs), with its parity (bad coverage mode: one packet per PARITY_GROUP
      * packets, pc.26, or one for the whole frame for a PC that asked for that only).
+     * @param secondCopy pc.50: a key frame's second copy - no more of it once a newer key frame waits
      * @return the time the socket itself took, ns (the pacing's waits not counted): the emergency brake's measure
      */
-    private long sendFragments(byte packetName, byte[] buf, boolean keyFrame, boolean withParity, int frameNum, int senderId) {
+    private long sendFragments(byte packetName, byte[] buf, boolean keyFrame, boolean withParity, int frameNum, int senderId,
+                               boolean secondCopy) {
         int size = buf.length;
         long gapNs = packetGapNs(size, keyFrame);
         long socketNs = 0;
@@ -2137,6 +2355,10 @@ public class Udp {
         boolean parityUsed = false;
         // pc.31: the frame's own number (the counter is the next stream's once it restarts), and no more of it then
         while (offset < size && udpSender != null && senderId == videoSenderThreadId) {
+            if (secondCopy && offset > 0 && newerKeyFrameQueued()) {
+                secondCopySkipped();
+                break;
+            }
             try {
                 synchronized (udpSync) {
                     UdpPacketData packetData = new UdpPacketData(packetName);
@@ -2244,7 +2466,7 @@ public class Udp {
         if (socket == null || socket.isClosed()) return;
         int num = nextFrameNum(senderId);
         if (num < 0) return;
-        sendFragments(UdpCommon.VideoFrame, buf, false, keyFramesTwice, num, senderId);
+        sendFragments(UdpCommon.VideoFrame, buf, false, keyFramesTwice, num, senderId, false);
     }
 
     private void sendAudioInitialFrame(byte[] buf) {
@@ -2328,9 +2550,9 @@ public class Udp {
         }
         Observe.Request r = Observe.decodeRequest(d, len);
         if (r == null) return;
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime(); // pc.50: the observers' table on the monotonic clock (observeTick's)
         int state;
-        boolean pilotNear = isConnected() || gate.silentMs(android.os.SystemClock.elapsedRealtime()) < OBSERVE_AFTER_PILOT_MS
+        boolean pilotNear = isConnected() || gate.silentMs(now) < OBSERVE_AFTER_PILOT_MS
                 && !packet.getAddress().equals(lastPcIp); // pc.38: the pilot's silence on the monotonic clock
         if (pilotNear) state = Observe.REFUSED_PILOT;
         else if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) state = Observe.REFUSED_ARMED;

@@ -153,6 +153,30 @@ class PcConfigTest {
         assertEquals("100.64.0.20", javas.getProperty("ip"));
     }
 
+    /**
+     * 1.0.64: the window sets a change in memory at once and its writer thread puts it in the file a moment later, in
+     * order. A write waiting behind a newer change must not put its older value back in memory.
+     */
+    @Test
+    void aQueuedWriteNeverPutsAnOlderValueBackInMemory() throws Exception {
+        Path file = dir.resolve("queued.properties");
+        PcConfig config = PcConfig.defaults();
+        config.apply(Map.of("phone.asleep", "one"));
+        assertEquals("one", config.getString("phone.asleep"), "in memory at once, nothing written yet");
+        assertFalse(Files.exists(file));
+        config.apply(Map.of("phone.asleep", "two")); // a newer change before the first write ran
+        config.write(file, Map.of("phone.asleep", "one"));
+        assertEquals("two", config.getString("phone.asleep"), "the older write left memory alone");
+        assertEquals("one", PcConfig.load(file).getString("phone.asleep"));
+        config.write(file, Map.of("phone.asleep", "two"));
+        assertEquals("two", PcConfig.load(file).getString("phone.asleep"), "the file has the newest once its write ran");
+        assertEquals("two", config.getString("phone.asleep"));
+        // save() is both, as before
+        config.save(file, Map.of("rcRate", "123"));
+        assertEquals("123", config.getString("rcRate"));
+        assertEquals("123", PcConfig.load(file).getString("rcRate"));
+    }
+
     @Test
     void incompleteCalibrationIsIgnored() throws Exception {
         PcConfig config = PcConfig.defaults();

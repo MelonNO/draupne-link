@@ -33,6 +33,9 @@ package de.droiddrone.common;
  * limit (0 = never drop) is dropped - sticks seconds old (a 4G queue flushed) end in Betaflight's failsafe instead of
  * flying the drone late. Buckets of 10 s (20 s seen at most): long enough that a queue building up isn't taken as the
  * new normal within a few seconds, short enough that a path that got slower for good (a relay) is learned.</li>
+ * <li>pc.50: a new session from the same PC keeps the best transit ({@link #restart(long, boolean)}): wiped, the
+ * seconds-old frames a 4G queue flushes after an outage were the new baseline, and none was dropped.</li>
+ * <li>pc.50: {@link IdleGuard} - by the PC's last stick frame, whether the idle sticks may be fed at all.</li>
  * </ul>
  * Read and written on the receive thread only, but for the figures the stats thread reports (volatile) and the time
  * of the last frame written, which the idle sticks' thread reads (written by the caller under its write lock).
@@ -43,6 +46,14 @@ public final class RcPath {
     /** 16-bit sequence: no frame taken for this long, anything is taken. */
     public static final long SEQ16_FORGET_MS = 1000;
     public static final long LAG_BUCKET_MS = 10_000;
+    /** pc.50: a best transit last measured against longer ago than this isn't kept (the two clocks drift apart). */
+    public static final long LAG_KEEP_MS = 120_000;
+    /** pc.50: a new session's frame later than the kept best by more than this is another clock, not a late frame. */
+    public static final int LAG_KEEP_SPAN_MS = 5000;
+    /** pc.50: no frame near the kept best for this long: the path is slower for good (or the clock another) - learned anew. */
+    public static final long LAG_TRIAL_MS = 2000;
+    /** pc.50: "near" the kept best while the PC sets no limit. */
+    public static final int LAG_TRIAL_NEAR_MS = 250;
 
     /** The channels of the last frame taken, filled in place: no allocation per frame. */
     private final short[] frame = new short[FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT];
@@ -52,6 +63,10 @@ public final class RcPath {
     private volatile long lastTakenMs;
     private int lagMinNow = -1, lagMinBefore = -1;
     private long lagBucketAt;
+    /** pc.50: when a frame's transit was last measured (0: never), and the kept best on trial (see restart). */
+    private long lagLastAt;
+    private boolean lagOnTrial;
+    private long lagTrialSince;
     private volatile int lagMs = -1;
     private volatile int lagMaxMs = -1;
     private volatile int lagDropped;
@@ -118,10 +133,30 @@ public final class RcPath {
 
     /** A new session (or none): the PC's sequence starts over, its clock may be another, the drop count is per session. */
     public void restart(long now) {
+        restart(now, false);
+    }
+
+    /**
+     * pc.50: a new session. From the same PC (its address and port) the best transit of the session before is kept
+     * for one bucket more, as long as it was measured against within {@link #LAG_KEEP_MS}: its clock is the same, and
+     * after an outage the first frames are the ones a 4G queue held back - with the best wiped they were the new
+     * baseline, and seconds-old sticks flew the drone whatever the limit. The kept best is on trial: a frame near it
+     * confirms it; one more than {@link #LAG_KEEP_SPAN_MS} later (another clock), or none near it for
+     * {@link #LAG_TRIAL_MS} (a path slower for good), and it is forgotten - so the limit never holds the sticks back
+     * for longer than that after a reconnect.
+     */
+    public void restart(long now, boolean samePc) {
         seqValid = false;
+        int kept = -1;
+        if (samePc && lagLastAt != 0 && now - lagLastAt <= LAG_KEEP_MS) {
+            kept = lagMinNow;
+            if (kept < 0 || lagMinBefore >= 0 && (short) (lagMinBefore - kept) < 0) kept = lagMinBefore;
+        }
         lagMinNow = -1;
-        lagMinBefore = -1;
+        lagMinBefore = kept;
         lagBucketAt = now;
+        lagOnTrial = kept >= 0;
+        lagTrialSince = 0;
         lagMs = -1;
         lagMaxMs = -1;
         lagDropped = 0;
@@ -176,11 +211,14 @@ public final class RcPath {
      */
     private boolean tooLate(int sentMs, int maxLagMs, long nowMs) {
         int transit = (int) ((nowMs - sentMs) & 0xFFFF);
+        lagLastAt = nowMs;
         if (nowMs - lagBucketAt >= LAG_BUCKET_MS) {
             lagMinBefore = lagMinNow;
             lagMinNow = -1;
             lagBucketAt = nowMs;
+            lagOnTrial = false; // pc.50: a kept best has aged out with its bucket
         }
+        if (lagOnTrial) tryKeptBest(transit, maxLagMs, nowMs);
         if (lagMinNow < 0 || (short) (transit - lagMinNow) < 0) lagMinNow = transit;
         int best = lagMinNow;
         if (lagMinBefore >= 0 && (short) (lagMinBefore - best) < 0) best = lagMinBefore;
@@ -192,5 +230,58 @@ public final class RcPath {
             return true;
         }
         return false;
+    }
+
+    /**
+     * pc.50: the best transit kept from the session before (lagMinBefore, see {@link #restart(long, boolean)})
+     * against a frame of the new one: confirmed by a frame near it (within the PC's limit), forgotten when the frame
+     * is far later than a late frame can be or nothing came near it for LAG_TRIAL_MS. Forgotten, the new session's own
+     * frames so far are the baseline, as in any session.
+     */
+    private void tryKeptBest(int transit, int maxLagMs, long nowMs) {
+        if (lagTrialSince == 0) lagTrialSince = nowMs;
+        int late = (short) (transit - lagMinBefore);
+        if (late <= (maxLagMs > 0 ? maxLagMs : LAG_TRIAL_NEAR_MS)) {
+            lagOnTrial = false;
+        } else if (late > LAG_KEEP_SPAN_MS || nowMs - lagTrialSince >= LAG_TRIAL_MS) {
+            lagOnTrial = false;
+            lagMinBefore = -1;
+        }
+    }
+
+    /**
+     * pc.50: by the PC's last stick frame, whether the idle sticks (pc.33) may stand in for the PC's at all. They say
+     * "arm switch off", and that ends Betaflight's lockout after a failsafe (or a crash it disarmed on): the link lost
+     * in the air, the drone down and disarmed by its failsafe, the idle sticks fed - and the pilot's own frames, ARM
+     * still on and throttle low, armed it on the ground when the link came back. So they are fed only while the
+     * pilot's sticks last said the same: the last frame taken came while the FC read DISARMED (a fresh status; armed
+     * or unknown: no) and could not turn ARM on by the FC's own ranges (after the failsafe the link may come and go
+     * with the switch still on: each of those frames comes at a disarmed FC). No frame yet: fed, as before (a PC
+     * without a radio). Pure; the caller's write lock orders {@link #frame} against {@link #check}.
+     */
+    public static final class IdleGuard {
+        /** Fed; held back: the FC armed (or not known disarmed) at the PC's last frame; that frame's own ARM on. */
+        public static final int FEED = 0, HELD_FC_ARMED = 1, HELD_ARM_ON = 2;
+        /** The PC's last stick frame (a copy, its own length); null: none yet. */
+        private short[] last;
+        private boolean fcDisarmed;
+
+        /** A PC stick frame was taken, with the FC reading DISARMED in a fresh status then - or not. */
+        public synchronized void frame(short[] channels, int count, boolean fcDisarmed) {
+            if (channels == null || count < 0 || count > channels.length) return;
+            if (last == null || last.length != count) last = new short[count];
+            System.arraycopy(channels, 0, last, 0, count);
+            this.fcDisarmed = fcDisarmed;
+        }
+
+        /**
+         * @param mayArm whether a frame could turn the FC's ARM mode on ({@link ArmRanges#mayArm}; ranges unread: yes)
+         * @return FEED, or why the idle sticks are held back
+         */
+        public synchronized int check(java.util.function.Predicate<short[]> mayArm) {
+            if (last == null) return FEED;
+            if (!fcDisarmed) return HELD_FC_ARMED;
+            return mayArm.test(last) ? HELD_ARM_ON : FEED;
+        }
     }
 }

@@ -281,6 +281,41 @@ class MapViewTest {
         assertEquals(2, map.trackPath().taken(), "the line took in the new point only");
     }
 
+    /**
+     * 1.0.64: an overwatch that sees nothing (its camera gives the motion detection no pictures) kept the calm teal eye
+     * on the map. Its eye is crossed out, in the warning colour; a seeing one, and a blind word on another sign, are not.
+     */
+    @Test
+    void aBlindOverwatchIsCrossedOutOnTheMap() {
+        MapView.NetDrone sees = new MapView.NetDrone("MobileAlpha", 59.9, 10.7, "OVERWATCH - LISTENING", MapView.Kind.OVERWATCH, false, null, null, Double.NaN);
+        MapView.NetDrone blind = new MapView.NetDrone("MobileAlpha", 59.9, 10.7, "OVERWATCH - BLIND - LISTENING", MapView.Kind.OVERWATCH, false, null, null,
+                Double.NaN, true);
+        MapView.NetDrone asleep = new MapView.NetDrone("MobileAlpha", 59.9, 10.7, "DEEP SLEEP", MapView.Kind.ASLEEP, false, null, null, Double.NaN, true);
+        assertFalse(sees.blind());
+        assertFalse(sees.watchesBlind());
+        assertTrue(blind.watchesBlind());
+        assertFalse(asleep.watchesBlind(), "only an eye is crossed out");
+        assertEquals(MapView.OVERWATCH_COLOR, MapView.signColor(sees));
+        assertEquals(Theme.WARN, MapView.signColor(blind));
+        assertEquals(MapView.ASLEEP_COLOR, MapView.signColor(asleep));
+        assertEquals(Theme.WARN, MapView.signColor(new MapView.NetDrone("MobileBravo", 59.9, 10.7, "FLOWN", MapView.Kind.ACTIVE, true, "PcOne")),
+                "the flown one stays yellow");
+
+        BufferedImage plain = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB), crossed = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = plain.createGraphics();
+        MapView.paintNetSign(g, MapView.Kind.OVERWATCH, MapView.signColor(sees), 20, 20);
+        g.dispose();
+        g = crossed.createGraphics();
+        MapView.paintNetSign(g, MapView.Kind.OVERWATCH, MapView.signColor(blind), 20, 20);
+        MapView.paintBlind(g, 20, 20);
+        g.dispose();
+        // the slash runs from bottom left to top right: on it, the crossed sign is yellow where the plain one is not
+        assertEquals(Theme.WARN.getRGB(), crossed.getRGB(16, 24), "the slash, bottom left");
+        assertEquals(Theme.WARN.getRGB(), crossed.getRGB(24, 16), "and top right");
+        assertNotEquals(Theme.WARN.getRGB(), plain.getRGB(16, 24));
+        assertNotEquals(Theme.WARN.getRGB(), plain.getRGB(24, 16));
+    }
+
     /** 1.0.56, the pilot: "create an indication that the map is loading". */
     @Test
     void loadingMapShowsWhileTilesAreOnTheirWay(@TempDir Path dir) throws Exception {

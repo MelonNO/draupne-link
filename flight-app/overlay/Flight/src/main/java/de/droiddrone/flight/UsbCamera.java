@@ -296,6 +296,7 @@ public class UsbCamera implements Camera {
             if (uvcCamera == null || !isOpened) return;
             boolean on = analysisOn;
             try {
+                if (on) MotionWatch.setFrameRate(0); // pc.50: this camera's rate isn't known here - not the internal camera's last
                 uvcCamera.setFrameCallback(on ? MotionWatch.uvcFrames(uvcCamera.getFrameWidth(), uvcCamera.getFrameHeight()) : null,
                         UVCCamera.PIXEL_FORMAT_NV21);
                 analysisSet = on;

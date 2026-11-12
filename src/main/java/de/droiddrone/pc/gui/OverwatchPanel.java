@@ -359,6 +359,8 @@ final class OverwatchPanel extends JPanel {
         private final JPanel foot = new JPanel(new BorderLayout(0, 6));
         private final JButton fold = Theme.secondaryButton("-");
         private boolean minimized;
+        /** The alert shown (its start, number and event in one): another one is a new alert. */
+        private long alertSeenAt;
 
         /** Minimized: the title line alone (what moved, which drone); the picture, the times and the buttons hidden. */
         void setMinimized(boolean on) {
@@ -463,6 +465,14 @@ final class OverwatchPanel extends JPanel {
 
         /** @return true when the layout changed (card and badge swapped) */
         boolean show(OverwatchHub.View v) {
+            // 1.0.64: a new alert opens a minimized card again (it stayed a title line: the next alert went unseen)
+            OverwatchProtocol.Alert shown = v.alert(); // (not the view's wall time: it is worked out anew each refresh)
+            long key = shown == null ? 0 : shown.startedAt * 1000 + shown.alertNo * 7L + shown.event;
+            if (key != alertSeenAt) {
+                boolean first = alertSeenAt == 0;
+                alertSeenAt = key;
+                if (!first && key != 0 && minimized) setMinimized(false);
+            }
             boolean layout = v.shown() != state;
             if (layout) {
                 state = v.shown();
@@ -907,6 +917,12 @@ final class OverwatchPanel extends JPanel {
     }
 
     void play(ClipIndex.Clip c) {
+        startPlayback(c);
+        showPlayerWindow(c);
+    }
+
+    /** The clip's playback started (its thread, the bar, the map's mark) - without the player window (tests). */
+    void startPlayback(ClipIndex.Clip c) {
         stopPlaying();
         playing = c;
         player.phone = c.drone();
@@ -921,7 +937,6 @@ final class OverwatchPanel extends JPanel {
         if (replay != null && !map.shows(replay.lat(), replay.lon(), 40)) map.panTo(replay.lat(), replay.lon());
         int gen = ++playGen;
         playerThread.execute(() -> runPlayback(gen, c));
-        showPlayerWindow(c);
     }
 
     /** The camera's view as it was when the clip was made (the event's facts), calm yellow on the map. */
@@ -971,6 +986,23 @@ final class OverwatchPanel extends JPanel {
     /** The playback reached the end of the clip (it waits there, paused). */
     private volatile boolean atEnd;
 
+    /** Tests: PAUSE / PLAY as the button; the bar let go at a place (ms); the picture the player shows (null: none). */
+    void pauseOrPlay() {
+        togglePause();
+    }
+
+    void seekToMs(long ms) {
+        seekTo = ms;
+    }
+
+    BufferedImage playerPicture() {
+        return player.image;
+    }
+
+    boolean isPaused() {
+        return paused;
+    }
+
     /**
      * On the player's thread: the clip as one video (2026-11-10, the pilot) - the pictures before the alert
      * ({@link ClipTimeline#PRE_MS} each), then the video's parts, on one clock: the time shows from the first moment, the
@@ -1003,6 +1035,9 @@ final class OverwatchPanel extends JPanel {
             int w = 0, h = 0;
             long pos = 0, wallStart = System.currentTimeMillis();
             boolean seekVideo = false;
+            // 1.0.64: a seek while paused (also at the clip's end) moved the bar and showed no picture - one picture of
+            // the new place is decoded and shown, then it waits on, paused
+            boolean still = false;
             post(gen, null, null, 0);
             try {
                 while (gen == playGen) {
@@ -1014,13 +1049,17 @@ final class OverwatchPanel extends JPanel {
                         shownPicture = -1;
                         seekVideo = true;
                         atEnd = false;
+                        still = paused;
                     }
-                    if (paused) {
+                    if (!paused) still = false; // playing again: the pictures come by themselves
+                    if (paused && !still) {
                         sleep(40);
                         wallStart = System.currentTimeMillis() - pos; // the clock stands still while paused
                         continue;
                     }
-                    ClipTimeline.At at = line.at(pos);
+                    // the bar at the very end has no picture of its own: the last one there is
+                    ClipTimeline.At at = line.at(still ? stillPlace(pos, line.totalMs()) : pos);
+                    if (still && pos >= line.totalMs()) atEnd = true; // PLAY from there: from the start, as after playing to it
                     if (at.end()) {
                         if (!atEnd) {
                             atEnd = true;
@@ -1039,6 +1078,10 @@ final class OverwatchPanel extends JPanel {
                             post(gen, pictures[at.picture()], null, pos);
                         } else {
                             post(gen, null, null, pos);
+                        }
+                        if (still) { // shown: paused on, where the pilot put the bar
+                            still = false;
+                            continue;
                         }
                         sleep(40);
                         pos = System.currentTimeMillis() - wallStart;
@@ -1061,6 +1104,16 @@ final class OverwatchPanel extends JPanel {
                         seekVideo = false;
                     }
                     long t = player.next(pixels, w, h);
+                    if (still) {
+                        if (t < 0) { // past the part's last picture (the bar at its end): the last one before it
+                            player.seek(Math.max(0, at.offsetMs() - STILL_BACK_MS));
+                            for (long n; gen == playGen && (n = player.next(pixels, w, h)) >= 0; ) t = n;
+                        }
+                        still = false;
+                        if (gen != playGen || seekTo >= 0 || t < 0) continue; // nothing to show there: as it was
+                        post(gen, frame(ring, turn = (turn + 1) % ring.length, pixels, w, h), null, pos);
+                        continue; // paused on; PLAY goes on from this picture
+                    }
                     if (t < 0) { // this part is over: its last picture stays until the clock reaches its end, then on
                         long next = line.partStartMs(part + 1);
                         player.close();
@@ -1081,12 +1134,7 @@ final class OverwatchPanel extends JPanel {
                     pos = at2;
                     // 1.0.64: three pictures by turns (one shown, one on its way, one filled) - a new full-size picture
                     // per frame was about 110 MB of garbage a second at 1280x720, its collection felt in the live video
-                    BufferedImage img = ring[turn = (turn + 1) % ring.length];
-                    if (img == null || img.getWidth() != w || img.getHeight() != h) {
-                        img = ring[turn] = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-                    }
-                    System.arraycopy(pixels, 0, ((DataBufferInt) img.getRaster().getDataBuffer()).getData(), 0, pixels.length);
-                    post(gen, img, null, pos);
+                    post(gen, frame(ring, turn = (turn + 1) % ring.length, pixels, w, h), null, pos);
                 }
             } finally {
                 if (player != null) player.close();
@@ -1094,6 +1142,22 @@ final class OverwatchPanel extends JPanel {
         } catch (IOException | RuntimeException e) {
             post(gen, null, "Can't play: " + e.getMessage(), -1);
         }
+    }
+
+    /** A still picture is looked for this far before the place when none comes at or after it (a part's end). */
+    static final long STILL_BACK_MS = 1000;
+
+    /** Where a paused seek takes its picture from: the place itself, or just before the end for the bar at its end. */
+    static long stillPlace(long pos, long totalMs) {
+        return Math.max(0, Math.min(pos, totalMs - 1));
+    }
+
+    /** The decoded pixels as the ring's picture at this turn (made, or made anew for another size). */
+    private static BufferedImage frame(BufferedImage[] ring, int turn, int[] pixels, int w, int h) {
+        BufferedImage img = ring[turn];
+        if (img == null || img.getWidth() != w || img.getHeight() != h) img = ring[turn] = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        System.arraycopy(pixels, 0, ((DataBufferInt) img.getRaster().getDataBuffer()).getData(), 0, pixels.length);
+        return img;
     }
 
     private void post(int gen, BufferedImage img, String note, long posMs) {

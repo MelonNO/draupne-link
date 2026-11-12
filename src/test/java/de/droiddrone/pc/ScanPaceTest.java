@@ -125,7 +125,73 @@ class ScanPaceTest {
         p.answered(PC, 1000, ScanPace.DEEP_SLEEP, 5, "MobileBravo");
         p.heard(PC, 301_000, ScanPace.DEEP_SLEEP, 0);
         assertFalse(p.due(PC, 400_000));
-        assertTrue(p.due(PC, 301_000 + 292_000), "round the check-in after the one heard");
+        // 1.0.64: and says its next check-in itself - not asked ahead of it (was: from 10 s before), only once it is late
+        assertFalse(p.due(PC, 301_000 + 292_000), "its hello is to come: nothing asked 8 s ahead");
+        assertTrue(p.due(PC, 301_000 + 300_000 + ScanPace.HELLO_GRACE_MS), "its hello 5 s late: asked");
+    }
+
+    /**
+     * 1.0.64, item 1d: the hello's own "next check in" reaches the pace. It was always passed 0, so a timed sleeper
+     * known only by its hellos (this PC restarted: no answer to a query yet) counted as listening and was asked every
+     * minute - each query waking a sleeping phone's radio for nothing.
+     */
+    @Test
+    void aTimedSleeperKnownOnlyByItsHellosIsNotAskedEveryMinute() {
+        ScanPace p = new ScanPace();
+        p.heard(PHONE, 1000, ScanPace.DEEP_SLEEP, 5); // its check-in, "next check in 5 min"
+        assertEquals(5, p.every(PHONE));
+        for (long t = 6000; t < 1000 + 300_000 + ScanPace.HELLO_GRACE_MS; t += 5000) {
+            assertFalse(p.due(PHONE, t), "between its check-ins, and up to its next hello: not asked, at " + t / 1000 + " s");
+        }
+        assertEquals(7 * 60_000L, ScanPace.holdMs(p.every(PHONE)), "held online for its own interval and the margin");
+        assertTrue(p.held(1000 + 6 * 60_000).contains(PHONE));
+        // its next hello came: nothing asked at all
+        p.heard(PHONE, 301_200, ScanPace.DEEP_SLEEP, 5);
+        for (long t = 301_200; t < 301_200 + 300_000 + ScanPace.HELLO_GRACE_MS; t += 5000) assertFalse(p.due(PHONE, t), "at " + t / 1000 + " s");
+        // the one after it doesn't come: asked from 5 s late to 30 s late, then left until the next
+        long due = 301_200 + 300_000;
+        assertTrue(p.due(PHONE, due + 6000));
+        p.asked(PHONE, due + 6000);
+        p.unanswered(PHONE);
+        assertTrue(p.due(PHONE, due + ScanPace.WINDOW_LATE_MS));
+        assertFalse(p.due(PHONE, due + ScanPace.WINDOW_LATE_MS + 1000));
+        assertFalse(p.due(PHONE, due + 200_000));
+        // a hello that says no interval (an older phone's) keeps what is known
+        p.heard(PHONE, due + 300_000, ScanPace.DEEP_SLEEP, 0);
+        assertEquals(5, p.every(PHONE));
+    }
+
+    /** The check-in PC asked 10 and 5 s ahead of every check-in; a PC that only hears answers still must (it has no hello to wait for). */
+    @Test
+    void onlyAPcWithoutItsHellosAsksAheadOfTheCheckIn() {
+        ScanPace byAnswer = new ScanPace(), byHello = new ScanPace();
+        byAnswer.asked(PHONE, 0);
+        byAnswer.answered(PHONE, 1000, ScanPace.DEEP_SLEEP, 5, "MobileAlpha");
+        byHello.heard(PHONE, 1000, ScanPace.DEEP_SLEEP, 5);
+        assertTrue(byAnswer.due(PHONE, 1000 + 290_000));
+        assertTrue(byAnswer.due(PHONE, 1000 + 295_000));
+        assertFalse(byHello.due(PHONE, 1000 + 290_000));
+        assertFalse(byHello.due(PHONE, 1000 + 295_000));
+        assertFalse(byHello.due(PHONE, 1000 + 301_000), "its hello takes a moment");
+        // an answer to a query is the anchor again
+        byHello.asked(PHONE, 1000 + 306_000);
+        byHello.answered(PHONE, 1000 + 306_500, ScanPace.DEEP_SLEEP, 5, "MobileAlpha");
+        assertTrue(byHello.due(PHONE, 1000 + 306_500 + 291_000));
+    }
+
+    /**
+     * 1.0.64, item 1c: a resting phone is asked once a minute, so its word on its mode is fresh for that long and a
+     * margin - with 30 s a phone another PC put to standby read STANDBY / ACTIVE (FLEET), STANDBY / NOT HEARD (the map)
+     * by turns.
+     */
+    @Test
+    void aRestingPhonesWordIsFreshForAsLongAsItIsLeftAlone() {
+        assertTrue(ScanPace.freshMs(ScanPace.STANDBY) >= ScanPace.SLOW_ASK_MS + 2 * NameService.SCAN_MS, "an ask a minute, a scan late");
+        assertEquals(ScanPace.freshMs(ScanPace.STANDBY), ScanPace.freshMs(ScanPace.DEEP_SLEEP));
+        assertEquals(ScanPace.freshMs(ScanPace.STANDBY), ScanPace.freshMs(ScanPace.OVERWATCH));
+        assertEquals(30_000, ScanPace.freshMs(0), "awake: asked every scan, as before");
+        assertEquals(30_000, ScanPace.freshMs(Names.POWER_UNKNOWN));
+        assertEquals(ScanPace.freshMs(ScanPace.STANDBY), NameService.saidFreshMs(1));
     }
 
     @Test

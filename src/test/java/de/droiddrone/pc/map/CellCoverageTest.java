@@ -178,14 +178,43 @@ class CellCoverageTest {
         assertTrue(Double.isNaN(CellCoverage.rsrpDbm(lat, lon, to[0], to[1], 50, (la, lo) -> Double.NaN)));
     }
 
+    /**
+     * 1.0.64, the pilot: "it is just green everywhere". A mast 20 km off read "good" at every height (free space, a
+     * flat 20 dB on the ground). Now the estimate falls off as measured rural cells do where trees and houses stand in
+     * the way, and stays strong only where the drone is clear of them.
+     */
+    @Test
+    void lowDownTheSignalFadesWithDistanceHighUpItHolds() {
+        double lat = 60.0, lon = 10.0;
+        int[][] want = { // {height, distance m, level}
+                {2, 800, CellCoverage.GOOD}, {2, 2500, CellCoverage.FAIR}, {2, 4000, CellCoverage.WEAK}, {2, 8000, CellCoverage.NONE},
+                {10, 2000, CellCoverage.GOOD}, {10, 6000, CellCoverage.FAIR}, {10, 12000, CellCoverage.WEAK}, {10, 19000, CellCoverage.NONE},
+                {50, 2000, CellCoverage.GOOD}, {50, 12000, CellCoverage.GOOD}, {120, 19000, CellCoverage.GOOD}};
+        for (int[] w : want) {
+            double[] at = RadioHorizon.destination(lat, lon, 90, w[1]);
+            double rsrp = CellCoverage.rsrpDbm(lat, lon, at[0], at[1], w[0], FLAT);
+            assertEquals(w[2], CellCoverage.level(rsrp), w[0] + " m up, " + w[1] + " m off: " + rsrp);
+        }
+        double last = 0;
+        for (int d = 200; d <= 20_000; d += 200) { // never better farther off, at any height
+            for (int h : CellCoverage.HEIGHTS_M) {
+                double[] a = RadioHorizon.destination(lat, lon, 90, d), b = RadioHorizon.destination(lat, lon, 90, d + 200);
+                assertTrue(CellCoverage.rsrpDbm(lat, lon, b[0], b[1], h, FLAT) <= CellCoverage.rsrpDbm(lat, lon, a[0], a[1], h, FLAT) + 1e-9, h + " m at " + d);
+            }
+        }
+    }
+
     @Test
     void theModelsPartsBehave() {
         assertEquals(0, CellCoverage.knifeEdgeDb(-1), 1e-9, "clear of the edge");
         assertEquals(6.0, CellCoverage.knifeEdgeDb(0), 0.1, "grazing: about 6 dB");
         assertTrue(CellCoverage.knifeEdgeDb(2.4) > 19 && CellCoverage.knifeEdgeDb(2.4) < 22);
         assertEquals(90.5, CellCoverage.freeSpaceDb(1000), 0.1, "800 MHz over 1 km");
-        assertEquals(CellCoverage.CLUTTER_DB, CellCoverage.clutterDb(2), 1e-9);
-        assertEquals(0, CellCoverage.clutterDb(50), 1e-9);
+        assertEquals(1, CellCoverage.losProbability(8000, 50), 1e-9, "clear of the ground: the mast is seen");
+        assertEquals(Math.exp(-0.99), CellCoverage.losProbability(1000, 2), 1e-6, "on the ground: seldom beyond a kilometre");
+        assertTrue(CellCoverage.losProbability(3000, 10) < 0.1 && CellCoverage.losProbability(3000, 10) > CellCoverage.losProbability(3000, 2));
+        assertEquals(118.2, CellCoverage.clutteredDb(1000, 2), 0.5, "3GPP's rural macro, no free line, 1 km");
+        assertEquals(128.4, CellCoverage.clutteredDb(5000, 10), 0.5, "a drone at 10 m, 5 km");
         assertEquals(CellCoverage.GOOD, CellCoverage.level(-80));
         assertEquals(CellCoverage.FAIR, CellCoverage.level(-100));
         assertEquals(CellCoverage.WEAK, CellCoverage.level(-110));

@@ -5,6 +5,9 @@ package de.droiddrone.pc.video;
  * damaged too, asking again at once only adds bursts to a link that is dropping them, so the spacing doubles
  * (1.5 -> 3 -> 6 s) until a key frame comes whole. In bad coverage mode the phone sends every key frame twice and
  * the assembler waits for the second copy, so a damaged one there means both copies failed: it starts at 3 s.
+ * <p>
+ * A request counts as sent here the moment it is handed on. 1.0.64: the link sends each one three times, 50 ms apart
+ * (ControlLink.KEY_FRAME_REPEATS) - it went once, and lost on the way the next was this spacing off.
  */
 final class KeyFrameBackoff {
     static final long BASE_MS = 1500;

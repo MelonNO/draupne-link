@@ -8,6 +8,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** The self-update's signature check (1.0.49, the review's L8): the rule, and the helper that runs it again. */
 class SelfUpdateTest {
+    /** 1.0.64: a broken shortcut on the user's own desktop stayed when the shared desktop had one too. */
+    @Test
+    void everyDesktopShortcutThereIsIsLookedAt() {
+        java.nio.file.Path shared = java.nio.file.Path.of("C:/Users/Public/Desktop/DRAUPNE Link.lnk"), own = java.nio.file.Path.of("C:/Users/x/Desktop/DRAUPNE Link.lnk");
+        assertEquals(java.util.List.of(shared, own), WindowsSetup.desktopLinks(shared, own, p -> true), "both there: both checked");
+        assertEquals(java.util.List.of(shared), WindowsSetup.desktopLinks(shared, own, shared::equals));
+        assertEquals(java.util.List.of(own), WindowsSetup.desktopLinks(shared, own, own::equals));
+        assertEquals(java.util.List.of(own), WindowsSetup.desktopLinks(shared, own, p -> false), "none: the user's own is made");
+    }
+
 
     @Test
     void whileReleasesAreUnsignedAnUnsignedInstallerPassesButABrokenSignatureNever() {

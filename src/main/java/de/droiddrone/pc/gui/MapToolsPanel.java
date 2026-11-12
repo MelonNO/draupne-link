@@ -391,7 +391,7 @@ final class MapToolsPanel extends JPanel {
         TacticalCombo.install(coverageOperator);
         TacticalCombo.install(coverageHeight);
         coverageOperator.setToolTipText("Your SIM's network: only its masts count");
-        coverageHeight.setToolTipText("Drone height above ground (2 m: on the ground)");
+        coverageHeight.setToolTipText("Drone height above ground. 2 m: on the ground. 10 m: low, among trees. 50 m up: clear of them");
         coverageKey.setToolTipText("OpenCelliD access token (free at opencellid.org)");
         coverageImport.setToolTipText("OpenCelliD country file (242.csv.gz = Norway): all cells, no requests");
         JPanel grid = new JPanel(new GridLayout(3, 2, 6, 4));

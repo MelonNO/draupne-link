@@ -63,6 +63,10 @@ final class SyntheticScene {
         float camo;
         /** Where its top left is at a time (s), instead of the straight line: {x, y}. */
         java.util.function.DoubleFunction<float[]> path;
+        /** pc.50: its size at a time (s), instead of w x h: {w, h} - a torch's spot as it swings to the camera and away. */
+        java.util.function.DoubleFunction<float[]> size;
+        /** pc.50: lit at night whatever its luma (ground in a headlight's beam); a luma over 200 is a light anyway. */
+        boolean glows;
 
         Mover(float x0, float y0, float w, float h, float vx, float vy, float t0, float t1, float luma, float u, float v, boolean textured) {
             this.x0 = x0;
@@ -85,11 +89,13 @@ final class SyntheticScene {
 
         /** The box at time t, in the picture's coordinates (no shake): x, y, w, h. */
         float[] at(double t) {
+            float[] s = size == null ? null : size.apply(t);
+            float bw = s == null ? w : s[0], bh = s == null ? h : s[1];
             if (path != null) {
                 float[] p = path.apply(t);
-                return new float[]{p[0], p[1], w, h};
+                return new float[]{p[0], p[1], bw, bh};
             }
-            return new float[]{(float) (x0 + vx * (t - t0)), (float) (y0 + vy * (t - t0)), w, h};
+            return new float[]{(float) (x0 + vx * (t - t0)), (float) (y0 + vy * (t - t0)), bw, bh};
         }
     }
 
@@ -334,7 +340,7 @@ final class SyntheticScene {
                 float l = px[0];
                 boolean light = false;
                 for (Mover m : movers) { // a light keeps its brightness however dark the night
-                    if (m.on(t) && m.luma > 200 && darkness < 1) {
+                    if (m.on(t) && (m.luma > 200 || m.glows) && darkness < 1) {
                         float[] b = m.at(t);
                         if (xx >= b[0] && xx < b[0] + b[2] && yy >= b[1] && yy < b[1] + b[3]) light = true;
                     }

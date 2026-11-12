@@ -63,19 +63,37 @@ class CoverageOverlayTest {
 
     @Test
     void theWindowsHelpers() {
-        assertEquals(1, MapWindow.heightIndex("50"));
-        assertEquals(2, MapWindow.heightIndex("120"));
-        assertEquals(1, MapWindow.heightIndex(""), "the default, 50 m");
+        assertEquals(2, MapWindow.heightIndex("50"));
+        assertEquals(3, MapWindow.heightIndex("120"));
+        assertEquals(1, MapWindow.heightIndex(""), "the default, 10 m");
         assertEquals(1, MapWindow.heightIndex("77"));
-        double[] a = {59.90, 59.95, 10.70, 10.80};
-        assertTrue(MapWindow.sameView(a, new double[]{59.901, 59.951, 10.701, 10.801}));
-        assertFalse(MapWindow.sameView(a, new double[]{59.92, 59.97, 10.70, 10.80}), "moved by 40 % of its height");
-        assertFalse(MapWindow.sameView(a, new double[]{59.85, 60.00, 10.65, 10.85}), "zoomed out");
+        // 1.0.64 (the pilot: "it seems to reload every time the map is zoomed or moved"): the estimate is made for
+        // the view and a margin round it, and serves every view inside that
+        double[] view = {59.90, 59.95, 10.70, 10.80};
+        double[] done = MapWindow.padded(view);
+        assertEquals(59.90 - 0.05 * MapWindow.COVERAGE_PAD, done[0], 1e-9);
+        assertEquals(10.80 + 0.10 * MapWindow.COVERAGE_PAD, done[3], 1e-9);
+        assertTrue(MapWindow.serves(done, view));
+        assertTrue(MapWindow.serves(done, new double[]{59.91, 59.96, 10.72, 10.82}), "moved by a fifth of the view: the same estimate");
+        assertTrue(MapWindow.serves(done, new double[]{59.915, 59.94, 10.725, 10.775}), "zoomed in twice: the same estimate");
+        assertFalse(MapWindow.serves(done, new double[]{59.93, 59.98, 10.70, 10.80}), "moved out of it");
+        assertFalse(MapWindow.serves(done, new double[]{59.85, 60.00, 10.65, 10.85}), "zoomed out");
+        assertFalse(MapWindow.serves(done, new double[]{59.92, 59.93, 10.74, 10.76}), "zoomed in five times: a finer one");
 
         byte[] level = {CellCoverage.GOOD, CellCoverage.GOOD, CellCoverage.WEAK, CellCoverage.UNKNOWN};
         CellCoverage.Grid g = new CellCoverage.Grid(0, 0, 1, 1, 2, 2, level, List.of(), 50, OpenCellId.Operator.ALL, false);
         assertEquals("0 masts, 67 % good, 33 % weak or none  -  no OpenCelliD key", MapWindow.coverageText(g, "no OpenCelliD key"));
+        // all green from 40 m up is said to be what it is, with the way to the height where it differs
+        byte[] green = {CellCoverage.GOOD, CellCoverage.GOOD, CellCoverage.GOOD, CellCoverage.GOOD};
+        String high = MapWindow.coverageText(new CellCoverage.Grid(0, 0, 1, 1, 2, 2, green, List.of(), 50, OpenCellId.Operator.ALL, false), null);
+        assertTrue(high.contains("above the trees") && high.contains("10 m"), high);
+        String low = MapWindow.coverageText(new CellCoverage.Grid(0, 0, 1, 1, 2, 2, green, List.of(), 10, OpenCellId.Operator.ALL, false), null);
+        assertFalse(low.contains("above the trees"), low);
         assertEquals(new int[]{0, 1, 0, 2}.length, g.counts().length);
         assertArrayEquals(new int[]{0, 1, 0, 2}, g.counts());
+        // 1.0.64: "move the map for more" - a small move no longer fetches (the estimate serves its padded area)
+        String left = MapWindow.boxesLeftText(40);
+        assertTrue(left.startsWith("40 boxes not fetched") && !left.contains("move the map"), left);
+        assertTrue(left.contains("zoom") && left.contains("away"), left);
     }
 }

@@ -21,6 +21,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
 import android.os.PowerManager;
+import android.os.SystemClock;
 
 import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.SleepCheck;
@@ -115,7 +116,11 @@ final class PowerMode {
     });
     private volatile int mode = NORMAL;
     private volatile int checkIntervalMin = DEFAULT_CHECK_MIN;
-    /** Deep sleep begins then; 0 when not counting down. */
+    /**
+     * Deep sleep begins then; 0 when not counting down. pc.50: SystemClock.elapsedRealtime, as every interval here (the
+     * wall clock steps when the network corrects it: a window that never closed, a check an hour late). Only
+     * nextCheckAt is wall time - it is shown.
+     */
     private volatile long sleepAt;
     /** The socket is closed: between the countdown and a check window, or between windows. */
     private volatile boolean asleep;
@@ -125,6 +130,21 @@ final class PowerMode {
     private long windowOpenedAt;
     /** When the last hello of this window went (worker thread). */
     private long lastHelloAt;
+
+    /**
+     * pc.50: a task for the worker that can't end the chain. An uncaught exception in a periodic task cancels it
+     * without a word, and one in the window's poll meant no close, no next alarm - a phone asleep with no check-in for
+     * ever. (The alarm after a window is also set before the window does anything: {@link #openWindow}.)
+     */
+    private static Runnable guarded(final String what, final Runnable task) {
+        return () -> {
+            try {
+                task.run();
+            } catch (Throwable e) {
+                log("Power: " + what + " failed: " + e);
+            }
+        };
+    }
     /** pc.50: listening in deep sleep - the opening burst is over, the processor may sleep (worker thread). */
     private volatile boolean burstDone;
     /** pc.50: the minute's hello from the alarm, and a packet's handling while the processor sleeps: this long awake. */
@@ -233,18 +253,26 @@ final class PowerMode {
     static void floorDrop(int reason) {
         PowerMode p = current;
         if (p == null) return;
-        p.worker.execute(() -> {
+        p.worker.execute(guarded("the floor's drop", () -> {
             if (p.mode != OVERWATCH) return;
             floorReason = reason;
             if (p.asleep || p.checking) {
-                p.mode = DEEP_SLEEP;
-                p.service.overwatchToDeepSleep(p.nextCheckAt);
+                p.overwatchToDeepSleep();
                 event("Overwatch ended: " + de.droiddrone.common.PowerFloor.describe(reason));
                 p.burst();
             } else {
                 p.apply(DEEP_SLEEP, 0, de.droiddrone.common.PowerFloor.describe(reason));
             }
-        });
+        }));
+    }
+
+    /** pc.36: overwatch asleep becomes deep sleep where it is - nothing to count down (worker thread). */
+    private void overwatchToDeepSleep() {
+        mode = DEEP_SLEEP;
+        // pc.50: listening, the minute's hello comes from the alarm from here on (the processor may sleep): one is set
+        // before anything else; the window's hello task sets the exact one when it sees the change
+        if (always() && checking) scheduleAlarm(service, SleepCheck.ALWAYS_HELLO_MS);
+        service.overwatchToDeepSleep(nextCheckAt);
     }
 
     /** Stick frames are dropped in every mode but normal: the PC sends none, and a stray one must not reach the FC. */
@@ -292,7 +320,7 @@ final class PowerMode {
             log("Power mode " + mode + " asked for (" + from + "): no such mode");
             return;
         }
-        p.worker.execute(() -> p.apply(mode, intervalMin, from));
+        p.worker.execute(guarded("the change to " + name(mode), () -> p.apply(mode, intervalMin, from)));
     }
 
     /**
@@ -302,11 +330,11 @@ final class PowerMode {
     static void fcArmed() {
         PowerMode p = current;
         if (p == null || p.mode == NORMAL) return;
-        p.worker.execute(() -> {
+        p.worker.execute(guarded("the wake on arming", () -> {
             if (p.mode == STANDBY || p.sleeping() && p.sleepAt != 0 && !p.asleep && !p.checking) {
                 p.apply(NORMAL, 0, "FC armed");
             }
-        });
+        }));
     }
 
     /** The alarm fired ({@link PowerAlarmReceiver}): a check window, if still asleep. */
@@ -318,21 +346,24 @@ final class PowerMode {
         }
         if (p.alarmHellos() && p.checking) { // pc.50: listening in deep sleep - the minute's hello
             p.acquireWindowLock(context, HELLO_LOCK_MS);
-            p.worker.execute(p::alarmHello);
+            p.worker.execute(guarded("the minute's hello", p::alarmHello));
             return;
         }
         // the lock now, on the receiver's thread: the system's own grace ends with onReceive
         p.acquireWindowLock(context);
-        p.worker.execute(p::openWindow);
+        p.worker.execute(guarded("the check window", p::openWindow));
     }
 
     /** pc.50: the alarm's hello while listening in deep sleep, and the next one set; the lock lapses by itself. */
     private void alarmHello() {
         if (!alarmHellos() || !checking) return;
-        long now = System.currentTimeMillis();
-        lastHelloAt = now;
+        // pc.50: the next alarm FIRST - set after the hello, a hello that threw was the last one for ever
+        scheduleAlarm(service, SleepCheck.ALWAYS_HELLO_MS);
+        burstDone = true; // the alarm brings the hellos: the opening burst is over, whatever became of its task
+        if (helloPending != null) helloPending.cancel(false);
+        helloPending = null;
+        lastHelloAt = SystemClock.elapsedRealtime();
         service.powerHello(checkIntervalMin);
-        scheduleAlarm(service, now + SleepCheck.ALWAYS_HELLO_MS);
     }
 
     /** Whether a record of the burst after a mode change is due now (the stats sender asks every 0.1 s). */
@@ -401,19 +432,18 @@ final class PowerMode {
             case DEEP_SLEEP:
                 if (mode == DEEP_SLEEP) return;
                 if (mode == OVERWATCH && (asleep || checking)) { // pc.36: from overwatch, nothing to count down
-                    mode = DEEP_SLEEP;
-                    service.overwatchToDeepSleep(nextCheckAt);
+                    overwatchToDeepSleep();
                     event("Deep sleep instead of overwatch (" + from + ")");
                     burst();
                     break;
                 }
                 mode = DEEP_SLEEP;
                 long deepIn = countdown(from);
-                sleepAt = System.currentTimeMillis() + deepIn;
+                sleepAt = SystemClock.elapsedRealtime() + deepIn;
                 event("Deep sleep in " + deepIn / 1000 + " s (" + from + "), " + checksText());
                 burst();
                 cancelPending();
-                pending = worker.schedule(this::fallAsleep, deepIn, TimeUnit.MILLISECONDS);
+                pending = worker.schedule(guarded("falling asleep", this::fallAsleep), deepIn, TimeUnit.MILLISECONDS);
                 scheduleNotices(deepIn);
                 break;
             case OVERWATCH:
@@ -421,11 +451,11 @@ final class PowerMode {
                 if (mode != NORMAL) wake(from); // from standby or deep sleep: everything back first, then down again
                 mode = OVERWATCH;
                 long owIn = countdown(from);
-                sleepAt = System.currentTimeMillis() + owIn;
+                sleepAt = SystemClock.elapsedRealtime() + owIn;
                 event("Overwatch in " + owIn / 1000 + " s (" + from + "), " + checksText());
                 burst();
                 cancelPending();
-                pending = worker.schedule(this::fallAsleep, owIn, TimeUnit.MILLISECONDS);
+                pending = worker.schedule(guarded("falling asleep", this::fallAsleep), owIn, TimeUnit.MILLISECONDS);
                 scheduleNotices(owIn);
                 break;
         }
@@ -446,13 +476,13 @@ final class PowerMode {
         final int target = mode;
         for (int i = 1; i <= 3; i++) {
             final boolean last = i == 3;
-            worker.schedule(() -> sendNotice(target, last), countdownMs * 3 * i / 10, TimeUnit.MILLISECONDS);
+            worker.schedule(guarded("the sleep notice", () -> sendNotice(target, last)), countdownMs * 3 * i / 10, TimeUnit.MILLISECONDS);
         }
     }
 
     private void sendNotice(int target, boolean last) {
         if (mode != target || asleep || checking) return; // changed, or already asleep
-        long now = System.currentTimeMillis();
+        long now = SystemClock.elapsedRealtime();
         int nextInS = target == STANDBY || always() ? 0
                 : (int) ((Math.max(0, sleepAt - now) + checkIntervalMin * 60_000L) / 1000);
         service.powerNotice(target, target == STANDBY ? 0 : checkIntervalMin, nextInS);
@@ -508,16 +538,20 @@ final class PowerMode {
             // from now (the service's goes with the sleep)
             nextCheckAt = System.currentTimeMillis() + SleepCheck.ALWAYS_OPEN_AFTER_MS;
             acquireWindowLock(service, SleepCheck.ALWAYS_OPEN_AFTER_MS + WINDOW_LOCK_SPARE_MS);
+            // pc.50, the safety net: should the window not open from this thread (a step below failed, the processor
+            // slept through its time), this alarm opens it; the open window sets its own in its place, or none
+            scheduleAlarm(service, SleepCheck.ALWAYS_OPEN_AFTER_MS + SleepCheck.ALWAYS_HELLO_MS);
             if (mode == OVERWATCH) service.powerOverwatch(nextCheckAt);
             else service.powerSleep(nextCheckAt);
             event((mode == OVERWATCH ? "Overwatch: " : "Deep sleep: ") + "always listening from "
                     + time(service, nextCheckAt));
             cancelPending();
-            pending = worker.schedule(this::openWindow, SleepCheck.ALWAYS_OPEN_AFTER_MS, TimeUnit.MILLISECONDS);
+            pending = worker.schedule(guarded("the listening window", this::openWindow), SleepCheck.ALWAYS_OPEN_AFTER_MS, TimeUnit.MILLISECONDS);
             return;
         }
-        nextCheckAt = System.currentTimeMillis() + checkIntervalMin * 60_000L;
-        scheduleAlarm(service, nextCheckAt); // before the wake lock goes
+        long interval = checkIntervalMin * 60_000L;
+        nextCheckAt = System.currentTimeMillis() + interval;
+        scheduleAlarm(service, interval); // before the wake lock goes
         if (mode == OVERWATCH) {
             service.powerOverwatch(nextCheckAt);
             event("Overwatch: next check " + time(service, nextCheckAt));
@@ -528,6 +562,20 @@ final class PowerMode {
     }
 
     private void openWindow() {
+        long mono = SystemClock.elapsedRealtime();
+        if (sleeping() && checking && !always() && mono - windowOpenedAt >= CHECK_WINDOW_MS + WINDOW_LOCK_SPARE_MS) {
+            // pc.50: an alarm, and the last window still "open" long past its time - what should have closed it never
+            // ran. Closed now, so this alarm opens a new one (it was ignored, and no check came ever again)
+            log("Sleep check: the last window never closed - closed now");
+            cancelPending();
+            checking = false;
+            asleep = true;
+            try {
+                service.powerListenEnd();
+            } catch (RuntimeException e) {
+                log("Sleep check: closing the stale window: " + e);
+            }
+        }
         if (!sleeping() || !asleep || checking) {
             log("Sleep check alarm in mode " + name(mode) + (checking ? " (a window is open)" : "") + ": ignored");
             releaseWindowLock();
@@ -535,47 +583,65 @@ final class PowerMode {
         }
         asleep = false;
         checking = true;
-        windowOpenedAt = System.currentTimeMillis();
+        windowOpenedAt = mono;
+        // pc.50, the safety net: the alarm after this window is set FIRST (it was set only when the window closed - an
+        // exception in the window's poll, or anywhere below, and the phone slept with no check-in for ever). A window
+        // that closes sets the real one in its place.
+        if (!always()) scheduleAlarm(service, CHECK_WINDOW_MS + checkIntervalMin * 60_000L);
+        else if (mode == DEEP_SLEEP) scheduleAlarm(service, SleepCheck.ALWAYS_HELLO_BURST_MS + SleepCheck.ALWAYS_HELLO_MS);
+        else cancelAlarm(service); // overwatch, listening: the processor stays up and this window's task says the hellos
         if (always()) nextCheckAt = 0; // no next check: this window is it
-        service.powerListen();
+        try {
+            service.powerListen();
+        } catch (RuntimeException e) { // the window goes on: it closes at its time, and the next one tries again
+            log("Sleep check: the socket didn't open: " + e);
+        }
         event(always() ? "Always listening" : "Sleep check: listening " + CHECK_WINDOW_MS / 1000 + " s");
         cancelPending();
-        pending = worker.scheduleAtFixedRate(this::pollWindow, WINDOW_POLL_MS, WINDOW_POLL_MS, TimeUnit.MILLISECONDS);
+        pending = worker.scheduleAtFixedRate(guarded("the window's poll", this::pollWindow), WINDOW_POLL_MS, WINDOW_POLL_MS, TimeUnit.MILLISECONDS);
         // "still here" to the PC, again and again through the window: its answer ends the window early (sleep on)
         // or wakes the phone. Always listening (pc.39): as in a window's first seconds, then once a minute, the
         // window's wake lock renewed with each
         lastHelloAt = 0;
         burstDone = false;
-        helloPending = worker.scheduleAtFixedRate(() -> {
-            if (!checking) return;
-            long now = System.currentTimeMillis();
-            boolean byAlarm = alarmHellos();
-            if (byAlarm && !burstDone && now - windowOpenedAt > SleepCheck.ALWAYS_HELLO_BURST_MS) {
-                // pc.50: the burst is over - the minute's hellos come from the alarm, and the processor may sleep
-                burstDone = true;
-                scheduleAlarm(service, lastHelloAt + SleepCheck.ALWAYS_HELLO_MS);
-                releaseWindowLock();
-                return;
-            }
-            if (!SleepCheck.helloDue(always(), byAlarm, now - windowOpenedAt, lastHelloAt == 0 ? Long.MAX_VALUE : now - lastHelloAt)) return;
-            if (always() && !byAlarm) acquireWindowLock(service, SleepCheck.ALWAYS_HELLO_MS + WINDOW_LOCK_SPARE_MS);
-            lastHelloAt = now;
-            service.powerHello(checkIntervalMin);
-        }, HELLO_FIRST_MS, HELLO_GAP_MS, TimeUnit.MILLISECONDS);
+        helloPending = worker.scheduleAtFixedRate(guarded("the window's hello", this::windowHello), HELLO_FIRST_MS, HELLO_GAP_MS, TimeUnit.MILLISECONDS);
+    }
+
+    /** The window's hello task, every HELLO_GAP_MS (worker thread). */
+    private void windowHello() {
+        if (!checking) return;
+        long now = SystemClock.elapsedRealtime();
+        boolean byAlarm = alarmHellos();
+        if (byAlarm && !burstDone && now - windowOpenedAt > SleepCheck.ALWAYS_HELLO_BURST_MS) {
+            // pc.50: the burst is over - the minute's hellos come from the alarm, and the processor may sleep
+            burstDone = true;
+            scheduleAlarm(service, Math.max(1000, lastHelloAt + SleepCheck.ALWAYS_HELLO_MS - now));
+            // pc.50: and this task ends with it (it ran on to the window's end, doing nothing). The window's poll stays:
+            // it is what sees the PC's Connect and wakes the phone - it runs only while a packet or an alarm has the
+            // processor up
+            if (helloPending != null) helloPending.cancel(false);
+            helloPending = null;
+            releaseWindowLock();
+            return;
+        }
+        if (!SleepCheck.helloDue(always(), byAlarm, now - windowOpenedAt, lastHelloAt == 0 ? Long.MAX_VALUE : now - lastHelloAt)) return;
+        if (always() && !byAlarm) acquireWindowLock(service, SleepCheck.ALWAYS_HELLO_MS + WINDOW_LOCK_SPARE_MS);
+        lastHelloAt = now;
+        service.powerHello(checkIntervalMin);
     }
 
     /** The PC answered the hello: sleep on (the window closes now) or wake. */
     static void sleepAnswer(boolean wake) {
         PowerMode p = current;
         if (p == null) return;
-        p.worker.execute(() -> {
+        p.worker.execute(guarded("the PC's answer", () -> {
             if (!p.sleeping() || !p.checking) return;
             if (wake) p.wake("PC called");
             else if (!p.always()) { // always listening (pc.39): the window stays open whatever the PC says
                 p.event("Sleep check: PC says sleep on");
                 p.closeWindow();
             }
-        });
+        }));
     }
 
     private void pollWindow() {
@@ -587,17 +653,27 @@ final class PowerMode {
             wake("PC called");
             return;
         }
-        if (!always() && System.currentTimeMillis() - windowOpenedAt >= CHECK_WINDOW_MS) closeWindow();
+        if (!always() && SystemClock.elapsedRealtime() - windowOpenedAt >= CHECK_WINDOW_MS) closeWindow();
     }
 
     private void closeWindow() {
         cancelPending();
         checking = false;
         asleep = true;
-        service.powerListenEnd();
-        nextCheckAt = System.currentTimeMillis() + checkIntervalMin * 60_000L;
-        scheduleAlarm(service, nextCheckAt);
-        service.powerSleepOn(nextCheckAt);
+        // pc.50: the next check one interval after this window OPENED, not after it closed - a window nobody answered
+        // put every later check its own length further on (10 s each), and a PC that counts the checks from the last one
+        // it heard sent its Connects ever earlier than the window they were meant for
+        long interval = checkIntervalMin * 60_000L;
+        long sinceOpened = windowOpenedAt == 0 ? 0 : SystemClock.elapsedRealtime() - windowOpenedAt;
+        if (sinceOpened > 0 && sinceOpened <= CHECK_WINDOW_MS + WINDOW_LOCK_SPARE_MS && interval - sinceOpened >= 5000) interval -= sinceOpened;
+        nextCheckAt = System.currentTimeMillis() + interval;
+        scheduleAlarm(service, interval); // pc.50: before the socket closes - whatever that does, the next check is set
+        try {
+            service.powerListenEnd();
+            service.powerSleepOn(nextCheckAt);
+        } catch (RuntimeException e) {
+            log("Sleep check: closing the window: " + e);
+        }
         event("Sleep check: no PC; next check " + time(service, nextCheckAt));
         releaseWindowLock(); // in overwatch the service's own lock keeps the CPU up for the camera
     }
@@ -677,23 +753,31 @@ final class PowerMode {
     /**
      * The next check. setExactAndAllowWhileIdle fires in doze too (setAlarmClock would as well, but shows an alarm
      * icon in the status bar and is meant for alarm clocks); without the exact-alarm permission (Android 12 and up,
-     * asked for from the activity) the inexact kind, which doze may hold back for minutes.
+     * asked for from the activity; pc.50: USE_EXACT_ALARM in the manifest allows them from Android 13 on without
+     * asking) the inexact kind, which doze may hold back for minutes.
+     * <p>
+     * pc.50: in inMs from now, on the clock that counts through sleep and never steps (ELAPSED_REALTIME_WAKEUP; it was
+     * a wall time on RTC_WAKEUP - a correction of the phone's clock moved the check with it). One alarm: a new one
+     * takes the last one's place.
      */
-    private static void scheduleAlarm(Context context, long at) {
+    private static void scheduleAlarm(Context context, long inMs) {
         AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
         if (am == null) return;
         PendingIntent pi = alarmIntent(context);
+        long in = Math.max(0, inMs);
+        long at = SystemClock.elapsedRealtime() + in;
+        String shown = time(context, System.currentTimeMillis() + in);
         try {
             if (canExactAlarms(context)) {
-                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
-                log("Sleep check alarm set (exact) for " + time(context, at));
+                am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi);
+                log("Sleep check alarm set (exact) for " + shown);
             } else {
-                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
-                log("Sleep check alarm set (inexact: exact alarms not allowed) for " + time(context, at));
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi);
+                log("Sleep check alarm set (inexact: exact alarms not allowed) for " + shown);
             }
         } catch (SecurityException e) {
             log("Sleep check alarm error: " + e);
-            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi);
+            am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi);
         }
     }
 

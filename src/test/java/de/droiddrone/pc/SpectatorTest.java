@@ -340,8 +340,10 @@ class SpectatorTest {
                 long high = System.currentTimeMillis();
                 waitFor(host::isPaused, (int) RelayGate.CONGESTION_HOLD_MS + 1000, "paused");
                 assertTrue(System.currentTimeMillis() - high >= RelayGate.CONGESTION_HOLD_MS - 100, "not before the hold time");
-                // announced (not necessarily the last event: on a slow runner another may follow it)
-                assertTrue(events.stream().anyMatch(e -> e.startsWith("Spectator video paused")), events.toString());
+                // announced (not necessarily the last event: on a slow runner another may follow it). Waited for: the
+                // host sets its flag a moment before it says so, and under load this thread looked in between (the
+                // "congestion flake" of many release runs)
+                waitFor(() -> events.stream().anyMatch(e -> e.startsWith("Spectator video paused")), 1000, "announced: " + events);
                 host.forward(packet, packet.length); // during the pause: dropped, and no number used up
                 viewer.receive(in);
                 assertEquals(Spectate.PAUSE, in.getData()[0], "told: paused");

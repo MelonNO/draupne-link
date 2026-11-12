@@ -130,14 +130,29 @@ class MapView extends JComponent {
         return airspaceInfo;
     }
 
+    /**
+     * @param blind 1.0.64: it overwatches but its camera gives the motion detection no pictures - the eye crossed
+     *              out, in the warning colour. A flag here, not a Kind: the spectators' mirror sends the Kind's ordinal
+     *              (and doesn't carry this).
+     */
     record NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot, Kind queued,
-                    double headingDeg) {
+                    double headingDeg, boolean blind) {
         NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot) {
             this(name, lat, lon, state, kind, flown, pilot, null);
         }
 
         NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot, Kind queued) {
             this(name, lat, lon, state, kind, flown, pilot, queued, Double.NaN);
+        }
+
+        NetDrone(String name, double lat, double lon, String state, Kind kind, boolean flown, String pilot, Kind queued,
+                 double headingDeg) {
+            this(name, lat, lon, state, kind, flown, pilot, queued, headingDeg, false);
+        }
+
+        /** Overwatching, seeing nothing: only an OVERWATCH sign is crossed out. */
+        boolean watchesBlind() {
+            return blind && kind == Kind.OVERWATCH;
         }
 
         /** Not heard from as it should be (asleep, lost or unknown): its name in grey. */
@@ -1837,9 +1852,10 @@ class MapView extends JComponent {
         for (NetDrone d : netDrones) {
             Point2D s = proj.toScreen(d.lat(), d.lon());
             if (s.getX() < -40 || s.getY() < -40 || s.getX() > proj.w() + 40 || s.getY() > proj.h() + 40) continue;
-            Color c = d.kind() == Kind.ACTIVE && d.flown() ? Theme.WARN : kindColor(d.kind());
+            Color c = signColor(d);
             if (!Double.isNaN(d.headingDeg())) paintNetHeading(g, c, s.getX(), s.getY(), d.headingDeg());
             paintNetSign(g, d.kind(), c, s.getX(), s.getY());
+            if (d.watchesBlind()) paintBlind(g, s.getX(), s.getY());
             if (d.queued() != null) paintQueued(g, d.queued(), s.getX(), s.getY());
             if (!d.name().equals(hoveredNet)) continue; // the sign alone; its name and state while the mouse is on it
             g.setFont(Theme.headingFont(11f));
@@ -1853,10 +1869,28 @@ class MapView extends JComponent {
             g.setColor(c);
             g.drawString(line1, bx + 5, by + fm.getAscent());
             if (line2 != null) {
-                g.setColor(d.kind() == Kind.LOST ? LOST_COLOR : d.kind() == Kind.CRASHED ? CRASHED_COLOR : Theme.MUTED);
+                g.setColor(d.kind() == Kind.LOST ? LOST_COLOR : d.kind() == Kind.CRASHED ? CRASHED_COLOR
+                        : d.watchesBlind() ? Theme.WARN : Theme.MUTED);
                 g.drawString(line2, bx + 5, by + fm.getHeight() + fm.getAscent());
             }
         }
+    }
+
+    /** A drone's sign colour: its Kind's; the flown one yellow; 1.0.64: an overwatch that sees nothing in the warning colour. */
+    static Color signColor(NetDrone d) {
+        if (d.watchesBlind()) return Theme.WARN;
+        return d.kind() == Kind.ACTIVE && d.flown() ? Theme.WARN : kindColor(d.kind());
+    }
+
+    /** 1.0.64: the eye crossed out - it overwatches but sees nothing (blind was a log line only); also FLEET's row. */
+    static void paintBlind(Graphics2D g, double x, double y) {
+        java.awt.geom.Line2D slash = new java.awt.geom.Line2D.Double(x - 7.5, y + 7.5, x + 7.5, y - 7.5);
+        g.setColor(new Color(0, 0, 0, 170));
+        g.setStroke(new BasicStroke(4.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(slash);
+        g.setColor(Theme.WARN);
+        g.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        g.draw(slash);
     }
 
     /**

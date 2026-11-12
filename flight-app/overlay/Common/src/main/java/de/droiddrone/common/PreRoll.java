@@ -40,11 +40,19 @@ public final class PreRoll {
     public static final int MAX_BYTES = 256 * 1024;
 
     public static final class Frame {
+        /** When the picture was taken, as the PC is told (wall ms). */
         public final long atMs;
         public final byte[] jpeg;
+        /** pc.50: when it was added, on the clock the pre-roll counts by. */
+        final long addedAt;
 
         public Frame(long atMs, byte[] jpeg) {
+            this(atMs, atMs, jpeg);
+        }
+
+        Frame(long atMs, long addedAt, byte[] jpeg) {
             this.atMs = atMs;
+            this.addedAt = addedAt;
             this.jpeg = jpeg;
         }
     }
@@ -74,9 +82,18 @@ public final class PreRoll {
     }
 
     public synchronized void add(long now, byte[] jpeg) {
+        add(now, now, jpeg);
+    }
+
+    /**
+     * pc.50: the phone counts by a clock that never steps (now: its elapsedRealtime, here and in {@link #due} and
+     * {@link #snapshot}) and gives the picture's wall time beside it for the PC. Counted by the wall clock, a time
+     * correction backwards stopped the pictures for as long as it stepped, and one forwards threw them all away.
+     */
+    public synchronized void add(long now, long wallMs, byte[] jpeg) {
         if (jpeg == null || jpeg.length == 0) return;
         lastAddedAt = now;
-        frames.addLast(new Frame(now, jpeg));
+        frames.addLast(new Frame(wallMs, now, jpeg));
         bytes += jpeg.length;
         trim(now);
     }
@@ -100,7 +117,7 @@ public final class PreRoll {
     }
 
     private void trim(long now) {
-        while (!frames.isEmpty() && (now - frames.peekFirst().atMs > KEEP_MS || bytes > MAX_BYTES)) {
+        while (!frames.isEmpty() && (now - frames.peekFirst().addedAt > KEEP_MS || bytes > MAX_BYTES)) {
             bytes -= frames.removeFirst().jpeg.length;
         }
     }

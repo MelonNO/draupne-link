@@ -40,13 +40,46 @@ class CameraWatchdogTest {
         assertEquals(REOPEN_AND_SAY_BLIND, w.tick(13_000, false, false), "blind again: said again");
     }
 
+    /**
+     * pc.50: an event's session wasn't counted at all - one that recorded without the picture (pc.47), or never started,
+     * left the phone blind for the whole event and nobody was told. Now the PC is told; the camera is not opened again
+     * under a recording (the caller decides what to do).
+     */
     @Test
-    void anEventsSessionIsNotCounted() {
+    void blindInAnEventIsSaidButTheCameraIsNotOpenedAgainUnderIt() {
+        assertEquals(NONE, w.tick(0, true, false));
+        assertEquals(NONE, w.tick(1000, false, true), "the event's session starts");
+        assertEquals(NONE, w.tick(5999, false, true));
+        assertEquals(SAY_BLIND, w.tick(6000, false, true), "5 s of it without a picture: the PC is told");
+        assertEquals(0, w.reopens(), "not opened again under the recording");
+        assertEquals(NONE, w.tick(30_000, false, true), "said once");
+        assertEquals(NONE, w.tick(31_000, false, false), "the event over: the watch's session takes its moment - counted from here");
+        assertEquals(NONE, w.tick(35_999, false, false));
+        assertEquals(REOPEN, w.tick(36_000, false, false), "still blind: opened again now, not said again");
+        assertEquals(SAY_BACK, w.tick(37_000, true, false));
+    }
+
+    @Test
+    void picturesAgainInAnEventAreSaidToo() {
+        w.tick(0, false, true);
+        assertEquals(SAY_BLIND, w.tick(5000, false, true));
+        assertEquals(SAY_BACK, w.tick(6000, true, true));
+        assertEquals(NONE, w.tick(7000, true, true));
+        assertEquals(NONE, w.tick(8000, false, true));
+        assertEquals(SAY_BLIND, w.tick(13_000, false, true), "blind again: said again");
+    }
+
+    @Test
+    void anEventsStartAndEndStartTheCountOver() {
         w.tick(0, false, false);
-        assertEquals(NONE, w.tick(4000, false, true), "the event's session may record without the picture");
-        assertEquals(NONE, w.tick(60_000, false, true));
-        assertEquals(NONE, w.tick(61_000, false, false), "counted from its end");
-        assertEquals(REOPEN_AND_SAY_BLIND, w.tick(66_000, false, false));
+        assertEquals(NONE, w.tick(4000, false, true), "4 s blind, then an event's session: it has its own 5 s");
+        assertEquals(NONE, w.tick(8999, false, true));
+        assertEquals(SAY_BLIND, w.tick(9000, false, true));
+        w.reset();
+        w.tick(0, false, true);
+        assertEquals(NONE, w.tick(4000, false, false), "and so has the watch's session after an event");
+        assertEquals(NONE, w.tick(8999, false, false));
+        assertEquals(REOPEN_AND_SAY_BLIND, w.tick(9000, false, false));
     }
 
     @Test

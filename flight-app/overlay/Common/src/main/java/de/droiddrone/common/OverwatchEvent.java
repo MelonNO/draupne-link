@@ -21,8 +21,15 @@ package de.droiddrone.common;
  * DRAUPNE Flight pc.36: one overwatch event on the phone, from the first detection to the motion's end - the pilot's
  * rules. A detection while quiet starts an event (the alert goes, the clip records). It ends {@link #QUIET_MS} after
  * the last detection (MOTION ENDED; the clip stops, the phone watches on). The PC's DISMISS silences the event until
- * then - but never longer than {@link #DISMISS_CAP_MS}: a scene still moving after that alerts again. A clip stops
- * at {@link #MAX_CLIP_MS} even while the motion goes on (the event and its silence don't).
+ * then - but never longer than {@link #DISMISS_CAP_MS}: a scene still moving after that alerts again.
+ * <p>
+ * pc.50: an event is never longer than its clip. At {@link #MAX_CLIP_MS} it ENDS (it only stopped its clip and went
+ * on: a scene that kept moving - wind, an animal, for hours - rang once at its start and recorded 15 min, and a person
+ * arriving later got no ring and no clip). The next detection starts a new event: its own alert, pictures before it
+ * and clip - so a scene that moves is recorded all along and rings at least every 15 min. A dismissed event waits for
+ * its silence to end first (at most {@link #DISMISS_CAP_MS} more), so a DISMISS is never answered with a ring at once.
+ * And motion that is new alerts again in an event nobody dismissed too ({@link #AGAIN_EVERY_MS} apart at least).
+ * <p>
  * Pure and single-threaded (the phone's overwatch thread): the PC's tests drive it with made-up times.
  */
 public final class OverwatchEvent {
@@ -31,17 +38,19 @@ public final class OverwatchEvent {
     public static final long MAX_CLIP_MS = 15 * 60_000;
 
     /** What the caller does now. */
-    public enum Action { NONE, START, ALERT_AGAIN, STOP_CLIP, ENDED }
+    public enum Action { NONE, START, ALERT_AGAIN, ENDED }
 
     private boolean active;
     private int event;
     private int alertNo;
     private long startedAt, lastDetectionAt, dismissedAt = -1;
-    private boolean clipStopped;
+    /** pc.50: when this event last alerted (at its start, or again), and new motion seen since that hasn't rung yet. */
+    private long alertedAt;
+    private boolean newWaiting;
 
     /**
-     * A detection now. START: a new event (alert, record, preview); ALERT_AGAIN: still moving 10 min after a dismiss
-     * (the alert once more, the same event); NONE: part of the running event.
+     * A detection now. START: a new event (alert, record, preview); ALERT_AGAIN: new motion, or still moving 10 min
+     * after a dismiss (the alert once more, the same event); NONE: part of the running event.
      */
     public Action onDetection(long now) {
         return onDetection(now, Float.NaN, Float.NaN);
@@ -56,6 +65,13 @@ public final class OverwatchEvent {
      */
     public static final long NEW_AFTER_QUIET_MS = 5000, NEW_MIN_AFTER_DISMISS_MS = 10_000;
     public static final float NEW_FAR = 0.3f;
+    /**
+     * pc.50: the same in an event nobody dismissed (an acknowledged alert rang once, then never again while anything
+     * kept the event alive) - but not a ring for every flicker: an event rings once in {@link #AGAIN_EVERY_MS} at most,
+     * its start counted. New motion in between is remembered and rings when that time is over, if the scene still
+     * moves then. (After a dismiss the dismiss's own rule holds: the pilot has looked.)
+     */
+    public static final long AGAIN_EVERY_MS = 60_000;
     private float lastX = Float.NaN, lastY = Float.NaN;
 
     public Action onDetection(long now, float cx, float cy) {
@@ -71,35 +87,49 @@ public final class OverwatchEvent {
             startedAt = now;
             lastDetectionAt = now;
             dismissedAt = -1;
-            clipStopped = false;
+            alertedAt = now;
+            newWaiting = false;
             return Action.START;
         }
         lastDetectionAt = now;
-        boolean newMotion = now - dismissedAt >= NEW_MIN_AFTER_DISMISS_MS && (quiet >= NEW_AFTER_QUIET_MS || far);
-        if (dismissedAt >= 0 && (now - dismissedAt >= DISMISS_CAP_MS || newMotion)) {
+        boolean newMotion = quiet >= NEW_AFTER_QUIET_MS || far;
+        // at the clip's cap the tick ends the event now (a dismissed one: once its silence is over) - no ring from this
+        // one just before; the next detection is the new event's first
+        boolean capped = now - startedAt >= MAX_CLIP_MS;
+        if (dismissedAt >= 0) {
+            if (now - dismissedAt < DISMISS_CAP_MS && !(newMotion && now - dismissedAt >= NEW_MIN_AFTER_DISMISS_MS)) return Action.NONE;
             dismissedAt = -1;
-            alertNo = (alertNo + 1) & 0xff;
-            return Action.ALERT_AGAIN;
+            return capped ? Action.NONE : again(now);
         }
-        return Action.NONE;
+        if (capped) return Action.NONE;
+        if (newMotion) newWaiting = true;
+        return newWaiting && now - alertedAt >= AGAIN_EVERY_MS ? again(now) : Action.NONE;
+    }
+
+    private Action again(long now) {
+        alertNo = (alertNo + 1) & 0xff;
+        alertedAt = now;
+        newWaiting = false;
+        return Action.ALERT_AGAIN;
     }
 
     /** The PC dismissed the alert: the event goes on quietly. */
     public void dismiss(long now) {
-        if (active) dismissedAt = now;
+        if (!active) return;
+        dismissedAt = now;
+        newWaiting = false; // the pilot saw what there is
     }
 
-    /** Every tick: ENDED after QUIET_MS without a detection (once), STOP_CLIP at the clip's cap (once). */
+    /**
+     * Every tick: ENDED (once) after QUIET_MS without a detection - or, pc.50, at the clip's cap: a dismissed event
+     * when its silence is over, but never more than DISMISS_CAP_MS past the cap.
+     */
     public Action tick(long now) {
         if (!active) return Action.NONE;
-        if (now - lastDetectionAt >= QUIET_MS) {
-            active = false;
-            dismissedAt = -1;
+        long ran = now - startedAt;
+        if (now - lastDetectionAt >= QUIET_MS || ran >= MAX_CLIP_MS && (!isSilenced(now) || ran >= MAX_CLIP_MS + DISMISS_CAP_MS)) {
+            abandon();
             return Action.ENDED;
-        }
-        if (!clipStopped && now - startedAt >= MAX_CLIP_MS) {
-            clipStopped = true;
-            return Action.STOP_CLIP;
         }
         return Action.NONE;
     }
@@ -108,6 +138,7 @@ public final class OverwatchEvent {
     public void abandon() {
         active = false;
         dismissedAt = -1;
+        newWaiting = false;
     }
 
     public boolean isActive() {
@@ -138,5 +169,22 @@ public final class OverwatchEvent {
     /** Numbering goes on from here (the phone remembers the last event across a restart of the watch). */
     public void continueFrom(int lastEvent) {
         event = lastEvent & 0xffff;
+    }
+
+    /**
+     * pc.50: how long a PC that doesn't answer is still told once another has it. The alert and the motion's end went
+     * to every PC until ALL had them: one PC switched off (of up to ten that asked this phone's name in a day) kept the
+     * phone sending through every event and for 30 min after it - its radio never idle.
+     */
+    public static final long STRAGGLER_MS = 60_000;
+
+    /**
+     * pc.50: whether an alert (or a motion's end) said sinceSaidMs ago is still to be sent again: someone lacks it -
+     * and nobody has it yet, or it is younger than {@link #STRAGGLER_MS}.
+     * @param allHave every PC told has acknowledged it
+     * @param anyHas one at least has
+     */
+    public static boolean resendOwed(boolean allHave, boolean anyHas, long sinceSaidMs) {
+        return !allHave && (!anyHas || sinceSaidMs < STRAGGLER_MS);
     }
 }

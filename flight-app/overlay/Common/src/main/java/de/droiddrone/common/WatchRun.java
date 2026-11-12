@@ -27,6 +27,23 @@ public final class WatchRun {
     private WatchRun() {
     }
 
+    /** The detector's pictures are about this far apart (8 a second). */
+    public static final long FRAME_EVERY_MS = 125;
+
+    /**
+     * pc.50: how old the last picture taken must be for the next frame to be taken, at a camera of fps frames a second.
+     * A fixed 125 ms against 15 frames a second (overwatch's own session: one every 66.7 ms) left 8 ms for the second
+     * frame - measured after the copy, it mostly came "too early" and the third was taken: 5 pictures a second, not
+     * 7.5. Now the gate lies half a frame before the frame meant - the one nearest {@link #FRAME_EVERY_MS} after the
+     * last: 100 ms at 15 fps (every second frame), 117 ms at 30 fps (every fourth, as before), 104 ms at 24 fps.
+     * @param fps the session's frame rate (its range's top); 0 or less: not known - as for 30
+     */
+    public static long frameGateMs(int fps) {
+        int f = fps <= 0 ? 30 : fps;
+        long frames = Math.max(1, Math.round(FRAME_EVERY_MS * f / 1000.0));
+        return Math.round((frames - 0.5) * 1000.0 / f);
+    }
+
     /**
      * @param ready       asked for, the FC disarmed, a camera there
      * @param started     that camera's session runs

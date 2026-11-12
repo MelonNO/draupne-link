@@ -86,32 +86,50 @@ final class AlertSound {
         });
     }
 
+    /** 1.0.64: the overwatch ring's own setting (LINK > Overwatch ring, on unless turned off). */
+    static final String RING_KEY = "overwatchRing";
+    private volatile boolean ringEnabled = true;
+    /** The ring, and where it plays (tests count instead, at once). */
+    Runnable ringer = AlertSound::playRing;
+    java.util.concurrent.Executor ringOn = player;
+
+    void setRingEnabled(boolean on) {
+        ringEnabled = on;
+    }
+
+    boolean isRingEnabled() {
+        return ringEnabled;
+    }
+
     /**
      * An overwatch alert (1.0.47): three rising notes, twice - unlike the falling warning, so it isn't taken for one
-     * about the drone in the air. Once per alert; the caller leaves it out while this PC flies.
+     * about the drone in the air. Once per alert; the caller leaves it out while this PC flies. 1.0.64: its own
+     * setting - Warning sounds off silenced the overwatch alerts too.
      */
     void ring() {
-        if (!enabled) return;
-        player.execute(() -> {
-            playing = true;
-            try (SourceDataLine line = AudioSystem.getSourceDataLine(new AudioFormat(RATE, 16, 1, true, false))) {
-                line.open();
-                line.start();
-                for (int round = 0; round < 2; round++) {
-                    for (double hz : new double[]{660, 880, 1100}) {
-                        byte[] pcm = tone(hz, 110);
-                        line.write(pcm, 0, pcm.length);
-                    }
-                    byte[] gap = new byte[RATE / 5 * 2];
-                    line.write(gap, 0, gap.length);
+        if (!ringEnabled) return;
+        ringOn.execute(ringer);
+    }
+
+    private static void playRing() {
+        playing = true;
+        try (SourceDataLine line = AudioSystem.getSourceDataLine(new AudioFormat(RATE, 16, 1, true, false))) {
+            line.open();
+            line.start();
+            for (int round = 0; round < 2; round++) {
+                for (double hz : new double[]{660, 880, 1100}) {
+                    byte[] pcm = tone(hz, 110);
+                    line.write(pcm, 0, pcm.length);
                 }
-                line.drain();
-            } catch (Exception | LinkageError e) {
-                log("Overwatch sound: " + e);
-            } finally {
-                playing = false;
+                byte[] gap = new byte[RATE / 5 * 2];
+                line.write(gap, 0, gap.length);
             }
-        });
+            line.drain();
+        } catch (Exception | LinkageError e) {
+            log("Overwatch sound: " + e);
+        } finally {
+            playing = false;
+        }
     }
 
     /** 880 Hz then 660 Hz, 120 ms each: short enough not to mask the motors, unlike a Windows sound. */

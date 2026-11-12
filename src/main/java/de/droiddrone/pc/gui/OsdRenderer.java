@@ -44,12 +44,31 @@ final class OsdRenderer {
      * @param sticksLost  the phone's own report says its last stick write to the flight controller is older than
      *                    STICKS_LOST_ALARM_MS (judged on the report's figure, not the extrapolated age: an app before
      *                    pc.26 reports once a second)
+     * @param waking      1.0.64: a sleeping phone is waited for ("WAKING - 4:12", "WAKING"): said steady in place of
+     *                    LINK LOST, no red frame; null otherwise
+     * @param tierTag     1.0.64: the video tier while it is under the normal picture ("ROBUST", "SURVIVAL"); null otherwise
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
                 boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
                 String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
-                boolean relayed, boolean sticksLost, String lostText) {
+                boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag) {
+        /** Up to 1.0.63: no waking line, no tier tag. */
+        Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
+             VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
+             boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
+             String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
+             boolean relayed, boolean sticksLost, String lostText) {
+            this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview, linkStalled,
+                    videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown, banner,
+                    spectatorPaused, relayed, sticksLost, lostText, null, null);
+        }
+
+        /** Waiting for a sleeping phone, the link not up yet: no LINK LOST, no red frame. */
+        boolean wakingNow() {
+            return waking != null && !linkReady;
+        }
+
         /** Up to 1.0.40: LINK LOST says only that. */
         Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
              VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -106,7 +125,7 @@ final class OsdRenderer {
     private static final int CORE_TEMP_ALARM_C = 70; // Betaflight's default osd_core_temp_alarm
 
     /** Warnings that aren't (yet) a loss of control: yellow; the rest red. */
-    private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "RC OFF - NO RADIO",
+    private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "RC OFF - NO RADIO", "RC OFF - READING FC",
             "RC OFF - MAPPING INCOMPLETE", "PHONE BATTERY LOW", "RADIO FROZEN?", "VIDEO FROZEN", "RELAY - MORE DELAY",
             "PILOT DISCONNECTED");
 
@@ -177,7 +196,7 @@ final class OsdRenderer {
                 if (!observer) ping(ex, ey, a, d.pingMs(), d.video() == null ? -1 : d.video().pingBaselineMs());
             });
             element(OsdElement.NETWORK, (ex, ey, a) -> network(ex, ey, a, t == null ? null : t.getNetwork()));
-            element(OsdElement.VIDEO, (ex, ey, a) -> video(ex, ey, a, d.video()));
+            element(OsdElement.VIDEO, (ex, ey, a) -> video(ex, ey, a, d.video(), d.tierTag()));
             element(OsdElement.PHONE_BATTERY, (ex, ey, a) -> {
                 int phone = t == null ? -1 : t.getPhoneBatteryPercent();
                 if (phone >= 0) phoneBattery(ex, ey, a, phone, t.isPhoneCharging());
@@ -285,7 +304,8 @@ final class OsdRenderer {
 
             if (d.recording()) recordingMark(now);
             element(OsdElement.WARNINGS, (ex, ey, a) -> warnings(ex, ey, a, d, s, t, now));
-            if (!d.linkReady() || d.linkStalled() || d.fcLost()) lostFrame();
+            // 1.0.64: not while a sleeping phone is waited for - that is no loss
+            if ((!d.linkReady() && !d.wakingNow()) || d.linkStalled() || d.fcLost()) lostFrame();
             element(OsdElement.DEBUG, (ex, ey, a) -> debugLine(ex, ey, a, d.video()));
         } finally { // also if an element throws: no Graphics left open, no bounds kept
             boundsOut = null;
@@ -591,11 +611,29 @@ final class OsdRenderer {
         signalBars(sx + tw + 8 * unit, y, net.strengthPercent());
     }
 
-    private void video(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v) {
-        if (v == null || v.width() <= 0) return;
+    /**
+     * @param tier 1.0.64: "ROBUST" / "SURVIVAL" while AUTO (or VIDEO) holds the picture under normal - after the line,
+     *             muted and steady (a tier change was a log line only); null: none
+     */
+    private void video(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v, String tier) {
+        boolean stats = v != null && v.width() > 0;
+        if (!stats && tier == null) return;
         g.setFont(Theme.monoFont(Font.PLAIN, 15 * unit));
         // the frames arriving (the shown count drops when frames bunch, see the debug line) and the bitrate in Mbit/s
-        put(String.format(Locale.ROOT, "VID %dFPS %.1f MBPS", v.receivedFps(), v.megabitsPerSecond()), x, y, WHITE, a);
+        if (!stats) { // no picture yet: the tier alone
+            put(tier, x, y, STALE, a);
+            return;
+        }
+        String line = String.format(Locale.ROOT, "VID %dFPS %.1f MBPS", v.receivedFps(), v.megabitsPerSecond());
+        if (tier == null) {
+            put(line, x, y, WHITE, a);
+            return;
+        }
+        FontMetrics fm = g.getFontMetrics();
+        float lw = fm.stringWidth(line), gap = fm.stringWidth("  ");
+        float sx = startX(x, lw + gap + fm.stringWidth(tier), a);
+        text(line, sx, y, WHITE);
+        text(tier, sx + lw + gap, y, STALE);
     }
 
     /** The phone's battery: a small battery icon with its charge, and the percentage. */
@@ -704,9 +742,14 @@ final class OsdRenderer {
             observerWarnings(x, y, a, d, t, now);
             return;
         }
+        // 1.0.64: waiting for a sleeping phone is no link loss - "WAKING - 4:12" in its place, steady
+        boolean waking = d.wakingNow();
         // a spectator says what kind of loss: the pilot's own link, or the pilot gone on purpose (1.0.41)
-        if (!d.linkReady()) big.add(d.lostText() != null ? d.lostText() : "LINK LOST");
-        else if (d.linkStalled()) big.add("LINK STALL");
+        if (!d.linkReady()) {
+            if (!waking) big.add(d.lostText() != null ? d.lostText() : "LINK LOST");
+        } else if (d.linkStalled()) {
+            big.add("LINK STALL");
+        }
         if (d.fcLost()) big.add("NO FLIGHT CONTROLLER");
         // Betaflight's real failsafe (stage 2: drop / land / disarm). RXLOSS alone is a pause of 100 ms or more in the
         // sticks: Betaflight holds the last sticks for 300 ms, and keeps the flag 0.5 s after they return
@@ -730,14 +773,19 @@ final class OsdRenderer {
         boolean blink = d.preview() || (now / 400) % 2 == 0;
         // the steady lines under the blinking block: why the link is down, the lost FC (two lines), a sticks gap or
         // what blocks arming - one of those - and the unread arm switch
-        boolean hint = !d.linkReady() && d.linkHint() != null;
+        boolean hint = !waking && !d.linkReady() && d.linkHint() != null;
         boolean blocked = !hint && !d.fcLost() && !rcGap && s != null && !s.armed() && !s.blockers().isEmpty();
         int lines = (hint ? 1 : d.fcLost() ? 2 : rcGap || blocked ? 1 : 0) + (d.armSwitchUnknown() ? 1 : 0);
         // the whole block stays in the picture, also when placed low: it moves up by what doesn't fit
-        float below = !big.isEmpty() ? (big.size() - 1) * 38 * unit : 0;
+        int bigLines = big.size() + (waking ? 1 : 0);
+        float below = bigLines > 0 ? (bigLines - 1) * 38 * unit : 0;
         float sub = lines == 0 ? 0 : (18 + 24 * lines) * unit;
         y = Math.min(y, h - 14 * unit - below - sub);
         g.setFont(Theme.headingFont(34 * unit));
+        if (waking) { // where LINK LOST would blink: steady, white - it is expected
+            put(d.waking(), x, y, WHITE, a);
+            y += 38 * unit;
+        }
         for (String text : big) {
             if (blink) put(text, x, y, YELLOW_WARNINGS.contains(text) || text.startsWith("RC OFF") ? YELLOW : RED, a);
             else mark(x, y, 1, 1);

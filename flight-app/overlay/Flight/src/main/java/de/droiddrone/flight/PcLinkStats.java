@@ -140,7 +140,7 @@ final class PcLinkStats {
 
     /** The PHONE_STATE record; lastRcSeq is -1 for none. */
     static synchronized void writePhoneStateTo(DataOutputStream out, int flags, int lastRcSeq) throws IOException {
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         out.writeShort(PHONE_STATE_CODE);
         out.writeByte(flags);
         out.writeByte(lastRcSeq < 0 ? 255 : lastRcSeq & 0xff); // the low byte of a 16-bit sequence (pc.26)
@@ -148,6 +148,10 @@ final class PcLinkStats {
         out.writeShort(rcInToOutMs < 0 ? 65535 : (int) Math.min(65535, rcInToOutMs));
     }
 
+    /**
+     * pc.50: the gaps and ages on SystemClock.elapsedRealtime (they were on the wall clock: a network time correction
+     * showed as a stick gap of that size on the PC, or hid one).
+     */
     private static long lastRcIn;
     private static long lastRcInNs;
     private static long lastRcOut;
@@ -164,7 +168,7 @@ final class PcLinkStats {
 
     /** A stick packet arrived from the PC. */
     static synchronized void rcIn() {
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         if (lastRcIn != 0) rcInMaxGap = Math.max(rcInMaxGap, now - lastRcIn);
         lastRcIn = now;
         lastRcInNs = System.nanoTime();
@@ -175,7 +179,7 @@ final class PcLinkStats {
      * the last arrival is (near enough) that frame's way through the phone.
      */
     static synchronized void rcOut() {
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         if (lastRcOut != 0) rcOutMaxGap = Math.max(rcOutMaxGap, now - lastRcOut);
         lastRcOut = now;
         if (lastRcInNs != 0) rcInToOutMs = (System.nanoTime() - lastRcInNs) / 1_000_000L;
@@ -200,7 +204,7 @@ final class PcLinkStats {
 
     /** The record body since the last call, then starts over: five shorts. */
     static synchronized void writeTo(DataOutputStream out) throws IOException {
-        long now = System.currentTimeMillis();
+        long now = android.os.SystemClock.elapsedRealtime();
         // a gap still open counts too: no stick packet for 0.3 s is a 0.3 s gap even before the next one comes
         long inGap = Math.max(rcInMaxGap, lastRcIn == 0 ? 0 : now - lastRcIn);
         long outGap = Math.max(rcOutMaxGap, lastRcOut == 0 ? 0 : now - lastRcOut);

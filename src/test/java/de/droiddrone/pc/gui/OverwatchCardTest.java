@@ -36,9 +36,11 @@ class OverwatchCardTest {
         return img;
     }
 
+    private static final long STARTED = System.currentTimeMillis() - 5000;
+
     private static OverwatchHub.View view(BufferedImage picture, String held) {
         long now = System.currentTimeMillis();
-        OverwatchProtocol.Alert a = new OverwatchProtocol.Alert(1, 1, 0, 0, now - 5000, 0.47f, 0.38f, 0.06f, 0.2f, 0, 90,
+        OverwatchProtocol.Alert a = new OverwatchProtocol.Alert(1, 1, 0, 0, STARTED, 0.47f, 0.38f, 0.06f, 0.2f, 0, 90,
                 611429110, 106897877, 0, 91, "MobileX-ray");
         return new OverwatchHub.View("MobileX-ray", AlertCard.Shown.CARD, false, now - 5000, -1, picture, a, null, null, false, held, 8);
     }
@@ -155,6 +157,18 @@ class OverwatchCardTest {
         img = paint(p);
         assertEquals(full, p.cardsBox().getComponent(0).getHeight());
         assertTrue(count(img, SKY) > 10_000);
+
+        // 1.0.64: a new alert from the drone opens its minimized card again
+        SwingUtilities.invokeAndWait(() -> p.minimize("MobileX-ray", true));
+        paint(p);
+        OverwatchHub.View old = view(preRoll(), null);
+        OverwatchProtocol.Alert again = new OverwatchProtocol.Alert(1, 2, 0, 0, STARTED + 60_000, 0.47f, 0.38f, 0.06f, 0.2f, 0, 90,
+                611429110, 106897877, 0, 91, "MobileX-ray");
+        OverwatchHub.View next = new OverwatchHub.View(old.drone(), old.shown(), false, old.alertAtWall() + 60_000, -1, old.picture(), again,
+                null, null, false, null, 8);
+        SwingUtilities.invokeAndWait(() -> p.setViews(List.of(next)));
+        paint(p);
+        assertEquals(full, p.cardsBox().getComponent(0).getHeight(), "the next alert shows whole");
     }
 
     /** 1.0.64, the pilot: "it should be possible to scroll in the clips menu" - cards pushed the clip list off the window. */

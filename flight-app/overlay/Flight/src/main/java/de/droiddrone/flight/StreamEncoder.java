@@ -23,6 +23,7 @@
  *  only at 2 Mbit/s and up), through a high-pass filter against wind and handling rumble.
  *  pc.45: listening only (startListening) - the microphone through the same filter into a VoiceActivity, nothing
  *  encoded or sent: "sound heard" for observers that muted the phone (Observe.STATE_SOUND_HEARD).
+ *  pc.50: the dead-man's hold at the lowest step while the PC is silent (holdAtFloor / releaseFloor).
  */
 
 package de.droiddrone.flight;
@@ -451,6 +452,7 @@ public class StreamEncoder {
      */
     public void setBitRateIndex(int index){
         if (index < 0 || index >= baseBitRates.length) return;
+        releaseFloor(); // pc.50: whoever sets the step is heard - it counts from the step asked for before the hold
         if (index > bitRateIndex && lockIncreaseBitrate) return;
         if (config.getBitrateLimit() != 0) {
             while (index > 0 && baseBitRates[index] > config.getBitrateLimit()) index--;
@@ -459,6 +461,48 @@ public class StreamEncoder {
         if (index < bitRateIndex) lastBitrateReduceTs = android.os.SystemClock.elapsedRealtime();
         bitRateIndex = index;
         encoderBitrateChange = true;
+    }
+
+    /** pc.50: the step the PC had asked for while the dead-man holds the encoder at the floor; -1: not held. */
+    private volatile int heldIndex = -1;
+    private final Object holdLock = new Object();
+
+    /**
+     * pc.50, the video's dead-man (Udp.pcSilentTick): the PC went silent - the encoder to this step, the one it was
+     * on kept for {@link #releaseFloor}. Nothing to do at or under the step already.
+     * @return whether the bitrate was lowered now
+     */
+    public boolean holdAtFloor(int floor){
+        synchronized (holdLock) {
+            if (heldIndex >= 0 || floor < 0 || floor >= bitRateIndex) return false;
+            heldIndex = bitRateIndex;
+            bitRateIndex = floor;
+            lastBitrateReduceTs = android.os.SystemClock.elapsedRealtime();
+            encoderBitrateChange = true;
+            return true;
+        }
+    }
+
+    /**
+     * pc.50: the PC is heard again (or a step is set outright): back to the step it had asked for - also right after
+     * this phone's own brake, whose 2 s hold is for raises the PC asks for anew. The PC's bitrate limit holds.
+     * @return whether a hold ended
+     */
+    public boolean releaseFloor(){
+        if (heldIndex < 0) return false;
+        synchronized (holdLock) {
+            int back = heldIndex;
+            if (back < 0) return false;
+            heldIndex = -1;
+            if (config.getBitrateLimit() != 0) {
+                while (back > 0 && baseBitRates[back] > config.getBitrateLimit()) back--;
+            }
+            if (back > bitRateIndex) {
+                bitRateIndex = back;
+                encoderBitrateChange = true;
+            }
+            return true;
+        }
     }
 
     /** A key frame now (the PC got one damaged); at most every 0.3 s, every 1 s with intra refresh (it heals anyway). */
