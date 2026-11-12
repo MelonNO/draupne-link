@@ -1,5 +1,6 @@
 package de.droiddrone.pc.fleet;
 
+import de.droiddrone.pc.video.H264Encoder;
 import de.droiddrone.common.MotionRecord;
 import de.droiddrone.common.OverwatchEvent;
 import de.droiddrone.common.OverwatchProtocol;

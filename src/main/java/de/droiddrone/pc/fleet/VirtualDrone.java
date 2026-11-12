@@ -870,8 +870,15 @@ public final class VirtualDrone {
         boolean pilotNear = isConnected() || now - lastPilotPacketMs < Takeover.PILOT_ALIVE_MS && !from.equals(lastPcIp);
         if (pilotNear) state = Observe.REFUSED_PILOT;
         else if (!fcDisarmed()) state = Observe.REFUSED_ARMED;
-        else if (mode != NORMAL || overwatch.isWatching()) state = Observe.REFUSED_POWER;
-        else {
+        else if (mode != NORMAL || overwatch.isWatching()) {
+            state = Observe.REFUSED_POWER;
+            // as the phone app from pc.52: standby (awake, camera off) wakes for an observer; its next request streams
+            if (mode == STANDBY && !overwatch.isWatching()) {
+                synchronized (powerLock) {
+                    if (mode == STANDBY) wake("an observer");
+                }
+            }
+        } else {
             boolean added;
             synchronized (observers) {
                 added = !observerAddresses.containsKey(id);

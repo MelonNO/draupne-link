@@ -171,4 +171,74 @@ class StanagStreamTest {
         pipeline.setFrameTap(null);
         pipeline.close();
     }
+
+    /** The same parameter sets with an access unit delimiter behind them: other bytes, the same picture size and codec. */
+    private static byte[] otherBytes(byte[] config) {
+        byte[] out = java.util.Arrays.copyOf(config, config.length + 6);
+        System.arraycopy(new byte[]{0, 0, 0, 1, 0x09, (byte) 0xf0}, 0, out, config.length, 6);
+        return out;
+    }
+
+    /**
+     * 1.0.65 (one stream per drone, each made on the PC: a page, an alert's pictures, a clip or the video by turns, each
+     * from an encoder of its own): new parameter sets at the same size went as "a new stream" - the transport stream
+     * ended and began again, its times from zero, and a player stalled at every change of what was shown.
+     */
+    @Test
+    void newParameterSetsAtTheSameSizeGoOnInTheSameStream(@TempDir Path dir) {
+        TestStreams.Stream a = TestStreams.h264(320, 240, 20, 10), b = TestStreams.h264(320, 240, 20, 10);
+        Path file = dir.resolve("same.ts");
+        StanagStream stream = new StanagStream(file.toString(), StanagStreamTest::meta, m -> {});
+        long ms = 10_000;
+        stream.onConfig(320, 240, false, a.codecConfig());
+        for (TestStreams.Packet p : a.packets()) stream.onFrame(p.data(), p.keyFrame(), ms += 33);
+        stream.onConfig(320, 240, false, otherBytes(b.codecConfig())); // another encoder's
+        stream.onFrame(b.packets().get(1).data(), false, ms += 33); // not a key frame: nothing of the new one before its key frame
+        for (TestStreams.Packet p : b.packets()) stream.onFrame(p.data(), p.keyFrame(), ms += 33);
+        stream.close();
+        assertEquals(40, stream.sentFrames(), "both, and not the picture that came before its key frame");
+        TsReader ts = TsReader.read(file, 0, 0, 0);
+        assertEquals(40, ts.pictures.size(), "one file with all of it: the stream never began again (a new one replaces the file)");
+        assertEquals(40, ts.decoded(), "every picture decodes across the change");
+        assertTrue(ts.timesRise());
+        assertTrue(ts.pictures.get(39).ptsMs() - ts.pictures.get(0).ptsMs() > 1200, "its times run on over the change");
+    }
+
+    @Test
+    void aNewPictureSizeStillBeginsAStreamOfItsOwn(@TempDir Path dir) {
+        TestStreams.Stream a = TestStreams.h264(320, 240, 10, 10), b = TestStreams.h264(640, 480, 10, 10);
+        Path file = dir.resolve("size.ts");
+        StanagStream stream = new StanagStream(file.toString(), StanagStreamTest::meta, m -> {});
+        long ms = 10_000;
+        stream.onConfig(320, 240, false, a.codecConfig());
+        for (TestStreams.Packet p : a.packets()) stream.onFrame(p.data(), p.keyFrame(), ms += 33);
+        stream.onConfig(640, 480, false, b.codecConfig());
+        for (TestStreams.Packet p : b.packets()) stream.onFrame(p.data(), p.keyFrame(), ms += 33);
+        stream.close();
+        TsReader ts = TsReader.read(file, 0, 0, 0);
+        assertEquals(640, ts.width, "the new stream (it took the file's place)");
+        assertEquals(10, ts.pictures.size());
+    }
+
+    /** 1.0.65: with a stream per drone a receiver that is away was said by every one of them every 5 s. */
+    @Test
+    void aStreamThatCannotBeSentIsSaidOnceAndAgainWhenItGoes(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 4, 1); // every picture a key frame: each is a new try
+        Path folder = dir.resolve("not-there-yet");
+        List<String> log = new java.util.concurrent.CopyOnWriteArrayList<>();
+        StanagStream stream = new StanagStream("MobileAlpha", folder.resolve("out.ts").toString(), StanagStreamTest::meta, log::add,
+                StanagStream.KLV_EVERY_MS);
+        stream.retryMs = 50;
+        stream.onConfig(320, 240, false, s.codecConfig());
+        for (int i = 0; i < 4; i++) {
+            stream.onFrame(s.packets().get(i).data(), true, 1000 + i * 100);
+            Thread.sleep(120);
+        }
+        assertEquals(1, log.stream().filter(l -> l.startsWith("STANAG 4609 MobileAlpha: ") && l.endsWith("trying every 5 s.")).count(), log.toString());
+        java.nio.file.Files.createDirectories(folder);
+        stream.onFrame(s.packets().get(0).data(), true, 2000);
+        stream.close();
+        assertTrue(log.get(log.size() - 1).startsWith("STANAG 4609 MobileAlpha: sending to"), log.toString());
+        assertEquals(2, log.size(), "the failure once, then that it goes: " + log);
+    }
 }

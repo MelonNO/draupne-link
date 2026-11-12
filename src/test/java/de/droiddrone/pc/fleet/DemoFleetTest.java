@@ -70,6 +70,23 @@ class DemoFleetTest {
         assertTrue(fleet.drones().containsAll(four.drones()));
         assertTrue(six.drones().containsAll(six.forOtherPilot()), "the other pilot observes drones with scenes");
         assertEquals(3, six.forOtherPilot().size());
+        // 2026-11-12, the pilot: SET UP SCENARIO "spawned another set of drones on top of the already existing drones" -
+        // the six had the layout's first places, and the scenario's four are put exactly there
+        for (VirtualDrone a : fleet.drones()) {
+            for (VirtualDrone b : fleet.drones()) {
+                if (a == b) continue;
+                double dn = (a.position()[0] - b.position()[0]) * 111_320.0;
+                double de = (a.position()[1] - b.position()[1]) * 111_320.0 * Math.cos(Math.toRadians(a.position()[0]));
+                assertTrue(Math.hypot(dn, de) >= 10, a.name() + " and " + b.name() + " stand " + Math.round(Math.hypot(dn, de)) + " m apart");
+            }
+        }
+        for (VirtualDrone s : six.drones()) {
+            for (VirtualDrone f : four.drones()) {
+                double dn = (s.position()[0] - f.position()[0]) * 111_320.0;
+                double de = (s.position()[1] - f.position()[1]) * 111_320.0 * Math.cos(Math.toRadians(s.position()[0]));
+                assertTrue(Math.hypot(dn, de) >= 60, s.name() + " is clear of the scenario's " + f.name() + ": " + Math.round(Math.hypot(dn, de)) + " m");
+            }
+        }
         List<String> names = new ArrayList<>();
         for (VirtualDrone d : fleet.drones()) names.add(d.name());
         assertEquals(names.size(), names.stream().distinct().count(), "every drone a name of its own: " + names);

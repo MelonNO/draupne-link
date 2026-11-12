@@ -58,7 +58,6 @@ import de.droiddrone.pc.setup.SelfUpdate;
 import de.droiddrone.pc.setup.Tailscale;
 import de.droiddrone.pc.setup.UpdateCheck;
 import de.droiddrone.pc.video.LatencyMeter;
-import de.droiddrone.pc.video.StanagStream;
 import de.droiddrone.pc.gui.PowerController.Asleep;
 import de.droiddrone.pc.video.VideoPipeline;
 
@@ -190,8 +189,14 @@ public class MainWindow extends JFrame {
     private final CameraView cameraView = new CameraView(tileCache);
     private final CameraView.Live cameraLive = new CameraView.Live(cameraView);
     private boolean cameraOnMap;
-    /** The STANAG 4609 stream while it is on and the video runs; null otherwise. */
-    private StanagStream stanag;
+    /** The STANAG 4609 streams, one per drone (1.0.65); set in the constructor. */
+    private StanagController stanagStreams;
+    /** Each OBSERVATION tile's OSD figures now, by phone: its STANAG stream draws them (read on that stream's thread). */
+    private final Map<String, OsdRenderer.Data> tileOsd = new ConcurrentHashMap<>();
+    /** While an overwatch alert runs its pictures go to its drone's stream eight times a second. */
+    private final Timer stanagPictures = new Timer(125, e -> {
+        if (stanagStreams != null) stanagStreams.alertPictures();
+    });
     private MapWindow mapWindow;
     static final String MAP_SOURCE_KEY = "mapSource";
     static final String COORDINATES_KEY = "coordinateFormat";
@@ -313,6 +318,7 @@ public class MainWindow extends JFrame {
     private final Timer networkTimer = new Timer(1000, e -> {
         refreshNetwork();
         refreshFleet(); // FLEET MANAGEMENT's cards (1.0.52)
+        if (stanagStreams != null) stanagStreams.refresh(); // 1.0.65: what each drone's stream shows
     });
     private static final String ASLEEP_KEY = "phone.asleep";
     /** "name@wallMs;..." - the drones LOST DRONE was pressed for (1.0.52): CRASHED until heard again or cleared. */
@@ -595,6 +601,7 @@ public class MainWindow extends JFrame {
         phoneWatch.scheduleWithFixedDelay(this::checkPhone, 1, 5, TimeUnit.SECONDS);
         nameService.onChange(() -> SwingUtilities.invokeLater(this::updatePhoneList)); // the PHONE list follows the network
         nameService.start();
+        if (stanagEnabled()) setStanag(true); // 1.0.65: every drone's stream from the start, not from the next connection
         // at once on opening, then every 15 minutes; its own thread, so a slow GitHub never holds up the phone check
         Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "updateCheck");
@@ -642,6 +649,8 @@ public class MainWindow extends JFrame {
         fleets = new FleetController(fleet, config, names, nameService, overwatch, power, standbyPhones, crashed, new FleetHost());
         fleet.setOnTaken(fleets::taken);
         nameService.setFleet(fleet, fleets::hello);
+        stanagStreams = new StanagController(config, new StanagHost(), SwingUtilities::invokeLater);
+        nameService.setStanag(stanagStreams::announced); // the other PCs hear where this one streams to (a clash is warned of)
         nameService.setOverwatchSink(overwatch::offer); // the link port while no link holds it (1.0.47)
         mirror = new MirrorController(new MirrorHooks()); // 1.0.56: spectators see this PC's own view
         nameService.setMirrorHost(mirror.start());
@@ -878,19 +887,13 @@ public class MainWindow extends JFrame {
                 this::openNameMap));
         if (!advanced) return menu; // STANAG 4609: TOOLS > Advanced
         menu.addSeparator();
-        menu.add(new MenuRows.SwitchRow("STANAG 4609 stream", "Video with metadata for ATAK, QGIS, VLC",
+        menu.add(new MenuRows.SwitchRow("STANAG 4609 streams", "One per drone, for ATAK, QGIS, VLC",
                 stanagEnabled(), on -> {
                     save(Map.of(StanagDialog.ENABLED_KEY, Boolean.toString(on)));
-                    if (!on) {
-                        stopStanag();
-                        logLine("STANAG 4609 stream off.");
-                    } else if (video == null) {
-                        logLine("STANAG 4609 stream from the next connection, to " + StanagDialog.target(config) + ".");
-                    } else {
-                        startStanag();
-                    }
+                    setStanag(on);
+                    if (!on) logLine("STANAG 4609 streams off.");
                 }));
-        menu.add(new MenuRows.WindowRow("STANAG 4609 settings", "Address, mission, camera angles",
+        menu.add(new MenuRows.WindowRow("STANAG 4609 settings", "Address, ports, mission, camera angles",
                 this::openStanagSettings));
         return menu;
     }
@@ -1796,7 +1799,7 @@ public class MainWindow extends JFrame {
             if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
             if (video != null && recordVideo) startRecording(video);
-            if (video != null && stanagEnabled()) startStanag();
+            stanagStreams.refreshSoon(); // 1.0.65: this drone's STANAG stream carries its video from now
             videoView.setStatsSource(video == null ? null : video::stats);
         } catch (IOException | RuntimeException e) {
             if (linkRef[0] != null) PossiblyFlying.pc().detach(linkRef[0]);
@@ -1983,7 +1986,7 @@ public class MainWindow extends JFrame {
         nameService.resume();
         updateFlightLayout();
         session = null;
-        stopStanag();
+        stanagStreams.refresh(); // its STANAG stream lets go of the video before the video ends: back to its page
         // 1.0.64: its end (the recording's, up to 2 s, then its own thread's, up to 1 s) off the Swing thread
         VideoPipeline ended = video;
         video = null;
@@ -2483,32 +2486,12 @@ public class MainWindow extends JFrame {
         return "true".equalsIgnoreCase(config.getString(StanagDialog.ENABLED_KEY));
     }
 
-    /**
-     * The STANAG 4609 stream from the video in hand (1.0.39): its own thread, the frames handed over from the video's
-     * receive thread; the KLV built there from the latest telemetry and the camera's view.
-     */
-    private void startStanag() {
-        stopStanag();
-        VideoPipeline v = video;
-        Connection c = connection;
-        if (v == null || c == null) return;
-        ControlLink link = c.getLink();
-        String mission = config.getString(StanagDialog.MISSION_KEY).trim(), country = StanagDialog.country(config);
-        StanagStream s = new StanagStream(StanagDialog.target(config),
-                ms -> cameraView.klv(ms, link.getTelemetry(), track, mission, country),
-                msg -> SwingUtilities.invokeLater(() -> logLine(msg)));
-        stanag = s;
-        v.setFrameTap(s);
-        logLine("STANAG 4609 stream on: " + s.url() + ".");
-    }
-
-    private void stopStanag() {
-        StanagStream s = stanag;
-        if (s == null) return;
-        stanag = null;
-        VideoPipeline v = video;
-        if (v != null) v.setFrameTap(null);
-        s.close();
+    /** The STANAG 4609 streams on or off (1.0.65: one per drone, see StanagController); the screen's OSD is taken for them while on. */
+    private void setStanag(boolean on) {
+        videoView.setOsdStreaming(on);
+        stanagStreams.setOn(on);
+        if (on) stanagPictures.start();
+        else stanagPictures.stop();
     }
 
     private void openStanagSettings() {
@@ -2517,9 +2500,165 @@ public class MainWindow extends JFrame {
             cameraView.configure(config);
             logLine("STANAG 4609: " + StanagDialog.target(config) + ", camera " + m.get(CameraView.HFOV_KEY)
                     + " deg wide, tilt " + m.get(CameraView.TILT_KEY) + " deg.");
-            if (stanag != null) startStanag(); // the new address / names from now
+            stanagStreams.restart(); // the new address / names from now
             refreshMap();
-        }).setVisible(true);
+        }, stanagStreams::rows, stanagStreams::warning).setVisible(true);
+    }
+
+    /** What the STANAG streams are told of this window (1.0.65). */
+    private final class StanagHost implements StanagController.Host {
+        private Map<String, NameService.DronePosition> positions = Map.of();
+        private long positionsAt;
+
+        private NameService.DronePosition position(String phone) {
+            long now = System.currentTimeMillis();
+            if (now - positionsAt > 500 || now < positionsAt) { // once a refresh, not once a drone
+                Map<String, NameService.DronePosition> m = new HashMap<>();
+                for (NameService.DronePosition d : nameService.dronePositions()) m.put(d.name().toLowerCase(Locale.ROOT), d);
+                positions = m;
+                positionsAt = now;
+            }
+            return positions.get(phone.toLowerCase(Locale.ROOT));
+        }
+
+        @Override
+        public List<FleetCards.Card> cards() {
+            return fleets == null ? null : FleetCards.markBlind(fleets.cards(), MainWindow.this::isBlind);
+        }
+
+        /** The phone this PC's own pilot link was to last, and when it was last seen up (wall ms). */
+        private String flownHere;
+        private long flownHereAt;
+
+        @Override
+        public String livePhone() {
+            Connection c = connection;
+            if (c == null) return null;
+            String phone = c.getLink().isSpectator() ? c.getLink().getPilotPhone() : config.getString(Names.PHONE_NAME_KEY);
+            if (phone == null || phone.isEmpty()) return null;
+            if (!c.getLink().isSpectator()) {
+                flownHere = phone;
+                flownHereAt = System.currentTimeMillis();
+            }
+            return phone;
+        }
+
+        @Override
+        public boolean spectating() {
+            Connection c = connection;
+            return c != null && c.getLink().isSpectator();
+        }
+
+        @Override
+        public VideoPipeline liveVideo() {
+            return connection == null ? null : video;
+        }
+
+        @Override
+        public StanagFeed.Osd liveOsd() {
+            return new StanagFeed.Osd() {
+                public OsdRenderer.Data data() { return videoView.lastOsdData(); }
+                public OsdLayout layout() { return videoView.getOsdLayout(); }
+                public boolean flipX() { return videoView.isMirror() != videoView.isUpsideDown(); }
+                public boolean flipY() { return videoView.isUpsideDown(); }
+                public double displayMs() { return videoView.displayMs(); }
+            };
+        }
+
+        @Override
+        public java.util.function.LongFunction<de.droiddrone.pc.video.Klv.Frame> liveKlv(String phone) {
+            Connection c = connection;
+            if (c == null) return null;
+            ControlLink link = c.getLink();
+            String mission = config.getString(StanagDialog.MISSION_KEY).trim(), country = StanagDialog.country(config);
+            return ms -> cameraView.klv(ms, link.getTelemetry(), track, mission, country, phone);
+        }
+
+        @Override
+        public List<StanagController.Tile> tiles() {
+            List<StanagController.Tile> out = new ArrayList<>();
+            String mission = config.getString(StanagDialog.MISSION_KEY).trim(), country = StanagDialog.country(config);
+            for (TileFeed f : tileFeeds) {
+                String phone = f.phone();
+                boolean calibrated = compassCalibrated(phone);
+                out.add(new StanagController.Tile(phone, f.video(), () -> tileOsd.get(phone), ms -> {
+                    FcTelemetry.Observed ob = f.link().telemetry().getObserved();
+                    if (ob == null || !ob.position().hasPosition()) return null; // the network's word on its place instead
+                    de.droiddrone.common.Observe.Position p = ob.position();
+                    double nan = Double.NaN;
+                    return new de.droiddrone.pc.video.Klv.Frame(ms * 1000, mission, phone, CameraView.SENSOR,
+                            HeadingChoice.choose(p, calibrated).deg(), nan, nan, nan, p.lat, p.lon, nan,
+                            p.hfovDeg > 0 ? p.hfovDeg : nan, nan, nan, nan, nan, nan, nan, nan, nan, null, country);
+                }));
+            }
+            return out;
+        }
+
+        @Override
+        public List<OverwatchHub.View> views() {
+            return overwatch.views();
+        }
+
+        @Override
+        public ClipIndex clips() {
+            return overwatch.index();
+        }
+
+        @Override
+        public StanagKlv.Place place(String phone, boolean overwatching) {
+            NameService.DronePosition d = position(phone);
+            CameraFootprint.View sector = null;
+            if (overwatching) { // its sector as the map draws it (the pilot: "transferred with the data as well")
+                for (OverwatchHub.Watched w : overwatch.watched()) {
+                    if (w.drone().equalsIgnoreCase(phone) && w.pose() != null) sector = watchedView(w.pose());
+                }
+            }
+            if (d != null) return new StanagKlv.Place(d.position().lat(), d.position().lon(), Double.NaN, d.headingDeg(), sector);
+            if (sector != null) return new StanagKlv.Place(sector.pose().lat(), sector.pose().lon(), Double.NaN, sector.pose().headingDeg(), sector);
+            return StanagKlv.Place.UNKNOWN;
+        }
+
+        @Override
+        public String flownBy(String phone) {
+            NameService.DronePosition d = position(phone);
+            if (d == null || !d.position().flown() || System.currentTimeMillis() - d.at() > 30_000) return null;
+            // its last answer says "flown" - by this PC, until a moment ago: that word is stale, not another PC's
+            if (phone.equalsIgnoreCase(flownHere) && System.currentTimeMillis() - flownHereAt < 60_000) return null;
+            String pilot = d.position().pilotIp().isEmpty() ? null : names.nameAt(d.position().pilotIp());
+            if (pilot != null && pilot.equalsIgnoreCase(nameService.ownName())) return null;
+            return pilot == null ? "" : pilot;
+        }
+
+        @Override
+        public boolean upsideDown(String phone) {
+            return cameraTurn.upsideDown(phone);
+        }
+
+        @Override
+        public boolean virtual(String phone) {
+            Names.Entry e = names.get(phone);
+            return e != null && e.isVirtual();
+        }
+
+        @Override
+        public OsdLayout osdLayout() {
+            return videoView.getOsdLayout();
+        }
+
+        @Override
+        public Map<String, String> otherStreams() {
+            return nameService.stanagStreams();
+        }
+
+        @Override
+        public void log(String line) {
+            logLine(line);
+        }
+
+        @Override
+        public void save(Map<String, String> settings) {
+            MainWindow.this.save(settings);
+        }
     }
 
     /**
@@ -2626,6 +2765,8 @@ public class MainWindow extends JFrame {
     /** @param beforeExit run once the settings are written and before the app exits (Reset setup), or null */
     private void shutdown(Runnable beforeExit) {
         if (demo != null) endDemo(); // its settings put back before they are written out
+        stanagPictures.stop();
+        stanagStreams.close(); // every STANAG stream ended whole, before the videos they tap
         phoneWatch.shutdownNow();
         nameService.stop();
         overwatch.close();
@@ -2816,6 +2957,8 @@ public class MainWindow extends JFrame {
         home.revalidate();
         home.repaint();
         setLinkEditable(false);
+        for (String phone : set.phones()) wakeForObserving(phone, now); // 1.0.65: a phone in standby refuses an observer
+        stanagStreams.refreshSoon(); // 1.0.65: each observed drone's STANAG stream carries its tile's video
         logLine("Observing " + String.join(", ", set.phones()) + ". Click a tile: sharp; double-click: enlarge; CONNECT on a tile flies it.");
     }
 
@@ -2864,12 +3007,49 @@ public class MainWindow extends JFrame {
         };
     }
 
+    /** The phones that were in standby when OBSERVE took them (1.0.65): back to standby when the grid ends. */
+    private final Set<String> wokenForObserving = new HashSet<>();
+    /** The phones said once to be too old to be observed from standby. */
+    private final Set<String> observeTooOldSaid = new HashSet<>();
+
+    /**
+     * 1.0.65 + phone pc.52 (the pilot: "when trying to connect phone to the observing menu it does not work"):
+     * DISCONNECT leaves a phone in standby, and a phone in standby refused every observer - its tile stayed empty.
+     * From pc.52 the phone wakes for an observer by itself (its next request, a second on, streams); this PC notes
+     * which phones it took out of standby, to rest them again when the grid ends. An older phone app can't be woken
+     * without flying it (FLEET_MODE knows no "awake"): said once, with what to do.
+     */
+    private void wakeForObserving(String phone, long now) {
+        if (fleets == null || !fleets.inStandby(phone)) return;
+        Names.Entry e = names.get(phone);
+        int build = e == null ? -1 : FcTelemetry.pcBuild(e.version());
+        if (e != null && !e.isVirtual() && build >= 0 && build < ObserveSet.STANDBY_WAKE_BUILD) {
+            if (observeTooOldSaid.add(phone)) {
+                logLine(phone + ": in standby - its app (pc." + build + ") can't be observed from standby. Update it to pc."
+                        + ObserveSet.STANDBY_WAKE_BUILD + " (UPDATE PHONE APP), or start DRAUPNE Flight again on the phone.");
+            }
+            return;
+        }
+        if (wokenForObserving.add(phone)) logLine(phone + ": in standby - woken for observation.");
+    }
+
+    /** The grid ends: the phones it woke rest in standby again - but not the one the pilot connects to. */
+    private void restObserved(String except) {
+        for (String phone : wokenForObserving) {
+            if (phone.equalsIgnoreCase(except)) continue;
+            if (fleets != null && fleets.ask(phone, ControlLink.POWER_STANDBY) == null) logLine(phone + ": back to standby.");
+        }
+        wokenForObserving.clear();
+        observeTooOldSaid.clear();
+    }
+
     /** STOP OBSERVING: every stream stopped, the picture area back to the single video. */
     private void stopObservation() {
         ObservationSession o = observation;
         if (o == null) return;
         o.stop();
         endObservationUi();
+        restObserved(null);
         logLine("Observation stopped.");
     }
 
@@ -2877,6 +3057,8 @@ public class MainWindow extends JFrame {
         observation = null;
         observedNames = Set.of();
         tileFeeds.clear();
+        tileOsd.clear();
+        stanagStreams.refresh(); // their STANAG streams back to their pages
         observationAudio = null;
         ObservationGrid grid = observationGrid;
         observationGrid = null;
@@ -2912,6 +3094,7 @@ public class MainWindow extends JFrame {
         }
         String phone = o.connect(tile); // every stream stops here
         endObservationUi();
+        restObserved(phone);
         if (phone == null) return;
         backToGrid = true;
         roleCombo.setSelectedItem(ROLE_PILOT);
@@ -2970,6 +3153,10 @@ public class MainWindow extends JFrame {
             l.setAudioWanted(o.audioWanted(phone, now));
             ObservationAudio audio = observationAudio;
             OsdRenderer.Data osd = ObservationOsd.data(l.telemetry(), f.video().stats(), last, invertPitch, now);
+            if (osd == null) tileOsd.remove(phone);
+            else tileOsd.put(phone, osd); // 1.0.65: its STANAG stream draws the same figures
+            Observe.State refused = l.state();
+            if (refused != null && refused.state == Observe.REFUSED_POWER) wakeForObserving(phone, now); // put to standby meanwhile
             grid.update(i, new ObservationGrid.TileState(status, ObservationSession.speaking(audio, f.audioId(), l, now), o.isMuted(phone),
                     volumeFor(phone), note, l.telemetry().getMotion().shown(now), osd));
         }
@@ -2985,6 +3172,9 @@ public class MainWindow extends JFrame {
         o.remove(f.phone());
         if (observationGrid != null) observationGrid.removeTile(tile);
         observedNames = Set.copyOf(o.set().phones());
+        tileOsd.remove(f.phone());
+        wokenForObserving.remove(f.phone()); // a pilot has it: not put to standby when the grid ends
+        stanagStreams.refreshSoon();
         logLine(f.phone() + " left the grid: " + why + ". Stays chosen.");
     }
 
@@ -3062,6 +3252,7 @@ public class MainWindow extends JFrame {
         alertSound.update(stickWarning(), System.currentTimeMillis());
         refreshAudio();
         refreshObservation();
+        videoView.keepOsdFresh(); // a STANAG stream's (or a recording's) OSD goes on with this window minimized
         if (slow) refreshMap();
         refreshOverwatch(slow);
         if (slow) refreshItsDown();
@@ -3693,7 +3884,10 @@ public class MainWindow extends JFrame {
         overwatch.setListener(new OverwatchHub.Listener() {
             @Override
             public void onNews(String drone) {
-                SwingUtilities.invokeLater(() -> overwatchNews(drone));
+                SwingUtilities.invokeLater(() -> {
+                    overwatchNews(drone);
+                    stanagStreams.refresh(); // 1.0.65: its STANAG stream shows the alert at once (a clip that plays ends)
+                });
             }
 
             @Override
@@ -3705,6 +3899,7 @@ public class MainWindow extends JFrame {
             public void onClips(String drone) {
                 SwingUtilities.invokeLater(() -> {
                     if (mapWindow != null) mapWindow.clipsChanged(drone);
+                    stanagStreams.refresh();
                 });
             }
 
@@ -3956,6 +4151,7 @@ public class MainWindow extends JFrame {
     /** The pilot's DISMISS on a card. */
     void overwatchDismiss(String drone) {
         overwatch.dismiss(drone);
+        stanagStreams.refreshSoon();
     }
 
     OverwatchHub overwatch() {
@@ -4461,7 +4657,10 @@ public class MainWindow extends JFrame {
             logLine("The pilot now flies " + phone + " (was " + watchedPhone + "): new track started.");
             pushKept();
         }
-        if (!phone.equals(watchedPhone)) liveTrackName = flightName(phone);
+        if (!phone.equals(watchedPhone)) {
+            liveTrackName = flightName(phone);
+            stanagStreams.refreshSoon(); // the watched video is another drone's now: its STANAG stream takes it
+        }
         watchedPhone = phone;
     }
 

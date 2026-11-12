@@ -4,10 +4,6 @@ import de.droiddrone.pc.video.OsdVideoWriter;
 import de.droiddrone.pc.video.VideoDecoder;
 import de.droiddrone.pc.video.VideoPipeline;
 
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.image.BufferedImage;
-import java.awt.image.DataBufferInt;
 import java.nio.file.Path;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.function.Consumer;
@@ -186,8 +182,8 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
     private boolean failed;
     private long firstMs = -1;
     private long left, written;
-    private final OsdRenderer osd = new OsdRenderer();
-    private BufferedImage picture, canvas;
+    /** The picture with the OSD over it (1.0.65: shared with the STANAG streams). */
+    private final OsdFrame frame = new OsdFrame();
 
     private void run() {
         while (true) {
@@ -241,33 +237,13 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
         if (w <= 0 || h <= 0) return;
         if (writer == null) {
             writer = new OsdVideoWriter(file, w, h, 30, audioTrack);
-            canvas = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+            frame.size(w, h);
             log.accept("OSD recording to " + file + " (" + w + "x" + h + ", " + writer.codecName() + ").");
         }
-        if (canvas.getWidth() != w || canvas.getHeight() != h) return; // the stream changed size: a new file comes with it
-        int[] out = ((DataBufferInt) canvas.getRaster().getDataBuffer()).getData();
+        if (frame.width() != w || frame.height() != h) return; // the stream changed size: a new file comes with it
         boolean flipX = view.mirror() != view.upsideDown(), flipY = view.upsideDown(); // as the screen shows it
-        Graphics2D g = canvas.createGraphics();
-        try {
-            if (!flipX && !flipY) {
-                decoder.convert(out, w, h);
-            } else {
-                if (picture == null || picture.getWidth() != w || picture.getHeight() != h) picture = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
-                decoder.convert(((DataBufferInt) picture.getRaster().getDataBuffer()).getData(), w, h);
-                g.drawImage(picture, flipX ? w : 0, flipY ? h : 0, flipX ? 0 : w, flipY ? 0 : h, 0, 0, w, h, null);
-            }
-            OsdRenderer.Data data = view.osdData();
-            if (data != null && data.connected()) {
-                g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-                osd.setDisplayMs(view.displayMs());
-                osd.setPictureFlip(flipX, flipY); // the motion boxes (1.0.46) as the screen draws them
-                osd.paint(g, 0, 0, w, h, data, view.osdLayout());
-            }
-        } finally {
-            g.dispose();
-        }
-        writer.write(out, ptsMs);
+        frame.draw(decoder, flipX, flipY, view.osdData(), view.osdLayout(), view.displayMs());
+        writer.write(frame.pixels(), ptsMs);
         written++;
     }
 
@@ -294,7 +270,6 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
             decoder.close();
             decoder = null;
         }
-        canvas = null;
-        picture = null;
+        frame.clear();
     }
 }

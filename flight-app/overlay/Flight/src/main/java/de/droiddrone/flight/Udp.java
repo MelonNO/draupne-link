@@ -2558,8 +2558,17 @@ public class Udp {
         else if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) state = Observe.REFUSED_ARMED;
         // pc.38: never an observer source while overwatching - its camera is the watch's (and its event recorder's);
         // overwatch can still be ending (the camera not yet let go) right after the mode went back to normal
-        else if (PowerMode.mode() != PowerMode.NORMAL || Overwatch.isWatching()) state = Observe.REFUSED_POWER;
-        else {
+        else if (PowerMode.mode() != PowerMode.NORMAL || Overwatch.isWatching()) {
+            state = Observe.REFUSED_POWER;
+            // pc.52 (the pilot: "when trying to connect phone to the observing menu it does not work"): DISCONNECT leaves a
+            // phone in standby, and standby refused every observer - a phone flown once could not be observed again.
+            // Standby is awake with the camera off: an observer wakes it (as a pilot's Connect does); its next request,
+            // a second on, gets the stream. Deep sleep and overwatch stay refused: those end at a check-in or by a pilot.
+            if (PowerMode.mode() == PowerMode.STANDBY && !Overwatch.isWatching()) {
+                log("Observer " + packet.getAddress().getHostAddress() + " asks in standby: waking");
+                PowerMode.request(PowerMode.NORMAL, 0, "an observer");
+            }
+        } else {
             boolean added;
             synchronized (observers) {
                 added = !observerAddresses.containsKey(id);

@@ -182,10 +182,15 @@ public final class CameraView {
      * picture lands. Without a position or attitude only the time, names and security marking go out.
      */
     public Klv.Frame klv(long arrivedMs, FcTelemetry t, FlightTrack track, String missionId, String country) {
+        return klv(arrivedMs, t, track, missionId, country, DESIGNATION);
+    }
+
+    /** As above, the platform named (1.0.65: one stream per drone, each under its drone's name). */
+    public Klv.Frame klv(long arrivedMs, FcTelemetry t, FlightTrack track, String missionId, String country, String designation) {
         CameraFootprint.View v = compute(t, track);
         double nan = Double.NaN;
         if (v == null) {
-            return new Klv.Frame(arrivedMs * 1000, missionId, DESIGNATION, SENSOR, nan, nan, nan, nan, nan, nan, nan,
+            return new Klv.Frame(arrivedMs * 1000, missionId, designation, SENSOR, nan, nan, nan, nan, nan, nan, nan,
                     hfovDeg, vfovDeg(), 0, tiltDeg, 0, nan, nan, nan, nan, null, country);
         }
         CameraFootprint.Pose p = v.pose();
@@ -196,14 +201,14 @@ public final class CameraView {
             for (int i = 0; i < 4; i++) corners[i] = new double[]{v.corners()[i][0], v.corners()[i][1]};
         }
         double[] c = v.centre();
-        return new Klv.Frame(arrivedMs * 1000, missionId, DESIGNATION, SENSOR, p.headingDeg(), p.pitchDeg(), p.rollDeg(),
+        return new Klv.Frame(arrivedMs * 1000, missionId, designation, SENSOR, p.headingDeg(), p.pitchDeg(), p.rollDeg(),
                 last == null ? nan : last.speedKmh() / 3.6, p.lat(), p.lon(), p.altM(), p.hfovDeg(), p.vfovDeg(),
                 0, p.tiltDeg(), 0, v.slantRangeM(), c == null ? nan : c[0], c == null ? nan : c[1], c == null ? nan : c[2],
                 corners, country);
     }
 
     /** ST 0601's platform designation and image source sensor. */
-    static final String DESIGNATION = "DRAUPNE", SENSOR = "EO FPV";
+    public static final String DESIGNATION = "DRAUPNE", SENSOR = "EO FPV";
 
     /** The terrain's height at the launch point, NaN when either is not known yet; kept once known (launch stays put). */
     private double groundAtLaunch(FlightTrack track) {

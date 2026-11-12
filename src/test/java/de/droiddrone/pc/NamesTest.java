@@ -128,6 +128,54 @@ class NamesTest {
         assertEquals("just now", Names.agoText(1000, 2000));
     }
 
+    /**
+     * 1.0.65: a PC's reply says where its STANAG 4609 streams go, so two PCs streaming to one address are told of each
+     * other (a warning, the pilot's choice). A PC or phone from before reads the reply as ever.
+     */
+    @Test
+    void aPcsReplySaysWhereItsStanagStreamsGoAndAnOlderReaderIgnoresIt() throws Exception {
+        byte[] r = Names.reply("DD", Names.Kind.PC, "PCBravo", "Desktop", "1.0.65", "100.64.0.9:15000");
+        Names.Reply reply = Names.parseReply(r, r.length, "DD");
+        assertNotNull(reply);
+        assertEquals("PCBravo", reply.name());
+        assertEquals("1.0.65", reply.version());
+        assertEquals("100.64.0.9:15000", reply.stanag());
+        assertNull(reply.position());
+        // a PC that streams nothing says nothing: the reply of before, byte for byte
+        assertArrayEquals(Names.reply("DD", Names.Kind.PC, "PCBravo", "Desktop", "1.0.65"), Names.reply("DD", Names.Kind.PC, "PCBravo", "Desktop", "1.0.65", null));
+        // a phone never carries it, whatever is asked
+        byte[] phone = Names.reply("DD", Names.Kind.PHONE, "MobileAlpha", "Pixel 8", "2.3.0-pc.51", "100.64.0.9:15000");
+        assertArrayEquals(Names.reply("DD", Names.Kind.PHONE, "MobileAlpha", "Pixel 8", "2.3.0-pc.51"), phone);
+        // what 1.0.64 does with the block: its reader of what follows the version (a phone's position, first byte 1)
+        // sees another first byte and takes it for "nothing more" - the name, device and version before it are read
+        byte[] plain = Names.reply("DD", Names.Kind.PC, "PCBravo", "Desktop", "1.0.65");
+        java.io.DataInputStream rest = new java.io.DataInputStream(new java.io.ByteArrayInputStream(r, plain.length, r.length - plain.length));
+        int[] power = {0};
+        assertNull(Names.readPosition(rest, power));
+        assertEquals(Names.POWER_UNKNOWN, power[0]);
+        // cut short on the way: no reply, never a half-read one
+        assertNull(Names.parseReply(r, r.length - 3, "DD"));
+    }
+
+    @Test
+    void theServiceSaysThisPcsStreamsInItsReply() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        config.set(Names.PC_NAME_KEY, "PCAlpha");
+        Names names = new Names(config, m -> m.forEach(config::set));
+        Tailscale.Status status = new Tailscale.Status(true, true, "Running", "", "127.0.0.2", "this-pc", List.of());
+        service = new NameService(config, names, () -> status, 1, false, m -> m.forEach(config::set), l -> {});
+        byte[] quiet = service.replyPacket();
+        assertNull(Names.parseReply(quiet, quiet.length, config.getKey()).stanag());
+        String[] target = {"100.64.0.9:15000"};
+        service.setStanag(() -> target[0]);
+        byte[] r = service.replyPacket();
+        assertEquals("100.64.0.9:15000", Names.parseReply(r, r.length, config.getKey()).stanag());
+        target[0] = null; // switched off
+        r = service.replyPacket();
+        assertNull(Names.parseReply(r, r.length, config.getKey()).stanag());
+        assertTrue(service.stanagStreams().isEmpty(), "no other PC heard");
+    }
+
     /** H5 (1.0.49): only DRAUPNE names come in from the network; device and version texts are made printable. */
     @Test
     void onlyValidNamesAreTakenFromTheNetwork() {

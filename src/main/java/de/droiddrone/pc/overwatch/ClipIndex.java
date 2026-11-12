@@ -56,6 +56,16 @@ public final class ClipIndex {
         return id;
     }
 
+    /** An event's id without the -2, -3 of a second event in the same second: what {@link #newId} starts from. */
+    public static String baseId(long startedAt) {
+        return ID.format(Instant.ofEpochMilli(startedAt).atZone(ZoneId.systemDefault()));
+    }
+
+    /** REMOVE was pressed for this clip: off the list (its files stay). */
+    public boolean isHidden(String drone, String id) {
+        return hidden(root.resolve(safe(drone))).contains(id);
+    }
+
     /** The drone's folder (made when missing). */
     public Path folder(String drone) throws IOException {
         return Files.createDirectories(root.resolve(safe(drone)));

@@ -74,7 +74,7 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 **More than one PC**
 - **Spectator:** a second PC watches the pilot's video and OSD (Allow spectators on the pilot PC). Never sends sticks.
 - **Observation:** up to six idle drones in a grid, with sound and view cones on the map. CONNECT on a tile to fly it.
-- **STANAG 4609:** MPEG-TS + MISB ST 0601 over UDP for ATAK, QGIS, VLC (MENU > LINK, Advanced).
+- **STANAG 4609:** one stream per drone, a port each (MPEG-TS + MISB ST 0601 over UDP) for ATAK, QGIS, VLC. Video with OSD while piloted or observed; an overwatch alert's picture, then its clip; else the drone's mode. Overwatch sectors in the metadata. Made on the PC: nothing extra from the phones (MENU > LINK, Advanced).
 
 **TOOLS > Advanced** shows rarely needed settings, and **RESET SETUP** (settings only, like a fresh install).
 
@@ -126,7 +126,7 @@ A drone on the ground as a sentry. The phone sleeps with the camera watching (di
 
 ## The phone app
 
-**DRAUPNE Flight** (2.3.0-pc.39) is DroidDrone Flight 2.3.0 with: names, async USB writes (no RXLOSS), any FC USB chip, video tuned for weak coverage, sound, motion detection, standby / deep sleep / overwatch, phone GPS, touch lock, self-update. Source in [`flight-app/`](flight-app). Every release includes the APK.
+**DRAUPNE Flight** (2.3.0-pc.52) is DroidDrone Flight 2.3.0 with: names, async USB writes (no RXLOSS), any FC USB chip, video tuned for weak coverage, sound, motion detection, standby / deep sleep / overwatch, phone GPS, touch lock, self-update. Source in [`flight-app/`](flight-app). Every release includes the APK.
 
 ## Testing without a drone
 
@@ -139,7 +139,7 @@ State, rules and release steps: [docs/HANDOFF.md](docs/HANDOFF.md). Also [PROTOC
 ```powershell
 git clone --recurse-submodules https://github.com/MelonNO/draupne-link
 cd draupne-link
-.\gradlew.bat test               # 700+ tests
+.\gradlew.bat test               # 1300+ tests
 .\gradlew.bat installDist        # build\install\draupne-link\bin\draupne-link.bat
 .\gradlew.bat packageInstaller   # installer, needs WiX Toolset 3
 ```

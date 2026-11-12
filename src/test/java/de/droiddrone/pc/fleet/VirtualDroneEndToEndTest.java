@@ -349,6 +349,47 @@ class VirtualDroneEndToEndTest {
     }
 
     /**
+     * pc.52 (the pilot: "when trying to connect phone to the observing menu it does not work"): DISCONNECT leaves a phone
+     * in standby, and standby refused every observer. An observer wakes a phone in standby; its next request streams.
+     * Deep sleep stays refused: a sleeper joins at its check-in.
+     */
+    @Test
+    void anObserverWakesADroneInStandbyAndGetsItsStream() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        startDrone(config);
+        drone.requestMode(VirtualDrone.STANDBY, 0, "the test");
+        waitFor(() -> drone.mode() == VirtualDrone.STANDBY, 5000, "standby");
+        try (DatagramSocket observer = new DatagramSocket(0, InetAddress.getLoopbackAddress())) {
+            observer.setSoTimeout(200);
+            byte[] ask = Observe.encodeRequest(config.getKey(), 640, 360, 15, 1000, Observe.FLAG_VIDEO_CONFIG, 0);
+            java.util.List<Integer> states = new java.util.ArrayList<>();
+            boolean keyFrame = false;
+            long end = System.currentTimeMillis() + 10_000, nextAsk = 0;
+            byte[] buf = new byte[1500];
+            while (System.currentTimeMillis() < end && !keyFrame) {
+                if (System.currentTimeMillis() >= nextAsk) {
+                    nextAsk = System.currentTimeMillis() + 1000;
+                    observer.send(new DatagramPacket(ask, ask.length, InetAddress.getLoopbackAddress(), drone.port()));
+                }
+                DatagramPacket p = new DatagramPacket(buf, buf.length);
+                try {
+                    observer.receive(p);
+                } catch (SocketTimeoutException e) {
+                    continue;
+                }
+                if (p.getData()[0] == Observe.STATE) states.add(Observe.decodeState(p.getData(), p.getLength()).state);
+                if (p.getData()[0] == UdpCommon.KeyFrame) keyFrame = true;
+            }
+            assertEquals(Observe.REFUSED_POWER, states.get(0), "the first request finds it in standby: " + states);
+            assertTrue(states.contains(Observe.STREAMING), "the next one streams: " + states);
+            assertTrue(keyFrame, "its picture");
+            assertEquals(VirtualDrone.NORMAL, drone.mode(), "awake");
+            observer.send(new DatagramPacket(Observe.encodeStop(config.getKey()), Observe.encodeStop(config.getKey()).length,
+                    InetAddress.getLoopbackAddress(), drone.port()));
+        }
+    }
+
+    /**
      * pc.45: an observer that asks no sound (a tile muted 10 s) gets no sound - not one audio packet - but its
      * OBSERVE_STATE says when the drone hears something (the tile's speaking highlight).
      */

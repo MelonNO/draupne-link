@@ -87,7 +87,13 @@ public final class Names {
      *                   fix, and FLEET must know of the pilot all the same)
      */
     public record Reply(Kind kind, String name, String device, String version, Position position, int powerMode,
-                        de.droiddrone.common.FleetProtocol.Status status, boolean flown) {
+                        de.droiddrone.common.FleetProtocol.Status status, boolean flown, String stanag) {
+        /** Up to 1.0.64: no word on a PC's STANAG streams. */
+        public Reply(Kind kind, String name, String device, String version, Position position, int powerMode,
+                     de.droiddrone.common.FleetProtocol.Status status, boolean flown) {
+            this(kind, name, device, version, position, powerMode, status, flown, null);
+        }
+
         public Reply(Kind kind, String name, String device, String version, Position position, int powerMode,
                      de.droiddrone.common.FleetProtocol.Status status) {
             this(kind, name, device, version, position, powerMode, status, position != null && position.flown());
@@ -356,11 +362,28 @@ public final class Names {
     }
 
     public static byte[] reply(String key, Kind kind, String name, String device, String version) {
+        return reply(key, kind, name, device, version, null);
+    }
+
+    /** A block after the version that begins with this is a PC's word on its STANAG streams (1.0.65); a phone's position block begins with 1. */
+    static final int BLOCK_STANAG = 2;
+
+    /**
+     * 1.0.65: a PC's reply also says where its STANAG 4609 streams go ("host:firstPort"; null or empty: it sends
+     * none), so two PCs streaming to one address can be told (StanagController). After the version, as
+     * [{@link #BLOCK_STANAG}][UTF]: a reader from before stops at a first byte that isn't 1 (readPosition) and files
+     * the PC as ever.
+     */
+    public static byte[] reply(String key, Kind kind, String name, String device, String version, String stanag) {
         return packet(NAME_REPLY, key, out -> {
             out.writeByte(kind == Kind.PHONE ? 0 : 1);
             out.writeUTF(nz(name));
             out.writeUTF(nz(device));
             out.writeUTF(nz(version));
+            if (kind == Kind.PC && stanag != null && !stanag.isEmpty()) {
+                out.writeByte(BLOCK_STANAG);
+                out.writeUTF(stanag.length() > MAX_TEXT ? stanag.substring(0, MAX_TEXT) : stanag);
+            }
         });
     }
 
@@ -400,6 +423,13 @@ public final class Names {
             if (k == null || !name.isEmpty() && !isValidName(name, k)) return null; // not a DRAUPNE name: never filed
             int[] power = {POWER_UNKNOWN};
             boolean[] flown = {false};
+            in.mark(1);
+            if (k == Kind.PC && in.available() > 0 && in.readUnsignedByte() == BLOCK_STANAG) { // 1.0.65: a PC's STANAG streams
+                String stanag = printable(in.readUTF(), MAX_TEXT);
+                return new Reply(k, name, printable(device, MAX_TEXT), printable(version, MAX_TEXT), null, POWER_UNKNOWN, null, false,
+                        stanag.isEmpty() ? null : stanag);
+            }
+            in.reset();
             Position position = readPosition(in, power, flown);
             // pc.40: the fleet status block after the power byte (only when the position block was read whole)
             de.droiddrone.common.FleetProtocol.Status status = power[0] != POWER_UNKNOWN ? de.droiddrone.common.FleetProtocol.Status.readFrom(in) : null;

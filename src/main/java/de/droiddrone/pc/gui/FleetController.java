@@ -314,6 +314,34 @@ final class FleetController {
         if (overwatch.poseIfNone(phone, new CameraFootprint.Pose(lat, lon, 1.5, headingDeg, 0, 0, 0, 70, 40))) host.saveWatched();
     }
 
+    /**
+     * 1.0.65: a mode for a phone without a card's button behind it - STOP OBSERVING rests a phone again that was in
+     * standby before the grid woke it (see MainWindow.wakeForObserving). The same request FLEET's buttons queue
+     * (STANDBY, DEEP SLEEP, OVERWATCH: FLEET_MODE knows no "awake" - a phone wakes for a pilot or an observer).
+     * @return why it was not asked, or null: the request is on its way
+     */
+    String ask(String phone, int mode) {
+        if (fleet == null) return "no fleet";
+        NameService.DronePosition pos = positionOf(phone);
+        long now = System.currentTimeMillis();
+        boolean here = connectedTo(phone);
+        String no = FleetManager.refusal(phone, pos == null ? null : pos.position().armed(), here && PossiblyFlying.now(), here,
+                !here && fleet.flown(phone, now), fleet.pcBuild(phone));
+        if (no != null) return no;
+        fleet.queue(phone, mode, 0, 0, 0, 0, now);
+        nameService.scanSoon(); // an awake phone (standby is awake) gets it now
+        refresh();
+        return null;
+    }
+
+    /** This PC left the phone in standby, or the phone's own fresh word says standby. */
+    boolean inStandby(String phone) {
+        String ip = names.ipOf(phone);
+        if (ip == null) return false;
+        if (power != null && power.asleep(ip) != null) return false;
+        return standbyPhones.containsKey(ip) || nameService.saidMode(ip) == ControlLink.POWER_STANDBY && nameService.saidFresh(ip);
+    }
+
     private NameService.DronePosition positionOf(String phone) {
         NameService.DronePosition pos = null;
         for (NameService.DronePosition d : nameService.dronePositions()) if (d.name().equalsIgnoreCase(phone)) pos = d;

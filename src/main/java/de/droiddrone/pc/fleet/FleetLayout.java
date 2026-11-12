@@ -58,6 +58,24 @@ public final class FleetLayout {
         return new double[]{lat + n / 111_320.0, lon + e / (111_320.0 * cos), heading};
     }
 
+    /** A drone of a second set stands this far from the layout's place it would otherwise share. */
+    public static final double BESIDE_M = 100;
+
+    /**
+     * Drone i's place for drones that are up beside the layout's own (2026-11-12, the pilot: in DEMO, SET UP SCENARIO
+     * spawned its drones "on top of the already existing drones ... move the location of the first spawned drones to
+     * be in the same area but not in the exact same spot"): the demo's six took the layout's first places, and the
+     * scenario's four are put on exactly those. The same area, {@link #BESIDE_M} off - behind and to the right of
+     * where the layout's drone there looks, out of its view. Past the layout: the ring round the launch point, as ever.
+     */
+    public static double[] beside(int i, double lat, double lon) {
+        double[] p = place(i, lat, lon);
+        if (i >= PLACES.size()) return p;
+        double a = Math.toRadians(p[2] + 135);
+        double n = Math.cos(a) * BESIDE_M, e = Math.sin(a) * BESIDE_M;
+        return new double[]{p[0] + n / 111_320.0, p[1] + e / (111_320.0 * Math.cos(Math.toRadians(p[0]))), p[2]};
+    }
+
     /** Degrees clockwise from north, from a to b ({lat, lon}). */
     public static double bearing(double[] a, double[] b) {
         double dn = (b[0] - a[0]) * 111_320.0, de = (b[1] - a[1]) * 111_320.0 * Math.cos(Math.toRadians(a[0]));

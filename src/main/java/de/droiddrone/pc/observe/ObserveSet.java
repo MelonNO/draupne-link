@@ -17,6 +17,8 @@ public final class ObserveSet {
     public static final int MAX = 6;
     /** The first phone app that streams to observers. */
     public static final int MIN_PC_BUILD = 37;
+    /** From this build on a phone in standby wakes for an observer (older ones refuse: "standby, sleep or overwatch"). */
+    public static final int STANDBY_WAKE_BUILD = 52;
 
     private final List<String> phones = new ArrayList<>();
     private int selected = -1, enlarged = -1;

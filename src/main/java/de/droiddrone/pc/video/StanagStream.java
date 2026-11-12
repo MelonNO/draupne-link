@@ -25,16 +25,28 @@ import static org.bytedeco.ffmpeg.global.avutil.*;
  * QGIS's FMV plugin, Esri's FMV, VLC and the military ground stations play. Off the flight path: frames are handed
  * over on a queue and written on a thread of its own at the lowest priority, so the picture on screen never waits
  * for it; when it can't keep up, frames are left out of the stream (until the next key frame), never queued.
+ * <p>
+ * 1.0.65 (one stream per drone, each encoded on this PC - a page, an alert's pictures, a clip or the video by turns):
+ * new parameter sets at the same picture size and codec no longer end the transport stream - they go in front of the
+ * next key frame and the time stamps run on, so a player sees no restart when what is shown changes. A failure is
+ * said once, not every 5 s.
  */
 public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable {
     /** Metadata at most this often (ST 0601 asks for none faster; 10 Hz is what most UAS send). */
-    static final long KLV_EVERY_MS = 100;
+    public static final long KLV_EVERY_MS = 100;
     private static final int QUEUE = 90; // 3 s at 30 fps
     private static final long RETRY_MS = 5000;
+    /** Tests: a shorter wait between two tries. */
+    volatile long retryMs = RETRY_MS;
 
     private record Config(int width, int height, boolean hevc, byte[] codecConfig) {
         boolean sameAs(Config o) {
-            return o != null && width == o.width && height == o.height && hevc == o.hevc && Arrays.equals(codecConfig, o.codecConfig);
+            return sameShape(o) && Arrays.equals(codecConfig, o.codecConfig);
+        }
+
+        /** The same picture size and codec: the transport stream can go on, whatever the parameter sets. */
+        boolean sameShape(Config o) {
+            return o != null && width == o.width && height == o.height && hevc == o.hevc;
         }
     }
 
@@ -43,6 +55,9 @@ public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable
     private static final Object STOP = new Object();
 
     private final String url;
+    /** "STANAG 4609 stream" or "STANAG 4609 MobileAlpha": how the log names it. */
+    private final String label;
+    private final long klvEveryMs;
     private final LongFunction<Klv.Frame> metadata;
     private final Consumer<String> log;
     private final LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<>(QUEUE);
@@ -56,10 +71,20 @@ public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable
      * @param metadata the KLV for a frame that arrived at the given wall-clock time (never null)
      */
     public StanagStream(String target, LongFunction<Klv.Frame> metadata, Consumer<String> log) {
+        this(null, target, metadata, log, KLV_EVERY_MS);
+    }
+
+    /**
+     * @param name the drone this stream is of (the log names it), or null
+     * @param klvEveryMs metadata at most this often (a still page: once a second is plenty)
+     */
+    public StanagStream(String name, String target, LongFunction<Klv.Frame> metadata, Consumer<String> log, long klvEveryMs) {
         this.url = url(target);
+        this.label = name == null || name.isEmpty() ? "STANAG 4609 stream" : "STANAG 4609 " + name;
+        this.klvEveryMs = Math.max(KLV_EVERY_MS, klvEveryMs);
         this.metadata = metadata;
         this.log = log;
-        thread = new Thread(this::run, "stanagStream");
+        thread = new Thread(this::run, name == null || name.isEmpty() ? "stanagStream" : "stanagStream-" + name);
         thread.setDaemon(true);
         thread.setPriority(Thread.MIN_PRIORITY);
         thread.start();
@@ -117,36 +142,45 @@ public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable
         Muxer mux = null;
         Config config = null;
         long failedAt = -RETRY_MS;
-        boolean told = false;
+        boolean told = false, failSaid = false;
+        boolean needKey = false; // new parameter sets in a running stream: from their key frame on
         try {
             while (true) {
                 Object item = queue.take();
                 if (item == STOP) break;
                 if (item instanceof Config c) {
-                    if (!c.sameAs(config) && mux != null) {
+                    if (mux != null && !c.sameShape(config)) {
                         mux.close(); // a new picture size or codec: a new stream from its key frame
                         mux = null;
+                    } else if (mux != null && !c.sameAs(config)) {
+                        needKey = true; // 1.0.65: the same shape - the stream goes on, the new sets ahead of the next key frame
                     }
                     config = c;
                     continue;
                 }
                 Frame f = (Frame) item;
+                if (needKey) {
+                    if (!f.keyFrame()) continue;
+                    needKey = false;
+                }
                 if (mux == null) {
                     if (config == null || !f.keyFrame()) continue;
                     long now = System.currentTimeMillis();
-                    if (now - failedAt < RETRY_MS) continue;
+                    if (now - failedAt < retryMs) continue;
                     try {
                         mux = new Muxer(url, config);
-                        log.accept("STANAG 4609 stream: sending to " + url + (told ? " again." : "."));
+                        log.accept(label + ": sending to " + url + (told ? " again." : "."));
                         told = true;
+                        failSaid = false;
                     } catch (IOException | RuntimeException e) {
                         failedAt = now;
-                        log.accept("STANAG 4609 stream: " + e.getMessage() + " - retry in 5 s.");
+                        if (!failSaid) log.accept(label + ": " + e.getMessage() + " - trying every 5 s.");
+                        failSaid = true;
                         continue;
                     }
                 }
                 try {
-                    if (f.arrivedMs() - mux.lastKlvMs >= KLV_EVERY_MS) {
+                    if (f.arrivedMs() - mux.lastKlvMs >= klvEveryMs) {
                         Klv.Frame k = metadata.apply(f.arrivedMs());
                         if (k != null) {
                             mux.writeKlv(Klv.encode(k), f.arrivedMs());
@@ -156,7 +190,8 @@ public final class StanagStream implements VideoPipeline.FrameTap, AutoCloseable
                     mux.writeVideo(withConfig(f.data(), f.keyFrame(), config.hevc(), config.codecConfig()), f.keyFrame(), f.arrivedMs());
                     sentFrames++;
                 } catch (IOException | RuntimeException e) {
-                    log.accept("STANAG 4609 stream stopped: " + e.getMessage() + " - retry in 5 s.");
+                    if (!failSaid) log.accept(label + " stopped: " + e.getMessage() + " - trying every 5 s.");
+                    failSaid = true;
                     mux.close();
                     mux = null;
                     failedAt = System.currentTimeMillis();

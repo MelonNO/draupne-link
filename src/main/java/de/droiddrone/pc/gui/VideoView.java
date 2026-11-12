@@ -246,8 +246,9 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             drawPicture(g, img, x, y, pw, ph);
         }
         // the recording with the OSD (1.0.42) takes the figures painted last - also with the HUD hidden here
-        OsdRenderer.Data fresh = osdEnabled || osdRecording ? osdData.get() : null;
+        OsdRenderer.Data fresh = osdEnabled || osdRecording || osdStreaming ? osdData.get() : null;
         lastOsd = fresh;
+        lastOsdAt = System.nanoTime();
         OsdRenderer.Data data = osdEnabled ? fresh : null;
         if (img == null) {
             paintSkeleton(g, w, h, data != null && data.connected());
@@ -369,6 +370,25 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
 
     void setOsdRecording(boolean on) {
         osdRecording = on;
+    }
+
+    /** 1.0.65: a STANAG 4609 stream draws this picture's OSD too: the figures are taken as for a recording with the OSD. */
+    private volatile boolean osdStreaming;
+    private volatile long lastOsdAt;
+
+    void setOsdStreaming(boolean on) {
+        osdStreaming = on;
+    }
+
+    /**
+     * The Swing thread, a few times a second while a stream or a recording draws the OSD: the figures taken here when
+     * no paint took them lately (the window minimized, the picture covered) - the stream's OSD stood still then.
+     */
+    void keepOsdFresh() {
+        if (!osdStreaming && !osdRecording) return;
+        if (System.nanoTime() - lastOsdAt < 150_000_000L) return;
+        lastOsd = osdData.get();
+        lastOsdAt = System.nanoTime();
     }
 
     /** The OSD's figures as last painted (the Swing thread), or null; for the recording with the OSD. */

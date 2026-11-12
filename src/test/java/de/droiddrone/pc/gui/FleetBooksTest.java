@@ -322,6 +322,40 @@ class FleetBooksTest {
     }
 
     /**
+     * 1.0.65 + phone pc.52 (the pilot: "when trying to connect phone to the observing menu it does not work"): the phone
+     * rested in the standby DISCONNECT leaves it in. From pc.52 it wakes for an observer by itself; the PC's books follow
+     * its own word, and STOP OBSERVING rests it again with FLEET's request.
+     */
+    @Test
+    void aPhoneTheGridTookOutOfStandbyIsRestedAgainAfter() throws Exception {
+        standby.put(IP, "MobileAlpha");
+        assertTrue(fleets.inStandby("MobileAlpha"));
+        assertFalse(fleets.inStandby("MobileBravo"), "one this PC knows nothing of");
+        // it woke for the observer: its own answers say "normal" - twice, a scan apart - and the standby this PC left it in is over
+        fleets.phoneReply(IP, reply("MobileAlpha", 0, 0), 0);
+        assertTrue(standby.containsKey(IP), "one answer may have left the phone before it changed");
+        Thread.sleep(FleetController.NOT_STANDBY_AFTER_MS + 100);
+        fleets.phoneReply(IP, reply("MobileAlpha", 0, 0), 0);
+        assertFalse(standby.containsKey(IP));
+        assertFalse(fleets.inStandby("MobileAlpha"));
+        // STOP OBSERVING: back to standby, by the request FLEET's STANDBY button sends
+        assertNull(fleets.ask("MobileAlpha", ControlLink.POWER_STANDBY));
+        FleetManager.Wanted rest = fleet.wanted("MobileAlpha");
+        assertEquals(ControlLink.POWER_STANDBY, rest.mode());
+        byte[] sent = fleet.onReply(reply("MobileAlpha", 0, 0), System.currentTimeMillis());
+        assertNotNull(sent, "the request goes with its answer to the scan");
+        assertEquals(ControlLink.POWER_STANDBY, FleetProtocol.parseRequest(sent, sent.length, config.getKey()).mode);
+        assertNull(fleet.onReply(reply("MobileAlpha", 1, rest.token()), System.currentTimeMillis()));
+        swing();
+        assertEquals("MobileAlpha", standby.get(IP));
+        assertTrue(fleets.inStandby("MobileAlpha"));
+        // a sleeping phone is not "in standby": it joins the grid at its check-in, as before
+        standby.remove(IP);
+        power.remember(new PowerController.Asleep("MobileAlpha", IP, System.currentTimeMillis(), 5, false));
+        assertFalse(fleets.inStandby("MobileAlpha"));
+    }
+
+    /**
      * Item 1c: a phone another PC put to standby is asked once a minute; with the badge's 30 s its card read STANDBY and
      * ACTIVE by turns. Its word holds for as long as it is left alone.
      */

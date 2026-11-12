@@ -62,7 +62,11 @@ public final class TourShowcase implements AutoCloseable {
         List<VirtualDrone> drones = new ArrayList<>();
         try {
             for (ShowScene.Kind k : SCENES) {
-                VirtualDrone d = fleet.addAtLaunch(fleet.freeName(), launch[0], launch[1]);
+                // beside the layout's places, never on them: the scenario's four are put exactly there (2026-11-12, the
+                // pilot: "spawned ... on top of the already existing drones")
+                double[] at = FleetLayout.beside(fleet.drones().size(), launch[0], launch[1]);
+                VirtualDrone d = fleet.add(fleet.freeName(), at[0], at[1], at[2]);
+                d.fc.setLaunch(launch[0], launch[1]); // it flew from the launch point, as addAtLaunch's
                 d.showScene(new ShowScene(k, d.fc.northM(), d.fc.eastM(), d.fc.headingDeg()));
                 d.setBeeperless(true);
                 drones.add(d);

@@ -390,7 +390,38 @@ public final class NameService {
 
     /** The reply this PC gives to a query. */
     public byte[] replyPacket() {
-        return Names.reply(config.getKey(), Names.Kind.PC, ownName(), device, AppInfo.version());
+        java.util.function.Supplier<String> s = ownStanag;
+        String stanag = null;
+        try {
+            stanag = s == null ? null : s.get();
+        } catch (RuntimeException ignored) {
+            // the reply goes without it
+        }
+        return Names.reply(config.getKey(), Names.Kind.PC, ownName(), device, AppInfo.version(), stanag);
+    }
+
+    /** 1.0.65: where this PC's STANAG 4609 streams go ("host:firstPort"), null while it sends none; asked at every reply (any thread). */
+    private volatile java.util.function.Supplier<String> ownStanag;
+
+    public void setStanag(java.util.function.Supplier<String> target) {
+        ownStanag = target;
+    }
+
+    /** What each other PC last said of its STANAG streams: name -> {target, when (MonoClock)}. */
+    private final java.util.Map<String, Object[]> pcStanag = new java.util.concurrent.ConcurrentHashMap<>();
+    /** A PC's word counts this long: it is asked at every scan. */
+    static final long STANAG_FRESH_MS = 60_000;
+
+    /** The other PCs that stream STANAG now, by name: where to ("host:firstPort"). Any thread. */
+    public java.util.Map<String, String> stanagStreams() {
+        java.util.Map<String, String> out = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        long now = MonoClock.ms();
+        String own = ownName();
+        for (java.util.Map.Entry<String, Object[]> e : pcStanag.entrySet()) {
+            if (now - (long) e.getValue()[1] > STANAG_FRESH_MS || e.getKey().equalsIgnoreCase(own)) continue;
+            out.put(e.getKey(), (String) e.getValue()[0]);
+        }
+        return out;
     }
 
     private void run() {
@@ -502,7 +533,11 @@ public final class NameService {
                     if (reply.kind() == Names.Kind.PHONE) unnamedPhones.add(ip);
                     continue;
                 }
-                if (reply.kind() == Names.Kind.PC) onlinePcNames.add(reply.name());
+                if (reply.kind() == Names.Kind.PC) {
+                    onlinePcNames.add(reply.name());
+                    if (reply.stanag() == null) pcStanag.remove(reply.name()); // 1.0.65
+                    else pcStanag.put(reply.name(), new Object[]{reply.stanag(), MonoClock.ms()});
+                }
                 List<String> claimed = claims.computeIfAbsent(reply.name().toLowerCase(java.util.Locale.ROOT), k -> new ArrayList<>());
                 if (!claimed.contains(ip)) claimed.add(ip);
                 if (claimed.size() > 1) continue; // a second device with this name: not filed (M3) - see duplicates()

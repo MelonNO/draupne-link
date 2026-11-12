@@ -1,4 +1,4 @@
-package de.droiddrone.pc.fleet;
+package de.droiddrone.pc.video;
 
 import org.bytedeco.ffmpeg.avcodec.AVCodec;
 import org.bytedeco.ffmpeg.avcodec.AVCodecContext;
@@ -21,13 +21,14 @@ import static org.bytedeco.ffmpeg.global.avutil.*;
 import static org.bytedeco.ffmpeg.global.swscale.*;
 
 /**
- * A virtual phone's video encoder: pictures (0xRRGGBB) in, H.264 out as the phone's MediaCodec gives it - the codec
- * config (SPS/PPS, Annex B) once, then a packet per picture, key frames every 2 s and on request. FFmpeg's libopenh264
- * on the caller's thread alone, one slice. Not thread-safe.
+ * Pictures (0xRRGGBB) in, H.264 out as a phone's MediaCodec gives it - the codec config (SPS/PPS, Annex B) once, then
+ * a packet per picture, key frames every 2 s (or every gop pictures) and on request. FFmpeg's libopenh264 on the
+ * caller's thread alone, one slice. Not thread-safe. The virtual fleet's phones use it (1.0.50, it lived in fleet),
+ * and the STANAG 4609 streams (1.0.65: every drone's stream is made here on the PC).
  */
-final class H264Encoder implements AutoCloseable {
+public final class H264Encoder implements AutoCloseable {
     /** One encoded picture. */
-    record Packet(byte[] data, boolean keyFrame) {}
+    public record Packet(byte[] data, boolean keyFrame) {}
 
     private final AVCodecContext enc;
     private final AVFrame yuv;
@@ -40,12 +41,19 @@ final class H264Encoder implements AutoCloseable {
     private final byte[] config;
     private long pts;
     private boolean closed;
+    /** A picture is in the encoder's frame: {@link #encodeAgain} may send it once more. */
+    private boolean hasPicture;
 
     static {
         av_log_set_level(AV_LOG_FATAL); // the encoders' chatter (OpenH264's profile notes) stays out of the console
     }
 
-    H264Encoder(int width, int height, int fps, int bitRate) throws IOException {
+    public H264Encoder(int width, int height, int fps, int bitRate) throws IOException {
+        this(width, height, fps, bitRate, 0);
+    }
+
+    /** @param gop a key frame by itself every this many pictures (0: every 2 s); a caller that asks for its own sets it high */
+    public H264Encoder(int width, int height, int fps, int bitRate, int gop) throws IOException {
         if (width <= 0 || height <= 0 || (width & 1) != 0 || (height & 1) != 0) throw new IOException("bad picture size " + width + "x" + height);
         this.width = width;
         this.height = height;
@@ -59,7 +67,7 @@ final class H264Encoder implements AutoCloseable {
         enc.pix_fmt(AV_PIX_FMT_YUV420P);
         enc.time_base(av_make_q(1, this.fps));
         enc.framerate(av_make_q(this.fps, 1));
-        enc.gop_size(this.fps * 2);
+        enc.gop_size(gop > 0 ? gop : this.fps * 2);
         enc.max_b_frames(0);
         enc.bit_rate(this.bitRate);
         enc.thread_count(1); // two were no faster (1080p: 15 ms on one, 20-22 ms on two)
@@ -92,34 +100,49 @@ final class H264Encoder implements AutoCloseable {
     }
 
     /** The codec config (Annex B SPS/PPS): the VideoInitialFrame's payload. */
-    byte[] config() {
+    public byte[] config() {
         return config;
     }
 
-    int width() {
+    public int width() {
         return width;
     }
 
-    int height() {
+    public int height() {
         return height;
     }
 
-    int fps() {
+    public int fps() {
         return fps;
     }
 
-    int bitRate() {
+    public int bitRate() {
         return bitRate;
     }
 
     /** One picture (width x height pixels); a key frame when asked. Packets out (none when the encoder skipped it). */
-    List<Packet> encode(int[] pixels, boolean keyFrame) throws IOException {
+    public List<Packet> encode(int[] pixels, boolean keyFrame) throws IOException {
         if (closed) throw new IOException("closed");
         bgr.position(0).limit((long) width * height * 4).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().put(pixels, 0, width * height);
         if (av_frame_make_writable(yuv) < 0) throw new IOException("could not reuse the picture");
         srcData.put(0, bgr);
         srcStride.put(0, width * 4);
         sws_scale(sws, srcData, srcStride, 0, height, yuv.data(), yuv.linesize());
+        hasPicture = true;
+        return send(keyFrame);
+    }
+
+    /**
+     * The last picture once more (1.0.65, a STANAG stream's still page: five a second of the same picture): no colour
+     * conversion, the encoder finds nothing changed and its packet is a few hundred bytes.
+     */
+    public List<Packet> encodeAgain(boolean keyFrame) throws IOException {
+        if (closed) throw new IOException("closed");
+        if (!hasPicture) throw new IOException("no picture to send again");
+        return send(keyFrame);
+    }
+
+    private List<Packet> send(boolean keyFrame) throws IOException {
         yuv.pts(pts++);
         yuv.pict_type(keyFrame ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE);
         if (avcodec_send_frame(enc, yuv) < 0) throw new IOException("could not encode a picture");
