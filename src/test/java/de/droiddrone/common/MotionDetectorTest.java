@@ -30,6 +30,8 @@ class MotionDetectorTest {
         boolean anyNight, anyLight;
         MotionDetector.Detection first, last;
         double lastAt;
+        /** pc.50: pictures with a box, and pictures not judged (settling). */
+        int boxed, settling;
     }
 
     static Run run(SyntheticScene scene, MotionDetector d, double fromS, double toS, Run into) {
@@ -44,6 +46,8 @@ class MotionDetectorTest {
             byte[][] f = scene.frame(t);
             MotionDetector.Result res = d.process(f[0], W, H, f[1], f[2], clockMs + Math.round(t * 1000));
             if (res.night) r.anyNight = true;
+            if (res.settling) r.settling++;
+            if (!res.detections.isEmpty()) r.boxed++;
             for (MotionDetector.Detection det : res.detections) {
                 r.ids.add(det.id);
                 r.reportsPerId.merge(det.id, 1, Integer::sum);
@@ -142,6 +146,36 @@ class MotionDetectorTest {
         Run r = runGrey(scene, new MotionDetector(MotionDetector.NORMAL), 0, 45);
         assertTrue(r.firstAt >= 20 && a.distance(r.firstAt) >= 15, "found " + a.distance(r.firstAt) + " m away (" + r.firstAt + " s)");
     }
+
+    /**
+     * pc.50: someone coming slowly - a wary walk, 0.5 - 0.7 m/s - out of the wood from 45 m straight at a grey camera.
+     * The growth the window asks (a quarter taller in 6 s) he reaches only some 15 m off, and half a minute after his
+     * first pixel stood out, far off, the reference had taken him and nothing was left to grow: found 11 - 12 m off at
+     * 0.5 m/s, 10 m off at 0.7 m/s (seed 13; seed 11 by luck 21.6 m). With the slow look - the same growth over 18 s,
+     * and what keeps a thing's shape and moves within itself left out of the reference meanwhile: SLOW_FOUND_M off at
+     * least, the box on him.
+     */
+    @Test
+    void someoneComingSlowlyOutOfTheWoodsIsFoundWellBeforeHeIsClose() {
+        for (long seed : new long[]{11, 13}) {
+            for (double speed : new double[]{0.5, 0.7}) {
+                SyntheticScene scene = woodsEdge(seed);
+                double until = 25 + (45 - 10) / speed; // he is then 10 m off
+                SyntheticScene.Approacher a = new SyntheticScene.Approacher(0.6, 45, speed, 25, until, 90, 30);
+                scene.approachers.add(a);
+                Run r = runGrey(scene, new MotionDetector(MotionDetector.NORMAL), 0, until);
+                String who = "seed " + seed + " at " + speed + " m/s";
+                assertTrue(r.firstAt >= 25, who + ": found, and nothing before the walker: " + r.firstAt + " " + r.reportsPerId);
+                double at = a.distance(r.firstAt);
+                assertTrue(at >= SLOW_FOUND_M, who + ": found " + String.format("%.1f", at) + " m away (at " + r.firstAt + " s)");
+                float[] truth = scene.box(a, r.lastAt);
+                assertEquals((truth[0] + truth[2] / 2) / W, r.last.centreX(), 0.05, who + ": box centre x on the walker");
+                assertEquals((truth[1] + truth[3] / 2) / H, r.last.centreY(), 0.08, who + ": box centre y on the walker");
+            }
+        }
+    }
+
+    static final double SLOW_FOUND_M = 15;
 
     /** The wood's edge in the gale for twenty minutes, without colour: nothing - the growing test must not take leaves. */
     @Test
@@ -456,6 +490,157 @@ class MotionDetectorTest {
         assertTrue(found.firstAt > 181 && found.firstAt <= 184, "the torch found: " + found.firstAt);
         assertTrue(found.anyLight, "reported as a light");
         assertEquals(1, found.ids.size(), "one id: " + found.reportsPerId);
+    }
+
+    // ------------------------------------------------------------------ pc.50: the night's lights
+
+    /** The night of the test above: mean luma about 12, a noisy sensor with hot pixels, the camera trembling. */
+    static SyntheticScene night(long seed) {
+        SyntheticScene scene = new SyntheticScene(W, H, seed);
+        scene.darkness = 0.1f;
+        scene.noiseSigma = 6;
+        scene.hotPixels = 40;
+        scene.shake = 1;
+        return scene;
+    }
+
+    /**
+     * A torch carried left at 15 px/s from t0, swinging towards the camera and away at 0.8 Hz: its spot 17 - 34 px
+     * across, 0.5 - 2 % of the picture - in the dark a tenth to four tenths of all the light in it.
+     */
+    static SyntheticScene.Mover swingingTorch(SyntheticScene scene, double t0, double t1) {
+        SyntheticScene.Mover m = new SyntheticScene.Mover(0, 0, 24, 24, 0, 0, (float) t0, (float) t1, 240, 128, 128, false);
+        m.size = t -> {
+            float s = (float) (25.5 + 8.5 * Math.sin(2 * Math.PI * 0.8 * t));
+            return new float[]{s, s};
+        };
+        m.path = t -> {
+            float s = m.size.apply(t)[0];
+            return new float[]{(float) (285 - 15 * (t - t0)) - s / 2, 110 - s / 2};
+        };
+        scene.movers.add(m);
+        return m;
+    }
+
+    /**
+     * A vehicle driving right at 40 px/s from t0, seen from the side: its lamp, and ahead of it the ground in its beam
+     * (64 x 24 px, 2.7 % of the picture, eight times the night's brightness).
+     */
+    static SyntheticScene.Mover headlights(SyntheticScene scene, double t0) {
+        SyntheticScene.Mover beam = new SyntheticScene.Mover(-70, 118, 64, 24, 40, 0, (float) t0, (float) t0 + 12, 95, 128, 128, true);
+        beam.glows = true;
+        scene.movers.add(beam);
+        scene.movers.add(new SyntheticScene.Mover(-78, 112, 6, 4, 40, 0, (float) t0, (float) t0 + 12, 250, 128, 128, false));
+        return beam;
+    }
+
+    /**
+     * pc.50: in the dark the picture's sum is small, and a light in it moved the factor of the sums as the camera's
+     * exposure would. A torch swinging towards the camera and away (0.5 - 2 % of the picture) "stepped" on a quarter of
+     * the pictures - each step rescaled the background and threw the tracks away: in 18 s not one report, 33 - 36 of
+     * the 144 pictures not judged. The exposure is now that of the middle half of the picture's cells: found 2 s after
+     * it shows, as one light, every picture judged.
+     */
+    @Test
+    void aTorchSwingingAtNightIsFoundAsALight() {
+        for (long seed : new long[]{41, 43}) {
+            SyntheticScene scene = night(seed);
+            MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
+            Run quiet = run(scene, d, 0, 40, null);
+            assertTrue(quiet.anyNight, "the dark picture is night");
+            assertEquals(Set.of(), quiet.ids, "seed " + seed + ": the dark alone");
+            swingingTorch(scene, 40, 58);
+            Run found = run(scene, d, 40, 58, null);
+            assertEquals(0, found.settling, "seed " + seed + ": every picture with the torch in it is judged");
+            assertTrue(found.firstAt > 40 && found.firstAt <= 43, "seed " + seed + ": the torch found: " + found.firstAt);
+            assertTrue(found.anyLight, "reported as a light");
+            assertEquals(1, found.ids.size(), "seed " + seed + ": one id: " + found.reportsPerId);
+            assertTrue(found.boxed >= 0.8 * 18 * FPS, "seed " + seed + ": boxed while it is there: " + found.boxed + " of 144 pictures");
+        }
+    }
+
+    /**
+     * pc.50: headlights. A vehicle crossing in the dark, the ground in its beam 2.7 % of the picture: as it drove in the
+     * picture's sum rose by a third - 5 pictures not judged, the tracks thrown away each time, 17 - 23 boxes in all.
+     * Now every picture is judged, and it is boxed, as a light, in HEADLIGHTS_BOXED pictures at least (47 - 58 boxes).
+     * (Its two ids are the shift search's doing: in the dark it follows a bright patch now and then.)
+     */
+    @Test
+    void headlightsCrossingAtNightAreFoundAsALight() {
+        for (long seed : new long[]{41, 43}) {
+            SyntheticScene scene = night(seed);
+            MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
+            assertEquals(Set.of(), run(scene, d, 0, 40, null).ids, "seed " + seed + ": the dark alone");
+            headlights(scene, 40); // all of it in the picture from 42 s, its beam's front out again at 46.4 s, gone at 49.9 s
+            Run found = run(scene, d, 40, 50, null);
+            assertEquals(0, found.settling, "seed " + seed + ": every picture with the headlights in it is judged");
+            assertTrue(found.firstAt > 40 && found.firstAt <= 44.5, "seed " + seed + ": found as it drives in: " + found.firstAt);
+            assertTrue(found.anyLight, "reported as a light");
+            assertTrue(found.boxed >= HEADLIGHTS_BOXED, "seed " + seed + ": boxed in " + found.boxed + " of 80 pictures");
+        }
+    }
+
+    static final int HEADLIGHTS_BOXED = 30;
+
+    /**
+     * pc.50: and the camera's own exposure in the dark is still a step - every pixel 1.3 times as bright, or as dark:
+     * that one picture is not judged, the background takes the new level at once, nothing is reported, and a torch
+     * after it is found as before.
+     */
+    @Test
+    void anExposureStepAtNightIsStillAStep() {
+        for (double g : new double[]{1.3, 1 / 1.3}) {
+            SyntheticScene scene = night(41);
+            scene.gain = t -> t < 40 ? 1 : g;
+            MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
+            run(scene, d, 0, 40, null);
+            Run step = run(scene, d, 40, 40.125, null);
+            assertEquals(1, step.settling, "x " + g + ": the picture of the step is not judged");
+            Run after = run(scene, d, 40.125, 60, null);
+            assertEquals(Set.of(), after.ids, "x " + g + ": no alarm from the step: " + after.reportsPerId);
+            assertEquals(0, after.settling, "x " + g + ": one step, taken at once");
+            swingingTorch(scene, 60, 70);
+            Run found = run(scene, d, 60, 70, null);
+            assertTrue(found.firstAt > 60 && found.firstAt <= 63 && found.anyLight, "x " + g + ": a torch after the step: " + found.firstAt);
+        }
+    }
+
+    // ------------------------------------------------------------------ pc.50: far off
+
+    /**
+     * Someone far off crossing the field between the trees: wide x 10 px, dark, walking right at 8 px/s and a little
+     * downhill (so he lies on the working picture's rows every which way).
+     */
+    static SyntheticScene.Mover farWalker(float wide, double t0, double t1) {
+        return new SyntheticScene.Mover(70, 103, wide, 10, 8, 0.3f, (float) t0, (float) t1, 60, 128, 128, false);
+    }
+
+    /**
+     * pc.50: someone far off. A man 38 m away is 1.5 x 5 of the detector's pixels (1.8 m tall and 0.55 m wide through a
+     * 74 degree lens, 160 working pixels across; here 3 x 10 px of the 320 wide picture), walking at 1.4 m/s: 8 px/s.
+     * He is mostly one working pixel wide, and the noise rule (two foreground neighbours) took both ends of him: three
+     * pixels left, under NORMAL's four - a box in 27 of 144 pictures with the camera still, in none in the gale's
+     * shake. With the ends of an upright line kept: found 2 s after he shows, boxed in most pictures, the box on him,
+     * camera still or shaken. (LOW asks six pixels, 30 m: not him. HIGH found him before, on the fine picture. A man
+     * one pixel wide all the time - 2 px here, 55 m - is half hidden between two columns every other picture: still
+     * not found on NORMAL.)
+     */
+    @Test
+    void someoneFortyMetresOffOnePixelWideIsFoundOnNormal() {
+        for (float shake : new float[]{0.5f, 4}) {
+            SyntheticScene scene = windyWoods(5);
+            scene.shake = shake;
+            SyntheticScene.Mover walker = farWalker(3, 30, 48);
+            scene.movers.add(walker);
+            MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
+            assertEquals(Set.of(), run(scene, d, 0, 30, null).ids, "shake " + shake + ": nothing before him");
+            Run r = run(scene, d, 30, 48, null);
+            assertTrue(r.firstAt >= 30 && r.firstAt <= 33, "shake " + shake + ": found within 3 s: " + r.firstAt);
+            assertTrue(r.boxed >= 0.75 * 18 * FPS, "shake " + shake + ": boxed in " + r.boxed + " of 144 pictures");
+            float[] truth = walker.at(r.lastAt);
+            assertEquals((truth[0] + truth[2] / 2) / W, r.last.centreX(), 0.03, "shake " + shake + ": box centre x on him");
+            assertEquals((truth[1] + truth[3] / 2) / H, r.last.centreY(), 0.05, "shake " + shake + ": box centre y on him");
+        }
     }
 
     @Test

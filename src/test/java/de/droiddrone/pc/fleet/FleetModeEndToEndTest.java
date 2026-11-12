@@ -126,10 +126,17 @@ class FleetModeEndToEndTest {
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "a pilot connected");
         fleet.queue("MobileZulu", ControlLink.POWER_STANDBY, 5, 0, 0, 0, System.currentTimeMillis());
         Names.Reply r = ask(config);
-        send(fleet.onReply(r, System.currentTimeMillis()));
+        assertTrue(r.flown(), "its answer says a pilot flies it");
+        // 1.0.64: this PC sends it nothing then, and drops what was queued - it stayed queued and went to the drone
+        // the moment that pilot's link dropped
+        assertNull(fleet.onReply(r, System.currentTimeMillis()));
+        assertNull(fleet.wanted("MobileZulu"));
+        assertTrue(log.contains("MobileZulu: queued STANDBY dropped - flown by another PC."), String.join("\n", log));
+        // the phone's own refusal (a PC that sends it all the same, an older one)
+        send(de.droiddrone.common.FleetProtocol.request(config.getKey(),
+                new de.droiddrone.common.FleetProtocol.Request(0x1234, ControlLink.POWER_STANDBY, 5, 0, 0, 0, pc.getLocalPort())));
         waitFor(() -> log.stream().anyMatch(l -> l.contains("refused: a pilot is connected")), 3000, "refused");
         assertEquals(VirtualDrone.NORMAL, drone.mode());
-        assertNotNull(fleet.wanted("MobileZulu"), "still queued: it goes once the pilot is gone");
     }
 
     private static void waitFor(BooleanSupplier ok, long ms, String what) throws InterruptedException {

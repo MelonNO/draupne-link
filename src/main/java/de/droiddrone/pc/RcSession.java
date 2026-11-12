@@ -18,14 +18,21 @@ import java.util.function.LongSupplier;
  * <p>
  * A link that goes down in flight no longer stops the sticks (1.0.33, {@link ControlLink#sticksWanted}): they keep
  * going out as they are, and reach the drone the moment its uplink works again - on 4G that is often while the
- * phone's own packets still don't come through. Betaflight's own rules keep that safe: a drone its failsafe landed
- * and disarmed won't arm again until the arm switch has been seen off, and never with the throttle up. The sticks
- * stop only when the pilot asks (STANDBY, DEEP SLEEP), the radio goes, or the link is given up.
+ * phone's own packets still don't come through. Betaflight's own rule - a drone its failsafe landed and disarmed
+ * won't arm again until the arm switch has been seen off, and never with the throttle up - doesn't keep that safe
+ * by itself: the phone feeds the idle sticks (arm switch off) to a DISARMED flight controller that gets no frames,
+ * which is the arm switch seen off, and the next live frame, arm switch still on, arms it on the ground. So (1.0.64)
+ * once nothing says the phone hears this PC ({@link ControlLink#sticksUnheard}), the flight controller's word is
+ * watched: a fresh DISARMED while the frame could arm stops the sticks, and they start again as at connect - arm
+ * switch off and throttle low. ARMED, or no word at all, changes nothing: a drone in the air must not be starved.
+ * Otherwise the sticks stop only when the pilot asks (STANDBY, DEEP SLEEP), the radio goes, or the link is given up.
  * <p>
  * When they did stop and the flight controller says it is still armed (fresh telemetry), the drone is in the air
  * (the failsafe is GPS rescue and it is flying home, or the loss was shorter than the failsafe's stage 2), and
  * waiting for throttle low and arm off would make the first frame disarm it in flight. The sticks go live at once,
- * as they are.
+ * as they are. And while the flight controller says nothing yet (1.0.64: this PC's app started with the drone in the
+ * air - its state takes seconds to arrive on a weak link) the start isn't taken at all: READING FC, until it is
+ * known or the link has been heard for {@link #FC_READ_WAIT_MS} without it.
  */
 public class RcSession {
     /** Throttle must be at or below this before RC output starts, so a link-up never spins motors unexpectedly. */
@@ -36,6 +43,24 @@ public class RcSession {
     public static final long FC_ARMED_FRESH_MS = 2000;
     /** What the OSD shows for a moment when the sticks went live on an armed drone (see {@link #lastResumeBanner}). */
     public static final String ARMED_RESUME_BANNER = "LINK BACK - ARMED - STICKS LIVE";
+    /**
+     * 1.0.64: with the flight controller's armed state unknown, the sticks don't start before the link has been heard
+     * this long without a word of it (see {@link #waitingFor}: READING FC). Then as before: a drone that never says.
+     */
+    public static final long FC_READ_WAIT_MS = 5000;
+    /** One input tick counts this much heard time at most (a stalled input loop is not five seconds of link). */
+    private static final long MAX_TICK_MS = 250;
+    /**
+     * 1.0.64: after a loss, ARMED read this long after the link is back closes the watch: by then the status is from
+     * after the loss, and a late burst of old ones is through.
+     */
+    static final long LOSS_SETTLE_MS = FC_ARMED_FRESH_MS + 1000;
+    /**
+     * 1.0.64: DISARMED stops the sticks after a loss only once it has been read this long without a break - two
+     * statuses in a row (they come every 0.25-0.5 s), as ARMED needs two: one stray status must not cut the sticks of a
+     * drone in the air.
+     */
+    static final long DISARMED_CONFIRM_MS = 600;
 
     /** A line for the OSD and when it was set (this session's clock: MonoClock.ms in the app). */
     public record Banner(String text, long at) {}
@@ -87,10 +112,35 @@ public class RcSession {
     /** The idle sticks go to the phone this often: a lost one is replaced soon, and they change only with the radio's AUX. */
     static final long IDLE_STICKS_EVERY_MS = 1000;
 
+    /** Nothing says the phone hears this PC now ({@link ControlLink#sticksUnheard}): a loss, or one way only. */
+    private final BooleanSupplier sticksUnheard;
+    /** See {@link #FC_READ_WAIT_MS}; 0 = the sticks never wait for the flight controller's state. */
+    private final long fcReadWaitMs;
+    /** The link was up at the last tick; when that tick was (0: none yet). */
+    private boolean linkWasUp;
+    private long lastTickAt;
+    /** How long the link has been heard with the flight controller's armed state unknown, ms (0 while it is known). */
+    private long fcUnknownHeardMs;
+    /** The sticks wait for the flight controller's armed state (see {@link #waitingFor}). */
+    private volatile boolean readingFc;
+    /**
+     * The link was unheard and what the flight controller says of it isn't settled yet (see {@link #watchLoss}); since
+     * when, whether it was unheard at the last tick, and when it was heard again (0: not yet).
+     */
+    private boolean lossWatch;
+    private long lossWatchSince;
+    private boolean wasUnheard;
+    private long heardAgainAt;
+    /** The sticks were stopped in this watch already (the throttle rule, without an arm switch, stops them once). */
+    private boolean lossStopped;
+    /** Since when the flight controller has read DISARMED without a break (0: it doesn't). */
+    private long disarmedSince;
+
     public RcSession(ControlLink link, RcMapper mapper, Consumer<String> events, ArmSwitch armSwitch) {
         this(link, mapper, events, new Inputs(MonoClock::ms, link::sticksWanted,
                 () -> link.getTelemetry().isArmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS),
-                () -> link.getTelemetry().isDisarmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS), armSwitch));
+                () -> link.getTelemetry().isDisarmedNow(MonoClock.ms(), FC_ARMED_FRESH_MS), armSwitch,
+                link::sticksUnheard, FC_READ_WAIT_MS));
         armBlocked = () -> link.getTelemetry().isPhoneInstalling(MonoClock.ms());
     }
 
@@ -107,11 +157,18 @@ public class RcSession {
 
     /**
      * What a session reads besides the link: its clock (ms), whether the link is up for sticks, the flight
-     * controller's armed and disarmed state as fresh telemetry says (both false: unknown), and the arm switch (null:
-     * none set).
+     * controller's armed and disarmed state as fresh telemetry says (both false: unknown), the arm switch (null:
+     * none set), whether nothing says the phone hears this PC now (1.0.64), and how long the sticks wait for the
+     * flight controller's state (FC_READ_WAIT_MS in the app; 0 = they don't).
      */
     record Inputs(LongSupplier clock, BooleanSupplier linkUp, BooleanSupplier fcArmedNow, BooleanSupplier fcDisarmedNow,
-                  ArmSwitch armSwitch) {
+                  ArmSwitch armSwitch, BooleanSupplier sticksUnheard, long fcReadWaitMs) {
+        /** As before 1.0.64: the phone always heard, no wait for the flight controller's state. */
+        Inputs(LongSupplier clock, BooleanSupplier linkUp, BooleanSupplier fcArmedNow, BooleanSupplier fcDisarmedNow,
+               ArmSwitch armSwitch) {
+            this(clock, linkUp, fcArmedNow, fcDisarmedNow, armSwitch, () -> false, 0);
+        }
+
         /** Tests: a clock and a link, the FC's state unknown, no arm switch. */
         static Inputs of(LongSupplier clock, BooleanSupplier linkUp) {
             return new Inputs(clock, linkUp, () -> false, () -> false, null);
@@ -127,6 +184,8 @@ public class RcSession {
         this.linkUp = in.linkUp();
         this.fcArmedNow = in.fcArmedNow();
         this.armSwitch = in.armSwitch();
+        this.sticksUnheard = in.sticksUnheard();
+        this.fcReadWaitMs = Math.max(0, in.fcReadWaitMs());
     }
 
     /**
@@ -158,6 +217,16 @@ public class RcSession {
         rcEnabled = false;
         frozenStopped = false;
         lostAt = 0;
+        linkDown(); // a WAKE starts like a new link
+    }
+
+    /** No sticks on this link now (given up, or paused): what was watched on it is over, the next start is a new one. */
+    private void linkDown() {
+        linkWasUp = false;
+        readingFc = false;
+        lossWatch = false;
+        wasUnheard = false;
+        disarmedSince = 0;
     }
 
     private void noteInput(Joystick.State state, long now) {
@@ -302,10 +371,20 @@ public class RcSession {
             if (rcEnabled) events.accept("Link given up - RC output off until link back and throttle low.");
             rcEnabled = false;
             lostAt = 0; // a link that was down long enough to notice: Betaflight has failed safe, no quick resume
+            linkDown();
+            lastTickAt = now;
             return;
         }
+        // 1.0.64: what the link and the flight controller say this tick (a few volatile reads: nothing waits)
+        boolean unheard = sticksUnheard.getAsBoolean();
+        boolean fcArmed = fcArmedNow.getAsBoolean(), fcDisarmed = fcDisarmedNow.getAsBoolean();
+        if (!linkWasUp || fcArmed || fcDisarmed) fcUnknownHeardMs = 0;
+        else if (!unheard) fcUnknownHeardMs += Math.min(MAX_TICK_MS, Math.max(0, now - lastTickAt));
+        linkWasUp = true;
+        lastTickAt = now;
+        boolean reading = false;
         // H9: the phone installs an update - nothing that could arm a disarmed drone goes out
-        boolean noArm = channels != null && armBlocked.getAsBoolean() && !fcArmedNow.getAsBoolean()
+        boolean noArm = channels != null && armBlocked.getAsBoolean() && !fcArmed
                 && (armSwitch == null || armSwitch.isUnknown(channels) || armSwitch.on(channels));
         if (noArm && rcEnabled) {
             events.accept("Phone installs an update - RC output stopped. No arming until back (throttle low, arm off).");
@@ -325,18 +404,25 @@ public class RcSession {
             if (blip) {
                 rcEnabled = true;
                 events.accept("Joystick back after " + (now - lostAt) + " ms - RC output resumed.");
-            } else if (fcArmedNow.getAsBoolean()) {
+            } else if (fcArmed) {
                 // armed and flying without sticks: every frame withheld is a frame of failsafe, and a frame with the
                 // arm switch off would disarm it in the air - the pilot's sticks as they are, now
                 rcEnabled = true;
                 banner = new Banner(ARMED_RESUME_BANNER, now);
                 events.accept("Link back - FC armed - sticks live.");
+            } else if (fcReadWaitMs > 0 && !fcDisarmed && (unheard || fcUnknownHeardMs < fcReadWaitMs)) {
+                // 1.0.64: the flight controller hasn't said yet (the app just started, or the link is out). Armed in
+                // the air, "throttle down, arm off" obeyed would be an arm-off frame: a disarm in flight. Not taken
+                // until its state is known, or the link has been heard for fcReadWaitMs without it
+                reading = true;
             } else if (channels[PcConfig.THROTTLE_INDEX] <= THROTTLE_SAFE_MAX && (armSwitch == null || !armSwitch.on(channels))) {
                 rcEnabled = true;
                 events.accept(armSwitch == null ? "Throttle low - RC output enabled." : "Throttle low, arm switch off - RC output enabled.");
             }
             if (rcEnabled || !blip) lostAt = 0;
         }
+        readingFc = reading;
+        watchLoss(channels, now, unheard, fcArmed, fcDisarmed);
         // only while the radio itself is at rest (throttle low, ARM off): an idle frame can't carry a live switch then
         if (channels != null && passesArmGate(channels) && (idleSentAt == 0 || now - idleSentAt >= IDLE_STICKS_EVERY_MS)) {
             short[] idle = idleSticks(withBeeper(channels, beeperChannel, false), armSwitch);
@@ -344,6 +430,46 @@ public class RcSession {
         }
         if (rcEnabled && frozenHolds(now)) return;
         if (rcEnabled) link.sendRc(channels);
+    }
+
+    /**
+     * 1.0.64: the link unheard, then what the flight controller says of it (see the class comment). From the first
+     * unheard tick the watch is open. A fresh DISARMED while the sticks are live and the frame could arm - the arm
+     * switch on, or not known and the throttle up - stops them, for the start rule to begin again; not before the
+     * watch is FC_ARMED_FRESH_MS old, so the status is from after the loss began and not the last one before it, nor
+     * before DISARMED has been read for DISARMED_CONFIRM_MS.
+     * The watch closes with the link heard again and DISARMED read with nothing that could arm, or ARMED still read
+     * LOSS_SETTLE_MS after (flying on: the sticks never stopped). No word from the flight controller: it stays open,
+     * and the sticks go on - a drone in the air must not be starved.
+     */
+    private void watchLoss(short[] channels, long now, boolean unheard, boolean fcArmed, boolean fcDisarmed) {
+        if (unheard && !lossWatch) {
+            lossWatch = true;
+            lossWatchSince = now;
+            lossStopped = false;
+        }
+        if (unheard) heardAgainAt = 0;
+        else if (wasUnheard) heardAgainAt = now;
+        wasUnheard = unheard;
+        if (!fcDisarmed) disarmedSince = 0;
+        else if (disarmedSince == 0) disarmedSince = now;
+        if (!lossWatch || channels == null) return;
+        // no arm switch known: the throttle alone, as at the start - and once a watch (a throttle resting at the limit
+        // would stop and start them tick by tick)
+        boolean couldArm = armSwitch != null ? armSwitch.on(channels)
+                : !lossStopped && channels[PcConfig.THROTTLE_INDEX] > THROTTLE_SAFE_MAX;
+        if (fcDisarmed && rcEnabled && couldArm) {
+            if (now - lossWatchSince < FC_ARMED_FRESH_MS) return; // may be the last status before the loss: wait
+            if (now - disarmedSince < DISARMED_CONFIRM_MS) return; // one status alone stops nothing: the next one too
+            // the watch stays open: still unheard, the arm switch off and on again is stopped again at once
+            rcEnabled = false;
+            lostAt = 0;
+            lossStopped = true;
+            events.accept((unheard ? "Link lost" : "Link back") + " - FC disarmed - "
+                    + (armSwitch != null ? "ARM off" : "throttle down") + " to fly again.");
+        } else if (!unheard && lostAt == 0 && (fcDisarmed || fcArmed && now - heardAgainAt >= LOSS_SETTLE_MS)) {
+            lossWatch = false;
+        }
     }
 
     /** Whether the frozen-radio limit holds this frame back; says so once each way. */
@@ -370,14 +496,17 @@ public class RcSession {
 
     /**
      * What the sticks wait for before they start: "NO RADIO" (no joystick), "MAPPING INCOMPLETE" (the radio lacks an
-     * axis or button the mapping needs), "ARM SWITCH NOT SENT" (the radio's mapping doesn't carry Betaflight's ARM
-     * channel, so its value at the drone is unknown), "THROTTLE DOWN", "ARM SWITCH OFF", or both; null when live.
+     * axis or button the mapping needs), "READING FC" (1.0.64: the flight controller's armed state isn't known yet -
+     * nothing to do but wait; never "throttle down, arm off" to a drone that may be in the air), "ARM SWITCH NOT SENT"
+     * (the radio's mapping doesn't carry Betaflight's ARM channel, so its value at the drone is unknown),
+     * "THROTTLE DOWN", "ARM SWITCH OFF", or both; null when live.
      */
     public String waitingFor() {
         if (rcEnabled) return null;
         short[] ch = lastChannels;
         if (ch == null) return radioPresent ? "MAPPING INCOMPLETE" : "NO RADIO";
         if (armBlocked.getAsBoolean()) return "PHONE UPDATING";
+        if (readingFc) return "READING FC";
         if (armSwitch != null && armSwitch.isUnknown(ch)) return "ARM SWITCH NOT SENT";
         boolean throttle = ch[PcConfig.THROTTLE_INDEX] > THROTTLE_SAFE_MAX;
         boolean arm = armSwitch != null && armSwitch.on(ch);

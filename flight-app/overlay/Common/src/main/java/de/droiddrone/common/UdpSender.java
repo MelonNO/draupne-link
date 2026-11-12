@@ -23,6 +23,9 @@
  *  numbering); one try per packet, not ten in a row on a dead network, and the error logged at most every 2 s; a
  *  packet's number and its saved copy are taken under the same lock as the reset in connect, so a packet of the
  *  old session can't be saved under the new numbering.
+ *  pc.50 / DRAUPNE Link 1.0.64: the resend timer on a ScheduledExecutorService (the monotonic clock). java.util.Timer
+ *  waits on the wall clock: a time correction backwards by N seconds stopped every resend for N seconds; and an
+ *  exception in one pass ended the timer for the rest of the session.
  */
 
 package de.droiddrone.common;
@@ -33,16 +36,17 @@ import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.util.ArrayList;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class UdpSender {
     private final DatagramSocket socket;
     private final Object packetNumberLock = new Object();
     private short nextPacketNumber;
     private final ConcurrentHashMap<Short, SavedPacket> savedPackets = new ConcurrentHashMap<>();
-    private volatile Timer timer;
+    private volatile ScheduledExecutorService timer;
     private volatile InetAddress ip;
     private volatile int port;
     private volatile boolean active;
@@ -76,22 +80,26 @@ public class UdpSender {
         }
         active = true;
         timerId++;
-        Timer old = timer;
-        if (old != null) old.cancel(); // the last session's timer: gone, not left to cancel the new one
-        final Timer own = new Timer("udpResend", true);
+        ScheduledExecutorService old = timer;
+        if (old != null) old.shutdown(); // the last session's timer: gone, not left to cancel the new one
+        final ScheduledExecutorService own = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "udpResend");
+            t.setDaemon(true);
+            return t;
+        });
         timer = own;
-        TimerTask tt = new TimerTask() {
-            final int id = timerId;
-            @Override
-            public void run() {
-                if (active && id == timerId) {
+        final int id = timerId;
+        own.scheduleWithFixedDelay(() -> {
+            if (active && id == timerId) {
+                try {
                     timerRun();
-                }else{
-                    own.cancel(); // its own timer, never the field (a newer session's)
+                } catch (RuntimeException e) {
+                    sendError("resend timer", e); // this pass lost; the next one runs
                 }
+            } else {
+                own.shutdown(); // its own timer, never the field (a newer session's)
             }
-        };
-        own.schedule(tt, 0, 10);
+        }, 0, 10, TimeUnit.MILLISECONDS);
     }
 
     private void timerRun() {
@@ -281,8 +289,8 @@ public class UdpSender {
     public void close(){
         active = false;
         timerId++;
-        Timer t = timer;
-        if (t != null) t.cancel();
+        ScheduledExecutorService t = timer;
+        if (t != null) t.shutdown();
         savedPackets.clear();
     }
 }

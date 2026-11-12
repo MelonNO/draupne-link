@@ -116,6 +116,21 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private long lastLost;
     private volatile int receivedFps;
     private volatile double megabitsPerSecond;
+    /**
+     * 1.0.64: the share of the last LOSS_WINDOWS seconds' frames the link didn't deliver whole - lost, damaged, or
+     * rebuilt from parity (bad coverage mode hides those; the loss is there all the same). For AUTO's tier choice
+     * ({@link #frameLossRatio}); counted with the once-a-second figures, on the receive thread.
+     */
+    static final int LOSS_WINDOWS = 3;
+    /** Fewer frames than this in the windows: too few to judge by. */
+    static final int LOSS_MIN_FRAMES = 20;
+    /** No window closed for this long (no picture comes): the last ratio says nothing any more. */
+    static final long LOSS_STALE_MS = 2500;
+    private final long[] lossHit = new long[LOSS_WINDOWS], lossAll = new long[LOSS_WINDOWS];
+    private int lossAt;
+    private long lossHitBefore, lossAllBefore;
+    private volatile double frameLoss;
+    private volatile long frameLossAt;
     private volatile Config currentConfig;
     /*
      * A restarted stream (the phone numbers it from key frame 1 again), in short - its config and its first frames
@@ -342,16 +357,22 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         windowBytes += length;
         FrameAssembler.Frame frame;
         List<FrameAssembler.Frame> earlier;
-        long lost;
+        long lost, hit = 0, all = 0;
+        boolean second = now - windowStart >= 1000;
         synchronized (assembler) {
             frame = assembler.put(keyFrame, frameNum, offset, frameSize, buf, dataOffset, length, now);
             earlier = assembler.takeFlushed(); // older unfinished frames, damaged: decoded first, they are references
             lost = assembler.getLostFrames();
+            if (second) { // for the frame loss, once a second
+                hit = lost + assembler.getDamagedFrames() + assembler.getRecoveredFrames();
+                all = lost + assembler.getDamagedFrames() + assembler.getCompletedFrames();
+            }
         }
         countLost(lost, now);
         for (FrameAssembler.Frame f : earlier) accept(f, now);
         if (frame != null) accept(frame, now);
-        if (now - windowStart >= 1000) {
+        if (second) {
+            noteFrameLoss(hit, all, now);
             receivedFps = (int) (windowFrames * 1000 / Math.max(1, now - windowStart));
             megabitsPerSecond = windowBytes * 8.0 / 1000.0 / Math.max(1, now - windowStart);
             bitrate.onReceivedRate(megabitsPerSecond, now);
@@ -369,6 +390,34 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
             windowBytes = 0;
             windowStart = now;
         }
+    }
+
+    /**
+     * One more second of the assembler's counts (receive thread): the frames not delivered whole and all frames, as
+     * counted so far - the ratio over the last LOSS_WINDOWS seconds is published.
+     */
+    private void noteFrameLoss(long hit, long all, long now) {
+        lossHit[lossAt] = hit - lossHitBefore;
+        lossAll[lossAt] = all - lossAllBefore;
+        lossHitBefore = hit;
+        lossAllBefore = all;
+        lossAt = (lossAt + 1) % LOSS_WINDOWS;
+        long hits = 0, frames = 0;
+        for (int i = 0; i < LOSS_WINDOWS; i++) {
+            hits += lossHit[i];
+            frames += lossAll[i];
+        }
+        frameLoss = frames < LOSS_MIN_FRAMES ? 0 : (double) hits / frames;
+        frameLossAt = now;
+    }
+
+    /**
+     * The share of the last seconds' frames that came lost, damaged or had to be rebuilt from parity, 0-1; 0 without
+     * a picture coming, or with too few frames to judge by (1.0.64, for AUTO: see TierPolicy.LOSSY_FRAMES).
+     */
+    @Override
+    public double frameLossRatio() {
+        return MonoClock.ms() - frameLossAt > LOSS_STALE_MS ? 0 : frameLoss;
     }
 
     /**

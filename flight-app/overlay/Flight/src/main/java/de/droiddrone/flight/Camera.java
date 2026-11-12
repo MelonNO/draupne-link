@@ -53,6 +53,13 @@ public interface Camera {
     default void setExtraTarget(android.view.Surface surface) {
     }
 
+    /**
+     * pc.50: an overwatch event's preview - the stream encoder gets pictures (true) or none (false) while the event's
+     * recorder runs; the session stays as it is. Cameras that can't leave it out ignore it.
+     */
+    default void setStreamTarget(boolean on) {
+    }
+
     /** pc.49: why overwatch gets no pictures from it (an OverwatchProtocol BLIND_ code). */
     default int blindReason() {
         return isStarted() ? de.droiddrone.common.OverwatchProtocol.BLIND_NO_FRAMES : de.droiddrone.common.OverwatchProtocol.BLIND_CLOSED;

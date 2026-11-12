@@ -166,22 +166,149 @@ class OverwatchLogicTest {
         assertFalse(e.isSilenced(40_000));
     }
 
+    /**
+     * pc.50: an event ends with its clip. At the cap it only stopped its clip and went on: a scene that kept moving
+     * (wind, an animal - for hours) rang once at its start, recorded 15 min, and a person arriving later got no ring
+     * and no clip. Now what still moves is a new event: its own alert, pictures before it and clip.
+     */
     @Test
-    void aLongEventStopsItsClipAtTheCapButGoesOn() {
+    void aLongEventEndsWithItsClipAndWhatStillMovesIsANewEvent() {
         OverwatchEvent e = new OverwatchEvent();
-        e.onDetection(0);
-        OverwatchEvent.Action stop = OverwatchEvent.Action.NONE;
-        long t = 0;
-        for (; t <= OverwatchEvent.MAX_CLIP_MS + 1000; t += 1000) {
-            e.onDetection(t);
-            OverwatchEvent.Action a = e.tick(t);
-            if (a == OverwatchEvent.Action.STOP_CLIP) {
-                assertEquals(OverwatchEvent.Action.NONE, stop, "once");
-                stop = a;
+        assertEquals(OverwatchEvent.Action.START, e.onDetection(0, 0.5f, 0.5f));
+        int first = e.event();
+        long t = 1000;
+        for (; t < OverwatchEvent.MAX_CLIP_MS; t += 1000) { // the same thing, moving on without a pause
+            assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.5f, 0.5f), "at " + t);
+            assertEquals(OverwatchEvent.Action.NONE, e.tick(t), "at " + t);
+        }
+        assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.9f, 0.1f), "no ring from the old event at its very end");
+        assertEquals(OverwatchEvent.Action.ENDED, e.tick(t), "15 min: the event ends with its clip");
+        assertFalse(e.isActive());
+        assertEquals(OverwatchEvent.Action.NONE, e.tick(t + 100), "ended once");
+        assertEquals(OverwatchEvent.Action.START, e.onDetection(t + 125, 0.9f, 0.1f), "the next detection: a new event - alert, pictures, clip");
+        assertNotEquals(first, e.event());
+        assertEquals(0, e.alertNo());
+        assertEquals(OverwatchEvent.Action.NONE, e.tick(t + 225), "and that one has its own 15 min");
+    }
+
+    /**
+     * pc.50: new motion alerts again in an event nobody dismissed too (an acknowledged alert rang once and never
+     * again while anything kept the event alive) - an event rings once a minute at most, its start counted.
+     */
+    @Test
+    void newMotionAlertsAgainInAnEventNobodyDismissedOnceAMinuteAtMost() {
+        OverwatchEvent e = new OverwatchEvent();
+        e.onDetection(0, 0.2f, 0.5f);
+        assertEquals(OverwatchEvent.Action.NONE, e.onDetection(2000, 0.9f, 0.5f), "something else, far - but the alert is 2 s old");
+        long t = 2500;
+        for (; t < OverwatchEvent.AGAIN_EVERY_MS; t += 500) assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.9f, 0.5f), "at " + t);
+        assertEquals(OverwatchEvent.Action.ALERT_AGAIN, e.onDetection(t, 0.9f, 0.5f), "it is remembered, and rings a minute after the first, still moving");
+        assertEquals(1, e.alertNo());
+        long rang = t;
+        for (t += 500; t < rang + 20_000; t += 500) assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.9f, 0.5f), "moving on: nothing new");
+        assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.2f, 0.4f), "new again, but a ring went 20 s ago");
+        for (t += 500; t < rang + OverwatchEvent.AGAIN_EVERY_MS; t += 500) {
+            assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.2f, 0.4f), "one a minute at most, at " + t);
+        }
+        assertEquals(OverwatchEvent.Action.ALERT_AGAIN, e.onDetection(t, 0.2f, 0.4f), "the minute over and still moving: it rings");
+        assertEquals(2, e.alertNo());
+        assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t + 500, 0.2f, 0.4f), "once");
+    }
+
+    @Test
+    void theSameThingMovingOnRingsOnceAndAPauseMakesItNew() {
+        OverwatchEvent e = new OverwatchEvent();
+        e.onDetection(0, 0.1f, 0.5f);
+        long t = 125;
+        for (; t < 5 * 60_000; t += 125) { // walking slowly across, 8 pictures a second
+            assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.1f + t / 1_000_000f, 0.5f), "at " + t);
+            assertEquals(OverwatchEvent.Action.NONE, e.tick(t));
+        }
+        t += OverwatchEvent.NEW_AFTER_QUIET_MS; // it stood still for 5 s (the event still runs: under 30 s)
+        assertEquals(OverwatchEvent.Action.ALERT_AGAIN, e.onDetection(t, 0.4f, 0.5f), "motion after a pause is new");
+        e.dismiss(t + 1000);
+        assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t + 8000, 0.9f, 0.5f), "dismissed: the dismiss's own rule (not within 10 s of it)");
+    }
+
+    /** pc.50: a DISMISS is never answered with a ring at once - a dismissed event at its clip's cap waits for its silence to end. */
+    @Test
+    void aDismissedEventPastItsClipsCapEndsWhenItsSilenceDoes() {
+        OverwatchEvent e = new OverwatchEvent();
+        e.onDetection(0, 0.5f, 0.5f);
+        long dismissed = OverwatchEvent.MAX_CLIP_MS - 60_000; // a minute before the cap
+        long t = 1000;
+        for (; t < dismissed; t += 1000) e.onDetection(t, 0.5f, 0.5f);
+        e.dismiss(dismissed);
+        for (; t < dismissed + OverwatchEvent.DISMISS_CAP_MS; t += 1000) {
+            assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.5f, 0.5f), "at " + t);
+            assertEquals(OverwatchEvent.Action.NONE, e.tick(t), "silent, and going on past the cap, at " + t);
+        }
+        assertEquals(OverwatchEvent.Action.NONE, e.onDetection(t, 0.5f, 0.5f), "10 min after the dismiss, past the cap: the old event doesn't ring");
+        assertEquals(OverwatchEvent.Action.ENDED, e.tick(t), "it ends");
+        assertEquals(OverwatchEvent.Action.START, e.onDetection(t, 0.5f, 0.5f), "and the ring is the new event's");
+
+        // new motion ends the silence as before the cap - and past the cap that is the event's end
+        OverwatchEvent f = new OverwatchEvent();
+        f.onDetection(0, 0.5f, 0.5f);
+        for (t = 1000; t < OverwatchEvent.MAX_CLIP_MS - 5000; t += 1000) f.onDetection(t, 0.5f, 0.5f);
+        long d = t;
+        f.dismiss(d); // 5 s before the cap
+        for (; t < d + 20_000; t += 1000) {
+            assertEquals(OverwatchEvent.Action.NONE, f.onDetection(t, 0.5f, 0.5f));
+            assertEquals(OverwatchEvent.Action.NONE, f.tick(t), "no ring 5 s after the dismiss, at " + t);
+        }
+        assertEquals(OverwatchEvent.Action.NONE, f.onDetection(t, 0.9f, 0.1f), "someone else, far from it");
+        assertEquals(OverwatchEvent.Action.ENDED, f.tick(t));
+        assertEquals(OverwatchEvent.Action.START, f.onDetection(t, 0.9f, 0.1f));
+
+        // dismissed again and again (several PCs), it still ends 10 min past the cap
+        OverwatchEvent g = new OverwatchEvent();
+        g.onDetection(0);
+        long cap = OverwatchEvent.MAX_CLIP_MS, more = OverwatchEvent.DISMISS_CAP_MS;
+        for (t = 20_000; t < cap + more; t += 20_000) {
+            g.onDetection(t);
+            g.dismiss(t);
+            assertEquals(OverwatchEvent.Action.NONE, g.tick(t), "at " + t);
+        }
+        assertTrue(g.isSilenced(cap + more - 1));
+        assertEquals(OverwatchEvent.Action.NONE, g.tick(cap + more - 1));
+        assertEquals(OverwatchEvent.Action.ENDED, g.tick(cap + more), "silenced or not");
+    }
+
+    /**
+     * pc.50: the alert and the motion's end went to every PC until ALL had them - one PC switched off kept the phone
+     * sending through the event and 30 min after it. Once any PC has it, the others are told a minute more.
+     */
+    @Test
+    void aPcThatNeverAnswersIsNotCalledOnOnceAnotherHasIt() {
+        assertTrue(OverwatchEvent.resendOwed(false, false, 20 * 60_000), "nobody has it: it goes on");
+        assertTrue(OverwatchEvent.resendOwed(false, true, OverwatchEvent.STRAGGLER_MS - 1), "one has it: the others a minute more");
+        assertFalse(OverwatchEvent.resendOwed(false, true, OverwatchEvent.STRAGGLER_MS), "then it rests for them");
+        assertFalse(OverwatchEvent.resendOwed(true, true, 0), "all have it");
+        assertFalse(OverwatchEvent.resendOwed(true, false, 0), "nobody to tell");
+    }
+
+    /**
+     * pc.50: the pictures before an alert count by a clock that never steps; each carries its wall time for the PC. By
+     * the wall clock a correction backwards stopped them for as long as it stepped (one forwards threw them all away).
+     */
+    @Test
+    void aStepOfThePhonesClockLosesNoPictureBeforeTheAlert() {
+        PreRoll r = new PreRoll();
+        long mono = 5_000_000, wall = 1_700_000_000_000L, lastWall = 0;
+        int added = 0;
+        for (int i = 0; i < 160; i++, mono += 125, wall += 125) { // 20 s at 8 pictures a second, something moving
+            if (i == 80) wall -= 3_600_000; // the network sets the phone's clock back an hour
+            if (r.due(mono, true)) {
+                r.add(mono, wall, new byte[]{(byte) added++});
+                lastWall = wall;
             }
         }
-        assertEquals(OverwatchEvent.Action.STOP_CLIP, stop);
-        assertTrue(e.isActive());
+        assertEquals(40, added, "two a second all along");
+        List<PreRoll.Frame> frames = r.snapshot(mono);
+        assertEquals(10, frames.size(), "the last 5 s of them");
+        assertEquals(lastWall, frames.get(frames.size() - 1).atMs, "each with its wall time, as the PC is told");
+        assertEquals(500, frames.get(1).atMs - frames.get(0).atMs);
     }
 
     @Test

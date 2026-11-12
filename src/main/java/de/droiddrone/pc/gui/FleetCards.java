@@ -35,15 +35,39 @@ final class FleetCards {
      * @param note          why its buttons can't be used now (short), else null
      * @param queuedAgoMs   since that mode was queued (2026-11-10, the pilot: "inform the user for how long since that
      *                      command was cued"), -1 none or unknown
+     * @param blind         1.0.64: it overwatches, but its camera gives the motion detection no pictures - it sees
+     *                      nothing (this PC's own word; the spectators' mirror doesn't carry it)
      */
     record Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
                 boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
-                int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note, long queuedAgoMs) {
+                int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note, long queuedAgoMs,
+                boolean blind) {
         Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
              boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
              int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note) {
             this(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs, signal,
                     gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, -1);
+        }
+
+        /** Up to 1.0.63: no word on what its camera sees. */
+        Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
+             boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
+             int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note, long queuedAgoMs) {
+            this(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs, signal,
+                    gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, false);
+        }
+
+        /** This card, blind or not: only a card whose badge is OVERWATCH can be. */
+        Card withBlind(boolean on) {
+            boolean b = on && "OVERWATCH".equals(badge);
+            if (b == blind) return this;
+            return new Card(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs,
+                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, b);
+        }
+
+        /** The badge as the card writes it: "OVERWATCH - BLIND" while it sees nothing (badge() stays the mode's word). */
+        String badgeText() {
+            return blind ? badge + " - BLIND" : badge;
         }
 
         /** The queued mode's sign, or null. */
@@ -56,6 +80,17 @@ final class FleetCards {
                 default -> null;
             };
         }
+    }
+
+    /**
+     * 1.0.64: the cards with the drones that overwatch blind marked (and the others unmarked): a blind overwatch was a
+     * log line only, its badge stayed OVERWATCH. Null stays null.
+     */
+    static java.util.List<Card> markBlind(java.util.List<Card> cards, java.util.function.Predicate<String> blind) {
+        if (cards == null) return null;
+        java.util.List<Card> out = new java.util.ArrayList<>(cards.size());
+        for (Card c : cards) out.add(c.withBlind(blind.test(c.name())));
+        return out;
     }
 
     /** A card's badge: the map's sign and its word. */

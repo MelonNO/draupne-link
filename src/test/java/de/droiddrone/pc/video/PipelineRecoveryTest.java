@@ -139,10 +139,12 @@ class PipelineRecoveryTest {
             // the phone restarts its stream (key frame 1 again) and its VideoInitialFrame goes lost
             num = 0;
             long start = System.currentTimeMillis();
-            for (int i = 0; i < 40; i++) { // from another key frame: a new stream's key frame 1 is never the old one's bytes
+            // from another key frame: a new stream's key frame 1 is never the old one's bytes. Fed until the pictures show
+            // (1.0.64: was until 1.3 s - on a busy PC, with each 33 ms a little longer, that was too few frames after the
+            // key frame the held ones are let go from, and 19 or 20 showed for the 25 asked)
+            for (int i = 0; i < 120 && (sink.presented.get() < 25 || System.currentTimeMillis() - start <= VideoPipeline.CONFIG_WAIT_MS + 300); i++) {
                 feed(p, stream.packets().get(10 + i % 30), ++num);
                 Thread.sleep(33);
-                if (configRequests.get() > 0 && System.currentTimeMillis() - start > VideoPipeline.CONFIG_WAIT_MS + 300) break;
             }
             assertTrue(configRequests.get() >= 1, "the config was asked for");
             end = System.currentTimeMillis() + 2000;

@@ -138,7 +138,7 @@ public final class SelfUpdate {
                 out.write(buf, 0, n);
                 sha.update(buf, 0, n);
                 done += n;
-                long percent = done * 100 / total;
+                long percent = total > 0 ? Math.min(100, done * 100 / total) : 0; // 1.0.64: a size of 0 was "/ by zero", the update's failure
                 if (percent != lastPercent) {
                     lastPercent = percent;
                     progress.update(done, total);

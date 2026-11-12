@@ -176,6 +176,25 @@ public final class WindowsSetup {
     }
 
     /**
+     * 1.0.64: every desktop shortcut there is - the shared desktop's and this user's own (only the shared one was
+     * looked at when it existed, so a broken one on the user's desktop stayed broken); none: this user's, to be made.
+     */
+    static List<Path> desktopShortcuts() {
+        String[] dirs = Shell.powershell(Duration.ofSeconds(10),
+                "[Environment]::GetFolderPath('CommonDesktopDirectory'); [Environment]::GetFolderPath('Desktop')")
+                .output().strip().split("\\R");
+        if (dirs.length < 2) return List.of(Path.of(System.getProperty("user.home"), "Desktop", "DRAUPNE Link.lnk"));
+        return desktopLinks(Path.of(dirs[0].trim()).resolve("DRAUPNE Link.lnk"), Path.of(dirs[1].trim()).resolve("DRAUPNE Link.lnk"), Files::exists);
+    }
+
+    static List<Path> desktopLinks(Path shared, Path user, java.util.function.Predicate<Path> exists) {
+        List<Path> out = new java.util.ArrayList<>();
+        if (exists.test(shared)) out.add(shared);
+        if (exists.test(user) || out.isEmpty()) out.add(user);
+        return out;
+    }
+
+    /**
      * 1.0.64 (a pilot after an update: the desktop shortcut said "error opening ...\OneDrive\Desktop\app\DRAUPNE
      * Link.cfg", and the copy they found from it ran from Downloads): the installed copy also checks where its
      * shortcuts point, and points one here that leads to nothing, to a copy that can't start, or to another copy of
@@ -186,7 +205,9 @@ public final class WindowsSetup {
      */
     static void ensureShortcuts(Path launcher, Path workingDir, boolean installed, boolean installedExists, java.util.function.Consumer<String> log) {
         if (launcher == null) return;
-        for (Path lnk : List.of(desktopShortcut(), startMenuShortcut())) {
+        List<Path> links = new java.util.ArrayList<>(desktopShortcuts());
+        links.add(startMenuShortcut());
+        for (Path lnk : links) {
             if (!exists(lnk)) {
                 if (installed || !installedExists) createShortcut(lnk, launcher, workingDir);
                 continue;

@@ -239,6 +239,66 @@ class FleetCardsTest {
         }
     }
 
+    /**
+     * 1.0.64: an overwatch whose camera gives the motion detection no pictures was a log line; its badge stayed
+     * OVERWATCH and its sign the eye. The card says OVERWATCH - BLIND, in the warning colour, its eye crossed out.
+     */
+    @Test
+    void aBlindOverwatchSaysSoOnItsCard() {
+        List<FleetCards.Card> cards = sample();
+        FleetCards.Card watching = cards.get(0), asleep = cards.get(1);
+        assertFalse(watching.blind(), "nothing known: not blind");
+        assertEquals("OVERWATCH", watching.badgeText());
+        List<FleetCards.Card> marked = FleetCards.markBlind(cards, n -> true);
+        assertTrue(marked.get(0).blind());
+        assertEquals("OVERWATCH - BLIND", marked.get(0).badgeText());
+        assertEquals("OVERWATCH", marked.get(0).badge(), "the mode's word stays: the buttons and CHECK EVERY go by it");
+        assertFalse(marked.get(1).blind(), "only an overwatching one can be blind");
+        assertEquals("ASLEEP", marked.get(1).badgeText());
+        assertSame(asleep, asleep.withBlind(true));
+        assertFalse(FleetCards.markBlind(marked, n -> false).get(0).blind(), "its camera sees again");
+        assertNull(FleetCards.markBlind(null, n -> true));
+        assertEquals(watching, marked.get(0).withBlind(false));
+
+        assertTrue(count(detail(marked.get(0))) > 40, "OVERWATCH - BLIND in the warning colour");
+        assertEquals(0, count(detail(watching)), "a seeing one: its own colour");
+        assertTrue(count(row(marked.get(0))) > count(row(watching)) + 10, "the eye crossed out in the row");
+    }
+
+    private static BufferedImage detail(FleetCards.Card c) {
+        // without its queued mode: that line is yellow too
+        FleetCards.Card plain = new FleetCards.Card(c.name(), c.virtual(), c.kind(), c.badge(), c.cellVolts(), c.cellAgeMs(), c.phonePercent(),
+                c.charging(), c.nextCheckMs(), c.intervalMin(), c.heardAgoMs(), c.signal(), c.gpsFix(), c.sats(), 0, 0,
+                c.phoneTempDeci(), c.fcTempC(), null, null, -1, c.blind());
+        BufferedImage img = new BufferedImage(FleetManagementPanel.BODY_WIDTH - 16, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        FleetManagementPanel.paintDetail(g, plain, img.getWidth());
+        g.dispose();
+        return img;
+    }
+
+    private static BufferedImage row(FleetCards.Card c) {
+        BufferedImage img = new BufferedImage(FleetManagementPanel.BODY_WIDTH - 16, FleetManagementPanel.ROW, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        FleetManagementPanel.paintRow(g, c, img.getWidth(), img.getHeight(), false);
+        g.dispose();
+        return img;
+    }
+
+    /** The pixels of (about) the warning colour. */
+    private static int count(BufferedImage img) {
+        java.awt.Color colour = Theme.WARN;
+        int n = 0;
+        for (int y = 0; y < img.getHeight(); y++) {
+            for (int x = 0; x < img.getWidth(); x++) {
+                java.awt.Color c = new java.awt.Color(img.getRGB(x, y), true);
+                if (c.getAlpha() > 200 && Math.abs(c.getRed() - colour.getRed()) < 12 && Math.abs(c.getGreen() - colour.getGreen()) < 12
+                        && Math.abs(c.getBlue() - colour.getBlue()) < 12) n++;
+            }
+        }
+        return n;
+    }
+
     @Test
     void aDroneNotHeardFromCanBeMarkedCrashedFromItsRow() {
         assertEquals("Mark CRASHED", FleetManagementPanel.crashChoice(MapView.Kind.LOST));

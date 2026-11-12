@@ -13,7 +13,8 @@ import java.util.ArrayDeque;
  * any thread.
  *
  * AUTO, down: the normal picture goes to bad coverage mode at a low bitrate ({@link #LOW_RES_BPS} for
- * {@link #LOW_RES_AFTER_MS}), {@link #STALLS_FOR_ROBUST} stalls within {@link #STALLS_WINDOW_MS}, or a relay; bad
+ * {@link #LOW_RES_AFTER_MS}), {@link #STALLS_FOR_ROBUST} stalls within {@link #STALLS_WINDOW_MS}, a relay, or (1.0.64)
+ * frames lost or damaged ({@link #LOSSY_FRAMES} for {@link #LOSSY_AFTER_MS}); bad
  * coverage mode to the survival tier the same way, at {@link #SURVIVAL_BPS}, once it has had
  * {@link #SURVIVAL_AFTER_MS}. Up: a tier back after {@link #ROBUST_HOLD_MS} calm (doubled, up to
  * {@link #MAX_ROBUST_HOLD_MS}, after a quick return). The sharp tier after {@link #SHARP_AFTER_MS} calm at the normal
@@ -44,14 +45,34 @@ final class TierPolicy {
     static final long SHARP_AFTER_MS = 20_000;
     /** The sharp tier ends when the phone's bitrate sat under the normal top for this long: the link can't carry it. */
     static final long SHARP_DROP_MS = 5000;
+    /**
+     * 1.0.64: AUTO goes to bad coverage when more than this share of the frames came lost, damaged or rebuilt from
+     * parity for LOSSY_AFTER_MS, and stays there while it lasts. Steady loss with a normal ping never got there: the
+     * bitrate control stops at 1 Mbit/s, so the LOW_RES_BPS rule never fired, and the picture stayed on single key
+     * frames without parity with most frames damaged.
+     */
+    static final double LOSSY_FRAMES = 0.10;
+    static final long LOSSY_AFTER_MS = 5000;
+    /**
+     * 1.0.64: just up from the survival tier the bitrate still sits at that tier's top; the bitrate control gets this
+     * long to raise it before a low rate counts against bad coverage mode (5 s after the way up it went straight down
+     * again, and the hold doubled each time).
+     */
+    static final long UP_SETTLE_MS = 15_000;
 
     /**
      * The link at one tick: ms since the last pong, the phone's bitrate (0 = it reports none), the normal top bitrate
      * the settings allow, a relayed way to the phone, spectators watching, this PC's decode load (1 = all its time;
-     * 0 without a picture), and whether the settings give the sharp tier anything over the normal picture.
+     * 0 without a picture), whether the settings give the sharp tier anything over the normal picture, and the share
+     * of the last seconds' frames the link didn't deliver whole (0 = none, or no picture to judge by).
      */
     record Link(long sincePongMs, int bps, int normalTopBps, boolean relayed, boolean watched, double decodeLoad,
-                boolean sharpAvailable) {
+                boolean sharpAvailable, double frameLoss) {
+        /** Without the frame loss: none. */
+        Link(long sincePongMs, int bps, int normalTopBps, boolean relayed, boolean watched, double decodeLoad,
+             boolean sharpAvailable) {
+            this(sincePongMs, bps, normalTopBps, relayed, watched, decodeLoad, sharpAvailable, 0);
+        }
     }
 
     /** A tier change: to, from, and why (for the log). */
@@ -72,6 +93,11 @@ final class TierPolicy {
     private long belowTopSince = -1;
     /** Since when this PC's decoder hasn't kept up with the sharp picture (decodeLoad over 1); -1 = it keeps up. */
     private long decodeSlowSince = -1;
+    /** Since when the frame loss has been over LOSSY_FRAMES (-1: it isn't), and when it last was. */
+    private long lossySince = -1;
+    private long lastLossyAt = Long.MIN_VALUE / 2;
+    /** The tier was reached from a lower one (the way up): its bitrate starts at that one's top (see UP_SETTLE_MS). */
+    private boolean cameUp;
 
     Tier tier() {
         return tier;
@@ -93,14 +119,38 @@ final class TierPolicy {
         if (forced != null && tier != forced) {
             Tier was = tier;
             tier = forced;
-            tierSince = now;
+            entered(now, false);
             return new Change(forced, was, "VIDEO is " + mode.name());
         }
         if (forced == null && tier == Tier.SHARP) {
             tier = Tier.NORMAL;
-            tierSince = now;
+            entered(now, false);
         }
         return null;
+    }
+
+    /**
+     * A tier begins (1.0.64): it is judged on its own time. The low-rate and frame-loss counts ran on from the tier
+     * before (only belowTopSince was reset), so a tier could be left the moment its own wait was over.
+     * @param up reached from a lower tier: the bitrate starts at that one's top (see UP_SETTLE_MS)
+     */
+    private void entered(long now, boolean up) {
+        tierSince = now;
+        belowTopSince = -1;
+        lowRateSince = -1;
+        survivalRateSince = -1;
+        lossySince = -1;
+        cameUp = up;
+    }
+
+    /**
+     * 1.0.64: the link was lost and is back - a stall, and more. Stalls were counted only as a late pong while the link
+     * was up, so a link that dropped out for seconds again and again never had its three stalls and AUTO never went to
+     * bad coverage mode for it.
+     */
+    void outage(long now) {
+        stalls.addLast(now);
+        lastCalmEnd = now;
     }
 
     /** One session tick: the tier the link should have now; null = it stays. */
@@ -113,9 +163,14 @@ final class TierPolicy {
         if (stalled) lastCalmEnd = now;
         int bps = l.bps();
         lowRateSince = bps > 0 && bps <= LOW_RES_BPS ? (lowRateSince < 0 ? now : lowRateSince) : -1;
-        survivalRateSince = bps > 0 && bps <= SURVIVAL_BPS ? (survivalRateSince < 0 ? now : survivalRateSince) : -1;
+        // 1.0.64: not while the bitrate control hasn't had its time to raise the rate after the way up (UP_SETTLE_MS)
+        boolean settling = cameUp && now - tierSince < UP_SETTLE_MS;
+        survivalRateSince = bps > 0 && bps <= SURVIVAL_BPS && !settling ? (survivalRateSince < 0 ? now : survivalRateSince) : -1;
         int normalTopBps = l.normalTopBps();
         belowTopSince = bps > 0 && bps < normalTopBps ? (belowTopSince < 0 ? now : belowTopSince) : -1;
+        boolean lossyNow = l.frameLoss() > LOSSY_FRAMES;
+        lossySince = lossyNow ? (lossySince < 0 ? now : lossySince) : -1;
+        if (lossyNow) lastLossyAt = now;
         boolean relayed = l.relayed();
         Tier want;
         String why;
@@ -141,10 +196,13 @@ final class TierPolicy {
         } else if (tier == Tier.NORMAL) {
             boolean lowRate = lowRateSince >= 0 && now - lowRateSince >= LOW_RES_AFTER_MS;
             boolean stalls3 = stalls.size() >= STALLS_FOR_ROBUST;
-            if (lowRate || stalls3 || relayed) {
+            // 1.0.64: frames lost or damaged for 5 s, whatever the ping and the bitrate say
+            boolean lossy = lossySince >= 0 && now - lossySince >= LOSSY_AFTER_MS;
+            if (lowRate || stalls3 || relayed || lossy) {
                 want = Tier.ROBUST;
                 why = lowRate ? "bitrate at " + bps / 1000 + " kbit/s"
-                        : stalls3 ? stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s" : "relayed";
+                        : stalls3 ? stalls.size() + " stalls in " + STALLS_WINDOW_MS / 1000 + " s"
+                        : relayed ? "relayed" : Math.round(l.frameLoss() * 100) + " % of frames damaged";
                 if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) {
                     robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2); // back too soon: stay longer next time
                 } else if (leftRobustAt >= 0 && now - leftRobustAt >= HOLD_FORGET_MS) {
@@ -154,26 +212,32 @@ final class TierPolicy {
                 // calm at the normal top bitrate for sharpHoldMs, no stall in that time: the sharp tier (a phone that
                 // reports no bitrate setting never gets there)
                 boolean atTop = bps >= normalTopBps;
-                boolean calm = now - tierSince >= sharpHoldMs && now - lastCalmEnd >= sharpHoldMs && stalls.isEmpty();
+                boolean calm = now - tierSince >= sharpHoldMs && now - lastCalmEnd >= sharpHoldMs && stalls.isEmpty()
+                        && now - lastLossyAt >= sharpHoldMs;
                 want = l.sharpAvailable() && atTop && calm && !l.watched() ? Tier.SHARP : Tier.NORMAL;
                 why = "calm at " + normalTopBps / 1_000_000 + " Mbit/s for " + sharpHoldMs / 1000 + " s";
             }
         } else if (tier == Tier.ROBUST) {
             // bad coverage mode isn't enough: the bitrate sits at the bottom or the stalls go on - the survival tier
             boolean lowRate = survivalRateSince >= 0 && now - survivalRateSince >= LOW_RES_AFTER_MS;
-            boolean stalls3 = stalls.size() >= STALLS_FOR_ROBUST;
+            // 1.0.64: the stalls of this spell only - after the way up, three from before it (up to 30 s old) sent it
+            // straight down again
+            int stallsHere = 0;
+            for (long at : stalls) if (at >= tierSince) stallsHere++;
+            boolean stalls3 = stallsHere >= STALLS_FOR_ROBUST;
             boolean worse = now - tierSince >= SURVIVAL_AFTER_MS && (lowRate || stalls3);
             if (worse) {
                 want = Tier.SURVIVAL;
-                why = lowRate ? "still " + bps / 1000 + " kbit/s" : "still " + stalls.size() + " stalls";
+                why = lowRate ? "still " + bps / 1000 + " kbit/s" : "still " + stallsHere + " stalls";
                 if (leftRobustAt >= 0 && now - leftRobustAt < 60_000) robustHoldMs = Math.min(MAX_ROBUST_HOLD_MS, robustHoldMs * 2);
             } else if (relayed) {
                 want = Tier.ROBUST;
                 why = "relayed";
             } else {
-                // calm long enough in bad coverage mode: no stall, and the bitrate not struggling under its 1 Mbit/s
+                // calm long enough in bad coverage mode: no stall, and the bitrate not struggling under its 1 Mbit/s -
+                // nor (1.0.64) frames still lost or rebuilt from parity: the normal picture has no parity to mend them
                 boolean calm = now - tierSince >= robustHoldMs && now - lastCalmEnd >= robustHoldMs
-                        && (bps <= 0 || bps > LOW_RES_BPS);
+                        && (bps <= 0 || bps > LOW_RES_BPS) && now - lastLossyAt >= robustHoldMs;
                 want = calm ? Tier.NORMAL : Tier.ROBUST;
                 why = "calm for " + robustHoldMs / 1000 + " s";
             }
@@ -186,8 +250,7 @@ final class TierPolicy {
         Tier was = tier;
         long held = now - tierSince;
         tier = want;
-        tierSince = now;
-        belowTopSince = -1;
+        entered(now, want.ordinal() < was.ordinal());
         if (want.ordinal() > was.ordinal()) { // down
             stalls.clear();
             if (was == Tier.SHARP && forced == null) { // left within a minute: the next sharp spell waits longer; a spell that lasted: the usual wait

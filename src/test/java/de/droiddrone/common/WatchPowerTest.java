@@ -61,6 +61,40 @@ class WatchPowerTest {
         assertArrayEquals(new int[]{24, 24}, AnalysisSize.watchFps(new int[][]{{24, 24}, {15, 30}}));
     }
 
+    /**
+     * pc.50: the gate between the detector's pictures follows the session's frame rate. The watch's own session runs
+     * 15 frames a second (66.7 ms apart); the fixed 125 ms left the second frame 8 ms, so with any jitter the third was
+     * taken - 5 to 6 pictures a second, not the 7.5 meant. Now: half a frame of room either side of the frame meant.
+     */
+    @Test
+    void theWatchTakesEverySecondFrameAtFifteenASecond() {
+        assertEquals(100, WatchRun.frameGateMs(15), "the second frame (133 ms) with 33 ms either side");
+        assertEquals(7.5, takenASecond(15, WatchRun.frameGateMs(15), 15), 0.01, "every second frame, 15 ms of jitter or not");
+        assertTrue(takenASecond(15, 125, 15) < 7, "what the fixed 125 ms made of it: " + takenASecond(15, 125, 15));
+        assertEquals(117, WatchRun.frameGateMs(30), "an event's session at 30: the fourth frame, as before");
+        assertEquals(7.5, takenASecond(30, WatchRun.frameGateMs(30), 8), 0.01);
+        assertEquals(104, WatchRun.frameGateMs(24), "24: every third, 8 a second");
+        assertEquals(8, takenASecond(24, WatchRun.frameGateMs(24), 8), 0.01);
+        assertEquals(WatchRun.frameGateMs(30), WatchRun.frameGateMs(0), "a rate not known (a USB camera): as for 30");
+        assertEquals(50, WatchRun.frameGateMs(10), "10 a second: every frame");
+        assertEquals(125, WatchRun.frameGateMs(60));
+    }
+
+    /** Pictures taken a second with this gate from a camera of fps, each frame up to jitterMs early or late. */
+    private static double takenASecond(int fps, long gateMs, double jitterMs) {
+        java.util.Random random = new java.util.Random(7);
+        double period = 1000.0 / fps, last = -1e9;
+        int taken = 0, seconds = 60;
+        for (int i = 0; i < fps * seconds; i++) {
+            double at = i * period + (random.nextDouble() * 2 - 1) * jitterMs;
+            if (at - last >= gateMs) {
+                taken++;
+                last = at;
+            }
+        }
+        return taken / (double) seconds;
+    }
+
     /** MotionWatch's copy from the cut: an offset to its first byte, then the rows as before. */
     @Test
     void theCutIsCopiedFromItsFirstRow() {

@@ -395,6 +395,285 @@ class ControlLinkTest {
         assertEquals(phone.keyFrameRequests.get(), link.getKeyFrameRequests());
     }
 
+    /**
+     * 1.0.64: the request went once, unnumbered, and counted as sent - lost on the link that had just damaged a frame,
+     * the next one was 1.5-6 s off. It goes three times now, a ping tick apart; the phone makes one key frame of them.
+     */
+    @Test
+    void aKeyFrameRequestLostOnTheWayStillGetsItsKeyFrame() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        phone.dropKeyFrameRequests.set(1);
+        long asked = System.nanoTime();
+        link.requestKeyFrame();
+        assertTrue((System.nanoTime() - asked) / 1_000_000 < 20, "the one who asks never waits for the copies");
+        waitFor(() -> phone.keyFrameRequests.get() == 1, 1000, "a key frame from the second copy");
+        waitFor(() -> phone.keyFramePackets.get() == 1 + ControlLink.KEY_FRAME_REPEATS, 1000, "three packets in all");
+        Thread.sleep(300);
+        assertEquals(1 + ControlLink.KEY_FRAME_REPEATS, phone.keyFramePackets.get(), "and no more");
+        assertEquals(1, phone.keyFrameRequests.get(), "one key frame, not three");
+        assertEquals(1, link.getKeyFrameRequests(), "one request in the link log's count");
+    }
+
+    /**
+     * 1.0.64: the profile is unnumbered and went once with each config. Lost while the config (resent until taken)
+     * got through, the phone kept the last session's flags - key frames twice, parity, H.264 - under a PC on normal.
+     */
+    @Test
+    void aVideoProfileLostWithTheFirstConfigIsSentAgain() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.videoProfile = 1 | 2 | 4; // left in bad coverage mode by the session before
+        phone.dropProfiles.set(1);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> phone.videoProfile == 0, 2000, "the normal profile, from the copy after the config");
+        assertFalse(phone.configs.isEmpty());
+    }
+
+    /** 1.0.64: the Disconnect went once, unnumbered: lost, the phone streamed on until its own 4 s timeout. */
+    @Test
+    void theDisconnectGoesThreeTimes() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        long t0 = System.nanoTime();
+        link.close();
+        long tookMs = (System.nanoTime() - t0) / 1_000_000;
+        waitFor(() -> phone.disconnects.get() == ControlLink.DISCONNECT_SENDS, 1000, "three Disconnects at the phone");
+        assertTrue(tookMs < 500, "close() took " + tookMs + " ms");
+        // the port is free the moment close() returns: the name service and a reconnect bind it at once
+        new DatagramSocket(PC_PORT).close();
+    }
+
+    /**
+     * 1.0.64: the way to the phone dies right after a reconnect, before the new session's first pong, while the
+     * phone's telemetry goes on. "No pong for 4.5 s" only counted pongs since the last READY: none came, so it never
+     * fired, and the link sat READY with every stick frame dropped. Measured from the reconnect now.
+     */
+    @Test
+    void aPhoneThatHearsNothingRightAfterAReconnectIsConnectedToAgain() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.phoneStateFlags = 0; // it has telemetry to send
+        phone.telemetryWithoutSession = true;
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> link.getPing() >= 0, 3000, "pongs on this link");
+        phone.silent = true;
+        waitFor(() -> !link.isConnected(), ControlLink.LINK_LOST_MS + 1500, "link lost");
+        int lost = phone.connects.get();
+        waitFor(() -> phone.connects.get() > lost, 2000, "a Connect: the session thread has seen the loss");
+        phone.deafAfterConfig = true; // back, and deaf as soon as the handshake is through
+        phone.silent = false;
+        waitFor(() -> link.getState() == ControlLink.State.READY && phone.deaf, 3000, "READY again, the phone deaf");
+        waitFor(() -> !link.isConnected(), ControlLink.PONG_LOST_MS + 2500, "no pong since the reconnect is a link loss");
+        int connects = phone.connects.get();
+        Thread.sleep(500);
+        assertTrue(phone.connects.get() > connects, "the Connects go out");
+        phone.deafAfterConfig = false;
+        phone.deaf = false;
+        waitFor(() -> link.getState() == ControlLink.State.READY, 3000, "READY again by itself");
+        Thread.sleep(ControlLink.PONG_LOST_MS + 500);
+        assertEquals(ControlLink.State.READY, link.getState(), "and it stays up");
+    }
+
+    /**
+     * 1.0.64: what RcSession watches after a loss - nothing says the phone hears this PC: no pong for a second while
+     * its telemetry still comes (the link still READY), or the link not READY at all.
+     */
+    @Test
+    void sticksUnheardSaysWhenNothingShowsThePhoneHearsThisPc() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.phoneStateFlags = 0; // it has telemetry to send
+        phone.telemetryWithoutSession = true;
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        assertFalse(link.sticksUnheard(), "not started");
+        link.start();
+        assertFalse(link.sticksUnheard(), "never up yet: no sticks either");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> link.getPing() >= 0, 3000, "pongs on this link");
+        Thread.sleep(300);
+        assertFalse(link.sticksUnheard());
+        phone.deaf = true; // one way: it hears nothing, its telemetry goes on
+        waitFor(link::sticksUnheard, ControlLink.PONG_SILENCE_MS + 1500, "no pong for a second");
+        assertEquals(ControlLink.State.READY, link.getState(), "long before the link counts as lost");
+        phone.deaf = false;
+        waitFor(() -> !link.sticksUnheard(), 2000, "pongs again");
+        phone.silent = true;
+        waitFor(() -> link.getState() != ControlLink.State.READY, ControlLink.LINK_LOST_MS + 1500, "link lost");
+        assertTrue(link.sticksUnheard());
+        assertTrue(link.sticksWanted(), "and the sticks still go out");
+        link.setDormant(true);
+        assertFalse(link.sticksUnheard(), "asleep on purpose: no sticks, nothing to watch");
+    }
+
+    /**
+     * 1.0.64: the mode names - without them the armed state is unknown, and the sticks' start waits for it - are asked
+     * for again after 1 s, not 2: their answer is an unnumbered telemetry packet, lost like any other.
+     */
+    @Test
+    void lostModeNamesAreAskedForAgainWithinASecond() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.dropBoxNames.set(1);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getFcInfo() != null, 5000, "FC info");
+        long t0 = System.nanoTime();
+        waitFor(() -> link.getTelemetry().hasBoxNames(), 5000, "the mode names, from the second request");
+        long tookMs = (System.nanoTime() - t0) / 1_000_000;
+        assertTrue(tookMs < 1800, "names " + tookMs + " ms after the FC info (2 s and more before)");
+        waitFor(() -> link.getTelemetry().isDisarmedNow(MonoClock.ms(), 2000), 1000, "and with them the armed state");
+    }
+
+    /**
+     * 1.0.64, on a real link: the sticks don't start on "throttle low, arm off" before the flight controller has said
+     * whether it is armed (the app as the pilot starts it: RcSession's public constructor).
+     */
+    @Test
+    void theSticksWaitForTheFlightControllersWordOnARealLink() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
+        List<String> said = new CopyOnWriteArrayList<>();
+        RcSession session = new RcSession(link, five, said::add, new ArmSwitch(4, List.of(new int[]{1700, 2100})));
+        Joystick.State atRest = new Joystick.State(new float[]{0, 0, 0, -1f, -1f}, new boolean[0]);
+        link.start();
+        boolean reading = false;
+        long end = System.currentTimeMillis() + 8000;
+        while (!session.isRcEnabled() && System.currentTimeMillis() < end) {
+            session.onInput(atRest);
+            if ("READING FC".equals(session.waitingFor())) {
+                reading = true;
+                assertTrue(phone.rcFrames.isEmpty(), "no frame while the FC's state is unknown");
+            }
+            Thread.sleep(5);
+        }
+        assertTrue(session.isRcEnabled(), "started: " + said);
+        assertTrue(reading, "READING FC was shown meanwhile");
+        assertTrue(link.getTelemetry().isDisarmedNow(MonoClock.ms(), RcSession.FC_ARMED_FRESH_MS + 200), "on the FC's DISARMED, not before");
+        assertEquals("Throttle low, arm switch off - RC output enabled.", said.get(said.size() - 1));
+        session.onInput(atRest);
+        waitFor(() -> !phone.rcFrames.isEmpty(), 2000, "frames at the phone");
+    }
+
+    /**
+     * 1.0.64: a sleeping phone's hello got its queued fleet mode and, right behind it, "sleep on" - which closes the
+     * phone's window. The mode packet lost, the answer through: the mode waited a whole check interval more. A hello
+     * that gets a mode gets no "sleep on"; the window stays open and the next hello (1.5 s on) gets the mode again.
+     */
+    @Test
+    void aHelloThatGetsAFleetModeGetsNoSleepOn() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        link.setDormant(true);
+        phone.sleep();
+        waitFor(() -> !link.isConnected(), 4000, "link lost");
+        byte[] mode = de.droiddrone.common.FleetProtocol.request("DD",
+                new de.droiddrone.common.FleetProtocol.Request(7, ControlLink.POWER_DEEP_SLEEP, 5, 0, 0, 0, PC_PORT));
+        java.util.concurrent.atomic.AtomicReference<byte[]> queued = new java.util.concurrent.atomic.AtomicReference<>(mode);
+        link.setFleetHello((address, hello) -> queued.get());
+        phone.sendSleepHello(67, true, 5);
+        waitFor(() -> phone.fleetModes.size() == 1, 8000, "the queued mode");
+        assertArrayEquals(mode, phone.fleetModes.get(0));
+        phone.sendSleepHello(67, true, 5); // the same window's next hello: the mode again
+        waitFor(() -> phone.fleetModes.size() == 2, 8000, "the mode again");
+        Thread.sleep(300);
+        assertTrue(phone.sleepAnswers.isEmpty(), "no sleep on while the mode is still to be taken: " + phone.sleepAnswers);
+        queued.set(null); // the phone's hello shows it taken: nothing queued any more
+        phone.sendSleepHello(67, true, 5);
+        waitFor(() -> phone.sleepAnswers.size() == 1, 8000, "sleep on, once the mode is through");
+        assertEquals(0, phone.sleepAnswers.get(0));
+        assertEquals(2, phone.fleetModes.size());
+        // "wake" is never held back
+        queued.set(mode);
+        link.setDormant(false);
+        phone.sendSleepHello(67, true, 5);
+        waitFor(() -> phone.sleepAnswers.size() == 2, 8000, "wake");
+        assertEquals(1, phone.sleepAnswers.get(1));
+    }
+
+    /** 1.0.64: the same for another phone's hello while this link holds the port. */
+    @Test
+    void anotherPhonesHelloThatGetsAFleetModeGetsNoSleepOn() throws Exception {
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        byte[] mode = de.droiddrone.common.FleetProtocol.request("DD",
+                new de.droiddrone.common.FleetProtocol.Request(8, ControlLink.POWER_DEEP_SLEEP, 5, 0, 0, 0, PC_PORT));
+        java.util.concurrent.atomic.AtomicReference<byte[]> queued = new java.util.concurrent.atomic.AtomicReference<>(mode);
+        link.setFleetHello((address, hello) -> queued.get());
+        link.setForeignSleepHandler((address, hello) -> false); // the window's answer: sleep on
+        byte[] hello = {ControlLink.SLEEP_HELLO, 67, 1, 5, 0x0F, (byte) 0xA0};
+        try (DatagramSocket other = new DatagramSocket(0, InetAddress.getLoopbackAddress())) {
+            other.setSoTimeout(700);
+            DatagramPacket in = new DatagramPacket(new byte[64], 64);
+            other.send(new DatagramPacket(hello, hello.length, InetAddress.getLoopbackAddress(), PC_PORT));
+            other.receive(in);
+            assertEquals(de.droiddrone.common.FleetProtocol.MODE, in.getData()[0], "the queued mode");
+            assertThrows(java.net.SocketTimeoutException.class, () -> other.receive(in), "and no sleep on behind it");
+            queued.set(null);
+            other.send(new DatagramPacket(hello, hello.length, InetAddress.getLoopbackAddress(), PC_PORT));
+            in.setLength(64);
+            other.receive(in);
+            assertEquals(ControlLink.SLEEP_ANSWER, in.getData()[0]);
+            assertEquals(0, in.getData()[1], "nothing queued: sleep on, as ever");
+        }
+    }
+
+    /**
+     * 1.0.64: on a path with a round trip over a second the Connects (every 150 ms) kept going out until the first
+     * answer was back; the phone takes those of one second as one session and starts another on each later one, and
+     * this side started its numbering over at every answer. Known slow (the last ping over 700 ms), they go in rounds.
+     */
+    @Test
+    void connectsOnASlowPathGoInRoundsThatWaitForTheAnswer() throws Exception {
+        // the last pong 2 s old, as when a loss is seen
+        assertEquals(0, ControlLink.connectRoundMs(ControlLink.SLOW_PATH_PING_MS, 2000), "a fast path: no rounds");
+        for (long t = 0; t < 10_000; t += 50) assertFalse(ControlLink.connectHeld(t, 0), "a fast path: as before");
+        long round = ControlLink.connectRoundMs(1200, 2000);
+        assertEquals(1800, round, "1.5 round trips");
+        assertFalse(ControlLink.connectHeld(Long.MAX_VALUE, round), "no round yet: the first Connect goes at once");
+        for (long t = 0; t < ControlLink.CONNECT_BURST_MS; t += 50) assertFalse(ControlLink.connectHeld(t, round), "the burst");
+        for (long t = ControlLink.CONNECT_BURST_MS; t < round; t += 50) assertTrue(ControlLink.connectHeld(t, round), "waiting for the answer at " + t);
+        assertFalse(ControlLink.connectHeld(round, round), "the next round");
+        assertEquals(ControlLink.SLOW_PATH_WAIT_MAX_MS, ControlLink.connectRoundMs(10_000, 0), "never longer without a Connect");
+        assertTrue(ControlLink.CONNECT_BURST_MS + 200 < de.droiddrone.common.SessionGate.SAME_SESSION_MS,
+                "a burst is one session to the phone");
+        // never past the phone's own session timeout after the last pong: until then it takes the sticks without a
+        // Connect; once it may have let go, the sticks wait for one - at full pace
+        assertEquals(1000, ControlLink.connectRoundMs(1200, ControlLink.PHONE_SESSION_MS - 1000));
+        assertEquals(0, ControlLink.connectRoundMs(1200, ControlLink.PHONE_SESSION_MS));
+        assertEquals(0, ControlLink.connectRoundMs(1200, Long.MAX_VALUE), "no pong ever");
+        for (long age = ControlLink.PHONE_SESSION_MS - ControlLink.CONNECT_BURST_MS; age < 20_000; age += 100) {
+            long late = ControlLink.connectRoundMs(5000, age);
+            for (long t = 0; t < 5000; t += 50) assertFalse(ControlLink.connectHeld(t, late), "pong " + age + " ms old: no wait");
+        }
+
+        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone.pongDelayMs = 900;
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
+        waitFor(() -> link.getPing() > ControlLink.SLOW_PATH_PING_MS, 5000, "a slow ping");
+        phone.silent = true;
+        int before = phone.connects.get();
+        waitFor(() -> !link.isConnected(), ControlLink.LINK_LOST_MS + 1500, "link lost");
+        // the round: Connects for 0.6 s, then none until 1.35 s (1.5 x the 900 ms ping) after its first
+        Thread.sleep(ControlLink.CONNECT_BURST_MS + 150);
+        int burst = phone.connects.get() - before;
+        assertTrue(burst >= 2, "the burst went out at once: " + burst);
+        Thread.sleep(350);
+        assertEquals(burst, phone.connects.get() - before, "none while the answer may be on its way (one every 150 ms before)");
+        waitFor(() -> phone.connects.get() - before > burst, 2000, "the next round");
+    }
+
     /** DEEP SLEEP: the mode reaches the phone; while the PC is dormant no Connect goes out; WAKE brings the link back. */
     @Test
     void powerModeReachesThePhoneAndADormantLinkSendsNoConnect() throws Exception {
@@ -750,6 +1029,7 @@ class ControlLinkTest {
         link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
         link.start();
         waitFor(() -> link.getTelemetry().getPhonePcBuild() == 26, 5000, "version known");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY"); // the version can come first
         short[] sticks = {1500, 1500, 1500, 1000};
         for (int i = 0; i < 3; i++) assertTrue(link.sendRc(sticks));
         waitFor(() -> phone.rcSeqs.size() >= 3, 2000, "numbered frames");
@@ -842,8 +1122,27 @@ class ControlLinkTest {
         volatile boolean telemetryWithoutSession;
         /** The sequence byte of every RC frame that carried one (pc.19 layout), in order. */
         final List<Integer> rcSeqs = new CopyOnWriteArrayList<>();
-        /** Key frame requests received (pc.13 on). */
+        /**
+         * Key frames made on request (pc.13 on): one per 300 ms at most, whatever comes, as the phone's
+         * StreamEncoder.requestKeyFrame - the PC sends each request three times (1.0.64).
+         */
         final AtomicInteger keyFrameRequests = new AtomicInteger();
+        /** Every key frame request packet that reached the socket, the ones lost on the way (below) too. */
+        final AtomicInteger keyFramePackets = new AtomicInteger();
+        private volatile long keyFrameMadeAt = Long.MIN_VALUE / 2;
+        /** The next this many key frame requests / video profiles are lost on the way. */
+        final AtomicInteger dropKeyFrameRequests = new AtomicInteger(), dropProfiles = new AtomicInteger();
+        /** Disconnect packets received. */
+        final AtomicInteger disconnects = new AtomicInteger();
+        /** The answers to the next this many BoxNames requests are lost on the way. */
+        final AtomicInteger dropBoxNames = new AtomicInteger();
+        /** Goes deaf the moment it has taken a config: the way to it dies right after the (re)connect. */
+        volatile boolean deafAfterConfig;
+        /** FLEET_MODE packets that reached the socket, in order. */
+        final List<byte[]> fleetModes = new CopyOnWriteArrayList<>();
+        /** The PC's pings are answered this much later: a slow path. */
+        volatile long pongDelayMs;
+        private final java.util.Timer pongTimer = new java.util.Timer("fakePhonePong", true);
         /** The PC's live audio requests (AUDIO, pc.34 on), in order. */
         final List<de.droiddrone.common.PcAudio.Request> audioRequests = new CopyOnWriteArrayList<>();
 
@@ -978,6 +1277,10 @@ class ControlLinkTest {
                             sleepAnswers.add((int) packet.getData()[1]);
                             continue;
                         }
+                        if (packet.getLength() > 0 && packet.getData()[0] == de.droiddrone.common.FleetProtocol.MODE) {
+                            fleetModes.add(java.util.Arrays.copyOf(packet.getData(), packet.getLength()));
+                            continue;
+                        }
                         if (silent || deaf) continue;
                         // like DRAUPNE Flight's Udp.receiverRun in direct mode: once a PC is connected, nothing from
                         // another one gets in; a second PC asking is told where the first one is
@@ -1066,6 +1369,7 @@ class ControlLinkTest {
                     config = c;
                     configs.add(c);
                     udpSender.sendPacket(new UdpPacketData(UdpCommon.ConfigReceived).getData());
+                    if (deafAfterConfig) deaf = true;
                 }
                 case UdpCommon.FcInfo -> {
                     UdpPacketData d = new UdpPacketData(UdpCommon.FcInfo);
@@ -1075,12 +1379,41 @@ class ControlLinkTest {
                 case UdpCommon.Ping -> { // like Flight Udp.processData: the PC's ping comes back as a pong at once
                     boolean toEndPoint = r.readBoolean();
                     long time = r.readLong();
-                    udpSender.sendPong(toEndPoint, time, (byte) -1);
+                    if (deaf) return; // one that was waiting when it went deaf
+                    long delay = pongDelayMs;
+                    if (delay <= 0) {
+                        udpSender.sendPong(toEndPoint, time, (byte) -1);
+                    } else {
+                        pongTimer.schedule(new java.util.TimerTask() {
+                            @Override
+                            public void run() {
+                                if (running && !silent) udpSender.sendPong(toEndPoint, time, (byte) -1);
+                            }
+                        }, delay);
+                    }
                 }
-                case ControlLink.KEY_FRAME_REQUEST -> keyFrameRequests.incrementAndGet();
+                case ControlLink.KEY_FRAME_REQUEST -> {
+                    keyFramePackets.incrementAndGet();
+                    if (dropKeyFrameRequests.get() > 0) {
+                        dropKeyFrameRequests.decrementAndGet();
+                        return;
+                    }
+                    long at = System.nanoTime() / 1_000_000;
+                    if (at - keyFrameMadeAt >= 300) {
+                        keyFrameMadeAt = at;
+                        keyFrameRequests.incrementAndGet();
+                    }
+                }
+                case UdpCommon.Disconnect -> disconnects.incrementAndGet();
                 case de.droiddrone.common.PcAudio.PACKET -> audioRequests.add(de.droiddrone.common.PcAudio.decode(packet.data, packet.data.length));
                 case ControlLink.POWER_MODE -> powerModes.add(new int[]{r.readByte(), r.readByte()});
-                case ControlLink.VIDEO_PROFILE -> videoProfile = r.readByte();
+                case ControlLink.VIDEO_PROFILE -> {
+                    if (dropProfiles.get() > 0) {
+                        dropProfiles.decrementAndGet();
+                        return;
+                    }
+                    videoProfile = r.readByte();
+                }
                 case ControlLink.SET_BITRATE -> bitRateSteps.add(r.readUnsignedByteAsInt());
                 case UdpCommon.ChangeBitRate -> bitRateChanges.add(r.readBoolean());
                 case UdpCommon.GetVideoConfig -> videoConfigRequests.incrementAndGet();
@@ -1096,6 +1429,10 @@ class ControlLinkTest {
                     rcFrames.add(ch);
                 }
                 case UdpCommon.BoxNames -> {
+                    if (dropBoxNames.get() > 0) { // the answer (an unnumbered telemetry packet) lost on the way
+                        dropBoxNames.decrementAndGet();
+                        return;
+                    }
                     // like Flight: Betaflight's answers go out as telemetry records
                     UdpPacketData names = new UdpPacketData(UdpCommon.TelemetryData);
                     names.daos.write(FcTelemetryTest.boxNamesPacket("ARM;ANGLE;HORIZON;"));
@@ -1170,6 +1507,7 @@ class ControlLinkTest {
 
         void close() {
             running = false;
+            pongTimer.cancel();
             udpSender.close();
             receiverBuffer.close();
             socket.close();

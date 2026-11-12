@@ -83,9 +83,16 @@ public final class Names {
      * @param position   where the phone's drone is, from its reply (phone app pc.32 on), or null
      * @param powerMode  its power mode (pc.39 on; {@link #POWER_UNKNOWN} not said) - also when it has no position
      * @param status     how it is doing (pc.40 on, FLEET MANAGEMENT), or null
+     * @param flown      a pilot PC flies it (1.0.64: said with or without a position - the position is null without a
+     *                   fix, and FLEET must know of the pilot all the same)
      */
     public record Reply(Kind kind, String name, String device, String version, Position position, int powerMode,
-                        de.droiddrone.common.FleetProtocol.Status status) {
+                        de.droiddrone.common.FleetProtocol.Status status, boolean flown) {
+        public Reply(Kind kind, String name, String device, String version, Position position, int powerMode,
+                     de.droiddrone.common.FleetProtocol.Status status) {
+            this(kind, name, device, version, position, powerMode, status, position != null && position.flown());
+        }
+
         public Reply(Kind kind, String name, String device, String version, Position position) {
             this(kind, name, device, version, position, position == null ? POWER_UNKNOWN : position.powerMode(), null);
         }
@@ -110,6 +117,8 @@ public final class Names {
 
     private final Map<String, Entry> entries = new LinkedHashMap<>();
     private final Consumer<Map<String, String>> saver;
+    /** 1.0.64: told of every rename (old name, new name), on the renaming thread: what else is kept by name moves too. */
+    private final List<java.util.function.BiConsumer<String, String>> renameListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /**
      * @param config the settings to read the map from (name.* keys)
@@ -268,14 +277,29 @@ public final class Names {
      * name of the same kind. The phone itself is told with NAME_ASSIGN ({@link NameService#assign}).
      * @return false when the old name is unknown or the new one is taken or not a name of that kind
      */
-    public synchronized boolean rename(String from, String to) {
-        Entry e = get(from);
-        if (e == null || to == null || kindOf(to) != e.kind() || get(to) != null) return false;
-        entries.remove(from.toLowerCase(Locale.ROOT));
-        Entry moved = new Entry(to, e.kind(), e.ip(), e.device(), e.host(), e.version(), e.lastSeen(), e.online());
-        entries.put(to.toLowerCase(Locale.ROOT), moved);
-        if (saver != null) saver.accept(Map.of(PREFIX + e.name(), "", PREFIX + moved.name(), format(moved)));
+    public boolean rename(String from, String to) {
+        String was;
+        synchronized (this) {
+            Entry e = get(from);
+            if (e == null || to == null || kindOf(to) != e.kind() || get(to) != null) return false;
+            entries.remove(from.toLowerCase(Locale.ROOT));
+            Entry moved = new Entry(to, e.kind(), e.ip(), e.device(), e.host(), e.version(), e.lastSeen(), e.online());
+            entries.put(to.toLowerCase(Locale.ROOT), moved);
+            if (saver != null) saver.accept(Map.of(PREFIX + e.name(), "", PREFIX + moved.name(), format(moved)));
+            was = e.name();
+        }
+        // 1.0.64: outside the lock - a listener may come back here (the name's address)
+        for (java.util.function.BiConsumer<String, String> l : renameListeners) l.accept(was, to);
         return true;
+    }
+
+    /**
+     * 1.0.64: called after every rename with the old and the new name. The settings went with a renamed phone
+     * ({@link #movedSettings}); its queued FLEET mode, its sleep record and its overwatch token stayed under the old
+     * name, where nothing found them.
+     */
+    public void onRenamed(java.util.function.BiConsumer<String, String> listener) {
+        renameListeners.add(listener);
     }
 
     /**
@@ -375,10 +399,11 @@ public final class Names {
             Kind k = kind == 0 ? Kind.PHONE : kind == 1 ? Kind.PC : null;
             if (k == null || !name.isEmpty() && !isValidName(name, k)) return null; // not a DRAUPNE name: never filed
             int[] power = {POWER_UNKNOWN};
-            Position position = readPosition(in, power);
+            boolean[] flown = {false};
+            Position position = readPosition(in, power, flown);
             // pc.40: the fleet status block after the power byte (only when the position block was read whole)
             de.droiddrone.common.FleetProtocol.Status status = power[0] != POWER_UNKNOWN ? de.droiddrone.common.FleetProtocol.Status.readFrom(in) : null;
-            return new Reply(k, name, printable(device, MAX_TEXT), printable(version, MAX_TEXT), position, power[0], status);
+            return new Reply(k, name, printable(device, MAX_TEXT), printable(version, MAX_TEXT), position, power[0], status, flown[0]);
         } catch (IOException e) {
             return null;
         }
@@ -391,7 +416,13 @@ public final class Names {
 
     /** As above; power[0] gets the power byte (pc.39) whether or not there is a fix, else POWER_UNKNOWN. */
     static Position readPosition(DataInputStream in, int[] power) {
+        return readPosition(in, power, new boolean[1]);
+    }
+
+    /** As above; flown[0] (1.0.64) says whether a pilot PC flies it - with or without a fix. */
+    static Position readPosition(DataInputStream in, int[] power, boolean[] flownOut) {
         power[0] = POWER_UNKNOWN;
+        flownOut[0] = false;
         try {
             if (in.available() < 1 || in.readUnsignedByte() != 1) return null;
             int source = in.readUnsignedByte();
@@ -399,6 +430,7 @@ public final class Names {
             int age = in.readUnsignedShort();
             int armed = in.readUnsignedByte();
             boolean flown = in.readUnsignedByte() != 0;
+            flownOut[0] = flown;
             int n = in.readUnsignedByte();
             String pilot = "";
             if (n == 4 || n == 16) {

@@ -95,7 +95,7 @@ final class FleetManagementPanel extends JPanel {
     private final Map<String, Integer> overwatchIntervals = new HashMap<>();
     private final Detail detail = new Detail();
     private final JButton fly = button("PILOTED", "Connect and fly it (a sleeping one at its next check)");
-    private final JButton standby = button("STANDBY", "Camera off, back in about 2 s at CONNECT");
+    private final JButton standby = button("STANDBY", "Camera off, back in about 2 s at PILOT UAV");
     private final JButton watch = button("OVERWATCH", "Sleeps with the camera watching for motion");
     private final JButton sleep = button("DEEP SLEEP", "Sleeps; checks in at CHECK EVERY");
     /** How often it checks in: a list, not a button (2026-11-10, the pilot). */
@@ -467,7 +467,7 @@ final class FleetManagementPanel extends JPanel {
         String tip = current ? "It is in this mode" : queued ? "Queued: press again to drop it" : null;
         if (tip != null) b.setToolTipText(tip);
         else b.setToolTipText(mode < 0 ? "Connect and fly it (a sleeping one at its next check)"
-                : mode == ControlLink.POWER_STANDBY ? "Camera off, back in about 2 s at CONNECT"
+                : mode == ControlLink.POWER_STANDBY ? "Camera off, back in about 2 s at PILOT UAV"
                 : mode == ControlLink.POWER_OVERWATCH ? "Sleeps with the camera watching for motion" : "Sleeps; checks in at CHECK EVERY");
     }
 
@@ -629,7 +629,8 @@ final class FleetManagementPanel extends JPanel {
         double s = Math.min(0.8, (h - 6) / 18.0);
         g.translate(15, cy);
         g.scale(s, s);
-        MapView.paintNetSign(g, c.kind(), kc, 0, 0);
+        MapView.paintNetSign(g, c.kind(), c.blind() ? Theme.WARN : kc, 0, 0);
+        if (c.blind()) MapView.paintBlind(g, 0, 0); // 1.0.64: overwatching, seeing nothing - the eye crossed out
         g.setTransform(saved);
         // the name; VIRTUAL as a small yellow V
         g.setFont(Theme.headingFont(h < 26 ? 11f : 12f));
@@ -781,9 +782,11 @@ final class FleetManagementPanel extends JPanel {
         int x = fm.stringWidth(c.name()) + 8;
         g.setFont(Theme.headingFont(10f));
         FontMetrics bf = g.getFontMetrics();
-        g.setColor(kindColor(c.kind()));
-        g.drawString(c.badge(), x, fm.getAscent());
-        x += bf.stringWidth(c.badge()) + 10;
+        // 1.0.64: "OVERWATCH - BLIND" in the warning colour while its camera gives the motion detection no pictures
+        String badge = c.badgeText();
+        g.setColor(c.blind() ? Theme.WARN : kindColor(c.kind()));
+        g.drawString(badge, x, fm.getAscent());
+        x += bf.stringWidth(badge) + 10;
         String right = c.note() != null ? c.note().toUpperCase(Locale.ROOT)
                 : c.queued() != null ? "QUEUED: " + c.queued() + (c.queuedAgoMs() >= 0 ? " " + FleetCards.ago(c.queuedAgoMs()).toUpperCase(Locale.ROOT) : "")
                 : c.nextCheckMs() == FleetCards.LISTENING ? "LISTENING"

@@ -169,6 +169,24 @@ public class PcConfig {
      */
     /** Synchronized: saves can come from the Swing thread and from a background one (the OSD editor's). */
     public synchronized void save(Path file, Map<String, String> updates) throws IOException {
+        // 1.0.64: this run has the change whatever the disk says (it was lost from memory too when the write failed)
+        apply(updates);
+        write(file, updates);
+    }
+
+    /**
+     * 1.0.64: the updates in memory only, at once - getString sees them from here on. The window sets them so and
+     * hands the file to its writer thread ({@link #write}), so no save reads and writes the file on the Swing thread.
+     */
+    public void apply(Map<String, String> updates) {
+        updates.forEach(props::setProperty);
+    }
+
+    /**
+     * 1.0.64: the updates into the file only (memory has them: {@link #apply}) - a write queued behind a newer apply
+     * must not put its older value back in memory. Calls in the order of their applies (one writer thread).
+     */
+    public synchronized void write(Path file, Map<String, String> updates) throws IOException {
         List<String> lines;
         if (Files.exists(file)) {
             lines = new ArrayList<>(Files.readAllLines(file, StandardCharsets.UTF_8));
@@ -196,9 +214,7 @@ public class PcConfig {
         }
         // whole, then moved into place: a crash or a power cut mid-write never leaves half a settings file
         Path tmp = file.resolveSibling(file.getFileName() + ".part");
-        // 1.0.64: this run has the change whatever the disk says (it was lost from memory too when the write failed),
-        // and the move is tried again: on Windows a virus scanner or an editor holding the file a moment refuses it
-        updates.forEach(props::setProperty);
+        // 1.0.64: the move is tried again: on Windows a virus scanner or an editor holding the file a moment refuses it
         Files.write(tmp, lines, StandardCharsets.UTF_8);
         IOException last = null;
         for (int attempt = 0; attempt < 3; attempt++) {

@@ -39,6 +39,10 @@ import java.util.List;
  * </ol>
  * Something left standing becomes the reference after {@link #ABSORB_S}. Day only. Not thread safe (the detector's
  * thread).
+ *
+ * <p>pc.50, someone coming slowly: the same growth is also looked for over {@link #SLOW_WINDOW_MS}, and what has a
+ * thing's shape, moves within itself and has not shrunk is not made the reference for up to {@link #SLOW_MAX_AGE_MS}
+ * (LOW and NORMAL only).
  */
 final class Looming {
     /** The reference learns in this (s) where nothing stands. */
@@ -99,6 +103,23 @@ final class Looming {
      * stands longer becomes the reference at ABSORB_S); a patch the wind has kept changed for minutes is no newcomer.
      */
     static final long MAX_AGE_MS = 45_000;
+    /**
+     * pc.50, someone coming slowly (0.5 - 0.7 m/s: a wary walk): the window's growth is reached only some 15 m off,
+     * by which time the reference had taken him (ABSORB_S after his first steady pixel) and nothing was left to grow -
+     * he was found 10 - 12 m off, or under 8. A second, slow look: the same growth over this long a window, judged on
+     * his box every SLOW_STEP_MS, and stricter (no quarter of it shorter than the one before).
+     */
+    static final long SLOW_WINDOW_MS = 18_000, SLOW_STEP_MS = 500;
+    /**
+     * pc.50: a loomer with a person's or a vehicle's shape, calm ground round it, whose height has not fallen over the
+     * slow look (at least SLOW_KEEP_MS of it; before that, any loomer) is not taken by the reference, and the slow
+     * look may still count it, until it is this old: someone at 0.5 m/s needs over a minute from where he first shows
+     * (40 m) to where he has grown enough (20 m). What stops being so is taken SLOW_LET_GO_S later. LOW and NORMAL only.
+     */
+    static final long SLOW_MAX_AGE_MS = 120_000, SLOW_KEEP_MS = 4000;
+    static final float SLOW_LET_GO_S = 5;
+    /** ... and moving within itself: its pixels change from picture to picture by this share of what they differ from the reference by. */
+    static final float SLOW_ALIVE = 0.1f;
     /** After a restart nothing counts for this long: what the reference took in the middle of a gust settles. */
     static final long SETTLE_MS = 10_000;
     /** A loomer not matched for this long ends. */
@@ -116,7 +137,13 @@ final class Looming {
         boolean confirmed;
         /** time ms (from the detector's epoch), min x, min y, max x, max y, count; oldest first, WINDOW_MS + 1 s kept. */
         final ArrayList<float[]> history = new ArrayList<>();
-        String why = "";
+        /** pc.50: the same every SLOW_STEP_MS, SLOW_WINDOW_MS kept: the slow look's. */
+        final ArrayList<float[]> slow = new ArrayList<>();
+        /** pc.50: shaped like a thing, calm round it, its height not falling: the reference leaves it be (SLOW_MAX_AGE_MS). */
+        boolean keeps;
+        /** pc.50: the slow look has a new box since it was last judged. */
+        boolean slowDue;
+        String why = "", slowWhy = "";
 
         Loomer(int id, long now) {
             this.id = id;
@@ -263,6 +290,16 @@ final class Looming {
             mask[i] = (byte) (persist[i] >= PERSIST_ON ? 2 : on[i] != 0 && around[i] >= PERSIST_ON ? 1 : 0);
         }
         follow(blobs(aligned, near), now, relNow);
+        // pc.50: what keeps a thing's shape and its height (someone coming slowly) the reference does not take yet
+        for (Loomer l : loomers) {
+            if (!l.keeps || l.lastSeen != now) continue;
+            float most = ABSORB_S - SLOW_LET_GO_S;
+            for (int yy = Math.max(0, l.minY - FREEZE_REACH); yy <= Math.min(h - 1, l.maxY + FREEZE_REACH); yy++) {
+                for (int xx = Math.max(0, l.minX - FREEZE_REACH); xx <= Math.min(w - 1, l.maxX + FREEZE_REACH); xx++) {
+                    if (held[yy * w + xx] > most) held[yy * w + xx] = most;
+                }
+            }
+        }
         System.arraycopy(aligned, 0, prev, 0, w * h);
     }
 
@@ -396,8 +433,14 @@ final class Looming {
         l.count = b[4];
         l.flicker += (l.hits == 1 ? 1 : 0.2f) * (b[5] / 1000f - l.flicker);
         l.shimmer += (l.hits == 1 ? 1 : 0.2f) * (b[6] / 1000f - l.shimmer);
-        l.history.add(new float[]{relNow, b[0], b[1], b[2], b[3], b[4]});
+        float[] p = {relNow, b[0], b[1], b[2], b[3], b[4]};
+        l.history.add(p);
         while (l.history.size() > 2 && relNow - l.history.get(0)[0] > WINDOW_MS + 1000) l.history.remove(0);
+        if (l.slow.isEmpty() || relNow - l.slow.get(l.slow.size() - 1)[0] >= SLOW_STEP_MS) { // pc.50: the slow look's
+            l.slow.add(p);
+            l.slowDue = true;
+        }
+        while (l.slow.size() > 2 && relNow - l.slow.get(0)[0] > SLOW_WINDOW_MS) l.slow.remove(0);
     }
 
     /** Whether it grew steadily where it stands over the window: confirms it, or takes it back. */
@@ -408,48 +451,83 @@ final class Looming {
         boolean grows = false;
         String why = "";
         if (now - l.first >= MIN_AGE_MS && n >= 8 && l.hits >= 0.8f * Math.min(frames, n)) {
-            // quarters of the window: their median heights, widths, areas
-            float[] hq = new float[4], wq = new float[4], aq = new float[4], cx = new float[4], bottom = new float[4];
-            for (int q = 0; q < 4; q++) {
-                List<float[]> part = win.subList(q * n / 4, Math.max(q * n / 4 + 1, (q + 1) * n / 4));
-                hq[q] = median(part, 4, 2, 1);
-                wq[q] = median(part, 3, 1, 1);
-                aq[q] = median(part, 5, -1, 0);
-                cx[q] = (median(part, 1, -1, 0) + median(part, 3, -1, 0)) / 2;
-                bottom[q] = median(part, 4, -1, 0);
-            }
-            boolean steady = hq[1] >= 0.95f * hq[0] && hq[2] >= 0.95f * hq[1] && hq[3] >= 0.95f * hq[2];
-            // smoothly: a thing coming nearer grows as one over its distance - a little each quarter; leaves a gust
-            // carries over new ground jump once
-            float s1 = hq[1] - hq[0], s2 = hq[2] - hq[1], s3 = hq[3] - hq[2], total = hq[3] - hq[0];
-            int rising = (s1 > 0 ? 1 : 0) + (s2 > 0 ? 1 : 0) + (s3 > 0 ? 1 : 0);
-            boolean smooth = rising >= 2 && Math.max(s1, Math.max(s2, s3)) <= MAX_STEP_SHARE * total;
-            // a person's or a vehicle's shape, not a swathe of the picture
-            boolean shaped = l.maxX - l.minX + 1 <= w * MAX_WIDTH_SHARE && hq[3] >= MIN_ASPECT * wq[3];
-            boolean taller = hq[3] >= GROWTH[sensitivity] * hq[0] && hq[3] - hq[0] >= GROWTH_MIN_PX && hq[3] >= MIN_HEIGHT;
-            boolean wider = wq[3] >= wq[0];
-            boolean bigger = aq[3] >= AREA_GROWTH * aq[0];
-            boolean feet = bottom[3] >= bottom[0] - 1;
-            float sideways = Math.abs(cx[3] - cx[0]);
-            boolean stays = sideways <= Math.max(2, MAX_SIDEWAYS * hq[3]);
-            // no sideways back and forth: the quarters' centres go one way
-            float d1 = cx[1] - cx[0], d2 = cx[2] - cx[1], d3 = cx[3] - cx[2];
-            boolean oneWay = !(d1 * d2 < -1 || d2 * d3 < -1);
-            float box = (l.maxX - l.minX + 1) * (l.maxY - l.minY + 1);
-            boolean compact = l.count >= MIN_FILL * box;
-            boolean calm = l.flicker <= MAX_FLICKER;
-            grows = steady && smooth && shaped && taller && wider && bigger && feet && stays && oneWay && compact && calm;
-            if (debug) {
-                why = String.format(java.util.Locale.ROOT, "h %.0f>%.0f>%.0f>%.0f w %.0f>%.0f a %.0f>%.0f side %.1f flick %.2f shim %.2f fill %.2f | %s%s%s%s%s%s%s%s%s%s%s",
-                        hq[0], hq[1], hq[2], hq[3], wq[0], wq[3], aq[0], aq[3], sideways, l.flicker, l.shimmer, l.count / box,
-                        steady ? "" : "!steady ", smooth ? "" : "!smooth ", shaped ? "" : "!shaped ", taller ? "" : "!taller ", wider ? "" : "!wider ", bigger ? "" : "!bigger ",
-                        feet ? "" : "!feet ", stays ? "" : "!stays ", oneWay ? "" : "!oneway ", compact ? "" : "!compact ", calm ? "" : "!calm");
-            }
+            grows = grew(l, win, sensitivity, false);
+            why = grewWhy;
         }
-        if (grows && now >= settledAt && now - l.first <= MAX_AGE_MS) l.confirmed = true;
+        // pc.50, the slow look (not on HIGH: in a gale its patches of leaves, kept this way, grew into alarms): while it
+        // has a thing's shape, moves within itself and its height has not fallen, the reference leaves it be - as it
+        // does a loomer just begun (its first steady pixel may be half a minute old, far off, before it was one) - and
+        // the window's growth over SLOW_WINDOW_MS counts too
+        boolean slowly = false;
+        int m = l.slow.size();
+        float span = m == 0 ? 0 : relNow - l.slow.get(0)[0];
+        if (sensitivity == MotionDetector.HIGH || now - l.first > SLOW_MAX_AGE_MS) {
+            l.keeps = false;
+        } else if (m < 8 || span < SLOW_KEEP_MS) {
+            l.keeps = now - l.first <= SLOW_KEEP_MS + 1000;
+        } else if (l.slowDue) { // (judged when the slow look has a new box: twice a second)
+            boolean grown = grew(l, l.slow, sensitivity, true);
+            slowly = grown && l.keeps && span >= 0.9f * SLOW_WINDOW_MS && m >= 0.8f * SLOW_WINDOW_MS / SLOW_STEP_MS;
+            if (debug) l.slowWhy = " SLOW " + grewWhy + (l.keeps ? "keeps" : "");
+        }
+        l.slowDue = false;
+        if (debug) why += l.slowWhy;
+        if (now >= settledAt && (grows && now - l.first <= MAX_AGE_MS || slowly)) l.confirmed = true;
         // a confirmed loomer stays while it is there and isn't leaves (it may stop growing as it stops)
         else if (l.confirmed && l.flicker > MAX_FLICKER * 1.5f) l.confirmed = false;
         l.why = why;
+    }
+
+    /** The last grew's figures (debug). */
+    private String grewWhy = "";
+
+    /**
+     * Whether the loomer's boxes (oldest first) grew steadily where it stands. slow (pc.50): the slow look's boxes -
+     * no quarter shorter than the one before, its area only not smaller (far off he is a line one pixel wide, and that
+     * grows in length alone) - and whether the reference leaves it be (keeps).
+     */
+    private boolean grew(Loomer l, List<float[]> win, int sensitivity, boolean slow) {
+        int n = win.size();
+        // quarters of the window: their median heights, widths, areas
+        float[] hq = new float[4], wq = new float[4], aq = new float[4], cx = new float[4], bottom = new float[4];
+        for (int q = 0; q < 4; q++) {
+            List<float[]> part = win.subList(q * n / 4, Math.max(q * n / 4 + 1, (q + 1) * n / 4));
+            hq[q] = median(part, 4, 2, 1);
+            wq[q] = median(part, 3, 1, 1);
+            aq[q] = median(part, 5, -1, 0);
+            cx[q] = (median(part, 1, -1, 0) + median(part, 3, -1, 0)) / 2;
+            bottom[q] = median(part, 4, -1, 0);
+        }
+        float slack = slow ? 1 : 0.95f;
+        boolean steady = hq[1] >= slack * hq[0] && hq[2] >= slack * hq[1] && hq[3] >= slack * hq[2];
+        // smoothly: a thing coming nearer grows as one over its distance - a little each quarter; leaves a gust
+        // carries over new ground jump once
+        float s1 = hq[1] - hq[0], s2 = hq[2] - hq[1], s3 = hq[3] - hq[2], total = hq[3] - hq[0];
+        int rising = (s1 > 0 ? 1 : 0) + (s2 > 0 ? 1 : 0) + (s3 > 0 ? 1 : 0);
+        boolean smooth = rising >= 2 && Math.max(s1, Math.max(s2, s3)) <= MAX_STEP_SHARE * total;
+        // a person's or a vehicle's shape, not a swathe of the picture
+        boolean shaped = l.maxX - l.minX + 1 <= w * MAX_WIDTH_SHARE && hq[3] >= MIN_ASPECT * wq[3];
+        boolean taller = hq[3] >= GROWTH[sensitivity] * hq[0] && hq[3] - hq[0] >= GROWTH_MIN_PX && hq[3] >= MIN_HEIGHT;
+        boolean wider = wq[3] >= wq[0];
+        boolean bigger = aq[3] >= (slow ? 1 : AREA_GROWTH) * aq[0];
+        boolean feet = bottom[3] >= bottom[0] - 1;
+        float sideways = Math.abs(cx[3] - cx[0]);
+        boolean stays = sideways <= Math.max(2, MAX_SIDEWAYS * hq[3]);
+        // no sideways back and forth: the quarters' centres go one way
+        float d1 = cx[1] - cx[0], d2 = cx[2] - cx[1], d3 = cx[3] - cx[2];
+        boolean oneWay = !(d1 * d2 < -1 || d2 * d3 < -1);
+        float box = (l.maxX - l.minX + 1) * (l.maxY - l.minY + 1);
+        boolean compact = l.count >= MIN_FILL * box;
+        boolean calm = l.flicker <= MAX_FLICKER;
+        // (alive: a walker's legs and arms move within him; a thing that stands, or a stale patch at the picture's edge, is still)
+        if (slow) l.keeps = steady && shaped && feet && stays && compact && calm && l.shimmer >= SLOW_ALIVE;
+        if (debug) {
+            grewWhy = String.format(java.util.Locale.ROOT, "h %.0f>%.0f>%.0f>%.0f w %.0f>%.0f a %.0f>%.0f side %.1f flick %.2f shim %.2f fill %.2f | %s%s%s%s%s%s%s%s%s%s%s",
+                    hq[0], hq[1], hq[2], hq[3], wq[0], wq[3], aq[0], aq[3], sideways, l.flicker, l.shimmer, l.count / box,
+                    steady ? "" : "!steady ", smooth ? "" : "!smooth ", shaped ? "" : "!shaped ", taller ? "" : "!taller ", wider ? "" : "!wider ", bigger ? "" : "!bigger ",
+                    feet ? "" : "!feet ", stays ? "" : "!stays ", oneWay ? "" : "!oneway ", compact ? "" : "!compact ", calm ? "" : "!calm");
+        }
+        return steady && smooth && shaped && taller && wider && bigger && feet && stays && oneWay && compact && calm;
     }
 
     /** The median of p[from] - p[to] + add over the points (to < 0: p[from] alone). */

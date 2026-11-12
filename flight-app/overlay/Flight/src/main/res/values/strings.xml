@@ -46,11 +46,11 @@
     <string name="dd_pill_linked">LINK READY</string>
     <string name="dd_update">Update %1$s available. Tap to install.</string>
     <string name="dd_update_allow">Allow installing apps, come back, tap again.</string>
-    <string name="dd_update_connected">Disconnect first: updating closes the app and the sticks.</string>
+    <string name="dd_update_connected">Tap Stop first: updating closes the app and the sticks.</string>
     <string name="dd_update_installing">Installing… confirm in Android\'s prompt.</string>
     <string name="dd_update_failed">Update failed (%1$s). Tap to retry.</string>
     <string name="dd_gps_not_allowed">Phone GPS not allowed. Tap to allow (While using the app).</string>
-    <string name="dd_gps_restart">Phone GPS starting… Stuck? Disconnect and connect.</string>
+    <string name="dd_gps_restart">Phone GPS starting… Stuck? Tap Stop, then Start.</string>
     <string name="dd_update_no_digest">No SHA-256 from GitHub: can\'t verify, not installed.</string>
     <string name="dd_gps_waiting">Phone GPS: no fix yet</string>
     <string name="dd_gps_fix">Phone GPS: %1$s, ±%2$d m, %3$d s ago</string>
@@ -59,7 +59,7 @@
     <string name="dd_tailscale_title">Tailscale is off</string>
     <string name="dd_tailscale_off">The PC reaches this phone over Tailscale.\n\nSwitch Tailscale on (with mobile data), then tap Start again.</string>
     <string name="dd_tailscale_open">Open Tailscale</string>
-    <string name="dd_connect_anyway">Connect anyway</string>
+    <string name="dd_connect_anyway">Start anyway</string>
     <string name="dd_tailscale_not_found">Tailscale not installed: get it from the Play Store.</string>
     <string name="dd_tailscale_off_line">Waiting for PC - Tailscale is off</string>
     <string name="dd_lock_button">LOCK SCREEN</string>

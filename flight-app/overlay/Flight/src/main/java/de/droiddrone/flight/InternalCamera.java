@@ -143,6 +143,52 @@ public class InternalCamera implements Camera{
         extraTarget = surface;
     }
 
+    /**
+     * pc.50: an overwatch event's session has the stream encoder's surface (for the PC's preview) beside the event's
+     * recorder - and the encoder coded every picture of every event, watched or not (no PC there, the alert dismissed,
+     * a PC that flies). The surface stays in the session, but is in the repeating request only while a PC asks for
+     * the preview: no session change, the recording goes on untouched, and an encoder given no pictures does nothing.
+     * Only beside an event's recorder (extraTarget): a video's own session always has it.
+     */
+    private volatile boolean streamWanted = true;
+
+    @Override
+    public void setStreamTarget(boolean on) {
+        if (on == streamWanted) return;
+        streamWanted = on;
+        HandlerThread thread = handlerThread;
+        if (thread == null) return;
+        try {
+            new Handler(thread.getLooper()).post(this::applyStreamTarget);
+        } catch (RuntimeException e) {
+            // the camera thread is ending: the next session starts with it as it is
+        }
+    }
+
+    /** The encoder's surface is left out: only with an event's recorder in the request (a request needs a target). */
+    private boolean streamLeftOut() {
+        Surface extra = extraTarget;
+        List<Surface> in = sessionTargets;
+        return !streamWanted && !watchOnly && extra != null && in != null && in.contains(extra);
+    }
+
+    private void applyStreamTarget() {
+        synchronized (requestLock) {
+            CaptureRequest.Builder request = mCaptureRequest;
+            CameraCaptureSession session = mCameraCaptureSession;
+            Surface encoder = streamEncoderSurface;
+            HandlerThread thread = handlerThread;
+            if (request == null || session == null || encoder == null || thread == null || watchOnly) return;
+            if (streamLeftOut()) request.removeTarget(encoder);
+            else request.addTarget(encoder);
+            try {
+                session.setRepeatingRequest(request.build(), captureCallback, new Handler(thread.getLooper()));
+            } catch (Exception e) {
+                log("The preview's pictures " + (streamWanted ? "on" : "off") + ": " + e);
+            }
+        }
+    }
+
     /** pc.36 (the PHONE_POWER caps): this camera refused the analysis picture, so it can't overwatch. */
     static boolean analysisRefused(String cameraId) {
         return cameraId != null && cameraId.equals(analysisRefusedFor);
@@ -365,16 +411,31 @@ public class InternalCamera implements Camera{
             }
         }
         sessionTargets = targets;
-        createSession(targets, analysisSurface(false));
+        // pc.50: while the detector is overwatch's (an event's session: beside its recorder, or without one), the session
+        // gives it the watch's own picture - the same size and reader, so MotionWatch's cut and shrink are the same. It
+        // got the video-shaped one here (1280x720 averaged down against the watch's 320x240 cut): the detector, not
+        // reset across the change, compared its background from one with pictures of the other at every event's start
+        // and end. What still differs in an event: the request's frame rate, edge mode and stabiliser (the recording's).
+        boolean overwatch = extra != null || MotionWatch.forOverwatch();
+        boolean watchPicture = overwatch && !config.getCameraId().equals(watchPictureRefusedFor);
+        sessionOverwatch = overwatch;
+        sessionWatchPicture = watchPicture;
+        createSession(targets, analysisSurface(watchPicture));
     }
+
+    /** pc.50: this session is an overwatch event's (a refusal of its detection picture isn't for good), and has the watch's own picture. */
+    private volatile boolean sessionOverwatch, sessionWatchPicture;
+    /** pc.50: a camera that refused the watch's picture beside a video: its events get the video-shaped one, as before. */
+    private static volatile String watchPictureRefusedFor;
 
     /**
      * pc.35: the motion detection's reader surface for a new session, or null: no small picture of the video's shape
      * on this camera, or the camera refused it before. A reader of the same size is kept from session to session.
+     * @param watch overwatch's own picture (pc.50: alone in its session, or beside an event's video)
      */
-    private Surface analysisSurface(boolean alone) {
-        Size size = alone && watchSize != null ? watchSize : analysisSize;
-        if (size == null || !alone && config.getCameraId().equals(analysisRefusedFor)) return null; // pc.49: alone, always tried
+    private Surface analysisSurface(boolean watch) {
+        Size size = watch && watchSize != null ? watchSize : analysisSize;
+        if (size == null || !watch && config.getCameraId().equals(analysisRefusedFor)) return null; // pc.49: overwatch's, always tried
         try {
             if (analysisReader != null && !fits(analysisReader, size) && spareReader != null && fits(spareReader, size)) {
                 ImageReader r = analysisReader; // pc.50: overwatch's and the video's sizes by turns - the other one kept
@@ -542,7 +603,7 @@ public class InternalCamera implements Camera{
                 mCameraCaptureSession = cameraCaptureSession;
                 if (trouble == de.droiddrone.common.OverwatchProtocol.BLIND_SESSION) trouble = 0;
                 configureCamera(captureRequest);
-                if (streamEncoderSurface != null && !watchOnly) captureRequest.addTarget(streamEncoderSurface);
+                if (streamEncoderSurface != null && !watchOnly && !streamLeftOut()) captureRequest.addTarget(streamEncoderSurface);
                 Surface extra = extraTarget;
                 if (extra != null && !watchOnly && sessionTargets != null && sessionTargets.contains(extra)) captureRequest.addTarget(extra); // pc.36
                 Surface analysis = sessionAnalysis;
@@ -579,11 +640,23 @@ public class InternalCamera implements Camera{
             // pc.35: the phone won't take the motion detection's stream beside the video: the video without it, now
             // and from here on (a USB camera or another phone may still do)
             List<Surface> targets = sessionTargets;
-            Surface extra = extraTarget;
-            if (sessionAnalysis != null && targets != null && camera != null && extra != null && targets.contains(extra)) {
+            if (sessionAnalysis != null && targets != null && camera != null && sessionOverwatch) {
+                if (sessionWatchPicture) {
+                    // pc.50: the watch's own picture beside the video refused (a camera that took the video-shaped one
+                    // there): that one again, now and in its later events - what every event had before
+                    sessionWatchPicture = false;
+                    watchPictureRefusedFor = config.getCameraId();
+                    Surface videoShaped = analysisSurface(false);
+                    if (videoShaped != null && videoShaped != sessionAnalysis) {
+                        log("Overwatch: the camera refused the watch's picture beside the recording: the video-shaped one instead");
+                        createSession(targets, videoShaped);
+                        return;
+                    }
+                }
                 // pc.47: an overwatch event's session (video, recording and the detection's picture) refused: this event
                 // records without the picture, but it is not refused for good - the watching after it needs it, and its
-                // own session (the picture alone) worked (was: never again, so a phone saw its first event only)
+                // own session (the picture alone) worked (was: never again, so a phone saw its first event only).
+                // pc.50: an event's session without a recorder too (it marked the camera refused for good)
                 log("Overwatch: the camera refused the detection's picture beside the recording: this event records without it");
                 createSession(targets, null);
                 return;
@@ -705,6 +778,9 @@ public class InternalCamera implements Camera{
         analysisSize = yuv == null ? null : pickAnalysisSize(yuv, cameraResolution);
         watchSize = yuv == null ? null : pickWatchSize(yuv, cameraResolution);
         MotionWatch.setVideoShape(width, height);
+        // pc.50: pictures stamped on the phone's own clock give the detector their own times (else: when they arrive)
+        Integer stamps = characteristics.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE);
+        MotionWatch.setSensorClock(stamps != null && stamps == CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME);
         if (watchSize != null) log("Overwatch picture: " + watchSize.getWidth() + "x" + watchSize.getHeight()
                 + (watchRange == null ? "" : " at " + watchRange.getLower() + "-" + watchRange.getUpper() + " fps"));
         SizeF sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
@@ -811,9 +887,12 @@ public class InternalCamera implements Camera{
         captureRequest.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
         captureRequest.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_ON);
         // pc.50: overwatch's picture alone at the camera's lowest range (15 here, not the video's 30): half the frames for
-        // the same 8 analysed a second, and up to 66 ms exposure at night; no stabiliser, no edge work for a 320 px picture
+        // as many analysed (every second one, 7.5 a second), and up to 66 ms exposure at night; no stabiliser, no edge
+        // work for a 320 px picture
         boolean alone = watchOnly;
-        captureRequest.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, alone && watchRange != null ? watchRange : frameRate);
+        Range<Integer> range = alone && watchRange != null ? watchRange : frameRate;
+        captureRequest.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range);
+        MotionWatch.setFrameRate(range.getUpper()); // pc.50: its pictures are taken by this session's rate (WatchRun.frameGateMs)
         captureRequest.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0.0f);
         captureRequest.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF);
         captureRequest.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO);

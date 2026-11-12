@@ -393,14 +393,24 @@ public final class OpenCellId {
 
     /** The box's cells on disk, however old; null when it was never fetched. */
     public List<Cell> cached(Tile t) {
+        // 1.0.64: read once - every estimate (and each step of one being fetched) read every box's file again
+        java.util.Optional<List<Cell>> known = memo.get(t);
+        if (known != null) return known.orElse(null);
         Path f = file(t);
-        if (!Files.isRegularFile(f)) return null;
-        try (BufferedReader in = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
-            return parseCsv(in);
-        } catch (IOException e) {
-            return null;
+        List<Cell> cells = null;
+        if (Files.isRegularFile(f)) {
+            try (BufferedReader in = Files.newBufferedReader(f, StandardCharsets.UTF_8)) {
+                cells = parseCsv(in);
+            } catch (IOException e) {
+                return null; // tried again next time
+            }
         }
+        memo.put(t, java.util.Optional.ofNullable(cells));
+        return cells;
     }
+
+    /** The boxes read (or found missing) since this start; a fetch writes its box here too. */
+    private final java.util.Map<Tile, java.util.Optional<List<Cell>>> memo = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** The box was fetched within {@link #MAX_AGE_MS}, or the imported file covers it. */
     public boolean isFresh(Tile t, long nowMs) {
@@ -465,6 +475,7 @@ public final class OpenCellId {
         } catch (IOException e) {
             // used this time anyway
         }
+        memo.put(t, java.util.Optional.of(all));
         return new Answer(all, 0, null);
     }
 
@@ -561,6 +572,8 @@ public final class OpenCellId {
     void store(Tile t, List<Cell> cells, long fetchedMs) throws IOException {
         write(file(t), toCsv(cells).getBytes(StandardCharsets.UTF_8));
         Files.setLastModifiedTime(file(t), FileTime.fromMillis(fetchedMs));
+        // 1.0.64: as a fetch does - the box may already be remembered as "not on disk"
+        memo.put(t, java.util.Optional.of(List.copyOf(cells)));
     }
 
     static List<Cell> parseCsv(String text) {

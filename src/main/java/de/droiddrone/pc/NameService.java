@@ -123,9 +123,16 @@ public final class NameService {
 
     /**
      * The pilot renamed a phone in the name map: NAME_ASSIGN to it (a phone keeps its name itself, so it must be
-     * online), then a scan, which files its answer under the new name.
+     * online), then a scan, which files its answer under the new name. 1.0.64: the assign goes again with every scan
+     * until the phone answers with that name ({@link #ASSIGN_KEEP_MS} at most) - it was one packet, and when it was
+     * lost the phone went on answering with its old name.
      */
     public void assign(String ip, String name) {
+        assigns.put(ip, new Assign(name, null, MonoClock.ms()));
+        sendAssign(ip, name);
+    }
+
+    private void sendAssign(String ip, String name) {
         byte[] assign = Names.assign(config.getKey(), name);
         try (DatagramSocket socket = new DatagramSocket()) {
             socket.send(new DatagramPacket(assign, assign.length, InetAddress.getByName(ip), VirtualFleet.portOf(ip, port)));
@@ -134,6 +141,60 @@ public final class NameService {
             log.accept("Names: rename failed for phone at " + ip + ": " + e);
         }
         scanSoon();
+    }
+
+    /**
+     * 1.0.64, the name map's RENAME in one place: the map's entry, the phone's own settings and the chosen phone go to
+     * the new name, and the phone is told ({@link #assign}). When it never answers with the new name the old one is
+     * put back - before, the map said the new name, the phone the old one, and both sat at one address.
+     * @return false when the map refused: the old name unknown, the new one taken or not a phone's
+     */
+    public boolean rename(String ip, String from, String to) {
+        if (ip == null || ip.isEmpty() || !moveName(from, to)) return false;
+        // a rename on top of one the phone hasn't taken yet: its real name is still the first one
+        Assign before = assigns.get(ip);
+        String real = before != null && before.from() != null && before.name().equalsIgnoreCase(from) ? before.from() : from;
+        assigns.put(ip, new Assign(to, real, MonoClock.ms()));
+        sendAssign(ip, to);
+        return true;
+    }
+
+    /** The map's entry, the phone's own settings ({@link Names#movedSettings}) and the chosen phone under another name. */
+    private boolean moveName(String from, String to) {
+        if (!names.rename(from, to)) return false;
+        java.util.Map<String, String> moved = Names.movedSettings(config.keys(), config::getString, from, to);
+        if (!moved.isEmpty()) saver.accept(moved);
+        if (from.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) saver.accept(java.util.Map.of(Names.PHONE_NAME_KEY, to));
+        return true;
+    }
+
+    /** A NAME_ASSIGN the phone hasn't answered with its new name yet; from: the name to put back (null: none). */
+    private record Assign(String name, String from, long since) {}
+
+    /** By the phone's address. */
+    private final java.util.Map<String, Assign> assigns = new java.util.concurrent.ConcurrentHashMap<>();
+    /** A rename is sent again with every scan for this long, then given up. */
+    static final long ASSIGN_KEEP_MS = 30_000;
+    /** Tests: a shorter wait. */
+    long assignKeepMs = ASSIGN_KEEP_MS;
+
+    /** 1.0.64: whether a rename of the phone at this address still waits for the phone's word. */
+    public boolean renaming(String ip) {
+        return ip != null && assigns.containsKey(ip);
+    }
+
+    /** After a scan: renames the phone never took are given up - said, and the old name put back. */
+    private void giveUpAssigns(long now) {
+        for (java.util.Map.Entry<String, Assign> a : assigns.entrySet()) {
+            Assign g = a.getValue();
+            if (now - g.since() < assignKeepMs || !assigns.remove(a.getKey(), g)) continue;
+            if (g.from() == null) {
+                log.accept("Names: phone at " + a.getKey() + " didn't take the name " + g.name() + ".");
+            } else {
+                log.accept(g.from() + " didn't take the name " + g.name() + ".");
+                moveName(g.name(), g.from());
+            }
+        }
     }
 
     /**
@@ -158,7 +219,10 @@ public final class NameService {
     /** 1.0.64: the power mode each address said in its last own answer (any thread reads; the scan writes). */
     private final java.util.Map<String, Integer> saidMode = new java.util.concurrent.ConcurrentHashMap<>();
 
-    /** 1.0.64: check-ins heard since the last scan ({mono ms, power mode}); the scan's thread files them in its pace. */
+    /** 1.0.64: when it said so (MonoClock). */
+    private final java.util.Map<String, Long> saidAt = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 1.0.64: check-ins heard since the last scan ({mono ms, power mode, next check min}); the scan's thread files them in its pace. */
     private final java.util.Map<String, long[]> heardHellos = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** The power mode this address said when it last answered itself ({@link Names#POWER_UNKNOWN}: never, or an older phone). */
@@ -166,7 +230,54 @@ public final class NameService {
         Integer m = ip == null ? null : saidMode.get(ip);
         return m == null ? Names.POWER_UNKNOWN : m;
     }
+
+    /**
+     * 1.0.64: how long a phone's own word on its power mode counts as fresh. A resting phone (standby, deep sleep,
+     * overwatch) is asked once a minute, not every scan: with the 30 s every mode had, a phone another PC put to
+     * standby read STANDBY and ACTIVE (FLEET), STANDBY and NOT HEARD (the map) by turns.
+     */
+    public static long saidFreshMs(int powerMode) {
+        return ScanPace.freshMs(powerMode);
+    }
+
+    /** 1.0.64: whether this address's last own word on its mode ({@link #saidMode}) is still fresh ({@link #saidFreshMs}). */
+    public boolean saidFresh(String ip) {
+        Long at = ip == null ? null : saidAt.get(ip);
+        return at != null && MonoClock.ms() - at <= saidFreshMs(saidMode(ip));
+    }
+
+    /**
+     * 1.0.64: a phone's own answer to this PC's query, as it comes in (the scan's thread; never an answer the scan
+     * only holds for a resting phone): its address, the reply, the power mode it says ({@link Names#POWER_UNKNOWN}
+     * none). The sleep book follows the phones other PCs put to sleep or woke by it.
+     */
+    public interface PhoneReplies {
+        void heard(String ip, Names.Reply reply, int saidMode);
+    }
+
+    private volatile PhoneReplies phoneReplies;
+
+    public void setPhoneReplies(PhoneReplies listener) {
+        phoneReplies = listener;
+    }
+
+    /**
+     * 1.0.64: a sleeping phone's check-in said when it checks next (SleepCheck's byte; 0 not said). The scan paces its
+     * queries by it: without it a timed sleeper known only by its hellos was asked every minute as if it listened.
+     */
+    public void heardCheckIn(String ip, int powerMode, int nextCheckMin) {
+        if (ip == null) return;
+        long now = MonoClock.ms();
+        saidMode.put(ip, powerMode);
+        saidAt.put(ip, now);
+        heardHellos.put(ip, new long[]{now, powerMode, nextCheckMin});
+    }
     private volatile java.util.function.BiFunction<String, byte[], byte[]> fleetHello;
+
+    /** Tests: the check-in interval the scan paces this address by (SleepCheck's byte; 0 unknown), as of the last scan. */
+    int pacedEvery(String ip) {
+        return pace.every(ip);
+    }
 
     public void setFleet(FleetManager fleet, java.util.function.BiFunction<String, byte[], byte[]> onHello) {
         this.fleet = fleet;
@@ -226,8 +337,11 @@ public final class NameService {
         String moved = names.seen(reply, ip, virtual ? VIRTUAL_HOST : old == null ? "" : old.host());
         if (moved != null) log.accept("Names: " + w.name + " now at " + ip + " (was " + moved + ").");
         if (p != null) positions.put(w.name, keepHeading(new DronePosition(w.name, p, System.currentTimeMillis(), headingDeg)));
+        long heardAt = MonoClock.ms();
         saidMode.put(ip, powerMode);
-        heardHellos.put(ip, new long[]{MonoClock.ms(), powerMode});
+        saidAt.put(ip, heardAt);
+        long[] before = heardHellos.get(ip); // its interval, when the check-in said it already (heardCheckIn)
+        heardHellos.put(ip, new long[]{heardAt, powerMode, before == null ? 0 : before[2]});
         return old == null || !ip.equals(old.ip());
     }
 
@@ -302,6 +416,8 @@ public final class NameService {
 
     /** One round: ask every online device, file the answers, name this PC and (as master) the unnamed phones. */
     void scan() {
+        FleetManager queued = fleet;
+        if (queued != null) queued.expire(System.currentTimeMillis()); // 1.0.64: before anything is asked or sent
         Tailscale.Status s;
         try {
             s = status.get();
@@ -314,6 +430,7 @@ public final class NameService {
         boolean tailscale = s != null && s.installed() && s.signedIn();
         if (!tailscale && virtual.isEmpty()) {
             names.onlineOnly(Set.of());
+            giveUpAssigns(MonoClock.ms());
             changed();
             return;
         }
@@ -336,17 +453,22 @@ public final class NameService {
             Set<String> asked = new HashSet<>(), allOnline = new HashSet<>();
             for (String ip : new ArrayList<>(heardHellos.keySet())) { // 1.0.64: check-ins since the last scan
                 long[] h = heardHellos.remove(ip);
-                if (h != null) pace.heard(ip, h[0], (int) h[1], 0);
+                if (h != null) pace.heard(ip, h[0], (int) h[1], (int) h[2]);
             }
             FleetManager fm = fleet;
             for (Tailscale.Peer p : online) {
                 allOnline.add(p.ip());
                 // 1.0.64 (ScanPace): a resting or silent phone seldom - a standby one at once while FLEET has a mode waiting for it
                 String known = pace.name(p.ip());
-                if (!pace.due(p.ip(), now) && (fm == null || known == null || fm.wanted(known) == null || !pace.mayHurry(p.ip()))) continue;
+                Assign renamed = assigns.get(p.ip()); // 1.0.64: a rename it hasn't answered yet goes again, whatever the pace
+                if (renamed == null && !pace.due(p.ip(), now) && (fm == null || known == null || fm.wanted(known) == null || !pace.mayHurry(p.ip()))) continue;
                 pace.asked(p.ip(), now);
                 asked.add(p.ip());
                 try {
+                    if (renamed != null) {
+                        byte[] again = Names.assign(key, renamed.name());
+                        socket.send(new DatagramPacket(again, again.length, InetAddress.getByName(p.ip()), ports.getOrDefault(p.ip(), port)));
+                    }
                     socket.send(new DatagramPacket(query, query.length, InetAddress.getByName(p.ip()), ports.getOrDefault(p.ip(), port)));
                 } catch (IOException ignored) {
                     // an address that can't be reached: no entry
@@ -367,7 +489,13 @@ public final class NameService {
                 onlineIps.add(ip);
                 int said = reply.status() != null ? reply.status().mode : reply.powerMode();
                 saidMode.put(ip, said);
+                saidAt.put(ip, MonoClock.ms());
                 pace.answered(ip, MonoClock.ms(), said, reply.status() != null ? reply.status().intervalMin : 0, reply.name());
+                Assign renamed = assigns.get(ip);
+                if (renamed != null && reply.kind() == Names.Kind.PHONE) {
+                    if (reply.name().equalsIgnoreCase(renamed.name())) assigns.remove(ip, renamed); // it took the name
+                    else if (renamed.from() != null && reply.name().equalsIgnoreCase(renamed.from())) continue; // not yet: its old name isn't filed again
+                }
                 String host = "";
                 for (Tailscale.Peer p : online) if (p.ip().equals(ip)) host = p.hostName();
                 if (reply.name().isEmpty()) {
@@ -383,6 +511,14 @@ public final class NameService {
                 }
                 String moved = names.seen(reply, ip, host);
                 if (moved != null) log.accept("Names: " + reply.name() + " now at " + ip + " (was " + moved + ").");
+                PhoneReplies heard = phoneReplies;
+                if (heard != null && reply.kind() == Names.Kind.PHONE) {
+                    try {
+                        heard.heard(ip, reply, said); // 1.0.64: before FLEET - a mode it took is filed after its own word
+                    } catch (RuntimeException e) {
+                        log.accept("Names: " + e);
+                    }
+                }
                 FleetManager f = fleet;
                 byte[] mode = f == null ? null : f.onReply(reply, System.currentTimeMillis());
                 if (mode != null) {
@@ -398,6 +534,7 @@ public final class NameService {
             for (String ip : pace.held(MonoClock.ms())) if (allOnline.contains(ip)) onlineIps.add(ip); // resting: kept between check-ins
             names.onlineOnly(onlineIps);
             noteDuplicates(claims);
+            giveUpAssigns(MonoClock.ms());
             // this PC's own name: the first PC letter nobody else online has
             String own = ownName();
             if (own.isEmpty() || Names.letterOf(own) < 0 || onlinePcNames.stream().anyMatch(own::equalsIgnoreCase)) {
@@ -533,9 +670,13 @@ public final class NameService {
         java.util.function.BiFunction<String, byte[], Boolean> h = sleepHandler;
         if (h == null) return;
         byte[] hello = java.util.Arrays.copyOf(packet.getData(), packet.getLength());
-        sendFleetMode(s, packet, fleetHello, hello);
+        boolean modeWent = sendFleetMode(s, packet, fleetHello, hello);
         Boolean wake = h.apply(packet.getAddress().getHostAddress(), hello);
         if (wake == null) return;
+        // 1.0.64: no "sleep on" behind a queued mode - that answer closes the phone's window, and when the mode's packet
+        // was lost and the answer wasn't, the mode waited another interval. Unanswered, the window's next hello (1.5 s
+        // on) has the mode sent again; the window closes by itself at its end
+        if (modeWent && !wake) return;
         byte[] answer = {ControlLink.SLEEP_ANSWER, (byte) (wake ? 1 : 0)};
         try {
             s.send(new DatagramPacket(answer, answer.length, packet.getAddress(), packet.getPort()));
@@ -543,15 +684,19 @@ public final class NameService {
         }
     }
 
-    /** A queued FLEET_MODE for the phone whose sleep hello this is, back to it ahead of the answer (1.0.52). */
-    static void sendFleetMode(DatagramSocket s, DatagramPacket from, java.util.function.BiFunction<String, byte[], byte[]> hook, byte[] hello) {
+    /**
+     * A queued FLEET_MODE for the phone whose sleep hello this is, back to it ahead of the answer (1.0.52).
+     * @return true when one went (1.0.64: no "sleep on" follows it then)
+     */
+    static boolean sendFleetMode(DatagramSocket s, DatagramPacket from, java.util.function.BiFunction<String, byte[], byte[]> hook, byte[] hello) {
         byte[] mode = hook == null ? null : hook.apply(from.getAddress().getHostAddress(), hello);
-        if (mode == null) return;
+        if (mode == null) return false;
         try {
             s.send(new DatagramPacket(mode, mode.length, from.getAddress(), from.getPort()));
         } catch (IOException ignored) {
             // again at its next hello
         }
+        return true;
     }
 
     /** A NAME_QUERY with this key from anyone: the reply back to the sender. Used by the open link too. */

@@ -495,6 +495,330 @@ class RcSessionTest {
         assertEquals(1000, link.idle.get(0)[4]);
     }
 
+    // ------------------------------------------------------------------ 1.0.64: a link loss, and the FC's state unknown
+
+    /** A link that records the stick frames handed to it (never started: nothing leaves this PC). */
+    static final class RcRecorder extends ControlLink {
+        final List<short[]> frames = new ArrayList<>();
+
+        RcRecorder() throws java.io.IOException {
+            super(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 46396, 46397);
+        }
+
+        @Override
+        public boolean sendRc(short[] channels) {
+            frames.add(channels.clone());
+            return true;
+        }
+    }
+
+    /** What a loss test changes: the phone unheard, and what the flight controller says (fresh). */
+    private final boolean[] unheard = {false}, fcArmed = {false}, fcDisarmed = {false};
+    private static final ArmSwitch ARM_AUX1 = new ArmSwitch(4, List.of(new int[]{1700, 2100}));
+    /** Throttle low, arm off; throttle low, arm on; throttle up, arm on. */
+    private static final Joystick.State AT_REST = new Joystick.State(new float[]{0, 0, 0, -1f, -1f}, new boolean[0]);
+    private static final Joystick.State ARM_ON = new Joystick.State(new float[]{0, 0, 0, -1f, 1f}, new boolean[0]);
+    private static final Joystick.State FLYING = new Joystick.State(new float[]{0, 0, 0, 0.4f, 1f}, new boolean[0]);
+
+    /** A session on a recording link: the arm switch on AUX1 (or none), the sticks' wait for the FC's state as given. */
+    private RcSession lossSession(RcRecorder rec, ArmSwitch arm, long fcReadWaitMs) {
+        RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
+        return new RcSession(rec, five, events::add, new RcSession.Inputs(() -> now[0], () -> linkUp[0],
+                () -> fcArmed[0], () -> fcDisarmed[0], arm, () -> unheard[0], fcReadWaitMs));
+    }
+
+    /** Input ticks 10 ms apart for ms; returns how many frames went out in them. */
+    private int ticks(RcSession s, RcRecorder rec, Joystick.State state, long ms) {
+        int before = rec.frames.size();
+        for (long end = now[0] + ms; now[0] < end; ) {
+            now[0] += 10;
+            s.onInput(state);
+        }
+        return rec.frames.size() - before;
+    }
+
+    /** Armed and flying: on the ground the arm switch off, then armed, throttle up. */
+    private void takeOff(RcSession s, RcRecorder rec) {
+        fcDisarmed[0] = true;
+        s.onInput(AT_REST);
+        assertTrue(s.isRcEnabled());
+        fcDisarmed[0] = false;
+        fcArmed[0] = true;
+        assertEquals(100, ticks(s, rec, FLYING, 1000));
+    }
+
+    /**
+     * 1.0.64: armed, the link lost for 10 s; the failsafe landed and disarmed it, and the phone's idle sticks have
+     * shown Betaflight the arm switch off. The sticks went out all the while, the arm switch on: the first frame
+     * through armed it on the ground. Back and DISARMED: no frame until the arm switch is off and the throttle low.
+     */
+    @Test
+    void aDroneDisarmedDuringALinkLossGetsNoSticksUntilArmOffAndThrottleLow() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        takeOff(s, rec);
+        unheard[0] = true;
+        fcArmed[0] = false; // nothing fresh from the flight controller any more
+        assertEquals(1000, ticks(s, rec, FLYING, 10_000), "lost and nothing known: the sticks go on, as since 1.0.33");
+        assertTrue(s.isRcEnabled());
+        unheard[0] = false;
+        assertEquals(20, ticks(s, rec, FLYING, 200), "back, no word from the FC yet: still going");
+        fcDisarmed[0] = true;
+        assertEquals(RcSession.DISARMED_CONFIRM_MS / 10, ticks(s, rec, FLYING, 5000),
+                "DISARMED and the arm switch on: stopped once a second status has said so too");
+        assertFalse(s.isRcEnabled());
+        assertEquals("Link back - FC disarmed - ARM off to fly again.", events.get(events.size() - 1));
+        assertEquals("THROTTLE DOWN, ARM OFF", s.waitingFor());
+        assertEquals(0, ticks(s, rec, ARM_ON, 3000), "throttle down, the arm switch still on: nothing");
+        assertEquals("ARM SWITCH OFF", s.waitingFor());
+        assertEquals(1, ticks(s, rec, AT_REST, 10), "arm off and throttle low: the usual start");
+        assertEquals("Throttle low, arm switch off - RC output enabled.", events.get(events.size() - 1));
+        assertEquals(100, ticks(s, rec, ARM_ON, 1000), "and then it arms as ever (DISARMED until it has)");
+        assertTrue(s.isRcEnabled());
+        assertNull(s.lastResumeBanner());
+    }
+
+    /** 1.0.64: the same loss, but the drone still flies (GPS rescue): not a frame withheld, before or after. */
+    @Test
+    void aDroneStillArmedAfterALinkLossKeepsItsSticks() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        takeOff(s, rec);
+        int said = events.size();
+        unheard[0] = true;
+        fcArmed[0] = false;
+        assertEquals(1000, ticks(s, rec, FLYING, 10_000));
+        unheard[0] = false;
+        assertEquals(20, ticks(s, rec, FLYING, 200), "back, nothing known yet");
+        fcArmed[0] = true;
+        assertEquals(1000, ticks(s, rec, FLYING, 10_000), "ARMED: every frame");
+        assertEquals(said, events.size(), "nothing happened as far as the sticks go");
+        // long after, a landing and a disarm by the pilot's own switch, then arming again: no part of this rule
+        fcArmed[0] = false;
+        fcDisarmed[0] = true;
+        assertEquals(100, ticks(s, rec, AT_REST, 1000));
+        assertEquals(100, ticks(s, rec, ARM_ON, 1000));
+        assertEquals(said, events.size());
+    }
+
+    /** 1.0.64: old statuses let go in a burst when the link returns say ARMED first - the DISARMED after them still counts. */
+    @Test
+    void anArmedStatusFirstDoesntHideTheDisarmedAfterIt() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        takeOff(s, rec);
+        unheard[0] = true;
+        fcArmed[0] = false;
+        ticks(s, rec, FLYING, 10_000);
+        unheard[0] = false;
+        fcArmed[0] = true;
+        assertEquals(30, ticks(s, rec, FLYING, 300));
+        fcArmed[0] = false;
+        fcDisarmed[0] = true;
+        assertEquals(RcSession.DISARMED_CONFIRM_MS / 10, ticks(s, rec, FLYING, 2000));
+        assertFalse(s.isRcEnabled());
+    }
+
+    /** 1.0.64: one DISARMED status alone (a stray one, the next says ARMED again) never stops the sticks of a drone in the air. */
+    @Test
+    void oneDisarmedStatusAloneStopsNothing() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        takeOff(s, rec);
+        int said = events.size();
+        unheard[0] = true;
+        assertEquals(500, ticks(s, rec, FLYING, 5000));
+        for (int i = 0; i < 4; i++) { // lost, and back
+            fcArmed[0] = false;
+            fcDisarmed[0] = true; // one status, 0.5 s until the next
+            assertEquals(50, ticks(s, rec, FLYING, 500));
+            fcDisarmed[0] = false;
+            fcArmed[0] = true;
+            assertEquals(100, ticks(s, rec, FLYING, 1000));
+            unheard[0] = false;
+        }
+        assertTrue(s.isRcEnabled());
+        assertEquals(said, events.size());
+    }
+
+    /** 1.0.64: a short loss in flight, the flight controller ARMED throughout: uninterrupted. */
+    @Test
+    void aShortLossWithTheDroneArmedIsUninterrupted() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        takeOff(s, rec);
+        int said = events.size();
+        for (int i = 0; i < 5; i++) { // again and again
+            unheard[0] = true;
+            assertEquals(150, ticks(s, rec, FLYING, 1500));
+            unheard[0] = false;
+            assertEquals(500, ticks(s, rec, FLYING, 5000));
+        }
+        assertTrue(s.isRcEnabled());
+        assertEquals(said, events.size());
+    }
+
+    /**
+     * 1.0.64: one way only - the phone hears nothing, its telemetry still arrives. The failsafe drops and disarms the
+     * drone; DISARMED is read while the sticks still can't get through: stopped before the way to the phone is back.
+     */
+    @Test
+    void disarmedReadWhileThePhoneHearsNothingStopsTheSticksBeforeTheyGetThrough() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        takeOff(s, rec);
+        unheard[0] = true;
+        assertEquals(100, ticks(s, rec, FLYING, 1000), "still armed: on");
+        fcArmed[0] = false;
+        fcDisarmed[0] = true;
+        assertEquals(RcSession.FC_ARMED_FRESH_MS / 10 - 100, ticks(s, rec, FLYING, 5000),
+                "DISARMED, read after the loss began for sure (" + RcSession.FC_ARMED_FRESH_MS + " ms into it): stopped");
+        assertFalse(s.isRcEnabled());
+        assertEquals("Link lost - FC disarmed - ARM off to fly again.", events.get(events.size() - 1));
+        // the pilot takes the switch off and on again while the phone still hears nothing: stopped again
+        assertEquals(1, ticks(s, rec, AT_REST, 10));
+        assertEquals(0, ticks(s, rec, ARM_ON, 5000), "no arming blind");
+        assertFalse(s.isRcEnabled());
+        unheard[0] = false;
+        ticks(s, rec, AT_REST, 100);
+        assertEquals(100, ticks(s, rec, ARM_ON, 1000), "heard again: arm off, then on, arms");
+    }
+
+    /** 1.0.64: the last status before the loss says DISARMED while the pilot is arming: not taken for the loss's outcome. */
+    @Test
+    void aStatusFromBeforeTheLossStopsNothing() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        fcDisarmed[0] = true;
+        s.onInput(AT_REST);
+        assertEquals(10, ticks(s, rec, ARM_ON, 100), "arming: DISARMED until the next status");
+        unheard[0] = true;
+        assertEquals(150, ticks(s, rec, FLYING, 1500), "the link goes, the last status still counts as fresh");
+        fcDisarmed[0] = false; // older than FC_ARMED_FRESH_MS now: nothing known
+        assertEquals(1000, ticks(s, rec, FLYING, 10_000), "armed for all this PC knows: the sticks go on");
+        assertTrue(s.isRcEnabled());
+    }
+
+    /** 1.0.64: on the ground, the arm switch off through a stall: nothing to stop, and arming after it is as ever. */
+    @Test
+    void aStallOnTheGroundWithTheArmSwitchOffChangesNothing() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        fcDisarmed[0] = true;
+        s.onInput(AT_REST);
+        int said = events.size();
+        unheard[0] = true;
+        assertEquals(400, ticks(s, rec, AT_REST, 4000));
+        unheard[0] = false;
+        assertEquals(100, ticks(s, rec, AT_REST, 1000));
+        assertEquals(500, ticks(s, rec, ARM_ON, 5000), "the arm switch on later: the pilot arming, not this rule's business");
+        assertEquals(said, events.size());
+    }
+
+    /** 1.0.64: where the arm switch isn't known, the throttle alone is judged, as at the start. */
+    @Test
+    void withNoArmSwitchKnownADisarmedDroneAfterALossNeedsTheThrottleLow() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, null, 0);
+        fcDisarmed[0] = true;
+        s.onInput(AT_REST);
+        fcDisarmed[0] = false;
+        fcArmed[0] = true;
+        ticks(s, rec, FLYING, 1000);
+        unheard[0] = true;
+        fcArmed[0] = false;
+        ticks(s, rec, FLYING, 10_000);
+        unheard[0] = false;
+        fcDisarmed[0] = true;
+        assertEquals(RcSession.DISARMED_CONFIRM_MS / 10, ticks(s, rec, FLYING, 2000), "DISARMED, the throttle up: stopped");
+        assertFalse(s.isRcEnabled());
+        assertEquals("Link back - FC disarmed - throttle down to fly again.", events.get(events.size() - 1));
+        assertEquals("THROTTLE DOWN", s.waitingFor());
+        assertEquals(100, ticks(s, rec, ARM_ON, 1000), "throttle low: on again");
+        // and with the throttle low at the return there is nothing the start rule would hold back: not stopped at all
+        RcRecorder rec2 = new RcRecorder();
+        RcSession low = lossSession(rec2, null, 0);
+        low.onInput(AT_REST);
+        unheard[0] = true;
+        ticks(low, rec2, AT_REST, 10_000);
+        unheard[0] = false;
+        assertEquals(100, ticks(low, rec2, AT_REST, 1000));
+    }
+
+    /**
+     * 1.0.64: this PC's app starts (or connects) with the drone armed in the air. Until FcInfo, the mode names and a
+     * status have come the armed state is unknown; the OSD said THROTTLE DOWN, ARM OFF, and a pilot who did as told
+     * started the sticks with an arm-off frame: a disarm in flight. Now it reads the flight controller first.
+     */
+    @Test
+    void theSticksDontStartBeforeTheFlightControllersStateIsKnown() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, RcSession.FC_READ_WAIT_MS);
+        assertEquals(0, ticks(s, rec, FLYING, 500));
+        assertEquals("READING FC", s.waitingFor(), "not THROTTLE DOWN, ARM OFF");
+        assertEquals(0, ticks(s, rec, AT_REST, 2000), "throttle down and arm off all the same: not taken");
+        assertFalse(s.isRcEnabled());
+        assertEquals("READING FC", s.waitingFor());
+        fcArmed[0] = true; // the state arrives: armed
+        assertEquals(1, ticks(s, rec, FLYING, 10), "armed: the sticks as they are, at once");
+        assertEquals("Link back - FC armed - sticks live.", events.get(events.size() - 1));
+        assertEquals(new RcSession.Banner(RcSession.ARMED_RESUME_BANNER, now[0]), s.lastResumeBanner());
+        assertTrue(ARM_AUX1.on(rec.frames.get(0)), "the arm switch on, as the pilot has it");
+    }
+
+    @Test
+    void aDisarmedStateStartsTheSticksByTheUsualRule() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, RcSession.FC_READ_WAIT_MS);
+        assertEquals(0, ticks(s, rec, AT_REST, 300));
+        assertEquals("READING FC", s.waitingFor());
+        fcDisarmed[0] = true;
+        assertEquals(0, ticks(s, rec, ARM_ON, 100));
+        assertEquals("ARM SWITCH OFF", s.waitingFor());
+        assertEquals(1, ticks(s, rec, AT_REST, 10));
+        assertEquals("Throttle low, arm switch off - RC output enabled.", events.get(events.size() - 1));
+    }
+
+    /** A flight controller that never says: after 5 s of a link that is heard, the rule as before. Unheard time doesn't count. */
+    @Test
+    void anFcThatNeverSaysIsWaitedForFiveSecondsOfHeardLink() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, RcSession.FC_READ_WAIT_MS);
+        assertEquals(0, ticks(s, rec, AT_REST, 2000));
+        unheard[0] = true;
+        assertEquals(0, ticks(s, rec, AT_REST, 20_000), "the link out: nothing can be read, nothing started blind");
+        assertEquals("READING FC", s.waitingFor());
+        unheard[0] = false;
+        assertEquals(0, ticks(s, rec, AT_REST, RcSession.FC_READ_WAIT_MS - 2000 - 20));
+        assertEquals("READING FC", s.waitingFor());
+        assertTrue(ticks(s, rec, AT_REST, 100) > 0, "5 s heard and not a word: throttle low, arm off starts them");
+        assertNull(s.waitingFor());
+        // a stalled input loop is one tick, not seconds of link
+        RcRecorder rec2 = new RcRecorder();
+        RcSession late = lossSession(rec2, ARM_AUX1, RcSession.FC_READ_WAIT_MS);
+        late.onInput(AT_REST);
+        now[0] += 60_000;
+        late.onInput(AT_REST);
+        assertFalse(late.isRcEnabled());
+    }
+
+    /** 1.0.64: sticks stopped in the air by a radio gone too long, the link out: no start blind with the arm switch off. */
+    @Test
+    void sticksStoppedWhileTheLinkIsOutWaitForTheFlightController() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, RcSession.FC_READ_WAIT_MS);
+        takeOff(s, rec);
+        unheard[0] = true;
+        fcArmed[0] = false;
+        ticks(s, rec, FLYING, 3000);
+        ticks(s, rec, null, RcSession.RESUME_WINDOW_MS + 500); // the radio's USB out, longer than a blip
+        assertEquals(0, ticks(s, rec, AT_REST, 3000), "the radio back, throttle down and arm off: not started on a drone that may fly");
+        assertEquals("READING FC", s.waitingFor());
+        unheard[0] = false;
+        fcArmed[0] = true;
+        assertEquals(1, ticks(s, rec, FLYING, 10), "the link back, ARMED: live at once");
+    }
+
     @Test
     void idleSticksCanNeverArm() {
         short[] radio = {1200, 1800, 1300, 1900, 2000, 1500, 2000, 1000};

@@ -137,7 +137,233 @@ class OverwatchHubTest {
         hub.dismiss("MobileAlpha"); // not started: runs at once
         sent.clear();
         hub.tickNow(5000);
-        assertTrue(commandsSent().isEmpty());
+        assertFalse(commandsSent().contains(OverwatchProtocol.CMD_PREVIEW));
+    }
+
+    /**
+     * 1.0.64, item 7: DISMISS went once and the phone doesn't answer it - one lost, and the card was closed here while
+     * the phone went on alerting. Three times, 300 ms apart, from the hub's own tick; not after new motion.
+     */
+    @Test
+    void theDismissGoesThreeTimesFromTheTick() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 4, 0));
+        sent.clear();
+        hub.dismiss("MobileAlpha");
+        assertEquals(1, dismisses(), "the first at once");
+        assertEquals(AlertCard.Shown.HIDDEN, hub.views().get(0).shown());
+        hub.tickNow(1100);
+        hub.tickNow(1200);
+        assertEquals(1, dismisses(), "not yet");
+        hub.tickNow(1300);
+        assertEquals(2, dismisses());
+        hub.tickNow(1400);
+        hub.tickNow(1500);
+        assertEquals(2, dismisses());
+        hub.tickNow(1600);
+        assertEquals(3, dismisses());
+        for (long t = 1700; t < 5000; t += 100) hub.tickNow(t);
+        assertEquals(3, dismisses(), "three in all");
+        for (byte[] p : sent) {
+            OverwatchProtocol.Command c = OverwatchProtocol.readCommand(p, p.length);
+            if (c.cmd == OverwatchProtocol.CMD_DISMISS) assertEquals(4, c.event, "each names the event dismissed");
+        }
+        // new motion right after a dismiss: the dismiss before isn't sent on into it
+        hub.nowOverride = 700_000;
+        hub.dismiss("MobileAlpha");
+        receive(hub, alert(TOKEN, 4, 1));
+        sent.clear();
+        for (long t = 700_100; t < 702_000; t += 100) hub.tickNow(t);
+        assertEquals(0, dismisses());
+        // CONNECT closes the card too, and sends no DISMISS
+        hub.connect("MobileAlpha");
+        for (long t = 702_000; t < 704_000; t += 100) hub.tickNow(t);
+        assertEquals(0, dismisses());
+    }
+
+    private int dismisses() {
+        return (int) commandsSent().stream().filter(c -> c == OverwatchProtocol.CMD_DISMISS).count();
+    }
+
+    /**
+     * 1.0.64, item 6: the alert was acknowledged first (the phone stops sending it), and when its event couldn't be
+     * stored - the disk full, the folder locked - it returned there: no ring, no card. It rings and shows regardless.
+     */
+    @Test
+    void anAlertThatCannotBeStoredStillRingsAndShowsItsCard() throws Exception {
+        Path inTheWay = dir.resolve("not-a-folder");
+        Files.write(inTheWay, new byte[]{1}); // a file where the clips' folder should be: nothing can be stored
+        OverwatchHub hub = new OverwatchHub(new ClipIndex(inTheWay.resolve("Overwatch")), sent::add);
+        hub.setListener(new OverwatchHub.Listener() {
+            @Override
+            public void onNews(String drone) {
+                news.add(drone);
+            }
+
+            @Override
+            public void onDropped(String drone, int reason, int batteryPercent, int tempDeci) {
+            }
+
+            @Override
+            public void onClips(String drone) {
+            }
+
+            @Override
+            public void log(String line) {
+                logs.add(line);
+            }
+        });
+        hub.watch("MobileAlpha", TOKEN, new CameraFootprint.Pose(59.9, 10.7, 120, 45, 0, 0, 10, 70, 40));
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 1, 0));
+        assertTrue(commandsSent().contains(OverwatchProtocol.CMD_ACK));
+        assertEquals(List.of("MobileAlpha"), news, "it rings");
+        assertEquals(1, hub.views().size(), "and its card opens");
+        assertEquals(AlertCard.Shown.CARD, hub.views().get(0).shown());
+        assertNotNull(hub.views().get(0).pose());
+        assertTrue(commandsSent().contains(OverwatchProtocol.CMD_PREVIEW), "with its live preview asked for");
+        assertEquals(1, logs.stream().filter(l -> l.contains("can't be stored")).count(), logs.toString());
+        receive(hub, alert(TOKEN, 1, 0)); // the phone's resend (the ACK was lost): no second ring, no second line
+        assertEquals(1, news.size());
+        assertEquals(1, logs.stream().filter(l -> l.contains("can't be stored")).count(), logs.toString());
+        // its pictures before the alert show on the card though none is kept
+        BufferedImage img = new BufferedImage(32, 18, BufferedImage.TYPE_INT_RGB);
+        ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+        ImageIO.write(img, "jpg", jpeg);
+        ByteArrayOutputStream unit = new ByteArrayOutputStream();
+        new java.io.DataOutputStream(unit).writeLong(STARTED - 1000);
+        unit.write(jpeg.toByteArray());
+        for (byte[] p : OverwatchProtocol.fragments(TOKEN, 1, 0, OverwatchProtocol.UNIT_PREROLL, unit.toByteArray())) receive(hub, p);
+        assertNotNull(hub.views().get(0).picture());
+        // the folder can be written again: the event is stored at its next alert
+        Files.delete(inTheWay);
+        receive(hub, alert(TOKEN, 1, 0));
+        assertEquals(1, hub.index().clips("MobileAlpha").size());
+        assertEquals(1, news.size(), "the same event: no second ring");
+    }
+
+    /**
+     * 1.0.64, item 4e: FLEET's OVERWATCH (or a new CHECK EVERY on an overwatching phone) put its new token in force at
+     * once. An alert before the phone's next check-in came with the old one: unknown, taken up as "set by another PC"
+     * without a view - which also deleted the new token. The old token stays in force until the new one is taken.
+     */
+    @Test
+    void theTokenInForceStaysUntilTheQueuedOverwatchIsTaken() throws Exception {
+        OverwatchHub hub = hub(); // MobileAlpha overwatches with TOKEN, its view known
+        hub.setOurPhone((name, from) -> true);
+        int next = 0x7E57;
+        CameraFootprint.Pose pose = new CameraFootprint.Pose(59.9, 10.7, 120, 90, 0, 0, 10, 70, 40);
+        hub.expect("mobilealpha", next, pose);
+        assertTrue(hub.expected(next));
+        assertEquals(1, hub.watched().size(), "one drone, one token in force");
+        assertEquals(TOKEN, hub.watched().get(0).token());
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 1, 0)); // the phone hasn't checked in yet: its alert carries the old token
+        assertEquals(List.of("MobileAlpha"), news);
+        assertNotNull(hub.views().get(0).pose(), "the camera's view is still on the map");
+        assertEquals(45.0, hub.views().get(0).pose().headingDeg());
+        assertTrue(logs.stream().noneMatch(l -> l.contains("another PC")), logs.toString());
+        assertTrue(hub.expected(next), "and the new token still waits");
+        // the phone took it: the new token is the drone's, the old one is gone
+        assertTrue(hub.taken(next));
+        assertEquals(1, hub.watched().size());
+        assertEquals(next, hub.watched().get(0).token());
+        assertEquals(90.0, hub.watched().get(0).pose().headingDeg());
+        sent.clear();
+        receive(hub, alert(TOKEN, 2, 0));
+        assertEquals(1, hub.watched().size(), "an alert with the old token now is another overwatch's");
+
+        // the phone's own packets say it took the queued one before FLEET hears so: in force at once, with its view
+        OverwatchHub early = hub();
+        early.expect("MobileAlpha", next, pose);
+        early.nowOverride = 1000;
+        receive(early, alertAt(next, 1, 0, STARTED + 60_000));
+        assertEquals(next, early.watched().get(0).token());
+        assertEquals(90.0, early.views().get(0).pose().headingDeg());
+        assertFalse(early.taken(next), "nothing left to take");
+        // dropped untaken (cancelled, too old): forgotten, the one in force stays
+        OverwatchHub droppedOne = hub();
+        droppedOne.expect("MobileAlpha", next, pose);
+        droppedOne.unexpect(next);
+        assertFalse(droppedOne.taken(next));
+        assertEquals(TOKEN, droppedOne.watched().get(0).token());
+        // watch: the name whatever its case
+        droppedOne.watch("MOBILEALPHA", 0x99, null);
+        assertEquals(1, droppedOne.watched().size(), "the old token of the same drone goes");
+        droppedOne.forget("mobilealpha");
+        assertTrue(droppedOne.watched().isEmpty());
+        // a view for a drone watched, or expected, without one
+        droppedOne.watch("MobileAlpha", 0x99, null);
+        droppedOne.expect("MobileAlpha", 0x100, null);
+        assertTrue(droppedOne.poseIfNone("mobilealpha", pose));
+        assertNotNull(droppedOne.watched().get(0).pose());
+        assertTrue(droppedOne.taken(0x100));
+        assertNotNull(droppedOne.watched().get(0).pose(), "the expected one got it too");
+        assertFalse(droppedOne.poseIfNone("MobileAlpha", pose), "one it has stays");
+    }
+
+    /** 1.0.64, item 4b: a renamed drone's token and open alert go on under its new name; under the old one nothing found them. */
+    @Test
+    void aRenamedDronesTokenAndAlertGoWithIt() throws Exception {
+        OverwatchHub hub = hub();
+        hub.nowOverride = 1000;
+        receive(hub, alert(TOKEN, 1, 0));
+        hub.expect("MobileAlpha", 0x7E57, null);
+        receive(hub, OverwatchProtocol.status(TOKEN, OverwatchProtocol.STATE_BLIND, OverwatchProtocol.BLIND_LOST, 80, 300));
+        hub.rename("mobilealpha", "MobileKilo");
+        assertEquals("MobileKilo", hub.watched().get(0).drone());
+        assertEquals(TOKEN, hub.watched().get(0).token());
+        assertNotNull(hub.watched().get(0).pose());
+        assertEquals(1, hub.views().size());
+        assertEquals("MobileKilo", hub.views().get(0).drone(), "its card stays, under the new name");
+        assertEquals(OverwatchHub.Trouble.BLIND, hub.word("MobileKilo").trouble());
+        assertNull(hub.word("MobileAlpha"));
+        sent.clear();
+        hub.dismiss("MobileKilo");
+        assertTrue(commandsSent().contains(OverwatchProtocol.CMD_DISMISS), "and answers to its new name");
+        // the running event's files stay where they began; the next event is filed under the new name
+        hub.nowOverride = 40_000;
+        receive(hub, OverwatchProtocol.clipEnded(TOKEN, 1, STARTED + 30_000, false));
+        assertEquals(Long.toString(STARTED + 30_000), hub.index().clips("MobileAlpha").get(0).meta().getProperty("endedAt"));
+        assertTrue(hub.index().clips("MobileKilo").isEmpty());
+        receive(hub, alertAt(TOKEN, 2, 0, STARTED + 600_000));
+        assertEquals(1, hub.index().clips("MobileKilo").size());
+        assertEquals(1, hub.index().clips("MobileAlpha").size());
+        assertTrue(hub.taken(0x7E57));
+        assertEquals("MobileKilo", hub.watched().get(0).drone(), "the queued token moved too");
+    }
+
+    /**
+     * 1.0.64, item 9: the drone's own last word on its overwatch, kept for the lists - blind, watching again, dropped to
+     * deep sleep - until its next overwatch.
+     */
+    @Test
+    void theDronesWordOnItsOverwatchIsKeptForTheLists() throws Exception {
+        OverwatchHub hub = hub();
+        hub.wallOverride = STARTED;
+        assertNull(hub.word("MobileAlpha"), "nothing said yet");
+        receive(hub, OverwatchProtocol.status(TOKEN, OverwatchProtocol.STATE_BLIND, OverwatchProtocol.BLIND_NO_FRAMES, 80, 300));
+        OverwatchHub.Word w = hub.word("mobilealpha");
+        assertEquals(OverwatchHub.Trouble.BLIND, w.trouble());
+        assertEquals(OverwatchProtocol.BLIND_NO_FRAMES, w.reason());
+        assertEquals(STARTED, w.at());
+        hub.wallOverride = STARTED + 5000;
+        receive(hub, OverwatchProtocol.status(TOKEN, OverwatchProtocol.STATE_WATCHING, 0, 80, 300));
+        assertEquals(OverwatchHub.Trouble.NONE, hub.word("MobileAlpha").trouble());
+        assertEquals(STARTED + 5000, hub.word("MobileAlpha").at());
+        receive(hub, OverwatchProtocol.status(TOKEN, OverwatchProtocol.STATE_DROPPED, PowerFloor.REASON_BATTERY, 18, 310));
+        assertEquals(OverwatchHub.Trouble.DROPPED, hub.word("MobileAlpha").trouble());
+        assertEquals(PowerFloor.REASON_BATTERY, hub.word("MobileAlpha").reason());
+        assertEquals(1, dropped.size());
+        // its next overwatch (a new token): the old word is over, and a drop is told again
+        hub.watch("MobileAlpha", TOKEN + 1, null);
+        assertNull(hub.word("MobileAlpha"));
+        sent.clear();
+        hub.handleNow(OverwatchProtocol.status(TOKEN + 1, OverwatchProtocol.STATE_DROPPED, PowerFloor.REASON_HEAT, 60, 450), InetAddress.getLoopbackAddress(), 40000);
+        assertEquals(2, dropped.size(), "told for this overwatch too");
+        hub.forget("MobileAlpha");
+        assertNull(hub.word("MobileAlpha"));
     }
 
     /**

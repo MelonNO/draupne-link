@@ -53,6 +53,19 @@ public final class OverwatchHub implements AutoCloseable {
     /** A drone this PC put to overwatch: its token, and how it stood and looked then (null: not known). */
     public record Watched(String drone, int token, CameraFootprint.Pose pose) {}
 
+    /** 1.0.64: what is wrong with a drone's overwatch - its camera gives no pictures, or it left overwatch for deep sleep by itself. */
+    public enum Trouble { NONE, BLIND, DROPPED }
+
+    /**
+     * 1.0.64: a drone's last word on its overwatch and when it came (wall ms). reason: OverwatchProtocol's BLIND_ code
+     * for BLIND, PowerFloor's reason for DROPPED, else 0.
+     */
+    public record Word(Trouble trouble, int reason, long at) {}
+
+    /** The DISMISS goes this often, this far apart: the phone doesn't answer it (1.0.64; it went once). */
+    static final int DISMISS_SENDS = 3;
+    static final long DISMISS_GAP_MS = 300;
+
     /**
      * What the map window shows of one drone, once a refresh. picture: the latest preview picture (or pre-roll
      * picture), null before one; alertAtWall / endedAtWall: wall-clock times (endedAtWall -1 while it goes on);
@@ -87,6 +100,13 @@ public final class OverwatchHub implements AutoCloseable {
 
     private final ClipIndex index;
     private final Map<Integer, Watched> byToken = new ConcurrentHashMap<>();
+    /**
+     * 1.0.64: tokens of an OVERWATCH that FLEET has queued and the phone hasn't taken yet. The drone's token in force
+     * (byToken) stays as it is meanwhile - the phone still alerts with it.
+     */
+    private final Map<Integer, Watched> pending = new ConcurrentHashMap<>();
+    /** 1.0.64: each drone's last STATUS word, by its name in lower case (any thread reads). */
+    private final Map<String, Word> words = new ConcurrentHashMap<>();
     private final LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<>(QUEUE_MAX);
     /**
      * The pilot's clicks (DISMISS, CONNECT, a badge closed): a queue of their own (1.0.49, M9), never full of a
@@ -159,18 +179,113 @@ public final class OverwatchHub implements AutoCloseable {
         }
     }
 
-    /** The drone was put to overwatch with this token (and stood like this). Kept until {@link #forget}. */
+    /**
+     * The drone was put to overwatch with this token (and stood like this). Kept until {@link #forget}. 1.0.64: the
+     * name whatever its case - "mobilealpha" left MobileAlpha's old token beside the new one.
+     */
     public void watch(String drone, int token, CameraFootprint.Pose pose) {
-        byToken.values().removeIf(w -> w.drone().equals(drone) && w.token() != token);
+        boolean again = byToken.containsKey(token);
+        byToken.values().removeIf(w -> w.drone().equalsIgnoreCase(drone) && w.token() != token);
         byToken.put(token, new Watched(drone, token, pose));
+        pending.remove(token);
+        if (!again) words.remove(id(drone)); // a new overwatch: the last one's word is over
+    }
+
+    /**
+     * 1.0.64: FLEET queued an OVERWATCH with this token; the phone takes it at its next check-in. Until then the token
+     * in force stays valid with its view: {@link #watch} replaced it at once, so an alert meanwhile came with a token
+     * not known, was taken up as "set by another PC" without a view - and that deleted the new token too.
+     */
+    public void expect(String drone, int token, CameraFootprint.Pose pose) {
+        if (byToken.containsKey(token)) return;
+        pending.put(token, new Watched(drone, token, pose));
+    }
+
+    /** Whether this token waits for its phone ({@link #expect}). */
+    public boolean expected(int token) {
+        return pending.containsKey(token);
+    }
+
+    /** The queued OVERWATCH was dropped untaken: its token is forgotten, the one in force stays. */
+    public void unexpect(int token) {
+        pending.remove(token);
+    }
+
+    /**
+     * The phone took the queued OVERWATCH: its token is the drone's now, the one before goes.
+     * @return false when the token wasn't expected (or is in force already: the phone's own packets said so first)
+     */
+    public boolean taken(int token) {
+        Watched p = pending.remove(token);
+        if (p == null) return false;
+        watch(p.drone(), token, p.pose());
+        return true;
+    }
+
+    /**
+     * 1.0.64: a view for a drone watched, or about to be, without one (its sleep notice says where it looks).
+     * @return true when the watched list changed (to be saved)
+     */
+    public boolean poseIfNone(String drone, CameraFootprint.Pose pose) {
+        boolean changed = false;
+        for (Watched w : watched()) {
+            if (!w.drone().equalsIgnoreCase(drone) || w.pose() != null) continue;
+            byToken.replace(w.token(), w, new Watched(w.drone(), w.token(), pose));
+            changed = true;
+        }
+        for (Watched w : new ArrayList<>(pending.values())) {
+            if (w.drone().equalsIgnoreCase(drone) && w.pose() == null) pending.replace(w.token(), w, new Watched(w.drone(), w.token(), pose));
+        }
+        return changed;
     }
 
     public void forget(String drone) {
-        byToken.values().removeIf(w -> w.drone().equals(drone));
+        byToken.values().removeIf(w -> w.drone().equalsIgnoreCase(drone));
+        pending.values().removeIf(w -> w.drone().equalsIgnoreCase(drone));
+        words.remove(id(drone));
     }
 
     public List<Watched> watched() {
         return new ArrayList<>(byToken.values());
+    }
+
+    private static String id(String drone) {
+        return drone == null ? "" : drone.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * 1.0.64, for the lists (any thread): the drone's own last word on its overwatch - WATCHING again (NONE), BLIND (its
+     * camera gives no pictures; the phone opens it again by itself), DROPPED (it left overwatch for deep sleep) - or
+     * null when it said nothing since its overwatch was set.
+     */
+    public Word word(String drone) {
+        return drone == null ? null : words.get(id(drone));
+    }
+
+    /**
+     * 1.0.64: a rename (the name map's): the drone's tokens and its open alert go on under the new name - under the old
+     * one nothing found them (no address, no CONNECT). The files of an event that runs stay where they began.
+     */
+    public void rename(String from, String to) {
+        if (from == null || to == null || from.equalsIgnoreCase(to)) return;
+        for (Watched w : watched()) {
+            if (w.drone().equalsIgnoreCase(from)) byToken.replace(w.token(), w, new Watched(to, w.token(), w.pose()));
+        }
+        for (Watched w : new ArrayList<>(pending.values())) {
+            if (w.drone().equalsIgnoreCase(from)) pending.replace(w.token(), w, new Watched(to, w.token(), w.pose()));
+        }
+        Word word = words.remove(id(from));
+        if (word != null) words.put(id(to), word);
+        task(() -> {
+            for (String key : new ArrayList<>(sessions.keySet())) {
+                if (!key.equalsIgnoreCase(from)) continue;
+                Session s = sessions.remove(key);
+                if (s.filedAs == null) s.filedAs = s.drone();
+                s.watched = new Watched(to, s.watched.token(), s.watched.pose());
+                sessions.put(to, s);
+            }
+            publish();
+        });
     }
 
     /** Tests: whether a drone on this PC may be flying (else this PC's PossiblyFlying flag). */
@@ -212,8 +327,14 @@ public final class OverwatchHub implements AutoCloseable {
         task(() -> {
             Session s = sessions.get(drone);
             if (s == null) return;
-            s.card.dismiss(now());
+            long now = now();
+            s.card.dismiss(now);
             send(s, OverwatchProtocol.command(s.token, s.event, OverwatchProtocol.CMD_DISMISS));
+            // 1.0.64: the phone doesn't answer a DISMISS - one lost, and the card was closed here while the phone went on
+            // alerting. Twice more, from the tick (never a wait on the caller's thread)
+            s.dismissEvent = s.event;
+            s.dismissLeft = DISMISS_SENDS - 1;
+            s.dismissAt = now;
             log(drone + ": alert dismissed; silent until new motion.");
             publish();
         });
@@ -225,6 +346,7 @@ public final class OverwatchHub implements AutoCloseable {
             Session s = sessions.get(drone);
             if (s == null) return;
             for (int i = 0; i < 3; i++) send(s, OverwatchProtocol.command(s.token, s.event, OverwatchProtocol.CMD_CONNECT));
+            s.dismissLeft = 0;
             s.card.dismiss(now()); // the pilot answers it: the card closes, the link takes over
             publish();
         });
@@ -315,6 +437,10 @@ public final class OverwatchHub implements AutoCloseable {
     private void handle(byte[] d, InetAddress from, int port) {
         int token = OverwatchProtocol.token(d);
         Watched known0 = byToken.get(token);
+        if (known0 == null && taken(token)) {
+            // 1.0.64: the phone took the queued OVERWATCH - its packets say so before FLEET hears it
+            known0 = byToken.get(token);
+        }
         if (known0 == null) {
             // 1.0.64 (the pilot: alerts go to "every pc"; phone app pc.50 sends them to each PC that knows it): an
             // alert of an overwatch another PC set, from a phone of ours at its own address - taken up here too
@@ -329,7 +455,10 @@ public final class OverwatchHub implements AutoCloseable {
         }
         final Watched w = known0;
         Session s = sessions.computeIfAbsent(w.drone(), k -> new Session(w));
-        if (s.token != token) s.blindSaid = false; // a new overwatch (a new token): its camera's word is new too
+        if (s.token != token) { // a new overwatch (a new token): its camera's word is new too, and it can drop again
+            s.blindSaid = false;
+            s.droppedSaid = false;
+        }
         s.token = token;
         s.watched = w;
         s.from = from;
@@ -374,29 +503,39 @@ public final class OverwatchHub implements AutoCloseable {
         send(s, OverwatchProtocol.command(s.token, a.event, OverwatchProtocol.CMD_ACK));
         // 1.0.64: its start time too - a phone's next overwatch counts its events from 1 again, and "event 1" after
         // an earlier event 1 was acknowledged and never shown (no ring, no card)
-        boolean newEvent = a.event != s.event || s.id == null || s.alert == null || s.alert.startedAt != a.startedAt;
+        boolean newEvent = a.event != s.event || s.alert == null || s.alert.startedAt != a.startedAt;
         if (newEvent) {
             s.card.forget();
             s.closeMedia();
+            if (s.filedAs != null) { // renamed while the event before ran: this one is filed under the new name
+                s.filedAs = null;
+                s.idsByStart.clear();
+            }
             s.id = null;
+            s.storeFailedSaid = false;
             s.endedSaid = false;
             s.live = false;
             s.event = a.event;
             s.alert = a;
-            s.id = idForOrNull(s, a.event, a.startedAt);
-            if (s.id == null) return;
             s.preRollSaved = 0;
             s.picture = null;
             s.boxes = null;
             s.boxesAt = Long.MIN_VALUE / 2;
             s.assembler.clear();
-            saveMeta(s, a);
+        }
+        if (s.id == null) {
+            // 1.0.64: stored or not (the disk full, the folder locked), the alert rings and its card opens - it was
+            // acknowledged above, so the phone stops sending it, and with no event stored it then returned here: no
+            // ring, no card. Storing is tried again with each alert of the event; a clip says its own failure
+            s.id = idForOrNull(s, a.event, a.startedAt);
+            if (s.id != null) saveMeta(s, a);
         }
         s.alert = a;
         boolean news = s.card.onAlert(a.event, a.alertNo, now);
         if (news) {
+            s.dismissLeft = 0; // new motion: the dismiss before isn't sent on
             log(s.drone() + ": MOTION " + (a.light() ? "(a light) " : "") + "- overwatch alert"
-                    + (a.alertNo > 0 ? " again (new motion after dismiss)" : "") + lateText(a.startedAt, wallNow()) + ".");
+                    + (a.alertNo > 0 ? " again (new motion)" : "") + lateText(a.startedAt, wallNow()) + ".");
             Listener l = listener;
             if (l != null) l.onNews(s.drone());
         }
@@ -410,7 +549,7 @@ public final class OverwatchHub implements AutoCloseable {
     }
 
     private void onFragment(Session s, OverwatchProtocol.Fragment f, long now) {
-        if (f == null || f.event != s.event || s.id == null) return;
+        if (f == null || f.event != s.event) return; // 1.0.64: also for an event that couldn't be stored - its card shows
         s.card.onHeard(now);
         UnitAssembler.Unit u = s.assembler.add(f);
         if (u == null) return;
@@ -453,7 +592,7 @@ public final class OverwatchHub implements AutoCloseable {
         int w = s.decoder.width(), h = s.decoder.height();
         if (picture && w > 0 && h > 0 && s.recorder == null && key && s.id != null) {
             try {
-                Path file = index.folder(s.drone()).resolve(s.id + "-preview.mkv");
+                Path file = index.folder(s.filed()).resolve(s.id + "-preview.mkv");
                 s.recorder = new StreamRecorder(file, false, w, h, s.config);
                 s.recordStart = now;
             } catch (IOException e) {
@@ -491,11 +630,13 @@ public final class OverwatchHub implements AutoCloseable {
         for (int i = 0; i < 8; i++) at = (at << 8) | (unit[i] & 0xff);
         byte[] jpeg = Arrays.copyOfRange(unit, 8, unit.length);
         try {
-            Path dir = index.folder(s.drone());
-            Path f = dir.resolve(String.format(Locale.ROOT, "%s-pre-%013d.jpg", s.id, at));
-            if (!Files.exists(f)) {
-                Files.write(f, jpeg);
-                s.preRollSaved++;
+            if (s.id != null) { // an event that couldn't be stored: shown, not kept
+                Path dir = index.folder(s.filed());
+                Path f = dir.resolve(String.format(Locale.ROOT, "%s-pre-%013d.jpg", s.id, at));
+                if (!Files.exists(f)) {
+                    Files.write(f, jpeg);
+                    s.preRollSaved++;
+                }
             }
             if (!s.live) { // until the live preview comes, the card shows the latest picture before the alert
                 BufferedImage img = ImageIO.read(new ByteArrayInputStream(jpeg));
@@ -556,14 +697,14 @@ public final class OverwatchHub implements AutoCloseable {
             String id = idFor(s, info.event, info.eventStartedAt);
             int part = Math.max(1, info.part);
             String sfx = ClipIndex.partSuffix(part);
-            Path dir = index.folder(s.drone());
+            Path dir = index.folder(s.filed());
             Path done = dir.resolve(ClipIndex.partFile(id, part));
             String hex = hex(info.sha256);
             if (Files.isRegularFile(done) && hasChecked(s, id, part, done, info, hex)) {
                 send(s, OverwatchProtocol.clipDone(s.token, info.event, true, info.startedAt)); // here already
                 return;
             }
-            ClipIndex.Clip known = index.clip(s.drone(), id);
+            ClipIndex.Clip known = index.clip(s.filed(), id);
             if (known != null && hex.equals(known.meta().getProperty(BAD_SHA + sfx))) {
                 send(s, OverwatchProtocol.clipDone(s.token, info.event, false, info.startedAt)); // given up on: not again
                 return;
@@ -589,7 +730,7 @@ public final class OverwatchHub implements AutoCloseable {
         if (t == null || t.info.event != event) return;
         try {
             if (t.clip.checked()) return; // in and checked: only its rename is left (the tick tries it)
-            t.clip.onChunk(OverwatchProtocol.chunkOffset(d), d, OverwatchProtocol.CHUNK_DATA_AT, d.length - OverwatchProtocol.CHUNK_DATA_AT);
+            t.clip.onChunk(OverwatchProtocol.chunkOffset(d), d, OverwatchProtocol.CHUNK_DATA_AT, d.length - OverwatchProtocol.CHUNK_DATA_AT, now());
             if (!t.clip.complete()) return;
         } catch (IOException e) {
             log(s.drone() + ": clip can't be written: " + e.getMessage());
@@ -652,7 +793,7 @@ public final class OverwatchHub implements AutoCloseable {
      */
     private boolean hasChecked(Session s, String id, int part, Path done, OverwatchProtocol.ClipInfo info, String hex) throws IOException {
         String key = CHECKED_SHA + ClipIndex.partSuffix(part);
-        ClipIndex.Clip c = index.clip(s.drone(), id);
+        ClipIndex.Clip c = index.clip(s.filed(), id);
         String stored = c == null ? null : c.meta().getProperty(key);
         if (stored != null) return stored.equals(hex) && Files.size(done) == info.size;
         byte[] actual = ClipTransfer.sha256(done);
@@ -669,6 +810,10 @@ public final class OverwatchHub implements AutoCloseable {
     private void onStatus(Session s, int[] st) {
         if (st == null) return;
         send(s, OverwatchProtocol.command(s.token, 0, OverwatchProtocol.CMD_STATUS_ACK));
+        // 1.0.64: its word kept for the lists (word)
+        Trouble said = st[0] == OverwatchProtocol.STATE_BLIND ? Trouble.BLIND : st[0] == OverwatchProtocol.STATE_DROPPED ? Trouble.DROPPED
+                : st[0] == OverwatchProtocol.STATE_WATCHING ? Trouble.NONE : null;
+        if (said != null) words.put(id(s.drone()), new Word(said, said == Trouble.NONE ? 0 : st[1], wallNow()));
         // phone app pc.49: its camera gave no pictures and it opens it again by itself; then pictures again - once each
         if (st[0] == OverwatchProtocol.STATE_BLIND && !s.blindSaid) {
             s.blindSaid = true;
@@ -686,6 +831,11 @@ public final class OverwatchHub implements AutoCloseable {
     private void tick(long now) {
         for (Session s : sessions.values()) {
             boolean flies = isFlying(); // the uplink is the sticks' and the picture's meanwhile: no preview, no clip
+            if (s.dismissLeft > 0 && now - s.dismissAt >= DISMISS_GAP_MS) { // 1.0.64: the DISMISS again (see dismiss)
+                s.dismissLeft--;
+                s.dismissAt = now;
+                send(s, OverwatchProtocol.command(s.token, s.dismissEvent, OverwatchProtocol.CMD_DISMISS));
+            }
             if (s.card.previewWanted(now) && now - s.previewAskedAt >= 1000 && !flies) askPreview(s, now);
             if (s.card.ended(now) && (s.recorder != null || s.decoder != null)) s.closeMedia(); // lost: what came is kept
             if (s.live && now - s.liveAt > 3000) s.live = false;
@@ -727,7 +877,8 @@ public final class OverwatchHub implements AutoCloseable {
         try {
             return idFor(s, event, startedAt);
         } catch (IOException e) {
-            log(s.drone() + ": event can't be stored: " + e.getMessage());
+            if (!s.storeFailedSaid) log(s.drone() + ": event can't be stored: " + e.getMessage());
+            s.storeFailedSaid = true; // once an event: it is tried again with each of its alerts
             return null;
         }
     }
@@ -737,19 +888,19 @@ public final class OverwatchHub implements AutoCloseable {
         if (s.id != null && s.event == event && s.alert != null && s.alert.startedAt == startedAt) return s.id;
         String known = s.idsByStart.get(startedAt);
         if (known != null) return known;
-        for (ClipIndex.Clip c : index.clips(s.drone(), true)) { // removed ones too: a removed event must not come back
+        for (ClipIndex.Clip c : index.clips(s.filed(), true)) { // removed ones too: a removed event must not come back
             if (c.longOf("phoneStartedAt", -1) == startedAt) {
                 s.idsByStart.put(startedAt, c.id());
                 return c.id();
             }
         }
-        String id = index.newId(s.drone(), startedAt);
+        String id = index.newId(s.filed(), startedAt);
         Properties m = new Properties();
         m.setProperty("drone", s.drone());
         m.setProperty("event", Integer.toString(event));
         m.setProperty("phoneStartedAt", Long.toString(startedAt));
         m.setProperty("startedAt", Long.toString(startedAt));
-        index.save(s.drone(), id, m);
+        index.save(s.filed(), id, m);
         s.idsByStart.put(startedAt, id);
         return id;
     }
@@ -785,13 +936,13 @@ public final class OverwatchHub implements AutoCloseable {
 
     private void updateMeta(Session s, String id, Consumer<Properties> change) {
         try {
-            ClipIndex.Clip c = index.clip(s.drone(), id);
+            ClipIndex.Clip c = index.clip(s.filed(), id);
             Properties m = c == null ? new Properties() : c.meta();
             change.accept(m);
             if (s.id != null && s.id.equals(id) && s.recordStart > 0 && s.recordEnd > s.recordStart) {
                 m.setProperty("previewDurationMs", Long.toString(s.recordEnd - s.recordStart));
             }
-            index.save(s.drone(), id, m);
+            index.save(s.filed(), id, m);
         } catch (IOException e) {
             log(s.drone() + ": event details not saved: " + e.getMessage());
         }
@@ -861,8 +1012,13 @@ public final class OverwatchHub implements AutoCloseable {
         float[][] boxes;
         long boxesAt = Long.MIN_VALUE / 2;
         int preRollSaved;
-        boolean endedSaid, droppedSaid, blindSaid;
+        boolean endedSaid, droppedSaid, blindSaid, storeFailedSaid;
         Transfer transfer;
+        /** 1.0.64: DISMISS still to send again, for which event, and when the last went. */
+        int dismissLeft, dismissEvent;
+        long dismissAt;
+        /** 1.0.64: the name the running event's files are under, when the drone was renamed meanwhile; else null. */
+        String filedAs;
 
         Session(Watched w) {
             this.watched = w;
@@ -871,6 +1027,11 @@ public final class OverwatchHub implements AutoCloseable {
 
         String drone() {
             return watched.drone();
+        }
+
+        /** The name this event's files are filed under. */
+        String filed() {
+            return filedAs != null ? filedAs : watched.drone();
         }
 
         void closeDecoder() {

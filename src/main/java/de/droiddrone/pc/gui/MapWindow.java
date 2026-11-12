@@ -723,6 +723,8 @@ final class MapWindow extends JFrame {
             AIRSPACE_N = "map.airspace.notam";
     private final de.droiddrone.pc.map.OpenAipAirspace airspaceData =
             new de.droiddrone.pc.map.OpenAipAirspace(de.droiddrone.pc.map.OpenAipAirspace.defaultDir());
+    private final java.util.concurrent.atomic.AtomicReference<Object[]> airspaceAsk = new java.util.concurrent.atomic.AtomicReference<>();
+    private final java.util.concurrent.atomic.AtomicBoolean airspaceQueued = new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.concurrent.ExecutorService airspaceWork = java.util.concurrent.Executors.newSingleThreadExecutor(r -> daemon(r, "airspace"));
     private volatile String airspaceKey = "";
     private boolean showR, showD, showN;
@@ -749,12 +751,19 @@ final class MapWindow extends JFrame {
         }
         if (area == null) return;
         String key = airspaceKey;
-        airspaceWork.execute(() -> {
-            de.droiddrone.pc.map.OpenAipAirspace.Answer a = airspaceData.areas(area, key);
-            openAip = a.areas();
-            airspaceNote = a.note();
-            javax.swing.SwingUtilities.invokeLater(this::publishAirspace);
-        });
+        // 1.0.64: the newest view only - each view rest queued a fetch of its own, and they ran one after the other
+        airspaceAsk.set(new Object[]{area, key});
+        if (airspaceQueued.compareAndSet(false, true)) {
+            airspaceWork.execute(() -> {
+                airspaceQueued.set(false);
+                Object[] ask = airspaceAsk.getAndSet(null);
+                if (ask == null) return;
+                de.droiddrone.pc.map.OpenAipAirspace.Answer a = airspaceData.areas((double[]) ask[0], (String) ask[1]);
+                openAip = a.areas();
+                airspaceNote = a.note();
+                javax.swing.SwingUtilities.invokeLater(this::publishAirspace);
+            });
+        }
         publishAirspace(); // the NOTAMs at once
     }
 
@@ -885,8 +894,31 @@ final class MapWindow extends JFrame {
     static final double COVERAGE_MARGIN_M = 3000;
     /** A wider view is worked out from the cells already known: fetching it would take hundreds of the key's requests. */
     static final double COVERAGE_FETCH_MAX_M = 25_000;
-    /** Boxes fetched for one resting view at most (two requests each, of the key's 1,000 a day); the rest on the next rest. */
-    static final int COVERAGE_MAX_FETCH = 60;
+    /**
+     * Boxes fetched for one view at most (two requests each, of the key's 1,000 a day). 1.0.64: 240 (was 60, "the rest
+     * on the next rest": a view of 180 boxes needed three nudges of the map, each starting the picture over).
+     */
+    static final int COVERAGE_MAX_FETCH = 240;
+    /**
+     * 1.0.64: the estimate is worked out for the view and this much of its size round it on every side, and kept
+     * while the view stays inside - it was worked out anew at every pan and zoom (the pilot: "it seems to reload
+     * every time the map is zoomed or moved").
+     */
+    static final double COVERAGE_PAD = 0.35;
+    /** Masts this far outside the estimate's area count when their cells are known already (nothing is fetched for them). */
+    static final double COVERAGE_SITES_M = 10_000;
+
+    /** An area with {@link #COVERAGE_PAD} of its size added on every side. */
+    static double[] padded(double[] a) {
+        double h = (a[1] - a[0]) * COVERAGE_PAD, w = (a[3] - a[2]) * COVERAGE_PAD;
+        return new double[]{Math.max(-85, a[0] - h), Math.min(85, a[1] + h), a[2] - w, a[3] + w};
+    }
+
+    /** Whether an estimate made for done still serves the view: the view inside it, and not zoomed in past three times. */
+    static boolean serves(double[] done, double[] view) {
+        return view[0] >= done[0] && view[1] <= done[1] && view[2] >= done[2] && view[3] <= done[3]
+                && (view[1] - view[0]) * 3 * (1 + 2 * COVERAGE_PAD) >= done[1] - done[0];
+    }
     /** An estimate is shown between fetches every this many boxes. */
     private static final int COVERAGE_SHOW_EVERY = 20;
     /** The estimate's points about this many pixels apart, at most 160 x 120 of them. */
@@ -897,9 +929,10 @@ final class MapWindow extends JFrame {
     private final java.util.concurrent.atomic.AtomicInteger coverageRun = new java.util.concurrent.atomic.AtomicInteger();
     private boolean coverageOn;
     private volatile String coverageKey = "";
-    /** The view last worked out, and whether everything in it was fetched (else the same view is tried again). */
+    /** The area last worked out (the view and its margin), whether that is done, and whether it is being worked out now. */
     private double[] coverageArea;
     private volatile boolean coverageComplete;
+    private volatile boolean coverageBusy;
 
     static int heightIndex(String value) {
         int wanted;
@@ -982,25 +1015,29 @@ final class MapWindow extends JFrame {
         });
     }
 
-    /** Two views are the same for the estimate when neither the centre nor the size moved by more than a tenth of it. */
-    static boolean sameView(double[] a, double[] b) {
-        double h = a[1] - a[0], w = a[3] - a[2];
-        return Math.abs((a[0] + a[1]) - (b[0] + b[1])) / 2 < h / 10 && Math.abs((a[2] + a[3]) - (b[2] + b[3])) / 2 < w / 10
-                && Math.abs(h - (b[1] - b[0])) < h / 10 && Math.abs(w - (b[3] - b[2])) < w / 10;
-    }
 
     /** The view rested: unless it is the one already done, its estimate is worked out anew (a newer view stops an older one). */
     private void coverageView(double[] area) {
         if (!coverageOn || !map.toolOverlaysShown()) return;
-        if (coverageArea != null && coverageComplete && sameView(coverageArea, area)) return;
-        coverageArea = area;
+        // 1.0.64: the one made (or being made) for an area this view lies in stays - no new one for every pan and zoom
+        if (coverageArea != null && (coverageComplete || coverageBusy) && serves(coverageArea, area)) return;
+        final double[] wide = padded(area);
+        coverageArea = wide;
         coverageComplete = false;
+        coverageBusy = true;
         int run = coverageRun.incrementAndGet();
         OpenCellId.Operator op = coverageOperator();
         int droneM = coverageHeightM();
         String key = coverageKey;
-        int cols = Math.max(8, Math.min(160, map.getWidth() / COVERAGE_PX)), rows = Math.max(8, Math.min(120, map.getHeight() / COVERAGE_PX));
-        coverageWork.execute(() -> computeCoverage(run, area, op, droneM, key, cols, rows));
+        double grow = 1 + 2 * COVERAGE_PAD;
+        int cols = Math.max(8, Math.min(240, (int) (map.getWidth() * grow) / COVERAGE_PX)), rows = Math.max(8, Math.min(180, (int) (map.getHeight() * grow) / COVERAGE_PX));
+        coverageWork.execute(() -> {
+            try {
+                computeCoverage(run, wide, op, droneM, key, cols, rows);
+            } finally {
+                if (coverageRun.get() == run) coverageBusy = false;
+            }
+        });
     }
 
     /**
@@ -1018,7 +1055,7 @@ final class MapWindow extends JFrame {
         List<OpenCellId.Tile> missing = new ArrayList<>();
         for (OpenCellId.Tile t : tiles) if (!cellData.isFresh(t, now)) missing.add(t);
         boolean noKey = key.isBlank();
-        boolean tooWide = sizeM > COVERAGE_FETCH_MAX_M;
+        boolean tooWide = sizeM > COVERAGE_FETCH_MAX_M * (1 + 2 * COVERAGE_PAD); // the limit is the view's; the area has its margin
         int toFetch = noKey || tooWide ? 0 : Math.min(missing.size(), Math.min(COVERAGE_MAX_FETCH, cellData.creditsLeft() / 2));
         coverageLine(run, "Loading terrain...");
         RadioHorizon.Data terrain = CellCoverage.loadTerrain(cache, reach, cancelled);
@@ -1047,24 +1084,34 @@ final class MapWindow extends JFrame {
         int left = missing.size() - fetched;
         if (problem == null && left > 0) {
             problem = noKey ? "no OpenCelliD key (MAP TOOLS > TOOLS > Key...)" : tooWide ? "zoom in to fetch cells"
-                    : cellData.creditsLeft() < 2 ? "key's daily requests used up" : left + " boxes not fetched: rest the map again";
+                    : cellData.creditsLeft() < 2 ? "key's daily requests used up" : boxesLeftText(left);
         }
-        publishCoverage(run, area, reach, tiles, op, droneM, terrain, cols, rows, problem, left == 0);
+        // done for this area whatever is missing: what stopped it (no key, the day's requests, a drone flying) is the
+        // same at the next pan - it began again at every one
+        publishCoverage(run, area, reach, tiles, op, droneM, terrain, cols, rows, problem, true);
+    }
+
+    /**
+     * Boxes left unfetched by the cap for one view. 1.0.64: it said "move the map for more" - but the estimate is kept
+     * while the view stays inside its padded area ({@link #serves}): only a zoom, or a move out of it, fetches again.
+     */
+    static String boxesLeftText(int left) {
+        return left + " boxes not fetched: zoom or move away for more";
     }
 
     /** The estimate from the cells known now (fetched boxes, however old, and the imported file), shown with a status line. */
     private void publishCoverage(int run, double[] area, double[] reach, List<OpenCellId.Tile> tiles, OpenCellId.Operator op, int droneM,
                                  RadioHorizon.Data terrain, int cols, int rows, String problem, boolean complete) {
         java.util.Set<OpenCellId.Tile> known = new java.util.HashSet<>();
-        List<OpenCellId.Cell> cells = new ArrayList<>(cellData.importedIn(reach[0], reach[1], reach[2], reach[3]));
-        for (OpenCellId.Tile t : tiles) {
+        // 1.0.64: the masts known up to COVERAGE_SITES_M outside the area count too (only those within 3 km did: the
+        // picture changed with the view, a mast 5 km off the screen's edge gone from the sum)
+        double[] far = CellCoverage.grow(area, COVERAGE_SITES_M);
+        List<OpenCellId.Cell> cells = new ArrayList<>(cellData.importedIn(far[0], far[1], far[2], far[3]));
+        java.util.Set<OpenCellId.Tile> near = new java.util.HashSet<>(tiles);
+        for (OpenCellId.Tile t : OpenCellId.tiles(far[0], far[1], far[2], far[3])) {
             List<OpenCellId.Cell> c = cellData.cached(t);
-            if (c != null) {
-                known.add(t);
-                cells.addAll(c);
-            } else if (cellData.coveredByImport(t)) {
-                known.add(t);
-            }
+            if (c != null) cells.addAll(c);
+            if (near.contains(t) && (c != null || cellData.coveredByImport(t))) known.add(t);
         }
         List<CellCoverage.Site> sites = CellCoverage.sites(cells, op);
         CellCoverage.Grid grid = CellCoverage.predict(area, cols, rows, sites, droneM, op, terrain,
@@ -1100,6 +1147,10 @@ final class MapWindow extends JFrame {
             b.append(", no cells known");
         }
         if (g.terrainMissing()) b.append(", some terrain missing");
+        // 1.0.64: why it is all green up there (the pilot took it for broken): clear of the ground the masts are in sight
+        if (all > 0 && g.droneM() >= CellCoverage.CLEAR_M && c[CellCoverage.GOOD] >= 0.95 * all) {
+            b.append("  -  ").append(Math.round(g.droneM())).append(" m is above the trees: strong wherever a mast is in sight. Low down: 10 m");
+        }
         if (problem != null) b.append("  -  ").append(problem);
         return b.toString();
     }

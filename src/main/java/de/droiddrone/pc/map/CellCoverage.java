@@ -17,10 +17,13 @@ import java.util.stream.IntStream;
  * The cells: 4G and 5G cells of the chosen network, put together into sites (the sectors and bands of one mast sit
  * within a few dozen metres of each other in the data), each taken as an antenna {@link #MAST_M} above the ground at
  * its estimated place. The signal: RSRP (the reference signal's power, what a phone's bars show) at 800 MHz, Norway's
- * coverage band (band 20), from a typical rural macro cell ({@link #RS_EIRP_DBM}). The loss on the way: free space or
- * the two-ray ground reflection, whichever is more (near the ground the second one rules: the signal falls 12 dB per
- * doubled distance instead of 6), plus the highest ridge in the line as one knife edge (ITU-R P.526) over a 4/3
- * earth, plus the clutter near the ground - buildings, trees, the pilot's own body - that a drone at height is above.
+ * coverage band (band 20), from a typical rural macro cell ({@link #RS_EIRP_DBM}). The loss on the way: with a free
+ * line to the mast, free space or the two-ray ground reflection, whichever is more; behind buildings and trees the
+ * loss 3GPP measured for rural macro cells ({@link #clutteredDb}); the two weighed by how likely a free line is at
+ * that height and distance ({@link #losProbability}: near the ground seldom beyond a kilometre, from 40 m up always);
+ * plus the highest ridge in the line as one knife edge (ITU-R P.526) over a 4/3 earth.
+ * 1.0.64: before, the ground's cost was a flat 20 dB at hand height and nothing from 30 m, on a free-space loss - a
+ * mast 20 km off still read "good" at every height offered, and the map was green wherever any mast was known.
  * The best site of each point wins. Not in it: several ridges in a line (one counted: the truth is worse), the masts'
  * down-tilted beams, and interference - a drone high up hears many cells at once, which costs quality the bars don't show.
  */
@@ -31,8 +34,10 @@ public final class CellCoverage {
     public static final double MAST_M = 30;
     /** A 20 MHz macro cell's 46 dBm spread over its 1,200 subcarriers (15 dBm each), plus a 17 dBi sector antenna, less 2 dB of cable. */
     public static final double RS_EIRP_DBM = 30;
-    /** The ground clutter: this much at hand height, none from {@link #CLUTTER_FREE_M} up (above the trees and roofs). */
-    public static final double CLUTTER_DB = 20, CLUTTER_FREE_M = 30;
+    /** From this height the drone is taken to see the mast wherever the terrain lets it (3GPP TR 36.777, rural). */
+    public static final double CLEAR_M = 40;
+    /** 20 log10(40 pi f / 3), f in GHz: the constant of 3GPP's distance laws. */
+    static final double LAW_DB = 20 * Math.log10(40 * Math.PI * (FREQUENCY_MHZ / 1000) / 3);
     /** RSRP limits: good above -95 dBm (video flows), fair to -105, weak to -115 (a phone still holds on), below that none. */
     public static final double GOOD_DBM = -95, FAIR_DBM = -105, WEAK_DBM = -115;
     public static final int UNKNOWN = -1, NONE = 0, WEAK = 1, FAIR = 2, GOOD = 3;
@@ -44,9 +49,10 @@ public final class CellCoverage {
     static final int PATH_MIN = 8, PATH_MAX = 120;
     /** Sites closer than this to each other (same network) are one mast. */
     static final double SITE_MERGE_M = 60;
-    /** The drone heights offered: on the ground (the pilot's own phone), a low flight, and the usual 120 m ceiling. */
-    public static final int[] HEIGHTS_M = {2, 50, 120};
-    public static final int DEFAULT_HEIGHT_M = 50;
+    /** The drone heights offered: on the ground (the pilot's own phone), low among the trees, a flight clear of them, the 120 m ceiling. */
+    public static final int[] HEIGHTS_M = {2, 10, 50, 120};
+    /** 1.0.64: 10 (was 50) - where an FPV drone flies, and where reception differs from place to place. */
+    public static final int DEFAULT_HEIGHT_M = 10;
 
     private CellCoverage() {
     }
@@ -121,10 +127,28 @@ public final class CellCoverage {
         return 6.9 + 20 * Math.log10(Math.sqrt((v - 0.1) * (v - 0.1) + 1) + v - 0.1);
     }
 
-    /** What the ground near the drone costs: {@link #CLUTTER_DB} at hand height, nothing above the trees. */
-    public static double clutterDb(double droneM) {
-        if (droneM >= CLUTTER_FREE_M) return 0;
-        return CLUTTER_DB * (CLUTTER_FREE_M - Math.max(2, droneM)) / (CLUTTER_FREE_M - 2);
+    /**
+     * How likely a free line to the mast is at droneM over the ground, distM away, terrain apart (3GPP: TR 38.901's
+     * rural macro on the ground, TR 36.777's for a drone from 10 m; always from {@link #CLEAR_M}).
+     */
+    public static double losProbability(double distM, double droneM) {
+        double d = Math.max(1, distM);
+        if (droneM >= CLEAR_M) return 1;
+        if (droneM < 10) return d <= 10 ? 1 : Math.exp(-(d - 10) / 1000);
+        double p1 = Math.max(15021 * Math.log10(droneM) - 16053, 1000), d1 = Math.max(1350.8 * Math.log10(droneM) - 1602, 18);
+        return d <= d1 ? 1 : d1 / d + Math.exp(-d / p1) * (1 - d1 / d);
+    }
+
+    /**
+     * The loss with no free line (behind trees and buildings), dB: 3GPP's rural macro laws - TR 38.901's for a phone
+     * on the ground (a 30 m mast, 5 m buildings, 20 m streets), TR 36.777's for a drone from 10 m up.
+     */
+    public static double clutteredDb(double distM, double droneM) {
+        double d = Math.max(10, distM);
+        if (droneM >= 10) return -12 + (35 - 5.3 * Math.log10(Math.min(300, droneM))) * Math.log10(d) + LAW_DB;
+        double h = Math.max(1.5, droneM), a = Math.log10(11.75 * h);
+        return 161.04 - 7.1 * Math.log10(20) + 7.5 * Math.log10(5) - (24.37 - 3.7 * (5 / MAST_M) * (5 / MAST_M)) * Math.log10(MAST_M)
+                + (43.42 - 3.1 * Math.log10(MAST_M)) * (Math.log10(d) - 3) + 20 * Math.log10(FREQUENCY_MHZ / 1000) - (3.2 * a * a - 4.97);
     }
 
     /**
@@ -155,7 +179,8 @@ public final class CellCoverage {
         }
         // the ground reflection sees each end's height over the other end's ground when that is lower (a mast on a hill over a valley)
         double h1 = MAST_M + Math.max(0, g0 - g1), h2 = droneM + Math.max(0, g1 - g0);
-        double loss = Math.max(freeSpaceDb(d), planeEarthDb(d, h1, h2)) + knifeEdgeDb(worst) + clutterDb(droneM);
+        double free = Math.max(freeSpaceDb(d), planeEarthDb(d, h1, h2)), p = losProbability(d, droneM);
+        double loss = p * free + (1 - p) * Math.max(free, clutteredDb(d, droneM)) + knifeEdgeDb(worst);
         return RS_EIRP_DBM - loss;
     }
 
