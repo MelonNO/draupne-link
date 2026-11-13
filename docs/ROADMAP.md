@@ -18,7 +18,7 @@
 - [x] Read, map and send in one tick at 250 Hz (was a separate 25 Hz thread)
 - [x] Hold the 1 ms Windows timer and opt out of power throttling, so the rate holds in the background
 - [x] Lower the video bitrate when the ping rises above its baseline (uplink queueing), not only above 300 ms
-- [x] Glass-to-glass latency test (F3) and exclusive full screen (F11)
+- [x] Glass-to-glass latency test (MENU > TOOLS > *Latency test*, Esc ends it; F3 is the map window now) and exclusive full screen (F11)
 - [x] Set `serial_update_rate_hz` from the setup wizard's Betaflight step (2000, or 1000 on F411)
 - [ ] Forked Flight app: low-latency encoder settings, intra refresh instead of key frames, RC handled on arrival
 - [x] `Pacer`: accurate loop timing despite Windows' 15.6 ms timer tick

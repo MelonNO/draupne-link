@@ -306,7 +306,7 @@ With phone app DRAUPNE Flight 2.3.0-pc.39 (sound in the air).
 
 ## 1.0.49
 
-The fix round from the full review of 1.0.48 (phone app 2.3.0-pc.38): every finding fixed, safety around arming first. Nothing of 1.0.44 - 1.0.49 has run on a phone, a flight controller or a drone yet: bench-test before flying (the bench plan in HANDOFF).
+The fix round from the full review of 1.0.48 (phone app 2.3.0-pc.38): every finding fixed, safety around arming first. Nothing of 1.0.44 - 1.0.49 has run on a phone, a flight controller or a drone yet: bench-test before flying (the bench plan is in the 1.0.49 notes of [HANDOFF's history](history/HANDOFF-history.md)).
 
 - **Arming.** BEEPER moved from AUX12 to AUX14 and can no longer arm the drone: it does nothing, and says why, when ARM or the radio uses AUX14 or Drone setup hasn't put BEEPER there alone (`drone.beeperSet`); it beeps only while Betaflight reports the drone freshly disarmed, at most 10 s a press, and lets go when the window loses focus. Stick frames carry only the radio's channels again (padded to 8, plus AUX14 for BEEPER, 0 in between): a switch the radio doesn't send no longer turns a mode on; an ARM channel the radio doesn't send, or sends as 0, counts as unknown - the sticks wait with ARM SWITCH NOT SENT.
 - **Idle sticks** (phone pc.38): checked by the phone against Betaflight's own arm ranges (MSP_MODE_RANGES, read once a second; unknown = refused), forgotten at every new connection, and sent by the PC only while the radio's own frame has the throttle low and the arm switch off - moving ARM in Configurator can't arm a drone sitting on idle sticks. An idle frame and a PC frame share one lock on the phone.
