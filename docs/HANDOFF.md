@@ -1232,6 +1232,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 - **No AI co-author trailers in commits** (`Co-Authored-By: ...`). Commits are by the maintainer only. A force push
   does not clear GitHub's contributor list, so such a line must never reach GitHub.
 - **No secrets in the repo.** The phone app's signing key lives outside it (see below).
+- **New work goes to the `beta` branch.** (The maintainer's rule since 2026-11-14.) Every new change is built on
+  `beta` and tested there by the maintainer before it is merged to `main`. Nothing reaches `main` or a release except
+  very safe changes, and only on the maintainer's word. Phone test builds from `beta` take their own number with
+  "beta" in the name, are sideloaded, and are never pinned in `ApkShare` or published as Latest.
 - **Publishing needs the maintainer's explicit go-ahead.** That covers tags, GitHub releases and the phone app release.
 - **Don't close a running DRAUPNE Link that has the drone link open.** A live drone may depend on it. This is also why
   the installer only asks and never closes the app.
