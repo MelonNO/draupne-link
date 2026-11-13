@@ -69,11 +69,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import de.droiddrone.common.CameraOwner;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
+import de.droiddrone.common.FleetGate;
 import de.droiddrone.common.FleetProtocol;
+import de.droiddrone.common.KnownPcs;
 import de.droiddrone.common.Log;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
@@ -227,8 +230,8 @@ public class Udp {
     private void answerName(DatagramPacket packet, byte[] d, int len) {
         if (!keyMatches(d, len, 1)) return;
         // pc.50: the PCs that ask who this phone is hear its sleep notice too
-        namedBy.put(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
-        knownPcs.put(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
+        namedBy.asked(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
+        knownPcs.asked(packet.getAddress(), android.os.SystemClock.elapsedRealtime());
         try {
             if (d[0] == NAME_ASSIGN) {
                 java.io.DataInputStream in = new java.io.DataInputStream(new java.io.ByteArrayInputStream(d, 1, len - 1));
@@ -338,12 +341,12 @@ public class Udp {
         return t;
     });
     /**
-     * pc.38 (the review's M19): who started the camera last, counted on the videoStarter thread - every video start
-     * (a pilot's StartVideo, a restart, observation) and overwatch's camera on take a new number. Overwatch's camera
-     * off and event video act only while its number is still the last: ending overwatch slowly (a long clip hashed)
-     * once let its off run after the pilot's StartVideo and close the new camera.
+     * pc.38 (the review's M19): who started the camera last (CameraOwner), counted on the videoStarter thread - every
+     * video start (a pilot's StartVideo, a restart, observation) and overwatch's camera on take a new number.
+     * Overwatch's camera off and event video act only while its number is still the last: ending overwatch slowly (a
+     * long clip hashed) once let its off run after the pilot's StartVideo and close the new camera.
      */
-    private volatile int cameraOwner, overwatchCameraOwner = -1;
+    private final CameraOwner cameraOwner = new CameraOwner();
     /**
      * DRAUPNE Link: the PC's video profile, [0x6B][flags]: bit 0 = bad coverage mode - key frames sent twice, and
      * after every frame a parity packet (VIDEO_PARITY) from which the PC rebuilds any one lost packet of it.
@@ -1030,8 +1033,7 @@ public class Udp {
         videoSenderThreadId++;
         // pc.38 (M19): the camera is this stream's now - overwatch's late camera off or event video leaves it alone,
         // and what overwatch set on it (watch-only, its recorder) goes
-        boolean wasOverwatch = overwatchCameraOwner == cameraOwner;
-        cameraOwner++;
+        boolean wasOverwatch = cameraOwner.videoTakes();
         if (wasOverwatch) {
             cameraManager.getCamera().setExtraTarget(null);
             cameraManager.getCamera().setWatchOnly(false);
@@ -1142,7 +1144,7 @@ public class Udp {
                 return;
             }
             // the pilot's stream only (standby and the sleeps have none)
-            if (observing || PowerMode.mode() != PowerMode.NORMAL || Overwatch.isWatching() || overwatchCameraOwner == cameraOwner) return;
+            if (observing || PowerMode.mode() != PowerMode.NORMAL || Overwatch.isWatching() || cameraOwner.isOverwatchs()) return;
             if (streamEncoder.isVideoEncoderInitialized() && streamEncoder.holdAtFloor(keyFramesTwice || groupParity ? SILENT_STEP_WEAK : SILENT_STEP_NORMAL)) {
                 log("PC silent for " + silent + " ms: video down to " + streamEncoder.getTargetBitRate() / 1000 + " kbit/s until it is heard again");
             }
@@ -1162,7 +1164,7 @@ public class Udp {
             videoStarter.execute(() -> {
                 // in turn with a StartVideo: not if the PC came back, observers or overwatch took the camera, or the FC
                 // armed meanwhile
-                if (isConnected() || observing || Overwatch.isWatching() || overwatchCameraOwner == cameraOwner
+                if (isConnected() || observing || Overwatch.isWatching() || cameraOwner.isOverwatchs()
                         || android.os.SystemClock.elapsedRealtime() - pcHeardAtMs <= PC_SILENT_STOP_MS
                         || FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED || mp4Recorder.isRecording()) {
                     log("Camera and video left on after all: the PC is back, the camera is in use or the FC isn't known disarmed");
@@ -1266,29 +1268,17 @@ public class Udp {
      * The sleeping phone's "still here" (pc.22): [0x6F][battery % u8][charging u8][nextCheckMin u8][mV u16] to the
      * PC's last address; it answers whether to sleep on or wake. Nothing to send to before the first flight.
      */
-    /** pc.50: the PCs that asked this phone's name lately (when), for its sleep notice; at most NOTICE_PCS. */
-    private final java.util.Map<InetAddress, Long> namedBy = new java.util.concurrent.ConcurrentHashMap<>();
-    static final long NOTICE_PC_MS = 120_000;
-    static final int NOTICE_PCS = 10;
+    /** pc.50: the PCs that asked this phone's name lately (when), for its sleep notice; at most KnownPcs.MAX. */
+    private final KnownPcs<InetAddress> namedBy = KnownPcs.forNotice();
     /**
      * pc.50 (the pilot: overwatch alerts go to "every pc"): the PCs that asked this phone's name in the last day - a
      * sleeping phone is asked only round its check-ins, so the notice's two minutes would mostly find nobody.
      */
-    private final java.util.Map<InetAddress, Long> knownPcs = new java.util.concurrent.ConcurrentHashMap<>();
-    static final long ALERT_PC_MS = 24 * 3600_000L;
+    private final KnownPcs<InetAddress> knownPcs = KnownPcs.forAlerts();
 
     /** The PCs an overwatch alert goes to: the one that set it (its own port) first, then the known ones at the link port. */
     java.util.List<java.net.InetSocketAddress> alertPcs() {
-        java.util.LinkedHashMap<InetAddress, Integer> to = new java.util.LinkedHashMap<>();
-        if (lastPcIp != null) to.put(lastPcIp, lastPcPort);
-        long now = android.os.SystemClock.elapsedRealtime();
-        knownPcs.values().removeIf(at -> now - at > ALERT_PC_MS);
-        java.util.List<java.util.Map.Entry<InetAddress, Long>> newest = new java.util.ArrayList<>(knownPcs.entrySet());
-        newest.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
-        for (java.util.Map.Entry<InetAddress, Long> e : newest) {
-            if (to.size() >= NOTICE_PCS) break;
-            to.putIfAbsent(e.getKey(), port);
-        }
+        java.util.Map<InetAddress, Integer> to = knownPcs.toTell(lastPcIp, lastPcPort, port, android.os.SystemClock.elapsedRealtime());
         java.util.List<java.net.InetSocketAddress> out = new java.util.ArrayList<>();
         for (java.util.Map.Entry<InetAddress, Integer> e : to.entrySet()) out.add(new java.net.InetSocketAddress(e.getKey(), e.getValue()));
         return out;
@@ -1312,14 +1302,7 @@ public class Udp {
                 (byte) Math.min(255, nextCheckMin), (byte) (milliVolts >> 8), (byte) milliVolts,
                 (byte) (owFlags | de.droiddrone.common.OverwatchProtocol.HELLO_NOTICE), (byte) PowerMode.floorReason()};
         byte[] d = de.droiddrone.common.FleetProtocol.hello(head, fleetStatus(), sleepWhere(), noticeOf(nextCheckInS), key);
-        java.util.LinkedHashMap<InetAddress, Integer> to = new java.util.LinkedHashMap<>();
-        if (lastPcIp != null) to.put(lastPcIp, lastPcPort);
-        long now = android.os.SystemClock.elapsedRealtime();
-        namedBy.values().removeIf(at -> now - at > NOTICE_PC_MS);
-        for (InetAddress pc : namedBy.keySet()) {
-            if (to.size() >= NOTICE_PCS) break;
-            to.putIfAbsent(pc, port);
-        }
+        java.util.Map<InetAddress, Integer> to = namedBy.toTell(lastPcIp, lastPcPort, port, android.os.SystemClock.elapsedRealtime());
         boolean sent = false;
         for (java.util.Map.Entry<InetAddress, Integer> e : to.entrySet()) {
             try {
@@ -1447,13 +1430,15 @@ public class Udp {
      */
     private void onFleetMode(DatagramPacket packet, byte[] d, int len) {
         FleetProtocol.Request r = FleetProtocol.parseRequest(d, len, key);
-        if (r == null || r.token == fleetToken) return;
+        if (r == null) return;
+        FleetGate.Verdict v = FleetGate.request(r.token, fleetToken, isConnected(), fcDisarmed);
+        if (v == FleetGate.Verdict.REPEAT) return;
         String from = packet.getAddress().getHostAddress();
-        if (isConnected()) {
+        if (v == FleetGate.Verdict.REFUSED_PILOT) {
             log("Fleet: " + PowerMode.name(r.mode) + " from " + from + " refused: a pilot is connected");
             return;
         }
-        if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) {
+        if (v == FleetGate.Verdict.REFUSED_ARMED) {
             log("Fleet: " + PowerMode.name(r.mode) + " from " + from + " refused: FC not known disarmed");
             return;
         }
@@ -1509,11 +1494,11 @@ public class Udp {
                 if (!on) {
                     // pc.38 (M19): a late "camera off" (overwatch ending slowly) never closes the camera a pilot's
                     // StartVideo or an observer opened after it
-                    if (overwatchCameraOwner != cameraOwner) {
+                    if (!cameraOwner.isOverwatchs()) {
                         log("Overwatch: its camera off came after the camera was started again - left as it is");
                         return;
                     }
-                    overwatchCameraOwner = -1;
+                    cameraOwner.overwatchLetsGo();
                     streamEncoder.close();
                     camera.setExtraTarget(null);
                     camera.setWatchOnly(false);
@@ -1523,7 +1508,7 @@ public class Udp {
                     mp4Recorder.close();
                     return;
                 }
-                overwatchCameraOwner = ++cameraOwner;
+                cameraOwner.overwatchTakes();
                 if (!camera.initialize(streamEncoder, mp4Recorder)) {
                     log("Overwatch: the camera can't be started");
                     return;
@@ -1551,7 +1536,7 @@ public class Udp {
         try {
             videoStarter.execute(() -> {
                 try {
-                    if (overwatchCameraOwner != cameraOwner) return;
+                    if (!cameraOwner.isOverwatchs()) return;
                     Camera camera = cameraManager.getCamera();
                     camera.close();
                     if (!camera.initialize(streamEncoder, mp4Recorder)) {
@@ -1587,7 +1572,7 @@ public class Udp {
 
     private void overwatchEventVideoNow(boolean on, android.view.Surface recorder) {
         try {
-            if (overwatchCameraOwner != cameraOwner) return; // pc.38 (M19): the camera is someone else's now
+            if (!cameraOwner.isOverwatchs()) return; // pc.38 (M19): the camera is someone else's now
             Camera camera = cameraManager.getCamera();
             streamEncoder.close();
             if (on) {
