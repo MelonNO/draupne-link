@@ -6,6 +6,7 @@ DRAUPNE Link is licensed under the GPL-3.0 (see [LICENSE](LICENSE)). The release
 |---|---|---|
 | [DroidDrone](https://github.com/DroidDrone/DroidDrone) (`upstream/` submodule: Common protocol code and relay server) | Wire protocol, in-process relay | GPL-3.0 |
 | [FFmpeg](https://ffmpeg.org) via [JavaCPP Presets](https://github.com/bytedeco/javacpp-presets) (`org.bytedeco:ffmpeg`, LGPL build) | H.265/H.264 decoding | LGPL-2.1+ (FFmpeg), Apache-2.0 / GPL-2.0 with Classpath Exception (JavaCPP) |
+| [OpenH264](https://github.com/cisco/openh264) (Cisco), as compiled into that FFmpeg build: no file of its own, its code is inside `avcodec-61.dll` in the `org.bytedeco:ffmpeg:7.1-1.5.11:windows-x86_64` jar | H.264 encoding (FFmpeg's `libopenh264`): the recording with OSD, the STANAG 4609 streams, the virtual fleet's video | BSD-2-Clause (OpenH264's source) - **maintainer to confirm, see the note under the table** |
 | [LWJGL 3](https://www.lwjgl.org) + GLFW | Joystick input | BSD-3-Clause, zlib |
 | [FlatLaf](https://www.formdev.com/flatlaf/) | Look and feel | Apache-2.0 |
 | [ZXing](https://github.com/zxing/zxing) | QR codes | Apache-2.0 |
@@ -38,3 +39,5 @@ DRAUPNE Link is licensed under the GPL-3.0 (see [LICENSE](LICENSE)). The release
 
 The installer installs [Tailscale](https://tailscale.com) from Tailscale's own signed package, and the setup wizard downloads this project's build of DRAUPNE Flight (upstream DroidDrone Flight 2.3.0, GPL-3.0, with the changes in [`flight-app/`](flight-app)) from this project's GitHub releases. Neither is bundled.
 FFmpeg's source is available from ffmpeg.org; the exact build used comes from the JavaCPP Presets project.
+
+**OpenH264 - TO BE CONFIRMED BY THE MAINTAINER: the licence wording above.** What was checked in the code and the jars (2026-11-14): `build.gradle` takes FFmpeg as `org.bytedeco:ffmpeg:7.1-1.5.11` with its `windows-x86_64` natives and names no OpenH264 dependency; that jar holds no OpenH264 file of its own; its `avcodec-61.dll` carries FFmpeg's configuration line with `--enable-libopenh264` (also `--enable-version3`; neither `--enable-gpl` nor `--enable-nonfree`) and OpenH264's own log messages, so the encoder is linked into that DLL. `video/H264Encoder` and `video/OsdVideoWriter` ask FFmpeg for `libopenh264` by name (the recording falls back to MPEG-4 where there is none). The OpenH264 code in a release is therefore the copy the JavaCPP Presets project built into its FFmpeg, not a binary downloaded from Cisco. Nothing here is a statement about patent licences.
