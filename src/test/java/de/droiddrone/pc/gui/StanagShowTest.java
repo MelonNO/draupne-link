@@ -65,6 +65,11 @@ class StanagShowTest {
         assertEquals(Set.of("CRASHED", "LOST", "PILOTED", "OVERWATCH", "OVERWATCH - BLIND", "DEEP SLEEP", "STANDBY", "IDLE", "UNKNOWN", "OFFLINE"), titles);
     }
 
+    private static FleetCards.Card charging0() {
+        return new FleetCards.Card("MobileAlpha", false, MapView.Kind.STANDBY, "STANDBY", Double.NaN, -1, 12, true, -1, 0, 2000,
+                3, 1, 9, 0, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null, -1, false);
+    }
+
     /** The pilot: "include some stats in the screen shown when no video is streamed, specifically battery level". */
     @Test
     void thePageCarriesTheBatteriesAndWhenTheDroneWasHeardAndChecksInNext() {
@@ -75,6 +80,7 @@ class StanagShowTest {
         StanagShow.Page p = StanagShow.page(c, false, null, false, now);
         assertEquals("DEEP SLEEP", p.title());
         assertEquals(java.util.List.of(new StanagShow.Stat("PHONE", "87 %", false), new StanagShow.Stat("DRONE", "69 % AT 20:54", false),
+                new StanagShow.Stat("FLIGHT", "16 MIN", false), new StanagShow.Stat("RANGE", "9.6 KM", false),
                 new StanagShow.Stat("HEARD", "21:03", false), new StanagShow.Stat("NEXT CHECK", "21:08", false)), p.stats());
         // a second later the same page: a still picture stays one (clock times to the minute, no countdown)
         FleetCards.Card later = new FleetCards.Card("MobileAlpha", false, MapView.Kind.ASLEEP, "ASLEEP", 3.92, 601_000, 87, false, 209_000, 5, 91_000,
@@ -84,7 +90,10 @@ class StanagShowTest {
         FleetCards.Card low = new FleetCards.Card("MobileAlpha", false, MapView.Kind.STANDBY, "STANDBY", 3.41, 0, 12, false, FleetCards.LISTENING, 255, 2000,
                 3, 1, 9, 0, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null, -1, false);
         assertEquals(java.util.List.of(new StanagShow.Stat("PHONE", "12 %", true), new StanagShow.Stat("DRONE", "12 %", true),
+                new StanagShow.Stat("FLIGHT", "3 MIN", true), new StanagShow.Stat("RANGE", "1.7 KM", true),
                 new StanagShow.Stat("HEARD", "21:04", false)), StanagShow.stats(low, now));
+        // the pilot: "flight time remaining and estimated range left" - none without a pack reading
+        for (StanagShow.Stat s : StanagShow.stats(charging0(), now)) assertFalse(s.label().equals("FLIGHT") || s.label().equals("RANGE"), s.label());
         FleetCards.Card charging = new FleetCards.Card("MobileAlpha", false, MapView.Kind.STANDBY, "STANDBY", Double.NaN, -1, 12, true, -1, 0, 2000,
                 3, 1, 9, 0, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null, -1, false);
         assertEquals(new StanagShow.Stat("PHONE", "12 % CHARGING", false), StanagShow.stats(charging, now).get(0));

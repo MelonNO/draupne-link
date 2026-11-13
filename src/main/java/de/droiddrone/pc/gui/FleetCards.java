@@ -185,6 +185,36 @@ final class FleetCards {
         return Math.max(0, Math.min(1, (v - 3.3) / 0.9));
     }
 
+    /**
+     * What a full pack gives (the pilot, 2026-11-13: "assume that a full battery has 14 km range and 23 min flight
+     * time"). What is left is that times the pack's charge ({@link #cellFill}, as the gauge and the STANAG page's
+     * per cent): an estimate from the voltage - lower while the drone flies (the pack sags under load).
+     */
+    static final double FULL_RANGE_KM = 14, FULL_FLIGHT_MIN = 23;
+
+    /** Flight time left, whole minutes; -1 unknown. */
+    static int flightMinLeft(double cellVolts) {
+        double fill = cellFill(cellVolts);
+        return Double.isNaN(fill) ? -1 : (int) Math.round(fill * FULL_FLIGHT_MIN);
+    }
+
+    /** Range left, km; NaN unknown. */
+    static double rangeKmLeft(double cellVolts) {
+        return cellFill(cellVolts) * FULL_RANGE_KM;
+    }
+
+    /** "12 MIN", or "-". */
+    static String flightLeft(double cellVolts) {
+        int min = flightMinLeft(cellVolts);
+        return min < 0 ? "-" : min + " MIN";
+    }
+
+    /** "7.3 KM", or "-". */
+    static String rangeLeft(double cellVolts) {
+        double km = rangeKmLeft(cellVolts);
+        return Double.isNaN(km) ? "-" : String.format(Locale.ROOT, "%.1f KM", km);
+    }
+
     /** GPS as the card writes it: "12 SAT FIX", "6 SAT NO FIX", or "-". */
     static String gps(int fix, int sats) {
         if (fix < 0 && sats < 0) return "-";

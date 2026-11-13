@@ -797,15 +797,42 @@ final class FleetManagementPanel extends JPanel {
         // signal, GPS, temperatures, events
         int y = fm.getAscent() + 16;
         bars(g, 0, y, c.signal());
-        g.setFont(Theme.font(java.awt.Font.PLAIN, 11f));
-        FontMetrics sf = g.getFontMetrics();
-        g.setColor(Theme.MUTED);
-        g.drawString("GPS " + FleetCards.gps(c.gpsFix(), c.sats()) + "   " + FleetCards.tempDeci(c.phoneTempDeci())
-                + " / FC " + FleetCards.tempC(c.fcTempC()), 22, y);
+        String gps = "GPS " + FleetCards.gps(c.gpsFix(), c.sats()) + "   " + FleetCards.tempDeci(c.phoneTempDeci())
+                + " / FC " + FleetCards.tempC(c.fcTempC());
+        // beside the GPS: what the pack still gives (the pilot: "flight time remaining and estimated range left ... in
+        // the same area as the GPS") - on this line, not one more: the strip's height is what lets ten phones fit a
+        // small screen without scrolling. None without a pack reading.
+        String left = leftText(c.cellVolts());
         String ev = c.events() == 0 ? "NO EVENTS" : c.events() + (c.events() == 1 ? " EVENT " : " EVENTS ")
                 + new java.text.SimpleDateFormat("HH:mm").format(new java.util.Date(c.lastEventWall()));
-        if (c.events() > 0) g.setColor(MapView.ALERT);
+        g.setFont(figuresFont(g, gps + left, ev, w));
+        FontMetrics sf = g.getFontMetrics();
+        g.setColor(Theme.MUTED);
+        g.drawString(gps, FIGURES_X, y);
+        if (!left.isEmpty()) { // brighter than the figures beside it; yellow when the pack is low, as the STANAG page
+            g.setColor(StanagShow.dronePercent(c.cellVolts()) < StanagShow.DRONE_LOW_PERCENT ? Theme.WARN : Theme.TEXT);
+            g.drawString(left, FIGURES_X + sf.stringWidth(gps), y);
+        }
+        g.setColor(c.events() > 0 ? MapView.ALERT : Theme.MUTED);
         g.drawString(ev, w - sf.stringWidth(ev), y);
+    }
+
+    /** Where the detail's figures begin (after the signal bars), and the room kept before the events on the right. */
+    static final int FIGURES_X = 22, FIGURES_GAP = 8;
+
+    /** The figures' font: 11 pt, the letters a little smaller (down to 9 pt) when the line would run into the events. */
+    static java.awt.Font figuresFont(Graphics2D g, String figures, String events, int w) {
+        for (float size = 11f; ; size -= 0.5f) {
+            java.awt.Font f = Theme.font(java.awt.Font.PLAIN, size);
+            FontMetrics m = g.getFontMetrics(f);
+            if (size <= 9f || FIGURES_X + m.stringWidth(figures) + FIGURES_GAP + m.stringWidth(events) <= w) return f;
+        }
+    }
+
+    /** "   12 MIN / 7.3 KM": flight time and range left on this pack, "" unknown. */
+    static String leftText(double cellVolts) {
+        if (Double.isNaN(cellVolts)) return "";
+        return "   " + FleetCards.flightLeft(cellVolts) + " / " + FleetCards.rangeLeft(cellVolts);
     }
 
     // ------------------------------------------------------------------ the tab

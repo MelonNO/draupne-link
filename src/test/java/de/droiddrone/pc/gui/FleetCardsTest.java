@@ -121,6 +121,50 @@ class FleetCardsTest {
         }
     }
 
+    /** The pilot (2026-11-13): "assume that a full battery has 14 km range and 23 min flight time". */
+    @Test
+    void flightTimeAndRangeLeftGoByThePacksCharge() {
+        assertEquals("23 MIN", FleetCards.flightLeft(4.2));
+        assertEquals("14.0 KM", FleetCards.rangeLeft(4.2));
+        assertEquals("23 MIN", FleetCards.flightLeft(4.35), "never over a full pack's");
+        assertEquals("12 MIN", FleetCards.flightLeft(3.75)); // half: 11.5
+        assertEquals("7.0 KM", FleetCards.rangeLeft(3.75));
+        assertEquals("0 MIN", FleetCards.flightLeft(3.3));
+        assertEquals("0.0 KM", FleetCards.rangeLeft(3.1), "never under");
+        assertEquals("-", FleetCards.flightLeft(Double.NaN));
+        assertEquals("-", FleetCards.rangeLeft(Double.NaN));
+        assertEquals(-1, FleetCards.flightMinLeft(Double.NaN));
+        // in the detail beside the GPS, on its line (one more line and ten phones no longer fit a small screen)
+        assertEquals("   16 MIN / 9.6 KM", FleetManagementPanel.leftText(3.92));
+        assertEquals("", FleetManagementPanel.leftText(Double.NaN), "none without a pack reading");
+        assertTrue(ink(pack(3.92, 0)) > ink(pack(Double.NaN, 0)) + 60, "the figures are drawn");
+        assertEquals(0, count(detail(pack(3.92, 0))), "a good pack: not yellow");
+        assertTrue(count(detail(pack(3.41, 0))) > 20, "a low pack: yellow");
+        // the longest line still ends before the events: the letters go smaller, never under 9 pt
+        int w = FleetManagementPanel.BODY_WIDTH - 16;
+        Graphics2D g = new BufferedImage(10, 10, BufferedImage.TYPE_INT_ARGB).createGraphics();
+        String figures = "GPS 12 SAT NO FIX   31\u00b0C / FC 40\u00b0C" + FleetManagementPanel.leftText(4.2), events = "12 EVENTS 21:04";
+        java.awt.Font f = FleetManagementPanel.figuresFont(g, figures, events, w);
+        java.awt.FontMetrics m = g.getFontMetrics(f);
+        assertTrue(FleetManagementPanel.FIGURES_X + m.stringWidth(figures) + FleetManagementPanel.FIGURES_GAP + m.stringWidth(events) <= w,
+                "fits at " + f.getSize2D() + " pt");
+        assertTrue(f.getSize2D() >= 9f);
+        assertEquals(11f, FleetManagementPanel.figuresFont(g, "GPS -   - / FC -", "NO EVENTS", w).getSize2D(), "as before when there is room");
+        g.dispose();
+    }
+
+    private static FleetCards.Card pack(double cellVolts, int events) {
+        return new FleetCards.Card("MobileAlpha", false, MapView.Kind.STANDBY, "STANDBY", cellVolts, 0, 80, false, -1, 0, 2000,
+                3, 1, 9, events, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null, -1, false);
+    }
+
+    private static int ink(FleetCards.Card c) {
+        BufferedImage img = detail(c);
+        int lit = 0;
+        for (int y = 0; y < img.getHeight(); y++) for (int x = 0; x < img.getWidth(); x++) if ((img.getRGB(x, y) >>> 24) != 0) lit++;
+        return lit;
+    }
+
     @Test
     void thePanelKeepsOneRowPerPhoneAndOneSelection() {
         FleetManagementPanel p = panel();

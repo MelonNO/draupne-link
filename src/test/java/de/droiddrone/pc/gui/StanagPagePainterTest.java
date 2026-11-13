@@ -107,6 +107,7 @@ class StanagPagePainterTest {
     @Test
     void theFiguresGoInOneLineUnderTheTextAndALowBatteryIsYellow() throws Exception {
         java.util.List<StanagShow.Stat> stats = java.util.List.of(new StanagShow.Stat("PHONE", "87 %", false), new StanagShow.Stat("DRONE", "69 % AT 20:54", false),
+                new StanagShow.Stat("FLIGHT", "16 MIN", false), new StanagShow.Stat("RANGE", "9.6 KM", false),
                 new StanagShow.Stat("HEARD", "21:03", false), new StanagShow.Stat("NEXT CHECK", "21:08", false));
         BufferedImage img = image();
         StanagPagePainter.page(img, "MobileAlpha", false, PAGES[6].with(stats));

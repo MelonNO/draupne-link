@@ -2,6 +2,15 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.66 (PC only, 2026-11-13)
+
+The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not tried by the pilot yet.
+
+- **Flight time and range left** (the pilot: "calculate flight time remaining and estimated range left. Assume that a full battery has 14 km range and 23 min flight time ... displayed on the stanag screen and in the details in the bottom of fleet manager ... in the same area as the GPS"): a full pack's 23 min and 14 km times the pack's charge - the per cent the STANAG page shows, FLEET's gauge (3.3 V a cell empty, 4.2 V full). An estimate from the voltage: lower while the drone flies (the pack sags under load), none without a pack reading.
+  - *STANAG page:* FLIGHT and RANGE beside DRONE in the line of figures, yellow with it when the pack is low.
+  - *FLEET detail:* on the GPS line, after the temperatures ("13 MIN / 8.1 KM"), brighter than the figures beside it, yellow when low. On that line and not one more: the strip's height is what lets ten phones fit a small screen without scrolling; the line's letters go a little smaller (to 9 pt at most) when it is full.
+- For developers: `FleetCards.FULL_RANGE_KM` / `FULL_FLIGHT_MIN`, `flightLeft` / `rangeLeft`; `StanagShow.stats`; `FleetManagementPanel.leftText` / `figuresFont`. Tests: `FleetCardsTest.flightTimeAndRangeLeftGoByThePacksCharge`, `StanagShowTest`, `StanagPagePainterTest`.
+
 ## 1.0.65 + phone pc.52 (2026-11-13)
 
 With the phone app **DRAUPNE Flight 2.3.0-pc.52** (one change: a phone in standby can be observed). Tried by the pilot in the dev window with the demo's drones and one phone (pages, the address change, a multicast group); not in ATAK / QGIS, and pc.52 not on a phone yet.

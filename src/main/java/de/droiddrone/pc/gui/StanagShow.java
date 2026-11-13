@@ -49,7 +49,8 @@ final class StanagShow {
 
     /**
      * The drone's figures as FLEET has them: the phone's battery, the drone's pack in per cent (with the time when this
-     * PC read it a while ago), when it was last heard and when a sleeper checks in next. Times as clock times, to the
+     * PC read it a while ago) and the flight time and range that leaves ({@link FleetCards#FULL_FLIGHT_MIN}), when it
+     * was last heard and when a sleeper checks in next. Times as clock times, to the
      * minute: the page is a still picture, and stays one between its changes.
      */
     static java.util.List<Stat> stats(FleetCards.Card c, long wallNow) {
@@ -62,6 +63,9 @@ final class StanagShow {
             String v = percent + " %";
             if (c.cellAgeMs() > CELL_OLD_MS) v += " AT " + minute(wallNow - c.cellAgeMs());
             out.add(new Stat("DRONE", v, percent < DRONE_LOW_PERCENT));
+            // the pilot: "flight time remaining and estimated range left ... displayed on the stanag screen"
+            out.add(new Stat("FLIGHT", FleetCards.flightLeft(c.cellVolts()), percent < DRONE_LOW_PERCENT));
+            out.add(new Stat("RANGE", FleetCards.rangeLeft(c.cellVolts()), percent < DRONE_LOW_PERCENT));
         }
         if (c.heardAgoMs() >= 0 && !"CONNECTED".equals(c.badge())) out.add(new Stat("HEARD", minute(wallNow - c.heardAgoMs()), false));
         if (c.nextCheckMs() > 0 && c.nextCheckMs() != FleetCards.LISTENING) out.add(new Stat("NEXT CHECK", minute(wallNow + c.nextCheckMs()), false));
