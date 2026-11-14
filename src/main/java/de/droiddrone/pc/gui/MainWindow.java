@@ -356,6 +356,9 @@ public class MainWindow extends JFrame {
     private final GlyphButton beeperButton = new GlyphButton(GlyphButton.Glyph.BEEPER, "Beeper");
     /** Detection areas on the video (2026-11-10, the pilot: a button with MUTE and BEEPER, no longer in VIDEO's menu). */
     private final GlyphButton areasButton = new GlyphButton(GlyphButton.Glyph.AREAS, "Detection areas");
+    /** MARK (P): the next click on the picture drops a pin there. STILL (S): the picture as PNG files. */
+    private final GlyphButton markButton = new GlyphButton(GlyphButton.Glyph.MARK, "Mark");
+    private final GlyphButton stillButton = new GlyphButton(GlyphButton.Glyph.STILL, "Still");
     /** MUTE (1.0.45): the phone's live sound on this PC, on or off; per phone (AUDIO_MUTED_KEY). */
     private final GlyphButton muteButton = new GlyphButton(GlyphButton.Glyph.SOUND, "Mute");
     static final String AUDIO_MUTED_KEY = "audio.muted";
@@ -634,6 +637,10 @@ public class MainWindow extends JFrame {
                 });
         videoView.setAreaLayer(areaLayer);
         areaLayer.setShown(detection.levelFor(config.getString(Names.PHONE_NAME_KEY)) > 0);
+        videoMark = new VideoMark(videoView, new MarkHost(), System::currentTimeMillis);
+        videoView.setMarkLayer(videoMark);
+        stillSaver = new StillSaver(StillSaver.Source.of(videoView, () -> video, this::osdData), AppPaths::videosDir, videoMark::say,
+                this::logLine, SwingUtilities::invokeLater);
         this.configFile = configFile;
         this.service = service;
         cameraView.configure(config);
@@ -725,8 +732,16 @@ public class MainWindow extends JFrame {
         bindKey(KeyEvent.VK_M, () -> {
             if (!(KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner() instanceof JTextComponent)) toggleMute();
         });
+        // P: MARK, S: STILL - plain letters as M
+        bindKey(KeyEvent.VK_P, () -> {
+            if (!(KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner() instanceof JTextComponent)) videoMark.toggle();
+        });
+        bindKey(KeyEvent.VK_S, () -> {
+            if (!(KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner() instanceof JTextComponent)) stillSaver.save();
+        });
         bindKey(KeyEvent.VK_ESCAPE, () -> {
-            if (latencyMeter != null) setLatencyTest(false);
+            if (videoMark.isArmed()) videoMark.disarm();
+            else if (latencyMeter != null) setLatencyTest(false);
             else exitFullScreen();
         });
         new Timer(33, e -> refresh()).start();
@@ -1374,17 +1389,29 @@ public class MainWindow extends JFrame {
         areasButton.setToolTipText("<html>Detection areas: boxes on the picture with their own sensitivity.<br>"
                 + "On: drag to draw one, right-click one to change or delete it. Again: done.</html>");
         areasButton.addActionListener(e -> {
+            videoMark.disarm(); // one cross-cursor mode at a time
             areaLayer.setEditing(!areaLayer.isEditing());
             areasButton.setSelected(areaLayer.isEditing());
         });
         videoBar.add(areasButton);
+        videoBar.add(Box.createVerticalStrut(4));
+        // MARK: the next click on the picture is a pin on the map; STILL: the picture saved beside the recordings
+        markButton.setAlignmentX(CENTER_ALIGNMENT);
+        markButton.setToolTipText("Mark (P): the next click on the picture drops a pin; Esc ends it");
+        markButton.addActionListener(e -> videoMark.toggle());
+        videoBar.add(markButton);
+        videoBar.add(Box.createVerticalStrut(4));
+        stillButton.setAlignmentX(CENTER_ALIGNMENT);
+        stillButton.setToolTipText("Still (S): the picture as PNG files, with and without the OSD");
+        stillButton.addActionListener(e -> stillSaver.save());
+        videoBar.add(stillButton);
         videoBar.add(Box.createVerticalGlue());
         video.add(videoBar, BorderLayout.EAST);
-        videoView.setToolTipText("Double-click: video only    F11: full screen    F2: OSD    M: sound");
+        videoView.setToolTipText("Double-click: video only    F11: full screen    F2: OSD    M: sound    P: mark    S: still");
         videoView.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() != 2) return;
+                if (e.getClickCount() != 2 || videoMark.claims(e)) return; // not the second half of a click that marked
                 if (fullScreen != null) exitFullScreen();
                 else if (popOut != null) popOut.setExtendedState(popOut.getExtendedState() ^ JFrame.MAXIMIZED_BOTH);
                 else toggleVideoOnly();
@@ -2111,6 +2138,35 @@ public class MainWindow extends JFrame {
     /** Each drone's motion detection level, and the detections' marks on the maps. */
     private final DetectionController detection;
     private final DetectionAreaLayer areaLayer;
+    /** MARK: a click on the picture as a pin on the map; it also draws the video's short lines (PIN ..., STILL SAVED). */
+    private final VideoMark videoMark;
+    /** STILL: the picture as PNG files beside the recordings. */
+    private final StillSaver stillSaver;
+
+    /** What MARK takes from the window: the drone on the video - flown or watched - the pins and the maps. */
+    private final class MarkHost implements VideoMark.Host {
+        public String off() { // observing, or a spectator of a PC that is: the grid stands in the picture's place
+            return VideoMark.off(observation != null || videoView.getParent() == null, latencyMeter != null, areaLayer.isEditing());
+        }
+
+        public PinDrop.Sight look(double u, double v) {
+            Connection c = connection;
+            int[] size = video == null ? null : video.pictureSize();
+            if (size != null) cameraView.setPictureSize(size[0], size[1]); // the maps set it only while one is in sight
+            return PinDrop.look(cameraView, c == null ? null : c.getLink().getTelemetry(), track, u, v);
+        }
+
+        public boolean onMap(Pins.Pin pin) {
+            miniMap.repaint();
+            if (mapWindow != null) mapWindow.map().repaint();
+            return miniMap.allPins().contains(pin);
+        }
+
+        public Pins pins() { return pins; }
+        public Coordinates.Format format() { return coordinateFormat; }
+        public void armed(boolean on) { markButton.setSelected(on); }
+        public void log(String line) { logLine(line); }
+    }
 
     /**
      * Connected, with the map not popped out: the minimap follows the drone. (Up to 1.0.38 the connection fields and
