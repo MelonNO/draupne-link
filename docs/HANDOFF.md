@@ -79,6 +79,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 | What | Needed for | Notes |
 |---|---|---|
 | JDK 21 (Temurin) | everything | `gradlew.bat test`, `installDist`, `releaseZip` |
+| Gradle plugin `org.gradle.test-retry` 1.6.2 | `quarantineTest` | Gradle fetches it; build-time only, not in the app |
 | WiX Toolset 3.14 on PATH | `packageInstaller` | jpackage builds the MSI with it; `src/installer/main.wxs` is jpackage's own with additions marked "DRAUPNE Link" |
 | JDK 17, Android SDK (`platforms;android-34`, `build-tools;34.0.0`, `ndk;26.3.11579264`) | phone app | `flight-app/build.ps1`; see the top of that script |
 | Phone app signing key | phone app | `flight-release.jks` + `flight-release.password` in `%APPDATA%\DroidDronePC-build` (or `DD_FLIGHT_KEYSTORE` / `DD_FLIGHT_KEYSTORE_PASSWORD`). **Not in the repo; keep a private backup.** Android only installs an update signed with the same key: with a new key, every phone must uninstall the app once |
@@ -100,6 +101,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 4. Run the tests, commit, push, then `git tag v<version>` and `git push origin v<version>`.
    `.github/workflows/release.yml` then:
    - checks the tag matches `build.gradle`
+   - runs the tests - unless a Build run (`build.yml`) for this very commit is completed and successful: tag once
+     the push's Build run is green and the release leaves them out; in every other case it runs them itself
    - builds the installer and zip
    - fetches the pinned APK and checks its SHA-256
    - publishes all three with `RELEASE_NOTES.md` as the text
@@ -119,10 +122,57 @@ Lessons from releasing:
 
 ## Testing and diagnosing
 
-- `gradlew.bat test`: 1355 tests at 1.0.66 (protocol, video, telemetry, calibration, Betaflight CLI plans, update
-  check, cell count, spectator mode end to end on loopback, flight mode / ARM / failsafe planning, setup page
-  composition, and the newer parts: the map, the virtual fleet, observation, overwatch, STANAG).
-  Loopback tests need full-size packets to catch size bugs: 1.0.17's spectator cut-off passed with a plain test
+- **Three test tasks** over the same test classes, told apart by JUnit tags (`build.gradle`):
+  - `gradlew.bat test`: every test without a tag, 1559 on 2026-11-14 (protocol, video, telemetry,
+    calibration, Betaflight CLI plans, update check, cell count, spectator mode end to end on loopback, flight mode /
+    ARM / failsafe planning, setup pages, the map, the virtual fleet, observation, overwatch, STANAG, the motion
+    detector on made-up scenes). Its classes run side by side in up to 4 JVMs ("forks": half the cores, 4 at most).
+  - `gradlew.bat perfTest`: `@Tag("perf")`, what the code costs in time (17 tests: `PaintCostTest`,
+    `PipelinePerfTest`, `StanagPerfTest`, `MotionDetectorPerfTest`, `ShowScenePerfTest`, `LinkPerformanceTest` and
+    seven single tests elsewhere). One at a time; meant for a PC doing nothing else - a budget missed on a busy PC
+    says little.
+  - `gradlew.bat quarantineTest`: `@Tag("quarantine")`, tests known to fail now and then under load. Each is tried up
+    to 3 times (the Gradle plugin `org.gradle.test-retry`: build-time only, nothing of it is in the app; the other
+    two tasks never retry).
+- **A tagged test runs in its own task only:** `gradlew.bat perfTest --tests PaintCostTest`,
+  `gradlew.bat quarantineTest --tests "*VideoTest.aHeldKeyFrameIsReleasedWhenNoConfigComes"`. `test --tests ...`
+  finds no such test. `--rerun` after the task's name runs it again although nothing changed.
+- **Which tag.** `perf`: the test asserts a duration or a rate measured on this PC (a paint under so many ms, the
+  pacer's rate). `quarantine`: the test was seen failing without a fault in the code; its reason is a comment at the
+  tag, and it leaves quarantine when the cause is found and fixed. Everything else has no tag and must pass every
+  time, beside three other forks and a running DRAUPNE Link.
+- **In quarantine now**, with the reasons recorded at the tags:
+  - `OverwatchFleetEndToEndTest.lostArmedThenAReconnectThatSaysDisarmedEndsTheWindowAndTheHeldAlertSaysWhy`: the
+    known flake under load (real seconds of flying, a link loss and a detection).
+  - `PinsAndFlightsTest.theRecordingPlaysFromTheRawFileWhenTheOsdCopyWontOpen`: on a loaded PC now and then no
+    picture 0.6 s after PLAY (the player runs at the lowest priority); cause not found.
+  - `SpectatorTest.aCongestionPauseLeavesNoGapAndIsAnnounced`: the "congestion flake" of release runs; its wait for
+    the announcement came with 1.0.64.
+  - `PipelineRecoveryTest.aBacklogKeepsItsNewestKeyFrame`: steadied in 1.0.49, still fails now and then under load.
+  - `VideoTest.aHeldKeyFrameIsReleasedWhenNoConfigComes`: the held-key-frame flake under load; the cut that caused it
+    went with 1.0.54.
+- **Tests of different classes run at the same time**, and the pilot's DRAUPNE Link may run beside them: no test
+  counts on a fixed port or file, or reads or writes `%APPDATA%\DraupneLink` or `Documents\DRAUPNE Link`.
+  `de.droiddrone.testing.Waits` is the one way to wait for another thread (`waitFor`, `await`, `until`,
+  `waitForOnSwing`); `Ports.free()` and `Ports.freeTcp()` hand out free UDP and TCP ports; files go into JUnit's
+  `@TempDir`. `TestHygieneTest` reads the test sources and fails on a waiting helper or a port number of a test's own,
+  and on a fixed port of the app's (`ApkShare.PORT`).
+- **A long test class holds up its fork.** Gradle deals the class files out to the forks in turn as it finds them
+  (in name order here; a class that failed in the run before goes first), all before any runs, and a fork runs its
+  share one class after the other. The motion detector's five long scenes were one class with its short tests: 10.2
+  minutes alone, the suite 11.2. Each is now a class of its own (`MotionDetectorEdgeWindTest`, `...LeavesBoxedTest`,
+  `...LongWindTest`, `...CloseUpWoodsTest`, `...NearBranchTest`; shared helpers in `MotionScenes`): 5.3 and 6.2
+  minutes, the longest class 2.5 (2026-11-14, `test --rerun`, another build on the same PC). A new scene of a minute
+  or more gets a class of its own too.
+- **A fork's classes share one JVM:** a thread or a static of the app's that stays for good is still there for the
+  classes after it. `PinsAndFlightsTest` waited for every thread named `flight*` to end, and timed out whenever a
+  Debrief test had started the notes' writer (one thread for good) in the same fork.
+- **CI** (`.github/workflows/build.yml`, on a push to `main` or `beta` and on pull requests; a newer push to the
+  same branch cancels the older run): job `test` runs `gradlew test` and is the workflow's result with `phone-app`
+  (the phone app still builds). Jobs `perf` and `quarantine` run the other two tasks; they are shown and keep their
+  report as an artifact when they fail, but never fail the workflow. `phone-app` keeps its Gradle files and the NDK
+  (not on the runner's image) in caches of its own.
+- Loopback tests need full-size packets to catch size bugs: 1.0.17's spectator cut-off passed with a plain test
   picture (see `SpectatorTest.fullSizePacketsReachTheSpectatorWhole`).
 - **App log:** `%APPDATA%\DraupneLink\logs\app-DATE.log` (`AppLog`, 14 days): System.out/err, the window's log
   lines, uncaught exceptions with stacks, and **every thread's stack when the window stops responding for 5 s**.
