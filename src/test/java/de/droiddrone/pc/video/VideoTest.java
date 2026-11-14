@@ -1,5 +1,6 @@
 package de.droiddrone.pc.video;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -1037,6 +1038,7 @@ class VideoTest {
     }
 
     @Test
+    @Tag("perf")
     void decodeAndDrawTimeAt720p() {
         TestStreams.Stream s = TestStreams.h264(1280, 720, 60, 30, true);
         long decodeNs = 0, convertNs = 0;
@@ -1065,6 +1067,7 @@ class VideoTest {
 
     /** The screen is bigger than the camera picture: 720p scaled up to 1080p BGRA, the scaler's heaviest job here. */
     @Test
+    @Tag("perf")
     void convertTo1080pTime() {
         TestStreams.Stream s = TestStreams.h264(1280, 720, 40, 20, true);
         long convertNs = 0;

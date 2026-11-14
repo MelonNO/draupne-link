@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.awt.Font;
@@ -24,6 +25,7 @@ class OsdFontsTest {
 
     /** The time to paint the whole HUD on a 1280x720 picture, as the screen does: printed, and well inside a frame. */
     @Test
+    @Tag("perf")
     void theHudPaintsWellInsideAFrame() {
         OsdRenderer.Data d = new OsdPreview().data();
         OsdLayout layout = OsdLayout.defaults();

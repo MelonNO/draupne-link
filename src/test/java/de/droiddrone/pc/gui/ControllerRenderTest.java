@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -104,6 +105,7 @@ class ControllerRenderTest {
     }
 
     @Test
+    @Tag("perf")
     void aFrameIsQuickEnoughToAnimate() {
         ControllerRender.frame(ControllerRender.Show.SWEEP, 0, 0, 460, 250); // warm up
         long t0 = System.nanoTime();

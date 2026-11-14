@@ -12,6 +12,7 @@ import de.droiddrone.pc.video.TestStreams;
 import de.droiddrone.pc.video.VideoPipeline;
 import de.droiddrone.testing.Ports;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.net.DatagramPacket;
@@ -350,6 +351,7 @@ class ControlLinkTest {
     }
 
     @Test
+    @Tag("perf")
     void pacerHoldsItsRateOnWindows() throws Exception {
         Pacer pacer = new Pacer(100);
         long start = System.nanoTime();
