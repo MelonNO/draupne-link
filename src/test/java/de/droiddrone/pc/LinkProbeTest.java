@@ -1,8 +1,7 @@
 package de.droiddrone.pc;
 
+import de.droiddrone.testing.Ports;
 import org.junit.jupiter.api.Test;
-
-import java.net.DatagramSocket;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -10,10 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class LinkProbeTest {
     @Test
     void theProbeWatchesNeverFlies() throws Exception {
-        int port;
-        try (DatagramSocket free = new DatagramSocket(0)) {
-            port = free.getLocalPort();
-        }
+        int port = Ports.free();
         PcConfig config = PcConfig.defaults();
         config.set("ip", "127.0.0.1");
         config.set("port", Integer.toString(port));

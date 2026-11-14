@@ -14,11 +14,10 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * The virtual fleet's pilot PC (1.0.56, the tour's spectator steps) against DRAUPNE Link's real spectator code on
@@ -38,14 +37,6 @@ class VirtualPilotPcTest {
         if (spectator != null) spectator.close();
         if (pilot != null) pilot.close();
         if (fleet != null) fleet.close();
-    }
-
-    private static void waitFor(BooleanSupplier ok, long ms, String what) throws InterruptedException {
-        long until = System.currentTimeMillis() + ms;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > until) fail("waited " + ms + " ms for " + what);
-            Thread.sleep(20);
-        }
     }
 
     @Test

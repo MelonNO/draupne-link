@@ -2,6 +2,7 @@ package de.droiddrone.pc;
 
 import de.droiddrone.common.FleetProtocol;
 import de.droiddrone.pc.setup.Tailscale;
+import de.droiddrone.testing.Ports;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -266,10 +267,7 @@ class NameServiceBooksTest {
      */
     @Test
     void noSleepOnBehindAQueuedMode() throws Exception {
-        int port;
-        try (DatagramSocket probe = new DatagramSocket(0)) {
-            port = probe.getLocalPort();
-        }
+        int port = Ports.free();
         Tailscale.Status status = new Tailscale.Status(true, true, "Running", "", "127.0.0.2", "this-pc", List.of());
         names = new Names(config, this::save);
         service = new NameService(config, names, () -> status, port, true, this::save, log::add);

@@ -5,6 +5,7 @@ import de.droiddrone.common.SavedPacket;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.common.UdpPacketData;
 import de.droiddrone.common.UdpSender;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.net.DatagramPacket;
@@ -18,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * not fail them): a stick frame built (250 a second, on the input thread - latency first) and a numbered packet
  * through the receive buffer (telemetry, pongs). The figures are printed for the record.
  */
+@Tag("perf")
 class LinkPerformanceTest {
     @Test
     void aStickFrameIsBuiltInMicroseconds() throws Exception {

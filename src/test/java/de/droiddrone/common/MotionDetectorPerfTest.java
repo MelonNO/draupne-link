@@ -1,5 +1,6 @@
 package de.droiddrone.common;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -9,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * detector timed. The phone runs it a few times a second on its own thread; on this PC it takes about 1 ms a picture.
  * The budget is ten times that, to catch a slip without failing on a busy release runner.
  */
+@Tag("perf")
 class MotionDetectorPerfTest {
     @Test
     void aPictureCostsAMillisecondOrSo() {

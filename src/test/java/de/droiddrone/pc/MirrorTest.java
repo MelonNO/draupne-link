@@ -15,12 +15,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
+import static de.droiddrone.testing.Waits.await;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * The mirror (1.0.56) on loopback, ephemeral ports both sides: a spectator joins through the pilot's link port, gets the
@@ -104,14 +104,6 @@ class MirrorTest {
         return c;
     }
 
-    private static void waitFor(BooleanSupplier ok, long ms, String what) throws InterruptedException {
-        long until = System.currentTimeMillis() + ms;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > until) fail("waited " + ms + " ms for " + what);
-            Thread.sleep(10);
-        }
-    }
-
     @Test
     void theSpectatorGetsThePilotPcsModeAndSectionsAndFollowsAChangeAtOnce() throws Exception {
         MirrorHost h = host(() -> true);
@@ -123,7 +115,7 @@ class MirrorTest {
         h.setSection("text.map", big);
         Seen seen = new Seen();
         MirrorClient c = client(linkPort(h), seen);
-        waitFor(() -> seen.last() != null, 3000, "the first state");
+        await(() -> seen.last() != null, 3000, "the first state");
         assertTrue(c.isJoined());
         assertEquals(1, h.count());
         Mirror.Mode m = Mirror.Mode.decode(seen.last().get(Mirror.MODE));
@@ -136,7 +128,7 @@ class MirrorTest {
         // the pilot starts observing: the spectator hears it well within the once-a-second state
         long at = System.currentTimeMillis();
         h.setSection(Mirror.MODE, new Mirror.Mode(Mirror.OBSERVER, "", List.of("MobileYankee", "MobileX-ray"), 1, -1).encode());
-        waitFor(() -> {
+        await(() -> {
             Mirror.Mode x = Mirror.Mode.decode(seen.last().get(Mirror.MODE));
             return x != null && x.mode() == Mirror.OBSERVER;
         }, 2000, "the OBSERVER mode");
@@ -161,12 +153,12 @@ class MirrorTest {
         Seen seen = new Seen();
         client(linkPort(h), seen);
         // joined: the config comes for the tile's decoder, and its phone is asked for a key frame
-        waitFor(() -> seen.tiles.stream().anyMatch(t -> t[0] == 0 && t[1] == UdpCommon.VideoInitialFrame), 3000, "tile 0's config");
-        waitFor(() -> keyAsks.get() > 0, 2000, "a key frame asked of tile 0's phone");
+        await(() -> seen.tiles.stream().anyMatch(t -> t[0] == 0 && t[1] == UdpCommon.VideoInitialFrame), 3000, "tile 0's config");
+        await(() -> keyAsks.get() > 0, 2000, "a key frame asked of tile 0's phone");
         // a packet from tile 1's phone now reaches the spectator as it was
         byte[] later = {UdpCommon.VideoFrame, 0, 8, 0, 0, 0, 0, 5};
         h.tile(1, later, later.length);
-        waitFor(() -> seen.tiles.stream().anyMatch(t -> t[0] == 1 && t[1] == UdpCommon.VideoFrame && t[8] == 5), 2000, "tile 1's frame");
+        await(() -> seen.tiles.stream().anyMatch(t -> t[0] == 1 && t[1] == UdpCommon.VideoFrame && t[8] == 5), 2000, "tile 1's frame");
     }
 
     @Test
@@ -176,15 +168,15 @@ class MirrorTest {
         h.setSection(Mirror.MODE, new Mirror.Mode(Mirror.PILOT, "MobileZulu", List.of(), -1, -1).encode());
         Seen seen = new Seen();
         MirrorClient c = client(linkPort(h), seen);
-        waitFor(() -> !seen.joins.isEmpty(), 3000, "the refusal");
+        await(() -> !seen.joins.isEmpty(), 3000, "the refusal");
         assertTrue(seen.joins.get(0).startsWith("left"), seen.joins.toString());
         Thread.sleep(300);
         assertNull(seen.last());
         assertEquals(0, h.count());
         // switched on: the next ask gets in
         allowed.set(true);
-        waitFor(c::isJoined, 3000, "joined once allowed");
-        waitFor(() -> seen.last() != null, 2000, "the state");
+        await(c::isJoined, 3000, "joined once allowed");
+        await(() -> seen.last() != null, 2000, "the state");
     }
 
     @Test
@@ -193,9 +185,9 @@ class MirrorTest {
         h.setSection(Mirror.MODE, new Mirror.Mode(Mirror.IDLE, "", List.of(), -1, -1).encode());
         Seen seen = new Seen();
         MirrorClient c = client(linkPort(h), seen);
-        waitFor(c::isJoined, 3000, "joined");
+        await(c::isJoined, 3000, "joined");
         h.close();
-        waitFor(() -> seen.joins.stream().anyMatch(j -> j.contains("closed")), 2000, "the BYE");
+        await(() -> seen.joins.stream().anyMatch(j -> j.contains("closed")), 2000, "the BYE");
     }
 
     @Test

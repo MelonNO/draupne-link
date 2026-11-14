@@ -33,8 +33,12 @@ class FleetPanelTest {
             assertTrue(dump.contains("127.0.0.11:"), "its address: " + dump);
             // the pilot's start place, shown as MGRS
             assertTrue(dump.contains("Start place " + Fleet.DEFAULT_PLACE), dump); // 1.0.52: the tour's launch point
-            // for a look at the layout: build/test-work/fleet-panel.png (the tests' working folder)
-            javax.imageio.ImageIO.write(img, "png", new java.io.File("fleet-panel.png"));
+            // for a look at the layout: fleet-panel.png in the folder FLEET_SHOTS names (nothing is written otherwise)
+            String shots = System.getenv("FLEET_SHOTS");
+            if (shots != null) {
+                java.nio.file.Files.createDirectories(java.nio.file.Path.of(shots));
+                javax.imageio.ImageIO.write(img, "png", java.nio.file.Path.of(shots, "fleet-panel.png").toFile());
+            }
         }
     }
 

@@ -23,11 +23,10 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.BooleanSupplier;
 
+import static de.droiddrone.testing.Waits.waitForOnSwing;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * The mirror as the windows use it (1.0.56), on loopback with two virtual drones: a pilot PC observing them, and a
@@ -104,17 +103,6 @@ class MirrorControllerTest {
         return s.getLocalPort();
     }
 
-    private static void waitFor(BooleanSupplier ok, long ms, String what) throws Exception {
-        long until = System.currentTimeMillis() + ms;
-        while (true) {
-            boolean[] r = new boolean[1];
-            SwingUtilities.invokeAndWait(() -> r[0] = ok.getAsBoolean());
-            if (r[0]) return;
-            if (System.currentTimeMillis() > until) fail("waited " + ms + " ms for " + what);
-            Thread.sleep(20);
-        }
-    }
-
     @Test
     void theSpectatorShowsThePilotsTilesAndFleetAndItsOwnPictureAgainAfter() throws Exception {
         PcConfig config = PcConfig.defaults();
@@ -161,14 +149,14 @@ class MirrorControllerTest {
         });
 
         // the pilot's grid takes the spectator's video area, a tile a drone, each decoding its relayed stream
-        waitFor(() -> grid(watcherHost) != null && grid(watcherHost).count() == 2, 5000, "the pilot's two tiles");
-        waitFor(() -> pilotHost.cards.equals(watcher.fleetShown(List.of())), 5000, "the pilot's FLEET list");
-        waitFor(() -> watcher.mirroredMode() != null && watcher.mirroredMode().tiles().equals(List.of(a.name(), b.name())), 3000, "the tiles' names");
-        waitFor(() -> decoding(watcher) == 2, 15_000, "both tiles' pictures decoded here");
+        waitForOnSwing(() -> grid(watcherHost) != null && grid(watcherHost).count() == 2, 5000, "the pilot's two tiles");
+        waitForOnSwing(() -> pilotHost.cards.equals(watcher.fleetShown(List.of())), 5000, "the pilot's FLEET list");
+        waitForOnSwing(() -> watcher.mirroredMode() != null && watcher.mirroredMode().tiles().equals(List.of(a.name(), b.name())), 3000, "the tiles' names");
+        waitForOnSwing(() -> decoding(watcher) == 2, 15_000, "both tiles' pictures decoded here");
 
         // the pilot stops observing: the spectator's own picture is back
         pilotHost.mode = Mirror.IDLE;
-        waitFor(() -> grid(watcherHost) == null, 3000, "the grid gone");
+        waitForOnSwing(() -> grid(watcherHost) == null, 3000, "the grid gone");
         SwingUtilities.invokeAndWait(() -> assertSame(watcherHost.video, watcherHost.home.getComponent(0)));
         // and stopping watching gives back this PC's own FLEET list
         SwingUtilities.invokeAndWait(watcher::unwatch);
