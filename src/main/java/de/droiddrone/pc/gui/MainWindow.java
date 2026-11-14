@@ -2062,6 +2062,10 @@ public class MainWindow extends JFrame {
             l.sample(c.getLink(), service.getSnapshot().selected() != null, s != null && s.isRcEnabled(),
                     vs == null ? 0 : vs.shownFps(), s == null ? null : s.getLastChannels(), phonePath, vs, service.getPollMaxMs());
         } catch (IOException e) {
+            try {
+                l.close(); // not only dropped: its file handle, and the older logs sorted out as at any close
+            } catch (IOException ignored) {
+            }
             linkLog = null;
             logLine("Link log stopped: " + e.getMessage());
         }
