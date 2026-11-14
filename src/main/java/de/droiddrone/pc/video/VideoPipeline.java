@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.IntSupplier;
 
@@ -622,6 +623,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         try {
             while (running) {
                 framesDone = taken; // back here: every frame taken so far is done with
+                if (stillWanted.get() != null) handStill(decoder); // between frames: the one just shown waited for nothing
                 Object item;
                 try {
                     item = queue.poll(200, TimeUnit.MILLISECONDS);
@@ -849,6 +851,40 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (t != null && c != null) {
             t.onConfig(c.width(), c.height(), c.hevc(), c.codecConfig());
             requestKeyFrame();
+        }
+    }
+
+    // ------------------------------------------------------------------ a still
+
+    private final AtomicReference<Consumer<VideoDecoder.Kept>> stillWanted = new AtomicReference<>();
+
+    /**
+     * STILL: the picture the decoder has in hand - the one on screen - kept at its own size (the screen's copy is
+     * scaled to the view). Handed to `to` on the decode thread when it is next between frames (after the next frame,
+     * or within 200 ms when none comes); null without a picture. `to` must only pass it on: its pixels
+     * ({@link VideoDecoder.Kept#rgb}) are for a thread of the caller's own, which also closes it. One at a time - asked
+     * again before the hand-over, the first is never answered. Costs the video a look at a field per frame, and a
+     * reference to the picture (nothing copied) per still.
+     */
+    public void keepPicture(Consumer<VideoDecoder.Kept> to) {
+        stillWanted.set(to);
+    }
+
+    /** The decode thread, between frames. Whatever goes wrong here is the still's alone: not the video's error. */
+    private void handStill(VideoDecoder decoder) {
+        Consumer<VideoDecoder.Kept> to = stillWanted.getAndSet(null);
+        if (to == null) return;
+        VideoDecoder.Kept kept = null;
+        try {
+            kept = decoder == null ? null : decoder.keep();
+        } catch (Throwable e) {
+            log("Video: no still - " + e);
+        }
+        try {
+            to.accept(kept); // null: told so, not left waiting
+        } catch (Throwable e) {
+            log("Video: no still - " + e);
+            if (kept != null) kept.close();
         }
     }
 
