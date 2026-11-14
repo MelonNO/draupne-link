@@ -18,8 +18,9 @@ import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Which link logs stay: a kept flight's as long as the flight, the others the newest {@link LinkLog#KEEP}. The older
- * logs here are made-up names from 2001, so the one LinkLog opens now is the newest by its name.
+ * Which link logs stay: a kept flight's as long as the flight, the others the newest {@link LinkLog#KEEP} - and when
+ * that is sorted out: as a connection's log is closed, never as it is opened. The older logs here are made-up names
+ * from 2001, so the one LinkLog opens now is the newest by its name.
  */
 class LinkLogKeepTest {
     @TempDir
@@ -42,12 +43,15 @@ class LinkLogKeepTest {
         }
     }
 
-    /** Opens a new log as CONNECT does, waits until the older ones are sorted out, and closes it. Returns its name. */
+    /**
+     * Opens a new log as CONNECT does and closes it as DISCONNECT does - the older ones are sorted out then, not
+     * before - and waits until they are. Returns its name.
+     */
     private String connect(Predicate<Path> kept) throws Exception {
-        try (LinkLog log = LinkLog.open(dir("logs"), kept)) {
-            log.awaitSorted();
-            return log.file().getFileName().toString();
-        }
+        LinkLog log = LinkLog.open(dir("logs"), kept);
+        log.close();
+        log.awaitSorted();
+        return log.file().getFileName().toString();
     }
 
     private Predicate<Path> keptFlights() throws IOException {
@@ -118,8 +122,37 @@ class LinkLogKeepTest {
         for (int n = 0; n < 25; n++) plain(2, n);
         try (LinkLog log = LinkLog.open(dir("logs"))) {
             assertNotNull(log.file());
+            assertEquals(LinkLog.KEEP, logs().size(), "sorted out at once, on the caller's thread, as it always was");
         }
         assertEquals(LinkLog.KEEP, logs().size());
+    }
+
+    @Test
+    void theOlderLogsAreSortedOutWhenTheLogIsClosedNotWhenItIsOpened() throws Exception {
+        AtomicInteger asked = new AtomicInteger();
+        Predicate<Path> counting = f -> {
+            asked.incrementAndGet();
+            return false;
+        };
+        for (int n = 0; n < 25; n++) plain(1, n);
+        LinkLog log = LinkLog.open(dir("logs"), counting);
+        log.awaitSorted(); // nothing to wait for: opening starts no thread
+        log.event("Connecting to MobileAlpha (192.0.2.7:8888)");
+        assertEquals(0, asked.get(), "nobody is asked while the connection is up");
+        assertEquals(26, logs().size(), "and nothing has gone: " + logs());
+
+        log.close();
+        log.awaitSorted();
+        assertEquals(25, asked.get(), "asked once the log is closed: each older log once");
+        assertEquals(LinkLog.KEEP, logs().size(), "the newest logs are kept, the closed one among them");
+        assertTrue(logs().contains(log.file().getFileName().toString()));
+        assertTrue(Files.readString(log.file()).contains("Connecting to MobileAlpha"), "the log itself was closed whole first");
+
+        for (int n = 0; n < 5; n++) plain(2, n); // 25 again, and a second close: nothing more happens
+        log.close();
+        log.awaitSorted();
+        assertEquals(25, asked.get(), "sorted out once, however often it is closed");
+        assertEquals(LinkLog.KEEP + 5, logs().size());
     }
 
     @Test

@@ -3,8 +3,14 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.pc.audio.FileAudio;
 import de.droiddrone.pc.flights.FlightData;
 import de.droiddrone.pc.flights.FlightLibrary;
+import de.droiddrone.pc.flights.FlightMarks;
+import de.droiddrone.pc.flights.FlightNotes;
+import de.droiddrone.pc.flights.FlightReport;
+import de.droiddrone.pc.flights.FlightSummary;
+import de.droiddrone.pc.map.Pins;
 import de.droiddrone.pc.map.TileCache;
 import de.droiddrone.pc.map.TileSource;
+import de.droiddrone.pc.overwatch.ClipIndex;
 import de.droiddrone.pc.overwatch.ClipPlayer;
 
 import javax.swing.BorderFactory;
@@ -17,6 +23,7 @@ import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JTextArea;
 import javax.swing.ListCellRenderer;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
@@ -24,6 +31,8 @@ import javax.swing.Timer;
 import java.awt.BasicStroke;
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Component;
+import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -31,9 +40,13 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.GridLayout;
+import java.awt.Insets;
+import java.awt.LayoutManager;
+import java.awt.Shape;
 import java.awt.Window;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.Path2D;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferInt;
@@ -50,33 +63,86 @@ import java.util.function.Consumer;
  * battery over the flight, the link's ping, losses and failsafes from its link log - that a click or a drag moves to.
  * ON MAP draws it on the map window as before; EXPORT copies its files to a folder; DELETE removes them.
  * Decoding runs on a thread of its own at the lowest priority, the sound on another: never the live video's.
+ * <p>
+ * The debrief: over the video and the map the flight's figures as a whole ({@link SummaryStrip}), there without
+ * playing; on the bar its marks - the pilot's bookmarks, the pins dropped while it flew, the overwatch clips of its
+ * time - each a sign of its own to point at (when and what) and to click (the bar goes there). BOOKMARK (or B) marks
+ * the moment playing now with a few words; a right-click on a bookmark's sign renames or removes it. NOTE under the
+ * flights is the pilot's free text on the flight. Both are kept in the flight's notes file as they are made. The
+ * speed button plays 1X, 2X, 4X or 0.5X. REPORT writes the flight as one HTML file ({@link FlightReport}).
  */
 final class PreviousFlightsDialog extends JDialog {
     private static PreviousFlightsDialog open;
 
     private final Path tracksDir, videosDir, logsDir;
     private final Consumer<Path> onMap;
+    private final TileCache cache;
+    /** The app's pins and overwatch clips: those of a flight's time are marks on its bar. Null: none. */
+    private final Pins pins;
+    private final ClipIndex clips;
     private final DefaultListModel<FlightLibrary.Flight> model = new DefaultListModel<>();
     final JList<FlightLibrary.Flight> list = new JList<>(model);
     private final JLabel listNote = Theme.label("Reading flights...", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
     final VideoPane video = new VideoPane();
     final MapView map;
     final Timeline timeline = new Timeline();
-    private final JLabel[] figures = new JLabel[5];
+    final JLabel[] figures = new JLabel[5];
     final JButton play = Theme.primaryButton("Play");
     private final JButton onMapButton = Theme.secondaryButton("On map");
     private final JButton export = Theme.secondaryButton("Export");
     private final JButton delete = Theme.secondaryButton("Delete");
-    private final JLabel time = Theme.label("0:00 / 0:00", Theme.monoFont(Font.BOLD, 12.5f), Theme.TEXT);
+    final JButton report = Theme.secondaryButton("Report");
+    final JButton bookmark = Theme.secondaryButton("Bookmark");
+    final JButton speedButton = Theme.secondaryButton(speedText(1));
+    final JLabel time = Theme.label("0:00 / 0:00", Theme.monoFont(Font.BOLD, 12.5f), Theme.TEXT);
     private final Timer tick = new Timer(66, e -> tick());
+    final SummaryStrip summaryStrip = new SummaryStrip();
+    /** NOTE: the pilot's free text on the chosen flight. */
+    final JTextArea note = new JTextArea();
+    /** A moment after the last key in the note it is kept, so little of it is lost when the app ends with this window open. */
+    private final Timer noteIdle = new Timer(1500, e -> keepNote());
+    private boolean settingNote, reporting;
 
     FlightData data;
-    // the clock: epoch ms of the flight; while playing it runs from playFrom at playWall
+    /** The chosen flight's figures, the pilot's notes on it and what its bar marks; null and empty while none is loaded. */
+    FlightSummary summary;
+    FlightNotes notes;
+    List<FlightMarks.Mark> marks = List.of();
+    /** The overwatch clips of the chosen flight's time, read with it. */
+    private List<ClipIndex.Clip> flightClips = List.of();
+    // the clock: epoch ms of the flight; while playing it runs from run.from at run.wall, run.speed times as fast
     private volatile long position;
     private volatile boolean playing;
-    private long playFrom, playWall;
+    private volatile Run run = new Run(0, 0, 1);
+    /** How fast the clock runs while playing; kept over pause, seek and the next flight. */
+    private volatile double speed = 1;
+    /** This PC's time in ms: what the clock runs by (a test's own, to step it). */
+    volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
     private Player player;
     private FileAudio audio;
+    /** The thread reading the folders or the chosen flight now (or the one that did last). */
+    private volatile Thread reading;
+
+    /** The speeds the speed button goes round. */
+    static final double[] SPEEDS = {1, 2, 4, 0.5};
+
+    /**
+     * The clock while it runs: the flight's time `from` at this PC's time `wall`, going `speed` times as fast. One
+     * object, so the player's thread never reads half of a change.
+     */
+    private record Run(long from, long wall, double speed) {}
+
+    /**
+     * A flight read for this screen (off the Swing thread): its files, its figures, the pilot's notes and the
+     * overwatch clips that started while it flew.
+     */
+    record Debrief(FlightData data, FlightSummary summary, FlightNotes notes, List<ClipIndex.Clip> clips) {
+        /** @param index the app's clips, or null */
+        static Debrief read(FlightLibrary.Flight f, ClipIndex index) {
+            FlightData d = FlightData.load(f);
+            return new Debrief(d, FlightSummary.of(d), FlightNotes.load(f), FlightMarks.clipsIn(index, d.startMs(), d.endMs()));
+        }
+    }
 
     /** The tour: the window, while it is open; null otherwise. */
     static java.awt.Window tourWindow() {
@@ -90,8 +156,17 @@ final class PreviousFlightsDialog extends JDialog {
         if (d != null && d.isDisplayable()) d.dispose();
     }
 
-    /** Opens it (in front if open already). */
+    /** Opens it (in front if open already), its bars without pins or clips. */
     static void show(Window owner, TileCache cache, TileSource source, Consumer<Path> onMap) {
+        show(owner, cache, source, onMap, null, null);
+    }
+
+    /**
+     * Opens it (in front if open already).
+     * @param pins  the app's pins: those dropped during a flight are marks on its bar; null: none
+     * @param clips the app's overwatch clips: those that started during a flight are marks on its bar; null: none
+     */
+    static void show(Window owner, TileCache cache, TileSource source, Consumer<Path> onMap, Pins pins, ClipIndex clips) {
         if (open != null && open.isDisplayable()) {
             open.toFront();
             return;
@@ -106,7 +181,7 @@ final class PreviousFlightsDialog extends JDialog {
         } catch (java.io.IOException ignored) {
         }
         logs = de.droiddrone.pc.AppPaths.dataDir().resolve("logs");
-        open = new PreviousFlightsDialog(owner, cache, source, onMap, tracks, videos, logs);
+        open = new PreviousFlightsDialog(owner, cache, source, onMap, tracks, videos, logs, pins, clips);
         open.setCameraTurn(turnOf(owner));
         open.setVisible(true);
     }
@@ -136,11 +211,19 @@ final class PreviousFlightsDialog extends JDialog {
     }
 
     PreviousFlightsDialog(Window owner, TileCache cache, TileSource source, Consumer<Path> onMap, Path tracksDir, Path videosDir, Path logsDir) {
+        this(owner, cache, source, onMap, tracksDir, videosDir, logsDir, null, null);
+    }
+
+    PreviousFlightsDialog(Window owner, TileCache cache, TileSource source, Consumer<Path> onMap, Path tracksDir, Path videosDir, Path logsDir,
+                          Pins pins, ClipIndex clips) {
         super(owner, "Previous flights", ModalityType.MODELESS);
         this.tracksDir = tracksDir;
         this.videosDir = videosDir;
         this.logsDir = logsDir;
         this.onMap = onMap;
+        this.cache = cache;
+        this.pins = pins;
+        this.clips = clips;
         if (owner != null) setIconImages(owner.getIconImages());
         map = new MapView(cache);
         if (source != null) map.setSource(source);
@@ -163,9 +246,48 @@ final class PreviousFlightsDialog extends JDialog {
         scroll.getViewport().setBackground(Theme.PANEL);
         scroll.setPreferredSize(new Dimension(250, 400));
         left.add(scroll, BorderLayout.CENTER);
-        JPanel leftFoot = new JPanel(new BorderLayout());
+        JPanel leftFoot = new JPanel(new BorderLayout(0, 8));
         leftFoot.setOpaque(false);
         leftFoot.add(listNote, BorderLayout.NORTH);
+        // NOTE: the pilot's own words on the chosen flight, kept as they are typed
+        JPanel notePanel = new JPanel(new BorderLayout(0, 4));
+        notePanel.setOpaque(false);
+        notePanel.add(Theme.label("NOTE", Theme.headingFont(10.5f), Theme.MUTED), BorderLayout.NORTH);
+        note.setLineWrap(true);
+        note.setWrapStyleWord(true);
+        note.setFont(Theme.font(Font.PLAIN, 12.5f));
+        note.setBackground(Theme.PANEL_2);
+        note.setForeground(Theme.TEXT);
+        note.setCaretColor(Theme.TEXT);
+        note.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+        note.setToolTipText("Kept with the flight");
+        note.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                keepNote();
+            }
+        });
+        note.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                if (!settingNote) noteIdle.restart();
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                if (!settingNote) noteIdle.restart();
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+            }
+        });
+        noteIdle.setRepeats(false);
+        JScrollPane noteScroll = new JScrollPane(note, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        noteScroll.setBorder(BorderFactory.createLineBorder(Theme.LINE));
+        noteScroll.setPreferredSize(new Dimension(250, 74));
+        notePanel.add(noteScroll, BorderLayout.CENTER);
+        leftFoot.add(notePanel, BorderLayout.CENTER);
         JButton folder = Theme.secondaryButton("Folder");
         folder.setToolTipText("Open the tracks folder");
         folder.addActionListener(e -> {
@@ -179,9 +301,10 @@ final class PreviousFlightsDialog extends JDialog {
         left.add(leftFoot, BorderLayout.SOUTH);
         root.add(left, BorderLayout.WEST);
 
-        // right: video and map, the figures, the bar, the buttons
+        // right: the flight's figures as a whole, video and map, the figures at the moment, the bar, the buttons
         JPanel right = new JPanel(new BorderLayout(0, 10));
         right.setOpaque(false);
+        right.add(summaryStrip, BorderLayout.NORTH);
         JPanel views = new JPanel(new GridLayout(1, 2, 10, 0));
         views.setOpaque(false);
         views.add(framed(video));
@@ -201,42 +324,61 @@ final class PreviousFlightsDialog extends JDialog {
             figs.add(cell);
         }
         bottom.add(figs, BorderLayout.NORTH);
-        timeline.setPreferredSize(new Dimension(600, 92));
+        timeline.setPreferredSize(new Dimension(600, 92 + Timeline.MARKS_H));
         bottom.add(timeline, BorderLayout.CENTER);
-        JPanel buttons = new JPanel(new BorderLayout());
-        buttons.setOpaque(false);
         JPanel playRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         playRow.setOpaque(false);
         play.addActionListener(e -> togglePlay());
         playRow.add(play);
+        speedButton.setToolTipText("Playing speed (sound at 1X only)");
+        speedButton.addActionListener(e -> nextSpeed());
+        int widest = 0; // one width for every speed: the row doesn't shift as it changes
+        for (double k : SPEEDS) {
+            speedButton.setText(speedText(k));
+            widest = Math.max(widest, speedButton.getPreferredSize().width);
+        }
+        speedButton.setText(speedText(speed));
+        speedButton.setPreferredSize(new Dimension(widest, speedButton.getPreferredSize().height));
+        playRow.add(speedButton);
         playRow.add(time);
-        buttons.add(playRow, BorderLayout.WEST);
+        bookmark.setToolTipText("Mark this moment (B)");
+        bookmark.addActionListener(e -> bookmarkNow());
+        playRow.add(bookmark);
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         actions.setOpaque(false);
         onMapButton.setToolTipText("Draw it on the map window");
         onMapButton.addActionListener(e -> {
             if (data != null && data.flight.track() != null && this.onMap != null) this.onMap.accept(data.flight.track());
         });
+        report.setToolTipText("The flight as one HTML file: figures, track, graphs, marks, note");
+        report.addActionListener(e -> reportFlight());
         export.setToolTipText("Copy its track, video and log to a folder");
         export.addActionListener(e -> exportFlight());
         delete.setToolTipText("Delete its track, video and log");
         delete.addActionListener(e -> deleteFlight());
         actions.add(onMapButton);
+        actions.add(report);
         actions.add(export);
         actions.add(delete);
-        buttons.add(actions, BorderLayout.EAST);
+        JPanel buttons = new JPanel(new TwoEnds(playRow, actions, 10, 8)) {
+            @Override
+            public Dimension getPreferredSize() { // asked anew each time: one line or two goes by the card's width now
+                return getLayout().preferredLayoutSize(this);
+            }
+        };
+        buttons.setOpaque(false);
+        buttons.add(playRow);
+        buttons.add(actions);
         bottom.add(buttons, BorderLayout.SOUTH);
         right.add(bottom, BorderLayout.SOUTH);
         root.add(right, BorderLayout.CENTER);
 
         timeline.onSeek = this::seek;
         root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(javax.swing.KeyStroke.getKeyStroke("SPACE"), "play");
-        root.getActionMap().put("play", new javax.swing.AbstractAction() {
-            @Override
-            public void actionPerformed(java.awt.event.ActionEvent e) {
-                togglePlay();
-            }
-        });
+        root.getActionMap().put("play", new WindowKey(this::togglePlay));
+        root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(javax.swing.KeyStroke.getKeyStroke("B"), "bookmark");
+        root.getActionMap().put("bookmark", new WindowKey(this::bookmarkNow));
+        showDebrief();
         setButtons();
         pack();
         ScreenFit.apply(this, 900, 600, 1280, 760);
@@ -245,12 +387,110 @@ final class PreviousFlightsDialog extends JDialog {
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
             public void windowClosed(java.awt.event.WindowEvent e) {
+                keepNote(); // the note as it stands when the window goes
                 tick.stop(); // 1.0.64: it ran on (15 a second) and kept this window, its map and its flight in memory
                 stopAll();
             }
         });
         tick.start();
         reload(null);
+    }
+
+    /**
+     * A key for the whole window (Space, B) - but not while a text is being typed: in the note the key is a letter of
+     * it, and goes there.
+     */
+    private static final class WindowKey extends javax.swing.AbstractAction {
+        private final Runnable press;
+
+        WindowKey(Runnable press) {
+            this.press = press;
+        }
+
+        @Override
+        public boolean isEnabled() {
+            return !(java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner() instanceof javax.swing.text.JTextComponent);
+        }
+
+        @Override
+        public void actionPerformed(java.awt.event.ActionEvent e) {
+            press.run();
+        }
+    }
+
+    /**
+     * The row under the bar: the playing controls at its left end, the flight's buttons at its right end - and on a
+     * window too narrow for both side by side, the flight's buttons on a line of their own under the controls. The row
+     * lies across what holds it (the card): its height is asked before it has its new width, so it goes by the card's.
+     */
+    static final class TwoEnds implements LayoutManager {
+        private final Component left, right;
+        private final int gap, lineGap;
+        private boolean wrapped;
+
+        TwoEnds(Component left, Component right, int gap, int lineGap) {
+            this.left = left;
+            this.right = right;
+            this.gap = gap;
+            this.lineGap = lineGap;
+        }
+
+        @Override
+        public void addLayoutComponent(String name, Component comp) {
+        }
+
+        @Override
+        public void removeLayoutComponent(Component comp) {
+        }
+
+        boolean fitsOneLine(int width) {
+            return left.getPreferredSize().width + gap + right.getPreferredSize().width <= width;
+        }
+
+        /** The width the row is about to have: the inner width of what holds it, once that has one; else its own. */
+        private static int widthToFill(Container row) {
+            Container holder = row.getParent();
+            if (holder == null || holder.getWidth() <= 0) return row.getWidth();
+            Insets in = holder.getInsets();
+            return holder.getWidth() - in.left - in.right;
+        }
+
+        @Override
+        public Dimension preferredLayoutSize(Container parent) {
+            Insets in = parent.getInsets();
+            Dimension l = left.getPreferredSize(), r = right.getPreferredSize();
+            int width = widthToFill(parent);
+            boolean one = width <= 0 || fitsOneLine(width - in.left - in.right);
+            return new Dimension(l.width + gap + r.width + in.left + in.right,
+                    (one ? Math.max(l.height, r.height) : l.height + lineGap + r.height) + in.top + in.bottom);
+        }
+
+        @Override
+        public Dimension minimumLayoutSize(Container parent) {
+            Insets in = parent.getInsets();
+            Dimension l = left.getPreferredSize(), r = right.getPreferredSize();
+            return new Dimension(Math.max(l.width, r.width) + in.left + in.right, l.height + lineGap + r.height + in.top + in.bottom);
+        }
+
+        @Override
+        public void layoutContainer(Container parent) {
+            Insets in = parent.getInsets();
+            int x = in.left, y = in.top, w = parent.getWidth() - in.left - in.right;
+            Dimension l = left.getPreferredSize(), r = right.getPreferredSize();
+            boolean one = fitsOneLine(w);
+            if (one) {
+                int line = Math.max(l.height, r.height);
+                left.setBounds(x, y + (line - l.height) / 2, l.width, l.height);
+                right.setBounds(x + w - r.width, y + (line - r.height) / 2, r.width, r.height);
+            } else {
+                left.setBounds(x, y, Math.min(l.width, w), l.height);
+                right.setBounds(x + Math.max(0, w - r.width), y + l.height + lineGap, Math.min(r.width, w), r.height);
+            }
+            if (one == wrapped) {
+                wrapped = !one;
+                SwingUtilities.invokeLater(parent::revalidate); // a line more or less: the card's height follows
+            }
+        }
     }
 
     private static JComponent framed(JComponent c) {
@@ -273,7 +513,18 @@ final class PreviousFlightsDialog extends JDialog {
         }, "flightsScan");
         t.setDaemon(true);
         t.setPriority(Thread.MIN_PRIORITY);
+        reading = t;
         t.start();
+    }
+
+    /** For tests: waits until the list is read and the flight it chose is loaded and shown. Not on the Swing thread. */
+    void awaitLoaded() throws InterruptedException, java.lang.reflect.InvocationTargetException {
+        Thread t;
+        do {
+            t = reading;
+            if (t != null) t.join();
+            SwingUtilities.invokeAndWait(() -> { }); // what it handed to the Swing thread is done - which may have started the next read
+        } while (reading != t);
     }
 
     void showFlights(List<FlightLibrary.Flight> flights, FlightLibrary.Flight keep) {
@@ -291,27 +542,37 @@ final class PreviousFlightsDialog extends JDialog {
 
     /** The chosen flight: read (off the Swing thread), then ready to play from its start. */
     private void choose(FlightLibrary.Flight f) {
+        keepNote(); // the note on the flight before, as it stands
         stopAll();
         data = null;
+        summary = null;
+        notes = null;
+        flightClips = List.of();
+        showDebrief();
         video.clear(f == null ? "" : "Loading...");
         map.setReplay(null);
         timeline.repaint();
         setButtons();
         if (f == null) return;
         Thread t = new Thread(() -> {
-            FlightData d = FlightData.load(f);
+            Debrief read = Debrief.read(f, clips);
             SwingUtilities.invokeLater(() -> {
                 if (list.getSelectedValue() != f) return; // another chosen meanwhile
-                loaded(d);
+                loaded(read);
             });
         }, "flightLoad");
         t.setDaemon(true);
         t.setPriority(Thread.MIN_PRIORITY);
+        reading = t;
         t.start();
     }
 
-    void loaded(FlightData d) {
+    void loaded(Debrief read) {
+        FlightData d = read.data();
         data = d;
+        summary = read.summary();
+        notes = read.notes();
+        flightClips = read.clips();
         position = d.startMs();
         map.setReplay(d.path());
         Path file = d.flight.playable();
@@ -322,6 +583,7 @@ final class PreviousFlightsDialog extends JDialog {
         } else {
             video.clear("No video");
         }
+        showDebrief();
         setButtons();
         tick();
     }
@@ -329,16 +591,163 @@ final class PreviousFlightsDialog extends JDialog {
     private void setButtons() {
         boolean have = data != null;
         play.setEnabled(have);
+        bookmark.setEnabled(have && notes != null);
+        report.setEnabled(have && !reporting);
         export.setEnabled(have);
         delete.setEnabled(have);
         onMapButton.setEnabled(have && data.flight.track() != null && onMap != null);
+    }
+
+    // ------------------------------------------------------------------ the debrief: figures, note, marks
+
+    /** The summary strip, the note and the bar's marks follow the chosen flight (none: empty). */
+    private void showDebrief() {
+        summaryStrip.show(summary);
+        settingNote = true;
+        note.setText(notes == null ? "" : notes.note());
+        note.setCaretPosition(0);
+        settingNote = false;
+        note.setEnabled(notes != null);
+        showMarks();
+    }
+
+    /** The bar's marks worked out again: the flight's bookmarks as they are now, the pins and the clips of its time. */
+    private void showMarks() {
+        FlightData d = data;
+        marks = d == null || notes == null ? List.of()
+                : FlightMarks.of(d.flight, notes, pins == null ? List.of() : pins.list(), flightClips);
+        timeline.repaint();
+    }
+
+    /** "1:23  Car at the gate", "4:05  PIN Alpha": a mark as the bar's tooltip says it. */
+    static String markText(FlightMarks.Mark m) {
+        return m.timeText() + "  " + (m.kind() == FlightMarks.Kind.BOOKMARK ? m.label() : m.kind().title + " " + m.label());
+    }
+
+    /** The notes' file is written by one thread, in the order the changes were made (as the link log's rows are). */
+    private static final java.util.concurrent.ExecutorService NOTES_WRITER = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "flightNotes");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        return t;
+    });
+
+    /** The chosen flight's notes to their file, off the Swing thread. */
+    private void saveNotes() {
+        FlightNotes n = notes;
+        if (n == null) return;
+        NOTES_WRITER.execute(() -> {
+            try {
+                n.save();
+            } catch (java.io.IOException | RuntimeException e) {
+                SwingUtilities.invokeLater(() -> {
+                    if (isDisplayable()) Dialogs.message(this, "Can't save the notes: " + e.getMessage(), "Previous flights", JOptionPane.WARNING_MESSAGE);
+                });
+            }
+        });
+    }
+
+    /** Waits until the notes changed so far are in their file (EXPORT and DELETE take the file along; tests look at it). */
+    static void awaitSaved() {
+        try {
+            NOTES_WRITER.submit(() -> { }).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (java.util.concurrent.ExecutionException ignored) {
+        }
+    }
+
+    /** The note as typed goes into the flight's notes and their file - when it has changed. */
+    void keepNote() {
+        noteIdle.stop();
+        FlightNotes n = notes;
+        if (n == null || settingNote) return;
+        String before = n.note();
+        n.setNote(note.getText());
+        if (!n.note().equals(before)) saveNotes();
+    }
+
+    /** BOOKMARK, or the B key: the moment showing now gets a mark and a few words - none will do - kept at once. */
+    void bookmarkNow() {
+        FlightData d = data;
+        if (d == null || notes == null) return;
+        long at = Math.max(0, position() - d.startMs());
+        Object text = Dialogs.input(this, "Text (may be empty)", "Bookmark at " + FlightLibrary.durationText(at), JOptionPane.PLAIN_MESSAGE,
+                null, null, "");
+        if (text == null || data != d) return; // called off
+        addBookmark(at, text.toString());
+    }
+
+    /** @param offsetMs from the flight's start */
+    FlightNotes.Bookmark addBookmark(long offsetMs, String text) {
+        FlightNotes.Bookmark b = notes.addBookmark(offsetMs, text);
+        saveNotes();
+        showMarks();
+        return b;
+    }
+
+    /** Other words for the same moment. */
+    FlightNotes.Bookmark renameBookmark(FlightNotes.Bookmark b, String text) {
+        if (notes == null || !notes.removeBookmark(b)) return b;
+        return addBookmark(b.offsetMs(), text);
+    }
+
+    void removeBookmark(FlightNotes.Bookmark b) {
+        if (notes == null || !notes.removeBookmark(b)) return;
+        saveNotes();
+        showMarks();
+    }
+
+    /** A right-click on a bookmark's sign: RENAME, REMOVE. Pins and clips are changed where they live, not here. */
+    private void bookmarkMenu(FlightNotes.Bookmark b, int x, int y) {
+        javax.swing.JPopupMenu menu = TacticalCombo.menu();
+        menu.setBackground(Theme.PANEL_2);
+        javax.swing.JMenuItem rename = new javax.swing.JMenuItem("Rename...");
+        rename.addActionListener(e -> {
+            Object text = Dialogs.input(this, "Text (may be empty)", "Bookmark at " + FlightLibrary.durationText(b.offsetMs()),
+                    JOptionPane.PLAIN_MESSAGE, null, null, b.text());
+            if (text != null) renameBookmark(b, text.toString());
+        });
+        menu.add(rename);
+        javax.swing.JMenuItem remove = new javax.swing.JMenuItem("Remove");
+        remove.addActionListener(e -> removeBookmark(b));
+        menu.add(remove);
+        TacticalCombo.show(menu, timeline, x, y);
     }
 
     // ------------------------------------------------------------------ the clock
 
     long position() {
         if (!playing) return position;
-        return playFrom + (System.currentTimeMillis() - playWall);
+        Run r = run;
+        return r.from + Math.round((clock.getAsLong() - r.wall) * r.speed);
+    }
+
+    static String speedText(double k) {
+        return (k == Math.rint(k) ? String.valueOf((int) k) : String.valueOf(k)) + "X";
+    }
+
+    double speed() {
+        return speed;
+    }
+
+    /** The speed button: 1X, 2X, 4X, 0.5X and round again. */
+    void nextSpeed() {
+        int i = 0;
+        while (i < SPEEDS.length && SPEEDS[i] != speed) i++;
+        setSpeed(SPEEDS[(i + 1) % SPEEDS.length]);
+    }
+
+    /**
+     * How fast the clock runs while playing. Everything shown goes by the clock - the picture, the drone on the map,
+     * the figures, the bar's playhead - so all of it stays in step at any speed; the clock goes on from where it is.
+     * The sound plays at 1X only.
+     */
+    void setSpeed(double k) {
+        if (playing) run = new Run(position(), clock.getAsLong(), k);
+        speed = k;
+        speedButton.setText(speedText(k));
+        if (playing) startAudio(position()); // on from here at 1X, off at any other speed
     }
 
     void togglePlay() {
@@ -348,9 +757,11 @@ final class PreviousFlightsDialog extends JDialog {
             playing = false;
             if (audio != null) audio.stop();
         } else {
-            if (position >= data.endMs() - 200) position = data.startMs();
-            playFrom = position;
-            playWall = System.currentTimeMillis();
+            if (position >= data.endMs() - 200) {
+                position = data.startMs();
+                if (player != null) player.seekTo(position); // the recording too: at its end it would wait there for a seek
+            }
+            run = new Run(position, clock.getAsLong(), speed);
             playing = true;
             startAudio(position);
         }
@@ -362,8 +773,7 @@ final class PreviousFlightsDialog extends JDialog {
         t = Math.max(data.startMs(), Math.min(data.endMs(), t));
         position = t;
         if (playing) {
-            playFrom = t;
-            playWall = System.currentTimeMillis();
+            run = new Run(t, clock.getAsLong(), speed);
             startAudio(t);
         }
         if (player != null) player.seekTo(t);
@@ -373,7 +783,7 @@ final class PreviousFlightsDialog extends JDialog {
     private void startAudio(long t) {
         if (audio == null || data == null) return;
         long ms = t - data.videoStartMs;
-        if (ms >= 0) audio.play(ms);
+        if (ms >= 0 && speed == 1) audio.play(ms); // at the speed it was recorded at, or not at all
         else audio.stop();
     }
 
@@ -427,6 +837,7 @@ final class PreviousFlightsDialog extends JDialog {
 
     private void exportFlight() {
         if (data == null) return;
+        keepNote(); // the notes' file goes along: with the note as it stands
         FlightLibrary.Flight f = data.flight;
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports").toFile());
         chooser.setDialogTitle("Export to folder");
@@ -436,6 +847,7 @@ final class PreviousFlightsDialog extends JDialog {
         Thread t = new Thread(() -> { // the disk (videos can be big), off the Swing thread
             String said;
             try {
+                awaitSaved();
                 said = "Exported to " + FlightData.export(f, parent) + ".";
             } catch (java.io.IOException e) {
                 said = "Export failed: " + e.getMessage();
@@ -455,6 +867,9 @@ final class PreviousFlightsDialog extends JDialog {
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
         stopAll(); // the files open for playback first
         data = null;
+        notes = null; // nothing more is written about it
+        noteIdle.stop();
+        awaitSaved(); // a note on its way to the file gets there first, and goes with the others
         List<Path> left = FlightData.delete(f);
         if (!left.isEmpty()) Dialogs.message(this, "Couldn't delete " + left.get(0).getFileName() + ".", "Delete flight", JOptionPane.WARNING_MESSAGE);
         int i = list.getSelectedIndex();
@@ -462,11 +877,145 @@ final class PreviousFlightsDialog extends JDialog {
         reload(next);
     }
 
+    // ------------------------------------------------------------------ REPORT
+
+    /** The report's picture of the track. */
+    private static final int PICTURE_W = 840, PICTURE_H = 472;
+
+    /** REPORT: asks for a file (Documents' Exports, as EXPORT; the flight's date in its name), writes it, offers its folder. */
+    private void reportFlight() {
+        if (data == null) return;
+        Path dir = Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports");
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(dir.toFile());
+        chooser.setDialogTitle("Save report");
+        chooser.setSelectedFile(dir.resolve(FlightReport.fileName(data.flight)).toFile());
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("HTML", "html", "htm"));
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+        Path chosen = chooser.getSelectedFile().toPath();
+        String name = chosen.getFileName().toString().toLowerCase(Locale.ROOT);
+        Path target = name.endsWith(".html") || name.endsWith(".htm") ? chosen : chosen.resolveSibling(chosen.getFileName() + ".html");
+        writeReport(target, failed -> {
+            if (!isDisplayable()) return;
+            if (failed != null) {
+                Dialogs.message(this, "Report failed: " + failed.getMessage(), "Report", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            Object[] options = {"Open folder", "OK"};
+            if (Dialogs.option(this, "<html>Report saved:<br>" + target + "</html>", "Report", JOptionPane.DEFAULT_OPTION,
+                    JOptionPane.INFORMATION_MESSAGE, null, options, options[1]) != 0) return;
+            try {
+                java.awt.Desktop.getDesktop().open(target.toAbsolutePath().getParent().toFile());
+            } catch (Exception ex) {
+                Dialogs.message(this, "Can't open the folder: " + ex.getMessage(), "Report", JOptionPane.WARNING_MESSAGE);
+            }
+        });
+    }
+
+    /**
+     * The chosen flight's report to this file, off the Swing thread (REPORT is locked meanwhile): its figures, its
+     * marks and the note as they stand, and the track on a map of its own.
+     * @param then on the Swing thread when it is done: null, or why it failed
+     */
+    void writeReport(Path target, Consumer<Exception> then) {
+        FlightData d = data;
+        if (d == null) return;
+        keepNote();
+        FlightSummary figures = summary;
+        FlightNotes written = notes;
+        List<FlightMarks.Mark> marked = marks;
+        MapView trackMap = trackMap(d);
+        reporting = true;
+        setButtons();
+        Thread t = new Thread(() -> {
+            Exception failed = null;
+            try {
+                FlightReport.write(target, d, figures, marked, written, trackPicture(trackMap));
+            } catch (java.io.IOException | RuntimeException e) {
+                failed = e;
+            }
+            Exception why = failed;
+            SwingUtilities.invokeLater(() -> {
+                reporting = false;
+                setButtons();
+                then.accept(why);
+            });
+        }, "flightReport");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
+    }
+
+    /**
+     * A map of its own for the report's picture, never on the screen: the whole track in view, as this window's map
+     * shows it at first, whatever the pilot has since moved that one to. Null for a flight without positions.
+     */
+    private MapView trackMap(FlightData d) {
+        List<de.droiddrone.pc.map.FlightTrack.Point> path = d.path();
+        if (path.isEmpty()) return null;
+        MapView shot = new MapView(cache);
+        shot.setSource(map.source());
+        shot.setFollow(false);
+        shot.setSize(PICTURE_W, PICTURE_H);
+        shot.setReplay(path);
+        return shot;
+    }
+
+    /**
+     * The track's picture, painted on the Swing thread and waited for on the report's: map tiles not in memory get a
+     * few seconds to come from the disk or the server. Null without a map.
+     */
+    private BufferedImage trackPicture(MapView shot) {
+        if (shot == null) return null;
+        BufferedImage[] picture = new BufferedImage[1];
+        boolean[] missing = new boolean[1];
+        try {
+            for (int i = 0; i < 20; i++) {
+                SwingUtilities.invokeAndWait(() -> {
+                    picture[0] = shot.picture(PICTURE_W, PICTURE_H);
+                    missing[0] = shot.tilesMissing();
+                });
+                if (!missing[0] || (i >= 2 && !cache.loading())) break;
+                Thread.sleep(150);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            return null; // the map couldn't be painted: the report goes without its picture
+        }
+        return picture[0];
+    }
+
     // ------------------------------------------------------------------ the video
+
+    /** A picture this late (ms of this PC's time) is not shown: the player goes on to the clock's place instead. */
+    static final long LATE_MS = 120;
+    /** Played faster than real time, about this many ms of this PC's time lie between two pictures shown (30 a second). */
+    static final long SHOWN_EVERY_MS = 33;
+
+    /** What the player does with the picture it has decoded. */
+    enum Pace { WAIT, SHOW, LEAVE_OUT, FIND_AGAIN }
+
+    /**
+     * The player's pace: the clock never waits for the picture, the picture follows the clock. A picture ahead of the
+     * clock waits for it; one on time is shown; one that is late (a slow PC, 4X, the clock moved on) is left out and
+     * the player goes on to the clock's place - except the first picture after such a step, which is shown however
+     * late, so that a PC too slow for the speed still shows pictures: fewer, not older and older ones.
+     * @param aheadMs  the picture's time less the clock's, in the flight's ms (negative: late)
+     * @param speed    how fast the clock runs
+     * @param caughtUp the picture is the first after others were left out
+     */
+    static Pace pace(long aheadMs, double speed, boolean caughtUp) {
+        if (aheadMs > 1500) return Pace.FIND_AGAIN; // the clock went back (a seek we missed)
+        if (aheadMs > 0) return Pace.WAIT;
+        return !caughtUp && -aheadMs / speed > LATE_MS ? Pace.LEAVE_OUT : Pace.SHOW;
+    }
 
     /**
      * Decodes the recording on its own thread at the lowest priority and shows each picture when the clock reaches
-     * it; a seek (or the clock jumping) goes to the key frame before the place and on from there.
+     * it; a seek (or the clock going back) goes to the key frame before the place and on from there. It follows the
+     * clock at any speed ({@link #pace}): faster than real time about 30 pictures a second are shown and the others
+     * only decoded, and a picture that comes late is left out with those up to the clock's place - from a key frame
+     * on the way when there is one, so they needn't even be decoded.
      */
     final class Player extends Thread {
         private final Path file;
@@ -517,6 +1066,7 @@ final class PreviousFlightsDialog extends JDialog {
                 int[] buf = new int[w * h];
                 long frameAt = Long.MIN_VALUE; // the clock time of the picture decoded last
                 boolean pending = false;
+                boolean caughtUp = false; // the picture decoded last is the first after others were left out
                 while (running) {
                     long s = seekTo;
                     if (s != Long.MIN_VALUE) {
@@ -530,6 +1080,7 @@ final class PreviousFlightsDialog extends JDialog {
                             video.clearLater("");
                         }
                         pending = false;
+                        caughtUp = false;
                         continue;
                     }
                     long now = position();
@@ -537,6 +1088,7 @@ final class PreviousFlightsDialog extends JDialog {
                         sleepQuietly(30);
                         continue;
                     }
+                    double k = speed;
                     if (!pending) {
                         long ms = p.next(buf, w, h);
                         if (ms < 0) { // the end of the recording
@@ -547,20 +1099,22 @@ final class PreviousFlightsDialog extends JDialog {
                         pending = true;
                     }
                     long wait = frameAt - position();
-                    if (wait > 1500) { // the clock went back (a seek we missed): find the place again
-                        seekTo = position();
-                        continue;
+                    switch (pace(wait, k, caughtUp)) {
+                        case FIND_AGAIN -> seekTo = position(); // the clock went back (a seek we missed): find the place again
+                        case WAIT -> sleepQuietly(Math.min((long) Math.ceil(wait / k), 40));
+                        case LEAVE_OUT -> { // behind the clock: to its place, not every picture on the way
+                            p.catchUp(position() - d.videoStartMs);
+                            pending = false;
+                            caughtUp = true;
+                        }
+                        case SHOW -> {
+                            video.show(buf, w, h);
+                            pending = false;
+                            caughtUp = false;
+                            // faster than real time: the pictures until the next one to show are decoded only
+                            if (k > 1) p.skipTo(frameAt - d.videoStartMs + Math.round(SHOWN_EVERY_MS * k));
+                        }
                     }
-                    if (wait > 0) {
-                        sleepQuietly(Math.min(wait, 40));
-                        continue;
-                    }
-                    if (wait < -1500) { // far behind (a jump forward): to the place, not every picture on the way
-                        seekTo = position();
-                        continue;
-                    }
-                    video.show(buf, w, h);
-                    pending = false;
                 }
             } finally {
                 p.close();
@@ -586,6 +1140,8 @@ final class PreviousFlightsDialog extends JDialog {
     static final class VideoPane extends JComponent {
         private BufferedImage image;
         private String note = "";
+        /** The pictures shown so far. */
+        private int shown;
         volatile CameraTurn turn;
         /** The drone whose camera recording plays, or null (the OSD copy, already turned). */
         private volatile String source;
@@ -614,8 +1170,21 @@ final class PreviousFlightsDialog extends JDialog {
                 int[] dst = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
                 System.arraycopy(rgb, 0, dst, 0, Math.min(dst.length, rgb.length));
                 note = "";
+                shown++;
+                notifyAll();
             }
             repaint();
+        }
+
+        synchronized int shown() {
+            return shown;
+        }
+
+        /** For tests: waits until this many pictures have been shown (the player's thread shows them). False: not within ms. */
+        synchronized boolean awaitShown(int pictures, long ms) throws InterruptedException {
+            long until = System.currentTimeMillis() + ms;
+            for (long left; shown < pictures && (left = until - System.currentTimeMillis()) > 0; ) wait(left);
+            return shown >= pictures;
         }
 
         void clear(String text) {
@@ -667,20 +1236,36 @@ final class PreviousFlightsDialog extends JDialog {
     /**
      * One bar for the whole flight: altitude (white) and battery per cell (green) as lines, the link under them - ping
      * green / yellow / red, a red mark where the link was down or Betaflight failed safe, yellow for RXLOSS - and the
-     * playhead. Click or drag to move there.
+     * playhead. Click or drag to move there. Over the lines a lane of signs for the flight's marks: a white ribbon for
+     * a bookmark, a yellow diamond (the map's pin) for a pin, a teal dot (overwatch's colour) for an overwatch clip.
+     * Pointing at a sign says when and what; a click on it moves there; a right-click on a bookmark's renames or
+     * removes it. Only the sign itself takes the click - beside it the bar is for moving, as ever.
      */
     final class Timeline extends JComponent {
         Consumer<Long> onSeek;
         static final int LINK_H = 16;
+        /** The marks' lane: under the bar's legend, over the lines. */
+        static final int MARKS_TOP = 14, MARKS_H = 12;
+        /** How far from a sign's middle the mouse still is on it. */
+        static final int MARK_REACH = 6;
 
         Timeline() {
             setOpaque(true);
             setBackground(Theme.PANEL);
             setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR));
+            javax.swing.ToolTipManager.sharedInstance().registerComponent(this); // the marks' tooltips
             MouseAdapter m = new MouseAdapter() {
                 @Override
                 public void mousePressed(MouseEvent e) {
-                    seekAt(e.getX());
+                    FlightMarks.Mark mark = markAt(e.getX(), e.getY());
+                    FlightData d = data;
+                    if (mark == null || d == null) {
+                        seekAt(e.getX());
+                    } else if (!SwingUtilities.isRightMouseButton(e)) {
+                        if (onSeek != null) onSeek.accept(d.startMs() + mark.offsetMs());
+                    } else if (mark.bookmark() != null) {
+                        bookmarkMenu(mark.bookmark(), e.getX(), e.getY());
+                    }
                 }
 
                 @Override
@@ -704,6 +1289,84 @@ final class PreviousFlightsDialog extends JDialog {
             return 8 + (w - 16) * (t - d.startMs()) / (double) span;
         }
 
+        /** The middle of a mark's sign. */
+        java.awt.Point markCentre(FlightMarks.Mark m) {
+            FlightData d = data;
+            if (d == null) return null;
+            long t = Math.max(d.startMs(), Math.min(d.endMs(), d.startMs() + m.offsetMs()));
+            return new java.awt.Point((int) Math.round(xOf(t, d, getWidth())), MARKS_TOP + MARKS_H / 2);
+        }
+
+        /** The mark whose sign is under the mouse - the nearest of them - or null. */
+        FlightMarks.Mark markAt(int x, int y) {
+            if (y < MARKS_TOP - 1 || y > MARKS_TOP + MARKS_H) return null;
+            FlightMarks.Mark best = null;
+            int bestD = MARK_REACH + 1;
+            for (FlightMarks.Mark m : marks) {
+                java.awt.Point c = markCentre(m);
+                if (c != null && Math.abs(x - c.x) < bestD) {
+                    bestD = Math.abs(x - c.x);
+                    best = m;
+                }
+            }
+            return best;
+        }
+
+        @Override
+        public String getToolTipText(MouseEvent e) {
+            FlightMarks.Mark m = markAt(e.getX(), e.getY());
+            return m == null ? null : markText(m);
+        }
+
+        static Color markColor(FlightMarks.Kind kind) {
+            return switch (kind) {
+                case BOOKMARK -> Theme.TEXT;
+                case PIN -> Theme.WARN;
+                case CLIP -> MapView.OVERWATCH_COLOR;
+            };
+        }
+
+        /** A mark's sign round (x, y): a ribbon, a diamond, a dot. */
+        private static Shape markShape(FlightMarks.Kind kind, double x, double y) {
+            Path2D p = new Path2D.Double();
+            switch (kind) {
+                case BOOKMARK -> {
+                    p.moveTo(x - 4, y - 5);
+                    p.lineTo(x + 4, y - 5);
+                    p.lineTo(x + 4, y + 5);
+                    p.lineTo(x, y + 2);
+                    p.lineTo(x - 4, y + 5);
+                }
+                case PIN -> {
+                    p.moveTo(x, y - 5.5);
+                    p.lineTo(x + 5, y);
+                    p.lineTo(x, y + 5.5);
+                    p.lineTo(x - 5, y);
+                }
+                case CLIP -> {
+                    return new Ellipse2D.Double(x - 4.5, y - 4.5, 9, 9);
+                }
+            }
+            p.closePath();
+            return p;
+        }
+
+        private void paintMarks(Graphics2D g, int bottom) {
+            for (FlightMarks.Mark m : marks) {
+                java.awt.Point c = markCentre(m);
+                if (c == null) continue;
+                Color color = markColor(m.kind());
+                g.setStroke(new BasicStroke(1f));
+                g.setColor(Theme.alpha(color, 70)); // down through the lines: where on them it is
+                g.drawLine(c.x, c.y + MARKS_H / 2, c.x, bottom);
+                Shape sign = markShape(m.kind(), c.x, c.y);
+                g.setColor(color);
+                g.fill(sign);
+                g.setColor(Theme.BG);
+                g.draw(sign);
+            }
+        }
+
         @Override
         protected void paintComponent(Graphics graphics) {
             Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
@@ -712,7 +1375,7 @@ final class PreviousFlightsDialog extends JDialog {
                 g.setColor(Theme.PANEL);
                 g.fillRect(0, 0, w, h);
                 FlightData d = data;
-                int graphTop = 14, graphBottom = h - LINK_H - 8, linkTop = h - LINK_H - 2;
+                int graphTop = MARKS_TOP + MARKS_H, graphBottom = h - LINK_H - 8, linkTop = h - LINK_H - 2;
                 g.setColor(new Color(0x101010));
                 g.fillRect(8, graphTop, w - 16, graphBottom - graphTop);
                 g.fillRect(8, linkTop, w - 16, LINK_H);
@@ -792,15 +1455,16 @@ final class PreviousFlightsDialog extends JDialog {
                         g.fillRect((int) x0, linkTop + LINK_H - bh, bw, bh);
                     }
                 }
+                paintMarks(g, linkTop + LINK_H);
                 // the playhead
                 double x = xOf(position(), d, w);
                 g.setColor(Color.WHITE);
                 g.setStroke(new BasicStroke(2f));
-                g.drawLine((int) x, graphTop - 2, (int) x, linkTop + LINK_H);
+                g.drawLine((int) x, MARKS_TOP - 2, (int) x, linkTop + LINK_H);
                 Path2D head = new Path2D.Double();
-                head.moveTo(x - 5, graphTop - 7);
-                head.lineTo(x + 5, graphTop - 7);
-                head.lineTo(x, graphTop - 1);
+                head.moveTo(x - 5, MARKS_TOP - 7);
+                head.lineTo(x + 5, MARKS_TOP - 7);
+                head.lineTo(x, MARKS_TOP - 1);
                 head.closePath();
                 g.setColor(Theme.ACCENT);
                 g.fill(head);

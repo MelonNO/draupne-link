@@ -7,6 +7,7 @@ import de.droiddrone.pc.map.Mercator;
 import de.droiddrone.pc.map.Pins;
 
 import javax.swing.BorderFactory;
+import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
@@ -44,6 +45,9 @@ import java.util.function.Supplier;
  * to remove it, the name to click to rename it (underlined, a pencil), a "+" row last (a typed grid, or a click on the
  * map) and REMOVE ALL with its warning. Everything that comes or goes slides: the X column, the + row, REMOVE ALL, and a
  * pin's row as it is added or removed. Pins dropped by right-click on a map show up too (the list looks once a second).
+ * SEARCH over the list keeps the rows whose name or grid has what is typed; everything a row does, it does to its own
+ * pin, searched or not. EXPORT GPX writes the pins listed as waypoints. A rough pin (placed from the video on weak
+ * geometry) has a ~ before its name, here and on the map.
  */
 final class PinManagerDialog extends JDialog {
     static final int ROW = 28, HEADER = 26;
@@ -58,7 +62,11 @@ final class PinManagerDialog extends JDialog {
     final EditToggle edit = new EditToggle();
     private final JPanel removeAllBar;
     private final Timer refresh = new Timer(1000, e -> refresh());
-    private final JLabel none = Theme.label("No pins. Right-click the map.", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
+    private static final String NO_PINS = "No pins. Right-click the map.";
+    final JLabel none = Theme.label(NO_PINS, Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
+    /** SEARCH: what is typed here is looked for in the pins' names and in their places as the list writes them. */
+    final JTextField search = new JTextField(16);
+    final JButton exportGpx = Theme.secondaryButton("Export GPX");
 
     PinManagerDialog(Window owner, Pins pins, MapView map, Supplier<Coordinates.Format> format, Supplier<FlightTrack> track, Elevation elevation) {
         super(owner, "Pins", ModalityType.MODELESS);
@@ -74,13 +82,46 @@ final class PinManagerDialog extends JDialog {
         setContentPane(root);
 
         JPanel card = Theme.card(new BorderLayout(0, 8));
-        JPanel top = new JPanel(new BorderLayout());
+        JPanel top = new JPanel(new BorderLayout(14, 0));
         top.setOpaque(false);
         top.add(Theme.sectionTitle("Pins"), BorderLayout.WEST);
         edit.setOnChange(on -> {
             sheet.setEditing(on); // REMOVE ALL slides with it (the sheet's animation)
         });
-        top.add(edit, BorderLayout.EAST);
+        // SEARCH between the title and the actions: the list follows every key
+        JPanel find = new JPanel(new BorderLayout(8, 0));
+        find.setOpaque(false);
+        find.add(Theme.label("SEARCH", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
+        search.setFont(Theme.font(Font.PLAIN, 12.5f));
+        search.setToolTipText("Name or grid");
+        search.putClientProperty("JTextField.showClearButton", true);
+        search.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                refresh();
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                refresh();
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+            }
+        });
+        find.add(search, BorderLayout.CENTER);
+        top.add(find, BorderLayout.CENTER);
+        JPanel actions = new JPanel(new BorderLayout(12, 0));
+        actions.setOpaque(false);
+        exportGpx.setFont(Theme.headingFont(11f)); // small, beside EDIT LIST
+        exportGpx.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(Theme.ACCENT, 1),
+                BorderFactory.createEmptyBorder(4, 10, 4, 10)));
+        exportGpx.setToolTipText("The pins listed, as GPX waypoints");
+        exportGpx.addActionListener(e -> exportGpx());
+        actions.add(exportGpx, BorderLayout.WEST);
+        actions.add(edit, BorderLayout.EAST);
+        top.add(actions, BorderLayout.EAST);
         card.add(top, BorderLayout.NORTH);
         JScrollPane scroll = new JScrollPane(sheet);
         scroll.setBorder(BorderFactory.createLineBorder(Theme.LINE));
@@ -189,8 +230,7 @@ final class PinManagerDialog extends JDialog {
             if (mapWindow != null) mapWindow.toFront();
             map.pickPointNext(ll -> {
                 if (ll == null) return;
-                pins.add(null, ll[0], ll[1]);
-                refresh();
+                addAt(null, ll[0], ll[1]);
                 toFront();
             });
         });
@@ -232,18 +272,31 @@ final class PinManagerDialog extends JDialog {
                 hint.setForeground(Theme.BAD);
                 continue;
             }
-            pins.add(name.getText().isBlank() ? null : name.getText().trim(), ll[0], ll[1]);
+            addAt(name.getText().isBlank() ? null : name.getText().trim(), ll[0], ll[1]);
             map.centreOn(ll[0], ll[1], Math.max(map.zoom(), 15));
-            refresh();
             return;
         }
     }
 
+    /** A pin from the + row (null: the next free name). A search that wouldn't find it is cleared, so it shows in the list. */
+    Pins.Pin addAt(String name, double lat, double lon) {
+        Pins.Pin p = pins.add(name, lat, lon);
+        if (!Pins.matches(p, search.getText(), format.get())) search.setText("");
+        refresh();
+        return p;
+    }
+
+    /** REMOVE ALL: every pin; while SEARCH has found some, those listed and no other. */
     private void removeAllPins() {
-        List<Pins.Pin> all = map.allPins();
+        List<Pins.Pin> all = listed();
         if (all.isEmpty()) return;
-        if (Dialogs.confirm(this, "Remove all " + all.size() + " pins? This can't be undone.", "Remove all",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
+        String ask = searching() ? "Remove the " + all.size() + (all.size() == 1 ? " pin" : " pins") + " listed? This can't be undone."
+                : "Remove all " + all.size() + " pins? This can't be undone.";
+        if (Dialogs.confirm(this, ask, "Remove all", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
+        removeAll(all);
+    }
+
+    void removeAll(List<Pins.Pin> all) {
         for (Pins.Pin p : all) {
             if (map.isExamplePin(p)) map.changeExamplePin(p, null);
             else pins.remove(p);
@@ -251,10 +304,68 @@ final class PinManagerDialog extends JDialog {
         refresh();
     }
 
+    private boolean searching() {
+        return !search.getText().isBlank();
+    }
+
+    /**
+     * The pins the list shows, in their order: every pin (the tour's example pins too, while they are on the map), or
+     * those SEARCH finds - in the name or in the place as the list writes it ({@link Pins#matching}).
+     */
+    List<Pins.Pin> listed() {
+        List<Pins.Pin> all = map.allPins();
+        if (!searching()) return all;
+        String query = search.getText();
+        Coordinates.Format shown = format.get();
+        List<Pins.Pin> found = pins.matching(query, shown);
+        for (Pins.Pin p : all) if (map.isExamplePin(p) && Pins.matches(p, query, shown)) found.add(p);
+        return found;
+    }
+
     void refresh() {
-        List<Pins.Pin> now = map.allPins(); // the tour's example pins too, while they are on the map
+        List<Pins.Pin> now = listed();
         sheet.setPins(now);
+        none.setText(searching() ? "No pin found." : NO_PINS);
         none.setVisible(now.isEmpty() && !edit.on);
+        exportGpx.setEnabled(!now.isEmpty());
+    }
+
+    /** EXPORT GPX: asks for a file under Documents\\DRAUPNE Link\\Exports, as the map's EXPORT does. */
+    private void exportGpx() {
+        java.nio.file.Path dir;
+        try {
+            dir = java.nio.file.Files.createDirectories(java.nio.file.Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports"));
+        } catch (java.io.IOException e) {
+            Dialogs.message(this, "No Exports folder: " + e.getMessage(), "Export", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String stamp = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd-HHmm"));
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(dir.toFile());
+        chooser.setDialogTitle("Export pins as GPX");
+        chooser.setSelectedFile(dir.resolve("pins-" + stamp + ".gpx").toFile());
+        chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("GPX", "gpx"));
+        if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
+        java.nio.file.Path gpx = chooser.getSelectedFile().toPath();
+        if (!gpx.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".gpx")) gpx = gpx.resolveSibling(gpx.getFileName() + ".gpx");
+        try {
+            int n = exportGpx(gpx);
+            Dialogs.message(this, "<html>Saved " + n + (n == 1 ? " pin" : " pins") + ":<br>" + gpx + "</html>", "Export", JOptionPane.INFORMATION_MESSAGE);
+        } catch (java.io.IOException | RuntimeException e) {
+            Dialogs.message(this, "Export failed: " + e.getMessage(), "Export", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    /**
+     * The pins listed - all of them, or those SEARCH has found - to a GPX file, in the list's order; a rough pin under
+     * its own name, without the list's ~.
+     * @return how many
+     */
+    int exportGpx(java.nio.file.Path target) throws java.io.IOException {
+        Pins out = new Pins(null); // in memory only
+        List<Pins.Pin> now = listed();
+        for (Pins.Pin p : now) out.add(p.name(), p.lat(), p.lon(), p.rough());
+        out.exportGpx(target);
+        return now.size();
     }
 
     // ------------------------------------------------------------------ the cells
@@ -502,7 +613,7 @@ final class PinManagerDialog extends JDialog {
                     case "go" -> "Go to";
                     case "copy" -> "Copy grid (Ctrl+C)";
                     case "x" -> "Remove";
-                    case "name" -> editing ? "Rename" : "Go to";
+                    case "name" -> (editing ? "Rename" : "Go to") + (rows.get(r).pin.rough() ? " (~ rough place)" : "");
                     default -> "Go to";
                 } : r == rows.size() ? "Add pin" : r == -1 ? "BRG, DIST: from launch" : null);
                 repaint();
@@ -623,7 +734,7 @@ final class PinManagerDialog extends JDialog {
                 // name: in EDIT LIST it reads as something to click (underline, a pencil)
                 rg.setFont(Theme.font(Font.BOLD, 12.5f));
                 rg.setColor(Theme.TEXT);
-                String name = fit(rg, r.pin.name().toUpperCase(Locale.ROOT), c[1] - c[0] - 26);
+                String name = fit(rg, MapPlaceLayer.shownName(r.pin), c[1] - c[0] - 26);
                 if (r.pin != renaming) {
                     rg.drawString(name, c[0], text);
                     if (editShown > 0) {

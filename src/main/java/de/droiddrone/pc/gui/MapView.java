@@ -687,6 +687,11 @@ class MapView extends JComponent {
         repaint();
     }
 
+    /** Where the played-back drone is drawn, {lat, lon}; NaN: nowhere. */
+    double[] replayMarker() {
+        return new double[]{replayLat, replayLon};
+    }
+
     /** The next left click on the map is a place for this (a crosshair until then); a right-click calls it off (null). */
     void pickPointNext(Consumer<double[]> then) {
         pickNext = then;
@@ -1703,6 +1708,11 @@ class MapView extends JComponent {
 
     /** The last paint had a tile on screen not in yet (the LOADING MAP chip). */
     private boolean tilesMissing;
+
+    /** Whether the last paint (or picture) had a tile's place empty: a picture taken a moment later may have it. */
+    boolean tilesMissing() {
+        return tilesMissing;
+    }
 
     /** 1.0.64: the clicked area's box, and openAIP's attribution while its areas show. */
     private void paintAirspaceTop(Graphics2D g, MapProjection proj) {
