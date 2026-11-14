@@ -2,12 +2,10 @@ package de.droiddrone.common;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
+import static de.droiddrone.common.MotionScenes.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -16,100 +14,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The motion detector on made-up pictures (SyntheticScene): 320 x 180 at 8 a second, as the phone feeds it. The
  * pilot's target is at most one false alarm an hour of wind in trees; no real footage exists here, so the windy scenes
  * are as unkind as could be made up - strong gusts, leaves out of step, the camera shaking - and must give none at all.
+ * <p>
+ * The scenes that take a minute or more each are in classes of their own - MotionDetectorCloseUpWoodsTest,
+ * MotionDetectorEdgeWindTest, MotionDetectorLeavesBoxedTest, MotionDetectorLongWindTest, MotionDetectorNearBranchTest -
+ * because a test class is run by one of the build's forks from start to end: all in this class, they kept one fork
+ * busy for ten minutes while the others had long finished. What the classes share is in MotionScenes.
  */
 class MotionDetectorTest {
-    static final int W = 320, H = 180;
-    static final double FPS = 8;
-
-    /** What a run saw: the ids reported, the first time any was, and each report's detections. */
-    static final class Run {
-        final Set<Integer> ids = new HashSet<>();
-        final Map<Integer, Integer> reportsPerId = new HashMap<>();
-        double firstAt = -1;
-        int reports;
-        boolean anyNight, anyLight;
-        MotionDetector.Detection first, last;
-        double lastAt;
-        /** pc.50: pictures with a box, and pictures not judged (settling). */
-        int boxed, settling;
-    }
-
-    static Run run(SyntheticScene scene, MotionDetector d, double fromS, double toS, Run into) {
-        return run(scene, d, fromS, toS, into, 0);
-    }
-
-    /** @param clockMs what the clock the pictures are timed by says at the scene's 0 s */
-    static Run run(SyntheticScene scene, MotionDetector d, double fromS, double toS, Run into, long clockMs) {
-        Run r = into == null ? new Run() : into;
-        for (long i = Math.round(fromS * FPS); i < Math.round(toS * FPS); i++) {
-            double t = i / FPS;
-            byte[][] f = scene.frame(t);
-            MotionDetector.Result res = d.process(f[0], W, H, f[1], f[2], clockMs + Math.round(t * 1000));
-            if (res.night) r.anyNight = true;
-            if (res.settling) r.settling++;
-            if (!res.detections.isEmpty()) r.boxed++;
-            for (MotionDetector.Detection det : res.detections) {
-                r.ids.add(det.id);
-                r.reportsPerId.merge(det.id, 1, Integer::sum);
-                r.reports++;
-                if (r.firstAt < 0) {
-                    r.firstAt = t;
-                    r.first = det;
-                }
-                if (det.light) r.anyLight = true;
-                r.last = det;
-                r.lastAt = t;
-            }
-        }
-        return r;
-    }
-
-    /**
-     * Woods round a field in a gale: four patches of foliage swaying 10 - 21 px (3 - 7 % of the picture's width) at
-     * 0.4 - 1.4 Hz in gusts, the camera shaking up to 4 px.
-     */
-    static SyntheticScene windyWoods(long seed) {
-        SyntheticScene s = new SyntheticScene(W, H, seed);
-        s.patches.add(new SyntheticScene.Patch(50, 50, 45, 40, 10f, 0.6f, 0.3f));
-        s.patches.add(new SyntheticScene.Patch(270, 60, 50, 45, 15f, 0.9f, 1.7f));
-        s.patches.add(new SyntheticScene.Patch(160, 30, 35, 25, 21f, 0.4f, 2.9f)); // a big branch, slow and wide
-        s.patches.add(new SyntheticScene.Patch(230, 150, 30, 25, 12f, 1.4f, 4.1f)); // a bush, quick
-        s.shake = 4;
-        return s;
-    }
-
-    /**
-     * The edge of a wood seen from 1.5 m up (1.0.53): the windy woods' foliage swaying in the canopy and the bushes, and
-     * trunks 18 - 45 m away across the middle of the picture, where someone in the wood would walk out.
-     */
-    static SyntheticScene woodsEdge(long seed) {
-        SyntheticScene s = windyWoods(seed);
-        s.patches.add(new SyntheticScene.Patch(120, 40, 40, 22, 9f, 0.8f, 1.1f)); // canopy over the trunks
-        s.patches.add(new SyntheticScene.Patch(200, 82, 18, 10, 6f, 1.1f, 3.3f)); // a bush at the wood's edge
-        double[][] trunks = {{-9, 30, 0.5}, {-5, 22, 0.4}, {-2.2, 38, 0.45}, {1.4, 26, 0.35}, {3.5, 18, 0.5}, {6, 34, 0.4}, {10, 45, 0.6}};
-        for (double[] k : trunks) s.trunks.add(new SyntheticScene.Trunk(k[0], k[1], k[2], 55));
-        return s;
-    }
-
-    /** The detector on a scene without colour (a grey camera): u and v null. */
-    static Run runGrey(SyntheticScene scene, MotionDetector d, double fromS, double toS) {
-        Run r = new Run();
-        for (long i = Math.round(fromS * FPS); i < Math.round(toS * FPS); i++) {
-            double t = i / FPS;
-            byte[][] f = scene.frame(t);
-            MotionDetector.Result res = d.process(f[0], W, H, null, null, Math.round(t * 1000));
-            for (MotionDetector.Detection det : res.detections) {
-                r.ids.add(det.id);
-                r.reportsPerId.merge(det.id, 1, Integer::sum);
-                r.reports++;
-                if (r.firstAt < 0) r.firstAt = t;
-                r.last = det;
-                r.lastAt = t;
-            }
-        }
-        return r;
-    }
-
     /**
      * 1.0.53, the pilot: "the movement detection should be able to find a person moving from inside the woods directly
      * towards the camera", without colour (other cameras have none; people and vehicles are the surroundings' colour).
@@ -177,24 +88,6 @@ class MotionDetectorTest {
 
     static final double SLOW_FOUND_M = 15;
 
-    /** The wood's edge in the gale for twenty minutes, without colour: nothing - the growing test must not take leaves. */
-    @Test
-    void theWoodsEdgeInTheWindGivesNoAlarmWithoutColour() {
-        for (int sens = MotionDetector.LOW; sens <= MotionDetector.HIGH; sens++) {
-            Run r = runGrey(woodsEdge(23 + sens), new MotionDetector(sens), 0, sens == MotionDetector.NORMAL ? 1200 : 300);
-            assertEquals(Set.of(), r.ids, "sensitivity " + sens + ": false alarms " + r.reportsPerId);
-        }
-    }
-
-    @Test
-    void windInTheTreesForTwentyMinutesGivesNoAlarm() {
-        SyntheticScene scene = windyWoods(11);
-        MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
-        Run r = run(scene, d, 0, 20 * 60, null);
-        assertEquals(Set.of(), r.ids, "false alarms in 20 minutes of wind");
-        assertTrue(d.tracksMade() >= 10, "the wind made candidates for the judges: " + d.tracksMade());
-    }
-
     @Test
     void highSensitivityKeepsQuietInTheWindToo() {
         SyntheticScene scene = windyWoods(23);
@@ -233,18 +126,6 @@ class MotionDetectorTest {
         float cx = (truth[0] + truth[2] / 2) / W, cy = (truth[1] + truth[3] / 2) / H;
         assertEquals(cx, r.last.centreX(), 0.05, "box centre x");
         assertEquals(cy, r.last.centreY(), 0.08, "box centre y");
-    }
-
-    /** Boxes over the scene's swaying foliage (its reach included), at this sensitivity: what the user would draw. */
-    static DetectionAreas foliage(SyntheticScene s, int level) {
-        List<DetectionAreas.Area> l = new java.util.ArrayList<>();
-        for (SyntheticScene.Patch p : s.patches) {
-            if (p.amplitude <= 0) continue;
-            // (SyntheticScene: a ragged edge up to 1.15 of the ellipse, the sway up to 1.3 x the amplitude, 0.4 of it up and down)
-            float rx = p.rx * 1.15f + 1.3f * p.amplitude + 2, ry = p.ry * 1.15f + 0.52f * p.amplitude + 2;
-            l.add(new DetectionAreas.Area((p.cx - rx) / W, (p.cy - ry) / H, 2 * rx / W, 2 * ry / H, level));
-        }
-        return DetectionAreas.of(l);
     }
 
     /**
@@ -310,30 +191,6 @@ class MotionDetectorTest {
             if (sens == MotionDetector.HIGH) assertTrue(boxed > 0.5 * walking, "on HIGH the sentry boxed in " + boxed + " of " + walking + " pictures while he walked");
             else assertTrue(boxed < 0.1 * walking, "on NORMAL as before: boxed in " + boxed + " of " + walking);
         }
-    }
-
-    /**
-     * 1.0.58: the price of HIGH, and what areas are for. The camera still on the ground in the gale, no one there: with
-     * the foliage boxed LOW or OFF nothing in five minutes; the same unboxed raises alarms - leaves a gust starts after a
-     * calm travel like someone walking for a few seconds.
-     */
-    @Test
-    void onHighTheSwayingLeavesBoxedLowOrOffGiveNoAlarm() {
-        int unboxed = 0;
-        for (long seed : new long[]{5, 17}) {
-            for (int level : new int[]{MotionDetector.LOW, MotionDetector.OFF}) {
-                SyntheticScene scene = windyWoods(seed);
-                scene.shake = 0;
-                MotionDetector d = new MotionDetector(MotionDetector.HIGH);
-                d.setAreas(foliage(scene, level));
-                Run r = run(scene, d, 0, 300, null);
-                assertEquals(Set.of(), r.ids, "seed " + seed + ", leaves boxed " + DetectionAreas.word(level) + ": false alarms " + r.reportsPerId);
-            }
-            SyntheticScene scene = windyWoods(seed);
-            scene.shake = 0;
-            unboxed += run(scene, new MotionDetector(MotionDetector.HIGH), 0, 300, null).ids.size();
-        }
-        assertTrue(unboxed > 0, "unboxed, HIGH finds the leaves a gust starts (what the areas are for)");
     }
 
     /** 1.0.58: someone walking through an OFF area is never boxed there, and boxed soon after leaving it. */
@@ -748,37 +605,6 @@ class MotionDetectorTest {
         scene.movers.add(p);
         Run r = run(scene, new MotionDetector(MotionDetector.NORMAL), 0, 20, null);
         assertTrue(r.firstAt >= 12 && r.firstAt <= 14.5, "found at " + r.firstAt + " " + r.reportsPerId);
-    }
-
-    /**
-     * A leafy branch right in front of the camera, filling much of the picture and swaying in gusts, the camera shaking:
-     * the close-up rule (1.0.56) never takes it - it asks for a place that was calm before, and leaves flicker in place.
-     * (The travel rules, made for trees 30 m off, do raise alarms on a branch this close: they did before 1.0.56 as well
-     * - about as many in these scenes. Not solved here: keep foliage out of the picture's near part.)
-     */
-    @Test
-    void aBranchCloseToTheCameraIsNeverTakenForSomethingClose() {
-        for (long seed : new long[]{51, 53}) {
-            for (int sens = MotionDetector.NORMAL; sens <= MotionDetector.HIGH; sens++) {
-                SyntheticScene scene = new SyntheticScene(W, H, seed);
-                scene.patches.add(new SyntheticScene.Patch(110, 80, 110, 70, 20f, 0.5f, 0.7f));
-                scene.patches.add(new SyntheticScene.Patch(280, 30, 50, 40, 24f, 0.9f, 2.3f));
-                scene.shake = 3;
-                MotionDetector d = new MotionDetector(sens);
-                run(scene, d, 0, 180, null);
-                assertEquals(0, d.nearMade, "seed " + seed + ", sensitivity " + sens + ": taken for something close");
-            }
-        }
-    }
-
-    /** The windy woods and the wood's edge: the close-up rule takes nothing there either. */
-    @Test
-    void theWoodsAreNeverTakenForSomethingClose() {
-        for (int sens = MotionDetector.LOW; sens <= MotionDetector.HIGH; sens++) {
-            MotionDetector d = new MotionDetector(sens);
-            run(woodsEdge(23 + sens), d, 0, 300, null);
-            assertEquals(0, d.nearMade, "sensitivity " + sens);
-        }
     }
 
     /** The camera knocked: moved a little and left so, then moved far (past what the shift search reaches): nothing. */

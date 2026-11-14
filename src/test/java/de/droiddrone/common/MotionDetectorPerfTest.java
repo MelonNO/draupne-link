@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class MotionDetectorPerfTest {
     @Test
     void aPictureCostsAMillisecondOrSo() {
-        SyntheticScene scene = MotionDetectorTest.woodsEdge(3);
+        SyntheticScene scene = MotionScenes.woodsEdge(3);
         scene.approachers.add(new SyntheticScene.Approacher(0.5, 40, 1.4, 5, 40, 90, 30));
         int n = 160;
         byte[][] frames = new byte[n][];
