@@ -372,6 +372,41 @@ class SpectatorTest {
         }
     }
 
+    /**
+     * 1.0.67: the host knows from each HELLO whether that spectator mends RS parity; one with 1.0.66's HELLO (no flags)
+     * makes allMendRs false while it watches, and true again once it has left.
+     */
+    @Test
+    void theHostKnowsWhichSpectatorsMendRsParity() throws Exception {
+        try (DatagramSocket linkSocket = new DatagramSocket(0, LOOPBACK);
+             DatagramSocket older = new DatagramSocket(0, LOOPBACK);
+             DatagramSocket newer = new DatagramSocket(0, LOOPBACK)) {
+            int[] joined = {0};
+            SpectatorHost host = new SpectatorHost("DD", true, linkSocket, () -> true, () -> 20, line -> {}, () -> joined[0]++);
+            try {
+                assertTrue(host.allMendRs(), "nobody watches");
+                byte[] hello = Spectate.hello("DD", Spectate.HELLO_MENDS_RS);
+                host.onHello(new DatagramPacket(hello, hello.length, LOOPBACK, newer.getLocalPort()));
+                assertEquals(1, host.count());
+                assertTrue(host.allMendRs(), "a spectator of this version");
+                byte[] hello166 = Spectate.keyed(Spectate.HELLO, "DD");
+                host.onHello(new DatagramPacket(hello166, hello166.length, LOOPBACK, older.getLocalPort()));
+                assertEquals(2, host.count());
+                assertEquals(2, joined[0]);
+                assertFalse(host.allMendRs(), "a spectator of 1.0.66 watches too");
+                host.onHello(new DatagramPacket(hello, hello.length, LOOPBACK, newer.getLocalPort())); // its HELLO again
+                assertEquals(2, host.count());
+                assertFalse(host.allMendRs());
+                byte[] bye = {Spectate.BYE};
+                older.send(new DatagramPacket(bye, bye.length, LOOPBACK, host.streamPort()));
+                waitFor(() -> host.count() == 1, 2000, "the older spectator gone");
+                assertTrue(host.allMendRs(), "only the one that mends RS is left");
+            } finally {
+                host.close();
+            }
+        }
+    }
+
     /** The next STREAM packet's sequence number; PAUSE notices on the way are skipped. */
     private static int receiveStream(DatagramSocket viewer, DatagramPacket in) throws java.io.IOException {
         while (true) {

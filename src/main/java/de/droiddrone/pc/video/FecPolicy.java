@@ -61,7 +61,8 @@ public final class FecPolicy {
      * then is (0-1; the encoder's bitrate comes down by it).
      */
     public record Choice(int mPlain, int mKey, double share) {
-        static final Choice NONE = new Choice(0, 0, 0);
+        /** No RS parity: the XOR groups and key frames twice in the weak tiers, as before. */
+        public static final Choice NONE = new Choice(0, 0, 0);
 
         /** The same parity as before: nothing new for the phone (the share moves with the frames' sizes). */
         public boolean sameParity(Choice other) {

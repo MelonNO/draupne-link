@@ -22,7 +22,7 @@ import java.nio.charset.StandardCharsets;
  * spectator -> phone   PILOT_QUERY [0x60][key UTF]                 who flies? (a Connect from a 2nd PC is asked too)
  * phone -> spectator   PILOT_AT    [0x61][n u8][ip n bytes][port u16]
  * phone -> spectator   NO_PILOT    [0x62]                          (only to PILOT_QUERY)
- * spectator -> pilot   HELLO       [0x63][key UTF]                 to the pilot's link port
+ * spectator -> pilot   HELLO       [0x63][key UTF][flags u8]       to the pilot's link port; flags 1.0.67 (none before)
  * pilot -> spectator   WELCOME     [0x64][stream port u16]         from the link port; again from the stream port
  * pilot -> spectator   REFUSED     [0x65][reason u8]
  * pilot -> spectator   STREAM      [0x66][seq i32][pilot ms i32][packet as the phone sent it]
@@ -39,6 +39,12 @@ import java.nio.charset.StandardCharsets;
  * packets, so PILOT_VIEW is 0x76 (1.0.41). An older spectator drops both. PILOT_VIEW flags: bit 0 the pilot's link is
  * ready, 1 its sticks are live, 2 its radio looks frozen, 3 its arm switch isn't read, 4 its way to the phone is a relay,
  * 5 its link stalls, 6 its picture is turned upside down (the spectator turns its own the same way).
+ * <p>
+ * HELLO's flags (1.0.67): bit 0 {@link #HELLO_MENDS_RS} - the spectator mends frames with the phone's RS parity
+ * (VIDEO_PARITY_RS). The byte is sent only with a bit set; a spectator of 1.0.66 and before sends none, and a pilot PC
+ * of 1.0.66 and before reads the key by its own length and nothing behind it (OldPeersTest). While a spectator without
+ * bit 0 watches, the pilot PC asks the phone for no RS parity (ControlLink.sendFecIfDue): the phone then sends the XOR
+ * groups and key frames twice, which every spectator mends.
  */
 final class Spectate {
     static final byte PILOT_QUERY = PacketIds.SPECTATE_PILOT_QUERY;
@@ -63,6 +69,9 @@ final class Spectate {
 
     /** KEEP flag: the spectator has no stream config or FC info yet; send the snapshot. */
     static final int FLAG_NEED_SNAPSHOT = 1;
+
+    /** HELLO flag (1.0.67): the spectator mends frames with RS parity (VIDEO_PARITY_RS). */
+    static final int HELLO_MENDS_RS = 1;
 
     static final int STREAM_HEADER = 9;
     static final int MAX_NACKS = 64;
@@ -132,6 +141,22 @@ final class Spectate {
         int n = ((d[1] & 0xff) << 8) | (d[2] & 0xff);
         if (3 + n > len) return null;
         return new String(d, 3, n, StandardCharsets.UTF_8); // the key is plain ASCII, where modified UTF-8 is UTF-8
+    }
+
+    /** A spectator's HELLO (1.0.67): the flags byte behind the key only with a flag set - with none, 1.0.66's bytes. */
+    static byte[] hello(String key, int flags) {
+        byte[] keyed = keyed(HELLO, key);
+        if (flags == 0) return keyed;
+        byte[] out = java.util.Arrays.copyOf(keyed, keyed.length + 1);
+        out[keyed.length] = (byte) flags;
+        return out;
+    }
+
+    /** A HELLO's flags (1.0.67): the byte behind the key, 0 from a spectator of 1.0.66 and before (none there). */
+    static int helloFlags(byte[] d, int len) {
+        if (len < 3) return 0;
+        int at = 3 + (((d[1] & 0xff) << 8) | (d[2] & 0xff));
+        return at < len ? d[at] & 0xff : 0;
     }
 
     /** What the phone answers: where the PC that flies is. */

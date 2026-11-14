@@ -19,7 +19,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * What the phones and PCs in the field do with the bytes this version sends: their own parsing, copied here from the
  * released code (the tag and file are named at each copy), run over the packets as they are built now. A phone on
  * pc.52 or older must take a 1.0.67 PC's Connect and video profile exactly as it took 1.0.66's - it is updated through
- * that very link - and a PC on 1.0.66 must make nothing of what a newer phone could send.
+ * that very link - and a PC on 1.0.66 must make nothing of what a newer phone could send, and take a 1.0.67
+ * spectator's HELLO as a 1.0.66 one's.
  */
 class OldPeersTest {
     private static final String KEY = "DD";
@@ -252,6 +253,54 @@ class OldPeersTest {
     /** DRAUPNE Link 1.0.66, ControlLink.handleVideoFragment's test (7e11612 ControlLink.java:664): is it a video packet? */
     private static boolean videoPacket166(byte first) {
         return first == UdpCommon.VideoFrame || first == UdpCommon.KeyFrame || first == ControlLink.VIDEO_PARITY || first == ControlLink.VIDEO_PARITY_GROUP;
+    }
+
+    // ------------------------------------------------------------------ the spectator's HELLO with its flags
+
+    /**
+     * DRAUPNE Link 1.0.17 - 1.0.66, a pilot PC taking a spectator's HELLO: ControlLink.onForeignPacket routes it by its
+     * first byte alone (7e11612 ControlLink.java:558), SpectatorHost.onHello takes the key with Spectate.readKey and
+     * compares it (7e11612 SpectatorHost.java:194-195; Spectate.java:130-135, the same since 108f0ab).
+     * @return the key it took, or null for a HELLO it drops
+     */
+    private static String pilotTakesHello166(byte[] d, int len, String ownKey) {
+        if (len < 1 || d[0] != Spectate.HELLO) return null;
+        if (len < 3) return null;
+        int n = ((d[1] & 0xff) << 8) | (d[2] & 0xff);
+        if (3 + n > len) return null;
+        String k = new String(d, 3, n, StandardCharsets.UTF_8);
+        return k.equals(ownKey) ? k : null;
+    }
+
+    /** DRAUPNE Link 1.0.17 - 1.0.66, SpectatorClient's HELLO (7e11612 SpectatorClient.java:324): Spectate.keyed. */
+    private static byte[] hello166(String key) throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+        out.writeByte(Spectate.HELLO);
+        out.writeUTF(key);
+        return bytes.toByteArray();
+    }
+
+    @Test
+    void anOlderPilotPcTakesTheSpectatorsHelloWithItsFlagsAsBefore() throws Exception {
+        for (String key : new String[]{KEY, "A-LONGER-KEY-0123456789", ""}) {
+            byte[] old = hello166(key), now = Spectate.hello(key, Spectate.HELLO_MENDS_RS);
+            assertArrayEquals(old, Arrays.copyOf(now, old.length), "1.0.66's HELLO, the flags behind it");
+            assertEquals(old.length + 1, now.length);
+            assertEquals(key, pilotTakesHello166(old, old.length, key));
+            assertEquals(key, pilotTakesHello166(now, now.length, key), "a 1.0.66 pilot PC takes it as the old one");
+            assertNull(pilotTakesHello166(now, now.length, key + "X"), "and drops it for another key, as the old one");
+            // in a receive buffer longer than the datagram, as the link reads it
+            byte[] buf = Arrays.copyOf(now, 1500);
+            assertEquals(key, pilotTakesHello166(buf, now.length, key));
+        }
+        // with no flag set the HELLO is 1.0.66's to the byte; this version reads no flags from it (an older spectator)
+        assertArrayEquals(hello166(KEY), Spectate.hello(KEY, 0));
+        byte[] old = hello166(KEY);
+        assertEquals(0, Spectate.helloFlags(old, old.length));
+        byte[] now = Spectate.hello(KEY, Spectate.HELLO_MENDS_RS);
+        assertEquals(Spectate.HELLO_MENDS_RS, Spectate.helloFlags(now, now.length));
+        assertEquals(KEY, Spectate.readKey(now, now.length), "this version takes the key as before");
     }
 
     @Test

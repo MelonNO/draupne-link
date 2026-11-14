@@ -45,13 +45,16 @@ final class SpectatorHost implements AutoCloseable {
         final InetAddress ip;
         final int port;
         volatile long lastHeard = MonoClock.ms();
+        /** 1.0.67: its HELLO said it mends RS parity (Spectate.HELLO_MENDS_RS); a spectator of 1.0.66 and before doesn't. */
+        volatile boolean mendsRs;
         long lastSnapshot;
         long budgetWindow;
         int resends;
 
-        Viewer(InetAddress ip, int port) {
+        Viewer(InetAddress ip, int port, boolean mendsRs) {
             this.ip = ip;
             this.port = port;
+            this.mendsRs = mendsRs;
         }
 
         boolean is(InetAddress ip, int port) {
@@ -149,6 +152,17 @@ final class SpectatorHost implements AutoCloseable {
         return viewers.length;
     }
 
+    /**
+     * 1.0.67: every spectator watching now mends RS parity (true with none). One that doesn't - a PC of 1.0.66 or
+     * before - mends the XOR groups and needs the key frames twice: the link asks the phone for no RS while it watches.
+     */
+    boolean allMendRs() {
+        for (Viewer v : viewers) {
+            if (!v.mendsRs) return false;
+        }
+        return true;
+    }
+
     boolean isPaused() {
         return paused;
     }
@@ -194,10 +208,12 @@ final class SpectatorHost implements AutoCloseable {
     void onHello(DatagramPacket packet) {
         String k = Spectate.readKey(packet.getData(), packet.getLength());
         if (k == null || !k.equals(key)) return;
+        boolean mendsRs = (Spectate.helloFlags(packet.getData(), packet.getLength()) & Spectate.HELLO_MENDS_RS) != 0;
         InetAddress ip = packet.getAddress();
         int port = packet.getPort();
         byte refuse = 0;
         Viewer known = find(ip, port);
+        if (known != null) known.mendsRs = mendsRs; // its HELLO again (the WELCOME lost): as it says now
         if (!allowed) {
             refuse = Spectate.REFUSED_OFF;
         } else if (!flying.getAsBoolean()) {
@@ -207,7 +223,7 @@ final class SpectatorHost implements AutoCloseable {
                 if (viewers.length >= MAX_SPECTATORS) {
                     refuse = Spectate.REFUSED_FULL;
                 } else {
-                    known = new Viewer(ip, port);
+                    known = new Viewer(ip, port, mendsRs);
                     List<Viewer> list = new ArrayList<>(List.of(viewers));
                     list.add(known);
                     viewers = list.toArray(new Viewer[0]);

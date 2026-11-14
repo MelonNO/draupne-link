@@ -254,7 +254,9 @@ public class ControlLink {
      * outside them. A phone that knows it takes it, with VIDEO_FEC [0x54][mPlain u8][mKey u8] (m > 0), as "send
      * VIDEO_PARITY_RS behind each block in place of the XOR groups, key frames once" (Fec; video.FrameAssembler mends).
      * VIDEO_FEC goes at every change of video.FecPolicy's choice (FEC_REPEATS times more) and once a second while it
-     * asks for parity; the phone forgets both with every new session.
+     * asks for parity; the phone forgets both with every new session. While a spectator that mends no RS watches (a PC
+     * of 1.0.66 or before: its HELLO has no Spectate.HELLO_MENDS_RS), the choice is 0 0: the phone sends the XOR
+     * groups and key frames twice, as to an older PC (sendFecIfDue).
      */
     static final int PROFILE_RS = 16;
     static final byte VIDEO_FEC = PacketIds.VIDEO_FEC;
@@ -265,6 +267,12 @@ public class ControlLink {
     private de.droiddrone.pc.video.FecPolicy.Choice fecSent;
     private int fecRepeats;
     private long fecSentAt;
+    /** 1.0.67: the phone was last told to send RS parity this session (written by the session thread). */
+    private volatile boolean rsAsked;
+    /** 1.0.67: the parity the policy asks for is held back for an older spectator (session thread). */
+    private boolean rsHeld;
+    /** 1.0.67: a spectator that mends no RS joined while the phone sent it: its key frame is asked for behind the 0 0. */
+    private volatile boolean keyFrameAfterFec;
     static final int FRAME_TIME_BYTES = 11;
     /**
      * Frame times asked for and none come while the video does: the profile goes again this often, at most this many
@@ -492,12 +500,12 @@ public class ControlLink {
         if (watchOnly) {
             // asks the phone who flies (PILOT_QUERY, never a Connect), then joins that PC
             spectator = new SpectatorClient(socket, remoteIp, remotePort, key, spectatorDelayMs,
-                    watchPilotPc ? new Spectate.Address(remoteIp, remotePort) : null, this::playSpectated);
+                    watchPilotPc ? new Spectate.Address(remoteIp, remotePort) : null, this::playSpectated, this::spectatorHelloFlags);
             if (watchPilotPc) spectator.pilotIsFixed();
         } else if (spectatorsEnabled) {
             try {
                 host = new SpectatorHost(key, spectatorsAllowed, socket, () -> getState() == State.READY, this::getPing,
-                        msg -> events.accept(msg), this::requestKeyFrame, localAddress); // a new spectator starts at a key frame
+                        msg -> events.accept(msg), this::spectatorJoined, localAddress); // a new spectator starts at a key frame
             } catch (IOException e) {
                 log("Spectators can't watch: " + e); // flying works as before
             }
@@ -675,7 +683,8 @@ public class ControlLink {
         }
         synchronized (this) {
             if (spectator != null || !running) return;
-            spectator = new SpectatorClient(socket, remoteIp, remotePort, key, spectatorDelayMs, pilot, this::playSpectated);
+            spectator = new SpectatorClient(socket, remoteIp, remotePort, key, spectatorDelayMs, pilot, this::playSpectated,
+                    this::spectatorHelloFlags);
         }
         events.accept("Another PC (" + pilot.ip().getHostAddress() + ") flies: spectating, "
                 + spectatorDelayMs + " ms behind. No sticks sent.");
@@ -884,6 +893,7 @@ public class ControlLink {
                     profileRefreshes = PROFILE_REFRESHES;
                     fecSent = null; // 1.0.67: the phone forgot it with the new session
                     fecRepeats = 0;
+                    rsAsked = false;
                 }
                 if (!wasConnected && connected && lostAt > 0) {
                     log("Link back after " + (now - lostAt) + " ms.");
@@ -1666,18 +1676,41 @@ public class ControlLink {
      * FEC_REPEATS times more FEC_REPEAT_MS apart (unnumbered, as the key frame request), and once a second while it asks
      * for parity. Nothing in the normal and sharp tiers but the 0 0 at the change out of the weak ones: there the wire
      * is as it was. Only for a listener that mends with it (and so a profile with bit 4).
+     * <p>
+     * While a spectator that mends no RS watches (a PC of 1.0.66 or before), the choice is 0 0 - at the next tick after
+     * it joined (100 ms at most), and once a second after the change while it watches: the phone sends the XOR groups
+     * and key frames twice, which that spectator mends. The tick after it left (BYE; a silent one after
+     * SpectatorHost.TIMEOUT_MS) the policy's choice goes out again. A spectator that mends RS changes nothing.
      */
     private void sendFecIfDue(long now, VideoListener v) {
-        if (v == null || !mendsRs()) return;
-        de.droiddrone.pc.video.FecPolicy.Choice c = v.fecChoice(now, getTier());
-        if (c == null) return;
+        if (v != null && mendsRs()) {
+            de.droiddrone.pc.video.FecPolicy.Choice c = v.fecChoice(now, getTier());
+            if (c != null) sendFec(now, c);
+        }
+        // an older spectator joined while the phone sent RS: its first key frame now, behind the 0 0 (spectatorJoined)
+        if (keyFrameAfterFec && (!rsAsked || allSpectatorsMendRs())) {
+            keyFrameAfterFec = false;
+            requestKeyFrame();
+        }
+    }
+
+    private void sendFec(long now, de.droiddrone.pc.video.FecPolicy.Choice wanted) {
+        boolean wants = wanted.mPlain() > 0 || wanted.mKey() > 0;
+        boolean held = wants && !allSpectatorsMendRs();
+        if (held != rsHeld) {
+            rsHeld = held;
+            if (held) events.accept("Video: older spectator watching - stronger parity off.");
+            else if (wants) events.accept("Video: stronger parity on again.");
+        }
+        de.droiddrone.pc.video.FecPolicy.Choice c = held ? de.droiddrone.pc.video.FecPolicy.Choice.NONE : wanted;
         boolean asks = c.mPlain() > 0 || c.mKey() > 0;
         if (fecSent == null ? asks : !c.sameParity(fecSent)) {
             fecSent = c;
             fecRepeats = FEC_REPEATS;
+            rsAsked = asks;
         } else if (fecRepeats > 0 && now - fecSentAt >= FEC_REPEAT_MS) {
             fecRepeats--;
-        } else if (!(asks && now - fecSentAt >= FEC_EVERY_MS)) {
+        } else if (!((asks || held && fecSent != null) && now - fecSentAt >= FEC_EVERY_MS)) {
             return;
         }
         fecSentAt = now;
@@ -1686,6 +1719,27 @@ public class ControlLink {
         } catch (IOException e) {
             // again with the next copy, or within the second
         }
+    }
+
+    /** 1.0.67: no spectator watches through this PC, or every one mends RS parity (SpectatorHost.allMendRs). */
+    private boolean allSpectatorsMendRs() {
+        SpectatorHost h = host;
+        return h == null || h.allMendRs();
+    }
+
+    /**
+     * A spectator joined (the link's receive thread): its picture starts at a key frame, asked for now. 1.0.67: one
+     * that mends no RS while the phone sends it gets it after the 0 0 of the next tick (sendFecIfDue), so it comes twice
+     * with the XOR groups, as from an older pilot PC.
+     */
+    private void spectatorJoined() {
+        if (rsAsked && !allSpectatorsMendRs()) keyFrameAfterFec = true;
+        else requestKeyFrame();
+    }
+
+    /** 1.0.67: what this PC's spectator HELLO says - it mends RS parity when its video listener does. */
+    private int spectatorHelloFlags() {
+        return mendsRs() ? Spectate.HELLO_MENDS_RS : 0;
     }
 
     /** 1.0.67: this PC asks for RS parity in the weak tiers - its video listener mends with it (an older PC's never did). */
