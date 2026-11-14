@@ -3,6 +3,7 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.map.FlightTrack;
 import de.droiddrone.pc.map.TileCache;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 2026-11-09 on a Ryzen 7 8840HS: OSD at 1920 x 1080 2.7 ms, the map at 1200 x 800 1.1 ms bare and 7 ms with a
  * 1-hour track (two wide anti-aliased strokes over its 4000 kept points - the length stroked, not the points, is the cost).
  */
+@Tag("perf")
 class PaintCostTest {
     /** Mean ms of a paint, after a warm-up. */
     private static double mean(Runnable paint, int warm, int n) {

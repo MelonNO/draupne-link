@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.awt.Graphics2D;
@@ -128,6 +129,7 @@ class OsdLayoutTest {
     }
 
     @Test
+    @Tag("perf")
     void aWholeHudPaintsInAFewMilliseconds() {
         OsdLayout all = OsdLayout.defaults();
         for (OsdElement e : OsdElement.values()) all = all.with(e, new OsdLayout.Placement(true, all.get(e).x(), all.get(e).y()));

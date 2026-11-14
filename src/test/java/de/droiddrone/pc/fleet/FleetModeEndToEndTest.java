@@ -14,8 +14,8 @@ import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.function.BooleanSupplier;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -137,13 +137,5 @@ class FleetModeEndToEndTest {
                 new de.droiddrone.common.FleetProtocol.Request(0x1234, ControlLink.POWER_STANDBY, 5, 0, 0, 0, pc.getLocalPort())));
         waitFor(() -> log.stream().anyMatch(l -> l.contains("refused: a pilot is connected")), 3000, "refused");
         assertEquals(VirtualDrone.NORMAL, drone.mode());
-    }
-
-    private static void waitFor(BooleanSupplier ok, long ms, String what) throws InterruptedException {
-        long end = System.currentTimeMillis() + ms;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("timed out waiting for " + what);
-            Thread.sleep(20);
-        }
     }
 }

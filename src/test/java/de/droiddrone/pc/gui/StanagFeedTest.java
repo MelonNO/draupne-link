@@ -18,8 +18,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BooleanSupplier;
 
+import static de.droiddrone.testing.Waits.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -41,14 +41,6 @@ class StanagFeedTest {
         f.setIds("OP TEST", "NOR");
         f.setPlace(new StanagKlv.Place(59.95, 10.7, Double.NaN, 45, null));
         return f;
-    }
-
-    private static void await(BooleanSupplier what, long ms, String why) throws InterruptedException {
-        long end = System.currentTimeMillis() + ms;
-        while (!what.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("waited " + ms + " ms for: " + why);
-            Thread.sleep(10);
-        }
     }
 
     /** The test stream's frames to the feed at its own pace (30 a second), as the video's receive thread hands them over. */

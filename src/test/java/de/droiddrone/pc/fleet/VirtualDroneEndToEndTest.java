@@ -17,8 +17,8 @@ import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BooleanSupplier;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -79,9 +79,9 @@ class VirtualDroneEndToEndTest {
         startDrone(config);
         assertTrue(drone.lookTo(123));
         startLink(config, null);
-        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY", log);
         FcTelemetry t = link.getTelemetry();
-        waitFor(() -> Boolean.TRUE.equals(t.fcCompass()) && t.getAttitude() != null, 5000, "status and attitude");
+        waitFor(() -> Boolean.TRUE.equals(t.fcCompass()) && t.getAttitude() != null, 5000, "status and attitude", log);
         assertEquals(123, de.droiddrone.pc.LiveHeading.of(t), 1);
     }
 
@@ -90,31 +90,31 @@ class VirtualDroneEndToEndTest {
         PcConfig config = PcConfig.defaults();
         startDrone(config);
         startLink(config, null);
-        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY", log);
         FcTelemetry t = link.getTelemetry();
-        waitFor(() -> t.getStatus() != null && t.hasBoxNames() && t.getAttitude() != null, 5000, "the FC's status, modes and attitude");
-        waitFor(() -> t.getPhonePcBuild() == FcTelemetry.pcBuild(VirtualDrone.VERSION), 3000, "the phone app's version");
+        waitFor(() -> t.getStatus() != null && t.hasBoxNames() && t.getAttitude() != null, 5000, "the FC's status, modes and attitude", log);
+        waitFor(() -> t.getPhonePcBuild() == FcTelemetry.pcBuild(VirtualDrone.VERSION), 3000, "the phone app's version", log);
         assertNotNull(link.getFcInfo(), "FcInfo answered");
         assertFalse(t.getStatus().armed());
-        waitFor(() -> t.getGps() != null && t.getBattery() != null, 3000, "GPS and battery");
+        waitFor(() -> t.getGps() != null && t.getBattery() != null, 3000, "GPS and battery", log);
         assertEquals(Fleet.DEFAULT_LAT, t.getGps().latDeg(), 1e-3);
 
         startSticks();
-        waitFor(() -> drone.fc.hadSticks(), 2000, "the sticks reach the virtual FC");
+        waitFor(() -> drone.fc.hadSticks(), 2000, "the sticks reach the virtual FC", log);
         Thread.sleep(Math.max(0, FlightModel.BOOT_GRACE_MS + 700 - (System.currentTimeMillis() - startedAt())));
         armValue = 1900;
-        waitFor(() -> t.isArmedNow(de.droiddrone.pc.MonoClock.ms(), 1000), 3000, "armed, as the PC's telemetry says");
+        waitFor(() -> t.isArmedNow(de.droiddrone.pc.MonoClock.ms(), 1000), 3000, "armed, as the PC's telemetry says", log);
         assertTrue(drone.fc.isArmed());
 
         // 4G gone: nothing either way for 4 s - Betaflight's failsafe drops it
         drone.link().silence(System.currentTimeMillis(), 4000);
-        waitFor(() -> !drone.fc.isArmed() && drone.fc.failsafe() == FlightModel.Failsafe.DROPPED, 3500, "failsafe, dropped");
+        waitFor(() -> !drone.fc.isArmed() && drone.fc.failsafe() == FlightModel.Failsafe.DROPPED, 3500, "failsafe, dropped", log);
         assertEquals("failsafe (drop)", drone.fc.lastDisarm());
-        waitFor(() -> link.getState() != ControlLink.State.READY, 3000, "the PC counts the link lost");
+        waitFor(() -> link.getState() != ControlLink.State.READY, 3000, "the PC counts the link lost", log);
         // back: the PC reconnects by itself and sees it disarmed; the switch still on doesn't re-arm it
-        waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back", log);
         waitFor(() -> t.getStatus() != null && de.droiddrone.pc.MonoClock.ms() - t.getStatus().receivedAt() < 300 && !t.getStatus().armed(),
-                3000, "a fresh status: disarmed");
+                3000, "a fresh status: disarmed", log);
         Thread.sleep(500);
         assertFalse(drone.fc.isArmed(), "the arm switch must go off and on after a failsafe");
     }
@@ -136,7 +136,7 @@ class VirtualDroneEndToEndTest {
         try (VideoPipeline video = new VideoPipeline(sink, () -> 30)) {
             startLink(config, video);
             video.attach(link);
-            waitFor(() -> sink.presented.get() >= 20, 15_000, "decoded pictures on the PC");
+            waitFor(() -> sink.presented.get() >= 20, 15_000, "decoded pictures on the PC", log);
             assertTrue(link.isVideoConfigReceived());
             assertNull(video.stats().error(), "no decoder error");
             assertEquals(640, sink.width, "the size the PC asked for");
@@ -151,25 +151,25 @@ class VirtualDroneEndToEndTest {
         PcConfig config = PcConfig.defaults();
         startDrone(config);
         startLink(config, null);
-        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY", log);
         FcTelemetry t = link.getTelemetry();
-        waitFor(() -> t.getPhonePower() != null, 3000, "the power record");
+        waitFor(() -> t.getPhonePower() != null, 3000, "the power record", log);
         long until = System.currentTimeMillis() + 3000;
         while (drone.mode() != VirtualDrone.DEEP_SLEEP && System.currentTimeMillis() < until) {
             link.sendPowerMode(ControlLink.POWER_DEEP_SLEEP, 1);
             Thread.sleep(200);
         }
-        waitFor(() -> drone.asleep(), 3000, "asleep after the countdown");
+        waitFor(() -> drone.asleep(), 3000, "asleep after the countdown", log);
         link.setDormant(true);
-        waitFor(() -> link.getState() != ControlLink.State.READY, 4000, "the link down: the phone sleeps");
+        waitFor(() -> link.getState() != ControlLink.State.READY, 4000, "the link down: the phone sleeps", log);
         drone.checkNow(); // its check window: the hello, answered "sleep on" while the PC is dormant
-        waitFor(() -> link.getSleepHello() != null, 3000, "the sleep check's hello at the PC");
-        waitFor(() -> log.stream().anyMatch(l -> l.contains("the PC says sleep on")), 3000, "the PC's answer: sleep on");
+        waitFor(() -> link.getSleepHello() != null, 3000, "the sleep check's hello at the PC", log);
+        waitFor(() -> log.stream().anyMatch(l -> l.contains("the PC says sleep on")), 3000, "the PC's answer: sleep on", log);
         assertTrue(drone.asleep());
         link.setDormant(false); // WAKE: the next check-in wakes it
         drone.checkNow();
-        waitFor(() -> drone.mode() == VirtualDrone.NORMAL && !drone.asleep(), 3000, "woken by the PC");
-        waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back");
+        waitFor(() -> drone.mode() == VirtualDrone.NORMAL && !drone.asleep(), 3000, "woken by the PC", log);
+        waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back", log);
         assertTrue(log.stream().anyMatch(l -> l.contains("sleep check: listening")), String.join("\n", log));
     }
 
@@ -182,29 +182,29 @@ class VirtualDroneEndToEndTest {
         PcConfig config = PcConfig.defaults();
         startDrone(config);
         startLink(config, null);
-        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY", log);
         FcTelemetry t = link.getTelemetry();
-        waitFor(() -> t.getPhonePower() != null && t.getPhonePcBuild() >= SleepCheck.ALWAYS_MIN_PC_BUILD, 3000, "the power record and a pc.39 app");
+        waitFor(() -> t.getPhonePower() != null && t.getPhonePcBuild() >= SleepCheck.ALWAYS_MIN_PC_BUILD, 3000, "the power record and a pc.39 app", log);
         long until = System.currentTimeMillis() + 3000;
         while (drone.mode() != VirtualDrone.OVERWATCH && System.currentTimeMillis() < until) {
             link.sendOverwatch(SleepCheck.ALWAYS, 2, 0, 0x5eed0001);
             Thread.sleep(200);
         }
-        waitFor(() -> t.getPhonePower() != null && t.getPhonePower().checkIntervalMin() == SleepCheck.ALWAYS, 3000, "the phone reports always listening");
-        waitFor(() -> drone.asleep(), 3000, "asleep after the countdown");
+        waitFor(() -> t.getPhonePower() != null && t.getPhonePower().checkIntervalMin() == SleepCheck.ALWAYS, 3000, "the phone reports always listening", log);
+        waitFor(() -> drone.asleep(), 3000, "asleep after the countdown", log);
         link.setDormant(true); // as MainWindow does once the phone sleeps: no Connect until WAKE or CONNECT
-        waitFor(() -> link.getState() != ControlLink.State.READY, 4000, "the link down: the phone sleeps");
-        waitFor(() -> drone.listening(), SleepCheck.ALWAYS_OPEN_AFTER_MS + 3000, "the window open by itself, no check to wait for");
-        waitFor(() -> link.getSleepHello() != null && SleepCheck.isAlways(link.getSleepHello().nextCheckMin()), 3000, "the hello says listening");
+        waitFor(() -> link.getState() != ControlLink.State.READY, 4000, "the link down: the phone sleeps", log);
+        waitFor(() -> drone.listening(), SleepCheck.ALWAYS_OPEN_AFTER_MS + 3000, "the window open by itself, no check to wait for", log);
+        waitFor(() -> link.getSleepHello() != null && SleepCheck.isAlways(link.getSleepHello().nextCheckMin()), 3000, "the hello says listening", log);
         Thread.sleep(2500); // more hellos, each answered "sleep on" while the PC is dormant
         assertTrue(drone.listening(), "the PC's sleep on doesn't close an always-listening window");
         assertEquals(VirtualDrone.OVERWATCH, drone.mode());
 
         long connectAt = System.currentTimeMillis();
         link.setDormant(false); // CONNECT (or WAKE): the Connects go out again
-        waitFor(() -> drone.mode() == VirtualDrone.NORMAL && !drone.asleep() && !drone.listening(), 3000, "woken by the Connect");
+        waitFor(() -> drone.mode() == VirtualDrone.NORMAL && !drone.asleep() && !drone.listening(), 3000, "woken by the Connect", log);
         assertTrue(System.currentTimeMillis() - connectAt < 3000, "awake within a couple of seconds");
-        waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back");
+        waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back", log);
         assertTrue(log.stream().anyMatch(l -> l.contains("always listening for the PC")), String.join("\n", log));
     }
 
@@ -217,8 +217,8 @@ class VirtualDroneEndToEndTest {
         try {
             hub.start();
             link.setOverwatchSink(hub::offer);
-            waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY");
-            waitFor(() -> link.getTelemetry().getPhonePower() != null, 3000, "the power record");
+            waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY", log);
+            waitFor(() -> link.getTelemetry().getPhonePower() != null, 3000, "the power record", log);
             int token = 0x5eed1234;
             hub.watch("MobileZulu", token, null);
             long until = System.currentTimeMillis() + 3000;
@@ -226,12 +226,12 @@ class VirtualDroneEndToEndTest {
                 link.sendOverwatch(1, 2, 0, token);
                 Thread.sleep(200);
             }
-            waitFor(() -> drone.asleep() && drone.overwatch.isWatching(), 3000, "overwatching");
+            waitFor(() -> drone.asleep() && drone.overwatch.isWatching(), 3000, "overwatching", log);
             link.setDormant(true);
             Thread.sleep(3500); // the detector's warm-up
             drone.someoneNow(); // someone walks past: the detector finds it, and that calls the PC
-            waitFor(() -> log.stream().anyMatch(l -> l.contains("the PC has the alert")), 8000, "the hub acknowledged the alert (its token)");
-            waitFor(() -> !hub.views().isEmpty(), 2000, "the alert on the PC's map");
+            waitFor(() -> log.stream().anyMatch(l -> l.contains("the PC has the alert")), 8000, "the hub acknowledged the alert (its token)", log);
+            waitFor(() -> !hub.views().isEmpty(), 2000, "the alert on the PC's map", log);
             assertEquals("MobileZulu", hub.views().get(0).drone());
         } finally {
             hub.close();
@@ -358,7 +358,7 @@ class VirtualDroneEndToEndTest {
         PcConfig config = PcConfig.defaults();
         startDrone(config);
         drone.requestMode(VirtualDrone.STANDBY, 0, "the test");
-        waitFor(() -> drone.mode() == VirtualDrone.STANDBY, 5000, "standby");
+        waitFor(() -> drone.mode() == VirtualDrone.STANDBY, 5000, "standby", log);
         try (DatagramSocket observer = new DatagramSocket(0, InetAddress.getLoopbackAddress())) {
             observer.setSoTimeout(200);
             byte[] ask = Observe.encodeRequest(config.getKey(), 640, 360, 15, 1000, Observe.FLAG_VIDEO_CONFIG, 0);
@@ -461,14 +461,6 @@ class VirtualDroneEndToEndTest {
         @Override
         public void presentFrame() {
             presented.incrementAndGet();
-        }
-    }
-
-    private void waitFor(BooleanSupplier ok, long ms, String what) throws InterruptedException {
-        long end = System.currentTimeMillis() + ms;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("Timed out waiting for " + what + "\n" + String.join("\n", log));
-            Thread.sleep(20);
         }
     }
 }

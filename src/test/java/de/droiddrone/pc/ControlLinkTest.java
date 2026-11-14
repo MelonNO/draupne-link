@@ -10,7 +10,9 @@ import de.droiddrone.common.UdpPacketData;
 import de.droiddrone.common.UdpSender;
 import de.droiddrone.pc.video.TestStreams;
 import de.droiddrone.pc.video.VideoPipeline;
+import de.droiddrone.testing.Ports;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.net.DatagramPacket;
@@ -20,6 +22,7 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -27,10 +30,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * "direct mode" (isServer = true), the same way upstream Flight/Udp.java sets them up.
  */
 class ControlLinkTest {
-    private static final int PHONE_PORT = 46286;
-    private static final int PC_PORT = 46287;
-    private static final int RELAY_PORT = 46300; // Connection uses RELAY_PORT + 1 locally in host mode
-    private static final int RELAY_PHONE_PORT = 46310;
+    /** Free ports, new ones for every test: the fake phone listens on the first, the link on the second. */
+    private final int phonePort = Ports.free(), pcPort = Ports.free();
 
     private FakeFlightPhone phone;
     private ControlLink link;
@@ -72,11 +73,11 @@ class ControlLinkTest {
 
     @Test
     void videoStreamsFromPhoneToScreen() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.videoStream = TestStreams.h264(320, 240, 40, 10);
         CapturingSink sink = new CapturingSink();
         try (VideoPipeline video = new VideoPipeline(sink, () -> 30)) {
-            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
             link.setVideoListener(video, false);
             video.attach(link);
             link.start();
@@ -92,12 +93,12 @@ class ControlLinkTest {
 
     @Test
     void lostFragmentDoesNotStopTheVideo() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.videoStream = TestStreams.h264(320, 240, 40, 20, true); // textured: frames span several packets
         phone.dropFrame = 5; // a P-frame (key frames are 1 and 21)
         CapturingSink sink = new CapturingSink();
         try (VideoPipeline video = new VideoPipeline(sink, () -> 30)) {
-            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
             link.setVideoListener(video, true);
             video.attach(link);
             link.start();
@@ -112,8 +113,8 @@ class ControlLinkTest {
 
     @Test
     void noVideoRequestedWithoutListener() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         Thread.sleep(700);
@@ -122,8 +123,8 @@ class ControlLinkTest {
 
     @Test
     void handshakeConfigAndRcReachThePhone() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
 
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
@@ -164,9 +165,9 @@ class ControlLinkTest {
     /** A phone app from pc.19 on gets numbered frames; an older one (which refuses extra bytes) the old frames. */
     @Test
     void sequenceByteGoesOutOnlyToAPhoneAppThatReadsIt() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.appVersion = "2.3.0-pc.18";
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> "2.3.0-pc.18".equals(link.getTelemetry().getPhoneAppVersion()), 5000, "version known");
@@ -190,9 +191,9 @@ class ControlLinkTest {
      */
     @Test
     void liveAudioIsAskedForAndArrives() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.appVersion = "2.3.0-pc.34";
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         List<de.droiddrone.pc.audio.AudioConfig> configs = new CopyOnWriteArrayList<>();
         List<byte[]> frames = new CopyOnWriteArrayList<>();
         link.setAudioListener(new ControlLink.AudioListener() {
@@ -225,9 +226,9 @@ class ControlLinkTest {
     /** A phone app older than pc.34 is never sent AUDIO; the window says why there is no sound. */
     @Test
     void anOlderPhoneGetsNoAudioRequest() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.appVersion = "2.3.0-pc.33";
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> link.getTelemetry().getPhonePcBuild() == 33, 5000, "version known");
@@ -239,8 +240,8 @@ class ControlLinkTest {
     /** Nothing from the phone for 2 s: the link counts as lost, well before upstream's 4000 ticks. */
     @Test
     void silenceOfTwoSecondsIsALinkLoss() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         Thread.sleep(300);
@@ -259,9 +260,9 @@ class ControlLinkTest {
     @Test
     void linkLogRecordsTheTimeline(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
         for (int i = 0; i < 25; i++) java.nio.file.Files.writeString(dir.resolve(String.format("link-20260101-0000%02d.csv", i)), "old");
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.phoneStateFlags = 0b1001; // channel map known, camera open
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> link.getTelemetry().getStatus() != null, 5000, "FC status");
@@ -311,8 +312,8 @@ class ControlLinkTest {
 
     @Test
     void phoneThatStopsForwardingFcDataCountsAsFcLost() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         assertFalse(link.isFcLost(), "no verdict during the grace period");
@@ -325,8 +326,8 @@ class ControlLinkTest {
 
     @Test
     void flightControllerStatusArrivesThroughTheLink() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getTelemetry().getStatus() != null, 8000, "FC status via telemetry");
         FcTelemetry.Status s = link.getTelemetry().getStatus();
@@ -336,8 +337,8 @@ class ControlLinkTest {
 
     @Test
     void rcGoesOutOnlyWhenTheInputLoopSendsIt() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         short[] sticks = {1500, 1500, 1500, 1000};
         link.start();
         assertFalse(link.sendRc(sticks), "nothing is sent before the phone accepted the config");
@@ -350,6 +351,7 @@ class ControlLinkTest {
     }
 
     @Test
+    @Tag("perf")
     void pacerHoldsItsRateOnWindows() throws Exception {
         Pacer pacer = new Pacer(100);
         long start = System.nanoTime();
@@ -363,12 +365,12 @@ class ControlLinkTest {
     @Test
     void cameraAlwaysRunsAtASteady30() throws Exception {
         for (String version : new String[]{"2.3.0-pc.12", "2.3.0-pc.11", null}) {
-            phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+            phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
             phone.appVersion = version;
             PcConfig config = PcConfig.defaults();
             config.set("cameraFpsMin", "60"); // an old settings file: ignored
             config.set("cameraFpsMax", "60");
-            link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link = new ControlLink(config, InetAddress.getLoopbackAddress(), phonePort, pcPort);
             link.start();
             waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
             assertEquals(30, phone.config.cameraFpsMin, "phone app " + version);
@@ -382,8 +384,8 @@ class ControlLinkTest {
 
     @Test
     void keyFrameRequestsReachThePhoneAtMostEvery1Point5Seconds() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         for (int i = 0; i < 40; i++) {
@@ -401,8 +403,8 @@ class ControlLinkTest {
      */
     @Test
     void aKeyFrameRequestLostOnTheWayStillGetsItsKeyFrame() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         phone.dropKeyFrameRequests.set(1);
@@ -423,10 +425,10 @@ class ControlLinkTest {
      */
     @Test
     void aVideoProfileLostWithTheFirstConfigIsSentAgain() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.videoProfile = 1 | 2 | 4; // left in bad coverage mode by the session before
         phone.dropProfiles.set(1);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> phone.videoProfile == 0, 2000, "the normal profile, from the copy after the config");
@@ -436,8 +438,8 @@ class ControlLinkTest {
     /** 1.0.64: the Disconnect went once, unnumbered: lost, the phone streamed on until its own 4 s timeout. */
     @Test
     void theDisconnectGoesThreeTimes() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         long t0 = System.nanoTime();
@@ -446,7 +448,7 @@ class ControlLinkTest {
         waitFor(() -> phone.disconnects.get() == ControlLink.DISCONNECT_SENDS, 1000, "three Disconnects at the phone");
         assertTrue(tookMs < 500, "close() took " + tookMs + " ms");
         // the port is free the moment close() returns: the name service and a reconnect bind it at once
-        new DatagramSocket(PC_PORT).close();
+        new DatagramSocket(pcPort).close();
     }
 
     /**
@@ -456,10 +458,10 @@ class ControlLinkTest {
      */
     @Test
     void aPhoneThatHearsNothingRightAfterAReconnectIsConnectedToAgain() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.phoneStateFlags = 0; // it has telemetry to send
         phone.telemetryWithoutSession = true;
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> link.getPing() >= 0, 3000, "pongs on this link");
@@ -487,10 +489,10 @@ class ControlLinkTest {
      */
     @Test
     void sticksUnheardSaysWhenNothingShowsThePhoneHearsThisPc() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.phoneStateFlags = 0; // it has telemetry to send
         phone.telemetryWithoutSession = true;
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         assertFalse(link.sticksUnheard(), "not started");
         link.start();
         assertFalse(link.sticksUnheard(), "never up yet: no sticks either");
@@ -517,9 +519,9 @@ class ControlLinkTest {
      */
     @Test
     void lostModeNamesAreAskedForAgainWithinASecond() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.dropBoxNames.set(1);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getFcInfo() != null, 5000, "FC info");
         long t0 = System.nanoTime();
@@ -535,8 +537,8 @@ class ControlLinkTest {
      */
     @Test
     void theSticksWaitForTheFlightControllersWordOnARealLink() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         RcMapper five = new RcMapper(new String[]{"axis0", "axis1", "axis2", "axis3", "axis4"});
         List<String> said = new CopyOnWriteArrayList<>();
         RcSession session = new RcSession(link, five, said::add, new ArmSwitch(4, List.of(new int[]{1700, 2100})));
@@ -567,15 +569,15 @@ class ControlLinkTest {
      */
     @Test
     void aHelloThatGetsAFleetModeGetsNoSleepOn() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         link.setDormant(true);
         phone.sleep();
         waitFor(() -> !link.isConnected(), 4000, "link lost");
         byte[] mode = de.droiddrone.common.FleetProtocol.request("DD",
-                new de.droiddrone.common.FleetProtocol.Request(7, ControlLink.POWER_DEEP_SLEEP, 5, 0, 0, 0, PC_PORT));
+                new de.droiddrone.common.FleetProtocol.Request(7, ControlLink.POWER_DEEP_SLEEP, 5, 0, 0, 0, pcPort));
         java.util.concurrent.atomic.AtomicReference<byte[]> queued = new java.util.concurrent.atomic.AtomicReference<>(mode);
         link.setFleetHello((address, hello) -> queued.get());
         phone.sendSleepHello(67, true, 5);
@@ -601,12 +603,12 @@ class ControlLinkTest {
     /** 1.0.64: the same for another phone's hello while this link holds the port. */
     @Test
     void anotherPhonesHelloThatGetsAFleetModeGetsNoSleepOn() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         byte[] mode = de.droiddrone.common.FleetProtocol.request("DD",
-                new de.droiddrone.common.FleetProtocol.Request(8, ControlLink.POWER_DEEP_SLEEP, 5, 0, 0, 0, PC_PORT));
+                new de.droiddrone.common.FleetProtocol.Request(8, ControlLink.POWER_DEEP_SLEEP, 5, 0, 0, 0, pcPort));
         java.util.concurrent.atomic.AtomicReference<byte[]> queued = new java.util.concurrent.atomic.AtomicReference<>(mode);
         link.setFleetHello((address, hello) -> queued.get());
         link.setForeignSleepHandler((address, hello) -> false); // the window's answer: sleep on
@@ -614,12 +616,12 @@ class ControlLinkTest {
         try (DatagramSocket other = new DatagramSocket(0, InetAddress.getLoopbackAddress())) {
             other.setSoTimeout(700);
             DatagramPacket in = new DatagramPacket(new byte[64], 64);
-            other.send(new DatagramPacket(hello, hello.length, InetAddress.getLoopbackAddress(), PC_PORT));
+            other.send(new DatagramPacket(hello, hello.length, InetAddress.getLoopbackAddress(), pcPort));
             other.receive(in);
             assertEquals(de.droiddrone.common.FleetProtocol.MODE, in.getData()[0], "the queued mode");
             assertThrows(java.net.SocketTimeoutException.class, () -> other.receive(in), "and no sleep on behind it");
             queued.set(null);
-            other.send(new DatagramPacket(hello, hello.length, InetAddress.getLoopbackAddress(), PC_PORT));
+            other.send(new DatagramPacket(hello, hello.length, InetAddress.getLoopbackAddress(), pcPort));
             in.setLength(64);
             other.receive(in);
             assertEquals(ControlLink.SLEEP_ANSWER, in.getData()[0]);
@@ -656,9 +658,9 @@ class ControlLinkTest {
             for (long t = 0; t < 5000; t += 50) assertFalse(ControlLink.connectHeld(t, late), "pong " + age + " ms old: no wait");
         }
 
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.pongDelayMs = 900;
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> link.getPing() > ControlLink.SLOW_PATH_PING_MS, 5000, "a slow ping");
@@ -677,8 +679,8 @@ class ControlLinkTest {
     /** DEEP SLEEP: the mode reaches the phone; while the PC is dormant no Connect goes out; WAKE brings the link back. */
     @Test
     void powerModeReachesThePhoneAndADormantLinkSendsNoConnect() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         link.sendPowerMode(ControlLink.POWER_DEEP_SLEEP, 2);
@@ -717,9 +719,9 @@ class ControlLinkTest {
     /** A weak link (the phone's bitrate setting low for 5 s): bad coverage mode, 640x360; the sticks keep going. */
     @Test
     void aWeakLinkSwitchesToBadCoverageMode() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.encoderBitRate = 250_000;
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         assertEquals(1280, phone.config.cameraWidth);
@@ -738,7 +740,7 @@ class ControlLinkTest {
     /** The phone ignores the switch (its config arrives, the picture stays): the PC sends the size again. */
     @Test
     void aSwitchThePhoneDidntMakeIsSentAgain() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.encoderBitRate = 250_000;
         phone.videoStream = TestStreams.h264(320, 240, 600, 10); // the stream stays 320 wide: the switch is never made
         ControlLinkTest.CapturingSink sink = new ControlLinkTest.CapturingSink();
@@ -746,7 +748,7 @@ class ControlLinkTest {
             PcConfig config = PcConfig.defaults();
             config.set("cameraWidth", "320");
             config.set("cameraHeight", "240");
-            link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link = new ControlLink(config, InetAddress.getLoopbackAddress(), phonePort, pcPort);
             link.setVideoListener(video, false);
             video.attach(link);
             link.start();
@@ -759,10 +761,10 @@ class ControlLinkTest {
 
     @Test
     void videoRobustAndSharpAreObeyedAtOnce() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         PcConfig config = PcConfig.defaults();
         config.set(ControlLink.VIDEO_MODE_KEY, "robust");
-        link = new ControlLink(config, InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(config, InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> phone.config.cameraWidth == 640 && phone.videoProfile > 0 && (phone.videoProfile & 1) == 1, 3000, "bad coverage mode from the start");
@@ -805,9 +807,9 @@ class ControlLinkTest {
      */
     @Test
     void autoWaitsTheWholeCalmBeforeTheSharpTier() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.encoderBitRate = 4_000_000; // at the normal top from the start
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.setSharpAfterMsForTest(4000);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
@@ -823,9 +825,9 @@ class ControlLinkTest {
      */
     @Test
     void autoGoesSharpWhenTheLinkIsCalmAndBackAtAStall() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.encoderBitRate = 4_000_000; // the phone sits at the normal top
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.setSharpAfterMsForTest(1500);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
@@ -846,9 +848,9 @@ class ControlLinkTest {
      */
     @Test
     void autoStaysOffTheSharpTierWhileSomeoneWatches() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.encoderBitRate = 4_000_000;
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.setSharpAfterMsForTest(1500);
         link.setWatchersForTest(1);
         link.start();
@@ -864,8 +866,8 @@ class ControlLinkTest {
     /** A phone that reports no bitrate setting (older than pc.13) is never judged calm at the top: no sharp tier. */
     @Test
     void aPhoneThatReportsNoBitrateNeverGoesSharp() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.setSharpAfterMsForTest(500);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
@@ -881,9 +883,9 @@ class ControlLinkTest {
      */
     @Test
     void theVideoProfileGoesOutWithTheFirstConfigOfEverySession() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.videoProfile = 1 | 2 | 4; // left in bad coverage mode by the session before
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> phone.videoProfile == 0, 2000, "the normal profile, with the first config");
@@ -893,9 +895,9 @@ class ControlLinkTest {
     /** Bad coverage mode not enough (the bitrate at the bottom for 5 s more): the survival tier, 480x270 at 15 fps. */
     @Test
     void aLinkThatCantCarryBadCoverageModeGetsTheSurvivalTier() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.encoderBitRate = 250_000;
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getTier() == ControlLink.Tier.ROBUST, (int) TierPolicy.LOW_RES_AFTER_MS + 3000, "bad coverage mode");
         waitFor(() -> link.getTier() == ControlLink.Tier.SURVIVAL, (int) TierPolicy.LOW_RES_AFTER_MS + 3000, "the survival tier");
@@ -914,8 +916,8 @@ class ControlLinkTest {
      */
     @Test
     void sticksAndFcStateSurviveALinkLoss() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> link.getTelemetry().hasBoxNames() && link.getFcInfo() != null, 5000, "FC state");
@@ -949,10 +951,10 @@ class ControlLinkTest {
      */
     @Test
     void aPhoneThatHearsNothingForSecondsIsConnectedToAgainByItself() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.phoneStateFlags = 0; // it has telemetry to send
         phone.telemetryWithoutSession = true; // as the real phone sends it
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         waitFor(() -> link.getPing() >= 0, 3000, "pongs on this link");
@@ -976,11 +978,11 @@ class ControlLinkTest {
     /** The link comes back and the video never stopped: the stream is not asked for again (no encoder restart). */
     @Test
     void aReconnectLeavesARunningStreamAlone() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.videoStream = TestStreams.h264(320, 240, 900, 10); // 30 s of frames
         CapturingSink sink = new CapturingSink();
         try (VideoPipeline video = new VideoPipeline(sink, () -> 30)) {
-            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
             link.setVideoListener(video, false);
             video.attach(link);
             link.start();
@@ -1001,12 +1003,12 @@ class ControlLinkTest {
     /** The link comes back but the stream really stopped (the phone app restarted): it is asked for again. */
     @Test
     void aStreamThatStoppedIsAskedForAgainAfterAReconnect() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.videoStream = TestStreams.h264(320, 240, 60, 10); // 2 s of frames, then nothing
         phone.appVersion = "2.3.0-pc.26";
         CapturingSink sink = new CapturingSink();
         try (VideoPipeline video = new VideoPipeline(sink, () -> 30)) {
-            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
             link.setVideoListener(video, false);
             video.attach(link);
             link.start();
@@ -1024,9 +1026,9 @@ class ControlLinkTest {
         assertEquals(2 + 8 * 2 + 2, wide.length);
         assertEquals(0x12, wide[wide.length - 2] & 0xff);
         assertEquals(0x34, wide[wide.length - 1] & 0xff);
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.appVersion = "2.3.0-pc.26";
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getTelemetry().getPhonePcBuild() == 26, 5000, "version known");
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY"); // the version can come first
@@ -1041,9 +1043,9 @@ class ControlLinkTest {
     /** SET_BITRATE (pc.26): the step outright; an older phone app gets one relative step. */
     @Test
     void theBitrateStepGoesOutrightToAPhoneAppThatTakesIt() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
         phone.appVersion = "2.3.0-pc.25";
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY && link.getTelemetry().getPhonePcBuild() == 25, 5000, "READY, version known");
         link.sendBitrateStep(3, 5);
@@ -1060,8 +1062,8 @@ class ControlLinkTest {
 
     @Test
     void anOlderPhoneAppNeverSwitchesResolution() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode); // reports no encoder setting
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode); // reports no encoder setting
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "link READY");
         Thread.sleep(TierPolicy.LOW_RES_AFTER_MS + 1000);
@@ -1071,8 +1073,8 @@ class ControlLinkTest {
 
     @Test
     void wrongKeyNeverConnects() throws Exception {
-        phone = new FakeFlightPhone("SECRET", SettingsCommon.versionCompatibleCode);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "SECRET", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         Thread.sleep(1500);
         assertEquals(ControlLink.State.CONNECTING, link.getState());
@@ -1081,18 +1083,10 @@ class ControlLinkTest {
 
     @Test
     void versionMismatchIsReported() throws Exception {
-        phone = new FakeFlightPhone("DD", SettingsCommon.versionCompatibleCode + 1);
-        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), PHONE_PORT, PC_PORT);
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode + 1);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
         link.start();
         waitFor(() -> link.getState() == ControlLink.State.VERSION_MISMATCH, 5000, "version mismatch");
-    }
-
-    static void waitFor(java.util.function.BooleanSupplier cond, long timeoutMs, String what) throws InterruptedException {
-        long end = System.currentTimeMillis() + timeoutMs;
-        while (!cond.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("Timed out waiting for " + what);
-            Thread.sleep(20);
-        }
     }
 
     static class ParsedConfig {
@@ -1203,16 +1197,16 @@ class ControlLinkTest {
         volatile ParsedConfig config;
         final List<short[]> rcFrames = new CopyOnWriteArrayList<>();
 
-        FakeFlightPhone(String key, int versionCode) throws Exception {
-            this(key, versionCode, -1);
+        FakeFlightPhone(int port, String key, int versionCode) throws Exception {
+            this(port, key, versionCode, -1);
         }
 
         /** @param relayPort >= 0: "Connect over server" mode, like upstream Flight with ConnectionMode.overServer */
-        FakeFlightPhone(String key, int versionCode, int relayPort) throws Exception {
+        FakeFlightPhone(int port, String key, int versionCode, int relayPort) throws Exception {
             this.versionCode = versionCode;
             this.key = key;
             viaRelay = relayPort >= 0;
-            socket = new DatagramSocket(viaRelay ? RELAY_PHONE_PORT : PHONE_PORT, InetAddress.getLoopbackAddress());
+            socket = new DatagramSocket(port, InetAddress.getLoopbackAddress());
             udpSender = new UdpSender(socket);
             receiverBuffer = new ReceiverBuffer(udpSender, !viaRelay, key, null);
             if (viaRelay) {

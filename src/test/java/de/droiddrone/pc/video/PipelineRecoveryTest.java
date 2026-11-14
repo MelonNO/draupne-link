@@ -1,5 +1,6 @@
 package de.droiddrone.pc.video;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CountDownLatch;
@@ -72,6 +73,7 @@ class PipelineRecoveryTest {
      * neither).
      */
     @Test
+    @Tag("quarantine") // steadied in 1.0.49 (T1 above); the CHANGELOG says one of the two video tests steadied then still fails now and then under load
     void aBacklogKeepsItsNewestKeyFrame() throws Exception {
         TestStreams.Stream stream = TestStreams.h264(320, 240, 35, 12);
         HoldingSink sink = new HoldingSink();

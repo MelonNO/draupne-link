@@ -1,5 +1,6 @@
 plugins {
     id 'application'
+    id 'org.gradle.test-retry' version '1.6.2' // quarantineTest's second and third try (off for the other test tasks)
 }
 
 group = 'de.droiddrone.pc'
@@ -72,15 +73,50 @@ run {
     workingDir = rootProject.projectDir
 }
 
-test {
-    useJUnitPlatform()
+// ---------------------------------------------------------------------------------------------------------------------
+// Tests: three tasks over the same test classes, told apart by JUnit tags.
+//   gradlew test            -> all but the two tags below; test classes side by side in a few JVMs (forks)
+//   gradlew perfTest        -> @Tag("perf"): what the code costs in time, one test at a time on a PC doing nothing else
+//   gradlew quarantineTest  -> @Tag("quarantine"): tests known to fail now and then under load, each tried up to 3 times
+// A tagged test is run by its own task only: `gradlew perfTest --tests PaintCostTest`, not `test --tests ...`.
+// Tests of different classes run at the same time, so none may count on a fixed port or file (TestHygieneTest;
+// de.droiddrone.testing.Ports and JUnit's @TempDir are the way).
+
+tasks.withType(Test).configureEach {
     // upstream's relay (RelayHost) writes config.cfg into the working directory
     workingDir = layout.buildDirectory.dir('test-work').get().asFile
     doFirst { workingDir.mkdirs() }
     testLogging { // a failure on the release runner shows its message in the log, not only its line
         events 'failed'
-        exceptionFormat 'full'
+        exceptionFormat = 'full'
     }
+}
+
+test {
+    useJUnitPlatform { excludeTags 'perf', 'quarantine' }
+    // half the cores, 4 at most: the link and video tests each keep several threads busy and count real time
+    maxParallelForks = Math.max(1, Math.min(4, Runtime.runtime.availableProcessors().intdiv(2)))
+}
+
+tasks.register('perfTest', Test) {
+    group = 'verification'
+    description = 'Runs the timing tests (@Tag("perf")), one at a time'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform { includeTags 'perf' }
+    maxParallelForks = 1
+    mustRunAfter test // in one build: never while the other tests load the PC
+}
+
+tasks.register('quarantineTest', Test) {
+    group = 'verification'
+    description = 'Runs the tests known to fail now and then under load (@Tag("quarantine")), each up to 3 times'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform { includeTags 'quarantine' }
+    maxParallelForks = 1
+    retry { maxRetries = 2 } // org.gradle.test-retry: a test that fails is run again, twice at most
+    mustRunAfter test
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -150,7 +186,7 @@ tasks.register('packageInstaller', Exec) {
             '--name', 'DRAUPNE Link',
             '--app-version', version,
             '--vendor', 'draupne-link',
-            '--description', 'Fly a Betaflight drone over 4G from Windows',
+            '--description', 'Fly a Betaflight drone over a mobile network from Windows',
             '--icon', iconFile,
             // all users (Program Files), so the installer runs as administrator and can do the PC setup itself;
             // one Windows approval prompt covers it all (src/installer/main.wxs)

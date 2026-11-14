@@ -16,8 +16,8 @@ import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -76,7 +76,7 @@ class TourScenarioTest {
         for (VirtualDrone d : s.overwatchers()) tokens.put(d.name(), d == s.watcher() ? token : token + 1);
         s.placeModes(new InetSocketAddress(InetAddress.getLoopbackAddress(), pc.getLocalPort()), tokens, 2);
         waitFor(() -> s.sleeper().mode() == VirtualDrone.DEEP_SLEEP
-                && s.overwatchers().stream().allMatch(d -> d.mode() == VirtualDrone.OVERWATCH), 3000, "the modes");
+                && s.overwatchers().stream().allMatch(d -> d.mode() == VirtualDrone.OVERWATCH), 3000, "the modes", log);
         // nothing moves until the BTR is sent: no alert in the detection's strict start and after it
         long placed = System.currentTimeMillis();
         byte[] buf = new byte[65536];
@@ -103,7 +103,7 @@ class TourScenarioTest {
             }
         }
         assertTrue(alertAt > 0, "no overwatch alert came\n" + String.join("\n", log));
-        waitFor(() -> alerted.get() == s.watcher(), 2000, "the listener heard of it");
+        waitFor(() -> alerted.get() == s.watcher(), 2000, "the listener heard of it", log);
     }
 
     /**
@@ -132,9 +132,9 @@ class TourScenarioTest {
         java.util.Map<String, Integer> tokens = new java.util.HashMap<>();
         for (VirtualDrone d : second.overwatchers()) tokens.put(d.name(), 0x5ec0 + tokens.size());
         second.placeModes(new InetSocketAddress(InetAddress.getLoopbackAddress(), pc.getLocalPort()), tokens, 2);
-        waitFor(() -> second.overwatchers().stream().allMatch(d -> d.mode() == VirtualDrone.OVERWATCH), 3000, "the modes");
+        waitFor(() -> second.overwatchers().stream().allMatch(d -> d.mode() == VirtualDrone.OVERWATCH), 3000, "the modes", log);
         second.driveInNow();
-        waitFor(() -> alerted.get() == second.watcher(), 40_000, "the second run's alert\n" + String.join("\n", log));
+        waitFor(() -> alerted.get() == second.watcher(), 40_000, "the second run's alert", log);
     }
 
     /**
@@ -167,7 +167,7 @@ class TourScenarioTest {
         for (VirtualDrone d : second.overwatchers()) tokens.put(d.name(), 0x7a11 + tokens.size());
         second.placeModes(new InetSocketAddress(InetAddress.getLoopbackAddress(), pc.getLocalPort()), tokens, 2);
         waitFor(() -> alerted.get() == second.watcher(), TourScenario.DRIVE_IN_AFTER_MS + 40_000,
-                "the alert of a BTR sent before the modes");
+                "the alert of a BTR sent before the modes", log);
     }
 
     @Test
@@ -193,20 +193,20 @@ class TourScenarioTest {
         ControlLink l = new ControlLink(config, w.address(), w.port(), 0);
         closing.add(l::close);
         l.start();
-        waitFor(() -> l.getState() == ControlLink.State.READY, 5000, "the link READY");
-        waitFor(() -> connected.get() == w, 2000, "the listener heard of the connection");
+        waitFor(() -> l.getState() == ControlLink.State.READY, 5000, "the link READY", log);
+        waitFor(() -> connected.get() == w, 2000, "the listener heard of the connection", log);
         FcTelemetry t = l.getTelemetry();
         startSticks(l);
-        waitFor(() -> w.fc.hadSticks(), 2000, "the sticks reach the virtual FC");
+        waitFor(() -> w.fc.hadSticks(), 2000, "the sticks reach the virtual FC", log);
         Thread.sleep(FlightModel.BOOT_GRACE_MS + 700);
         armValue = 1900;
-        waitFor(() -> t.isArmedNow(MonoClock.ms(), 1000), 3000, "armed");
+        waitFor(() -> t.isArmedNow(MonoClock.ms(), 1000), 3000, "armed", log);
         s.driveInNow();
-        waitFor(() -> crashed.get() == w, 20_000, "the BTR running into it");
+        waitFor(() -> crashed.get() == w, 20_000, "the BTR running into it", log);
         assertTrue(w.isBroken());
         assertFalse(w.fc.isArmed(), "disarmed by the hit");
         assertTrue(w.fc.crashed());
-        waitFor(() -> l.getState() != ControlLink.State.READY, 4000, "the PC counts the link lost");
+        waitFor(() -> l.getState() != ControlLink.State.READY, 4000, "the PC counts the link lost", log);
         assertTrue(log.stream().anyMatch(x -> x.contains("flew into the BTR")), String.join("\n", log));
     }
 
@@ -224,13 +224,5 @@ class TourScenarioTest {
         }, "testSticks");
         sticks.setDaemon(true);
         sticks.start();
-    }
-
-    private void waitFor(BooleanSupplier ok, long ms, String what) throws InterruptedException {
-        long end = System.currentTimeMillis() + ms;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("Timed out waiting for " + what + "\n" + String.join("\n", log));
-            Thread.sleep(20);
-        }
     }
 }

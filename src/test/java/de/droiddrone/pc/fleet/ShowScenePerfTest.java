@@ -1,5 +1,6 @@
 package de.droiddrone.pc.fleet;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
@@ -12,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * each picture) and the motion detection's 320 x 180. On this PC about 1-3 ms, 20-35 ms and 1 ms. The budgets are
  * several times that, to catch a slip without failing on a busy release runner.
  */
+@Tag("perf")
 class ShowScenePerfTest {
     @Test
     void aPictureFitsTheVideosFrameTime() {

@@ -24,9 +24,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.function.BooleanSupplier;
 import java.util.function.LongFunction;
 
+import static de.droiddrone.testing.Waits.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -138,14 +138,6 @@ class StanagControllerTest {
             byte[] d = k.data();
             p.onVideoFragment(k.keyFrame(), ++n, 0, d.length, d, 0, d.length);
             Thread.sleep(33);
-        }
-    }
-
-    private static void await(BooleanSupplier what, long ms, String why) throws InterruptedException {
-        long end = System.currentTimeMillis() + ms;
-        while (!what.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("waited " + ms + " ms for: " + why);
-            Thread.sleep(10);
         }
     }
 

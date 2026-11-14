@@ -19,8 +19,8 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BooleanSupplier;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -45,14 +45,6 @@ class DemoFleetTest {
         if (spectator != null) spectator.close();
         if (pilot != null) pilot.close();
         if (fleet != null) fleet.close();
-    }
-
-    private static void waitFor(BooleanSupplier ok, long ms, String what) throws InterruptedException {
-        long until = System.currentTimeMillis() + ms;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > until) fail("waited " + ms + " ms for " + what);
-            Thread.sleep(20);
-        }
     }
 
     @Test

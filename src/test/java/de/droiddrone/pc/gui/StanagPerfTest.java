@@ -6,6 +6,7 @@ import de.droiddrone.pc.video.H264Encoder;
 import de.droiddrone.pc.video.TestStreams;
 import de.droiddrone.pc.video.VideoDecoder;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.awt.image.BufferedImage;
@@ -19,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * priority). Measured on the work as the feed does it, one thread, no waiting between pictures. The budgets are several
  * times what this PC needs, to catch a slip without failing on a busy release runner; the figures are printed.
  */
+@Tag("perf")
 class StanagPerfTest {
     private static final int W = StanagFeed.W, H = StanagFeed.H;
 

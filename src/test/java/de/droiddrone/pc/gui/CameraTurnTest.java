@@ -5,6 +5,7 @@ import de.droiddrone.pc.MonoClock;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.flights.FlightLibrary;
 import de.droiddrone.pc.observe.ObserverLink;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.ImageIcon;
@@ -184,6 +185,7 @@ class CameraTurnTest {
     }
 
     @Test
+    @Tag("perf")
     void sixTileOsdsStayCheap() throws Exception {
         FcTelemetry t = telemetry(false);
         long now = MonoClock.ms();

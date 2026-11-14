@@ -1,6 +1,7 @@
 package de.droiddrone.pc;
 
 import de.droiddrone.pc.setup.Tailscale;
+import de.droiddrone.testing.Ports;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** DRAUPNE names (1.0.35): the letters, the map, the packets, and the service that asks the network. */
@@ -244,6 +246,7 @@ class NamesTest {
             saved.putAll(m);
             m.forEach(config::set);
         }, log::add);
+        service.setVirtualDrones(List::of); // not the drones of a fleet program running on this PC
         service.scan();
         assertEquals("PCAlpha", config.getString(Names.PC_NAME_KEY), "the first PC letter: nobody else online");
         assertTrue(service.isMaster());
@@ -260,6 +263,7 @@ class NamesTest {
         // another PC with a higher letter online: this PC is not the master, and a nameless phone is left alone
         phone.name = "";
         NameService second = new NameService(config, names, () -> status, otherPc.port(), false, m -> m.forEach(config::set), log::add);
+        second.setVirtualDrones(List::of);
         try {
             second.scan(); // asks the other PC (it answers PCAlpha): this PC's own name PCAlpha is taken
             assertEquals("PCBravo", config.getString(Names.PC_NAME_KEY), "PCAlpha was taken: the next letter");
@@ -303,14 +307,6 @@ class NamesTest {
             announced.clear();
             service.scan();
             assertFalse(names.get("MobileYankee").online(), "the fleet gone: offline");
-        }
-    }
-
-    private static void waitFor(java.util.function.BooleanSupplier ok, int ms, String what) throws InterruptedException {
-        long end = System.currentTimeMillis() + ms;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("Timed out waiting for " + what);
-            Thread.sleep(20);
         }
     }
 
@@ -385,14 +381,12 @@ class NamesTest {
      */
     @Test
     void aSleepingPhonesCheckInIsAnsweredWhileNoLinkIsOpen() throws Exception {
-        int port;
-        try (java.net.DatagramSocket probe = new java.net.DatagramSocket(0)) {
-            port = probe.getLocalPort();
-        }
+        int port = Ports.free();
         PcConfig config = PcConfig.defaults();
         Names names = new Names(config, m -> m.forEach(config::set));
         Tailscale.Status status = new Tailscale.Status(true, true, "Running", "", "127.0.0.2", "this-pc", List.of());
         NameService svc = new NameService(config, names, () -> status, port, true, m -> m.forEach(config::set), s -> { });
+        svc.setVirtualDrones(List::of);
         List<String> asked = new CopyOnWriteArrayList<>();
         svc.setSleepHandler((ip, d) -> {
             asked.add(ip + " " + (d[1] & 0xff) + " %");

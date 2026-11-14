@@ -1,5 +1,6 @@
 package de.droiddrone.pc.video;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -15,6 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * performance review): the fragments put back together, and the whole way through the pipeline's own threads. The
  * figures are printed for the log; the limits are loose, for a slow PC under a busy test run.
  */
+@Tag("perf")
 class PipelinePerfTest {
     /** The phone's fragments of one frame: {offset, length} pairs as it splits them. */
     static List<int[]> split(int size) {
