@@ -229,10 +229,13 @@ public final class FlightLibrary {
         long start = fileTime(name, LINK);
         if (start == 0) return null;
         long end = start;
-        String last = lastLine(f);
-        if (last != null && last.length() >= 12 && !last.startsWith("time")) {
+        for (String last : lastLines(f)) { // from the end: a last row cut short has no time, the row before it has
+            if (last.length() < 12 || last.startsWith("time")) continue;
             long t = timeOnDay(start, last.substring(0, 12));
-            if (t > 0) end = t;
+            if (t > 0) {
+                end = t;
+                break;
+            }
         }
         return new Item(Kind.LINK, f, start, end, droneIn(f), Double.NaN);
     }
@@ -291,6 +294,22 @@ public final class FlightLibrary {
         } catch (IOException e) {
             return null;
         }
+    }
+
+    /** The lines in a text file's last 8 KB, the last one first (blank ones left out); empty when it can't be read. */
+    static List<String> lastLines(Path f) {
+        List<String> out = new ArrayList<>();
+        if (f == null || !Files.isRegularFile(f)) return out;
+        try (RandomAccessFile raf = new RandomAccessFile(f.toFile(), "r")) {
+            long len = raf.length();
+            byte[] b = new byte[(int) Math.min(len, 8192)];
+            raf.seek(len - b.length);
+            raf.readFully(b);
+            String[] lines = new String(b, StandardCharsets.UTF_8).split("\n");
+            for (int i = lines.length - 1; i >= 0; i--) if (!lines[i].isBlank()) out.add(lines[i].trim());
+        } catch (IOException ignored) {
+        }
+        return out;
     }
 
     static double length(List<FlightTrack.Point> pts) {
