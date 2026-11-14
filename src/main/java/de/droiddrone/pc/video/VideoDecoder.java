@@ -184,6 +184,84 @@ public final class VideoDecoder implements AutoCloseable {
     }
 
     /**
+     * The picture in hand kept for a still: a second reference to its buffers - nothing is copied and nothing
+     * converted here, so the decoder goes on at once; the caller converts it on a thread of its own ({@link Kept#rgb})
+     * and lets it go. A picture decoded on the GPU: the copy last brought back for the screen. Null without one.
+     */
+    public Kept keep() {
+        AVFrame src = frame.format() == AV_PIX_FMT_D3D11 ? copied : frame;
+        if (src.width() <= 0 || src.height() <= 0 || src.format() < 0) return null;
+        AVFrame ref = av_frame_clone(src);
+        return ref == null || ref.isNull() ? null : new Kept(ref, frame.colorspace(), frame.color_range());
+    }
+
+    /**
+     * One decoded picture, held on its own: the decoder may decode on, flush or close meanwhile. Its pixels come at
+     * its own size - what the stream carries, not what the screen scaled it to. One thread at a time; close() it.
+     */
+    public static final class Kept implements AutoCloseable {
+        private AVFrame picture;
+        private final int colorspace, range;
+
+        private Kept(AVFrame picture, int colorspace, int range) {
+            this.picture = picture;
+            this.colorspace = colorspace;
+            this.range = range;
+        }
+
+        public int width() {
+            return picture == null ? 0 : picture.width();
+        }
+
+        public int height() {
+            return picture == null ? 0 : picture.height();
+        }
+
+        /**
+         * The picture as 0xRRGGBB pixels, row by row, into dst (length >= width * height). A scaler of its own, made
+         * and freed here: one thread (the caller's), bicubic with the colour between the lines worked out in full -
+         * a still is looked at longer than a frame. The same colour matrix and range as the screen's.
+         */
+        public void rgb(int[] dst) {
+            AVFrame src = picture;
+            if (src == null) throw new IllegalStateException("The picture was let go");
+            int w = src.width(), h = src.height();
+            SwsContext scaler = sws_alloc_context();
+            if (scaler == null || scaler.isNull()) throw new IllegalStateException("No colour converter");
+            BytePointer out = null;
+            try (PointerPointer<BytePointer> data = new PointerPointer<>(4); IntPointer stride = new IntPointer(4)) {
+                av_opt_set_int(scaler, "srcw", w, 0);
+                av_opt_set_int(scaler, "srch", h, 0);
+                av_opt_set_int(scaler, "src_format", src.format(), 0);
+                av_opt_set_int(scaler, "dstw", w, 0);
+                av_opt_set_int(scaler, "dsth", h, 0);
+                av_opt_set_int(scaler, "dst_format", AV_PIX_FMT_BGRA, 0);
+                av_opt_set_int(scaler, "sws_flags", SWS_BICUBIC | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT, 0);
+                av_opt_set_int(scaler, "threads", 1, 0);
+                if (sws_init_context(scaler, null, null) < 0) throw new IllegalStateException("No colour converter for pixel format " + src.format());
+                sws_setColorspaceDetails(scaler, sws_getCoefficients(coefficients(colorspace, h)), range == AVCOL_RANGE_JPEG ? 1 : 0,
+                        sws_getCoefficients(SWS_CS_DEFAULT), 1, 0, 1 << 16, 1 << 16);
+                long needed = (long) w * h * 4;
+                out = new BytePointer(av_malloc(needed)).capacity(needed);
+                data.put(0, out);
+                stride.put(0, w * 4);
+                sws_scale(scaler, src.data(), src.linesize(), 0, h, data, stride);
+                // BGRA bytes read as little-endian ints are 0xAARRGGBB
+                out.position(0).limit(needed).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().get(dst, 0, w * h);
+            } finally {
+                if (out != null) av_free(out.position(0));
+                sws_freeContext(scaler);
+            }
+        }
+
+        @Override
+        public void close() {
+            if (picture != null) av_frame_free(picture);
+            picture = null;
+        }
+    }
+
+    /**
      * The scaler for this picture and screen size, kept between frames like sws_getCachedContext would - made by hand
      * so its options can be set before it is initialised: slice threads (FFmpeg 5.1 on; the bundled one is 7.1) share
      * the scaling of a big picture between cores. The colour matrix follows the picture: the phone's H.265 is BT.709
