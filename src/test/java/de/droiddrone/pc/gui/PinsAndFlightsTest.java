@@ -51,11 +51,16 @@ class PinsAndFlightsTest {
     /**
      * Closes PREVIOUS FLIGHTS and waits for its threads to end. The window gives its player and its sound 0.5 s each to
      * shut the recording; on a loaded PC they shut it later, and Windows can't remove the @TempDir while it is open.
+     * The notes' writer is waited for until it has written what it was given; its one thread, flightNotes, is shared
+     * by every window and stays for good - once a test before this one in the same JVM had notes saved (the Debrief
+     * tests do), waiting for it to end timed out.
      */
     private static void close(PreviousFlightsDialog d) throws Exception {
         SwingUtilities.invokeAndWait(d::dispose);
         SwingUtilities.invokeAndWait(() -> {}); // windowClosed (queued by dispose) stops playback
-        waitFor(() -> Thread.getAllStackTraces().keySet().stream().noneMatch(t -> t.getName().startsWith("flight")),
+        PreviousFlightsDialog.awaitSaved();
+        waitFor(() -> Thread.getAllStackTraces().keySet().stream().map(Thread::getName)
+                        .noneMatch(name -> name.startsWith("flight") && !name.equals("flightNotes")),
                 LOAD_MS, "the window's threads done with their files");
     }
 
