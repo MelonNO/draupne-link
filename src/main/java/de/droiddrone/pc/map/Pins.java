@@ -12,10 +12,22 @@ import java.util.Locale;
 /**
  * Pins the pilot drops on the map (right-click > Add pin): named Alpha, Bravo ... Zulu, then Alpha2, Bravo2 ...
  * (no "1": Alpha and Alpha1 would be confused). Kept between sessions in Documents\DRAUPNE Link\pins.txt, one per
- * line: name, latitude, longitude. Thread-safe.
+ * line, its parts split by tabs: name, latitude, longitude - and two that older files don't have: when it was dropped
+ * (epoch ms, 0 unknown) and 1 for a rough one. A file with three parts a line reads as before; an older app reads
+ * the first three and takes no notice of the rest (and writes three again at its next save). Thread-safe.
  */
 public final class Pins {
-    public record Pin(String name, double lat, double lon) {}
+    /**
+     * createdMs: when it was dropped, on the wall clock (0: unknown - a pin from an older file); a flight's marks
+     * are the pins dropped while it flew. rough: placed from the video on weak geometry - a place to look around,
+     * not a point.
+     */
+    public record Pin(String name, double lat, double lon, long createdMs, boolean rough) {
+        /** A pin whose time isn't known. */
+        public Pin(String name, double lat, double lon) {
+            this(name, lat, lon, 0, false);
+        }
+    }
 
     static final String[] NATO = {"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India",
             "Juliett", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform",
@@ -35,7 +47,8 @@ public final class Pins {
                     String[] p = line.split("\t");
                     try {
                         if (p.length < 3) throw new NumberFormatException(line);
-                        pins.add(new Pin(p[0], Double.parseDouble(p[1]), Double.parseDouble(p[2])));
+                        pins.add(new Pin(p[0], Double.parseDouble(p[1]), Double.parseDouble(p[2]),
+                                p.length > 3 ? createdMs(p[3]) : 0, p.length > 4 && "1".equals(p[4].trim())));
                     } catch (NumberFormatException e) {
                         broken = true; // a line that isn't a pin: kept below, not lost at the next save
                     }
@@ -48,6 +61,15 @@ public final class Pins {
                 brokenMovedTo = MapGraphics.moveAside(file);
                 keepOff = brokenMovedTo == null;
             }
+        }
+    }
+
+    /** The fourth part of a line; anything that isn't a time is "unknown" - the pin itself is good. */
+    private static long createdMs(String s) {
+        try {
+            return Math.max(0, Long.parseLong(s.trim()));
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 
@@ -79,7 +101,12 @@ public final class Pins {
     }
 
     public synchronized Pin add(String name, double lat, double lon) {
-        Pin p = new Pin(name == null || name.isBlank() ? nextName() : oneLine(name), lat, lon);
+        return add(name, lat, lon, false);
+    }
+
+    /** A pin dropped now. @param rough placed from the video on weak geometry */
+    public synchronized Pin add(String name, double lat, double lon, boolean rough) {
+        Pin p = new Pin(name == null || name.isBlank() ? nextName() : oneLine(name), lat, lon, System.currentTimeMillis(), rough);
         pins.add(p);
         save();
         return p;
@@ -96,7 +123,7 @@ public final class Pins {
     public synchronized Pin rename(Pin pin, String name) {
         int i = pins.indexOf(pin);
         if (i < 0 || name == null || name.isBlank()) return pin;
-        Pin renamed = new Pin(oneLine(name), pin.lat(), pin.lon());
+        Pin renamed = new Pin(oneLine(name), pin.lat(), pin.lon(), pin.createdMs(), pin.rough());
         pins.set(i, renamed);
         save();
         return renamed;
@@ -131,6 +158,36 @@ public final class Pins {
         return best;
     }
 
+    /** The pins a search box finds, whatever format the list shows their places in: see {@link #matches}. */
+    public synchronized List<Pin> matching(String query) {
+        return matching(query, null);
+    }
+
+    /** The pins a search box finds, in the list's order. @param shown the format the list shows; null: any of them */
+    public synchronized List<Pin> matching(String query, Coordinates.Format shown) {
+        List<Pin> out = new ArrayList<>();
+        for (Pin p : pins) if (matches(p, query, shown)) out.add(p);
+        return out;
+    }
+
+    /**
+     * Whether a search box's text finds this pin: in its name, or in its place as the pins list writes it
+     * ({@link Coordinates#format}) - upper or lower case, and a grid with or without its spaces ("32vnm97" finds
+     * 32V NM 97254 42617). Nothing typed finds every pin.
+     * @param shown the format the list shows; null: any of them
+     */
+    public static boolean matches(Pin p, String query, Coordinates.Format shown) {
+        String q = query == null ? "" : query.trim().replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
+        if (q.isEmpty()) return true;
+        if (p.name().toLowerCase(Locale.ROOT).contains(q)) return true;
+        String packed = q.replace(" ", "");
+        for (Coordinates.Format f : shown == null ? Coordinates.Format.values() : new Coordinates.Format[]{shown}) {
+            String place = Coordinates.format(f, p.lat(), p.lon()).toLowerCase(Locale.ROOT);
+            if (place.contains(q) || place.replace(" ", "").contains(packed)) return true;
+        }
+        return false;
+    }
+
     /** The pins as a GPX file's waypoints: for another map program or a phone. */
     public synchronized String toGpx() {
         StringBuilder sb = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
@@ -153,7 +210,8 @@ public final class Pins {
         if (file == null || keepOff) return;
         StringBuilder sb = new StringBuilder();
         for (Pin p : pins) sb.append(p.name().replace('\t', ' ')).append('\t')
-                .append(String.format(Locale.ROOT, "%.7f", p.lat())).append('\t').append(String.format(Locale.ROOT, "%.7f", p.lon())).append('\n');
+                .append(String.format(Locale.ROOT, "%.7f", p.lat())).append('\t').append(String.format(Locale.ROOT, "%.7f", p.lon()))
+                .append('\t').append(p.createdMs()).append('\t').append(p.rough() ? 1 : 0).append('\n');
         try {
             Files.createDirectories(file.getParent());
             Path tmp = file.resolveSibling(file.getFileName() + ".part");
