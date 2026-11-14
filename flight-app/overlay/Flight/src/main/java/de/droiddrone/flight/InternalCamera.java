@@ -950,6 +950,9 @@ public class InternalCamera implements Camera{
         public void onCaptureStarted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, long timestamp, long frameNumber){
             super.onCaptureStarted(session, request, timestamp, frameNumber);
             isStarted = true;
+            // pc.53: this picture's stamp against the phone's clock, for the PC's picture delay figure (CaptureClock:
+            // the encoder gives the stamp back with the encoded frame, on a clock that is the camera's business)
+            Udp.captureClock.stamped(timestamp / 1000, android.os.SystemClock.elapsedRealtimeNanos());
         }
 
         @Override

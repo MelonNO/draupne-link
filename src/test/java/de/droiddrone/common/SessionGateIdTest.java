@@ -235,6 +235,98 @@ class SessionGateIdTest {
         assertEquals(NEW_SESSION, fromPilot(phone, connect(KEY, pc.next(answeredAt + 5000, 0)), answeredAt + 5040));
     }
 
+    /** A 1.0.67 PC's Connect: the id, then the byte the phone's answer says "told by the id" in. */
+    private static byte[] withAnswerByte(byte[] connect) {
+        return java.util.Arrays.copyOf(connect, connect.length + 1);
+    }
+
+    @Test
+    void aLateConnectOfAnOlderTryStartsNothing() {
+        // the PC gave up try 1000 unanswered and went on to 1001, which started the session; a Connect of 1000, held
+        // up on the way, comes after it. As "another id" it was a session more - under a PC that is in 1001's and
+        // lets an older try's answer start nothing: the two sides apart
+        SessionGate g = new SessionGate(KEY);
+        assertEquals(NEW_SESSION, noSession(g, connect(KEY, 1001), 10_000));
+        assertEquals(SAME_SESSION, fromPilot(g, connect(KEY, 1000), 10_400), "the try before: late, not new");
+        assertEquals(SAME_SESSION, fromPilot(g, connect(KEY, 1001 - SessionGate.OLDER_TRIES), 10_500), "as far back as a PC's tries go");
+        assertEquals(SAME_SESSION, fromPilot(g, connect(KEY, 1001), 10_600), "the session's id is still 1001");
+        assertEquals(0, g.silentMs(10_600), "and the pilot is heard");
+        assertEquals(NEW_SESSION, fromPilot(g, connect(KEY, 1002), 10_700), "the next try is a new session at once");
+        assertEquals(SAME_SESSION, fromPilot(g, connect(KEY, 1001), 10_800), "and 1001 the older one now");
+        // further back than a PC's own tries reach: a PC counting from another seed - a new session, as any other id
+        assertEquals(NEW_SESSION, fromPilot(g, connect(KEY, 1002 - SessionGate.OLDER_TRIES - 1), 10_900));
+        // across the count's wrap
+        SessionGate w = new SessionGate(KEY);
+        assertEquals(NEW_SESSION, noSession(w, connect(KEY, 1), 0));
+        assertEquals(SAME_SESSION, fromPilot(w, connect(KEY, 0xFFFFFFFFL), 100), "2 behind, over the wrap");
+        assertEquals(NEW_SESSION, fromPilot(w, connect(KEY, 2), 200));
+        // with no session up the rule is as it was: any keyed Connect of the pilot's starts one
+        SessionGate n = new SessionGate(KEY);
+        assertEquals(NEW_SESSION, noSession(n, connect(KEY, 1001), 0));
+        assertEquals(NEW_SESSION, noSession(n, connect(KEY, 1000), 9000));
+    }
+
+    @Test
+    void thePhoneMarksItsAnswerAndThePcReadsTheMark() {
+        byte[] c = withAnswerByte(connect(KEY, 77));
+        assertFalse(SessionGate.answeredById(c, c.length), "as the PC sends it: 0");
+        byte[] expected = c.clone();
+        expected[expected.length - 1] = SessionGate.ANSWER_BY_ID;
+        SessionGate.markAnswer(c, c.length);
+        assertArrayEquals(expected, c, "one bit of the last byte, nothing else");
+        assertTrue(SessionGate.answeredById(c, c.length));
+        assertEquals(77, SessionGate.sessionId(c, c.length), "the id as it was");
+        assertTrue(new SessionGate(KEY).keyMatches(c, c.length, 4));
+        // a Connect that ends with the id, or with the version (an older PC's), and what is no Connect: not a byte
+        // changes, and no mark is read
+        for (byte[] other : new byte[][]{connect(KEY, 77), connect(KEY, NO_ID), PING.clone()}) {
+            byte[] was = other.clone();
+            SessionGate.markAnswer(other, other.length);
+            assertArrayEquals(was, other);
+            assertFalse(SessionGate.answeredById(other, other.length));
+        }
+        assertFalse(SessionGate.answeredById(c, c.length - 1), "cut before the byte");
+        byte[] more = java.util.Arrays.copyOf(c, c.length + 3); // a later PC's Connect goes on behind it
+        assertTrue(SessionGate.answeredById(more, more.length));
+    }
+
+    @Test
+    void anOlderTrysAnswerKeepsTheIdsLonger() {
+        SessionGate.Ids ids = new SessionGate.Ids(99);
+        long a = ids.next(0, 0);
+        assertEquals(a, ids.next(900, 0));
+        long b = ids.next(1000, 0);
+        assertNotEquals(a, b);
+        assertEquals(-1, ids.olderAnswer(b, 1500), "the id in use is no older try's");
+        assertEquals(-1, ids.olderAnswer(12_345, 1500), "nor is one never given out");
+        // the answer to the first try comes 1.6 s after that try began: the way is slower than a try is kept
+        assertEquals(1600, ids.olderAnswer(a, 1600));
+        assertEquals(b, ids.next(2300, 0), "b is kept past its second");
+        assertEquals(b, ids.next(1000 + 2399, 0), "half as long again as the answer took, from its own first Connect");
+        long c = ids.next(1000 + 2400, 0);
+        assertNotEquals(b, c);
+        assertEquals(c, ids.next(3400 + 2399, 0), "and so is the next, until a session is up");
+        ids.sessionUp();
+        long d = ids.next(10_000, 0);
+        assertEquals(d, ids.next(10_999, 0));
+        assertNotEquals(d, ids.next(11_000, 0), "after a session a try is a second again");
+        // never longer than SLOW_KEEP_MAX_MS, whatever an answer took
+        SessionGate.Ids slow = new SessionGate.Ids(5);
+        long first = slow.next(0, 0);
+        long second = slow.next(1000, 0);
+        assertEquals(60_000, slow.olderAnswer(first, 60_000));
+        assertEquals(second, slow.next(1000 + SessionGate.Ids.SLOW_KEEP_MAX_MS - 1, 0));
+        assertNotEquals(second, slow.next(1000 + SessionGate.Ids.SLOW_KEEP_MAX_MS, 0));
+        // with a session up an older try's answer teaches nothing: its own answer came in time
+        SessionGate.Ids up = new SessionGate.Ids(5);
+        long x = up.next(0, 0);
+        up.next(1000, 0);
+        up.sessionUp();
+        assertEquals(3000, up.olderAnswer(x, 3000));
+        long z = up.next(5000, 0);
+        assertNotEquals(z, up.next(6000, 0), "a second, as ever");
+    }
+
     @Test
     void aSlowPathsRoundIsOneSession() {
         // 1.6 s there and back: the round's Connects (0.6 s of them) reach the phone 0.8 s late, and the answer is

@@ -55,6 +55,13 @@
  *  connected too; the PC silent: the encoder to its lowest step, and after a minute on a disarmed drone the camera off
  *  (pcSilentTick); no second copy of a key frame once a newer one waits; the sleep check's hello to every PC that
  *  knows this phone; a new session from the same PC keeps the stick lag's baseline.
+ *  pc.53 (DRAUPNE Link 1.0.67): FRAME_TIME ahead of each frame's first packet for a PC that asks (profile bit 3) - how
+ *  old the picture is as it leaves (CaptureClock) and the last Ping held (PingEcho), the PC's picture delay figure.
+ *  The session id a newer PC ends its Connect with goes to the gate (SessionGate: one try's Connects are one session
+ *  at any age, an older try's start nothing), and the answer to such a Connect says the sessions are told by it.
+ *  Reed-Solomon parity (Fec, FecSender) in bad coverage mode for a PC that mends with it (profile bit 4 and VIDEO_FEC
+ *  m > 0, both this session's): VIDEO_PARITY_RS behind each block of a frame in place of the XOR groups, key frames
+ *  once; the parity's share comes off the encoder's bitrate, the step's figure is still the one reported.
  */
 
 package de.droiddrone.flight;
@@ -69,11 +76,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import de.droiddrone.common.Bytes;
 import de.droiddrone.common.CameraOwner;
+import de.droiddrone.common.CaptureClock;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
+import de.droiddrone.common.Fec;
+import de.droiddrone.common.FecSender;
 import de.droiddrone.common.FleetGate;
 import de.droiddrone.common.FleetProtocol;
 import de.droiddrone.common.KnownPcs;
@@ -360,6 +371,38 @@ public class Udp {
     /** What the PC's StartVideo asked for; the profile may override it (profileAvc). */
     private volatile boolean defaultHevc = true;
     /**
+     * Profile bit 3 (pc.53): this session's PC wants FRAME_TIME [0x53][frameNum i16][captureToSendMs u16][pingEcho u32]
+     * [pingHoldMs u16] (65535 = not known) ahead of the first packet of each frame's first copy - for its picture
+     * delay figure (DRAUPNE Link's GlassToGlass). Not kept across sessions as bits 0-2 are: a PC that knows the packet
+     * asks again with its first Config, and one that doesn't never gets it.
+     */
+    private static final byte FRAME_TIME = PacketIds.FRAME_TIME;
+    private volatile boolean frameTimes;
+    /**
+     * How old a picture is as its first packet leaves (pc.53): InternalCamera's capture callback stamps it, the video
+     * sender asks. Static: the camera outlives a Udp (deep sleep's wake makes a new one).
+     */
+    static final CaptureClock captureClock = new CaptureClock();
+    /** The last Ping taken and when (receive thread), for FRAME_TIME (video sender thread). */
+    private final CaptureClock.PingEcho pingEcho = new CaptureClock.PingEcho();
+    /** FRAME_TIME's bytes and datagram, the video sender thread's alone: nothing is allocated per frame. */
+    private final byte[] frameTimeBuf = new byte[11];
+    private final DatagramPacket frameTimePacket = new DatagramPacket(frameTimeBuf, frameTimeBuf.length);
+    private int frameTimeSource = -1;
+    /**
+     * Profile bit 4 (pc.53): this session's PC mends frames with Reed-Solomon parity (VIDEO_PARITY_RS, Fec). With it and
+     * VIDEO_FEC [0x54][mPlain u8][mKey u8] > 0 - and only in bad coverage mode (bit 0), where the XOR groups went - a
+     * frame's blocks each get that many parity packets right behind them, in place of the XOR groups, and a key frame
+     * goes once. Both forgotten with every new session, as bit 3: a PC that never asked never gets a packet it can't
+     * read, and bits 0-2 go on meaning what they meant.
+     */
+    private volatile boolean rsUnderstood;
+    private volatile int rsPlain, rsKey;
+    private static final byte VIDEO_FEC = PacketIds.VIDEO_FEC;
+    /** The parity packets of the frame in hand and the share they take (video sender thread only), one datagram for all of them. */
+    private final FecSender fecSender = new FecSender();
+    private final DatagramPacket rsPacket = new DatagramPacket(new byte[0], 0);
+    /**
      * [0x71][frame number i16][frame size i32][key frame u8][group u8][XOR of the group's packet payloads, each
      * zero-padded to the longest] (pc.26). Packets of a frame are grouped PARITY_GROUP at a time: any one lost
      * packet per group is rebuilt by the PC, where one parity over a 40-packet key frame rarely saved it.
@@ -569,7 +612,8 @@ public class Udp {
                                 && receiverPacket.getPort() == udpSender.getPort()) {
                             lastPcIp = udpSender.getIp(); // kept across deep sleep: the check window's hello goes there
                             lastPcPort = udpSender.getPort();
-                            SessionGate.Verdict v = gate.fromPilot(d, len, now);
+                            // pc.53: with the session id of a PC that sends one (none: the rule of before, to the letter)
+                            SessionGate.Verdict v = gate.fromPilot(d, len, now, SessionGate.sessionId(d, len));
                             if (v == SessionGate.Verdict.SAME_SESSION) continue; // one of the Connects in flight after a loss
                             if (v == SessionGate.Verdict.NEW_SESSION) {
                                 // pc.26: the pilot itself asks to connect again - it counts the link as lost (2 s of
@@ -600,7 +644,7 @@ public class Udp {
                         boolean sameAddress = from.equals(lastPcIp);
                         boolean samePc = sameAddress && receiverPacket.getPort() == lastPcPort;
                         SessionGate.Verdict v = gate.noSession(d, len, pilotKnown, samePc, sameAddress,
-                                () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, now);
+                                () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, now, SessionGate.sessionId(d, len));
                         if (v == SessionGate.Verdict.DROP) continue;
                         if (v == SessionGate.Verdict.WRONG_KEY) {
                             noteWrongKey(receiverPacket);
@@ -615,6 +659,7 @@ public class Udp {
                         // Connect taken, not at every packet - and the same PC's lag baseline is kept, RcPath.restart)
                         rcPath.restart(now, samePc);
                         idleSticks = null; // pc.38: a new session's PC sends its own within a second; none kept from before
+                        sessionAsksAnew();
                     }
                     pcHeardAtMs = now; // pc.50: a packet of the session - the video's dead-man counts from it (pcSilentTick)
                     // DRAUPNE Link: sticks straight to the flight controller from here - not through the buffer, a
@@ -629,6 +674,14 @@ public class Udp {
                         if (buffer.isConnected() && !PowerMode.dropSticks()) handleRcFrame(d, len);
                         continue;
                     }
+                    // pc.53: the Ping a frame's FRAME_TIME answers ([10][toEndPoint u8][time i64]: its stamp's low half),
+                    // only for a PC that asked; stick frames never get this far
+                    if (frameTimes && d[0] == UdpCommon.Ping && len >= 10) {
+                        pingEcho.received(Bytes.readInt(d, 6), android.os.SystemClock.elapsedRealtimeNanos());
+                    }
+                    // pc.53: a Connect that got here starts a session - the answer (the buffer sends it back) says this
+                    // phone tells sessions by the id; a Connect without an id is left as it came
+                    if (d[0] == UdpCommon.Connect) SessionGate.markAnswer(d, len);
                     buffer.addPacket(receiverPacket);
                     synchronized (packetSignal) {
                         // pc.50: the buffer thread waits for it while resting; the flag, so that a packet added
@@ -830,7 +883,7 @@ public class Udp {
         // while armed is unknown, nor on a MAVLink FC, which isArmed never saw: FcArmedState)
         boolean disarmed = FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
         boolean sameAddress = packet.getAddress().equals(udpSender.getIp());
-        SessionGate.Verdict v = gate.fromOther(d, len, sameAddress, disarmed, now);
+        SessionGate.Verdict v = gate.fromOther(d, len, sameAddress, disarmed, now, SessionGate.sessionId(d, len));
         if (v == SessionGate.Verdict.WRONG_KEY) {
             noteWrongKey(packet);
             return false;
@@ -861,6 +914,19 @@ public class Udp {
         if (old != null) old.close();
         rcPath.restart(android.os.SystemClock.elapsedRealtime(), samePc);
         idleSticks = null; // pc.38: the new session's PC sends its own within a second; none kept from before (H1)
+        sessionAsksAnew();
+    }
+
+    /**
+     * pc.53, every new session (receive thread): what only a PC that knows it asks for is off until this session's PC
+     * asks - its VIDEO_PROFILE comes with its first Config. An older PC never gets a packet it doesn't know; the
+     * profile's bits 0-2 stay as they were, as ever. The Ping held was the last session's (another PC's clock, perhaps).
+     */
+    private void sessionAsksAnew() {
+        frameTimes = false;
+        rsUnderstood = false; // pc.53: the RS parity too - the video sender gives the encoder its whole step back
+        rsPlain = rsKey = 0;
+        pingEcho.restart();
     }
 
     /** Whether the key written (UTF) at keyAt - 4 in a Connect, 1 in a PILOT_QUERY - is this phone's. */
@@ -1049,6 +1115,7 @@ public class Udp {
         synchronized (frameNumLock) { // pc.31: the old sender (its generation passed) can't number a frame after this
             videoFrameNum = 0;
         }
+        captureClock.restart(); // pc.53: another camera may stamp its pictures on another base
         if (cameraManager.getCamera().isOpened(config.getCameraId())) {
             cameraManager.getCamera().startPreview();
         }else{
@@ -1690,10 +1757,16 @@ public class Udp {
                 boolean twice = (flags & 1) != 0;
                 boolean groups = (flags & 2) != 0;
                 boolean avc = (flags & 4) != 0;
+                boolean times = (flags & 8) != 0; // pc.53
+                boolean rs = (flags & 16) != 0; // pc.53: the PC mends with RS parity (used once VIDEO_FEC asks for some)
                 if (twice != keyFramesTwice || groups != groupParity || avc != profileAvc) {
                     log("Video profile: key frames " + (twice ? "twice" : "once") + ", parity " + (groups ? "per group" : "per frame")
                             + ", " + (avc ? "H.264" : "the codec asked for"));
                 }
+                if (times != frameTimes) log("Video profile: frame times " + (times ? "wanted" : "not wanted"));
+                if (rs != rsUnderstood) log("Video profile: RS parity " + (rs ? "understood" : "not understood"));
+                frameTimes = times;
+                rsUnderstood = rs;
                 keyFramesTwice = twice;
                 groupParity = groups;
                 boolean wasHevc = wantedHevc();
@@ -1719,6 +1792,17 @@ public class Udp {
                         }
                     });
                 }
+                break;
+            }
+            case VIDEO_FEC:
+            {
+                // pc.53: [0x54][mPlain u8][mKey u8] - the RS parity packets a block of a plain and of a key frame gets
+                // (0: the XOR groups, as before); sent at a change and once a second while not 0
+                if (buffer.getRemaining() < 2) break;
+                int plain = FecSender.parityOf(buffer.readByte()), key = FecSender.parityOf(buffer.readByte());
+                if (plain != rsPlain || key != rsKey) log("RS parity: " + plain + " a block of plain frames, " + key + " of key frames");
+                rsPlain = plain;
+                rsKey = key;
                 break;
             }
             case KEY_FRAME_REQUEST:
@@ -2097,10 +2181,10 @@ public class Udp {
                     if ((buf.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                         sendVideoInitialFrame(buf.data);
                     } else if ((buf.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
-                        sendKeyFrame(buf.data, id);
+                        sendKeyFrame(buf.data, id, presentationUs(buf));
                         keyFrame = true;
                     } else {
-                        sendVideoFrame(buf.data, id);
+                        sendVideoFrame(buf.data, id, presentationUs(buf));
                     }
                     // a queue behind a key frame is the key frame's own doing (paced over a few frame times), and so is
                     // the queue the plain frames behind it drain for a few frame times more (pc.27: it was judged after
@@ -2116,6 +2200,11 @@ public class Udp {
             }
         }
     };
+
+    /** pc.53: the encoded frame's presentation time (the camera's stamp, given back by the encoder), us; -1: none came with it. */
+    private static long presentationUs(MediaCodecBuffer buf) {
+        return buf.info == null ? -1 : buf.info.presentationTimeUs;
+    }
 
     private final Runnable audioSenderRun = new Runnable() {
         public void run() {
@@ -2272,7 +2361,7 @@ public class Udp {
     /** The sender loop judges its queue only from then on (after a key frame's paced send and the drain behind it). */
     private volatile long queueJudgeAfterNs;
 
-    private void sendKeyFrame(byte[] buf, int senderId) {
+    private void sendKeyFrame(byte[] buf, int senderId, long presentationUs) {
         if (socket == null || socket.isClosed()) return;
         int num = nextFrameNum(senderId);
         if (num < 0) return;
@@ -2286,13 +2375,17 @@ public class Udp {
         // late copy would mend nothing. And no faster: that is the burst pc.31 took out (the pongs behind it, a
         // "spike" to the PC's bitrate control). So only this: no second copy, or no more of it, once a newer key
         // frame waits in the queue - that one needs nothing of this one
-        int copies = keyFramesTwice ? 2 : 1;
+        // pc.53: with RS parity (a PC that mends with it) the key frame goes once - its parity, interleaved, does what
+        // the second copy did, at a fraction of its packets
+        int rs = rsParity(true);
+        int copies = keyFramesTwice && rs == 0 ? 2 : 1;
         int sent = 0;
         long socketNs = 0;
         long start = System.nanoTime();
         for (int copy = 0; copy < copies; copy++) {
             if (copy > 0 && newerKeyFrameQueued()) break;
-            socketNs += sendFragments(UdpCommon.KeyFrame, buf, true, copy == 0 && keyFramesTwice, num, senderId, copy > 0);
+            if (copy == 0) sendFrameTime(num, presentationUs);
+            socketNs += sendFragments(UdpCommon.KeyFrame, buf, true, copy == 0 && keyFramesTwice, num, senderId, copy > 0, rs);
             sent++;
         }
         if (sent < copies) secondCopySkipped();
@@ -2329,17 +2422,28 @@ public class Udp {
     /**
      * A frame's packets, paced (packetGapNs), with its parity (bad coverage mode: one packet per PARITY_GROUP
      * packets, pc.26, or one for the whole frame for a PC that asked for that only).
+     * <p>
+     * pc.53, rs > 0 (rsParity): RS parity in place of the XOR - after the last packet of each block (Fec: up to 32
+     * packets, a frame of more cut into blocks of nearly one size) its rs parity packets, each a packet gap after the
+     * one before, as the frame's own; the gap is worked out with them counted, so frame and parity together keep to the
+     * frame's old span (a plain frame's: at most half a frame time). The encoding is done in the first
+     * of those gaps. The PC lets a whole frame out at once and a frame with a gap when its block's parity has mended it
+     * - at most these few gaps after the block's last packet - or, failing that, as before (FrameAssembler).
      * @param secondCopy pc.50: a key frame's second copy - no more of it once a newer key frame waits
+     * @param rs         pc.53: RS parity packets a block (0: the XOR groups as before; only with withParity)
      * @return the time the socket itself took, ns (the pacing's waits not counted): the emergency brake's measure
      */
     private long sendFragments(byte packetName, byte[] buf, boolean keyFrame, boolean withParity, int frameNum, int senderId,
-                               boolean secondCopy) {
+                               boolean secondCopy, int rs) {
         int size = buf.length;
-        long gapNs = packetGapNs(size, keyFrame);
+        int rsPackets = withParity && rs > 0 ? fecSender.begin(buf, size, frameNum, keyFrame, rs) : 0;
+        boolean rsOn = rsPackets > 0;
+        long gapNs = rsOn ? packetGapNs(size, keyFrame, rsPackets) : packetGapNs(size, keyFrame);
         long socketNs = 0;
         int offset = 0;
         int packet = 0;
-        byte[] parity = withParity ? new byte[UdpCommon.packetLength - 9] : null;
+        int rsBytes = 0;
+        byte[] parity = withParity && !rsOn ? new byte[UdpCommon.packetLength - 9] : null;
         boolean parityUsed = false;
         // pc.31: the frame's own number (the counter is the next stream's once it restarts), and no more of it then
         while (offset < size && udpSender != null && senderId == videoSenderThreadId) {
@@ -2379,6 +2483,21 @@ public class Udp {
                         java.util.Arrays.fill(parity, (byte) 0);
                         parityUsed = false;
                     }
+                    // pc.53: the block's RS parity, paced as the frame's packets - not by a sender a new stream has
+                    // replaced (the sender's parity is the new one's from then on)
+                    int block = rsOn && senderId == videoSenderThreadId ? fecSender.blockEndingAt(packet - 1) : -1;
+                    if (block >= 0) {
+                        long encodeAt = System.nanoTime();
+                        int length = fecSender.encode(block);
+                        for (int i = 0; i < fecSender.m() && senderId == videoSenderThreadId; i++) {
+                            long waitNs = gapNs - (i == 0 ? System.nanoTime() - encodeAt : 0);
+                            if (waitNs > 0) udpSync.wait(waitNs / 1_000_000L, (int) (waitNs % 1_000_000L));
+                            long sendAt = System.nanoTime();
+                            sendParityRs(fecSender.packet(i), length);
+                            socketNs += System.nanoTime() - sendAt;
+                        }
+                        rsBytes += fecSender.m() * (length - Fec.HEADER);
+                    }
                     if (offset < size) udpSync.wait(gapNs / 1_000_000L, (int) (gapNs % 1_000_000L));
                 }
             } catch (Exception e) {
@@ -2393,6 +2512,7 @@ public class Udp {
                 log("sendParity error: " + e);
             }
         }
+        if (!secondCopy) noteParity(size, rsBytes);
         return socketNs;
     }
 
@@ -2425,7 +2545,12 @@ public class Udp {
      * the pongs the PC judges the link by sat behind it in the modem's queue.
      */
     private long packetGapNs(int frameBytes, boolean keyFrame){
-        int packets = Math.max(1, (frameBytes + UdpCommon.packetLength - 1) / UdpCommon.packetLength);
+        return packetGapNs(frameBytes, keyFrame, 0);
+    }
+
+    /** pc.53: with that many RS parity packets going out among the frame's own - spread over the same time (sendFragments). */
+    private long packetGapNs(int frameBytes, boolean keyFrame, int parityPackets){
+        int packets = Math.max(1, (frameBytes + UdpCommon.packetLength - 1) / UdpCommon.packetLength) + parityPackets;
         long frameNs = 1_000_000_000L / Math.max(1, cameraManager.getCamera().getCurrentFps());
         if (keyFrame && (keyFramesTwice || groupParity)) {
             // pc.31, bad coverage mode and the survival tier (150-1000 kbit/s): a key frame at about the bitrate, not
@@ -2450,11 +2575,100 @@ public class Udp {
     /** pc.31: in bad coverage mode, over at most this many (at 15 fps: 0.67 s a copy). */
     private static final int KEY_FRAME_TIMES_WEAK = 10;
 
-    private void sendVideoFrame(byte[] buf, int senderId) {
+    private void sendVideoFrame(byte[] buf, int senderId, long presentationUs) {
         if (socket == null || socket.isClosed()) return;
         int num = nextFrameNum(senderId);
         if (num < 0) return;
-        sendFragments(UdpCommon.VideoFrame, buf, false, keyFramesTwice, num, senderId, false);
+        sendFrameTime(num, presentationUs);
+        sendFragments(UdpCommon.VideoFrame, buf, false, keyFramesTwice, num, senderId, false, rsParity(false));
+    }
+
+    /**
+     * pc.53: the RS parity packets a block of this frame gets - 0 (the XOR groups, or no parity, as before) unless this
+     * session's PC asked for both (profile bit 4, VIDEO_FEC), bad coverage mode is on and the pilot's session is up.
+     */
+    private int rsParity(boolean keyFrame) {
+        if (!rsUnderstood || !keyFramesTwice || !isConnected()) return 0;
+        return keyFrame ? rsKey : rsPlain;
+    }
+
+    /**
+     * pc.53: a frame went out (its first copy): its RS parity counted for the share, and the encoder set under the step
+     * by it. Nothing at all while no RS parity was asked for - the normal picture's frames take two field reads here.
+     */
+    private void noteParity(int frameBytes, int rsBytes) {
+        boolean active = rsUnderstood && keyFramesTwice && (rsPlain > 0 || rsKey > 0);
+        if (active) {
+            fecSender.sent(frameBytes, rsBytes, android.os.SystemClock.elapsedRealtime());
+            streamEncoder.setParityShare(fecSender.sharePermille());
+        } else if (fecSender.sharePermille() > 0) {
+            fecSender.stop(); // a new session, the tier left, the PC asked for none: the encoder's whole step back at once
+            streamEncoder.setParityShare(0);
+        }
+    }
+
+    /** pc.53: one RS parity packet to the pilot's PC, straight to the socket (one datagram for all of them: nothing allocated). */
+    private void sendParityRs(byte[] p, int length) {
+        UdpSender sender = udpSender;
+        DatagramSocket s = socket;
+        if (sender == null || s == null) return;
+        InetAddress to = sender.getIp();
+        if (to == null) return;
+        try {
+            rsPacket.setData(p, 0, length);
+            rsPacket.setAddress(to);
+            rsPacket.setPort(sender.getPort());
+            s.send(rsPacket);
+        } catch (Exception e) {
+            // a parity packet less: the PC mends with the others, or asks for a key frame as ever
+        }
+    }
+
+    /**
+     * pc.53: FRAME_TIME for the frame about to leave (video sender thread, right before its first packet): how old the
+     * picture is now and the last Ping this phone took with how long it has held it - the PC makes the picture's whole
+     * delay of them (GlassToGlass). Only to a pilot's session whose PC asked (profile bit 3): never to observers, never
+     * once the session has timed out. One small datagram straight to the socket: the same buffer and packet every
+     * time, no number, nothing kept; a send that fails is a figure less.
+     * @param presentationUs the encoded frame's stamp; negative: none, and the age says "not known"
+     */
+    private void sendFrameTime(int frameNum, long presentationUs) {
+        if (!frameTimes) return;
+        UdpSender sender = udpSender;
+        DatagramSocket s = socket;
+        if (sender == null || s == null || !isConnected()) return;
+        InetAddress to = sender.getIp();
+        if (to == null) return;
+        long nowNs = android.os.SystemClock.elapsedRealtimeNanos();
+        int age = presentationUs < 0 ? CaptureClock.UNKNOWN : captureClock.captureToSendMs(presentationUs, nowNs, System.nanoTime());
+        long ping = pingEcho.at(nowNs);
+        int hold = CaptureClock.PingEcho.holdMs(ping);
+        byte[] d = frameTimeBuf;
+        synchronized (d) { // a stream's last frame and the next stream's first may meet here
+            d[0] = FRAME_TIME;
+            d[1] = (byte) (frameNum >> 8);
+            d[2] = (byte) frameNum;
+            d[3] = (byte) (age >> 8);
+            d[4] = (byte) age;
+            Bytes.putInt(d, 5, (int) CaptureClock.PingEcho.echo(ping));
+            d[9] = (byte) (hold >> 8);
+            d[10] = (byte) hold;
+            try {
+                frameTimePacket.setAddress(to);
+                frameTimePacket.setPort(sender.getPort());
+                s.send(frameTimePacket);
+            } catch (Exception e) {
+                // the frame goes all the same
+            }
+        }
+        int source = captureClock.source();
+        if (source != frameTimeSource) { // once per change: which clock the camera's stamps turned out to be on
+            frameTimeSource = source;
+            log("Frame times: " + (source == CaptureClock.SEND_CLOCK ? "the pictures' stamps are on the elapsed-time clock"
+                    : source == CaptureClock.OTHER_CLOCK ? "the pictures' stamps are on the uptime clock"
+                    : source == CaptureClock.STAMPS ? "from the capture callback's stamps (a clock of the camera's own)"
+                    : "no usable stamp on the pictures - the PC is told so and shows no figure"));
+        }
     }
 
     private void sendAudioInitialFrame(byte[] buf) {
@@ -2689,6 +2903,9 @@ public class Udp {
             keyFramesTwice = false;
             groupParity = true;
             profileAvc = true;
+            frameTimes = false; // pc.53: a pilot's alone
+            rsUnderstood = false; // pc.53: as the RS parity
+            rsPlain = rsKey = 0;
             PhoneHeading.start(context);
             log("Observation: streaming to observers");
         }

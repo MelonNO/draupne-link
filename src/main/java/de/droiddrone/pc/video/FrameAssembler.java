@@ -1,5 +1,6 @@
 package de.droiddrone.pc.video;
 
+import de.droiddrone.common.Fec;
 import de.droiddrone.common.UdpCommon;
 
 import java.util.ArrayList;
@@ -23,6 +24,25 @@ import java.util.Map;
  * forgotten). A frame number passed over (the frame lost whole, every packet of it) counts as lost once a newer frame is
  * released, so the pipeline asks for a key frame and the bitrate steps down (1.0.49).
  * <p>
+ * Reed-Solomon parity (1.0.67, phone app pc.53, bad coverage mode and under only - {@link #putParityRs}, {@link Fec}):
+ * a frame's blocks of up to 32 packets each get m parity packets right behind them, any m lost packets of a block
+ * are rebuilt. What it may cost in time, all of it a frame with a gap's and only in those tiers (in the normal and
+ * sharp tiers no parity is sent and nothing here waits, as before):
+ * <ul>
+ * <li>A frame whose packets all came is let out the moment its last one is in - its parity, behind it, is not waited
+ * for (and is then dropped unread: the frame is out).</li>
+ * <li>A frame with a gap waits for its block's parity: the phone sends it right behind the block, paced as the
+ * frame's own packets, and frame and parity together keep to the frame's old span - a plain frame's at most half a
+ * frame time from its first packet (16.7 ms at 30 frames a second, 33 ms at 15), its
+ * parity at most m (4) packet gaps after the block's last packet (about 2.2 ms each in these tiers: under 9 ms). The
+ * frame goes out the moment the parity has made it whole.</li>
+ * <li>Not mended (more lost than parity, the parity lost): as the XOR groups' frames before it - out damaged once the
+ * frame's last parity packet is in (a key frame too: with RS parity it comes once, there is no second copy to wait
+ * for), or when the next frame is whole: at most until then - about one frame time after its own last packet (33 ms
+ * at 30 frames a second, 67 ms at 15). The XOR groups waited as long already; their parity came unpaced right behind
+ * each group, so a plain frame's mending can come up to m packet gaps later than an XOR group's did, and a key
+ * frame's sooner than the second copy it waited for before.</li>
+ * </ul>
  * Each fragment is copied once, straight into the frame-sized array the frame is handed over in (the offset-0 fragment
  * carries the size; the rare fragment that comes before it goes into a provisional array that grows). What came is
  * kept as a short list of offsets, not a map: fragments arrive in order nearly always, and a frame has a few dozen.
@@ -126,6 +146,20 @@ public class FrameAssembler {
         byte[] parity;
         /** The parity of each group of PARITY_GROUP packets (pc.26), by group; null until the first came. */
         byte[][] groupParity;
+        /**
+         * 1.0.67: RS parity kept, by block and index (only for a block that missed a packet when it came); null until
+         * one was kept, a block's null once it is whole. rsM: the parity packets a block has.
+         */
+        byte[][][] rs;
+        int[] rsM;
+        /** RS parity came for this frame; and its last packet (the last block's last parity, sent last of the frame). */
+        boolean rsSeen, rsLastIn;
+        /**
+         * A packet of it was rebuilt from parity (either kind): counted as recovered when it goes out whole (1.0.67 - a
+         * block mended while the next was on its way left the frame not yet whole; counted at the rebuild, as before,
+         * such a frame was missed).
+         */
+        boolean mended;
         int size = -1; // unknown until the offset-0 fragment arrives
         int received;
         boolean startReceived;
@@ -195,9 +229,9 @@ public class FrameAssembler {
             return Math.min(packet == 0 ? FIRST_SEGMENT : SEGMENT, size - offsetOf(packet));
         }
 
-        /** Every parity the phone sends for this frame has come (one in all, or one per group). */
+        /** Every parity the phone sends for this frame has come (one in all, or one per group; RS: its last one). */
         boolean parityIn() {
-            if (parity != null) return true;
+            if (parity != null || rsLastIn) return true;
             if (groupParity == null || size <= 0) return false;
             int groups = (packets() + PARITY_GROUP - 1) / PARITY_GROUP;
             if (groupParity.length < groups) return false;
@@ -219,7 +253,53 @@ public class FrameAssembler {
                 }
             }
             if (parity != null && !complete()) recoverSpan(parity, 0, packets);
+            if (rs != null && !complete()) recoverRs(packets);
             return complete();
+        }
+
+        /** Whether packets first .. first + k - 1 are all in, each as long as the phone cuts it. */
+        boolean blockWhole(int first, int k) {
+            for (int j = first; j < first + k; j++) {
+                int got = indexOf(offsetOf(j));
+                if (got < 0 || lengths[got] != lengthOf(j)) return false;
+            }
+            return true;
+        }
+
+        /** 1.0.67: each block with RS parity kept and packets missing - rebuilt in place if enough of it came (Fec.decode). */
+        private void recoverRs(int packets) {
+            for (int b = 0; b < rs.length; b++) {
+                if (rs[b] == null) continue;
+                int first = Fec.blockFirst(packets, b), k = Fec.blockK(packets, b);
+                boolean[] have = new boolean[k];
+                boolean odd = false;
+                for (int j = 0; j < k && !odd; j++) {
+                    int got = indexOf(offsetOf(first + j));
+                    if (got >= 0) {
+                        have[j] = true;
+                        odd = lengths[got] != lengthOf(first + j); // not the phone's usual layout: leave it
+                    }
+                }
+                if (odd || !Fec.decode(data, size, first, k, have, rs[b], 0, rsM[b])) continue;
+                for (int j = 0; j < k; j++) {
+                    int at = offsetOf(first + j);
+                    if (!have[j]) put(at, data, at, lengthOf(first + j)); // rebuilt where it belongs: registered
+                }
+                rs[b] = null;
+                mended = true;
+            }
+        }
+
+        /** Keeps one RS parity packet's payload for its block. */
+        void keepRs(int block, int m, int index, byte[] d, int len) {
+            int blocks = Fec.blocks(packets());
+            if (rs == null) {
+                rs = new byte[blocks][][];
+                rsM = new int[blocks];
+            }
+            if (rs[block] == null) rs[block] = new byte[Fec.MAX_PARITY][];
+            if (rs[block][index] == null) rs[block][index] = Arrays.copyOfRange(d, Fec.HEADER, len);
+            rsM[block] = Math.max(rsM[block], m);
         }
 
         /** @return true if the one missing packet of packets [from, to) was rebuilt from their parity */
@@ -243,6 +323,7 @@ public class FrameAssembler {
                 for (int j = 0; j < n; j++) rebuilt[j] ^= data[off + j];
             }
             put(offsetOf(missing), rebuilt, 0, lengthOf(missing));
+            mended = true;
             return true;
         }
 
@@ -309,7 +390,7 @@ public class FrameAssembler {
         if (!parityWanted(frameNum, frameSize, length)) return null;
         Pending frame = parityFor(frameNum, keyFrame, frameSize);
         frame.parity = Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
-        if (frame.recover()) recoveredFrames++;
+        frame.recover();
         return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
     }
 
@@ -326,7 +407,33 @@ public class FrameAssembler {
         if (frame.groupParity == null) frame.groupParity = new byte[groups][];
         else if (frame.groupParity.length < groups) frame.groupParity = Arrays.copyOf(frame.groupParity, groups);
         frame.groupParity[group] = Arrays.copyOfRange(buf, dataOffset, dataOffset + length);
-        if (frame.recover()) recoveredFrames++;
+        frame.recover();
+        return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
+    }
+
+    /**
+     * A block's Reed-Solomon parity (1.0.67, phone app pc.53: VIDEO_PARITY_RS, the whole packet - header as
+     * {@link Fec#putHeader}): any m lost packets of the block are rebuilt from it, and the frame goes out the moment it
+     * is whole. Kept only for a block that misses a packet; one for a frame already out, or a block that is whole,
+     * costs a look and is dropped (the class says how long a frame may wait for it).
+     * @return the frame, if that made it whole (or it was waiting for this), else null
+     */
+    public Frame putParityRs(byte[] d, int len, long now) {
+        this.now = now;
+        if (!Fec.valid(d, len)) return null;
+        short frameNum = Fec.frameNum(d);
+        int frameSize = Fec.frameSize(d);
+        if (!parityWanted(frameNum, frameSize, len - Fec.HEADER)) return null;
+        boolean keyFrame = Fec.keyFrame(d);
+        Pending frame = parityFor(frameNum, keyFrame, frameSize);
+        if (frame.size != frameSize) return null; // not this frame's: its own packets said another size
+        int packets = frame.packets(), block = Fec.block(d), m = Fec.m(d), index = Fec.index(d);
+        frame.rsSeen = true;
+        if (block == Fec.blocks(packets) - 1 && index == m - 1) frame.rsLastIn = true;
+        if (!frame.blockWhole(Fec.blockFirst(packets, block), Fec.blockK(packets, block))) {
+            frame.keepRs(block, m, index, d, len);
+            frame.recover();
+        }
         return frame.received > 0 ? finish(frameNum, frame, keyFrame) : null;
     }
 
@@ -452,15 +559,17 @@ public class FrameAssembler {
     }
 
     private Frame finish(short frameNum, Pending frame, boolean keyFrame) {
-        if (!frame.complete() && (frame.parity != null || frame.groupParity != null) && frame.recover()) recoveredFrames++;
+        if (!frame.complete() && (frame.parity != null || frame.groupParity != null || frame.rs != null)) frame.recover();
         if (!frame.complete() && !(frame.startReceived && frame.endReceived)) return null;
         // bad coverage mode: an incomplete frame waits for its parity (right behind it) or a key frame's second copy;
-        // if neither makes it whole, it goes out damaged when the next frame completes (retireOlder)
-        if (!frame.complete() && waitForWholeKeyFrames && (frame.keyFrame || !frame.parityIn())) return null;
+        // if neither makes it whole, it goes out damaged when the next frame completes (retireOlder). 1.0.67: a key
+        // frame with RS parity comes once - all of its parity in, nothing more will come for it
+        if (!frame.complete() && waitForWholeKeyFrames && ((frame.keyFrame && !frame.rsSeen) || !frame.parityIn())) return null;
         pending.remove(frameNum);
         retireOlder(frameNum, keyFrame);
         boolean damaged = !frame.complete();
         if (damaged) damagedFrames++; else completedFrames++;
+        if (!damaged && frame.mended) recoveredFrames++; // made whole from its parity
         Frame out = release(frame, frameNum, damaged);
         released(frameNum, frame.keyFrame, out.data());
         return out;

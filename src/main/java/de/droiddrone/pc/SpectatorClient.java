@@ -62,6 +62,7 @@ final class SpectatorClient implements AutoCloseable {
     private final String key;
     private final int delayMs;
     private final Consumer<byte[]> deliver;
+    private final java.util.function.IntSupplier helloFlags;
     private final Thread thread;
     private volatile boolean running = true;
 
@@ -111,6 +112,12 @@ final class SpectatorClient implements AutoCloseable {
      */
     SpectatorClient(DatagramSocket socket, InetAddress phoneIp, int phonePort, String key, int delayMs,
                     Spectate.Address pilot, Consumer<byte[]> deliver) {
+        this(socket, phoneIp, phonePort, key, delayMs, pilot, deliver, () -> 0);
+    }
+
+    /** @param helloFlags what the HELLO says (1.0.67: Spectate.HELLO_MENDS_RS), read at each HELLO; 0 sends 1.0.66's HELLO */
+    SpectatorClient(DatagramSocket socket, InetAddress phoneIp, int phonePort, String key, int delayMs,
+                    Spectate.Address pilot, Consumer<byte[]> deliver, java.util.function.IntSupplier helloFlags) {
         this.socket = socket;
         this.phoneIp = phoneIp;
         this.phonePort = phonePort;
@@ -118,6 +125,7 @@ final class SpectatorClient implements AutoCloseable {
         this.delayMs = delayMs;
         this.pilot = pilot;
         this.deliver = deliver;
+        this.helloFlags = helloFlags;
         thread = new Thread(this::run, "spectator");
         thread.setDaemon(true);
         thread.setUncaughtExceptionHandler((th, e) -> log("Spectator thread died: " + e)); // 1.0.49: never silently
@@ -321,7 +329,7 @@ final class SpectatorClient implements AutoCloseable {
                 }
                 if (streamPort < 0) {
                     if (p != null && now >= nextHello) {
-                        send(Spectate.keyed(Spectate.HELLO, key), p.ip(), p.port());
+                        send(Spectate.hello(key, helloFlags.getAsInt()), p.ip(), p.port());
                         nextHello = now + (phase == Phase.JOINING ? HELLO_MS : 2000);
                     }
                     // nobody answers, or nobody flies: ask the phone (never a Connect - that could take the drone)

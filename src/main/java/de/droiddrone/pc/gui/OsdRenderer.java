@@ -109,6 +109,8 @@ final class OsdRenderer {
     static final int STICKS_LOST_ALARM_MS = 300;
     /** The picture's age (arrival to screen): yellow from here, red from twice it; VIDEO FROZEN comes at 700. */
     static final int PICTURE_AGE_WARN_MS = 150;
+    /** 1.0.67: the picture's whole delay (camera to screen): yellow from here, red from twice it. */
+    static final int G2G_WARN_MS = 250;
     /** LINK colour by how far the ping is over the link's own usual (BitrateControl's 15-30 s minimum). */
     static final int PING_EXCESS_WARN_MS = 60;
     static final int PING_EXCESS_ALARM_MS = 150;
@@ -301,6 +303,9 @@ final class OsdRenderer {
                     value(java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")), ex, ey, a, WHITE));
             element(OsdElement.STICKS_LEFT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 2, PcConfig.THROTTLE_INDEX));
             element(OsdElement.STICKS_RIGHT, (ex, ey, a) -> sticks(ex, ey, a, d.channels(), 0, 1));
+            element(OsdElement.G2G, (ex, ey, a) -> {
+                if (!observer) pictureDelay(ex, ey, a, d.video());
+            });
 
             if (d.recording()) recordingMark(now);
             element(OsdElement.WARNINGS, (ex, ey, a) -> warnings(ex, ey, a, d, s, t, now));
@@ -598,6 +603,18 @@ final class OsdRenderer {
         long age = v.pictureAgeMs() + Math.round(displayMs);
         g.setFont(Theme.monoFont(Font.PLAIN, 15 * unit));
         put("AGE " + age + "MS", x, y, age > 2 * PICTURE_AGE_WARN_MS ? RED : age > PICTURE_AGE_WARN_MS ? YELLOW : WHITE, a);
+    }
+
+    /**
+     * 1.0.67, "G2G ~185MS": the picture's delay from the camera to this screen, estimated for every picture shown
+     * (video.GlassToGlass; the view's display time added, as to the age). Nothing without a figure: a phone app
+     * before pc.53, no picture, watching.
+     */
+    private void pictureDelay(float x, float y, OsdLayout.Align a, VideoPipeline.Stats v) {
+        if (v == null || v.width() <= 0 || v.g2gMs() < 0) return;
+        long ms = v.g2gMs() + Math.round(displayMs);
+        g.setFont(Theme.monoFont(Font.PLAIN, 15 * unit));
+        put("G2G ~" + ms + "MS", x, y, ms > 2 * G2G_WARN_MS ? RED : ms > G2G_WARN_MS ? YELLOW : WHITE, a);
     }
 
     /** "LTE 82%" and four signal bars after it. */

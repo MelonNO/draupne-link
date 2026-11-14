@@ -49,10 +49,24 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
      * @param hardware       the pictures are decoded on the GPU
      * @param pingBaselineMs the link's usual ping, the lowest of the last 15-30 s (-1 before the first)
      * @param pictureAgeMs   how long ago the frame on screen arrived (-1 without one); the view adds its display time
+     * @param g2gMs          1.0.67: the picture's delay from the camera to this PC's screen, estimated and evened out
+     *                       (GlassToGlass); -1 without a figure - a phone app before pc.53, no picture, watching
+     * @param captureToSendMs its parts for the last picture shown: the phone's, from the capture to the first packet
+     *                       leaving, and videoNetMs the network's; -1 each without a figure
+     * @param g2gMaxMs       the highest single picture's figure of the last second; -1 for none
      */
     public record Stats(boolean hevc, int width, int height, int receivedFps, int shownFps, double megabitsPerSecond,
                         double decodeMs, double convertMs, long damaged, long lost, String error, boolean hardware,
-                        int bitrateStep, long drawSkipped, long bunched, long recovered, int pingBaselineMs, long pictureAgeMs) {}
+                        int bitrateStep, long drawSkipped, long bunched, long recovered, int pingBaselineMs, long pictureAgeMs,
+                        int g2gMs, int captureToSendMs, int videoNetMs, int g2gMaxMs) {
+        /** Up to 1.0.66: no picture delay figures. */
+        public Stats(boolean hevc, int width, int height, int receivedFps, int shownFps, double megabitsPerSecond,
+                     double decodeMs, double convertMs, long damaged, long lost, String error, boolean hardware,
+                     int bitrateStep, long drawSkipped, long bunched, long recovered, int pingBaselineMs, long pictureAgeMs) {
+            this(hevc, width, height, receivedFps, shownFps, megabitsPerSecond, decodeMs, convertMs, damaged, lost, error, hardware,
+                    bitrateStep, drawSkipped, bunched, recovered, pingBaselineMs, pictureAgeMs, -1, -1, -1, -1);
+        }
+    }
 
     /** Frames arriving closer together than this came bunched up (4G delivers in bursts). */
     static final long BUNCH_MS = 4;
@@ -129,6 +143,15 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     static final long LOSS_STALE_MS = 2500;
     private final long[] lossHit = new long[LOSS_WINDOWS], lossAll = new long[LOSS_WINDOWS];
     private int lossAt;
+    /**
+     * 1.0.67: the RS parity the phone is to add (ControlLink ticks it, FecPolicy) - fed each frame's kind and size while
+     * bad coverage mode is on (fecFrames: nothing in the other tiers but that look), and the packet loss behind the
+     * frame loss above: FecPolicy.fragmentLoss with the packets a frame had over the last second (fragmentLoss, -1 =
+     * not known yet).
+     */
+    private final FecPolicy fec = new FecPolicy();
+    private volatile boolean fecFrames;
+    private volatile double fragmentLoss = -1;
     private long lossHitBefore, lossAllBefore;
     private volatile double frameLoss;
     private volatile long frameLossAt;
@@ -224,6 +247,14 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile long lastFragmentAt;
     /** When the frame on screen arrived (decode thread); 0 = none yet. The OSD's picture age. */
     private volatile long shownArrivedMs;
+    /**
+     * 1.0.67: the picture's delay from the camera to this screen (the OSD's G2G, the link log): the phone's FRAME_TIME
+     * from the receive thread, each picture shown from the decode thread; not fed while this PC only watches (the
+     * link passes nothing on then). Its own lock, taken alone.
+     */
+    private final GlassToGlass g2g = new GlassToGlass();
+    /** The highest figure of the last whole second (decode thread), for the link log's rows of that second. */
+    private volatile int g2gMaxMs = GlassToGlass.UNKNOWN;
 
     // decode-thread statistics
     /** Frames the decode thread is done with - decoded and drawn, or passed over (tests wait for it, not for a pause). */
@@ -374,6 +405,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (frame != null) accept(frame, now);
         if (second) {
             noteFrameLoss(hit, all, now);
+            // 1.0.67: the packet loss for the RS parity's choice (each frame's payload over a packet's, as the phone cuts it)
+            fragmentLoss = windowFrames == 0 ? -1 : FecPolicy.fragmentLoss(frameLossRatio(), windowBytes / (double) windowFrames / de.droiddrone.common.Fec.SEGMENT);
             receivedFps = (int) (windowFrames * 1000 / Math.max(1, now - windowStart));
             megabitsPerSecond = windowBytes * 8.0 / 1000.0 / Math.max(1, now - windowStart);
             bitrate.onReceivedRate(megabitsPerSecond, now);
@@ -383,6 +416,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 bitrate.setMaxStep(l.maxBitrateStep()); // 1 Mbit/s in bad coverage mode, else the set limit
                 boolean robust = l.isRobust();
                 keyFrames.setRobust(robust);
+                fecFrames = robust;
                 synchronized (assembler) {
                     assembler.setWaitForWholeKeyFrames(robust); // key frames come twice then
                 }
@@ -436,6 +470,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     /** A finished frame (receive thread): recorded, counted, and queued for the decoder. */
     private void accept(FrameAssembler.Frame frame, long now) {
+        if (fecFrames) fec.onFrame(frame.keyFrame(), frame.data().length); // 1.0.67: the blocks' size for the parity
         recording.frame(frame, now);
         FrameTap t = tap;
         if (t != null) t.onFrame(frame.data(), frame.keyFrame(), now);
@@ -609,6 +644,52 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (frame != null) accept(frame, now);
     }
 
+    /**
+     * 1.0.67: a block's RS parity (VIDEO_PARITY_RS, checked by the link): kept by the assembler only for a block that
+     * misses a packet, and the frame out the moment it is whole (FrameAssembler.putParityRs).
+     */
+    @Override
+    public void onVideoParityRs(byte[] d, int len) {
+        long now = MonoClock.ms();
+        FrameAssembler.Frame frame;
+        List<FrameAssembler.Frame> earlier;
+        long lost;
+        synchronized (assembler) {
+            frame = assembler.putParityRs(d, len, now);
+            earlier = assembler.takeFlushed();
+            lost = assembler.getLostFrames();
+        }
+        countLost(lost, now);
+        for (FrameAssembler.Frame f : earlier) accept(f, now);
+        if (frame != null) accept(frame, now);
+    }
+
+    @Override
+    public boolean mendsRs() {
+        return true;
+    }
+
+    @Override
+    public FecPolicy.Choice fecChoice(long now, ControlLink.Tier tier) {
+        return fec.tick(now, tier, fragmentLoss);
+    }
+
+    @Override
+    public void onFrameTime(short frameNum, int captureToSendMs, long pingEcho, int pingHoldMs, long arriveMs) {
+        g2g.onFrameTime(frameNum, captureToSendMs, pingEcho, pingHoldMs, arriveMs);
+    }
+
+    @Override
+    public void onRoundTrip(int ms, long clockMs) {
+        g2g.onRoundTrip(ms, clockMs);
+    }
+
+    @Override
+    public void onLinkSession() {
+        g2g.reset();
+        fec.reset(); // 1.0.67: the phone starts each session without parity; the choice starts again at the tier's least
+    }
+
     // ------------------------------------------------------------------ decode thread
 
     private void decodeLoop() {
@@ -638,6 +719,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         shownFps = (int) (shown * 1000 / (now - shownWindow));
                         shown = 0;
                         shownWindow = now;
+                        g2gMaxMs = g2g.takeMaxMs();
                     }
                     if (item == null) continue;
                     if (item == STOP) break;
@@ -699,6 +781,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         decoder.convert(pixels, size[0], size[1]);
                         decodingOnGpu = decoder.isHardware();
                         sink.presentFrame();
+                        g2g.onShown(frame.number(), GlassToGlass.clockMs()); // 1.0.67: this picture's delay, if the phone sent its times
                         long shownAt = MonoClock.ms();
                         lastPresentedAt = shownAt;
                         shownArrivedMs = frame.arrivedMs() > 0 ? frame.arrivedMs() : shownAt;
@@ -792,9 +875,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         long now = MonoClock.ms();
         boolean flowing = now - lastFragmentAt < 1500; // stopped: no old figures
         long arrived = shownArrivedMs;
+        long clock = GlassToGlass.clockMs();
         return new Stats(c != null && c.hevc(), c == null ? 0 : c.width(), c == null ? 0 : c.height(), flowing ? receivedFps : 0,
                 flowing ? shownFps : 0, flowing ? megabitsPerSecond : 0, decodeMs, convertMs, damaged, lost, error, decodingOnGpu,
-                bitrate.step(), drawSkipped, bunched, recovered, bitrate.baselinePingMs(), arrived == 0 ? -1 : now - arrived);
+                bitrate.step(), drawSkipped, bunched, recovered, bitrate.baselinePingMs(), arrived == 0 ? -1 : now - arrived,
+                g2g.smoothedMs(clock), g2g.lastCaptureToSendMs(clock), g2g.lastNetworkMs(clock), flowing ? g2gMaxMs : GlassToGlass.UNKNOWN);
     }
 
     /** Decode on the GPU from the next stream (re)start or decoder restart; software stays the fallback. */

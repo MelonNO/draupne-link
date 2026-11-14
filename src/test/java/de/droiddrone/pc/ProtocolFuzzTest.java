@@ -31,6 +31,7 @@ class ProtocolFuzzTest {
         add(p, "Names.parseAssign", (d, n) -> Names.parseAssign(d, n, KEY));
         add(p, "Spectate.readPilotView", (d, n) -> Spectate.readPilotView(d, n));
         add(p, "Spectate.readKey", (d, n) -> Spectate.readKey(d, n));
+        add(p, "Spectate.helloFlags", (d, n) -> Spectate.helloFlags(d, n));
         add(p, "Spectate.readPilotAt", (d, n) -> Spectate.readPilotAt(d, n));
         add(p, "Spectate.readPort", (d, n) -> Spectate.readPort(d, n));
         add(p, "Observe.decodeRequest", (d, n) -> Observe.decodeRequest(d, n));
@@ -107,6 +108,7 @@ class ProtocolFuzzTest {
                 "LINK BACK", "hint", new short[]{1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000}, "MobileAlpha", true)));
         valid.add(Spectate.pilotAt(java.net.InetAddress.getByName("::1"), 6286));
         valid.add(Spectate.keyed(Spectate.HELLO, KEY));
+        valid.add(Spectate.hello(KEY, Spectate.HELLO_MENDS_RS));
         valid.add(Observe.encodeStop(KEY));
         valid.add(Observe.encodeRequest(KEY, 640, 360, 15, 800, 3, 2));
         valid.add(FleetProtocol.request(KEY, new FleetProtocol.Request(7, 3, 1, 2, 0, 9, 6286)));

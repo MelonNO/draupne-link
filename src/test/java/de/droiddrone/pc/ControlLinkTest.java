@@ -304,6 +304,10 @@ class ControlLinkTest {
         assertEquals(Integer.toString(Integer.parseInt(row[2]) / 2 + 3), row[columns.indexOf("pc_to_fc_ms")], "half the ping + the phone's in-to-out");
         assertEquals("7", row[columns.indexOf("glfw_poll_max_ms")]);
         assertEquals("event", columns.get(columns.size() - 1), "the event stays the last column");
+        // 1.0.67: the picture delay's four columns right before it, blank without a figure (no video here)
+        assertEquals(List.of("capture_to_send_ms", "video_net_ms", "g2g_ms", "g2g_max_ms"), columns.subList(columns.size() - 5, columns.size() - 1));
+        for (int i = 2; i <= 5; i++) assertEquals("", row[row.length - i], columns.get(columns.size() - i));
+        assertEquals("sticks_dropped_late", columns.get(columns.size() - 6), "the columns of before stand where they stood");
         assertEquals(LinkLog.HEADER.split(",").length, row.length, "every column in every row");
         assertEquals(LinkLog.HEADER.split(",").length, lines.get(2).replace("\"Joystick lost, test\"", "e").split(",", -1).length,
                 "event rows too (the event's own comma is inside quotes)");
@@ -881,6 +885,107 @@ class ControlLinkTest {
      * the session before would send key frames twice, parity and H.264 to a PC that takes it for normal. So the profile
      * goes out with the first config of every session, the normal one too (1.0.34).
      */
+    /**
+     * 1.0.67: with the video shown, the profile asks for frame times (bit 3) in every tier - and bits 0-2, all a phone
+     * app before pc.53 reads, are what 1.0.66 sent: nothing on the normal picture, 1 | 2 | 4 in bad coverage mode.
+     */
+    @Test
+    void theProfileAsksForFrameTimesInEveryTierAndLeavesTheOlderBitsAsTheyWere() throws Exception {
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        PcConfig config = PcConfig.defaults();
+        config.set(ControlLink.VIDEO_MODE_KEY, "NORMAL");
+        link = new ControlLink(config, InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        link.setVideoListener(new ControlLink.VideoListener() {
+            @Override
+            public void onVideoConfig(int width, int height, boolean hevc, boolean frontCamera, byte[] codecConfig) {
+            }
+
+            @Override
+            public void onVideoFragment(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length) {
+            }
+        }, true);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY && phone.videoProfileRaw >= 0, 5000, "link READY, a profile");
+        assertEquals(ControlLink.PROFILE_FRAME_TIMES, phone.videoProfileRaw & ControlLink.PROFILE_FRAME_TIMES, "frame times asked for");
+        assertEquals(0, phone.videoProfile, "the normal picture: bits 0-2 as 1.0.66 sent them");
+        link.setVideoMode(ControlLink.VideoMode.ROBUST);
+        waitFor(() -> phone.videoProfile == (1 | 2 | 4), 3000, "bad coverage mode: key frames twice, parity per group, H.264");
+        assertEquals(ControlLink.PROFILE_FRAME_TIMES, phone.videoProfileRaw & ControlLink.PROFILE_FRAME_TIMES, "and frame times there too");
+        link.setVideoMode(ControlLink.VideoMode.SHARP);
+        waitFor(() -> phone.videoProfile == 0 && link.getTier() == ControlLink.Tier.SHARP, 3000, "the sharp tier: bits 0-2 clear again");
+        assertEquals(ControlLink.PROFILE_FRAME_TIMES, phone.videoProfileRaw & ControlLink.PROFILE_FRAME_TIMES);
+    }
+
+    /** Without a video listener nothing is shown, so nothing is asked: the profile is 1.0.66's to the bit. */
+    @Test
+    void aLinkWithoutVideoAsksForNoFrameTimes() throws Exception {
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY && phone.videoProfileRaw >= 0, 5000, "link READY, a profile");
+        assertEquals(0, phone.videoProfileRaw);
+    }
+
+    /**
+     * 1.0.67, the session id on the wire: one id for the Connects of a try, the next id for a try unanswered for a
+     * second, and a new one after every session that was up.
+     */
+    @Test
+    void theConnectCarriesOneIdATryAndANewOneAfterASession() throws Exception {
+        try (DatagramSocket phoneSocket = new DatagramSocket(phonePort, InetAddress.getLoopbackAddress())) {
+            phoneSocket.setSoTimeout(100);
+            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
+            link.start();
+            byte[] buf = new byte[1200];
+            DatagramPacket p = new DatagramPacket(buf, buf.length);
+            List<Long> ids = new java.util.ArrayList<>(), firstAt = new java.util.ArrayList<>(), lastAt = new java.util.ArrayList<>();
+            byte[] connect = null;
+            long start = System.currentTimeMillis();
+            while (System.currentTimeMillis() - start < 2700) { // a phone that answers nothing
+                try {
+                    phoneSocket.receive(p);
+                } catch (java.net.SocketTimeoutException e) {
+                    continue;
+                }
+                if (p.getLength() < 1 || buf[0] != UdpCommon.Connect) continue;
+                connect = java.util.Arrays.copyOf(buf, p.getLength());
+                long id = de.droiddrone.common.SessionGate.sessionId(connect, connect.length), at = System.currentTimeMillis() - start;
+                assertNotEquals(de.droiddrone.common.SessionGate.NO_ID, id, "every Connect carries one");
+                assertEquals(0, connect[connect.length - 1], "and the byte for the phone's answer, 0");
+                if (ids.isEmpty() || ids.get(ids.size() - 1) != id) {
+                    ids.add(id);
+                    firstAt.add(at);
+                    lastAt.add(at);
+                } else {
+                    lastAt.set(lastAt.size() - 1, at);
+                }
+            }
+            assertTrue(ids.size() >= 2 && ids.size() <= 4, "a new id about every second: " + ids + " first sent at " + firstAt);
+            for (int i = 1; i < ids.size(); i++) {
+                assertEquals((ids.get(i - 1) + 1) & 0xFFFFFFFFL, ids.get(i), "counted up, try by try");
+                assertTrue(firstAt.get(i) - firstAt.get(i - 1) >= de.droiddrone.common.SessionGate.SAME_SESSION_MS - 60, "a try is kept a second: " + firstAt);
+            }
+            assertTrue(lastAt.get(0) - firstAt.get(0) <= de.droiddrone.common.SessionGate.SAME_SESSION_MS + 400, "the first try's Connects: " + firstAt.get(0) + " - " + lastAt.get(0));
+            // answered as a phone app before pc.53 answers: the Connect back as it came - taken, whatever its id
+            long lastId = ids.get(ids.size() - 1);
+            byte[] answer = connect;
+            phoneSocket.send(new DatagramPacket(answer, answer.length, InetAddress.getLoopbackAddress(), pcPort));
+            waitFor(() -> link.getSessionStarts() == 1, 2000, "the answer starts the session");
+            // nothing more comes: 2 s later the link counts as lost, and the next try has an id of its own - at once
+            long next = -1;
+            long until = System.currentTimeMillis() + 6000;
+            while (next < 0 && System.currentTimeMillis() < until) {
+                try {
+                    phoneSocket.receive(p);
+                } catch (java.net.SocketTimeoutException e) {
+                    continue;
+                }
+                if (p.getLength() > 0 && buf[0] == UdpCommon.Connect) next = de.droiddrone.common.SessionGate.sessionId(buf, p.getLength());
+            }
+            assertEquals((lastId + 1) & 0xFFFFFFFFL, next, "a session was up: the id is spent");
+        }
+    }
+
     @Test
     void theVideoProfileGoesOutWithTheFirstConfigOfEverySession() throws Exception {
         phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
@@ -1179,6 +1284,8 @@ class ControlLinkTest {
         }
         /** The last video profile received (pc.15 on): -1 = none yet, else its flags (bit 0: key frames twice). */
         volatile int videoProfile = -1;
+        /** The profile's whole byte as it came (1.0.67 sets bits a phone app before pc.53 never looks at). */
+        volatile int videoProfileRaw = -1;
         /** ChangeBitRate packets (true = up) and SET_BITRATE steps (pc.26), in order. */
         final List<Boolean> bitRateChanges = new CopyOnWriteArrayList<>();
         final List<Integer> bitRateSteps = new CopyOnWriteArrayList<>();
@@ -1406,7 +1513,9 @@ class ControlLinkTest {
                         dropProfiles.decrementAndGet();
                         return;
                     }
-                    videoProfile = r.readByte();
+                    int flags = r.readByte();
+                    videoProfileRaw = flags;
+                    videoProfile = flags & 7; // as every released phone app reads it: by mask, bits 0-2 at most
                 }
                 case ControlLink.SET_BITRATE -> bitRateSteps.add(r.readUnsignedByteAsInt());
                 case UdpCommon.ChangeBitRate -> bitRateChanges.add(r.readBoolean());

@@ -24,6 +24,8 @@
  *  pc.45: listening only (startListening) - the microphone through the same filter into a VoiceActivity, nothing
  *  encoded or sent: "sound heard" for observers that muted the phone (Observe.STATE_SOUND_HEARD).
  *  pc.50: the dead-man's hold at the lowest step while the PC is silent (holdAtFloor / releaseFloor).
+ *  pc.53: the Reed-Solomon parity's share of the upload comes off the encoder's bitrate (setParityShare); the step's
+ *  own figure is still the one reported to the PC and paced by (getTargetBitRate).
  */
 
 package de.droiddrone.flight;
@@ -37,6 +39,7 @@ import android.os.Bundle;
 import android.view.Surface;
 
 import androidx.annotation.NonNull;
+import de.droiddrone.common.FecSender;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
 import de.droiddrone.common.VoiceActivity;
@@ -78,7 +81,9 @@ public class StreamEncoder {
     private static final float INTRA_REFRESH_S = 0.5f;
     private boolean intraRefresh;
     private long lastKeyFrameRequest;
-    private boolean encoderBitrateChange = false;
+    private volatile boolean encoderBitrateChange = false;
+    /** pc.53: the RS parity's share of the upload, per mille (FecSender): the encoder is set that much under the step. */
+    private volatile int parityPermille;
     private boolean sendFrames = false;
     private boolean writeToRecorder;
     private boolean isAudioSending;
@@ -535,6 +540,22 @@ public class StreamEncoder {
         return baseBitRates[bitRateIndex];
     }
 
+    /**
+     * pc.53: the video sender's RS parity takes this share of the upload (per mille, FecSender.sharePermille): the
+     * encoder is set that much under the step from its next frame on, so frame and parity leave at the step's figure.
+     * The step itself - what the PC is told (PcLinkStats ENCODER_CODE) and the packets are paced by - stays as it is.
+     */
+    public void setParityShare(int permille){
+        if (permille == parityPermille) return;
+        parityPermille = permille;
+        encoderBitrateChange = true;
+    }
+
+    /** What the codec is set to: the step less the parity's share (pc.53; without parity the step). */
+    private int encoderBitRate(){
+        return FecSender.encoderBitRate(baseBitRates[bitRateIndex], parityPermille);
+    }
+
     public int getNextBitrate(){
         int index = bitRateIndex + 1;
         if (index >= baseBitRates.length) index = baseBitRates.length - 1;
@@ -603,13 +624,13 @@ public class StreamEncoder {
                 if (videoRecorderOutputBuffer.size() > maxOutputBufferSize) videoRecorderOutputBuffer.remove();
             }
             if (encoderBitrateChange){
-                log("Encoder bitrate change: " + baseBitRates[bitRateIndex]);
+                log("Encoder bitrate change: " + encoderBitRate() + (parityPermille > 0 ? " (step " + baseBitRates[bitRateIndex] + ", parity " + parityPermille / 10 + " %)" : ""));
                 encoderBitrateChange = false;
                 // DRAUPNE Link: on the codec this callback is for, inside try - close() nulls videoEncoder from another
                 // thread, and an exception on the codec's thread ends the whole app
                 try {
                     Bundle param = new Bundle();
-                    param.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, baseBitRates[bitRateIndex]);
+                    param.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, encoderBitRate());
                     codec.setParameters(param);
                 } catch (Exception e) {
                     log("Encoder bitrate change error: " + e);
@@ -663,7 +684,7 @@ public class StreamEncoder {
     private MediaFormat getEncoderFormat(boolean withIntraRefresh, boolean lowLatency){
         int fps = cameraManager.getCamera().getTargetFps();
         MediaFormat mediaFormat = MediaFormat.createVideoFormat(codecType, cameraManager.getCamera().getWidth(), cameraManager.getCamera().getHeight());
-        mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, baseBitRates[bitRateIndex]);
+        mediaFormat.setInteger(MediaFormat.KEY_BIT_RATE, encoderBitRate());
         mediaFormat.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
         mediaFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
         mediaFormat.setFloat(MediaFormat.KEY_I_FRAME_INTERVAL, withIntraRefresh ? KEY_FRAME_INTERVAL_INTRA_REFRESH_S : KEY_FRAME_INTERVAL_S);

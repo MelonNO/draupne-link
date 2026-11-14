@@ -50,7 +50,8 @@ import java.util.Map;
  * The stream itself is upstream's packets unchanged (VideoInitialFrame - its number left 0 -, VideoFrame, KeyFrame,
  * VIDEO_PARITY_GROUP, AudioInitialFrame, AudioFrame) and a TelemetryData packet with record {@link #RECORD} (and the
  * motion detection's 0x40FA when asked for), sent from the phone's link port to each observer's address and port,
- * only while no pilot is connected. 0x53-0x57 and record 0x40FF are reserved for observation and unused.
+ * only while no pilot is connected. 0x56-0x57 and record 0x40FF are reserved for observation and unused (0x53-0x55
+ * went to the pilot's link: PacketIds FRAME_TIME, VIDEO_FEC, VIDEO_PARITY_RS - never sent to an observer).
  * <p>
  * DRAUPNE Flight pc.45: the speaking highlight of a muted tile. A tile muted for 10 s asks no sound (it saves the
  * phone's upload); while nobody asks for it, the phone listens to its microphone itself (VoiceActivity, nothing
