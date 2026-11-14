@@ -44,6 +44,7 @@ import static de.droiddrone.common.PacketIds.SLEEP_HELLO;
 import static de.droiddrone.common.PacketIds.SPECTATE_NO_PILOT;
 import static de.droiddrone.common.PacketIds.SPECTATE_PILOT_AT;
 import static de.droiddrone.common.PacketIds.SPECTATE_PILOT_QUERY;
+import static de.droiddrone.common.PacketIds.VIDEO_FEC;
 import static de.droiddrone.common.PacketIds.VIDEO_PROFILE;
 
 /**
@@ -162,6 +163,9 @@ public final class VirtualDrone {
     private volatile boolean videoWanted;
     /** pc.53: profile bit 3 - this session's PC wants FRAME_TIME; the last Ping taken, for it (the phone's Udp). */
     private volatile boolean frameTimes;
+    /** pc.53: profile bit 4 and VIDEO_FEC - this session's PC mends with RS parity, so many packets a block (the phone's Udp). */
+    private volatile boolean rsUnderstood;
+    private volatile int rsPlain, rsKey;
     private final de.droiddrone.common.CaptureClock.PingEcho pingEcho = new de.droiddrone.common.CaptureClock.PingEcho();
     /**
      * It behaves as a phone app before pc.53 (tests: an older phone under a new PC): the profile's bits 0-2 only, no
@@ -238,6 +242,7 @@ public final class VirtualDrone {
             @Override public void renderPicture(BufferedImage img, long nowMs) { VirtualDrone.this.renderPicture(img, nowMs); }
             @Override public void streamOut(byte[] data) { VirtualDrone.this.streamOut(data); }
             @Override public void frameTime(int frameNum, long capturedNs) { VirtualDrone.this.sendFrameTime(frameNum, capturedNs); }
+            @Override public int rsParity(boolean keyFrame) { return VirtualDrone.this.rsParity(keyFrame); }
         }, slot, this.log);
     }
 
@@ -517,7 +522,20 @@ public final class VirtualDrone {
     private void sessionAsksAnew() {
         sessions++;
         frameTimes = false;
+        rsUnderstood = false;
+        rsPlain = rsKey = 0;
         pingEcho.restart();
+    }
+
+    /** pc.53: the RS parity packets a block of a frame gets now (the phone's Udp.rsParity): 0 - the XOR groups, as before. */
+    int rsParity(boolean keyFrame) {
+        if (!rsUnderstood || !keyFramesTwice || !isConnected()) return 0;
+        return keyFrame ? rsKey : rsPlain;
+    }
+
+    /** The bitrate the virtual encoder runs at now: the step less the RS parity's share (tests; the step is what the PC is told). */
+    int encoderBitRate() {
+        return video.encoderBitRate();
     }
 
     /** Under handle's lock: the sessions started so far. */
@@ -752,6 +770,13 @@ public final class VirtualDrone {
                     keyFramesTwice = twice;
                     groupParity = groups;
                     frameTimes = !olderApp && (flags & 8) != 0;
+                    rsUnderstood = !olderApp && (flags & 16) != 0; // pc.53
+                }
+                case VIDEO_FEC -> { // pc.53: [0x54][mPlain u8][mKey u8]; an older app has no case for it
+                    if (!olderApp && buffer.getRemaining() >= 2) {
+                        rsPlain = de.droiddrone.common.FecSender.parityOf(buffer.readByte());
+                        rsKey = de.droiddrone.common.FecSender.parityOf(buffer.readByte());
+                    }
                 }
                 case KEY_FRAME_REQUEST -> video.requestKeyFrame();
                 case PcAudio.PACKET -> {
@@ -1022,6 +1047,8 @@ public final class VirtualDrone {
             keyFramesTwice = false;
             groupParity = true;
             frameTimes = false; // pc.53: a pilot's alone
+            rsUnderstood = false;
+            rsPlain = rsKey = 0;
             log.accept("observation: streaming to observers");
         }
         observeAudio = want.audio();
@@ -1067,7 +1094,7 @@ public final class VirtualDrone {
         return observing && !isConnected() && w != null ? Math.max(1, w.fps) : cameraFps;
     }
 
-    private int bitRateNow() {
+    int bitRateNow() {
         Observe.Request w = observeWant;
         if (observing && !isConnected() && w != null) return STEPS[Observe.stepFor(w.maxKbps)];
         return STEPS[step];

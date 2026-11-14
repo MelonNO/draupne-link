@@ -143,6 +143,15 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     static final long LOSS_STALE_MS = 2500;
     private final long[] lossHit = new long[LOSS_WINDOWS], lossAll = new long[LOSS_WINDOWS];
     private int lossAt;
+    /**
+     * 1.0.67: the RS parity the phone is to add (ControlLink ticks it, FecPolicy) - fed each frame's kind and size while
+     * bad coverage mode is on (fecFrames: nothing in the other tiers but that look), and the packet loss behind the
+     * frame loss above: FecPolicy.fragmentLoss with the packets a frame had over the last second (fragmentLoss, -1 =
+     * not known yet).
+     */
+    private final FecPolicy fec = new FecPolicy();
+    private volatile boolean fecFrames;
+    private volatile double fragmentLoss = -1;
     private long lossHitBefore, lossAllBefore;
     private volatile double frameLoss;
     private volatile long frameLossAt;
@@ -396,6 +405,8 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (frame != null) accept(frame, now);
         if (second) {
             noteFrameLoss(hit, all, now);
+            // 1.0.67: the packet loss for the RS parity's choice (each frame's payload over a packet's, as the phone cuts it)
+            fragmentLoss = windowFrames == 0 ? -1 : FecPolicy.fragmentLoss(frameLossRatio(), windowBytes / (double) windowFrames / de.droiddrone.common.Fec.SEGMENT);
             receivedFps = (int) (windowFrames * 1000 / Math.max(1, now - windowStart));
             megabitsPerSecond = windowBytes * 8.0 / 1000.0 / Math.max(1, now - windowStart);
             bitrate.onReceivedRate(megabitsPerSecond, now);
@@ -405,6 +416,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 bitrate.setMaxStep(l.maxBitrateStep()); // 1 Mbit/s in bad coverage mode, else the set limit
                 boolean robust = l.isRobust();
                 keyFrames.setRobust(robust);
+                fecFrames = robust;
                 synchronized (assembler) {
                     assembler.setWaitForWholeKeyFrames(robust); // key frames come twice then
                 }
@@ -458,6 +470,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
 
     /** A finished frame (receive thread): recorded, counted, and queued for the decoder. */
     private void accept(FrameAssembler.Frame frame, long now) {
+        if (fecFrames) fec.onFrame(frame.keyFrame(), frame.data().length); // 1.0.67: the blocks' size for the parity
         recording.frame(frame, now);
         FrameTap t = tap;
         if (t != null) t.onFrame(frame.data(), frame.keyFrame(), now);
@@ -631,6 +644,36 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (frame != null) accept(frame, now);
     }
 
+    /**
+     * 1.0.67: a block's RS parity (VIDEO_PARITY_RS, checked by the link): kept by the assembler only for a block that
+     * misses a packet, and the frame out the moment it is whole (FrameAssembler.putParityRs).
+     */
+    @Override
+    public void onVideoParityRs(byte[] d, int len) {
+        long now = MonoClock.ms();
+        FrameAssembler.Frame frame;
+        List<FrameAssembler.Frame> earlier;
+        long lost;
+        synchronized (assembler) {
+            frame = assembler.putParityRs(d, len, now);
+            earlier = assembler.takeFlushed();
+            lost = assembler.getLostFrames();
+        }
+        countLost(lost, now);
+        for (FrameAssembler.Frame f : earlier) accept(f, now);
+        if (frame != null) accept(frame, now);
+    }
+
+    @Override
+    public boolean mendsRs() {
+        return true;
+    }
+
+    @Override
+    public FecPolicy.Choice fecChoice(long now, ControlLink.Tier tier) {
+        return fec.tick(now, tier, fragmentLoss);
+    }
+
     @Override
     public void onFrameTime(short frameNum, int captureToSendMs, long pingEcho, int pingHoldMs, long arriveMs) {
         g2g.onFrameTime(frameNum, captureToSendMs, pingEcho, pingHoldMs, arriveMs);
@@ -644,6 +687,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     @Override
     public void onLinkSession() {
         g2g.reset();
+        fec.reset(); // 1.0.67: the phone starts each session without parity; the choice starts again at the tier's least
     }
 
     // ------------------------------------------------------------------ decode thread

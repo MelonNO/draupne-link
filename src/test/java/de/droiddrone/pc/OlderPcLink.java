@@ -9,8 +9,8 @@ import java.net.InetAddress;
 
 /**
  * A PC before 1.0.67 as the phone sees it on the wire, for the tests: the same link, but it asks for nothing 1.0.67
- * added - its video profile carries bits 0-2 only (no frame times), its Connect ends with the version (no session
- * id). Everything else of the link is the code of today, which is the point: what a phone app of now sends to a PC
+ * added - its video profile carries bits 0-2 only (no frame times, no RS parity) and no VIDEO_FEC goes out, its
+ * Connect ends with the version (no session id). Everything else of the link is the code of today, which is the point: what a phone app of now sends to a PC
  * that never asked.
  */
 public class OlderPcLink extends ControlLink {
@@ -25,6 +25,12 @@ public class OlderPcLink extends ControlLink {
     @Override
     int profileFlags() {
         return super.profileFlags() & (PROFILE_KEY_FRAMES_TWICE | PROFILE_GROUP_PARITY | PROFILE_AVC);
+    }
+
+    /** 1.0.66 mended with the XOR groups only: no profile bit 4, no VIDEO_FEC. */
+    @Override
+    boolean mendsRs() {
+        return false;
     }
 
     /** As 1.0.66's sendConnect, to the byte: [8][num i16 = -1][client type u8 = 1][key UTF][version i16]. */

@@ -53,6 +53,11 @@ final class VirtualVideo {
 
         /** pc.53: a frame is about to leave - its FRAME_TIME, if the pilot's PC asked. capturedNs: when its picture was drawn (System.nanoTime). */
         void frameTime(int frameNum, long capturedNs);
+
+        /** pc.53: RS parity packets a block of such a frame gets (0: the XOR groups as before; key frames once when not 0). */
+        default int rsParity(boolean keyFrame) {
+            return 0;
+        }
     }
 
     private static final int PARITY_GROUP = 8;
@@ -64,6 +69,9 @@ final class VirtualVideo {
     private volatile int videoGen;
     private volatile String videoState = "off";
     private volatile int sentBitRate;
+    /** pc.53: the RS parity's packets and share, as the phone's (FecSender); the encoder's bitrate is the step less that share. */
+    private final de.droiddrone.common.FecSender fecSender = new de.droiddrone.common.FecSender();
+    private volatile int encoderBitRate;
     private volatile boolean keyFrameWanted, configResend;
 
     VirtualVideo(Drone drone, int slot, Consumer<String> log) {
@@ -85,6 +93,11 @@ final class VirtualVideo {
     /** What went out over the last second, bit/s. */
     int sentBitRate() {
         return sentBitRate;
+    }
+
+    /** What the encoder was last set to, bit/s: the step less the RS parity's share (pc.53). */
+    int encoderBitRate() {
+        return encoderBitRate;
     }
 
     /** A key frame next. */
@@ -135,7 +148,8 @@ final class VirtualVideo {
         long bytesWindow = 0, windowStart = System.currentTimeMillis();
         try {
             while (gen == videoGen && drone.running()) {
-                int w = drone.cameraWidthNow(), h = drone.cameraHeightNow(), fps = drone.cameraFpsNow(), bps = drone.bitRateNow();
+                int w = drone.cameraWidthNow(), h = drone.cameraHeightNow(), fps = drone.cameraFpsNow();
+                int bps = de.droiddrone.common.FecSender.encoderBitRate(drone.bitRateNow(), fecSender.sharePermille()); // pc.53
                 long nowMs = System.currentTimeMillis();
                 boolean sizeChanged = enc == null || enc.width() != w || enc.height() != h || enc.fps() != fps;
                 boolean rateChanged = enc != null && enc.bitRate() != bps && nowMs - lastReopen >= 1500;
@@ -144,6 +158,7 @@ final class VirtualVideo {
                     ahead = null;
                     if (enc != null) enc.close();
                     enc = new H264Encoder(w, h, fps, bps);
+                    encoderBitRate = bps;
                     lastReopen = nowMs;
                     if (sizeChanged) frameNum = 0; // a restarted stream: frame 1 next
                     if (img[0] == null || img[0].getWidth() != w || img[0].getHeight() != h) {
@@ -181,11 +196,15 @@ final class VirtualVideo {
                     if (frameNum >= Short.MAX_VALUE) frameNum = 1;
                     frameNum++;
                     if (p.keyFrame() && drone.observedOnly()) sendVideoConfig(enc);
-                    int copies = p.keyFrame() && drone.keyFramesTwice() ? 2 : 1;
+                    int rs = drone.rsParity(p.keyFrame()); // pc.53: RS parity in place of the XOR groups and the second copy
+                    int copies = p.keyFrame() && drone.keyFramesTwice() && rs == 0 ? 2 : 1;
                     drone.frameTime(frameNum, capturedNs);
+                    int rsBytes = 0;
                     for (int c = 0; c < copies; c++) {
-                        sendFragments(p.keyFrame() ? UdpCommon.KeyFrame : UdpCommon.VideoFrame, p.data(), p.keyFrame(), frameNum, fps, gen);
+                        rsBytes += sendFragments(p.keyFrame() ? UdpCommon.KeyFrame : UdpCommon.VideoFrame, p.data(), p.keyFrame(), frameNum, fps, gen, c == 0 ? rs : 0);
                     }
+                    if (rs > 0 || drone.rsParity(!p.keyFrame()) > 0) fecSender.sent(p.data().length, rsBytes, nowMs);
+                    else if (fecSender.sharePermille() > 0) fecSender.stop();
                     bytesWindow += p.data().length;
                 }
                 cur = 1 - cur;
@@ -233,14 +252,18 @@ final class VirtualVideo {
     /**
      * A frame's packets as the phone sends them ([type][frameNum i16][offset i32][size i32 on the first][data]), spread
      * over at most half a frame time (a key frame over up to three), with a parity packet per group of 8 when the
-     * profile asks.
+     * profile asks - or, pc.53, rs RS parity packets behind each block (FecSender, as the phone's Udp; counted in the
+     * spread).
+     * @return the RS parity's bytes sent (payload)
      */
-    private void sendFragments(byte type, byte[] buf, boolean keyFrame, int frameNum, int fps, int gen) throws IOException {
+    private int sendFragments(byte type, byte[] buf, boolean keyFrame, int frameNum, int fps, int gen, int rs) throws IOException {
         int size = buf.length;
-        int packets = Math.max(1, (size + UdpCommon.packetLength - 1) / UdpCommon.packetLength);
+        int rsPackets = rs > 0 ? fecSender.begin(buf, size, frameNum, keyFrame, rs) : 0;
+        int packets = Math.max(1, (size + UdpCommon.packetLength - 1) / UdpCommon.packetLength) + rsPackets;
         long frameNs = 1_000_000_000L / Math.max(1, fps);
         long gapNs = packets <= 2 ? 0 : (keyFrame ? 3 * frameNs : frameNs / 2) / packets;
-        byte[] parity = drone.groupParity() ? new byte[UdpCommon.packetLength - 9] : null;
+        byte[] parity = drone.groupParity() && rsPackets == 0 ? new byte[UdpCommon.packetLength - 9] : null;
+        int rsBytes = 0;
         int offset = 0, packet = 0;
         while (offset < size && gen == videoGen) {
             UdpPacketData p = new UdpPacketData(type);
@@ -267,7 +290,17 @@ final class VirtualVideo {
                 drone.streamOut(q.getData());
                 Arrays.fill(parity, (byte) 0);
             }
+            int block = rsPackets > 0 ? fecSender.blockEndingAt(packet - 1) : -1;
+            if (block >= 0) {
+                int length = fecSender.encode(block);
+                for (int i = 0; i < fecSender.m(); i++) {
+                    if (gapNs > 0) LockSupport.parkNanos(Math.min(gapNs, 5_000_000L));
+                    drone.streamOut(Arrays.copyOf(fecSender.packet(i), length));
+                }
+                rsBytes += fecSender.m() * (length - de.droiddrone.common.Fec.HEADER);
+            }
             if (gapNs > 0 && offset < size) LockSupport.parkNanos(Math.min(gapNs, 5_000_000L));
         }
+        return rsBytes;
     }
 }

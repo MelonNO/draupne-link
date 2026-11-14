@@ -5,6 +5,7 @@ import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
+import de.droiddrone.common.Fec;
 import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
@@ -106,6 +107,26 @@ public class ControlLink {
 
         /** 1.0.67: the link is up (again): what was learned of its times belongs to the session before. */
         default void onLinkSession() {
+        }
+
+        /**
+         * 1.0.67 (phone app pc.53, asked for by profile bit 4 and VIDEO_FEC): a block's Reed-Solomon parity, the whole
+         * VIDEO_PARITY_RS packet - its header as Fec.putHeader writes it, checked by Fec.valid before it comes here.
+         */
+        default void onVideoParityRs(byte[] d, int len) {
+        }
+
+        /** 1.0.67: this listener mends frames with RS parity - the profile says so (bit 4) in bad coverage mode and under. */
+        default boolean mendsRs() {
+            return false;
+        }
+
+        /**
+         * 1.0.67: the parity the phone is to add now, for the tier (video.FecPolicy, ticked on the session thread beside
+         * TierPolicy with the loss the listener measured); null for none to ask for.
+         */
+        default de.droiddrone.pc.video.FecPolicy.Choice fecChoice(long now, Tier tier) {
+            return null;
         }
     }
 
@@ -227,6 +248,23 @@ public class ControlLink {
      */
     static final int PROFILE_FRAME_TIMES = 8;
     static final byte FRAME_TIME = PacketIds.FRAME_TIME;
+    /**
+     * 1.0.67 (phone app pc.53; older ones read bits 0-2 and go on with the XOR groups and key frames twice): profile bit
+     * 4 = this PC mends frames with Reed-Solomon parity - set beside bits 0-2 in bad coverage mode and under, never
+     * outside them. A phone that knows it takes it, with VIDEO_FEC [0x54][mPlain u8][mKey u8] (m > 0), as "send
+     * VIDEO_PARITY_RS behind each block in place of the XOR groups, key frames once" (Fec; video.FrameAssembler mends).
+     * VIDEO_FEC goes at every change of video.FecPolicy's choice (FEC_REPEATS times more) and once a second while it
+     * asks for parity; the phone forgets both with every new session.
+     */
+    static final int PROFILE_RS = 16;
+    static final byte VIDEO_FEC = PacketIds.VIDEO_FEC;
+    static final byte VIDEO_PARITY_RS = PacketIds.VIDEO_PARITY_RS;
+    static final int FEC_REPEATS = 2;
+    static final long FEC_REPEAT_MS = 100, FEC_EVERY_MS = 1000;
+    /** The parity last told the phone this session (session thread; null: none yet), and its copies still to go. */
+    private de.droiddrone.pc.video.FecPolicy.Choice fecSent;
+    private int fecRepeats;
+    private long fecSentAt;
     static final int FRAME_TIME_BYTES = 11;
     /**
      * Frame times asked for and none come while the video does: the profile goes again this often, at most this many
@@ -684,7 +722,8 @@ public class ControlLink {
     /** A packet the pilot PC passed on, played at its time (spectator thread). */
     private void playSpectated(byte[] d) {
         if (d.length < 1) return;
-        if (d[0] == UdpCommon.VideoFrame || d[0] == UdpCommon.KeyFrame || d[0] == VIDEO_PARITY || d[0] == VIDEO_PARITY_GROUP) {
+        if (d[0] == UdpCommon.VideoFrame || d[0] == UdpCommon.KeyFrame || d[0] == VIDEO_PARITY || d[0] == VIDEO_PARITY_GROUP
+                || d[0] == VIDEO_PARITY_RS) {
             deliverVideoFragment(d, d.length);
             return;
         }
@@ -716,7 +755,8 @@ public class ControlLink {
             }
             return true;
         }
-        if (len < 1 || (d[0] != UdpCommon.VideoFrame && d[0] != UdpCommon.KeyFrame && d[0] != VIDEO_PARITY && d[0] != VIDEO_PARITY_GROUP)) return false;
+        if (len < 1 || (d[0] != UdpCommon.VideoFrame && d[0] != UdpCommon.KeyFrame && d[0] != VIDEO_PARITY && d[0] != VIDEO_PARITY_GROUP
+                && d[0] != VIDEO_PARITY_RS)) return false;
         // shown whenever the stream's config is known: before 1.0.33 the fragments were thrown away while the link
         // counted as lost (2 s of silence), so a picture that was arriving again stayed black until the handshake
         if (!isConnected() && !videoConfigReceived) return true;
@@ -743,6 +783,10 @@ public class ControlLink {
         }
         if (d[0] == VIDEO_PARITY_GROUP) {
             if (len > 9) listener.onVideoParityGroup(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), Bytes.readInt(d, 3), d[8] & 0xff, d, 9, len - 9);
+            return;
+        }
+        if (d[0] == VIDEO_PARITY_RS) { // 1.0.67: one that doesn't agree with itself is dropped (a rebuilt packet has no checksum)
+            if (Fec.valid(d, len)) listener.onVideoParityRs(d, len);
             return;
         }
         short frameNum = (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff));
@@ -836,8 +880,10 @@ public class ControlLink {
                 if (!wasConnected && connected) {
                     audioRequest.newSession(); // the audio request goes out at once
                     VideoListener v = videoListener;
-                    if (v != null) v.onLinkSession(); // 1.0.67: the picture delay's figures start over
+                    if (v != null) v.onLinkSession(); // 1.0.67: the picture delay's figures start over (and the parity's choice)
                     profileRefreshes = PROFILE_REFRESHES;
+                    fecSent = null; // 1.0.67: the phone forgot it with the new session
+                    fecRepeats = 0;
                 }
                 if (!wasConnected && connected && lostAt > 0) {
                     log("Link back after " + (now - lostAt) + " ms.");
@@ -1608,9 +1654,44 @@ public class ControlLink {
                 de.droiddrone.pc.video.BitrateControl.STEPS_BPS[stepFor(config.getBitrateLimitMbps())], relayed, watched(),
                 v == null ? 0 : v.decodeLoad(), sharpAvailable(), v == null ? 0 : v.frameLossRatio());
         TierPolicy.Change change = tierPolicy.tick(now, videoMode(), link);
-        if (change == null) return;
-        events.accept(tierMessage(change.to(), change.from(), change.why()));
-        sendTier(now);
+        if (change != null) {
+            events.accept(tierMessage(change.to(), change.from(), change.why()));
+            sendTier(now);
+        }
+        sendFecIfDue(now, v);
+    }
+
+    /**
+     * 1.0.67: the RS parity the phone is to add (FecPolicy, ticked here beside TierPolicy) - VIDEO_FEC at a change,
+     * FEC_REPEATS times more FEC_REPEAT_MS apart (unnumbered, as the key frame request), and once a second while it asks
+     * for parity. Nothing in the normal and sharp tiers but the 0 0 at the change out of the weak ones: there the wire
+     * is as it was. Only for a listener that mends with it (and so a profile with bit 4).
+     */
+    private void sendFecIfDue(long now, VideoListener v) {
+        if (v == null || !mendsRs()) return;
+        de.droiddrone.pc.video.FecPolicy.Choice c = v.fecChoice(now, getTier());
+        if (c == null) return;
+        boolean asks = c.mPlain() > 0 || c.mKey() > 0;
+        if (fecSent == null ? asks : !c.sameParity(fecSent)) {
+            fecSent = c;
+            fecRepeats = FEC_REPEATS;
+        } else if (fecRepeats > 0 && now - fecSentAt >= FEC_REPEAT_MS) {
+            fecRepeats--;
+        } else if (!(asks && now - fecSentAt >= FEC_EVERY_MS)) {
+            return;
+        }
+        fecSentAt = now;
+        try {
+            socket.send(new DatagramPacket(new byte[]{VIDEO_FEC, (byte) c.mPlain(), (byte) c.mKey()}, 3, remoteIp, remotePort));
+        } catch (IOException e) {
+            // again with the next copy, or within the second
+        }
+    }
+
+    /** 1.0.67: this PC asks for RS parity in the weak tiers - its video listener mends with it (an older PC's never did). */
+    boolean mendsRs() {
+        VideoListener v = videoListener;
+        return v != null && v.mendsRs();
     }
 
     /** What the log says when the tier changes. */
@@ -1682,6 +1763,7 @@ public class ControlLink {
     int profileFlags() {
         int asked = videoListener != null ? PROFILE_FRAME_TIMES : 0; // 1.0.67: in every tier; bits 0-2 as they were
         if (!isRobust()) return asked;
+        if (mendsRs()) asked |= PROFILE_RS; // 1.0.67: beside bits 0-2, which an older phone goes on by
         return asked | PROFILE_KEY_FRAMES_TWICE | PROFILE_GROUP_PARITY | (videoHevc ? PROFILE_AVC : 0);
     }
 
