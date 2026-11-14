@@ -10,13 +10,15 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Comparator;
 import java.util.List;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 /**
  * A timeline of one connection, 10 rows a second, to find what is behind a failsafe: was the PC sending sticks
  * (longest gap between RC frames), did the phone answer (ping, longest gap between telemetry packets), did the
  * flight controller talk (age of its last data) and what Betaflight said (RXLOSS / FAILSAFE). One CSV file per
- * connection in %APPDATA%\DraupneLink\logs, newest {@value #KEEP} kept.
+ * connection in %APPDATA%\DraupneLink\logs: the newest {@value #KEEP} kept, and those of kept flights as long as the
+ * flight is.
  */
 public final class LinkLog implements AutoCloseable {
     static final int KEEP = 20;
@@ -62,12 +64,64 @@ public final class LinkLog implements AutoCloseable {
     /** A new log in dir (created if needed); older logs beyond {@value #KEEP} are deleted. */
     public static LinkLog open(Path dir) throws IOException {
         Files.createDirectories(dir);
-        try (Stream<Path> files = Files.list(dir)) {
-            List<Path> old = files.filter(f -> f.getFileName().toString().matches("link-.*\\.csv"))
-                    .sorted(Comparator.comparing(Path::toString).reversed()).skip(KEEP - 1).toList();
-            for (Path f : old) Files.deleteIfExists(f);
-        }
+        sortOut(dir, null, f -> false);
         return new LinkLog(dir.resolve("link-" + LocalDateTime.now().format(FILE) + ".csv"));
+    }
+
+    /**
+     * A new log in dir (created if needed). A log that belongs to a kept flight - PREVIOUS FLIGHTS plays its link with
+     * the video and the track - stays as long as the flight does: it is neither deleted nor counted among the newest
+     * {@value #KEEP}; the logs of connections that kept nothing go by that rule as before.
+     * @param kept whether an older log is a kept flight's. It may read the flights' files (FlightLibrary.keptLinkLog):
+     *             it is asked on a thread of its own after the new log is open, never on the caller's (CONNECT is on
+     *             the Swing thread), and only when there are more logs than the rule keeps anyway
+     */
+    public static LinkLog open(Path dir, Predicate<Path> kept) throws IOException {
+        Files.createDirectories(dir);
+        LinkLog log = new LinkLog(dir.resolve("link-" + LocalDateTime.now().format(FILE) + ".csv"));
+        log.sorting = new Thread(() -> {
+            try {
+                sortOut(dir, log.file, kept);
+            } catch (IOException | RuntimeException e) {
+                // the folder or the flights can't be read: nothing deleted, the next connection tries again
+            }
+        }, "linkLogKeep");
+        log.sorting.setDaemon(true);
+        log.sorting.setPriority(Thread.MIN_PRIORITY);
+        log.sorting.start();
+        return log;
+    }
+
+    /**
+     * The older logs sorted out: newest first, the kept flights' passed over, the rest counted with the new one -
+     * those beyond {@value #KEEP} deleted (one that can't go now, open in another program, is tried at the next
+     * connection).
+     * @param current the new log when it is in the folder already, else null
+     */
+    static void sortOut(Path dir, Path current, Predicate<Path> kept) throws IOException {
+        List<Path> older;
+        try (Stream<Path> files = Files.list(dir)) {
+            older = files.filter(f -> f.getFileName().toString().matches("link-.*\\.csv") && !f.equals(current))
+                    .sorted(Comparator.comparing(Path::toString).reversed()).toList();
+        }
+        if (older.size() < KEEP) return; // not more than the rule keeps: nobody is asked
+        int counted = 1; // the new one
+        for (Path f : older) {
+            if (kept.test(f)) continue;
+            if (++counted <= KEEP) continue;
+            try {
+                Files.deleteIfExists(f);
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    /** The thread sorting out the older logs ({@link #open(Path, Predicate)}), or null. */
+    private Thread sorting;
+
+    /** Waits until the older logs are sorted out (tests look at the folder right after opening). */
+    void awaitSorted() throws InterruptedException {
+        if (sorting != null) sorting.join();
     }
 
     public Path file() {

@@ -54,7 +54,7 @@ final class LinkProbe {
             System.out.println("probe: " + config.getIp() + ":" + config.getPort() + ", video " + ControlLink.VideoMode.parse(config.getString(ControlLink.VIDEO_MODE_KEY))
                     + ", " + seconds + " s");
             System.out.println("t  state  ping max  rx shown Mbps phone step cam dmg lost fixed keyreq bunch skip res robust app");
-            try (LinkLog log = LinkLog.open(AppPaths.dataDir().resolve("logs"))) {
+            try (LinkLog log = LinkLog.open(AppPaths.dataDir().resolve("logs"), de.droiddrone.pc.flights.FlightLibrary.keptLinkLog())) {
                 VideoPipeline.Stats prev = video.stats();
                 long prevKeys = 0, prevShown = 0;
                 for (int t = 1; t <= seconds; t++) {

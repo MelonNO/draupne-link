@@ -18,12 +18,19 @@ import java.util.List;
  * the flight has no file for stays empty; {@link #at} then makes do with the track (no battery, no mode).
  */
 public final class FlightData {
-    /** The figures at one moment; NaN / -1 / "" when unknown. homeM: distance from the launch point. */
+    /**
+     * The figures at one moment; NaN / -1 / "" when unknown. homeM: distance from the launch point. From a recording,
+     * altM is the flight controller's own altitude (the OSD's ALT, counted from where it armed) and pingMs the link's
+     * ping when the frame was shown; from the track alone, altM is the GPS's and there is no ping.
+     */
     public record Sample(long timeMs, double altM, double speedKmh, double cellVolts, double volts, int homeM, String mode,
-                         boolean armed, double lat, double lon, double headingDeg) {}
+                         boolean armed, double lat, double lon, double headingDeg, int pingMs) {}
 
-    /** One link log row: ping (ms, -1 unknown), the link not up, RXLOSS, FAILSAFE as Betaflight reported them. */
-    public record LinkSample(long timeMs, int pingMs, boolean down, boolean rxloss, boolean failsafe) {}
+    /**
+     * One link log row: ping (ms, -1 unknown), the link not up, RXLOSS, FAILSAFE as Betaflight reported them. fcKnown:
+     * the flight controller's word was fresh in this row - without it rxloss and failsafe are false for "not known".
+     */
+    public record LinkSample(long timeMs, int pingMs, boolean down, boolean rxloss, boolean failsafe, boolean fcKnown) {}
 
     public final FlightLibrary.Flight flight;
     public final List<FlightTrack.Point> track;
@@ -75,7 +82,7 @@ public final class FlightData {
                     lastT = t;
                     double heading = num(c[18]); // -1: the recording had no attitude (VideoPipeline.osdRow) - unknown
                     out.add(new Sample(t, num(c[12]), num(c[10]), num(c[3]), num(c[2]), (int) num(c[11], -1), c[14], "1".equals(c[15]),
-                            num(c[8]), num(c[9]), heading < 0 ? Double.NaN : heading));
+                            num(c[8]), num(c[9]), heading < 0 ? Double.NaN : heading, (int) num(c[1], -1)));
                 } catch (RuntimeException ignored) {
                     // a row cut short: left out
                 }
@@ -100,7 +107,7 @@ public final class FlightData {
                 if (t == 0) continue;
                 int ping = c[2].isEmpty() ? -1 : (int) num(c[2], -1);
                 boolean down = !c[1].equals("READY") && !c[1].equals("SPECTATING");
-                out.add(new LinkSample(t, ping, down, "1".equals(c[8]), "1".equals(c[9])));
+                out.add(new LinkSample(t, ping, down, "1".equals(c[8]), "1".equals(c[9]), !c[9].isEmpty()));
             }
         } catch (IOException | RuntimeException ignored) {
         }
@@ -145,7 +152,7 @@ public final class FlightData {
             }
         }
         int homeM = home == null ? -1 : (int) Math.round(Mercator.distanceM(home.lat(), home.lon(), p.lat(), p.lon()));
-        return new Sample(p.timeMs(), p.altM(), p.speedKmh(), Double.NaN, Double.NaN, homeM, "", p.armed(), p.lat(), p.lon(), p.courseDeg());
+        return new Sample(p.timeMs(), p.altM(), p.speedKmh(), Double.NaN, Double.NaN, homeM, "", p.armed(), p.lat(), p.lon(), p.courseDeg(), -1);
     }
 
     /** Where the drone was at t, {lat, lon, heading} (heading NaN unknown), from the track, else the recording; null: unknown. */
@@ -180,6 +187,16 @@ public final class FlightData {
         return out;
     }
 
+    /**
+     * What the bar marks beside its figures ({@link FlightMarks}): the pilot's bookmarks, the pins dropped while it
+     * flew and the overwatch clips that started meanwhile, in the order they came. Reads the clips' files: not on the
+     * Swing thread.
+     * @param notes the flight's ({@link FlightNotes#load}); pins and clips: the app's, either may be null
+     */
+    public List<FlightMarks.Mark> marks(FlightNotes notes, de.droiddrone.pc.map.Pins pins, de.droiddrone.pc.overwatch.ClipIndex clips) {
+        return FlightMarks.of(flight, notes, pins == null ? List.of() : pins.list(), FlightMarks.clipsIn(clips, startMs(), endMs()));
+    }
+
     private static <T> int indexAtOrBefore(List<T> list, long t, java.util.function.ToLongFunction<T> time) {
         int lo = 0, hi = list.size() - 1, found = -1;
         while (lo <= hi) {
@@ -194,7 +211,7 @@ public final class FlightData {
         return found;
     }
 
-    /** The files to a folder of its own (EXPORT): track, recordings and figures; the link log too. */
+    /** The files to a folder of its own (EXPORT): track, recordings and figures; the link log and the pilot's notes too. */
     public static Path export(FlightLibrary.Flight f, Path parent) throws IOException {
         String stamp = f.title().replace(":", "").replace(" ", "_");
         Path dir = parent.resolve("flight-" + stamp);
