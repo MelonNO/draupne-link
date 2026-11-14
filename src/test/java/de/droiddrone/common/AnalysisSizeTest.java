@@ -96,13 +96,13 @@ class AnalysisSizeTest {
         return ByteBuffer.wrap(f);
     }
 
-    static MotionDetectorTest.Run run(SyntheticScene scene, double toS, boolean averaged) {
+    static MotionScenes.Run run(SyntheticScene scene, double toS, boolean averaged) {
         MotionDetector d = new MotionDetector(MotionDetector.NORMAL);
-        MotionDetectorTest.Run r = new MotionDetectorTest.Run();
+        MotionScenes.Run r = new MotionScenes.Run();
         Random ois = new Random(4);
         byte[] y = new byte[SW * SH];
-        for (long i = 0; i < Math.round(toS * MotionDetectorTest.FPS); i++) {
-            double t = i / MotionDetectorTest.FPS;
+        for (long i = 0; i < Math.round(toS * MotionScenes.FPS); i++) {
+            double t = i / MotionScenes.FPS;
             ByteBuffer picture = cameraPicture(scene.frame(t)[0], ois);
             if (averaged) {
                 AnalysisSize.shrink(picture, FW, 1, STEP, y, SW, SH);
@@ -125,7 +125,7 @@ class AnalysisSizeTest {
         assertEquals(0, run(still, 20, true).reports, "a still picture with the stabiliser moving: nothing");
         SyntheticScene walk = new SyntheticScene(SW, SH, 21);
         walk.movers.add(new SyntheticScene.Mover(20, 95, 10, 26, 18, 1, 6, 20, 70, 140, 122, true));
-        MotionDetectorTest.Run r = run(walk, 20, true);
+        MotionScenes.Run r = run(walk, 20, true);
         assertTrue(r.firstAt >= 6 && r.firstAt <= 10, "the walker found: " + r.firstAt);
     }
 }
