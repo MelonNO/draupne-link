@@ -194,7 +194,7 @@ public final class FlightData {
         return found;
     }
 
-    /** The files to a folder of its own (EXPORT): track, recordings and figures; the link log too. */
+    /** The files to a folder of its own (EXPORT): track, recordings and figures; the link log and the pilot's notes too. */
     public static Path export(FlightLibrary.Flight f, Path parent) throws IOException {
         String stamp = f.title().replace(":", "").replace(" ", "_");
         Path dir = parent.resolve("flight-" + stamp);

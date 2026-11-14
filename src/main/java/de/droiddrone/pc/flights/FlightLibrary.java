@@ -27,7 +27,8 @@ import java.util.stream.Stream;
  * recording (Videos\DRAUPNE Link\flight-DATE.mkv, the OSD copy -osd.mkv and the figures .csv beside it, whose pts_ms is
  * the MKV's clock) and its link log (%APPDATA%\DraupneLink\logs\link-DATE.csv, the newest 20 only). The files of one
  * connection overlap in time; that's how they are put together. A connection with neither a track nor a recording
- * isn't a flight to show. The drone's name comes from the link log's "Connecting to ..." / "Watching ..." line.
+ * isn't a flight to show. The drone's name comes from the link log's "Connecting to ..." / "Watching ..." line. The
+ * pilot's bookmarks and note are a file beside the track ({@link FlightNotes}).
  */
 public final class FlightLibrary {
     /** Files this close in time (or overlapping) are the same connection's. */
@@ -64,11 +65,25 @@ public final class FlightLibrary {
             return osdVideo != null ? osdVideo : video;
         }
 
-        /** Every file of it, for EXPORT and DELETE. */
+        /** Every file of it, for EXPORT and DELETE: track, recordings, figures, link log - and its notes, once written. */
         public List<Path> files() {
             List<Path> out = new ArrayList<>();
             for (Path p : new Path[]{track, video, osdVideo, telemetry, linkLog}) if (p != null) out.add(p);
+            Path notes = notesFile();
+            if (notes != null && Files.isRegularFile(notes)) out.add(notes);
             return out;
+        }
+
+        /**
+         * Where its bookmarks and note are kept ({@link FlightNotes}), there or not: beside the track as
+         * track-DATE.notes.txt; a flight with only a recording has them beside that, as flight-DATE.notes.txt.
+         */
+        public Path notesFile() {
+            Path beside = track != null ? track : video;
+            if (beside == null) return null;
+            String name = beside.getFileName().toString();
+            int dot = name.lastIndexOf('.');
+            return beside.resolveSibling((dot > 0 ? name.substring(0, dot) : name) + FlightNotes.SUFFIX);
         }
     }
 
