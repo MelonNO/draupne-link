@@ -49,6 +49,7 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     /** Where the picture (or the HUD's area while there is none) was last drawn; the detection areas over it (1.0.58). */
     private volatile Rectangle pictureRect = new Rectangle();
     private DetectionAreaLayer areaLayer;
+    private VideoMark markLayer;
     private volatile boolean osdEnabled = true;
     private volatile OsdLayout osdLayout = OsdLayout.defaults();
     /** When the newest picture was handed over, and the smoothed wait until Swing painted it (shown in the stats). */
@@ -268,6 +269,8 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
         }
         DetectionAreaLayer areas = areaLayer;
         if (areas != null) areas.paint(g, pictureRect, mirror != upsideDown, upsideDown);
+        VideoMark mark = markLayer;
+        if (mark != null) mark.paint(g, pictureRect);
         notePainted();
     }
 
@@ -338,6 +341,11 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
     /** The detection areas drawn over the picture (1.0.58). */
     void setAreaLayer(DetectionAreaLayer layer) {
         areaLayer = layer;
+    }
+
+    /** MARK's pin and the video's short lines, drawn over the rest. */
+    void setMarkLayer(VideoMark layer) {
+        markLayer = layer;
     }
 
     /** Where the picture was last drawn (empty before the first paint). */
