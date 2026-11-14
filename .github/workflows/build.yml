@@ -5,6 +5,15 @@ on:
     branches: [main, beta]
   pull_request:
 
+permissions:
+  contents: read
+
+# A newer push to a branch (or to a pull request) ends the run of the one before it. Never a tag's run: this workflow
+# has no tag trigger, and should it get one, a tag's run is left to finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   test:
     runs-on: windows-latest
@@ -26,6 +35,53 @@ jobs:
           name: test-report
           path: build/reports/tests/test
 
+  # The timing tests (@Tag("perf"), one at a time). A shared runner is no place to hold a time budget, so a failure
+  # here is shown and its report kept, but the workflow's result (and with it the release's "already tested") is the
+  # test job's.
+  perf:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Timing tests
+        run: .\gradlew.bat --no-daemon perfTest
+      - name: Test report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: perf-test-report
+          path: build/reports/tests/perfTest
+
+  # The tests known to fail now and then under load (@Tag("quarantine")), each tried up to 3 times. As the timing
+  # tests: shown and reported, never the workflow's result.
+  quarantine:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Quarantined tests
+        run: .\gradlew.bat --no-daemon quarantineTest
+      - name: Test report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: quarantine-test-report
+          path: build/reports/tests/quarantineTest
+
   # The phone app: built here only to check it compiles (signed with a throwaway key, never published). Releases are
   # built and signed off CI with the real key (flight-app/build.ps1).
   phone-app:
@@ -38,6 +94,27 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
+          # A cache of its own, named by what the phone app is built from. Without this list the action names the
+          # cache by every Gradle file of the repository - the test job's name: whichever job saved first would
+          # leave the other (and the release) without its libraries.
+          cache-dependency-path: |
+            upstream/**/*.gradle*
+            upstream/gradle/wrapper/gradle-wrapper.properties
+            flight-app/overlay/**/*.gradle*
+      # The runner has this platform and these build tools, but not this NDK (the Windows images of November 2026
+      # carry 27, 29 and 30): sdkmanager downloaded it in every run. It is kept in a cache; sdkmanager then finds it
+      # in place.
+      - name: Where the NDK goes
+        id: ndk
+        shell: pwsh
+        run: |
+          "dir=$env:ANDROID_HOME\ndk\26.3.11579264" >> $env:GITHUB_OUTPUT
+      - name: NDK from the cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.ndk.outputs.dir }}
+          key: android-ndk-26.3.11579264-${{ runner.os }}
       - name: Android SDK parts the app needs
         shell: pwsh
         run: |

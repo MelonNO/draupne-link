@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  actions: read # asking whether the Build workflow already tested this commit
 
 jobs:
   release:
@@ -37,8 +38,40 @@ jobs:
           $apk = [regex]::Match((Get-Content src/main/java/de/droiddrone/pc/setup/ApkShare.java -Raw), 'String VERSION = "([^"]+)"').Groups[1].Value
           $phone = (Select-String -Path flight-app/overlay/Flight/build.gradle -Pattern 'versionName "([^"]+)"').Matches[0].Groups[1].Value
           if ($apk -ne $phone) { throw "ApkShare.VERSION is $apk but the phone app source is ${phone} - publish that phone app and pin it first" }
+      # The Build workflow tested this very commit when it was pushed to its branch. The tests are left out here only
+      # when a run of it for exactly this commit is completed and successful. No such run, one still going, one that
+      # failed or was cancelled, or no answer to the question: the tests run here, as they always did.
+      - name: Was this commit already tested by the Build workflow?
+        id: tested
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $skip = 'false'
+          try {
+            $sha = "$(git rev-parse HEAD)".Trim()
+            if ($sha -ne $env:GITHUB_SHA) { throw "the commit checked out ($sha) is not the one this run is for ($env:GITHUB_SHA)" }
+            $json = gh run list --repo $env:GITHUB_REPOSITORY --workflow build.yml --event push --commit $sha --limit 20 --json 'databaseId,headSha,status,conclusion'
+            if ($LASTEXITCODE -ne 0) { throw "gh run list ended with $LASTEXITCODE" }
+            $green = @(($json | Out-String | ConvertFrom-Json) | Where-Object { $_.headSha -eq $sha -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
+            if ($green.Count -gt 0) {
+              $skip = 'true'
+              Write-Host "Build run $($green[0].databaseId) passed for ${sha}: the tests are not run again"
+            } else {
+              Write-Host "No completed, successful Build run for ${sha} (found: $json): the tests run here"
+            }
+          } catch {
+            Write-Host "Could not ask about the Build workflow ($_): the tests run here"
+          }
+          "skip=$skip" >> $env:GITHUB_OUTPUT
+          exit 0
       - name: Test, build installer and zip
+        if: steps.tested.outputs.skip != 'true'
         run: .\gradlew.bat --no-daemon test releaseZip packageInstaller
+      - name: Build installer and zip (the Build workflow tested this commit)
+        if: steps.tested.outputs.skip == 'true'
+        run: .\gradlew.bat --no-daemon releaseZip packageInstaller
       # The phone app is built and signed off CI (flight-app/build.ps1, key outside the repo) and stored in its own
       # flight-<version> release. Every PC release carries the exact build the PC app installs: the version and
       # SHA-256 pinned in ApkShare.java.
