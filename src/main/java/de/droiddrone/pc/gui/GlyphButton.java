@@ -13,7 +13,7 @@ import java.awt.geom.Path2D;
  * room from the picture as possible. The text is kept as its name (the tour, the tooltip) and never painted.
  */
 final class GlyphButton extends JButton {
-    enum Glyph { POP_OUT, VIDEO_BACK, FULL_SCREEN, BEEPER, SOUND, MUTED, AREAS }
+    enum Glyph { POP_OUT, VIDEO_BACK, FULL_SCREEN, BEEPER, SOUND, MUTED, AREAS, MARK, STILL }
 
     private static final int SIZE = 30;
     private Glyph glyph;
@@ -41,7 +41,7 @@ final class GlyphButton extends JButton {
     protected void paintComponent(Graphics graphics) {
         Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
         try {
-            boolean lit = isSelected(); // a switch that is on (AREAS while drawing)
+            boolean lit = isSelected(); // a switch that is on (AREAS while drawing, MARK while armed)
             boolean hot = getModel().isRollover() || getModel().isPressed() || lit;
             Color line = hot ? Theme.ACCENT : Theme.LINE;
             Color ink = hot ? Theme.ACCENT : Theme.TEXT;
@@ -96,6 +96,19 @@ final class GlyphButton extends JButton {
                     g.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                     g.drawLine(w - m - 5, h - m - 1, w - m + 2, h - m - 8);
                     g.fillPolygon(new int[]{w - m - 6, w - m - 3, w - m - 6}, new int[]{h - m, h - m, h - m - 3}, 3);
+                }
+                case MARK -> {
+                    // a pin for the map from a click on the picture: the map's pin, a diamond, with the point in it
+                    int cx = w / 2, cy = h / 2;
+                    g.drawPolygon(new int[]{cx, cx + 6, cx, cx - 6}, new int[]{cy - 8, cy, cy + 8, cy}, 4);
+                    g.fillOval(cx - 2, cy - 2, 4, 4);
+                }
+                case STILL -> {
+                    // a photo of the picture: a camera - its body, the lens, the release on top
+                    int cx = w / 2, cy = h / 2 + 1;
+                    g.drawRoundRect(m - 2, cy - 5, w - 2 * m + 4, 11, 3, 3);
+                    g.drawOval(cx - 3, cy - 3, 6, 6);
+                    g.fillRect(m + 1, cy - 8, 5, 2);
                 }
                 case SOUND, MUTED -> {
                     // the live sound (1.0.45): a filled loudspeaker, unlike the beeper's outline one; muted: a cross
