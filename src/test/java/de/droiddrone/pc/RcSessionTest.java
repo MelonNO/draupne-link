@@ -9,13 +9,13 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class RcSessionTest {
-    /** A link that is never started (sendRc returns false), for sessions made inside a test. */
+    /** A link that is never started (sendRc returns false; its ports stay numbers), for sessions made inside a test. */
     static final class NoLink {
         final ControlLink link;
 
         NoLink() {
             try {
-                link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 46392, 46393);
+                link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 1, 0);
             } catch (java.io.IOException e) {
                 throw new IllegalStateException(e);
             }
@@ -30,7 +30,7 @@ class RcSessionTest {
 
     RcSessionTest() throws java.io.IOException {
         // never started: sendRc just returns false, which is all the gate needs
-        ControlLink link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 46390, 46391);
+        ControlLink link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 1, 0);
         session = new RcSession(link, mapper, events::add, RcSession.Inputs.of(() -> now[0], () -> linkUp[0]));
     }
 
@@ -340,7 +340,7 @@ class RcSessionTest {
         final List<short[]> idle = new ArrayList<>();
 
         IdleRecorder() throws java.io.IOException {
-            super(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 46394, 46395);
+            super(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 1, 0);
         }
 
         @Override
@@ -502,7 +502,7 @@ class RcSessionTest {
         final List<short[]> frames = new ArrayList<>();
 
         RcRecorder() throws java.io.IOException {
-            super(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 46396, 46397);
+            super(PcConfig.defaults(), InetAddress.getLoopbackAddress(), 1, 0);
         }
 
         @Override

@@ -1,6 +1,7 @@
 package de.droiddrone.pc;
 
 import de.droiddrone.pc.setup.Tailscale;
+import de.droiddrone.testing.Ports;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -12,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** DRAUPNE names (1.0.35): the letters, the map, the packets, and the service that asks the network. */
@@ -306,14 +308,6 @@ class NamesTest {
         }
     }
 
-    private static void waitFor(java.util.function.BooleanSupplier ok, int ms, String what) throws InterruptedException {
-        long end = System.currentTimeMillis() + ms;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("Timed out waiting for " + what);
-            Thread.sleep(20);
-        }
-    }
-
     /** A device on loopback that answers queries and takes a name. */
     static final class FakeDevice {
         private final DatagramSocket socket = new DatagramSocket(0, InetAddress.getLoopbackAddress());
@@ -385,10 +379,7 @@ class NamesTest {
      */
     @Test
     void aSleepingPhonesCheckInIsAnsweredWhileNoLinkIsOpen() throws Exception {
-        int port;
-        try (java.net.DatagramSocket probe = new java.net.DatagramSocket(0)) {
-            port = probe.getLocalPort();
-        }
+        int port = Ports.free();
         PcConfig config = PcConfig.defaults();
         Names names = new Names(config, m -> m.forEach(config::set));
         Tailscale.Status status = new Tailscale.Status(true, true, "Running", "", "127.0.0.2", "this-pc", List.of());

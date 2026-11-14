@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
+import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -147,14 +148,6 @@ class FleetBooksTest {
         return new Names.Reply(Names.Kind.PHONE, name, "Pixel 8", "2.3.0-pc.47", null, mode, status(mode, token));
     }
 
-    private static void waitFor(java.util.function.BooleanSupplier ok, String what) throws InterruptedException {
-        long end = System.currentTimeMillis() + 10_000;
-        while (!ok.getAsBoolean()) {
-            if (System.currentTimeMillis() > end) fail("Timed out: " + what);
-            Thread.sleep(20);
-        }
-    }
-
     private static void swing() throws Exception {
         SwingUtilities.invokeAndWait(() -> {
         });
@@ -208,14 +201,14 @@ class FleetBooksTest {
         standby.put(IP, "MobileAlpha");
         phoneMode = 0;
         nameService.start(); // its first scan at once
-        waitFor(() -> power.asleep(IP) == null, "it answers awake: not asleep here any more");
+        waitFor(() -> power.asleep(IP) == null, 10_000, "it answers awake: not asleep here any more");
         assertTrue(log.contains("MobileAlpha is awake again."), log.toString());
         assertTrue(standby.containsKey(IP), "its standby: not over at one answer (sent, maybe, just before it took the standby)");
-        waitFor(() -> !standby.containsKey(IP), "said again a scan later: the standby this PC left it in is over");
+        waitFor(() -> !standby.containsKey(IP), 10_000, "said again a scan later: the standby this PC left it in is over");
 
         phoneMode = 2; // put to sleep by another PC: its word alone files it
         nameService.scanSoon();
-        waitFor(() -> power.asleep(IP) != null, "it answers asleep: in the book");
+        waitFor(() -> power.asleep(IP) != null, 10_000, "it answers asleep: in the book");
         PowerController.Asleep a = power.asleep(IP);
         assertFalse(a.setHere());
         assertEquals(5, a.intervalMin());
