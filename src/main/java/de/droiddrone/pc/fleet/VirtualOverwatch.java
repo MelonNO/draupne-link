@@ -29,7 +29,8 @@ import java.util.function.Consumer;
  * small analysis picture goes through the real MotionDetector ({@link VirtualDrone}); a detection that travels calls
  * the PC that put it to sleep - the ALERT, again every second until acknowledged - with the 5 s before it as JPEGs,
  * a live preview while the PC's card asks (H.264, 640x360, 1 Mbit/s), and records the event until 30 s without a
- * detection. The clip then waits until the PC pulls it in chunks and checks its SHA-256; then it is deleted here.
+ * detection. The clip then waits until the PC pulls it in chunks and checks its SHA-256; then it is deleted here -
+ * as is a clip the PC never pulled, when a newer one takes its place or the drone stops (the temp folder kept hundreds).
  * <p>
  * What differs from the phone: the clip is one file per event (no 60 s segments), written as MKV (the PC's player reads
  * any container) at the preview's quality, without sound; no battery or heat floor. Its packets go from a socket of
@@ -62,6 +63,10 @@ final class VirtualOverwatch {
     private boolean endedAcked, endedClip;
     /** The clip waiting for the PC (one at a time), and when its INFO went last. */
     private Clip waiting;
+    /** Under lock: the drone stopped ({@link #shutdown}) - a clip still being written then is deleted, not kept waiting. */
+    private boolean stopped;
+    /** Where the clips' files are made; null: the system's temp folder. The tests' own folder. */
+    private volatile Path clipDir;
     private long infoSentAt, chunksAskedAt;
     private volatile String lastNews = "";
 
@@ -132,12 +137,35 @@ final class VirtualOverwatch {
         log.accept("overwatch: stopped (" + why + ")");
     }
 
+    /** The clips' files go into this folder instead of the system's temp folder (the tests'). */
+    void clipsIn(Path dir) {
+        clipDir = dir;
+    }
+
+    /**
+     * The drone stops: nobody is left to hand a clip to the PC, so the one waiting is deleted, and the one an event's
+     * video thread is still writing once that thread has closed it ({@link #finishClip}).
+     */
     void shutdown() {
         watching = false;
         eventGen++;
         DatagramSocket s = socket;
         socket = null;
         if (s != null) s.close();
+        synchronized (lock) {
+            stopped = true;
+            Clip w = waiting;
+            waiting = null;
+            if (w != null) delete(w.file());
+        }
+    }
+
+    /** A clip's file is no longer needed. Never fails: what can't be deleted now goes when the program ends (deleteOnExit). */
+    private static void delete(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException ignored) {
+        }
     }
 
     private void openSocket() {
@@ -284,7 +312,9 @@ final class VirtualOverwatch {
         int gen = ++eventGen;
         Path file;
         try {
-            file = Files.createTempFile("draupne-fleet-clip-", ".mkv");
+            Path dir = clipDir;
+            file = dir == null ? Files.createTempFile("draupne-fleet-clip-", ".mkv") : Files.createTempFile(dir, "draupne-fleet-clip-", ".mkv");
+            file.toFile().deleteOnExit(); // the backstop: whatever the paths below miss goes when the program ends
         } catch (IOException e) {
             log.accept("overwatch: no clip file: " + e.getMessage());
             file = null;
@@ -334,6 +364,8 @@ final class VirtualOverwatch {
             if (clip != null) {
                 clip.close();
                 finishClip(file, startedAt);
+            } else if (file != null) {
+                delete(file); // the encoder or the recorder never started: an empty file
             }
         }
     }
@@ -348,14 +380,19 @@ final class VirtualOverwatch {
             MessageDigest sha = MessageDigest.getInstance("SHA-256");
             byte[] sum = sha.digest(Files.readAllBytes(file));
             synchronized (lock) {
+                if (stopped) { // the drone stopped while this was written: no one will ask for it
+                    delete(file);
+                    return;
+                }
                 Clip old = waiting;
-                if (old != null) Files.deleteIfExists(old.file()); // one at a time here: the newest
+                if (old != null) delete(old.file()); // one at a time here: the newest
                 waiting = new Clip(file, event.event(), size, sum, Math.max(0, System.currentTimeMillis() - startedAt), startedAt, PREVIEW_W, PREVIEW_H);
                 infoSentAt = 0;
             }
             log.accept("overwatch: clip of " + size / 1024 + " KB waits for the PC");
         } catch (IOException | java.security.NoSuchAlgorithmException e) {
             log.accept("overwatch: the clip can't be read: " + e.getMessage());
+            delete(file); // never handed to the PC
         }
     }
 
@@ -460,10 +497,7 @@ final class VirtualOverwatch {
                     Clip w = waiting;
                     if (c.offset == 0 || w == null || w.event() != c.event) return;
                     waiting = null;
-                    try {
-                        Files.deleteIfExists(w.file());
-                    } catch (IOException ignored) {
-                    }
+                    delete(w.file());
                     lastNews = "the PC has the clip";
                     log.accept("overwatch: PC has the clip (checked), deleted here");
                 }
