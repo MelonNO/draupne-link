@@ -81,7 +81,7 @@ public class Main {
 
     private static void printHelp() {
         System.out.println("""
-                draupne-link - fly a Betaflight drone over 4G
+                draupne-link - fly a Betaflight drone over a mobile network
                 (Flight app protocol %d, DroidDrone 2.3.0)
 
                 Commands:
