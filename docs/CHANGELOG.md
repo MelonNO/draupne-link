@@ -2,6 +2,17 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.68 (PC only, 2026-11-14)
+
+The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not tried by the pilot yet.
+
+- **Fixed: a crash of the whole app in a STANAG stream** (the pilot: "fix the crash, do the separate process"). On 2026-11-14 the dev window died about 10 min after its start: an access violation inside the native H.264 encoder (`avcodec_send_frame`, libopenh264) on MobileEcho's stream thread, while it showed a page; the drone link went with it. Not reproduced offline (11 page encoders, 97 790 pictures; 660 encoders made and closed in parallel). The STANAG streams' encoders now run in a **process of their own** (`"DRAUPNE Link.exe" stanag-encoder`, below normal priority): a crash there ends that process, not the app. The streams send nothing for a moment and go on from a new process (at once the first time, then after 2, 5, 15, 30 s while it keeps crashing), in the same transport stream - a player keeps playing. Said once in the log: "STANAG 4609: the encoder process stopped (0xC0000005). The streams start again. Crash log: hs_err_pid<pid>.log in the logs folder." It ends with the app (and when STANAG is switched off).
+  - *Cost:* a 720p picture 5.3 ms against 2.85 ms in the app (the picture is copied over, about 2.4 ms more), on the stream's own lowest-priority thread; a still page again about 1.5 ms of waiting. Only this app can use the process: a random token on every connection, loopback only.
+  - The decoders the streams use (the drone's video for VIDEO, a clip) still run in the app.
+- **FIND GPS in Drone setup** (the pilot: "add a button in the betaflight setup that searches for the GPS uart"): on the GPS row. It puts the GPS on each free UART in turn - written, saved, Betaflight restarted, up to 12 s for the GPS to talk - until Betaflight hears it, and leaves it there (the PORT list follows). None: every port, the GPS feature and gps_auto_baud back as they were. Only free UARTs are tried (the one the GPS was set on last); a UART with the receiver, MSP, telemetry or anything else is left alone and named. Betaflight's "diff all" is saved first, as for Drone setup's own writes; nothing without it. Over USB on the bench (STANDBY first); about 20 s a port. Found with the GPS on No: Yes, and CONFIRM again for the GPS modes and failsafe. Where no GPS answers, the row points to it.
+- For developers: `setup/GpsSearch` (+ `GpsSearchTest`, a made-up Betaflight), `DroneSetup.BetaflightPage.findGpsNow` / `searchDone`.
+- For developers: `video/PictureEncoder` (`H264Encoder` and the process's encoders), `video/EncoderProcess` (app side; `Down` = the process stopped, said once by it), `video/EncoderWorker` (the process), `AppPaths.appCommand`, `WindowsTuning.belowNormal`; `StanagController.encoders` (tests: in the app). Tests: `EncoderProcessTest`, `StanagFeedTest.aCrashOfTheEncoderProcessIsAMomentWithoutPicturesNotTheAppsEnd`.
+
 ## 1.0.67 (PC only, 2026-11-14)
 
 The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not tried on a motor yet.

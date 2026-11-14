@@ -8,6 +8,7 @@ import de.droiddrone.pc.setup.Beepers;
 import de.droiddrone.pc.setup.BetaflightPlan;
 import de.droiddrone.pc.setup.BetaflightUsb;
 import de.droiddrone.pc.setup.CliWrite;
+import de.droiddrone.pc.setup.GpsSearch;
 import de.droiddrone.pc.setup.GpsSetup;
 import de.droiddrone.pc.setup.ModeSwitch;
 import de.droiddrone.pc.setup.SetupConfirm;
@@ -205,6 +206,16 @@ final class DroneSetup {
         private volatile int gpsUart = GpsSetup.DEFAULT_UART;
         /** The compass calibration has the flight controller's USB port: this page leaves it alone meanwhile. */
         private boolean compassCalOpen;
+        /** FIND GPS (1.0.68): every free UART tried in turn until the GPS answers - GpsSearch. */
+        private javax.swing.JButton findGps;
+        /** FIND GPS pressed while a round runs: it starts when the round is over. */
+        private boolean searchWanted;
+        /** A search runs: the rounds wait. */
+        private boolean searching;
+        /** What the last search found not, kept in the GPS row until a GPS choice changes. */
+        private String searchSaid;
+        /** The USB port the flight controller was last read on: the search opens that one. */
+        private volatile String lastFcPort;
         private final Section switches = settings.section("SWITCHES");
         private final Part armRow = switches.part("Arm");
         private final Part prearmRow = switches.part("Prearm");
@@ -592,7 +603,7 @@ final class DroneSetup {
             card.add(javax.swing.Box.createVerticalStrut(8));
             JComponent gpsChoice = gpsChoices();
             JComponent compassLine = compassLine();
-            JComponent gpsLine = line(gps, "GPS", gpsChoice, portBox);
+            JComponent gpsLine = line(gps, "GPS", gpsChoice, portBox, findGps);
             card.add(gpsSection.build(gpsLine, compassLine));
             card.add(javax.swing.Box.createVerticalStrut(8));
             rescueFold = new Fold(line(rescueRow, "GPS RESCUE", rescueChoices()), gpsYes);
@@ -684,6 +695,11 @@ final class DroneSetup {
             port.add(uartChoice);
             port.setVisible(gpsYes);
             portBox = port;
+            findGps = Theme.secondaryButton("Find GPS");
+            findGps.setToolTipText("Tries each free UART until the GPS answers (battery in, props off). "
+                    + "Writes and saves Betaflight, about 20 s a port");
+            findGps.addActionListener(e -> findGpsNow());
+            findGps.setEnabled(false);
             return gpsChoice;
         }
 
@@ -734,6 +750,7 @@ final class DroneSetup {
          */
         private void setGps(boolean yes, boolean save, boolean animate) {
             gpsYes = yes;
+            if (save) searchSaid = null;
             if (save) {
                 gpsAnswered = true;
                 main.save(Map.of(GpsSetup.GPS_KEY, yes ? "yes" : "no"));
@@ -837,6 +854,7 @@ final class DroneSetup {
             int uart = item == null ? gpsUart : GpsSetup.parseUart(item.toString());
             if (uart == gpsUart) return;
             gpsUart = uart;
+            searchSaid = null;
             main.save(Map.of(GpsSetup.UART_KEY, Integer.toString(uart)));
             choiceChanged();
             showGpsChoice();
@@ -1269,9 +1287,13 @@ final class DroneSetup {
 
         @Override
         void refresh() {
+            if (searchWanted && !busy && !searching && !paused) {
+                startSearch();
+                return;
+            }
             // the motor test or the compass calibration may have the port, however it was opened (Check now or SETTINGS)
             if (paused || MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen()
-                    || OrientationCheckDialog.isOpen()
+                    || OrientationCheckDialog.isOpen() || searching
                     || busy || done || System.currentTimeMillis() < nextTry) return;
             busy = true;
             String writeFor = applies < MAX_APPLIES ? confirm.armedFor() : null; // the board CONFIRM was pressed for
@@ -1525,6 +1547,7 @@ final class DroneSetup {
             markByHand(r == null);
             readAgain.setText(r == null || r.error() != null ? "Retry" : "Read again");
             calibrateCompass.setEnabled(found && !failed);
+            findGps.setEnabled(found && !failed && !searching && !searchWanted);
             confirmButton.setEnabled(found && !failed && r.boardId() != null); // CONFIRM is for a board known by its id
             if (r == null) {
                 nextTry = now + 1500;
@@ -1547,6 +1570,7 @@ final class DroneSetup {
             }
             lastError = null;
             sameErrorCount = 0;
+            lastFcPort = r.port();
             restartedAt = now; // the CLI was open and is closed now: Betaflight restarts
             if (!r.version().isEmpty()) fcVersion = r.version();
             lastBoardId = r.boardId();
@@ -1742,8 +1766,11 @@ final class DroneSetup {
             } else if (gpsAuto && Boolean.FALSE.equals(r.gpsFound())) { // a battery in, and still no GPS: none fitted
                 noGpsFound();
                 return false;
+            } else if (searchSaid != null) {
+                lines.add(searchSaid);
+                worst = State.WARN;
             } else {
-                lines.add("No GPS on " + g.portNow() + ": check wiring (RX-TX, TX-RX). Battery in, then <b>Read again</b>.");
+                lines.add("No GPS on " + g.portNow() + ": check wiring (RX-TX, TX-RX), or <b>Find GPS</b>. Battery in, then <b>Read again</b>.");
                 worst = State.WARN;
             }
             gps.set(worst, String.join("<br>", lines));
@@ -1776,7 +1803,101 @@ final class DroneSetup {
             choiceChanged();
             setGps(false, true, true);
             if (failsafeChoice != ModeSwitch.Failsafe.DROP) failsafeCombo.setSelectedItem(ModeSwitch.Failsafe.DROP);
-            gps.set(State.INFO, "No GPS found: set to No. Failsafe: Drop.");
+            gps.set(State.INFO, "No GPS found: set to No. Failsafe: Drop. On another UART? <b>Find GPS</b>.");
+        }
+
+        /** FIND GPS: over USB, on the bench; when the round running now is over. */
+        private void findGpsNow() {
+            if (searching || searchWanted) return;
+            if (main.isLinkActive()) {
+                gps.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                return;
+            }
+            if (MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen() || OrientationCheckDialog.isOpen()) {
+                gps.set(State.WARN, "Close the window using USB first.");
+                return;
+            }
+            searchWanted = true;
+            findGps.setEnabled(false);
+            gps.set(State.PENDING, "Finding the GPS...");
+            if (!busy) startSearch();
+        }
+
+        private void startSearch() {
+            searchWanted = false;
+            searching = true;
+            busy = true;
+            searchSaid = null;
+            String port = lastFcPort;
+            GpsSearch search = new GpsSearch(() -> openBetaflight(port), (diff, version) -> backup(diff, version),
+                    line -> javax.swing.SwingUtilities.invokeLater(() -> {
+                        if (searching) gps.set(State.PENDING, line);
+                    }), main::logLine, () -> abandoned);
+            background(search::run, this::searchDone);
+        }
+
+        /** Betaflight on that USB port (any, when not known), for the search: opened again after each restart. */
+        private static GpsSearch.Board openBetaflight(String port) throws IOException {
+            for (BetaflightUsb.Port p : BetaflightUsb.findFlightControllers()) {
+                if (port != null && !p.systemName().equals(port)) continue;
+                BetaflightUsb fc = BetaflightUsb.open(p);
+                try {
+                    if (fc.firmware().startsWith("BTFL")) return GpsSearch.of(fc);
+                } catch (IOException e) {
+                    fc.close();
+                    throw e;
+                }
+                fc.close();
+            }
+            throw new IOException("the flight controller isn't there" + (port == null ? "" : " (" + port + ")"));
+        }
+
+        private void searchDone(GpsSearch.Result r) {
+            searching = false;
+            busy = false;
+            long now = System.currentTimeMillis();
+            restartedAt = now; // Betaflight restarts after the last write
+            nextTry = now + 3000;
+            done = false;
+            applies = 0;
+            gpsAuto = false; // looked for on purpose: what it found (or not) is the answer, not a guess
+            findGps.setEnabled(found && !failed);
+            if (r == null) {
+                gps.set(State.BAD, "The search failed (see log).");
+                return;
+            }
+            if (r.found()) {
+                searchSaid = null;
+                if (r.foundUart() != gpsUart) {
+                    gpsUart = r.foundUart();
+                    main.save(Map.of(GpsSetup.UART_KEY, Integer.toString(gpsUart)));
+                    List<Integer> listed = new java.util.ArrayList<>();
+                    DefaultComboBoxModel<String> model = (DefaultComboBoxModel<String>) uartChoice.getModel();
+                    for (int i = 0; i < model.getSize(); i++) listed.add(GpsSetup.parseUart(model.getElementAt(i)));
+                    revertingChoice = true;
+                    uartChoice.setModel(new DefaultComboBoxModel<>(uartItems(listed)));
+                    uartChoice.setSelectedItem("UART" + gpsUart);
+                    revertingChoice = false;
+                }
+                if (!gpsYes) {
+                    choiceChanged();
+                    setGps(true, true, true);
+                }
+                showManual();
+                gps.set(State.OK, "GPS found on UART" + r.foundUart() + ". Saved in Betaflight.");
+                return;
+            }
+            StringBuilder said = new StringBuilder();
+            if (r.problem() != null) {
+                said.append(r.problem());
+            } else {
+                said.append("No GPS on ").append(String.join(", ", r.tried().stream().map(u -> "UART" + u).toList()))
+                        .append(". Ports as before. Check wiring (RX-TX, TX-RX)")
+                        .append(Boolean.FALSE.equals(r.battery()) ? ", <b>battery in</b>." : ".");
+            }
+            if (!r.skipped().isEmpty()) said.append("<br>Left alone: ").append(String.join(", ", r.skipped())).append(".");
+            searchSaid = said.toString();
+            gps.set(State.WARN, searchSaid);
         }
 
         /** The failsafe row after a round that changed nothing. @return true if it is not as chosen */

@@ -951,19 +951,7 @@ public class MainWindow extends JFrame {
 
     /** This app again: the installed exe, or from source this same Java with this classpath; its arguments go after. */
     private static List<String> appCommand() {
-        List<String> command = new ArrayList<>();
-        String app = System.getProperty("jpackage.app-path");
-        if (app != null) {
-            command.add(app);
-        } else {
-            String exe = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows") ? "java.exe" : "java";
-            command.add(Path.of(System.getProperty("java.home"), "bin", exe).toString());
-            command.add("-Dfile.encoding=UTF-8");
-            command.add("-cp");
-            command.add(System.getProperty("java.class.path"));
-            command.add(Main.class.getName());
-        }
-        return command;
+        return de.droiddrone.pc.AppPaths.appCommand();
     }
 
     /**

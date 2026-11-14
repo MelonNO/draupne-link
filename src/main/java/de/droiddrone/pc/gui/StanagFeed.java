@@ -3,7 +3,9 @@ package de.droiddrone.pc.gui;
 import de.droiddrone.pc.MonoClock;
 import de.droiddrone.pc.overwatch.ClipPlayer;
 import de.droiddrone.pc.video.H264Encoder;
+import de.droiddrone.pc.video.EncoderProcess;
 import de.droiddrone.pc.video.Klv;
+import de.droiddrone.pc.video.PictureEncoder;
 import de.droiddrone.pc.video.StanagStream;
 import de.droiddrone.pc.video.VideoDecoder;
 import de.droiddrone.pc.video.VideoPipeline;
@@ -87,6 +89,7 @@ final class StanagFeed implements VideoPipeline.FrameTap, AutoCloseable {
     private final BooleanSupplier upsideDown;
     private final LongConsumer clipEnded;
     private final Consumer<String> log;
+    private final PictureEncoder.Factory encoders;
     private final StanagStream stream;
     private final LinkedBlockingQueue<Object> queue = new LinkedBlockingQueue<>(QUEUE);
     private final Thread thread;
@@ -111,6 +114,13 @@ final class StanagFeed implements VideoPipeline.FrameTap, AutoCloseable {
      */
     StanagFeed(String name, boolean virtual, String target, int bitrate, BooleanSupplier upsideDown, LongConsumer clipEnded,
                Consumer<String> log) {
+        this(name, virtual, target, bitrate, upsideDown, clipEnded, log, PictureEncoder.IN_PROCESS);
+    }
+
+    /** @param encoders where the encoders run (1.0.68: the app's, {@link de.droiddrone.pc.video.EncoderProcess}) */
+    StanagFeed(String name, boolean virtual, String target, int bitrate, BooleanSupplier upsideDown, LongConsumer clipEnded,
+               Consumer<String> log, PictureEncoder.Factory encoders) {
+        this.encoders = encoders;
         this.name = name;
         this.virtual = virtual;
         this.bitrate = Math.max(300_000, bitrate);
@@ -236,7 +246,7 @@ final class StanagFeed implements VideoPipeline.FrameTap, AutoCloseable {
 
     // ------------------------------------------------------------------ its own thread
 
-    private H264Encoder enc;
+    private PictureEncoder enc;
     private int encFps, encBps;
     private boolean forceKey = true;
     private long lastKeyAt, lastSentAt;
@@ -286,7 +296,8 @@ final class StanagFeed implements VideoPipeline.FrameTap, AutoCloseable {
                     failSaid = false;
                 } catch (IOException | RuntimeException e) {
                     // this stream only; again from a clean encoder at the next step
-                    if (!failSaid) log.accept("STANAG 4609 " + name + ": " + (e.getMessage() == null ? e.toString() : e.getMessage()));
+                    // the encoder process's stop is said once by it, not by every stream
+                    if (!failSaid && !(e instanceof EncoderProcess.Down)) log.accept("STANAG 4609 " + name + ": " + (e.getMessage() == null ? e.toString() : e.getMessage()));
                     failSaid = true;
                     closeEncoder();
                     try {
@@ -492,7 +503,7 @@ final class StanagFeed implements VideoPipeline.FrameTap, AutoCloseable {
     private void send(StanagShow.Kind kind, int fps, int bps, long keyEveryMs, int[] pixels, Object still, long now) throws IOException {
         if (enc == null || encFps != fps || encBps != bps) {
             closeEncoder();
-            enc = new H264Encoder(W, H, fps, bps, fps * 3600); // key frames when asked here, never by its own count
+            enc = encoders.open(W, H, fps, bps, fps * 3600); // key frames when asked here, never by its own count
             encFps = fps;
             encBps = bps;
             stream.onConfig(W, H, false, enc.config());

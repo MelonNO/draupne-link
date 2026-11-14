@@ -29,7 +29,7 @@ public final class WindowsTuning {
     private static final int PROCESS_POWER_THROTTLING = 4; // PROCESS_INFORMATION_CLASS.ProcessPowerThrottling
     private static final int THROTTLING_EXECUTION_SPEED = 0x1;
     private static final int THROTTLING_IGNORE_TIMER_RESOLUTION = 0x4;
-    private static final int ABOVE_NORMAL_PRIORITY_CLASS = 0x8000;
+    private static final int ABOVE_NORMAL_PRIORITY_CLASS = 0x8000, BELOW_NORMAL_PRIORITY_CLASS = 0x4000;
 
     private WindowsTuning() {
     }
@@ -62,6 +62,17 @@ public final class WindowsTuning {
         }
         log("Windows tuning: " + (applied.isEmpty() ? "none applied" : String.join(", ", applied)));
         return applied;
+    }
+
+    /** The STANAG encoder process (1.0.68): below normal, so it never holds up the app's or anyone's work. Best effort. */
+    public static void belowNormal() {
+        if (!System.getProperty("os.name", "").startsWith("Windows")) return;
+        try {
+            long process = Kernel32.GetCurrentProcess();
+            call(Kernel32.getLibrary(), "SetPriorityClass", fn -> JNI.callPI(process, BELOW_NORMAL_PRIORITY_CLASS, fn));
+        } catch (Throwable ignored) {
+            // normal priority, then
+        }
     }
 
     private static final int ES_CONTINUOUS = 0x80000000, ES_SYSTEM_REQUIRED = 0x1, ES_DISPLAY_REQUIRED = 0x2;

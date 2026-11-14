@@ -96,6 +96,7 @@ class StanagControllerTest {
         window = new Window();
         window.index = new ClipIndex(dir.resolve("clips"));
         stanag = new StanagController(config, window, Runnable::run);
+        stanag.encoders = de.droiddrone.pc.video.PictureEncoder.IN_PROCESS; // the process: EncoderProcessTest
         stanag.targetOf = (name, slot) -> dir.resolve(name + ".ts").toString();
         stanag.clipQuietMs = 0;
     }
