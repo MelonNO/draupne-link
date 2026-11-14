@@ -6,6 +6,7 @@ import de.droiddrone.pc.Connection;
 import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FleetManager;
 import de.droiddrone.pc.NameService;
+import de.droiddrone.pc.NameServiceAccess;
 import de.droiddrone.pc.Names;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.map.CameraFootprint;
@@ -71,6 +72,7 @@ class FleetBooksTest {
         phone = new DatagramSocket(0, InetAddress.getLoopbackAddress());
         phone.setSoTimeout(100);
         nameService = new NameService(config, names, () -> network, phone.getLocalPort(), false, m -> m.forEach(config::set), log::add);
+        NameServiceAccess.noVirtualFleet(nameService); // only the test's phone: no fleet program's drones on this PC
         fleet = new FleetManager(config.getKey(), 7777, "", saved::putAll, log::add);
         hub = new OverwatchHub(new ClipIndex(dir));
         power = new PowerController(new PowerController.Host() {

@@ -57,6 +57,9 @@ class TourPlacesTest {
                 } catch (SocketTimeoutException e) {
                     continue;
                 }
+                // this drone's answer only: one of the drone before, asked twice on a loaded PC, comes late and was
+                // taken for this one's ("MobileWhiskey reports" the grid of the drone before it)
+                if (!p.getAddress().equals(d.address()) || p.getPort() != d.port()) continue;
                 if (buf[0] == Names.NAME_REPLY) reply = Names.parseReply(buf, p.getLength(), config.getKey());
             }
             assertNotNull(reply, d.name() + " answers");

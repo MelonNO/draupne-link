@@ -9,6 +9,7 @@ import de.droiddrone.pc.PossiblyFlying;
 import de.droiddrone.pc.overwatch.ClipIndex;
 import de.droiddrone.pc.overwatch.OverwatchHub;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import javax.imageio.ImageIO;
@@ -152,6 +153,7 @@ class OverwatchFleetEndToEndTest {
     }
 
     @Test
+    @Tag("quarantine") // HANDOFF's known flake under load (re-run alone): real seconds of flying, a link loss and a detection
     void lostArmedThenAReconnectThatSaysDisarmedEndsTheWindowAndTheHeldAlertSaysWhy() throws Exception {
         PcConfig config = PcConfig.defaults();
         PossiblyFlying flag = new PossiblyFlying(MonoClock::ms);

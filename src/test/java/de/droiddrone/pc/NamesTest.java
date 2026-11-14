@@ -246,6 +246,7 @@ class NamesTest {
             saved.putAll(m);
             m.forEach(config::set);
         }, log::add);
+        service.setVirtualDrones(List::of); // not the drones of a fleet program running on this PC
         service.scan();
         assertEquals("PCAlpha", config.getString(Names.PC_NAME_KEY), "the first PC letter: nobody else online");
         assertTrue(service.isMaster());
@@ -262,6 +263,7 @@ class NamesTest {
         // another PC with a higher letter online: this PC is not the master, and a nameless phone is left alone
         phone.name = "";
         NameService second = new NameService(config, names, () -> status, otherPc.port(), false, m -> m.forEach(config::set), log::add);
+        second.setVirtualDrones(List::of);
         try {
             second.scan(); // asks the other PC (it answers PCAlpha): this PC's own name PCAlpha is taken
             assertEquals("PCBravo", config.getString(Names.PC_NAME_KEY), "PCAlpha was taken: the next letter");
@@ -384,6 +386,7 @@ class NamesTest {
         Names names = new Names(config, m -> m.forEach(config::set));
         Tailscale.Status status = new Tailscale.Status(true, true, "Running", "", "127.0.0.2", "this-pc", List.of());
         NameService svc = new NameService(config, names, () -> status, port, true, m -> m.forEach(config::set), s -> { });
+        svc.setVirtualDrones(List::of);
         List<String> asked = new CopyOnWriteArrayList<>();
         svc.setSleepHandler((ip, d) -> {
             asked.add(ip + " " + (d[1] & 0xff) + " %");

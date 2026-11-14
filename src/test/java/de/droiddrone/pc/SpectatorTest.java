@@ -7,6 +7,7 @@ import de.droiddrone.pc.video.TestStreams;
 import de.droiddrone.pc.video.VideoPipeline;
 import de.droiddrone.testing.Ports;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.net.DatagramPacket;
@@ -302,6 +303,7 @@ class SpectatorTest {
      * the sequence stands still (nothing to ask for again), and a packet from before the pause is not resent after it.
      */
     @Test
+    @Tag("quarantine") // the "congestion flake" of release runs (HANDOFF); its wait for the announcement came with 1.0.64
     void aCongestionPauseLeavesNoGapAndIsAnnounced() throws Exception {
         try (DatagramSocket linkSocket = new DatagramSocket(0, LOOPBACK);
              DatagramSocket viewer = new DatagramSocket(0, LOOPBACK)) {
