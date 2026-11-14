@@ -187,6 +187,16 @@ public final class FlightData {
         return out;
     }
 
+    /**
+     * What the bar marks beside its figures ({@link FlightMarks}): the pilot's bookmarks, the pins dropped while it
+     * flew and the overwatch clips that started meanwhile, in the order they came. Reads the clips' files: not on the
+     * Swing thread.
+     * @param notes the flight's ({@link FlightNotes#load}); pins and clips: the app's, either may be null
+     */
+    public List<FlightMarks.Mark> marks(FlightNotes notes, de.droiddrone.pc.map.Pins pins, de.droiddrone.pc.overwatch.ClipIndex clips) {
+        return FlightMarks.of(flight, notes, pins == null ? List.of() : pins.list(), FlightMarks.clipsIn(clips, startMs(), endMs()));
+    }
+
     private static <T> int indexAtOrBefore(List<T> list, long t, java.util.function.ToLongFunction<T> time) {
         int lo = 0, hi = list.size() - 1, found = -1;
         while (lo <= hi) {
