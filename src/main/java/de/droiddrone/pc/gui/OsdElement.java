@@ -47,7 +47,8 @@ enum OsdElement {
     ON_TIME("onTime", "On time", "Time since the phone found the FC.", false, left(), y(704), true, true),
     CLOCK("clock", "Clock", "This PC's time of day.", false, 0.5, y(110), true, true),
     STICKS_LEFT("sticksLeft", "Left stick", "Left stick (mode 2: throttle and yaw).", false, 560 / 1280.0, y(600), true, true),
-    STICKS_RIGHT("sticksRight", "Right stick", "Right stick (mode 2: pitch and roll).", false, 720 / 1280.0, y(600), true, true);
+    STICKS_RIGHT("sticksRight", "Right stick", "Right stick (mode 2: pitch and roll).", false, 720 / 1280.0, y(600), true, true),
+    G2G("g2g", "Picture delay", "Camera to screen, estimated. Needs phone app pc.53.", false, right(), y(218), true, true);
 
     final String key;
     final String title;

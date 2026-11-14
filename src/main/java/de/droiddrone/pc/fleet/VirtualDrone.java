@@ -157,6 +157,19 @@ public final class VirtualDrone {
     private volatile int step = 5;
     private volatile boolean keyFramesTwice, groupParity;
     private volatile boolean videoWanted;
+    /** pc.53: profile bit 3 - this session's PC wants FRAME_TIME; the last Ping taken, for it (the phone's Udp). */
+    private volatile boolean frameTimes;
+    private final de.droiddrone.common.CaptureClock.PingEcho pingEcho = new de.droiddrone.common.CaptureClock.PingEcho();
+    /**
+     * It behaves as a phone app before pc.53 (tests: an older phone under a new PC): the profile's bits 0-2 only, no
+     * FRAME_TIME. It goes on saying {@link #VERSION} - the PC goes by what comes on the wire, never by the number.
+     */
+    private volatile boolean olderApp;
+
+    void setOlderApp(boolean older) {
+        olderApp = older;
+        if (older) frameTimes = false;
+    }
     private final PcAudio pcAudio = new PcAudio();
     private volatile int detectionLevel;
     private volatile long detectionAskedAt;
@@ -219,6 +232,7 @@ public final class VirtualDrone {
             @Override public boolean observedOnly() { return observing && !isConnected(); }
             @Override public void renderPicture(BufferedImage img, long nowMs) { VirtualDrone.this.renderPicture(img, nowMs); }
             @Override public void streamOut(byte[] data) { VirtualDrone.this.streamOut(data); }
+            @Override public void frameTime(int frameNum, long capturedNs) { VirtualDrone.this.sendFrameTime(frameNum, capturedNs); }
         }, slot, this.log);
     }
 
@@ -426,6 +440,7 @@ public final class VirtualDrone {
             lastPilotPacketMs = now;
             sessionStartedMs = now;
             idleSticks = null;
+            sessionAsksAnew();
         }
         if (d[0] == IDLE_STICKS) {
             if (buffer.isConnected()) handleIdleSticks(d, len);
@@ -435,7 +450,31 @@ public final class VirtualDrone {
             if (buffer.isConnected() && mode == NORMAL) handleRcFrame(d, len);
             return;
         }
+        if (frameTimes && d[0] == UdpCommon.Ping && len >= 10) pingEcho.received(de.droiddrone.common.Bytes.readInt(d, 6), System.nanoTime());
         buffer.addPacket(new DatagramPacket(d, len, from, fromPort));
+    }
+
+    /**
+     * pc.53: FRAME_TIME ahead of a frame's first packet, to a pilot's PC that asked - how old the picture is (here: since
+     * it was drawn) and the last Ping held, as the phone's Udp.sendFrameTime.
+     */
+    private void sendFrameTime(int frameNum, long capturedNs) {
+        UdpSender sender = udpSender;
+        if (!frameTimes || sender == null || !isConnected()) return;
+        long nowNs = System.nanoTime();
+        long age = Math.max(0, Math.min(de.droiddrone.common.CaptureClock.MAX_MS, (nowNs - capturedNs + 500_000) / 1_000_000));
+        long ping = pingEcho.at(nowNs);
+        int hold = de.droiddrone.common.CaptureClock.PingEcho.holdMs(ping);
+        byte[] d = new byte[11];
+        d[0] = de.droiddrone.common.PacketIds.FRAME_TIME;
+        d[1] = (byte) (frameNum >> 8);
+        d[2] = (byte) frameNum;
+        d[3] = (byte) (age >> 8);
+        d[4] = (byte) age;
+        de.droiddrone.common.Bytes.putInt(d, 5, (int) de.droiddrone.common.CaptureClock.PingEcho.echo(ping));
+        d[9] = (byte) (hold >> 8);
+        d[10] = (byte) hold;
+        sender.sendPacket(d);
     }
 
     private boolean otherPcWhileConnected(byte[] d, int len, InetAddress from, int fromPort) {
@@ -464,6 +503,22 @@ public final class VirtualDrone {
         rcSeqValid = false;
         resetRcLag();
         idleSticks = null;
+        sessionAsksAnew();
+    }
+
+    /** pc.53, every new session: what only a PC that knows it asks for is off until this session's PC asks (the phone's Udp). */
+    private void sessionAsksAnew() {
+        sessions++;
+        frameTimes = false;
+        pingEcho.restart();
+    }
+
+    /** Under handle's lock: the sessions started so far. */
+    private volatile int sessions;
+
+    /** How many sessions it has started since it was made (tests: one reconnect, one session). */
+    int sessions() {
+        return sessions;
     }
 
     private boolean keyMatches(byte[] d, int len, int keyAt) {
@@ -689,6 +744,7 @@ public final class VirtualDrone {
                     }
                     keyFramesTwice = twice;
                     groupParity = groups;
+                    frameTimes = !olderApp && (flags & 8) != 0;
                 }
                 case KEY_FRAME_REQUEST -> video.requestKeyFrame();
                 case PcAudio.PACKET -> {
@@ -958,6 +1014,7 @@ public final class VirtualDrone {
             observing = true;
             keyFramesTwice = false;
             groupParity = true;
+            frameTimes = false; // pc.53: a pilot's alone
             log.accept("observation: streaming to observers");
         }
         observeAudio = want.audio();

@@ -55,6 +55,8 @@
  *  connected too; the PC silent: the encoder to its lowest step, and after a minute on a disarmed drone the camera off
  *  (pcSilentTick); no second copy of a key frame once a newer one waits; the sleep check's hello to every PC that
  *  knows this phone; a new session from the same PC keeps the stick lag's baseline.
+ *  pc.53 (DRAUPNE Link 1.0.67): FRAME_TIME ahead of each frame's first packet for a PC that asks (profile bit 3) - how
+ *  old the picture is as it leaves (CaptureClock) and the last Ping held (PingEcho), the PC's picture delay figure.
  */
 
 package de.droiddrone.flight;
@@ -69,7 +71,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import de.droiddrone.common.Bytes;
 import de.droiddrone.common.CameraOwner;
+import de.droiddrone.common.CaptureClock;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.FcCommon;
@@ -360,6 +364,25 @@ public class Udp {
     /** What the PC's StartVideo asked for; the profile may override it (profileAvc). */
     private volatile boolean defaultHevc = true;
     /**
+     * Profile bit 3 (pc.53): this session's PC wants FRAME_TIME [0x53][frameNum i16][captureToSendMs u16][pingEcho u32]
+     * [pingHoldMs u16] (65535 = not known) ahead of the first packet of each frame's first copy - for its picture
+     * delay figure (DRAUPNE Link's GlassToGlass). Not kept across sessions as bits 0-2 are: a PC that knows the packet
+     * asks again with its first Config, and one that doesn't never gets it.
+     */
+    private static final byte FRAME_TIME = PacketIds.FRAME_TIME;
+    private volatile boolean frameTimes;
+    /**
+     * How old a picture is as its first packet leaves (pc.53): InternalCamera's capture callback stamps it, the video
+     * sender asks. Static: the camera outlives a Udp (deep sleep's wake makes a new one).
+     */
+    static final CaptureClock captureClock = new CaptureClock();
+    /** The last Ping taken and when (receive thread), for FRAME_TIME (video sender thread). */
+    private final CaptureClock.PingEcho pingEcho = new CaptureClock.PingEcho();
+    /** FRAME_TIME's bytes and datagram, the video sender thread's alone: nothing is allocated per frame. */
+    private final byte[] frameTimeBuf = new byte[11];
+    private final DatagramPacket frameTimePacket = new DatagramPacket(frameTimeBuf, frameTimeBuf.length);
+    private int frameTimeSource = -1;
+    /**
      * [0x71][frame number i16][frame size i32][key frame u8][group u8][XOR of the group's packet payloads, each
      * zero-padded to the longest] (pc.26). Packets of a frame are grouped PARITY_GROUP at a time: any one lost
      * packet per group is rebuilt by the PC, where one parity over a 40-packet key frame rarely saved it.
@@ -615,6 +638,7 @@ public class Udp {
                         // Connect taken, not at every packet - and the same PC's lag baseline is kept, RcPath.restart)
                         rcPath.restart(now, samePc);
                         idleSticks = null; // pc.38: a new session's PC sends its own within a second; none kept from before
+                        sessionAsksAnew();
                     }
                     pcHeardAtMs = now; // pc.50: a packet of the session - the video's dead-man counts from it (pcSilentTick)
                     // DRAUPNE Link: sticks straight to the flight controller from here - not through the buffer, a
@@ -628,6 +652,11 @@ public class Udp {
                         // pc.21: none in standby or deep sleep - the PC sends none, and a stray one must not fly
                         if (buffer.isConnected() && !PowerMode.dropSticks()) handleRcFrame(d, len);
                         continue;
+                    }
+                    // pc.53: the Ping a frame's FRAME_TIME answers ([10][toEndPoint u8][time i64]: its stamp's low half),
+                    // only for a PC that asked; stick frames never get this far
+                    if (frameTimes && d[0] == UdpCommon.Ping && len >= 10) {
+                        pingEcho.received(Bytes.readInt(d, 6), android.os.SystemClock.elapsedRealtimeNanos());
                     }
                     buffer.addPacket(receiverPacket);
                     synchronized (packetSignal) {
@@ -861,6 +890,17 @@ public class Udp {
         if (old != null) old.close();
         rcPath.restart(android.os.SystemClock.elapsedRealtime(), samePc);
         idleSticks = null; // pc.38: the new session's PC sends its own within a second; none kept from before (H1)
+        sessionAsksAnew();
+    }
+
+    /**
+     * pc.53, every new session (receive thread): what only a PC that knows it asks for is off until this session's PC
+     * asks - its VIDEO_PROFILE comes with its first Config. An older PC never gets a packet it doesn't know; the
+     * profile's bits 0-2 stay as they were, as ever. The Ping held was the last session's (another PC's clock, perhaps).
+     */
+    private void sessionAsksAnew() {
+        frameTimes = false;
+        pingEcho.restart();
     }
 
     /** Whether the key written (UTF) at keyAt - 4 in a Connect, 1 in a PILOT_QUERY - is this phone's. */
@@ -1049,6 +1089,7 @@ public class Udp {
         synchronized (frameNumLock) { // pc.31: the old sender (its generation passed) can't number a frame after this
             videoFrameNum = 0;
         }
+        captureClock.restart(); // pc.53: another camera may stamp its pictures on another base
         if (cameraManager.getCamera().isOpened(config.getCameraId())) {
             cameraManager.getCamera().startPreview();
         }else{
@@ -1690,10 +1731,13 @@ public class Udp {
                 boolean twice = (flags & 1) != 0;
                 boolean groups = (flags & 2) != 0;
                 boolean avc = (flags & 4) != 0;
+                boolean times = (flags & 8) != 0; // pc.53
                 if (twice != keyFramesTwice || groups != groupParity || avc != profileAvc) {
                     log("Video profile: key frames " + (twice ? "twice" : "once") + ", parity " + (groups ? "per group" : "per frame")
                             + ", " + (avc ? "H.264" : "the codec asked for"));
                 }
+                if (times != frameTimes) log("Video profile: frame times " + (times ? "wanted" : "not wanted"));
+                frameTimes = times;
                 keyFramesTwice = twice;
                 groupParity = groups;
                 boolean wasHevc = wantedHevc();
@@ -2097,10 +2141,10 @@ public class Udp {
                     if ((buf.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
                         sendVideoInitialFrame(buf.data);
                     } else if ((buf.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0) {
-                        sendKeyFrame(buf.data, id);
+                        sendKeyFrame(buf.data, id, presentationUs(buf));
                         keyFrame = true;
                     } else {
-                        sendVideoFrame(buf.data, id);
+                        sendVideoFrame(buf.data, id, presentationUs(buf));
                     }
                     // a queue behind a key frame is the key frame's own doing (paced over a few frame times), and so is
                     // the queue the plain frames behind it drain for a few frame times more (pc.27: it was judged after
@@ -2116,6 +2160,11 @@ public class Udp {
             }
         }
     };
+
+    /** pc.53: the encoded frame's presentation time (the camera's stamp, given back by the encoder), us; -1: none came with it. */
+    private static long presentationUs(MediaCodecBuffer buf) {
+        return buf.info == null ? -1 : buf.info.presentationTimeUs;
+    }
 
     private final Runnable audioSenderRun = new Runnable() {
         public void run() {
@@ -2272,7 +2321,7 @@ public class Udp {
     /** The sender loop judges its queue only from then on (after a key frame's paced send and the drain behind it). */
     private volatile long queueJudgeAfterNs;
 
-    private void sendKeyFrame(byte[] buf, int senderId) {
+    private void sendKeyFrame(byte[] buf, int senderId, long presentationUs) {
         if (socket == null || socket.isClosed()) return;
         int num = nextFrameNum(senderId);
         if (num < 0) return;
@@ -2292,6 +2341,7 @@ public class Udp {
         long start = System.nanoTime();
         for (int copy = 0; copy < copies; copy++) {
             if (copy > 0 && newerKeyFrameQueued()) break;
+            if (copy == 0) sendFrameTime(num, presentationUs);
             socketNs += sendFragments(UdpCommon.KeyFrame, buf, true, copy == 0 && keyFramesTwice, num, senderId, copy > 0);
             sent++;
         }
@@ -2450,11 +2500,59 @@ public class Udp {
     /** pc.31: in bad coverage mode, over at most this many (at 15 fps: 0.67 s a copy). */
     private static final int KEY_FRAME_TIMES_WEAK = 10;
 
-    private void sendVideoFrame(byte[] buf, int senderId) {
+    private void sendVideoFrame(byte[] buf, int senderId, long presentationUs) {
         if (socket == null || socket.isClosed()) return;
         int num = nextFrameNum(senderId);
         if (num < 0) return;
+        sendFrameTime(num, presentationUs);
         sendFragments(UdpCommon.VideoFrame, buf, false, keyFramesTwice, num, senderId, false);
+    }
+
+    /**
+     * pc.53: FRAME_TIME for the frame about to leave (video sender thread, right before its first packet): how old the
+     * picture is now and the last Ping this phone took with how long it has held it - the PC makes the picture's whole
+     * delay of them (GlassToGlass). Only to a pilot's session whose PC asked (profile bit 3): never to observers, never
+     * once the session has timed out. One small datagram straight to the socket: the same buffer and packet every
+     * time, no number, nothing kept; a send that fails is a figure less.
+     * @param presentationUs the encoded frame's stamp; negative: none, and the age says "not known"
+     */
+    private void sendFrameTime(int frameNum, long presentationUs) {
+        if (!frameTimes) return;
+        UdpSender sender = udpSender;
+        DatagramSocket s = socket;
+        if (sender == null || s == null || !isConnected()) return;
+        InetAddress to = sender.getIp();
+        if (to == null) return;
+        long nowNs = android.os.SystemClock.elapsedRealtimeNanos();
+        int age = presentationUs < 0 ? CaptureClock.UNKNOWN : captureClock.captureToSendMs(presentationUs, nowNs, System.nanoTime());
+        long ping = pingEcho.at(nowNs);
+        int hold = CaptureClock.PingEcho.holdMs(ping);
+        byte[] d = frameTimeBuf;
+        synchronized (d) { // a stream's last frame and the next stream's first may meet here
+            d[0] = FRAME_TIME;
+            d[1] = (byte) (frameNum >> 8);
+            d[2] = (byte) frameNum;
+            d[3] = (byte) (age >> 8);
+            d[4] = (byte) age;
+            Bytes.putInt(d, 5, (int) CaptureClock.PingEcho.echo(ping));
+            d[9] = (byte) (hold >> 8);
+            d[10] = (byte) hold;
+            try {
+                frameTimePacket.setAddress(to);
+                frameTimePacket.setPort(sender.getPort());
+                s.send(frameTimePacket);
+            } catch (Exception e) {
+                // the frame goes all the same
+            }
+        }
+        int source = captureClock.source();
+        if (source != frameTimeSource) { // once per change: which clock the camera's stamps turned out to be on
+            frameTimeSource = source;
+            log("Frame times: " + (source == CaptureClock.SEND_CLOCK ? "the pictures' stamps are on the elapsed-time clock"
+                    : source == CaptureClock.OTHER_CLOCK ? "the pictures' stamps are on the uptime clock"
+                    : source == CaptureClock.STAMPS ? "from the capture callback's stamps (a clock of the camera's own)"
+                    : "no usable stamp on the pictures - the PC is told so and shows no figure"));
+        }
     }
 
     private void sendAudioInitialFrame(byte[] buf) {
@@ -2689,6 +2787,7 @@ public class Udp {
             keyFramesTwice = false;
             groupParity = true;
             profileAvc = true;
+            frameTimes = false; // pc.53: a pilot's alone
             PhoneHeading.start(context);
             log("Observation: streaming to observers");
         }

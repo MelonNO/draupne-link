@@ -38,7 +38,12 @@ public final class LinkLog implements AutoCloseable {
             + "phone_rc_write_age_ms,phone_rc_in_to_out_ms,phone_rc_seq,phone_flags,pc_to_fc_ms,glfw_poll_max_ms,"
             // record 0x40F6 (phone app pc.31): the worst lateness of the sticks over the link's usual in the last
             // second, and how many frames the phone dropped as too late (rc.maxLagMs) this session
-            + "stick_lag_max_ms,sticks_dropped_late,event";
+            + "stick_lag_max_ms,sticks_dropped_late,"
+            // 1.0.67 (phone app pc.53, FRAME_TIME): the picture's delay from the camera to this screen as estimated for
+            // the last picture shown (video.GlassToGlass, evened out) with two of its parts - the phone's, capture to
+            // first packet, and the network's - and the highest single picture's figure of the last second; blank
+            // without a figure (an older phone app, no picture, watching)
+            + "capture_to_send_ms,video_net_ms,g2g_ms,g2g_max_ms,event";
     /** A phone state older than this is not shown: the phone has stopped reporting. */
     static final long PHONE_STATE_FRESH_MS = 2500;
 
@@ -202,7 +207,10 @@ public final class LinkLog implements AutoCloseable {
                 ps == null || ps.lastRcSeq() < 0 ? "" : ps.lastRcSeq(), ps == null ? "" : ps.flags(),
                 ps == null || ps.rcInToOutMs() < 0 || ping < 0 ? "" : ping / 2 + ps.rcInToOutMs(),
                 glfwPollMaxMs < 0 ? "" : glfwPollMaxMs,
-                lag == null || lag.maxLagMs() < 0 ? "" : lag.maxLagMs(), lag == null ? "" : lag.dropped(), "");
+                lag == null || lag.maxLagMs() < 0 ? "" : lag.maxLagMs(), lag == null ? "" : lag.dropped(),
+                video == null || video.captureToSendMs() < 0 ? "" : video.captureToSendMs(),
+                video == null || video.videoNetMs() < 0 ? "" : video.videoNetMs(),
+                video == null || video.g2gMs() < 0 ? "" : video.g2gMs(), video == null || video.g2gMaxMs() < 0 ? "" : video.g2gMaxMs(), "");
         if (video != null) lastRecovered = video.recovered();
         lastKeyRequests = link.getKeyFrameRequests();
         if (video != null) {

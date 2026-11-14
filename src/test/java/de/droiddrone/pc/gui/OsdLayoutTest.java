@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import de.droiddrone.pc.video.VideoPipeline;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -145,6 +146,87 @@ class OsdLayoutTest {
         g.dispose();
         System.out.printf(java.util.Locale.ROOT, "OSD with every element at 1080p: %.2f ms per paint%n", ms);
         assertTrue(ms < 25, "a frame at 60 fps is 16 ms, the HUD must be a fraction of it: " + ms);
+    }
+
+    /** 1.0.67: the picture's delay - off until turned on, "G2G ~185MS" on the right with a figure, nothing without one. */
+    @Test
+    void thePictureDelayDrawsOnlyWithAFigure() {
+        assertFalse(OsdLayout.defaults().isOn(OsdElement.G2G), "an extra: off until turned on");
+        assertEquals("g2g", OsdElement.G2G.key);
+        OsdLayout on = OsdLayout.defaults().with(OsdElement.G2G, new OsdLayout.Placement(true, OsdElement.G2G.defaultX, OsdElement.G2G.defaultY));
+        assertEquals("on", on.toSettings().get("osd.g2g").split(",")[0], "its settings key, by the elements' scheme");
+        assertEquals(OsdLayout.Align.RIGHT, on.get(OsdElement.G2G).align());
+        OsdRenderer.Data sample = new OsdPreview().data();
+        Rectangle2D with = pictureDelayBounds(sample, on);
+        assertNotNull(with, "drawn with the sample's 185 ms");
+        assertTrue(new Rectangle2D.Double(0, 0, 1280, 720).contains(with), "inside the picture: " + with);
+        assertTrue(with.getWidth() > 60 && with.getMaxX() <= 1280 - 10, "a short line at the right edge: " + with);
+        // no figure (a phone app before pc.53, no picture yet, watching): nothing is drawn, not "G2G ---"
+        VideoPipeline.Stats v = sample.video();
+        VideoPipeline.Stats none = new VideoPipeline.Stats(v.hevc(), v.width(), v.height(),
+                v.receivedFps(), v.shownFps(), v.megabitsPerSecond(), v.decodeMs(), v.convertMs(), v.damaged(), v.lost(), v.error(), v.hardware(),
+                v.bitrateStep(), v.drawSkipped(), v.bunched(), v.recovered(), v.pingBaselineMs(), v.pictureAgeMs());
+        assertEquals(-1, none.g2gMs(), "the figures of before 1.0.67: no picture delay");
+        OsdRenderer.Data without = new OsdRenderer.Data(true, true, 42, true, false, sample.telemetry(), none, false, null,
+                sample.channels(), false, false, false, false, null, false, null, false);
+        assertNull(pictureDelayBounds(without, on), "nothing without a figure");
+        // no other element stands where it is drawn (the sticks' age is 26 units above it)
+        Map<OsdElement, Rectangle2D> all = new EnumMap<>(OsdElement.class);
+        BufferedImage img = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        new OsdRenderer().paint(g, 0, 0, 1280, 720, sample, on, all);
+        g.dispose();
+        for (Map.Entry<OsdElement, Rectangle2D> e : all.entrySet()) {
+            if (e.getKey() == OsdElement.G2G || !e.getKey().movable || e.getKey() == OsdElement.WARNINGS) continue;
+            assertFalse(e.getValue().intersects(all.get(OsdElement.G2G)), e.getKey() + " under the picture delay: " + e.getValue());
+        }
+    }
+
+    private static Rectangle2D pictureDelayBounds(OsdRenderer.Data d, OsdLayout layout) {
+        BufferedImage img = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        Map<OsdElement, Rectangle2D> bounds = new EnumMap<>(OsdElement.class);
+        new OsdRenderer().paint(g, 0, 0, 1280, 720, d, layout, bounds);
+        g.dispose();
+        return bounds.get(OsdElement.G2G);
+    }
+
+    /** Its colour: white up to G2G_WARN_MS, yellow over it, red over twice it - read back from the picture drawn. */
+    @Test
+    void thePictureDelayTurnsYellowAndRedWhenItIsLong() {
+        assertEquals(0xf2f2ea, pictureDelayColour(185), "white");
+        assertEquals(Theme.WARN.getRGB() & 0xffffff, pictureDelayColour(OsdRenderer.G2G_WARN_MS + 40), "yellow");
+        assertEquals(Theme.BAD.getRGB() & 0xffffff, pictureDelayColour(2 * OsdRenderer.G2G_WARN_MS + 40), "red");
+    }
+
+    /** Which of the OSD's three text colours most of the element's pixels have, with nothing else drawn. */
+    private static int pictureDelayColour(int g2gMs) {
+        VideoPipeline.Stats v = new OsdPreview().data().video();
+        VideoPipeline.Stats stats = new VideoPipeline.Stats(v.hevc(), v.width(), v.height(),
+                v.receivedFps(), v.shownFps(), v.megabitsPerSecond(), v.decodeMs(), v.convertMs(), v.damaged(), v.lost(), v.error(), v.hardware(),
+                v.bitrateStep(), v.drawSkipped(), v.bunched(), v.recovered(), v.pingBaselineMs(), v.pictureAgeMs(), g2gMs, 60, 40, g2gMs);
+        OsdRenderer.Data d = new OsdRenderer.Data(true, true, 42, true, false, null, stats, false, null, null, false, false, false, false, null,
+                false, null, false);
+        OsdLayout only = OsdLayout.defaults();
+        for (OsdElement e : OsdElement.values()) {
+            only = only.with(e, new OsdLayout.Placement(e == OsdElement.G2G, only.get(e).x(), only.get(e).y()));
+        }
+        BufferedImage img = new BufferedImage(1280, 720, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        Map<OsdElement, Rectangle2D> bounds = new EnumMap<>(OsdElement.class);
+        new OsdRenderer().paint(g, 0, 0, 1280, 720, d, only, bounds);
+        g.dispose();
+        Rectangle2D b = bounds.get(OsdElement.G2G);
+        assertNotNull(b);
+        int white = 0xf2f2ea, yellow = Theme.WARN.getRGB() & 0xffffff, red = Theme.BAD.getRGB() & 0xffffff;
+        Map<Integer, Integer> seen = new HashMap<>();
+        for (int y = (int) b.getMinY(); y < b.getMaxY(); y++) {
+            for (int x = (int) b.getMinX(); x < b.getMaxX(); x++) {
+                int rgb = img.getRGB(x, y) & 0xffffff;
+                if (rgb == white || rgb == yellow || rgb == red) seen.merge(rgb, 1, Integer::sum);
+            }
+        }
+        return seen.entrySet().stream().max(Map.Entry.comparingByValue()).orElseThrow().getKey();
     }
 
     @Test

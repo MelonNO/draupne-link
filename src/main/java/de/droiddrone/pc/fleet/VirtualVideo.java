@@ -50,6 +50,9 @@ final class VirtualVideo {
 
         /** To the pilot's session, or to each observer. */
         void streamOut(byte[] data);
+
+        /** pc.53: a frame is about to leave - its FRAME_TIME, if the pilot's PC asked. capturedNs: when its picture was drawn (System.nanoTime). */
+        void frameTime(int frameNum, long capturedNs);
     }
 
     private static final int PARITY_GROUP = 8;
@@ -119,6 +122,7 @@ final class VirtualVideo {
         // virtual picture's rate was too low - drawing and encoding a 1080p frame one after the other took ~32 ms of
         // the 33 a frame has at 30 fps; side by side a frame costs the longer of the two)
         BufferedImage[] img = new BufferedImage[2];
+        long[] drawnNs = new long[2]; // when each picture's drawing began: the camera's capture, for the frame's FRAME_TIME
         int cur = 0;
         Future<?> ahead = null;
         ExecutorService painter = Executors.newSingleThreadExecutor(r -> {
@@ -154,13 +158,22 @@ final class VirtualVideo {
                     configResend = false;
                     sendVideoConfig(enc);
                 }
-                if (ahead != null) waitFor(ahead); // this frame's picture, drawn while the last one was encoded
-                else drone.renderPicture(img[cur], nowMs);
+                if (ahead != null) {
+                    waitFor(ahead); // this frame's picture, drawn while the last one was encoded
+                } else {
+                    drawnNs[cur] = System.nanoTime();
+                    drone.renderPicture(img[cur], nowMs);
+                }
                 BufferedImage now = img[cur], following = img[1 - cur];
+                long capturedNs = drawnNs[cur];
+                int drawnNext = 1 - cur;
                 // the next picture shows the world and the camera at one moment: when its painting starts (the vehicle
                 // placed a frame ahead while the camera was read at the paint's own moment made them disagree by up to
                 // a frame - the vehicle wobbled against the ground)
-                ahead = painter.submit(() -> drone.renderPicture(following, System.currentTimeMillis()));
+                ahead = painter.submit(() -> {
+                    drawnNs[drawnNext] = System.nanoTime();
+                    drone.renderPicture(following, System.currentTimeMillis());
+                });
                 boolean key = keyFrameWanted;
                 keyFrameWanted = false;
                 for (H264Encoder.Packet p : enc.encode(Scene.pixels(now), key)) {
@@ -169,6 +182,7 @@ final class VirtualVideo {
                     frameNum++;
                     if (p.keyFrame() && drone.observedOnly()) sendVideoConfig(enc);
                     int copies = p.keyFrame() && drone.keyFramesTwice() ? 2 : 1;
+                    drone.frameTime(frameNum, capturedNs);
                     for (int c = 0; c < copies; c++) {
                         sendFragments(p.keyFrame() ? UdpCommon.KeyFrame : UdpCommon.VideoFrame, p.data(), p.keyFrame(), frameNum, fps, gen);
                     }

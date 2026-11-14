@@ -21,8 +21,8 @@ package de.droiddrone.common;
  * The first byte of the DRAUPNE packets on the link's port that have no class of their own in Common: one table both
  * apps and the virtual fleet read, so no code is copied by hand. The layouts are written where each packet is sent
  * (ControlLink, Spectate, Names on the PC). The others live with their protocol: UdpCommon (upstream DroidDrone),
- * {@link Observe} 0x50-0x52, {@link FleetProtocol#MODE} 0x58, {@link PcAudio#PACKET} 0x79, {@link OverwatchProtocol}
- * 0x7A, 0x7B, 0x7D-0x7F. PacketIdsTest checks no two share a code.
+ * {@link Observe} 0x50-0x52 (0x53-0x55 are this table's now, 0x56-0x57 unused), {@link FleetProtocol#MODE} 0x58,
+ * {@link PcAudio#PACKET} 0x79, {@link OverwatchProtocol} 0x7A, 0x7B, 0x7D-0x7F. PacketIdsTest checks no two share a code.
  */
 public final class PacketIds {
     // spectator <-> pilot PC (Spectate)
@@ -51,6 +51,14 @@ public final class PacketIds {
     /** Phone -> PC: a group's parity (pc.26). */
     public static final byte VIDEO_PARITY_GROUP = 0x71;
     public static final byte SET_BITRATE = 0x72;
+
+    // the link in poor reception (DRAUPNE Link 1.0.67 / phone app pc.53; the three codes observation left unused)
+    /** Phone -> PC: when a frame was taken and sent ({@link CaptureClock}), to a PC that asked by VIDEO_PROFILE bit 3. */
+    public static final byte FRAME_TIME = 0x53;
+    /** PC -> phone: the parity packets a block the phone is to add ({@link Fec}). */
+    public static final byte VIDEO_FEC = 0x54;
+    /** Phone -> PC: a block's Reed-Solomon parity ({@link Fec}), to a PC that asked by VIDEO_PROFILE bit 4. */
+    public static final byte VIDEO_PARITY_RS = 0x55;
 
     // power modes (ControlLink, the phone's PowerMode)
     public static final byte POWER_MODE = 0x6E;
