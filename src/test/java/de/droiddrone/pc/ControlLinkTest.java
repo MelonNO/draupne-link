@@ -926,6 +926,66 @@ class ControlLinkTest {
         assertEquals(0, phone.videoProfileRaw);
     }
 
+    /**
+     * 1.0.67, the session id on the wire: one id for the Connects of a try, the next id for a try unanswered for a
+     * second, and a new one after every session that was up.
+     */
+    @Test
+    void theConnectCarriesOneIdATryAndANewOneAfterASession() throws Exception {
+        try (DatagramSocket phoneSocket = new DatagramSocket(phonePort, InetAddress.getLoopbackAddress())) {
+            phoneSocket.setSoTimeout(100);
+            link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
+            link.start();
+            byte[] buf = new byte[1200];
+            DatagramPacket p = new DatagramPacket(buf, buf.length);
+            List<Long> ids = new java.util.ArrayList<>(), firstAt = new java.util.ArrayList<>(), lastAt = new java.util.ArrayList<>();
+            byte[] connect = null;
+            long start = System.currentTimeMillis();
+            while (System.currentTimeMillis() - start < 2700) { // a phone that answers nothing
+                try {
+                    phoneSocket.receive(p);
+                } catch (java.net.SocketTimeoutException e) {
+                    continue;
+                }
+                if (p.getLength() < 1 || buf[0] != UdpCommon.Connect) continue;
+                connect = java.util.Arrays.copyOf(buf, p.getLength());
+                long id = de.droiddrone.common.SessionGate.sessionId(connect, connect.length), at = System.currentTimeMillis() - start;
+                assertNotEquals(de.droiddrone.common.SessionGate.NO_ID, id, "every Connect carries one");
+                assertEquals(0, connect[connect.length - 1], "and the byte for the phone's answer, 0");
+                if (ids.isEmpty() || ids.get(ids.size() - 1) != id) {
+                    ids.add(id);
+                    firstAt.add(at);
+                    lastAt.add(at);
+                } else {
+                    lastAt.set(lastAt.size() - 1, at);
+                }
+            }
+            assertTrue(ids.size() >= 2 && ids.size() <= 4, "a new id about every second: " + ids + " first sent at " + firstAt);
+            for (int i = 1; i < ids.size(); i++) {
+                assertEquals((ids.get(i - 1) + 1) & 0xFFFFFFFFL, ids.get(i), "counted up, try by try");
+                assertTrue(firstAt.get(i) - firstAt.get(i - 1) >= de.droiddrone.common.SessionGate.SAME_SESSION_MS - 60, "a try is kept a second: " + firstAt);
+            }
+            assertTrue(lastAt.get(0) - firstAt.get(0) <= de.droiddrone.common.SessionGate.SAME_SESSION_MS + 400, "the first try's Connects: " + firstAt.get(0) + " - " + lastAt.get(0));
+            // answered as a phone app before pc.53 answers: the Connect back as it came - taken, whatever its id
+            long lastId = ids.get(ids.size() - 1);
+            byte[] answer = connect;
+            phoneSocket.send(new DatagramPacket(answer, answer.length, InetAddress.getLoopbackAddress(), pcPort));
+            waitFor(() -> link.getSessionStarts() == 1, 2000, "the answer starts the session");
+            // nothing more comes: 2 s later the link counts as lost, and the next try has an id of its own - at once
+            long next = -1;
+            long until = System.currentTimeMillis() + 6000;
+            while (next < 0 && System.currentTimeMillis() < until) {
+                try {
+                    phoneSocket.receive(p);
+                } catch (java.net.SocketTimeoutException e) {
+                    continue;
+                }
+                if (p.getLength() > 0 && buf[0] == UdpCommon.Connect) next = de.droiddrone.common.SessionGate.sessionId(buf, p.getLength());
+            }
+            assertEquals((lastId + 1) & 0xFFFFFFFFL, next, "a session was up: the id is spent");
+        }
+    }
+
     @Test
     void theVideoProfileGoesOutWithTheFirstConfigOfEverySession() throws Exception {
         phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);

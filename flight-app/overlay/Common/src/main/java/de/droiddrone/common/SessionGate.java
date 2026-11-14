@@ -36,12 +36,17 @@ import java.util.function.BooleanSupplier;
  * device on the network, and came back to life on it. From another PC than the last pilot's, Takeover's rule holds on
  * after the 4 s timeout: a 4G fade of 4 s handed an armed drone to any PC left on CONNECT.</li>
  * </ul>
- * The session id (planned, not on the wire yet): a PC that knows it ends its Connect with {@code [sessionId u32]},
- * behind the version - {@code [8][num i16][client type][key UTF][version i16][sessionId u32]}; an older phone reads
- * past it, and the phone's answer (the Connect sent back) carries it home. With it the phone need not tell by the
- * clock which Connects are one session: the overloads that take the id ({@link #sessionId} reads it) count the live
- * session's own id as that session at any age and another id as a new session at once. A Connect without one
- * ({@link #NO_ID}, an older PC) is judged by the rules above, to the letter. {@link Ids} is the PC's side.
+ * The session id (DRAUPNE Link 1.0.67 / phone app pc.53): a PC that knows it ends its Connect with {@code [sessionId
+ * u32][byId u8 = 0]}, behind the version - {@code [8][num i16][client type][key UTF][version i16][sessionId u32][byId
+ * u8]}; an older phone reads past it (every released one takes the key by its own length and nothing behind it), and
+ * the phone's answer (the Connect sent back) carries it home. With it the phone need not tell by the clock which
+ * Connects are one session: the overloads that take the id ({@link #sessionId} reads it) count the live session's own
+ * id as that session at any age and another id as a new session at once - but for an id the PC counted past just
+ * before the live one ({@link #OLDER_TRIES}): a Connect of a try it had given up, come late, starts nothing. A Connect
+ * without one ({@link #NO_ID}, an older PC) is judged by the rules above, to the letter. A phone that judges by the id
+ * says so in its answer: byId = 1 ({@link #markAnswer}, {@link #answeredById}) - the PC then lets only the answer to
+ * its newest try start a session, and takes every answer of a phone that doesn't say so, as ever. {@link Ids} is the
+ * PC's side.
  */
 public final class SessionGate {
     /** A pilot's Connect within this long of the session it started is the same session. */
@@ -146,10 +151,50 @@ public final class SessionGate {
      * Connect (so every packet from the pilot can be handed to the overload below as it comes).
      */
     public static long sessionId(byte[] d, int len) {
-        if (len < 6 || d[0] != UdpCommon.Connect) return NO_ID;
+        int at = idAt(d, len);
+        return at < 0 ? NO_ID : Bytes.readInt(d, at) & 0xFFFFFFFFL;
+    }
+
+    /** Where a Connect's session id begins; -1 for a Connect without one, or a packet that is no Connect. */
+    private static int idAt(byte[] d, int len) {
+        if (len < 6 || d[0] != UdpCommon.Connect) return -1;
         int at = 6 + (((d[4] & 0xff) << 8) | (d[5] & 0xff)) + 2; // behind the key and the version
-        if (len < at + 4) return NO_ID;
-        return Bytes.readInt(d, at) & 0xFFFFFFFFL;
+        return len < at + 4 ? -1 : at;
+    }
+
+    /** The byte behind the id: 0 as the PC sends it, this bit set in the answer of a phone that tells sessions by the id. */
+    public static final int ANSWER_BY_ID = 1;
+
+    /**
+     * The phone, on a Connect that starts a session, before its buffer takes it (and sends it back as the answer):
+     * the answer says "sessions are told by the id here". In place, one byte; nothing on a Connect that ends with
+     * the id, or has none.
+     */
+    public static void markAnswer(byte[] d, int len) {
+        int at = idAt(d, len);
+        if (at >= 0 && len > at + 4) d[at + 4] |= ANSWER_BY_ID;
+    }
+
+    /**
+     * The PC, on an answer (its own Connect come back): whether the phone told this session by the id. False for a
+     * phone app before pc.53 and for upstream's relay - they send the Connect back as it came.
+     */
+    public static boolean answeredById(byte[] d, int len) {
+        int at = idAt(d, len);
+        return at >= 0 && len > at + 4 && (d[at + 4] & ANSWER_BY_ID) != 0;
+    }
+
+    /**
+     * An id this many or fewer behind the live session's is an older try of the same PC ({@link Ids} counts up, one
+     * id a try): its Connect, held up on the way until after a newer try's started the session. Another PC, or the
+     * same one started again, counts from a seed of its own - 32 in 2^32 that it lands here, and then only until the
+     * session times out.
+     */
+    static final int OLDER_TRIES = 32;
+
+    static boolean olderTry(long sessionId, long liveId) {
+        long behind = (liveId - sessionId) & 0xFFFFFFFFL;
+        return behind >= 1 && behind <= OLDER_TRIES;
     }
 
     private boolean liveIdKnown() {
@@ -166,9 +211,11 @@ public final class SessionGate {
      * {@link #fromPilot(byte[], int, long)} for a PC that may send a session id ({@link #sessionId}). Without one:
      * that method's verdict, unchanged. With one, a keyed Connect is SAME_SESSION when the id is the live session's -
      * however long ago that started: its Connects still in flight on a slow path, a second and more after the first
-     * - and NEW_SESSION at once when it is another: the PC has let the old session go. Where the live session has no
-     * id (it was started through a call that takes none), a Connect within {@link #SAME_SESSION_MS} of its start is
-     * one of its own and gives it its id.
+     * - and NEW_SESSION at once when it is another: the PC has let the old session go. An id just behind the live
+     * one ({@link #OLDER_TRIES}) is the other way round - a try the PC let go before this session's, its Connect come
+     * late: SAME_SESSION too (dropped; answered, it would start the phone's side over under a PC that has moved on).
+     * Where the live session has no id (it was started through a call that takes none), a Connect within
+     * {@link #SAME_SESSION_MS} of its start is one of its own and gives it its id.
      * <p>
      * SAME_SESSION is dropped unanswered, as ever: if the phone's answer to the first Connect was lost, the same id
      * gets none again. The PC must change the id when its Connects stay unanswered - {@link Ids}.
@@ -181,7 +228,9 @@ public final class SessionGate {
         }
         lastPilotMs = now;
         if (d[0] != UdpCommon.Connect || !keyMatches(d, len, 4)) return Verdict.TAKE;
-        if (liveIdKnown() ? liveId == sessionId : now - sessionStartedMs < SAME_SESSION_MS) {
+        if (liveIdKnown()) {
+            if (liveId == sessionId || olderTry(sessionId, liveId)) return Verdict.SAME_SESSION;
+        } else if (now - sessionStartedMs < SAME_SESSION_MS) {
             liveIdIs(sessionId);
             return Verdict.SAME_SESSION;
         }
@@ -223,14 +272,28 @@ public final class SessionGate {
      * old id its Connects would be dropped as that session's until it timed out.</li>
      * <li>Counted up from a seed taken at random at every start of the app (SecureRandom): two runs of the PC
      * counting through the same ids would meet the phone holding one of them.</li>
+     * <li>An answer that carries an older id - a try this side gave up - starts nothing on the PC (the phone has gone
+     * on to the newer try's session, or will when its Connects arrive). It shows that the way there and back takes
+     * longer than a try was kept: {@link #olderAnswer} keeps the id in use, and the ones after it until a session is
+     * up, half as long again as that answer took - or every answer would be an older try's by the time it came.</li>
      * </ul>
      */
     public static final class Ids {
+        /** The most an id is kept for a slow way's sake ({@link #olderAnswer}). */
+        static final long SLOW_KEEP_MAX_MS = 5000;
+        /** The ids remembered with their first send. */
+        private static final int PAST = 8;
         private int id;
         /** When the id was first sent, and how long it is kept unanswered. */
         private long since, keepMs;
         /** The id was a session's (or none was given out yet): the next Connect takes a new one. */
         private boolean spent = true;
+        /** The last ids given out and when each was first sent (a ring; given counts them all). */
+        private final int[] pastId = new int[PAST];
+        private final long[] pastSince = new long[PAST];
+        private int given;
+        /** Until a session is up: every id is kept at least this long (0: no older try's answer came). */
+        private long slowKeepMs;
 
         public Ids(int seed) {
             id = seed;
@@ -245,8 +308,11 @@ public final class SessionGate {
             if (spent || now - since >= keepMs) {
                 id++;
                 since = now;
-                keepMs = Math.max(SAME_SESSION_MS, roundMs);
+                keepMs = Math.max(Math.max(SAME_SESSION_MS, roundMs), slowKeepMs);
                 spent = false;
+                pastId[given % PAST] = id;
+                pastSince[given % PAST] = now;
+                given++;
             }
             return id & 0xFFFFFFFFL;
         }
@@ -254,6 +320,26 @@ public final class SessionGate {
         /** The phone answered and the session is up: its id is spent. */
         public synchronized void sessionUp() {
             spent = true;
+            slowKeepMs = 0;
+        }
+
+        /**
+         * An answer came that carries sessionId, not {@link #current}: if it is one of the last ids given out, the
+         * answer of a try given up - the ids are kept longer from now on (see the class).
+         * @return how long ago that id was first sent, ms: the most its answer took; -1 for an id not given out
+         * lately, or the one in use (nothing changes)
+         */
+        public synchronized long olderAnswer(long sessionId, long now) {
+            for (int i = Math.min(given, PAST) - 1; i >= 0; i--) {
+                if ((pastId[i] & 0xFFFFFFFFL) != sessionId || pastId[i] == id) continue;
+                long took = Math.max(0, now - pastSince[i]);
+                if (!spent) { // trying: learn (with a session up its own answer came in time - nothing to learn)
+                    slowKeepMs = Math.max(slowKeepMs, Math.min(SLOW_KEEP_MAX_MS, took * 3 / 2));
+                    keepMs = Math.max(keepMs, slowKeepMs);
+                }
+                return took;
+            }
+            return -1;
         }
 
         /** The id of the last Connect sent - the session's, once it is up (an answer carrying another is an older try's). */

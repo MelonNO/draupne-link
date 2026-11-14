@@ -8,6 +8,7 @@ import de.droiddrone.common.Observe;
 import de.droiddrone.common.PcAudio;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
+import de.droiddrone.common.SessionGate;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.SleepCheck;
 import de.droiddrone.common.Takeover;
@@ -72,7 +73,7 @@ public final class VirtualDrone {
     static final short PHONE_UPDATE = 0x40F7;
     public static final int NORMAL = 0, STANDBY = 1, DEEP_SLEEP = 2, OVERWATCH = 3;
     /** The phone's own times (overlay Udp, PowerMode). */
-    static final long SAME_SESSION_MS = 1000, RC_SEQ16_FORGET_MS = 1000, IDLE_AFTER_MS = 300, IDLE_EVERY_MS = 50,
+    static final long RC_SEQ16_FORGET_MS = 1000, IDLE_AFTER_MS = 300, IDLE_EVERY_MS = 50,
             SLEEP_COUNTDOWN_MS = 1000, CHECK_WINDOW_MS = 20_000, HELLO_FIRST_MS = 200, HELLO_GAP_MS = 1500, DETECTION_KEEP_MS = 5000,
             RESTART_MS = 3000;
 
@@ -133,7 +134,9 @@ public final class VirtualDrone {
     private volatile ReceiverBuffer receiverBuffer;
     private volatile int threadsGen;
     private volatile boolean running;
-    private volatile long lastPilotPacketMs, sessionStartedMs;
+    private volatile long lastPilotPacketMs;
+    /** Who gets a session: the phone's own gate (Common), the session id of a PC that sends one with it (pc.53). */
+    private volatile SessionGate gate;
     private volatile InetAddress lastPcIp;
     private volatile int lastPcPort;
     private volatile boolean restarting;
@@ -162,7 +165,8 @@ public final class VirtualDrone {
     private final de.droiddrone.common.CaptureClock.PingEcho pingEcho = new de.droiddrone.common.CaptureClock.PingEcho();
     /**
      * It behaves as a phone app before pc.53 (tests: an older phone under a new PC): the profile's bits 0-2 only, no
-     * FRAME_TIME. It goes on saying {@link #VERSION} - the PC goes by what comes on the wire, never by the number.
+     * FRAME_TIME; sessions told by the clock, the Connect sent back as it came. It goes on saying {@link #VERSION} -
+     * the PC goes by what comes on the wire, never by the number.
      */
     private volatile boolean olderApp;
 
@@ -212,6 +216,7 @@ public final class VirtualDrone {
                  FlightModel.Setup setup, Consumer<String> log) {
         this.slot = slot;
         this.key = key;
+        this.gate = new SessionGate(key);
         this.address = address;
         this.name = name == null ? "" : name;
         this.log = msg -> log.accept((this.name.isEmpty() ? "Virtual drone " + (slot + 1) : this.name) + ": " + msg);
@@ -311,6 +316,7 @@ public final class VirtualDrone {
                 if (!running) return;
                 lastPcIp = null;
                 lastPcPort = 0;
+                gate = new SessionGate(key); // the app's own: what session it held is gone with it
                 idleSticks = null;
                 pcAudio.forget();
                 synchronized (observers) {
@@ -398,20 +404,23 @@ public final class VirtualDrone {
         UdpSender sender = udpSender;
         if (buffer == null || sender == null) return;
         long now = System.currentTimeMillis();
+        // pc.53: the session id of a PC that sends one; an older app (and an older PC's Connect) knows none
+        long sessionId = olderApp ? SessionGate.NO_ID : SessionGate.sessionId(d, len);
+        SessionGate g = gate;
         if (buffer.isConnected()) {
             if (from.equals(sender.getIp()) && fromPort == sender.getPort()) {
                 lastPilotPacketMs = now;
                 lastPcIp = from;
                 lastPcPort = fromPort;
-                if (d[0] == UdpCommon.Connect && keyMatches(d, len, 4)) {
-                    if (now - sessionStartedMs < SAME_SESSION_MS) return;
+                SessionGate.Verdict v = g.fromPilot(d, len, now, sessionId);
+                if (v == SessionGate.Verdict.SAME_SESSION) return; // one of the Connects in flight after a loss
+                if (v == SessionGate.Verdict.NEW_SESSION) {
                     log.accept("pilot reconnects (link was lost): new session");
                     newSession();
-                    sessionStartedMs = now;
                     buffer = receiverBuffer;
                 }
             } else {
-                if (!otherPcWhileConnected(d, len, from, fromPort)) return;
+                if (!otherPcWhileConnected(d, len, from, fromPort, sessionId)) return;
                 buffer = receiverBuffer;
             }
         } else {
@@ -425,20 +434,19 @@ public final class VirtualDrone {
                 if (len >= 2 && from.equals(lastPcIp)) sleepAnswer(d[1] != 0);
                 return;
             }
-            if (d[0] != UdpCommon.Connect) return;
-            if (!keyMatches(d, len, 4)) {
+            boolean pilotKnown = lastPcIp != null, sameAddress = from.equals(lastPcIp), samePc = sameAddress && fromPort == lastPcPort;
+            SessionGate.Verdict v = g.noSession(d, len, pilotKnown, samePc, sameAddress, this::fcDisarmed, now, sessionId);
+            if (v == SessionGate.Verdict.DROP) return;
+            if (v == SessionGate.Verdict.WRONG_KEY) {
                 log.accept("PC at " + from.getHostAddress() + " tried another key");
                 return;
             }
-            if (lastPcIp != null && !(from.equals(lastPcIp) && fromPort == lastPcPort)) {
-                if (!Takeover.allowed(from.equals(lastPcIp), fcDisarmed(), now - lastPilotPacketMs)) {
-                    answerSpectator(d, len, from, fromPort, true);
-                    return;
-                }
-                if (!from.equals(lastPcIp)) log.accept("new session from " + from.getHostAddress() + " (pilot silent, FC disarmed)");
+            if (v == SessionGate.Verdict.SPECTATOR) {
+                answerSpectator(d, len, from, fromPort, true);
+                return;
             }
+            if (pilotKnown && !sameAddress) log.accept("new session from " + from.getHostAddress() + " (pilot silent, FC disarmed)");
             lastPilotPacketMs = now;
-            sessionStartedMs = now;
             idleSticks = null;
             sessionAsksAnew();
         }
@@ -451,6 +459,8 @@ public final class VirtualDrone {
             return;
         }
         if (frameTimes && d[0] == UdpCommon.Ping && len >= 10) pingEcho.received(de.droiddrone.common.Bytes.readInt(d, 6), System.nanoTime());
+        // pc.53: the answer to a Connect that carries a session id says the sessions are told by it (the phone's Udp)
+        if (!olderApp && d[0] == UdpCommon.Connect) SessionGate.markAnswer(d, len);
         buffer.addPacket(new DatagramPacket(d, len, from, fromPort));
     }
 
@@ -477,22 +487,19 @@ public final class VirtualDrone {
         sender.sendPacket(d);
     }
 
-    private boolean otherPcWhileConnected(byte[] d, int len, InetAddress from, int fromPort) {
+    private boolean otherPcWhileConnected(byte[] d, int len, InetAddress from, int fromPort, long sessionId) {
         long now = System.currentTimeMillis();
-        long silent = now - lastPilotPacketMs;
         boolean disarmed = fcDisarmed();
-        boolean pilotAlive = silent < Takeover.PILOT_ALIVE_MS || !disarmed;
-        if (d[0] == UdpCommon.Connect) {
-            if (!keyMatches(d, len, 4)) return false;
-            boolean sameAddress = from.equals(udpSender.getIp());
-            if (Takeover.allowed(sameAddress, disarmed, silent)) {
-                log.accept("new session from " + from.getHostAddress() + ":" + fromPort + (sameAddress ? " (pilot's address)" : " (pilot silent)"));
-                newSession();
-                sessionStartedMs = now;
-                return true;
-            }
+        boolean sameAddress = from.equals(udpSender.getIp());
+        SessionGate g = gate;
+        SessionGate.Verdict v = g.fromOther(d, len, sameAddress, disarmed, now, sessionId);
+        if (v == SessionGate.Verdict.WRONG_KEY) return false;
+        if (v == SessionGate.Verdict.NEW_SESSION) {
+            log.accept("new session from " + from.getHostAddress() + ":" + fromPort + (sameAddress ? " (pilot's address)" : " (pilot silent)"));
+            newSession();
+            return true;
         }
-        answerSpectator(d, len, from, fromPort, pilotAlive);
+        answerSpectator(d, len, from, fromPort, g.pilotAlive(disarmed, now));
         return false;
     }
 

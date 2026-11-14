@@ -44,6 +44,7 @@ public final class Wire implements AutoCloseable {
     private volatile Rule rule = (toPhone, d, len) -> 0;
     private volatile boolean running = true, keeping;
     private final AtomicLongArray toPhoneCount = new AtomicLongArray(256), toPcCount = new AtomicLongArray(256);
+    private final AtomicLongArray fromPcCount = new AtomicLongArray(256), fromPhoneCount = new AtomicLongArray(256);
     private final List<byte[]> toPhoneKept = new ArrayList<>(), toPcKept = new ArrayList<>();
     private final ScheduledExecutorService later = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "wireLater");
@@ -107,6 +108,7 @@ public final class Wire implements AutoCloseable {
                 SocketAddress to = toPhone ? phone : pc;
                 if (to == null) continue; // the phone spoke before any PC did
                 int len = p.getLength();
+                if (len > 0) (toPhone ? fromPcCount : fromPhoneCount).incrementAndGet(buf[0] & 0xff);
                 long hold = rule.decide(toPhone, buf, len);
                 if (hold < 0) continue;
                 byte[] d = Arrays.copyOf(buf, len);
@@ -143,6 +145,16 @@ public final class Wire implements AutoCloseable {
     /** How many datagrams with that first byte went on to the phone so far. */
     public long toPhone(int type) {
         return toPhoneCount.get(type & 0xff);
+    }
+
+    /** How many datagrams with that first byte the PC has sent so far, lost on the wire or not. */
+    public long fromPc(int type) {
+        return fromPcCount.get(type & 0xff);
+    }
+
+    /** How many datagrams with that first byte the phone has sent so far, lost on the wire or not. */
+    public long fromPhone(int type) {
+        return fromPhoneCount.get(type & 0xff);
     }
 
     /** What went on to the PC since {@link #keep}, in order (copies). */

@@ -8,6 +8,7 @@ import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
+import de.droiddrone.common.SessionGate;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.UdpCommon;
 import de.droiddrone.common.UdpPacketData;
@@ -495,7 +496,11 @@ public class ControlLink {
                     continue;
                 }
                 lastReceivedAt = MonoClock.ms();
-                if (packet.getLength() > 0 && d[0] == UdpCommon.Connect) connectAnsweredAt = lastReceivedAt; // it hears us again
+                if (packet.getLength() > 0 && d[0] == UdpCommon.Connect) {
+                    if (answerOfAnOlderTry(d, packet.getLength(), lastReceivedAt)) continue; // 1.0.67: it starts nothing
+                    connectAnsweredAt = lastReceivedAt; // it hears us again
+                    sessionStarts.incrementAndGet();
+                }
                 if (handleVideoFragment(packet)) continue;
                 if (packet.getLength() > 0 && d[0] == UdpCommon.AudioFrame) { // unnumbered: the queue adds nothing
                     if (isConnected()) onAudioFrame(d, packet.getLength(), true);
@@ -845,6 +850,11 @@ public class ControlLink {
                 if (connected) { // the next loss starts its Connects at once
                     connectRoundAt = 0;
                     connectRoundLen = 0;
+                    trying = false;
+                    // 1.0.67: the id is a session's now - the Connect after the next loss takes another. Here, not at
+                    // the answer: a Connect this thread sends between the answer and seeing the link up keeps the id,
+                    // and the phone drops it as the session's own (a new id there was a session more)
+                    sessionIds.sessionUp();
                 }
                 if (!connected && lostAt > 0 && fcInfo != null && now - lostAt > FC_STATE_KEEP_MS) {
                     log("No link for " + FC_STATE_KEEP_MS / 1000 + " s: FC state is re-read on reconnect.");
@@ -867,6 +877,7 @@ public class ControlLink {
                             connectRoundAt = now;
                             connectRoundLen = connectRoundMs(pingMs, pong == 0 ? Long.MAX_VALUE : now - pong);
                         }
+                        trying = true;
                         sendConnect();
                         lastConnect = now;
                     }
@@ -980,11 +991,86 @@ public class ControlLink {
 
     /** The Connect, sent on this thread (upstream's sendConnect starts a thread per call). */
     private void sendConnect() throws IOException {
+        udpSender.sendPacket(buildConnectPacket(MonoClock.ms(), connectRoundLen));
+    }
+
+    /**
+     * 1.0.67, the session id: the Connect, upstream's [8][num i16 = -1][client type u8 = 1][key UTF][version i16],
+     * goes on with [sessionId u32][byId u8 = 0]. Every released phone app takes the key by its own length and reads
+     * nothing behind it, and its answer - the Connect sent back - brings the tail home as it went.
+     * <p>
+     * Why: the phone told the Connects of one try from a new session by the clock (SessionGate.SAME_SESSION_MS: a
+     * second), and this side starts its numbering over at each answer. On a slow or reordering path the late Connects
+     * of a try each made a session more, and the handshake started over with every answer (the reconnect storm).
+     * With the id (phone app pc.53) the Connects of one try are one session however late they come, and a new id - a
+     * try unanswered for a second (or the slow path's round), and every try after a session that was up - is a new
+     * session at once (SessionGate.Ids). The phone says in its answer that it judged by the id (byId = 1): then an
+     * older try's answer, come late, starts nothing here ({@link #answerOfAnOlderTry}). An answer without the mark -
+     * an older phone app, upstream's relay - is taken whatever it carries, as before 1.0.67.
+     * @param roundMs the slow path's round the Connect belongs to (connectRoundLen; 0: none)
+     */
+    byte[] buildConnectPacket(long now, long roundMs) throws IOException {
         UdpPacketData packetData = new UdpPacketData(UdpCommon.Connect, -1);
         packetData.daos.writeByte(1);
         packetData.daos.writeUTF(key);
         packetData.daos.writeShort(SettingsCommon.versionCompatibleCode);
-        udpSender.sendPacket(packetData.getData());
+        packetData.daos.writeInt((int) sessionIds.next(now, roundMs));
+        packetData.daos.writeByte(0);
+        return packetData.getData();
+    }
+
+    /** One id for the Connects of a try, a new one for the next try: counted up from a seed that is another at every start of the app. */
+    private final SessionGate.Ids sessionIds = new SessionGate.Ids(new java.security.SecureRandom().nextInt());
+    /** Answers of older tries in a row while trying (receive thread), and how many of them start nothing. */
+    private int olderAnswers;
+    static final int OLDER_ANSWERS_DROPPED = 2;
+    /** The id of the answer that last started this side's session (receive thread); NO_ID: none yet, or an answer without the phone's mark. */
+    private long answeredId = SessionGate.NO_ID;
+    /** The session thread is sending Connects - a try is in hand, its answer on the way - until it sees the link up. */
+    private volatile boolean trying;
+    private final AtomicLong sessionStarts = new AtomicLong();
+
+    /**
+     * The phone's answer to a Connect (receive thread): true if it is to start nothing. Only for a phone that told
+     * the session by the id (its mark): such a phone starts a session once for an id and never for an older try's
+     * (SessionGate), so every answer says which session it began, and its sessions follow this side's tries in order.
+     * <ul>
+     * <li>While this side is trying, the answer to an older try starts nothing: that try was given up as unanswered,
+     * the newest try's Connects are on their way or there, and the phone answers them from a session of their own.
+     * Taken, this side would start in a session the phone is leaving and start over a moment later - the storm. The
+     * ids are kept longer from here on (Ids.olderAnswer), so the newest try's answer finds its id still in use. Not
+     * for ever: the third such answer in a row is taken as before 1.0.67 - a way so slow that every answer comes
+     * late must not keep the link down.</li>
+     * <li>With the link up (no Connects going out), an answer starts this side over only if its session is newer
+     * than the one this side is in: the phone has gone on, and no other answer may come to say so. One this side
+     * has had, or an older one still (a copy on the network, a try's late answer), starts nothing.</li>
+     * </ul>
+     */
+    private boolean answerOfAnOlderTry(byte[] d, int len, long now) {
+        long id = SessionGate.sessionId(d, len);
+        if (id == SessionGate.NO_ID || !SessionGate.answeredById(d, len)) { // an older phone app, upstream's relay: as ever
+            olderAnswers = 0;
+            answeredId = SessionGate.NO_ID;
+            return false;
+        }
+        // the session this side is in, or an older one still (a copy on the network, an older try's answer after it)
+        if (answeredId != SessionGate.NO_ID && (int) (id - answeredId) <= 0) return true;
+        if (trying && id != sessionIds.current()) {
+            long took = sessionIds.olderAnswer(id, now);
+            if (++olderAnswers <= OLDER_ANSWERS_DROPPED) {
+                log("Connect: the answer to an older try came" + (took < 0 ? "" : ", " + took + " ms after it began") + " - waiting for this try's.");
+                return true;
+            }
+            log("Connect: the third late answer in a row - taken (a very slow way to the phone).");
+        }
+        olderAnswers = 0;
+        answeredId = id;
+        return false;
+    }
+
+    /** How often the phone's answer to a Connect started this side's session (over) since start(): one a (re)connect when all is well. */
+    public long getSessionStarts() {
+        return sessionStarts.get();
     }
 
     private void processData(byte[] data) {

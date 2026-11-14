@@ -57,6 +57,8 @@
  *  knows this phone; a new session from the same PC keeps the stick lag's baseline.
  *  pc.53 (DRAUPNE Link 1.0.67): FRAME_TIME ahead of each frame's first packet for a PC that asks (profile bit 3) - how
  *  old the picture is as it leaves (CaptureClock) and the last Ping held (PingEcho), the PC's picture delay figure.
+ *  The session id a newer PC ends its Connect with goes to the gate (SessionGate: one try's Connects are one session
+ *  at any age, an older try's start nothing), and the answer to such a Connect says the sessions are told by it.
  */
 
 package de.droiddrone.flight;
@@ -592,7 +594,8 @@ public class Udp {
                                 && receiverPacket.getPort() == udpSender.getPort()) {
                             lastPcIp = udpSender.getIp(); // kept across deep sleep: the check window's hello goes there
                             lastPcPort = udpSender.getPort();
-                            SessionGate.Verdict v = gate.fromPilot(d, len, now);
+                            // pc.53: with the session id of a PC that sends one (none: the rule of before, to the letter)
+                            SessionGate.Verdict v = gate.fromPilot(d, len, now, SessionGate.sessionId(d, len));
                             if (v == SessionGate.Verdict.SAME_SESSION) continue; // one of the Connects in flight after a loss
                             if (v == SessionGate.Verdict.NEW_SESSION) {
                                 // pc.26: the pilot itself asks to connect again - it counts the link as lost (2 s of
@@ -623,7 +626,7 @@ public class Udp {
                         boolean sameAddress = from.equals(lastPcIp);
                         boolean samePc = sameAddress && receiverPacket.getPort() == lastPcPort;
                         SessionGate.Verdict v = gate.noSession(d, len, pilotKnown, samePc, sameAddress,
-                                () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, now);
+                                () -> FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED, now, SessionGate.sessionId(d, len));
                         if (v == SessionGate.Verdict.DROP) continue;
                         if (v == SessionGate.Verdict.WRONG_KEY) {
                             noteWrongKey(receiverPacket);
@@ -658,6 +661,9 @@ public class Udp {
                     if (frameTimes && d[0] == UdpCommon.Ping && len >= 10) {
                         pingEcho.received(Bytes.readInt(d, 6), android.os.SystemClock.elapsedRealtimeNanos());
                     }
+                    // pc.53: a Connect that got here starts a session - the answer (the buffer sends it back) says this
+                    // phone tells sessions by the id; a Connect without an id is left as it came
+                    if (d[0] == UdpCommon.Connect) SessionGate.markAnswer(d, len);
                     buffer.addPacket(receiverPacket);
                     synchronized (packetSignal) {
                         // pc.50: the buffer thread waits for it while resting; the flag, so that a packet added
@@ -859,7 +865,7 @@ public class Udp {
         // while armed is unknown, nor on a MAVLink FC, which isArmed never saw: FcArmedState)
         boolean disarmed = FcArmedState.of(msp, mavlink) == FcArmedState.DISARMED;
         boolean sameAddress = packet.getAddress().equals(udpSender.getIp());
-        SessionGate.Verdict v = gate.fromOther(d, len, sameAddress, disarmed, now);
+        SessionGate.Verdict v = gate.fromOther(d, len, sameAddress, disarmed, now, SessionGate.sessionId(d, len));
         if (v == SessionGate.Verdict.WRONG_KEY) {
             noteWrongKey(packet);
             return false;
