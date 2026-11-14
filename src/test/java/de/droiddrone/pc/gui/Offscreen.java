@@ -19,18 +19,21 @@ final class Offscreen {
     private Offscreen() {
     }
 
-    /** The window's size set and everything in it laid out (a few times: wrapping rows ask again once they know their width). */
+    /**
+     * The window's size set and everything in it laid out - a few times, every size asked anew each time, as the
+     * window on the screen does when a wrapping row asks for another layout once it knows its width.
+     */
     static void layout(java.awt.Window w, int width, int height) {
         w.setSize(width, height);
         for (int i = 0; i < 4; i++) {
+            invalidateAll(w);
             w.validate();
-            layoutAll(w);
         }
     }
 
-    private static void layoutAll(Container c) {
-        c.doLayout();
-        for (Component k : c.getComponents()) if (k instanceof Container ct) layoutAll(ct);
+    private static void invalidateAll(Component c) {
+        c.invalidate();
+        if (c instanceof Container k) for (Component x : k.getComponents()) invalidateAll(x);
     }
 
     /** Every visible part with a size lies inside its parent: nothing cut off at this window size. */

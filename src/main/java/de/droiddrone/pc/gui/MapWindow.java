@@ -87,6 +87,8 @@ final class MapWindow extends JFrame {
     private final Timer saveBounds = new Timer(800, e -> saveBounds());
     private boolean settingCombos;
     private final OverwatchPanel overwatchPanel;
+    /** The overwatch clips on this PC: the clip list's, and PREVIOUS FLIGHTS' marks. */
+    private final de.droiddrone.pc.overwatch.ClipIndex clips;
     /** FLEET MANAGEMENT (1.0.52): the FLEET tab at the right edge and its cards. */
     private final FleetManagementPanel fleetPanel;
     /** The least width of one of the figures under the map (an MGRS position in full). */
@@ -148,7 +150,7 @@ final class MapWindow extends JFrame {
         left.add(followButton);
         // the whole flight: a double-click on the map; the launch point: the Home key (End: the drone)
         // PREVIOUS FLIGHTS: in MAP TOOLS > TOOLS only (1.0.52, the pilot)
-        tools.flights.addActionListener(e -> PreviousFlightsDialog.show(this, cache, map.source(), this::showOldTrackOrClear));
+        tools.flights.addActionListener(e -> previousFlights());
         // MAP TOOLS (1.0.35): GO TO, PINS and DOWNLOAD AREA live in the slide-out, with the ruler, the drawings and the symbols
         tools.goTo.setToolTipText("Centre on a position: MGRS, UTM or lat, lon");
         tools.goTo.addActionListener(e -> goToPosition());
@@ -291,8 +293,8 @@ final class MapWindow extends JFrame {
         mapRow.add(map, BorderLayout.CENTER);
         // OVERWATCH (1.0.47): the alert cards and the clip list, right of the map
         MainWindow main = owner instanceof MainWindow m ? m : null;
-        overwatchPanel = new OverwatchPanel(map,
-                main != null ? main.overwatch().index() : new de.droiddrone.pc.overwatch.ClipIndex(de.droiddrone.pc.overwatch.ClipIndex.defaultRoot()),
+        clips = main != null ? main.overwatch().index() : new de.droiddrone.pc.overwatch.ClipIndex(de.droiddrone.pc.overwatch.ClipIndex.defaultRoot());
+        overwatchPanel = new OverwatchPanel(map, clips,
                 () -> new de.droiddrone.pc.map.CameraFootprint.Terrain(cache), () -> this.format,
                 d -> { if (main != null) main.overwatchConnect(d); },
                 d -> { if (main != null) main.overwatchDismiss(d); },
@@ -1358,7 +1360,12 @@ final class MapWindow extends JFrame {
 
     /** The tour opens PREVIOUS FLIGHTS from here (MAP TOOLS > TOOLS), in front of the map window. */
     void tourOpenPreviousFlights() {
-        PreviousFlightsDialog.show(this, cache, map.source(), this::showOldTrackOrClear);
+        previousFlights();
+    }
+
+    /** PREVIOUS FLIGHTS, with the pins and the overwatch clips: a flight's bar marks those of its time. */
+    private void previousFlights() {
+        PreviousFlightsDialog.show(this, cache, map.source(), this::showOldTrackOrClear, pins, clips);
     }
 
     /** PREVIOUS FLIGHTS in MAP TOOLS > DATA (1.0.64; was TOOLS). */
