@@ -63,6 +63,14 @@ final class MapPlaceLayer {
     }
 
     /**
+     * A pin's name as the map and the pins list write it: upper case, and a rough one - placed from the video on weak
+     * geometry, a place to look around and not a point - with a ~ before it. Shown so only: its name stays as it is.
+     */
+    static String shownName(Pins.Pin p) {
+        return (p.rough() ? "~" : "") + p.name().toUpperCase(Locale.ROOT);
+    }
+
+    /**
      * A pin: a diamond with its name, and the distance and bearing to it from the drone's last position (D) and from
      * the launch point (L), for the one who walks there.
      */
@@ -84,7 +92,7 @@ final class MapPlaceLayer {
             g.setColor(Color.WHITE);
             g.setStroke(new BasicStroke(1.4f));
             g.draw(d);
-            String line1 = p.name().toUpperCase(Locale.ROOT);
+            String line1 = shownName(p);
             String line2 = last == null ? null : (home == null ? "" : "D  ") + wayText(last.lat(), last.lon(), p);
             String line3 = home == null ? null : "L  " + wayText(home.lat(), home.lon(), p);
             g.setFont(Theme.headingFont(11f));

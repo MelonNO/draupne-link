@@ -4,6 +4,7 @@ import de.droiddrone.pc.video.VideoDecoder;
 import org.bytedeco.ffmpeg.avcodec.AVCodecParameters;
 import org.bytedeco.ffmpeg.avcodec.AVPacket;
 import org.bytedeco.ffmpeg.avformat.AVFormatContext;
+import org.bytedeco.ffmpeg.avformat.AVIndexEntry;
 import org.bytedeco.ffmpeg.avformat.AVStream;
 import org.bytedeco.ffmpeg.avutil.AVDictionary;
 import org.bytedeco.ffmpeg.avutil.AVRational;
@@ -96,6 +97,7 @@ public final class ClipPlayer implements AutoCloseable {
                 pkt.data().get(data);
                 long ts = pkt.pts() != AV_NOPTS_VALUE ? pkt.pts() : pkt.dts();
                 long ms = ts == AV_NOPTS_VALUE ? 0 : toMs(ts) - startMs();
+                readMs = ms;
                 if (decoder.decode(data, data.length) && skipUntil <= ms) {
                     decoder.convert(dst, w, h);
                     return Math.max(0, ms);
@@ -108,6 +110,38 @@ public final class ClipPlayer implements AutoCloseable {
     }
 
     private long skipUntil = Long.MIN_VALUE;
+    /** The time of the picture read last, ms from the clip's first moment; before the first, none. */
+    private long readMs = Long.MIN_VALUE;
+
+    /**
+     * For a player that shows fewer pictures than the clip has - playing faster than real time, or behind its clock:
+     * the pictures before ms are decoded (the ones after them are built on them) but not turned into a picture to
+     * show, which is the part that can be spared; the next one {@link #next} gives is the first at or after ms.
+     * Reading goes on from where it is.
+     */
+    public void skipTo(long ms) {
+        skipUntil = ms;
+    }
+
+    /**
+     * For a player behind its clock: as {@link #skipTo}, and when a key frame lies between the picture read last and
+     * ms the reading goes on from that key frame - the pictures before it are not even decoded. Without one, or in a
+     * file that doesn't list its key frames, it reads on from where it is: a seek would only decode the same pictures
+     * once more.
+     * @return whether it went on from a later key frame
+     */
+    public boolean catchUp(long ms) {
+        skipUntil = ms;
+        AVStream st = fmt.streams(stream);
+        long ts = av_rescale_q(Math.max(0, ms) + startMs(), av_make_q(1, 1000), timeBase);
+        int i = av_index_search_timestamp(st, ts, AVSEEK_FLAG_BACKWARD);
+        AVIndexEntry key = i < 0 ? null : avformat_index_get_entry(st, i);
+        if (key == null || key.isNull() || toMs(key.timestamp()) - startMs() <= readMs) return false;
+        if (av_seek_frame(fmt, stream, ts, AVSEEK_FLAG_BACKWARD) < 0) return false;
+        decoder.flush();
+        ended = false;
+        return true;
+    }
 
     /** To ms (from the clip's first moment): back to the key frame before it; the pictures up to ms are decoded unseen. */
     public void seek(long ms) {
