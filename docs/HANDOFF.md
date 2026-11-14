@@ -4,7 +4,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-13, 1.0.66 released, phone 2.3.0-pc.52; last flown: 1.0.43)
+## Where things stand (2026-11-14, 1.0.67 released, phone 2.3.0-pc.52; last flown: 1.0.43)
+
+- **1.0.67 (PC only, phone pc.52 stays; 2026-11-14; not tried on a motor):** the motor test's click on a motor (and REORDER MOTORS) spins at 2 % (`MotorTestDialog.PULSE` = 1020), was 8 %. The pilot's word. 2 % is below Betaflight's usual DShot idle (5.5 %): if a motor only twitches, 3 - 4 % is the next step.
 
 - **1.0.66 RELEASED 2026-11-13 (PC only, phone pc.52 stays; v1.0.66 Latest: installer, zip, APK; full suite 1355 green; not tried by the pilot):** flight time and range left, the pilot's figures for a full pack (23 min, 14 km: `FleetCards.FULL_FLIGHT_MIN` / `FULL_RANGE_KM`) times the pack's charge (`cellFill`, the same per cent as the STANAG page's DRONE). On the STANAG page (`StanagShow.stats`: FLIGHT, RANGE) and in FLEET's detail on the GPS line (`FleetManagementPanel.leftText`, `figuresFont`). A third line in the detail was tried first and failed `FleetCardsTest.tenPhonesFitWithoutScrollingOnSmallScreens` - the strip has no pixel to spare at 1093x584, so the figures share the GPS line and its letters shrink to fit. Linear in the voltage, as the gauge: not a discharge curve, and low under load - say so if the pilot finds the figures off in flight.
 

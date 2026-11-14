@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.67 (PC only, 2026-11-14)
+
+The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not tried on a motor yet.
+
+- **Motor test: a click on a motor spins it at 2 %** (the pilot: "make it spin at 2% when pressing"; was 8 %), still for 3 s. REORDER MOTORS spins each motor at the same 2 %. The sliders are unchanged (up to 10 %). At 2 % (DShot about 86 of 2047, below Betaflight's usual idle) a motor may only twitch: raise it if so.
+- For developers: `MotorTestDialog.PULSE`.
+
 ## 1.0.66 (PC only, 2026-11-13)
 
 The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not tried by the pilot yet.
