@@ -18,7 +18,7 @@ import java.util.stream.Stream;
  * (longest gap between RC frames), did the phone answer (ping, longest gap between telemetry packets), did the
  * flight controller talk (age of its last data) and what Betaflight said (RXLOSS / FAILSAFE). One CSV file per
  * connection in %APPDATA%\DraupneLink\logs: the newest {@value #KEEP} kept, and those of kept flights as long as the
- * flight is.
+ * flight is - sorted out when a connection's log is closed, not when it is opened.
  */
 public final class LinkLog implements AutoCloseable {
     static final int KEEP = 20;
@@ -71,24 +71,16 @@ public final class LinkLog implements AutoCloseable {
     /**
      * A new log in dir (created if needed). A log that belongs to a kept flight - PREVIOUS FLIGHTS plays its link with
      * the video and the track - stays as long as the flight does: it is neither deleted nor counted among the newest
-     * {@value #KEEP}; the logs of connections that kept nothing go by that rule as before.
+     * {@value #KEEP}; the logs of connections that kept nothing go by that rule as before. Nothing is sorted out here
+     * (CONNECT is where every millisecond counts): the older logs are when this one is closed, see {@link #close}.
      * @param kept whether an older log is a kept flight's. It may read the flights' files (FlightLibrary.keptLinkLog):
-     *             it is asked on a thread of its own after the new log is open, never on the caller's (CONNECT is on
-     *             the Swing thread), and only when there are more logs than the rule keeps anyway
+     *             it is asked on a thread of its own after this log is closed, never on the caller's (CONNECT and
+     *             DISCONNECT are on the Swing thread), and only when there are more logs than the rule keeps anyway
      */
     public static LinkLog open(Path dir, Predicate<Path> kept) throws IOException {
         Files.createDirectories(dir);
         LinkLog log = new LinkLog(dir.resolve("link-" + LocalDateTime.now().format(FILE) + ".csv"));
-        log.sorting = new Thread(() -> {
-            try {
-                sortOut(dir, log.file, kept);
-            } catch (IOException | RuntimeException e) {
-                // the folder or the flights can't be read: nothing deleted, the next connection tries again
-            }
-        }, "linkLogKeep");
-        log.sorting.setDaemon(true);
-        log.sorting.setPriority(Thread.MIN_PRIORITY);
-        log.sorting.start();
+        log.kept = kept;
         return log;
     }
 
@@ -116,12 +108,39 @@ public final class LinkLog implements AutoCloseable {
         }
     }
 
-    /** The thread sorting out the older logs ({@link #open(Path, Predicate)}), or null. */
-    private Thread sorting;
+    /** Whether an older log is a kept flight's ({@link #open(Path, Predicate)}); null: opened without anyone to ask. */
+    private Predicate<Path> kept;
+    /** The thread sorting out the older logs, started by {@link #close}; null before, and without a predicate. */
+    private volatile Thread sorting;
 
-    /** Waits until the older logs are sorted out (tests look at the folder right after opening). */
+    /**
+     * The connection is over: the older logs are sorted out on a thread of their own at the lowest priority (it may
+     * read every kept flight's files), this log counted as the new one. Once: from the close() that closed the file.
+     */
+    private void sortSoon() {
+        Predicate<Path> asked = kept;
+        if (asked == null) return;
+        Path dir = file.toAbsolutePath().getParent();
+        Thread t = new Thread(() -> {
+            try {
+                sortOut(dir, file, asked);
+            } catch (IOException | RuntimeException e) {
+                // the folder or the flights can't be read: nothing deleted, the next connection tries again
+            }
+        }, "linkLogKeep");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        sorting = t;
+        t.start();
+    }
+
+    /**
+     * Waits until the older logs are sorted out, after {@link #close} (at once before it): tests look at the folder
+     * then, and the probe's process ends right after its log.
+     */
     void awaitSorted() throws InterruptedException {
-        if (sorting != null) sorting.join();
+        Thread t = sorting;
+        if (t != null) t.join();
     }
 
     public Path file() {
@@ -285,6 +304,10 @@ public final class LinkLog implements AutoCloseable {
         return b ? "1" : "0";
     }
 
+    /**
+     * The last rows written and the file closed; then, for a log opened with {@link #open(Path, Predicate)}, the older
+     * logs are sorted out ({@link #sortSoon}). A second close does nothing.
+     */
     @Override
     public void close() throws IOException {
         synchronized (fileLock) { // after a write already under way: the last rows, then closed
@@ -295,8 +318,15 @@ public final class LinkLog implements AutoCloseable {
                 text = pending.toString();
                 pending.setLength(0);
             }
-            out.write(text);
-            out.close();
+            try {
+                out.write(text);
+            } finally {
+                try {
+                    out.close();
+                } finally {
+                    sortSoon(); // a disk that failed at the end is no reason to leave the older logs
+                }
+            }
         }
     }
 }
