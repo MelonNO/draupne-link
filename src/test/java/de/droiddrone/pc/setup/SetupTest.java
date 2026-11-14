@@ -1,5 +1,6 @@
 package de.droiddrone.pc.setup;
 
+import de.droiddrone.testing.Ports;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -104,14 +105,19 @@ class SetupTest {
         assertFalse(ApkShare.isAllowed(InetAddress.getByName("8.8.8.8")));
     }
 
+    /**
+     * On a free port of the test's own, never the app's: a DRAUPNE Link serving the phone app on this PC holds
+     * ApkShare.PORT (the test failed beside it, and holding the port would have kept the app from serving).
+     */
     @Test
     void apkShareServesTheFile() throws Exception {
         Path apk = dir.resolve(ApkShare.APK_NAME);
         Files.write(apk, new byte[]{1, 2, 3, 4, 5});
         try (ApkShare share = new ApkShare()) {
-            share.start(apk);
+            int port = Ports.freeTcp();
+            share.start(apk, port);
             HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
-            String base = "http://127.0.0.1:" + ApkShare.PORT + "/";
+            String base = "http://127.0.0.1:" + port + "/";
             HttpResponse<String> page = client.send(HttpRequest.newBuilder(URI.create(base)).build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, page.statusCode());
             assertTrue(page.body().contains(ApkShare.APK_NAME));
