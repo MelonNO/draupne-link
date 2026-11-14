@@ -15,8 +15,12 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -25,10 +29,11 @@ import java.util.stream.Stream;
  * PREVIOUS FLIGHTS (the pilot, 2026-11-08: "a proper screen with the possibility to play back"): every connection
  * this PC has kept something of, found by time - its GPX track (Documents\DRAUPNE Link\Tracks\track-DATE.gpx), its
  * recording (Videos\DRAUPNE Link\flight-DATE.mkv, the OSD copy -osd.mkv and the figures .csv beside it, whose pts_ms is
- * the MKV's clock) and its link log (%APPDATA%\DraupneLink\logs\link-DATE.csv, the newest 20 only). The files of one
- * connection overlap in time; that's how they are put together. A connection with neither a track nor a recording
- * isn't a flight to show. The drone's name comes from the link log's "Connecting to ..." / "Watching ..." line. The
- * pilot's bookmarks and note are a file beside the track ({@link FlightNotes}).
+ * the MKV's clock) and its link log (%APPDATA%\DraupneLink\logs\link-DATE.csv: a kept flight's stays, LinkLog deletes
+ * the others beyond the newest 20). The files of one connection overlap in time; that's how they are put together. A
+ * connection with neither a track nor a recording isn't a flight to show. The drone's name comes from the link log's
+ * "Connecting to ..." / "Watching ..." line. The pilot's bookmarks and note are a file beside the track
+ * ({@link FlightNotes}).
  */
 public final class FlightLibrary {
     /** Files this close in time (or overlapping) are the same connection's. */
@@ -108,6 +113,57 @@ public final class FlightLibrary {
             if (i != null) items.add(i);
         }
         return group(items);
+    }
+
+    /** The link logs that are a kept flight's: what {@link #scan} gives each flight. Reads files: not on the Swing thread. */
+    public static Set<Path> keptLinkLogs(Path tracksDir, Path videosDir, Path logsDir) {
+        Set<Path> kept = new HashSet<>();
+        for (Flight f : scan(tracksDir, videosDir, logsDir)) if (f.linkLog() != null) kept.add(f.linkLog().toAbsolutePath().normalize());
+        return kept;
+    }
+
+    /**
+     * For {@link de.droiddrone.pc.LinkLog#open(Path, Predicate)}: whether a link log is a kept flight's, with the
+     * tracks and recordings in the app's own folders. The folders are read once, when the first log is asked about
+     * (every track: LinkLog asks on a thread of its own); making it costs nothing.
+     */
+    public static Predicate<Path> keptLinkLog() {
+        return keptLinkLog(() -> {
+            try {
+                return FlightTrack.defaultDir();
+            } catch (IOException e) {
+                return null;
+            }
+        }, () -> {
+            try {
+                return de.droiddrone.pc.AppPaths.videosDir();
+            } catch (IOException e) {
+                return null;
+            }
+        });
+    }
+
+    /**
+     * {@link #keptLinkLog()} with the folders given; the logs' folder is the asked log's. A folder that isn't there
+     * (Documents on a share that is away) hides its flights: every log then counts as kept, so none is deleted until
+     * the flights can be seen again.
+     */
+    public static Predicate<Path> keptLinkLog(Supplier<Path> tracksDir, Supplier<Path> videosDir) {
+        return new Predicate<>() {
+            private Set<Path> kept;
+            private boolean unseen;
+
+            @Override
+            public synchronized boolean test(Path log) {
+                Path file = log.toAbsolutePath().normalize();
+                if (kept == null) {
+                    Path tracks = tracksDir.get(), videos = videosDir.get();
+                    unseen = tracks == null || videos == null || !Files.isDirectory(tracks) || !Files.isDirectory(videos);
+                    kept = unseen ? Set.of() : keptLinkLogs(tracks, videos, file.getParent());
+                }
+                return unseen || kept.contains(file);
+            }
+        };
     }
 
     static List<Flight> group(List<Item> items) {

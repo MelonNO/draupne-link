@@ -1878,7 +1878,7 @@ public class MainWindow extends JFrame {
             }
         }
         try {
-            linkLog = LinkLog.open(AppPaths.dataDir().resolve("logs"));
+            linkLog = LinkLog.open(AppPaths.dataDir().resolve("logs"), de.droiddrone.pc.flights.FlightLibrary.keptLinkLog());
             logLine("Link log: " + shortPath(linkLog.file()));
         } catch (IOException e) {
             linkLog = null;
