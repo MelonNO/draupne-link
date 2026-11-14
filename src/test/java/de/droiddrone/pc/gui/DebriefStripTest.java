@@ -122,6 +122,7 @@ class DebriefStripTest {
                             d.map.setReplay(d.data.path()); // fitted to the map's size now
                             d.tick();
                             Offscreen.shot(d, "flights-" + at); // first the picture to look at, then what must hold
+                            if (size[0] == 1093) Offscreen.shot(d, "flights-" + at + "-at-125-percent", 1.25); // a 1366x768 screen at 125 %
                             Offscreen.assertNothingClipped(d.getRootPane(), at);
                             assertWholeTexts(d.summaryStrip, at);
                             SummaryStrip s = d.summaryStrip;

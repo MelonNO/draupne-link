@@ -57,9 +57,16 @@ final class Offscreen {
 
     /** The content painted at the window's size; kept as name.png in $DEBRIEF_SHOTS when that is set. */
     static BufferedImage shot(javax.swing.RootPaneContainer w, String name) throws java.io.IOException {
+        return shot(w, name, 1);
+    }
+
+    /** @param scale Windows' display scaling to paint it at (1.25, 1.5): the same layout on more pixels, as such a screen shows it */
+    static BufferedImage shot(javax.swing.RootPaneContainer w, String name, double scale) throws java.io.IOException {
         Component root = w.getRootPane();
-        BufferedImage img = new BufferedImage(Math.max(1, root.getWidth()), Math.max(1, root.getHeight()), BufferedImage.TYPE_INT_RGB);
+        BufferedImage img = new BufferedImage(Math.max(1, (int) Math.round(root.getWidth() * scale)), Math.max(1, (int) Math.round(root.getHeight() * scale)),
+                BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
+        g.scale(scale, scale);
         root.paint(g);
         g.dispose();
         String dir = System.getenv("DEBRIEF_SHOTS");
