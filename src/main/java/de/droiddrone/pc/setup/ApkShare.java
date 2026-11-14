@@ -78,8 +78,17 @@ public class ApkShare implements AutoCloseable {
     }
 
     public void start(Path apk) throws IOException {
+        start(apk, PORT);
+    }
+
+    /**
+     * The same on a port of the caller's choosing: the tests', which must never bind {@link #PORT} - a DRAUPNE Link
+     * serving the phone app on this PC holds it. The app itself always serves on PORT (its firewall rule and the
+     * addresses it shows name that one).
+     */
+    void start(Path apk, int port) throws IOException {
         if (server != null) return;
-        server = HttpServer.create(new InetSocketAddress(PORT), 0);
+        server = HttpServer.create(new InetSocketAddress(port), 0);
         executor = Executors.newFixedThreadPool(2, r -> {
             Thread t = new Thread(r, "apkShare");
             t.setDaemon(true);

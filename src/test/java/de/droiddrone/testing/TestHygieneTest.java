@@ -15,8 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Keeps the tests fit to run side by side (the build's forks, a DRAUPNE Link running on the same PC): no waiting
- * helper of a test's own ({@link Waits} has the one copy) and no UDP port written into a test ({@link Ports} hands out
- * free ones). The test sources are read as text, so this finds the usual ways of writing either, not every way.
+ * helper of a test's own ({@link Waits} has the one copy), no port written into a test and none of the app's own
+ * fixed ports ({@link Ports} hands out free ones, UDP and TCP). The test sources are read as text, so this finds the
+ * usual ways of writing either, not every way.
  */
 class TestHygieneTest {
     /** A method named waitFor, or an await / waitUntil over a condition: Waits' job. */
@@ -25,12 +26,17 @@ class TestHygieneTest {
     /** The ways a test names the port it binds; group 1 is the number. */
     private static final List<Pattern> BOUND_PORTS = List.of(
             // a socket on a number of its own
-            Pattern.compile("new\\s+(?:java\\.net\\.)?(?:DatagramSocket|MulticastSocket|InetSocketAddress)\\(\\s*(\\d[\\d_]*)\\s*[,)]"),
+            Pattern.compile("new\\s+(?:java\\.net\\.)?(?:DatagramSocket|MulticastSocket|ServerSocket|InetSocketAddress)\\(\\s*(\\d[\\d_]*)\\s*[,)]"),
             // a link's own port (the last argument; a link made as a subclass too), a name service that answers on its port
             Pattern.compile("(?:new\\s+ControlLink|super)\\((?=[^;]*InetAddress)[^;]*,\\s*(\\d[\\d_]*)\\s*\\)\\s*;"),
             Pattern.compile("new\\s+NameService\\([^;]*,\\s*(\\d[\\d_]*)\\s*,\\s*true\\b"),
             // a constant or variable named for a port (PC_PORT, pcPort, port - not "report")
             Pattern.compile("\\b(?:\\w*_)?(?:PORT(?:_\\w*)?|port|[a-z]\\w*Port\\w*)\\s*=\\s*(\\d[\\d_]*)\\s*[;,]"));
+    /**
+     * A fixed port of the app's own named in a test (ApkShare.PORT): a DRAUPNE Link on this PC may hold it, and a test
+     * holding it keeps that app from serving.
+     */
+    private static final Pattern APP_PORT = Pattern.compile("\\b[A-Z]\\w*\\.(?:\\w+_)?PORT\\b");
 
     @Test
     void noTestHasAWaitingHelperOrAPortNumberOfItsOwn() throws Exception {
@@ -52,8 +58,9 @@ class TestHygieneTest {
                     if (OWN_WAIT.matcher(line).find()) found.add(at + "  <- use Waits");
                     for (Pattern p : BOUND_PORTS) {
                         Matcher m = p.matcher(line);
-                        if (m.find() && Integer.parseInt(m.group(1).replace("_", "")) >= 1024) found.add(at + "  <- use Ports.free()");
+                        if (m.find() && Integer.parseInt(m.group(1).replace("_", "")) >= 1024) found.add(at + "  <- use Ports.free() / Ports.freeTcp()");
                     }
+                    if (APP_PORT.matcher(line).find()) found.add(at + "  <- the app's own port: use Ports.free() / Ports.freeTcp()");
                 }
             }
         }
@@ -77,6 +84,7 @@ class TestHygieneTest {
         for (String bound : List.of("    private static final int PHONE_PORT = 46286;",
                 "        new DatagramSocket(46287).close();",
                 "            socket = new DatagramSocket(46310, InetAddress.getLoopbackAddress());",
+                "        try (ServerSocket taken = new ServerSocket(8765)) {",
                 "        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phone.port(), 46391);",
                 "        svc = new NameService(config, names, () -> status, 6286, true, m -> { }, log::add);")) {
             assertTrue(BOUND_PORTS.stream().anyMatch(p -> p.matcher(bound).find()), bound);
@@ -89,6 +97,17 @@ class TestHygieneTest {
                 Matcher m = p.matcher(fine);
                 assertTrue(!m.find() || Integer.parseInt(m.group(1).replace("_", "")) < 1024, fine);
             }
+        }
+        for (String app : List.of("            String base = \"http://127.0.0.1:\" + ApkShare.PORT + \"/\";",
+                "        assertTrue(rules.contains(de.droiddrone.pc.setup.ApkShare.PORT));",
+                "        server.bind(new InetSocketAddress(Relay.UDP_PORT));")) {
+            assertTrue(APP_PORT.matcher(app).find(), app);
+        }
+        for (String fine : List.of("            share.start(apk, port);",
+                "        assertEquals(MotionRecord.KIND_REPORT, b.kind);",
+                "        int n = Limits.PORT_COUNT;",
+                "        String s = report.SUPPORT;")) {
+            assertTrue(!APP_PORT.matcher(fine).find(), fine);
         }
     }
 }
