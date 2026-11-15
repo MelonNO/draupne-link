@@ -88,6 +88,24 @@ public class ControlLink {
         default double frameLossRatio() {
             return 0;
         }
+
+        /**
+         * 1.0.67 (phone app pc.53, asked for by profile bit 3): a frame's times, come right before its first fragment -
+         * how old the picture was as it left the phone and the Ping the phone had last taken (video.GlassToGlass).
+         * @param captureToSendMs 65535 = the phone knows none
+         * @param pingEcho        that Ping's stamp, its low 32 bits; pingHoldMs how long the phone held it, 65535 = none taken
+         * @param arriveMs        when the packet came, on GlassToGlass.clockMs (the Pings' clock, not MonoClock)
+         */
+        default void onFrameTime(short frameNum, int captureToSendMs, long pingEcho, int pingHoldMs, long arriveMs) {
+        }
+
+        /** 1.0.67: a Pong's round trip, ms, at clockMs (GlassToGlass.clockMs): the link's best is the lowest of them. */
+        default void onRoundTrip(int ms, long clockMs) {
+        }
+
+        /** 1.0.67: the link is up (again): what was learned of its times belongs to the session before. */
+        default void onLinkSession() {
+        }
     }
 
     /**
@@ -199,6 +217,27 @@ public class ControlLink {
      */
     static final byte VIDEO_PROFILE = PacketIds.VIDEO_PROFILE;
     static final int PROFILE_KEY_FRAMES_TWICE = 1, PROFILE_GROUP_PARITY = 2, PROFILE_AVC = 4;
+    /**
+     * 1.0.67 (phone app pc.53; an older one reads bits 0-2 by mask and never sees it): profile bit 3 = frame times
+     * wanted - in every tier, whenever this PC shows the video. The phone then sends FRAME_TIME [0x53][frameNum i16]
+     * [captureToSendMs u16][pingEcho u32][pingHoldMs u16] (65535 = not known) right before each frame's first
+     * fragment, unnumbered: the picture's delay from the camera to this screen (video.GlassToGlass, the OSD's G2G).
+     * The phone forgets the bit with every new session (bits 0-2 it keeps), so a PC that doesn't ask never gets one.
+     */
+    static final int PROFILE_FRAME_TIMES = 8;
+    static final byte FRAME_TIME = PacketIds.FRAME_TIME;
+    static final int FRAME_TIME_BYTES = 11;
+    /**
+     * Frame times asked for and none come while the video does: the profile goes again this often, at most this many
+     * times a session. It is unnumbered; lost with its copies, the phone would send none for the whole session. An
+     * older phone app gets the few packets too and finds its flags as they were.
+     */
+    static final long PROFILE_REFRESH_MS = 3000;
+    static final int PROFILE_REFRESHES = 5;
+    private int profileRefreshes;
+    private long lastProfileAt;
+    /** When the last FRAME_TIME came (MonoClock.ms); 0 = none. */
+    private volatile long lastFrameTimeAt;
     /** Upstream's Control app asks for the stream every 2.5 s until the codec config arrives. */
     private static final int START_VIDEO_RETRY_MS = 2500;
     /**
@@ -661,6 +700,17 @@ public class ControlLink {
     private boolean handleVideoFragment(DatagramPacket packet) {
         byte[] d = packet.getData();
         int len = packet.getLength();
+        if (len == FRAME_TIME_BYTES && d[0] == FRAME_TIME) {
+            // 1.0.67: a frame's times, ahead of its fragments - to the video side with its arrival on the Pings' clock.
+            // Never passed on to spectators (the times are this link's), and nothing while this PC only watches
+            VideoListener v = videoListener;
+            if (v != null && spectator == null) {
+                lastFrameTimeAt = lastReceivedAt;
+                v.onFrameTime((short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), ((d[3] & 0xff) << 8) | (d[4] & 0xff),
+                        Bytes.readInt(d, 5) & 0xFFFFFFFFL, ((d[9] & 0xff) << 8) | (d[10] & 0xff), de.droiddrone.pc.video.GlassToGlass.clockMs());
+            }
+            return true;
+        }
         if (len < 1 || (d[0] != UdpCommon.VideoFrame && d[0] != UdpCommon.KeyFrame && d[0] != VIDEO_PARITY && d[0] != VIDEO_PARITY_GROUP)) return false;
         // shown whenever the stream's config is known: before 1.0.33 the fragments were thrown away while the link
         // counted as lost (2 s of silence), so a picture that was arriving again stayed black until the handshake
@@ -778,7 +828,12 @@ public class ControlLink {
                     // kept: the flight controller's state (for FC_STATE_KEEP_MS, see below) and the video config -
                     // the phone's stream usually never stopped, and asking for it again would rebuild its encoder
                 }
-                if (!wasConnected && connected) audioRequest.newSession(); // the audio request goes out at once
+                if (!wasConnected && connected) {
+                    audioRequest.newSession(); // the audio request goes out at once
+                    VideoListener v = videoListener;
+                    if (v != null) v.onLinkSession(); // 1.0.67: the picture delay's figures start over
+                    profileRefreshes = PROFILE_REFRESHES;
+                }
                 if (!wasConnected && connected && lostAt > 0) {
                     log("Link back after " + (now - lostAt) + " ms.");
                     tierPolicy.outage(now); // 1.0.64: a loss counts for AUTO as a stall does
@@ -941,9 +996,12 @@ public class ControlLink {
                 boolean toEndPoint = buffer.readBoolean();
                 long time = buffer.readLong();
                 if (toEndPoint) {
-                    pingMs = (int) (UdpSender.pingClockMs() - time); // 1.0.49: UdpSender's monotonic stamp, not the wall clock
+                    long clock = UdpSender.pingClockMs();
+                    pingMs = (int) (clock - time); // 1.0.49: UdpSender's monotonic stamp, not the wall clock
                     lastPingTimestamp = MonoClock.ms();
                     maxPingMs.accumulateAndGet(pingMs, Math::max);
+                    VideoListener v = videoListener;
+                    if (v != null && spectator == null) v.onRoundTrip(pingMs, clock); // 1.0.67: the picture delay's "link at its best"
                 }
             }
             case UdpCommon.ConfigReceived -> {
@@ -1431,6 +1489,12 @@ public class ControlLink {
             nextProfileSend = now + 700;
             sendProfile();
         }
+        // 1.0.67: frame times asked for, the video comes and no FRAME_TIME with it: the profile once more (see PROFILE_REFRESH_MS)
+        if (profileRefreshes > 0 && videoListener != null && spectator == null && now - lastProfileAt >= PROFILE_REFRESH_MS
+                && lastFrameTimeAt < readyAt && now - lastVideoFragmentAt < 1000) {
+            profileRefreshes--;
+            sendProfile();
+        }
         // did the phone really switch? Its new stream says (2026-11-01: a switch back to 720p never happened, and PC
         // and phone disagreed for 3 minutes). If not, the size goes out again
         if (verifyFrom >= 0 && now >= verifyFrom) {
@@ -1521,6 +1585,7 @@ public class ControlLink {
      * in bad coverage mode would send key frames twice, parity and H.264 to a PC that takes it for normal.
      */
     private void sendProfile() {
+        lastProfileAt = MonoClock.ms();
         try {
             socket.send(new DatagramPacket(new byte[]{VIDEO_PROFILE, (byte) profileFlags()}, 2, remoteIp, remotePort));
         } catch (IOException e) {
@@ -1529,8 +1594,9 @@ public class ControlLink {
     }
 
     int profileFlags() {
-        if (!isRobust()) return 0;
-        return PROFILE_KEY_FRAMES_TWICE | PROFILE_GROUP_PARITY | (videoHevc ? PROFILE_AVC : 0);
+        int asked = videoListener != null ? PROFILE_FRAME_TIMES : 0; // 1.0.67: in every tier; bits 0-2 as they were
+        if (!isRobust()) return asked;
+        return asked | PROFILE_KEY_FRAMES_TWICE | PROFILE_GROUP_PARITY | (videoHevc ? PROFILE_AVC : 0);
     }
 
     /** Bad coverage mode (or the survival tier) is on. */

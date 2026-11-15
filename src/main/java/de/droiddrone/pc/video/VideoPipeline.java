@@ -49,10 +49,24 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
      * @param hardware       the pictures are decoded on the GPU
      * @param pingBaselineMs the link's usual ping, the lowest of the last 15-30 s (-1 before the first)
      * @param pictureAgeMs   how long ago the frame on screen arrived (-1 without one); the view adds its display time
+     * @param g2gMs          1.0.67: the picture's delay from the camera to this PC's screen, estimated and evened out
+     *                       (GlassToGlass); -1 without a figure - a phone app before pc.53, no picture, watching
+     * @param captureToSendMs its parts for the last picture shown: the phone's, from the capture to the first packet
+     *                       leaving, and videoNetMs the network's; -1 each without a figure
+     * @param g2gMaxMs       the highest single picture's figure of the last second; -1 for none
      */
     public record Stats(boolean hevc, int width, int height, int receivedFps, int shownFps, double megabitsPerSecond,
                         double decodeMs, double convertMs, long damaged, long lost, String error, boolean hardware,
-                        int bitrateStep, long drawSkipped, long bunched, long recovered, int pingBaselineMs, long pictureAgeMs) {}
+                        int bitrateStep, long drawSkipped, long bunched, long recovered, int pingBaselineMs, long pictureAgeMs,
+                        int g2gMs, int captureToSendMs, int videoNetMs, int g2gMaxMs) {
+        /** Up to 1.0.66: no picture delay figures. */
+        public Stats(boolean hevc, int width, int height, int receivedFps, int shownFps, double megabitsPerSecond,
+                     double decodeMs, double convertMs, long damaged, long lost, String error, boolean hardware,
+                     int bitrateStep, long drawSkipped, long bunched, long recovered, int pingBaselineMs, long pictureAgeMs) {
+            this(hevc, width, height, receivedFps, shownFps, megabitsPerSecond, decodeMs, convertMs, damaged, lost, error, hardware,
+                    bitrateStep, drawSkipped, bunched, recovered, pingBaselineMs, pictureAgeMs, -1, -1, -1, -1);
+        }
+    }
 
     /** Frames arriving closer together than this came bunched up (4G delivers in bursts). */
     static final long BUNCH_MS = 4;
@@ -224,6 +238,14 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     private volatile long lastFragmentAt;
     /** When the frame on screen arrived (decode thread); 0 = none yet. The OSD's picture age. */
     private volatile long shownArrivedMs;
+    /**
+     * 1.0.67: the picture's delay from the camera to this screen (the OSD's G2G, the link log): the phone's FRAME_TIME
+     * from the receive thread, each picture shown from the decode thread; not fed while this PC only watches (the
+     * link passes nothing on then). Its own lock, taken alone.
+     */
+    private final GlassToGlass g2g = new GlassToGlass();
+    /** The highest figure of the last whole second (decode thread), for the link log's rows of that second. */
+    private volatile int g2gMaxMs = GlassToGlass.UNKNOWN;
 
     // decode-thread statistics
     /** Frames the decode thread is done with - decoded and drawn, or passed over (tests wait for it, not for a pause). */
@@ -609,6 +631,21 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         if (frame != null) accept(frame, now);
     }
 
+    @Override
+    public void onFrameTime(short frameNum, int captureToSendMs, long pingEcho, int pingHoldMs, long arriveMs) {
+        g2g.onFrameTime(frameNum, captureToSendMs, pingEcho, pingHoldMs, arriveMs);
+    }
+
+    @Override
+    public void onRoundTrip(int ms, long clockMs) {
+        g2g.onRoundTrip(ms, clockMs);
+    }
+
+    @Override
+    public void onLinkSession() {
+        g2g.reset();
+    }
+
     // ------------------------------------------------------------------ decode thread
 
     private void decodeLoop() {
@@ -638,6 +675,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         shownFps = (int) (shown * 1000 / (now - shownWindow));
                         shown = 0;
                         shownWindow = now;
+                        g2gMaxMs = g2g.takeMaxMs();
                     }
                     if (item == null) continue;
                     if (item == STOP) break;
@@ -699,6 +737,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         decoder.convert(pixels, size[0], size[1]);
                         decodingOnGpu = decoder.isHardware();
                         sink.presentFrame();
+                        g2g.onShown(frame.number(), GlassToGlass.clockMs()); // 1.0.67: this picture's delay, if the phone sent its times
                         long shownAt = MonoClock.ms();
                         lastPresentedAt = shownAt;
                         shownArrivedMs = frame.arrivedMs() > 0 ? frame.arrivedMs() : shownAt;
@@ -792,9 +831,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         long now = MonoClock.ms();
         boolean flowing = now - lastFragmentAt < 1500; // stopped: no old figures
         long arrived = shownArrivedMs;
+        long clock = GlassToGlass.clockMs();
         return new Stats(c != null && c.hevc(), c == null ? 0 : c.width(), c == null ? 0 : c.height(), flowing ? receivedFps : 0,
                 flowing ? shownFps : 0, flowing ? megabitsPerSecond : 0, decodeMs, convertMs, damaged, lost, error, decodingOnGpu,
-                bitrate.step(), drawSkipped, bunched, recovered, bitrate.baselinePingMs(), arrived == 0 ? -1 : now - arrived);
+                bitrate.step(), drawSkipped, bunched, recovered, bitrate.baselinePingMs(), arrived == 0 ? -1 : now - arrived,
+                g2g.smoothedMs(clock), g2g.lastCaptureToSendMs(clock), g2g.lastNetworkMs(clock), flowing ? g2gMaxMs : GlassToGlass.UNKNOWN);
     }
 
     /** Decode on the GPU from the next stream (re)start or decoder restart; software stays the fallback. */

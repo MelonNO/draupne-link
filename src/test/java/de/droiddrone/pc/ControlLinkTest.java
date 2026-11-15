@@ -304,6 +304,10 @@ class ControlLinkTest {
         assertEquals(Integer.toString(Integer.parseInt(row[2]) / 2 + 3), row[columns.indexOf("pc_to_fc_ms")], "half the ping + the phone's in-to-out");
         assertEquals("7", row[columns.indexOf("glfw_poll_max_ms")]);
         assertEquals("event", columns.get(columns.size() - 1), "the event stays the last column");
+        // 1.0.67: the picture delay's four columns right before it, blank without a figure (no video here)
+        assertEquals(List.of("capture_to_send_ms", "video_net_ms", "g2g_ms", "g2g_max_ms"), columns.subList(columns.size() - 5, columns.size() - 1));
+        for (int i = 2; i <= 5; i++) assertEquals("", row[row.length - i], columns.get(columns.size() - i));
+        assertEquals("sticks_dropped_late", columns.get(columns.size() - 6), "the columns of before stand where they stood");
         assertEquals(LinkLog.HEADER.split(",").length, row.length, "every column in every row");
         assertEquals(LinkLog.HEADER.split(",").length, lines.get(2).replace("\"Joystick lost, test\"", "e").split(",", -1).length,
                 "event rows too (the event's own comma is inside quotes)");
@@ -881,6 +885,47 @@ class ControlLinkTest {
      * the session before would send key frames twice, parity and H.264 to a PC that takes it for normal. So the profile
      * goes out with the first config of every session, the normal one too (1.0.34).
      */
+    /**
+     * 1.0.67: with the video shown, the profile asks for frame times (bit 3) in every tier - and bits 0-2, all a phone
+     * app before pc.53 reads, are what 1.0.66 sent: nothing on the normal picture, 1 | 2 | 4 in bad coverage mode.
+     */
+    @Test
+    void theProfileAsksForFrameTimesInEveryTierAndLeavesTheOlderBitsAsTheyWere() throws Exception {
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        PcConfig config = PcConfig.defaults();
+        config.set(ControlLink.VIDEO_MODE_KEY, "NORMAL");
+        link = new ControlLink(config, InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        link.setVideoListener(new ControlLink.VideoListener() {
+            @Override
+            public void onVideoConfig(int width, int height, boolean hevc, boolean frontCamera, byte[] codecConfig) {
+            }
+
+            @Override
+            public void onVideoFragment(boolean keyFrame, short frameNum, int offset, int frameSize, byte[] buf, int dataOffset, int length) {
+            }
+        }, true);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY && phone.videoProfileRaw >= 0, 5000, "link READY, a profile");
+        assertEquals(ControlLink.PROFILE_FRAME_TIMES, phone.videoProfileRaw & ControlLink.PROFILE_FRAME_TIMES, "frame times asked for");
+        assertEquals(0, phone.videoProfile, "the normal picture: bits 0-2 as 1.0.66 sent them");
+        link.setVideoMode(ControlLink.VideoMode.ROBUST);
+        waitFor(() -> phone.videoProfile == (1 | 2 | 4), 3000, "bad coverage mode: key frames twice, parity per group, H.264");
+        assertEquals(ControlLink.PROFILE_FRAME_TIMES, phone.videoProfileRaw & ControlLink.PROFILE_FRAME_TIMES, "and frame times there too");
+        link.setVideoMode(ControlLink.VideoMode.SHARP);
+        waitFor(() -> phone.videoProfile == 0 && link.getTier() == ControlLink.Tier.SHARP, 3000, "the sharp tier: bits 0-2 clear again");
+        assertEquals(ControlLink.PROFILE_FRAME_TIMES, phone.videoProfileRaw & ControlLink.PROFILE_FRAME_TIMES);
+    }
+
+    /** Without a video listener nothing is shown, so nothing is asked: the profile is 1.0.66's to the bit. */
+    @Test
+    void aLinkWithoutVideoAsksForNoFrameTimes() throws Exception {
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY && phone.videoProfileRaw >= 0, 5000, "link READY, a profile");
+        assertEquals(0, phone.videoProfileRaw);
+    }
+
     @Test
     void theVideoProfileGoesOutWithTheFirstConfigOfEverySession() throws Exception {
         phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
@@ -1179,6 +1224,8 @@ class ControlLinkTest {
         }
         /** The last video profile received (pc.15 on): -1 = none yet, else its flags (bit 0: key frames twice). */
         volatile int videoProfile = -1;
+        /** The profile's whole byte as it came (1.0.67 sets bits a phone app before pc.53 never looks at). */
+        volatile int videoProfileRaw = -1;
         /** ChangeBitRate packets (true = up) and SET_BITRATE steps (pc.26), in order. */
         final List<Boolean> bitRateChanges = new CopyOnWriteArrayList<>();
         final List<Integer> bitRateSteps = new CopyOnWriteArrayList<>();
@@ -1406,7 +1453,9 @@ class ControlLinkTest {
                         dropProfiles.decrementAndGet();
                         return;
                     }
-                    videoProfile = r.readByte();
+                    int flags = r.readByte();
+                    videoProfileRaw = flags;
+                    videoProfile = flags & 7; // as every released phone app reads it: by mask, bits 0-2 at most
                 }
                 case ControlLink.SET_BITRATE -> bitRateSteps.add(r.readUnsignedByteAsInt());
                 case UdpCommon.ChangeBitRate -> bitRateChanges.add(r.readBoolean());
