@@ -14,7 +14,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 - **On `beta`, not released, not merged to main, nothing tried on hardware (2026-11-14):** 1.0.67 + phone app
   2.3.0-pc.53-beta (versionCode 2030053; `ApkShare` still pins pc.52). See CHANGELOG 1.0.67: the picture's delay on
   the OSD (G2G), a session id in Connect, Reed-Solomon parity in ROBUST / SURVIVAL, PREVIOUS FLIGHTS' debrief, MARK
-  and STILL on the video, pins search / GPX; tests in 4 forks (~6-8 min), 1605 green, phone compiles.
+  and STILL on the video, pins search / GPX, pins on the video (AR, 2026-11-15) and two DEMO fixes; tests in 4
+  forks (~6-8 min), 1624 green, phone compiles.
   - The release after this beta takes phone app **pc.54**: the update check reads numbers only, so pc.53 would not
     count as newer than pc.53-beta on the test phones.
   - Known, not changed: in ROBUST the 1 Mbit/s cap reaches the phone a step a second (`BitrateControl`) and
@@ -53,6 +54,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   B5. beta: OSD extra G2G against the QR latency test, in NORMAL and in ROBUST.
   B6. beta: the picture in ROBUST, old phone vs new at the same spot (damaged / recovered in the link log).
   B7. beta: MARK a landmark 100-300 m out, centre and edge of the picture; STILL in flight (no hitch); REPORT.
+  B8. beta: pins on the video - a pin on a known landmark stays on it in a hover and a slow turn (how far off in a
+      fast one, with pc.53-beta and with pc.52); one behind a hill grey; the edge arrows point the right way; in DEMO
+      the horizon tilts with the picture.
 - **Open items and known limits:**
   - 1.0.66: flight time and range are linear in the voltage, not a discharge curve - low under load.
   - 1.0.65 STANAG: no sound; a drone flown from another PC is a page here; a clip can be dropped unplayed.

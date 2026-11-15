@@ -188,6 +188,8 @@ public class MainWindow extends JFrame {
     /** Where the camera looks (1.0.39): drawn on the maps, and the STANAG 4609 stream's frame centre and corners. */
     private final CameraView cameraView = new CameraView(tileCache);
     private final CameraView.Live cameraLive = new CameraView.Live(cameraView);
+    /** The pins on the video (1.0.67): the maps' pins where they stand in the picture. */
+    private final VideoPins videoPins = new VideoPins(cameraView);
     private boolean cameraOnMap;
     /** The STANAG 4609 streams, one per drone (1.0.65); set in the constructor. */
     private StanagController stanagStreams;
@@ -1970,6 +1972,7 @@ public class MainWindow extends JFrame {
     /** The OSD and the maps say VIRTUAL while the link is to a drone of the virtual fleet. */
     private void setVirtualShown(boolean on) {
         videoView.setVirtual(on);
+        cameraView.setVirtual(on); // 1.0.67: the virtual camera's angle for MARK, the pins on the video and the map's view
         miniMap.setVirtualDrone(on);
         if (mapWindow != null) mapWindow.map().setVirtualDrone(on);
     }
@@ -3610,7 +3613,7 @@ public class MainWindow extends JFrame {
         VideoPipeline v = video;
         boolean spectator = l.isSpectator();
         RcSession s = spectator ? null : session;
-        return OsdDataBuilder.build(new OsdDataBuilder.In(spectator, l.isWatchOnly(),
+        OsdRenderer.Data d = OsdDataBuilder.build(new OsdDataBuilder.In(spectator, l.isWatchOnly(),
                 l.getState() == (spectator ? ControlLink.State.SPECTATING : ControlLink.State.READY),
                 v != null && v.hasStream(), videoView.msSincePicture(), videoView.msSinceStreamStart(),
                 l.getTelemetry().getStatus(), l.getTelemetry().getPhoneState(), s != null, s != null && s.isRcEnabled(),
@@ -3623,6 +3626,15 @@ public class MainWindow extends JFrame {
                 MonoClock.ms(),
                 // 1.0.64: waiting for a sleeper is WAKING - m:ss, not LINK LOST; and the tier under normal is tagged
                 !spectator && power.awaitingWake, spectator ? -1 : wakeInMs(), spectator ? null : l.getTier()));
+        if (!videoView.getOsdLayout().isOn(OsdElement.PINS) || miniMap == null) return d;
+        // the pins the maps show (watching: the pilot PC's), from the pose of when the picture was taken
+        FcTelemetry t = l.getTelemetry();
+        long now = MonoClock.ms();
+        VideoPipeline.Stats st = d.video();
+        long shift = spectator || st == null ? 0 : VideoPins.shiftMs(st.g2gMs(), videoView.displayMs(), l.getPing());
+        int[] size = v == null ? null : v.pictureSize();
+        if (size != null) cameraView.setPictureSize(size[0], size[1]);
+        return d.withPins(videoPins.marks(t, track, miniMap.allPins(), t.isArmedNow(now, 2000), shift, now));
     }
 
     /** The worst stick lateness the phone saw in the last second, in a fresh report; -1 = unknown. */

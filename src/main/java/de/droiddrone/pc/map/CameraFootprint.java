@@ -121,6 +121,67 @@ public final class CameraFootprint {
         return new double[]{d[0] / n, d[1] / n, d[2] / n};
     }
 
+    /**
+     * 1.0.67, the pins on the video: where a point of the ground shows in the picture - {@link #direction} turned
+     * back. (lat, lon) at heightM above the sea; returns {u, v, ahead}: u, v -1..1 left to right and top to bottom of
+     * the picture as it is shown (beyond -1..1: beside it), ahead the way to the point along the camera's look, m.
+     * Ahead 0 or less: behind the camera, and u, v then say only which way it is (their signs). The earth's curve as
+     * the rays take it.
+     */
+    public static double[] toPicture(Pose p, double lat, double lon, double heightM) {
+        double north = northM(p, lat), east = eastM(p, lon);
+        double dist = Math.hypot(north, east);
+        double down = p.altM() - (heightM - dist * dist / (2 * EARTH_M));
+        double[] d = yaw(new double[]{north, east, down}, -p.headingDeg()); // direction's turns, the other way round
+        d = pitch(d, -p.pitchDeg());
+        d = roll(d, -p.rollDeg());
+        d = pitch(d, -p.tiltDeg());
+        double tu = Math.tan(Math.toRadians(p.hfovDeg() / 2)), tv = Math.tan(Math.toRadians(p.vfovDeg() / 2));
+        double ahead = d[0], over = ahead > 1e-6 ? ahead : 1;
+        return new double[]{d[1] / (over * tu), d[2] / (over * tv), ahead};
+    }
+
+    /** The sight line is looked along every this many metres for ground in the way (the terrain's cells are ~20-40 m). */
+    static final double SIGHT_STEP_M = 15;
+    /** Ground this near either end hides nothing: the cells round a pin on a crest, and round the drone itself. */
+    static final double SIGHT_END_M = 40;
+    /** The point is looked at this high over its ground (a pin marks something standing there), and the camera taken as at least this high over its own. */
+    static final double SIGHT_ABOVE_M = 2;
+
+    /**
+     * 1.0.67: the terrain stands between the camera and a point of the ground (lat, lon with its ground at heightM):
+     * the straight line from the camera to SIGHT_ABOVE_M over the point passes under the ground on the way, the
+     * earth's curve as the rays take it. Where the terrain isn't known it hides nothing; no terrain: false.
+     */
+    public static boolean hidden(Pose p, double lat, double lon, double heightM, RadioHorizon.Terrain terrain) {
+        if (terrain == null) return false;
+        double north = northM(p, lat), east = eastM(p, lon);
+        double dist = Math.hypot(north, east);
+        if (dist <= 2 * SIGHT_END_M) return false;
+        double under = terrain.heightM(p.lat(), p.lon());
+        // a drone sitting in the grass: its height (launch ground + barometer) may be under the terrain's own
+        double from = Double.isNaN(under) ? p.altM() : Math.max(p.altM(), under + SIGHT_ABOVE_M);
+        double to = heightM + SIGHT_ABOVE_M - dist * dist / (2 * EARTH_M);
+        int steps = (int) Math.ceil(dist / SIGHT_STEP_M);
+        for (int i = 1; i < steps; i++) {
+            double f = (double) i / steps, s = f * dist;
+            if (s < SIGHT_END_M || dist - s < SIGHT_END_M) continue;
+            double[] ll = RadioHorizon.offset(p.lat(), p.lon(), east * f, north * f);
+            double ground = terrain.heightM(ll[0], ll[1]);
+            if (!Double.isNaN(ground) && ground - s * s / (2 * EARTH_M) > from + (to - from) * f) return true;
+        }
+        return false;
+    }
+
+    /** Metres north and east of the pose to a point: RadioHorizon.offset turned back. */
+    private static double northM(Pose p, double lat) {
+        return (lat - p.lat()) * 111_320.0;
+    }
+
+    private static double eastM(Pose p, double lon) {
+        return (lon - p.lon()) * 111_320.0 * Math.cos(Math.toRadians(p.lat()));
+    }
+
     private static double[] pitch(double[] d, double deg) { // nose up positive: forward turns up (-down)
         double c = Math.cos(Math.toRadians(deg)), s = Math.sin(Math.toRadians(deg));
         return new double[]{d[0] * c + d[2] * s, d[1], -d[0] * s + d[2] * c};
