@@ -13,7 +13,7 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 1.0.67, the frame assembler with Reed-Solomon parity (phone app pc.53, bad coverage mode): the packets in the order
+ * 1.0.69, the frame assembler with Reed-Solomon parity (phone app pc.53, bad coverage mode): the packets in the order
  * the phone's video sender sends them (FecSender: each block's parity right behind it), some of them lost, and what
  * comes out when. A whole frame is never held for its parity; a frame with a gap goes out the moment its block's
  * parity has made it whole; what can't be mended goes out damaged - so the pipeline asks for a key frame, as ever.

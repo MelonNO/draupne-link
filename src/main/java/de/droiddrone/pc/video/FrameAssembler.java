@@ -24,7 +24,7 @@ import java.util.Map;
  * forgotten). A frame number passed over (the frame lost whole, every packet of it) counts as lost once a newer frame is
  * released, so the pipeline asks for a key frame and the bitrate steps down (1.0.49).
  * <p>
- * Reed-Solomon parity (1.0.67, phone app pc.53, bad coverage mode and under only - {@link #putParityRs}, {@link Fec}):
+ * Reed-Solomon parity (1.0.69, phone app pc.53, bad coverage mode and under only - {@link #putParityRs}, {@link Fec}):
  * a frame's blocks of up to 32 packets each get m parity packets right behind them, any m lost packets of a block
  * are rebuilt. What it may cost in time, all of it a frame with a gap's and only in those tiers (in the normal and
  * sharp tiers no parity is sent and nothing here waits, as before):
@@ -147,7 +147,7 @@ public class FrameAssembler {
         /** The parity of each group of PARITY_GROUP packets (pc.26), by group; null until the first came. */
         byte[][] groupParity;
         /**
-         * 1.0.67: RS parity kept, by block and index (only for a block that missed a packet when it came); null until
+         * 1.0.69: RS parity kept, by block and index (only for a block that missed a packet when it came); null until
          * one was kept, a block's null once it is whole. rsM: the parity packets a block has.
          */
         byte[][][] rs;
@@ -155,7 +155,7 @@ public class FrameAssembler {
         /** RS parity came for this frame; and its last packet (the last block's last parity, sent last of the frame). */
         boolean rsSeen, rsLastIn;
         /**
-         * A packet of it was rebuilt from parity (either kind): counted as recovered when it goes out whole (1.0.67 - a
+         * A packet of it was rebuilt from parity (either kind): counted as recovered when it goes out whole (1.0.69 - a
          * block mended while the next was on its way left the frame not yet whole; counted at the rebuild, as before,
          * such a frame was missed).
          */
@@ -266,7 +266,7 @@ public class FrameAssembler {
             return true;
         }
 
-        /** 1.0.67: each block with RS parity kept and packets missing - rebuilt in place if enough of it came (Fec.decode). */
+        /** 1.0.69: each block with RS parity kept and packets missing - rebuilt in place if enough of it came (Fec.decode). */
         private void recoverRs(int packets) {
             for (int b = 0; b < rs.length; b++) {
                 if (rs[b] == null) continue;
@@ -412,7 +412,7 @@ public class FrameAssembler {
     }
 
     /**
-     * A block's Reed-Solomon parity (1.0.67, phone app pc.53: VIDEO_PARITY_RS, the whole packet - header as
+     * A block's Reed-Solomon parity (1.0.69, phone app pc.53: VIDEO_PARITY_RS, the whole packet - header as
      * {@link Fec#putHeader}): any m lost packets of the block are rebuilt from it, and the frame goes out the moment it
      * is whole. Kept only for a block that misses a packet; one for a frame already out, or a block that is whole,
      * costs a look and is dropped (the class says how long a frame may wait for it).
@@ -562,7 +562,7 @@ public class FrameAssembler {
         if (!frame.complete() && (frame.parity != null || frame.groupParity != null || frame.rs != null)) frame.recover();
         if (!frame.complete() && !(frame.startReceived && frame.endReceived)) return null;
         // bad coverage mode: an incomplete frame waits for its parity (right behind it) or a key frame's second copy;
-        // if neither makes it whole, it goes out damaged when the next frame completes (retireOlder). 1.0.67: a key
+        // if neither makes it whole, it goes out damaged when the next frame completes (retireOlder). 1.0.69: a key
         // frame with RS parity comes once - all of its parity in, nothing more will come for it
         if (!frame.complete() && waitForWholeKeyFrames && ((frame.keyFrame && !frame.rsSeen) || !frame.parityIn())) return null;
         pending.remove(frameNum);

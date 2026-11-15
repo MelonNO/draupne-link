@@ -35,7 +35,7 @@ import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 1.0.67, the stronger parity in the weak tiers, end to end on loopback: a virtual drone (the phone's rules: RS parity
+ * 1.0.69, the stronger parity in the weak tiers, end to end on loopback: a virtual drone (the phone's rules: RS parity
  * once the PC's profile has bit 4 and VIDEO_FEC asks for some) and the PC's link and video pipeline, a wire between
  * them that loses chosen packets of chosen frames. Two lost in one block are mended (an older phone app's XOR groups
  * can't), a burst past the parity is a damaged frame and a key frame request as ever, an older phone app's XOR groups
@@ -267,7 +267,7 @@ class RsParityEndToEndTest {
         assertTrue(wire.toPhone(PacketIds.VIDEO_FEC) > 0, "the new PC asked, the old app had no ear for it");
     }
 
-    /** A new phone app under a PC before 1.0.67 in bad coverage mode: the XOR groups and key frames twice, nothing new. */
+    /** A new phone app under a PC before 1.0.69 in bad coverage mode: the XOR groups and key frames twice, nothing new. */
     @Test
     void aNewPhoneUnderAnOlderPcSendsWhatItSentBefore() throws Exception {
         start("ROBUST", false, true);

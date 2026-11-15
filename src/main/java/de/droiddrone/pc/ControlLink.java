@@ -92,7 +92,7 @@ public class ControlLink {
         }
 
         /**
-         * 1.0.67 (phone app pc.53, asked for by profile bit 3): a frame's times, come right before its first fragment -
+         * 1.0.69 (phone app pc.53, asked for by profile bit 3): a frame's times, come right before its first fragment -
          * how old the picture was as it left the phone and the Ping the phone had last taken (video.GlassToGlass).
          * @param captureToSendMs 65535 = the phone knows none
          * @param pingEcho        that Ping's stamp, its low 32 bits; pingHoldMs how long the phone held it, 65535 = none taken
@@ -101,28 +101,28 @@ public class ControlLink {
         default void onFrameTime(short frameNum, int captureToSendMs, long pingEcho, int pingHoldMs, long arriveMs) {
         }
 
-        /** 1.0.67: a Pong's round trip, ms, at clockMs (GlassToGlass.clockMs): the link's best is the lowest of them. */
+        /** 1.0.69: a Pong's round trip, ms, at clockMs (GlassToGlass.clockMs): the link's best is the lowest of them. */
         default void onRoundTrip(int ms, long clockMs) {
         }
 
-        /** 1.0.67: the link is up (again): what was learned of its times belongs to the session before. */
+        /** 1.0.69: the link is up (again): what was learned of its times belongs to the session before. */
         default void onLinkSession() {
         }
 
         /**
-         * 1.0.67 (phone app pc.53, asked for by profile bit 4 and VIDEO_FEC): a block's Reed-Solomon parity, the whole
+         * 1.0.69 (phone app pc.53, asked for by profile bit 4 and VIDEO_FEC): a block's Reed-Solomon parity, the whole
          * VIDEO_PARITY_RS packet - its header as Fec.putHeader writes it, checked by Fec.valid before it comes here.
          */
         default void onVideoParityRs(byte[] d, int len) {
         }
 
-        /** 1.0.67: this listener mends frames with RS parity - the profile says so (bit 4) in bad coverage mode and under. */
+        /** 1.0.69: this listener mends frames with RS parity - the profile says so (bit 4) in bad coverage mode and under. */
         default boolean mendsRs() {
             return false;
         }
 
         /**
-         * 1.0.67: the parity the phone is to add now, for the tier (video.FecPolicy, ticked on the session thread beside
+         * 1.0.69: the parity the phone is to add now, for the tier (video.FecPolicy, ticked on the session thread beside
          * TierPolicy with the loss the listener measured); null for none to ask for.
          */
         default de.droiddrone.pc.video.FecPolicy.Choice fecChoice(long now, Tier tier) {
@@ -240,7 +240,7 @@ public class ControlLink {
     static final byte VIDEO_PROFILE = PacketIds.VIDEO_PROFILE;
     static final int PROFILE_KEY_FRAMES_TWICE = 1, PROFILE_GROUP_PARITY = 2, PROFILE_AVC = 4;
     /**
-     * 1.0.67 (phone app pc.53; an older one reads bits 0-2 by mask and never sees it): profile bit 3 = frame times
+     * 1.0.69 (phone app pc.53; an older one reads bits 0-2 by mask and never sees it): profile bit 3 = frame times
      * wanted - in every tier, whenever this PC shows the video. The phone then sends FRAME_TIME [0x53][frameNum i16]
      * [captureToSendMs u16][pingEcho u32][pingHoldMs u16] (65535 = not known) right before each frame's first
      * fragment, unnumbered: the picture's delay from the camera to this screen (video.GlassToGlass, the OSD's G2G).
@@ -249,7 +249,7 @@ public class ControlLink {
     static final int PROFILE_FRAME_TIMES = 8;
     static final byte FRAME_TIME = PacketIds.FRAME_TIME;
     /**
-     * 1.0.67 (phone app pc.53; older ones read bits 0-2 and go on with the XOR groups and key frames twice): profile bit
+     * 1.0.69 (phone app pc.53; older ones read bits 0-2 and go on with the XOR groups and key frames twice): profile bit
      * 4 = this PC mends frames with Reed-Solomon parity - set beside bits 0-2 in bad coverage mode and under, never
      * outside them. A phone that knows it takes it, with VIDEO_FEC [0x54][mPlain u8][mKey u8] (m > 0), as "send
      * VIDEO_PARITY_RS behind each block in place of the XOR groups, key frames once" (Fec; video.FrameAssembler mends).
@@ -267,11 +267,11 @@ public class ControlLink {
     private de.droiddrone.pc.video.FecPolicy.Choice fecSent;
     private int fecRepeats;
     private long fecSentAt;
-    /** 1.0.67: the phone was last told to send RS parity this session (written by the session thread). */
+    /** 1.0.69: the phone was last told to send RS parity this session (written by the session thread). */
     private volatile boolean rsAsked;
-    /** 1.0.67: the parity the policy asks for is held back for an older spectator (session thread). */
+    /** 1.0.69: the parity the policy asks for is held back for an older spectator (session thread). */
     private boolean rsHeld;
-    /** 1.0.67: a spectator that mends no RS joined while the phone sent it: its key frame is asked for behind the 0 0. */
+    /** 1.0.69: a spectator that mends no RS joined while the phone sent it: its key frame is asked for behind the 0 0. */
     private volatile boolean keyFrameAfterFec;
     static final int FRAME_TIME_BYTES = 11;
     /**
@@ -543,7 +543,7 @@ public class ControlLink {
                 }
                 lastReceivedAt = MonoClock.ms();
                 if (packet.getLength() > 0 && d[0] == UdpCommon.Connect) {
-                    if (answerOfAnOlderTry(d, packet.getLength(), lastReceivedAt)) continue; // 1.0.67: it starts nothing
+                    if (answerOfAnOlderTry(d, packet.getLength(), lastReceivedAt)) continue; // 1.0.69: it starts nothing
                     connectAnsweredAt = lastReceivedAt; // it hears us again
                     sessionStarts.incrementAndGet();
                 }
@@ -754,7 +754,7 @@ public class ControlLink {
         byte[] d = packet.getData();
         int len = packet.getLength();
         if (len == FRAME_TIME_BYTES && d[0] == FRAME_TIME) {
-            // 1.0.67: a frame's times, ahead of its fragments - to the video side with its arrival on the Pings' clock.
+            // 1.0.69: a frame's times, ahead of its fragments - to the video side with its arrival on the Pings' clock.
             // Never passed on to spectators (the times are this link's), and nothing while this PC only watches
             VideoListener v = videoListener;
             if (v != null && spectator == null) {
@@ -794,7 +794,7 @@ public class ControlLink {
             if (len > 9) listener.onVideoParityGroup(d[7] != 0, (short) (((d[1] & 0xff) << 8) | (d[2] & 0xff)), Bytes.readInt(d, 3), d[8] & 0xff, d, 9, len - 9);
             return;
         }
-        if (d[0] == VIDEO_PARITY_RS) { // 1.0.67: one that doesn't agree with itself is dropped (a rebuilt packet has no checksum)
+        if (d[0] == VIDEO_PARITY_RS) { // 1.0.69: one that doesn't agree with itself is dropped (a rebuilt packet has no checksum)
             if (Fec.valid(d, len)) listener.onVideoParityRs(d, len);
             return;
         }
@@ -889,9 +889,9 @@ public class ControlLink {
                 if (!wasConnected && connected) {
                     audioRequest.newSession(); // the audio request goes out at once
                     VideoListener v = videoListener;
-                    if (v != null) v.onLinkSession(); // 1.0.67: the picture delay's figures start over (and the parity's choice)
+                    if (v != null) v.onLinkSession(); // 1.0.69: the picture delay's figures start over (and the parity's choice)
                     profileRefreshes = PROFILE_REFRESHES;
-                    fecSent = null; // 1.0.67: the phone forgot it with the new session
+                    fecSent = null; // 1.0.69: the phone forgot it with the new session
                     fecRepeats = 0;
                     rsAsked = false;
                 }
@@ -907,7 +907,7 @@ public class ControlLink {
                     connectRoundAt = 0;
                     connectRoundLen = 0;
                     trying = false;
-                    // 1.0.67: the id is a session's now - the Connect after the next loss takes another. Here, not at
+                    // 1.0.69: the id is a session's now - the Connect after the next loss takes another. Here, not at
                     // the answer: a Connect this thread sends between the answer and seeing the link up keeps the id,
                     // and the phone drops it as the session's own (a new id there was a session more)
                     sessionIds.sessionUp();
@@ -1051,7 +1051,7 @@ public class ControlLink {
     }
 
     /**
-     * 1.0.67, the session id: the Connect, upstream's [8][num i16 = -1][client type u8 = 1][key UTF][version i16],
+     * 1.0.69, the session id: the Connect, upstream's [8][num i16 = -1][client type u8 = 1][key UTF][version i16],
      * goes on with [sessionId u32][byId u8 = 0]. Every released phone app takes the key by its own length and reads
      * nothing behind it, and its answer - the Connect sent back - brings the tail home as it went.
      * <p>
@@ -1062,7 +1062,7 @@ public class ControlLink {
      * try unanswered for a second (or the slow path's round), and every try after a session that was up - is a new
      * session at once (SessionGate.Ids). The phone says in its answer that it judged by the id (byId = 1): then an
      * older try's answer, come late, starts nothing here ({@link #answerOfAnOlderTry}). An answer without the mark -
-     * an older phone app, upstream's relay - is taken whatever it carries, as before 1.0.67.
+     * an older phone app, upstream's relay - is taken whatever it carries, as before 1.0.69.
      * @param roundMs the slow path's round the Connect belongs to (connectRoundLen; 0: none)
      */
     byte[] buildConnectPacket(long now, long roundMs) throws IOException {
@@ -1095,7 +1095,7 @@ public class ControlLink {
      * the newest try's Connects are on their way or there, and the phone answers them from a session of their own.
      * Taken, this side would start in a session the phone is leaving and start over a moment later - the storm. The
      * ids are kept longer from here on (Ids.olderAnswer), so the newest try's answer finds its id still in use. Not
-     * for ever: the third such answer in a row is taken as before 1.0.67 - a way so slow that every answer comes
+     * for ever: the third such answer in a row is taken as before 1.0.69 - a way so slow that every answer comes
      * late must not keep the link down.</li>
      * <li>With the link up (no Connects going out), an answer starts this side over only if its session is newer
      * than the one this side is in: the phone has gone on, and no other answer may come to say so. One this side
@@ -1143,7 +1143,7 @@ public class ControlLink {
                     lastPingTimestamp = MonoClock.ms();
                     maxPingMs.accumulateAndGet(pingMs, Math::max);
                     VideoListener v = videoListener;
-                    if (v != null && spectator == null) v.onRoundTrip(pingMs, clock); // 1.0.67: the picture delay's "link at its best"
+                    if (v != null && spectator == null) v.onRoundTrip(pingMs, clock); // 1.0.69: the picture delay's "link at its best"
                 }
             }
             case UdpCommon.ConfigReceived -> {
@@ -1631,7 +1631,7 @@ public class ControlLink {
             nextProfileSend = now + 700;
             sendProfile();
         }
-        // 1.0.67: frame times asked for, the video comes and no FRAME_TIME with it: the profile once more (see PROFILE_REFRESH_MS)
+        // 1.0.69: frame times asked for, the video comes and no FRAME_TIME with it: the profile once more (see PROFILE_REFRESH_MS)
         if (profileRefreshes > 0 && videoListener != null && spectator == null && now - lastProfileAt >= PROFILE_REFRESH_MS
                 && lastFrameTimeAt < readyAt && now - lastVideoFragmentAt < 1000) {
             profileRefreshes--;
@@ -1672,7 +1672,7 @@ public class ControlLink {
     }
 
     /**
-     * 1.0.67: the RS parity the phone is to add (FecPolicy, ticked here beside TierPolicy) - VIDEO_FEC at a change,
+     * 1.0.69: the RS parity the phone is to add (FecPolicy, ticked here beside TierPolicy) - VIDEO_FEC at a change,
      * FEC_REPEATS times more FEC_REPEAT_MS apart (unnumbered, as the key frame request), and once a second while it asks
      * for parity. Nothing in the normal and sharp tiers but the 0 0 at the change out of the weak ones: there the wire
      * is as it was. Only for a listener that mends with it (and so a profile with bit 4).
@@ -1721,14 +1721,14 @@ public class ControlLink {
         }
     }
 
-    /** 1.0.67: no spectator watches through this PC, or every one mends RS parity (SpectatorHost.allMendRs). */
+    /** 1.0.69: no spectator watches through this PC, or every one mends RS parity (SpectatorHost.allMendRs). */
     private boolean allSpectatorsMendRs() {
         SpectatorHost h = host;
         return h == null || h.allMendRs();
     }
 
     /**
-     * A spectator joined (the link's receive thread): its picture starts at a key frame, asked for now. 1.0.67: one
+     * A spectator joined (the link's receive thread): its picture starts at a key frame, asked for now. 1.0.69: one
      * that mends no RS while the phone sends it gets it after the 0 0 of the next tick (sendFecIfDue), so it comes twice
      * with the XOR groups, as from an older pilot PC.
      */
@@ -1737,12 +1737,12 @@ public class ControlLink {
         else requestKeyFrame();
     }
 
-    /** 1.0.67: what this PC's spectator HELLO says - it mends RS parity when its video listener does. */
+    /** 1.0.69: what this PC's spectator HELLO says - it mends RS parity when its video listener does. */
     private int spectatorHelloFlags() {
         return mendsRs() ? Spectate.HELLO_MENDS_RS : 0;
     }
 
-    /** 1.0.67: this PC asks for RS parity in the weak tiers - its video listener mends with it (an older PC's never did). */
+    /** 1.0.69: this PC asks for RS parity in the weak tiers - its video listener mends with it (an older PC's never did). */
     boolean mendsRs() {
         VideoListener v = videoListener;
         return v != null && v.mendsRs();
@@ -1815,9 +1815,9 @@ public class ControlLink {
     }
 
     int profileFlags() {
-        int asked = videoListener != null ? PROFILE_FRAME_TIMES : 0; // 1.0.67: in every tier; bits 0-2 as they were
+        int asked = videoListener != null ? PROFILE_FRAME_TIMES : 0; // 1.0.69: in every tier; bits 0-2 as they were
         if (!isRobust()) return asked;
-        if (mendsRs()) asked |= PROFILE_RS; // 1.0.67: beside bits 0-2, which an older phone goes on by
+        if (mendsRs()) asked |= PROFILE_RS; // 1.0.69: beside bits 0-2, which an older phone goes on by
         return asked | PROFILE_KEY_FRAMES_TWICE | PROFILE_GROUP_PARITY | (videoHevc ? PROFILE_AVC : 0);
     }
 

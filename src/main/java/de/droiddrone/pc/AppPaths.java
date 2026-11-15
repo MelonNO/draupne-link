@@ -56,6 +56,26 @@ public final class AppPaths {
     }
 
     /**
+     * This app again, its arguments to go after (1.0.50 the virtual fleet, 1.0.68 the STANAG encoder process): the
+     * installed exe, or from source this same Java with this classpath.
+     */
+    public static java.util.List<String> appCommand() {
+        java.util.List<String> command = new java.util.ArrayList<>();
+        String app = System.getProperty("jpackage.app-path");
+        if (app != null) {
+            command.add(app);
+        } else {
+            String exe = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).startsWith("windows") ? "java.exe" : "java";
+            command.add(Path.of(System.getProperty("java.home"), "bin", exe).toString());
+            command.add("-Dfile.encoding=UTF-8");
+            command.add("-cp");
+            command.add(System.getProperty("java.class.path"));
+            command.add(Main.class.getName());
+        }
+        return command;
+    }
+
+    /**
      * What a shortcut should start: the packaged DRAUPNE Link.exe (jpackage), or the .bat from installDist.
      * null when running from Gradle or an IDE.
      */

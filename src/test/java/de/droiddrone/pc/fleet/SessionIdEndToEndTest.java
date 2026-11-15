@@ -20,7 +20,7 @@ import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 1.0.67, the session id, end to end on loopback: a virtual drone (the phone's own SessionGate) and the PC's link with
+ * 1.0.69, the session id, end to end on loopback: a virtual drone (the phone's own SessionGate) and the PC's link with
  * a wire between them that holds given packets back. A reconnect is one session on both sides - also when Connects of
  * the try arrive late (the reconnect storm: with the clock's rule each made a session more) and when the answers come
  * late (an older try's answer starts nothing). An older phone app and an older PC meet what they met before, to the
@@ -145,7 +145,7 @@ class SessionIdEndToEndTest {
         start(false, true);
         lateConnectsOfATry();
         assertTrue(drone.sessions() >= 3, "a Connect over a second late is a new session by the clock: " + drone.sessions());
-        assertTrue(link.getSessionStarts() >= 3, "and its answer starts the PC's side over, as before 1.0.67: " + link.getSessionStarts());
+        assertTrue(link.getSessionStarts() >= 3, "and its answer starts the PC's side over, as before 1.0.69: " + link.getSessionStarts());
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link up all the same", log);
     }
 
@@ -173,7 +173,7 @@ class SessionIdEndToEndTest {
 
     /**
      * The same late answers from a phone app before pc.53: it tells the sessions by the clock and sends each Connect
-     * back as it came - no mark - so the PC takes every answer, as before 1.0.67: the session starts over with each.
+     * back as it came - no mark - so the PC takes every answer, as before 1.0.69: the session starts over with each.
      */
     @Test
     void lateAnswersOfAnOlderPhoneAppEachStartTheSessionOver() throws Exception {
@@ -190,7 +190,7 @@ class SessionIdEndToEndTest {
         waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "and the link up in the end, as it was", log);
     }
 
-    /** A PC before 1.0.67: its Connect ends with the version, and the phone app of now answers it as it came. */
+    /** A PC before 1.0.69: its Connect ends with the version, and the phone app of now answers it as it came. */
     @Test
     void anOlderPcIsAnsweredAsEver() throws Exception {
         PcConfig config = config();

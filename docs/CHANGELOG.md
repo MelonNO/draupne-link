@@ -2,7 +2,7 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## 1.0.67 (unreleased, on beta)
+## 1.0.69 (unreleased, on beta)
 
 With the phone app **DRAUPNE Flight 2.3.0-pc.53-beta**. Nothing of it tried on a phone or a drone yet; old phones and old PCs work with it as before (each side uses what's new only when the other side shows it knows it).
 
@@ -16,6 +16,24 @@ With the phone app **DRAUPNE Flight 2.3.0-pc.53-beta**. Nothing of it tried on a
 - **Pins on the video** (the pilot: "make all pins virtual AR pins in the camera view"): every pin the maps show stands on the live picture where it is - the map's diamond on a short stem, its name and distance over it ("ALPHA 850M"); grey where the terrain stands between, hollow and `~` for a rough one; the five nearest outside the picture get an arrow on its edge pointing the way (behind: on the side to turn to). Out to 10 km. On by default, SETTINGS > OSD > Pins on video turns it off; in the recording and the STILL with the OSD too. As exact as the heading and the camera's angle and tilt settings (5 degrees of heading: a fourteenth of the picture to the side). With the new phone app the drone's pose is the one from when the picture was taken (by G2G), so the pins trail less in a fast turn; with an older one, the newest.
 - **DEMO:** a virtual drone's nose down was read as nose up - its horizon, MARK and the camera's view on the map moved against the picture when it tilted; and while connected to one the PC now takes its camera's 90 degrees, not the settings' angle. A replayed flight's telemetry goes on as recorded.
 - For developers: docs/HANDOFF.md is short now (the release-by-release notes are in docs/history/HANDOFF-history.md); the phone's observe / overwatch rules moved out of its Udp into tested Common classes (ObserveGate, ObservePace, CameraOwner, KnownPcs, FleetGate); `gradlew test` runs in 4 forks in about 6 minutes, timing tests in `perfTest`, five tests known to fail now and then in `quarantineTest` (retried); one waiting helper and free ports for every test (testing/Waits, Ports, TestHygieneTest); CI runs perf and quarantine as jobs of their own, and a release skips the tests a green Build already ran for the same commit. Pins on the video: `gui/VideoPins` (marks, arrows, the pose history, the hidden check off the Swing thread), `CameraFootprint.toPicture` / `hidden`, `CameraView.pinPose` / `groundM` / `hidden` / `setVirtual`, `OsdElement.PINS`, `OsdRenderer.Data.pins`; tests `VideoPinsTest`, `CameraFootprintTest` (a ray's ground point drawn back where the ray left, a ridge), `VirtualCameraMatchTest` (the virtual camera against the PC's sums, within a pixel).
+
+## 1.0.68 (PC only, 2026-11-14)
+
+The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not tried by the pilot yet.
+
+- **Fixed: a crash of the whole app in a STANAG stream** (the pilot: "fix the crash, do the separate process"). On 2026-11-14 the dev window died about 10 min after its start: an access violation inside the native H.264 encoder (`avcodec_send_frame`, libopenh264) on MobileEcho's stream thread, while it showed a page; the drone link went with it. Not reproduced offline (11 page encoders, 97 790 pictures; 660 encoders made and closed in parallel). The STANAG streams' encoders now run in a **process of their own** (`"DRAUPNE Link.exe" stanag-encoder`, below normal priority): a crash there ends that process, not the app. The streams send nothing for a moment and go on from a new process (at once the first time, then after 2, 5, 15, 30 s while it keeps crashing), in the same transport stream - a player keeps playing. Said once in the log: "STANAG 4609: the encoder process stopped (0xC0000005). The streams start again. Crash log: hs_err_pid<pid>.log in the logs folder." It ends with the app (and when STANAG is switched off).
+  - *Cost:* a 720p picture 5.3 ms against 2.85 ms in the app (the picture is copied over, about 2.4 ms more), on the stream's own lowest-priority thread; a still page again about 1.5 ms of waiting. Only this app can use the process: a random token on every connection, loopback only.
+  - The decoders the streams use (the drone's video for VIDEO, a clip) still run in the app.
+- **FIND GPS in Drone setup** (the pilot: "add a button in the betaflight setup that searches for the GPS uart"): on the GPS row. It puts the GPS on each free UART in turn - written, saved, Betaflight restarted, up to 12 s for the GPS to talk - until Betaflight hears it, and leaves it there (the PORT list follows). None: every port, the GPS feature and gps_auto_baud back as they were. Only free UARTs are tried (the one the GPS was set on last); a UART with the receiver, MSP, telemetry or anything else is left alone and named. Betaflight's "diff all" is saved first, as for Drone setup's own writes; nothing without it. Over USB on the bench (STANDBY first); about 20 s a port. Found with the GPS on No: Yes, and CONFIRM again for the GPS modes and failsafe. Where no GPS answers, the row points to it.
+- For developers: `setup/GpsSearch` (+ `GpsSearchTest`, a made-up Betaflight), `DroneSetup.BetaflightPage.findGpsNow` / `searchDone`.
+- For developers: `video/PictureEncoder` (`H264Encoder` and the process's encoders), `video/EncoderProcess` (app side; `Down` = the process stopped, said once by it), `video/EncoderWorker` (the process), `AppPaths.appCommand`, `WindowsTuning.belowNormal`; `StanagController.encoders` (tests: in the app). Tests: `EncoderProcessTest`, `StanagFeedTest.aCrashOfTheEncoderProcessIsAMomentWithoutPicturesNotTheAppsEnd`.
+
+## 1.0.67 (PC only, 2026-11-14)
+
+The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not tried on a motor yet.
+
+- **Motor test: a click on a motor spins it at 2 %** (the pilot: "make it spin at 2% when pressing"; was 8 %), still for 3 s. REORDER MOTORS spins each motor at the same 2 %. The sliders are unchanged (up to 10 %). At 2 % (DShot about 86 of 2047, below Betaflight's usual idle) a motor may only twitch: raise it if so.
+- For developers: `MotorTestDialog.PULSE`.
 
 ## 1.0.66 (PC only, 2026-11-13)
 

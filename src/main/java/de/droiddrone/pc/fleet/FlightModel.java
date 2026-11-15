@@ -584,7 +584,7 @@ public final class FlightModel {
         east = (lon - homeLon) * 111_320.0 * Math.cos(Math.toRadians(homeLat));
         alt = Math.max(0, altM);
         roll = rollDeg;
-        pitch = -pitchDeg; // 1.0.67: the flight's CSV keeps Betaflight's sign (nose down +), the model's is nose up +
+        pitch = -pitchDeg; // 1.0.69: the flight's CSV keeps Betaflight's sign (nose down +), the model's is nose up +
         heading = norm(headingDeg);
         vn = ve = vz = 0;
         if (isArmed && !armed) {

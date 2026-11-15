@@ -373,7 +373,7 @@ class SpectatorTest {
     }
 
     /**
-     * 1.0.67: the host knows from each HELLO whether that spectator mends RS parity; one with 1.0.66's HELLO (no flags)
+     * 1.0.69: the host knows from each HELLO whether that spectator mends RS parity; one with 1.0.66's HELLO (no flags)
      * makes allMendRs false while it watches, and true again once it has left.
      */
     @Test

@@ -18,8 +18,8 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * What the phones and PCs in the field do with the bytes this version sends: their own parsing, copied here from the
  * released code (the tag and file are named at each copy), run over the packets as they are built now. A phone on
- * pc.52 or older must take a 1.0.67 PC's Connect and video profile exactly as it took 1.0.66's - it is updated through
- * that very link - and a PC on 1.0.66 must make nothing of what a newer phone could send, and take a 1.0.67
+ * pc.52 or older must take a 1.0.69 PC's Connect and video profile exactly as it took 1.0.66's - it is updated through
+ * that very link - and a PC on 1.0.66 must make nothing of what a newer phone could send, and take a 1.0.69
  * spectator's HELLO as a 1.0.66 one's.
  */
 class OldPeersTest {
@@ -170,7 +170,7 @@ class OldPeersTest {
         for (int i = 0; i < 20_000; i++) {
             now += r.nextInt(4) == 0 ? r.nextInt(12_000) : r.nextInt(400);
             int what = r.nextInt(3);
-            // the 1.0.67 PC's Connect of this moment (its id changes as the tries go by) against 1.0.66's
+            // the 1.0.69 PC's Connect of this moment (its id changes as the tries go by) against 1.0.66's
             byte[] longer = what == 0 ? link.buildConnectPacket(now, r.nextInt(3) == 0 ? 1800 : 0) : what == 1 ? wrongNew : ping;
             byte[] shorter = what == 0 ? old : what == 1 ? wrongOld : ping;
             boolean sameAddress = r.nextBoolean(), disarmed = r.nextBoolean(), pilotKnown = r.nextBoolean(), samePc = sameAddress && r.nextBoolean();
@@ -238,7 +238,7 @@ class OldPeersTest {
 
     @Test
     void anOlderPhoneReadsTheProfileAsBefore() {
-        // every profile 1.0.66 could send (bits 0-2) with every combination of what 1.0.67 adds on top (bits 3 and 4)
+        // every profile 1.0.66 could send (bits 0-2) with every combination of what 1.0.69 adds on top (bits 3 and 4)
         for (int old = 0; old < 8; old++) {
             for (int added : new int[]{0, ControlLink.PROFILE_FRAME_TIMES, 16, ControlLink.PROFILE_FRAME_TIMES | 16}) {
                 byte[] before = {ControlLink.VIDEO_PROFILE, (byte) old}, now = {ControlLink.VIDEO_PROFILE, (byte) (old | added)};

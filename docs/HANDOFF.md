@@ -4,18 +4,22 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-14: main = 1.0.66 / phone pc.52 released; beta = 1.0.67 unreleased; last flown 1.0.43)
+## Where things stand (2026-11-15: main = 1.0.68 / phone pc.52 released; beta = 1.0.69 unreleased; last flown 1.0.43)
 
-- **Now:** DRAUPNE Link 1.0.66 (released 2026-11-13), phone app 2.3.0-pc.52; 1355 tests green; last flown: 1.0.43.
+- **Now:** DRAUPNE Link 1.0.68 (released 2026-11-14), phone app 2.3.0-pc.52; 1366 tests green; last flown: 1.0.43.
+- **1.0.68** (2026-11-14, PC only): STANAG encoders in a process of their own (a native crash in one had taken the
+  whole app down); FIND GPS in Drone setup. Not tried by the pilot.
+- **1.0.67** (2026-11-14, PC only): the motor test's click spins a motor at 2 % (was 8 %). Not tried on a motor.
+  Both were built and released from another PC; their full notes are at the top of docs/history/HANDOFF-history.md.
 - **1.0.66** (2026-11-13, PC only): flight time and range left on the STANAG page and in FLEET's detail.
 - **1.0.65 + phone pc.52** (2026-11-13): STANAG 4609 as one stream per drone; a phone in standby can be observed.
 - **1.0.64 + phone pc.51** (2026-11-12): two review rounds' fixes, overwatch / deep sleep power, sleep notice, AIRSPACE.
 - **New work happens on the `beta` branch** - see "Rules for working on this repo" below.
-- **On `beta`, not released, not merged to main, nothing tried on hardware (2026-11-14):** 1.0.67 + phone app
-  2.3.0-pc.53-beta (versionCode 2030053; `ApkShare` still pins pc.52). See CHANGELOG 1.0.67: the picture's delay on
+- **On `beta`, not released, not merged to main, nothing tried on hardware (2026-11-15):** 1.0.69 + phone app
+  2.3.0-pc.53-beta (versionCode 2030053; `ApkShare` still pins pc.52). See CHANGELOG 1.0.69: the picture's delay on
   the OSD (G2G), a session id in Connect, Reed-Solomon parity in ROBUST / SURVIVAL, PREVIOUS FLIGHTS' debrief, MARK
   and STILL on the video, pins search / GPX, pins on the video (AR, 2026-11-15) and two DEMO fixes; tests in 4
-  forks (~6-8 min), 1624 green, phone compiles.
+  forks (~6-8 min), 1624 green, phone compiles. Main's 1.0.67 / 1.0.68 merged in on 2026-11-15.
   - The release after this beta takes phone app **pc.54**: the update check reads numbers only, so pc.53 would not
     count as newer than pc.53-beta on the test phones.
   - Known, not changed: in ROBUST the 1 Mbit/s cap reaches the phone a step a second (`BitrateControl`) and
@@ -62,13 +66,13 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   - 1.0.65 STANAG: no sound; a drone flown from another PC is a page here; a clip can be dropped unplayed.
   - 1.0.64: USB-camera phones record no overwatch clip; DEEP SLEEP -> OVERWATCH goes through a full wake.
   - 1.0.64: noise reduction is still on in the dark (785-1030 mA): switch it off, measure current and false alarms.
-  - 1.0.64: no session id (the reconnect storm's root) - built on beta (1.0.67), not released.
+  - 1.0.64: no session id (the reconnect storm's root) - built on beta (1.0.69), not released.
   - 1.0.64 detector: a drop or insect on the lens alerts, headlights get two ids, a 2 px walker (about 55 m) is missed.
   - 1.0.58: HIGH's fine stage needs a still camera; HIGH alarms on swaying leaves unless they are boxed LOW / OFF.
   - 1.0.60-1.0.61, not found: the notice every phone gets when one is piloted (asked); DEMO's empty tiles on a PC.
   - 1.0.49: the phone's idle-sticks check doesn't read Betaflight's linked modes (MSP_MODE_RANGES_EXTRA).
   - 1.0.42: the GPS UART choice writes the port as GPS only - what else was on that UART is taken off.
-  - Mission debrief: built on beta (1.0.67). Asked about, not ordered: idle watch (idle phones that watch).
+  - Mission debrief: built on beta (1.0.69). Asked about, not ordered: idle watch (idle phones that watch).
 - **Flaky tests:** on beta they are tagged `quarantine` and run apart, retried (see "Testing and diagnosing").
   Seen once under load on beta, not tagged: `RsParityEndToEndTest.aLossWithinTheParityIsMendedBeyondItAsksForAKeyFrame`.
 - **Refactors still open:** the card layout builder in `MainWindow`, the drone signs in `MapView` (1.0.54); one decode

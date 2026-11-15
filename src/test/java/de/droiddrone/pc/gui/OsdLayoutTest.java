@@ -148,7 +148,7 @@ class OsdLayoutTest {
         assertTrue(ms < 25, "a frame at 60 fps is 16 ms, the HUD must be a fraction of it: " + ms);
     }
 
-    /** 1.0.67: the picture's delay - off until turned on, "G2G ~185MS" on the right with a figure, nothing without one. */
+    /** 1.0.69: the picture's delay - off until turned on, "G2G ~185MS" on the right with a figure, nothing without one. */
     @Test
     void thePictureDelayDrawsOnlyWithAFigure() {
         assertFalse(OsdLayout.defaults().isOn(OsdElement.G2G), "an extra: off until turned on");
@@ -166,7 +166,7 @@ class OsdLayoutTest {
         VideoPipeline.Stats none = new VideoPipeline.Stats(v.hevc(), v.width(), v.height(),
                 v.receivedFps(), v.shownFps(), v.megabitsPerSecond(), v.decodeMs(), v.convertMs(), v.damaged(), v.lost(), v.error(), v.hardware(),
                 v.bitrateStep(), v.drawSkipped(), v.bunched(), v.recovered(), v.pingBaselineMs(), v.pictureAgeMs());
-        assertEquals(-1, none.g2gMs(), "the figures of before 1.0.67: no picture delay");
+        assertEquals(-1, none.g2gMs(), "the figures of before 1.0.69: no picture delay");
         OsdRenderer.Data without = new OsdRenderer.Data(true, true, 42, true, false, sample.telemetry(), none, false, null,
                 sample.channels(), false, false, false, false, null, false, null, false);
         assertNull(pictureDelayBounds(without, on), "nothing without a figure");

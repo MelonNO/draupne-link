@@ -5,7 +5,10 @@ import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.overwatch.AlertCard;
 import de.droiddrone.pc.overwatch.ClipIndex;
 import de.droiddrone.pc.overwatch.OverwatchHub;
+import de.droiddrone.pc.AppPaths;
+import de.droiddrone.pc.video.EncoderProcess;
 import de.droiddrone.pc.video.Klv;
+import de.droiddrone.pc.video.PictureEncoder;
 import de.droiddrone.pc.video.VideoPipeline;
 
 import java.nio.file.Path;
@@ -142,6 +145,12 @@ final class StanagController {
     long clipQuietMs = CLIP_QUIET_MS;
     /** Tests: where a drone's stream goes instead of host:port (a file each). */
     BiFunction<String, Integer, String> targetOf;
+    /**
+     * Where the streams' encoders run: null = a process of their own (1.0.68, {@link EncoderProcess}: started with the
+     * first stream, ended when they are switched off); tests set one.
+     */
+    PictureEncoder.Factory encoders;
+    private EncoderProcess process;
 
     /** @param later runs something on the caller's thread a moment later (SwingUtilities::invokeLater) */
     StanagController(PcConfig config, Host host, Consumer<Runnable> later) {
@@ -160,6 +169,7 @@ final class StanagController {
         on = wanted;
         if (!on) {
             closeAll();
+            endProcess();
             announce();
             return;
         }
@@ -189,7 +199,22 @@ final class StanagController {
     synchronized void close() {
         on = false;
         closeAll();
+        endProcess();
         announce();
+    }
+
+    /** The encoders' process for a new stream: the one running, or a new one (started by the stream's first encoder). */
+    private PictureEncoder.Factory encoders() {
+        if (encoders != null) return encoders;
+        if (process == null) {
+            process = new EncoderProcess(AppPaths::appCommand, AppPaths.dataDir().resolve("logs"), line -> later.accept(() -> host.log(line)));
+        }
+        return process;
+    }
+
+    private void endProcess() {
+        if (process != null) process.close(); // after the feeds: their encoders are closed already
+        process = null;
     }
 
     private void announce() {
@@ -366,7 +391,7 @@ final class StanagController {
         }
         Entry[] made = new Entry[1];
         StanagFeed feed = new StanagFeed(name, host.virtual(name), to, bitrate(), () -> host.upsideDown(name),
-                clipId -> later.accept(() -> clipEnded(made[0], clipId)), line -> later.accept(() -> host.log(line)));
+                clipId -> later.accept(() -> clipEnded(made[0], clipId)), line -> later.accept(() -> host.log(line)), encoders());
         made[0] = new Entry(name, feed, to);
         made[0].slot = slot;
         made[0].own = own != null && targetOf == null;

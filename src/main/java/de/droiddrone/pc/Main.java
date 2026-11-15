@@ -40,6 +40,11 @@ public class Main {
                 PcPrep.cleanup();
                 return;
             }
+            // the STANAG streams' encoders, started by the app (1.0.68): a crash there can't take the app down
+            case "stanag-encoder" -> {
+                de.droiddrone.pc.video.EncoderWorker.run(args);
+                return;
+            }
             default -> {
             }
         }

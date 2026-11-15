@@ -26,7 +26,7 @@ import static org.bytedeco.ffmpeg.global.swscale.*;
  * caller's thread alone, one slice. Not thread-safe. The virtual fleet's phones use it (1.0.50, it lived in fleet),
  * and the STANAG 4609 streams (1.0.65: every drone's stream is made here on the PC).
  */
-public final class H264Encoder implements AutoCloseable {
+public final class H264Encoder implements PictureEncoder {
     /** One encoded picture. */
     public record Packet(byte[] data, boolean keyFrame) {}
 
@@ -100,6 +100,7 @@ public final class H264Encoder implements AutoCloseable {
     }
 
     /** The codec config (Annex B SPS/PPS): the VideoInitialFrame's payload. */
+    @Override
     public byte[] config() {
         return config;
     }
@@ -121,6 +122,7 @@ public final class H264Encoder implements AutoCloseable {
     }
 
     /** One picture (width x height pixels); a key frame when asked. Packets out (none when the encoder skipped it). */
+    @Override
     public List<Packet> encode(int[] pixels, boolean keyFrame) throws IOException {
         if (closed) throw new IOException("closed");
         bgr.position(0).limit((long) width * height * 4).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).asIntBuffer().put(pixels, 0, width * height);
@@ -136,6 +138,7 @@ public final class H264Encoder implements AutoCloseable {
      * The last picture once more (1.0.65, a STANAG stream's still page: five a second of the same picture): no colour
      * conversion, the encoder finds nothing changed and its packet is a few hundred bytes.
      */
+    @Override
     public List<Packet> encodeAgain(boolean keyFrame) throws IOException {
         if (closed) throw new IOException("closed");
         if (!hasPicture) throw new IOException("no picture to send again");

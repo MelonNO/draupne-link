@@ -8,7 +8,7 @@ import java.io.IOException;
 import java.net.InetAddress;
 
 /**
- * A PC before 1.0.67 as the phone sees it on the wire, for the tests: the same link, but it asks for nothing 1.0.67
+ * A PC before 1.0.69 as the phone sees it on the wire, for the tests: the same link, but it asks for nothing 1.0.69
  * added - its video profile carries bits 0-2 only (no frame times, no RS parity) and no VIDEO_FEC goes out, its
  * Connect ends with the version (no session id). Everything else of the link is the code of today, which is the point: what a phone app of now sends to a PC
  * that never asked.

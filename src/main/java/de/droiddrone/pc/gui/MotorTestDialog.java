@@ -75,7 +75,7 @@ final class MotorTestDialog extends JFrame {
     private final WrappingText note = new WrappingText("", Theme.font(Font.PLAIN, 13f), Theme.WARN);
     /** A click on a motor in the picture: it runs this long at PULSE, then stops; one timer per motor. */
     private static final int PULSE_MS = 3000;
-    private static final int PULSE = MotorTest.STOP + (MotorTest.MAX - MotorTest.STOP) * 8 / 10; // 8 %: turns, slowly
+    private static final int PULSE = MotorTest.STOP + (MotorTest.MAX - MotorTest.STOP) * 2 / 10; // 2 % (the pilot's, was 8 %): turns, slowly
     private final java.util.Map<Integer, Timer> pulses = new java.util.HashMap<>();
     /** The risk line shakes when the motors are asked for without the box ticked. */
     private Timer shake;

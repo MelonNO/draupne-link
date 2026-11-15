@@ -1,7 +1,9 @@
 package de.droiddrone.pc.gui;
 
+import de.droiddrone.pc.AppPaths;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.MonoClock;
+import de.droiddrone.pc.video.EncoderProcess;
 import de.droiddrone.pc.video.StreamRecorder;
 import de.droiddrone.pc.video.TestStreams;
 import de.droiddrone.pc.video.TsReader;
@@ -304,5 +306,29 @@ class StanagFeedTest {
         await(() -> f.sent(StanagShow.Kind.VIDEO) >= 3, 8000, "it goes on with what it kept");
         assertTrue(f.leftOut() > 0, "the rest was left out of the stream, never queued without end");
         f.close();
+    }
+
+    @Test
+    void aCrashOfTheEncoderProcessIsAMomentWithoutPicturesNotTheAppsEnd(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("crash.ts");
+        List<String> log = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<String> processLog = java.util.Collections.synchronizedList(new ArrayList<>());
+        EncoderProcess process = new EncoderProcess(AppPaths::appCommand, de.droiddrone.pc.video.EncoderProcessTest.runIn(), processLog::add);
+        try {
+            StanagFeed f = new StanagFeed("MobileAlpha", false, file.toString(), 2_000_000, () -> false, id -> {}, log::add, process);
+            f.setPage(SLEEP);
+            await(() -> f.sent(StanagShow.Kind.PAGE) >= 5, 20_000, "pages through the encoder process");
+            process.process().destroyForcibly(); // as the native encoder's crash on 2026-11-14
+            long before = f.sent(StanagShow.Kind.PAGE);
+            await(() -> process.starts() == 2 && f.sent(StanagShow.Kind.PAGE) >= before + 5, 20_000, "pages again from a new process");
+            f.close();
+        } finally {
+            de.droiddrone.pc.video.EncoderProcessTest.end(process);
+        }
+        assertTrue(log.isEmpty(), "the stream doesn't say it again: " + log);
+        assertEquals(1, processLog.stream().filter(l -> l.contains("encoder process stopped")).count(), "said once: " + processLog);
+        TsReader ts = TsReader.read(file, 5, W, H);
+        assertTrue(ts.timesRise(), "one stream on, before and after");
+        assertEquals(ts.pictures.size(), ts.decoded(), "every picture decodes, before and after");
     }
 }

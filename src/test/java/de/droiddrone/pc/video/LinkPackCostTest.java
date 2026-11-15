@@ -16,7 +16,7 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * What the link round of 1.0.67 (phone app pc.53) costs per packet and per frame, on this PC: the phone's session id
+ * What the link round of 1.0.69 (phone app pc.53) costs per packet and per frame, on this PC: the phone's session id
  * check on every stick frame, the video sender's RS parity per frame (and that it allocates nothing), the PC's look at
  * a parity packet it doesn't need and the mending of a frame that needs it. Warmed first, then timed; the budgets are
  * ten times what this PC takes or more, to catch a slip without failing on a busy runner. A phone is slower than
