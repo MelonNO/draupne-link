@@ -2,6 +2,13 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
+## 1.0.69 (PC only, 2026-11-15)
+
+The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not flown yet.
+
+- **New OSD element: mAh/km** (the pilot: "Create a OSD element that is Mah/km", then "Set it default on"). On by default, under the battery's figures (SETTINGS > OSD moves or hides it); on for a pilot whose OSD was set before it too. The current over the GPS ground speed (A x 1000 / km/h), smoothed over about 3 s, like Betaflight's efficiency element: e.g. `322MAH/KM` at 14.5 A and 45 km/h. `---MAH/KM` under 5 km/h (hovering is no km) and without a 3D fix; grey when the flight controller goes quiet. A live figure, not the flight's average: Betaflight's mAh count runs from the pack being plugged in, the distance only while armed.
+- For developers: `OsdElement.EFFICIENCY` (key `efficiency`), `OsdRenderer.efficiency(...)`; `OsdLayoutTest.mahPerKmIsTheCurrentOverTheSpeedSmoothedAndDashesWhenSlow`.
+
 ## 1.0.68 (PC only, 2026-11-14)
 
 The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not tried by the pilot yet.

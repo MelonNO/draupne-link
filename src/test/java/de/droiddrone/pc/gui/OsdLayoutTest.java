@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class OsdLayoutTest {
     /** The OSD as it was before it could be changed (plus 1.0.27's picture age, sticks age and status line): these on, the extras off. */
     private static final Set<OsdElement> STANDARD = Set.of(OsdElement.CROSSHAIR, OsdElement.HORIZON, OsdElement.HEADING,
-            OsdElement.BATTERY, OsdElement.PING, OsdElement.NETWORK, OsdElement.VIDEO, OsdElement.PHONE_BATTERY,
+            OsdElement.BATTERY, OsdElement.EFFICIENCY, OsdElement.PING, OsdElement.NETWORK, OsdElement.VIDEO, OsdElement.PHONE_BATTERY,
             OsdElement.PICTURE_AGE, OsdElement.STICKS_AGE, OsdElement.BANNER,
             OsdElement.ARMED, OsdElement.FLIGHT_MODE, OsdElement.FLY_TIME, OsdElement.CORE_TEMP, OsdElement.GPS_SATS,
             OsdElement.SPEED, OsdElement.ALTITUDE, OsdElement.HOME, OsdElement.WARNINGS, OsdElement.DEBUG);
@@ -143,6 +143,24 @@ class OsdLayoutTest {
         g.dispose();
         System.out.printf(java.util.Locale.ROOT, "OSD with every element at 1080p: %.2f ms per paint%n", ms);
         assertTrue(ms < 25, "a frame at 60 fps is 16 ms, the HUD must be a fraction of it: " + ms);
+    }
+
+    /** The pilot: "Create a OSD element that is Mah/km". */
+    @Test
+    void mahPerKmIsTheCurrentOverTheSpeedSmoothedAndDashesWhenSlow() {
+        assertEquals(322, OsdRenderer.efficiency(Double.NaN, 0, 14.5, 45), 1, "14.5 A at 45 km/h: 322 mAh a km");
+        assertTrue(Double.isNaN(OsdRenderer.efficiency(300, 33, 8, 3)), "hovering: ---");
+        assertTrue(Double.isNaN(OsdRenderer.efficiency(300, 33, Double.NaN, 40)));
+        double after1Frame = OsdRenderer.efficiency(300, 33, 30, 50); // a punch: 600 mAh/km for a moment
+        assertTrue(after1Frame > 300 && after1Frame < 310, "one frame barely moves it: " + after1Frame);
+        double v = 300;
+        for (int i = 0; i < 90; i++) v = OsdRenderer.efficiency(v, 33, 30, 50); // 3 s of it
+        assertTrue(v > 470 && v < 520, "most of the way in 3 s: " + v);
+        for (int i = 0; i < 510; i++) v = OsdRenderer.efficiency(v, 33, 30, 50); // 20 s in all
+        assertEquals(600, v, 2, "held, it gets there");
+        assertEquals(600, OsdRenderer.efficiency(300, 10_000, 30, 50), 1e-9, "after a gap: afresh");
+        assertTrue(OsdElement.EFFICIENCY.defaultOn, "the pilot: on by default");
+        assertTrue(OsdLayout.load(k -> null).isOn(OsdElement.EFFICIENCY), "also for a pilot whose settings were saved before it existed");
     }
 
     @Test

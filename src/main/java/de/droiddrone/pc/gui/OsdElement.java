@@ -13,6 +13,8 @@ enum OsdElement {
     HORIZON("horizon", "Artificial horizon", "Horizon line and pitch ladder, following roll and pitch.", true, 0.5, 0.5, false, true),
     HEADING("heading", "Heading tape", "Compass tape, heading and home direction (H).", true, 0.5, y(16), true, true),
     BATTERY("battery", "Battery", "Cell voltage with a bar, pack voltage, mAh used, current.", true, left(), y(40), true, true),
+    // 1.0.69, the pilot: on by default, under the battery's figures
+    EFFICIENCY("efficiency", "mAh/km", "Battery used per km: current over GPS speed, smoothed. --- under 5 km/h.", true, left(), y(136), true, true),
     PING("ping", "Ping", "Round-trip time to the phone.", true, right(), y(40), true, true),
     NETWORK("network", "Mobile network", "Phone network (LTE, 5G ...) and signal.", true, (1280 - 24) / 1280.0, y(92), true, true),
     VIDEO("video", "Video", "Frames per second and bitrate.", true, right(), y(114), true, true),
