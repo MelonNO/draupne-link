@@ -11,6 +11,7 @@ enum OsdElement {
     // ------------------------------------------------------------------ the standard layout
     CROSSHAIR("crosshair", "Crosshair", "Fixed aircraft symbol in the middle.", true, 0.5, 0.5, false, true),
     HORIZON("horizon", "Artificial horizon", "Horizon line and pitch ladder, following roll and pitch.", true, 0.5, 0.5, false, true),
+    PINS("videoPins", "Pins on video", "Pins where they stand. Grey: behind a hill. Arrows: outside the picture.", true, 0.5, 0.5, false, true),
     HEADING("heading", "Heading tape", "Compass tape, heading and home direction (H).", true, 0.5, y(16), true, true),
     BATTERY("battery", "Battery", "Cell voltage with a bar, pack voltage, mAh used, current.", true, left(), y(40), true, true),
     PING("ping", "Ping", "Round-trip time to the phone.", true, right(), y(40), true, true),

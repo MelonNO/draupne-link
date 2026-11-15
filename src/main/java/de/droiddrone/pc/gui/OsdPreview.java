@@ -31,8 +31,14 @@ final class OsdPreview {
     OsdRenderer.Data data() {
         telemetry.parse(new DataReader(packet, true), BETAFLIGHT);
         return new OsdRenderer.Data(true, true, 42, true, false, telemetry, VIDEO, false, null, CHANNELS, true, false, false, false, null, false, null, false,
-                12, false, "LINK BACK - ARMED - STICKS LIVE", false);
+                12, false, "LINK BACK - ARMED - STICKS LIVE", false).withPins(PINS);
     }
+
+    /** The pins on the video: one in sight, one behind a hill, one to the right of the picture. */
+    private static final java.util.List<VideoPins.Mark> PINS = java.util.List.of(
+            new VideoPins.Mark("BRAVO 2.4KM", 0.36, 0.08, false, 0, 0, false, true, 2400),
+            new VideoPins.Mark("ALPHA 850M", -0.42, 0.34, false, 0, 0, false, false, 850),
+            new VideoPins.Mark("~CHARLIE 1.1KM", VideoPins.EDGE, 0.2, true, 1, 0.2, true, false, 1100));
 
     private static byte[] packet() {
         try {

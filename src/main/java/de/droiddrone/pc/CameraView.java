@@ -23,6 +23,17 @@ public final class CameraView {
     private volatile double hfovDeg = DEFAULT_HFOV, tiltDeg = DEFAULT_TILT;
     private volatile boolean invertPitch;
     private volatile double aspect = 16.0 / 9;
+    /** The virtual fleet's camera (fleet.Scene.HFOV_DEG): 90 degrees across, level on the frame. */
+    public static final double VIRTUAL_HFOV = 90;
+    private volatile boolean virtual;
+
+    /**
+     * 1.0.67: the drone on the video is one of the virtual fleet's (DEMO): its camera's angle and tilt, not the
+     * settings' - else MARK's pins, the pins on the video and the view on the map stood apart from its picture.
+     */
+    public void setVirtual(boolean on) {
+        virtual = on;
+    }
 
     public CameraView(TileCache cache) {
         terrain = cache == null ? null : new CameraFootprint.Terrain(cache);
@@ -45,16 +56,16 @@ public final class CameraView {
     }
 
     public double hfovDeg() {
-        return hfovDeg;
+        return virtual ? VIRTUAL_HFOV : hfovDeg;
     }
 
     public double tiltDeg() {
-        return tiltDeg;
+        return virtual ? 0 : tiltDeg;
     }
 
     /** The picture's angle up and down, from the angle across and the picture's shape. */
     public double vfovDeg() {
-        return Math.toDegrees(2 * Math.atan(Math.tan(Math.toRadians(hfovDeg / 2)) / aspect));
+        return Math.toDegrees(2 * Math.atan(Math.tan(Math.toRadians(hfovDeg() / 2)) / aspect));
     }
 
     /** The video's size, for the angle up and down. */
@@ -86,7 +97,7 @@ public final class CameraView {
         else alt = last.altM(); // the GPS's height above the sea
         double pitch = invertPitch ? att.pitchDeg() : -att.pitchDeg(); // Betaflight: nose down positive
         return new CameraFootprint.Pose(last.lat(), last.lon(), alt, heading, pitch, att.rollDeg(),
-                tiltDeg, hfovDeg, vfovDeg());
+                tiltDeg(), hfovDeg(), vfovDeg());
     }
 
     /** The view now (see {@link #pose}), the terrain fetched round the drone as it flies; null when there is none. */
@@ -172,6 +183,26 @@ public final class CameraView {
         return CameraFootprint.ray(p, u, v, terrain, groundFallback(t, track, p));
     }
 
+    /**
+     * 1.0.67, the pins on the video: the camera's pose for them - armed, the position no older than the map's view
+     * takes (the drone moves); disarmed, as old as a sitting drone's. Null without one.
+     */
+    public CameraFootprint.Pose pinPose(FcTelemetry t, FlightTrack track, boolean armed) {
+        return pose(t, track, armed ? STALE_MS : SITTING_STALE_MS);
+    }
+
+    /** The ground's height at a point, m above the sea: the terrain's (asked for round the pose), else the fallback ground. */
+    public double groundM(FcTelemetry t, FlightTrack track, CameraFootprint.Pose p, double lat, double lon) {
+        if (terrain != null) terrain.around(p.lat(), p.lon());
+        double h = terrain == null ? Double.NaN : terrain.heightM(lat, lon);
+        return Double.isNaN(h) ? groundFallback(t, track, p) : h;
+    }
+
+    /** The terrain stands between the camera and that point ({@link CameraFootprint#hidden}); false without terrain. */
+    public boolean hidden(CameraFootprint.Pose p, double lat, double lon, double groundM) {
+        return CameraFootprint.hidden(p, lat, lon, groundM, terrain);
+    }
+
     /** The camera's pose for a detection: the drone's position up to SITTING_STALE_MS old. */
     public CameraFootprint.Pose sittingPose(FcTelemetry t, FlightTrack track) {
         return pose(t, track, SITTING_STALE_MS);
@@ -191,7 +222,7 @@ public final class CameraView {
         double nan = Double.NaN;
         if (v == null) {
             return new Klv.Frame(arrivedMs * 1000, missionId, designation, SENSOR, nan, nan, nan, nan, nan, nan, nan,
-                    hfovDeg, vfovDeg(), 0, tiltDeg, 0, nan, nan, nan, nan, null, country);
+                    hfovDeg(), vfovDeg(), 0, tiltDeg(), 0, nan, nan, nan, nan, null, country);
         }
         CameraFootprint.Pose p = v.pose();
         FlightTrack.Point last = track.last();

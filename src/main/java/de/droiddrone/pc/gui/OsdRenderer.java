@@ -47,12 +47,31 @@ final class OsdRenderer {
      * @param waking      1.0.64: a sleeping phone is waited for ("WAKING - 4:12", "WAKING"): said steady in place of
      *                    LINK LOST, no red frame; null otherwise
      * @param tierTag     1.0.64: the video tier while it is under the normal picture ("ROBUST", "SURVIVAL"); null otherwise
+     * @param pins        1.0.67: the pins on the video ({@link VideoPins}), or null
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
                 boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
                 String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
-                boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag) {
+                boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag, List<VideoPins.Mark> pins) {
+        /** Up to 1.0.66: no pins on the video. */
+        Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
+             VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
+             boolean linkStalled, boolean videoFrozen, boolean radioFrozen, String rcWaiting, boolean recording,
+             String roleBanner, boolean roleAlarm, int sticksAgeMs, boolean armSwitchUnknown, String banner, boolean spectatorPaused,
+             boolean relayed, boolean sticksLost, String lostText, String waking, String tierTag) {
+            this(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview, linkStalled,
+                    videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown, banner,
+                    spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, null);
+        }
+
+        /** The same with the pins on the video. */
+        Data withPins(List<VideoPins.Mark> marks) {
+            return new Data(connected, linkReady, pingMs, rcLive, fcLost, telemetry, video, invertPitch, linkHint, channels, preview,
+                    linkStalled, videoFrozen, radioFrozen, rcWaiting, recording, roleBanner, roleAlarm, sticksAgeMs, armSwitchUnknown,
+                    banner, spectatorPaused, relayed, sticksLost, lostText, waking, tierTag, marks);
+        }
+
         /** Up to 1.0.63: no waking line, no tier tag. */
         Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
              VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -178,6 +197,7 @@ final class OsdRenderer {
             FcTelemetry.Altitude alt = t == null ? null : t.getAltitude();
 
             if (t != null) motion(t.getMotion().shown(now)); // under the HUD: the HUD's figures stay readable
+            if (d.pins() != null && !observer && this.layout.isOn(OsdElement.PINS)) pins(d.pins());
             if (attFresh && this.layout.isOn(OsdElement.HORIZON)) horizon(att, d.invertPitch());
             if (this.layout.isOn(OsdElement.CROSSHAIR)) crosshair(g, w / 2f, h / 2f, unit);
             if (d.roleBanner() != null) { // a spectator: always in sight that this PC doesn't fly (red when it wanted to)
@@ -381,6 +401,67 @@ final class OsdRenderer {
             }
         } finally {
             g.setComposite(saved);
+        }
+    }
+
+    /**
+     * 1.0.67, the pins on the video ({@link VideoPins}): a pin in the picture as the map's diamond on a short stem that
+     * stands on its ground point, its name and distance over it - hollow for a rough pin, grey where the terrain hides
+     * it; one outside the picture as an arrow on the edge pointing the way, its label on the inside.
+     */
+    private void pins(List<VideoPins.Mark> marks) {
+        if (marks.isEmpty()) return;
+        g.setFont(Theme.headingFont(14 * unit));
+        FontMetrics fm = g.getFontMetrics();
+        for (VideoPins.Mark m : marks) {
+            float x = (float) ((m.u() + 1) / 2 * w), y = (float) ((m.v() + 1) / 2 * h);
+            Color c = m.hidden() ? STALE : YELLOW, label = m.hidden() ? STALE : WHITE;
+            if (m.arrow()) {
+                double a = Math.atan2(m.dv() * h, m.du() * w), cos = Math.cos(a), sin = Math.sin(a);
+                float len = 11 * unit, half = 7 * unit;
+                Path2D tri = new Path2D.Float();
+                tri.moveTo(x + cos * len, y + sin * len);
+                tri.lineTo(x - cos * len * 0.4 - sin * half, y - sin * len * 0.4 + cos * half);
+                tri.lineTo(x - cos * len * 0.4 + sin * half, y - sin * len * 0.4 - cos * half);
+                tri.closePath();
+                g.setColor(OUTLINE);
+                g.setStroke(new BasicStroke(3.5f * unit, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g.draw(tri);
+                g.setColor(c);
+                if (m.rough()) {
+                    g.setStroke(new BasicStroke(1.6f * unit));
+                    g.draw(tri);
+                } else {
+                    g.fill(tri);
+                }
+                // the label inside the arrow: before it as the arrow points right, after it pointing left, else under or over
+                int tw = fm.stringWidth(m.label());
+                float lx = (float) (x - cos * 18 * unit), ly = (float) (y - sin * 18 * unit) + fm.getAscent() / 2f;
+                if (cos > 0.5) lx -= tw;
+                else if (cos >= -0.5) lx -= tw / 2f;
+                lx = Math.max(4 * unit, Math.min(w - 4 * unit - tw, lx));
+                text(m.label(), lx, ly, label);
+            } else {
+                float stem = 18 * unit, a = 7 * unit, b = 9 * unit, top = y - stem - 2 * b; // MARK's mark's size
+                g.setColor(OUTLINE);
+                g.setStroke(new BasicStroke(3.5f * unit, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g.draw(new java.awt.geom.Line2D.Float(x, y, x, y - stem));
+                Path2D d = new Path2D.Float();
+                d.moveTo(x, top);
+                d.lineTo(x + a, top + b);
+                d.lineTo(x, top + 2 * b);
+                d.lineTo(x - a, top + b);
+                d.closePath();
+                g.draw(d);
+                g.setColor(c);
+                g.setStroke(new BasicStroke(1.6f * unit, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g.draw(new java.awt.geom.Line2D.Float(x, y, x, y - stem));
+                if (!m.rough()) g.fill(d);
+                g.setColor(m.rough() ? c : m.hidden() ? STALE.brighter() : Color.WHITE);
+                g.draw(d);
+                int tw = fm.stringWidth(m.label()); // over the pin, kept inside the picture at its edges
+                text(m.label(), Math.max(4 * unit, Math.min(w - 4 * unit - tw, x - tw / 2f)), top - 5 * unit, label);
+            }
         }
     }
 

@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OsdLayoutTest {
     /** The OSD as it was before it could be changed (plus 1.0.27's picture age, sticks age and status line): these on, the extras off. */
-    private static final Set<OsdElement> STANDARD = Set.of(OsdElement.CROSSHAIR, OsdElement.HORIZON, OsdElement.HEADING,
+    private static final Set<OsdElement> STANDARD = Set.of(OsdElement.CROSSHAIR, OsdElement.HORIZON, OsdElement.PINS, OsdElement.HEADING,
             OsdElement.BATTERY, OsdElement.PING, OsdElement.NETWORK, OsdElement.VIDEO, OsdElement.PHONE_BATTERY,
             OsdElement.PICTURE_AGE, OsdElement.STICKS_AGE, OsdElement.BANNER,
             OsdElement.ARMED, OsdElement.FLIGHT_MODE, OsdElement.FLY_TIME, OsdElement.CORE_TEMP, OsdElement.GPS_SATS,
