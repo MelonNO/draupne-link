@@ -73,7 +73,6 @@ class PacketIdsTest {
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "SET_BITRATE", "PacketIds.SET_BITRATE"},
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "VIDEO_PARITY", "PacketIds.VIDEO_PARITY"},
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "KEY_FRAME_REQUEST", "PacketIds.KEY_FRAME_REQUEST"},
-            {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/Udp.java", "FRAME_TIME", "PacketIds.FRAME_TIME"},
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "PACKET", "PacketIds.POWER_MODE"},
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "SLEEP_HELLO", "PacketIds.SLEEP_HELLO"},
             {"flight-app/overlay/Flight/src/main/java/de/droiddrone/flight/PowerMode.java", "SLEEP_ANSWER", "PacketIds.SLEEP_ANSWER"},

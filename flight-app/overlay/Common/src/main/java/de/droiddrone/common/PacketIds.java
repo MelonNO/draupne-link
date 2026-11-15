@@ -52,7 +52,7 @@ public final class PacketIds {
     public static final byte VIDEO_PARITY_GROUP = 0x71;
     public static final byte SET_BITRATE = 0x72;
 
-    // the link in poor reception (DRAUPNE Link 1.0.67 / phone app pc.53; the three codes observation left unused)
+    // the link in poor reception (DRAUPNE Link 1.0.69 / phone app pc.53; the three codes observation left unused)
     /** Phone -> PC: when a frame was taken and sent ({@link CaptureClock}), to a PC that asked by VIDEO_PROFILE bit 3. */
     public static final byte FRAME_TIME = 0x53;
     /** PC -> phone: the parity packets a block the phone is to add ({@link Fec}). */

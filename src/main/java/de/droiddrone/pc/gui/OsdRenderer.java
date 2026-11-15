@@ -47,7 +47,7 @@ final class OsdRenderer {
      * @param waking      1.0.64: a sleeping phone is waited for ("WAKING - 4:12", "WAKING"): said steady in place of
      *                    LINK LOST, no red frame; null otherwise
      * @param tierTag     1.0.64: the video tier while it is under the normal picture ("ROBUST", "SURVIVAL"); null otherwise
-     * @param pins        1.0.67: the pins on the video ({@link VideoPins}), or null
+     * @param pins        1.0.69: the pins on the video ({@link VideoPins}), or null
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -128,7 +128,7 @@ final class OsdRenderer {
     static final int STICKS_LOST_ALARM_MS = 300;
     /** The picture's age (arrival to screen): yellow from here, red from twice it; VIDEO FROZEN comes at 700. */
     static final int PICTURE_AGE_WARN_MS = 150;
-    /** 1.0.67: the picture's whole delay (camera to screen): yellow from here, red from twice it. */
+    /** 1.0.69: the picture's whole delay (camera to screen): yellow from here, red from twice it. */
     static final int G2G_WARN_MS = 250;
     /** LINK colour by how far the ping is over the link's own usual (BitrateControl's 15-30 s minimum). */
     static final int PING_EXCESS_WARN_MS = 60;
@@ -405,7 +405,7 @@ final class OsdRenderer {
     }
 
     /**
-     * 1.0.67, the pins on the video ({@link VideoPins}): a pin in the picture as the map's diamond on a short stem that
+     * 1.0.69, the pins on the video ({@link VideoPins}): a pin in the picture as the map's diamond on a short stem that
      * stands on its ground point, its name and distance over it - hollow for a rough pin, grey where the terrain hides
      * it; one outside the picture as an arrow on the edge pointing the way, its label on the inside.
      */
@@ -687,7 +687,7 @@ final class OsdRenderer {
     }
 
     /**
-     * 1.0.67, "G2G ~185MS": the picture's delay from the camera to this screen, estimated for every picture shown
+     * 1.0.69, "G2G ~185MS": the picture's delay from the camera to this screen, estimated for every picture shown
      * (video.GlassToGlass; the view's display time added, as to the age). Nothing without a figure: a phone app
      * before pc.53, no picture, watching.
      */

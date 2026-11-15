@@ -14,7 +14,7 @@ import java.io.DataOutputStream;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 1.0.67: the PC's sums for where a ground point shows in the picture (the pins on the video; MARK and the map's view
+ * 1.0.69: the PC's sums for where a ground point shows in the picture (the pins on the video; MARK and the map's view
  * are the same sums the other way) against the virtual fleet's own camera - a DEMO drone's pins stand on what its
  * picture shows, and turn and tilt with it.
  */

@@ -49,7 +49,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
      * @param hardware       the pictures are decoded on the GPU
      * @param pingBaselineMs the link's usual ping, the lowest of the last 15-30 s (-1 before the first)
      * @param pictureAgeMs   how long ago the frame on screen arrived (-1 without one); the view adds its display time
-     * @param g2gMs          1.0.67: the picture's delay from the camera to this PC's screen, estimated and evened out
+     * @param g2gMs          1.0.69: the picture's delay from the camera to this PC's screen, estimated and evened out
      *                       (GlassToGlass); -1 without a figure - a phone app before pc.53, no picture, watching
      * @param captureToSendMs its parts for the last picture shown: the phone's, from the capture to the first packet
      *                       leaving, and videoNetMs the network's; -1 each without a figure
@@ -239,7 +239,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
     /** When the frame on screen arrived (decode thread); 0 = none yet. The OSD's picture age. */
     private volatile long shownArrivedMs;
     /**
-     * 1.0.67: the picture's delay from the camera to this screen (the OSD's G2G, the link log): the phone's FRAME_TIME
+     * 1.0.69: the picture's delay from the camera to this screen (the OSD's G2G, the link log): the phone's FRAME_TIME
      * from the receive thread, each picture shown from the decode thread; not fed while this PC only watches (the
      * link passes nothing on then). Its own lock, taken alone.
      */
@@ -737,7 +737,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                         decoder.convert(pixels, size[0], size[1]);
                         decodingOnGpu = decoder.isHardware();
                         sink.presentFrame();
-                        g2g.onShown(frame.number(), GlassToGlass.clockMs()); // 1.0.67: this picture's delay, if the phone sent its times
+                        g2g.onShown(frame.number(), GlassToGlass.clockMs()); // 1.0.69: this picture's delay, if the phone sent its times
                         long shownAt = MonoClock.ms();
                         lastPresentedAt = shownAt;
                         shownArrivedMs = frame.arrivedMs() > 0 ? frame.arrivedMs() : shownAt;

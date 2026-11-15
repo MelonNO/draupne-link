@@ -90,7 +90,7 @@ public class ControlLink {
         }
 
         /**
-         * 1.0.67 (phone app pc.53, asked for by profile bit 3): a frame's times, come right before its first fragment -
+         * 1.0.69 (phone app pc.53, asked for by profile bit 3): a frame's times, come right before its first fragment -
          * how old the picture was as it left the phone and the Ping the phone had last taken (video.GlassToGlass).
          * @param captureToSendMs 65535 = the phone knows none
          * @param pingEcho        that Ping's stamp, its low 32 bits; pingHoldMs how long the phone held it, 65535 = none taken
@@ -99,11 +99,11 @@ public class ControlLink {
         default void onFrameTime(short frameNum, int captureToSendMs, long pingEcho, int pingHoldMs, long arriveMs) {
         }
 
-        /** 1.0.67: a Pong's round trip, ms, at clockMs (GlassToGlass.clockMs): the link's best is the lowest of them. */
+        /** 1.0.69: a Pong's round trip, ms, at clockMs (GlassToGlass.clockMs): the link's best is the lowest of them. */
         default void onRoundTrip(int ms, long clockMs) {
         }
 
-        /** 1.0.67: the link is up (again): what was learned of its times belongs to the session before. */
+        /** 1.0.69: the link is up (again): what was learned of its times belongs to the session before. */
         default void onLinkSession() {
         }
     }
@@ -218,7 +218,7 @@ public class ControlLink {
     static final byte VIDEO_PROFILE = PacketIds.VIDEO_PROFILE;
     static final int PROFILE_KEY_FRAMES_TWICE = 1, PROFILE_GROUP_PARITY = 2, PROFILE_AVC = 4;
     /**
-     * 1.0.67 (phone app pc.53; an older one reads bits 0-2 by mask and never sees it): profile bit 3 = frame times
+     * 1.0.69 (phone app pc.53; an older one reads bits 0-2 by mask and never sees it): profile bit 3 = frame times
      * wanted - in every tier, whenever this PC shows the video. The phone then sends FRAME_TIME [0x53][frameNum i16]
      * [captureToSendMs u16][pingEcho u32][pingHoldMs u16] (65535 = not known) right before each frame's first
      * fragment, unnumbered: the picture's delay from the camera to this screen (video.GlassToGlass, the OSD's G2G).
@@ -701,7 +701,7 @@ public class ControlLink {
         byte[] d = packet.getData();
         int len = packet.getLength();
         if (len == FRAME_TIME_BYTES && d[0] == FRAME_TIME) {
-            // 1.0.67: a frame's times, ahead of its fragments - to the video side with its arrival on the Pings' clock.
+            // 1.0.69: a frame's times, ahead of its fragments - to the video side with its arrival on the Pings' clock.
             // Never passed on to spectators (the times are this link's), and nothing while this PC only watches
             VideoListener v = videoListener;
             if (v != null && spectator == null) {
@@ -831,7 +831,7 @@ public class ControlLink {
                 if (!wasConnected && connected) {
                     audioRequest.newSession(); // the audio request goes out at once
                     VideoListener v = videoListener;
-                    if (v != null) v.onLinkSession(); // 1.0.67: the picture delay's figures start over
+                    if (v != null) v.onLinkSession(); // 1.0.69: the picture delay's figures start over
                     profileRefreshes = PROFILE_REFRESHES;
                 }
                 if (!wasConnected && connected && lostAt > 0) {
@@ -1001,7 +1001,7 @@ public class ControlLink {
                     lastPingTimestamp = MonoClock.ms();
                     maxPingMs.accumulateAndGet(pingMs, Math::max);
                     VideoListener v = videoListener;
-                    if (v != null && spectator == null) v.onRoundTrip(pingMs, clock); // 1.0.67: the picture delay's "link at its best"
+                    if (v != null && spectator == null) v.onRoundTrip(pingMs, clock); // 1.0.69: the picture delay's "link at its best"
                 }
             }
             case UdpCommon.ConfigReceived -> {
@@ -1489,7 +1489,7 @@ public class ControlLink {
             nextProfileSend = now + 700;
             sendProfile();
         }
-        // 1.0.67: frame times asked for, the video comes and no FRAME_TIME with it: the profile once more (see PROFILE_REFRESH_MS)
+        // 1.0.69: frame times asked for, the video comes and no FRAME_TIME with it: the profile once more (see PROFILE_REFRESH_MS)
         if (profileRefreshes > 0 && videoListener != null && spectator == null && now - lastProfileAt >= PROFILE_REFRESH_MS
                 && lastFrameTimeAt < readyAt && now - lastVideoFragmentAt < 1000) {
             profileRefreshes--;
@@ -1594,7 +1594,7 @@ public class ControlLink {
     }
 
     int profileFlags() {
-        int asked = videoListener != null ? PROFILE_FRAME_TIMES : 0; // 1.0.67: in every tier; bits 0-2 as they were
+        int asked = videoListener != null ? PROFILE_FRAME_TIMES : 0; // 1.0.69: in every tier; bits 0-2 as they were
         if (!isRobust()) return asked;
         return asked | PROFILE_KEY_FRAMES_TWICE | PROFILE_GROUP_PARITY | (videoHevc ? PROFILE_AVC : 0);
     }
