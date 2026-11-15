@@ -4,18 +4,37 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-14, 1.0.68 released (STANAG encoders in a process of their own, FIND GPS), phone 2.3.0-pc.52; last flown: 1.0.43)
+## Where things stand (2026-11-15: main = 1.0.68 released + 1.0.69 merged, unreleased; beta = the link round; last flown 1.0.43)
 
-- **1.0.68 RELEASED 2026-11-14 (PC only, phone pc.52 stays; v1.0.68 Latest: installer, zip, APK; full suite 1366 green; the packaged exe checked as the encoder process (starts in 0.4 s, encodes, ends with the app); not tried by the pilot):** FIND GPS in Drone setup (`setup/GpsSearch`): each free UART in turn (written + saved + restart + `waitForGps` 12 s), the GPS left where it answers, else ports / feature GPS / gps_auto_baud restored; ports carrying anything else never tried; "diff all" backup first; stops between tries when the page is left. Tested against a made-up Betaflight only - never run on hardware by me (the pilot's board on USB is theirs). And the crash below contained, not explained: the STANAG streams' encoders run in a process of their own (`EncoderProcess` / `EncoderWorker`, `"DRAUPNE Link.exe" stanag-encoder <port> <token>`, from source this Java + classpath via `AppPaths.appCommand`; below normal priority; its folder is the logs folder, so its hs_err log lands there; stanag-encoder.log beside it). A crash: the feeds get `EncoderProcess.Down` (said once by the process, not by each feed), their next encoder starts it again (backoff 0/2/5/15/30 s for deaths within 60 s of a start); the transport stream goes on (StanagStream takes a new config). 720p: 5.3 ms a picture through it, 2.85 in the app. The decoders (VIDEO's second decoder, the clip player) still run in the app - if a crash ever shows up there, they go the same way. A second crash log (hs_err in the logs folder) would tell more about the cause.
-- **(contained in 1.0.68) A native crash in a STANAG stream's encoder (2026-11-14, the dev window, ~10 min after start):** the JVM died (EXCEPTION_ACCESS_VIOLATION, a write) in `avcodec_send_frame` under `H264Encoder.encode` <- `StanagFeed.send` on thread `stanag-MobileEcho`; 11 streams on, all pages (the link closed 4 min before, no video decoding); `encode`, not `encodeAgain`: its page had just changed. In native code the encoder copies the source picture's chroma (stride 672: openh264's padded 640-wide plane) to an address that isn't mapped. Not reproduced: 11 page encoders in parallel, 97 790 frames with 3000-frame still runs, and 660 encoders made and closed in parallel - no crash. Code that shipped in 1.0.65 - 1.0.67. A crash here takes the whole app, the drone link with it. Until it is understood: STANAG off when flying. Ideas: run the encoders in a child process; a crash log (hs_err) from a second time.
-- **1.0.67 RELEASED 2026-11-14 (PC only, phone pc.52 stays; v1.0.67 Latest: installer, zip, APK; full suite 1355 green; not tried on a motor):** the motor test's click on a motor (and REORDER MOTORS) spins at 2 % (`MotorTestDialog.PULSE` = 1020), was 8 %. The pilot's word. 2 % is below Betaflight's usual DShot idle (5.5 %): if a motor only twitches, 3 - 4 % is the next step.
-
-- **Now:** DRAUPNE Link 1.0.66 (released 2026-11-13), phone app 2.3.0-pc.52; 1355 tests green; last flown: 1.0.43.
+- **Now:** DRAUPNE Link 1.0.68 (released 2026-11-14), phone app 2.3.0-pc.52; 1366 tests green; last flown: 1.0.43.
+- **1.0.68** (2026-11-14, PC only): STANAG encoders in a process of their own (a native crash in one had taken the
+  whole app down); FIND GPS in Drone setup. Not tried by the pilot.
+- **1.0.67** (2026-11-14, PC only): the motor test's click spins a motor at 2 % (was 8 %). Not tried on a motor.
+  Both were built and released from another PC; their full notes are at the top of docs/history/HANDOFF-history.md.
 - **1.0.66** (2026-11-13, PC only): flight time and range left on the STANAG page and in FLEET's detail.
 - **1.0.65 + phone pc.52** (2026-11-13): STANAG 4609 as one stream per drone; a phone in standby can be observed.
 - **1.0.64 + phone pc.51** (2026-11-12): two review rounds' fixes, overwatch / deep sleep power, sleep notice, AIRSPACE.
 - **New work happens on the `beta` branch** - see "Rules for working on this repo" below.
-- **Not yet tried on hardware, in the order to do it** (how: the history file; 17-19 were written before 1.0.43 flew):
+- **On `main`, merged from `beta` on 2026-11-15 on the maintainer's word, not released, nothing tried on a drone:**
+  1.0.69 (PC only, phone pc.52 stays) - the parts of beta that don't touch the link: PREVIOUS FLIGHTS' debrief, MARK
+  and STILL on the video, pins search / GPX, pins on the video (AR; on by default, the maintainer's choice), the
+  picture's delay (G2G, the PC's side: no figure until a phone app sends frame times), two DEMO fixes, the tests in
+  4 forks and CI. See CHANGELOG 1.0.69.
+- **On `beta`, not released, nothing tried on hardware (2026-11-15):** the link round + phone app 2.3.0-pc.53-beta
+  (versionCode 2030053; `ApkShare` still pins pc.52): a session id in Connect (the cleaner reconnect), Reed-Solomon
+  parity in ROBUST / SURVIVAL, the phone's side of G2G, the phone's observe / overwatch rules in Common; beta has
+  all of main besides. Its bench checks are B1-B6 below.
+  - The release after this beta takes phone app **pc.54**: the update check reads numbers only, so pc.53 would not
+    count as newer than pc.53-beta on the test phones.
+  - Known, not changed: in ROBUST the 1 Mbit/s cap reaches the phone a step a second (`BitrateControl`) and
+    overshoots by one step - about 1-2 s over the cap after a switch from NORMAL. Older than this round.
+  - Phone-side oddities found in the Udp move, kept as they were: an observed phone put to sleep sends its sleep
+    notices without its heading; a standby set from another PC is undone by an observer's next request; right after
+    a FLEET command the "pilot's own PC may observe" exemption goes to the PC that sent it.
+  - The video bar (with MARK / STILL) is cut on 1093x584 with the controller card open; P and S still work.
+  - The OpenH264 wording in THIRD-PARTY.md is for the maintainer to confirm.
+- **Not yet tried on hardware, in the order to do it** (how: the history file; 17-19 were written before 1.0.43 flew;
+  the beta's own checks follow as B1-B7):
   1. 1.0.64, props off, before any flight: link cut while armed until failsafe disarms, back with ARM on - no re-arm.
   2. 1.0.64, props off: start the PC app on an armed drone - RC OFF - READING FC, then sticks live, no arm-off frame.
   3. 1.0.64: LOST DRONE after 5 s, and its question when the link is back.
@@ -35,23 +54,33 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   17. 1.0.40-1.0.42: Drone setup's CONFIRM, motor REORDER / SPIN DIRECTION / PROPS, compass calibration, orientation.
   18. 1.0.33-1.0.41: the far phone on a weak mobile link (link logs), spectator relay, WAKE of a sleeper, remote update.
   19. Older: the "Waiting on the pilot" and "Built but never tried on hardware" lists at the end of the history file.
+  B1. beta, props off: old phone (pc.52) + beta PC - connect, sticks, video in NORMAL / ROBUST / SURVIVAL, a 5 s cut,
+      UPDATE PHONE APP; the phone log has no "RS parity" line.
+  B2. beta, props off: pc.53-beta phone + 1.0.66 PC - all as before; no "RS parity" / "frame times wanted" in its log.
+  B3. beta, props off, armed, switch left on: link cut 3 / 6 / 15 s - no re-arm until ARM off and on; one "Link back".
+  B4. beta, at a weak spot: one "new session" per reconnect in the phone log; note "answer to an older try" lines.
+  B5. beta: OSD extra G2G against the QR latency test, in NORMAL and in ROBUST.
+  B6. beta: the picture in ROBUST, old phone vs new at the same spot (damaged / recovered in the link log).
+  B7. 1.0.69: MARK a landmark 100-300 m out, centre and edge of the picture; STILL in flight (no hitch); REPORT.
+  B8. 1.0.69: pins on the video - a pin on a known landmark stays on it in a hover and a slow turn (how far off in a
+      fast one, with pc.53-beta and with pc.52); one behind a hill grey; the edge arrows point the right way; in DEMO
+      the horizon tilts with the picture.
 - **Open items and known limits:**
   - 1.0.66: flight time and range are linear in the voltage, not a discharge curve - low under load.
   - 1.0.65 STANAG: no sound; a drone flown from another PC is a page here; a clip can be dropped unplayed.
   - 1.0.64: USB-camera phones record no overwatch clip; DEEP SLEEP -> OVERWATCH goes through a full wake.
   - 1.0.64: noise reduction is still on in the dark (785-1030 mA): switch it off, measure current and false alarms.
-  - 1.0.64: no session id yet (the reconnect storm's root, `SessionGate.SAME_SESSION_MS`) - after this round has flown.
+  - 1.0.64: no session id (the reconnect storm's root) - built on beta (the link round), not released.
   - 1.0.64 detector: a drop or insect on the lens alerts, headlights get two ids, a 2 px walker (about 55 m) is missed.
   - 1.0.58: HIGH's fine stage needs a still camera; HIGH alarms on swaying leaves unless they are boxed LOW / OFF.
   - 1.0.60-1.0.61, not found: the notice every phone gets when one is piloted (asked); DEMO's empty tiles on a PC.
   - 1.0.49: the phone's idle-sticks check doesn't read Betaflight's linked modes (MSP_MODE_RANGES_EXTRA).
   - 1.0.42: the GPS UART choice writes the port as GPS only - what else was on that UART is taken off.
-  - Planned next (as of 1.0.50): mission debrief. Asked about, not ordered: idle watch (idle phones that watch).
-- **Known flaky tests** (under load; re-run alone, one suite at a time - the network tests use fixed UDP ports):
-  `NamesTest.theServiceNamesThePcAndTheNamelessPhone`, `PaintCostTest`, `PinsAndFlightsTest`, `VideoTest`'s held key
-  frame, `OverwatchFleetEndToEndTest.lostArmed...`. `SpectatorTest`'s congestion flake was fixed in 1.0.64.
-- **Refactors still open:** the card layout builder in `MainWindow`, the drone signs in `MapView`, observe / overwatch
-  out of the phone's `Udp` (1.0.54); one decode shared by the OSD recorder and the STANAG stream (1.0.65).
+  - Mission debrief: on main (1.0.69, unreleased). Asked about, not ordered: idle watch (idle phones that watch).
+- **Flaky tests:** on beta they are tagged `quarantine` and run apart, retried (see "Testing and diagnosing").
+  Seen once under load on beta, not tagged: `RsParityEndToEndTest.aLossWithinTheParityIsMendedBeyondItAsksForAKeyFrame`.
+- **Refactors still open:** the card layout builder in `MainWindow`, the drone signs in `MapView` (1.0.54); one decode
+  shared by the OSD recorder and the STANAG stream (1.0.65). Observe / overwatch's rules left `Udp` on beta.
 - **History:** [history/HANDOFF-history.md](history/HANDOFF-history.md) (up to 1.0.66) and [CHANGELOG](CHANGELOG.md).
 
 ## Ideas not done yet
