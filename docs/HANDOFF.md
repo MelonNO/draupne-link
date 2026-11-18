@@ -4,9 +4,11 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-15: main = 1.0.68 released + 1.0.69 merged, unreleased; beta = the link round; last flown 1.0.43)
+## Where things stand (2026-11-18: main = 1.0.69 released + 1.0.70 merged, unreleased; beta = the link round; last flown 1.0.43)
 
-- **Now:** DRAUPNE Link 1.0.68 (released 2026-11-14), phone app 2.3.0-pc.52; 1366 tests green; last flown: 1.0.43.
+- **Now:** DRAUPNE Link 1.0.69 (released 2026-11-15), phone app 2.3.0-pc.52; last flown: 1.0.43.
+- **1.0.69** (2026-11-15, PC only): OSD element mAh/km, on by default (`OsdElement.EFFICIENCY`). Not flown. Released
+  from another PC while 1.0.70 waited here unpushed - the number taken, the merged parts moved to 1.0.70.
 - **1.0.68** (2026-11-14, PC only): STANAG encoders in a process of their own (a native crash in one had taken the
   whole app down); FIND GPS in Drone setup. Not tried by the pilot.
 - **1.0.67** (2026-11-14, PC only): the motor test's click spins a motor at 2 % (was 8 %). Not tried on a motor.
@@ -16,10 +18,10 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 - **1.0.64 + phone pc.51** (2026-11-12): two review rounds' fixes, overwatch / deep sleep power, sleep notice, AIRSPACE.
 - **New work happens on the `beta` branch** - see "Rules for working on this repo" below.
 - **On `main`, merged from `beta` on 2026-11-15 on the maintainer's word, not released, nothing tried on a drone:**
-  1.0.69 (PC only, phone pc.52 stays) - the parts of beta that don't touch the link: PREVIOUS FLIGHTS' debrief, MARK
+  1.0.70 (PC only, phone pc.52 stays) - the parts of beta that don't touch the link: PREVIOUS FLIGHTS' debrief, MARK
   and STILL on the video, pins search / GPX, pins on the video (AR; on by default, the maintainer's choice), the
   picture's delay (G2G, the PC's side: no figure until a phone app sends frame times), two DEMO fixes, the tests in
-  4 forks and CI. See CHANGELOG 1.0.69.
+  4 forks and CI. See CHANGELOG 1.0.70.
 - **On `beta`, not released, nothing tried on hardware (2026-11-15):** the link round + phone app 2.3.0-pc.53-beta
   (versionCode 2030053; `ApkShare` still pins pc.52): a session id in Connect (the cleaner reconnect), Reed-Solomon
   parity in ROBUST / SURVIVAL, the phone's side of G2G, the phone's observe / overwatch rules in Common; beta has
@@ -61,8 +63,8 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   B4. beta, at a weak spot: one "new session" per reconnect in the phone log; note "answer to an older try" lines.
   B5. beta: OSD extra G2G against the QR latency test, in NORMAL and in ROBUST.
   B6. beta: the picture in ROBUST, old phone vs new at the same spot (damaged / recovered in the link log).
-  B7. 1.0.69: MARK a landmark 100-300 m out, centre and edge of the picture; STILL in flight (no hitch); REPORT.
-  B8. 1.0.69: pins on the video - a pin on a known landmark stays on it in a hover and a slow turn (how far off in a
+  B7. 1.0.70: MARK a landmark 100-300 m out, centre and edge of the picture; STILL in flight (no hitch); REPORT.
+  B8. 1.0.70: pins on the video - a pin on a known landmark stays on it in a hover and a slow turn (how far off in a
       fast one, with pc.53-beta and with pc.52); one behind a hill grey; the edge arrows point the right way; in DEMO
       the horizon tilts with the picture.
 - **Open items and known limits:**
@@ -76,7 +78,7 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   - 1.0.60-1.0.61, not found: the notice every phone gets when one is piloted (asked); DEMO's empty tiles on a PC.
   - 1.0.49: the phone's idle-sticks check doesn't read Betaflight's linked modes (MSP_MODE_RANGES_EXTRA).
   - 1.0.42: the GPS UART choice writes the port as GPS only - what else was on that UART is taken off.
-  - Mission debrief: on main (1.0.69, unreleased). Asked about, not ordered: idle watch (idle phones that watch).
+  - Mission debrief: on main (1.0.70, unreleased). Asked about, not ordered: idle watch (idle phones that watch).
 - **Flaky tests:** on beta they are tagged `quarantine` and run apart, retried (see "Testing and diagnosing").
   Seen once under load on beta, not tagged: `RsParityEndToEndTest.aLossWithinTheParityIsMendedBeyondItAsksForAKeyFrame`.
 - **Refactors still open:** the card layout builder in `MainWindow`, the drone signs in `MapView` (1.0.54); one decode

@@ -122,7 +122,7 @@ public final class CameraFootprint {
     }
 
     /**
-     * 1.0.69, the pins on the video: where a point of the ground shows in the picture - {@link #direction} turned
+     * 1.0.70, the pins on the video: where a point of the ground shows in the picture - {@link #direction} turned
      * back. (lat, lon) at heightM above the sea; returns {u, v, ahead}: u, v -1..1 left to right and top to bottom of
      * the picture as it is shown (beyond -1..1: beside it), ahead the way to the point along the camera's look, m.
      * Ahead 0 or less: behind the camera, and u, v then say only which way it is (their signs). The earth's curve as
@@ -149,7 +149,7 @@ public final class CameraFootprint {
     static final double SIGHT_ABOVE_M = 2;
 
     /**
-     * 1.0.69: the terrain stands between the camera and a point of the ground (lat, lon with its ground at heightM):
+     * 1.0.70: the terrain stands between the camera and a point of the ground (lat, lon with its ground at heightM):
      * the straight line from the camera to SIGHT_ABOVE_M over the point passes under the ground on the way, the
      * earth's curve as the rays take it. Where the terrain isn't known it hides nothing; no terrain: false.
      */

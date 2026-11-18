@@ -304,7 +304,7 @@ class ControlLinkTest {
         assertEquals(Integer.toString(Integer.parseInt(row[2]) / 2 + 3), row[columns.indexOf("pc_to_fc_ms")], "half the ping + the phone's in-to-out");
         assertEquals("7", row[columns.indexOf("glfw_poll_max_ms")]);
         assertEquals("event", columns.get(columns.size() - 1), "the event stays the last column");
-        // 1.0.69: the picture delay's four columns right before it, blank without a figure (no video here)
+        // 1.0.70: the picture delay's four columns right before it, blank without a figure (no video here)
         assertEquals(List.of("capture_to_send_ms", "video_net_ms", "g2g_ms", "g2g_max_ms"), columns.subList(columns.size() - 5, columns.size() - 1));
         for (int i = 2; i <= 5; i++) assertEquals("", row[row.length - i], columns.get(columns.size() - i));
         assertEquals("sticks_dropped_late", columns.get(columns.size() - 6), "the columns of before stand where they stood");
@@ -886,7 +886,7 @@ class ControlLinkTest {
      * goes out with the first config of every session, the normal one too (1.0.34).
      */
     /**
-     * 1.0.69: with the video shown, the profile asks for frame times (bit 3) in every tier - and bits 0-2, all a phone
+     * 1.0.70: with the video shown, the profile asks for frame times (bit 3) in every tier - and bits 0-2, all a phone
      * app before pc.53 reads, are what 1.0.66 sent: nothing on the normal picture, 1 | 2 | 4 in bad coverage mode.
      */
     @Test
@@ -1224,7 +1224,7 @@ class ControlLinkTest {
         }
         /** The last video profile received (pc.15 on): -1 = none yet, else its flags (bit 0: key frames twice). */
         volatile int videoProfile = -1;
-        /** The profile's whole byte as it came (1.0.69 sets bits a phone app before pc.53 never looks at). */
+        /** The profile's whole byte as it came (1.0.70 sets bits a phone app before pc.53 never looks at). */
         volatile int videoProfileRaw = -1;
         /** ChangeBitRate packets (true = up) and SET_BITRATE steps (pc.26), in order. */
         final List<Boolean> bitRateChanges = new CopyOnWriteArrayList<>();

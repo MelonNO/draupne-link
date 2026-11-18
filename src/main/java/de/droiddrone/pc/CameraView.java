@@ -28,7 +28,7 @@ public final class CameraView {
     private volatile boolean virtual;
 
     /**
-     * 1.0.69: the drone on the video is one of the virtual fleet's (DEMO): its camera's angle and tilt, not the
+     * 1.0.70: the drone on the video is one of the virtual fleet's (DEMO): its camera's angle and tilt, not the
      * settings' - else MARK's pins, the pins on the video and the view on the map stood apart from its picture.
      */
     public void setVirtual(boolean on) {
@@ -184,7 +184,7 @@ public final class CameraView {
     }
 
     /**
-     * 1.0.69, the pins on the video: the camera's pose for them - armed, the position no older than the map's view
+     * 1.0.70, the pins on the video: the camera's pose for them - armed, the position no older than the map's view
      * takes (the drone moves); disarmed, as old as a sitting drone's. Null without one.
      */
     public CameraFootprint.Pose pinPose(FcTelemetry t, FlightTrack track, boolean armed) {

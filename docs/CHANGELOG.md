@@ -2,7 +2,7 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## 1.0.69 (unreleased)
+## 1.0.70 (unreleased)
 
 PC only: the phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Built and tested on beta, merged to main on 2026-11-15 on the pilot's word (the parts that don't touch the link); nothing of it tried on a drone yet. The link round (the cleaner reconnect, the stronger repair in ROBUST / SURVIVAL, the phone's side of the picture's delay) stays on beta with the phone app 2.3.0-pc.53-beta.
 
@@ -13,6 +13,13 @@ PC only: the phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Built and tested on
 - **Pins on the video** (the pilot: "make all pins virtual AR pins in the camera view"): every pin the maps show stands on the live picture where it is - the map's diamond on a short stem, its name and distance over it ("ALPHA 850M"); grey where the terrain stands between, hollow and `~` for a rough one; the five nearest outside the picture get an arrow on its edge pointing the way (behind: on the side to turn to). Out to 10 km. On by default, SETTINGS > OSD > Pins on video turns it off; in the recording and the STILL with the OSD too. As exact as the heading and the camera's angle and tilt settings (5 degrees of heading: a fourteenth of the picture to the side). With the new phone app the drone's pose is the one from when the picture was taken (by G2G), so the pins trail less in a fast turn; with an older one, the newest.
 - **DEMO:** a virtual drone's nose down was read as nose up - its horizon, MARK and the camera's view on the map moved against the picture when it tilted; and while connected to one the PC now takes its camera's 90 degrees, not the settings' angle. A replayed flight's telemetry goes on as recorded.
 - For developers: docs/HANDOFF.md is short now (the release-by-release notes are in docs/history/HANDOFF-history.md); `gradlew test` runs in 4 forks in about 6 minutes, timing tests in `perfTest`, five tests known to fail now and then in `quarantineTest` (retried); one waiting helper and free ports for every test (testing/Waits, Ports, TestHygieneTest); CI runs perf and quarantine as jobs of their own, and a release skips the tests a green Build already ran for the same commit. Pins on the video: `gui/VideoPins` (marks, arrows, the pose history, the hidden check off the Swing thread), `CameraFootprint.toPicture` / `hidden`, `CameraView.pinPose` / `groundM` / `hidden` / `setVirtual`, `OsdElement.PINS`, `OsdRenderer.Data.pins`; tests `VideoPinsTest`, `CameraFootprintTest` (a ray's ground point drawn back where the ray left, a ridge), `VirtualCameraMatchTest` (the virtual camera against the PC's sums, within a pixel).
+
+## 1.0.69 (PC only, 2026-11-15)
+
+The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not flown yet.
+
+- **New OSD element: mAh/km** (the pilot: "Create a OSD element that is Mah/km", then "Set it default on"). On by default, under the battery's figures (SETTINGS > OSD moves or hides it); on for a pilot whose OSD was set before it too. The current over the GPS ground speed (A x 1000 / km/h), smoothed over about 3 s, like Betaflight's efficiency element: e.g. `322MAH/KM` at 14.5 A and 45 km/h. `---MAH/KM` under 5 km/h (hovering is no km) and without a 3D fix; grey when the flight controller goes quiet. A live figure, not the flight's average: Betaflight's mAh count runs from the pack being plugged in, the distance only while armed.
+- For developers: `OsdElement.EFFICIENCY` (key `efficiency`), `OsdRenderer.efficiency(...)`; `OsdLayoutTest.mahPerKmIsTheCurrentOverTheSpeedSmoothedAndDashesWhenSlow`.
 
 ## 1.0.68 (PC only, 2026-11-14)
 

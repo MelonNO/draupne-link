@@ -19,7 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 
 /**
- * The pins on the video (1.0.69, the pilot: "make all pins virtual AR pins in the camera view"): each pin the maps
+ * The pins on the video (1.0.70, the pilot: "make all pins virtual AR pins in the camera view"): each pin the maps
  * show, drawn on the live picture where it stands - the map's camera view turned round
  * ({@link CameraFootprint#toPicture}), from the pose MARK casts its rays from. A pin the terrain hides is grey; the
  * nearest pins beside or behind the picture get an arrow on its edge, pointing the way. As exact as the heading and

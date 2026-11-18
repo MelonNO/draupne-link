@@ -188,7 +188,7 @@ public class MainWindow extends JFrame {
     /** Where the camera looks (1.0.39): drawn on the maps, and the STANAG 4609 stream's frame centre and corners. */
     private final CameraView cameraView = new CameraView(tileCache);
     private final CameraView.Live cameraLive = new CameraView.Live(cameraView);
-    /** The pins on the video (1.0.69): the maps' pins where they stand in the picture. */
+    /** The pins on the video (1.0.70): the maps' pins where they stand in the picture. */
     private final VideoPins videoPins = new VideoPins(cameraView);
     private boolean cameraOnMap;
     /** The STANAG 4609 streams, one per drone (1.0.65); set in the constructor. */
@@ -1960,7 +1960,7 @@ public class MainWindow extends JFrame {
     /** The OSD and the maps say VIRTUAL while the link is to a drone of the virtual fleet. */
     private void setVirtualShown(boolean on) {
         videoView.setVirtual(on);
-        cameraView.setVirtual(on); // 1.0.69: the virtual camera's angle for MARK, the pins on the video and the map's view
+        cameraView.setVirtual(on); // 1.0.70: the virtual camera's angle for MARK, the pins on the video and the map's view
         miniMap.setVirtualDrone(on);
         if (mapWindow != null) mapWindow.map().setVirtualDrone(on);
     }

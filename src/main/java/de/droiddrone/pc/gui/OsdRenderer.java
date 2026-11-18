@@ -47,7 +47,7 @@ final class OsdRenderer {
      * @param waking      1.0.64: a sleeping phone is waited for ("WAKING - 4:12", "WAKING"): said steady in place of
      *                    LINK LOST, no red frame; null otherwise
      * @param tierTag     1.0.64: the video tier while it is under the normal picture ("ROBUST", "SURVIVAL"); null otherwise
-     * @param pins        1.0.69: the pins on the video ({@link VideoPins}), or null
+     * @param pins        1.0.70: the pins on the video ({@link VideoPins}), or null
      */
     record Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
                 VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -128,7 +128,7 @@ final class OsdRenderer {
     static final int STICKS_LOST_ALARM_MS = 300;
     /** The picture's age (arrival to screen): yellow from here, red from twice it; VIDEO FROZEN comes at 700. */
     static final int PICTURE_AGE_WARN_MS = 150;
-    /** 1.0.69: the picture's whole delay (camera to screen): yellow from here, red from twice it. */
+    /** 1.0.70: the picture's whole delay (camera to screen): yellow from here, red from twice it. */
     static final int G2G_WARN_MS = 250;
     /** LINK colour by how far the ping is over the link's own usual (BitrateControl's 15-30 s minimum). */
     static final int PING_EXCESS_WARN_MS = 60;
@@ -144,6 +144,10 @@ final class OsdRenderer {
     private static final long STALE_MS = 2000;
     private static final double PITCH_FOV_DEG = 60; // degrees of pitch across the picture height
     private static final int CORE_TEMP_ALARM_C = 70; // Betaflight's default osd_core_temp_alarm
+    /** mAh/km: slower than this the figure runs away (hovering is no km), so it says --- (Betaflight's efficiency does too). */
+    static final double EFFICIENCY_MIN_KMH = 5;
+    /** mAh/km smoothed over about this long: a punch of throttle or a gust moves it over seconds, not in one frame. */
+    static final double EFFICIENCY_SMOOTH_MS = 3000;
 
     /** Warnings that aren't (yet) a loss of control: yellow; the rest red. */
     private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "RC OFF - NO RADIO", "RC OFF - READING FC",
@@ -163,6 +167,20 @@ final class OsdRenderer {
     /** The editor's: where each element was drawn this time. Null while flying. */
     private Map<OsdElement, Rectangle2D> boundsOut;
     private Rectangle2D box; // the element being drawn, while boundsOut is wanted
+    /** The mAh/km shown, NaN for ---; and when it was worked out (MonoClock ms). */
+    private double efficiency = Double.NaN;
+    private long efficiencyAtMs;
+
+    /**
+     * mAh per km: the current over the ground speed (A x 1000 / km/h), smoothed with what was shown {@code dtMs} ago.
+     * NaN (---) slower than {@link #EFFICIENCY_MIN_KMH}; starts afresh after a gap of seconds.
+     */
+    static double efficiency(double before, long dtMs, double amps, double speedKmh) {
+        if (Double.isNaN(amps) || amps < 0 || Double.isNaN(speedKmh) || speedKmh < EFFICIENCY_MIN_KMH) return Double.NaN;
+        double now = amps * 1000 / speedKmh;
+        if (Double.isNaN(before) || dtMs < 0 || dtMs > 2 * EFFICIENCY_SMOOTH_MS) return now;
+        return before + (now - before) * (1 - Math.exp(-dtMs / EFFICIENCY_SMOOTH_MS));
+    }
 
     void paint(Graphics2D graphics, int x, int y, int w, int h, Data d, OsdLayout layout) {
         paint(graphics, x, y, w, h, d, layout, null);
@@ -293,6 +311,13 @@ final class OsdRenderer {
                 int m = gps.travelledM();
                 value(m < 1000 ? "DIST " + m + "M" : String.format(Locale.ROOT, "DIST %.2fKM", m / 1000.0), ex, ey, a, fcFresh ? WHITE : STALE);
             });
+            element(OsdElement.EFFICIENCY, (ex, ey, a) -> {
+                if (battery == null || gps == null) return;
+                boolean moving = fcFresh && gps.fix() >= 2;
+                efficiency = efficiency(efficiency, now - efficiencyAtMs, battery.amps(), moving ? gps.speedKmh() : 0);
+                efficiencyAtMs = now;
+                value(Double.isNaN(efficiency) ? "---MAH/KM" : Math.round(efficiency) + "MAH/KM", ex, ey, a, fcFresh ? WHITE : STALE);
+            });
             element(OsdElement.RSSI, (ex, ey, a) -> {
                 int rssi = t == null ? -1 : t.getRssiPercent();
                 if (rssi >= 0) value("RSSI " + rssi + "%", ex, ey, a, !fcFresh ? STALE : rssi < 30 ? RED : rssi < 60 ? YELLOW : WHITE);
@@ -405,7 +430,7 @@ final class OsdRenderer {
     }
 
     /**
-     * 1.0.69, the pins on the video ({@link VideoPins}): a pin in the picture as the map's diamond on a short stem that
+     * 1.0.70, the pins on the video ({@link VideoPins}): a pin in the picture as the map's diamond on a short stem that
      * stands on its ground point, its name and distance over it - hollow for a rough pin, grey where the terrain hides
      * it; one outside the picture as an arrow on the edge pointing the way, its label on the inside.
      */
@@ -687,7 +712,7 @@ final class OsdRenderer {
     }
 
     /**
-     * 1.0.69, "G2G ~185MS": the picture's delay from the camera to this screen, estimated for every picture shown
+     * 1.0.70, "G2G ~185MS": the picture's delay from the camera to this screen, estimated for every picture shown
      * (video.GlassToGlass; the view's display time added, as to the age). Nothing without a figure: a phone app
      * before pc.53, no picture, watching.
      */

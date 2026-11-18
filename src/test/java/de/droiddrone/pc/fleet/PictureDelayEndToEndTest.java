@@ -24,7 +24,7 @@ import static de.droiddrone.testing.Waits.waitFor;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * 1.0.69, the picture's delay shown in flight (G2G), end to end on loopback: a virtual drone sends FRAME_TIME when the
+ * 1.0.70, the picture's delay shown in flight (G2G), end to end on loopback: a virtual drone sends FRAME_TIME when the
  * PC's profile asks (bit 3), the PC's pipeline makes a figure of it for every picture shown, and the link log gets its
  * columns. With an older phone app (the profile's bits 0-2 only) there is no figure and the video is as before; a PC
  * that doesn't ask is sent no FRAME_TIME.
@@ -141,7 +141,7 @@ class PictureDelayEndToEndTest {
         }
     }
 
-    /** A PC before 1.0.69 never asks (its profile is bits 0-2): the phone app of now sends it no packet it doesn't know. */
+    /** A PC before 1.0.70 never asks (its profile is bits 0-2): the phone app of now sends it no packet it doesn't know. */
     @Test
     void aPcThatDoesNotAskIsSentNoFrameTimes() throws Exception {
         PcConfig config = config();
