@@ -195,6 +195,23 @@ final class PowerMode {
         return p == null ? NORMAL : p.mode;
     }
 
+    /**
+     * pc.54: the deep sleep asked for is an OUT OF ACTION drone's (FLEET's request flag): its flight controller's
+     * lost-signal beeper stays on through the sleep, so the drone can be found. Set by the request that asks, cleared
+     * by any other request and at the wake.
+     */
+    private static volatile boolean outOfAction;
+
+    static boolean outOfAction() {
+        return outOfAction;
+    }
+
+    /** A FLEET request: {@link #request} with whether it is an OUT OF ACTION drone's deep sleep. */
+    static void request(int mode, int intervalMin, String from, boolean forOutOfAction) {
+        outOfAction = forOutOfAction && mode == DEEP_SLEEP;
+        request(mode, intervalMin, from);
+    }
+
     /** Deep sleep or overwatch: the link's socket closed between checks, the checks running (pc.36). */
     static boolean isSleepMode() {
         int m = mode();
@@ -501,6 +518,7 @@ final class PowerMode {
         boolean wasDeep = mode == DEEP_SLEEP || wasOverwatch;
         boolean wasDown = asleep || checking; // things really let go of, not just the countdown
         mode = NORMAL;
+        outOfAction = false; // pc.54: awake, it is flown or looked after again
         sleepAt = 0;
         if (wasStandby) service.powerStandby(false);
         if (wasOverwatch) Overwatch.end("woken: " + from); // its clip so far kept for the PC, the camera closed

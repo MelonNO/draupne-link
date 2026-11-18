@@ -72,23 +72,65 @@ class LiveHeadingTest {
         assertEquals(234, LiveHeading.of(t), 0.01);
     }
 
+    /** The modes' names, so a status without the ARM mode on reads as disarmed for sure. */
+    private static void modeNames(FcTelemetry t) throws Exception {
+        t.parse(new DataReader(FcTelemetryTest.boxNamesPacket("ARM;ANGLE;"), true), BETAFLIGHT);
+    }
+
     @Test
-    void withoutACompassThePhonesSensorIsTheHeading() throws Exception {
+    void withoutACompassThePhonesSensorIsTheHeadingOnTheGround() throws Exception {
         FcTelemetry t = new FcTelemetry();
+        modeNames(t);
         yaw(t, 234); // drift since power-up
         sensors(t, ACC | GYRO);
         assertEquals(Boolean.FALSE, t.fcCompass());
         assertTrue(Double.isNaN(LiveHeading.of(t)), "no compass, no phone's word: no heading, never the drift");
         record(t, 0, 234, 79);
-        assertEquals(79, LiveHeading.of(t), 0.01);
+        assertEquals(79, LiveHeading.of(t), 0.01, "disarmed and still: the phone's compass");
+        assertEquals(de.droiddrone.common.BestHeading.PHONE, LiveHeading.now(t).source());
+    }
+
+    /** 1.0.71, the pilot: "compass heading is wrong it spins around randomly" - in the air, beside the motors. */
+    @Test
+    void whileItMayBeArmedThePhonesSensorIsNotTaken() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        yaw(t, 234);
+        sensors(t, ACC | GYRO); // no modes' names: armed or not isn't known
+        record(t, 0, 234, 79);
+        assertTrue(Double.isNaN(LiveHeading.of(t)), "not known to be disarmed: not the phone's compass, not the drift");
+    }
+
+    /** In flight without a compass: the way the drone travels. */
+    @Test
+    void movingWithAFixTheHeadingIsTheGpsCourse() throws Exception {
+        FcTelemetry t = new FcTelemetry();
+        yaw(t, 234);
+        sensors(t, ACC | GYRO);
+        record(t, 0, 234, 79);
+        parse(t, out -> {
+            out.writeShort(FcCommon.MSP_RAW_GPS);
+            out.writeByte(2);
+            out.writeByte(14);
+            out.writeInt(600_000_000);
+            out.writeInt(100_000_000);
+            out.writeShort(120);
+            out.writeShort(1500); // 15 m/s = 54 km/h
+            out.writeShort(900); // course 90.0
+            out.writeShort(90);
+            out.writeInt(0);
+        });
+        assertEquals(90, LiveHeading.of(t), 0.01);
+        LiveHeading.Now now = LiveHeading.now(t);
+        assertEquals(de.droiddrone.common.BestHeading.TRAVEL, now.source());
+        assertFalse(now.stale());
     }
 
     @Test
-    void anOlderPhoneAppWithoutAWordOnTheCompassKeepsTheYaw() throws Exception {
+    void anOlderPhoneAppWithoutAWordOnTheCompassHasNoHeadingFromTheYaw() throws Exception {
         FcTelemetry t = new FcTelemetry();
         yaw(t, 120);
         assertNull(t.fcCompass());
-        assertEquals(120, LiveHeading.of(t), 0.01, "as before 1.0.62");
+        assertTrue(Double.isNaN(LiveHeading.of(t)), "1.0.71: a yaw nobody vouches for is the gyro's drift (before: shown, as before 1.0.62)");
     }
 
     @Test
@@ -106,6 +148,15 @@ class LiveHeadingTest {
         sensors(t, ACC | GYRO);
         record(t, 0, 234, 79);
         long later = MonoClock.ms() + LiveHeading.RECORD_STALE_MS + 1;
-        assertTrue(Double.isNaN(LiveHeading.of(t, later)));
+        assertTrue(Double.isNaN(LiveHeading.of(t, later)), "never taken: the drone was not known to be disarmed");
+        // 1.0.71: a heading once taken is kept when its source goes quiet - and said to be an older one
+        FcTelemetry known = new FcTelemetry();
+        modeNames(known);
+        sensors(known, ACC | GYRO);
+        record(known, 0, 234, 79);
+        assertEquals(79, LiveHeading.of(known), 0.01);
+        LiveHeading.Now kept = LiveHeading.now(known, MonoClock.ms() + LiveHeading.RECORD_STALE_MS + 1);
+        assertEquals(79, kept.deg(), 0.01);
+        assertTrue(kept.stale());
     }
 }

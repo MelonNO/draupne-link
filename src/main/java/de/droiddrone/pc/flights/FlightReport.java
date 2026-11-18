@@ -60,7 +60,10 @@ public final class FlightReport {
             throws IOException {
         FlightLibrary.Flight f = d.flight;
         if (summary == null) summary = FlightSummary.of(d);
-        String drone = isName(f.drone()) ? f.drone().trim() : null;
+        // 1.0.71, the pilot: every flight says its drone - a flight with a record prints what it was flown by, a name
+        // or (without one) its address; an older flight's name is the link log's guess, printed only when it is a name
+        String drone = f.record() != null && f.drone() != null && !f.drone().isBlank() ? f.drone().trim()
+                : isName(f.drone()) ? f.drone().trim() : null;
         String title = "Flight " + f.title() + (drone == null ? "" : " - " + drone);
         StringBuilder sb = new StringBuilder(64_000);
         sb.append("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n")

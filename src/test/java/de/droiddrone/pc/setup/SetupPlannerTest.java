@@ -93,7 +93,10 @@ class SetupPlannerTest {
         SetupPlanner.Result r = SetupPlanner.plan(cli, new SetupPlanner.Fc(BOXES, SERIAL_RX, false, null),
                 wanted(null, 0, ModeSwitch.Failsafe.KEEP));
         assertEquals(List.of("version", "board_name", "get craft_name", "aux", "get serial_update_rate_hz",
-                "get force_battery_cell_count", "beeper list", "beeper", "beacon"), cli.asked, "no GPS, no failsafe asked");
+                "get force_battery_cell_count", "get vbat_warning_cell_voltage", "get vbat_min_cell_voltage",
+                "beeper list", "beeper", "beacon"), cli.asked, "no GPS, no failsafe asked");
+        // 1.0.71: the lost receiver's beacon too (the drone beeps, buzzer and motors, when the link is lost)
+        assertTrue(r.plan().stream().anyMatch(c -> c.commands().contains("beacon RX_LOST")), described(r).toString());
         assertEquals("IFLIGHT_BLITZ_F722 - Vanguard", r.board());
         List<String> d = described(r);
         assertTrue(d.get(0).startsWith("Receiver: MSP RX input, now RX_SERIAL"), d.toString());
@@ -113,7 +116,8 @@ class SetupPlannerTest {
         SetupPlanner.Result r = SetupPlanner.plan(cli, new SetupPlanner.Fc(BOXES, MSP_RX_GPS, true, true),
                 wanted(true, 4, ModeSwitch.Failsafe.GPS_RESCUE));
         assertEquals(List.of("version", "board_name", "get craft_name", "aux", "get serial_update_rate_hz",
-                "get force_battery_cell_count", "serial", "get gps_auto_baud", "get mag_hardware", "get mag_calibration",
+                "get force_battery_cell_count", "get vbat_warning_cell_voltage", "get vbat_min_cell_voltage",
+                "serial", "get gps_auto_baud", "get mag_hardware", "get mag_calibration",
                 "beeper list", "beeper", "beacon", "get failsafe_procedure", "get gps_rescue_allow_arming_without_fix"), cli.asked);
         List<String> d = described(r);
         assertFalse(d.get(0).startsWith("Receiver"), "MSP already");
@@ -181,7 +185,9 @@ class SetupPlannerTest {
         FakeCli cli = new FakeCli()
                 .with("get serial_update_rate_hz", "serial_update_rate_hz = 2000\r\n")
                 .with("get force_battery_cell_count", "force_battery_cell_count = 6\r\n")
-                .with("beeper", SILENT).with("beacon", "Disabled:  RX_LOST\r\n")
+                .with("beeper", SILENT).with("beacon", "Disabled:  none\r\n")
+                .with("get vbat_warning_cell_voltage", "vbat_warning_cell_voltage = 320\r\n")
+                .with("get vbat_min_cell_voltage", "vbat_min_cell_voltage = 280\r\n")
                 .with("aux", aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 36 2 1700 2100 0 0",
                         "aux 3 13 13 1700 2100 0 0"));
         ModeSwitch angleOnly = new ModeSwitch(2, ModeSwitch.Mode.ACRO, ModeSwitch.Mode.ANGLE, ModeSwitch.Mode.ACRO);
@@ -194,6 +200,25 @@ class SetupPlannerTest {
         assertEquals(List.of(), r.replaced());
     }
 
+    /** The field round of 2026-11-18: Li-ion limits, and a drone set up before 1.0.71 gets what is new - nothing more. */
+    @Test
+    void aDroneSetUpBeforeGetsTheBatteryLimitsAndTheLostLinkBeacon() throws IOException {
+        FakeCli cli = new FakeCli()
+                .with("get serial_update_rate_hz", "serial_update_rate_hz = 2000\r\n")
+                .with("get force_battery_cell_count", "force_battery_cell_count = 6\r\n")
+                .with("beeper", SILENT).with("beacon", "Disabled:  RX_LOST\r\n")
+                .with("get vbat_warning_cell_voltage", "vbat_warning_cell_voltage = 350\r\nAllowed range: 100 - 500\r\n")
+                .with("get vbat_min_cell_voltage", "vbat_min_cell_voltage = 330\r\nAllowed range: 100 - 500\r\n")
+                .with("aux", aux("aux 0 0 0 1700 2100 0 0", "aux 1 1 1 1300 1700 0 0", "aux 2 36 2 1700 2100 0 0",
+                        "aux 3 13 13 1700 2100 0 0"));
+        ModeSwitch angleOnly = new ModeSwitch(2, ModeSwitch.Mode.ACRO, ModeSwitch.Mode.ANGLE, ModeSwitch.Mode.ACRO);
+        SetupPlanner.Result r = SetupPlanner.plan(cli, new SetupPlanner.Fc(BOXES, BetaflightPlan.FEATURE_RX_MSP, false, null),
+                new SetupPlanner.Wanted(6, true, angleOnly, 0, ModeSwitch.Failsafe.KEEP, 1, 3, SetupPlanner.Gps.none(false, 3, false)));
+        assertEquals(2, r.plan().size(), described(r).toString());
+        assertEquals(List.of("set vbat_min_cell_voltage = 280", "set vbat_warning_cell_voltage = 320"), r.plan().get(0).commands());
+        assertEquals(List.of("beacon RX_LOST"), r.plan().get(1).commands());
+    }
+
     @Test
     void takenOffReadsAsASentence() {
         assertEquals("", SetupPlanner.takenOff(List.of()));
@@ -201,8 +226,10 @@ class SetupPlannerTest {
     }
 
     // ---- recorded: every round of a grid as 1.0.53 planned it (moved out of the GUI unchanged) ----
+    // 1.0.71: recorded anew for the field round - checked to differ from 1.0.53's (49d15c23...) in three things only:
+    // the two vbat limits asked for, "beacon RX_LOST" after "beacon RX_SET", and the beepers' line saying so
 
-    private static final String RECORDED = "49d15c23db75d43348ec37e8141382dec3b6fb38a33d2458ac6eb641f4ed0901";
+    private static final String RECORDED = "b7a0338e553a047b66d16f4917cffaae4b12b86d5e4fd2e9c6953daf0c89b92f";
 
     static String grid() throws IOException {
         StringBuilder sb = new StringBuilder();

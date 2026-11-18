@@ -1,5 +1,6 @@
 package de.droiddrone.pc.gui;
 
+import de.droiddrone.common.CellVolts;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.video.VideoPipeline;
@@ -151,7 +152,7 @@ final class OsdRenderer {
 
     /** Warnings that aren't (yet) a loss of control: yellow; the rest red. */
     private static final java.util.Set<String> YELLOW_WARNINGS = java.util.Set.of("RC OFF - THROTTLE DOWN", "RC OFF - NO RADIO", "RC OFF - READING FC",
-            "RC OFF - MAPPING INCOMPLETE", "PHONE BATTERY LOW", "RADIO FROZEN?", "VIDEO FROZEN", "RELAY - MORE DELAY",
+            "RC OFF - MAPPING INCOMPLETE", "PHONE BATTERY LOW", "LOW BATTERY", "RADIO FROZEN?", "VIDEO FROZEN", "RELAY - MORE DELAY",
             "PILOT DISCONNECTED");
 
     private interface Element {
@@ -228,8 +229,13 @@ final class OsdRenderer {
                     put("ANOTHER PC IS PILOT - YOUR STICKS NOT SENT", w / 2f, 162 * unit, YELLOW, OsdLayout.Align.CENTER);
                 }
             }
+            // 1.0.71: the heading is the link's best one (a compass that agrees with the flight, the way travelled, the
+            // phone's compass at rest), never the gyro's drift; an older one kept is shown greyed, none as "---"
+            de.droiddrone.pc.LiveHeading.Now best = de.droiddrone.pc.LiveHeading.now(t);
+            double hdg = best.known() ? best.deg() : d.preview() && attFresh ? att.headingDeg() : Double.NaN;
             element(OsdElement.HEADING, (ex, ey, a) -> {
-                if (attFresh) headingTape(ex, ey, a, att, gps);
+                if (!Double.isNaN(hdg)) headingTape(ex, ey, a, (int) Math.round(hdg) % 360, best.stale(), gps);
+                else if (attFresh) value("HDG ---", ex, ey, a, STALE);
             });
             element(OsdElement.BATTERY, (ex, ey, a) -> battery(ex, ey, a, t, fcFresh));
             element(OsdElement.PING, (ex, ey, a) -> {
@@ -284,7 +290,7 @@ final class OsdRenderer {
                 value(String.format(Locale.ROOT, "ALT %4.0fM%s", alt.meters(), vario), ex, ey, a, fcFresh ? WHITE : STALE);
             });
             element(OsdElement.HOME, (ex, ey, a) -> {
-                if (gps != null && gps.distanceHomeM() >= 0) home(ex, ey, a, gps, attFresh ? att : null, fcFresh);
+                if (gps != null && gps.distanceHomeM() >= 0) home(ex, ey, a, gps, hdg, fcFresh);
             });
 
             // extras
@@ -335,8 +341,14 @@ final class OsdRenderer {
                 if (attFresh) value(String.format(Locale.ROOT, "ROL %+d°", Math.round(att.rollDeg())), ex, ey, a, WHITE);
             });
             element(OsdElement.COORDINATES, (ex, ey, a) -> {
-                if (gps == null || gps.latDeg() == 0 && gps.lonDeg() == 0) return;
-                Color c = fcFresh ? WHITE : STALE;
+                if (gps == null) return;
+                if (gps.latDeg() == 0 && gps.lonDeg() == 0) { // no place yet; readings that are held back are said
+                    if (gps.heldBack()) value("GPS ?", ex, ey, a, YELLOW);
+                    return;
+                }
+                // 1.0.71: the place the position filter holds; "GPS ?" while this report's own reading is not taken
+                Color c = !fcFresh || !gps.positionOk() ? STALE : WHITE;
+                if (gps.heldBack()) value("GPS ?", ex, ey + 44 * unit, a, YELLOW);
                 value(String.format(Locale.ROOT, "LAT %.6f", gps.latDeg()), ex, ey, a, c);
                 value(String.format(Locale.ROOT, "LON %.6f", gps.lonDeg()), ex, ey + 22 * unit, a, c);
             });
@@ -598,11 +610,10 @@ final class OsdRenderer {
     }
 
     /** The tape, 90 degrees wide; y is its top. */
-    private void headingTape(float x, float top, OsdLayout.Align align, FcTelemetry.Attitude att, FcTelemetry.Gps gps) {
+    private void headingTape(float x, float top, OsdLayout.Align align, int heading, boolean stale, FcTelemetry.Gps gps) {
         float span = 360 * unit;        // pixels for the visible arc
         float cx = startX(x, span, align) + span / 2;
         float pxPerDeg = span / 90f;    // 90 degrees visible
-        int heading = att.headingDeg();
         g.setFont(Theme.headingFont(15 * unit));
         for (int deg = heading - 50; deg <= heading + 50; deg++) {
             if (Math.floorMod(deg, 5) != 0) continue;
@@ -638,7 +649,7 @@ final class OsdRenderer {
         g.drawRect(Math.round(cx - bw / 2), Math.round(top - 4 * unit), Math.round(bw), Math.round(24 * unit));
         mark(cx - bw / 2, top - 4 * unit, bw, 24 * unit);
         mark(cx - span / 2, top, span, 1); // the whole tape, also where it has no ticks
-        centered(hdg, cx, top + 14 * unit, ACCENT);
+        centered(hdg, cx, top + 14 * unit, stale ? STALE : ACCENT); // an older heading kept: greyed
     }
 
     // ------------------------------------------------------------------ edges
@@ -647,7 +658,6 @@ final class OsdRenderer {
     private void battery(float x, float y, OsdLayout.Align a, FcTelemetry t, boolean fresh) {
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
         if (b == null || b.volts() <= 0) return;
-        FcTelemetry.BatteryLimits lim = t.getBatteryLimits();
         if (!b.cellCountKnown()) { // no cell count from Betaflight yet: the pack voltage, no guess
             label("BATT" + (fresh ? "" : "  NO DATA"), x, y, a);
             g.setFont(Theme.monoFont(Font.BOLD, 30 * unit));
@@ -657,10 +667,8 @@ final class OsdRenderer {
             return;
         }
         double cell = b.cellVolts();
-        double warn = lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5;
-        double min = lim != null && lim.minCell() > 0 ? lim.minCell() : 3.3;
-        double max = lim != null && lim.maxCell() > 0 ? lim.maxCell() : 4.3;
-        Color c = !fresh ? STALE : cell <= min ? RED : cell <= warn ? YELLOW : GREEN;
+        // the pilot's limits (2026-11-18), whatever the flight controller has stored: low at 3.2 V, empty at 2.8 V
+        Color c = !fresh ? STALE : CellVolts.empty(cell) ? RED : CellVolts.low(cell) ? YELLOW : GREEN;
         // Betaflight counted wrong (battery plugged in while it ran on USB): say so, its own warnings are off too
         label("BATT " + b.cells() + "S" + (b.fcCountWrong() ? "  (BF SAYS " + b.fcCells() + "S)" : "") + (fresh ? "" : "  NO DATA"), x, y, a);
         String cellText = String.format(Locale.ROOT, "%.2fV", cell);
@@ -673,7 +681,7 @@ final class OsdRenderer {
         text("/CELL", sx + cellW + 6 * unit, y + 32 * unit, fresh ? WHITE : STALE);
         // charge bar from cell voltage
         float bw = 120 * unit, bh = 8 * unit, by = y + 42 * unit, bx = startX(x, bw, a);
-        double frac = Math.max(0, Math.min(1, (cell - min) / (max - min)));
+        double frac = CellVolts.fill(cell);
         g.setColor(OUTLINE);
         g.fillRect(Math.round(bx), Math.round(by), Math.round(bw), Math.round(bh));
         g.setColor(c);
@@ -809,13 +817,13 @@ final class OsdRenderer {
     }
 
     /** "HOME 230M" and an arrow pointing home after it. */
-    private void home(float x, float y, OsdLayout.Align a, FcTelemetry.Gps gps, FcTelemetry.Attitude att, boolean fresh) {
+    private void home(float x, float y, OsdLayout.Align a, FcTelemetry.Gps gps, double headingDeg, boolean fresh) {
         g.setFont(Theme.monoFont(Font.BOLD, 18 * unit));
         String text = String.format(Locale.ROOT, "HOME %dM", gps.distanceHomeM());
         float tw = g.getFontMetrics().stringWidth(text);
         float sx = startX(x, tw + 34 * unit, a);
         text(text, sx, y, fresh ? GREEN : STALE);
-        if (att != null) homeArrow(sx + tw + 22 * unit, y - 6 * unit, gps.directionHomeDeg() - att.headingDeg());
+        if (!Double.isNaN(headingDeg)) homeArrow(sx + tw + 22 * unit, y - 6 * unit, gps.directionHomeDeg() - headingDeg);
     }
 
     private void homeArrow(float cx, float cy, double relativeDeg) {
@@ -887,9 +895,10 @@ final class OsdRenderer {
         if (d.relayed() && d.linkReady()) big.add("RELAY - MORE DELAY");
         if (d.spectatorPaused()) big.add("PAUSED (PILOT LINK SLOW)");
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
-        FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
-        if (!d.fcLost() && b != null && b.volts() > 0 && b.cellCountKnown()
-                && b.cellVolts() <= (lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5)) big.add("LOW BATTERY");
+        if (!d.fcLost() && b != null && b.volts() > 0 && b.cellCountKnown()) {
+            String battery = batteryWarning(b.cellVolts());
+            if (battery != null) big.add(battery);
+        }
         // the phone is the radio: when it dies, the link goes
         if (t != null && t.getPhoneBatteryPercent() >= 0 && t.getPhoneBatteryPercent() <= 15 && !t.isPhoneCharging()) big.add("PHONE BATTERY LOW");
         if (d.preview() && big.isEmpty()) big.add("LOW BATTERY"); // the editor: something to see and drag
@@ -938,14 +947,24 @@ final class OsdRenderer {
         }
     }
 
+    /**
+     * The drone's pack as a warning, by the pilot's limits (2026-11-18: "empty at 2,8 and low at 3,2"; Li-ion packs):
+     * LOW BATTERY (yellow) at or under 3.2 V a cell, BATTERY EMPTY (red) at or under 2.8 V; null above. A warning
+     * only: nothing in the app stops arming for it.
+     */
+    static String batteryWarning(double cellVolts) {
+        return CellVolts.empty(cellVolts) ? "BATTERY EMPTY" : CellVolts.low(cellVolts) ? "LOW BATTERY" : null;
+    }
+
     /** An observation tile's warnings: the link, the drone's battery, the phone's battery; nothing about flying. */
     private void observerWarnings(float x, float y, OsdLayout.Align a, Data d, FcTelemetry t, long now) {
         List<String> big = new ArrayList<>(3);
         if (!d.linkReady()) big.add("LINK LOST");
         FcTelemetry.Battery b = t == null ? null : t.getBattery();
-        FcTelemetry.BatteryLimits lim = t == null ? null : t.getBatteryLimits();
-        if (b != null && b.volts() > 0 && b.cellCountKnown()
-                && b.cellVolts() <= (lim != null && lim.warningCell() > 0 ? lim.warningCell() : 3.5)) big.add("LOW BATTERY");
+        if (b != null && b.volts() > 0 && b.cellCountKnown()) {
+            String battery = batteryWarning(b.cellVolts());
+            if (battery != null) big.add(battery);
+        }
         if (t != null && t.getPhoneBatteryPercent() >= 0 && t.getPhoneBatteryPercent() <= 15 && !t.isPhoneCharging()) big.add("PHONE BATTERY LOW");
         if (big.isEmpty() || (now / 400) % 2 != 0) return;
         y = Math.min(y, h - 14 * unit - (big.size() - 1) * 38 * unit);

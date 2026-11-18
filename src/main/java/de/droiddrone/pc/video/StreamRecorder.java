@@ -214,7 +214,18 @@ public final class StreamRecorder implements AutoCloseable {
                 num(r.varioMs(), 1), r.mode() == null ? "" : r.mode().replace(',', ' '), r.armed() ? 1 : 0, num(r.rollDeg(), 1), num(r.pitchDeg(), 1), r.headingDeg()));
         osd.newLine();
         osdRows++;
+        // 1.0.71 (the pilot: "always save a log"): what is written so far is on the disk once a second - the app
+        // killed or the PC restarted mid-flight loses a second, not the buffers' worth
+        long now = System.nanoTime();
+        if (now - flushedAt >= FLUSH_EVERY_NS) {
+            flushedAt = now;
+            osd.flush();
+            avio_flush(oc.pb());
+        }
     }
+
+    private static final long FLUSH_EVERY_NS = 1_000_000_000L;
+    private long flushedAt = System.nanoTime();
 
     private static String num(double v, int decimals) {
         return Double.isNaN(v) ? "" : String.format(Locale.ROOT, "%." + decimals + "f", v);

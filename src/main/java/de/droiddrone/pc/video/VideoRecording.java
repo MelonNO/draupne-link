@@ -82,6 +82,7 @@ final class VideoRecording {
     private volatile VideoPipeline.RecordingTap tap;
     /** Told each new recording file as it is created (record thread), or null - the tour notes its own files by path. */
     private volatile Consumer<Path> fileListener;
+    private volatile String label = "";
 
     VideoRecording(Supplier<VideoPipeline.Config> currentConfig, Runnable requestKeyFrame, Supplier<AudioConfig> defaultAudio) {
         this.currentConfig = currentConfig;
@@ -91,6 +92,11 @@ final class VideoRecording {
 
     void setFileListener(Consumer<Path> listener) {
         fileListener = listener;
+    }
+
+    /** 1.0.71: the drone's name in each new file's name (flight-DATE-label.mkv); "" or null: none. */
+    void setLabel(String label) {
+        this.label = label == null ? "" : label;
     }
 
     void setTap(VideoPipeline.RecordingTap t) {
@@ -309,7 +315,7 @@ final class VideoRecording {
         if (recorder == null) {
             VideoPipeline.Config c = config != null ? config : currentConfig.get();
             if (c == null || !f.keyFrame()) return null; // a file starts at a key frame
-            Path path = newFile(r.dir);
+            Path path = newFile(r.dir, label);
             AudioConfig sound = audioTrackForNewFile();
             StreamRecorder opened = new StreamRecorder(path, c.hevc(), c.width(), c.height(), c.codecConfig(), sound);
             try {
@@ -339,9 +345,15 @@ final class VideoRecording {
 
     /** flight-(date)_(time).mkv; a second file within the same second gets -2, -3 ... (it overwrote the first). */
     static Path newFile(Path dir) {
+        return newFile(dir, "");
+    }
+
+    /** The same with the drone's name after the stamp: flight-(date)_(time)-(label).mkv, then -2, -3 ... */
+    static Path newFile(Path dir, String label) {
         String stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
-        Path file = dir.resolve("flight-" + stamp + ".mkv");
-        for (int n = 2; Files.exists(file); n++) file = dir.resolve("flight-" + stamp + "-" + n + ".mkv");
+        String base = "flight-" + stamp + (label == null || label.isEmpty() ? "" : "-" + label);
+        Path file = dir.resolve(base + ".mkv");
+        for (int n = 2; Files.exists(file); n++) file = dir.resolve(base + "-" + n + ".mkv");
         return file;
     }
 }

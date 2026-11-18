@@ -44,7 +44,7 @@ Radio --USB--> Windows PC  == 5G / mobile / Tailscale ==>  Android phone on the 
 - Kartverket topo, world topo, satellite, OpenStreetMap. MGRS / UTM / degrees. Works offline after **DOWNLOAD AREA**.
 - Every drone on the map with its state: active, asleep, overwatch, lost, unknown. Right-click to fly, watch or copy the grid.
 - **PREVIOUS FLIGHTS:** video, track and telemetry on one timeline, link quality graph, export, delete.
-- **FIND DRONE** / **LOST DRONE** with the MGRS on the clipboard. LOST DRONE marks the drone CRASHED.
+- **FIND DRONE** / **LOST DRONE** with the MGRS on the clipboard. LOST DRONE marks the drone OUT OF ACTION (any drone can be marked by right-click: it stays until cleared, and its last known grid is kept).
 - **MAP TOOLS:** ruler with elevation profile, lines, rectangles, arrows, NATO symbols (MIL-STD-2525D / APP-6D), pins list, **RADIO HORIZON**, **GCS SEARCH**, **COVERAGE** (mobile network, estimate from OpenCelliD masts), overwatch **CLIPS**, KML/PNG export and import.
 
 <table>

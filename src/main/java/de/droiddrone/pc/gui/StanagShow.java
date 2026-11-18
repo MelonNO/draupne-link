@@ -33,13 +33,14 @@ final class StanagShow {
         }
     }
 
-    /** A phone's battery under this, not charging, is low; and a drone's pack under this. */
-    static final int PHONE_LOW_PERCENT = 20, DRONE_LOW_PERCENT = 20;
+    /** A phone's battery under this, not charging, is low. (A drone's pack: {@link FleetCards#cellLow}.) */
+    static final int PHONE_LOW_PERCENT = 20;
 
     /**
      * The drone's pack as a percentage (the pilot: "give a percentage of the power in the drone battery, don't give the
-     * cell value"): from its voltage per cell as FLEET's gauge fills ({@link FleetCards#cellFill}: 3.3 V empty, 4.2 V
-     * full) - an estimate from the voltage at rest, the only measure a sitting drone gives.
+     * cell value"): from its voltage per cell as FLEET's gauge fills ({@link FleetCards#cellFill}: 2.8 V empty, 4.2 V
+     * full, a Li-ion curve) - an estimate from the voltage at rest, the only measure a sitting drone gives. Low (the
+     * yellow figures) is the cell at or under 3.2 V ({@link FleetCards#cellLow}), not a per cent.
      */
     static int dronePercent(double cellVolts) {
         return (int) Math.round(FleetCards.cellFill(cellVolts) * 100);
@@ -62,10 +63,11 @@ final class StanagShow {
             int percent = dronePercent(c.cellVolts());
             String v = percent + " %";
             if (c.cellAgeMs() > CELL_OLD_MS) v += " AT " + minute(wallNow - c.cellAgeMs());
-            out.add(new Stat("DRONE", v, percent < DRONE_LOW_PERCENT));
+            boolean low = FleetCards.cellLow(c.cellVolts());
+            out.add(new Stat("DRONE", v, low));
             // the pilot: "flight time remaining and estimated range left ... displayed on the stanag screen"
-            out.add(new Stat("FLIGHT", FleetCards.flightLeft(c.cellVolts()), percent < DRONE_LOW_PERCENT));
-            out.add(new Stat("RANGE", FleetCards.rangeLeft(c.cellVolts()), percent < DRONE_LOW_PERCENT));
+            out.add(new Stat("FLIGHT", FleetCards.flightLeft(c.cellVolts()), low));
+            out.add(new Stat("RANGE", FleetCards.rangeLeft(c.cellVolts()), low));
         }
         if (c.heardAgoMs() >= 0 && !"CONNECTED".equals(c.badge())) out.add(new Stat("HEARD", minute(wallNow - c.heardAgoMs()), false));
         if (c.nextCheckMs() > 0 && c.nextCheckMs() != FleetCards.LISTENING) out.add(new Stat("NEXT CHECK", minute(wallNow + c.nextCheckMs()), false));
@@ -99,7 +101,8 @@ final class StanagShow {
      */
     static Page page(FleetCards.Card c, boolean watchedHere, String flownBy, boolean alerting) {
         String badge = c.badge() == null ? "" : c.badge();
-        if (c.kind() == MapView.Kind.CRASHED) return new Page("CRASHED", "Marked lost. Last place in the metadata.", Tone.ALARM);
+        // 1.0.71: OUT OF ACTION (CRASHED before) - the pilot's mark for a drone that can't fly any more, whatever the reason
+        if (c.kind() == MapView.Kind.OUT_OF_ACTION) return new Page("OUT OF ACTION", "Marked by the pilot. Last place in the metadata.", Tone.WARN);
         if (c.kind() == MapView.Kind.LOST) return new Page("LOST", "Link lost while flown.", Tone.ALARM);
         if ("CONNECTED".equals(badge) || watchedHere) return new Page("PILOTED", "Waiting for the picture.", Tone.PLAIN);
         if (alerting) return new Page("OVERWATCH - ALERT", "Motion seen. See the map window.", Tone.ALARM);
@@ -121,11 +124,19 @@ final class StanagShow {
             case "ACTIVE":
                 return new Page("IDLE", "Awake, no pilot. PILOT UAV flies it.", Tone.PLAIN);
             case "UNKNOWN":
-                if (c.heardAgoMs() < 0) return new Page("OFFLINE", "Not heard since this PC started.", Tone.PLAIN);
-                return new Page("UNKNOWN", c.nextCheckMs() != -1 ? "Missed its check-in." : "Not heard from.", Tone.WARN);
+                // 1.0.71 (the pilot: "show last mode when unknown"): the mode alone - the page is a still picture, and
+                // HEARD below it says when
+                String was = c.was() == null ? "" : " " + sentence(c.was().replaceFirst("\\s+\\d+ (MIN|H|D)$|\\s+NOW$", "")) + ".";
+                if (c.heardAgoMs() < 0) return new Page("OFFLINE", "Not heard since this PC started." + was, Tone.PLAIN);
+                return new Page("UNKNOWN", (c.nextCheckMs() != -1 ? "Missed its check-in." : "Not heard from.") + was, Tone.WARN);
             default:
                 return new Page(badge.isEmpty() ? "UNKNOWN" : badge, "", Tone.PLAIN);
         }
+    }
+
+    /** "WAS OVERWATCH" -> "Was OVERWATCH": a sentence on the page, the mode's word as it is everywhere. */
+    private static String sentence(String was) {
+        return was.startsWith("WAS ") ? "Was " + was.substring(4) : was;
     }
 
     private static String sleepText(FleetCards.Card c) {

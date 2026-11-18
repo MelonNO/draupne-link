@@ -38,9 +38,10 @@ import java.util.stream.Stream;
 public final class FlightLibrary {
     /** Files this close in time (or overlapping) are the same connection's. */
     static final long JOIN_MS = 20_000;
-    private static final Pattern VIDEO = Pattern.compile("flight-(\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2})(-\\d+)?\\.mkv");
+    /** 1.0.71: after the stamp the drone's name ({@link FlightRecord#fileLabel}) and / or a counter, each after a dash. */
+    private static final Pattern VIDEO = Pattern.compile("flight-(\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2})(-[A-Za-z0-9._]+)*\\.mkv");
     private static final Pattern LINK = Pattern.compile("link-(\\d{8}-\\d{6})\\.csv");
-    private static final Pattern TRACK = Pattern.compile("track-(\\d{8}-\\d{6})\\.gpx");
+    private static final Pattern TRACK = Pattern.compile("track-(\\d{8}-\\d{6})(-[A-Za-z0-9._]+)*\\.gpx");
     private static final Pattern CONNECTING = Pattern.compile("(?:Connecting to|Watching|The pilot now flies) (\\S+)");
     private static final DateTimeFormatter VIDEO_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss");
     private static final DateTimeFormatter FILE_TIME = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
@@ -54,7 +55,19 @@ public final class FlightLibrary {
      * any more); distanceM is the track's length (NaN: not measured).
      */
     public record Flight(long startMs, long endMs, String drone, Path track, Path video, Path osdVideo, Path telemetry,
-                         Path linkLog, double distanceM) {
+                         Path linkLog, double distanceM, List<Part> parts, String ended, Path record) {
+        /** A flight found by its files' times (before 1.0.71): one recording, nothing known of its end. */
+        public Flight(long startMs, long endMs, String drone, Path track, Path video, Path osdVideo, Path telemetry,
+                      Path linkLog, double distanceM) {
+            this(startMs, endMs, drone, track, video, osdVideo, telemetry, linkLog, distanceM,
+                    video == null ? List.of() : List.of(new Part(video, osdVideo, telemetry, videoStart(video))), null, null);
+        }
+
+        /** How it ended, for the list: "LINK LOST", "LOST DRONE", "APP CLOSED", "NOW" - null for a flight ended as usual. */
+        public String endMark() {
+            return ended == null || FlightRecord.DISCONNECT.equals(ended) ? null : ended;
+        }
+
         public long durationMs() {
             return Math.max(0, endMs - startMs);
         }
@@ -74,6 +87,10 @@ public final class FlightLibrary {
         public List<Path> files() {
             List<Path> out = new ArrayList<>();
             for (Path p : new Path[]{track, video, osdVideo, telemetry, linkLog}) if (p != null) out.add(p);
+            for (Part part : parts) { // 1.0.71: every part of the recording, not the first alone
+                for (Path p : new Path[]{part.video(), part.osdVideo(), part.telemetry()}) if (p != null && !out.contains(p)) out.add(p);
+            }
+            if (record != null && Files.isRegularFile(record)) out.add(record);
             Path notes = notesFile();
             if (notes != null && Files.isRegularFile(notes)) out.add(notes);
             return out;
@@ -90,6 +107,23 @@ public final class FlightLibrary {
             int dot = name.lastIndexOf('.');
             return beside.resolveSibling((dot > 0 ? name.substring(0, dot) : name) + FlightNotes.SUFFIX);
         }
+    }
+
+    /**
+     * One part of a flight's recording (a new file starts whenever the picture's size changes): the camera's own
+     * recording, its copy with the OSD and its figures (either may be null), and where its clock's 0 is.
+     */
+    public record Part(Path video, Path osdVideo, Path telemetry, long startMs) {
+        /** The file to show: the copy with the OSD drawn in when there is one. */
+        public Path playable() {
+            return osdVideo != null ? osdVideo : video;
+        }
+    }
+
+    /** When a recording began, from the stamp in its name; 0 when it has none. */
+    static long videoStart(Path video) {
+        Item i = video == null ? null : videoItem(video);
+        return i == null ? 0 : i.startMs();
     }
 
     /** One file found, with its time span. */
@@ -112,7 +146,67 @@ public final class FlightLibrary {
             Item i = linkItem(f);
             if (i != null) items.add(i);
         }
-        return group(items);
+        // 1.0.71: a connection with a record is one flight with all its files, whatever their times; the files of
+        // older connections are put together by their times, as before
+        List<Flight> recorded = new ArrayList<>();
+        Set<Path> claimed = new HashSet<>();
+        for (FlightRecord r : FlightRecord.readAll(tracksDir)) {
+            Flight f = flight(r, items, claimed);
+            if (f != null) recorded.add(f);
+        }
+        items.removeIf(i -> claimed.contains(normal(i.file())));
+        List<Flight> all = new ArrayList<>(group(items));
+        all.addAll(recorded);
+        all.sort(Comparator.comparingLong(Flight::startMs).reversed());
+        return all;
+    }
+
+    private static Path normal(Path p) {
+        return p.toAbsolutePath().normalize();
+    }
+
+    /**
+     * A record's flight: its own files among those found (they are claimed, armed or not, so the grouping by time
+     * leaves them alone). Null when the drone was never armed in it (the pilot: no flight to log), or when it has
+     * neither a track nor a recording to show.
+     */
+    static Flight flight(FlightRecord r, List<Item> items, Set<Path> claimed) {
+        Item track = null, link = null;
+        List<Item> videos = new ArrayList<>();
+        Set<Path> mine = new HashSet<>();
+        if (r.track() != null) mine.add(normal(r.track()));
+        if (r.linkLog() != null) mine.add(normal(r.linkLog()));
+        for (Path v : r.videos()) mine.add(normal(v));
+        for (Item i : items) {
+            if (!mine.contains(normal(i.file()))) continue;
+            claimed.add(normal(i.file()));
+            switch (i.kind()) {
+                case TRACK -> track = i;
+                case LINK -> link = i;
+                case VIDEO -> videos.add(i);
+            }
+        }
+        if (!r.wasArmed()) return null;
+        if (track == null && videos.isEmpty()) return null;
+        videos.sort(Comparator.comparingLong(Item::startMs));
+        List<Part> parts = new ArrayList<>();
+        long start = Long.MAX_VALUE, end = Long.MIN_VALUE;
+        for (Item v : videos) {
+            String base = v.file().getFileName().toString().replaceFirst("\\.mkv$", "");
+            Path o = v.file().resolveSibling(base + "-osd.mkv"), c = v.file().resolveSibling(base + ".csv");
+            parts.add(new Part(v.file(), Files.isRegularFile(o) ? o : null, Files.isRegularFile(c) ? c : null, v.startMs()));
+            start = Math.min(start, v.startMs());
+            end = Math.max(end, v.endMs());
+        }
+        if (track != null) {
+            start = Math.min(start, track.startMs());
+            end = Math.max(end, track.endMs());
+        }
+        Part first = parts.isEmpty() ? null : parts.get(0);
+        String label = r.label().isEmpty() ? null : r.label();
+        return new Flight(start, Math.max(start, end), label, track == null ? null : track.file(),
+                first == null ? null : first.video(), first == null ? null : first.osdVideo(), first == null ? null : first.telemetry(),
+                link == null ? null : link.file(), track == null ? Double.NaN : track.distanceM(), List.copyOf(parts), r.ended(), r.file());
     }
 
     /** The link logs that are a kept flight's: what {@link #scan} gives each flight. Reads files: not on the Swing thread. */

@@ -4,9 +4,9 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
 [README](../README.md) (what it does, troubleshooting), [CHANGELOG](CHANGELOG.md) (what changed when),
 [PROTOCOL](PROTOCOL.md) and [ROADMAP](ROADMAP.md).
 
-## Where things stand (2026-11-18: main = 1.0.69 released + 1.0.70 merged, unreleased; beta = the link round; last flown 1.0.43)
+## Where things stand (2026-11-18: main = 1.0.69 released + 1.0.70 merged, unreleased; beta = the link round + the field round (work tree); last flown 1.0.69 on 2026-11-17 and 18)
 
-- **Now:** DRAUPNE Link 1.0.69 (released 2026-11-15), phone app 2.3.0-pc.52; last flown: 1.0.43.
+- **Now:** DRAUPNE Link 1.0.69 (released 2026-11-15), phone app 2.3.0-pc.52; last flown: 1.0.69 with pc.52 (2026-11-17 and 18).
 - **1.0.69** (2026-11-15, PC only): OSD element mAh/km, on by default (`OsdElement.EFFICIENCY`). Not flown. Released
   from another PC while 1.0.70 waited here unpushed - the number taken, the merged parts moved to 1.0.70.
 - **1.0.68** (2026-11-14, PC only): STANAG encoders in a process of their own (a native crash in one had taken the
@@ -23,11 +23,45 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   picture's delay (G2G, the PC's side: no figure until a phone app sends frame times), two DEMO fixes, the tests in
   4 forks and CI. See CHANGELOG 1.0.70.
 - **On `beta`, not released, nothing tried on hardware (2026-11-18; to be 1.0.71; on GitHub as the branch `beta`, no tag, no release):** the link round + phone app 2.3.0-pc.53-beta
-  (versionCode 2030053; `ApkShare` still pins pc.52): a session id in Connect (the cleaner reconnect), Reed-Solomon
+  (`ApkShare` still pins pc.52): a session id in Connect (the cleaner reconnect), Reed-Solomon
   parity in ROBUST / SURVIVAL, the phone's side of G2G, the phone's observe / overwatch rules in Common; beta has
   all of main besides. Its bench checks are B1-B6 below.
-  - The release after this beta takes phone app **pc.54**: the update check reads numbers only, so pc.53 would not
-    count as newer than pc.53-beta on the test phones.
+  - The release after this beta takes phone app **pc.55** (the field round below made the beta pc.54-beta): the
+    update check reads numbers only, so pc.54 would not count as newer than pc.54-beta on the test phones.
+- **The field round, on `beta` (2026-11-18 evening, committed, NOT pushed until the pilot says; phone app
+  2.3.0-pc.54-beta, versionCode 2030054):** the pilot flew 1.0.69 + pc.52 on 2026-11-17/18 (the first flights since
+  1.0.43) and came back with twelve items; the answers to every question asked are in CHANGELOG 1.0.71 "Field
+  round". What was built, and where:
+  - *Flights:* `flights/FlightRecord` (a `flight-DATE.record` file beside the tracks from the moment of connecting:
+    drone, address, its files, armed first / last, how it ended), `FlightKeeper` (never armed: files deleted;
+    `recover` at the start for records without an end line - kept as APP CLOSED and back on the map), `FlightLibrary`
+    (a record's files are one flight, `Flight.parts`, `endMark`; older files still grouped by time),
+    `PreviousFlightsDialog` (the player runs the parts in order - `Player.play`, `partAt`, `soundFor`; SEARCH; DELETE
+    logged), names in file names (`FlightRecord.fileLabel`, `FlightTrack.setLabel`, `VideoRecording.setLabel`),
+    `MainWindow.endFlightRecord` / `recoverFlights` / `closeFlightAtExit` (a shutdown hook), Record video on by
+    default, `StreamRecorder` flushes once a second, `liveVirtual` (a made-up drone writes nothing).
+  - *Position and heading:* Common `PositionFilter` (in `FcTelemetry` for the drone's and the phone's GPS:
+    `Gps.positionOk` / `heldBack`; on the phone in `Msp`), Common `BestHeading` behind `LiveHeading.now` (a
+    `BestHeading` per link in `FcTelemetry`), `HeadingChoice` (an observed drone: no phone compass while armed).
+  - *Battery:* Common `CellVolts` (3.2 / 2.8 V, the Li-ion curve) behind `FleetCards.cellFill` / `cellLow`,
+    `OsdRenderer.batteryWarning`; `setup/BatterySetup` (Betaflight's two limits); `ArmWhy` (the log's line).
+  - *Fleet:* `LastKnown` (`%APPDATA%\DraupneLink\last-known.txt`), `LastKnownDialog`, `FleetCards.Card.was` /
+    `withWas`, `MapView.Kind.OUT_OF_ACTION` (CRASHED's place in the enum), `MainWindow.markOutOfAction` (no
+    auto-clear; settings key `drone.outOfAction`, `drone.crashed` read once), `FleetController.outOfAction` (DEEP
+    SLEEP 30 min with `FleetProtocol.FLAG_OUT_OF_ACTION`, kept queued by `FleetManager.setKeepWaiting`).
+  - *Beeper:* Common `BeeperRule` (the phone's idle sticks: not after a link lost without a Disconnect, not during
+    the PC's BEEP; its own idle frame when no PC sent one) and `BeeperQuiet` (MSP_BEEPER_CONFIG 184 / 185: RX_LOST
+    off in RAM before a sleep closes the port - `DDService.quietTheDrone` - and written back at the wake -
+    `beeperConfigRead`; what was read is kept in the phone's settings meanwhile); `PacketIds.BEEP` 0x56
+    (`ControlLink.sendBeep`, BEEPER while the phone rests); `setup/Beepers` adds `beacon RX_LOST`.
+  - *Known limits:* the phone still refuses a sleep unless its flight controller is known disarmed - an OUT OF ACTION
+    drone whose phone lost its USB stays awake (and beeps for the lost USB anyway); a USB lost during a quieted deep
+    sleep stays silent until the flight controller is power-cycled; an ESC's own "beacon delay" is outside the app;
+    MSP_BEEPER_CONFIG's layout is from Betaflight's source as remembered (4.3 - 2025.12) and untried on a board - B10
+    is its test; observed drones (not flown from this PC) get no travel heading, only "none while armed"; the
+    debrief plays one part's sound at a time (each part's own file); a spectator's flight that follows the pilot to
+    another phone keeps one record for both tracks; `last-position.txt` is still one file for all (LAST KNOWN is
+    the per-phone one).
   - Known, not changed: in ROBUST the 1 Mbit/s cap reaches the phone a step a second (`BitrateControl`) and
     overshoots by one step - about 1-2 s over the cap after a switch from NORMAL. Older than this round.
   - Phone-side oddities found in the Udp move, kept as they were: an observed phone put to sleep sends its sleep
@@ -67,7 +101,29 @@ Everything needed to pick up work on DRAUPNE Link from a new session or another 
   B8. 1.0.70: pins on the video - a pin on a known landmark stays on it in a hover and a slow turn (how far off in a
       fast one, with pc.53-beta and with pc.52); one behind a hill grey; the edge arrows point the right way; in DEMO
       the horizon tilts with the picture.
+  B9. field round, props off: BEEPER silent in every rest - DISCONNECT (standby), FLEET STANDBY on a phone no PC has
+      connected to, DEEP SLEEP, OVERWATCH (the phone's log: "lost-signal beeper is off for the deep sleep", and
+      "back as it was" after the wake) - on a drone that has been through Drone setup again (`beacon RX_LOST`).
+  B10. field round: pull the PC's network for 10 s while connected, disarmed: the drone beeps (buzzer and motors)
+      until the link is back; the same armed, props off (Betaflight's failsafe, then beeping). Pull the phone's USB:
+      it beeps. BEEPER while the phone is in standby: it beeps while held.
+  B11. field round: Mark OUT OF ACTION on a drone in each mode (connected too: the link ends first): FLEET and the
+      map say OUT OF ACTION with its last grid, the phone goes to deep sleep ("out of action" in its log), checks in
+      after 30 min, the drone beeps; the mark stays when the phone answers; CONNECT asks before clearing it.
+  B12. field round: connect without arming, DISCONNECT - nothing in PREVIOUS FLIGHTS, no files; arm for a moment -
+      the flight with its name; kill the app (Task Manager) while armed - after the restart the path is on the map
+      and the flight is listed APP CLOSED, its video plays to the last second; a flight with several video parts
+      plays through them; SEARCH by name.
+  B13. field round, outdoors: before the GPS has its fix no position (was 0/0 and far-away places); the map's arrow
+      and the OSD's heading follow the flight after take-off (no spinning), fainter / greyed in a hover, the phone's
+      compass after landing and disarming; "GPS ?" never while flying normally.
+  B14. field round: a low pack (3.2 V a cell): LOW BATTERY yellow, arming works; 2.8 V: BATTERY EMPTY red. Drone setup
+      offers "Battery: low at 3.2 V a cell, empty at 2.8 V" once. ARM on without arming: a line in the log says why.
+  B15. field round: restart the app with phones switched off - their LAST KNOWN marks on the map, their grids on the
+      FLEET cards and in MAP TOOLS > DATA > LAST KNOWN; an UNKNOWN phone reads "WAS <MODE> <AGE>".
 - **Open items and known limits:**
+  - 1.0.71 field round: the per cent, flight time and range left follow a Li-ion curve to 2.8 V now (still from the
+    voltage: low under load).
   - 1.0.66: flight time and range are linear in the voltage, not a discharge curve - low under load.
   - 1.0.65 STANAG: no sound; a drone flown from another PC is a page here; a clip can be dropped unplayed.
   - 1.0.64: USB-camera phones record no overwatch clip; DEEP SLEEP -> OVERWATCH goes through a full wake.

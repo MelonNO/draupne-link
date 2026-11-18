@@ -44,6 +44,8 @@ import androidx.core.app.NotificationCompat;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import de.droiddrone.common.BeeperQuiet;
+import de.droiddrone.common.BeeperRule;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.SettingsCommon;
@@ -347,6 +349,7 @@ public class DDService extends Service {
         closeMavlinkBridge();
         udp.stopVideo();
         fcInfo = null;
+        quietTheDrone("deep sleep");
         serial.close();
         PhoneLocation.stop();
         udp.close();
@@ -374,6 +377,62 @@ public class DDService extends Service {
         }
     }
 
+    private static final String BEEPER_PREFS = "beeper", BEEPER_AS_READ = "asRead";
+
+    /**
+     * pc.54 (the pilot, 2026-11-18: "the esc beeper still goes off when the drone is not controlled"): a sleep closes
+     * the flight controller's port, and Betaflight beeps for its lost receiver - the buzzer and the motors. Before the
+     * port closes those two sounds are switched off in the flight controller's memory (BeeperQuiet; not saved there: a
+     * power cycle brings them back), and what it had before is kept in the phone's settings until it is written back
+     * at the wake (beeperConfigRead). Not for a drone marked OUT OF ACTION: that one is to be found by its beeping.
+     */
+    private void quietTheDrone(String why) {
+        try {
+            if (!BeeperRule.muteForSleep(PowerMode.outOfAction())) {
+                log("Out of action: the drone's beeper stays on through the " + why);
+                return;
+            }
+            Msp m = msp;
+            byte[] read = m == null ? null : m.beeperConfig();
+            if (m == null || !m.isInitialized() || !BeeperQuiet.understood(read)) {
+                log("The drone's beeper is not switched off for the " + why + ": its settings were not read");
+                return;
+            }
+            android.content.SharedPreferences prefs = getSharedPreferences(BEEPER_PREFS, MODE_PRIVATE);
+            // what the flight controller had before the first quiet is the one to put back - not a quiet one read later
+            if (!BeeperQuiet.isQuiet(read) || prefs.getString(BEEPER_AS_READ, "").isEmpty()) {
+                prefs.edit().putString(BEEPER_AS_READ, BeeperQuiet.hex(BeeperQuiet.asRead(read))).commit();
+            }
+            if (m.quietBeeper()) {
+                log("The drone's lost-signal beeper is off for the " + why + " (back at the wake)");
+                android.os.SystemClock.sleep(150); // the write leaves the phone before the port closes
+            }
+        } catch (RuntimeException e) {
+            log("Beeper quiet: " + e);
+        }
+    }
+
+    /**
+     * pc.54, on the MSP thread at each read of the beeper settings: awake again with settings kept from before a sleep -
+     * they are written back (once), so the drone beeps again when its receiver is really lost.
+     */
+    void beeperConfigRead(Msp from, byte[] read) {
+        try {
+            int mode = PowerMode.mode();
+            if (mode == PowerMode.DEEP_SLEEP || mode == PowerMode.OVERWATCH) return; // going to sleep: quietTheDrone's turn
+            android.content.SharedPreferences prefs = getSharedPreferences(BEEPER_PREFS, MODE_PRIVATE);
+            String kept = prefs.getString(BEEPER_AS_READ, "");
+            if (kept.isEmpty()) return;
+            byte[] before = BeeperQuiet.fromHex(kept);
+            prefs.edit().remove(BEEPER_AS_READ).commit();
+            if (before == null || !BeeperQuiet.understood(read) || java.util.Arrays.equals(BeeperQuiet.asRead(read), before)) return;
+            from.writeBeeperConfig(before);
+            log("Awake: the drone's lost-signal beeper is back as it was");
+        } catch (RuntimeException e) {
+            log("Beeper back: " + e);
+        }
+    }
+
     /** Between checks: the notification says when the next one is (pc.39: or that it always listens). */
     void powerSleepOn(long nextCheckAt) {
         boolean overwatch = PowerMode.mode() == PowerMode.OVERWATCH;
@@ -397,6 +456,7 @@ public class DDService extends Service {
         closeMavlinkBridge();
         udp.stopVideo();
         fcInfo = null;
+        quietTheDrone("overwatch");
         serial.close();
         PhoneLocation.stop();
         udp.close();

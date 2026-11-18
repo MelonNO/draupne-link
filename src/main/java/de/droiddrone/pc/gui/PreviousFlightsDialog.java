@@ -83,6 +83,10 @@ final class PreviousFlightsDialog extends JDialog {
     private final DefaultListModel<FlightLibrary.Flight> model = new DefaultListModel<>();
     final JList<FlightLibrary.Flight> list = new JList<>(model);
     private final JLabel listNote = Theme.label("Reading flights...", Theme.font(Font.PLAIN, 12.5f), Theme.MUTED);
+    /** 1.0.71: narrows the list to a drone (or a date). */
+    final javax.swing.JTextField search = new javax.swing.JTextField(12);
+    /** Every flight read, searched or not. */
+    private List<FlightLibrary.Flight> allFlights = List.of();
     final VideoPane video = new VideoPane();
     final MapView map;
     final Timeline timeline = new Timeline();
@@ -120,6 +124,8 @@ final class PreviousFlightsDialog extends JDialog {
     volatile java.util.function.LongSupplier clock = System::currentTimeMillis;
     private Player player;
     private FileAudio audio;
+    /** Where the sound file's 0 is on the flight's clock: the start of the recording's part being played. */
+    private long audioStartMs;
     /** The thread reading the folders or the chosen flight now (or the one that did last). */
     private volatile Thread reading;
 
@@ -234,7 +240,34 @@ final class PreviousFlightsDialog extends JDialog {
 
         // left: the flights
         JPanel left = Theme.card(new BorderLayout(0, 8));
-        left.add(Theme.sectionTitle("Previous flights"), BorderLayout.NORTH);
+        // 1.0.71, the pilot: "search / filter by name" - the list follows every key (as the pins sheet's SEARCH)
+        JPanel leftTop = new JPanel(new BorderLayout(0, 6));
+        leftTop.setOpaque(false);
+        leftTop.add(Theme.sectionTitle("Previous flights"), BorderLayout.NORTH);
+        JPanel find = new JPanel(new BorderLayout(8, 0));
+        find.setOpaque(false);
+        find.add(Theme.label("SEARCH", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
+        search.setFont(Theme.font(Font.PLAIN, 12.5f));
+        search.setToolTipText("Drone or date");
+        search.putClientProperty("JTextField.showClearButton", true);
+        search.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                showFlights(allFlights, list.getSelectedValue());
+            }
+
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                showFlights(allFlights, list.getSelectedValue());
+            }
+
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+            }
+        });
+        find.add(search, BorderLayout.CENTER);
+        leftTop.add(find, BorderLayout.SOUTH);
+        left.add(leftTop, BorderLayout.NORTH);
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         list.setBackground(Theme.PANEL);
         list.setCellRenderer(new FlightCell());
@@ -527,10 +560,18 @@ final class PreviousFlightsDialog extends JDialog {
         } while (reading != t);
     }
 
-    void showFlights(List<FlightLibrary.Flight> flights, FlightLibrary.Flight keep) {
+    void showFlights(List<FlightLibrary.Flight> read, FlightLibrary.Flight keep) {
+        allFlights = read;
+        List<FlightLibrary.Flight> flights = new java.util.ArrayList<>();
+        for (FlightLibrary.Flight f : read) if (matches(f, search.getText())) flights.add(f);
+        if (keep != null && flights.contains(keep) && model.size() == flights.size() && list.getSelectedValue() == keep) {
+            boolean same = true;
+            for (int i = 0; i < flights.size() && same; i++) same = model.get(i) == flights.get(i);
+            if (same) return; // a key that changed nothing: the flight chosen plays on
+        }
         model.clear();
         for (FlightLibrary.Flight f : flights) model.addElement(f);
-        listNote.setText("No flights yet.");
+        listNote.setText(read.isEmpty() ? "No flights yet." : "No flight found.");
         listNote.setVisible(flights.isEmpty());
         if (flights.isEmpty()) {
             choose(null);
@@ -538,6 +579,17 @@ final class PreviousFlightsDialog extends JDialog {
         }
         int at = keep == null ? 0 : Math.max(0, flights.indexOf(keep));
         list.setSelectedIndex(at);
+    }
+
+    /**
+     * SEARCH: a flight whose drone (its name, or the address it was flown by) or date and time has what is typed,
+     * capitals or not; nothing typed finds every flight.
+     */
+    static boolean matches(FlightLibrary.Flight f, String query) {
+        String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        if (q.isEmpty()) return true;
+        if (f.drone() != null && f.drone().toLowerCase(Locale.ROOT).contains(q)) return true;
+        return f.title().toLowerCase(Locale.ROOT).contains(q);
     }
 
     /** The chosen flight: read (off the Swing thread), then ready to play from its start. */
@@ -575,11 +627,9 @@ final class PreviousFlightsDialog extends JDialog {
         flightClips = read.clips();
         position = d.startMs();
         map.setReplay(d.path());
-        Path file = d.flight.playable();
-        if (file != null) {
-            player = new Player(d, file, d.flight.video());
+        if (!d.flight.parts().isEmpty()) { // 1.0.71: every part of the recording, one after the other
+            player = new Player(d, d.flight.parts());
             player.start();
-            if (d.flight.video() != null) audio = new FileAudio(d.flight.video()); // the recording carries the sound
         } else {
             video.clear("No video");
         }
@@ -780,9 +830,21 @@ final class PreviousFlightsDialog extends JDialog {
         tick();
     }
 
+    /**
+     * The player opened a part of the recording: its sound is that part's file's (the recording carries the sound),
+     * on its own clock.
+     */
+    private void soundFor(Player from, FlightLibrary.Part part) {
+        if (player != from) return; // another flight chosen meanwhile
+        if (audio != null) audio.close();
+        audio = part.video() == null ? null : new FileAudio(part.video());
+        audioStartMs = part.startMs();
+        if (playing) startAudio(position());
+    }
+
     private void startAudio(long t) {
         if (audio == null || data == null) return;
-        long ms = t - data.videoStartMs;
+        long ms = t - audioStartMs;
         if (ms >= 0 && speed == 1) audio.play(ms); // at the speed it was recorded at, or not at all
         else audio.stop();
     }
@@ -871,6 +933,9 @@ final class PreviousFlightsDialog extends JDialog {
         noteIdle.stop();
         awaitSaved(); // a note on its way to the file gets there first, and goes with the others
         List<Path> left = FlightData.delete(f);
+        // 1.0.71: said in the app's log - a flight missing from the list later is then known to have been deleted
+        de.droiddrone.pc.AppLog.line("Previous flights: " + f.title() + (f.drone() == null ? "" : " " + f.drone()) + " deleted"
+                + (left.isEmpty() ? "." : " (" + left.size() + " file(s) could not go)."));
         if (!left.isEmpty()) Dialogs.message(this, "Couldn't delete " + left.get(0).getFileName() + ".", "Delete flight", JOptionPane.WARNING_MESSAGE);
         int i = list.getSelectedIndex();
         FlightLibrary.Flight next = i + 1 < model.size() ? model.get(i + 1) : i > 0 ? model.get(i - 1) : null;
@@ -1018,19 +1083,18 @@ final class PreviousFlightsDialog extends JDialog {
      * on the way when there is one, so they needn't even be decoded.
      */
     final class Player extends Thread {
-        private final Path file;
         private final FlightData d;
-        private final Path fallback;
+        /** 1.0.71: the recording's parts in order (a new file whenever the picture's size changed); never empty. */
+        private final List<FlightLibrary.Part> parts;
         private volatile long seekTo = Long.MIN_VALUE;
         private volatile boolean running = true;
 
-        Player(FlightData d, Path file, Path fallback) {
+        Player(FlightData d, List<FlightLibrary.Part> parts) {
             super("flightVideo");
             setDaemon(true);
             setPriority(Thread.MIN_PRIORITY);
             this.d = d;
-            this.file = file;
-            this.fallback = fallback;
+            this.parts = parts;
             seekTo = d.startMs();
         }
 
@@ -1046,6 +1110,16 @@ final class PreviousFlightsDialog extends JDialog {
 
         @Override
         public void run() {
+            long first = seekTo;
+            int index = partAt(parts, first == Long.MIN_VALUE ? d.startMs() : first);
+            while (running && index >= 0) index = play(index);
+        }
+
+        /** Plays one part until the clock or a seek is in another one; that part's index, or -1 at the end. */
+        private int play(int index) {
+            FlightLibrary.Part part = parts.get(index);
+            long partStart = part.startMs();
+            Path file = part.playable(), fallback = part.video();
             ClipPlayer p;
             Path played = file;
             try {
@@ -1057,10 +1131,12 @@ final class PreviousFlightsDialog extends JDialog {
                     played = fallback;
                 } catch (java.io.IOException e2) {
                     video.clearLater("Can't play the video");
-                    return;
+                    return waitForAnother(index);
                 }
             }
-            video.setSource(rawRecording(played, d.flight) ? d.flight.drone() : null);
+            video.setSource(rawPart(played, part) ? d.flight.drone() : null);
+            javax.swing.SwingUtilities.invokeLater(() -> soundFor(this, part));
+            if (seekTo == Long.MIN_VALUE) seekTo = Math.max(position(), partStart); // came here by the clock: from its place
             try {
                 int w = Math.max(16, Math.min(960, p.width())), h = Math.max(16, (int) Math.round(w * (double) p.height() / Math.max(1, p.width())));
                 int[] buf = new int[w * h];
@@ -1070,11 +1146,13 @@ final class PreviousFlightsDialog extends JDialog {
                 while (running) {
                     long s = seekTo;
                     if (s != Long.MIN_VALUE) {
+                        int there = partAt(parts, s);
+                        if (there != index) return there; // the place is in another part: that one seeks to it
                         seekTo = Long.MIN_VALUE;
-                        p.seek(Math.max(0, s - d.videoStartMs));
+                        p.seek(Math.max(0, s - partStart));
                         long ms = p.next(buf, w, h);
                         if (ms >= 0) {
-                            frameAt = d.videoStartMs + ms;
+                            frameAt = partStart + ms;
                             video.show(buf, w, h);
                         } else {
                             video.clearLater("");
@@ -1084,18 +1162,20 @@ final class PreviousFlightsDialog extends JDialog {
                         continue;
                     }
                     long now = position();
-                    if (!playing || now < d.videoStartMs) {
+                    int there = partAt(parts, now);
+                    if (there != index) return there; // the clock ran on into the next part (or back)
+                    if (!playing || now < partStart) {
                         sleepQuietly(30);
                         continue;
                     }
                     double k = speed;
                     if (!pending) {
                         long ms = p.next(buf, w, h);
-                        if (ms < 0) { // the end of the recording
+                        if (ms < 0) { // the end of this part
                             sleepQuietly(50);
                             continue;
                         }
-                        frameAt = d.videoStartMs + ms;
+                        frameAt = partStart + ms;
                         pending = true;
                     }
                     long wait = frameAt - position();
@@ -1103,7 +1183,7 @@ final class PreviousFlightsDialog extends JDialog {
                         case FIND_AGAIN -> seekTo = position(); // the clock went back (a seek we missed): find the place again
                         case WAIT -> sleepQuietly(Math.min((long) Math.ceil(wait / k), 40));
                         case LEAVE_OUT -> { // behind the clock: to its place, not every picture on the way
-                            p.catchUp(position() - d.videoStartMs);
+                            p.catchUp(position() - partStart);
                             pending = false;
                             caughtUp = true;
                         }
@@ -1112,13 +1192,26 @@ final class PreviousFlightsDialog extends JDialog {
                             pending = false;
                             caughtUp = false;
                             // faster than real time: the pictures until the next one to show are decoded only
-                            if (k > 1) p.skipTo(frameAt - d.videoStartMs + Math.round(SHOWN_EVERY_MS * k));
+                            if (k > 1) p.skipTo(frameAt - partStart + Math.round(SHOWN_EVERY_MS * k));
                         }
                     }
                 }
             } finally {
                 p.close();
             }
+            return -1;
+        }
+
+        /** A part that can't be played: nothing to show until the clock or a seek is in another. */
+        private int waitForAnother(int index) {
+            while (running) {
+                long s = seekTo;
+                int there = partAt(parts, s != Long.MIN_VALUE ? s : position());
+                if (there != index) return there;
+                if (s != Long.MIN_VALUE) seekTo = Long.MIN_VALUE;
+                sleepQuietly(100);
+            }
+            return -1;
         }
 
         private void sleepQuietly(long ms) {
@@ -1128,6 +1221,19 @@ final class PreviousFlightsDialog extends JDialog {
                 // a seek or the end: the loop looks again
             }
         }
+    }
+
+    /** Which part of a recording a moment is in: the last one that had begun by then (the first, before any). */
+    static int partAt(List<FlightLibrary.Part> parts, long t) {
+        int at = 0;
+        for (int i = 1; i < parts.size(); i++) if (parts.get(i).startMs() <= t) at = i;
+        return at;
+    }
+
+    /** The file played is this part's own recording (not its copy with the OSD drawn in, already turned). */
+    static boolean rawPart(Path played, FlightLibrary.Part part) {
+        return played != null && part != null && part.video() != null && played.equals(part.video())
+                && (part.osdVideo() == null || !played.equals(part.osdVideo()));
     }
 
     /** The file played is the camera's own recording (not the copy with the OSD drawn in, already turned). */
@@ -1405,7 +1511,7 @@ final class PreviousFlightsDialog extends JDialog {
                             altStarted = true;
                         }
                         if (!Double.isNaN(s.cellVolts()) && s.cellVolts() > 2) {
-                            double v = Math.max(0, Math.min(1, (s.cellVolts() - 3.3) / (4.35 - 3.3)));
+                            double v = Math.max(0, Math.min(1, (s.cellVolts() - 2.8) / (4.35 - 2.8))); // from the pilot's "empty"
                             double y = graphBottom - 2 - gh * v;
                             if (battStarted) batt.lineTo(x, y);
                             else batt.moveTo(x, y);
@@ -1514,6 +1620,12 @@ final class PreviousFlightsDialog extends JDialog {
                 g.setColor(selected ? Theme.ACCENT : Theme.MUTED);
                 String drone = f.drone() == null ? "-" : f.drone();
                 g.drawString(drone, 12, 38);
+                String ended = f.endMark(); // 1.0.71: a flight that did not end with a DISCONNECT says how
+                if (ended != null) {
+                    int x = 12 + g.getFontMetrics().stringWidth(drone) + 8;
+                    g.setColor(Theme.WARN);
+                    g.drawString(ended, x, 38);
+                }
                 g.setFont(Theme.monoFont(Font.PLAIN, 11.5f));
                 g.setColor(Theme.MUTED);
                 String right = FlightLibrary.durationText(f.durationMs()) + "  " + (Double.isNaN(f.distanceM()) ? "-" : MapView.distanceText(f.distanceM()));

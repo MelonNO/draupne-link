@@ -4,6 +4,7 @@ import de.droiddrone.common.DataReader;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.NetworkState;
+import de.droiddrone.common.PositionFilter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -238,13 +239,33 @@ public class FcTelemetry {
      * fix: 0 none, 1 2D, 2 3D (as Betaflight); distanceHomeM -1 if unknown. travelledM: what the Flight app adds up
      * while it sees the drone armed, -1 if unknown.
      */
+    /**
+     * 1.0.71: latDeg / lonDeg are the place {@link PositionFilter} holds - never a reading without a fix, 0/0 or a lone
+     * far leap (the pilot, 2026-11-18: "the location data jumps around randomly"); 0/0 while there is none yet.
+     * positionOk: this report's own reading is that place (a new point for the track); heldBack: it had a position
+     * that was not taken ("GPS ?").
+     */
     public record Gps(int fix, int sats, double speedKmh, int altM, int distanceHomeM, int directionHomeDeg,
-                      double latDeg, double lonDeg, int travelledM, int courseDeg, double hdop, long receivedAt) {}
+                      double latDeg, double lonDeg, int travelledM, int courseDeg, double hdop, long receivedAt,
+                      boolean positionOk, boolean heldBack) {
+        /** A report taken as it is (the tests, the virtual fleet's own figures): ok with a fix and a place. */
+        public Gps(int fix, int sats, double speedKmh, int altM, int distanceHomeM, int directionHomeDeg,
+                   double latDeg, double lonDeg, int travelledM, int courseDeg, double hdop, long receivedAt) {
+            this(fix, sats, speedKmh, altM, distanceHomeM, directionHomeDeg, latDeg, lonDeg, travelledM, courseDeg, hdop, receivedAt,
+                    fix >= 1 && PositionFilter.onGlobe(latDeg, lonDeg), false);
+        }
+    }
 
     public record Timers(int onSeconds, int flySeconds, int lastArmSeconds) {}
 
     /** The phone's own GPS: accuracy in m (65535 = unknown), ageS how old the fix was when sent. */
-    public record PhonePosition(double latDeg, double lonDeg, int altM, int accuracyM, double speedKmh, int courseDeg, int ageS, long receivedAt) {}
+    public record PhonePosition(double latDeg, double lonDeg, int altM, int accuracyM, double speedKmh, int courseDeg, int ageS, long receivedAt,
+                                boolean positionOk) {
+        /** A report taken as it is: ok with a place. (From the link: what {@link PositionFilter} says, 1.0.71.) */
+        public PhonePosition(double latDeg, double lonDeg, int altM, int accuracyM, double speedKmh, int courseDeg, int ageS, long receivedAt) {
+            this(latDeg, lonDeg, altM, accuracyM, speedKmh, courseDeg, ageS, receivedAt, PositionFilter.onGlobe(latDeg, lonDeg));
+        }
+    }
 
     /** The phone's mobile network: "LTE", "5G", ... and signal 0-100 %. */
     public record Network(String name, int strengthPercent) {}
@@ -315,6 +336,16 @@ public class FcTelemetry {
     private volatile Attitude attitude;
     private volatile Altitude altitude;
     private volatile Gps gps;
+    /** 1.0.71: which GPS readings are the place, one filter per source (this object lives as long as its link). */
+    private final PositionFilter gpsFilter = new PositionFilter(), phoneFilter = new PositionFilter();
+    /** 1.0.71: this link's heading over time ({@link LiveHeading} feeds and reads it). */
+    private final de.droiddrone.common.BestHeading heading = new de.droiddrone.common.BestHeading();
+
+    de.droiddrone.common.BestHeading heading() {
+        return heading;
+    }
+    /** The phone's fix older than this when sent: no reading (as the track's own limit). */
+    static final int PHONE_FIX_MAX_AGE_S = 30;
     private volatile Timers timers;
     /** Time armed, from Betaflight's own ARM flag: completed arms plus the one running (armedSince != 0). */
     private long flownMs;
@@ -420,8 +451,12 @@ public class FcTelemetry {
                 double hdop = b.readShort() / 100.0;
                 int travelled = b.readInt(); // the Flight app's own count, in m
                 Gps old = gps;
+                long now = MonoClock.ms();
+                // the place: never a reading without a fix, 0/0 or a lone far leap (PositionFilter); the place held otherwise
+                int taken = gpsFilter.offer(lat, lon, PositionFilter.usableFc(fix, sats, lat, lon), Double.NaN, now);
                 gps = new Gps(fix, sats, kmh, altM, old == null ? -1 : old.distanceHomeM(), old == null ? 0 : old.directionHomeDeg(),
-                        lat, lon, travelled, course, hdop, MonoClock.ms());
+                        gpsFilter.has() ? gpsFilter.lat() : 0, gpsFilter.has() ? gpsFilter.lon() : 0, travelled, course, hdop, now,
+                        taken == PositionFilter.TAKEN, taken == PositionFilter.HELD_BACK);
             }
             case FcCommon.MSP_COMP_GPS -> {
                 int dist = b.readShort();
@@ -430,7 +465,7 @@ public class FcTelemetry {
                 Gps old = gps;
                 gps = old == null ? new Gps(0, 0, 0, 0, dist, dir, 0, 0, -1, 0, 0, 0)
                         : new Gps(old.fix(), old.sats(), old.speedKmh(), old.altM(), dist, dir, old.latDeg(), old.lonDeg(), old.travelledM(),
-                        old.courseDeg(), old.hdop(), old.receivedAt());
+                        old.courseDeg(), old.hdop(), old.receivedAt(), old.positionOk(), old.heldBack());
             }
             case FcCommon.MSP_OSD_CANVAS -> skip(b, 2);
             case FcCommon.MSP2_INAV_STATUS -> {
@@ -506,7 +541,12 @@ public class FcTelemetry {
                 double kmh = (b.readShort() & 0xffff) / 10.0;
                 int course = b.readShort() & 0xffff;
                 int age = b.readShort() & 0xffff;
-                phonePosition = new PhonePosition(lat, lon, alt, accuracy, kmh, course, age, MonoClock.ms());
+                long now = MonoClock.ms();
+                // an old fix repeated is no reading; the rest goes through the same filter as the drone's GPS
+                boolean usable = age <= PHONE_FIX_MAX_AGE_S && PositionFilter.onGlobe(lat, lon);
+                int taken = phoneFilter.offer(lat, lon, usable, accuracy == 65535 ? Double.NaN : accuracy, now);
+                phonePosition = new PhonePosition(phoneFilter.has() ? phoneFilter.lat() : lat, phoneFilter.has() ? phoneFilter.lon() : lon,
+                        alt, accuracy, kmh, course, age, now, taken == PositionFilter.TAKEN);
             }
             default -> {
                 return false;
@@ -783,6 +823,11 @@ public class FcTelemetry {
 
     public Gps getGps() {
         return gps;
+    }
+
+    /** How often agreeing readings moved the drone's GPS place far from the one held (each is worth a log line). */
+    public int gpsPlaceMoves() {
+        return gpsFilter.moves() + phoneFilter.moves();
     }
 
     public Timers getTimers() {

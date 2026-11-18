@@ -166,11 +166,12 @@ class MapView extends JComponent {
      * overwatch, Diamond = Standby, Arrow = Piloted drone", as confirmed - a mode only queued shows as an arrow to its
      * sign): ACTIVE (heard now, awake: an arrow), STANDBY (a diamond), ASLEEP (DEEP SLEEP on time with its check-ins: a
      * moon), OVERWATCH (on time: an eye), LOST (it went quiet while flown or armed: a red triangle with "!"), UNKNOWN
-     * (quiet while idle, or asleep but its check-ins overdue: a grey "?"), CRASHED (1.0.52: LOST DRONE pressed for it -
-     * down and gone, until it is heard again or cleared: a grey square with an X). STANDBY last: the spectators' mirror
-     * sends the ordinal, and an older PC reads one it doesn't know as UNKNOWN.
+     * (quiet while idle, or asleep but its check-ins overdue: a grey "?"), OUT_OF_ACTION (1.0.71; CRASHED from 1.0.52:
+     * the pilot marked it - it can't fly any more, whatever the reason - until the pilot clears it: a grey square with
+     * an X; the same place in the list as CRASHED had). STANDBY last: the spectators' mirror sends the ordinal, and an
+     * older PC reads one it doesn't know as UNKNOWN.
      */
-    enum Kind { ACTIVE, ASLEEP, OVERWATCH, LOST, UNKNOWN, CRASHED, STANDBY }
+    enum Kind { ACTIVE, ASLEEP, OVERWATCH, LOST, UNKNOWN, OUT_OF_ACTION, STANDBY }
 
     /** A queued mode's sign (ControlLink.POWER_*: 1 standby, 2 deep sleep, 3 overwatch), else null. */
     static Kind queuedKind(int mode) {
@@ -193,18 +194,18 @@ class MapView extends JComponent {
     private volatile String hoveredNet;
     /** Right-click on a drone: its name, and true to watch it (through its pilot PC), false to connect and fly. */
     private java.util.function.BiConsumer<String, Boolean> onDroneConnect;
-    /** Right-click "Clear CRASHED" on a crashed drone (1.0.52); null: not offered. */
-    private Consumer<String> onClearCrashed;
+    /** Right-click "Clear OUT OF ACTION" on a marked drone (1.0.52: CRASHED); null: not offered. */
+    private Consumer<String> onClearOutOfAction;
 
-    void setOnClearCrashed(Consumer<String> listener) {
-        onClearCrashed = listener;
+    void setOnClearOutOfAction(Consumer<String> listener) {
+        onClearOutOfAction = listener;
     }
 
-    /** Right-click "Mark CRASHED" on a drone not heard from (LOST, UNKNOWN; 1.0.52); null: not offered. */
-    private Consumer<String> onMarkCrashed;
+    /** Right-click "Mark OUT OF ACTION" on any drone (1.0.71; before: only LOST and UNKNOWN); null: not offered. */
+    private Consumer<String> onMarkOutOfAction;
 
-    void setOnMarkCrashed(Consumer<String> listener) {
-        onMarkCrashed = listener;
+    void setOnMarkOutOfAction(Consumer<String> listener) {
+        onMarkOutOfAction = listener;
     }
 
     void setKept(List<Kept> flights, java.util.function.IntConsumer onRemove, Runnable onClear) {
@@ -341,6 +342,12 @@ class MapView extends JComponent {
     /** The + and - buttons, drawn on the map (top right); set while painting. */
     private Rectangle zoomInButton = new Rectangle(), zoomOutButton = new Rectangle();
     private int headingDeg = -1;
+    /** 1.0.71: the heading is an older one kept (nothing says which way the drone points now): the arrow fainter. */
+    private boolean headingHeld;
+
+    void setHeadingHeld(boolean held) {
+        headingHeld = held;
+    }
     /** What the camera sees of the ground (1.0.39), drawn under the drone; null for none. */
     private CameraFootprint.View cameraView;
     private boolean fcLost;
@@ -1021,14 +1028,14 @@ class MapView extends JComponent {
             menu.add(clips);
             if (drone == null) menu.addSeparator();
         }
-        if (drone != null && drone.kind() == Kind.CRASHED && onClearCrashed != null) {
-            JMenuItem clear = new JMenuItem("Clear CRASHED on " + drone.name());
-            clear.addActionListener(e -> onClearCrashed.accept(drone.name()));
+        if (drone != null && drone.kind() == Kind.OUT_OF_ACTION && onClearOutOfAction != null) {
+            JMenuItem clear = new JMenuItem("Clear OUT OF ACTION: " + drone.name());
+            clear.addActionListener(e -> onClearOutOfAction.accept(drone.name()));
             menu.add(clear);
         }
-        if (drone != null && (drone.kind() == Kind.LOST || drone.kind() == Kind.UNKNOWN) && onMarkCrashed != null) {
-            JMenuItem mark = new JMenuItem("Mark CRASHED: " + drone.name());
-            mark.addActionListener(e -> onMarkCrashed.accept(drone.name()));
+        if (drone != null && drone.kind() != Kind.OUT_OF_ACTION && onMarkOutOfAction != null) {
+            JMenuItem mark = new JMenuItem("Mark OUT OF ACTION: " + drone.name());
+            mark.addActionListener(e -> onMarkOutOfAction.accept(drone.name()));
             menu.add(mark);
         }
         if (drone != null && onDroneConnect != null) {
@@ -1765,7 +1772,7 @@ class MapView extends JComponent {
 
     /** The asleep drones' moon, the overwatching ones' eye: blue-violet and teal, never the lost red or the unknown grey. */
     static final Color ASLEEP_COLOR = new Color(0x9fa8da), OVERWATCH_COLOR = new Color(0x4db6ac), LOST_COLOR = new Color(0xef5350);
-    static final Color CRASHED_COLOR = new Color(0x8a8a8a), STANDBY_COLOR = new Color(0x9ccc65);
+    static final Color OUT_OF_ACTION_COLOR = new Color(0x8a8a8a), STANDBY_COLOR = new Color(0x9ccc65);
 
     /** A sign's colour (the flown one aside: the map draws it yellow). */
     static Color kindColor(Kind k) {
@@ -1776,7 +1783,7 @@ class MapView extends JComponent {
             case OVERWATCH -> OVERWATCH_COLOR;
             case LOST -> LOST_COLOR;
             case UNKNOWN -> Theme.MUTED;
-            case CRASHED -> CRASHED_COLOR;
+            case OUT_OF_ACTION -> OUT_OF_ACTION_COLOR;
         };
     }
 
@@ -1879,7 +1886,7 @@ class MapView extends JComponent {
             g.setColor(c);
             g.drawString(line1, bx + 5, by + fm.getAscent());
             if (line2 != null) {
-                g.setColor(d.kind() == Kind.LOST ? LOST_COLOR : d.kind() == Kind.CRASHED ? CRASHED_COLOR
+                g.setColor(d.kind() == Kind.LOST ? LOST_COLOR : d.kind() == Kind.OUT_OF_ACTION ? OUT_OF_ACTION_COLOR
                         : d.watchesBlind() ? Theme.WARN : Theme.MUTED);
                 g.drawString(line2, bx + 5, by + fm.getHeight() + fm.getAscent());
             }
@@ -1953,11 +1960,11 @@ class MapView extends JComponent {
     /**
      * One drone's sign, 18 px across, told apart by shape as well as colour: an arrow (ACTIVE: awake, flown), a diamond
      * (STANDBY), a circle with a crescent moon (ASLEEP: deep sleep) or an eye (OVERWATCH), a red triangle with "!"
-     * (LOST), a circle with "?" (UNKNOWN), a grey square with an X (CRASHED).
+     * (LOST), a circle with "?" (UNKNOWN), a grey square with an X (OUT OF ACTION).
      */
     static void paintNetSign(Graphics2D g, Kind kind, Color c, double x, double y) { // also the fleet cards' badge (1.0.52)
         java.awt.Shape body;
-        boolean solid = kind == Kind.ACTIVE || kind == Kind.STANDBY || kind == Kind.LOST || kind == Kind.CRASHED;
+        boolean solid = kind == Kind.ACTIVE || kind == Kind.STANDBY || kind == Kind.LOST || kind == Kind.OUT_OF_ACTION;
         switch (kind) {
             case ACTIVE -> { // an arrow, pointing up: the drone in flight
                 Path2D arrow = new Path2D.Double();
@@ -1985,7 +1992,7 @@ class MapView extends JComponent {
                 triangle.closePath();
                 body = triangle;
             }
-            case CRASHED -> body = new java.awt.geom.Rectangle2D.Double(x - 7.5, y - 7.5, 15, 15);
+            case OUT_OF_ACTION -> body = new java.awt.geom.Rectangle2D.Double(x - 7.5, y - 7.5, 15, 15);
             default -> body = new java.awt.geom.Ellipse2D.Double(x - 9, y - 9, 18, 18);
         }
         g.setStroke(new BasicStroke(3f));
@@ -2014,7 +2021,7 @@ class MapView extends JComponent {
                 g.draw(eye);
                 g.fill(new java.awt.geom.Ellipse2D.Double(x - 2.2, y - 2.2, 4.4, 4.4));
             }
-            case CRASHED -> { // an X: down, no longer with us
+            case OUT_OF_ACTION -> { // an X: down, no longer with us
                 g.setColor(Color.WHITE);
                 g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                 g.draw(new java.awt.geom.Line2D.Double(x - 3.8, y - 3.8, x + 3.8, y + 3.8));
@@ -2210,7 +2217,8 @@ class MapView extends JComponent {
         g.setColor(new Color(0, 0, 0, 140));
         g.setStroke(new BasicStroke(4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         g.draw(arrow);
-        g.setColor(stale ? Theme.MUTED : Theme.ACCENT);
+        Color accent = headingHeld && heading >= 0 ? new Color(Theme.ACCENT.getRed(), Theme.ACCENT.getGreen(), Theme.ACCENT.getBlue(), 110) : Theme.ACCENT;
+        g.setColor(stale ? Theme.MUTED : accent);
         g.fill(arrow);
         g.setColor(Color.WHITE);
         g.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));

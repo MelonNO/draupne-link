@@ -85,9 +85,9 @@ final class FleetController {
     private final NameService nameService;
     private final OverwatchHub overwatch;
     private final PowerController power;
-    /** MainWindow's phones left in STANDBY and drones marked CRASHED (shared, read here). */
+    /** MainWindow's phones left in STANDBY and drones marked OUT OF ACTION (shared, read here). */
     private final Map<String, String> standbyPhones;
-    private final Map<String, Long> crashed;
+    private final Map<String, Long> outOfAction;
     private final Host host;
     /** The drone's battery per cell as this PC last read it while connected: name -> {volts per cell, wall ms}. */
     private final Map<String, double[]> lastCell = new ConcurrentHashMap<>();
@@ -96,7 +96,7 @@ final class FleetController {
     private long fleetClipsAt;
 
     FleetController(FleetManager fleet, PcConfig config, Names names, NameService nameService, OverwatchHub overwatch,
-                    PowerController power, Map<String, String> standbyPhones, Map<String, Long> crashed, Host host) {
+                    PowerController power, Map<String, String> standbyPhones, Map<String, Long> outOfAction, Host host) {
         this.fleet = fleet;
         this.config = config;
         this.names = names;
@@ -104,7 +104,7 @@ final class FleetController {
         this.overwatch = overwatch;
         this.power = power;
         this.standbyPhones = standbyPhones;
-        this.crashed = crashed;
+        this.outOfAction = outOfAction;
         this.host = host;
         // 1.0.64: the books follow each other
         if (nameService != null && power != null) {
@@ -269,6 +269,34 @@ final class FleetController {
         return c != null && !c.getLink().isSpectator() && phone.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY));
     }
 
+    /** 1.0.71: what this PC last knew of every phone, on disk (null: not kept - the tests). */
+    private volatile de.droiddrone.pc.LastKnown lastKnown;
+
+    void setLastKnown(de.droiddrone.pc.LastKnown store) {
+        lastKnown = store;
+        // an OUT OF ACTION drone's deep sleep stays queued until its phone is heard, however long that takes
+        if (fleet != null) fleet.setKeepWaiting(phone -> outOfAction.keySet().stream().anyMatch(phone::equalsIgnoreCase));
+    }
+
+    /**
+     * 1.0.71, the pilot marked this drone OUT OF ACTION: its phone is to save its battery for being found - DEEP SLEEP
+     * checking in every {@link FleetProtocol#OUT_OF_ACTION_CHECK_MIN} min, queued whatever its state (the phone itself
+     * refuses a sleep while its flight controller is armed, and is asked again at its next word), and flagged so the
+     * phone leaves the drone's lost-signal beeper on. Stays queued until taken ({@link #setLastKnown}).
+     */
+    void outOfAction(String phone) {
+        if (fleet == null || phone == null || phone.isBlank()) return;
+        fleet.queue(phone, ControlLink.POWER_DEEP_SLEEP, FleetProtocol.OUT_OF_ACTION_CHECK_MIN, 0, FleetProtocol.FLAG_OUT_OF_ACTION, 0,
+                System.currentTimeMillis());
+    }
+
+    /** The mark is cleared: a deep sleep still waiting for the phone is not wanted any more. */
+    void outOfActionCleared(String phone) {
+        if (fleet == null || phone == null) return;
+        FleetManager.Wanted w = fleet.wanted(phone);
+        if (w != null && w.mode() == ControlLink.POWER_DEEP_SLEEP && (w.flags() & FleetProtocol.FLAG_OUT_OF_ACTION) != 0) fleet.cancel(phone);
+    }
+
     /** A card's button: the mode queued for the phone - or refused, said beside the button. */
     void request(String phone, int mode, int intervalMin, JComponent near) {
         if (fleet == null) return;
@@ -430,7 +458,19 @@ final class FleetController {
             FleetCards.Badge badge = FleetCards.badge(here, sleeping != null, sleeping != null && sleeping.overwatch(),
                     sleeping == null ? 0 : power.checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),
                     said, saidAge, e.online() || now - heardAt < 30_000, wasFlying);
-            if (crashed.containsKey(e.name()) && !here) badge = new FleetCards.Badge(MapView.Kind.CRASHED, "CRASHED");
+            // 1.0.71: what the phone is confirmed as now is remembered (on disk), for when it is UNKNOWN later
+            de.droiddrone.pc.LastKnown store = e.isVirtual() ? null : lastKnown;
+            String confirmed = de.droiddrone.pc.LastKnown.modeWord(badge.text());
+            if (store != null && confirmed != null && badge.kind() != MapView.Kind.UNKNOWN) store.mode(e.name(), confirmed, here || heardAt <= 0 ? now : heardAt);
+            String was = null;
+            if (store != null && badge.kind() == MapView.Kind.UNKNOWN) {
+                de.droiddrone.pc.LastKnown.Entry known = store.get(e.name());
+                if (known != null && !known.mode().isEmpty()) {
+                    was = de.droiddrone.pc.LastKnown.wasText(known.mode(), now - (heardAt > 0 ? heardAt : known.modeAt()));
+                }
+            }
+            boolean marked = outOfAction.containsKey(e.name()) && !here;
+            if (marked) badge = new FleetCards.Badge(MapView.Kind.OUT_OF_ACTION, "OUT OF ACTION");
             // the drone's battery per cell: live here, else what this PC last read
             double cell = Double.NaN;
             long cellAge = -1;
@@ -473,10 +513,11 @@ final class FleetController {
             if (build < 0) build = FleetProtocol.pcBuild(e.version());
             // the phone this PC flies takes its modes too (2026-11-10, the pilot: "not possible to select standby from the map")
             String note = !here && build >= 0 && build < FleetProtocol.MIN_PC_BUILD ? "Needs phone app pc." + FleetProtocol.MIN_PC_BUILD : null;
+            if (store != null) store.battery(e.name(), pct, cellAge >= 0 && cellAge < 60_000 ? cell : Double.NaN, now);
             cards.add(new FleetCards.Card(e.name(), e.isVirtual(), badge.kind(), badge.text(), cell, cellAge, pct, charging, next, interval,
                     heardAt <= 0 ? -1 : now - heardAt, signal, fix, sats, events, clips == null ? 0 : clips[1], phoneTemp, fcTemp,
                     wanted == null ? null : FleetManager.modeName(wanted.mode()), note,
-                    wanted == null || wanted.queuedAt() <= 0 ? -1 : Math.max(0, now - wanted.queuedAt())));
+                    wanted == null || wanted.queuedAt() <= 0 ? -1 : Math.max(0, now - wanted.queuedAt())).withWas(marked ? null : was));
         }
         return cards;
     }

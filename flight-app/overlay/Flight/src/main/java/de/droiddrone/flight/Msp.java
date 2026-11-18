@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 
 import de.droiddrone.common.ArmRanges;
+import de.droiddrone.common.BeeperQuiet;
 import de.droiddrone.common.Cadence;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DataWriter;
@@ -38,10 +39,13 @@ import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.MspFrames;
 import de.droiddrone.common.MspPages;
+import de.droiddrone.common.PositionFilter;
 import de.droiddrone.common.TelemetryData;
 
 public class Msp {
     /** pc.32: the flight controller's last 2D/3D GPS fix (1e-7 degrees) and when (elapsedRealtime), 0 = none yet. */
+    /** pc.54: which of the flight controller's GPS readings are its place (touched on the MSP thread only). */
+    private final PositionFilter gpsFilter = new PositionFilter();
     volatile int gpsLatE7, gpsLonE7;
     volatile long gpsFixAt;
     /** pc.40 (fleet management): the FC's GPS satellites and whether it has a fix, as last read, and when (0 never). */
@@ -338,6 +342,8 @@ public class Msp {
                         }
                         // pc.38: where ARM sits now - idle sticks are checked against it (ARM may have moved)
                         if (fcVariant == FcInfo.FC_VARIANT_BETAFLIGHT || fcVariant == FcInfo.FC_VARIANT_INAV) getModeRanges();
+                        // pc.54: its beeper settings as they are now - what a sleep switches off, and puts back after
+                        if (fcVariant == FcInfo.FC_VARIANT_BETAFLIGHT) getBeeperConfig();
                         if (runGetOsdConfig) getOsdConfig();
                         if (runGetBatteryConfig) {
                             if (fcVariant == FcInfo.FC_VARIANT_INAV){
@@ -408,6 +414,12 @@ public class Msp {
                     continue;
                 }
                 if (packet.type != MspFrames.RESPONSE) continue;
+                if ((packet.code & 0xffff) == BeeperQuiet.MSP_BEEPER_CONFIG) { // pc.54 (not a record for the PC)
+                    beeperConfig = packet.payload == null ? null : packet.payload.clone();
+                    DDService service = DDService.instance();
+                    if (service != null) service.beeperConfigRead(this, beeperConfig);
+                    continue;
+                }
                 DataReader buffer = new DataReader(packet.payload, false);
                 switch (packet.code) {
                     case FcCommon.MSP_API_VERSION:
@@ -576,10 +588,14 @@ public class Msp {
                         gpsHasFix = fixType >= 2;
                         gpsReadAt = android.os.SystemClock.elapsedRealtime();
                         // pc.32: kept for the PCs' map (the name reply says where this drone is)
-                        if (fixType >= 2 && (lat != 0 || lon != 0)) {
+                        // pc.54 (the pilot: "the location data jumps around randomly"): only a reading the position
+                        // filter takes - a fix on enough satellites, and no lone far leap (PositionFilter)
+                        long gpsNow = android.os.SystemClock.elapsedRealtime();
+                        boolean usable = fixType >= 2 && PositionFilter.usableFc(fixType, numSat & 0xff, lat / 1e7, lon / 1e7);
+                        if (gpsFilter.offer(lat / 1e7, lon / 1e7, usable, Double.NaN, gpsNow) == PositionFilter.TAKEN) {
                             gpsLatE7 = lat;
                             gpsLonE7 = lon;
-                            gpsFixAt = android.os.SystemClock.elapsedRealtime();
+                            gpsFixAt = gpsNow;
                         }
                         short groundSpeed = buffer.readShort();
                         short groundCourse = buffer.readShort();
@@ -728,6 +744,36 @@ public class Msp {
      */
     boolean idleMayArm(short[] frame){
         return ArmRanges.mayArm(frame, frame == null ? 0 : frame.length, armSlots);
+    }
+
+    /** pc.54: Betaflight's beeper settings as last read (MSP_BEEPER_CONFIG's payload), null: not read. */
+    private volatile byte[] beeperConfig;
+
+    /** pc.54: asked once a second with the other slow requests. */
+    public void getBeeperConfig(){
+        serial.writeDataMsp(getMspRequest((short) BeeperQuiet.MSP_BEEPER_CONFIG), true);
+    }
+
+    /** The beeper settings as last read, or null. */
+    byte[] beeperConfig(){
+        return beeperConfig;
+    }
+
+    /**
+     * pc.54: the flight controller's lost-receiver sounds off, in its memory only (BeeperQuiet) - before a sleep
+     * closes its port. False when its settings weren't read or aren't understood: nothing written.
+     */
+    boolean quietBeeper(){
+        byte[] quiet = BeeperQuiet.quiet(beeperConfig);
+        if (quiet == null) return false;
+        serial.writeDataMspUrgent(getMspRequestWithPayload((short) BeeperQuiet.MSP_SET_BEEPER_CONFIG, quiet));
+        return true;
+    }
+
+    /** pc.54: the beeper settings as they were read before the sleep, written back. */
+    void writeBeeperConfig(byte[] config){
+        if (config == null) return;
+        serial.writeDataMspUrgent(getMspRequestWithPayload((short) BeeperQuiet.MSP_SET_BEEPER_CONFIG, config));
     }
 
     /** pc.38: the ARM slots, asked once a second with the other slow requests (a skipped one comes again). */

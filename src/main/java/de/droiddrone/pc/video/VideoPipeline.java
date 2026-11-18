@@ -208,6 +208,11 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         recording.setFileListener(listener);
     }
 
+    /** 1.0.71: the drone's name in the recording's file names; "" or null: none. */
+    public void setRecordingLabel(String label) {
+        recording.setLabel(label);
+    }
+
     public void setRecordingTap(RecordingTap tap) {
         recording.setTap(tap);
     }
@@ -1017,6 +1022,12 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
         return recording.file();
     }
 
+    /** The link's best heading for the recording's CSV (1.0.71: not the gyro's drift), whole degrees; -1: none. */
+    private static int heading(FcTelemetry t) {
+        double h = de.droiddrone.pc.LiveHeading.of(t);
+        return Double.isNaN(h) ? -1 : (int) Math.round(h) % 360;
+    }
+
     /** The HUD's figures for the frame on screen (decode thread), for the CSV next to the recording. */
     private StreamRecorder.OsdRow osdRow(long arrivedMs) {
         ControlLink l = link;
@@ -1032,7 +1043,7 @@ public class VideoPipeline implements ControlLink.VideoListener, AutoCloseable {
                 gps == null ? Double.NaN : gps.latDeg(), gps == null ? Double.NaN : gps.lonDeg(), gps == null ? Double.NaN : gps.speedKmh(),
                 gps == null ? -1 : gps.distanceHomeM(), alt == null ? Double.NaN : alt.meters(), alt == null ? Double.NaN : alt.varioMetersPerSecond(),
                 s == null ? "" : FcTelemetry.flightMode(s.activeModes()), s != null && s.armed(),
-                att == null ? Double.NaN : att.rollDeg(), att == null ? Double.NaN : att.pitchDeg(), att == null ? -1 : att.headingDeg());
+                att == null ? Double.NaN : att.rollDeg(), att == null ? Double.NaN : att.pitchDeg(), heading(t));
     }
 
     public boolean hasStream() {

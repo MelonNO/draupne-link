@@ -97,7 +97,10 @@ class VirtualDroneEndToEndTest {
         assertNotNull(link.getFcInfo(), "FcInfo answered");
         assertFalse(t.getStatus().armed());
         waitFor(() -> t.getGps() != null && t.getBattery() != null, 3000, "GPS and battery", log);
-        assertEquals(Fleet.DEFAULT_LAT, t.getGps().latDeg(), 1e-3);
+        // 1.0.71: no place before the GPS has its fix (a reading without one was taken as a position before)
+        FcTelemetry.Gps first = t.getGps();
+        if (first.positionOk()) assertEquals(Fleet.DEFAULT_LAT, first.latDeg(), 1e-3);
+        else if (first.fix() == 0) assertEquals(0, first.latDeg(), 0, "no fix yet: no place");
 
         startSticks();
         waitFor(() -> drone.fc.hadSticks(), 2000, "the sticks reach the virtual FC", log);

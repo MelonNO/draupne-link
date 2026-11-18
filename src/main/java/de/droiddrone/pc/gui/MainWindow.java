@@ -214,6 +214,20 @@ public class MainWindow extends JFrame {
     private FlightTrack track;
     /** The connection's own track, written to a GPX file as it comes; becomes {@link #track} with its first point. */
     private FlightTrack liveTrack;
+    /**
+     * 1.0.71: this connection's flight on disk from the start (the pilot: "always save a log"): who is flown, its
+     * files, whether it was armed, how it ended. Null with no connection, and for a made-up drone (DEMO, the tour,
+     * the virtual fleet: the pilot wants no flights of those saved).
+     */
+    private de.droiddrone.pc.flights.FlightRecord flightRecord;
+    /** The live flight's recording files as they are made (its record lists them; a never-armed one's are deleted). */
+    private final List<Path> liveRecordings = new java.util.concurrent.CopyOnWriteArrayList<>();
+    /** The link was lost while armed and has not been back since: how the flight ends if it ends now. */
+    private boolean lostWhileArmed;
+    /** LOST DRONE ended the link: how this flight ended. */
+    private boolean endedByLostDrone;
+    /** The connection is to a made-up drone (DEMO, the tour, the virtual fleet): nothing of it goes to disk. */
+    private boolean liveVirtual;
     /** Which GPS the shown position last came from, for one log line per switch; null before the first. */
     private Boolean positionFromPhone;
     /** The last time the FC reported armed; LOST DRONE shows when the link drops within a few minutes of it. */
@@ -302,8 +316,13 @@ public class MainWindow extends JFrame {
             fillingInterval = false;
         }
     }
-    /** Crashed drones (CRASHED_KEY): the name as the name map has it -> when LOST DRONE was pressed (wall clock). */
-    private final Map<String, Long> crashed = new ConcurrentHashMap<>();
+    /**
+     * Drones the pilot marked OUT OF ACTION (OUT_OF_ACTION_KEY; up to 1.0.70: CRASHED): the name as the name map has it
+     * -> when it was marked (wall clock).
+     */
+    private final Map<String, Long> outOfAction = new ConcurrentHashMap<>();
+    /** 1.0.71: what this PC last knew of every phone - place, batteries, mode - kept on disk (LastKnown). */
+    private final de.droiddrone.pc.LastKnown lastKnown = new de.droiddrone.pc.LastKnown(AppPaths.dataDir().resolve("last-known.txt"));
 
     /**
      * Earlier flights kept on the map until removed (1.0.41): when this PC connects again, the flight before stays; a
@@ -323,8 +342,13 @@ public class MainWindow extends JFrame {
         if (stanagStreams != null) stanagStreams.refresh(); // 1.0.65: what each drone's stream shows
     });
     private static final String ASLEEP_KEY = "phone.asleep";
-    /** "name@wallMs;..." - the drones LOST DRONE was pressed for (1.0.52): CRASHED until heard again or cleared. */
-    static final String CRASHED_KEY = "drone.crashed";
+    /**
+     * "name@wallMs;..." - the drones marked OUT OF ACTION (1.0.71, the pilot: a drone "not able to fly anymore, could be
+     * because of low battery or it crashed"; set by hand only, and it stays until cleared by hand). 1.0.52 - 1.0.70
+     * called it CRASHED, kept under {@link #CRASHED_KEY_BEFORE}: read once, then written under the new key.
+     */
+    static final String OUT_OF_ACTION_KEY = "drone.outOfAction";
+    static final String CRASHED_KEY_BEFORE = "drone.crashed";
     private long pilotViewSentAt;
     private long mapIdleUpdatedAt;
     /** The way the drone this PC flew looked when last connected (-1: not known), and which drone (1.0.62). */
@@ -356,6 +380,8 @@ public class MainWindow extends JFrame {
     private final GlyphButton popOutButton = new GlyphButton(GlyphButton.Glyph.POP_OUT, "Pop out video");
     private final GlyphButton fullScreenButton = new GlyphButton(GlyphButton.Glyph.FULL_SCREEN, "Full screen");
     private final GlyphButton beeperButton = new GlyphButton(GlyphButton.Glyph.BEEPER, "Beeper");
+    /** BEEPER asked of a resting phone (no stick frames go): what was last sent, so a release is said once too. */
+    private boolean beepAsked;
     /** Detection areas on the video (2026-11-10, the pilot: a button with MUTE and BEEPER, no longer in VIDEO's menu). */
     private final GlyphButton areasButton = new GlyphButton(GlyphButton.Glyph.AREAS, "Detection areas");
     /** MARK (P): the next click on the picture drops a pin there. STILL (S): the picture as PNG files. */
@@ -655,7 +681,7 @@ public class MainWindow extends JFrame {
         nameService =new NameService(config, names, Tailscale::status, config.getPort(), true, this::save, this::logLine);
         nameService.setSleepHandler(this::onSleepCheck);
         FleetManager fleet = new FleetManager(config.getKey(), config.getPort(), config.getString(FLEET_QUEUE_KEY), this::save, this::logLine);
-        fleets = new FleetController(fleet, config, names, nameService, overwatch, power, standbyPhones, crashed, new FleetHost());
+        fleets = new FleetController(fleet, config, names, nameService, overwatch, power, standbyPhones, outOfAction, new FleetHost());
         fleet.setOnTaken(fleets::taken);
         nameService.setFleet(fleet, fleets::hello);
         stanagStreams = new StanagController(config, new StanagHost(), SwingUtilities::invokeLater);
@@ -665,8 +691,11 @@ public class MainWindow extends JFrame {
         nameService.setMirrorHost(mirror.start());
         startOverwatch();
         power.load(config.getString(ASLEEP_KEY));
-        crashed.putAll(parseCrashed(config.getString(CRASHED_KEY)));
+        outOfAction.putAll(parseOutOfAction(config.getString(CRASHED_KEY_BEFORE))); // marks from 1.0.70 and before
+        outOfAction.putAll(parseOutOfAction(config.getString(OUT_OF_ACTION_KEY)));
+        fleets.setLastKnown(lastKnown);
         loadKeptFlights();
+        recoverFlights();
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             @Override
@@ -697,7 +726,8 @@ public class MainWindow extends JFrame {
         videoView.setOsdLayout(OsdLayout.load(config::getString));
         alertSound.setEnabled(!"false".equalsIgnoreCase(config.getString(AlertSound.KEY)));
         alertSound.setRingEnabled(!"false".equalsIgnoreCase(config.getString(AlertSound.RING_KEY))); // 1.0.64: its own setting
-        recordVideo = "true".equalsIgnoreCase(config.getString(RECORD_KEY));
+        // 1.0.71 (the pilot: "automatic with the switch set to on by default"): on unless switched off
+        recordVideo = !"false".equalsIgnoreCase(config.getString(RECORD_KEY));
         hardwareDecode = !"false".equalsIgnoreCase(config.getString(HW_DECODE_KEY)); // on unless turned off (1.0.50)
         advanced = "true".equalsIgnoreCase(config.getString(ADVANCED_KEY));
         videoView.setOsdEnabled(!"false".equalsIgnoreCase(config.getString(OSD_KEY)));
@@ -846,7 +876,7 @@ public class MainWindow extends JFrame {
                     save(Map.of(CameraView.SHOW_KEY, Boolean.toString(on)));
                     refreshMap();
                 }));
-        menu.add(new MenuRows.SwitchRow("Record video", "Every flight, to Videos",
+        menu.add(new MenuRows.SwitchRow("Record video", "Every armed flight, to Videos",
                 recordVideo, on -> {
                     recordVideo = on;
                     save(Map.of(RECORD_KEY, Boolean.toString(on)));
@@ -1161,7 +1191,7 @@ public class MainWindow extends JFrame {
         // the link dropped while the drone was armed: one click opens FIND DRONE and copies the MGRS to send on
         lostDroneButton.setBackground(Theme.BAD);
         // 1.0.64: the tooltip says what a press does first - it ends the link
-        lostDroneButton.setToolTipText("Ends the link and marks it CRASHED. Last position in FIND DRONE, MGRS copied");
+        lostDroneButton.setToolTipText("Ends the link and marks it OUT OF ACTION. Last position in FIND DRONE, MGRS copied");
         lostDroneButton.addActionListener(e -> lostDrone());
         rows.add(folded(lostDroneButton, 14), c);
         // 1.0.50: a drone lost armed holds this PC's downloads, previews and clips for 10 min - the pilot who knows it
@@ -1355,6 +1385,16 @@ public class MainWindow extends JFrame {
         beeperButton.getModel().addChangeListener(e -> {
             boolean held = beeperButton.getModel().isPressed() && beeperButton.getModel().isArmed();
             RcSession s = session;
+            // 1.0.71 (the pilot: it beeps when "beeper is pressed", in standby too): no stick frames go while the phone
+            // rests, so BEEPER asks the phone itself (phone app pc.54) - it lets Betaflight miss its receiver that long
+            Connection linked = connection;
+            if (linked != null && !linked.getLink().isSpectator() && sticksPaused() && held != beepAsked) {
+                beepAsked = held;
+                boolean sent = linked.getLink().sendBeep(held ? (int) (RcSession.BEEPER_MAX_MS / 1000) : 0);
+                if (held) logLine(sent ? "BEEPER: the resting drone beeps, " + RcSession.BEEPER_MAX_MS / 1000 + " s max."
+                        : "BEEPER: needs phone app pc." + de.droiddrone.common.FleetProtocol.OUT_OF_ACTION_PC_BUILD + " while the phone rests.");
+                return;
+            }
             if (s == null || s.isBeeperHeld() == held) return;
             s.setBeeper(held);
             if (held) logLine(beeperPressedText(s));
@@ -1590,15 +1630,15 @@ public class MainWindow extends JFrame {
         String chosen = config.getString(Names.PHONE_NAME_KEY);
         List<Names.Entry> list = names.list(kind);
         if (kind == Names.Kind.PC) list.removeIf(e -> e.name().equalsIgnoreCase(nameService.ownName()));
-        // a CRASHED drone isn't offered (1.0.52, the pilot); the one this PC is still linked to stays while it waits
-        if (kind == Names.Kind.PHONE) list = offeredPhones(list, crashed.keySet(), connection != null ? config.getString(Names.PHONE_NAME_KEY) : null);
+        // an OUT OF ACTION drone isn't offered (1.0.52, the pilot); the one this PC is still linked to stays while it waits
+        if (kind == Names.Kind.PHONE) list = offeredPhones(list, outOfAction.keySet(), connection != null ? config.getString(Names.PHONE_NAME_KEY) : null);
         long now = System.currentTimeMillis();
         int at = -1;
         for (int i = 0; i < list.size(); i++) if (list.get(i).name().equalsIgnoreCase(chosen)) at = i;
         List<String> items = new ArrayList<>();
         for (Names.Entry e : list) {
             Asleep sleeping = e.ip() == null || kind != Names.Kind.PHONE ? null : power.asleep(e.ip());
-            items.add(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + (kind == Names.Kind.PHONE && crashed.containsKey(e.name()) ? "   CRASHED"
+            items.add(e.name() + (e.isVirtual() ? "  VIRTUAL" : "") + (kind == Names.Kind.PHONE && outOfAction.containsKey(e.name()) ? "   OUT OF ACTION"
                     : sleeping != null ? "   " + sleeping.mode() + " " + power.checkText(sleeping, now)
                     : e.online() ? "   online" : "   seen " + Names.agoText(e.lastSeen(), now)));
         }
@@ -1617,7 +1657,7 @@ public class MainWindow extends JFrame {
         }
         // 1.0.64: not when the chosen drone is only off the list for being marked CRASHED - the first other phone was
         // chosen and saved without a word, and the next PILOT UAV went to another drone
-        boolean chosenCrashed = kind == Names.Kind.PHONE && chosen != null && crashed.keySet().stream().anyMatch(chosen::equalsIgnoreCase);
+        boolean chosenCrashed = kind == Names.Kind.PHONE && chosen != null && outOfAction.keySet().stream().anyMatch(chosen::equalsIgnoreCase);
         if (at < 0 && !list.isEmpty() && connection == null && !chosenCrashed) {
             choosePhone(); // the first one seen: taken, so CONNECT just works
             return;
@@ -1793,6 +1833,12 @@ public class MainWindow extends JFrame {
         }
         if (refuseDuplicate(target)) return;
         if (!save(Map.of(IP_KEY, target.ip()))) return;
+        // 1.0.71 (the pilot: the mark comes off "by hand, asked on connect"): flying a drone marked OUT OF ACTION asks first
+        if (!watch && isOutOfAction(target.name())) {
+            if (Dialogs.confirm(this, target.name() + " is OUT OF ACTION. Clear the mark and connect?", "Out of action",
+                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
+            clearOutOfAction(target.name(), "cleared at connect");
+        }
         if (!watch) dropQueuedFor(target.name()); // 1.0.64: PILOT UAV wins over a mode still queued in FLEET
         int port = config.getPort();
         nameService.pause(); // the link takes the port, and answers name queries itself meanwhile
@@ -1815,7 +1861,10 @@ public class MainWindow extends JFrame {
             startLiveAudio(connection.getLink(), video, target.name());
             if (video != null) video.setHardwareDecode(hardwareDecode);
             if (video != null) video.attach(connection.getLink());
-            if (video != null && recordVideo) startRecording(video);
+            // 1.0.71: a made-up drone's video is not recorded (the pilot: none of their flights are saved)
+            liveRecordings.clear();
+            if (video != null) video.setRecordingLabel(target.isVirtual() ? "" : de.droiddrone.pc.flights.FlightRecord.fileLabel(flightLabel(target)));
+            if (video != null && recordVideo && !target.isVirtual()) startRecording(video);
             stanagStreams.refreshSoon(); // 1.0.65: this drone's STANAG stream carries its video from now
             videoView.setStatsSource(video == null ? null : video::stats);
         } catch (IOException | RuntimeException e) {
@@ -1902,11 +1951,31 @@ public class MainWindow extends JFrame {
             logLine("No link log: " + e.getMessage());
         }
         if (liveTrack != null) liveTrack.close();
-        try {
-            liveTrack = new FlightTrack(FlightTrack.defaultDir());
-        } catch (IOException e) {
-            liveTrack = new FlightTrack(null);
-            logLine("No track file: " + e.getMessage());
+        flightRecord = null;
+        lostWhileArmed = false;
+        endedByLostDrone = false;
+        if (target.isVirtual()) {
+            liveTrack = new FlightTrack(null); // 1.0.71: a made-up drone's flight is kept in memory only
+            liveVirtual = true;
+        } else {
+            try {
+                liveVirtual = false;
+                Path tracks = FlightTrack.defaultDir();
+                liveTrack = new FlightTrack(tracks);
+                liveTrack.setLabel(de.droiddrone.pc.flights.FlightRecord.fileLabel(flightLabel(target)));
+                // the flight's record: on disk now, so a link loss, a closed app or a restarted PC loses nothing
+                de.droiddrone.pc.flights.FlightRecord record = de.droiddrone.pc.flights.FlightRecord.start(tracks,
+                        isAddress(target.name()) ? "" : target.name(),
+                        target.ip(), de.droiddrone.pc.AppInfo.version(), System.currentTimeMillis());
+                flightRecord = record;
+                de.droiddrone.pc.flights.FlightRecord.live(record);
+                liveTrack.setFileListener(record::track);
+                if (linkLog != null) record.linkLog(linkLog.file());
+                for (Path made : liveRecordings) record.video(made);
+            } catch (IOException e) {
+                liveTrack = new FlightTrack(null);
+                logLine("No track file: " + e.getMessage());
+            }
         }
         track = liveTrack; // the flight before is a kept one now (1.0.41)
         pushKept();
@@ -2012,6 +2081,7 @@ public class MainWindow extends JFrame {
         videoView.setStatsSource(null);
         videoView.clear();
         logLine("Disconnected. No more sticks: Betaflight fails safe.");
+        endFlightRecord();
         if (backToGrid) {
             backToGrid = false;
             SwingUtilities.invokeLater(this::offerBackToGrid);
@@ -2025,6 +2095,53 @@ public class MainWindow extends JFrame {
         }
         setLinkEditable(true);
         slowRefreshedAt = 0; // 1.0.64: the card's idle state at the next refresh, not a slow round later
+    }
+
+    /** What a flight is called in its files: the phone's name, or without one the address it is flown by. */
+    private static String flightLabel(Names.Entry target) {
+        String name = target.name();
+        return name != null && !name.isBlank() ? name : target.ip() == null ? "" : target.ip();
+    }
+
+    /** Four numbers with dots (an address typed where a name would be). */
+    private static boolean isAddress(String s) {
+        return s != null && s.trim().matches("\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?");
+    }
+
+    /**
+     * 1.0.71: the connection's flight is over. Its record gets its end line (DISCONNECT, LOST DRONE, or LINK LOST when
+     * the link went while armed and never came back). The pilot: "don't log flights where the drone was not armed" -
+     * such a connection's track, recording and record are deleted, once the recording is closed (off this thread).
+     */
+    private void endFlightRecord() {
+        de.droiddrone.pc.flights.FlightRecord record = flightRecord;
+        flightRecord = null;
+        if (record == null) return;
+        String how = endedByLostDrone ? de.droiddrone.pc.flights.FlightRecord.LOST_DRONE
+                : lostWhileArmed ? de.droiddrone.pc.flights.FlightRecord.LINK_LOST : de.droiddrone.pc.flights.FlightRecord.DISCONNECT;
+        record.end(how, System.currentTimeMillis());
+        de.droiddrone.pc.flights.FlightRecord.live(null);
+        if (record.wasArmed()) {
+            if (!de.droiddrone.pc.flights.FlightRecord.DISCONNECT.equals(how)) logLine("Flight kept: ended by " + how + ".");
+            return;
+        }
+        FlightTrack flown = liveTrack;
+        Path trackFile = flown == null ? null : flown.file();
+        // never armed: nothing of it stays on the map or in PREVIOUS FLIGHTS
+        if (trackFile != null) {
+            keptFlights.removeIf(k -> trackFile.equals(k.file()));
+            saveKeptFlights();
+        }
+        List<Path> recordings = List.copyOf(liveRecordings);
+        Thread t = new Thread(() -> {
+            awaitVideoClosed(VIDEO_CLOSE_MS + 3000); // the files are open until the pipeline has ended
+            if (flown != null) flown.flush();
+            int gone = de.droiddrone.pc.flights.FlightKeeper.deleteUnarmed(record, trackFile, recordings);
+            if (gone > 0) AppLog.line("Not armed in this connection: its track and recording are not kept (" + gone + " files).");
+        }, "unarmedFlight");
+        t.setDaemon(true);
+        t.setPriority(Thread.MIN_PRIORITY);
+        t.start();
     }
 
     private void sampleLinkLog() {
@@ -2071,6 +2188,7 @@ public class MainWindow extends JFrame {
         long now = MonoClock.ms();
         FcTelemetry.Gps gps = null;
         int heading = -1;
+        boolean headingHeld = false;
         boolean fcLost = false, connected = false;
         String phoneNow = config.getString(Names.PHONE_NAME_KEY);
         if (c == null) {
@@ -2083,8 +2201,11 @@ public class MainWindow extends JFrame {
             FcTelemetry t = link.getTelemetry();
             gps = t.getGps();
             // 1.0.62: the FC's yaw with a compass, else the phone's sensor (pc.48), else none - never the gyro's drift
-            double h = LiveHeading.of(t);
+            // 1.0.71: or the way it travels; an older heading kept (a hover, no compass) is drawn fainter
+            LiveHeading.Now best = LiveHeading.now(t);
+            double h = best.deg();
             heading = Double.isNaN(h) ? -1 : (int) Math.round(h) % 360;
+            headingHeld = best.stale();
             if (!link.isSpectator()) {
                 lastHeadingPhone = phoneNow;
                 lastHeading = heading;
@@ -2114,7 +2235,7 @@ public class MainWindow extends JFrame {
         String liveIp = names.ipOf(livePhone);
         Asleep sleeping = liveIp == null ? null : power.asleep(liveIp);
         boolean liveAsleep = sleeping != null && power.checkInOverdue(sleeping, System.currentTimeMillis()) <= 0;
-        if (isCrashed(livePhone)) liveAsleep = true; // CRASHED (1.0.52): its crash sign stands at the last point, never LAST KNOWN
+        if (isOutOfAction(livePhone)) liveAsleep = true; // OUT OF ACTION: its own sign stands at the last point, never LAST KNOWN
         FlightTrack.Point lastFix = track == null ? null : track.last();
         if (!liveAsleep && lastFix != null && livePhone != null && !livePhone.isEmpty()) liveAsleep = heardSince(livePhone, liveIp, lastFix.timeMs());
         // the pilot put it to sleep a moment ago: it goes quiet on purpose before the connection ends (the pilot: "they
@@ -2124,6 +2245,8 @@ public class MainWindow extends JFrame {
                 || power.wanted == ControlLink.POWER_STANDBY)) liveAsleep = true;
         if (w != null) w.map().setLiveAsleep(liveAsleep);
         miniMap.setLiveAsleep(liveAsleep);
+        if (w != null) w.setHeadingHeld(headingHeld);
+        miniMap.setHeadingHeld(headingHeld);
         if (w != null) w.update(track, gps, heading, fcLost, connected);
         if (mini) miniMap.update(track, gps, heading, fcLost, connected);
     }
@@ -2274,8 +2397,8 @@ public class MainWindow extends JFrame {
 
     /** LOST DRONE: FIND DRONE opens and the last known position's MGRS is on the clipboard, ready to send to a phone. */
     private void lostDrone() {
-        // 1.0.52 (the pilot): the drone is down and gone - CRASHED on the map, the fleet and the PHONE list until its
-        // phone is heard again or the pilot clears it; FIND DRONE still has its last position
+        // 1.0.52 (the pilot): the drone is down and gone - OUT OF ACTION (1.0.71; before: CRASHED) on the map, the fleet
+        // and the PHONE list until the pilot clears it; FIND DRONE still has its last position
         // and the link to it ends at once (1.0.52, the pilot: standby): no more waiting for it, no reconnecting, no
         // link-loss alarms; the LINK card is idle. Its track stays for FIND DRONE and the map; if its phone ever answers
         // again it is heard as any phone is.
@@ -2299,9 +2422,10 @@ public class MainWindow extends JFrame {
         }
         if (connection != null) {
             logLine("LOST DRONE: link to " + name + " ended.");
+            endedByLostDrone = true;
             disconnect();
         }
-        markCrashed(name, "lost");
+        markOutOfAction(name, "lost");
         FindDroneDialog d = openFindDrone();
         String mgrs = d.mgrs();
         if (mgrs != null) {
@@ -2313,10 +2437,10 @@ public class MainWindow extends JFrame {
     }
 
     /** "name@wallMs;..." to the map (a broken entry is left out). */
-    static Map<String, Long> parseCrashed(String saved) {
+    static Map<String, Long> parseOutOfAction(String saved) {
         Map<String, Long> out = new LinkedHashMap<>();
         if (saved == null || saved.isBlank()) return out;
-        for (String one : saved.split(";")) {
+        for (String one : saved.split(";")) { // (the same form as 1.0.52's "drone.crashed")
             int at = one.lastIndexOf('@');
             if (at <= 0) continue;
             try {
@@ -2328,50 +2452,85 @@ public class MainWindow extends JFrame {
         return out;
     }
 
-    private void saveCrashed() {
+    private void saveOutOfAction() {
         StringBuilder sb = new StringBuilder();
-        for (Map.Entry<String, Long> e : crashed.entrySet()) sb.append(sb.length() == 0 ? "" : ";").append(e.getKey()).append('@').append(e.getValue());
-        save(Map.of(CRASHED_KEY, sb.toString()));
+        for (Map.Entry<String, Long> e : outOfAction.entrySet()) sb.append(sb.length() == 0 ? "" : ";").append(e.getKey()).append('@').append(e.getValue());
+        save(Map.of(OUT_OF_ACTION_KEY, sb.toString(), CRASHED_KEY_BEFORE, "")); // the old key's marks live under the new one now
     }
 
     /**
-     * The drone is down and gone (1.0.52, the pilot): LOST DRONE after a link loss, or right-click "Mark CRASHED" on a
-     * drone not heard from for a while. CRASHED on the map and the fleet, out of the PHONE list, no LAST KNOWN, and it
-     * no longer counts as possibly flying (PossiblyFlying.markDown) - until it is heard again or cleared.
+     * The drone can't fly any more (1.0.71, the pilot: "a mode to be used whenever a drone is not able to fly anymore,
+     * could be because of low battery or it crashed etc. This mode should still only be set manually"; 1.0.52 - 1.0.70:
+     * CRASHED, and only for a drone not heard from): LOST DRONE after a link loss, or right-click "Mark OUT OF ACTION"
+     * on any drone, whatever its state. From then on, until the pilot clears it (it no longer clears itself when the
+     * phone is heard): OUT OF ACTION on the map and the fleet with its last known place, out of the PHONE list, quiet
+     * (no check-in warnings, not offered for observation), no longer possibly flying (PossiblyFlying.markDown) - and
+     * its phone is asked to sleep deeply, checking in every 30 min, with the drone's beeper left on to be found by.
+     * A drone this PC is linked to: the link ends first (asked, while it may be flying).
      * @return whether it was newly marked
      */
-    boolean markCrashed(String name, String why) {
-        if (name == null || name.isBlank() || crashed.containsKey(name)) return false;
-        crashed.put(name, System.currentTimeMillis());
-        saveCrashed();
+    boolean markOutOfAction(String name, String why) {
+        if (name == null || name.isBlank() || isOutOfAction(name)) return false;
+        Connection c = connection;
+        if (c != null && !c.getLink().isSpectator() && name.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) {
+            if (!confirmEndWhileArmed("Mark " + name + " OUT OF ACTION")) return false;
+            logLine("OUT OF ACTION: link to " + name + " ended.");
+            disconnect();
+        }
+        outOfAction.put(name, System.currentTimeMillis());
+        saveOutOfAction();
         boolean held = PossiblyFlying.pc().markDown(name);
-        logLine(name + ": CRASHED - " + ("lost".equals(why) ? "LOST" : "marked by the pilot") + "." + (held ? " Not flying any more: downloads resume." : ""));
+        logLine(name + ": OUT OF ACTION - " + ("lost".equals(why) ? "LOST DRONE" : "marked by the pilot") + "."
+                + (held ? " Not flying any more: downloads resume." : ""));
+        if (fleets != null) {
+            fleets.outOfAction(name);
+            logLine(name + ": DEEP SLEEP queued, check every " + de.droiddrone.common.FleetProtocol.OUT_OF_ACTION_CHECK_MIN + " min. Beeper stays on.");
+        }
         updatePhoneList();
         return true;
     }
 
-    /** The PHONE list without CRASHED drones (1.0.52), but the one still linked (its link waits after the crash). */
-    static List<Names.Entry> offeredPhones(List<Names.Entry> all, Set<String> crashedNames, String linked) {
+    /** The PHONE list without OUT OF ACTION drones (1.0.52), but the one still linked (its link waits). */
+    static List<Names.Entry> offeredPhones(List<Names.Entry> all, Set<String> outNames, String linked) {
         List<Names.Entry> out = new ArrayList<>(all);
-        out.removeIf(e -> crashedNames.contains(e.name()) && !e.name().equalsIgnoreCase(linked));
+        out.removeIf(e -> outNames.contains(e.name()) && !e.name().equalsIgnoreCase(linked));
         return out;
     }
 
-    /** The pilot's Clear CRASHED (map or fleet right-click). */
-    void clearCrashedByPilot(String name) {
-        clearCrashed(name, "cleared");
+    /** 1.0.71: what this PC last knew of every phone (MAP TOOLS > DATA > LAST KNOWN reads it). */
+    de.droiddrone.pc.LastKnown lastKnown() {
+        return lastKnown;
     }
 
-    /** Heard again (a reply after the crash, or a link to it), or the pilot's Clear: no longer CRASHED. */
-    private void clearCrashed(String name, String why) {
-        if (name == null || crashed.remove(name) == null) return;
-        saveCrashed();
-        logLine(name + ": CRASHED cleared - " + why + ".");
+    /** FLEET's detail line for a phone: "LAST 32V NM 97254 42617  12 MIN" (the grid as the map writes grids), or null. */
+    String lastKnownLine(String phone) {
+        de.droiddrone.pc.LastKnown.Entry k = lastKnown.get(phone);
+        if (k == null || !k.hasPlace()) return null;
+        return "LAST " + Coordinates.format(coordinateFormat == null ? Coordinates.Format.MGRS : coordinateFormat, k.lat(), k.lon())
+                + "  " + de.droiddrone.pc.LastKnown.age(System.currentTimeMillis() - k.placeAt());
+    }
+
+    /** The pilot's Clear OUT OF ACTION (map or fleet right-click). */
+    void clearOutOfActionByPilot(String name) {
+        clearOutOfAction(name, "cleared");
+    }
+
+    /** The pilot's Clear (1.0.71: the only way - being heard again no longer clears it): no longer OUT OF ACTION. */
+    private void clearOutOfAction(String name, String why) {
+        if (name == null) return;
+        String key = null;
+        for (String k : outOfAction.keySet()) if (k.equalsIgnoreCase(name)) key = k;
+        if (key == null || outOfAction.remove(key) == null) return;
+        saveOutOfAction();
+        if (fleets != null) fleets.outOfActionCleared(name);
+        logLine(name + ": OUT OF ACTION cleared - " + why + ".");
         SwingUtilities.invokeLater(this::updatePhoneList); // offered in the PHONE list again
     }
 
-    boolean isCrashed(String name) {
-        return name != null && crashed.containsKey(name);
+    boolean isOutOfAction(String name) {
+        if (name == null) return false;
+        for (String k : outOfAction.keySet()) if (k.equalsIgnoreCase(name)) return true;
+        return false;
     }
 
     private long itsDownCheckedAt;
@@ -2419,12 +2578,30 @@ public class MainWindow extends JFrame {
         refreshItsDown();
     }
 
+    /** 1.0.71: why the drone is not armed while ARM is on - said once in the log (ArmWhy). */
+    private final de.droiddrone.pc.ArmWhy armWhy = new de.droiddrone.pc.ArmWhy();
+
     /** The link dropped (or the FC went) within a few minutes of the drone being armed: LOST DRONE comes up. */
     private void refreshLostDrone(ControlLink link, ControlLink.State state) {
         long now = MonoClock.ms();
         FcTelemetry.Status st = link.getTelemetry().getStatus();
-        if (st != null && st.armed() && now - st.receivedAt() < 2000) lastArmedAt = now;
+        RcSession flying = link.isSpectator() || state != ControlLink.State.READY ? null : session;
+        if (flying != null) { // the pilot: a drone that would not arm "showed nothing"
+            boolean fresh = st != null && now - st.receivedAt() < 2000;
+            String why = armWhy.check(flying.isArmSwitchOn(), flying.waitingFor(), fresh, fresh && st.armed(),
+                    fresh ? st.blockers().stream().map(FcTelemetry.Blocker::osdName).toList() : List.of(), now);
+            if (why != null) logLine(why);
+        }
+        boolean armedNow = st != null && st.armed() && now - st.receivedAt() < 2000;
+        if (armedNow) {
+            lastArmedAt = now;
+            de.droiddrone.pc.flights.FlightRecord record = flightRecord;
+            if (record != null) record.armed(System.currentTimeMillis()); // 1.0.71: an armed flight is one to keep
+        }
         boolean dropped = !link.isSpectator() && (state != ControlLink.State.READY || link.isFcLost() || link.isLinkStalled());
+        // how the flight ends if it ends now: the link gone while it was armed (or just had been) and not back since
+        if (dropped && lastArmedAt != 0 && now - lastArmedAt < LOST_DRONE_WINDOW_MS) lostWhileArmed = true;
+        else if (!dropped) lostWhileArmed = false;
         boolean inWindow = !link.isSpectator() && lastArmedAt != 0 && now - lastArmedAt < LOST_DRONE_WINDOW_MS && track != null && !track.isEmpty();
         // 1.0.64: only once it has lasted, and then it stays through a link that flickers back (LostDroneShow)
         boolean show = lostDroneShow.update(dropped, inWindow, now);
@@ -2826,6 +3003,7 @@ public class MainWindow extends JFrame {
         if (observation != null) stopObservation();
         backToGrid = false;
         if (connection != null) disconnect();
+        lastKnown.flush(); // 1.0.71: every phone's last place on disk before the exit
         awaitVideoClosed(VIDEO_CLOSE_MS); // 1.0.64: the pipeline ends on its own thread - its recording whole before the exit
         if (osdRecorder != null) osdRecorder.finish(3000); // the file with the OSD closed whole, not cut off by the exit
         settingsWriter.shutdown(); // what is queued (the OSD layout, the window's place) reaches the file before the exit
@@ -2888,7 +3066,7 @@ public class MainWindow extends JFrame {
         Map<String, String> out = new HashMap<>();
         for (Names.Entry e : phones) {
             Names.Position p = where.get(e.name().toLowerCase(Locale.ROOT));
-            String why = ObserveSet.refusal(p, e.version());
+            String why = isOutOfAction(e.name()) ? "OUT OF ACTION" : ObserveSet.refusal(p, e.version()); // 1.0.71: quiet in the fleet
             if (why != null && p != null && p.flown() && !p.pilotIp().isEmpty()) {
                 String pilot = names.nameAt(p.pilotIp());
                 if (pilot != null) why = pilot + " flies it";
@@ -3649,6 +3827,10 @@ public class MainWindow extends JFrame {
                     t.note(file);
                     t.note(OsdRecorder.osdFile(file));
                 }
+                // 1.0.71: every part of the recording belongs to the flight's record (a new file at each size change)
+                liveRecordings.add(file);
+                de.droiddrone.pc.flights.FlightRecord record = flightRecord;
+                if (record != null) record.video(file);
             });
             v.startRecording(dir);
             logLine("Recording to " + dir + (withOsd ? ", plus a copy with the OSD." : "."));
@@ -4297,7 +4479,7 @@ public class MainWindow extends JFrame {
         // 1.0.64: a check-in missed is said (the countdown started over without a word)
         int missed = !waiting ? 0 : power.missedCheckIns(MonoClock.ms(), System.currentTimeMillis(), c.getLink().getSleepHello());
         if (missed != missedSaid) {
-            if (missed > missedSaid) logLine(config.getString(Names.PHONE_NAME_KEY) + " missed its check-in" + (missed > 1 ? " (" + missed + " now)" : "") + ". Waiting for the next.");
+            if (missed > missedSaid && !isOutOfAction(config.getString(Names.PHONE_NAME_KEY))) logLine(config.getString(Names.PHONE_NAME_KEY) + " missed its check-in" + (missed > 1 ? " (" + missed + " now)" : "") + ". Waiting for the next.");
             missedSaid = missed;
         }
         String text = PowerController.connectText(c != null, c != null && c.getLink().isSpectator(), observation != null, observerRole(),
@@ -4645,6 +4827,62 @@ public class MainWindow extends JFrame {
         }
     }
 
+    /**
+     * 1.0.71, at the start: flights the app never got to close (the pilot's lost flight was on the screen until the PC
+     * restarted for an update, then gone). An armed one is kept - back on the map, and in PREVIOUS FLIGHTS marked APP
+     * CLOSED; a never-armed one's files go. And from now on, when Windows ends the app, the live flight's files are
+     * closed whole first.
+     */
+    private void recoverFlights() {
+        try {
+            Path tracks = FlightTrack.defaultDir();
+            for (de.droiddrone.pc.flights.FlightRecord r : de.droiddrone.pc.flights.FlightKeeper.recover(tracks)) {
+                String when = java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(r.startMs()), java.time.ZoneId.systemDefault())
+                        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+                logLine("Flight " + (r.label().isEmpty() ? "" : r.label() + " ") + when + " was not closed (app or PC stopped): kept.");
+                Path file = r.track();
+                if (file == null || !Files.isRegularFile(file)) continue;
+                boolean there = false;
+                for (KeptFlight k : keptFlights) if (file.equals(k.file())) there = true;
+                if (there) continue;
+                try {
+                    FlightTrack t = FlightTrack.read(file);
+                    String name = (r.label().isEmpty() ? "Flight" : r.label()) + " " + when.substring(11);
+                    if (!t.isEmpty()) keptFlights.add(new KeptFlight(name, file, t.points()));
+                } catch (IOException | RuntimeException e) {
+                    // unreadable: PREVIOUS FLIGHTS still lists what it can
+                }
+            }
+            saveKeptFlights();
+        } catch (IOException | RuntimeException e) {
+            logLine("Flights not checked: " + e.getMessage());
+        }
+        Thread hook = new Thread(this::closeFlightAtExit, "saveAtExit");
+        Runtime.getRuntime().addShutdownHook(hook);
+    }
+
+    /**
+     * The JVM is going (Windows ending the session, the app killed politely) with a connection still open: its track
+     * gets its ending and its recording is closed, so both read whole. The record stays without an end line - at the
+     * next start it is found and kept as APP CLOSED (or, never armed, deleted). Not the Swing thread.
+     */
+    private void closeFlightAtExit() {
+        if (flightRecord == null) return;
+        try {
+            FlightTrack t = liveTrack;
+            if (t != null) {
+                t.close();
+                t.flush();
+            }
+            VideoPipeline v = video;
+            if (v != null) v.stopRecording();
+            if (osdRecorder != null) osdRecorder.finish(1500);
+            de.droiddrone.pc.flights.FlightRecord.flush();
+        } catch (RuntimeException ignored) {
+            // the exit goes on whatever happens here
+        }
+    }
+
     private void saveKeptFlights() {
         StringBuilder b = new StringBuilder();
         for (KeptFlight k : keptFlights) {
@@ -4709,7 +4947,8 @@ public class MainWindow extends JFrame {
             keepFlight(liveTrack, liveTrackName);
             if (liveTrack != null) liveTrack.close(pins.list());
             try {
-                liveTrack = new FlightTrack(FlightTrack.defaultDir());
+                liveTrack = liveVirtual ? new FlightTrack(null) : new FlightTrack(FlightTrack.defaultDir());
+                if (!liveVirtual) liveTrack.setLabel(de.droiddrone.pc.flights.FlightRecord.fileLabel(phone));
             } catch (IOException e) {
                 liveTrack = new FlightTrack(null);
             }
@@ -4719,6 +4958,8 @@ public class MainWindow extends JFrame {
         }
         if (!phone.equals(watchedPhone)) {
             liveTrackName = flightName(phone);
+            de.droiddrone.pc.flights.FlightRecord record = flightRecord;
+            if (record != null && watchedPhone == null) record.drone(phone); // watching: the flight is that phone's
             stanagStreams.refreshSoon(); // the watched video is another drone's now: its STANAG stream takes it
         }
         watchedPhone = phone;
@@ -4799,44 +5040,65 @@ public class MainWindow extends JFrame {
                 if (queued != null) doing += " - " + PowerController.modeWord(queuedMode.mode()) + " QUEUED "
                         + FleetCards.queuedAgo(queuedMode.queuedAt() <= 0 ? -1 : now - queuedMode.queuedAt()).toUpperCase(Locale.ROOT);
             }
-            Long crashedAt = crashed.get(d.name());
-            if (crashedAt != null && d.at() > crashedAt + 2000) {
-                clearCrashed(d.name(), "heard again"); // its phone answers: not gone after all
-            } else if (crashedAt != null) {
-                kind = MapView.Kind.CRASHED;
-                doing = "CRASHED - LOST " + Names.agoText(crashedAt, now);
+            // 1.0.71: what this PC knows of every phone's place is kept on disk (never a made-up drone's)
+            if (!VirtualFleet.isVirtual(ip)) lastKnown.place(d.name(), p.lat(), p.lon(), d.at() - p.ageS() * 1000L);
+            Long outAt = outOfAction.get(d.name());
+            if (outAt != null) { // 1.0.71: it stays until the pilot clears it - a phone heard again is still out of action
+                kind = MapView.Kind.OUT_OF_ACTION;
+                doing = "OUT OF ACTION - " + Names.agoText(outAt, now).toUpperCase(Locale.ROOT);
                 queued = null;
+                blind = false;
+            }
+            if (kind == MapView.Kind.UNKNOWN) { // 1.0.71 (the pilot: "show last mode when unknown"): what it was, first
+                de.droiddrone.pc.LastKnown.Entry known = VirtualFleet.isVirtual(ip) ? null : lastKnown.get(d.name());
+                String was = known == null ? null : de.droiddrone.pc.LastKnown.wasText(known.mode(), age);
+                if (was != null) doing = was + " - " + doing;
             }
             if (kind == MapView.Kind.LOST) queued = null;
             String state = (VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + doing;
             drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot, queued, d.headingDeg(),
                     blind && kind == MapView.Kind.OVERWATCH));
         }
-        // a crashed drone the network has no position of (the one flown here): at its track's last point
-        for (Map.Entry<String, Long> e : crashed.entrySet()) {
-            String name = e.getKey();
-            if (drones.stream().anyMatch(x -> x.name().equalsIgnoreCase(name))) continue;
-            if (connection != null && name.equalsIgnoreCase(flying) && connection.getLink().getState() == ControlLink.State.READY) {
-                clearCrashed(name, "link back"); // its link is up again: flying, not crashed
-                continue;
-            }
-            FlightTrack.Point last = name.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY)) && track != null ? track.last() : null;
-            if (last != null) drones.add(new MapView.NetDrone(name, last.lat(), last.lon(), "CRASHED - LOST " + Names.agoText(e.getValue(), now),
-                    MapView.Kind.CRASHED, false, null));
+        // the flown drone's own place too (the network says nothing of it while this PC flies it)
+        if (connection != null && !liveVirtual && !connection.getLink().isSpectator() && flying != null && !flying.isEmpty()) {
+            FlightTrack.Point at = liveTrack == null ? null : liveTrack.last();
+            if (at != null) lastKnown.place(flying, at.lat(), at.lon(), at.timeMs());
         }
+        // 1.0.71: a phone the network has no place of now - not heard since this PC started, or gone quiet - stands at
+        // the last place this PC knew it at (kept on disk): an OUT OF ACTION drone with its sign, any other as UNKNOWN
+        Set<String> shown = new HashSet<>();
+        for (MapView.NetDrone x : drones) shown.add(x.name().toLowerCase(Locale.ROOT));
+        for (de.droiddrone.pc.LastKnown.Entry k : lastKnown.all()) {
+            if (!k.hasPlace() || shown.contains(k.name().toLowerCase(Locale.ROOT))) continue;
+            if (liveShown && k.name().equalsIgnoreCase(flying)) continue;
+            if (observedNames.contains(k.name()) || names.get(k.name()) == null) continue; // observed here, or forgotten
+            Long outAt = null;
+            for (Map.Entry<String, Long> e : outOfAction.entrySet()) if (e.getKey().equalsIgnoreCase(k.name())) outAt = e.getValue();
+            String last = "LAST KNOWN " + Names.agoText(k.placeAt(), now).toUpperCase(Locale.ROOT);
+            if (outAt != null) {
+                drones.add(new MapView.NetDrone(k.name(), k.lat(), k.lon(), "OUT OF ACTION - " + last, MapView.Kind.OUT_OF_ACTION, false, null));
+            } else if (connection == null || !k.name().equalsIgnoreCase(flying)) {
+                // the chosen phone's own flight on the map already ends in its LAST KNOWN mark: not a second sign on it
+                if (track != null && track.last() != null && k.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) continue;
+                String was = de.droiddrone.pc.LastKnown.wasText(k.mode(), -1);
+                drones.add(new MapView.NetDrone(k.name(), k.lat(), k.lon(), (was == null ? "NOT HEARD" : was) + " - " + last,
+                        MapView.Kind.UNKNOWN, false, null));
+            }
+        }
+        lastKnown.saveIfDue(now);
         // 1.0.56: kept for the spectators' mirror; a spectator shows the pilot PC's drones instead (and flies none)
         List<MapView.NetDrone> shownDrones = mirror.drones(drones);
         java.util.function.BiConsumer<String, Boolean> onDrone = mirror.isMirroring() ? (n, w) -> {
         } : this::connectFromMap;
         miniMap.setNetDrones(shownDrones, onDrone);
-        miniMap.setOnClearCrashed(this::clearCrashedByPilot);
+        miniMap.setOnClearOutOfAction(this::clearOutOfActionByPilot);
         miniMap.setOnDronePicked(this::pickedOnMap);
-        miniMap.setOnMarkCrashed(n -> markCrashed(n, "marked"));
+        miniMap.setOnMarkOutOfAction(n -> markOutOfAction(n, "marked"));
         if (mapWindow != null) {
             mapWindow.map().setNetDrones(shownDrones, onDrone);
-            mapWindow.map().setOnClearCrashed(this::clearCrashedByPilot);
+            mapWindow.map().setOnClearOutOfAction(this::clearOutOfActionByPilot);
             mapWindow.map().setOnDronePicked(this::pickedOnMap);
-            mapWindow.map().setOnMarkCrashed(n -> markCrashed(n, "marked"));
+            mapWindow.map().setOnMarkOutOfAction(n -> markOutOfAction(n, "marked"));
         }
         if (!power.noneAsleep() && connection == null && !phoneCombo.isPopupVisible()) updatePhoneList(); // the countdowns
     }
@@ -5973,7 +6235,7 @@ public class MainWindow extends JFrame {
         public void forgetDrone(String n) {
             overwatch.drop(n);
             if (fleets != null) fleets.forgetCell(n);
-            if (crashed.keySet().removeIf(k -> k.equalsIgnoreCase(n))) saveCrashed();
+            if (outOfAction.keySet().removeIf(k -> k.equalsIgnoreCase(n))) saveOutOfAction();
             power.forgetNamed(n);
             standbyPhones.values().removeIf(n::equalsIgnoreCase);
             if (fleets != null) fleets.manager().cancel(n);

@@ -127,19 +127,21 @@ class FleetCardsTest {
         assertEquals("23 MIN", FleetCards.flightLeft(4.2));
         assertEquals("14.0 KM", FleetCards.rangeLeft(4.2));
         assertEquals("23 MIN", FleetCards.flightLeft(4.35), "never over a full pack's");
-        assertEquals("12 MIN", FleetCards.flightLeft(3.75)); // half: 11.5
-        assertEquals("7.0 KM", FleetCards.rangeLeft(3.75));
-        assertEquals("0 MIN", FleetCards.flightLeft(3.3));
-        assertEquals("0.0 KM", FleetCards.rangeLeft(3.1), "never under");
+        assertEquals("13 MIN", FleetCards.flightLeft(3.75)); // a Li-ion cell at 3.75 V: a little over half
+        assertEquals("7.9 KM", FleetCards.rangeLeft(3.75));
+        assertEquals("0 MIN", FleetCards.flightLeft(2.8)); // the pilot's "empty" (2026-11-18)
+        assertEquals("3 MIN", FleetCards.flightLeft(3.3), "3.3 V is no longer empty");
+        assertEquals("0.0 KM", FleetCards.rangeLeft(2.6), "never under");
         assertEquals("-", FleetCards.flightLeft(Double.NaN));
         assertEquals("-", FleetCards.rangeLeft(Double.NaN));
         assertEquals(-1, FleetCards.flightMinLeft(Double.NaN));
         // in the detail beside the GPS, on its line (one more line and ten phones no longer fit a small screen)
-        assertEquals("   16 MIN / 9.6 KM", FleetManagementPanel.leftText(3.92));
+        assertEquals("   17 MIN / 10.5 KM", FleetManagementPanel.leftText(3.92));
         assertEquals("", FleetManagementPanel.leftText(Double.NaN), "none without a pack reading");
         assertTrue(ink(pack(3.92, 0)) > ink(pack(Double.NaN, 0)) + 60, "the figures are drawn");
         assertEquals(0, count(detail(pack(3.92, 0))), "a good pack: not yellow");
-        assertTrue(count(detail(pack(3.41, 0))) > 20, "a low pack: yellow");
+        assertEquals(0, count(detail(pack(3.41, 0))), "3.41 V a cell is not low any more (the pilot's 3.2 V)");
+        assertTrue(count(detail(pack(3.15, 0))) > 20, "a low pack: yellow");
         // the longest line still ends before the events: the letters go smaller, never under 9 pt
         int w = FleetManagementPanel.BODY_WIDTH - 16;
         Graphics2D g = new BufferedImage(10, 10, BufferedImage.TYPE_INT_ARGB).createGraphics();
@@ -343,12 +345,45 @@ class FleetCardsTest {
         return n;
     }
 
+    /**
+     * The field round of 2026-11-18, the pilot: "change the name of the status crashed to something less specific"
+     * (OUT OF ACTION), "make it possible to mark all drones" - any drone, in any state (before: only one not heard
+     * from, LOST or UNKNOWN).
+     */
     @Test
-    void aDroneNotHeardFromCanBeMarkedCrashedFromItsRow() {
-        assertEquals("Mark CRASHED", FleetManagementPanel.crashChoice(MapView.Kind.LOST));
-        assertEquals("Mark CRASHED", FleetManagementPanel.crashChoice(MapView.Kind.UNKNOWN));
-        assertEquals("Clear CRASHED", FleetManagementPanel.crashChoice(MapView.Kind.CRASHED));
-        assertNull(FleetManagementPanel.crashChoice(MapView.Kind.ACTIVE), "a drone heard from now isn't crashed");
-        assertNull(FleetManagementPanel.crashChoice(MapView.Kind.OVERWATCH));
+    void anyDroneCanBeMarkedOutOfActionFromItsRowAndAMarkedOneCleared() {
+        for (MapView.Kind k : MapView.Kind.values()) {
+            if (k == MapView.Kind.OUT_OF_ACTION) continue;
+            assertEquals("Mark OUT OF ACTION", FleetManagementPanel.outOfActionChoice(k), k.name());
+        }
+        assertEquals("Clear OUT OF ACTION", FleetManagementPanel.outOfActionChoice(MapView.Kind.OUT_OF_ACTION));
+        assertEquals(5, MapView.Kind.OUT_OF_ACTION.ordinal(), "where CRASHED was: the spectators' mirror sends the ordinal");
+    }
+
+    /** The pilot: "show last mode when unknown" - "WAS OVERWATCH 12 MIN". */
+    @Test
+    void anUnknownPhoneSaysWhatItWasLastAndHowLongSinceItWasHeard() {
+        assertEquals("WAS OVERWATCH 12 MIN", de.droiddrone.pc.LastKnown.wasText("OVERWATCH", 12 * 60_000L + 30_000));
+        assertEquals("WAS DEEP SLEEP 3 H", de.droiddrone.pc.LastKnown.wasText("DEEP SLEEP", 3 * 3_600_000L + 1));
+        assertEquals("WAS STANDBY NOW", de.droiddrone.pc.LastKnown.wasText("STANDBY", 20_000));
+        assertEquals("WAS IDLE 2 D", de.droiddrone.pc.LastKnown.wasText("IDLE", 2 * 86_400_000L + 5));
+        assertNull(de.droiddrone.pc.LastKnown.wasText("", 1000), "no mode known: nothing to say");
+        FleetCards.Card unknown = card(MapView.Kind.UNKNOWN, "UNKNOWN").withWas("WAS OVERWATCH 12 MIN");
+        assertEquals("UNKNOWN", unknown.badge(), "the badge stays the word the rules go by");
+        assertEquals("WAS OVERWATCH 12 MIN", unknown.badgeText(), "what the card writes");
+        assertEquals("UNKNOWN", card(MapView.Kind.UNKNOWN, "UNKNOWN").badgeText(), "never heard in any mode: as before");
+        assertEquals("OVERWATCH", card(MapView.Kind.OVERWATCH, "OVERWATCH").withWas("WAS STANDBY 5 MIN").badgeText(), "only an UNKNOWN phone says it");
+        // FLEET's badge words as the pilot reads them
+        assertEquals("PILOTED", de.droiddrone.pc.LastKnown.modeWord("CONNECTED"));
+        assertEquals("DEEP SLEEP", de.droiddrone.pc.LastKnown.modeWord("ASLEEP"));
+        assertEquals("IDLE", de.droiddrone.pc.LastKnown.modeWord("ACTIVE"));
+        assertNull(de.droiddrone.pc.LastKnown.modeWord("UNKNOWN"));
+        assertNull(de.droiddrone.pc.LastKnown.modeWord("LOST"));
+        assertNull(de.droiddrone.pc.LastKnown.modeWord("OUT OF ACTION"));
+    }
+
+    private static FleetCards.Card card(MapView.Kind kind, String badge) {
+        return new FleetCards.Card("MobileAlpha", false, kind, badge, Double.NaN, -1, 50, false, -1, 0, 60_000,
+                3, 1, 9, 0, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null);
     }
 }

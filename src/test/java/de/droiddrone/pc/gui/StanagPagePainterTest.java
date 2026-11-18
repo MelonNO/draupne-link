@@ -62,7 +62,7 @@ class StanagPagePainterTest {
     }
 
     private static final StanagShow.Page[] PAGES = {
-            new StanagShow.Page("CRASHED", "Marked lost. Last place in the metadata.", StanagShow.Tone.ALARM),
+            new StanagShow.Page("OUT OF ACTION", "Marked by the pilot. Last place in the metadata.", StanagShow.Tone.WARN),
             new StanagShow.Page("LOST", "Link lost while flown.", StanagShow.Tone.ALARM),
             new StanagShow.Page("PILOTED", "Flown from PCBravo. Video on that PC.", StanagShow.Tone.PLAIN),
             new StanagShow.Page("OVERWATCH - ALERT", "Motion seen. See the map window.", StanagShow.Tone.ALARM),

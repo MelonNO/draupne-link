@@ -31,6 +31,10 @@ public final class HeadingChoice {
     public static Heading choose(Observe.Position p, boolean compassCalibrated) {
         if (p == null) return Heading.NONE;
         if (p.fcCompass() && !Double.isNaN(p.fcHeadingDeg)) return new Heading(p.fcHeadingDeg, Source.FC_COMPASS, !compassCalibrated);
+        // 1.0.71 (the pilot, 2026-11-18: without a compass the heading "spins around randomly" in flight): the phone's
+        // compass sits beside the motors' currents - while the drone is armed, or not known to be disarmed, it is no
+        // heading; a view cone that isn't drawn says more than one that turns by itself
+        if ((p.flags & (Observe.ARMED | Observe.ARMED_UNKNOWN)) != 0) return Heading.NONE;
         if (!Double.isNaN(p.phoneAzimuthDeg)) {
             boolean low = p.phoneAccuracy < PHONE_ACCURACY_GOOD || p.phoneErrorDeg > PHONE_ERROR_MAX_DEG;
             return new Heading(p.phoneAzimuthDeg, Source.PHONE, low);

@@ -513,6 +513,12 @@ public class RcSession {
         return throttle && arm ? "THROTTLE DOWN, ARM OFF" : arm ? "ARM SWITCH OFF" : "THROTTLE DOWN";
     }
 
+    /** 1.0.71: the radio's ARM switch is on, as the last frame read from it has it; false while that isn't known. */
+    public boolean isArmSwitchOn() {
+        short[] ch = lastChannels;
+        return ch != null && armSwitch != null && !armSwitch.isUnknown(ch) && armSwitch.on(ch);
+    }
+
     /** No arm switch is known (Drone setup hasn't read Betaflight's modes): the sticks only wait for the throttle. */
     public boolean isArmSwitchUnknown() {
         return armSwitch == null;

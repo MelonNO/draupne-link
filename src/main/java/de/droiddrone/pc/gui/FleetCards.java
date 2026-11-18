@@ -41,7 +41,16 @@ final class FleetCards {
     record Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
                 boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
                 int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note, long queuedAgoMs,
-                boolean blind) {
+                boolean blind, String was) {
+        /** Up to 1.0.70: an UNKNOWN phone's last mode is not said. */
+        Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
+             boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
+             int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note, long queuedAgoMs,
+             boolean blind) {
+            this(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs, signal,
+                    gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, blind, null);
+        }
+
         Card(String name, boolean virtual, MapView.Kind kind, String badge, double cellVolts, long cellAgeMs, int phonePercent,
              boolean charging, long nextCheckMs, int intervalMin, long heardAgoMs, int signal, int gpsFix, int sats,
              int events, long lastEventWall, int phoneTempDeci, int fcTempC, String queued, String note) {
@@ -62,12 +71,26 @@ final class FleetCards {
             boolean b = on && "OVERWATCH".equals(badge);
             if (b == blind) return this;
             return new Card(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs,
-                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, b);
+                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, b, was);
         }
 
-        /** The badge as the card writes it: "OVERWATCH - BLIND" while it sees nothing (badge() stays the mode's word). */
+        /**
+         * 1.0.71 (the pilot: "show last mode when unknown"): this card with what an UNKNOWN phone was last confirmed
+         * as, "WAS OVERWATCH 12 MIN" (the mode, and how long since the phone was heard) - null: nothing to say.
+         */
+        Card withWas(String text) {
+            String w = kind == MapView.Kind.UNKNOWN ? text : null;
+            if (java.util.Objects.equals(w, was)) return this;
+            return new Card(name, virtual, kind, badge, cellVolts, cellAgeMs, phonePercent, charging, nextCheckMs, intervalMin, heardAgoMs,
+                    signal, gpsFix, sats, events, lastEventWall, phoneTempDeci, fcTempC, queued, note, queuedAgoMs, blind, w);
+        }
+
+        /**
+         * The badge as the card writes it: "OVERWATCH - BLIND" while it sees nothing, "WAS OVERWATCH 12 MIN" for an
+         * UNKNOWN phone whose last mode is known (badge() stays the mode's word).
+         */
         String badgeText() {
-            return blind ? badge + " - BLIND" : badge;
+            return was != null ? was : blind ? badge + " - BLIND" : badge;
         }
 
         /** The queued mode's sign, or null. */
@@ -127,7 +150,7 @@ final class FleetCards {
      * Shown for a phone that can still take it: not over this PC's link, nor for a lost or crashed drone.
      */
     static boolean showsQueued(Badge b) {
-        return b.kind() != MapView.Kind.LOST && b.kind() != MapView.Kind.CRASHED && !"CONNECTED".equals(b.text());
+        return b.kind() != MapView.Kind.LOST && b.kind() != MapView.Kind.OUT_OF_ACTION && !"CONNECTED".equals(b.text());
     }
 
     /** "now", "40s", "12m", "3h": since a mode was queued; "" unknown. */
@@ -179,10 +202,17 @@ final class FleetCards {
         return Double.isNaN(v) ? "-" : String.format(Locale.ROOT, "%.2f V", v);
     }
 
-    /** A cell's charge for the gauge (0..1): 3.3 V empty, 4.2 V full; NaN unknown. */
+    /**
+     * A cell's charge for the gauge (0..1): 2.8 V empty, 4.2 V full, on a Li-ion curve
+     * ({@link de.droiddrone.common.CellVolts}, the pilot's limits of 2026-11-18); NaN unknown.
+     */
     static double cellFill(double v) {
-        if (Double.isNaN(v)) return Double.NaN;
-        return Math.max(0, Math.min(1, (v - 3.3) / 0.9));
+        return de.droiddrone.common.CellVolts.fill(v);
+    }
+
+    /** The drone's pack is low: its cell at or under 3.2 V (yellow figures, LOW BATTERY). */
+    static boolean cellLow(double v) {
+        return de.droiddrone.common.CellVolts.low(v);
     }
 
     /**

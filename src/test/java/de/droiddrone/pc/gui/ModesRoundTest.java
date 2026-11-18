@@ -37,7 +37,7 @@ class ModesRoundTest {
         assertNull(MapView.queuedKind(ControlLink.POWER_NORMAL));
         assertTrue(FleetCards.showsQueued(new FleetCards.Badge(MapView.Kind.UNKNOWN, "UNKNOWN")));
         assertFalse(FleetCards.showsQueued(new FleetCards.Badge(MapView.Kind.LOST, "LOST")), "a lost drone takes nothing");
-        assertFalse(FleetCards.showsQueued(new FleetCards.Badge(MapView.Kind.CRASHED, "CRASHED")));
+        assertFalse(FleetCards.showsQueued(new FleetCards.Badge(MapView.Kind.OUT_OF_ACTION, "OUT OF ACTION")));
         assertFalse(FleetCards.showsQueued(new FleetCards.Badge(MapView.Kind.ACTIVE, "CONNECTED")), "this PC's link says it");
         assertEquals("now", FleetCards.queuedAgo(1_000));
         assertEquals("40s", FleetCards.queuedAgo(40_000));

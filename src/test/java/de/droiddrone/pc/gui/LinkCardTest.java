@@ -68,23 +68,28 @@ class LinkCardTest {
         assertFalse(t.isEditable());
     }
 
-    /** LOST DRONE marks it CRASHED (1.0.52): kept in the settings as name@time, a broken entry left out. */
+    /**
+     * LOST DRONE marks it OUT OF ACTION (1.0.71; CRASHED from 1.0.52): kept in the settings as name@time, a broken entry
+     * left out. The form is the old key's, so marks made before 1.0.71 read as they are.
+     */
     @Test
-    void crashedDronesSurviveARestart() {
-        java.util.Map<String, Long> m = MainWindow.parseCrashed("MobileAlpha@1700000000000;broken;MobileBravo@x;MobileZulu@5");
+    void outOfActionDronesSurviveARestart() {
+        assertEquals("drone.outOfAction", MainWindow.OUT_OF_ACTION_KEY);
+        assertEquals("drone.crashed", MainWindow.CRASHED_KEY_BEFORE, "1.0.52 - 1.0.70's marks are read from here once");
+        java.util.Map<String, Long> m = MainWindow.parseOutOfAction("MobileAlpha@1700000000000;broken;MobileBravo@x;MobileZulu@5");
         assertEquals(java.util.Map.of("MobileAlpha", 1700000000000L, "MobileZulu", 5L), m);
-        assertTrue(MainWindow.parseCrashed("").isEmpty());
-        assertTrue(MainWindow.parseCrashed(null).isEmpty());
+        assertTrue(MainWindow.parseOutOfAction("").isEmpty());
+        assertTrue(MainWindow.parseOutOfAction(null).isEmpty());
     }
 
     @Test
-    void aCrashedDroneIsNotOfferedInThePhoneList() {
+    void anOutOfActionDroneIsNotOfferedInThePhoneList() {
         java.util.function.Function<String, de.droiddrone.pc.Names.Entry> phone = n ->
                 new de.droiddrone.pc.Names.Entry(n, de.droiddrone.pc.Names.Kind.PHONE, "100.64.0.1", "", "", "", 0, false);
         java.util.List<de.droiddrone.pc.Names.Entry> all = java.util.List.of(phone.apply("MobileAlpha"), phone.apply("MobileZulu"), phone.apply("MobileBravo"));
         assertEquals(java.util.List.of("MobileAlpha", "MobileBravo"),
                 MainWindow.offeredPhones(all, java.util.Set.of("MobileZulu"), null).stream().map(de.droiddrone.pc.Names.Entry::name).toList());
-        // the one still linked (its link waits after the crash) stays until the pilot ends it
+        // the one still linked stays until the pilot ends it
         assertEquals(3, MainWindow.offeredPhones(all, java.util.Set.of("MobileZulu"), "mobilezulu").size());
     }
 }

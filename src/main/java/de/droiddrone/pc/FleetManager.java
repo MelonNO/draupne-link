@@ -87,6 +87,13 @@ public final class FleetManager {
         checkEvery = intervalMinOf == null ? phone -> 0 : intervalMinOf;
     }
 
+    /** 1.0.71: phones whose queued mode never grows too old - an OUT OF ACTION drone's deep sleep waits until it is heard. */
+    private volatile java.util.function.Predicate<String> keepWaiting = phone -> false;
+
+    public void setKeepWaiting(java.util.function.Predicate<String> phones) {
+        keepWaiting = phones == null ? phone -> false : phones;
+    }
+
     /** 1.0.64: whether this PC's pilot link is to the phone - a mode queued for it is dropped then, never sent. */
     public void setPilotHere(java.util.function.Predicate<String> connected) {
         pilotHere = connected == null ? phone -> false : connected;
@@ -193,6 +200,7 @@ public final class FleetManager {
 
     /** Drops w when it waited too long. @return true when dropped */
     private boolean expired(Wanted w, long now) {
+        if (keepWaiting.test(w.phone())) return false;
         long keep = keepMs(w.phone());
         if (now - w.queuedAt() <= keep) return false;
         drop(w, "not reached in " + keep / 60_000 + " min");

@@ -1,5 +1,6 @@
 package de.droiddrone.pc.fleet;
 
+import de.droiddrone.common.CellVolts;
 import de.droiddrone.common.DataReader;
 import de.droiddrone.common.DetectionAreas;
 import de.droiddrone.common.FcCommon;
@@ -755,7 +756,7 @@ public final class VirtualDrone {
                     if (!fcLost) sendRecords(out -> TelemetryRecords.boxIds(out, FlightModel.BOX_IDS));
                 }
                 case UdpCommon.BatteryConfig -> {
-                    if (!fcLost) sendRecords(out -> TelemetryRecords.batteryConfig(out, 3.3, 4.3, 3.5));
+                    if (!fcLost) sendRecords(out -> TelemetryRecords.batteryConfig(out, CellVolts.EMPTY, 4.3, CellVolts.LOW));
                 }
                 case SET_BITRATE -> {
                     if (buffer.getRemaining() > 0) setStep(buffer.readUnsignedByteAsInt());
@@ -1627,7 +1628,7 @@ public final class VirtualDrone {
             TelemetryRecords.videoBitRate(out, video.sentBitRate() / 1_000_000f);
             TelemetryRecords.network(out, 4, link.signalPercent(now));
         }
-        if (every || tick % 167 == 11) TelemetryRecords.batteryConfig(out, 3.3, 4.3, 3.5);
+        if (every || tick % 167 == 11) TelemetryRecords.batteryConfig(out, CellVolts.EMPTY, 4.3, CellVolts.LOW);
         streamOut(p.getData()); // the pilot, or the observers while only observed
     }
 

@@ -25,9 +25,10 @@ class BeepersTest {
             assertFalse(commands.contains("beeper -" + keep), keep + " stays on");
         }
         assertFalse(commands.contains("beeper -ALL"));
-        assertEquals("beacon RX_SET", commands.get(commands.size() - 1));
-        assertFalse(commands.contains("beacon RX_LOST"), "the receiver-lost beacon is left as it is");
-        assertEquals(19 + 1, commands.size(), "23 conditions, 4 kept, plus the beacon");
+        // 1.0.71 (the pilot, 2026-11-18: it beeps when the link is lost - the buzzer and the motors): both beacons on
+        assertEquals(List.of("beacon RX_SET", "beacon RX_LOST"), commands.subList(commands.size() - 2, commands.size()));
+        assertEquals(19 + 2, commands.size(), "23 conditions, 4 kept, plus the two beacons");
+        assertTrue(c.description().contains("a lost link"), c.description());
     }
 
     @Test
@@ -35,10 +36,14 @@ class BeepersTest {
         String disabled = "Disabled:  GYRO_CALIBRATED  RX_LOST  DISARMING  ARMING  ARMING_GPS_FIX  BAT_CRIT_LOW  BAT_LOW"
                 + "  GPS_STATUS  ACC_CALIBRATION  ACC_CALIBRATION_FAIL  READY_BEEP  MULTI_BEEPS  DISARM_REPEAT  ARMED  SYSTEM_INIT"
                 + "  BLACKBOX_ERASE  CRASHFLIP  CAM_CONNECTION_OPEN  CAM_CONNECTION_CLOSE  ARMING_GPS_NO_FIX\r\n";
-        BetaflightPlan.Change c = Beepers.plan(LIST, disabled, "Disabled:  RX_LOST\r\n");
+        BetaflightPlan.Change c = Beepers.plan(LIST, disabled, "Disabled:  none\r\n");
         assertNotNull(c);
         assertEquals(List.of("beeper RX_LOST"), c.commands());
-        assertNull(Beepers.plan(LIST, disabled.replace("  RX_LOST", ""), "Disabled:  RX_LOST\r\n"));
+        assertNull(Beepers.plan(LIST, disabled.replace("  RX_LOST", ""), "Disabled:  none\r\n"));
+        // a drone set up before 1.0.71: only the lost receiver's beacon is still to switch on
+        BetaflightPlan.Change beacon = Beepers.plan(LIST, disabled.replace("  RX_LOST", ""), "Disabled:  RX_LOST\r\n");
+        assertNotNull(beacon);
+        assertEquals(List.of("beacon RX_LOST"), beacon.commands());
     }
 
     @Test

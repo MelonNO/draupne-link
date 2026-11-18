@@ -102,6 +102,8 @@ final class MapToolsPanel extends JPanel {
      * pilot: "move prev flights from tools to Data"): in DATA, not TOOLS.
      */
     final JButton flights = Theme.secondaryButton("Previous flights");
+    /** 1.0.71 (the pilot: every phone's last known grid as "a list in DATA"). */
+    final JButton lastKnown = Theme.secondaryButton("Last known");
     final JButton download = Theme.secondaryButton("Download area");
     final JButton export = Theme.secondaryButton("Export...");
     final JButton importButton = Theme.secondaryButton("Import...");
@@ -353,6 +355,7 @@ final class MapToolsPanel extends JPanel {
         section(body, "FLIGHTS");
         flights.setToolTipText("Play back, show on map, export");
         row(body, flights);
+        row(body, lastKnown);
 
         section(body, "DATA");
         export.setToolTipText("Drag a box: PNG + KML to Documents\\DRAUPNE Link\\Exports");

@@ -1977,6 +1977,29 @@ public class ControlLink {
         }
     }
 
+    /** The first phone app that takes {@link #sendBeep} (BEEPER while no stick frames go). */
+    static final int BEEP_MIN_PC_BUILD = de.droiddrone.common.FleetProtocol.OUT_OF_ACTION_PC_BUILD;
+
+    /**
+     * 1.0.71 (the pilot: the drone beeps when "beeper is pressed", also in standby): BEEPER while this PC sends no
+     * sticks - the phone holds its idle sticks back for that long and Betaflight beeps for its lost receiver (BEEP
+     * [0x56][seconds u8], unnumbered, sent three times: one lost and the button would do nothing). 0: let go.
+     * @return true if sent (the link up, a phone app that takes it)
+     */
+    public boolean sendBeep(int seconds) {
+        if (!(everReady || configReceived && isConnected())) return false;
+        if (telemetry.getPhonePcBuild() < BEEP_MIN_PC_BUILD) return false;
+        try {
+            UdpPacketData packetData = new UdpPacketData(PacketIds.BEEP);
+            packetData.daos.writeByte(Math.max(0, Math.min(255, seconds)));
+            byte[] data = packetData.getData();
+            for (int i = 0; i < 3; i++) socket.send(new DatagramPacket(data, data.length, remoteIp, remotePort));
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     static byte[] idleSticksFrame(short[] frame) throws IOException {
         UdpPacketData packetData = new UdpPacketData(IDLE_STICKS);
         packetData.daos.writeByte(frame.length);

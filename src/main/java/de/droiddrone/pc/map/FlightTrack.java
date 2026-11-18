@@ -53,6 +53,9 @@ public final class FlightTrack {
     private static final int ACCURACY_UNKNOWN = 65535;
 
     private final Path dir;
+    /** 1.0.71: the drone's name for the file's name ("" none) and who is told the file once it is there. */
+    private volatile String label = "";
+    private volatile java.util.function.Consumer<Path> onFile;
     private final List<Point> points = new ArrayList<>();
     private Point home;
     private long lastDroneAt, lastPhoneAt;
@@ -76,6 +79,20 @@ public final class FlightTrack {
         });
     }
 
+    /**
+     * 1.0.71 (the pilot: "always log the phone name to the flight"): the file is track-DATE-label.gpx and its track's
+     * name ends with the label. Set before the first position.
+     * @param label letters, digits, dots and underscores ({@code FlightRecord.fileLabel}); "" or null: none
+     */
+    public void setLabel(String label) {
+        this.label = label == null ? "" : label;
+    }
+
+    /** Told the track's file when it is created (at the first position; on the caller's thread). */
+    public void setFileListener(java.util.function.Consumer<Path> listener) {
+        onFile = listener;
+    }
+
     /** Documents\DRAUPNE Link\Tracks. */
     public static Path defaultDir() throws IOException {
         return Files.createDirectories(Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Tracks"));
@@ -95,10 +112,11 @@ public final class FlightTrack {
         long now = System.currentTimeMillis();
         boolean droneNew = gps != null && gps.receivedAt() != 0 && gps.receivedAt() != lastDroneAt;
         if (droneNew) lastDroneAt = gps.receivedAt();
-        boolean droneFix = droneNew && gps.fix() >= 1 && !(gps.latDeg() == 0 && gps.lonDeg() == 0);
+        // 1.0.71: only a reading the position filter took (a fix, enough satellites, no lone far leap)
+        boolean droneFix = droneNew && gps.positionOk() && !(gps.latDeg() == 0 && gps.lonDeg() == 0);
         boolean phoneNew = phone != null && phone.receivedAt() != 0 && phone.receivedAt() != lastPhoneAt;
         if (phoneNew) lastPhoneAt = phone.receivedAt();
-        boolean phoneFix = phoneNew && phone.ageS() <= PHONE_MAX_AGE_S && !(phone.latDeg() == 0 && phone.lonDeg() == 0) && !sameFix(phone);
+        boolean phoneFix = phoneNew && phone.positionOk() && phone.ageS() <= PHONE_MAX_AGE_S && !(phone.latDeg() == 0 && phone.lonDeg() == 0) && !sameFix(phone);
 
         Point p = null;
         if (preferPhone) {
@@ -114,7 +132,11 @@ public final class FlightTrack {
         if (home == null && armed && (p.phone() || gps.fix() >= 2)) home = p;
         if (armed && !p.phone()) homeFromFc(gps, p);
         if (writer != null) {
-            if (file == null) file = dir.resolve("track-" + LocalDateTime.now().format(FILE) + ".gpx");
+            if (file == null) {
+                file = dir.resolve("track-" + LocalDateTime.now().format(FILE) + (label.isEmpty() ? "" : "-" + label) + ".gpx");
+                java.util.function.Consumer<Path> told = onFile;
+                if (told != null) told.accept(file);
+            }
             Point h = home, pt = p;
             Path f = file;
             writer.execute(() -> {
@@ -205,8 +227,8 @@ public final class FlightTrack {
         return points.isEmpty();
     }
 
-    /** Waits for what is queued for the files (tests read them right after sampling). */
-    void flush() {
+    /** Waits for what is queued for the files (tests read them right after sampling; before its file is deleted). */
+    public void flush() {
         if (writer == null) return;
         try {
             writer.submit(() -> { }).get(5, TimeUnit.SECONDS);
@@ -274,7 +296,8 @@ public final class FlightTrack {
                     + "<gpx version=\"1.1\" creator=\"DRAUPNE Link " + de.droiddrone.pc.AppInfo.version() + "\""
                     + " xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:dl=\"https://github.com/MelonNO/draupne-link/gpx\">\n"
                     + " <metadata><time>" + ISO.format(Instant.ofEpochMilli(startedAt)) + "</time></metadata>\n"
-                    + " <trk>\n  <name>Flight " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) + "</name>\n"
+                    + " <trk>\n  <name>Flight " + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                    + (label.isEmpty() ? "" : " " + xml(label)) + "</name>\n"
                     + "  <trkseg>\n");
         }
         out.write(String.format(Locale.ROOT,

@@ -126,6 +126,9 @@ public final class SetupPlanner {
         String rate = cli.command("get serial_update_rate_hz");
         String forced = cli.command("get force_battery_cell_count");
         List<BetaflightPlan.Change> plan = new ArrayList<>(BetaflightPlan.plan(rate, version, forced, w.cellTarget(), w.cellsOk()));
+        // 1.0.71: Betaflight's own battery warnings as the app's - low at 3.2 V a cell, empty at 2.8 V (BatterySetup)
+        BetaflightPlan.Change limits = BatterySetup.plan(cli.command("get " + BatterySetup.WARNING), cli.command("get " + BatterySetup.MIN));
+        if (limits != null) plan.add(limits);
         if (!fc.mspRx()) {
             plan.add(0, new BetaflightPlan.Change("Receiver: MSP RX input, now "
                     + fc.receiverNow(), List.of()));

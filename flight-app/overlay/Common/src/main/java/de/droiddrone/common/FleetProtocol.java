@@ -48,6 +48,16 @@ public final class FleetProtocol {
     public static final String MIN_PHONE_VERSION = "2.3.0-pc.40";
     static final int STATUS_VERSION = 1;
     public static final int UNKNOWN = -1;
+    /**
+     * 1.0.71 / pc.54, in a mode 2 (deep sleep) request's flags byte (which mode 2 did not read before, so an older phone
+     * just sleeps): the pilot marked the drone OUT OF ACTION - it can't fly any more and is to be found. The phone sleeps
+     * as asked and leaves the flight controller's lost-signal beeper on (a deep sleep as any other switches it off first).
+     */
+    public static final int FLAG_OUT_OF_ACTION = 0x40;
+    /** The first phone app that reads {@link #FLAG_OUT_OF_ACTION} and keeps the drone quiet in its other sleeps. */
+    public static final int OUT_OF_ACTION_PC_BUILD = 54;
+    /** An OUT OF ACTION phone checks in this often (the pilot: "every 30 min"): its battery is for being found. */
+    public static final int OUT_OF_ACTION_CHECK_MIN = 30;
     /** The temperature's "unknown" on the wire. */
     static final int TEMP_UNKNOWN = Short.MIN_VALUE;
 

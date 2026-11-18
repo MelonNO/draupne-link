@@ -76,6 +76,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import de.droiddrone.common.BeeperRule;
 import de.droiddrone.common.Bytes;
 import de.droiddrone.common.CameraOwner;
 import de.droiddrone.common.CaptureClock;
@@ -170,6 +171,12 @@ public class Udp {
      * Static with the idle sticks: it outlives a session and a restarted link.
      */
     private static final RcPath.IdleGuard idleGuard = new RcPath.IdleGuard();
+    /**
+     * pc.54: when the drone beeps (BeeperRule; the pilot, 2026-11-18): silent while it rests on purpose, beeping for a
+     * link that went without the PC's Disconnect - until a PC connects again - and for the PC's BEEPER. Static with
+     * the idle sticks: it outlives a restarted link.
+     */
+    private static final BeeperRule beeperRule = new BeeperRule();
     /**
      * pc.34: the live audio for DRAUPNE Link 1.0.45 (PcAudio: AUDIO [0x79], again every second from the PC). The
      * microphone streams while the PC asks and the FC reads DISARMED - never in the air. audioGateRun decides every
@@ -659,6 +666,7 @@ public class Udp {
                         // Connect taken, not at every packet - and the same PC's lag baseline is kept, RcPath.restart)
                         rcPath.restart(now, samePc);
                         idleSticks = null; // pc.38: a new session's PC sends its own within a second; none kept from before
+                        beeperRule.sessionTaken(); // pc.54: a pilot is here again - the drone is fed idle sticks, silent
                         sessionAsksAnew();
                     }
                     pcHeardAtMs = now; // pc.50: a packet of the session - the video's dead-man counts from it (pcSilentTick)
@@ -667,6 +675,16 @@ public class Udp {
                     // had nothing to do with it). The session stays alive on the PC's pings (20 a second)
                     if (d[0] == IdleSticks) {
                         if (buffer.isConnected()) handleIdleSticks(d, len);
+                        continue;
+                    }
+                    // pc.54: BEEPER pressed on the PC while no sticks go (standby): [0x56][seconds u8, 0 = let go] - the
+                    // idle sticks pause that long and Betaflight beeps for its lost receiver, disarmed only (BeeperRule)
+                    if (d[0] == PacketIds.BEEP) {
+                        if (buffer.isConnected() && len >= 2) {
+                            int seconds = d[1] & 0xff;
+                            beeperRule.beep(android.os.SystemClock.elapsedRealtime(), seconds * 1000L);
+                            log(seconds > 0 ? "BEEPER from the PC: " + seconds + " s" : "BEEPER let go");
+                        }
                         continue;
                     }
                     if (d[0] == UdpCommon.RcFrame) {
@@ -752,11 +770,19 @@ public class Udp {
                     Thread.sleep(dormantFcClosed() ? DORMANT_LOOP_MS : IDLE_EVERY_MS);
                     boolean feed, refused = false;
                     int held = RcPath.IdleGuard.FEED;
+                    boolean quiet;
                     synchronized (rcWriteLock) {
                         short[] idle = idleSticks;
+                        // pc.54: none from a PC (FLEET's standby without a session, a PC without a radio): the phone's
+                        // own - everything low and centred - when Betaflight's ARM ranges say it can't arm
+                        if (idle == null && msp.isInitialized()) idle = BeeperRule.ownIdle(msp::idleMayArm);
                         long lastRc = rcPath.lastTakenMs();
                         long now = android.os.SystemClock.elapsedRealtime();
-                        feed = idle != null && msp.isInitialized() && now - lastRc >= IDLE_AFTER_MS
+                        // pc.54: a link that went without a Disconnect, or the PC's BEEPER: no idle sticks - Betaflight
+                        // beeps for its lost receiver (disarmed here: an armed drone gets none anyway)
+                        beeperRule.session(isConnected());
+                        quiet = beeperRule.feedIdle(now);
+                        feed = quiet && idle != null && msp.isInitialized() && now - lastRc >= IDLE_AFTER_MS
                                 && msp.disarmedAfter(lastRc + IDLE_STATUS_AFTER_MS, now);
                         if (feed && msp.idleMayArm(idle)) {
                             feed = false;
@@ -777,7 +803,9 @@ public class Udp {
                                 + " - no ARM off from here before the pilot's own sticks say it");
                     }
                     heldSaid = held;
-                    if (feed != feeding) log(feed ? "Idle sticks to the FC (disarmed, no sticks from the PC)" : "Idle sticks stopped");
+                    if (feed != feeding) log(feed ? "Idle sticks to the FC (disarmed, no sticks from the PC)"
+                            : quiet ? "Idle sticks stopped" : beeperRule.linkLost() ? "Idle sticks stopped: link lost without a Disconnect - the drone beeps until a PC connects"
+                            : "Idle sticks stopped: BEEPER from the PC");
                     feeding = feed;
                 } catch (InterruptedException e) {
                     return;
@@ -1513,7 +1541,10 @@ public class Udp {
         lastPcIp = packet.getAddress();
         lastPcPort = r.pcPort;
         if (r.mode == PowerMode.OVERWATCH) Overwatch.configure(r.sensitivity, r.flags, r.owToken);
-        PowerMode.request(r.mode, r.intervalMin, "PC fleet");
+        // pc.54: a deep sleep for a drone the pilot marked OUT OF ACTION - its beeper stays on through it
+        boolean out = r.mode == PowerMode.DEEP_SLEEP && (r.flags & FleetProtocol.FLAG_OUT_OF_ACTION) != 0;
+        if (out) log("Fleet: out of action - deep sleep with the drone's beeper left on");
+        PowerMode.request(r.mode, r.intervalMin, "PC fleet", out);
     }
 
     /** pc.40: how this phone is doing (FleetProtocol.Status), for the name reply and the sleep hello. */
@@ -1947,6 +1978,7 @@ public class Udp {
             // UdpCommon.RcFrame never gets here: the receive thread takes it (handleRcFrame)
             case UdpCommon.Disconnect:
             {
+                beeperRule.disconnectSaid(); // pc.54: ended on purpose - the drone stays silent (not a lost link)
                 // stop stream when controller disconnected - on the videoStarter thread (the camera and muxer take
                 // their time to close, and this thread delivers the PC's packets)
                 videoInitialFrame = null;

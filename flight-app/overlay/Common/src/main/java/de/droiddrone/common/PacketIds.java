@@ -21,7 +21,7 @@ package de.droiddrone.common;
  * The first byte of the DRAUPNE packets on the link's port that have no class of their own in Common: one table both
  * apps and the virtual fleet read, so no code is copied by hand. The layouts are written where each packet is sent
  * (ControlLink, Spectate, Names on the PC). The others live with their protocol: UdpCommon (upstream DroidDrone),
- * {@link Observe} 0x50-0x52 (0x53-0x55 are this table's now, 0x56-0x57 unused), {@link FleetProtocol#MODE} 0x58,
+ * {@link Observe} 0x50-0x52 (0x53-0x56 are this table's now, 0x57 unused), {@link FleetProtocol#MODE} 0x58,
  * {@link PcAudio#PACKET} 0x79, {@link OverwatchProtocol} 0x7A, 0x7B, 0x7D-0x7F. PacketIdsTest checks no two share a code.
  */
 public final class PacketIds {
@@ -70,6 +70,11 @@ public final class PacketIds {
     // PC -> phone (ControlLink)
     public static final byte REMOTE_UPDATE = 0x77;
     public static final byte IDLE_STICKS = 0x78;
+    /**
+     * PC -> phone (1.0.71 / pc.54): BEEPER while no stick frames go (standby) - {@code [0x56][seconds u8, 0 = let go]}.
+     * The phone holds its idle sticks back that long ({@link BeeperRule}) and Betaflight beeps for its lost receiver.
+     */
+    public static final byte BEEP = 0x56;
     public static final byte DETECTION_SET = 0x7C;
 
     private PacketIds() {

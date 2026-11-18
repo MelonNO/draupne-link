@@ -50,7 +50,7 @@ class StanagShowTest {
     void noPageIsWithoutAnExplanationAndNoneIsLong() {
         Set<String> titles = new HashSet<>();
         FleetCards.Card[] cards = {
-                card("MobileAlpha", "CRASHED", MapView.Kind.CRASHED), card("MobileAlpha", "LOST", MapView.Kind.LOST),
+                card("MobileAlpha", "OUT OF ACTION", MapView.Kind.OUT_OF_ACTION), card("MobileAlpha", "LOST", MapView.Kind.LOST),
                 card("MobileAlpha", "CONNECTED", MapView.Kind.ACTIVE), card("MobileAlpha", "OVERWATCH", MapView.Kind.OVERWATCH),
                 card("MobileAlpha", "OVERWATCH", MapView.Kind.OVERWATCH, 60_000, 5, 5000, true),
                 card("MobileAlpha", "ASLEEP", MapView.Kind.ASLEEP, 60_000, 2, 5000, false), card("MobileAlpha", "STANDBY", MapView.Kind.STANDBY),
@@ -62,7 +62,13 @@ class StanagShowTest {
             assertFalse(p.text().isBlank(), p.title() + " says what it means");
             assertTrue(p.text().length() <= 48, "short text (the pilot's rule): " + p.text());
         }
-        assertEquals(Set.of("CRASHED", "LOST", "PILOTED", "OVERWATCH", "OVERWATCH - BLIND", "DEEP SLEEP", "STANDBY", "IDLE", "UNKNOWN", "OFFLINE"), titles);
+        assertEquals(Set.of("OUT OF ACTION", "LOST", "PILOTED", "OVERWATCH", "OVERWATCH - BLIND", "DEEP SLEEP", "STANDBY", "IDLE", "UNKNOWN", "OFFLINE"), titles);
+    }
+
+    /** A phone with no battery word and a pack at this voltage a cell: its DRONE figure comes first. */
+    private static FleetCards.Card pack(double cellVolts) {
+        return new FleetCards.Card("MobileAlpha", false, MapView.Kind.STANDBY, "STANDBY", cellVolts, 0, -1, false, -1, 0, 2000,
+                3, 1, 9, 0, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null, -1, false);
     }
 
     private static FleetCards.Card charging0() {
@@ -79,18 +85,18 @@ class StanagShowTest {
                 3, 1, 9, 0, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null, -1, false);
         StanagShow.Page p = StanagShow.page(c, false, null, false, now);
         assertEquals("DEEP SLEEP", p.title());
-        assertEquals(java.util.List.of(new StanagShow.Stat("PHONE", "87 %", false), new StanagShow.Stat("DRONE", "69 % AT 20:54", false),
-                new StanagShow.Stat("FLIGHT", "16 MIN", false), new StanagShow.Stat("RANGE", "9.6 KM", false),
+        assertEquals(java.util.List.of(new StanagShow.Stat("PHONE", "87 %", false), new StanagShow.Stat("DRONE", "75 % AT 20:54", false),
+                new StanagShow.Stat("FLIGHT", "17 MIN", false), new StanagShow.Stat("RANGE", "10.5 KM", false),
                 new StanagShow.Stat("HEARD", "21:03", false), new StanagShow.Stat("NEXT CHECK", "21:08", false)), p.stats());
         // a second later the same page: a still picture stays one (clock times to the minute, no countdown)
         FleetCards.Card later = new FleetCards.Card("MobileAlpha", false, MapView.Kind.ASLEEP, "ASLEEP", 3.92, 601_000, 87, false, 209_000, 5, 91_000,
                 3, 1, 9, 0, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null, -1, false);
         assertEquals(p, StanagShow.page(later, false, null, false, now + 1000));
         // low batteries are marked; a charging phone is not low; a fresh reading has no time; an always-listening sleeper no next check
-        FleetCards.Card low = new FleetCards.Card("MobileAlpha", false, MapView.Kind.STANDBY, "STANDBY", 3.41, 0, 12, false, FleetCards.LISTENING, 255, 2000,
+        FleetCards.Card low = new FleetCards.Card("MobileAlpha", false, MapView.Kind.STANDBY, "STANDBY", 3.1, 0, 12, false, FleetCards.LISTENING, 255, 2000,
                 3, 1, 9, 0, 0, FleetCards.NO_TEMP, FleetCards.NO_TEMP, null, null, -1, false);
-        assertEquals(java.util.List.of(new StanagShow.Stat("PHONE", "12 %", true), new StanagShow.Stat("DRONE", "12 %", true),
-                new StanagShow.Stat("FLIGHT", "3 MIN", true), new StanagShow.Stat("RANGE", "1.7 KM", true),
+        assertEquals(java.util.List.of(new StanagShow.Stat("PHONE", "12 %", true), new StanagShow.Stat("DRONE", "6 %", true),
+                new StanagShow.Stat("FLIGHT", "1 MIN", true), new StanagShow.Stat("RANGE", "0.8 KM", true),
                 new StanagShow.Stat("HEARD", "21:04", false)), StanagShow.stats(low, now));
         // the pilot: "flight time remaining and estimated range left" - none without a pack reading
         for (StanagShow.Stat s : StanagShow.stats(charging0(), now)) assertFalse(s.label().equals("FLIGHT") || s.label().equals("RANGE"), s.label());
@@ -100,9 +106,11 @@ class StanagShowTest {
         // the pilot: "give a percentage of the power in the drone battery, don't give the cell value" - as FLEET's gauge fills
         assertEquals(100, StanagShow.dronePercent(4.2));
         assertEquals(100, StanagShow.dronePercent(4.35), "never over");
-        assertEquals(50, StanagShow.dronePercent(3.75));
-        assertEquals(0, StanagShow.dronePercent(3.3));
-        assertEquals(0, StanagShow.dronePercent(2.9), "never under");
+        assertEquals(51, StanagShow.dronePercent(3.7));
+        assertEquals(0, StanagShow.dronePercent(2.8));
+        assertFalse(StanagShow.stats(pack(3.3), now).get(0).low(), "3.3 V a cell is not low: the pilot's limit is 3.2 V");
+        assertTrue(StanagShow.stats(pack(3.2), now).get(0).low());
+        assertEquals(0, StanagShow.dronePercent(2.5), "never under");
         for (StanagShow.Stat s : p.stats()) assertFalse(s.value().contains("V"), "no voltage on the page: " + s.value());
         // nothing known: no figures, never a made-up one
         assertTrue(StanagShow.stats(card("MobileAlpha", "UNKNOWN", MapView.Kind.UNKNOWN, -1, 0, -1, false), now).isEmpty());
@@ -149,7 +157,7 @@ class StanagShowTest {
         StanagShow.Page alert = StanagShow.page(card("MobileAlpha", "OVERWATCH", MapView.Kind.OVERWATCH), false, null, true);
         assertEquals("OVERWATCH - ALERT", alert.title());
         assertEquals(StanagShow.Tone.ALARM, alert.tone());
-        assertEquals("CRASHED", StanagShow.page(card("MobileAlpha", "CRASHED", MapView.Kind.CRASHED), false, null, true).title());
+        assertEquals("OUT OF ACTION", StanagShow.page(card("MobileAlpha", "OUT OF ACTION", MapView.Kind.OUT_OF_ACTION), false, null, true).title());
         assertEquals(StanagShow.Tone.ALARM, StanagShow.page(card("MobileAlpha", "LOST", MapView.Kind.LOST), false, null, false).tone());
         assertEquals(StanagShow.Tone.WARN, StanagShow.page(card("MobileAlpha", "OVERWATCH", MapView.Kind.OVERWATCH, 1, 5, 1, true), false, null, false).tone());
     }

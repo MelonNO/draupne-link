@@ -58,20 +58,21 @@ final class FleetManagementPanel extends JPanel {
         default void connect(String phone) {
         }
 
-        /** Right-click on a drone not heard from (LOST, UNKNOWN): it is down and gone (1.0.52). */
-        default void markCrashed(String phone) {
+        /** Right-click on any drone (1.0.71; before: only one not heard from): it can't fly any more - OUT OF ACTION. */
+        default void markOutOfAction(String phone) {
         }
 
-        /** Right-click on a CRASHED drone: not crashed after all. */
-        default void clearCrashed(String phone) {
+        /** Right-click on an OUT OF ACTION drone: the mark off again. */
+        default void clearOutOfAction(String phone) {
         }
     }
 
-    /** What a row's right-click offers for this state: "Mark CRASHED", "Clear CRASHED", or null (nothing). */
-    static String crashChoice(MapView.Kind kind) {
-        if (kind == MapView.Kind.LOST || kind == MapView.Kind.UNKNOWN) return "Mark CRASHED";
-        if (kind == MapView.Kind.CRASHED) return "Clear CRASHED";
-        return null;
+    /**
+     * What a row's right-click offers: "Clear OUT OF ACTION" on a marked drone, "Mark OUT OF ACTION" on any other,
+     * whatever its state (1.0.71, the pilot: "make it possible to mark all drones"; before, only LOST and UNKNOWN).
+     */
+    static String outOfActionChoice(MapView.Kind kind) {
+        return kind == MapView.Kind.OUT_OF_ACTION ? "Clear OUT OF ACTION" : "Mark OUT OF ACTION";
     }
 
     static final int BODY_WIDTH = 340;
@@ -573,27 +574,27 @@ final class FleetManagementPanel extends JPanel {
                 public void mousePressed(java.awt.event.MouseEvent e) {
                     select(RowView.this.phone);
                     actions.picked(RowView.this.phone);
-                    if (e.isPopupTrigger()) crashMenu(e);
+                    if (e.isPopupTrigger()) outOfActionMenu(e);
                 }
 
                 @Override
                 public void mouseReleased(java.awt.event.MouseEvent e) {
-                    if (e.isPopupTrigger()) crashMenu(e); // Windows: the menu comes on release
+                    if (e.isPopupTrigger()) outOfActionMenu(e); // Windows: the menu comes on release
                 }
             });
         }
 
-        /** Right-click: Mark CRASHED on a drone not heard from, Clear CRASHED on a crashed one. */
-        private void crashMenu(java.awt.event.MouseEvent e) {
+        /** Right-click: Mark OUT OF ACTION on any drone, Clear OUT OF ACTION on a marked one. */
+        private void outOfActionMenu(java.awt.event.MouseEvent e) {
             FleetCards.Card c = card;
-            String choice = c == null ? null : crashChoice(c.kind());
+            String choice = c == null ? null : outOfActionChoice(c.kind());
             if (choice == null) return;
             javax.swing.JPopupMenu menu = TacticalCombo.menu();
             menu.setBackground(Theme.PANEL_2);
-            javax.swing.JMenuItem item = new javax.swing.JMenuItem(choice + " on " + phone);
+            javax.swing.JMenuItem item = new javax.swing.JMenuItem(choice + ": " + phone);
             item.addActionListener(a -> {
-                if (c.kind() == MapView.Kind.CRASHED) actions.clearCrashed(phone);
-                else actions.markCrashed(phone);
+                if (c.kind() == MapView.Kind.OUT_OF_ACTION) actions.clearOutOfAction(phone);
+                else actions.markOutOfAction(phone);
             });
             menu.add(item);
             menu.show(this, e.getX(), e.getY());
@@ -666,7 +667,10 @@ final class FleetManagementPanel extends JPanel {
         // the drone's volts per cell and the phone's battery: a number over a thin gauge
         g.setFont(Theme.headingFont(10f));
         String cell = Double.isNaN(c.cellVolts()) ? "-" : String.format(Locale.ROOT, "%.2fV", c.cellVolts());
-        mini(g, DRONE_X, cy, 42, cell, FleetCards.cellFill(c.cellVolts()));
+        // the pack by the pilot's limits: yellow at or under 3.2 V a cell, red at or under 2.8 V
+        double fill = FleetCards.cellFill(c.cellVolts());
+        mini(g, DRONE_X, cy, 42, cell, fill, Double.isNaN(fill) ? Theme.LINE
+                : de.droiddrone.common.CellVolts.empty(c.cellVolts()) ? Theme.BAD : FleetCards.cellLow(c.cellVolts()) ? Theme.WARN : Theme.OK);
         String batt = c.phonePercent() < 0 ? "-" : c.phonePercent() + "%" + (c.charging() ? "+" : "");
         mini(g, PHONE_X, cy, 34, batt, c.phonePercent() < 0 ? Double.NaN : c.phonePercent() / 100.0);
         g.setFont(Theme.headingFont(10f));
@@ -704,8 +708,12 @@ final class FleetManagementPanel extends JPanel {
 
     /** A number with a thin gauge under it, green to red by how full; grey when unknown. */
     private static void mini(Graphics2D g, int x, int cy, int w, String text, double fill) {
+        mini(g, x, cy, w, text, fill, Double.isNaN(fill) ? Theme.LINE : fill < 0.2 ? Theme.BAD : fill < 0.45 ? Theme.WARN : Theme.OK);
+    }
+
+    /** The same with the gauge's colour given. */
+    private static void mini(Graphics2D g, int x, int cy, int w, String text, double fill, Color on) {
         FontMetrics fm = g.getFontMetrics();
-        Color on = Double.isNaN(fill) ? Theme.LINE : fill < 0.2 ? Theme.BAD : fill < 0.45 ? Theme.WARN : Theme.OK;
         g.setColor(Double.isNaN(fill) ? Theme.MUTED : Theme.TEXT);
         g.drawString(text, x, cy + fm.getAscent() / 2 - 3);
         int y = cy + fm.getAscent() / 2;
@@ -751,17 +759,46 @@ final class FleetManagementPanel extends JPanel {
         }
     }
 
+    /**
+     * 1.0.71 (the pilot: every phone's last known grid "on its FLEET card"): the selected phone's last place as this PC
+     * has it on disk - "LAST 32V NM 97254 42617  12 MIN" - or null: none known. Asked at each paint.
+     */
+    private volatile java.util.function.Function<String, String> lastKnownLine = phone -> null;
+
+    void setLastKnown(java.util.function.Function<String, String> line) {
+        lastKnownLine = line == null ? phone -> null : line;
+    }
+
+    /**
+     * Whether a card's second line is its last known grid: a phone that isn't confirmed now - UNKNOWN, LOST, OUT OF
+     * ACTION - has no live figures to show there (its signal, GPS and temperatures are old words or none), and its
+     * last place is what the pilot needs of it. A phone that answers keeps its figures; its last grid is the strip's
+     * tooltip and in MAP TOOLS > DATA > LAST KNOWN. (Not a third line: the strip's height is what lets ten phones fit
+     * a small screen without scrolling.)
+     */
+    static boolean showsLastKnown(MapView.Kind kind) {
+        return kind == MapView.Kind.UNKNOWN || kind == MapView.Kind.LOST || kind == MapView.Kind.OUT_OF_ACTION;
+    }
+
     /** The selected phone's details over the buttons: name and mode (queued, or why not), then its figures. */
     private final class Detail extends JComponent {
         Detail() {
             setPreferredSize(new Dimension(10, 32));
+            setToolTipText(""); // asked for at each hover: getToolTipText
+        }
+
+        @Override
+        public String getToolTipText(java.awt.event.MouseEvent e) {
+            FleetCards.Card c = selectedCard();
+            return c == null ? null : lastKnownLine.apply(c.name());
         }
 
         @Override
         protected void paintComponent(Graphics graphics) {
             Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
             try {
-                paintDetail(g, selectedCard(), getWidth());
+                FleetCards.Card c = selectedCard();
+                paintDetail(g, c, getWidth(), c != null && showsLastKnown(c.kind()) ? lastKnownLine.apply(c.name()) : null);
             } finally {
                 g.dispose();
             }
@@ -769,6 +806,11 @@ final class FleetManagementPanel extends JPanel {
     }
 
     static void paintDetail(Graphics2D g, FleetCards.Card c, int w) {
+        paintDetail(g, c, w, null);
+    }
+
+    /** @param lastKnown the phone's last known grid to write as its second line ("LAST 32V ..."), or null: its figures */
+    static void paintDetail(Graphics2D g, FleetCards.Card c, int w, String lastKnown) {
         if (c == null) {
             g.setFont(Theme.font(java.awt.Font.PLAIN, 11f));
             g.setColor(Theme.MUTED);
@@ -796,6 +838,16 @@ final class FleetManagementPanel extends JPanel {
         g.drawString(right, w - bf.stringWidth(right), fm.getAscent());
         // signal, GPS, temperatures, events
         int y = fm.getAscent() + 16;
+        if (lastKnown != null && !lastKnown.isEmpty()) { // 1.0.71: a phone not confirmed now - where it was last, to find it
+            String events = c.events() == 0 ? "" : c.events() + (c.events() == 1 ? " EVENT" : " EVENTS");
+            g.setFont(figuresFont(g, lastKnown, events, w + FIGURES_X));
+            FontMetrics lf = g.getFontMetrics();
+            g.setColor(c.kind() == MapView.Kind.OUT_OF_ACTION ? Theme.TEXT : Theme.MUTED);
+            g.drawString(lastKnown, 0, y);
+            g.setColor(MapView.ALERT);
+            g.drawString(events, w - lf.stringWidth(events), y);
+            return;
+        }
         bars(g, 0, y, c.signal());
         String gps = "GPS " + FleetCards.gps(c.gpsFix(), c.sats()) + "   " + FleetCards.tempDeci(c.phoneTempDeci())
                 + " / FC " + FleetCards.tempC(c.fcTempC());
@@ -810,7 +862,7 @@ final class FleetManagementPanel extends JPanel {
         g.setColor(Theme.MUTED);
         g.drawString(gps, FIGURES_X, y);
         if (!left.isEmpty()) { // brighter than the figures beside it; yellow when the pack is low, as the STANAG page
-            g.setColor(StanagShow.dronePercent(c.cellVolts()) < StanagShow.DRONE_LOW_PERCENT ? Theme.WARN : Theme.TEXT);
+            g.setColor(FleetCards.cellLow(c.cellVolts()) ? Theme.WARN : Theme.TEXT);
             g.drawString(left, FIGURES_X + sf.stringWidth(gps), y);
         }
         g.setColor(c.events() > 0 ? MapView.ALERT : Theme.MUTED);

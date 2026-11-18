@@ -91,6 +91,8 @@ final class MapWindow extends JFrame {
     private final de.droiddrone.pc.overwatch.ClipIndex clips;
     /** FLEET MANAGEMENT (1.0.52): the FLEET tab at the right edge and its cards. */
     private final FleetManagementPanel fleetPanel;
+    /** MAP TOOLS > DATA > LAST KNOWN (1.0.71), while open. */
+    private LastKnownDialog lastKnownDialog;
     /** The least width of one of the figures under the map (an MGRS position in full). */
     static final int STAT_MIN_WIDTH = 190;
     /** The overwatch drone's pulse on the map: repaints while an alert is on. */
@@ -329,14 +331,27 @@ final class MapWindow extends JFrame {
             }
 
             @Override
-            public void markCrashed(String phone) {
-                if (main != null) main.markCrashed(phone, "marked");
+            public void markOutOfAction(String phone) {
+                if (main != null) main.markOutOfAction(phone, "marked");
             }
 
             @Override
-            public void clearCrashed(String phone) {
-                if (main != null) main.clearCrashedByPilot(phone);
+            public void clearOutOfAction(String phone) {
+                if (main != null) main.clearOutOfActionByPilot(phone);
             }
+        });
+        if (main != null) fleetPanel.setLastKnown(main::lastKnownLine); // 1.0.71: the selected phone's last grid, from disk
+        tools.lastKnown.setToolTipText("Every phone's last grid, time and battery");
+        tools.lastKnown.addActionListener(e -> {
+            if (main == null) return;
+            if (lastKnownDialog == null || !lastKnownDialog.isDisplayable()) {
+                lastKnownDialog = new LastKnownDialog(this, main.lastKnown(), () -> this.format, main::isOutOfAction, (lat, lon) -> {
+                    map.centreOn(lat, lon, Math.max(map.zoom(), 15));
+                    syncFollow();
+                });
+            }
+            lastKnownDialog.setVisible(true);
+            lastKnownDialog.toFront();
         });
         JPanel east = new JPanel(new BorderLayout(6, 0)); // the alerts left of the fleet, both at the right edge
         east.setOpaque(false);
@@ -1521,6 +1536,11 @@ final class MapWindow extends JFrame {
         map.setDetections(marks);
     }
 
+    /** 1.0.71: the heading shown is an older one kept: its arrow fainter. */
+    void setHeadingHeld(boolean held) {
+        map.setHeadingHeld(held);
+    }
+
     void update(FlightTrack track, FcTelemetry.Gps gps, int headingDeg, boolean fcLost, boolean connected) {
         this.track = track;
         map.update(track, gps, headingDeg, fcLost, connected);
@@ -1587,7 +1607,7 @@ final class MapWindow extends JFrame {
 
     /** "2026-11-02 14:05" from track-20261102-140512.gpx; the file's name when it isn't one of ours. */
     static String trackTitle(String fileName) {
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("track-(\\d{4})(\\d{2})(\\d{2})-(\\d{2})(\\d{2})\\d{2}\\.gpx").matcher(fileName);
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("track-(\\d{4})(\\d{2})(\\d{2})-(\\d{2})(\\d{2})\\d{2}(?:-[A-Za-z0-9._]+)*\\.gpx").matcher(fileName);
         return m.matches() ? m.group(1) + "-" + m.group(2) + "-" + m.group(3) + " " + m.group(4) + ":" + m.group(5) : fileName;
     }
 

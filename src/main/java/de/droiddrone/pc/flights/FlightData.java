@@ -61,7 +61,12 @@ public final class FlightData {
             FlightLibrary.Item v = FlightLibrary.videoItem(f.video());
             if (v != null) videoStart = v.startMs();
         }
-        List<Sample> tel = f.telemetry() == null ? List.of() : readTelemetry(f.telemetry(), videoStart);
+        // 1.0.71: the figures of every part of the recording, each on its own file's clock
+        List<Sample> tel = new ArrayList<>();
+        for (FlightLibrary.Part p : f.parts()) {
+            if (p.telemetry() != null) tel.addAll(readTelemetry(p.telemetry(), p.startMs()));
+        }
+        if (tel.isEmpty() && f.telemetry() != null) tel = readTelemetry(f.telemetry(), videoStart);
         List<LinkSample> link = f.linkLog() == null ? List.of() : readLink(f.linkLog());
         return new FlightData(f, track, tel, link, videoStart);
     }

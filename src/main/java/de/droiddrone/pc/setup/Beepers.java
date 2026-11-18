@@ -18,7 +18,11 @@ import java.util.Set;
  * <li>ON_USB - no sound of its own: off, it silences every beep while no battery is in, the button's too.</li>
  * </ul>
  * The DShot beacon (the motors beep) is on for the BEEPER mode, so the button is loud enough to find the drone in grass
- * (Betaflight beeps the motors only while disarmed); its receiver-lost beacon is left as it is.
+ * (Betaflight beeps the motors only while disarmed) - and, 1.0.71, for the lost receiver too (the pilot, 2026-11-18:
+ * the drone "should beep if link is lost, usb connection to FC is lost, or out of action is pressed, or beeper is
+ * pressed", the buzzer and the motors both). What keeps a resting drone silent is the phone (pc.54, BeeperRule): idle
+ * sticks while it is awake, and before a deep sleep or overwatch closes the port, the lost-receiver sounds switched
+ * off in the flight controller's memory until the wake.
  *
  * <p>Read and written in the CLI by name ({@code beeper -NAME}, {@code beacon RX_SET}), never as MSP's bit mask: the
  * bits moved between 4.5 and 2025.12 (RC_SMOOTHING_INIT_FAIL went), the names didn't. Betaflight matches a name by
@@ -27,8 +31,8 @@ import java.util.Set;
 public final class Beepers {
     /** The beeper conditions left on. */
     public static final List<String> KEEP = List.of("RX_LOST", "RX_LOST_LANDING", "RX_SET", "ON_USB");
-    /** The DShot beacon wanted on. */
-    static final String BEACON = "RX_SET";
+    /** The DShot beacons wanted on: with the BEEPER mode, and (1.0.71) when the receiver is lost. */
+    static final List<String> BEACONS = List.of("RX_SET", "RX_LOST");
 
     private Beepers() {
     }
@@ -73,18 +77,20 @@ public final class Beepers {
                 }
             }
         }
-        boolean beacon = false;
+        int beacons = 0;
         Set<String> beaconOff = names(beaconReply, "Disabled:");
-        if (beaconOff != null && beaconOff.contains(BEACON)) {
-            commands.add("beacon " + BEACON);
-            beacon = true;
+        for (String b : BEACONS) {
+            if (beaconOff != null && beaconOff.contains(b)) {
+                commands.add("beacon " + b);
+                beacons++;
+            }
         }
         if (commands.isEmpty()) return null;
         List<String> what = new ArrayList<>();
         if (silenced > 0) what.add(silenced + " beeper sound" + (silenced == 1 ? "" : "s") + " off");
-        if (commands.size() - silenced - (beacon ? 1 : 0) > 0) what.add("receiver lost and BEEPER on");
-        if (beacon) what.add("motors beep with BEEPER (DShot beacon)");
-        return new BetaflightPlan.Change("Beepers: " + String.join(", ", what) + " - silent unless BEEPER or phone unplugged",
+        if (commands.size() - silenced - beacons > 0) what.add("receiver lost and BEEPER on");
+        if (beacons > 0) what.add("motors beep with BEEPER and a lost link (DShot beacon)");
+        return new BetaflightPlan.Change("Beepers: " + String.join(", ", what) + " - silent unless BEEPER, a lost link or phone unplugged",
                 List.copyOf(commands));
     }
 }
