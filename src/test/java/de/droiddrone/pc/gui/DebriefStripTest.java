@@ -106,11 +106,14 @@ class DebriefStripTest {
                 d.note.setText("Wind from the west, stronger than forecast.\nLanded with 3.56 V.");
                 d.seek(DebriefFlight.START + 75_000);
             });
+            // Windows holds a window to its screen: a size bigger than this one's (the CI runner's is 1024x768) is left out
+            Rectangle screen = d.getGraphicsConfiguration().getBounds();
             // the wish on a big screen; the whole of a 1093x584 screen; the least the window goes to on that screen
             int[][] sizes = {{1280, 760}, {1093, 584}, {900, 584}};
             for (int flight : new int[]{0, 2}) { // all there is to show; and the longest heading (MAX PHONE GPS ALT)
                 flights.choose(flight);
                 for (int[] size : sizes) {
+                    if (size[0] > screen.width || size[1] > screen.height) continue;
                     String at = size[0] + "x" + size[1] + (flight == 0 ? "" : "-track-only");
                     SwingUtilities.invokeAndWait(() -> {
                         try {
