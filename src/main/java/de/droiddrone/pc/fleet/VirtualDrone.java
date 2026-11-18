@@ -1601,7 +1601,7 @@ public final class VirtualDrone {
         UdpPacketData p = new UdpPacketData(UdpCommon.TelemetryData);
         DataOutputStream out = p.daos;
         boolean every = slow; // standby: all of them, once a second
-        // 1.0.69: in Betaflight's sign, nose down + (the model's is nose up +): up to now the PC read a virtual drone's
+        // 1.0.70: in Betaflight's sign, nose down + (the model's is nose up +): up to now the PC read a virtual drone's
         // nose down as nose up - its horizon, the map's view, MARK and the pins on the video moved against the picture
         TelemetryRecords.attitude(out, fc.rollDeg(), -fc.pitchDeg(), fc.headingDeg());
         if (every || tick % 3 == 0) {

@@ -2,17 +2,17 @@
 
 Every DRAUPNE Link release (DroidDrone PC up to 1.0.15), newest first. The release pages on GitHub show only that version's changes.
 
-## 1.0.70 (unreleased, on beta)
+## 1.0.71 (unreleased, on beta)
 
 The link round, with the phone app **DRAUPNE Flight 2.3.0-pc.53-beta** (the release takes pc.54). Nothing of it tried on a phone or a drone yet; old phones and old PCs work with it as before (each side uses what's new only when the other side shows it knows it). The rest of what was built on beta went to main on 2026-11-15 as 1.0.69.
 
-- **The picture's delay, the phone's side:** the phone app sends each frame's times when the PC asks, so 1.0.69's OSD extra G2G shows a figure.
+- **The picture's delay, the phone's side:** the phone app sends each frame's times when the PC asks, so 1.0.70's OSD extra G2G shows a figure.
 - **A cleaner reconnect:** after a link loss the PC and the phone now agree on one new connection, even when the network delivers the reconnect messages late or out of order. Before, a slow network could make the two sides start over several times in a row before the link settled. The arming safety is unchanged: a reconnect never arms the drone by itself (tested on the virtual fleet with the link cut for 3 s and 6 s while armed, the arm switch left on).
 - **A steadier picture in weak signal (ROBUST and SURVIVAL only):** the phone sends stronger repair data with each frame, so a frame that lost two or more pieces on the way can still be rebuilt (before, one lost piece per group was the limit) - and key frames go once instead of twice. The cost: a frame that lost pieces may wait for its repair data, at most until the next frame is complete (about one frame: 33 ms at 30 fps, 67 ms at 15); a complete frame never waits. The repair data's share comes off the picture's own bitrate, so the upload stays at the set step. NORMAL and SHARP are exactly as before.
   - A spectator PC on an older version keeps today's picture repair: while it watches, the phone sends the old repair data and key frames twice; the stronger repair comes back when it leaves.
 - For developers: the phone's observe / overwatch rules moved out of its Udp into tested Common classes (ObserveGate, ObservePace, CameraOwner, KnownPcs, FleetGate), a pure move; Fec / FecPolicy (Reed-Solomon), SessionGate's session id.
 
-## 1.0.69 (unreleased)
+## 1.0.70 (unreleased)
 
 PC only: the phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Built and tested on beta, merged to main on 2026-11-15 on the pilot's word (the parts that don't touch the link); nothing of it tried on a drone yet. The link round (the cleaner reconnect, the stronger repair in ROBUST / SURVIVAL, the phone's side of the picture's delay) stays on beta with the phone app 2.3.0-pc.53-beta.
 
@@ -23,6 +23,13 @@ PC only: the phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Built and tested on
 - **Pins on the video** (the pilot: "make all pins virtual AR pins in the camera view"): every pin the maps show stands on the live picture where it is - the map's diamond on a short stem, its name and distance over it ("ALPHA 850M"); grey where the terrain stands between, hollow and `~` for a rough one; the five nearest outside the picture get an arrow on its edge pointing the way (behind: on the side to turn to). Out to 10 km. On by default, SETTINGS > OSD > Pins on video turns it off; in the recording and the STILL with the OSD too. As exact as the heading and the camera's angle and tilt settings (5 degrees of heading: a fourteenth of the picture to the side). With the new phone app the drone's pose is the one from when the picture was taken (by G2G), so the pins trail less in a fast turn; with an older one, the newest.
 - **DEMO:** a virtual drone's nose down was read as nose up - its horizon, MARK and the camera's view on the map moved against the picture when it tilted; and while connected to one the PC now takes its camera's 90 degrees, not the settings' angle. A replayed flight's telemetry goes on as recorded.
 - For developers: docs/HANDOFF.md is short now (the release-by-release notes are in docs/history/HANDOFF-history.md); `gradlew test` runs in 4 forks in about 6 minutes, timing tests in `perfTest`, five tests known to fail now and then in `quarantineTest` (retried); one waiting helper and free ports for every test (testing/Waits, Ports, TestHygieneTest); CI runs perf and quarantine as jobs of their own, and a release skips the tests a green Build already ran for the same commit. Pins on the video: `gui/VideoPins` (marks, arrows, the pose history, the hidden check off the Swing thread), `CameraFootprint.toPicture` / `hidden`, `CameraView.pinPose` / `groundM` / `hidden` / `setVirtual`, `OsdElement.PINS`, `OsdRenderer.Data.pins`; tests `VideoPinsTest`, `CameraFootprintTest` (a ray's ground point drawn back where the ray left, a ridge), `VirtualCameraMatchTest` (the virtual camera against the PC's sums, within a pixel).
+
+## 1.0.69 (PC only, 2026-11-15)
+
+The phone app stays **DRAUPNE Flight 2.3.0-pc.52**. Not flown yet.
+
+- **New OSD element: mAh/km** (the pilot: "Create a OSD element that is Mah/km", then "Set it default on"). On by default, under the battery's figures (SETTINGS > OSD moves or hides it); on for a pilot whose OSD was set before it too. The current over the GPS ground speed (A x 1000 / km/h), smoothed over about 3 s, like Betaflight's efficiency element: e.g. `322MAH/KM` at 14.5 A and 45 km/h. `---MAH/KM` under 5 km/h (hovering is no km) and without a 3D fix; grey when the flight controller goes quiet. A live figure, not the flight's average: Betaflight's mAh count runs from the pack being plugged in, the distance only while armed.
+- For developers: `OsdElement.EFFICIENCY` (key `efficiency`), `OsdRenderer.efficiency(...)`; `OsdLayoutTest.mahPerKmIsTheCurrentOverTheSpeedSmoothedAndDashesWhenSlow`.
 
 ## 1.0.68 (PC only, 2026-11-14)
 

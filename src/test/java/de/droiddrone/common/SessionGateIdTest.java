@@ -235,7 +235,7 @@ class SessionGateIdTest {
         assertEquals(NEW_SESSION, fromPilot(phone, connect(KEY, pc.next(answeredAt + 5000, 0)), answeredAt + 5040));
     }
 
-    /** A 1.0.69 PC's Connect: the id, then the byte the phone's answer says "told by the id" in. */
+    /** A 1.0.71 PC's Connect: the id, then the byte the phone's answer says "told by the id" in. */
     private static byte[] withAnswerByte(byte[] connect) {
         return java.util.Arrays.copyOf(connect, connect.length + 1);
     }

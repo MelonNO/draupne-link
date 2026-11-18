@@ -55,7 +55,7 @@
  *  connected too; the PC silent: the encoder to its lowest step, and after a minute on a disarmed drone the camera off
  *  (pcSilentTick); no second copy of a key frame once a newer one waits; the sleep check's hello to every PC that
  *  knows this phone; a new session from the same PC keeps the stick lag's baseline.
- *  pc.53 (DRAUPNE Link 1.0.69): FRAME_TIME ahead of each frame's first packet for a PC that asks (profile bit 3) - how
+ *  pc.53 (DRAUPNE Link 1.0.70): FRAME_TIME ahead of each frame's first packet for a PC that asks (profile bit 3) - how
  *  old the picture is as it leaves (CaptureClock) and the last Ping held (PingEcho), the PC's picture delay figure.
  *  The session id a newer PC ends its Connect with goes to the gate (SessionGate: one try's Connects are one session
  *  at any age, an older try's start nothing), and the answer to such a Connect says the sessions are told by it.

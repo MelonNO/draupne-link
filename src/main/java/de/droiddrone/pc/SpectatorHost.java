@@ -45,7 +45,7 @@ final class SpectatorHost implements AutoCloseable {
         final InetAddress ip;
         final int port;
         volatile long lastHeard = MonoClock.ms();
-        /** 1.0.69: its HELLO said it mends RS parity (Spectate.HELLO_MENDS_RS); a spectator of 1.0.66 and before doesn't. */
+        /** 1.0.71: its HELLO said it mends RS parity (Spectate.HELLO_MENDS_RS); a spectator of 1.0.66 and before doesn't. */
         volatile boolean mendsRs;
         long lastSnapshot;
         long budgetWindow;
@@ -153,7 +153,7 @@ final class SpectatorHost implements AutoCloseable {
     }
 
     /**
-     * 1.0.69: every spectator watching now mends RS parity (true with none). One that doesn't - a PC of 1.0.66 or
+     * 1.0.71: every spectator watching now mends RS parity (true with none). One that doesn't - a PC of 1.0.66 or
      * before - mends the XOR groups and needs the key frames twice: the link asks the phone for no RS while it watches.
      */
     boolean allMendRs() {

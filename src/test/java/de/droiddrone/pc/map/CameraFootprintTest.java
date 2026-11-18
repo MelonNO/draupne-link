@@ -111,7 +111,7 @@ class CameraFootprintTest {
         }
     }
 
-    // ------------------------------------------------------------------ 1.0.69: a ground point in the picture
+    // ------------------------------------------------------------------ 1.0.70: a ground point in the picture
 
     /** The pins on the video: the point a ray through (u, v) meets is drawn back at (u, v), however the drone turns. */
     @Test

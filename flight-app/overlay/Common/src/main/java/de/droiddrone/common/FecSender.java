@@ -18,7 +18,7 @@
 package de.droiddrone.common;
 
 /**
- * DRAUPNE Flight pc.53 / DRAUPNE Link 1.0.69: the video sender's side of the Reed-Solomon parity ({@link Fec}), for
+ * DRAUPNE Flight pc.53 / DRAUPNE Link 1.0.71: the video sender's side of the Reed-Solomon parity ({@link Fec}), for
  * the phone's Udp and the virtual fleet's drone alike. One frame at a time, on the video sender's thread:
  * <ul>
  * <li>{@link #begin} with the frame and the parity packets a block gets ({@link #m}; 0 = none);</li>

@@ -39,7 +39,7 @@ public final class LinkLog implements AutoCloseable {
             // record 0x40F6 (phone app pc.31): the worst lateness of the sticks over the link's usual in the last
             // second, and how many frames the phone dropped as too late (rc.maxLagMs) this session
             + "stick_lag_max_ms,sticks_dropped_late,"
-            // 1.0.69 (phone app pc.53, FRAME_TIME): the picture's delay from the camera to this screen as estimated for
+            // 1.0.70 (phone app pc.53, FRAME_TIME): the picture's delay from the camera to this screen as estimated for
             // the last picture shown (video.GlassToGlass, evened out) with two of its parts - the phone's, capture to
             // first packet, and the network's - and the highest single picture's figure of the last second; blank
             // without a figure (an older phone app, no picture, watching)

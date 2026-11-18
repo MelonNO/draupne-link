@@ -115,7 +115,7 @@ final class SpectatorClient implements AutoCloseable {
         this(socket, phoneIp, phonePort, key, delayMs, pilot, deliver, () -> 0);
     }
 
-    /** @param helloFlags what the HELLO says (1.0.69: Spectate.HELLO_MENDS_RS), read at each HELLO; 0 sends 1.0.66's HELLO */
+    /** @param helloFlags what the HELLO says (1.0.71: Spectate.HELLO_MENDS_RS), read at each HELLO; 0 sends 1.0.66's HELLO */
     SpectatorClient(DatagramSocket socket, InetAddress phoneIp, int phonePort, String key, int delayMs,
                     Spectate.Address pilot, Consumer<byte[]> deliver, java.util.function.IntSupplier helloFlags) {
         this.socket = socket;

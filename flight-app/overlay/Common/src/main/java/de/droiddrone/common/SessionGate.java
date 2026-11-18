@@ -36,7 +36,7 @@ import java.util.function.BooleanSupplier;
  * device on the network, and came back to life on it. From another PC than the last pilot's, Takeover's rule holds on
  * after the 4 s timeout: a 4G fade of 4 s handed an armed drone to any PC left on CONNECT.</li>
  * </ul>
- * The session id (DRAUPNE Link 1.0.69 / phone app pc.53): a PC that knows it ends its Connect with {@code [sessionId
+ * The session id (DRAUPNE Link 1.0.71 / phone app pc.53): a PC that knows it ends its Connect with {@code [sessionId
  * u32][byId u8 = 0]}, behind the version - {@code [8][num i16][client type][key UTF][version i16][sessionId u32][byId
  * u8]}; an older phone reads past it (every released one takes the key by its own length and nothing behind it), and
  * the phone's answer (the Connect sent back) carries it home. With it the phone need not tell by the clock which
