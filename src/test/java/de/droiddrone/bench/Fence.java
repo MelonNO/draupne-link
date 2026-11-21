@@ -20,6 +20,9 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * </ul>
  * Each attempt is refused with a {@link Refused} and written down ({@link #refusals()}): a refusal is either a hole
  * in the bench's stand-ins or something the app does that nobody knew of - both worth a line in the report.
+ * <p>
+ * A hardware run (gradlew benchHw / benchHwPhone, docs/TESTING.md) puts the fence up with a {@link Reach}: the one real
+ * phone's address and port, and nothing else outside this PC. Every other run has none.
  */
 @SuppressWarnings("removal")
 public final class Fence extends SecurityManager {
@@ -38,16 +41,150 @@ public final class Fence extends SecurityManager {
         }
     }
 
+    /**
+     * What a hardware run may reach outside this PC: a short list of address-and-port pairs, each written out
+     * ("192.0.2.10:6286") - no host name, no range, no multicast or broadcast address, no port 0. A packet or a
+     * connection to exactly such a pair goes out, and one from exactly such a pair comes in; another port of the same
+     * address is as closed as the rest of the world. Fixed once made.
+     * <p>
+     * It fails closed: a list with anything in it can only be made in a JVM started with {@code -Dbench.hardware=true},
+     * which the tasks benchHw and benchHwPhone set and no other. In every other bench run the making itself throws -
+     * before a fence with a hole in it exists.
+     */
+    public static final class Reach {
+        /** The system property a hardware task starts its JVM with. */
+        public static final String PROPERTY = "bench.hardware";
+        /** One real phone is what a run is for: more pairs than this is a range by another name. */
+        static final int MOST = 4;
+        private static final Reach NONE = new Reach(List.of());
+        private static final java.util.regex.Pattern PAIR =
+                java.util.regex.Pattern.compile("(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3}):(\\d{1,5})");
+
+        private final List<String> pairs;
+        /** The same, apart: asked for every packet of a hardware run, so nothing is put together there. */
+        private final String[] ips;
+        private final int[] ports;
+
+        private Reach(List<String> pairs) {
+            this.pairs = pairs;
+            ips = new String[pairs.size()];
+            ports = new int[pairs.size()];
+            for (int i = 0; i < ips.length; i++) {
+                int colon = pairs.get(i).indexOf(':');
+                ips[i] = pairs.get(i).substring(0, colon);
+                ports[i] = Integer.parseInt(pairs.get(i).substring(colon + 1));
+            }
+        }
+
+        /** Nothing outside this PC: what every run but a hardware run has. */
+        public static Reach none() {
+            return NONE;
+        }
+
+        /**
+         * @param pairs each "a.b.c.d:port"
+         * @throws IllegalStateException    when there is a pair and this JVM is not a hardware task's
+         * @throws IllegalArgumentException for anything that is not one address and one port, written out
+         */
+        public static Reach of(String... pairs) {
+            return of(List.of(pairs));
+        }
+
+        public static Reach of(java.util.Collection<String> pairs) {
+            if (pairs.isEmpty()) return NONE;
+            requireHardwareRun();
+            if (pairs.size() > MOST) throw new IllegalArgumentException("A hardware run reaches " + MOST + " addresses at most, not " + pairs.size());
+            List<String> checked = new ArrayList<>();
+            for (String pair : pairs) {
+                String p = checked(pair);
+                if (!checked.contains(p)) checked.add(p);
+            }
+            return new Reach(List.copyOf(checked));
+        }
+
+        static boolean hardwareRun() {
+            return "true".equals(System.getProperty(PROPERTY));
+        }
+
+        static void requireHardwareRun() {
+            if (!hardwareRun()) {
+                throw new IllegalStateException("This is no hardware run (no -D" + PROPERTY + "=true): the fence lets nothing out of this PC. "
+                        + "Only gradlew benchHw and benchHwPhone (.\\bench.ps1 hw | phone) may reach a real phone.");
+            }
+        }
+
+        /** The pair as the fence compares it, or an IllegalArgumentException that says what is wrong with it. */
+        static String checked(String pair) {
+            String p = pair == null ? "" : pair.trim();
+            java.util.regex.Matcher m = PAIR.matcher(p);
+            if (!m.matches()) {
+                throw new IllegalArgumentException("Not an address and a port written out (like 192.0.2.10:6286 - no name, no range): \"" + pair + "\"");
+            }
+            int[] part = new int[4];
+            for (int i = 0; i < 4; i++) {
+                String digits = m.group(i + 1);
+                part[i] = Integer.parseInt(digits);
+                if (part[i] > 255 || digits.length() > 1 && digits.startsWith("0")) {
+                    throw new IllegalArgumentException("Not an address: \"" + pair + "\"");
+                }
+            }
+            int port = Integer.parseInt(m.group(5));
+            if (port < 1 || port > 65535 || m.group(5).length() > 1 && m.group(5).startsWith("0")) {
+                throw new IllegalArgumentException("Not a port (1 .. 65535): \"" + pair + "\"");
+            }
+            if (part[0] == 0 || part[0] >= 224) { // 0.x: no device's address; 224 and up: multicast, reserved, broadcast
+                throw new IllegalArgumentException("Not one device's address (multicast, broadcast or none at all): \"" + pair + "\"");
+            }
+            return part[0] + "." + part[1] + "." + part[2] + "." + part[3] + ":" + port;
+        }
+
+        public boolean isEmpty() {
+            return pairs.isEmpty();
+        }
+
+        /** The pairs, each "a.b.c.d:port"; cannot be changed. */
+        public List<String> pairs() {
+            return pairs;
+        }
+
+        /** Whether this address, as the JDK names it to the fence, at this port is one of the pairs. */
+        boolean allows(String host, int port) {
+            if (ips.length == 0 || host == null || port < 1) return false;
+            String h = host.trim();
+            if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length() - 1);
+            if (h.regionMatches(true, 0, "::ffff:", 0, 7)) h = h.substring(7);
+            for (int i = 0; i < ips.length; i++) if (ports[i] == port && ips[i].equals(h)) return true;
+            return false;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof Reach r && r.pairs.equals(pairs);
+        }
+
+        @Override
+        public int hashCode() {
+            return pairs.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return pairs.isEmpty() ? "nothing outside this PC" : String.join(", ", pairs);
+        }
+    }
+
     private static final List<Refusal> REFUSALS = new CopyOnWriteArrayList<>();
     private static volatile Fence up;
 
     private final List<String> writable = new ArrayList<>();
     private final Set<String> programs;
+    private final Reach reach;
     private volatile boolean exitAllowed;
 
-    private Fence(List<Path> writableRoots, Set<String> programs) {
+    private Fence(List<Path> writableRoots, Set<String> programs, Reach reach) {
         for (Path p : writableRoots) writable.add(norm(p.toAbsolutePath().normalize().toString()) + "\\");
         this.programs = programs;
+        this.reach = reach;
     }
 
     /**
@@ -57,11 +194,33 @@ public final class Fence extends SecurityManager {
      * @param programs      file names (lower case) of the programs that may be started
      */
     public static synchronized Fence up(List<Path> writableRoots, Set<String> programs) {
-        if (up != null) return up;
-        Fence f = new Fence(writableRoots, programs);
+        return up(writableRoots, programs, Reach.none());
+    }
+
+    /**
+     * Puts the fence up for a hardware run: as above, and the pairs of {@code reach} can be reached. A fence that is
+     * up already is kept only when it lets through exactly the same - one with another reach is never taken for this
+     * one (a hole nobody asked for, or a real phone that cannot be reached and nobody knows why).
+     */
+    public static synchronized Fence up(List<Path> writableRoots, Set<String> programs, Reach reach) {
+        if (reach == null) throw new IllegalArgumentException("No reach: Reach.none() is the one that lets nothing out");
+        if (!reach.isEmpty()) Reach.requireHardwareRun(); // again here: the list may have been made at another time
+        if (up != null) {
+            if (!up.reach.equals(reach)) {
+                throw new IllegalStateException("A fence is up that reaches " + up.reach + ": it is not one that reaches " + reach);
+            }
+            return up;
+        }
+        Fence f = new Fence(writableRoots, programs, reach);
         System.setSecurityManager(f);
         up = f;
         return f;
+    }
+
+    /** What the fence that is up lets out of this PC ({@link Reach#none()} without a fence). */
+    public static Reach reach() {
+        Fence f = up;
+        return f == null ? Reach.none() : f.reach;
     }
 
     /** Takes it down (the test JVM must be able to end). */
@@ -99,6 +258,7 @@ public final class Fence extends SecurityManager {
     @Override
     public void checkConnect(String host, int port) {
         if (loopback(host)) return;
+        if (reach.allows(host, port)) return; // a hardware run's real phone, at its port (a lookup has no port: refused below)
         // this PC asking for its own name's addresses (InetAddress.getLocalHost): refused - the app then gets loopback,
         // not this PC's real addresses - but not written down: every Java program does it
         String me = System.getenv("COMPUTERNAME");
@@ -115,11 +275,18 @@ public final class Fence extends SecurityManager {
     public void checkAccept(String host, int port) {
         // a packet from outside this PC reaching a bench socket: dropped by the JDK when this throws; not written down
         // (anything on the network may send one), only kept out
-        if (!loopback(host)) throw new Refused("The bench takes nothing from " + host);
+        if (!loopback(host) && !reach.allows(host, port)) throw new Refused("The bench takes nothing from " + host);
     }
 
     @Override
     public void checkMulticast(java.net.InetAddress maddr) {
+        refuse("network", "multicast " + maddr);
+    }
+
+    /** The older way of sending to a group (MulticastSocket.send with a ttl) asks here: as closed as the other. */
+    @Override
+    @Deprecated
+    public void checkMulticast(java.net.InetAddress maddr, byte ttl) {
         refuse("network", "multicast " + maddr);
     }
 
