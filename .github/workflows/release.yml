@@ -89,6 +89,10 @@ jobs:
           $got = (Get-FileHash "build/release/$name" -Algorithm SHA256).Hash.ToLower()
           if ($got -ne $sha) { throw "$name has SHA-256 $got, expected $sha" }
           Write-Host "$name OK ($sha)"
+          # The phone app has a build for the test rig only (flight-app/bench-overlay), which must never be released:
+          # an APK with its marker, its package (...bench), its version (...-bench), its test-only flag or its key
+          # stops the release here (the same scan flight-app/build.ps1 runs on every APK it builds)
+          .\flight-app\scan-apk.ps1 -Apk "build/release/$name"
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:

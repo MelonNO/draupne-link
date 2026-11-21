@@ -22,6 +22,9 @@
  *  generation, so two inits can't open the port at once and close each other's; requests time out after 20 ms (100
  *  before; sticks wait behind one in flight); the status request has a slot of its own that the slow-link backoff
  *  never skips.
+ *  The test rig: where the port is opened, written, closed and asked whether it is still there, BenchFc.BUILT_IN is
+ *  asked first. It is the constant false in every released app (BenchFc), so the compiler leaves those steps out;
+ *  only a build made for the rig, from sources that are not in this folder, has another way to a flight controller.
  */
 
 package de.droiddrone.flight;
@@ -242,7 +245,12 @@ public class Serial {
         while (id == threadsId) {
             try {
                 restart = false;
-                if (config.isUseNativeSerialPort()){
+                if (BenchFc.BUILT_IN && BenchFc.wanted()) { // the test rig's build only: not in a released app
+                    if (openBenchFc(id)) {
+                        log("Bench FC port is opened");
+                        return;
+                    }
+                } else if (config.isUseNativeSerialPort()){
                     if (openNativeSerialPort(id)) {
                         log("Native serial port is opened");
                         return;
@@ -497,8 +505,52 @@ public class Serial {
         }
     }
 
+    /**
+     * The test rig's build only ({@link BenchFc#BUILT_IN} is false in every released app, and nothing calls this
+     * there): the flight controller behind the rig's own port instead of USB, opened as the USB port is - under
+     * portLock, for this generation, read by a thread of its own (BenchFc's) and written by the same writer.
+     */
+    private boolean openBenchFc(final int id) {
+        synchronized (portLock) {
+            if (id != threadsId) return false; // a newer init took over
+            if (status == STATUS_SERIAL_PORT_OPENED) return true;
+            setFcProtocol(null, null);
+            if (!BenchFc.open(this, id)) {
+                status = STATUS_DEVICE_NOT_CONNECTED;
+                return false;
+            }
+            status = STATUS_SERIAL_PORT_OPENED;
+            startWriter(id);
+            if (isMavlink){
+                if (!mavlink.isInitialized()) mavlink.initialize();
+            } else {
+                if (!msp.isInitialized()) msp.initialize();
+            }
+            return true;
+        }
+    }
+
+    /** The test rig's build only: bytes its reader got go the way the USB reader's go ({@link #readerLoop}). */
+    void benchData(int id, byte[] buf, int size) {
+        if (restart || id != threadsId || size <= 0) return;
+        status = STATUS_SERIAL_PORT_OPENED;
+        if (isMavlink){
+            mavlink.addData(buf, size);
+        } else {
+            msp.addData(buf, size);
+        }
+    }
+
+    /** The test rig's build only: its link ended or failed - what a flight controller pulled from USB is. */
+    void benchLost(int id, String why) {
+        if (id != threadsId) return; // closed on purpose
+        log("Serial reader thread error: " + why);
+        lostDevice(id, why);
+    }
+
     /** DRAUPNE Link: is the flight controller's USB device still there? */
     private boolean deviceAttached() {
+        if (BenchFc.BUILT_IN && BenchFc.active()) return BenchFc.attached(); // the test rig's build only
         UsbSerialDriver d = driver;
         if (d == null || config.isUseNativeSerialPort()) return true;
         return manager.getDeviceList().containsValue(d.getDevice());
@@ -619,7 +671,9 @@ public class Serial {
         boolean timedOut = false;
         boolean written = false; // DRAUPNE Link: only a write that went out counts as sticks delivered
         try {
-            if (config.isUseNativeSerialPort()){
+            if (BenchFc.BUILT_IN && BenchFc.active()) { // the test rig's build only
+                written = BenchFc.write(data);
+            } else if (config.isUseNativeSerialPort()){
                 if (serialHelper != null && serialHelper.isOpen()) {
                     serialHelper.send(data);
                     written = true;
@@ -645,7 +699,9 @@ public class Serial {
     public void writeDataMavlink(byte[] data){
         if (status != STATUS_SERIAL_PORT_OPENED || data == null) return;
         try {
-            if (config.isUseNativeSerialPort()){
+            if (BenchFc.BUILT_IN && BenchFc.active()) { // the test rig's build only
+                BenchFc.write(data);
+            } else if (config.isUseNativeSerialPort()){
                 if (serialHelper != null && serialHelper.isOpen()) serialHelper.send(data);
             }else{
                 if (port != null && port.isOpen()) port.write(data, serialPortReadWriteTimeoutMs);
@@ -676,6 +732,7 @@ public class Serial {
     private void closePort() {
         signalWriter();
         PcLinkStats.rcPortClosed();
+        if (BenchFc.BUILT_IN) BenchFc.close(); // the test rig's build only
         try {
             if (port != null) port.close();
         } catch (Exception e) {

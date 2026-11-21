@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The test rig's build only: its name on the phone (launcher, notification, app list), so it is never taken for
+     the real app. -->
+<resources>
+    <string name="app_name">DRAUPNE Flight BENCH</string>
+</resources>

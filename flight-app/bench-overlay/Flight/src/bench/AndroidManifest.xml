@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The test rig's build only (flight-app/bench-overlay/README.md). NEVER RELEASED: merged over the app's manifest
+     for the build type "bench" alone. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- testOnly: Android installs this app only by `adb install -t` - not from a file manager, a browser, a store
+         or the app's own updater.
+         networkSecurityConfig: plain (unencrypted) traffic is declared for this phone's own 127.0.0.1 and for
+         nowhere else. -->
+    <application
+        android:testOnly="true"
+        android:networkSecurityConfig="@xml/bench_network_security">
+
+        <!-- The marker a scan of an APK looks for (flight-app/scan-apk.ps1); BenchFc carries it in the code -->
+        <meta-data
+            android:name="DRAUPNE-BENCH-FC"
+            android:value="test rig build - never released" />
+
+        <!-- What the rig does to the app by adb where the emulator's tests use root. Only a sender that holds DUMP
+             reaches it: adb's shell does; no app from a store can get that permission. -->
+        <receiver
+            android:name=".BenchControlReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="de.droiddrone.flight.bench.RESET_CRASH_GUARD" />
+                <action android:name="de.droiddrone.flight.bench.KILL" />
+                <action android:name="de.droiddrone.flight.bench.CRASH" />
+                <action android:name="de.droiddrone.flight.bench.STATS" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

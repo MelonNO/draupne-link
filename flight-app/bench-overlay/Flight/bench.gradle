@@ -1,0 +1,41 @@
+// The test rig's build of DRAUPNE Flight (flight-app/bench-overlay/README.md). NEVER RELEASED.
+//
+// Applied only by `flight-app\build.ps1 -Bench`, which copies this folder over its own source copy
+// (build\flight-bench-src) and adds the line that applies this file to the end of Flight/build.gradle. The app that
+// is released is built from a source copy that has neither.
+//
+// A build type of its own, a copy of release (same code shrinking, same everything) but:
+//   - another package name (de.droiddrone.flight.pc.bench) and "-bench" at the end of its version, so it can never
+//     take the place of the real app on a phone, and is told apart everywhere;
+//   - signed with the rig's own key (from outside the repo), never the release key;
+//   - its own sources (src/bench): the real BenchFc, the adb-only control receiver, a manifest that marks the app
+//     test-only.
+android {
+    signingConfigs {
+        bench {
+            storeFile System.getenv('DD_BENCH_KEYSTORE') ? file(System.getenv('DD_BENCH_KEYSTORE')) : null
+            storePassword System.getenv('DD_BENCH_KEYSTORE_PASSWORD')
+            keyAlias 'flight-bench'
+            keyPassword System.getenv('DD_BENCH_KEYSTORE_PASSWORD')
+        }
+    }
+    buildTypes {
+        bench {
+            initWith android.buildTypes.release
+            applicationIdSuffix '.bench'
+            versionNameSuffix '-bench'
+            // set here whatever release had: the rig's key or none, never the release key
+            signingConfig System.getenv('DD_BENCH_KEYSTORE') ? android.signingConfigs.bench : null
+            // the libraries (Common, libuvccamera, mavlink) have no bench type: their release one
+            matchingFallbacks = ['release']
+        }
+    }
+}
+
+// A source copy that carries the rig's code builds the rig's app and nothing else
+gradle.taskGraph.whenReady { graph ->
+    def other = graph.allTasks.find { it.project == project && it.name ==~ /(assemble|bundle|package|install)(Release|Debug).*/ }
+    if (other != null) {
+        throw new GradleException("This source copy carries the test rig's code (bench.gradle): only :Flight:assembleBench is built here, not ${other.name}")
+    }
+}

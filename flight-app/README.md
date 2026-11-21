@@ -24,6 +24,7 @@ The phone app that flies on the drone: upstream [DroidDrone](https://github.com/
 | `Flight/src/main/java/de/droiddrone/flight/InternalCamera.java`, `Overwatch.java`, `MotionWatch.java` | pc.47: an overwatch event's session refused with the detection's picture records without it for that event only (it was refused for good, so the watching after it saw nothing); the overwatch check-in says whether the detection gets pictures (`OverwatchProtocol.HELLO_PICTURES` / `HELLO_ANALYSING`) |
 | `Flight/src/main/java/de/droiddrone/flight/Silent.java` | New (pc.47): while the service runs the phone's ringer is silent (no sound, no vibration for calls and notifications), its own mode put back when it stops; needs Do Not Disturb access (a yellow line opens the setting). The service starts 0.3 s after the app opens, under the boot animation (was 3 s: its screen changes moved the cards as the animation ended) |
 | `Flight/src/main/AndroidManifest.xml` | The theme; permission to ask for the earlier app's removal, and to see it; permission to install its own update and the installer's answer (`AppUpdateReceiver`); any orientation (`fullUser`, was landscape only); exact alarms, full-screen intent and battery optimisation opt-out for deep sleep, and its two receivers |
+| `Flight/src/release/java/de/droiddrone/flight/BenchFc.java`, `Serial.java` | The test rig's door, shut: `BenchFc.BUILT_IN` is the constant `false`, and `Serial` asks it before each step that could go to the rig (open, write, close, "still there?"), so those steps are not in the compiled app. The rig's own build has another `BenchFc`, which is not in `overlay/` (below) |
 | `Flight/build.gradle` | Own package name `de.droiddrone.flight.pc` (installs next to an earlier DroidDrone Flight), version `2.3.0-pc.26`, release signing from outside the repo |
 | `settings.gradle` | Builds only the Flight app (not upstream's Control app) |
 
@@ -41,5 +42,22 @@ created on the first build. Keep a backup: Android only accepts updates signed w
 
 To ship a new build: attach the APK to a GitHub release tagged `flight-<version>`, then set `VERSION` and `APK_SHA256`
 in [`ApkShare.java`](../src/main/java/de/droiddrone/pc/setup/ApkShare.java).
+
+## The test rig's build (never released)
+
+```powershell
+powershell -File .\flight-app\build.ps1 -Bench   # -> build\flight-bench\DRAUPNE-Flight-<version>-bench.apk
+```
+
+For the hardware test rig and the emulator only: the same app, but it can reach a flight controller over TCP on the
+phone's own `127.0.0.1` (carried to the PC by `adb reverse`) instead of USB. Its code is in
+[`bench-overlay/`](bench-overlay), which only `-Bench` lays over the sources; it has its own package
+(`de.droiddrone.flight.pc.bench`), name (DRAUPNE Flight BENCH), version (`...-bench`) and key, and Android installs
+it only by `adb install -t`. See [`bench-overlay/README.md`](bench-overlay/README.md).
+
+It must never reach a release: [`scan-apk.ps1`](scan-apk.ps1) reads every APK `build.ps1` builds, and the phone app the
+release workflow publishes, and stops on anything of the rig (the marker `DRAUPNE-BENCH-FC`, the package, the
+version, the test-only flag, the key). Nothing of `bench-overlay/` may be copied into `overlay/`
+(`ReleaseHasNoBenchCodeTest`).
 
 License: GPL-3.0, like upstream.

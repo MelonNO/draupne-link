@@ -39,6 +39,11 @@ android {
             }
         }
     }
+    // BenchFc ("the test rig's door: shut") is in the release build type's sources, not in main (see the file); a
+    // debug build takes the same one
+    sourceSets {
+        debug.java.srcDirs += 'src/release/java'
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
