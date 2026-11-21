@@ -41,6 +41,7 @@ import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.MspFrames;
 import de.droiddrone.common.MspPages;
 import de.droiddrone.common.PositionFilter;
+import de.droiddrone.common.RcPace;
 import de.droiddrone.common.TelemetryData;
 
 public class Msp {
@@ -97,8 +98,8 @@ public class Msp {
     private byte[] modeFlagsBtfl = null;
     private byte[] osdConfig = null;
     private boolean oldCamSwitchState;
-    private int rcMinPeriod;
-    private long rcLastFrame;
+    /** F-070d: upstream's pace of the stick frames (rcMinPeriod, rcLastFrame), on a clock that cannot hold them back. */
+    private final RcPace rcPace = new RcPace();
     private int platformType;
     private FcCommon.GpsFixTypes fixType = FcCommon.GpsFixTypes.GPS_NO_FIX;
     volatile boolean isArmed = false;
@@ -170,7 +171,7 @@ public class Msp {
      */
     public void setRcMinPeriod(){
         int rate = config.getRcRefreshRate();
-        rcMinPeriod = rate >= 255 ? 0 : 1000 / Math.max(1, rate) / 2;
+        rcPace.setMinPeriod(rate >= 255 ? 0 : 1000 / Math.max(1, rate) / 2);
     }
 
     /** DRAUPNE Link: whether the flight controller's channel map is known (sticks go out only then). */
@@ -761,9 +762,9 @@ public class Msp {
         if (rcChannels == null || count < 4 || count > rcChannels.length || count > FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT) return;
         int[] map = rxMap;
         if (map == null) return;
-        long current = System.currentTimeMillis();
-        if (rcMinPeriod > 0 && current - rcLastFrame < rcMinPeriod) return;
-        rcLastFrame = current;
+        // F-070d: paced on the monotonic clock - on the wall clock, a clock set back N seconds dropped every frame for N
+        // seconds. At the PC's rate (255) nothing is paced and no clock is read
+        if (rcPace.pacing() && !rcPace.take(android.os.SystemClock.elapsedRealtime())) return;
         byte[] payload = new byte[count * 2];
         for (int i = 0; i < count; i++) {
             int at = i; // where the PC's channel i goes in Betaflight's order
