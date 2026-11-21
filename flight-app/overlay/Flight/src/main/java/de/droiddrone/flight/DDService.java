@@ -44,6 +44,7 @@ import androidx.core.app.NotificationCompat;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import de.droiddrone.common.BeeperBack;
 import de.droiddrone.common.BeeperQuiet;
 import de.droiddrone.common.BeeperRule;
 import de.droiddrone.common.FcInfo;
@@ -382,7 +383,8 @@ public class DDService extends Service {
         }
     }
 
-    private static final String BEEPER_PREFS = "beeper", BEEPER_AS_READ = "asRead";
+    /** The settings kept from before a sleep, and (F-069) the id of the board they were read from. */
+    private static final String BEEPER_PREFS = "beeper", BEEPER_AS_READ = "asRead", BEEPER_BOARD = "board";
 
     /**
      * pc.54 (the pilot, 2026-11-18: "the esc beeper still goes off when the drone is not controlled"): a sleep closes
@@ -390,6 +392,10 @@ public class DDService extends Service {
      * port closes those two sounds are switched off in the flight controller's memory (BeeperQuiet; not saved there: a
      * power cycle brings them back), and what it had before is kept in the phone's settings until it is written back
      * at the wake (beeperConfigRead). Not for a drone marked OUT OF ACTION: that one is to be found by its beeping.
+     * F-069: kept with the board's id, and only a board that has one is switched off (the settings could not be put
+     * back surely otherwise); the "off" write is read back and made again, three times at the most (BeeperBack), and
+     * the log says when the flight controller never answered that it is off - the drone may then beep through the
+     * sleep. (No record tells the PC of the beeper: the log is where it is said.)
      */
     private void quietTheDrone(String why) {
         try {
@@ -400,27 +406,36 @@ public class DDService extends Service {
             Msp m = msp;
             byte[] read = m == null ? null : m.beeperConfig();
             if (m == null || !m.isInitialized() || !BeeperQuiet.understood(read)) {
-                log("The drone's beeper is not switched off for the " + why + ": its settings were not read");
+                log("The drone's beeper is not switched off for the " + why + ": its settings were not read - it may beep");
+                return;
+            }
+            String board = m.boardId();
+            if (board == null) {
+                log("The drone's beeper is not switched off for the " + why + ": its board was not identified - it may beep");
                 return;
             }
             android.content.SharedPreferences prefs = getSharedPreferences(BEEPER_PREFS, MODE_PRIVATE);
+            byte[] kept = BeeperQuiet.fromHex(prefs.getString(BEEPER_AS_READ, ""));
             // what the flight controller had before the first quiet is the one to put back - not a quiet one read later
-            if (!BeeperQuiet.isQuiet(read) || prefs.getString(BEEPER_AS_READ, "").isEmpty()) {
-                prefs.edit().putString(BEEPER_AS_READ, BeeperQuiet.hex(BeeperQuiet.asRead(read))).commit();
+            byte[] keep = BeeperBack.keepWhatIsRead(read, board, kept, prefs.getString(BEEPER_BOARD, "")) ? BeeperQuiet.asRead(read) : kept;
+            prefs.edit().putString(BEEPER_AS_READ, BeeperQuiet.hex(keep)).putString(BEEPER_BOARD, board).commit();
+            byte[] quiet = BeeperQuiet.quiet(read);
+            boolean off = BeeperBack.holds(quiet, read); // its own settings are quiet already: nothing to write
+            for (int i = 0; i < BeeperBack.QUIET_TRIES && !off; i++) {
+                m.writeBeeperConfig(quiet); // and asks what it has now: the answer comes to Msp on its own thread
+                long until = android.os.SystemClock.elapsedRealtime() + BeeperBack.QUIET_WAIT_MS;
+                while (!(off = BeeperBack.holds(quiet, m.beeperConfig())) && android.os.SystemClock.elapsedRealtime() < until) {
+                    android.os.SystemClock.sleep(5);
+                }
             }
-            if (m.quietBeeper()) {
-                log("The drone's lost-signal beeper is off for the " + why + " (back at the wake)");
-                android.os.SystemClock.sleep(150); // the write leaves the phone before the port closes
-            }
+            log(off ? "The drone's lost-signal beeper is off for the " + why + " (read back; back at the wake)"
+                    : "The drone's lost-signal beeper may NOT be off for the " + why + ": written " + BeeperBack.QUIET_TRIES
+                    + " times, never read back as off - it may beep");
         } catch (RuntimeException e) {
             log("Beeper quiet: " + e);
         }
     }
 
-    /**
-     * pc.54, on the MSP thread at each read of the beeper settings: awake again with settings kept from before a sleep -
-     * they are written back (once), so the drone beeps again when its receiver is really lost.
-     */
     /** F-051: the drone's beeper was switched off for a sleep and not yet put back (its settings kept here). */
     boolean beeperQuieted() {
         try {
@@ -430,6 +445,13 @@ public class DDService extends Service {
         }
     }
 
+    /**
+     * pc.54, on the MSP thread at each read of the beeper settings (once a second, and right after each write of
+     * them): awake again with settings kept from before a sleep - they are written back, so the drone beeps again when
+     * its receiver is really lost. F-069: written until the flight controller reads them back (BeeperBack: five writes
+     * a connection at the most, then said), forgotten only then, and never written to another board than theirs.
+     * OUT OF ACTION's wake for the beeper (F-051, PowerMode.beeperBackThenSleep) waits for this same read-back.
+     */
     void beeperConfigRead(Msp from, byte[] read) {
         try {
             int mode = PowerMode.mode();
@@ -438,10 +460,39 @@ public class DDService extends Service {
             String kept = prefs.getString(BEEPER_AS_READ, "");
             if (kept.isEmpty()) return;
             byte[] before = BeeperQuiet.fromHex(kept);
-            prefs.edit().remove(BEEPER_AS_READ).commit();
-            if (before == null || !BeeperQuiet.understood(read) || java.util.Arrays.equals(BeeperQuiet.asRead(read), before)) return;
-            from.writeBeeperConfig(before);
-            log("Awake: the drone's lost-signal beeper is back as it was");
+            BeeperBack back = from.beeperBack();
+            String board = from.boardId();
+            int todo = before == null ? BeeperBack.FORGET // not settings at all
+                    : back.read(before, prefs.getString(BEEPER_BOARD, ""), board, read, android.os.SystemClock.elapsedRealtime());
+            switch (todo) {
+                case BeeperBack.DONE: // the flight controller has them: only now are they forgotten
+                    prefs.edit().remove(BEEPER_AS_READ).remove(BEEPER_BOARD).commit();
+                    log("Awake: the drone's lost-signal beeper is back as it was (read back, " + back.writes() + " written)");
+                    break;
+                case BeeperBack.ADOPT:
+                case BeeperBack.WRITE:
+                    // kept by an app before F-069, and this board is as that quiet left it: it is theirs from here on
+                    if (todo == BeeperBack.ADOPT) prefs.edit().putString(BEEPER_BOARD, board).commit();
+                    from.writeBeeperConfig(before); // and asks again: the answer comes back here
+                    if (back.writes() > 1) log("The drone's lost-signal beeper did not come back: written again (" + back.writes() + ")");
+                    break;
+                case BeeperBack.GAVE_UP:
+                    if (back.sayOnce(todo)) {
+                        log("The drone's lost-signal beeper is NOT back: written " + BeeperBack.MAX_WRITES + " times, never read back."
+                                + " It stays off until the flight controller loses power; tried again when its port opens next");
+                    }
+                    break;
+                case BeeperBack.OTHER_BOARD:
+                    if (back.sayOnce(todo)) log("Beeper settings kept for another flight controller: this one is left as it is");
+                    break;
+                case BeeperBack.FORGET:
+                    prefs.edit().remove(BEEPER_AS_READ).remove(BEEPER_BOARD).commit();
+                    log("Beeper settings kept from before a sleep fit no flight controller here: forgotten");
+                    break;
+                default: // WAIT: its board is not identified yet, or the last write's read-back is still to come
+                    if (board == null && back.sayOnce(todo)) log("Beeper settings wait to be put back: this flight controller is not identified yet");
+                    break;
+            }
         } catch (RuntimeException e) {
             log("Beeper back: " + e);
         }

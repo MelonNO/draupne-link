@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 
 import de.droiddrone.common.ArmRanges;
+import de.droiddrone.common.BeeperBack;
 import de.droiddrone.common.BeeperQuiet;
 import de.droiddrone.common.Cadence;
 import de.droiddrone.common.DataReader;
@@ -241,6 +242,10 @@ public class Msp {
         telemetryOutputBuffer.clear();
         serialRawData.clear();
         frames.reset();
+        // F-069: again here - an answer of the last connection's that was still under way when it closed is not this board's
+        beeperConfig = null;
+        boardId = null;
+        beeperBack.restart();
         threadsId++;
         Thread mspThread = new Thread(mspRun);
         mspThread.setDaemon(false);
@@ -294,6 +299,10 @@ public class Msp {
         armedFlagStatusMs = 0;
         isArmed = false;
         armSlots = null; // pc.38: another FC (or this one changed meanwhile): read again before any idle sticks
+        // F-069: and its beeper settings and its id - what the last one answered is not this one's to be written with
+        beeperConfig = null;
+        boardId = null;
+        beeperBack.restart();
     }
 
     private final Runnable mspRun = new Runnable() {
@@ -356,6 +365,8 @@ public class Msp {
                         }
                         // pc.38: where ARM sits now - idle sticks are checked against it (ARM may have moved)
                         if (fcVariant == FcInfo.FC_VARIANT_BETAFLIGHT || fcVariant == FcInfo.FC_VARIANT_INAV) getModeRanges();
+                        // F-069: which board this is, asked until it answers - the beeper settings kept for a sleep are its own
+                        if (fcVariant == FcInfo.FC_VARIANT_BETAFLIGHT && boardId == null) getBoardId();
                         // pc.54: its beeper settings as they are now - what a sleep switches off, and puts back after
                         if (fcVariant == FcInfo.FC_VARIANT_BETAFLIGHT) getBeeperConfig();
                         if (runGetOsdConfig) getOsdConfig();
@@ -428,6 +439,11 @@ public class Msp {
                     continue;
                 }
                 if (packet.type != MspFrames.RESPONSE) continue;
+                if ((packet.code & 0xffff) == BeeperBack.MSP_UID) { // F-069 (not a record for the PC)
+                    String id = BeeperBack.boardId(packet.payload);
+                    if (id != null) boardId = id;
+                    continue;
+                }
                 if ((packet.code & 0xffff) == BeeperQuiet.MSP_BEEPER_CONFIG) { // pc.54 (not a record for the PC)
                     beeperConfig = packet.payload == null ? null : packet.payload.clone();
                     DDService service = DDService.instance();
@@ -795,20 +811,36 @@ public class Msp {
     }
 
     /**
-     * pc.54: the flight controller's lost-receiver sounds off, in its memory only (BeeperQuiet) - before a sleep
-     * closes its port. False when its settings weren't read or aren't understood: nothing written.
+     * F-069: this board's id (BeeperBack.boardId, its processor's unique id), null until it answers: the beeper
+     * settings kept through a sleep are kept with it, and written back to this board only.
      */
-    boolean quietBeeper(){
-        byte[] quiet = BeeperQuiet.quiet(beeperConfig);
-        if (quiet == null) return false;
-        serial.writeDataMspUrgent(getMspRequestWithPayload((short) BeeperQuiet.MSP_SET_BEEPER_CONFIG, quiet));
-        return true;
+    private volatile String boardId;
+    /** F-069: this connection's tries to put the kept beeper settings back (DDService.beeperConfigRead asks it). */
+    private final BeeperBack beeperBack = new BeeperBack();
+
+    String boardId(){
+        return boardId;
     }
 
-    /** pc.54: the beeper settings as they were read before the sleep, written back. */
+    BeeperBack beeperBack(){
+        return beeperBack;
+    }
+
+    /** F-069: asked with the other slow requests until the board answers. */
+    private void getBoardId(){
+        serial.writeDataMsp(getMspRequest((short) BeeperBack.MSP_UID), true);
+    }
+
+    /**
+     * Beeper settings written - the quiet ones before a sleep (pc.54), the kept ones after it - in the flight
+     * controller's memory only. F-069: and the flight controller is asked at once what it has now; only that answer
+     * says whether the write held (DDService.quietTheDrone, beeperConfigRead). In line with the other requests: it
+     * went through the one-place slot of the channel map's request, where either replaced the other unwritten.
+     */
     void writeBeeperConfig(byte[] config){
         if (config == null) return;
-        serial.writeDataMspUrgent(getMspRequestWithPayload((short) BeeperQuiet.MSP_SET_BEEPER_CONFIG, config));
+        serial.writeDataMsp(getMspRequestWithPayload((short) BeeperQuiet.MSP_SET_BEEPER_CONFIG, config), true);
+        getBeeperConfig();
     }
 
     /** pc.38: the ARM slots, asked once a second with the other slow requests (a skipped one comes again). */

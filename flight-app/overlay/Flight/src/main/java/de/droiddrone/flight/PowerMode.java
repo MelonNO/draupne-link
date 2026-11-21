@@ -520,7 +520,8 @@ final class PowerMode {
             pending = worker.schedule(guarded("the beeper back", () -> sleepWhenBeeperBack(until)), 1000, TimeUnit.MILLISECONDS);
             return;
         }
-        if (service.beeperQuieted()) log("Out of action: the drone's beeper could not be put back - its flight controller was not read");
+        // F-069: "back" is the flight controller's own answer now (DDService.beeperConfigRead), not a write sent off
+        if (service.beeperQuieted()) log("Out of action: the drone's beeper is NOT back - its flight controller was not read, is another board, or did not take it");
         apply(DEEP_SLEEP, 0, "out of action");
     }
 
