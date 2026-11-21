@@ -44,37 +44,52 @@ import java.util.List;
  * checking, props off, that each motor sits where its number says and turns the right way, and then that the props go
  * on the right way round. Runs over this PC's USB (the drone on the bench), never over the 4G link.
  * The motors stop when the box is unticked, on SPACE or STOP ALL, when this window loses focus or closes, and when
- * the USB link fails; sliders go to 10 % at most (MotorTest.MAX).
+ * the USB link fails; sliders go to 10 % at most (MotorTest.MAX). The thread that sends the values has limits of its
+ * own, which need no Swing event (F-061, {@link MotorLimits}): a click's 3 s, 20 s of any motor running, and a
+ * Swing thread that has not answered for a second. A cable pulled while a motor turns is the one thing nothing here
+ * can stop - Betaflight keeps the last value - and the warning over the sliders says so.
  */
 final class MotorTestDialog extends JFrame {
     private static final int SLIDER_H = 150;
     /** The pilot's choice of motor direction for the picture; props out unless they pick props in. */
     static final String PROPS_OUT_KEY = "motorTest.propsOut";
-    private final MainWindow main;
+
+    /** What the motor test asks of the app: the main window in the app; a stand-in in tests, which have none. */
+    interface Host {
+        /** A saved setting, or null. */
+        String setting(String key);
+
+        void save(java.util.Map<String, String> settings);
+
+        /** A line for the log; from any thread. */
+        void logLine(String text);
+    }
+
+    private final Host main;
     private final Diagram diagram = new Diagram();
     private final JCheckBox understood = new JCheckBox("<html><b>Propellers removed, I understand the risk</b> - enable motors.</html>");
     private final JButton stopAll = Theme.primaryButton("Stop all  (space)");
     private final JPanel sliderRow = new JPanel(new GridLayout(1, 0, 10, 0));
-    private final List<Slider> sliders = new java.util.ArrayList<>();
+    final List<Slider> sliders = new java.util.ArrayList<>();
     private final Slider master = new Slider(0);
     private final CheckRow usb = new CheckRow("Flight controller on USB");
     private final CheckRow mixer = new CheckRow("Motor layout");
     private final CheckRow battery = new CheckRow("Battery");
 
-    /** What the sliders ask for; the motor thread sends it. All STOP unless the box is ticked. */
-    private volatile int[] wanted = new int[0];
+    /**
+     * What the sliders ask for, all STOP unless the box is ticked, and what the motor thread may send of it by its
+     * own clock (F-061): the 20 s auto-stop, a click's 3 s, and all STOP when the Swing thread no longer answers.
+     */
+    private final MotorLimits limits;
     /** The battery's voltage as the flight controller reports it; -1 before the first reading. */
     private double volts = -1;
     /** A battery is in (Betaflight counts its cells, or the voltage is above USB power's): else nothing can spin. */
     private boolean batteryIn;
-    /** Any motor running this long stops by itself (on top of the stop on leaving the window). */
-    private static final long AUTO_STOP_MS = 20_000;
-    private long spinningSince;
-    private final Timer autoStop = new Timer(250, e -> checkAutoStop());
+    /** Ten times a second the Swing thread tells the motor thread it is there, and shows what that thread stopped. */
+    private final Timer beat = new Timer(MotorLimits.BEAT_MS, e -> beat());
     /** Under the sliders: why the motors stopped by themselves. */
     private final WrappingText note = new WrappingText("", Theme.font(Font.PLAIN, 13f), Theme.WARN);
-    /** A click on a motor in the picture: it runs this long at PULSE, then stops; one timer per motor. */
-    private static final int PULSE_MS = 3000;
+    /** A click on a motor in the picture: it runs at PULSE for the limits' time, then stops; one timer per motor. */
     private static final int PULSE = MotorTest.STOP + (MotorTest.MAX - MotorTest.STOP) * 2 / 10; // 2 % (the pilot's, was 8 %): turns, slowly
     private final java.util.Map<Integer, Timer> pulses = new java.util.HashMap<>();
     /** The risk line shakes when the motors are asked for without the box ticked. */
@@ -112,14 +127,16 @@ final class MotorTestDialog extends JFrame {
     private final List<javax.swing.JComboBox<String>> directionChoices = new java.util.ArrayList<>();
     private boolean revertingDirection;
 
-    private MotorTestDialog(Window owner, MainWindow main) {
+    /** Built, not shown: {@link #open} shows it; tests don't. */
+    MotorTestDialog(Window owner, Host main, MotorLimits limits) {
         super("Motor test - DRAUPNE Link"); // a window of its own: Windows' minimise, maximise and close
+        this.limits = limits;
         setIconImages(AppIcon.images());
         setDefaultCloseOperation(WindowConstants.DISPOSE_ON_CLOSE);
         // opened from a setup guide (Drone setup > Check now), which blocks the app's other windows: not this one
         setModalExclusionType(java.awt.Dialog.ModalExclusionType.APPLICATION_EXCLUDE);
         this.main = main;
-        propsOut = !"false".equalsIgnoreCase(main.config().getString(PROPS_OUT_KEY));
+        propsOut = !"false".equalsIgnoreCase(main.setting(PROPS_OUT_KEY));
         JPanel root = new JPanel(new BorderLayout(14, 14));
         root.setBackground(Theme.BG);
         root.setBorder(BorderFactory.createEmptyBorder(18, 20, 16, 20));
@@ -197,23 +214,29 @@ final class MotorTestDialog extends JFrame {
         worker = new Thread(this::run, "motor-test");
         worker.setDaemon(true);
         worker.start();
-        autoStop.start();
+        beat.start();
     }
 
-    /** Twenty seconds of any motor running: all stop, whatever the sliders say. Enough to see each one turn. */
-    private void checkAutoStop() {
-        boolean spinning = false;
-        for (Slider s : sliders) spinning |= s.value > MotorTest.STOP;
-        if (!spinning) {
-            spinningSince = 0;
-            return;
-        }
-        if (spinningSince == 0) spinningSince = System.currentTimeMillis();
-        if (System.currentTimeMillis() - spinningSince < AUTO_STOP_MS) return;
+    /**
+     * The Swing thread's word to the motor thread that it is there (without it that thread stops every motor), and
+     * what the motor thread stopped by its own clock, shown: the sliders back at 0 and why. After twenty seconds of
+     * any motor running a slider goes on; after a window that did not answer the box is unticked too, so nothing
+     * clicked while it hung starts a motor now.
+     */
+    private void beat() {
+        MotorLimits.Cut cut = limits.takeCut();
+        limits.alive(MotorLimits.now());
+        if (cut == null) return;
+        if (cut == MotorLimits.Cut.WINDOW_SILENT) understood.setSelected(false);
         stopAll();
-        spinningSince = 0;
-        note.setHtml("Auto-stopped after " + AUTO_STOP_MS / 1000 + " s. Raise a slider to continue.");
-        main.logLine("Motor test: auto-stopped after " + AUTO_STOP_MS / 1000 + " s.");
+        enableSliders();
+        if (cut == MotorLimits.Cut.AUTO_STOP) {
+            note.setHtml("Auto-stopped after " + limits.autoStopMs / 1000 + " s. Raise a slider to continue.");
+            main.logLine("Motor test: auto-stopped after " + limits.autoStopMs / 1000 + " s.");
+        } else {
+            note.setHtml("Window froze: motors stopped. Tick the box to go on.");
+            main.logLine("Motor test: stopped, the window did not answer for " + limits.silentMs / 1000 + " s.");
+        }
     }
 
     /** The one open, if any: opening it again brings that one forward. */
@@ -231,7 +254,7 @@ final class MotorTestDialog extends JFrame {
     /** @param onClosed run once the window is closed (and so stops using the USB port), or null */
     static void open(Window owner, MainWindow main, Runnable onClosed) {
         if (open == null || !open.isDisplayable()) {
-            open = new MotorTestDialog(owner, main);
+            open = new MotorTestDialog(owner, host(main), new MotorLimits(MotorLimits.now()));
             open.setVisible(true);
         } else {
             if ((open.getExtendedState() & ICONIFIED) != 0) open.setExtendedState(open.getExtendedState() & ~ICONIFIED);
@@ -245,6 +268,26 @@ final class MotorTestDialog extends JFrame {
                 }
             });
         }
+    }
+
+    /** The main window as the motor test's host. */
+    private static Host host(MainWindow main) {
+        return new Host() {
+            @Override
+            public String setting(String key) {
+                return main.config().getString(key);
+            }
+
+            @Override
+            public void save(java.util.Map<String, String> settings) {
+                main.save(settings);
+            }
+
+            @Override
+            public void logLine(String text) {
+                main.logLine(text);
+            }
+        };
     }
 
     /**
@@ -262,7 +305,7 @@ final class MotorTestDialog extends JFrame {
         java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(pressWhileWaiting);
         diagram.nudge.stop();
         flip.stop();
-        autoStop.stop();
+        beat.stop();
         stopAll();
         running = false;
         if (worker != null) worker.interrupt();
@@ -390,7 +433,7 @@ final class MotorTestDialog extends JFrame {
             reorderButton.setText("Reorder motors");
             note.setHtml("Reorder cancelled. Nothing changed.");
         }
-        wanted = new int[0];
+        limits.stop();
         for (Slider s : sliders) s.value = MotorTest.STOP;
         master.value = MotorTest.STOP;
         for (Slider s : sliders) s.repaint();
@@ -438,14 +481,18 @@ final class MotorTestDialog extends JFrame {
         shake.start();
     }
 
-    /** A click on a motor in the picture: it runs for a few seconds at a low value, then stops by itself. */
-    private void pulse(int motor) {
+    /**
+     * A click on a motor in the picture: it runs for a few seconds at a low value, then stops by itself - on the
+     * wire by the motor thread's clock (the limits), on the slider by this timer.
+     */
+    void pulse(int motor) {
         if (motor < 1 || motor > sliders.size() || !readyToSpin()) return;
         Slider s = sliders.get(motor - 1);
         s.set(PULSE);
+        limits.pulse(motor, MotorLimits.now());
         Timer old = pulses.remove(motor);
         if (old != null) old.stop();
-        Timer t = new Timer(PULSE_MS, e -> {
+        Timer t = new Timer((int) limits.pulseMs, e -> {
             pulses.remove(motor);
             if (s.value == PULSE) s.set(MotorTest.STOP); // unless the pilot moved it meanwhile
         });
@@ -613,7 +660,7 @@ final class MotorTestDialog extends JFrame {
         note.setHtml("");
         int[] v = new int[sliders.size()];
         for (int i = 0; i < v.length; i++) v[i] = sliders.get(i).value;
-        wanted = understood.isSelected() ? v : new int[0];
+        limits.ask(understood.isSelected() ? v : new int[0], MotorLimits.now());
         diagram.repaint();
         diagram.animate();
     }
@@ -671,7 +718,8 @@ final class MotorTestDialog extends JFrame {
                         }
                         sent = null;
                     }
-                    int[] want = wanted;
+                    // what the sliders ask for, within this thread's own limits: no stop here waits for a Swing event
+                    int[] want = limits.allowed(MotorLimits.now());
                     if (!Arrays.equals(want, sent) || now - lastSend >= 250) {
                         test.set(want);
                         sent = want;
@@ -681,8 +729,8 @@ final class MotorTestDialog extends JFrame {
                         MotorTest.Live live = test.poll();
                         lastPoll = now;
                         if (live.armed()) {
-                            wanted = new int[0];
-                            test.set(wanted);
+                            limits.stop();
+                            test.set(new int[0]);
                         }
                         ui(() -> showLive(live));
                     }
@@ -693,6 +741,7 @@ final class MotorTestDialog extends JFrame {
                     if (test != null) test.close();
                     test = null;
                     info = null;
+                    limits.stop(); // what was asked of it is over with it: not sent again when a board is back
                     String msg = e.getMessage();
                     ui(() -> {
                         stopAll();
@@ -823,7 +872,7 @@ final class MotorTestDialog extends JFrame {
     // ------------------------------------------------------------------ slider
 
     /** A vertical slider like Betaflight's, from STOP to MAX: % on top, the motor number under it. 0 = master. */
-    private final class Slider extends JComponent {
+    final class Slider extends JComponent {
         private final int motor;
         int value = MotorTest.STOP;
         int reported; // what the flight controller says it outputs; 0 = unknown
@@ -883,7 +932,7 @@ final class MotorTestDialog extends JFrame {
             set((int) Math.round(MotorTest.STOP + Math.max(0, Math.min(1, f)) * (MotorTest.MAX - MotorTest.STOP)));
         }
 
-        private void set(int v) {
+        void set(int v) {
             v = Math.max(MotorTest.STOP, Math.min(MotorTest.MAX, v));
             if (motor == 0) {
                 value = v;
@@ -1014,7 +1063,7 @@ final class MotorTestDialog extends JFrame {
 
         Diagram() {
             setPreferredSize(new Dimension(DW / 2, DH / 2));
-            setToolTipText("Click a motor: it runs for " + PULSE_MS / 1000 + " s (box ticked, battery in, props off)");
+            setToolTipText("Click a motor: it runs for " + MotorLimits.PULSE_MS / 1000 + " s (box ticked, battery in, props off)");
             MouseAdapter mouse = new MouseAdapter() {
                 @Override
                 public void mouseMoved(MouseEvent e) {
