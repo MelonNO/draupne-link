@@ -111,12 +111,16 @@ final class MotorTestDialog extends JFrame {
     private interface Job {
         void run(MotorTest test) throws IOException;
     }
-    private final java.util.concurrent.LinkedBlockingQueue<Job> jobs = new java.util.concurrent.LinkedBlockingQueue<>();
+    /** A change and the flight controller it was asked of (as it was open then): it is never made on another (F-064). */
+    private record Asked(MotorTest.Info board, Job job) {
+    }
+    private final java.util.concurrent.LinkedBlockingQueue<Asked> jobs = new java.util.concurrent.LinkedBlockingQueue<>();
     /** Betaflight saves and restarts after a settings change: its port is gone for a few seconds, not lost. */
     private static final long RESTART_MS = 6000;
     private volatile long restartUntil;
     /** REORDER MOTORS: 0 = off; k = motor k spins and the pilot clicks the place where it is. */
     private int reorderStep;
+    private MotorTest.Info reorderBoard;
     private int[] reorderCurrent;
     private int[] reorderPlaces;
     private final JButton reorderButton = Theme.secondaryButton("Reorder motors");
@@ -126,6 +130,9 @@ final class MotorTestDialog extends JFrame {
     private static final int TOOL_W = 210;
     private final List<javax.swing.JComboBox<String>> directionChoices = new java.util.ArrayList<>();
     private boolean revertingDirection;
+    /** The question before a direction is saved in an ESC (F-064): yes or no, in this window. Tests answer it themselves. */
+    java.util.function.BiPredicate<String, String> ask = (question, title) ->
+            Dialogs.confirm(this, question, title, JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION;
 
     /** Built, not shown: {@link #open} shows it; tests don't. */
     MotorTestDialog(Window owner, Host main, MotorLimits limits) {
@@ -514,7 +521,7 @@ final class MotorTestDialog extends JFrame {
         stopAll();
         reorderButton.setEnabled(false);
         note.setHtml("Reading Betaflight's motor order...");
-        jobs.add(t -> {
+        queue(i, t -> {
             int[] order;
             try {
                 order = t.outputOrder();
@@ -525,16 +532,17 @@ final class MotorTestDialog extends JFrame {
                 });
                 return;
             }
-            ui(() -> beginReorder(order));
+            ui(() -> beginReorder(i, order));
         });
     }
 
-    private void beginReorder(int[] order) {
+    private void beginReorder(MotorTest.Info board, int[] order) {
         reorderButton.setEnabled(true);
         if (order.length < 4 || !understood.isSelected()) {
             note.setHtml(order.length < 4 ? "No motor order for four motors." : "Tick the box first.");
             return;
         }
+        reorderBoard = board;
         reorderCurrent = order;
         reorderPlaces = new int[4];
         reorderStep = 1;
@@ -581,7 +589,7 @@ final class MotorTestDialog extends JFrame {
             return;
         }
         String was = java.util.Arrays.toString(current), now = java.util.Arrays.toString(next);
-        jobs.add(t -> {
+        queue(reorderBoard, t -> { // the board whose order was read and whose motors were spun
             main.logLine(MotorTest.writeLog("motor order", was, now, "writing"));
             t.setOutputOrderAndRestart(next);
             main.logLine(MotorTest.writeLog("motor order", was, now, "saved, Betaflight restarts"));
@@ -608,7 +616,7 @@ final class MotorTestDialog extends JFrame {
                 line.add(n);
                 javax.swing.JComboBox<String> c = new javax.swing.JComboBox<>(new String[]{"As is", "Normal", "Reversed"});
                 c.setPrototypeDisplayValue("Reversed  ");
-                c.setToolTipText("Motor " + m + " direction, saved in the ESC. Battery in.");
+                c.setToolTipText("Motor " + m + " direction, saved in the ESC (box ticked, battery in, props off)");
                 c.setFocusable(false); // SPACE stops the motors
                 TacticalCombo.install(c);
                 c.addActionListener(e -> directionChosen(motor, c));
@@ -630,27 +638,71 @@ final class MotorTestDialog extends JFrame {
         return c;
     }
 
+    /**
+     * A pick in a motor's SPIN DIRECTION list. The ESC keeps it and it can't be read back, so it is saved only with
+     * the box "Propellers removed" ticked and after one question that names the motor and the direction (F-064:
+     * the pick alone saved it), and only in the flight controller that was open at the pick.
+     */
     private void directionChosen(int motor, javax.swing.JComboBox<String> choice) {
         if (revertingDirection || choice.getSelectedIndex() <= 0) return;
         boolean reversed = choice.getSelectedIndex() == 2;
-        if (info == null || volts >= 0 && !batteryIn) {
-            revertingDirection = true;
-            choice.setSelectedIndex(0);
-            revertingDirection = false;
+        MotorTest.Info board = info;
+        if (board == null || volts >= 0 && !batteryIn) {
+            asIs(choice);
             note.setHtml("Plug in the battery first (props off).");
             return;
         }
+        if (!understood.isSelected()) {
+            asIs(choice);
+            shakeUnderstood();
+            note.setHtml("Tick the box first.");
+            return;
+        }
         stopAll();
-        note.setHtml("Motor " + motor + ": sending " + (reversed ? "reversed" : "normal") + " to its ESC...");
+        String now = reversed ? "reversed" : "normal";
+        if (!ask.test("Set motor " + motor + " to " + now + "?\nSaved in its ESC.", "Spin direction")) {
+            asIs(choice);
+            note.setHtml("Motor " + motor + " direction not changed.");
+            return;
+        }
+        note.setHtml("Motor " + motor + ": sending " + now + " to its ESC...");
         // an ESC's direction can't be read back over DShot: the one before is what this window last set, if it did
-        String was = directionSet.getOrDefault(motor, "as the ESC had it (not readable)"), now = reversed ? "reversed" : "normal";
-        jobs.add(t -> {
+        String was = directionSet.getOrDefault(motor, "as the ESC had it (not readable)");
+        queue(board, t -> {
             main.logLine(MotorTest.writeLog("motor " + motor + " spin direction", was, now, "writing"));
             t.setDirection(motor, reversed);
             directionSet.put(motor, now);
             main.logLine(MotorTest.writeLog("motor " + motor + " spin direction", was, now, "saved in its ESC"));
             ui(() -> note.setHtml("Motor " + motor + " set to <b>" + now + "</b>, saved. Spin it to check."));
         });
+    }
+
+    /** The list back at "As is": nothing was sent. */
+    private void asIs(javax.swing.JComboBox<String> choice) {
+        revertingDirection = true;
+        choice.setSelectedIndex(0);
+        revertingDirection = false;
+    }
+
+    /**
+     * A change for the motor thread to make between its sends - in this flight controller only. One that is lost or
+     * another by the time its turn comes is not changed: the queue is emptied ({@link #dropJobs}), and the motor
+     * thread makes no change that was asked of another board than the one it has open.
+     */
+    private void queue(MotorTest.Info board, Job job) {
+        jobs.add(new Asked(board, job));
+    }
+
+    /** The motor thread: the flight controller is lost or another one - what still waited is not done (F-064). */
+    private void dropJobs() {
+        if (jobs.isEmpty()) return;
+        jobs.clear();
+        notDone();
+    }
+
+    private void notDone() {
+        ui(() -> note.setHtml("Flight controller lost: nothing saved."));
+        main.logLine("Motor test: flight controller lost - what was asked of it was not saved.");
     }
 
     /** Each motor's spin direction as this window last set it in the ESC (motor number -> "normal" / "reversed"). */
@@ -690,16 +742,21 @@ final class MotorTestDialog extends JFrame {
                             continue;
                         }
                         MotorTest.Info i = test.info();
+                        dropJobs(); // whatever still waits was asked of a board before this one
                         info = i;
                         sent = null;
                         ui(() -> connected(i));
                         main.logLine("Motor test: " + i.port() + ", Betaflight " + i.version() + ", " + i.motorCount() + " motors.");
                     }
                     long now = System.currentTimeMillis();
-                    Job job = jobs.poll();
-                    if (job != null) {
+                    Asked asked = jobs.poll();
+                    if (asked != null && asked.board() != test.info()) { // asked of another board than the one open now
+                        asked = null;
+                        notDone();
+                    }
+                    if (asked != null) {
                         try {
-                            job.run(test);
+                            asked.job().run(test);
                         } catch (IOException e) {
                             String msg = e.getMessage();
                             ui(() -> note.setHtml(msg));
@@ -749,6 +806,7 @@ final class MotorTestDialog extends JFrame {
                         usb.set(State.BAD, "Lost: " + msg + "<br>If a motor still spins, unplug the battery.");
                     });
                     main.logLine("Motor test: lost the flight controller (" + msg + ").");
+                    dropJobs(); // nothing asked of this board is made on the next one that opens
                     try {
                         Thread.sleep(1500);
                     } catch (InterruptedException ie) {
@@ -810,7 +868,7 @@ final class MotorTestDialog extends JFrame {
                             + "?\nBetaflight restarts.", "Props in / out", JOptionPane.YES_NO_OPTION);
             if (answer != JOptionPane.YES_OPTION) return;
             String was = i.reversed() ? "props out" : "props in", now = out ? "props out" : "props in";
-            jobs.add(t -> {
+            queue(i, t -> {
                 main.logLine(MotorTest.writeLog("Betaflight's motor direction (yaw_motors_reversed)", was, now, "writing"));
                 t.setPropsOutAndRestart(out);
                 main.logLine(MotorTest.writeLog("Betaflight's motor direction (yaw_motors_reversed)", was, now, "saved, Betaflight restarts"));

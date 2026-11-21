@@ -80,9 +80,28 @@ final class MotorTestRig implements AutoCloseable {
 
     /** Waits for the flight controller to be read (the risk box can be ticked), and ticks it. */
     void connectAndTick() throws Exception {
-        Waits.waitForOnSwing(() -> box().isEnabled(), 10_000, "the motor test to find the flight controller: " + text());
+        connect();
         onSwing(() -> box().doClick());
         assertTrue(box().isSelected(), "the box is ticked");
+    }
+
+    /** Waits for the flight controller to be read: the risk box can be ticked, and is not. */
+    void connect() throws Exception {
+        Waits.waitForOnSwing(() -> box().isEnabled(), 10_000, "the motor test to find the flight controller");
+    }
+
+    /** The SPIN DIRECTION lists, motor 1 first (there while a DShot board is connected). */
+    @SuppressWarnings("unchecked")
+    List<javax.swing.JComboBox<String>> directions() {
+        List<javax.swing.JComboBox<String>> out = new ArrayList<>();
+        for (javax.swing.JComboBox<?> c : all(window.getContentPane(), javax.swing.JComboBox.class)) out.add((javax.swing.JComboBox<String>) c);
+        return out;
+    }
+
+    /** The window's motor thread. */
+    static Thread motorThread() {
+        for (Thread t : Thread.getAllStackTraces().keySet()) if (t.isAlive() && t.getName().equals("motor-test")) return t;
+        throw new IllegalStateException("no motor thread");
     }
 
     /** "Propellers removed, I understand the risk". */
