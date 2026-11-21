@@ -27,9 +27,15 @@ final class MotorsPageRig implements AutoCloseable {
     final FakeUsb usb = new FakeUsb();
     /** The settings the step saved. */
     final Map<String, String> saved = new ConcurrentHashMap<>();
-    /** How often the step opened the motor test, and what to run when that window closes. */
+    /** The flight controller Drone setup's first step has read (its port and id), as the step is told; null: none. */
+    volatile MotorTestDialog.Board board;
+    /**
+     * How often the step opened the motor test, for which flight controller, and what to tell it when that window
+     * closes: whether a motor was turned.
+     */
     volatile int motorTests;
-    volatile Runnable motorTestClosed;
+    volatile MotorTestDialog.Board motorTestFor;
+    volatile java.util.function.Consumer<Boolean> motorTestClosed;
     final DroneSetup.MotorsPage.Host host = new DroneSetup.MotorsPage.Host() {
         @Override
         public boolean isLinkActive() {
@@ -47,8 +53,9 @@ final class MotorsPageRig implements AutoCloseable {
         }
 
         @Override
-        public void motorTest(java.awt.Window owner, Runnable onClosed) {
+        public void motorTest(java.awt.Window owner, MotorTestDialog.Board board, java.util.function.Consumer<Boolean> onClosed) {
             motorTests++;
+            motorTestFor = board;
             motorTestClosed = onClosed;
         }
 
@@ -71,7 +78,7 @@ final class MotorsPageRig implements AutoCloseable {
     void open(Supplier<String> port) throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             Theme.install();
-            page = new DroneSetup.MotorsPage(host, port);
+            page = new DroneSetup.MotorsPage(host, port, () -> board);
             wizard = new WizardDialog(null, "Drone setup", List.of(new FirstPage(), page), null);
             wizard.pack(); // displayable as when open
             for (JButton b : all(wizard.getContentPane(), JButton.class)) {

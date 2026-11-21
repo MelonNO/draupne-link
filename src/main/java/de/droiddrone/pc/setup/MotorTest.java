@@ -71,15 +71,27 @@ public final class MotorTest implements AutoCloseable {
         this.info = info;
     }
 
+    /** A motor test was opened for one board and another is on the port: {@link #open(BetaflightUsb.Port, String)}. */
+    public static final String OTHER_BOARD = "Not the board Drone setup read. Nothing sent.";
+
+    /** As {@link #open(BetaflightUsb.Port, String)}, for whatever Betaflight board is on the port. */
+    public static MotorTest open(BetaflightUsb.Port port) throws IOException {
+        return open(port, null);
+    }
+
     /**
      * Opens the flight controller for a motor test, after checking it can be done safely: Betaflight, not armed, no 3D
      * mode (where 1000 is full reverse, not stop). Sends STOP to every motor first.
+     * @param boardId the board the motor test is for (SetupConfirm.boardId, as Drone setup read it), or null. Another
+     *                board on the port is refused ({@link #OTHER_BOARD}) once it has said what it is - before
+     *                anything is sent to its motors, the first STOP too (F-060)
      */
-    public static MotorTest open(BetaflightUsb.Port port) throws IOException {
+    public static MotorTest open(BetaflightUsb.Port port, String boardId) throws IOException {
         BetaflightUsb fc = BetaflightUsb.open(port);
         try {
             String variant = new String(fc.msp(FcCommon.MSP_FC_VARIANT, null), StandardCharsets.US_ASCII);
             if (!variant.startsWith("BTFL")) throw new IOException("This flight controller doesn't run Betaflight (" + variant.trim() + ").");
+            if (boardId != null && !boardId.equals(SetupConfirm.boardId(fc))) throw new IOException(OTHER_BOARD);
             byte[] v = fc.msp(FcCommon.MSP_FC_VERSION, null);
             String version = v.length >= 3 ? (v[0] & 0xff) + "." + (v[1] & 0xff) + "." + (v[2] & 0xff) : "";
             if (is3d(fc.msp(MSP_FEATURE_CONFIG, null))) {

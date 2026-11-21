@@ -99,6 +99,27 @@ public final class SetupConfirm {
         return null;
     }
 
+    /**
+     * The id of the board on this connection, asked over MSP (MSP_UID, else MSP_BOARD_INFO; nothing is written):
+     * what CONFIRM belongs to, and what the motor test is opened for; null if neither answers.
+     */
+    public static String boardId(BetaflightUsb fc) {
+        byte[] uid = null, info = null;
+        try {
+            uid = fc.msp(160 /* MSP_UID */, null);
+        } catch (java.io.IOException e) {
+            // the board info below
+        }
+        if (uid == null || uid.length < 12) {
+            try {
+                info = fc.msp(4 /* MSP_BOARD_INFO */, null);
+            } catch (java.io.IOException e) {
+                // unknown
+            }
+        }
+        return boardId(uid, info);
+    }
+
     private static boolean allZero(byte[] b) {
         for (byte x : b) if (x != 0) return false;
         return true;

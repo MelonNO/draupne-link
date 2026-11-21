@@ -58,24 +58,65 @@ final class MotorTestRig implements AutoCloseable {
     /** A Betaflight board with a battery in on a port of this name; its id's last byte is {@code id}. */
     FakeFlightBoard plug(String port, int id) {
         FakeFlightBoard board = new FakeFlightBoard(port);
-        board.uid = new byte[]{0x4d, 0x41, 0x44, 0x45, 0x2d, 0x55, 0x50, 0, 0, 0, 0, (byte) id};
+        board.uid = uid(id);
         board.battery(16.0, 4);
         usb.plug(port, "Made-up Betaflight board", board::connect);
         return board;
     }
 
-    /** The window as {@code MotorTestDialog.open} builds it, not put on the screen. */
+    private static byte[] uid(int id) {
+        return new byte[]{0x4d, 0x41, 0x44, 0x45, 0x2d, 0x55, 0x50, 0, 0, 0, 0, (byte) id};
+    }
+
+    /** The id of the made-up board number {@code id}, as Drone setup reads it for CONFIRM. */
+    static String id(int id) {
+        return de.droiddrone.pc.setup.SetupConfirm.boardId(uid(id), null);
+    }
+
+    /** The window as {@code MotorTestDialog.open} builds it, not put on the screen; opened for no board. */
     MotorTestDialog open(MotorLimits limits) throws Exception {
+        return open(limits, null);
+    }
+
+    /** The same, opened for this flight controller (Drone setup's). */
+    MotorTestDialog open(MotorLimits limits, MotorTestDialog.Board board) throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             Theme.install();
-            window = new MotorTestDialog(null, host, limits);
+            window = new MotorTestDialog(null, host, limits, board);
             window.addNotify(); // displayable as when open
         });
         return window;
     }
 
+    /** What the row "Flight controller on USB" says, with its state: "BAD: ..." (a line break reads as a space). Not from the Swing thread. */
+    String usbRow() {
+        String[] out = new String[1];
+        swing(() -> {
+            CheckRow row = all(window.getContentPane(), CheckRow.class).get(0);
+            StringBuilder said = new StringBuilder();
+            for (javax.swing.text.JTextComponent t : all(row, javax.swing.text.JTextComponent.class)) {
+                try {
+                    said.append(t.getDocument().getText(0, t.getDocument().getLength()).strip());
+                } catch (javax.swing.text.BadLocationException e) {
+                    throw new IllegalStateException(e);
+                }
+            }
+            out[0] = row.getState() + ": " + said;
+        });
+        return out[0];
+    }
+
     static void onSwing(Runnable r) throws Exception {
         SwingUtilities.invokeAndWait(r);
+    }
+
+    /** As {@link #onSwing}, for a condition that is looked at again and again: no checked exception. */
+    private static void swing(Runnable r) {
+        try {
+            SwingUtilities.invokeAndWait(r);
+        } catch (InterruptedException | java.lang.reflect.InvocationTargetException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /** Waits for the flight controller to be read (the risk box can be ticked), and ticks it. */

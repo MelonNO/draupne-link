@@ -52,7 +52,7 @@ final class DroneSetup {
      */
     static List<Page> pages(MainWindow main) {
         BetaflightPage betaflight = new BetaflightPage(main);
-        return List.of(betaflight, new MotorsPage(host(main), () -> betaflight.chosenPort));
+        return List.of(betaflight, new MotorsPage(host(main), () -> betaflight.chosenPort, betaflight::board));
     }
 
     /** The main window as the Motors and orientation step's host. */
@@ -74,8 +74,8 @@ final class DroneSetup {
             }
 
             @Override
-            public void motorTest(java.awt.Window owner, Runnable onClosed) {
-                MotorTestDialog.open(owner, main, onClosed);
+            public void motorTest(java.awt.Window owner, MotorTestDialog.Board board, java.util.function.Consumer<Boolean> onClosed) {
+                MotorTestDialog.open(owner, main, board, onClosed);
             }
 
             @Override
@@ -210,6 +210,16 @@ final class DroneSetup {
         private final SetupConfirm confirm = new SetupConfirm();
         /** The board the last round read (SetupConfirm.boardId), what CONFIRM is pressed for; null = none read. */
         private String lastBoardId;
+
+        /**
+         * The flight controller this page shows - the USB port and the id of the board the last round read, what
+         * CONFIRM is for - for the motor test, which then turns that one's motors and no other's (F-060). Null when
+         * none was read or its id is not known. Swing thread.
+         */
+        MotorTestDialog.Board board() {
+            String port = lastFcPort, id = lastBoardId;
+            return port == null || id == null ? null : new MotorTestDialog.Board(port, id);
+        }
         private final Part receiver = settings.part("Receiver");
         private final Part stickDelay = settings.part("Stick delay");
         private final Part battery = settings.part("Battery");
@@ -1521,22 +1531,12 @@ final class DroneSetup {
             main.save(Map.of(de.droiddrone.pc.RcSession.BEEPER_KEY, Boolean.toString(de.droiddrone.pc.RcSession.beeperSetUp(aux))));
         }
 
-        /** The board's id over MSP (MSP_UID, else MSP_BOARD_INFO): what CONFIRM belongs to; null if neither answers. */
+        /**
+         * The board's id over MSP (MSP_UID, else MSP_BOARD_INFO): what CONFIRM belongs to; null if neither answers -
+         * then nothing is written. Read in one place (SetupConfirm), so the motor test knows the board by the same id.
+         */
         private static String boardId(BetaflightUsb fc) {
-            byte[] uid = null, info = null;
-            try {
-                uid = fc.msp(160 /* MSP_UID */, null);
-            } catch (IOException e) {
-                // the board info below
-            }
-            if (uid == null || uid.length < 12) {
-                try {
-                    info = fc.msp(4 /* MSP_BOARD_INFO */, null);
-                } catch (IOException e) {
-                    // unknown: nothing is written
-                }
-            }
-            return SetupConfirm.boardId(uid, info);
+            return SetupConfirm.boardId(fc);
         }
 
         /** MSP's four-letter firmware id as a name: INAV, ArduPilot, Cleanflight ... */
@@ -2161,8 +2161,11 @@ final class DroneSetup {
 
             void save(Map<String, String> settings);
 
-            /** Opens the motor test; onClosed once its window is closed. */
-            void motorTest(java.awt.Window owner, Runnable onClosed);
+            /**
+             * Opens the motor test for this flight controller (null: none was read - then only a board that is
+             * alone on USB); onClosed once its window is closed, with whether a motor was turned in it.
+             */
+            void motorTest(java.awt.Window owner, MotorTestDialog.Board board, java.util.function.Consumer<Boolean> onClosed);
 
             /** Opens the guided orientation check on this USB port (null: the first that answers as Betaflight). */
             void orientationCheck(java.awt.Window owner, String port, Runnable onPassed, Runnable onClosed);
@@ -2170,6 +2173,7 @@ final class DroneSetup {
 
         private final Host main;
         private final java.util.function.Supplier<String> port;
+        private final java.util.function.Supplier<MotorTestDialog.Board> board;
         private final CheckRow level = new CheckRow("Accelerometer");
         private final CheckRow motors = new CheckRow("Motors and props");
         private final CheckRow orientation = new CheckRow("Orientation");
@@ -2198,9 +2202,14 @@ final class DroneSetup {
         private volatile boolean shown;
         private Thread live;
 
-        MotorsPage(Host main, java.util.function.Supplier<String> port) {
+        /**
+         * @param port  Drone setup's port choice (null: automatic), for the live view and the orientation check
+         * @param board the flight controller Drone setup's first step last read - the one the motor test is for
+         */
+        MotorsPage(Host main, java.util.function.Supplier<String> port, java.util.function.Supplier<MotorTestDialog.Board> board) {
             this.main = main;
             this.port = port;
+            this.board = board;
         }
 
         @Override
@@ -2397,9 +2406,16 @@ final class DroneSetup {
                 return;
             }
             motors.set(State.PENDING, "Motor test open.");
-            main.motorTest(javax.swing.SwingUtilities.getWindowAncestor(motors), () -> {
-                main.save(Map.of(BetaflightPage.MOTORS_CHECKED_KEY, "true"));
-                motors.set(State.OK, "Checked.");
+            // F-060: for the board the first step read (its port and id) - not the first board that answers - and
+            // "Checked." only when a motor was turned: closing the window untouched said it too
+            main.motorTest(javax.swing.SwingUtilities.getWindowAncestor(motors), board.get(), turned -> {
+                if (turned) {
+                    motorsAlreadyChecked();
+                } else if ("true".equalsIgnoreCase(main.setting(BetaflightPage.MOTORS_CHECKED_KEY))) {
+                    motors.set(State.OK, "Checked."); // an earlier check stands
+                } else {
+                    motors.set(State.INFO, "No motor turned. <b>Check now</b>.");
+                }
             });
         }
 
