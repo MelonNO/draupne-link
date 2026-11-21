@@ -48,7 +48,7 @@ class LongFlightScenario {
             Night.Table table = new Night.Table("long-flight", "minutes", "heap MB", "threads", "slowest answer ms", "track KB", "recording MB",
                     "height m", "pack V", "app log KB");
 
-            rig.radio.handsOff();
+            rig.radio.sticksAtRest();
             rig.radio.aux(1, -1);
             rig.radio.aux(2, 1); // ANGLE: it levels itself, as a drone flown for hours would be flown
             pilot.connect();

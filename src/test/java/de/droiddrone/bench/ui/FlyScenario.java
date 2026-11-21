@@ -84,7 +84,7 @@ class FlyScenario {
             Pilot pilot = new Pilot(rig);
             String name = String.valueOf(Ui.edt(() -> ui.all(javax.swing.JComboBox.class).get(0).getSelectedItem())).trim().split("\\s+")[0];
             VirtualDrone drone = rig.drone(name);
-            rig.radio.handsOff();
+            rig.radio.sticksAtRest();
             rig.radio.aux(1, 1); // left on after the last flight
             pilot.connect();
             pilot.waitForVideo();

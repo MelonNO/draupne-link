@@ -153,7 +153,7 @@ class LooksScenario {
             rig.film.remark("Random presser, seed " + seed + ": " + presses + " presses, " + refused + " not pressable at the moment. The last 30: "
                     + trail.subList(Math.max(0, trail.size() - 30), trail.size()));
             ui.shot("the random presser's last picture");
-            rig.radio.handsOff();
+            rig.radio.sticksAtRest();
             rig.radio.aux(1, -1);
             rig.check(presses > 20, "the presser found buttons to press: " + presses);
         });

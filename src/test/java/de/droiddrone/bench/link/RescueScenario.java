@@ -92,7 +92,7 @@ class RescueScenario {
             Ui.pause(4000);
             rig.check(BenchFleetAccess.armed(drone) && "RESCUE".equals(BenchFleetAccess.failsafe(drone)), "in the cut: armed, in GPS rescue");
             rig.radio.aux(1, -1); // the pilot gives up and puts ARM off
-            rig.radio.handsOff();
+            rig.radio.sticksAtRest();
             Ui.pause(3000);
             rig.check(BenchFleetAccess.armed(drone), "ARM off during the cut changes nothing yet: the drone does not hear it");
             ui.until("the link back", 40_000, () -> ui.has("LINK READY") || ui.has("PILOT UAV"));

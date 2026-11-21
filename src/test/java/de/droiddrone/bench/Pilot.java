@@ -40,7 +40,7 @@ public final class Pilot {
 
     /** Sticks centred, throttle down, the ARM switch (AUX1) up; waits for the drone itself to say armed. */
     public void arm(VirtualDrone drone) {
-        rig.radio.handsOff();
+        rig.radio.sticksAtRest();
         Ui.pause(1300); // Betaflight wants half a second of clean sticks before the switch counts
         // as a pilot does it: switch on; if the drone does not arm (Betaflight wants the switch off first when the
         // sticks were not clean the moment it went on - a weak link does that), off for a second and on again
@@ -60,7 +60,7 @@ public final class Pilot {
     }
 
     public void disarm(VirtualDrone drone) {
-        rig.radio.handsOff();
+        rig.radio.sticksAtRest();
         Ui.pause(300);
         rig.radio.aux(1, -1);
         until("the drone to disarm", 10_000, () -> !drone.readout().armed());

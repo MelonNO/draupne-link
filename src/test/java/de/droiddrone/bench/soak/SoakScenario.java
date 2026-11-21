@@ -96,7 +96,7 @@ class SoakScenario {
                     drone.link().silence(System.currentTimeMillis(), ms);
                     Ui.pause(ms + 500);
                     // failsafe took the motors; the link comes back by itself; the switch goes off as a pilot's would
-                    rig.radio.handsOff();
+                    rig.radio.sticksAtRest();
                     rig.radio.aux(1, -1);
                     // back means the header says LINK READY again, and a moment for the flight controller's fresh word.
                     // (The first long run pressed STANDBY MODE in the very moment the link returned, 5 times in 183:
@@ -137,7 +137,7 @@ class SoakScenario {
                     // back to "nothing connected" as a pilot would, and on with the next
                     failures++;
                     rig.check(false, "flight try " + tried + " (after " + (System.currentTimeMillis() - t0) / 60_000 + " min) went wrong: " + t.getMessage());
-                    rig.radio.handsOff();
+                    rig.radio.sticksAtRest();
                     rig.radio.aux(1, -1);
                     for (VirtualDrone d : rig.fleet.drones()) d.link().clear();
                     Ui.pause(3000);

@@ -75,7 +75,7 @@ class SleepCycleScenario {
                     if (!entry.equals(String.valueOf(Ui.edt(phones::getSelectedItem)))) ui.choose(phones, entry);
                     String name = String.valueOf(Ui.edt(phones::getSelectedItem)).trim().split("\\s+")[0];
                     VirtualDrone drone = rig.drone(name);
-                    rig.radio.handsOff();
+                    rig.radio.sticksAtRest();
                     rig.radio.aux(1, -1);
                     ui.choose(checkEvery(ui), every + " min");
                     pilot.connect();
