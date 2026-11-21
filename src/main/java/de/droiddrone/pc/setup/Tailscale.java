@@ -100,7 +100,7 @@ public final class Tailscale {
         Path app = Path.of(System.getenv().getOrDefault("ProgramFiles", "C:\\Program Files"), "Tailscale", "tailscale-ipn.exe");
         if (!Files.isRegularFile(app)) return false;
         try {
-            new ProcessBuilder(app.toString()).start();
+            de.droiddrone.pc.Outside.start(new ProcessBuilder(app.toString()));
             return true;
         } catch (Exception e) {
             return false;
@@ -195,8 +195,9 @@ public final class Tailscale {
         Path msi = Files.createTempDirectory("draupne-tailscale").resolve("tailscale-setup.msi");
         HttpClient http = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(20)).build();
-        HttpResponse<Path> response = http.send(HttpRequest.newBuilder(URI.create(msiUrl()))
-                .timeout(Duration.ofMinutes(10)).build(), HttpResponse.BodyHandlers.ofFile(msi));
+        // as long as it takes while it keeps coming, given up when it stands still for a minute (Net.sendMoving)
+        HttpResponse<Path> response = de.droiddrone.pc.Net.sendMoving(http, HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url(msiUrl())))
+                .timeout(Duration.ofSeconds(60)).build(), HttpResponse.BodyHandlers.ofFile(msi), 60_000L, 3 * 3_600_000L);
         if (response.statusCode() != 200) throw new java.io.IOException("HTTP " + response.statusCode());
         return msi;
     }
@@ -239,8 +240,9 @@ public final class Tailscale {
         Process old = loginProcess;
         if (old != null && old.isAlive()) return;
         try {
-            Process p = new ProcessBuilder(exe.toString(), "login").redirectErrorStream(true)
-                    .redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            Process p = de.droiddrone.pc.Outside.start(new ProcessBuilder(exe.toString(), "login").redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.DISCARD));
+            if (p == null) return; // the test bench took it
             loginProcess = p;
             Thread reaper = new Thread(() -> {
                 try {

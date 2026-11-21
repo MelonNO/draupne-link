@@ -159,7 +159,7 @@ public class MainActivity extends Activity {
         bWake.setText(R.string.dd_power_wake);
         PowerMode.request(PowerMode.NORMAL, 0, "WAKE button");
     };
-    private TextView tvPowerMode, tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery, tvSilent;
+    private TextView tvPowerMode, tvPowerEvent, tvPowerAdmin, tvPowerExact, tvPowerBattery, tvSilent, tvInstalls;
     /** pc.28: Data Saver, and the radios before flying - checked here, not listed in the PC's guide any more. */
     private TextView tvDataSaver, tvRadios;
     private long checksAt;
@@ -170,6 +170,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState){
         super.onCreate(savedInstanceState);
+        CrashGuard.install(this); // pc.55: an error that ends the app opens it again
+        AppReplacedReceiver.opened(this);
+        String ended = CrashGuard.last(this);
+        if (!ended.isEmpty()) log("The app was last ended by: " + ended);
 
         try {
             PackageInfo packageInfo = this.getPackageManager().getPackageInfo(this.getPackageName(), 0);
@@ -251,6 +255,9 @@ public class MainActivity extends Activity {
         // pc.47: the phone silent while the app works - Android asks for Do Not Disturb access first
         tvSilent = findViewById(R.id.tvSilent);
         tvSilent.setOnClickListener(v -> openSetting(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS, false));
+        // F-058: the PC's UPDATE PHONE APP needs "Install unknown apps" for this app - without it Android asks on the phone
+        tvInstalls = findViewById(R.id.tvInstalls);
+        tvInstalls.setOnClickListener(v -> openSetting(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, true));
         tvDataSaver = findViewById(R.id.tvDataSaver);
         tvDataSaver.setOnClickListener(v -> openSetting(android.provider.Settings.ACTION_IGNORE_BACKGROUND_DATA_RESTRICTIONS_SETTINGS, true));
         tvRadios = findViewById(R.id.tvRadios);
@@ -388,6 +395,7 @@ public class MainActivity extends Activity {
         tvPowerBattery.setVisibility(PowerMode.ignoresBatteryOptimisation(this) ? View.GONE : View.VISIBLE);
         boolean silentAllowed = Silent.allowed(this);
         tvSilent.setVisibility(silentAllowed ? View.GONE : View.VISIBLE);
+        tvInstalls.setVisibility(getPackageManager().canRequestPackageInstalls() ? View.GONE : View.VISIBLE);
         if (silentAllowed && DDService.isRunning) Silent.on(this); // allowed just now (back from the setting)
         updateChecks();
     }
@@ -694,7 +702,8 @@ public class MainActivity extends Activity {
         updateCheckedAt = now;
         String current = versionName;
         Thread t = new Thread(() -> {
-            AppUpdater.cleanUp(getApplicationContext()); // an update cut short
+            // an update cut short - not the PC's, under way (pc.55: a slow download over ten minutes lost its file here)
+            if (!RemoteUpdate.busy()) AppUpdater.cleanUp(getApplicationContext());
             UpdateCheck.Found found = UpdateCheck.newerThan(current);
             if (found != null) runOnUiThread(() -> showUpdate(found));
         }, "updateCheck");

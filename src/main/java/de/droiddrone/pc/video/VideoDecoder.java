@@ -324,10 +324,22 @@ public final class VideoDecoder implements AutoCloseable {
         return errors;
     }
 
+    /** Closed already: a second close frees nothing (2026-11-20). */
+    private boolean closed;
+
+    /**
+     * Frees what the decoder holds. Safe to call twice: sws_freeContext and av_free take the pointer itself, not its
+     * address, so the fields kept the freed addresses - a second close freed them again and the whole app was gone
+     * (a reader of this code, 2026-11-20: an overwatch clip's next part that fails to open did it).
+     */
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
         if (sws != null) sws_freeContext(sws);
+        sws = null;
         if (rgb != null) av_free(rgb);
+        rgb = null;
         av_frame_free(frame);
         av_frame_free(spare);
         av_frame_free(copied);

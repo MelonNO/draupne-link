@@ -31,16 +31,34 @@ import java.util.concurrent.Executors;
 public class ApkShare implements AutoCloseable {
     // ---- RELEASE PIN: the phone app this PC app hands out. At every release that ships a new phone app, set both
     // ---- to it: its versionName and the SHA-256 flight-app/build.ps1 printed (the flight-VERSION release's APK).
-    public static final String VERSION = "2.3.0-pc.52";
+    public static final String VERSION = bench(0, "2.3.0-pc.52");
     /** SHA-256 of the APK built by flight-app/build.ps1 and attached to the flight-VERSION release. */
-    public static final String APK_SHA256 = "072cd1d39fe6221422ed1e3fb652611349e06faaeb2a37e6b3b0fa115afaa1a9";
+    public static final String APK_SHA256 = bench(1, "072cd1d39fe6221422ed1e3fb652611349e06faaeb2a37e6b3b0fa115afaa1a9");
     // ---- end of the pin
     public static final String APK_NAME = "DRAUPNE-Flight-" + VERSION + ".apk";
-    public static final String APK_URL = "https://github.com/MelonNO/draupne-link/releases/download/flight-" + VERSION + "/" + APK_NAME;
+    public static final String APK_URL = bench(2, "https://github.com/MelonNO/draupne-link/releases/download/flight-" + VERSION + "/" + APK_NAME);
+
+    /**
+     * The test bench's own phone app (F-054's emulator test, 2026-11-21): {@code -Ddraupne.bench.phoneApp=version|sha256|url}
+     * puts a test build in the pin's place, so UPDATE PHONE APP can be run end to end. Unset - always, outside the
+     * bench - the pin above as it stands. The phone checks the SHA-256 it is sent and Android the signature, as ever.
+     */
+    private static String bench(int part, String pinned) {
+        return bench(System.getProperty("draupne.bench.phoneApp"), part, pinned);
+    }
+
+    static String bench(String s, int part, String pinned) {
+        if (s == null || s.isBlank()) return pinned;
+        String[] p = s.split("\\|");
+        return p.length == 3 && !p[part].isBlank() ? p[part].trim() : pinned;
+    }
     public static final int PORT = 8765;
 
     private HttpServer server;
     private java.util.concurrent.ExecutorService executor;
+
+    /** A download that stands still this long is given up; one that keeps coming may take this long (tests make them short). */
+    static long DOWNLOAD_STALL_MS = 60_000, DOWNLOAD_WHOLE_MS = 3 * 3_600_000L;
 
     /** Downloads and verifies the APK once; later calls return the cached file. */
     public static Path prepareApk(Path downloadsDir) throws IOException, InterruptedException {
@@ -50,8 +68,11 @@ public class ApkShare implements AutoCloseable {
         Path tmp = downloadsDir.resolve(APK_NAME + ".part");
         HttpClient client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL)
                 .connectTimeout(Duration.ofSeconds(20)).build();
-        HttpResponse<Path> response = client.send(HttpRequest.newBuilder(URI.create(APK_URL)).timeout(Duration.ofMinutes(5)).build(),
-                HttpResponse.BodyHandlers.ofFile(tmp));
+        Files.deleteIfExists(tmp); // what an earlier try left: never the head of a file under a new one's tail
+        // as long as it takes while it keeps coming; given up when it stands still for a minute (15 min for all of it
+        // was too short for 23 MB on a weak link, and each new try began at nothing)
+        HttpResponse<Path> response = de.droiddrone.pc.Net.sendMoving(client, HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url(APK_URL))).timeout(Duration.ofSeconds(60)).build(),
+                HttpResponse.BodyHandlers.ofFile(tmp), DOWNLOAD_STALL_MS, DOWNLOAD_WHOLE_MS);
         if (response.statusCode() != 200) {
             Files.deleteIfExists(tmp);
             throw new IOException("GitHub answered HTTP " + response.statusCode());

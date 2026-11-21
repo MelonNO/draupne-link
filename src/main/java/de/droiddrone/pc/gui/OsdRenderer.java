@@ -89,6 +89,11 @@ final class OsdRenderer {
             return waking != null && !linkReady;
         }
 
+        /** F-019: the connection's first link not up yet - CONNECTING in LINK LOST's place, its reason kept under it. */
+        boolean connectingNow() {
+            return OsdDataBuilder.CONNECTING.equals(waking) && !linkReady;
+        }
+
         /** Up to 1.0.40: LINK LOST says only that. */
         Data(boolean connected, boolean linkReady, int pingMs, boolean rcLive, boolean fcLost, FcTelemetry telemetry,
              VideoPipeline.Stats video, boolean invertPitch, String linkHint, short[] channels, boolean preview,
@@ -365,7 +370,14 @@ final class OsdRenderer {
             });
 
             if (d.recording()) recordingMark(now);
-            element(OsdElement.WARNINGS, (ex, ey, a) -> warnings(ex, ey, a, d, s, t, now));
+            element(OsdElement.WARNINGS, (ex, ey, a) -> {
+                backed = true; // F-043: on a dark ground, readable over the pitch ladder
+                try {
+                    warnings(ex, ey, a, d, s, t, now);
+                } finally {
+                    backed = false;
+                }
+            });
             // 1.0.64: not while a sleeping phone is waited for - that is no loss
             if ((!d.linkReady() && !d.wakingNow()) || d.linkStalled() || d.fcLost()) lostFrame();
             element(OsdElement.DEBUG, (ex, ey, a) -> debugLine(ex, ey, a, d.video()));
@@ -905,9 +917,12 @@ final class OsdRenderer {
         boolean blink = d.preview() || (now / 400) % 2 == 0;
         // the steady lines under the blinking block: why the link is down, the lost FC (two lines), a sticks gap or
         // what blocks arming - one of those - and the unread arm switch
-        boolean hint = !waking && !d.linkReady() && d.linkHint() != null;
+        boolean hint = (!waking || d.connectingNow()) && !d.linkReady() && d.linkHint() != null;
         boolean blocked = !hint && !d.fcLost() && !rcGap && s != null && !s.armed() && !s.blockers().isEmpty();
-        int lines = (hint ? 1 : d.fcLost() ? 2 : rcGap || blocked ? 1 : 0) + (d.armSwitchUnknown() ? 1 : 0);
+        // 1.0.71 (the test bench's F-004): not while armed - it stood there through every flight of a drone that
+        // has not been through Drone setup, about a thing nobody can do in the air
+        boolean armNote = d.armSwitchUnknown() && (s == null || !s.armed());
+        int lines = (hint ? 1 : d.fcLost() ? 2 : rcGap || blocked ? 1 : 0) + (armNote ? 1 : 0);
         // the whole block stays in the picture, also when placed low: it moves up by what doesn't fit
         int bigLines = big.size() + (waking ? 1 : 0);
         float below = bigLines > 0 ? (bigLines - 1) * 38 * unit : 0;
@@ -942,7 +957,7 @@ final class OsdRenderer {
             put("ARMING BLOCKED: " + names, x, ly, YELLOW, a);
             ly += 24 * unit;
         }
-        if (d.armSwitchUnknown()) { // the sticks can't arm until Drone setup has read which switch arms
+        if (armNote) { // Drone setup has not read which switch arms
             put("ARM SWITCH NOT READ - RUN DRONE SETUP", x, ly, YELLOW, a);
         }
     }
@@ -1064,7 +1079,26 @@ final class OsdRenderer {
 
     /** Text aligned at x. */
     private void put(String s, float x, float y, Color c, OsdLayout.Align a) {
-        text(s, startX(x, g.getFontMetrics().stringWidth(s), a), y, c);
+        float sx = startX(x, g.getFontMetrics().stringWidth(s), a);
+        if (backed) backing(s, sx, y);
+        text(s, sx, y, c);
+    }
+
+    /**
+     * F-043: the warnings' lines on a dark ground - they lay on the pitch ladder's 10 rung (the warnings sit at 66 % of
+     * the height, the rung at 67 % with the drone level) and the ladder moves with the pitch: no place is free of it.
+     */
+    private boolean backed;
+    static final Color WARNING_GROUND = new Color(0, 0, 0, 130);
+
+    private void backing(String s, float x, float y) {
+        FontMetrics fm = g.getFontMetrics();
+        float pad = 5 * unit;
+        Color was = g.getColor();
+        g.setColor(WARNING_GROUND);
+        g.fill(new java.awt.geom.RoundRectangle2D.Float(x - pad, y - fm.getAscent() - pad / 2, fm.stringWidth(s) + 2 * pad,
+                fm.getAscent() + fm.getDescent() + pad, 6 * unit, 6 * unit));
+        g.setColor(was);
     }
 
     /**

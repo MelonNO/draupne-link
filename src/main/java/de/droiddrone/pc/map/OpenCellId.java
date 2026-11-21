@@ -496,9 +496,9 @@ public final class OpenCellId {
             countRequest();
         }
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(15))
+            HttpRequest request = HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url(url))).timeout(Duration.ofSeconds(15))
                     .header("User-Agent", userAgent).header("Accept", "application/json").GET().build();
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = de.droiddrone.pc.Net.send(http, request, HttpResponse.BodyHandlers.ofString(), 30_000);
             Answer a = parseJson(response.body());
             if (a.ok() && response.statusCode() != 200) a = new Answer(null, response.statusCode() == 429 ? 7 : 5, "HTTP " + response.statusCode());
             if (a.errorCode() == 7) {

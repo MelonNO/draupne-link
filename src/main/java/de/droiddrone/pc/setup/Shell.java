@@ -45,6 +45,8 @@ public final class Shell {
     }
 
     private static Result run(Duration timeout, List<String> command, boolean mergeErrors) {
+        Result standIn = de.droiddrone.pc.Outside.run(command); // the test bench's answer; null always in the app itself
+        if (standIn != null) return standIn;
         try {
             ProcessBuilder builder = new ProcessBuilder(withFullPath(command));
             if (mergeErrors) {

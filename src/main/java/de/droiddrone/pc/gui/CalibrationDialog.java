@@ -107,16 +107,24 @@ class CalibrationDialog extends JDialog {
         radio.setPreferredSize(new Dimension(560, 600));
         JPanel summary = new JPanel(new BorderLayout(0, 14));
         summary.add(channelBars, BorderLayout.CENTER);
-        JPanel invertRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 14, 0));
-        invertRow.add(Theme.label("INVERT", Theme.headingFont(11.5f), Theme.MUTED));
+        // F-036: wraps. With four AUX switches the eighth box (aux4) was off the window's edge at 1280 wide - a row of
+        // FlowLayout asks for one line's height whatever it holds
+        // F-043: INVERT over even rows of four, in capitals as the channel list above names them - it wrapped with
+        // "aux4" alone on a second line, in small letters beside a list in capitals
+        JPanel invertRow = new JPanel(new BorderLayout(0, 6));
+        invertRow.add(Theme.label("INVERT", Theme.headingFont(11.5f), Theme.MUTED), BorderLayout.NORTH);
+        JPanel boxes = new JPanel(new java.awt.GridLayout(0, 4, 14, 4));
+        boxes.setOpaque(false);
         for (int i = 0; i < summaryChannels; i++) {
             final int channel = i;
-            JCheckBox box = new JCheckBox(PcConfig.CHANNEL_NAMES[i]);
+            JCheckBox box = new JCheckBox(PcConfig.CHANNEL_NAMES[i].toUpperCase(java.util.Locale.ROOT));
+            box.setFont(Theme.headingFont(11.5f));
             box.setForeground(Theme.TEXT);
             box.addActionListener(e -> wizard.setInverted(channel, box.isSelected()));
             invertBoxes[i] = box;
-            invertRow.add(box);
+            boxes.add(box);
         }
+        invertRow.add(boxes, BorderLayout.CENTER);
         summary.add(invertRow, BorderLayout.SOUTH);
         cardPanel.add(rawAxes, "raw");
         cardPanel.add(summary, "summary");
@@ -297,6 +305,9 @@ class CalibrationDialog extends JDialog {
             int n = Integer.parseInt(plain.replaceAll("\\D", ""));
             if (plain.startsWith("axis")) highlightAxis = n; else highlightButton = n;
         }
+        boolean[] swept = new boolean[state.axes().length];
+        for (int i = 0; i < swept.length && i < wizard.getMin().length; i++) swept[i] = wizard.isFullySwept(i);
+        rawAxes.setSwept(swept);
         rawAxes.setData(new RawAxesView.Data(state.axes(), state.buttons(), wizard.getMin(), wizard.getMax(),
                 wizard.getCenter(), axisRoles, buttonRoles, highlightAxis, highlightButton,
                 wizard.getCandidateProgress(now), step.kind() == StepKind.RANGE || step.kind() == StepKind.CENTER));

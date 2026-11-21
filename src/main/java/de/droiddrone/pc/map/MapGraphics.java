@@ -321,8 +321,33 @@ public final class MapGraphics {
         if (file == null || keepOff) return;
         try {
             writeKml(file, Kml.write(items, List.of(), "DRAUPNE Link graphics"));
-        } catch (IOException ignored) {
-            // they stay in memory for this session
+            if (saveFailing) {
+                saveFailing = false;
+                tell("Map drawings saved again.");
+            }
+        } catch (IOException e) {
+            // they stay in memory for this session - and the pilot is told, once
+            if (!saveFailing) {
+                saveFailing = true;
+                tell("MAP DRAWINGS NOT SAVED: " + de.droiddrone.pc.DiskSpace.why(e));
+            }
+        }
+    }
+
+    private volatile java.util.function.Consumer<String> onProblem;
+    private boolean saveFailing;
+
+    /** Told (on the caller's thread) when the drawings stop being saved, once, and when they are saved again. */
+    public void onProblem(java.util.function.Consumer<String> listener) {
+        onProblem = listener;
+    }
+
+    private void tell(String text) {
+        java.util.function.Consumer<String> to = onProblem;
+        if (to == null) return;
+        try {
+            to.accept(text);
+        } catch (RuntimeException ignored) {
         }
     }
 

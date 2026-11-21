@@ -20,15 +20,20 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class LinkFleetRoundTest {
     @Test
-    void overwatchChecksInConstantlyByDefaultDeepSleepEveryFiveMinutes() {
-        assertEquals(SleepCheck.ALWAYS, PowerController.defaultInterval(ControlLink.POWER_OVERWATCH));
+    void deepSleepAndOverwatchShareOneCheckInterval() {
+        // F-046, the pilot (2026-11-20): one CHECK EVERY for both - 1.0.56 to 1.0.71 kept one each (OVERWATCH Constant),
+        // and a value chosen while the box showed the other mode's went to that mode
+        assertEquals(5, PowerController.defaultInterval(ControlLink.POWER_OVERWATCH));
         assertEquals(5, PowerController.defaultInterval(ControlLink.POWER_DEEP_SLEEP));
         PowerController p = new PowerController(null, System::currentTimeMillis);
+        assertEquals(5, p.intervalFor(ControlLink.POWER_OVERWATCH));
+        assertEquals(5, p.intervalFor(ControlLink.POWER_DEEP_SLEEP));
+        p.checkIntervalMin = 1;
+        assertEquals(1, p.intervalFor(ControlLink.POWER_OVERWATCH), "the value just chosen goes to whichever is pressed");
+        assertEquals(1, p.intervalFor(ControlLink.POWER_DEEP_SLEEP));
+        p.checkIntervalMin = SleepCheck.ALWAYS;
         assertEquals(SleepCheck.ALWAYS, p.intervalFor(ControlLink.POWER_OVERWATCH));
-        assertEquals(5, p.intervalFor(ControlLink.POWER_DEEP_SLEEP));
-        p.overwatchIntervalMin = 2;
-        assertEquals(2, p.intervalFor(ControlLink.POWER_OVERWATCH), "each keeps its own");
-        assertEquals(5, p.intervalFor(ControlLink.POWER_DEEP_SLEEP));
+        assertEquals(SleepCheck.ALWAYS, p.intervalFor(ControlLink.POWER_DEEP_SLEEP));
     }
 
     @Test
@@ -40,7 +45,7 @@ class LinkFleetRoundTest {
     }
 
     @Test
-    void theFleetsButtonsSendEachModeWithItsOwnInterval() throws Exception {
+    void theFleetsButtonsSendOneIntervalForEitherSleep() throws Exception {
         List<int[]> sent = new ArrayList<>();
         FleetManagementPanel[] panel = new FleetManagementPanel[1];
         SwingUtilities.invokeAndWait(() -> {
@@ -63,11 +68,18 @@ class LinkFleetRoundTest {
             press(panel[0], "DEEP SLEEP");
         });
         assertEquals(2, sent.size());
-        assertArrayEquals(new int[]{ControlLink.POWER_OVERWATCH, SleepCheck.ALWAYS}, sent.get(0),
-                "an awake phone's own 5 min is not OVERWATCH's choice: Constant");
+        // F-046, the pilot (2026-11-20): one CHECK EVERY for both sleeps (1.0.56 - 1.0.71: OVERWATCH its own, Constant)
+        assertArrayEquals(new int[]{ControlLink.POWER_OVERWATCH, 5}, sent.get(0), "the one interval, 5 min unless chosen");
         assertArrayEquals(new int[]{ControlLink.POWER_DEEP_SLEEP, 5}, sent.get(1));
         SwingUtilities.invokeAndWait(() -> panel[0].setCards(List.of(card("MobileAlpha", "OVERWATCH", SleepCheck.ALWAYS, null))));
-        SwingUtilities.invokeAndWait(() -> assertEquals("CONSTANT", everyShown(panel[0]), "EVERY shows OVERWATCH's interval"));
+        SwingUtilities.invokeAndWait(() -> assertEquals("CONSTANT", everyShown(panel[0]), "EVERY shows the interval it sleeps by"));
+        sent.clear();
+        SwingUtilities.invokeAndWait(() -> {
+            panel[0].setCards(List.of(card("MobileAlpha", "ACTIVE", 5, null))); // woken: the value it slept by is kept
+            press(panel[0], "DEEP SLEEP");
+        });
+        assertArrayEquals(new int[]{ControlLink.POWER_DEEP_SLEEP, SleepCheck.ALWAYS}, sent.get(0),
+                "the value OVERWATCH slept by goes to DEEP SLEEP too: one interval");
     }
 
     /** The check-in list's choice (a list since 2026-11-10, was a button). */

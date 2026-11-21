@@ -154,7 +154,7 @@ public final class Coordinates {
     private static final Pattern DECIMAL_PAIR = Pattern.compile("^([-+]?\\d{1,2}(?:\\.\\d+)?)\\s*([NS])?\\s*[,;]?\\s*([-+]?\\d{1,3}(?:\\.\\d+)?)\\s*([EW])?$", Pattern.CASE_INSENSITIVE);
     private static final Pattern DMS_PAIR = Pattern.compile("^(\\d{1,2})\\D+(\\d{1,2})\\D+(\\d{1,2}(?:\\.\\d+)?)\\D*([NS])\\s*,?\\s*(\\d{1,3})\\D+(\\d{1,2})\\D+(\\d{1,2}(?:\\.\\d+)?)\\D*([EW])$", Pattern.CASE_INSENSITIVE);
     private static final Pattern MGRS = Pattern.compile("^(\\d{1,2})\\s*([C-HJ-NP-X])\\s*([A-HJ-NP-Z])([A-HJ-NP-V])\\s*(\\d{1,10}(?:\\s+\\d{1,5})?)$", Pattern.CASE_INSENSITIVE);
-    private static final Pattern UTM = Pattern.compile("^(\\d{1,2})\\s*([C-HJ-NP-X])\\s+(\\d{5,7}(?:\\.\\d+)?)\\s*(?:M?\\s*E)?\\s*,?\\s+(\\d{6,8}(?:\\.\\d+)?)\\s*(?:M?\\s*N)?$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern UTM = Pattern.compile("^(\\d{1,2})\\s*([C-HJ-NP-X])\\s+(\\d{5,7}(?:\\.\\d+)?)\\s*(?:M?\\s*E)?\\s*,?\\s+(\\d{1,8}(?:\\.\\d+)?)\\s*(?:M?\\s*N)?$", Pattern.CASE_INSENSITIVE);
 
     /**
      * A position as the pilot types or pastes it, in any of the formats the map writes: MGRS ("32V NM 97254 42617",
@@ -214,8 +214,12 @@ public final class Coordinates {
         return null;
     }
 
+    /** A place worked out from a grid: one a hair past the date line (a grid of 180 E comes back as 180.0000001) is the other side's. */
     private static double[] valid(double[] ll) {
-        return valid(ll[0], ll[1]);
+        double lon = ll[1];
+        if (lon > 180 && lon < 186) lon -= 360;
+        else if (lon < -180 && lon > -186) lon += 360;
+        return valid(ll[0], lon);
     }
 
     private static double[] valid(double lat, double lon) {

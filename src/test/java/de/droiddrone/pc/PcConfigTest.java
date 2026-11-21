@@ -17,6 +17,95 @@ class PcConfigTest {
     Path dir;
 
     /**
+     * 1.0.71 (the test bench's F-009): "pcName=Bjørn" saved by Notepad as ANSI stopped the app starting, without a
+     * window or a word - one byte that is not UTF-8 made the load throw.
+     */
+    @Test
+    void aSettingsFileSavedAsAnsiStillLoadsAndIsUtf8AfterTheNextSave(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("draupne-link.properties");
+        Files.write(file, "port=6286\r\npcName=Bjørn\r\nkey=DD\r\n".getBytes(StandardCharsets.ISO_8859_1)); // as Notepad's ANSI writes it
+        PcConfig config = assertDoesNotThrow(() -> PcConfig.load(file), "the settings load (the app starts)");
+        assertEquals("DD", config.getKey(), "the lines that are fine are read");
+        assertEquals("Bjørn", config.getString("pcName"), "and the name as the pilot wrote it");
+        config.save(file, Map.of("rcRate", "25"));
+        String saved = Files.readString(file, StandardCharsets.UTF_8); // throws if it were not UTF-8 now
+        assertTrue(saved.contains("pcName=Bj"), saved);
+        assertEquals("Bjørn", PcConfig.load(file).getString("pcName"));
+        assertEquals(saved.lines().count(), PcConfig.readLines(file).size(), "no line gained or lost");
+    }
+
+    /** A byte no code page explains (a crash's rubbish) still loads: that line may be odd, the others are read. */
+    /**
+     * A save that fails - here something stands where the file is put together - and the save after it. Until
+     * 2026-11-20 the first one's change was lost for good: in the app until it closed, never in the file.
+     */
+    @Test
+    void whatASaveCouldNotWriteGoesIntoTheFileWithTheNextSave(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("draupne-link.properties");
+        Files.writeString(file, "key=DD\nport=6286\naxis0.center=0.00\n");
+        PcConfig config = PcConfig.load(file);
+        Path inTheWay = Files.createDirectory(dir.resolve("draupne-link.properties.part"));
+        Files.writeString(inTheWay.resolve("x"), "x");
+        assertThrows(java.io.IOException.class, () -> config.write(file, Map.of("axis0.center", "0.12")));
+        assertThrows(java.io.IOException.class, () -> config.write(file, Map.of("axis1.center", "0.34")), "and a second one, the first still waiting");
+        assertEquals("0.00", PcConfig.load(file).getString("axis0.center"), "the file is as it was");
+        Files.delete(inTheWay.resolve("x"));
+        Files.delete(inTheWay);
+
+        config.write(file, Map.of("rcRate", "25"));
+        PcConfig read = PcConfig.load(file);
+        assertEquals("25", read.getString("rcRate"));
+        assertEquals("0.12", read.getString("axis0.center"), "the change that could not be written is in the file now");
+        assertEquals("0.34", read.getString("axis1.center"));
+        assertEquals("DD", read.getKey());
+        // and it is not written again and again: a later value of the same key stays
+        config.write(file, Map.of("axis0.center", "0.50"));
+        config.write(file, Map.of("rcRate", "30"));
+        assertEquals("0.50", PcConfig.load(file).getString("axis0.center"));
+    }
+
+    @Test
+    void rubbishBytesAndAUtf8MarkDoNotStopTheLoad(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("draupne-link.properties");
+        Files.write(file, new byte[]{'k', 'e', 'y', '=', 'D', 'D', '\n', (byte) 0x81, (byte) 0xFF, 0, '\n', 'p', 'o', 'r', 't', '=', '7', '\n'});
+        PcConfig config = PcConfig.load(file);
+        assertEquals("DD", config.getKey());
+        assertEquals("7", config.getString("port"));
+        // Notepad's "UTF-8 with BOM": the mark is not part of the first key
+        Files.write(file, ("﻿key=EE\r\npcName=Bjørn\r\n").getBytes(StandardCharsets.UTF_8));
+        assertEquals("EE", PcConfig.load(file).getKey());
+        assertEquals("Bjørn", PcConfig.load(file).getString("pcName"));
+    }
+
+    /**
+     * The test bench's F-025: "cameraWidth=wide" in the settings file. PILOT UAV waited for the phone for ever and the
+     * link's thread wrote the same error into the log without a pause. The numbers the link asks for at every turn
+     * now fall back to the built-in ones, and say so once.
+     */
+    @Test
+    void aNumberOfTheLinkThatIsNoNumberFallsBackToTheBuiltInOneAndSaysSoOnce(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("draupne-link.properties");
+        Files.writeString(file, "cameraWidth=wide\r\ncameraHeight=720\r\ntelemetryRate=often\r\nserialBaudRate=115200baud\r\n"
+                + "bitrateLimitMbps=4,5\r\nsharpWidth=\r\nsharpHeight=1080\r\nsharpBitrateLimitMbps=12\r\n", StandardCharsets.UTF_8);
+        PcConfig config = PcConfig.load(file);
+        PcConfig builtIn = PcConfig.defaults();
+        for (int turn = 0; turn < 3; turn++) {
+            assertEquals(builtIn.getCameraWidth(), config.getCameraWidth());
+            assertEquals(720, config.getCameraHeight(), "a number that is one stays");
+            assertEquals(builtIn.getTelemetryRate(), config.getTelemetryRate());
+            assertEquals(builtIn.getSerialBaudRate(), config.getSerialBaudRate());
+            assertEquals(builtIn.getBitrateLimitMbps(), config.getBitrateLimitMbps());
+            assertEquals(builtIn.getSharpWidth(), config.getSharpWidth(), "an empty value too");
+            assertEquals(12, config.getSharpBitrateLimitMbps());
+        }
+        List<String> notes = config.takeNotes();
+        assertEquals(5, notes.size(), "one line a wrong value, however often it is asked for: " + notes);
+        assertTrue(notes.contains("Settings file: cameraWidth=wide is not a number. Using " + builtIn.getCameraWidth() + "."), notes.toString());
+        assertTrue(config.takeNotes().isEmpty(), "said once");
+        assertTrue(builtIn.takeNotes().isEmpty(), "the built-in settings have nothing to say");
+    }
+
+    /**
      * Review 1.0.53: a key twice in the file (a hand edit, a copied block) - save changed the first line only, and the
      * next start read the last, so the change seemed never to save (an ARM switch, a channel mapping).
      */

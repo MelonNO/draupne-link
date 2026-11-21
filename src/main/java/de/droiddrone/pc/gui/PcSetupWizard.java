@@ -59,7 +59,7 @@ final class PcSetupWizard {
 
     static void openInBrowser(MainWindow main, String url) {
         try {
-            Desktop.getDesktop().browse(URI.create(url));
+            de.droiddrone.pc.Outside.browse(URI.create(url));
         } catch (Exception e) {
             main.logLine("Browser did not open. Open: " + url);
         }

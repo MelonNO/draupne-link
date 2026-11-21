@@ -41,6 +41,13 @@ public final class FleetManager {
     private final Map<String, Integer> builds = new ConcurrentHashMap<>();
     /** 1.0.64: when each phone last said a pilot flies it (wall ms). */
     private final Map<String, Long> flownAt = new ConcurrentHashMap<>();
+    /** When this PC's own pilot link to a phone last ended (wall clock): its session's tail is no other PC's flying. */
+    private final Map<String, Long> leftAt = new ConcurrentHashMap<>();
+    /**
+     * How long a phone still says "flown" after this PC's link to it ended: its side of the session lasts 4 s more
+     * (a Disconnect stops its picture, not the session), and a name scan may be a second behind.
+     */
+    static final long OWN_TAIL_MS = 6000;
     /** 1.0.64: the token of the last mode each phone took from this PC. */
     private final Map<String, Integer> lastTaken = new ConcurrentHashMap<>();
     private final String key;
@@ -92,6 +99,13 @@ public final class FleetManager {
 
     public void setKeepWaiting(java.util.function.Predicate<String> phones) {
         keepWaiting = phones == null ? phone -> false : phones;
+    }
+
+    /** This PC's own pilot link to the phone has just ended (its DISCONNECT, a lost link given up, OUT OF ACTION). */
+    public void pilotLeft(String phone, long now) {
+        if (phone == null || phone.isBlank()) return;
+        leftAt.put(id(phone), now);
+        flownAt.remove(id(phone));
     }
 
     /** 1.0.64: whether this PC's pilot link is to the phone - a mode queued for it is dropped then, never sent. */
@@ -233,7 +247,16 @@ public final class FleetManager {
         int build = FleetProtocol.pcBuild(r.version());
         builds.put(id(r.name()), build);
         if (r.status() != null) heard.put(id(r.name()), new Heard(r.status(), now, build));
-        if (r.flown()) flownAt.put(id(r.name()), now);
+        // "flown" by this PC's own pilot link is not another PC's flying: not filed. F-027 (the test bench): a phone put
+        // to DEEP SLEEP from here says no more, so its last "flown" - of this PC - stood for 30 s, and OVERWATCH or
+        // STANDBY pressed in that time got "is flown by another PC"
+        // 2026-11-20 (a reader of this code): nor is the "flown" of the seconds after this PC's own link ended - the
+        // phone's session outlives a DISCONNECT by 4 s. Taken for another PC's, it dropped what had just been queued
+        // for that very phone: Mark OUT OF ACTION on the drone flown here disconnects, then queues its DEEP SLEEP, and
+        // a name reply in those seconds dropped it ("flown by another PC") - the drone stayed awake
+        Long left = leftAt.get(id(r.name()));
+        boolean ownTail = left != null && now - left >= 0 && now - left < OWN_TAIL_MS;
+        if (r.flown() && !pilotHere.test(r.name()) && !ownTail) flownAt.put(id(r.name()), now);
         else flownAt.remove(id(r.name()));
         return next(r.name(), r.status(), build, now);
     }

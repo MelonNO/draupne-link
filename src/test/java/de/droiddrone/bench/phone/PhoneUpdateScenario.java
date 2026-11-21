@@ -1,0 +1,212 @@
+package de.droiddrone.bench.phone;
+
+import com.sun.net.httpserver.HttpServer;
+import de.droiddrone.bench.AppRig;
+import de.droiddrone.bench.BadLink;
+import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.Pilot;
+import de.droiddrone.bench.Ui;
+import de.droiddrone.pc.fleet.VirtualFleet;
+import de.droiddrone.testing.Wire;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
+import javax.swing.JComboBox;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.List;
+
+/**
+ * F-054, the first remote update of the phone app (the pilot, 2026-11-20: "emulator after the run, then one of my
+ * phones"). UPDATE PHONE APP pressed on the real Windows app, the real phone app in the emulator downloads the newer
+ * app, checks it and installs it - with no "Update this app?" from Android on a phone nobody can reach (the
+ * permission F-054 added) - opens again by itself, and the PC has its link back and says the new version.
+ * <p>
+ * Two test builds of the phone app (scratchpad build-update-test.ps1, copied to build/update-test):
+ * receiver.apk, the pc.54 code as it is with plain http allowed to 10.0.2.2 (Android 14 refuses plain http, and a
+ * test build has no place on GitHub); sender.apk, the same labelled 2.3.0-pc.55-test. The PC is told of the sender by
+ * the bench's switch for it (ApkShare, {@code draupne.bench.phoneApp}); the file is served on this PC's loopback,
+ * which the emulator reaches as 10.0.2.2.
+ */
+@Tag("emulator")
+class PhoneUpdateScenario {
+    private static final String APP = "de.droiddrone.flight.pc";
+
+    private static String sha256(Path p) throws Exception {
+        byte[] d = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(p));
+        StringBuilder s = new StringBuilder();
+        for (byte b : d) s.append(String.format("%02x", b));
+        return s.toString();
+    }
+
+    /** What Android shows in front now (its installer's "Update this app?" would be com.*.packageinstaller). */
+    private static String inFront(PhoneRig phone) {
+        try {
+            String w = phone.shell("dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'");
+            return w.trim().replaceAll("\\s+", " ");
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    @Test
+    void thePhoneAppUpdatesFromThePcWithoutAQuestionOnThePhone() throws Exception {
+        Assumptions.assumeTrue(PhoneRig.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        // the build folder, not %LOCALAPPDATA%: inside the bench's sandbox that is another folder
+        Path dir = Path.of(System.getProperty("bench.build", "build")).resolve("update-test");
+        Path receiver = dir.resolve("receiver.apk"), sender = dir.resolve("sender.apk");
+        Assumptions.assumeTrue(Files.isRegularFile(receiver) && Files.isRegularFile(sender), "no test builds in " + dir + " (build-update-test.ps1)");
+        // the two builds' names, written by build-update-test.ps1: the tree's, and one up
+        Path versions = dir.resolve("versions.txt");
+        Assumptions.assumeTrue(Files.isRegularFile(versions), "no versions.txt in " + dir + " (build-update-test.ps1)");
+        List<String> names = Files.readAllLines(versions, StandardCharsets.UTF_8);
+        String treeVersion = names.get(0).trim(), newVersion = names.get(1).trim();
+        HttpServer web = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        int[] served = {0};
+        web.createContext("/", ex -> {
+            byte[] body = Files.readAllBytes(sender);
+            served[0]++;
+            ex.getResponseHeaders().add("Content-Type", "application/vnd.android.package-archive");
+            ex.sendResponseHeaders(200, body.length);
+            try (OutputStream o = ex.getResponseBody()) {
+                o.write(body);
+            }
+        });
+        web.start();
+        String url = "http://10.0.2.2:" + web.getAddress().getPort() + "/DRAUPNE-Flight-" + newVersion + ".apk";
+        // before the app's classes load (ApkShare reads it once)
+        System.setProperty("draupne.bench.phoneApp", newVersion + "|" + sha256(sender) + "|" + url);
+        try {
+            AppRig.scenario("phone-remote-update").drones(0).run(rig -> {
+                Ui ui = rig.ui;
+                ui.autoShot(false);
+                Pilot pilot = new Pilot(rig);
+                PhoneRig phone = new PhoneRig(rig.film);
+                phone.ensureRunning();
+                // over whatever is there: "-d" takes a lower version code (an earlier run's pc.55-test). The app can't be
+                // uninstalled from the shell - it is the phone's device admin (screen lock), and only test admins go
+                phone.adbBytes(180, "install", "-r", "-d", receiver.toString());
+                rig.check(phone.version().equals(treeVersion), "the phone runs " + treeVersion + ": " + phone.version());
+                // "Install unknown apps" off before the app opens: Android ends an app whose switch is turned off (the
+                // 2026-11-21 09:38 run did it while connected: the link was lost, the PC's question went nowhere)
+                phone.shell("appops set " + APP + " REQUEST_INSTALL_PACKAGES default");
+                phone.grantPermissions();
+                phone.launch();
+                if (phone.texts().contains("START")) phone.tap("START");
+                int hostPort = phone.forwardUdp(PhoneRig.linkOnThePhone());
+                try (Wire wire = new Wire(InetAddress.getLoopbackAddress(), hostPort)) {
+                    wire.rule(BadLink.clean(54));
+                    rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
+                    rig.fleet.startHeartbeat();
+                    @SuppressWarnings("rawtypes")
+                    JComboBox phones = ui.all(JComboBox.class).get(0);
+                    ui.until("the phone in the PC's PHONE list", 60_000, () -> phones.getItemCount() > 0 && String.valueOf(phones.getItemAt(0)).contains("online"));
+                    pilot.connect();
+                    rig.waitForLog("Video: H.26", 60_000);
+                    ui.until("UPDATE PHONE APP offered", 30_000, () -> ui.has("UPDATE PHONE APP"));
+                    boolean oldSaid = false;
+                    try {
+                        ui.until("the card's line about the old app", 5_000, () -> ui.sees("Old phone app"));
+                        oldSaid = true;
+                    } catch (Throwable t) {
+                        rig.film.remark("The card: " + t.getMessage());
+                    }
+                    rig.check(oldSaid, "the PC says the phone app is older than the one it has");
+                    ui.shot("an older phone app: UPDATE PHONE APP");
+                    String from = phone.now();
+
+                    // ---- A. "Install unknown apps" not allowed for the app (F-058, this scenario's first run: Android
+                    // put its question up after the download): refused at once, the reason on the PC, nothing fetched
+                    rig.check(!phone.shell("appops get " + APP + " REQUEST_INSTALL_PACKAGES").contains("allow"),"\"Install unknown apps\" off on the phone");
+                    ui.click("UPDATE PHONE APP");
+                    ui.until("the PC asks first", 10_000, () -> ui.sees(newVersion));
+                    ui.click("Yes");
+                    boolean said = false;
+                    try {
+                        ui.until("the phone's reason on the PC", 20_000, () -> ui.sees("Install unknown apps"));
+                        said = true;
+                    } catch (Throwable t) {
+                        rig.film.remark("Not allowed to install: " + t.getMessage());
+                    }
+                    rig.check(said, "\"Install unknown apps\" not allowed: the PC says so at once");
+                    rig.check(served[0] == 0, "and the phone fetched nothing (" + served[0] + " download(s))");
+                    rig.check(!inFront(phone).contains("packageinstaller"), "and Android asks nothing on the phone");
+                    ui.shot("not allowed to install: the PC says why");
+                    phone.shot("not allowed to install: the phone");
+                    ui.until("UPDATE PHONE APP again", 30_000, () -> ui.has("UPDATE PHONE APP") && Ui.edt(() -> ui.find("UPDATE PHONE APP").isEnabled()));
+
+                    // ---- B. allowed once by hand, as on a drone's phone that is set up: the update goes through
+                    phone.shell("appops set " + APP + " REQUEST_INSTALL_PACKAGES allow");
+                    long t0 = System.currentTimeMillis();
+                    ui.click("UPDATE PHONE APP");
+                    ui.until("the PC asks first", 10_000, () -> ui.sees(newVersion));
+                    ui.shot("the PC asks first");
+                    ui.click("Yes");
+                    // downloading, checking, installing: Android's question must not come, the new app must
+                    String question = "";
+                    boolean updated = false;
+                    long until = System.currentTimeMillis() + 240_000;
+                    while (!updated && System.currentTimeMillis() < until) {
+                        Ui.pause(2000);
+                        String front = inFront(phone);
+                        if (front.contains("packageinstaller") && question.isEmpty()) {
+                            question = front;
+                            phone.shot("Android's installer in front");
+                        }
+                        updated = newVersion.equals(phone.version());
+                    }
+                    long installedS = (System.currentTimeMillis() - t0) / 1000;
+                    rig.check(served[0] >= 1, "the phone downloaded the newer app from the address the PC sent (" + served[0] + " time(s))");
+                    rig.check(updated, "the phone runs " + newVersion + (updated ? ", " + installedS + " s after UPDATE PHONE APP" : " - not within 4 min: " + phone.version()));
+                    rig.check(question.isEmpty(), "Android asked nothing on the phone (\"Update this app?\")" + (question.isEmpty() ? "" : ": " + question));
+                    boolean back = false;
+                    try {
+                        ui.until("the link back by itself", 120_000, pilot::linkUp);
+                        back = true;
+                    } catch (Throwable t) {
+                        rig.film.remark("After the update: " + t.getMessage());
+                    }
+                    rig.check(back, "the app open again by itself and the PC's link back, nobody touching the phone");
+                    if (back) {
+                        ui.until("the PC to say the new version", 30_000, () -> rig.log().stream().anyMatch(l -> l.contains("Phone app updated to " + newVersion)));
+                        // the card is refreshed once a second and folds the button away: a few seconds, not the moment
+                        boolean gone = false;
+                        long by = System.currentTimeMillis() + 10_000;
+                        while (!gone && System.currentTimeMillis() < by) {
+                            gone = !ui.has("UPDATE PHONE APP") || !ui.sees("Old phone app");
+                            if (!gone) Ui.pause(500);
+                        }
+                        rig.check(gone, "no longer offered: the phone has the newest");
+                    }
+                    ui.shot("after the update");
+                    phone.shot("the phone after the update");
+                    String log = phone.logSince(from);
+                    Files.writeString(rig.film.dir().resolve("phone-log.txt"), log, StandardCharsets.UTF_8);
+                    rig.check(!log.contains("FATAL EXCEPTION"), "no crash in the phone app's log");
+                    if (pilot.linkUp()) pilot.standby();
+                } finally {
+                    // as found for the next scenarios: the normal pc.54 build (a lower version code: "-d")
+                    try {
+                        String said = new String(phone.adbBytes(180, "install", "-r", "-d", PhoneRig.builtApk().toString()), StandardCharsets.UTF_8);
+                        if (!said.contains("Success")) throw new IllegalStateException(said);
+                        rig.check(phone.version().equals(treeVersion), "the normal phone app is back for the next scenarios: " + phone.version());
+                        phone.grantPermissions();
+                        phone.launch();
+                    } catch (RuntimeException e) {
+                        rig.film.remark("The normal phone app not put back: " + e.getMessage());
+                    }
+                    phone.close();
+                }
+            });
+        } finally {
+            web.stop(0);
+            System.clearProperty("draupne.bench.phoneApp");
+        }
+    }
+}

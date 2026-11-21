@@ -182,9 +182,9 @@ public final class OpenAipAirspace {
             String url = API + "?bbox=" + lon + "," + lat + "," + (lon + 1) + "," + (lat + 1) + "&type=" + TYPE_RESTRICTED + "&type=" + TYPE_DANGER
                     + "&type=" + TYPE_PROHIBITED + "&limit=1000&page=" + page;
             try {
-                HttpRequest r = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(20)).header("User-Agent", userAgent)
+                HttpRequest r = HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url(url))).timeout(Duration.ofSeconds(20)).header("User-Agent", userAgent)
                         .header("Accept", "application/json").header("x-openaip-api-key", key.trim()).GET().build();
-                HttpResponse<String> resp = http.send(r, HttpResponse.BodyHandlers.ofString());
+                HttpResponse<String> resp = de.droiddrone.pc.Net.send(http, r, HttpResponse.BodyHandlers.ofString(), 45_000);
                 if (resp.statusCode() != 200) return new Fetched(null, resp.statusCode());
                 JsonObject o = JsonParser.parseString(resp.body()).getAsJsonObject();
                 if (o.has("items")) all.addAll(o.getAsJsonArray("items"));

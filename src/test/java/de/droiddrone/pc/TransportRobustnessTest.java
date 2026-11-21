@@ -159,6 +159,75 @@ class TransportRobustnessTest {
         }
     }
 
+    /**
+     * F-057 (the bench's bad-link table, 2026-11-21: a 3 s one-way cut, LINK READY 1.06 s after the phone was heard,
+     * 0.86 s before F-001): the PC's Connect began the phone's new session and the answer was lost on the dead way
+     * back. When it opens, the phone's new session's first numbers come - the PC took them as strangers to its old
+     * session until recoverCounter mended it. With a Connect out unanswered they start the session at once.
+     */
+    @Test
+    void theFarSidesNewSessionIsTakenWithoutItsLostAnswer() throws Exception {
+        try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
+            AtomicLong clock = new AtomicLong();
+            ReceiverBuffer client = sessionAt(socket, clock, 2000);
+            client.awaitAnswer(); // the link lost, a Connect sent: its answer lost
+            client.addPacket(numbered(UdpCommon.FcInfo, 0)); // the new session's first
+            assertEquals(1, drain(client), "taken at once, not left for recoverCounter");
+            assertEquals(1, client.getUnansweredStarts());
+            client.addPacket(numbered(UdpCommon.FcInfo, 1));
+            assertEquals(1, drain(client), "and the session's numbering goes on from there");
+            assertTrue(client.isConnected());
+        }
+        try (DatagramSocket socket = new DatagramSocket(0, FAR)) { // the same without a Connect out: as before
+            AtomicLong clock = new AtomicLong();
+            ReceiverBuffer client = sessionAt(socket, clock, 2000);
+            client.addPacket(numbered(UdpCommon.FcInfo, 0));
+            assertEquals(0, drain(client), "no Connect of ours out: a stranger, as ever");
+            assertEquals(0, client.getUnansweredStarts());
+        }
+    }
+
+    /** F-057's rule starts nothing new where the old session goes on: a late copy, or the session's own numbers first. */
+    @Test
+    void aLateCopyOrTheOldSessionGoingOnStartsNoNewOne() throws Exception {
+        try (DatagramSocket socket = new DatagramSocket(0, FAR)) {
+            AtomicLong clock = new AtomicLong();
+            ReceiverBuffer client = sessionAt(socket, clock, 600);
+            client.awaitAnswer();
+            client.addPacket(numbered(UdpCommon.FcInfo, 500)); // 100 behind: a late copy of this session's
+            assertEquals(0, client.getUnansweredStarts(), "a late copy is no new session");
+            client.addPacket(numbered(UdpCommon.FcInfo, 600)); // the session's own next number: it goes on (a two-way cut)
+            assertEquals(1, drain(client));
+            client.addPacket(numbered(UdpCommon.FcInfo, 0)); // then a small number: not the far side's new session
+            assertEquals(0, client.getUnansweredStarts(), "the Connect is no longer out: the old session answered for it");
+        }
+        try (DatagramSocket socket = new DatagramSocket(0, FAR)) { // the far side (the phone) never takes it
+            AtomicLong clock = new AtomicLong();
+            UdpSender sender = new UdpSender(socket);
+            ReceiverBuffer server = new ReceiverBuffer(sender, true, "DD", "DD", clock::get);
+            server.awaitAnswer();
+            byte[] c = connect().getData();
+            server.addPacket(new DatagramPacket(c, c.length, FAR, 50_000));
+            drain(server);
+            for (int n = 0; n < 2000; n++) {
+                server.addPacket(numbered(UdpCommon.FcInfo, n));
+                drain(server);
+            }
+            server.addPacket(numbered(UdpCommon.FcInfo, 3));
+            assertEquals(0, server.getUnansweredStarts(), "the phone's side: no such rule");
+        }
+    }
+
+    /** A connected client whose session has delivered numbers 0 .. next-1. */
+    private static ReceiverBuffer sessionAt(DatagramSocket socket, AtomicLong clock, int next) throws Exception {
+        ReceiverBuffer client = connectedClient(socket, clock);
+        for (int n = 0; n < next; n++) {
+            client.addPacket(numbered(UdpCommon.FcInfo, n));
+            assertEquals(1, drain(client));
+        }
+        return client;
+    }
+
     private static void tick(ReceiverBuffer b, AtomicLong clock, int ms) {
         for (int i = 0; i < ms; i++) {
             clock.incrementAndGet();

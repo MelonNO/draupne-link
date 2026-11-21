@@ -21,6 +21,11 @@ import static de.droiddrone.common.Logcat.log;
 public class PowerAlarmReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context context, Intent intent) {
+        if (intent != null && CrashGuard.ACTION_REOPEN.equals(intent.getAction())) { // pc.55: an error ended the app a moment ago
+            final PendingResult pending = goAsync(); // it may have to wait a moment for the screen's lock
+            CrashGuard.reopen(context, pending::finish);
+            return;
+        }
         log("Sleep check alarm fired");
         PowerMode.alarmFired(context);
     }

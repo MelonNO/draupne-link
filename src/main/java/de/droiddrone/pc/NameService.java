@@ -217,6 +217,31 @@ public final class NameService {
     /** 1.0.64: how often each address is asked (the scan's thread). */
     private final ScanPace pace = new ScanPace();
     /** 1.0.64: the power mode each address said in its last own answer (any thread reads; the scan writes). */
+    /** The phones told of that no name is left for them (their addresses): once each. */
+    private final Set<String> noNameSaid = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * The names the master gives in one round: each unnamed phone (by its address, in the order heard) the next free
+     * name, none twice; a phone for which no name is left is not in the answer.
+     * @param firstFree the first free name given those handed out in this round already; null when none is left
+     */
+    static java.util.Map<String, String> namesFor(List<String> unnamedPhones, java.util.function.Function<List<String>, String> firstFree) {
+        java.util.Map<String, String> named = new java.util.LinkedHashMap<>();
+        List<String> given = new ArrayList<>();
+        for (String ip : unnamedPhones) {
+            String name = firstFree.apply(given);
+            if (name == null) continue;
+            given.add(name);
+            named.put(ip, name);
+        }
+        return named;
+    }
+
+    /** What the log says when a new phone can't be named: all 26 names are in the name map. */
+    static String noNameLeft(String ip) {
+        return "Names: no name left for the phone at " + ip + " - all 26 are taken. Remove one no longer used: MENU > LINK > Name map.";
+    }
+
     private final java.util.Map<String, Integer> saidMode = new java.util.concurrent.ConcurrentHashMap<>();
 
     /** 1.0.64: when it said so (MonoClock). */
@@ -576,16 +601,24 @@ public final class NameService {
                 String free = names.firstFree(Names.Kind.PC, onlinePcNames);
                 if (free != null) {
                     saver.accept(java.util.Map.of(Names.PC_NAME_KEY, free));
-                    log.accept("This PC is " + free + (own.isEmpty() ? "." : " (" + own + " was taken)."));
+                    // 1.0.71 (the test bench's F-012): a name that is none of the app's was said to be "taken"
+                    log.accept("This PC is " + free + (own.isEmpty() ? "." : Names.letterOf(own) < 0 ? " (" + own + " is not a PC name)."
+                            : " (" + own + " was taken)."));
                     own = free;
                 }
             }
             master = names.isMaster(own);
             if (master) {
                 List<String> given = new ArrayList<>();
+                java.util.Map<String, String> named = namesFor(unnamedPhones, taken -> names.firstFree(Names.Kind.PHONE, taken));
                 for (String ip : unnamedPhones) {
-                    String name = names.firstFree(Names.Kind.PHONE, given);
-                    if (name == null) break;
+                    String name = named.get(ip);
+                    if (name == null) {
+                        // F-029: the name map keeps every phone it ever saw; the 27th got no name and no word, and
+                        // never came into the PHONE list. Said once a phone
+                        if (noNameSaid.add(ip)) log.accept(noNameLeft(ip));
+                        continue;
+                    }
                     given.add(name);
                     byte[] assign = Names.assign(key, name);
                     try {

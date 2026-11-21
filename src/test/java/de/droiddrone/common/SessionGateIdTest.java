@@ -174,6 +174,35 @@ class SessionGateIdTest {
         assertEquals(WRONG_KEY, g.fromOther(wrong, wrong.length, false, true, later + 60_000, 51));
     }
 
+    /**
+     * 1.0.71 / pc.55: the pilot PC's address changed under its session (no Tailscale): its Connects come from another
+     * address with its own count's next ids. Let in once its old address is silent SAME_IP_SILENT_MS, armed or not -
+     * before, refused while the drone may fly, the pilot a spectator of itself. Another PC's ids are not that count.
+     */
+    @Test
+    void thePilotPcAtANewAddressIsKnownByItsIds() {
+        SessionGate g = new SessionGate(KEY);
+        assertEquals(NEW_SESSION, noSession(g, connect(KEY, 1000), 0));
+        assertEquals(TAKE, fromPilot(g, PING, 5000)); // flying: heard to 5 s
+        byte[] moved = connect(KEY, 1001), stranger = connect(KEY, 77), farOn = connect(KEY, 1000 + SessionGate.OLDER_TRIES + 1);
+        long t = 5000 + Takeover.SAME_IP_SILENT_MS;
+        assertEquals(REFUSED, g.fromOther(moved, moved.length, false, false, t - 1, 1001), "its old address heard moments ago: refused");
+        assertEquals(REFUSED, g.fromOther(stranger, stranger.length, false, false, t, 77), "another PC, armed: refused as ever");
+        assertEquals(REFUSED, g.fromOther(farOn, farOn.length, false, false, t, 1000 + SessionGate.OLDER_TRIES + 1), "too far on to be its count");
+        assertEquals(NEW_SESSION, g.fromOther(moved, moved.length, false, false, t, 1001), "its next id, its old address silent: in, armed");
+        assertEquals(SAME_SESSION, fromPilot(g, moved, t + 100), "its session now");
+        byte[] wrong = connect("XX", 1002);
+        assertEquals(WRONG_KEY, g.fromOther(wrong, wrong.length, false, false, t + 10_000, 1002), "never without the key");
+
+        // the phone's session timed out meanwhile: the same rule after it
+        SessionGate h = new SessionGate(KEY);
+        assertEquals(NEW_SESSION, noSession(h, connect(KEY, 5000), 0));
+        assertEquals(TAKE, fromPilot(h, PING, 1000));
+        byte[] next = connect(KEY, 5002), other = connect(KEY, 9);
+        assertEquals(SPECTATOR, h.noSession(other, other.length, true, false, false, () -> false, 8000, 9), "another PC, armed: a spectator");
+        assertEquals(NEW_SESSION, h.noSession(next, next.length, true, false, false, () -> false, 8000, 5002), "the pilot PC moved: in");
+    }
+
     @Test
     void withNoSessionUpTheSameIdStartsOneAgain() {
         // the phone's session timed out (4 s without a packet) while the PC's Connects with that id still come
@@ -207,6 +236,61 @@ class SessionGateIdTest {
         assertEquals(2, ids.current());
         assertEquals(3, ids.next(13_801, 0));
         assertEquals(3, ids.next(13_900, 0));
+    }
+
+    @Test
+    void aPhoneHeardNotAtAllKeepsItsIdFourSeconds() {
+        // F-001, the pilot's rule (2026-11-20): a link dead one way - the phone hears the Connects, the PC hears nothing
+        SessionGate.Ids ids = new SessionGate.Ids(100);
+        long heardAt = 9_000; // the last the PC heard of the phone: before the cut
+        long first = ids.next(10_000, 0, heardAt);
+        assertEquals(101, first, "the link went: a new id at once, one session");
+        assertEquals(first, ids.next(10_000 + SAME_SESSION_MS, 0, heardAt), "unanswered a second, nothing heard: kept");
+        assertEquals(first, ids.next(10_000 + SessionGate.Ids.UNHEARD_KEEP_MS - 1, 0, heardAt));
+        assertEquals(102, ids.next(10_000 + SessionGate.Ids.UNHEARD_KEEP_MS, 0, heardAt), "after 4 s: a new one");
+    }
+
+    @Test
+    void aNewIdIsDueTheMomentThePhoneIsHeardAgain() {
+        // F-001: a 3 s one-way cut - the id kept while unheard is given up as soon as the phone is heard, so the PC
+        // sends that Connect at once (the bad-link table: LINK READY within a second of the phone heard again)
+        SessionGate.Ids ids = new SessionGate.Ids(7);
+        assertFalse(ids.renewDue(10_000, 0), "nothing tried yet");
+        ids.next(10_000, 0, 9_000);
+        assertFalse(ids.renewDue(10_500, 9_000), "half a second: kept");
+        assertFalse(ids.renewDue(11_200, 9_000), "unheard: kept 4 s");
+        assertTrue(ids.renewDue(11_200, 11_150), "heard at 11.15 s, the id 1.2 s old: due now");
+        assertTrue(ids.renewDue(14_000, 9_000), "unheard 4 s: due");
+        ids.sessionUp();
+        assertFalse(ids.renewDue(20_000, 19_000), "a session up: nothing tried");
+    }
+
+    @Test
+    void aPhoneHeardSinceTheIdWentOutGetsANewIdAfterASecondAsBefore() {
+        // heard, but no answer: the answer is what was lost - mended by the next id after a second, as ever
+        SessionGate.Ids ids = new SessionGate.Ids(100);
+        long first = ids.next(10_000, 0, 9_000);
+        assertEquals(first, ids.next(10_500, 0, 10_400));
+        assertEquals(first + 1, ids.next(10_000 + SAME_SESSION_MS, 0, 10_400), "heard at 10.4 s: a new id at 11 s");
+    }
+
+    @Test
+    void aOneWayCutOfSixSecondsMakesTwoSessionsNotFive() {
+        // the bad-link table's cell "cut 6 s phone to PC only": Connects every 100 ms, the phone hears each
+        SessionGate.Ids ids = new SessionGate.Ids(0);
+        SessionGate phone = new SessionGate(KEY);
+        long cutAt = 10_000, backAt = 16_000, heardAt = cutAt;
+        int sessions = 0;
+        // the PC counts the link lost 2 s into the cut and tries from then on
+        for (long t = cutAt + 2000; t < backAt; t += 100) {
+            if (fromPilot(phone, connect(KEY, ids.next(t, 0, heardAt)), t) == NEW_SESSION) sessions++;
+        }
+        assertTrue(sessions <= 2, "one when the link goes, about one when it is back: " + sessions);
+        assertTrue(sessions >= 1);
+        // back: the phone's answer is heard - the session is up on the id in use
+        ids.sessionUp();
+        assertEquals(NEW_SESSION, fromPilot(phone, connect(KEY, ids.next(backAt + 3000, 0, backAt + 2900)), backAt + 3000),
+                "the next loss starts at once with a new id");
     }
 
     @Test

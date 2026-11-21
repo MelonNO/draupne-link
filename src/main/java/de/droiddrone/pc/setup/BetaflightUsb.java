@@ -25,7 +25,7 @@ public final class BetaflightUsb implements AutoCloseable {
     }
 
     /** The bytes to and from the flight controller: the serial port, or a fake one in tests. */
-    interface Wire {
+    public interface Wire {
         /** What has arrived, waiting a little (the port's read timeout) for the first byte: 0 = nothing, -1 = gone. */
         int read(byte[] buf) throws IOException;
 
@@ -67,6 +67,8 @@ public final class BetaflightUsb implements AutoCloseable {
     private final Wire wire;
     /** The CLI is open: closing the port then sends "exit", so the board isn't left in CLI mode. */
     private boolean inCli;
+    /** The port is with the ESCs (the passthrough): closing it ends that first, so the board is not left there. */
+    private EscLink escs;
 
     private BetaflightUsb(Wire wire) {
         this.wire = wire;
@@ -77,8 +79,28 @@ public final class BetaflightUsb implements AutoCloseable {
         return new BetaflightUsb(wire);
     }
 
+    /**
+     * The test bench's USB (1.0.71): the ports it says are there and what answers on them, instead of this PC's serial
+     * ports - so Drone setup, the motor test and the compass pages can be run with no board, and never touch one
+     * that is plugged in. The app itself never sets it.
+     */
+    public interface Usb {
+        List<Port> ports();
+
+        Wire open(Port port) throws IOException;
+    }
+
+    private static volatile Usb usb;
+
+    /** The test bench only; null puts this PC's serial ports back. */
+    public static void use(Usb standIn) {
+        usb = standIn;
+    }
+
     /** Serial ports that look like a flight controller's USB, by vendor or by name. */
     public static List<Port> findFlightControllers() {
+        Usb standIn = usb;
+        if (standIn != null) return standIn.ports();
         List<Port> found = new ArrayList<>();
         for (SerialPort p : SerialPort.getCommPorts()) {
             if (isFlightController(p.getVendorID(), p.getPortDescription() + " " + p.getDescriptivePortName())) {
@@ -95,6 +117,8 @@ public final class BetaflightUsb implements AutoCloseable {
     }
 
     public static BetaflightUsb open(Port p) throws IOException {
+        Usb standIn = usb;
+        if (standIn != null) return new BetaflightUsb(standIn.open(p));
         SerialPort port = SerialPort.getCommPort(p.systemName());
         port.setComPortParameters(115200, 8, SerialPort.ONE_STOP_BIT, SerialPort.NO_PARITY);
         port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, 100, 1000);
@@ -357,9 +381,26 @@ public final class BetaflightUsb implements AutoCloseable {
         wire.write(data);
     }
 
+    /**
+     * Hands the port to the ESCs (1.0.71, {@link EscLink}): Betaflight stops its motor outputs and passes what the PC
+     * says on to each ESC's bootloader, until the returned link is closed - only then MSP answers again. Refused on
+     * an armed drone and with the CLI open. Battery on, props off.
+     */
+    public EscLink escs(java.util.function.Consumer<String> log) throws IOException {
+        if (inCli) throw new IOException("The CLI is open");
+        if (escs != null && !escs.closed()) throw new IOException("The ESC passthrough is open already");
+        if (MotorTest.armed(msp(de.droiddrone.common.FcCommon.MSP_STATUS, null))) throw new IOException("The drone is armed. Disarm it first.");
+        byte[] answer = msp(EscLink.MSP_SET_PASSTHROUGH, null);
+        int count = answer.length > 0 ? answer[0] & 0xff : 0;
+        if (count == 0) throw new IOException("Betaflight has no motor outputs for the ESCs.");
+        escs = new EscLink(wire, count, log);
+        return escs;
+    }
+
     /** Lets go of the port; with the CLI open, "exit" goes first so the board isn't left in CLI mode (it restarts). */
     @Override
     public void close() {
+        if (escs != null && !escs.closed() && wire.isOpen()) escs.close();
         if (inCli && wire.isOpen()) {
             inCli = false;
             try {

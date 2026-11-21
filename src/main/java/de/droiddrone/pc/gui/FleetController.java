@@ -264,6 +264,13 @@ final class FleetController {
     }
 
     /** True when this PC's pilot link is to that phone. */
+    /** This PC's pilot link to the chosen phone ends now: what that phone says in the next seconds is still of it. */
+    void pilotLeft() {
+        Connection c = host.connection();
+        if (c == null || c.getLink().isSpectator()) return;
+        fleet.pilotLeft(config.getString(Names.PHONE_NAME_KEY), System.currentTimeMillis());
+    }
+
     boolean connectedTo(String phone) {
         Connection c = host.connection();
         return c != null && !c.getLink().isSpectator() && phone.equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY));
@@ -459,7 +466,7 @@ final class FleetController {
                     sleeping == null ? 0 : power.checkInOverdue(sleeping, now), e.ip() != null && standbyPhones.containsKey(e.ip()),
                     said, saidAge, e.online() || now - heardAt < 30_000, wasFlying);
             // 1.0.71: what the phone is confirmed as now is remembered (on disk), for when it is UNKNOWN later
-            de.droiddrone.pc.LastKnown store = e.isVirtual() ? null : lastKnown;
+            de.droiddrone.pc.LastKnown store = MainWindow.savesNothing(e) ? null : lastKnown;
             String confirmed = de.droiddrone.pc.LastKnown.modeWord(badge.text());
             if (store != null && confirmed != null && badge.kind() != MapView.Kind.UNKNOWN) store.mode(e.name(), confirmed, here || heardAt <= 0 ? now : heardAt);
             String was = null;

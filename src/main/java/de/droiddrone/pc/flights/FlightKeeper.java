@@ -52,6 +52,33 @@ public final class FlightKeeper {
         return gone;
     }
 
+    /**
+     * What a record's own files say of arming: its link log (a row a second, column "armed") or its track (each
+     * point's dl:armed). When either has the drone armed: that file's last change, as "last seen armed"; else 0.
+     */
+    static long armedByItsFiles(FlightRecord r) {
+        Path log = r.linkLog(), track = r.track();
+        try {
+            if (log != null && Files.isRegularFile(log)) {
+                List<String> rows = Files.readAllLines(log, java.nio.charset.StandardCharsets.UTF_8);
+                int column = rows.isEmpty() ? -1 : java.util.Arrays.asList(rows.get(0).split(",", -1)).indexOf("armed");
+                for (int i = 1; column >= 0 && i < rows.size(); i++) {
+                    String[] cells = rows.get(i).split(",", column + 2);
+                    if (cells.length > column && cells[column].trim().equals("1")) return Math.max(1, Files.getLastModifiedTime(log).toMillis());
+                }
+            }
+        } catch (IOException | RuntimeException ignored) {
+            // not readable: the track is asked
+        }
+        try {
+            if (track != null && Files.isRegularFile(track) && Files.readString(track, java.nio.charset.StandardCharsets.UTF_8).contains("<dl:armed>1</dl:armed>")) {
+                return Math.max(1, Files.getLastModifiedTime(track).toMillis());
+            }
+        } catch (IOException | RuntimeException ignored) {
+        }
+        return 0;
+    }
+
     /** x.gpx / x.mkv -> x + suffix, in the same folder. */
     private static Path beside(Path f, String suffix) {
         String name = f.getFileName().toString();
@@ -69,7 +96,14 @@ public final class FlightKeeper {
     public static List<FlightRecord> recover(Path tracksDir) {
         List<FlightRecord> kept = new ArrayList<>();
         for (FlightRecord r : FlightRecord.readAll(tracksDir)) {
-            if (r.isLive()) continue;
+            if (r.isLive() || r.heldElsewhere()) continue; // open now, here or in another copy of the app: not a closed app's
+            if (!r.wasArmed() && !r.finished()) {
+                // never closed, and nothing in it says armed - before its files go, they are asked: the line is
+                // written by the window, and a window that froze before the arming never wrote it while the sticks
+                // flew on. In doubt the flight is kept
+                long armedAt = armedByItsFiles(r);
+                if (armedAt > 0) r.armed(armedAt);
+            }
             if (!r.wasArmed()) {
                 deleteUnarmed(r, null, List.of());
             } else if (!r.finished()) {

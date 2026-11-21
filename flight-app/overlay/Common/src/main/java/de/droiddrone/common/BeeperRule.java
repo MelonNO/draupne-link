@@ -90,6 +90,23 @@ public final class BeeperRule {
     }
 
     /**
+     * F-051 (the pilot, 2026-11-20): OUT OF ACTION asked of a drone already asleep with its beeper switched off - it
+     * wakes for the beeper (then sleeps again, {@link #backToSleep}). Not when its beeper was left on, or it is awake
+     * (the sleep it falls into next leaves the beeper on by {@link #muteForSleep}).
+     */
+    public static boolean wakeForBeeper(boolean outOfAction, boolean asleep, boolean beeperQuieted) {
+        return outOfAction && asleep && beeperQuieted;
+    }
+
+    /**
+     * F-051: awake for its beeper, the drone sleeps again once the beeper is back and its flight controller is read as
+     * disarmed (unknown counts as armed: the sleep would be refused) - or when the time for it is up.
+     */
+    public static boolean backToSleep(boolean beeperQuieted, boolean armedOrUnknown, boolean timeUp) {
+        return timeUp || !beeperQuieted && !armedOrUnknown;
+    }
+
+    /**
      * pc.54: idle sticks of the phone's own, for when no PC has sent any (a phone put to standby from FLEET without a
      * session, a PC without a radio): roll, pitch and yaw centred, the throttle low, every AUX low - {@link #CHANNELS}
      * channels in the PC's order (roll, pitch, yaw, throttle, AUX1 ...). Null when that could arm by the flight

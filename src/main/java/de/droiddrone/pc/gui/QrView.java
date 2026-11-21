@@ -19,14 +19,29 @@ import java.util.Map;
 class QrView extends JComponent {
     private BitMatrix matrix;
     private String caption = "";
+    /** In the empty box: why there is no code (F-043: it stood empty, the reason a row further down). */
+    private String inside = "";
 
     QrView(int size) {
         setPreferredSize(new Dimension(size, size + 26));
         setOpaque(false);
     }
 
+    /** No code: the box says why, in its middle ("Preparing...", "App not ready"). */
+    void showNone(String why) {
+        setContent(null, "");
+        inside = why == null ? "" : why;
+        repaint();
+    }
+
+    /** What the empty box says, "" when a code shows (for the tests). */
+    String insideText() {
+        return matrix == null ? inside : "";
+    }
+
     void setContent(String text, String caption) {
         this.caption = caption == null ? "" : caption;
+        this.inside = "";
         try {
             matrix = text == null || text.isEmpty() ? null
                     : new QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0, Map.of(EncodeHintType.MARGIN, 2));
@@ -58,6 +73,9 @@ class QrView extends JComponent {
         g.setFont(Theme.font(Font.BOLD, 12f));
         g.setColor(Theme.MUTED);
         FontMetrics fm = g.getFontMetrics();
+        if (matrix == null && !inside.isEmpty()) {
+            g.drawString(inside, x0 + (size - fm.stringWidth(inside)) / 2, size / 2 + fm.getAscent() / 2);
+        }
         g.drawString(caption, (getWidth() - fm.stringWidth(caption)) / 2, size + 18);
         g.dispose();
     }

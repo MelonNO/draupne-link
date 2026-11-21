@@ -138,9 +138,13 @@ class MapTest {
         assertEquals(3, gpx.split("<trkpt ").length - 1, "every point on disk before close()");
         assertTrue(gpx.contains("lat=\"59.9149000\""));
         String last = Files.readString(dir.resolve("last-position.txt"));
-        assertTrue(last.contains("59.915900, 10.752200"), last); // at the first point, then at most once a second: t=1000 and t=2000
+        // F-055: only a track that flew writes it - from the first armed point (t=1500), then at most once a second,
+        // so t=2000 waits; up to then the unarmed t=1000 began the count and t=2000 was written
+        assertTrue(last.contains("59.914900, 10.752200"), last);
         track.close();
         assertTrue(Files.readString(track.file()).trim().endsWith("</gpx>"));
+        last = Files.readString(dir.resolve("last-position.txt"));
+        assertTrue(last.contains("59.915900, 10.752200"), "at close the very last point: " + last);
         track.sample(fix(OSLO_LAT, OSLO_LON, 9000, 2), true);
         assertEquals(3, track.points().size(), "closed: no more points");
     }

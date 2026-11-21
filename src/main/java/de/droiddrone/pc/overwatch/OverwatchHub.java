@@ -748,7 +748,7 @@ public final class OverwatchHub implements AutoCloseable {
         try {
             r = t.clip.finish();
         } catch (IOException e) {
-            if (!t.renameFailedSaid) log(s.drone() + ": clip checked but can't be renamed (" + e.getMessage() + "): retrying.");
+            if (!t.renameFailedSaid) log(s.drone() + ": clip in but can't be " + (t.clip.checked() ? "renamed" : "checked") + " (" + e.getMessage() + "): retrying.");
             t.renameFailedSaid = true;
             return;
         }
@@ -840,7 +840,11 @@ public final class OverwatchHub implements AutoCloseable {
             if (s.card.ended(now) && (s.recorder != null || s.decoder != null)) s.closeMedia(); // lost: what came is kept
             if (s.live && now - s.liveAt > 3000) s.live = false;
             Transfer t = s.transfer;
-            if (t != null && t.clip.checked() && now - t.renameTriedAt >= RENAME_RETRY_MS) {
+            // all of it in, checked or not (2026-11-20, a reader of this code): finished from here too. A clip whose
+            // .part was already whole when it was announced (the PC restarted after its last chunk), or whose check
+            // could not read it once (a virus scanner holding it), had nothing more to ask and no chunk to come - it
+            // stayed "coming" for good, and the phone kept its copy
+            if (t != null && (t.clip.checked() || t.clip.complete()) && now - t.renameTriedAt >= RENAME_RETRY_MS) {
                 finishClip(s, t, now); // in and checked, its rename failed: again (1.0.49; it stuck forever)
             } else if (t != null) {
                 long[] ask = t.clip.next(now, flies);

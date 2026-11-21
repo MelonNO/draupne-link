@@ -67,10 +67,44 @@ public final class AppLog {
         return file;
     }
 
-    /** One line, time-stamped. Never blocks. */
+    /** One line, time-stamped. Never blocks. A line repeated without end is written {@link #FLOOD_LINES} times in 5 s, then counted. */
     public static void line(String text) {
         if (file == null) return;
-        queue.offer(LocalDateTime.now().format(TIME) + "  " + text);
+        for (String out : flood.take(text, System.currentTimeMillis())) queue.offer(LocalDateTime.now().format(TIME) + "  " + out);
+    }
+
+    static final int FLOOD_LINES = 20;
+    static final long FLOOD_MS = 5000;
+    private static final Flood flood = new Flood();
+
+    /**
+     * The same line again and again - an error at every turn of a loop. F-025 (the test bench, 2026-11-19): one wrong
+     * value in the settings file wrote 418,940 lines, 64 MB, into this log in ten seconds, and would have gone on at
+     * that rate for as long as the app ran. The first {@link #FLOOD_LINES} of a line in {@link #FLOOD_MS} are
+     * written; the rest are counted and said in one line when another line comes or the stretch is over. A log as
+     * it normally is - no line twenty times in five seconds - is written as before.
+     */
+    static final class Flood {
+        private String text;
+        private long since;
+        private int seen, held;
+
+        /** What goes to the file for this line: the line, the line after the count of those held back, or nothing. */
+        synchronized List<String> take(String line, long nowMs) {
+            if (line.equals(text) && nowMs - since < FLOOD_MS) {
+                if (++seen > FLOOD_LINES) {
+                    held++;
+                    return List.of();
+                }
+                return List.of(line);
+            }
+            List<String> out = held > 0 ? List.of("(the line above " + held + " more times)", line) : List.of(line);
+            text = line;
+            since = nowMs;
+            seen = 1;
+            held = 0;
+            return out;
+        }
     }
 
     /** Waits (at most maxMs) until every queued line has been handed to the writer: before an exit. */

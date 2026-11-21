@@ -33,6 +33,10 @@
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- DRAUPNE Link: UPDATE installs the newer app itself (Android asks; "Install unknown apps" once) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- pc.55 (a reader of this code, 2026-11-20): Android 12 on installs a self-update without "update this app?" only
+         for an app that holds this one (granted at install) - without it every UPDATE PHONE APP stopped at the prompt,
+         on a phone nobody can reach -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
     <!-- DRAUPNE Link (pc.21): deep sleep's checks for the PC on time (Android 12+ asks the pilot), the screen lit
          over the lock screen when the PC wakes the phone, and the network usable during a check in doze -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />

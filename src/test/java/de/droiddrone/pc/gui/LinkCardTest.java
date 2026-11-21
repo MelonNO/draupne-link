@@ -92,4 +92,18 @@ class LinkCardTest {
         // the one still linked stays until the pilot ends it
         assertEquals(3, MainWindow.offeredPhones(all, java.util.Set.of("MobileZulu"), "mobilezulu").size());
     }
+
+    /**
+     * The test bench's F-037: the controller card said "LOWER THROTTLE TO ENABLE" whatever the sticks waited for -
+     * also with the throttle down and the ARM switch left on. It names what they wait for.
+     */
+    @Test
+    void theControllerCardNamesWhatTheSticksWaitFor() {
+        assertEquals("RC OUTPUT: OFF - LOWER THROTTLE TO ENABLE", MainWindow.rcOffLine("THROTTLE DOWN"));
+        assertEquals("RC OUTPUT: OFF - ARM SWITCH OFF TO ENABLE", MainWindow.rcOffLine("ARM SWITCH OFF"));
+        assertEquals("RC OUTPUT: OFF - THROTTLE DOWN, ARM OFF", MainWindow.rcOffLine("THROTTLE DOWN, ARM OFF"));
+        assertEquals("RC OUTPUT: OFF - READING FC", MainWindow.rcOffLine("READING FC"));
+        assertEquals("RC OUTPUT: OFF - PHONE UPDATING", MainWindow.rcOffLine("PHONE UPDATING"));
+        assertEquals("RC OUTPUT: OFF - LOWER THROTTLE TO ENABLE", MainWindow.rcOffLine(null), "as it was while nothing is known");
+    }
 }

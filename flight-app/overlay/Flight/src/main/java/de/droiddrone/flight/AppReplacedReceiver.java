@@ -38,6 +38,21 @@ public class AppReplacedReceiver extends BroadcastReceiver {
         AppUpdater.cleanUp(context);
         if (!RemoteUpdate.takePending(context)) return;
         log("Updated by the PC: opening again");
+        final PendingResult pending = goAsync(); // it may wait a moment for the screen's lock
+        CrashGuard.bringToFront(context, R.string.dd_updated_text, pending::finish);
+    }
+
+    /** The app is open: the notification that opened it (or asked to be tapped) has done its work. */
+    static void opened(Context context) {
+        try {
+            NotificationManager manager = context.getSystemService(NotificationManager.class);
+            if (manager != null) manager.cancel(NOTIFICATION_ID);
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    /** The app in front again from the background, the screen lit: after an update by the PC, and after an error ended it (pc.55, CrashGuard). */
+    static void openAgain(Context context, int text) {
         try {
             NotificationManager manager = context.getSystemService(NotificationManager.class);
             if (manager == null) return;
@@ -48,7 +63,7 @@ public class AppReplacedReceiver extends BroadcastReceiver {
             PendingIntent full = PendingIntent.getActivity(context, 2, open, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             Notification n = new NotificationCompat.Builder(context, DDService.WAKE_CHANNEL_ID)
                     .setContentTitle(context.getString(R.string.app_name))
-                    .setContentText(context.getString(R.string.dd_updated_text))
+                    .setContentText(context.getString(text))
                     .setSmallIcon(R.drawable.baseline_rocket_launch_24)
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
                     .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -56,6 +71,10 @@ public class AppReplacedReceiver extends BroadcastReceiver {
                     .setFullScreenIntent(full, true)
                     .setAutoCancel(true)
                     .build();
+            // pc.55: the one from last time goes first. A notification that is still there is only changed by a new
+            // one of its number, and a changed notification opens nothing: the second time the app was to come back
+            // by itself it did not (seen in the emulator, 2026-11-20)
+            manager.cancel(NOTIFICATION_ID);
             manager.notify(NOTIFICATION_ID, n);
         } catch (Exception e) {
             log("Updated notification error: " + e);

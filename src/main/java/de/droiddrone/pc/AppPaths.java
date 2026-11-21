@@ -14,6 +14,9 @@ public final class AppPaths {
     }
 
     private static Path appDataBase() {
+        // the test bench (1.0.71): each scenario's own empty folder instead of this user's - never set in the app itself
+        String bench = System.getProperty("draupne.appData");
+        if (bench != null && !bench.isBlank()) return Path.of(bench);
         String appData = System.getenv("APPDATA");
         return appData != null ? Path.of(appData) : Path.of(System.getProperty("user.home"));
     }
@@ -49,6 +52,20 @@ public final class AppPaths {
     /** Documents\DRAUPNE Link\Betaflight backups: Betaflight's settings, saved before Drone setup changes them. */
     public static Path betaflightBackupsDir() throws IOException {
         return Files.createDirectories(Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Betaflight backups"));
+    }
+
+    /**
+     * Documents\DRAUPNE Link\Exports, made if it is not there yet: where a save dialog for a report or an export
+     * starts. A dialog pointed at a folder that does not exist opens in plain Documents instead (F-024). The path
+     * alone when it can't be made - the dialog then starts where it can.
+     */
+    public static Path exportsDir() {
+        Path dir = Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports");
+        try {
+            return Files.createDirectories(dir);
+        } catch (IOException | RuntimeException e) {
+            return dir;
+        }
     }
 
     public static Path downloadsDir() throws IOException {

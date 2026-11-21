@@ -106,14 +106,41 @@ public class StreamEncoder {
         audioThreadId = 0;
     }
 
-    public Surface initializeVideo() {
+    /**
+     * pc.55: one thread for the encoder's answers. Without a Handler they came on the looper of the thread that made
+     * the codec - the camera's thread at a camera's open, the app's main (screen) thread at every size change made on
+     * the video starter's thread, which has none: from the first size change of a flight each encoded picture went
+     * through the screen's thread, and a screen held for two seconds (woken, its window made anew) was "no encoder
+     * output for 2000 ms" and a video restart for nothing.
+     */
+    private static android.os.Handler callbackHandler;
+
+    private static synchronized android.os.Handler callbackHandler() {
+        if (callbackHandler == null) {
+            android.os.HandlerThread t = new android.os.HandlerThread("videoEncoderCallbacks");
+            t.start();
+            callbackHandler = new android.os.Handler(t.getLooper());
+        }
+        return callbackHandler;
+    }
+
+    /**
+     * pc.55: synchronized with {@link #close} - both ran at once (this on the camera's thread after an open, close on
+     * the video starter's) and one could release or null the codec between two lines of the other.
+     */
+    public synchronized Surface initializeVideo() {
         if (videoEncoder != null) {
             try {
                 videoEncoder.stop();
             } catch (IllegalStateException e) {
                 e.printStackTrace();
             }
-            videoEncoder.release();
+            try {
+                videoEncoder.release();
+            } catch (RuntimeException e) {
+                log("StreamEncoder release error: " + e);
+            }
+            videoEncoder = null;
         }
         String encoderName = MediaCommon.getCodecName(codecType, true);
         if (encoderName == null) {
@@ -133,7 +160,7 @@ public class StreamEncoder {
         }
         videoStreamOutputBuffer.clear();
         videoRecorderOutputBuffer.clear();
-        videoEncoder.setCallback(encoderCallback);
+        videoEncoder.setCallback(encoderCallback, callbackHandler());
         // DRAUPNE Link: no intra refresh. 2.3.0-pc.13 used it where the encoder said it had it, and on a test phone
         // the video never started (and held up the sticks, see Udp.videoStarter). Key frames every 2 s and on request.
         intraRefresh = false;
@@ -148,7 +175,7 @@ public class StreamEncoder {
             try {
                 videoEncoder.release();
                 videoEncoder = MediaCodec.createByCodecName(encoderName);
-                videoEncoder.setCallback(encoderCallback);
+                videoEncoder.setCallback(encoderCallback, callbackHandler());
                 videoEncoder.configure(getEncoderFormat(false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             } catch (Exception e2) {
                 log("StreamEncoder configure error: " + e2);
@@ -162,7 +189,7 @@ public class StreamEncoder {
         try {
             surface = videoEncoder.createInputSurface();
             videoEncoder.start();
-        } catch (IllegalStateException e) {
+        } catch (RuntimeException e) { // pc.55: not only IllegalStateException (a codec the system took back: MediaCodec.CodecException is one, so is a NullPointerException of a released one)
             log("videoEncoder.start error: " + e);
             e.printStackTrace();
             surface = null;
@@ -621,7 +648,7 @@ public class StreamEncoder {
             }
             if (writeToRecorder) {
                 videoRecorderOutputBuffer.offer(new MediaCodecBuffer(info, buf));
-                if (videoRecorderOutputBuffer.size() > maxOutputBufferSize) videoRecorderOutputBuffer.remove();
+                if (videoRecorderOutputBuffer.size() > maxOutputBufferSize) videoRecorderOutputBuffer.poll(); // pc.55: not remove(), which throws on a queue another thread emptied meanwhile
             }
             if (encoderBitrateChange){
                 log("Encoder bitrate change: " + encoderBitRate() + (parityPermille > 0 ? " (step " + baseBitRates[bitRateIndex] + ", parity " + parityPermille / 10 + " %)" : ""));
@@ -715,7 +742,7 @@ public class StreamEncoder {
         sendFrames = true;
     }
 
-    public void close(){
+    public synchronized void close(){
         sendFrames = false;
         audioThreadId++;
         stopListening(); // pc.45
@@ -726,7 +753,11 @@ public class StreamEncoder {
                 videoEncoder.stop();
             }catch (IllegalStateException ignored){
             }
-            videoEncoder.release();
+            try {
+                videoEncoder.release();
+            } catch (RuntimeException e) {
+                log("StreamEncoder release error: " + e);
+            }
             videoEncoder = null;
         }
         if (isAudioSending) {
@@ -737,7 +768,11 @@ public class StreamEncoder {
             }catch (Exception e){
                 e.printStackTrace();
             }
-            audioEncoder.release();
+            try {
+                audioEncoder.release();
+            } catch (RuntimeException e) {
+                log("Audio encoder release error: " + e);
+            }
         }
         videoStreamOutputBuffer.clear();
         videoRecorderOutputBuffer.clear();

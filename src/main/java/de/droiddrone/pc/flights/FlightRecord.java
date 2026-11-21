@@ -51,8 +51,77 @@ public final class FlightRecord {
     private String ended;
     private Path track, linkLog;
     private final List<Path> videos = new ArrayList<>();
+    /** Held open and locked from the start to the end by the app that has this connection open (see {@link #heldElsewhere}). */
+    private java.nio.channels.FileChannel hold;
+
     private FlightRecord(Path file) {
         this.file = file;
+    }
+
+    /** The mark beside a record that its app holds while the connection is open: flight-DATE.record.open. */
+    static Path openMark(Path record) {
+        return record.resolveSibling(record.getFileName() + ".open");
+    }
+
+    private synchronized void hold() {
+        try {
+            java.nio.channels.FileChannel c = java.nio.channels.FileChannel.open(openMark(file), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+            if (c.tryLock() == null) {
+                c.close();
+                return;
+            }
+            hold = c;
+        } catch (IOException | RuntimeException e) {
+            // no mark: this flight is then told from a closed app's by the one app's own memory alone, as before
+        }
+    }
+
+    private synchronized void letGo(boolean markToo) {
+        java.nio.channels.FileChannel c = hold;
+        hold = null;
+        if (c == null) return;
+        try {
+            c.close();
+        } catch (IOException ignored) {
+        }
+        if (!markToo) return;
+        try {
+            Files.deleteIfExists(openMark(file));
+        } catch (IOException ignored) {
+        }
+    }
+
+    /** As if the app had been killed here: the record stays without its end line, nobody holds it any more (the tests). */
+    void abandon() {
+        letGo(false);
+    }
+
+    /**
+     * Another copy of the app, running now, has this connection open. Two copies on one PC were not thought of
+     * until a review of 2026-11-20: the second one, starting, took the first one's flight in progress for a closed
+     * app's - deleted its track and recording when the drone was not armed yet, wrote "APP CLOSED" into it when it
+     * was. Windows lets go of the lock when its app ends, however it ends: a mark nobody holds is a closed app's.
+     */
+    public boolean heldElsewhere() {
+        synchronized (this) {
+            if (hold != null) return false; // this app's own
+        }
+        Path mark = openMark(file);
+        if (!Files.exists(mark)) return false;
+        try (java.nio.channels.FileChannel c = java.nio.channels.FileChannel.open(mark, StandardOpenOption.WRITE)) {
+            java.nio.channels.FileLock lock = c.tryLock();
+            if (lock == null) return true;
+            lock.release();
+        } catch (java.nio.channels.OverlappingFileLockException e) {
+            return true; // held in this very program, by the record that was started (not this copy read from disk)
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+        try {
+            Files.deleteIfExists(mark); // its app is gone: the mark with it
+        } catch (IOException ignored) {
+        }
+        return false;
     }
 
     /**
@@ -70,6 +139,7 @@ public final class FlightRecord {
         r.app = clean(app);
         r.startMs = nowMs;
         r.append("drone=" + r.drone, "address=" + r.address, "app=" + r.app, "start=" + nowMs);
+        r.hold();
         return r;
     }
 
@@ -131,6 +201,7 @@ public final class FlightRecord {
         } catch (Exception ignored) {
             // the record is a convenience; a flight without its end line reads as APP CLOSED
         }
+        letGo(true);
     }
 
     private Future<?> append(String... lines) {
@@ -165,7 +236,13 @@ public final class FlightRecord {
                         r.armedFirstMs = number(value);
                         r.armedLastMs = Math.max(r.armedLastMs, r.armedFirstMs);
                     }
-                    case "armedlast" -> r.armedLastMs = Math.max(r.armedLastMs, number(value));
+                    case "armedlast" -> {
+                        r.armedLastMs = Math.max(r.armedLastMs, number(value));
+                        // "last seen armed" says armed too: the one "armed=" line may never have reached the disk
+                        // (a full disk, the file held for a moment), and a flight read as never armed is deleted
+                        // with its track and recording at the next start
+                        if (r.armedFirstMs == 0) r.armedFirstMs = number(value);
+                    }
                     case "track" -> r.track = Path.of(value);
                     case "linklog" -> r.linkLog = Path.of(value);
                     case "video" -> {

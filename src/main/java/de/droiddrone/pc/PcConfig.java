@@ -38,12 +38,31 @@ public class PcConfig {
     public static PcConfig load(Path file) throws IOException {
         Properties props = new Properties(loadTemplate());
         if (file != null && Files.exists(file)) {
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            for (String line : readLines(file)) {
                 String[] kv = parseLine(line);
                 if (kv != null) props.setProperty(kv[0], kv[1]);
             }
         }
         return new PcConfig(props);
+    }
+
+    /**
+     * The file's lines whatever wrote it (1.0.71): UTF-8 as this app writes it; when a byte is not UTF-8 - "Bjørn"
+     * saved by Notepad as ANSI, a byte a crash left - Windows' own code page instead, which reads any byte. Up to
+     * 1.0.70 one such byte stopped the app starting, before it had a window or a log to say so. A UTF-8 mark at the
+     * start (Notepad's "UTF-8 with BOM") is no part of the first key.
+     */
+    static List<String> readLines(Path file) throws IOException {
+        byte[] bytes = Files.readAllBytes(file);
+        String text;
+        try {
+            text = StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            text = new String(bytes, java.nio.charset.Charset.forName("windows-1252"));
+        }
+        if (text.startsWith("﻿")) text = text.substring(1);
+        return text.lines().toList();
     }
 
     /**
@@ -187,9 +206,29 @@ public class PcConfig {
      * must not put its older value back in memory. Calls in the order of their applies (one writer thread).
      */
     public synchronized void write(Path file, Map<String, String> updates) throws IOException {
+        // Together with what an earlier write could not put in the file (a review of 2026-11-20): a save that failed -
+        // the file held by another program through every try, the disk full - was said once in the log and never
+        // tried again. Later saves write their own keys only, so that one change (a calibration, say) was back at
+        // its old value at the next start
+        Map<String, String> all = new LinkedHashMap<>(unwritten);
+        all.putAll(updates);
+        try {
+            writeNow(file, all);
+            unwritten.clear();
+        } catch (IOException | RuntimeException e) {
+            unwritten.clear();
+            unwritten.putAll(all);
+            throw e;
+        }
+    }
+
+    /** What a write could not put in the file: it goes with the next one. Guarded by this. */
+    private final Map<String, String> unwritten = new LinkedHashMap<>();
+
+    private void writeNow(Path file, Map<String, String> updates) throws IOException {
         List<String> lines;
         if (Files.exists(file)) {
-            lines = new ArrayList<>(Files.readAllLines(file, StandardCharsets.UTF_8));
+            lines = new ArrayList<>(readLines(file));
         } else {
             try (InputStream in = PcConfig.class.getResourceAsStream(TEMPLATE_RESOURCE)) {
                 if (in == null) throw new IOException("Missing resource " + TEMPLATE_RESOURCE);
@@ -216,6 +255,13 @@ public class PcConfig {
         Path tmp = file.resolveSibling(file.getFileName() + ".part");
         // 1.0.64: the move is tried again: on Windows a virus scanner or an editor holding the file a moment refuses it
         Files.write(tmp, lines, StandardCharsets.UTF_8);
+        // on the disk before it takes the file's place: after a power cut the new name can be there and its bytes
+        // not - a settings file of nothing, read as "all defaults" without a word
+        try (java.nio.channels.FileChannel made = java.nio.channels.FileChannel.open(tmp, java.nio.file.StandardOpenOption.WRITE)) {
+            made.force(true);
+        } catch (IOException ignored) {
+            // a disk that cannot promise it: the move goes ahead as before
+        }
         IOException last = null;
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
@@ -354,16 +400,51 @@ public class PcConfig {
         }
     }
 
-    public int getTelemetryRate() { return getInt("telemetryRate"); }
-    public int getSerialBaudRate() { return getInt("serialBaudRate"); }
+    /** The keys whose value was no number, and what was said of each: said once ({@link #takeNotes}). */
+    private final java.util.Set<String> badNumbers = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.Queue<String> notes = new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private static volatile Properties builtIn;
+
+    /**
+     * A number the link and the window ask for again and again. The file's value; when that is no number - a slip of
+     * the hand in the settings file, "cameraWidth=wide" - the built-in one, and a line for the log, once. F-025
+     * (the test bench, 2026-11-19): with such a line PILOT UAV waited for the phone for ever, said nothing, and the
+     * link's thread wrote the same error into the app's log 40,000 times a second - 6 MB a second.
+     */
+    private int linkInt(String key) {
+        String value = getString(key);
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            int fallback = 0;
+            try {
+                Properties template = builtIn;
+                if (template == null) builtIn = template = loadTemplate();
+                fallback = Integer.parseInt(template.getProperty(key, "0").trim());
+            } catch (IOException | NumberFormatException ignored) {
+            }
+            if (badNumbers.add(key)) notes.add("Settings file: " + key + "=" + value + " is not a number. Using " + fallback + ".");
+            return fallback;
+        }
+    }
+
+    /** What the settings have to tell the pilot since the last call (a value that was no number): for the window's log. */
+    public List<String> takeNotes() {
+        List<String> taken = new java.util.ArrayList<>();
+        for (String note = notes.poll(); note != null; note = notes.poll()) taken.add(note);
+        return taken;
+    }
+
+    public int getTelemetryRate() { return linkInt("telemetryRate"); }
+    public int getSerialBaudRate() { return linkInt("serialBaudRate"); }
     public String getCameraId() { return getString("cameraId"); }
-    public int getCameraWidth() { return getInt("cameraWidth"); }
-    public int getCameraHeight() { return getInt("cameraHeight"); }
-    public int getBitrateLimitMbps() { return getInt("bitrateLimitMbps"); }
+    public int getCameraWidth() { return linkInt("cameraWidth"); }
+    public int getCameraHeight() { return linkInt("cameraHeight"); }
+    public int getBitrateLimitMbps() { return linkInt("bitrateLimitMbps"); }
     /** The sharp tier's picture size and top bitrate (1.0.34); equal to the normal ones = no sharp tier. */
-    public int getSharpWidth() { return getInt("sharpWidth"); }
-    public int getSharpHeight() { return getInt("sharpHeight"); }
-    public int getSharpBitrateLimitMbps() { return getInt("sharpBitrateLimitMbps"); }
+    public int getSharpWidth() { return linkInt("sharpWidth"); }
+    public int getSharpHeight() { return linkInt("sharpHeight"); }
+    public int getSharpBitrateLimitMbps() { return linkInt("sharpBitrateLimitMbps"); }
 
     /** Channel source specs in AETR+AUX order; null where a channel is not configured. */
     public String[] getChannelSpecs() {

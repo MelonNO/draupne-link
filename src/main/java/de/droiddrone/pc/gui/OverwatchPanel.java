@@ -822,12 +822,12 @@ final class OverwatchPanel extends JPanel {
         try {
             Path target = c == null ? null : c.video() != null ? c.video() : c.thumbnail();
             if (target != null) {
-                new ProcessBuilder("explorer.exe", "/select," + target.toAbsolutePath()).start();
+                de.droiddrone.pc.Outside.start(new ProcessBuilder("explorer.exe", "/select," + target.toAbsolutePath()));
             } else {
                 Object d = droneCombo.getSelectedItem();
                 Path dir = d == null ? index.root() : index.folder(d.toString());
                 Files.createDirectories(dir);
-                new ProcessBuilder("explorer.exe", dir.toAbsolutePath().toString()).start();
+                de.droiddrone.pc.Outside.start(new ProcessBuilder("explorer.exe", dir.toAbsolutePath().toString()));
             }
         } catch (IOException e) {
             folderSize.setText("Explorer didn't open: " + e.getMessage());
@@ -1090,6 +1090,7 @@ final class OverwatchPanel extends JPanel {
                     shownPicture = -1;
                     if (player == null || part != at.part()) {
                         if (player != null) player.close();
+                        player = null; // a next part that fails to open must not leave the closed one to be closed again
                         part = at.part();
                         player = new ClipPlayer(videos.get(part));
                         if (pixels == null) {

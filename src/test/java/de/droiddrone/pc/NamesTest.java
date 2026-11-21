@@ -473,4 +473,26 @@ class NamesTest {
             assertEquals(mode, r.position().powerMode());
         }
     }
+    /**
+     * The test bench's F-029: the name map keeps every phone it ever saw, so its 26 names run out over time. The
+     * 27th phone got no name and no word. The master names as many as it has names for - none twice in a round - and
+     * says of each of the others that no name is left and where to free one.
+     */
+    @Test
+    void whenTheNamesRunOutThePhonesLeftOverAreToldOf() throws Exception {
+        Names names = new Names(PcConfig.defaults(), m -> { });
+        for (int i = 0; i < 24; i++) { // 24 phones seen over the months: Alpha .. Xray taken
+            names.seen(new Names.Reply(Names.Kind.PHONE, Names.Kind.PHONE.name(i), "Pixel", "2.3.0-pc.52"), "100.64.1." + (i + 1), "");
+        }
+        List<String> unnamed = List.of("100.64.2.1", "100.64.2.2", "100.64.2.3", "100.64.2.4");
+        java.util.Map<String, String> named = NameService.namesFor(unnamed, taken -> names.firstFree(Names.Kind.PHONE, taken));
+        assertEquals(java.util.Map.of("100.64.2.1", Names.Kind.PHONE.name(24), "100.64.2.2", Names.Kind.PHONE.name(25)), named,
+                "the two names left go to the first two, one each");
+        assertFalse(named.containsKey("100.64.2.3"), "the third has none");
+        String said = NameService.noNameLeft("100.64.2.3");
+        assertTrue(said.contains("100.64.2.3") && said.contains("all 26 are taken") && said.contains("MENU > LINK > Name map"), said);
+        // one removed in the name map: the next round names one more
+        names.remove(Names.Kind.PHONE.name(3));
+        assertEquals(Names.Kind.PHONE.name(3), NameService.namesFor(List.of("100.64.2.3"), taken -> names.firstFree(Names.Kind.PHONE, taken)).get("100.64.2.3"));
+    }
 }

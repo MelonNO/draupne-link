@@ -167,8 +167,10 @@ public final class FlightLibrary {
 
     /**
      * A record's flight: its own files among those found (they are claimed, armed or not, so the grouping by time
-     * leaves them alone). Null when the drone was never armed in it (the pilot: no flight to log), or when it has
-     * neither a track nor a recording to show.
+     * leaves them alone). Null when the drone was never armed in it (the pilot: no flight to log), or when none of
+     * its files is left. An armed flight with neither a position nor a recording - no GPS and REC off, or a disk
+     * that was full - is listed with its link log alone (until 2026-11-20 it was no flight at all, and its link log,
+     * the only log of it, went with the old ones twenty connections later: the pilot's "always save a log").
      */
     static Flight flight(FlightRecord r, List<Item> items, Set<Path> claimed) {
         Item track = null, link = null;
@@ -187,7 +189,7 @@ public final class FlightLibrary {
             }
         }
         if (!r.wasArmed()) return null;
-        if (track == null && videos.isEmpty()) return null;
+        if (track == null && videos.isEmpty() && link == null) return null;
         videos.sort(Comparator.comparingLong(Item::startMs));
         List<Part> parts = new ArrayList<>();
         long start = Long.MAX_VALUE, end = Long.MIN_VALUE;
@@ -202,6 +204,10 @@ public final class FlightLibrary {
             start = Math.min(start, track.startMs());
             end = Math.max(end, track.endMs());
         }
+        if (track == null && videos.isEmpty()) { // the link log alone: the connection's own span
+            start = link.startMs();
+            end = link.endMs();
+        }
         Part first = parts.isEmpty() ? null : parts.get(0);
         String label = r.label().isEmpty() ? null : r.label();
         return new Flight(start, Math.max(start, end), label, track == null ? null : track.file(),
@@ -213,6 +219,8 @@ public final class FlightLibrary {
     public static Set<Path> keptLinkLogs(Path tracksDir, Path videosDir, Path logsDir) {
         Set<Path> kept = new HashSet<>();
         for (Flight f : scan(tracksDir, videosDir, logsDir)) if (f.linkLog() != null) kept.add(f.linkLog().toAbsolutePath().normalize());
+        // and every armed flight's by its record, whatever else of it was found or could be read just now
+        for (FlightRecord r : FlightRecord.readAll(tracksDir)) if (r.wasArmed() && r.linkLog() != null) kept.add(normal(r.linkLog()));
         return kept;
     }
 

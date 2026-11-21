@@ -16,8 +16,13 @@ import java.awt.Rectangle;
  * MINI_MIN; before that, a 768-high screen lost POP OUT MAP altogether.)
  */
 final class LinkCardLayout implements LayoutManager {
-    /** The least the minimap keeps: the LINK card's rows scroll before the MAP card gets less. */
-    static final int MINI_MIN = 70;
+    /**
+     * F-010 / F-043, the pilot (2026-11-20): "hide the mini-map when the window is too low; POP OUT MAP stays". Below
+     * this height the minimap is not shown at all and the MAP card is POP OUT MAP alone. Up to then the LINK card's rows
+     * scrolled to leave the minimap 70 px - a strip with its LAST KNOWN line and zoom button cut, and PILOT UAV half
+     * hidden in the scrolled rows.
+     */
+    static final int MINI_SHOWN_MIN = 140;
     /** The gap between the minimap and POP OUT MAP. */
     static final int BUTTON_GAP = 8;
 
@@ -43,10 +48,11 @@ final class LinkCardLayout implements LayoutManager {
         return new Dimension(Math.max(m.width, b.width) + in.left + in.right, m.height + BUTTON_GAP + b.height + in.top + in.bottom);
     }
 
+    /** The least: POP OUT MAP alone (F-010: the minimap goes before the LINK card's rows scroll for it). */
     @Override
     public Dimension minimumLayoutSize(Container parent) {
         Insets in = parent.getInsets();
-        return new Dimension(in.left + in.right + 100, in.top + in.bottom + MINI_MIN + BUTTON_GAP + popMap.getPreferredSize().height);
+        return new Dimension(in.left + in.right + 100, in.top + in.bottom + popMap.getPreferredSize().height);
     }
 
     @Override
@@ -56,7 +62,11 @@ final class LinkCardLayout implements LayoutManager {
         int top = in.top, bottom = parent.getHeight() - in.bottom;
         int buttonH = popMap.getPreferredSize().height;
         popMap.setBounds(x, Math.max(top, bottom - buttonH), w, Math.min(buttonH, bottom - top));
-        miniMap.setBounds(x, top, w, Math.max(0, bottom - buttonH - BUTTON_GAP - top));
+        int miniH = bottom - buttonH - BUTTON_GAP - top;
+        // too low to be of use: not shown at all (no zero-high map that still loads its tiles)
+        boolean shown = miniH >= MINI_SHOWN_MIN;
+        miniMap.setBounds(x, top, w, shown ? miniH : 0);
+        if (miniMap.isVisible() != shown) miniMap.setVisible(shown);
     }
 
     /** The LINK card's rows: as wide as the card (never a sideways scroll), as tall as they want. */

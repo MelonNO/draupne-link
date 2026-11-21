@@ -226,8 +226,14 @@ public final class FlightData {
         return dir;
     }
 
-    /** DELETE: every file of the flight; those that couldn't go are returned. */
+    /** A flight that may be deleted: any but the one being flown now, whose files are being written. */
+    public static boolean deletable(FlightLibrary.Flight f) {
+        return f != null && !FlightRecord.FLYING.equals(f.ended());
+    }
+
+    /** DELETE: every file of the flight; those that couldn't go are returned (all of them for the flight flown now). */
     public static List<Path> delete(FlightLibrary.Flight f) {
+        if (!deletable(f)) return f == null ? List.of() : Collections.unmodifiableList(f.files());
         List<Path> left = new ArrayList<>();
         for (Path p : f.files()) {
             try {

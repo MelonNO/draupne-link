@@ -91,6 +91,38 @@ class ControlLinkTest {
         }
     }
 
+    /**
+     * The test bench's F-025: an error at every turn of the link's thread - a setting that was no number threw before
+     * the turn's own wait - went round without a pause, 40,000 times a second, each time a line in the log (64 MB in
+     * ten seconds). Now a turn that fails waits like any other, and an error that repeats is said once in 5 s.
+     */
+    @Test
+    void anErrorAtEveryTurnOfTheLinksThreadNeitherSpinsNorFloodsTheLog() throws Exception {
+        link = new ControlLink(PcConfig.defaults(), InetAddress.getLoopbackAddress(), phonePort, pcPort);
+        AtomicInteger turns = new AtomicInteger();
+        link.sessionTurnHook = () -> {
+            turns.incrementAndGet();
+            throw new IllegalArgumentException("Setting 'cameraWidth' must be a number, got 'wide'");
+        };
+        java.io.PrintStream before = System.out;
+        java.io.ByteArrayOutputStream said = new java.io.ByteArrayOutputStream();
+        System.setOut(new java.io.PrintStream(said, true));
+        try {
+            link.start();
+            Thread.sleep(2000);
+        } finally {
+            System.setOut(before);
+        }
+        int n = turns.get();
+        long lines = said.toString().lines().filter(l -> l.contains("Session thread error")).count();
+        assertTrue(n >= 10 && n <= 80, "the thread keeps its pace through the errors (a turn is 50 ms): " + n + " turns in 2 s");
+        assertEquals(1, lines, "the same error is said once, not at every turn: " + lines + " lines");
+        // and the thread is alive: the error gone, the link comes up
+        link.sessionTurnHook = null;
+        phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        waitFor(() -> link.getState() == ControlLink.State.READY, 10_000, "the link up once the error is gone");
+    }
+
     @Test
     void lostFragmentDoesNotStopTheVideo() throws Exception {
         phone = new FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
@@ -928,7 +960,8 @@ class ControlLinkTest {
 
     /**
      * 1.0.71, the session id on the wire: one id for the Connects of a try, the next id for a try unanswered for a
-     * second, and a new one after every session that was up.
+     * second, and a new one after every session that was up. F-001 (the pilot, 2026-11-20): a second only while the
+     * phone is heard - one heard not at all keeps its id 4 s (a link dead one way: a session a second on the phone).
      */
     @Test
     void theConnectCarriesOneIdATryAndANewOneAfterASession() throws Exception {
@@ -941,7 +974,8 @@ class ControlLinkTest {
             List<Long> ids = new java.util.ArrayList<>(), firstAt = new java.util.ArrayList<>(), lastAt = new java.util.ArrayList<>();
             byte[] connect = null;
             long start = System.currentTimeMillis();
-            while (System.currentTimeMillis() - start < 2700) { // a phone that answers nothing
+            long unheard = de.droiddrone.common.SessionGate.Ids.UNHEARD_KEEP_MS;
+            while (System.currentTimeMillis() - start < 2 * unheard + 700) { // a phone that answers nothing, heard not at all
                 try {
                     phoneSocket.receive(p);
                 } catch (java.net.SocketTimeoutException e) {
@@ -960,12 +994,34 @@ class ControlLinkTest {
                     lastAt.set(lastAt.size() - 1, at);
                 }
             }
-            assertTrue(ids.size() >= 2 && ids.size() <= 4, "a new id about every second: " + ids + " first sent at " + firstAt);
+            assertTrue(ids.size() >= 2 && ids.size() <= 3, "heard not at all: a new id about every 4 s: " + ids + " first sent at " + firstAt);
             for (int i = 1; i < ids.size(); i++) {
                 assertEquals((ids.get(i - 1) + 1) & 0xFFFFFFFFL, ids.get(i), "counted up, try by try");
-                assertTrue(firstAt.get(i) - firstAt.get(i - 1) >= de.droiddrone.common.SessionGate.SAME_SESSION_MS - 60, "a try is kept a second: " + firstAt);
+                assertTrue(firstAt.get(i) - firstAt.get(i - 1) >= unheard - 60, "a try is kept 4 s: " + firstAt);
             }
-            assertTrue(lastAt.get(0) - firstAt.get(0) <= de.droiddrone.common.SessionGate.SAME_SESSION_MS + 400, "the first try's Connects: " + firstAt.get(0) + " - " + lastAt.get(0));
+            assertTrue(lastAt.get(0) - firstAt.get(0) <= unheard + 400, "the first try's Connects: " + firstAt.get(0) + " - " + lastAt.get(0));
+            // now the phone is heard (anything at all from it; here a datagram the PC does not know) but still answers no
+            // Connect: its answers may be what is lost - a new id after a second, as before F-001
+            long heardFrom = System.currentTimeMillis(), lastBefore = ids.get(ids.size() - 1), newer = -1, newerAt = -1;
+            byte[] noise = {(byte) 0x7E, 0, 0, 0, 0, 0};
+            while (newer < 0 && System.currentTimeMillis() - heardFrom < 3000) {
+                phoneSocket.send(new DatagramPacket(noise, noise.length, InetAddress.getLoopbackAddress(), pcPort));
+                try {
+                    phoneSocket.receive(p);
+                } catch (java.net.SocketTimeoutException e) {
+                    continue;
+                }
+                if (p.getLength() < 1 || buf[0] != UdpCommon.Connect) continue;
+                long id = de.droiddrone.common.SessionGate.sessionId(buf, p.getLength());
+                if (id != lastBefore) {
+                    newer = id;
+                    newerAt = System.currentTimeMillis() - heardFrom;
+                    connect = java.util.Arrays.copyOf(buf, p.getLength());
+                }
+            }
+            assertEquals((lastBefore + 1) & 0xFFFFFFFFL, newer, "heard: the next id");
+            assertTrue(newerAt <= de.droiddrone.common.SessionGate.SAME_SESSION_MS + 600, "within about a second of being heard: " + newerAt + " ms");
+            ids.add(newer);
             // answered as a phone app before pc.53 answers: the Connect back as it came - taken, whatever its id
             long lastId = ids.get(ids.size() - 1);
             byte[] answer = connect;
@@ -1301,6 +1357,13 @@ class ControlLinkTest {
          * instead of being accepted (seen on 2026-11-02 after a link loss, naming the PC's own previous session).
          */
         volatile Spectate.Address staleSession;
+
+        /** Its session ends at once, as when the pilot's old address went silent for 4 s (the next Connect taken starts one). */
+        void endSession() {
+            ReceiverBuffer old = receiverBuffer;
+            receiverBuffer = new ReceiverBuffer(udpSender, !viaRelay, key, null);
+            old.close();
+        }
         volatile ParsedConfig config;
         final List<short[]> rcFrames = new CopyOnWriteArrayList<>();
 

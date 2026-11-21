@@ -132,6 +132,8 @@ A drone on the ground as a sentry. The phone sleeps with the camera watching (di
 
 The **virtual fleet** plays several drones on this PC: real protocol, Betaflight-like flight, link failures, walkers and cars for motion detection. Start it with TOOLS > Virtual fleet (Advanced on), `Virtual fleet.bat` in the install folder, or `.\gradlew.bat run --args=fleet`. Virtual drones are always marked VIRTUAL.
 
+The **test bench** tests the whole app on one PC - the real window with its buttons pressed, bad links, the phone app in an emulator: `.\bench.ps1 quick`, see [docs/TESTING.md](docs/TESTING.md).
+
 ## For developers
 
 State, rules and release steps: [docs/HANDOFF.md](docs/HANDOFF.md). Also [PROTOCOL](docs/PROTOCOL.md), [CHANGELOG](docs/CHANGELOG.md), [ROADMAP](docs/ROADMAP.md).

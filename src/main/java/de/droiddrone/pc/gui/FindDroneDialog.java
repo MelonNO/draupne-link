@@ -51,10 +51,23 @@ final class FindDroneDialog extends JDialog {
     private FlightTrack shown;
     private boolean fromFile;
     private FlightTrack.Point last;
+    /**
+     * After LOST DRONE (2026-11-20, a reader of this code): the lost drone's own newest place, kept by this PC from its
+     * name replies and its sleep check-ins - newer than its track once it has checked in from where it came down. Null:
+     * the track alone, as before.
+     */
+    private final Supplier<de.droiddrone.pc.LastKnown.Entry> known;
+    private boolean fromCheckIn;
 
     private FindDroneDialog(Window owner, Supplier<FlightTrack> session, BooleanSupplier connected, BooleanSupplier fcLost, TileCache cache,
                             TileSource source, Pins pins) {
-        super(owner, "Find drone", ModalityType.MODELESS);
+        this(owner, session, connected, fcLost, cache, source, pins, null, null);
+    }
+
+    private FindDroneDialog(Window owner, Supplier<FlightTrack> session, BooleanSupplier connected, BooleanSupplier fcLost, TileCache cache,
+                            TileSource source, Pins pins, String drone, Supplier<de.droiddrone.pc.LastKnown.Entry> known) {
+        super(owner, drone == null || drone.isBlank() ? "Find drone" : "Find drone - " + drone, ModalityType.MODELESS);
+        this.known = known;
         this.session = session;
         this.connected = connected;
         this.fcLost = fcLost;
@@ -108,7 +121,7 @@ final class FindDroneDialog extends JDialog {
         JButton folder = Theme.secondaryButton("Tracks folder");
         folder.addActionListener(e -> {
             try {
-                java.awt.Desktop.getDesktop().open(FlightTrack.defaultDir().toFile());
+                de.droiddrone.pc.Outside.open(FlightTrack.defaultDir().toFile());
             } catch (Exception ignored) {
             }
         });
@@ -123,6 +136,7 @@ final class FindDroneDialog extends JDialog {
         refresh();
         pack();
         setLocationRelativeTo(owner);
+        ScreenFit.clampToScreen(this); // F-018: on a small screen the map gives way, the buttons stay on it
         setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         addWindowListener(new java.awt.event.WindowAdapter() {
             @Override
@@ -141,6 +155,17 @@ final class FindDroneDialog extends JDialog {
     static FindDroneDialog open(Window owner, Supplier<FlightTrack> session, BooleanSupplier connected, BooleanSupplier fcLost, TileCache cache,
                                 TileSource source, Pins pins) {
         FindDroneDialog d = new FindDroneDialog(owner, session, connected, fcLost, cache, source, pins);
+        d.setVisible(true);
+        return d;
+    }
+
+    /**
+     * After LOST DRONE: bound to that drone - its own track, whatever is connected afterwards (it followed the next
+     * drone connected to search with, and Copy MGRS copied that one's place), and its newest place from a check-in.
+     */
+    static FindDroneDialog openFor(Window owner, String drone, FlightTrack track, Supplier<de.droiddrone.pc.LastKnown.Entry> known, TileCache cache,
+                                   TileSource source, Pins pins) {
+        FindDroneDialog d = new FindDroneDialog(owner, () -> track, () -> false, () -> false, cache, source, pins, drone, known);
         d.setVisible(true);
         return d;
     }
@@ -170,17 +195,29 @@ final class FindDroneDialog extends JDialog {
         shown = t;
         fromFile = file;
         last = t == null ? null : t.last();
-        text.setText(describe(last, t == null ? null : t.home(), t == null ? null : t.file(), file));
+        last = newestOf(last, known == null ? null : known.get());
+        fromCheckIn = last != null && t != null && last != t.last() || last != null && t == null;
+        text.setText(describe(last, t == null ? null : t.home(), t == null ? null : t.file(), file)
+                + (fromCheckIn ? "\nFrom            its own report since (newer than the track)" : ""));
         boolean has = last != null;
         for (JButton b : new JButton[]{copy, copyMgrs, google, osm}) b.setEnabled(has);
-        none.setText(has ? "" : "No position yet. Last flight's: last-position.txt in Tracks.");
+        none.setText(has ? "" : "Last flight's: last-position.txt in Tracks."); // "No position yet." stands above it (F-017)
         if (none.isVisible() != !has) {
             none.setVisible(!has);
             pack();
+            ScreenFit.clampToScreen(this);
         }
         // from a file nothing is live; otherwise the real link state, so a still-reporting drone isn't LAST KNOWN.
         // The map centres itself on the first position it gets and follows a drone that still moves
         map.update(t, null, -1, !file && fcLost.getAsBoolean(), !file && connected.getAsBoolean());
+    }
+
+    /** The track's last point, or the drone's own newer place (a check-in) as a point of the phone's; either may be null. */
+    static FlightTrack.Point newestOf(FlightTrack.Point last, de.droiddrone.pc.LastKnown.Entry known) {
+        if (known == null || !known.hasPlace() || known.placeAt() <= 0) return last;
+        // 10 s more than the track: the same moment reported twice (the link's own position updates both) is the track's
+        if (last != null && known.placeAt() <= last.timeMs() + 10_000) return last;
+        return new FlightTrack.Point(known.placeAt(), known.lat(), known.lon(), 0, 0, 0, 0, false, true, 0);
     }
 
     static String describe(FlightTrack.Point last, FlightTrack.Point home, Path file, boolean fromFile) {
@@ -210,7 +247,7 @@ final class FindDroneDialog extends JDialog {
 
     private static void browse(String url) {
         try {
-            if (java.awt.Desktop.isDesktopSupported()) java.awt.Desktop.getDesktop().browse(URI.create(url));
+            if (java.awt.Desktop.isDesktopSupported()) de.droiddrone.pc.Outside.browse(URI.create(url));
         } catch (Exception ignored) {
         }
     }

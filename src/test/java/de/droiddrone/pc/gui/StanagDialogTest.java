@@ -50,6 +50,45 @@ class StanagDialogTest {
         });
     }
 
+    /**
+     * The test bench's F-032: the window was 700 high whatever the screen - on a 584-high one (a 1366 x 768 laptop at
+     * 125 %) SAVE and CLOSE were below its edge. It fits the screen it opens on, its buttons on it; the list gives way.
+     */
+    @Test
+    void onASmallScreenTheWindowFitsWithItsButtons() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                Theme.install();
+                ScreenFit.pretend = new java.awt.Dimension(1093, 584);
+                StanagDialog d = new StanagDialog(null, PcConfig.defaults(), m -> { });
+                try {
+                    d.addNotify();
+                    d.validate();
+                    java.awt.Rectangle screen = ScreenFit.usable(null);
+                    assertTrue(d.getHeight() <= 584 && d.getWidth() <= 1093, "the window " + d.getSize() + " on a screen of 1093 x 584");
+                    assertTrue(screen.contains(d.getBounds()), d.getBounds() + " lies on " + screen);
+                    List<Component> all = new ArrayList<>();
+                    collect(d.getContentPane(), all);
+                    int buttons = 0;
+                    java.awt.Rectangle inside = new java.awt.Rectangle(d.getContentPane().getSize());
+                    for (Component c : all) {
+                        if (!(c instanceof javax.swing.JButton b) || b.getText() == null) continue;
+                        if (!b.getText().equalsIgnoreCase("Save") && !b.getText().equalsIgnoreCase("Close")) continue;
+                        buttons++;
+                        java.awt.Rectangle r = SwingUtilities.convertRectangle(b.getParent(), b.getBounds(), d.getContentPane());
+                        assertTrue(inside.contains(r), b.getText() + " at " + r + " is inside the window's " + inside);
+                    }
+                    assertEquals(2, buttons, "SAVE and CLOSE");
+                } finally {
+                    ScreenFit.pretend = null;
+                    d.dispose();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
     /** 1.0.65: every drone's port and what its stream shows, and the line when another PC streams to the same address. */
     @Test
     void theStreamsAreListedAndAClashIsSaidWithTheFieldsStillWhole() throws Exception {

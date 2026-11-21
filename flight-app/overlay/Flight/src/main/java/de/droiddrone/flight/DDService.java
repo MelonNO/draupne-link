@@ -95,6 +95,7 @@ public class DDService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        CrashGuard.install(this); // pc.55
         Overwatch.clips(this); // pc.38: overwatch clips a restart left are taken back (scanned on a thread of its own)
     }
 
@@ -103,6 +104,10 @@ public class DDService extends Service {
         // DRAUPNE Link: restarted by Android after the app's process was killed, the settings (MainActivity.config)
         // aren't there and the service crashed; stop quietly instead (the pilot starts it from the app)
         if (MainActivity.config == null) {
+            // pc.55: ... and the app is asked to open itself, as after an error (CrashGuard): opened, it has its
+            // settings and starts this service as it always does. Android starts a service again whose process it
+            // (or a battery saver) ended - without the window, where the window was not in front
+            CrashGuard.serviceWithoutApp(getApplicationContext());
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -416,6 +421,15 @@ public class DDService extends Service {
      * pc.54, on the MSP thread at each read of the beeper settings: awake again with settings kept from before a sleep -
      * they are written back (once), so the drone beeps again when its receiver is really lost.
      */
+    /** F-051: the drone's beeper was switched off for a sleep and not yet put back (its settings kept here). */
+    boolean beeperQuieted() {
+        try {
+            return !getSharedPreferences(BEEPER_PREFS, MODE_PRIVATE).getString(BEEPER_AS_READ, "").isEmpty();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
     void beeperConfigRead(Msp from, byte[] read) {
         try {
             int mode = PowerMode.mode();
@@ -543,7 +557,7 @@ public class DDService extends Service {
      * pc.50: the sleep notice in the countdown to a power-saving mode - battery, mode (in the status block), name and
      * position, heading, the next check (Udp.sendSleepNotice).
      */
-    void powerNotice(int mode, int intervalMin, int nextCheckInS) {
+    boolean powerNotice(int mode, int intervalMin, int nextCheckInS) {
         int percent = 255;
         boolean charging = false;
         int mV = 0;
@@ -561,7 +575,15 @@ public class DDService extends Service {
         int flags = mode == PowerMode.OVERWATCH ? de.droiddrone.common.OverwatchProtocol.HELLO_OVERWATCH : 0;
         if (!udp.sendSleepNotice(percent < 0 ? 255 : percent, charging, intervalMin, mV, flags, nextCheckInS)) {
             log("Sleep notice: no PC to tell");
+            return false;
         }
+        return true;
+    }
+
+    /** F-056: the link's socket, for a last sleep notice on it opened anew; null when it is not open. */
+    de.droiddrone.common.LinkSocket linkSocket() {
+        Udp u = udp;
+        return u == null ? null : u.linkSocket();
     }
 
     /** pc.50: the heading sensor off after the notice, unless a pilot or observers use it. */
@@ -569,7 +591,7 @@ public class DDService extends Service {
         if (!udp.headingInUse()) PhoneHeading.stop(this);
     }
 
-    void powerHello(int nextCheckMin) {
+    boolean powerHello(int nextCheckMin) {
         int percent = 255;
         try {
             android.os.BatteryManager bm = (android.os.BatteryManager) getSystemService(BATTERY_SERVICE);
@@ -591,7 +613,9 @@ public class DDService extends Service {
         // pc.36: overwatching (and an event running), and why overwatch gave way to deep sleep by itself
         if (!udp.sendSleepHello(percent < 0 ? 255 : percent, charging, nextCheckMin, mV, Overwatch.helloFlags(), PowerMode.floorReason())) {
             log("Sleep check: no hello to the PC of the last link (no address, or it didn't go)");
+            return false;
         }
+        return true;
     }
 
     /** The check window closed without the PC: the socket shut again. */

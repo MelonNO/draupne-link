@@ -81,6 +81,41 @@ class BeeperRuleTest {
         assertFalse(BeeperRule.muteForSleep(true), "OUT OF ACTION: it is to be found by its beeping");
     }
 
+    /**
+     * The pilot (2026-11-20): DISCONNECT pressed on a link dead one way - the PC hears nothing, so it sends no
+     * Disconnect (ControlLink.close: only while connected), and the phone counts the link as lost: the drone beeps.
+     * "Beep: it may need finding." Kept as it is, and held here.
+     */
+    @Test
+    void aPilotWhoLeavesALinkDeadOneWayLeavesADroneThatBeeps() {
+        BeeperRule r = new BeeperRule();
+        r.sessionTaken();
+        r.session(true);
+        assertTrue(r.feedIdle(1000), "flown: idle sticks, silent");
+        r.session(false); // the session times out on the phone: no Disconnect ever came
+        assertTrue(r.linkLost());
+        assertFalse(r.feedIdle(2000), "no idle sticks: Betaflight beeps for its lost receiver");
+        r.sessionTaken(); // a PC connects again: silent
+        assertTrue(r.feedIdle(3000));
+    }
+
+    /**
+     * F-051 (the pilot, 2026-11-20: "build the fix; I try it with a real flight controller"): OUT OF ACTION for a drone
+     * already asleep, its beeper switched off when it fell asleep - it wakes for the beeper and sleeps again.
+     */
+    @Test
+    void outOfActionWhileAsleepWakesForTheBeeperThenSleepsAgain() {
+        assertTrue(BeeperRule.wakeForBeeper(true, true, true), "asleep, beeper off: awake for it");
+        assertFalse(BeeperRule.wakeForBeeper(true, true, false), "its beeper was left on: nothing to do");
+        assertFalse(BeeperRule.wakeForBeeper(true, false, true), "awake: the next sleep leaves it on");
+        assertFalse(BeeperRule.wakeForBeeper(false, true, true), "a plain deep sleep: as it is");
+        // awake for it: back to sleep once the beeper is back and the FC is known disarmed - or the time is up
+        assertFalse(BeeperRule.backToSleep(true, false, false), "the beeper not back yet");
+        assertFalse(BeeperRule.backToSleep(false, true, false), "the FC not read as disarmed yet: the sleep would be refused");
+        assertTrue(BeeperRule.backToSleep(false, false, false));
+        assertTrue(BeeperRule.backToSleep(true, true, true), "time up (no flight controller read): asleep in any case");
+    }
+
     @Test
     void thePhonesOwnIdleSticksAreLowAndCentredAndNoneWhenTheyCouldArm() {
         short[] idle = BeeperRule.ownIdle(frame -> false);

@@ -114,6 +114,8 @@ public final class StreamRecorder implements AutoCloseable {
         av_packet_unref(pkt);
         check(r, "write a frame");
         frames++;
+        unflushed = true;
+        if (System.nanoTime() - flushedAt >= FLUSH_EVERY_NS) flush();
     }
 
     public long frames() {
@@ -174,6 +176,10 @@ public final class StreamRecorder implements AutoCloseable {
         if (ms < 0) return -1; // the sound ran ahead of the video: this frame left out (AudioPts)
         check(writeAac(oc, pkt, audioStream, data, ms), "write the sound");
         audioFrames++;
+        // to the disk once a second with the sound too: a picture that stopped while the sound goes on (a camera
+        // that failed, the link holding) left its last frames in memory - the record thread's idle flush never came
+        unflushed = true;
+        if (System.nanoTime() - flushedAt >= FLUSH_EVERY_NS) flush();
         return ms;
     }
 
@@ -216,16 +222,32 @@ public final class StreamRecorder implements AutoCloseable {
         osdRows++;
         // 1.0.71 (the pilot: "always save a log"): what is written so far is on the disk once a second - the app
         // killed or the PC restarted mid-flight loses a second, not the buffers' worth
-        long now = System.nanoTime();
-        if (now - flushedAt >= FLUSH_EVERY_NS) {
-            flushedAt = now;
-            osd.flush();
-            avio_flush(oc.pb());
-        }
+        unflushed = true;
+        if (System.nanoTime() - flushedAt >= FLUSH_EVERY_NS) flush();
+    }
+
+    /**
+     * Everything written so far on the disk: the figures' rows, the packets the muxer holds back to interleave the
+     * tracks, and the cluster it is filling. Until 2026-11-20 the once-a-second flush emptied the file's own buffer
+     * only: the Matroska writer keeps the cluster it is filling in memory until that is 5 s or 5 MB long or a key
+     * frame comes, so an app killed in flight lost up to the last 5 s of picture, not one - and the flush ran only
+     * when a frame was shown, so once the link was lost and the picture stood, the frames just before the loss (the
+     * ones that show where the drone went) stayed in memory until the recording was closed properly.
+     */
+    public void flush() throws IOException {
+        flushedAt = System.nanoTime();
+        if (!unflushed) return;
+        unflushed = false;
+        if (osd != null) osd.flush();
+        if (!started) return;
+        av_interleaved_write_frame(oc, null); // what waited to be interleaved
+        av_write_frame(oc, null); // the cluster in hand ends here; the next frame begins one
+        avio_flush(oc.pb());
     }
 
     private static final long FLUSH_EVERY_NS = 1_000_000_000L;
     private long flushedAt = System.nanoTime();
+    private boolean unflushed;
 
     private static String num(double v, int decimals) {
         return Double.isNaN(v) ? "" : String.format(Locale.ROOT, "%." + decimals + "f", v);

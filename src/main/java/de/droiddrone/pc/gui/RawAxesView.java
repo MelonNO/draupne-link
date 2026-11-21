@@ -20,6 +20,16 @@ class RawAxesView extends JComponent {
     private static final int BUTTON_GAP = 6;
 
     private Data snapshot = null;
+    /**
+     * Which axes the wizard counts as swept sticks (F-034): the tick beside a bar follows it. The tick went by the
+     * range alone, the count ("Full range: 3 of 4 stick axes") by the range and a smooth travel - so a switch flipped
+     * in this step got a tick and was not counted, four ticks stood beside "3 of 4". Null: by the range, as before.
+     */
+    private boolean[] swept;
+
+    void setSwept(boolean[] swept) {
+        this.swept = swept;
+    }
 
     /** What to draw, captured each frame from the wizard. */
     record Data(float[] axes, boolean[] buttons, float[] min, float[] max, float[] center,
@@ -84,7 +94,7 @@ class RawAxesView extends JComponent {
                 g.setFont(Theme.headingFont(12f));
                 g.setColor(Theme.ACCENT);
                 g.drawString(d.axisRoles()[i].toUpperCase(), textX, y + 20);
-            } else if (d.showRange() && d.max()[i] - d.min()[i] >= CalibrationWizard.FULL_RANGE) {
+            } else if (d.showRange() && (swept != null ? i < swept.length && swept[i] : d.max()[i] - d.min()[i] >= CalibrationWizard.FULL_RANGE)) {
                 paintCheck(g, textX + 4, y + 15);
             }
             if (highlight && d.highlightProgress() > 0) {

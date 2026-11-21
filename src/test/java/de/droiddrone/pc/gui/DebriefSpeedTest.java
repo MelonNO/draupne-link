@@ -84,7 +84,7 @@ class DebriefSpeedTest {
                 now[0] += 1_000;
                 assertEquals(START + 4_000, d.position());
                 d.togglePlay(); // pause
-                assertEquals("Play", d.play.getText());
+                assertEquals("PLAY", d.play.getText());
                 now[0] += 5_000;
                 assertEquals(START + 4_000, d.position(), "paused: the clock stands");
                 assertEquals(4, d.speed(), "and the speed is kept");
@@ -159,7 +159,7 @@ class DebriefSpeedTest {
                 assertEquals("80 m", d.figures[0].getText(), "ten seconds past the turn: coming down");
                 now[0] += 60_000; // far past the end
                 d.tick();
-                assertEquals("Play", d.play.getText(), "the end stops it");
+                assertEquals("PLAY", d.play.getText(), "the end stops it");
                 assertEquals(d.data.endMs(), d.position());
                 assertEquals("3:00 / 3:00", d.time.getText());
                 assertEquals(4, d.speed());
@@ -255,7 +255,7 @@ class DebriefSpeedTest {
             Thread.sleep(2_500); // 6 s of flight at 4X are 1.5 s here
             SwingUtilities.invokeAndWait(() -> {
                 d.tick();
-                assertEquals("Play", d.play.getText(), "played to the end at 4X in under 2.5 s");
+                assertEquals("PLAY", d.play.getText(), "played to the end at 4X in under 2.5 s");
                 assertEquals(d.data.endMs(), d.position());
                 int shown = d.video.shown() - before[0];
                 assertTrue(shown >= 1, "pictures were shown on the way: " + shown);

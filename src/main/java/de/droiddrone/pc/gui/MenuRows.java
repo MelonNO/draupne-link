@@ -127,6 +127,8 @@ final class MenuRows {
     /** An on/off setting: a switch at the right edge that slides when clicked; the menu stays open. */
     static final class SwitchRow extends JMenuItem {
         private static final int SW = 40, SH = 20;
+        /** The switch's dark red on a row that is lit red. */
+        private static final Color LIT_OFF = new Color(0x3a0508);
         private static final long SLIDE_MS = 160;
         private final Consumer<Boolean> changed;
         private boolean on;
@@ -169,15 +171,19 @@ final class MenuRows {
             Graphics2D g = Theme.smooth((Graphics2D) graphics.create());
             try {
                 int x = getWidth() - 14 - SW, y = (getHeight() - SH) / 2;
-                Color track = blend(Theme.LINE, Theme.ACCENT, knob);
+                // The row under the mouse is red (as every menu row is): on it the switch's own red and the grey
+                // "OFF" were lost - seen in the bench's pictures, 2026-11-20. There the switch is dark when off and
+                // white with a red knob when on, and the word is white.
+                boolean lit = isArmed();
+                Color track = lit ? blend(LIT_OFF, Color.WHITE, knob) : blend(Theme.LINE, Theme.ACCENT, knob);
                 g.setColor(track);
                 g.fillRoundRect(x, y, SW, SH, SH, SH);
                 int d = SH - 6;
                 int kx = Math.round(x + 3 + knob * (SW - d - 6));
-                g.setColor(blend(Theme.MUTED, Color.WHITE, knob));
+                g.setColor(lit ? blend(Color.WHITE, LIT_OFF, knob) : blend(Theme.MUTED, Color.WHITE, knob));
                 g.fillOval(kx, y + 3, d, d);
                 g.setFont(Theme.headingFont(10f));
-                g.setColor(knob > 0.5f ? Theme.TEXT : Theme.MUTED);
+                g.setColor(lit ? Color.WHITE : knob > 0.5f ? Theme.TEXT : Theme.MUTED);
                 String state = on ? "ON" : "OFF";
                 g.drawString(state, x - 8 - g.getFontMetrics().stringWidth(state), y + SH / 2 + 4);
             } finally {

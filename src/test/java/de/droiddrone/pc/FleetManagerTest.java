@@ -62,6 +62,30 @@ class FleetManagerTest {
         assertNull(f.wanted("MobileAlpha"));
     }
 
+    /**
+     * Mark OUT OF ACTION on the drone flown here: the PC disconnects and queues its DEEP SLEEP. The phone's session
+     * outlives the DISCONNECT by 4 s, and a name reply in that time says "flown" - it was taken for another PC's
+     * flying and the deep sleep was dropped (a reader of the code, 2026-11-20).
+     */
+    @Test
+    void thePhonesOwnSessionTailAfterThisPcLeftDropsNothing() {
+        FleetManager f = manager();
+        boolean[] here = {true};
+        f.setPilotHere(phone -> here[0]);
+        Names.Reply flown = new Names.Reply(Names.Kind.PHONE, "MobileAlpha", "phone", "2.3.0-pc.54", null, 0, status(0, 0), true);
+        here[0] = false;
+        f.pilotLeft("MobileAlpha", 1000);
+        FleetManager.Wanted w = f.queue("MobileAlpha", ControlLink.POWER_DEEP_SLEEP, 30, 0, FleetProtocol.FLAG_OUT_OF_ACTION, 0, 1001);
+        assertNotNull(f.onReply(flown, 3000), "two seconds after this PC left, \"flown\" is this PC's own: the deep sleep goes");
+        assertFalse(f.flown("MobileAlpha", 3000));
+        assertEquals(w, f.wanted("MobileAlpha"), "and stays queued until the phone takes it");
+        assertTrue(log.stream().noneMatch(l -> l.contains("dropped")), log.toString());
+        // another PC that flies it afterwards is still another PC
+        assertNull(f.onReply(flown, 1000 + FleetManager.OWN_TAIL_MS + 1));
+        assertNull(f.wanted("MobileAlpha"), "flown after the tail: by another PC - dropped as before");
+        assertTrue(log.stream().anyMatch(l -> l.contains("flown by another PC")), log.toString());
+    }
+
     @Test
     void anOlderPhoneIsNeverSentIt() {
         FleetManager f = manager();
@@ -203,6 +227,16 @@ class FleetManagerTest {
         assertFalse(f.flown("MobileAlpha", T0 + 5000 + FleetManager.FLOWN_FRESH_MS + 1), "its word grows old");
         assertNull(f.onReply(flownReply(false), T0 + 10_000));
         assertFalse(f.flown("MobileAlpha", T0 + 10_000), "the pilot left");
+
+        // F-027: the pilot it speaks of is this PC - no other PC flies it, also not in the 30 s after this PC's link
+        // has ended into DEEP SLEEP (a sleeping phone sends no later word to take the old one back)
+        boolean[] here = {true};
+        f.setPilotHere(phone -> here[0] && phone.equalsIgnoreCase("MobileAlpha"));
+        assertNull(f.onReply(flownReply(true), T0 + 20_000));
+        assertFalse(f.flown("MobileAlpha", T0 + 20_000), "flown by this PC is not flown by another");
+        here[0] = false; // DEEP SLEEP asked: the link is gone, the phone silent
+        assertFalse(f.flown("MobileAlpha", T0 + 21_000), "and not for the half minute after either");
+        assertNull(FleetManager.refusal("MobileAlpha", false, false, false, f.flown("MobileAlpha", T0 + 21_000), 47), "OVERWATCH can be queued for it");
     }
 
     /** A phone's answer with no GPS fix (no position) that says whether a pilot PC flies it. */

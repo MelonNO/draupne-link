@@ -27,8 +27,13 @@ public final class MotorTest implements AutoCloseable {
     /** Betaflight's own MSP v2 commands (msp_protocol_v2_betaflight.h), as Configurator's motor wizards use them. */
     static final int MSP2_MOTOR_OUTPUT_REORDERING = 0x3001, MSP2_SET_MOTOR_OUTPUT_REORDERING = 0x3002,
             MSP2_SEND_DSHOT_COMMAND = 0x3003;
-    /** DShot commands to the ESC: spin direction (absolute, kept by the ESC once saved) and save. */
-    static final int DSHOT_SPIN_NORMAL = 20, DSHOT_SPIN_REVERSED = 21, DSHOT_SAVE_SETTINGS = 12;
+    /**
+     * DShot commands to the ESC: spin direction and save. F-053, the pilot (2026-11-20): Betaflight's
+     * DSHOT_CMD_SPIN_DIRECTION_1 / _2 (7 / 8), the directions an ESC keeps once saved (12). Up to then 20 / 21 -
+     * SPIN_DIRECTION_NORMAL / _REVERSED, the ones crash-flip uses for the moment it flips: on some ESC firmware not
+     * kept, so a motor set REVERSED could turn the old way after the next battery. To be tried on the drone, props off.
+     */
+    static final int DSHOT_SPIN_NORMAL = 7, DSHOT_SPIN_REVERSED = 8, DSHOT_SAVE_SETTINGS = 12;
     /** MSP2_SEND_DSHOT_COMMAND's type: blocking - Betaflight stops the motors while it sends. */
     static final int DSHOT_CMD_TYPE_BLOCKING = 1;
     /** Betaflight's motor protocols that take DShot commands: DSHOT150, 300, 600 and PROSHOT1000. */

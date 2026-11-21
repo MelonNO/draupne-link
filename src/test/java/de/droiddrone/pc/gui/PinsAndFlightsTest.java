@@ -206,9 +206,9 @@ class PinsAndFlightsTest {
                 d.seek(FlightLibraryTest.at("2026-11-08T14:06:30"));
                 assertEquals(FlightLibraryTest.at("2026-11-08T14:06:30"), d.position());
                 d.togglePlay();
-                assertEquals("Pause", d.play.getText());
+                assertEquals("PAUSE", d.play.getText());
                 d.togglePlay();
-                assertEquals("Play", d.play.getText());
+                assertEquals("PLAY", d.play.getText());
                 d.setSize(1280, 760);
                 for (int i = 0; i < 3; i++) layout(d.getRootPane());
                 d.map.setReplay(d.data.path()); // fitted to the map's size now

@@ -35,6 +35,8 @@ final class RemoteUpdate {
     static final byte PACKET = PacketIds.REMOTE_UPDATE;
     /** What the record says (PHONE_UPDATE). */
     static final int IDLE = 0, DOWNLOADING = 1, INSTALLING = 2, TAP_NEEDED = 3, FAILED = 4, REFUSED_ARMED = 5, CURRENT = 6;
+    /** F-058: what the PC shows after "update failed - " when the app may not install apps (the PC knows the words). */
+    static final String INSTALLS_NOT_ALLOWED = "allow \"Install unknown apps\" for DRAUPNE Flight on the phone, once by hand";
     /** A state other than IDLE is reported this long after it last changed (the PC shows the last one). */
     private static final long REPORT_MS = 30_000;
     /**
@@ -66,6 +68,13 @@ final class RemoteUpdate {
         String current = MainActivity.versionName;
         if (current != null && !UpdateCheck.isNewer(version, current)) {
             set(CURRENT, 100, current);
+            return;
+        }
+        // F-058 (the bench's first remote update, 2026-11-21): without "Install unknown apps" for this app Android puts
+        // its own question up after the download - on a phone nobody can reach. Said at once, before 23 MB are fetched
+        if (!c.getPackageManager().canRequestPackageInstalls()) {
+            log("Remote update to " + version + " refused: \"Install unknown apps\" is not allowed for this app");
+            set(FAILED, 0, INSTALLS_NOT_ALLOWED);
             return;
         }
         if (FcArmedState.of(msp, mavlink) != FcArmedState.DISARMED) {
@@ -102,7 +111,12 @@ final class RemoteUpdate {
     /** The app is to open again by itself after this update (AppReplacedReceiver). */
     static void pending(Context c, boolean on) {
         SharedPreferences p = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        p.edit().putBoolean(PENDING_KEY, on).apply();
+        p.edit().putBoolean(PENDING_KEY, on).commit(); // pc.55: on the disk now - the install ends this process next
+    }
+
+    /** A remote update is under way (its download, or the APK going to the installer). */
+    static boolean busy() {
+        return busy;
     }
 
     static boolean takePending(Context c) {

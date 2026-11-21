@@ -33,8 +33,15 @@ final class Dialogs {
      */
     static void fit(JDialog d, Component near) {
         repack(d);
+        // never wider or higher than the screen it is on: "Report saved:" with a long folder's path was 1208 px wide,
+        // its right end and half its OK off a 1093-wide screen (F-031)
+        java.awt.Rectangle screen = ScreenFit.usable(near instanceof java.awt.Window w ? w : near != null ? javax.swing.SwingUtilities.getWindowAncestor(near) : d.getOwner());
+        if (screen != null && (d.getWidth() > screen.width || d.getHeight() > screen.height)) {
+            d.setSize(Math.min(d.getWidth(), screen.width), Math.min(d.getHeight(), screen.height));
+        }
         d.setMinimumSize(d.getSize());
         d.setLocationRelativeTo(near != null ? near : d.getOwner());
+        ScreenFit.clampToScreen(d);
     }
 
     /** pack() for a window whose HTML text changes: until its size stays put (a few times at most). */

@@ -37,6 +37,24 @@ class SetupConfirmTest {
         assertEquals(SetupConfirm.NONE, restarted.saved());
     }
 
+    /**
+     * A CONFIRM is spent once its write is done, and by DISCONNECT: a board changed afterwards by hand (Betaflight
+     * Configurator) is not written over at the next round. It was, with ARM put back on the old switch.
+     */
+    @Test
+    void aConfirmIsSpentByItsWriteAndByDisconnect() {
+        SetupConfirm c = new SetupConfirm();
+        c.press(A);
+        assertTrue(c.mayWrite(A));
+        c.done(A);
+        assertTrue(c.confirmed());
+        assertFalse(c.mayWrite(A), "done: nothing more is written without a new CONFIRM");
+        assertFalse(c.armed());
+        c.press(A);
+        c.letGo(); // DISCONNECT before the write was done
+        assertFalse(c.mayWrite(A), "after DISCONNECT and RECONNECT: CONFIRM again");
+    }
+
     @Test
     void oldSavedValuesNameNoBoard() {
         SetupConfirm c = new SetupConfirm();

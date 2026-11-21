@@ -49,7 +49,22 @@ final class OsdDataBuilder {
               String rcWaiting, short[] channels, boolean standbyWanted, int lagMs, String linkHint,
               ControlLink.PilotView pilotView, String pilotLeft, int ping, boolean fcLost, FcTelemetry telemetry,
               VideoPipeline.Stats stats, boolean invertPitch, boolean recording, boolean spectatorPaused,
-              boolean linkStalled, boolean relayed, long now, boolean awaitingWake, long wakeInMs, ControlLink.Tier tier) {
+              boolean linkStalled, boolean relayed, long now, boolean awaitingWake, long wakeInMs, ControlLink.Tier tier,
+              boolean neverUp) {
+        /** Up to F-019: the link of this connection taken as up before. */
+        In(boolean spectator, boolean watchOnly, boolean ready, boolean hasStream, long sincePicture, long sinceStreamStart,
+           FcTelemetry.Status status, FcTelemetry.PhoneState phoneState, boolean session, boolean rcEnabled,
+           long msSinceInputChanged, RcSession.Banner resume, boolean frozenStopped, boolean armSwitchUnknown,
+           String rcWaiting, short[] channels, boolean standbyWanted, int lagMs, String linkHint,
+           ControlLink.PilotView pilotView, String pilotLeft, int ping, boolean fcLost, FcTelemetry telemetry,
+           VideoPipeline.Stats stats, boolean invertPitch, boolean recording, boolean spectatorPaused,
+           boolean linkStalled, boolean relayed, long now, boolean awaitingWake, long wakeInMs, ControlLink.Tier tier) {
+            this(spectator, watchOnly, ready, hasStream, sincePicture, sinceStreamStart, status, phoneState, session, rcEnabled,
+                    msSinceInputChanged, resume, frozenStopped, armSwitchUnknown, rcWaiting, channels, standbyWanted, lagMs, linkHint,
+                    pilotView, pilotLeft, ping, fcLost, telemetry, stats, invertPitch, recording, spectatorPaused, linkStalled, relayed,
+                    now, awaitingWake, wakeInMs, tier, false);
+        }
+
         /** Up to 1.0.63: nobody waited for, no tier. */
         In(boolean spectator, boolean watchOnly, boolean ready, boolean hasStream, long sincePicture, long sinceStreamStart,
            FcTelemetry.Status status, FcTelemetry.PhoneState phoneState, boolean session, boolean rcEnabled,
@@ -61,7 +76,7 @@ final class OsdDataBuilder {
             this(spectator, watchOnly, ready, hasStream, sincePicture, sinceStreamStart, status, phoneState, session, rcEnabled,
                     msSinceInputChanged, resume, frozenStopped, armSwitchUnknown, rcWaiting, channels, standbyWanted, lagMs, linkHint,
                     pilotView, pilotLeft, ping, fcLost, telemetry, stats, invertPitch, recording, spectatorPaused, linkStalled, relayed,
-                    now, false, -1, null);
+                    now, false, -1, null, false);
         }
     }
 
@@ -81,6 +96,9 @@ final class OsdDataBuilder {
         if (tier == ControlLink.Tier.SURVIVAL) return "SURVIVAL";
         return null;
     }
+
+    /** F-019: in LINK LOST's place until the connection's first link. */
+    static final String CONNECTING = "CONNECTING";
 
     static OsdRenderer.Data build(In in) {
         boolean spectator = in.spectator();
@@ -136,6 +154,9 @@ final class OsdDataBuilder {
         // 1.0.64: the pilot's own wait for a sleeping phone - no LINK LOST, no "reconnecting" under it
         String waking = !spectator && in.awaitingWake() && !linkReady ? wakingText(in.wakeInMs()) : null;
         if (waking != null) hint = null;
+        // F-019, the pilot's rule (2026-11-20): before the connection's first link it is CONNECTING, steady and white,
+        // with its reason under it - LINK LOST (red, blinking, the alarm) only once a link was up
+        else if (!spectator && in.neverUp() && !linkReady) waking = CONNECTING;
         return new OsdRenderer.Data(true, linkReady, in.ping(), rcLive,
                 in.fcLost(), in.telemetry(), in.stats(), in.invertPitch(),
                 hint, channels, false, stalled, videoFrozen, radioFrozen,

@@ -21,6 +21,36 @@ class MapViewTest {
         return new FcTelemetry.Gps(2, 14, 40.0, 80, -1, 0, lat, lon, -1, 45, 0.8, at);
     }
 
+    /**
+     * F-055 (the pilot, 2026-11-20): "the name tag and LAST KNOWN follow the track's end". After a loss the lost drone's
+     * sign stood where it had answered a name scan before take-off; it goes where its track ends when that is newer.
+     */
+    @Test
+    void theLostDronesSignStandsWhereItsTrackEnds() {
+        FlightTrack.Point end = new FlightTrack.Point(10_000_000L, 59.95, 10.80, 120, 0, 0, 12, true, false, 0);
+        double[] at = MainWindow.signPlace("MobileAlpha", 59.90, 10.75, 9_000_000L, "MobileAlpha", end);
+        assertArrayEquals(new double[]{59.95, 10.80}, at, 1e-9, "the scan before take-off is older: the track's end");
+        at = MainWindow.signPlace("mobilealpha", 59.90, 10.75, 9_000_000L, "MobileAlpha", end);
+        assertArrayEquals(new double[]{59.95, 10.80}, at, 1e-9, "names as the name map has them, any case");
+        at = MainWindow.signPlace("MobileAlpha", 60.10, 11.00, 10_500_000L, "MobileAlpha", end);
+        assertArrayEquals(new double[]{60.10, 11.00}, at, 1e-9, "heard of since, from where it came down: that newer place");
+        at = MainWindow.signPlace("MobileBravo", 59.90, 10.75, 9_000_000L, "MobileAlpha", end);
+        assertArrayEquals(new double[]{59.90, 10.75}, at, 1e-9, "another drone: its own place");
+        at = MainWindow.signPlace("MobileAlpha", 59.90, 10.75, 9_000_000L, "MobileAlpha", null);
+        assertArrayEquals(new double[]{59.90, 10.75}, at, 1e-9, "no track: the network's place");
+    }
+
+    /** F-055: the LAST KNOWN of the live track goes by the track's drone, not by the phone chosen in the PHONE list since. */
+    @Test
+    void theTracksLastKnownIsItsOwnDronesNotTheChosenPhones() throws Exception {
+        FlightTrack live = new FlightTrack(null), kept = new FlightTrack(null);
+        assertEquals("MobileAlpha", MainWindow.trackDrone(live, live, "MobileAlpha", "MobileBravo"),
+                "MobileBravo chosen after MobileAlpha was lost: the track is still MobileAlpha's");
+        assertEquals("MobileBravo", MainWindow.trackDrone(kept, live, "MobileAlpha", "MobileBravo"), "a kept flight: as before");
+        assertEquals("MobileBravo", MainWindow.trackDrone(live, live, null, "MobileBravo"), "not known (watching): the chosen phone");
+        assertEquals("MobileBravo", MainWindow.trackDrone(null, live, "MobileAlpha", "MobileBravo"));
+    }
+
     private static int count(BufferedImage img, int rgb) {
         int n = 0;
         for (int y = 0; y < img.getHeight(); y++) {
@@ -35,6 +65,25 @@ class MapViewTest {
         BufferedImage img = map.snapshot(400, 300);
         assertEquals(400, img.getWidth());
         assertEquals(TileSource.KARTVERKET_TOPO, map.effectiveSource(), "auto over Norway until a fix comes");
+    }
+
+    /**
+     * FIND DRONE after LOST DRONE: the drone checked in from where it came down, after its track ended - that place is
+     * the one to go to. It gave the track's end (a reader of the code, 2026-11-20).
+     */
+    @Test
+    void findDroneTakesTheDronesOwnNewerPlace() {
+        long t = System.currentTimeMillis() - 3_600_000;
+        FlightTrack.Point end = new FlightTrack.Point(t, 59.9139, 10.7522, 50, 3, 90, 11, false, false, 0);
+        de.droiddrone.pc.LastKnown.Entry checkIn = new de.droiddrone.pc.LastKnown.Entry("MobileAlpha", 59.9200, 10.7600, t + 1_800_000, 40, 3.7, t, "DEEP SLEEP", t);
+        FlightTrack.Point newest = FindDroneDialog.newestOf(end, checkIn);
+        assertEquals(59.92, newest.lat(), 1e-9, "the check-in, half an hour after the track ended");
+        assertTrue(newest.phone());
+        de.droiddrone.pc.LastKnown.Entry older = new de.droiddrone.pc.LastKnown.Entry("MobileAlpha", 59.80, 10.70, t - 60_000, 40, 3.7, t, "", t);
+        assertSame(end, FindDroneDialog.newestOf(end, older), "an older place does not replace the track's end");
+        assertSame(end, FindDroneDialog.newestOf(end, null));
+        assertEquals(59.92, FindDroneDialog.newestOf(null, checkIn).lat(), 1e-9, "no track at all: the check-in");
+        assertNull(FindDroneDialog.newestOf(null, new de.droiddrone.pc.LastKnown.Entry("MobileAlpha", Double.NaN, Double.NaN, 0, -1, Double.NaN, 0, "", 0)));
     }
 
     @Test
@@ -330,5 +379,56 @@ class MapViewTest {
         });
         assertNotNull(map.loadingChip, "LOADING MAP shows");
         assertTrue(map.loadingChip.y >= 45 && map.loadingChip.y < 70 && Math.abs(map.loadingChip.getCenterX() - 200) < 2, "top middle, under NO DRONE POSITION: " + map.loadingChip);
+        assertEquals(MapView.LOADING_TEXT, map.chipText);
+    }
+
+    /**
+     * 1.0.71 (the pilot: "the map is stuck loading even though the computer has internet"): tiles missing and no
+     * server reached is said where LOADING MAP stands - the map asks again by itself, and says so.
+     */
+    @Test
+    void noMapServerIsSaidWhileTilesAreMissingAndNothingIsReached(@TempDir Path dir) throws Exception {
+        TileCache offline = new TileCache(dir, "test", false); // its loaders run and reach nothing
+        MapView map = new MapView(offline);
+        BufferedImage img = new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB);
+        long end = System.currentTimeMillis() + 5000;
+        do {
+            javax.swing.SwingUtilities.invokeAndWait(() -> {
+                map.setSize(400, 300);
+                java.awt.Graphics2D g = img.createGraphics();
+                map.printAll(g);
+                g.dispose();
+            });
+            Thread.sleep(50);
+        } while (!MapView.NOT_REACHED_TEXT.equals(map.chipText) && System.currentTimeMillis() < end);
+        assertEquals(MapView.NOT_REACHED_TEXT, map.chipText, "said once every tile asked for has failed");
+        assertNotNull(map.loadingChip);
+    }
+
+    /**
+     * 1.0.71: a map that fetches nothing on purpose - a drone here is flying, or was lost armed in the last ten
+     * minutes - says so where LOADING MAP stands, not only in the small line at its lower edge; and when the hold
+     * ends it says so no more.
+     */
+    @Test
+    void aMapThatWaitsBecauseADroneMayFlySaysSo(@TempDir Path dir) throws Exception {
+        boolean[] held = {true};
+        MapView map = new MapView(TileCache.heldWhile(dir, () -> held[0]));
+        BufferedImage img = new BufferedImage(400, 300, BufferedImage.TYPE_INT_RGB);
+        Runnable paint = () -> {
+            map.setSize(400, 300);
+            java.awt.Graphics2D g = img.createGraphics();
+            map.printAll(g);
+            g.dispose();
+        };
+        javax.swing.SwingUtilities.invokeAndWait(paint);
+        assertEquals(MapView.HELD_TEXT, map.chipText, "tiles missing while a drone may fly: the map says why it waits");
+        held[0] = false;
+        long end = System.currentTimeMillis() + 5000;
+        do {
+            javax.swing.SwingUtilities.invokeAndWait(paint);
+            Thread.sleep(50);
+        } while (MapView.HELD_TEXT.equals(map.chipText) && System.currentTimeMillis() < end);
+        assertNotEquals(MapView.HELD_TEXT, map.chipText, "the hold over: no longer said");
     }
 }

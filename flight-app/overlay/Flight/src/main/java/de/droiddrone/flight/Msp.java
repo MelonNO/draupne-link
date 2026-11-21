@@ -470,6 +470,7 @@ public class Msp {
                             case FcInfo.FC_VARIANT_INAV: {
                                 runGetBoxIds = false;
                                 boxIds = FcCommon.getBoxIds(buffer.getData());
+                                statusNeededAgain();
                                 telemetryOutputBuffer.offer(new TelemetryData(packet.code, buffer.getData()));
                                 break;
                             }
@@ -479,6 +480,7 @@ public class Msp {
                                 byte[] allPages = bfBoxIds.joined();
                                 if (allPages != null) {
                                     boxIds = FcCommon.getBoxIds(allPages);
+                                    statusNeededAgain();
                                     telemetryOutputBuffer.offer(new TelemetryData(packet.code, allPages));
                                 }
                                 break;
@@ -669,13 +671,20 @@ public class Msp {
         boolean isCamSwitch = false;
         boolean isArmed = false;
         FcCommon.BoxMode[] activeBoxModes = null;
-        switch (fcVariant){
-            case FcInfo.FC_VARIANT_INAV:
-                activeBoxModes = FcCommon.getActiveBoxesInav(modeFlagsInav, boxIds);
-                break;
-            case FcInfo.FC_VARIANT_BETAFLIGHT:
-                activeBoxModes = FcCommon.getActiveBoxesBtfl(modeFlagsBtfl, boxIds);
-                break;
+        try {
+            switch (fcVariant){
+                case FcInfo.FC_VARIANT_INAV:
+                    activeBoxModes = FcCommon.getActiveBoxesInav(modeFlagsInav, boxIds);
+                    break;
+                case FcInfo.FC_VARIANT_BETAFLIGHT:
+                    activeBoxModes = FcCommon.getActiveBoxesBtfl(modeFlagsBtfl, boxIds);
+                    break;
+            }
+        } catch (RuntimeException e) {
+            // pc.55: mode flags shorter than the mode ids (upstream reads past them): not read is UNKNOWN - the reply's
+            // stamp was set already, and the ARM state of the reply before it would have been served as this one's
+            statusNeededAgain();
+            return;
         }
         if (activeBoxModes != null) {
             for (FcCommon.BoxMode box : activeBoxModes) {
@@ -752,6 +761,18 @@ public class Msp {
     /** pc.54: asked once a second with the other slow requests. */
     public void getBeeperConfig(){
         serial.writeDataMsp(getMspRequest((short) BeeperQuiet.MSP_BEEPER_CONFIG), true);
+    }
+
+    /**
+     * pc.55 (a reader of this code, 2026-11-20): the mode ids have just come - the ARM flag can be read from the next
+     * status reply, not from one that came before them. Those were read with no ids at all, and "no ARM bit found"
+     * made isArmed false and stamped it fresh: when the ids came, an ARMED drone read DISARMED until the next status
+     * reply, up to half a second (a second in standby) - right after the flight controller's USB came back, where
+     * unknown must count as armed. Now the state stays UNKNOWN until that reply.
+     */
+    private void statusNeededAgain(){
+        armedFlagStatusMs = 0;
+        statusAtMs = 0;
     }
 
     /** The beeper settings as last read, or null. */

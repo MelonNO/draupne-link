@@ -293,7 +293,7 @@ final class ObservationGrid extends JPanel {
 
         void show(TileState s) {
             String text = s.status() == null || s.status().isEmpty() ? " " : s.status();
-            if (s.headingNote() != null) text = text.isBlank() ? s.headingNote() : text + "  |  " + s.headingNote();
+            if (s.headingNote() != null) text = text.isBlank() ? s.headingNote() : text + " | " + s.headingNote();
             if (!text.equals(status.getText())) status.setText(text);
             if (s.muted() != muted) {
                 muted = s.muted();

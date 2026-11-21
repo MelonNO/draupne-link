@@ -117,8 +117,8 @@ public class CalibrationWizard {
         Arrays.fill(max, -Float.MAX_VALUE);
         steps.add(new Step(StepKind.RANGE, -1, Direction.NONE, "Move all sticks to their limits",
                 "Circle both sticks a few times, firmly into every corner."));
-        steps.add(new Step(StepKind.CENTER, -1, Direction.NONE, "Center the sticks",
-                "All sticks to the center, throttle too. Thumbs off. "
+        steps.add(new Step(StepKind.CENTER, -1, Direction.NONE, "Centre the sticks", // F-043: one spelling - the app says centre (ALL STICKS CENTRED under it)
+                "All sticks to the centre, throttle too. Thumbs off. "
                         + "Then press Next."));
         steps.add(new Step(StepKind.ASSIGN, 3, Direction.UP, "Throttle up",
                 "THROTTLE fully UP and hold."));

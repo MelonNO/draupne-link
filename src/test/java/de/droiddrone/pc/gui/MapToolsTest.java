@@ -380,6 +380,56 @@ class MapToolsTest {
     }
 
     /** The component is in the panel's tree: in the strip, or in the one list in view (the others are out of it). */
+    /**
+     * The test bench's F-028: on legs short on the screen the ruler's figures lay on each other and under the total
+     * ("362.93 KM 333° KM 211°"). A leg's figure that would lie on the total or on another is left out; with room
+     * for all, all are there.
+     */
+    @Test
+    void theRulersFiguresNeverLieOnEachOther(@TempDir Path dir) {
+        MapGraphics g = new MapGraphics(null);
+        MapView map = map(dir, g);
+        map.setSize(900, 700);
+        // a small triangle: its legs about 90 px, each figure about as wide
+        map.setTool(MapView.Tool.RULER);
+        click(map, 200, 200);
+        click(map, 290, 200);
+        click(map, 245, 280);
+        click(map, 202, 201);
+        assertNotNull(map.currentMeasurement());
+        map.snapshot(900, 700);
+        java.util.List<java.awt.Rectangle> small = MapGraphicsLayer.lastLabels;
+        assertFalse(small.isEmpty(), "the total is always there");
+        for (int i = 0; i < small.size(); i++) {
+            for (int j = i + 1; j < small.size(); j++) assertFalse(small.get(i).intersects(small.get(j)), "figures on each other: " + small.get(i) + " and " + small.get(j));
+        }
+        assertTrue(small.size() < 4, "on a triangle that small not every leg's figure has room: " + small.size() + " boxes");
+        map.clearMeasurement();
+
+        // a big one: the total and all three legs' figures, apart
+        map.setTool(MapView.Tool.RULER);
+        click(map, 150, 150);
+        click(map, 750, 150);
+        click(map, 450, 600);
+        click(map, 152, 151);
+        map.snapshot(900, 700);
+        java.util.List<java.awt.Rectangle> big = MapGraphicsLayer.lastLabels;
+        assertEquals(4, big.size(), "the total and three legs: " + big);
+        for (int i = 0; i < big.size(); i++) {
+            for (int j = i + 1; j < big.size(); j++) assertFalse(big.get(i).intersects(big.get(j)), "figures on each other: " + big.get(i) + " and " + big.get(j));
+        }
+    }
+
+    /** F-022: GCS SEARCH's box is too big when its corners are farther from its centre than a mast reaches (30 km). */
+    @Test
+    void aGcsSearchBoxNoMastCanCoverIsToldApart() {
+        // 2 km x 2 km round Lillehammer; then 400 km x 400 km of southern Norway
+        assertFalse(MapWindow.searchAreaTooBig(de.droiddrone.pc.map.RadioHorizon.searchRadiusM(61.10, 61.12, 10.45, 10.49)));
+        assertFalse(MapWindow.searchAreaTooBig(de.droiddrone.pc.map.RadioHorizon.searchRadiusM(61.0, 61.3, 10.2, 10.8)), "30 km across still is searched");
+        assertTrue(MapWindow.searchAreaTooBig(de.droiddrone.pc.map.RadioHorizon.searchRadiusM(59.0, 62.6, 7.0, 14.0)));
+        assertTrue(MapWindow.searchAreaTooBig(de.droiddrone.pc.map.RadioHorizon.searchRadiusM(60.8, 61.5, 10.0, 11.3)), "70 km across: no mast sees all of it");
+    }
+
     private static boolean inView(java.awt.Component c, java.awt.Container root) {
         for (java.awt.Container p = c.getParent(); p != null; p = p.getParent()) if (p == root) return true;
         return false;

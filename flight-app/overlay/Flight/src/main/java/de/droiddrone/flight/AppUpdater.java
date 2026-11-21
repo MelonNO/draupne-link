@@ -80,7 +80,7 @@ final class AppUpdater {
             download(found, apk, progress, null, () -> !DDService.isRunning, c.getString(R.string.dd_update_connected));
             if (DDService.isRunning) throw new IOException(c.getString(R.string.dd_update_connected)); // connected while it downloaded
             progress.update(c.getString(R.string.dd_update_installing));
-            install(c, apk, false);
+            install(c, apk, false, () -> true);
         } finally {
             if (apk.exists() && !apk.delete()) log("Could not delete " + apk);
         }
@@ -106,7 +106,7 @@ final class AppUpdater {
             if (!disarmed.getAsBoolean()) throw new GuardedCopy.Stopped("FC not known disarmed: not installed");
             installing.run();
             RemoteUpdate.pending(c, true); // opens again by itself once updated
-            install(c, apk, true);
+            install(c, apk, true, disarmed);
         } finally {
             if (apk.exists() && !apk.delete()) log("Could not delete " + apk);
         }
@@ -143,7 +143,7 @@ final class AppUpdater {
     /** Extra on the installer's answer: the PC asked for this update. */
     static final String EXTRA_REMOTE = "de.droiddrone.flight.pc.REMOTE";
 
-    private static void install(Context c, File apk, boolean remote) throws IOException {
+    private static void install(Context c, File apk, boolean remote, java.util.function.BooleanSupplier disarmed) throws IOException {
         PackageInstaller installer = c.getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         params.setAppPackageName(c.getPackageName());
@@ -157,6 +157,9 @@ final class AppUpdater {
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
                 session.fsync(out);
             }
+            // pc.55: asked once more right before the commit - copying the APK into the session takes seconds, and an
+            // arm in that time had the install end the app (and the sticks) on an armed drone
+            if (!disarmed.getAsBoolean()) throw new GuardedCopy.Stopped("FC not known disarmed: not installed");
             Intent status = new Intent(ACTION_STATUS).setClass(c, AppUpdateReceiver.class).putExtra(EXTRA_REMOTE, remote);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
             session.commit(PendingIntent.getBroadcast(c, id, status, flags).getIntentSender());

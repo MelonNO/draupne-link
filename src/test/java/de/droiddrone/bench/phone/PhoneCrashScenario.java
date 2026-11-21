@@ -1,0 +1,250 @@
+package de.droiddrone.bench.phone;
+
+import de.droiddrone.bench.AppRig;
+import de.droiddrone.bench.BadLink;
+import de.droiddrone.bench.PhoneRig;
+import de.droiddrone.bench.Pilot;
+import de.droiddrone.bench.Ui;
+import de.droiddrone.common.CrashRestarts;
+import de.droiddrone.pc.fleet.VirtualFleet;
+import de.droiddrone.testing.Wire;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+
+import javax.swing.JComboBox;
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+
+/**
+ * The phone app ended by an error (F-047). In the bench's night of 2026-11-20 one exception on the camera's thread
+ * ended the whole app, Android planned its service's restart for 77 minutes later, and the link stayed dead until
+ * the bench started the app again - on a drone nobody can.
+ * <p>
+ * Here the real app is flown by the real Windows app and ended on purpose, the way Android ends an app with an error
+ * ({@code am crash}); then, asleep with a check every minute, its process is killed outright, as a phone maker's
+ * battery saver does. Each time it must be back by itself and the PC must have its link again without anyone
+ * touching the phone. And an app that keeps ending is not opened for ever: after {@link CrashRestarts#MAX} times in
+ * ten minutes it stays down.
+ * <p>
+ * {@code BENCH_KEEP_APP=1} leaves the app on the phone as it is.
+ */
+@Tag("emulator")
+class PhoneCrashScenario {
+    private static final String APP = "de.droiddrone.flight.pc";
+
+    private static String pid(PhoneRig phone) {
+        try {
+            return phone.shell("pidof " + APP).trim();
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    /** What the app (whichever of its processes) and Android's crash handler said since the stamp. */
+    private static String said(PhoneRig phone, String stamp) {
+        try {
+            return phone.shell("logcat -d -v time -T '" + stamp + "' -s DDLog:I AndroidRuntime:E");
+        } catch (RuntimeException e) {
+            return "";
+        }
+    }
+
+    /** Waits for the app to be a new process; its pid, or "" when none came in time. */
+    private static String newProcess(PhoneRig phone, String oldPid, long withinMs) {
+        long end = System.currentTimeMillis() + withinMs;
+        while (System.currentTimeMillis() < end) {
+            String now = pid(phone);
+            if (!now.isEmpty() && !now.equals(oldPid)) return now;
+            Ui.pause(500);
+        }
+        return "";
+    }
+
+    @Test
+    void anAppEndedByAnErrorOrKilledAsleepIsBackByItself() throws Exception {
+        Assumptions.assumeTrue(PhoneRig.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        boolean keepApp = System.getenv("BENCH_KEEP_APP") != null;
+        AppRig.scenario("phone-crash-comes-back").drones(0).run(rig -> {
+            Ui ui = rig.ui;
+            ui.autoShot(false);
+            Pilot pilot = new Pilot(rig);
+            PhoneRig phone = new PhoneRig(rig.film);
+            phone.ensureRunning();
+            phone.adb("root"); // to end a process outright, and to forget earlier restarts
+            Ui.pause(3000);
+            if (!keepApp) phone.install(PhoneRig.builtApk());
+            phone.grantPermissions();
+            phone.forceStop();
+            phone.shell("rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml"); // no restart of an earlier run counts
+            phone.launch();
+            if (phone.texts().contains("START")) phone.tap("START");
+            int phonePort = PhoneRig.linkOnThePhone();
+            int hostPort = phone.forwardUdp(phonePort);
+            try (Wire wire = new Wire(InetAddress.getLoopbackAddress(), hostPort)) {
+                wire.rule(BadLink.clean(47));
+                rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
+                rig.fleet.startHeartbeat();
+                @SuppressWarnings("rawtypes")
+                JComboBox phones = ui.all(JComboBox.class).get(0);
+                ui.until("the phone in the PC's PHONE list", 60_000, () -> phones.getItemCount() > 0 && String.valueOf(phones.getItemAt(0)).contains("online"));
+                // CHECK EVERY on the screen (the driver sees nothing of no height since 2026-11-21: a row that is being
+                // laid out anew, its card's folds moving, is waited for - one that never shows is a fault of the window)
+                @SuppressWarnings("rawtypes")
+                JComboBox[] found = {null};
+                ui.until("CHECK EVERY on the screen", 10_000, () -> {
+                    try {
+                        found[0] = ui.first(JComboBox.class, c -> {
+                            for (int i = 0; i < c.getItemCount(); i++) if ("1 min".equals(String.valueOf(c.getItemAt(i)))) return true;
+                            return false;
+                        });
+                        return true;
+                    } catch (Ui.NotPressable e) {
+                        return false;
+                    }
+                });
+                @SuppressWarnings("rawtypes")
+                JComboBox every = found[0];
+                ui.choose(every, "1 min");
+                String from = phone.now();
+                pilot.connect();
+                rig.waitForLog("Video: H.26", 60_000);
+                Ui.pause(5000);
+                ui.shot("flown on a clean network");
+
+                // ---- 1. ended by an error while it is flown
+                String pid0 = pid(phone);
+                rig.check(!pid0.isEmpty(), "the phone app runs (process " + pid0 + ")");
+                // (a recording begins with the first picture of a link: "Recording to ...flight-...mkv")
+                int recordingsBefore = (int) rig.log().stream().filter(l -> l.contains("Recording to") && l.contains(".mkv")).count();
+                long t0 = System.currentTimeMillis();
+                phone.shell("am crash " + APP);
+                String pid1 = newProcess(phone, pid0, 30_000);
+                long openedMs = System.currentTimeMillis() - t0;
+                rig.check(!pid1.isEmpty(), "ended by an error while flown, the app is a new process by itself" + (pid1.isEmpty() ? " - none within 30 s" : " after " + openedMs / 1000.0 + " s"));
+                boolean back = false;
+                try {
+                    ui.until("the PC to lose the link", 15_000, () -> !pilot.linkUp());
+                    ui.until("the link back by itself", 60_000, pilot::linkUp);
+                    back = true;
+                } catch (Throwable t) {
+                    rig.film.remark("After the error: " + t.getMessage());
+                }
+                long backMs = System.currentTimeMillis() - t0;
+                rig.check(back, "and the PC has its link again without anyone touching the phone" + (back ? ", " + backMs / 1000.0 + " s after the error" : " - not within a minute"));
+                if (back) {
+                    boolean picture = false;
+                    long end = System.currentTimeMillis() + 30_000;
+                    while (!picture && System.currentTimeMillis() < end) {
+                        picture = rig.log().stream().filter(l -> l.contains("Recording to") && l.contains(".mkv")).count() > recordingsBefore;
+                        Ui.pause(500);
+                    }
+                    rig.check(picture, "with a picture again");
+                }
+                ui.shot("after the app was ended by an error");
+                String log1 = said(phone, from);
+                rig.check(log1.contains("FATAL on thread") && log1.contains("Opening again"), "the phone's log says what happened and that it opens again");
+                rig.check(log1.contains("The app was last ended by"), "and the new start says what ended the last one");
+
+                // ---- 2. killed outright while asleep (a check every minute): back at its next check's alarm
+                if (back) {
+                    Ui.pause(3000);
+                    int asked = rig.log().size();
+                    for (int presses = 0; presses < 4; presses++) {
+                        if (!pilot.linkUp()) break;
+                        ui.click("DEEP SLEEP");
+                        Ui.pause(4000);
+                        java.util.List<String> all = rig.log(); // once: it grows between two reads
+                        if (all.subList(Math.min(asked, all.size()), all.size()).stream().anyMatch(l -> l.contains("DEEP SLEEP asked"))) break;
+                    }
+                    ui.until("the link ended, the phone asleep", 120_000, () -> ui.has("PILOT UAV"));
+                    Ui.pause(8000); // its first alarm is set
+                    String asleepFrom = phone.now();
+                    String pid2 = pid(phone);
+                    long killedAt = System.currentTimeMillis();
+                    phone.shell("kill -9 " + pid2);
+                    Ui.pause(1500);
+                    rig.check(pid(phone).isEmpty(), "asleep, the app's process is killed outright (as a battery saver does): gone");
+                    // (Android may start a process of its own for the service it lost - that one finds no settings and
+                    // stops: what counts is the app opening itself at its alarm)
+                    boolean opened = false;
+                    long until = System.currentTimeMillis() + 100_000;
+                    while (!opened && System.currentTimeMillis() < until) {
+                        Ui.pause(2000);
+                        opened = said(phone, asleepFrom).contains("Opened to wake the phone");
+                    }
+                    long cameS = (System.currentTimeMillis() - killedAt) / 1000;
+                    rig.check(opened, "within its check interval and a little the app is open again by itself" + (opened ? " (" + cameS + " s after it was killed)" : " - not within 100 s"));
+                    // (by its own sleep check's alarm, or by Android starting the service it lost - whichever came
+                    // first; in the night Android had planned that for 77 minutes later, here it took 39 s)
+                    String log2 = said(phone, asleepFrom);
+                    rig.film.remark("Killed asleep, it came back " + (log2.contains("Sleep check alarm fired") ? "at its own sleep check's alarm" : "with Android's restart of its service") + ".");
+                    Ui.pause(5000);
+                    ui.click("PILOT UAV");
+                    boolean reached = false;
+                    try {
+                        ui.until("the phone reached by PILOT UAV", 90_000, pilot::linkUp);
+                        reached = true;
+                    } catch (Throwable t) {
+                        rig.film.remark("After the kill: " + t.getMessage());
+                    }
+                    rig.check(reached, "and PILOT UAV reaches it");
+                    ui.shot("after the app was killed asleep");
+                    if (pilot.linkUp()) pilot.standby();
+                }
+
+                // ---- 3. not for ever: the app's own limit is CrashRestarts.MAX times in ten minutes. Android has one
+                // of its own, sooner: an app that an error ends twice within two minutes is "a bad process" - nothing
+                // of it is started any more, its alarm included, until a hand opens it (seen in this scenario's first
+                // run, 2026-11-20). So the errors here come more than two minutes apart, and the app's own limit is
+                // what ends them
+                String loopFrom = phone.now();
+                // counted from nothing: the app closed, what it kept of the restarts above gone, opened again
+                phone.forceStop();
+                phone.shell("rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml");
+                phone.launch();
+                Ui.pause(4000);
+                int opened = 0;
+                String down = "";
+                for (int n = 1; n <= CrashRestarts.MAX + 1; n++) {
+                    long wait = t0 + n * 135_000L - System.currentTimeMillis();
+                    if (wait > 0) Ui.pause(wait);
+                    if (!phone.serviceRunning()) { // only a phone at work opens itself again
+                        phone.unlock();
+                        phone.launch();
+                        Ui.pause(4000);
+                    }
+                    String before = pid(phone);
+                    String stamp = phone.now();
+                    phone.shell("am crash " + APP);
+                    boolean again = false;
+                    long until = System.currentTimeMillis() + 30_000;
+                    while (!again && System.currentTimeMillis() < until) {
+                        Ui.pause(1500);
+                        again = said(phone, stamp).contains("Opened to wake the phone");
+                    }
+                    if (n <= CrashRestarts.MAX) {
+                        rig.check(again, "ended by an error the " + n + ". time (" + (System.currentTimeMillis() - t0) / 1000 + " s after the first), it opens itself again");
+                        if (again) opened++;
+                    } else {
+                        down = pid(phone);
+                        rig.check(!again, "ended the " + n + ". time within ten minutes, it does not open itself again");
+                        rig.check(said(phone, stamp).contains("Not opened again"), "and its log says so");
+                        rig.check(down.isEmpty() || down.equals(before) || !phone.serviceRunning(), "it stays down until a hand opens it");
+                    }
+                }
+                rig.film.remark("Opened by itself " + opened + " time(s) after an error; the limit is " + CrashRestarts.MAX + " in ten minutes.");
+                rig.check(said(phone, loopFrom).length() > 0, "the phone's log was read to the end");
+                Files.writeString(rig.film.dir().resolve("phone-log.txt"), said(phone, from), StandardCharsets.UTF_8);
+                rig.check(!said(phone, from).contains("CameraDevice was already closed"), "no camera error among what ended it");
+                // as found: the app open, nothing kept of this run's restarts
+                phone.forceStop();
+                phone.shell("rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml");
+                phone.launch();
+            } finally {
+                phone.close();
+            }
+        });
+    }
+}

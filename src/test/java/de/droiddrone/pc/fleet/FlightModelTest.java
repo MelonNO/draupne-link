@@ -121,6 +121,91 @@ class FlightModelTest {
         assertTrue(m.isArmed(), "back in time: it flies on");
     }
 
+    /** As fly, with the roll and pitch sticks where wanted (angle mode is on in these frames: AUX2 at 1500). */
+    private static long fly(FlightModel m, long from, long to, int roll, int pitch, int throttle, int arm) {
+        long t = from;
+        for (; t < to; t += 20) {
+            short[] f = sticks(throttle, arm);
+            f[0] = (short) roll;
+            f[1] = (short) pitch;
+            m.sticks(f, 8, t);
+            m.step(t, 0.02);
+        }
+        return t;
+    }
+
+    /** Armed, up and some way from home: the time it is then. */
+    private static long awayFromHome(FlightModel m) {
+        long t = fly(m, T0, T0 + 4000, 1000, 1000);
+        t = fly(m, t, t + 100, 1000, 1900);
+        t = fly(m, t, t + 3000, 1600, 1900);
+        t = fly(m, t, t + 6000, 1500, 1750, 1550, 1900); // nose down: away
+        assertTrue(m.isArmed() && m.altitudeM() > 2 && m.homeDistanceM() > 20, "up and away: " + m.altitudeM() + " m up, " + m.homeDistanceM() + " m out");
+        return t;
+    }
+
+    /**
+     * 1.0.71 (the pilot: "it is important that the drone does not disarm if gps rescue is set"): the failsafe set to
+     * GPS rescue keeps the drone ARMED through a lost link - it climbs, flies home, lands there, and only then disarms.
+     */
+    @Test
+    void gpsRescueStaysArmedFliesHomeAndDisarmsOnlyOnTheGround() {
+        FlightModel m = model(FlightModel.Procedure.GPS_RESCUE);
+        long t = awayFromHome(m);
+        t = silent(m, t, t + 2500);
+        assertEquals(FlightModel.Failsafe.RESCUE, m.failsafe());
+        assertTrue(m.isArmed(), "a rescue flies: armed");
+        assertNotEquals(0, m.modeFlags(t) & (1 << FlightModel.BOX_GPS_RESCUE), "GPS RESCUE in the mode flags");
+        assertEquals("RX_LOST", m.beeping(t));
+        long landed = -1;
+        for (long end = t + 120_000; t < end && landed < 0; t = silent(m, t, t + 1000)) {
+            if (!m.isArmed()) landed = t;
+            else assertEquals(FlightModel.Failsafe.RESCUE, m.failsafe(), "armed all the way home");
+        }
+        assertTrue(landed > 0, "it came down within two minutes");
+        assertEquals("failsafe (GPS rescue landed)", m.lastDisarm());
+        assertTrue(m.homeDistanceM() < 5, "at home: " + m.homeDistanceM() + " m");
+        assertFalse(m.crashed());
+        // and on the ground the switch must go off before it arms again
+        t = fly(m, t, t + 1500, 1000, 1900);
+        assertFalse(m.isArmed(), "the switch still on: no re-arm");
+    }
+
+    /** The link back in a rescue: the drone flies on home by itself, armed, until the pilot moves a stick. */
+    @Test
+    void theLinkBackInARescueLeavesItArmedAndAStickTakesItBack() {
+        FlightModel m = model(FlightModel.Procedure.GPS_RESCUE);
+        long t = awayFromHome(m);
+        t = silent(m, t, t + 6000);
+        assertEquals(FlightModel.Failsafe.RESCUE, m.failsafe());
+        // the sticks are back, centred, ARM still on: it is still the rescue's
+        t = fly(m, t, t + 2000, 1500, 1900);
+        assertTrue(m.isArmed(), "armed with the link back");
+        assertEquals(FlightModel.Failsafe.RESCUE, m.failsafe(), "no stick moved: the rescue flies on");
+        // a stick moved: the pilot's again
+        t = fly(m, t, t + 300, 1800, 1500, 1500, 1900);
+        assertEquals(FlightModel.Failsafe.NONE, m.failsafe());
+        assertTrue(m.isArmed());
+        assertEquals(0, m.blockers(t) & FlightModel.FLAG_FAILSAFE);
+    }
+
+    /**
+     * What a pilot on GPS rescue must know (Betaflight's rc_controls.c): ARM off when the link returns disarms the
+     * drone in the air - the switch is obeyed again once the receiver's data is believed (half a second).
+     */
+    @Test
+    void armOffWhenTheLinkReturnsDisarmsARescueInTheAir() {
+        FlightModel m = model(FlightModel.Procedure.GPS_RESCUE);
+        long t = awayFromHome(m);
+        t = silent(m, t, t + 6000);
+        assertTrue(m.isArmed() && m.altitudeM() > 5);
+        t = fly(m, t, t + 300, 1000, 1000); // the link back, ARM off: not believed yet
+        assertTrue(m.isArmed(), "the first frames after a loss are not obeyed");
+        fly(m, t, t + 600, 1000, 1000);
+        assertFalse(m.isArmed(), "believed after half a second: disarmed, in the air");
+        assertEquals("the arm switch", m.lastDisarm());
+    }
+
     @Test
     void landFailsafeDescendsAndDisarmsOnTheGround() {
         FlightModel m = model(FlightModel.Procedure.LAND);

@@ -444,7 +444,8 @@ class VideoView extends JComponent implements VideoPipeline.FrameSink {
             centered(v, "NO VIDEO FEED" + dots, vw, base);
             v.setFont(Theme.font(Font.PLAIN, Math.max(12f, 14f * u)));
             v.setColor(Theme.MUTED);
-            centered(v, idleText, vw, base + Math.round(24 * u));
+            // on a small picture the letters stop shrinking: the second line keeps its own height below the first (F-010)
+            centered(v, idleText, vw, base + Math.max(Math.round(24 * u), v.getFontMetrics().getAscent() + 4));
         } finally {
             v.dispose();
         }

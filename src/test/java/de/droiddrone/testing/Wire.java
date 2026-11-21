@@ -29,6 +29,8 @@ public final class Wire implements AutoCloseable {
     public interface Rule {
         /** Lost on the way. */
         long LOST = -1;
+        /** Passed at once and once more a moment later: a network that doubles packets (the test bench, 1.0.71). */
+        long TWICE = -2;
 
         /**
          * @param toPhone from the PC to the phone (else from the phone to the PC)
@@ -110,9 +112,14 @@ public final class Wire implements AutoCloseable {
                 int len = p.getLength();
                 if (len > 0) (toPhone ? fromPcCount : fromPhoneCount).incrementAndGet(buf[0] & 0xff);
                 long hold = rule.decide(toPhone, buf, len);
-                if (hold < 0) continue;
+                if (hold < 0 && hold != Rule.TWICE) continue;
                 byte[] d = Arrays.copyOf(buf, len);
                 DatagramSocket out = toPhone ? phoneSide : pcSide;
+                if (hold == Rule.TWICE) {
+                    pass(out, d, to, toPhone);
+                    later.schedule(() -> pass(out, d, to, toPhone), 3, TimeUnit.MILLISECONDS);
+                    continue;
+                }
                 if (hold == 0) pass(out, d, to, toPhone);
                 else later.schedule(() -> pass(out, d, to, toPhone), hold, TimeUnit.MILLISECONDS);
             } catch (IOException | RuntimeException e) {

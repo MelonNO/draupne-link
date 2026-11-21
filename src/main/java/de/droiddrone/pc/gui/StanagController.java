@@ -168,8 +168,7 @@ final class StanagController {
         if (wanted == on) return;
         on = wanted;
         if (!on) {
-            closeAll();
-            endProcess();
+            closeFeeds(true, false);
             announce();
             return;
         }
@@ -195,11 +194,10 @@ final class StanagController {
         sayOn(); // said: the pilot switched them off and on to be sure the new address was taken
     }
 
-    /** The app closes. */
+    /** The app closes: here the streams are waited for (a stream to a file gets its end written). */
     synchronized void close() {
         on = false;
-        closeAll();
-        endProcess();
+        closeFeeds(true, true);
         announce();
     }
 
@@ -212,24 +210,50 @@ final class StanagController {
         return process;
     }
 
-    private void endProcess() {
-        if (process != null) process.close(); // after the feeds: their encoders are closed already
-        process = null;
-    }
+    /**
+     * Where streams are waited for when they end (1.0.71): each takes up to 2 s for its thread, twice - not the
+     * window's thread (the test bench's F-003: STANAG 4609 STREAMS off froze the window for 1.3 to 2.6 s with one
+     * drone). One thread, so they end in the order they were closed. Tests set their own.
+     */
+    java.util.concurrent.Executor closer = CLOSER;
+    private static final java.util.concurrent.Executor CLOSER = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "stanag-close");
+        t.setDaemon(true);
+        return t;
+    });
 
     private void announce() {
         announced = on && !loopback(hostOf(target)) && portOf(target) > 0 ? target : null;
     }
 
     private void closeAll() {
+        closeFeeds(false, false);
+    }
+
+    /**
+     * Every stream ends now - nothing more is sent from this moment ({@link StanagFeed#stop}) - and is waited for
+     * elsewhere ({@link #closer}), or here when the app closes. andProcess: the encoders' process after them (their
+     * encoders are closed by then).
+     */
+    private void closeFeeds(boolean andProcess, boolean here) {
+        List<StanagFeed> going = new ArrayList<>();
         for (Entry e : feeds.values()) {
             untap(e);
-            e.feed.close();
+            e.feed.stop();
+            going.add(e.feed);
         }
         feeds.clear();
         tappedBy.clear();
         clashSaid.clear();
         clashes = List.of();
+        EncoderProcess ending = andProcess ? process : null;
+        if (andProcess) process = null;
+        Runnable end = () -> {
+            for (StanagFeed f : going) f.close();
+            if (ending != null) ending.close();
+        };
+        if (here) end.run();
+        else closer.execute(end);
     }
 
     /** "host:port" -> host ("" when there is none). */
@@ -350,7 +374,9 @@ final class StanagController {
             Map.Entry<String, Entry> en = it.next();
             if (known.contains(en.getKey())) continue;
             untap(en.getValue());
-            en.getValue().feed.close();
+            StanagFeed gone = en.getValue().feed;
+            gone.stop();
+            closer.execute(gone::close);
             it.remove();
         }
         checkOthers();

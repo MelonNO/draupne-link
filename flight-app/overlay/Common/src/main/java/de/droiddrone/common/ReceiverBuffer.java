@@ -143,13 +143,26 @@ public class ReceiverBuffer {
                         udpSender.connect(ip, port);
                         isConnected = true;
                         lastPacketTimer = disconnectTimeMs;
+                        answerAwaited = false;
                     }else{
                         return;
                     }
                 }
                 if (!isConnected()) return; // pc.31: not the field - a timed-out session stays down until a Connect
                 lastPacketTimer = disconnectTimeMs;
+                if (packetName != UdpCommon.Connect && freshSessionOfTheFarSide(num)) {
+                    // F-057 (DRAUPNE Link 1.0.71): this side's Connect began the far side's new session and only its
+                    // answer was lost (a one-way cut of 2 - 4 s): the new session's first numbers come. Started over
+                    // as the answer would have - before, the numbering stayed apart until recoverCounter mended it,
+                    // a second more to LINK READY
+                    restart();
+                    udpSender.connect(ip, port);
+                    nextPacketNum = 0;
+                    answerAwaited = false;
+                    unansweredStarts++;
+                }
                 if (ahead(num) < MAX_PACKET_NUM_DIFF){
+                    if (packetName != UdpCommon.Connect) answerAwaited = false; // the session's numbering goes on: no new one
                     numberedBuffer.put(num, new SavedPacket(packetName, num, data, ip, port));
                     packetCount++;
                     recoverCounter = 0;
@@ -171,6 +184,33 @@ public class ReceiverBuffer {
                 unnumberedBuffer.add(new SavedPacket(packetName, (short) -1, data, ip, port));
             }
         }
+    }
+
+    /** F-057: a Connect of this side (the client) is out and unanswered; set by the link, cleared by an answer or the session's own numbers. */
+    private volatile boolean answerAwaited;
+    /** Behind the next number by this many at most: a late copy of this session's, never a new session's first. */
+    static final int LATE_COPY_WINDOW = 256;
+    /** How often the far side's new session was taken without its answer (F-057). */
+    private volatile int unansweredStarts;
+
+    /** The client side has sent a Connect: until an answer, or a packet in the session's own numbering, comes. */
+    public void awaitAnswer() {
+        if (!isServer) answerAwaited = true;
+    }
+
+    public int getUnansweredStarts() {
+        return unansweredStarts;
+    }
+
+    /**
+     * Under the lock. A numbered packet that can only be the far side's new session: a Connect of ours is out
+     * unanswered, and the number is a new session's first ones (0 .. MAX_PACKET_NUM_DIFF) far outside this session's
+     * window - neither ahead of the next number nor within LATE_COPY_WINDOW behind it (a late copy of this session's).
+     */
+    private boolean freshSessionOfTheFarSide(short num) {
+        if (isServer || !answerAwaited || num < 0 || num >= MAX_PACKET_NUM_DIFF || nextPacketNum < 0) return false;
+        int behind = (nextPacketNum - num + 32768) % 32768;
+        return ahead(num) >= MAX_PACKET_NUM_DIFF && behind > LATE_COPY_WINDOW;
     }
 
     /** How far num is ahead of the next number to deliver, across the wrap (0..32767). */

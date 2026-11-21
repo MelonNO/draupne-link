@@ -22,6 +22,8 @@
  *  PC's sequence byte keeping a late frame from going out after a newer one; a PC that restarts gets its session
  *  back at once (receiverRun). pc.21: the PC's PowerMode packet and the PHONE_POWER record (PowerMode); no sticks
  *  and no StartVideo in standby or deep sleep; the socket closes and opens again for deep sleep's checks.
+ *  pc.55: the socket is a LinkSocket - opened anew under its users when nothing leaves it for 5 s though the PC is
+ *  heard (sendWatchRun; found by the test bench: a send buffer full for good stopped every sender until the app ended).
  *  pc.26 (weak reception): a Connect from the pilot's own address and port starts a new session at once (the PC
  *  thinks the link is lost; before, it was dropped until this side's 4 s timer ran out); another PC takes over
  *  only after 10 s of silence and never while armed; the stick sequence is 16 bits wide and starts over after
@@ -89,6 +91,7 @@ import de.droiddrone.common.FecSender;
 import de.droiddrone.common.FleetGate;
 import de.droiddrone.common.FleetProtocol;
 import de.droiddrone.common.KnownPcs;
+import de.droiddrone.common.LinkSocket;
 import de.droiddrone.common.Log;
 import de.droiddrone.common.MediaCodecBuffer;
 import de.droiddrone.common.MediaCommon;
@@ -100,6 +103,7 @@ import de.droiddrone.common.PcAudio;
 import de.droiddrone.common.RcPath;
 import de.droiddrone.common.ReceiverBuffer;
 import de.droiddrone.common.SavedPacket;
+import de.droiddrone.common.SendWatch;
 import de.droiddrone.common.SessionGate;
 import de.droiddrone.common.SettingsCommon;
 import de.droiddrone.common.Takeover;
@@ -353,11 +357,30 @@ public class Udp {
      * one also passes the sticks to the flight controller and answers pings. In 2.3.0-pc.13 a video start that hung
      * held up both (the PC saw telemetry, but no pongs and no picture).
      */
-    private final ExecutorService videoStarter = Executors.newSingleThreadExecutor(r -> {
+    private final ExecutorService videoStarter = new java.util.concurrent.ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+            new java.util.concurrent.LinkedBlockingQueue<>(), r -> {
         Thread t = new Thread(r, "videoStarter");
         t.setDaemon(true);
         return t;
-    });
+    }) {
+        /**
+         * pc.55 (a review of 2026-11-20): nothing thrown by a task ends the app. Some of what runs here was guarded
+         * (the video restart, a config change) and some was not - the stop of camera and encoder at a Disconnect, at
+         * standby and at deep sleep, the sound's start, the recording's start and stop: one exception from the camera
+         * there and Android ended the whole app, and with the app gone nothing brings the link back or wakes the
+         * phone at its next check-in until someone opens the app by hand.
+         */
+        @Override
+        public void execute(Runnable task) {
+            super.execute(() -> {
+                try {
+                    task.run();
+                } catch (Throwable e) {
+                    log("videoStarter: a task failed: " + e);
+                }
+            });
+        }
+    };
     /**
      * pc.38 (the review's M19): who started the camera last (CameraOwner), counted on the videoStarter thread - every
      * video start (a pilot's StartVideo, a restart, observation) and overwatch's camera on take a new number.
@@ -505,13 +528,22 @@ public class Udp {
         }
         try {
             if (socket != null) socket.close();
-            socket = new DatagramSocket(port);
-            // DRAUPNE Link: upstream's 2 KB held two packets: a 4G burst (a key frame's packets delivered at once,
-            // sticks behind them) tail-dropped the newest frames. 256 KB holds the burst; the sequence byte and
-            // the writer's newest-first rule keep stale sticks from going out
-            socket.setReceiveBufferSize(256 * 1024);
-            socket.setSendBufferSize(UdpCommon.packetLength * 30);
-            socket.setTrafficClass(0x10);
+            // pc.55: a socket that can be opened anew under its users when nothing leaves it (LinkSocket, sendWatchRun)
+            socket = new LinkSocket(() -> {
+                DatagramSocket s = new DatagramSocket(port);
+                try {
+                    // DRAUPNE Link: upstream's 2 KB held two packets: a 4G burst (a key frame's packets delivered at
+                    // once, sticks behind them) tail-dropped the newest frames. 256 KB holds the burst; the sequence
+                    // byte and the writer's newest-first rule keep stale sticks from going out
+                    s.setReceiveBufferSize(256 * 1024);
+                    s.setSendBufferSize(UdpCommon.packetLength * 30);
+                    s.setTrafficClass(0x10);
+                } catch (java.io.IOException | RuntimeException e) {
+                    s.close();
+                    throw e;
+                }
+                return s;
+            });
             udpSender = new UdpSender(socket);
             if (connectionMode == SettingsCommon.ConnectionMode.overServer) {
                 udpSender.connect(destIp, port);
@@ -538,6 +570,10 @@ public class Udp {
             audioGate.setDaemon(true);
             audioGate.setName("audioGateThread");
             audioGate.start();
+            Thread sendWatch = new Thread(sendWatchRun);
+            sendWatch.setDaemon(true);
+            sendWatch.setName("sendWatchThread");
+            sendWatch.start();
             // DRAUPNE Link: no rcThread any more - stick frames go to the flight controller from the receive thread
             // (handleRcFrame), which runs at MAX_PRIORITY like the serial writer that takes them
             return true;
@@ -586,6 +622,7 @@ public class Udp {
                 try {
                     socket.receive(receiverPacket);
                     int len = receiverPacket.getLength();
+                    heardAtMs = android.os.SystemClock.elapsedRealtime(); // pc.55: anything at all arrives - the way in works (sendWatchRun)
                     if (len < 1) continue;
                     byte[] d = receiverPacket.getData();
                     // DRAUPNE names (pc.28): a PC asking who this phone is, or the master PC naming it - in any state
@@ -661,7 +698,7 @@ public class Udp {
                             answerSpectator(receiverPacket, true); // PILOT_AT the pilot: it can watch
                             continue;
                         }
-                        if (pilotKnown && !sameAddress) log("New session from " + from.getHostAddress() + " (the pilot is silent, the FC disarmed)");
+                        if (pilotKnown && !sameAddress) log("New session from " + from.getHostAddress() + " (the pilot is silent: the FC disarmed, or the pilot PC moved)");
                         // every (re)connect passes here: the PC's stick sequence starts over (pc.50: here, at the
                         // Connect taken, not at every packet - and the same PC's lag baseline is kept, RcPath.restart)
                         rcPath.restart(now, samePc);
@@ -942,6 +979,10 @@ public class Udp {
         if (old != null) old.close();
         rcPath.restart(android.os.SystemClock.elapsedRealtime(), samePc);
         idleSticks = null; // pc.38: the new session's PC sends its own within a second; none kept from before (H1)
+        // pc.55 (a review of 2026-11-20): a pilot is here again on this path too. Without it a DISCONNECT followed by
+        // PILOT UAV within the 4 s the old session still counted as up left "ended on purpose" standing for the new
+        // session - and when that link was then really lost, the drone did not beep
+        beeperRule.sessionTaken();
         sessionAsksAnew();
     }
 
@@ -1053,6 +1094,44 @@ public class Udp {
                     Thread.sleep(dormant() ? DORMANT_LOOP_MS : 10);
                 } catch (Exception e) {
                     log("Telemetry thread error: " + e);
+                }
+            }
+        }
+    };
+
+    /** pc.55: when the last datagram arrived, any at all (elapsedRealtime). */
+    private volatile long heardAtMs;
+
+    /**
+     * pc.55: the watch on the link's socket. Every sender here - telemetry, video, sound, the answers to the PC's
+     * Connect - shares it, and a send waits while its send buffer is full. The bench saw that buffer stay full for
+     * good (the emulator's Wi-Fi kept what was sent): all four senders stood in their send until the app was ended,
+     * while the phone heard the PC and began a new session at every Connect it could not answer. Twice a second:
+     * when nothing has left the socket for 5 s though packets arrive, it is opened anew ({@link LinkSocket#reopen},
+     * the rule in {@link SendWatch}) - the waiting sends are let go, the port, the session and the camera stay.
+     */
+    private final Runnable sendWatchRun = new Runnable() {
+        public void run() {
+            final int id = udpThreadsId;
+            final SendWatch watch = new SendWatch();
+            while (id == udpThreadsId) {
+                try {
+                    Thread.sleep(dormant() ? 1000 : 500);
+                    DatagramSocket s = socket;
+                    if (id != udpThreadsId || !(s instanceof LinkSocket) || s.isClosed()) continue;
+                    LinkSocket link = (LinkSocket) s;
+                    long now = android.os.SystemClock.elapsedRealtime();
+                    long stuck = link.stuckMs();
+                    boolean broken = link.broken();
+                    if (!watch.tick(now, stuck, now - heardAtMs, broken)) continue;
+                    boolean open = link.reopen();
+                    log(broken ? "Link socket: was closed - " + (open ? "opened anew" : "could not be opened, trying again")
+                            : "Link socket: nothing left the phone for " + stuck / 1000 + " s though the PC is heard - "
+                            + (open ? "opened anew (" + link.reopens() + ")" : "could not be opened anew, trying again"));
+                } catch (InterruptedException e) {
+                    return;
+                } catch (Exception e) {
+                    log("Send watch error: " + e);
                 }
             }
         }
@@ -1382,6 +1461,12 @@ public class Udp {
     /** pc.50: a pilot or observers use the heading sensor (it stays on after the sleep notice). */
     boolean headingInUse() {
         return isConnected() || observing;
+    }
+
+    /** F-056: the link's socket (one that can be opened anew), or null when it is not open. */
+    public LinkSocket linkSocket() {
+        DatagramSocket s = socket;
+        return s instanceof LinkSocket && !s.isClosed() ? (LinkSocket) s : null;
     }
 
     /**
@@ -1966,7 +2051,11 @@ public class Udp {
                     // pc.26: the camera part on the video starter thread, in line with StartVideo and the watchdog
                     // (two threads restarted the encoder at once before); the rest at once, on a thread of its own
                     Thread t1 = new Thread(() -> {
-                        checkConfigUpdate(oldCamera, sizeOnly, false);
+                        try {
+                            checkConfigUpdate(oldCamera, sizeOnly, false);
+                        } catch (RuntimeException e) { // pc.55: not the app's end (see videoStarter)
+                            log("Config update error: " + e);
+                        }
                     });
                     t1.start();
                     if (config.isCameraConfigChanged()) videoStarter.execute(() -> checkConfigUpdate(oldCamera, sizeOnly, true));
@@ -2129,6 +2218,21 @@ public class Udp {
                 } catch (InterruptedException ignored) {
                 }
             }
+            // pc.55: a camera just opened by a StartVideo, its session still being set up: its picture is a second away
+            // - waited for (2 s at most), so the new size is made on it. It fell between the two cases below before,
+            // and the change was marked done without being made
+            for (int i = 0; i < 20 && !camera.isStarted() && videoInitialFrame == null && camera.isOpened(config.getCameraId()); i++) {
+                try {
+                    Thread.sleep(100);
+                } catch (InterruptedException ignored) {
+                }
+            }
+            // pc.55 (a reader of this code, 2026-11-20): marked done HERE, before the sizes are read - it was marked at
+            // the end, so a size change that came while this one was being made (100 ms to a second) was stored, its
+            // task found nothing to do, and the PC's repeats of it changed nothing either (the same values): the picture
+            // kept the wrong size until the next tier change ("Video: phone kept the picture size"). Now it is made by
+            // the task queued for it
+            config.cameraConfigUpdated();
             if (sizeOnly && (camera.isStarted() || videoInitialFrame != null) && resizeOnOpenCamera(camera)) {
                 // done without closing the camera
             } else if ((camera.isStarted() || videoInitialFrame != null) && !isCameraRestarting){
@@ -2152,17 +2256,22 @@ public class Udp {
                 }
                 if (isRecording) {
                     Thread t1 = new Thread(() -> {
-                        for (int i = 0; i < 5; i++) {
-                            try {
-                                Thread.sleep(1000);
-                            } catch (InterruptedException ignored) {
+                        try {
+                            for (int i = 0; i < 5; i++) {
+                                try {
+                                    Thread.sleep(1000);
+                                } catch (InterruptedException ignored) {
+                                }
+                                if (cameraManager.getCamera().isStarted()) {
+                                    startStopRecording();
+                                    break;
+                                }
                             }
-                            if (cameraManager.getCamera().isStarted()) {
-                                startStopRecording();
-                                break;
-                            }
+                        } catch (RuntimeException e) { // pc.55: a camera changed under it - not the app's end
+                            log("Recording after the camera restart: " + e);
+                        } finally {
+                            isCameraRestarting = false;
                         }
-                        isCameraRestarting = false;
                     });
                     t1.start();
                     config.recorderConfigUpdated();
@@ -2170,7 +2279,6 @@ public class Udp {
                     isCameraRestarting = false;
                 }
             }
-            config.cameraConfigUpdated();
         }
     }
 

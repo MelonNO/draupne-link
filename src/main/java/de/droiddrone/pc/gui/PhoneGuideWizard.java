@@ -241,6 +241,9 @@ final class PhoneGuideWizard {
             page.add(col, BorderLayout.CENTER);
             file.set(State.PENDING, "Preparing...");
             firewall.set(State.PENDING, "Checking...");
+            // F-043: no empty box and no empty address list while there is no code to show
+            qr.showNone("Preparing...");
+            urlChoice.setVisible(false);
             main.nameService().scanSoon();
             return page;
         }
@@ -256,6 +259,7 @@ final class PhoneGuideWizard {
             if (share != null || preparing) return;
             preparing = true;
             file.set(State.PENDING, "Downloading (about 7 MB)...");
+            qr.showNone("Downloading...");
             background(() -> {
                 try {
                     Path apk = ApkShare.prepareApk(AppPaths.downloadsDir());
@@ -263,7 +267,11 @@ final class PhoneGuideWizard {
                     s.start(apk);
                     return s;
                 } catch (Exception e) {
-                    SwingUtilities.invokeLater(() -> file.set(State.BAD, "App not ready: " + e.getMessage()));
+                    SwingUtilities.invokeLater(() -> {
+                        file.set(State.BAD, "App not ready: " + e.getMessage());
+                        qr.showNone("App not ready"); // the reason in the row beside it
+                        urlChoice.setVisible(false);
+                    });
                     return null;
                 }
             }, s -> {
@@ -280,6 +288,7 @@ final class PhoneGuideWizard {
                 urls.removeAllElements();
                 list.forEach(urls::addElement);
                 if (!list.isEmpty()) urls.setSelectedItem(list.get(0));
+                urlChoice.setVisible(!list.isEmpty()); // the list once there are addresses in it
                 showQr();
             });
         }

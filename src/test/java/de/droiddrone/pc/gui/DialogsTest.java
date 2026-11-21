@@ -65,6 +65,38 @@ class DialogsTest {
         assertTrue(found.isEmpty(), "use Dialogs.message/confirm/option/input in " + found);
     }
 
+    /**
+     * The test bench's F-031: "Report saved:" and a long folder's path - a line that can't wrap - made a box 1208 px
+     * wide on a screen of 1093, its OK half off it. No box is wider or higher than its screen, and it lies on it.
+     */
+    @Test
+    void aMessageWiderThanTheScreenIsCutToTheScreenWithItsButtonOnIt() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            Theme.install();
+            ScreenFit.pretend = new java.awt.Dimension(700, 400);
+            JOptionPane pane = new JOptionPane("<html>Report saved:<br>" + "C:\\Users\\a-long-name\\Documents\\".repeat(8) + "report.html</html>",
+                    JOptionPane.INFORMATION_MESSAGE);
+            JDialog d = Dialogs.dialog(null, pane, "Report");
+            try {
+                Rectangle screen = ScreenFit.usable(null);
+                assertTrue(d.getWidth() <= 700 && d.getHeight() <= 400, "the box " + d.getSize() + " on a screen of 700 x 400");
+                assertTrue(screen.contains(d.getBounds()), d.getBounds() + " lies on " + screen);
+                invalidateAll(d);
+                d.validate();
+                List<AbstractButton> buttons = new ArrayList<>();
+                collect(pane, buttons);
+                Rectangle area = new Rectangle(d.getContentPane().getSize());
+                for (AbstractButton b : buttons) {
+                    Rectangle r = SwingUtilities.convertRectangle(b.getParent(), b.getBounds(), d.getContentPane());
+                    assertTrue(area.contains(r), b.getText() + " at " + r + " outside " + area);
+                }
+            } finally {
+                ScreenFit.pretend = null;
+                d.dispose();
+            }
+        });
+    }
+
     private static void assertButtonsInside(String message, int optionType, int buttonCount) throws Exception {
         SwingUtilities.invokeAndWait(() -> {
             Theme.install();

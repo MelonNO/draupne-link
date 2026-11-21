@@ -270,6 +270,7 @@ public class MainWindow extends JFrame {
         if (row == null || (standbyButton.getParent() == row) == on) return;
         if (on) row.add(standbyButton, 0);
         else row.remove(standbyButton);
+        fitSleepButtons();
         row.revalidate();
         row.repaint();
     }
@@ -283,11 +284,8 @@ public class MainWindow extends JFrame {
             powerStatusText.setHtml(h.isBlank() ? "&nbsp;" : h);
         }
     }
+    /** CHECK EVERY, one for DEEP SLEEP and OVERWATCH (F-046; up to then OVERWATCH's own was "phone.overwatchCheckMin"). */
     private static final String CHECK_INTERVAL_KEY = "phone.sleepCheckMin";
-    /** CHECK EVERY for OVERWATCH (1.0.56): its own, Constant until chosen. */
-    private static final String OVERWATCH_INTERVAL_KEY = "phone.overwatchCheckMin";
-    /** CHECK EVERY shows (and sets) OVERWATCH's interval: the chosen phone overwatches, or OVERWATCH was pressed last. */
-    private boolean intervalForOverwatch;
     private boolean fillingInterval;
 
     /** A saved CHECK EVERY, one of the list's; the mode's default when none (or another) is saved. */
@@ -302,19 +300,32 @@ public class MainWindow extends JFrame {
         return PowerController.defaultInterval(mode);
     }
 
-    /** CHECK EVERY shows the interval of OVERWATCH (true) or DEEP SLEEP; the list's choice changes nothing. */
+    /**
+     * CHECK EVERY shows the one interval (F-046: the same for DEEP SLEEP and OVERWATCH, whichever is pressed next); the
+     * list's choice changes nothing here. The mode is no longer looked at - kept for the callers' sake.
+     */
     private void showIntervalFor(boolean overwatchMode) {
-        intervalForOverwatch = overwatchMode;
-        int v = overwatchMode ? power.overwatchIntervalMin : power.checkIntervalMin;
+        int v = power.checkIntervalMin;
         int chosen = CHECK_INTERVALS.length - 1;
         for (int i = 0; i < CHECK_INTERVALS.length; i++) if (CHECK_INTERVALS[i] == v) chosen = i;
-        if (checkIntervalCombo.getSelectedIndex() == chosen) return;
+        // F-043: the chosen drone OUT OF ACTION checks in every 30 min whatever is chosen - the box shows that (it
+        // showed the pilot's own 5 min); the list's own values stay the next sleep's
+        boolean outOfAction = isOutOfAction(config.getString(Names.PHONE_NAME_KEY));
+        if (outOfAction) chosen = CHECK_INTERVALS.length;
         fillingInterval = true;
         try {
-            checkIntervalCombo.setSelectedIndex(chosen);
+            boolean extra = checkIntervalCombo.getItemCount() > CHECK_INTERVALS.length;
+            if (outOfAction && !extra) checkIntervalCombo.addItem(SleepCheck.label(de.droiddrone.common.FleetProtocol.OUT_OF_ACTION_CHECK_MIN));
+            if (!outOfAction && extra) checkIntervalCombo.removeItemAt(CHECK_INTERVALS.length);
+            if (checkIntervalCombo.getSelectedIndex() != chosen) checkIntervalCombo.setSelectedIndex(chosen);
         } finally {
             fillingInterval = false;
         }
+    }
+
+    /** F-043: what CHECK EVERY shows now (for the tests). */
+    String checkEveryShown() {
+        return String.valueOf(checkIntervalCombo.getSelectedItem());
     }
     /**
      * Drones the pilot marked OUT OF ACTION (OUT_OF_ACTION_KEY; up to 1.0.70: CRASHED): the name as the name map has it
@@ -333,6 +344,11 @@ public class MainWindow extends JFrame {
     private static final String KEPT_FLIGHTS_KEY = "map.keptFlights";
     /** The live flight's name on the map ("MobileAlpha 22:41"). */
     private String liveTrackName;
+    /**
+     * F-055: the drone the live track is of (its phone's name; null: not known, watching before the pilot's phone is
+     * known). Its LAST KNOWN and its sign on the map go by it - not by the phone chosen in the PHONE list since.
+     */
+    private volatile String liveTrackDrone;
     /** Watching: the phone the pilot flew at the last look (a new one: a new flight). */
     private String watchedPhone;
     /** The other drones on the network, for the map (1 s). */
@@ -579,6 +595,14 @@ public class MainWindow extends JFrame {
     private static final String MINIMIZED_KEY = "controllerMinimized";
     static final String UPSIDE_DOWN_KEY = CameraTurn.KEY;
 
+    /**
+     * A made-up drone (DEMO, the tour, the virtual fleet) leaves no flights, recordings or last places (1.0.71) -
+     * unless the test bench asks for them, which has nothing but made-up drones to test the saving with.
+     */
+    static boolean savesNothing(Names.Entry e) {
+        return e != null && e.isVirtual() && !Boolean.getBoolean("draupne.bench.madeUpSaves");
+    }
+
     public static void open(PcConfig config, Path configFile, JoystickService service) {
         Theme.install();
         boolean firstStart = !Files.exists(configFile); // nothing has saved settings yet
@@ -747,6 +771,9 @@ public class MainWindow extends JFrame {
             graphics = new MapGraphics(null);
         }
         if (pins.brokenMovedTo() != null) logLine("pins.txt had bad lines: moved to " + pins.brokenMovedTo().getFileName() + ".");
+        if (pins.notRead() != null) logLine("PINS NOT READ (" + pins.notRead() + "): none shown, pins.txt left as it is. Restart to try again.");
+        pins.onProblem(this::logLine);
+        graphics.onProblem(this::logLine);
         if (graphics.brokenMovedTo() != null) logLine("graphics.kml unreadable: moved to " + graphics.brokenMovedTo().getFileName() + "; map starts without graphics.");
         miniMap.setPins(pins);
         miniMap.setCoordinateFormat(() -> coordinateFormat);
@@ -989,7 +1016,7 @@ public class MainWindow extends JFrame {
         List<String> command = appCommand();
         command.add("fleet");
         try {
-            new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+            de.droiddrone.pc.Outside.start(new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD));
             logLine("Virtual fleet starting: its drones appear in the PHONE list as VIRTUAL.");
         } catch (IOException e) {
             logLine("Virtual fleet couldn't start: " + e.getMessage());
@@ -1013,7 +1040,7 @@ public class MainWindow extends JFrame {
                 Files.deleteIfExists(configFile);
                 List<String> command = appCommand();
                 command.addAll(List.of("gui", "--after", Long.toString(ProcessHandle.current().pid())));
-                new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+                de.droiddrone.pc.Outside.start(new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD));
                 AppLog.drain(500);
             } catch (IOException e) {
                 System.err.println("Reset setup: " + e.getMessage());
@@ -1453,7 +1480,14 @@ public class MainWindow extends JFrame {
             @Override
             public Dimension getPreferredSize() {
                 Dimension d = super.getPreferredSize();
-                return controllerAnimHeight < 0 ? d : new Dimension(d.width, controllerAnimHeight);
+                if (controllerAnimHeight >= 0) return new Dimension(d.width, controllerAnimHeight);
+                // 1.0.71 (the test bench's F-010): in a small window (1366 x 768 at 125 %) the open card took the
+                // video's room - the picture a stamp, five of its seven buttons cut off. The video keeps the height
+                // of its button column; the sticks get what is left, down to a small pair.
+                java.awt.Container column = getParent();
+                if (controllerMinimized || column == null || column.getHeight() <= 0) return d;
+                int most = column.getHeight() - videoBar.getPreferredSize().height - VIDEO_CARD_EXTRA;
+                return d.height <= most ? d : new Dimension(d.width, Math.max(most, d.height - (GIMBALS_HEIGHT - GIMBALS_MIN_HEIGHT)));
             }
         };
         JPanel card = Theme.card(null); // the card look, on a panel that can fold
@@ -1535,7 +1569,7 @@ public class MainWindow extends JFrame {
         gimbals.setOpaque(false);
         gimbals.add(leftGimbal);
         gimbals.add(rightGimbal);
-        gimbals.setPreferredSize(new Dimension(440, 262));
+        gimbals.setPreferredSize(new Dimension(440, GIMBALS_HEIGHT));
         controller.add(gimbals, BorderLayout.WEST);
         gimbalPanel = gimbals;
         controller.add(channelBars, BorderLayout.CENTER); // folded away with the sticks: no gap is left for it
@@ -1543,6 +1577,11 @@ public class MainWindow extends JFrame {
         setControllerMinimized("true".equalsIgnoreCase(config.getString(MINIMIZED_KEY)), false);
         return column;
     }
+
+    /** The stick boxes' height, and the least they are squeezed to in a small window (F-010). */
+    private static final int GIMBALS_HEIGHT = 262, GIMBALS_MIN_HEIGHT = 86;
+    /** What the video card needs besides its button column: its border and the gap to the controller card. */
+    private static final int VIDEO_CARD_EXTRA = 44;
 
     /** Minimized: only the top row stays - the controller's name, its buttons and the status lines; the video grows into the space. */
     /**
@@ -1617,6 +1656,7 @@ public class MainWindow extends JFrame {
      * a first device seen is taken as the choice. Called as the name service hears answers.
      */
     private void updatePhoneList() {
+        showIntervalFor(false); // F-043: the chosen drone OUT OF ACTION, or no longer: CHECK EVERY says its own
         boolean observe = observerRole();
         phoneCombo.setVisible(!observe);
         chooseDronesButton.setVisible(observe);
@@ -1630,8 +1670,10 @@ public class MainWindow extends JFrame {
         String chosen = config.getString(Names.PHONE_NAME_KEY);
         List<Names.Entry> list = names.list(kind);
         if (kind == Names.Kind.PC) list.removeIf(e -> e.name().equalsIgnoreCase(nameService.ownName()));
-        // an OUT OF ACTION drone isn't offered (1.0.52, the pilot); the one this PC is still linked to stays while it waits
-        if (kind == Names.Kind.PHONE) list = offeredPhones(list, outOfAction.keySet(), connection != null ? config.getString(Names.PHONE_NAME_KEY) : null);
+        // an OUT OF ACTION drone isn't offered (1.0.52, the pilot) - but the chosen one stays, marked, until the pilot
+        // picks another (1.0.71, the test bench's F-007: it left the list, which then showed the next drone, while
+        // PILOT UAV still meant the marked one - and asked about a drone the list no longer had)
+        if (kind == Names.Kind.PHONE) list = offeredPhones(list, outOfAction.keySet(), chosen);
         long now = System.currentTimeMillis();
         int at = -1;
         for (int i = 0; i < list.size(); i++) if (list.get(i).name().equalsIgnoreCase(chosen)) at = i;
@@ -1751,6 +1793,18 @@ public class MainWindow extends JFrame {
         return calibrated;
     }
 
+    /**
+     * The controller card's line while the sticks are not sent, by what they wait for ({@code RcSession.waitingFor}).
+     * F-037 (the test bench, 2026-11-19): it said "LOWER THROTTLE TO ENABLE" whatever it was - also with the throttle
+     * down and the ARM switch left on, where lowering the throttle does nothing and the switch was not named.
+     */
+    static String rcOffLine(String waitingFor) {
+        String what = waitingFor == null || "THROTTLE DOWN".equals(waitingFor) ? "LOWER THROTTLE TO ENABLE"
+                : "ARM SWITCH OFF".equals(waitingFor) ? "ARM SWITCH OFF TO ENABLE"
+                : waitingFor; // THROTTLE DOWN, ARM OFF; READING FC; PHONE UPDATING; NO RADIO; MAPPING INCOMPLETE; ARM SWITCH NOT SENT
+        return "RC OUTPUT: OFF - " + what;
+    }
+
     private void rebuildMapper() {
         try {
             mapper = config.createMapper();
@@ -1863,8 +1917,8 @@ public class MainWindow extends JFrame {
             if (video != null) video.attach(connection.getLink());
             // 1.0.71: a made-up drone's video is not recorded (the pilot: none of their flights are saved)
             liveRecordings.clear();
-            if (video != null) video.setRecordingLabel(target.isVirtual() ? "" : de.droiddrone.pc.flights.FlightRecord.fileLabel(flightLabel(target)));
-            if (video != null && recordVideo && !target.isVirtual()) startRecording(video);
+            if (video != null) video.setRecordingLabel(savesNothing(target) ? "" : de.droiddrone.pc.flights.FlightRecord.fileLabel(flightLabel(target)));
+            if (video != null && recordVideo && !savesNothing(target)) startRecording(video);
             stanagStreams.refreshSoon(); // 1.0.65: this drone's STANAG stream carries its video from now
             videoView.setStatsSource(video == null ? null : video::stats);
         } catch (IOException | RuntimeException e) {
@@ -1919,6 +1973,7 @@ public class MainWindow extends JFrame {
         // the flight before stays on the map; this one is the live one
         keepFlight(track, liveTrackName);
         liveTrackName = flightName(watch ? null : target.name());
+        liveTrackDrone = watch ? null : target.name();
         watchedPhone = null;
         if (!watch) videoView.setUpsideDown(upsideDownFor(target.name())); // the phone's own way up (1.0.41)
         setVirtualShown(!watch && target.isVirtual());
@@ -1954,7 +2009,7 @@ public class MainWindow extends JFrame {
         flightRecord = null;
         lostWhileArmed = false;
         endedByLostDrone = false;
-        if (target.isVirtual()) {
+        if (savesNothing(target)) {
             liveTrack = new FlightTrack(null); // 1.0.71: a made-up drone's flight is kept in memory only
             liveVirtual = true;
         } else {
@@ -1962,6 +2017,7 @@ public class MainWindow extends JFrame {
                 liveVirtual = false;
                 Path tracks = FlightTrack.defaultDir();
                 liveTrack = new FlightTrack(tracks);
+                liveTrack.setProblemListener(this::logLine);
                 liveTrack.setLabel(de.droiddrone.pc.flights.FlightRecord.fileLabel(flightLabel(target)));
                 // the flight's record: on disk now, so a link loss, a closed app or a restarted PC loses nothing
                 de.droiddrone.pc.flights.FlightRecord record = de.droiddrone.pc.flights.FlightRecord.start(tracks,
@@ -2063,6 +2119,7 @@ public class MainWindow extends JFrame {
         lostDroneShow.reset();
         modeAsked = ControlLink.POWER_NORMAL;
         if (connection != null) {
+            if (fleets != null) fleets.pilotLeft(); // before connection goes: which phone, and that it was the pilot's link
             PossiblyFlying.pc().detach(connection.getLink()); // armed at the end: the flag stays for the lost-drone window
             connection.close();
         }
@@ -2231,7 +2288,9 @@ public class MainWindow extends JFrame {
         // the chosen drone put to sleep and on time with its check-ins: its sleep sign, not LAST KNOWN (1.0.50) - and
         // the same when it was heard of after the track's last point (an overwatch alert, a sleep check, its phone's
         // position): LAST KNOWN is only for a drone nothing newer is known of (the pilot)
-        String livePhone = config.getString(Names.PHONE_NAME_KEY);
+        // F-055: the track's own drone - another phone chosen in the PHONE list after a loss took the lost track's
+        // LAST KNOWN away when that one slept or was heard of
+        String livePhone = trackDrone(track, liveTrack, liveTrackDrone, config.getString(Names.PHONE_NAME_KEY));
         String liveIp = names.ipOf(livePhone);
         Asleep sleeping = liveIp == null ? null : power.asleep(liveIp);
         boolean liveAsleep = sleeping != null && power.checkInOverdue(sleeping, System.currentTimeMillis()) <= 0;
@@ -2426,7 +2485,9 @@ public class MainWindow extends JFrame {
             disconnect();
         }
         markOutOfAction(name, "lost");
-        FindDroneDialog d = openFindDrone();
+        // bound to this drone: its track as it is now, and its own newer place once it checks in (2026-11-20)
+        FlightTrack lostTrack = track;
+        FindDroneDialog d = FindDroneDialog.openFor(this, name, lostTrack, () -> lastKnown.get(name), tileCache, mapSource, pins);
         String mgrs = d.mgrs();
         if (mgrs != null) {
             Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(mgrs), null);
@@ -2490,10 +2551,13 @@ public class MainWindow extends JFrame {
         return true;
     }
 
-    /** The PHONE list without OUT OF ACTION drones (1.0.52), but the one still linked (its link waits). */
-    static List<Names.Entry> offeredPhones(List<Names.Entry> all, Set<String> outNames, String linked) {
+    /**
+     * The PHONE list without OUT OF ACTION drones (1.0.52), but the chosen one (1.0.71; up to 1.0.70 only while it
+     * was still linked): the list always shows the drone PILOT UAV means.
+     */
+    static List<Names.Entry> offeredPhones(List<Names.Entry> all, Set<String> outNames, String chosen) {
         List<Names.Entry> out = new ArrayList<>(all);
-        out.removeIf(e -> outNames.contains(e.name()) && !e.name().equalsIgnoreCase(linked));
+        out.removeIf(e -> outNames.contains(e.name()) && !e.name().equalsIgnoreCase(chosen));
         return out;
     }
 
@@ -3378,7 +3442,7 @@ public class MainWindow extends JFrame {
             HeadingChoice.Heading hd = HeadingChoice.choose(
                     ob == null ? null : ob.position(), compassCalibrated(phone));
             String note = ob == null ? null : hd.source() == HeadingChoice.Source.NONE ? "no heading"
-                    : hd.approximate() ? "heading approximate" : null;
+                    : hd.approximate() ? "heading approx." : null; // F-035: "heading approximate" was cut to "heading approxi..." under a tile
             l.setAudioWanted(o.audioWanted(phone, now));
             ObservationAudio audio = observationAudio;
             OsdRenderer.Data osd = ObservationOsd.data(l.telemetry(), f.video().stats(), last, invertPitch, now);
@@ -3558,7 +3622,7 @@ public class MainWindow extends JFrame {
         } else if (session.isRcEnabled()) {
             setLabel(rcStateLabel, "RC OUTPUT: LIVE", Theme.OK);
         } else {
-            setLabel(rcStateLabel, "RC OUTPUT: OFF - LOWER THROTTLE TO ENABLE", Theme.WARN);
+            setLabel(rcStateLabel, rcOffLine(session.waitingFor()), Theme.WARN);
         }
 
         FcTelemetry.Status fc = connection == null ? null : connection.getLink().getTelemetry().getStatus();
@@ -3572,7 +3636,7 @@ public class MainWindow extends JFrame {
             setLabel(fcStateLabel, "FC: DISARMED - READY TO ARM", Theme.OK);
         } else {
             setLabel(fcStateLabel, "FC: ARMING BLOCKED BY " + fc.blockers().stream().map(FcTelemetry.Blocker::osdName)
-                    .reduce((a, b) -> a + ", " + b).orElse("") + "  (TOOLS > RC check)", Theme.WARN);
+                    .reduce((a, b) -> a + ", " + b).orElse("") + "  (TOOLS > RC CHECK)", Theme.WARN); // F-043: all in capitals
         }
     }
 
@@ -3635,6 +3699,14 @@ public class MainWindow extends JFrame {
         if (!SelfUpdate.runsInstalled()) { // 1.0.64: a copy elsewhere updates the installed one, which starts after
             logLine("Update: this copy runs from " + AppInfo.runningFrom() + "; the installed one (" + app + ") is updated and starts.");
         }
+        if (connection == null && PossiblyFlying.now()) {
+            // 2026-11-20 (a reader of this code): a link lost while armed leaves no connection - and UPDATE closed the
+            // app while that drone was perhaps on its failsafe, its pilot looking for it
+            logLine("Update: refused - a drone of this PC may still be flying.");
+            Dialogs.message(this, "<html>A drone of this PC may still be flying.<br><br>Updating closes DRAUPNE Link.<br>"
+                    + "Land it (or wait), then UPDATE.</html>", "Update", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
         if (connection != null) {
             logLine("Update: refused while connected - " + endLinkButton() + " first.");
             Dialogs.message(this, "<html>Connected to the drone.<br><br>Updating closes DRAUPNE Link: "
@@ -3654,6 +3726,10 @@ public class MainWindow extends JFrame {
                 SwingUtilities.invokeLater(() -> {
                     if (connection != null) {
                         updateFailed(r, "connected during the download - " + endLinkButton() + ", then UPDATE");
+                        return;
+                    }
+                    if (PossiblyFlying.now()) {
+                        updateFailed(r, "a drone of this PC may still be flying - land it, then UPDATE");
                         return;
                     }
                     try {
@@ -3700,7 +3776,9 @@ public class MainWindow extends JFrame {
     private void checkPhone() {
         try {
             String ip = config.getIp();
-            boolean tailscale = !ip.isEmpty();
+            // 1.0.71 (the test bench's F-011): a virtual phone is an address on this PC - Tailscale never has it, and
+            // DEMO, the tour and the virtual fleet said "not on your Tailscale network, run SETUP" about it in red
+            boolean tailscale = !ip.isEmpty() && !VirtualFleet.isVirtual(ip);
             Tailscale.Status status = tailscale ? Tailscale.status() : null;
             Tailscale.PhoneState state = status == null ? null : Tailscale.phoneState(status, ip);
             String path = status == null ? "" : Tailscale.phonePath(status, ip);
@@ -3791,7 +3869,9 @@ public class MainWindow extends JFrame {
                 v != null && v.recordingFile() != null, spectator && l.isSpectatorPaused(), l.isLinkStalled(), l.isRelayed(),
                 MonoClock.ms(),
                 // 1.0.64: waiting for a sleeper is WAKING - m:ss, not LINK LOST; and the tier under normal is tagged
-                !spectator && power.awaitingWake, spectator ? -1 : wakeInMs(), spectator ? null : l.getTier()));
+                !spectator && power.awaitingWake, spectator ? -1 : wakeInMs(), spectator ? null : l.getTier(),
+                // F-019: CONNECTING until this connection's first link, LINK LOST only after one was up
+                !spectator && !l.wasEverReady()));
         if (!videoView.getOsdLayout().isOn(OsdElement.PINS) || miniMap == null) return d;
         // the pins the maps show (watching: the pilot PC's), from the pose of when the picture was taken
         FcTelemetry t = l.getTelemetry();
@@ -3834,6 +3914,8 @@ public class MainWindow extends JFrame {
             });
             v.startRecording(dir);
             logLine("Recording to " + dir + (withOsd ? ", plus a copy with the OSD." : "."));
+            String low = de.droiddrone.pc.DiskSpace.warning(dir);
+            if (low != null) logLine(low);
         } catch (IOException e) {
             logLine("Could not record: " + e.getMessage());
         }
@@ -3846,6 +3928,8 @@ public class MainWindow extends JFrame {
         ControlLink l = c.getLink();
         if (l.isSpectator()) return null; // watching: no sticks to lose, no alarm
         if (PowerController.quietWhileWaking(power.awaitingWake, l.getState())) return null;
+        // F-019: no link was up in this connection - nothing lost, no sticks ever sent: CONNECTING, no alarm
+        if (l.getState() != ControlLink.State.READY && !l.wasEverReady()) return null;
         if (l.getState() != ControlLink.State.READY) return "LINK LOST";
         if (l.isLinkStalled()) return "LINK STALL";
         if (l.isFcLost()) return "NO FLIGHT CONTROLLER";
@@ -3910,6 +3994,12 @@ public class MainWindow extends JFrame {
         JPanel buttons = new JPanel(new GridLayout(1, 0, 6, 0));
         buttons.setOpaque(false);
         sleepButtonsRow = buttons;
+        buttons.addComponentListener(new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                fitSleepButtons();
+            }
+        });
         // 1.0.56 (the pilot): STANDBY joins them for a phone in DEEP SLEEP or OVERWATCH - queued for its next check
         standbyButton.setToolTipText("Standby at its next check");
         standbyButton.addActionListener(e -> askPower(ControlLink.POWER_STANDBY));
@@ -3932,21 +4022,17 @@ public class MainWindow extends JFrame {
         interval.add(Theme.label("CHECK EVERY", Theme.headingFont(11f), Theme.MUTED), BorderLayout.WEST);
         TacticalCombo.install(checkIntervalCombo);
         checkIntervalCombo.setToolTipText("<html>How often a sleeping phone listens for this PC. More often: a little more power.<br>"
-                + "Constant: always listening, PILOT UAV reaches it at once. Own setting for OVERWATCH (default Constant)</html>");
-        // 1.0.56 (the pilot): DEEP SLEEP and OVERWATCH each keep their own; OVERWATCH starts at Constant, DEEP SLEEP at 5 min
+                + "Constant: always listening, PILOT UAV reaches it at once. For DEEP SLEEP and OVERWATCH alike</html>");
+        // F-046 (the pilot, 2026-11-20): one interval for DEEP SLEEP and OVERWATCH (1.0.56 - 1.0.71: each its own)
         power.checkIntervalMin = savedInterval(CHECK_INTERVAL_KEY, ControlLink.POWER_DEEP_SLEEP);
-        power.overwatchIntervalMin = savedInterval(OVERWATCH_INTERVAL_KEY, ControlLink.POWER_OVERWATCH);
         showIntervalFor(false);
         checkIntervalCombo.addActionListener(e -> {
             if (fillingInterval) return;
-            int v = CHECK_INTERVALS[Math.max(0, checkIntervalCombo.getSelectedIndex())];
-            if (intervalForOverwatch) {
-                power.overwatchIntervalMin = v;
-                save(Map.of(OVERWATCH_INTERVAL_KEY, Integer.toString(v)));
-            } else {
-                power.checkIntervalMin = v;
-                save(Map.of(CHECK_INTERVAL_KEY, Integer.toString(v)));
-            }
+            int at = checkIntervalCombo.getSelectedIndex();
+            if (at >= CHECK_INTERVALS.length) return; // OUT OF ACTION's 30 min: shown, not chosen (F-043)
+            int v = CHECK_INTERVALS[Math.max(0, at)];
+            power.checkIntervalMin = v;
+            save(Map.of(CHECK_INTERVAL_KEY, Integer.toString(v)));
         });
         interval.add(checkIntervalCombo, BorderLayout.CENTER);
         powerRow.add(interval, c);
@@ -4027,7 +4113,7 @@ public class MainWindow extends JFrame {
         if (mode == ControlLink.POWER_OVERWATCH && !prepareOverwatch(pressed)) return;
         power.wanted = mode;
         power.askedAt = MonoClock.ms();
-        power.sentAt = 0;
+        power.notSent();
         modeAsked = mode; // 1.0.64: its button says so ("DEEP SLEEP...") until the phone is there, or its time is up
         modeAskedAt = power.askedAt;
         slowRefreshedAt = 0;
@@ -4492,6 +4578,24 @@ public class MainWindow extends JFrame {
         }
     }
 
+    /** F-055: whose the track on the map is - the live track's drone, else (a kept flight, not known) the chosen phone. */
+    static String trackDrone(FlightTrack shown, FlightTrack live, String liveDrone, String chosen) {
+        return shown != null && shown == live && liveDrone != null && !liveDrone.isEmpty() ? liveDrone : chosen;
+    }
+
+    /**
+     * F-055 (the pilot, 2026-11-20): after a loss the lost drone's sign stood where it answered a name scan before
+     * take-off, away from the end of its track. Its sign goes where the track ends when the track's end is newer than
+     * the place the network last had of it.
+     * @return {lat, lon} for the sign
+     */
+    static double[] signPlace(String name, double lat, double lon, long placeAtWall, String trackDrone, FlightTrack.Point trackEnd) {
+        if (trackEnd != null && trackDrone != null && name.equalsIgnoreCase(trackDrone) && trackEnd.timeMs() > placeAtWall) {
+            return new double[]{trackEnd.lat(), trackEnd.lon()};
+        }
+        return new double[]{lat, lon};
+    }
+
     private Asleep asleepChosen() {
         if (ROLE_SPECTATOR.equals(roleCombo.getSelectedItem())) return null;
         String ip = config.getString(IP_KEY);
@@ -4814,11 +4918,14 @@ public class MainWindow extends JFrame {
     private void loadKeptFlights() {
         String saved = config.getString(KEPT_FLIGHTS_KEY);
         if (saved == null || saved.isBlank()) return;
-        for (String one : saved.split("\\|")) {
+        String[] all = saved.split("\\|");
+        for (int i = Math.max(0, all.length - MAX_KEPT_FLIGHTS); i < all.length; i++) { // a list from before 1.0.71 may be long: its newest
+            String one = all[i];
             int at = one.indexOf('>');
             if (at <= 0) continue;
-            Path file = Path.of(one.substring(at + 1));
             try {
+                // (the path too: a damaged settings file with a character no path may hold stopped the app at every start)
+                Path file = Path.of(one.substring(at + 1));
                 FlightTrack t = FlightTrack.read(file);
                 if (!t.isEmpty()) keptFlights.add(new KeptFlight(one.substring(0, at), file, t.points()));
             } catch (IOException | RuntimeException e) {
@@ -4899,8 +5006,23 @@ public class MainWindow extends JFrame {
         Path file = t.file();
         for (KeptFlight k : keptFlights) if (file != null && file.equals(k.file())) return; // kept already
         keptFlights.add(new KeptFlight(name == null ? "Flight " + (keptFlights.size() + 1) : name, file, t.points()));
+        trimKeptFlights();
         saveKeptFlights();
         pushKept();
+    }
+
+    /**
+     * The most earlier flights the map keeps (1.0.71, the test bench's F-015: every flight stayed - on the map, in
+     * memory and in one line of the settings file - until the pilot took it off; after 549 flights that line was
+     * 110 KB, written anew at every save, and the mini-map 549 paths with their labels on each other). The oldest
+     * leave the map; their files stay, and PREVIOUS FLIGHTS > ON MAP brings any of them back.
+     */
+    static final int MAX_KEPT_FLIGHTS = 30;
+
+    private void trimKeptFlights() {
+        int over = keptFlights.size() - MAX_KEPT_FLIGHTS;
+        if (over <= 0) return;
+        keptFlights.subList(0, over).clear();
     }
 
     /** The map views get the kept flights, but the one shown live (the flight just ended stays the live one until the next). */
@@ -4948,6 +5070,7 @@ public class MainWindow extends JFrame {
             if (liveTrack != null) liveTrack.close(pins.list());
             try {
                 liveTrack = liveVirtual ? new FlightTrack(null) : new FlightTrack(FlightTrack.defaultDir());
+                liveTrack.setProblemListener(this::logLine);
                 if (!liveVirtual) liveTrack.setLabel(de.droiddrone.pc.flights.FlightRecord.fileLabel(phone));
             } catch (IOException e) {
                 liveTrack = new FlightTrack(null);
@@ -4958,6 +5081,7 @@ public class MainWindow extends JFrame {
         }
         if (!phone.equals(watchedPhone)) {
             liveTrackName = flightName(phone);
+            liveTrackDrone = phone;
             de.droiddrone.pc.flights.FlightRecord record = flightRecord;
             if (record != null && watchedPhone == null) record.drone(phone); // watching: the flight is that phone's
             stanagStreams.refreshSoon(); // the watched video is another drone's now: its STANAG stream takes it
@@ -5041,7 +5165,7 @@ public class MainWindow extends JFrame {
                         + FleetCards.queuedAgo(queuedMode.queuedAt() <= 0 ? -1 : now - queuedMode.queuedAt()).toUpperCase(Locale.ROOT);
             }
             // 1.0.71: what this PC knows of every phone's place is kept on disk (never a made-up drone's)
-            if (!VirtualFleet.isVirtual(ip)) lastKnown.place(d.name(), p.lat(), p.lon(), d.at() - p.ageS() * 1000L);
+            if (!VirtualFleet.isVirtual(ip) || Boolean.getBoolean("draupne.bench.madeUpSaves")) lastKnown.place(d.name(), p.lat(), p.lon(), d.at() - p.ageS() * 1000L);
             Long outAt = outOfAction.get(d.name());
             if (outAt != null) { // 1.0.71: it stays until the pilot clears it - a phone heard again is still out of action
                 kind = MapView.Kind.OUT_OF_ACTION;
@@ -5056,7 +5180,10 @@ public class MainWindow extends JFrame {
             }
             if (kind == MapView.Kind.LOST) queued = null;
             String state = (VirtualFleet.isVirtual(ip) ? "VIRTUAL - " : "") + doing;
-            drones.add(new MapView.NetDrone(d.name(), p.lat(), p.lon(), state, kind, p.flown(), pilot, queued, d.headingDeg(),
+            // F-055: the sign where its track ends, when that is newer than the network's place of it
+            FlightTrack lt = liveTrack;
+            double[] at = signPlace(d.name(), p.lat(), p.lon(), d.at() - p.ageS() * 1000L, liveTrackDrone, lt == null ? null : lt.last());
+            drones.add(new MapView.NetDrone(d.name(), at[0], at[1], state, kind, p.flown(), pilot, queued, d.headingDeg(),
                     blind && kind == MapView.Kind.OVERWATCH));
         }
         // the flown drone's own place too (the network says nothing of it while this PC flies it)
@@ -5079,7 +5206,8 @@ public class MainWindow extends JFrame {
                 drones.add(new MapView.NetDrone(k.name(), k.lat(), k.lon(), "OUT OF ACTION - " + last, MapView.Kind.OUT_OF_ACTION, false, null));
             } else if (connection == null || !k.name().equalsIgnoreCase(flying)) {
                 // the chosen phone's own flight on the map already ends in its LAST KNOWN mark: not a second sign on it
-                if (track != null && track.last() != null && k.name().equalsIgnoreCase(config.getString(Names.PHONE_NAME_KEY))) continue;
+                if (track != null && track.last() != null
+                        && k.name().equalsIgnoreCase(trackDrone(track, liveTrack, liveTrackDrone, config.getString(Names.PHONE_NAME_KEY)))) continue; // F-055: the track's own
                 String was = de.droiddrone.pc.LastKnown.wasText(k.mode(), -1);
                 drones.add(new MapView.NetDrone(k.name(), k.lat(), k.lon(), (was == null ? "NOT HEARD" : was) + " - " + last,
                         MapView.Kind.UNKNOWN, false, null));
@@ -5351,7 +5479,7 @@ public class MainWindow extends JFrame {
     private void wakePhone() {
         power.wanted = ControlLink.POWER_NORMAL;
         power.askedAt = MonoClock.ms();
-        power.sentAt = 0;
+        power.notSent();
         if (connection != null && power.phoneAsleep) {
             connection.getLink().setDormant(false);
             logLine(SleepCheck.isAlways(power.sentIntervalMin) ? "Waking: the phone is listening: now."
@@ -5376,11 +5504,12 @@ public class MainWindow extends JFrame {
         int m = chosenPowerMode();
         // 1.0.64: the one asked of the connected phone and not there yet: "DEEP SLEEP...", yellow as a queued mode
         int asked = connection == null ? ControlLink.POWER_NORMAL : modeAsked;
-        markModeButton(deepSleepButton, m == ControlLink.POWER_DEEP_SLEEP, ControlLink.POWER_DEEP_SLEEP, asked);
-        markModeButton(overwatchButton, m == ControlLink.POWER_OVERWATCH, ControlLink.POWER_OVERWATCH, asked);
+        markModeButton(deepSleepButton, m == ControlLink.POWER_DEEP_SLEEP, ControlLink.POWER_DEEP_SLEEP, asked, sleepPad);
+        markModeButton(overwatchButton, m == ControlLink.POWER_OVERWATCH, ControlLink.POWER_OVERWATCH, asked, sleepPad);
+        fitSleepButtons(); // "DEEP SLEEP..." is longer than "DEEP SLEEP"
     }
 
-    private static void markModeButton(JButton b, boolean current, int mode, int asked) {
+    private static void markModeButton(JButton b, boolean current, int mode, int asked, int pad) {
         String text = modeButtonText(mode, asked);
         if (!text.equals(b.getText())) b.setText(text);
         boolean pending = asked == mode;
@@ -5388,7 +5517,43 @@ public class MainWindow extends JFrame {
         if (fg.equals(b.getForeground())) return;
         b.setForeground(fg);
         b.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(pending ? Theme.WARN : current ? Theme.LINE : Theme.ACCENT, 1),
-                BorderFactory.createEmptyBorder(7, 16, 7, 16)));
+                BorderFactory.createEmptyBorder(7, pad, 7, pad)));
+    }
+
+    /** The room left and right of the sleep buttons' words: 16 as every button's, less in a row too narrow for them. */
+    private int sleepPad = 16;
+
+    /**
+     * F-020 (the bench, 2026-11-19): STANDBY, DEEP SLEEP and OVERWATCH keep their words whole. Three of them in the
+     * LINK card of a small window read "STAN...", "DEEP SLEEP", "OVER...": the room beside the words is cut first, then
+     * the words are set smaller, all of the row alike.
+     */
+    private void fitSleepButtons() {
+        JPanel row = sleepButtonsRow;
+        if (row == null || row.getWidth() <= 0 || row.getComponentCount() == 0) return;
+        int n = row.getComponentCount();
+        int cell = (row.getWidth() - 6 * (n - 1)) / n;
+        int pad = 16;
+        float size = 13.5f;
+        while (true) {
+            Font f = Theme.headingFont(size);
+            int widest = 0;
+            for (Component c : row.getComponents()) {
+                if (c instanceof JButton b && b.getText() != null) widest = Math.max(widest, b.getFontMetrics(f).stringWidth(b.getText()));
+            }
+            if (widest + 2 * pad + 4 <= cell || (pad <= 4 && size <= 9.5f)) break;
+            if (pad > 4) pad -= 2;
+            else size -= 0.5f;
+        }
+        sleepPad = pad;
+        Font f = Theme.headingFont(size);
+        for (Component c : row.getComponents()) {
+            if (!(c instanceof JButton b)) continue;
+            if (!f.equals(b.getFont())) b.setFont(f);
+            if (b.getBorder() instanceof javax.swing.border.CompoundBorder frame && frame.getInsideBorder().getBorderInsets(b).left != pad) {
+                b.setBorder(BorderFactory.createCompoundBorder(frame.getOutsideBorder(), BorderFactory.createEmptyBorder(7, pad, 7, pad)));
+            }
+        }
     }
 
     /** Once a refresh while connected: keeps asking until the phone is in the mode wanted, and says where things are. */
@@ -5403,7 +5568,7 @@ public class MainWindow extends JFrame {
         sleepFold.setShown(true, true);
         if (power.wanted != ControlLink.POWER_NORMAL && fcArmedNow()) {
             power.wanted = ControlLink.POWER_NORMAL;
-            power.sentAt = 0;
+            power.notSent();
             logLine("Drone armed: sleep cancelled, phone woken.");
         }
         refreshModeAsked(reported, now); // 1.0.64: a mode asked and not taken in 15 s is taken back
@@ -5427,7 +5592,7 @@ public class MainWindow extends JFrame {
                 power.phoneAsleep = false;
                 power.phoneOverwatching = false;
                 power.wanted = ControlLink.POWER_NORMAL;
-                power.sentAt = 0;
+                power.notSent();
                 link.setDormant(false);
                 link.setHoldConnects(false);
                 link.restartVideo();
@@ -5493,9 +5658,9 @@ public class MainWindow extends JFrame {
                 } else {
                     link.sendPowerMode(power.wanted, power.wanted == ControlLink.POWER_NORMAL ? power.checkIntervalMin : power.sentIntervalMin);
                 }
-                power.sentAt = now;
+                power.sent(now);
             }
-            if (pp == null && power.askedAt != 0 && now - power.askedAt > 10_000) {
+            if (power.unanswered(now, pp != null)) {
                 powerStatus.setText("<html>The phone app doesn't answer: STANDBY and DEEP SLEEP need DRAUPNE Flight 2.3.0-pc.21 or newer (tap its Update available line).</html>");
                 if (!powerSilentSaid) { // 1.0.64: said in the log - the status line is on no card, and nothing told why no mode came
                     powerSilentSaid = true;
@@ -5616,7 +5781,7 @@ public class MainWindow extends JFrame {
         logLine(config.getString(Names.PHONE_NAME_KEY) + " didn't take " + PowerController.modeWord(modeAsked) + ".");
         modeAsked = ControlLink.POWER_NORMAL;
         power.wanted = ControlLink.POWER_NORMAL; // as the arming's cancel: NORMAL is asked again, the sticks come back
-        power.sentAt = 0;
+        power.notSent();
     }
 
     /** @param slow the texts' round too (1.0.64: SLOW_REFRESH_MS); the link's state and what follows it every time */
@@ -5837,6 +6002,20 @@ public class MainWindow extends JFrame {
         logLine("Phone app update to " + newest + " asked.");
     }
 
+    /**
+     * F-058 (the bench's remote update, 2026-11-21): the phone's update state is its answer only if it came after the
+     * request had time to reach it - its report goes on with every telemetry, and a FAILED from the last try (say,
+     * "Install unknown apps" not allowed, then allowed and UPDATE PHONE APP pressed again) was taken as the answer to
+     * the new one before the request was even sent: given up, nothing sent. Up to then: any report after the press.
+     * @param sentAt when the request last went out (MonoClock; 0: not yet)
+     */
+    static boolean updateAnswered(long receivedAt, long sentAt, int pingMs) {
+        return sentAt > 0 && receivedAt >= sentAt + Math.max(UPDATE_ANSWER_MIN_MS, Math.max(0, pingMs) + 200L);
+    }
+
+    /** The least time between the request going out and a report that can be its answer, ms. */
+    static final long UPDATE_ANSWER_MIN_MS = 400;
+
     /** While a remote update runs: the request again until the phone answers, and its progress on the card. */
     private void refreshRemoteUpdate(FcTelemetry t, String phoneVersion) {
         if (remoteUpdateAskedAt == 0) return;
@@ -5850,7 +6029,7 @@ public class MainWindow extends JFrame {
             return;
         }
         FcTelemetry.PhoneUpdate u = t.getPhoneUpdate();
-        boolean answered = u != null && u.receivedAt() >= remoteUpdateAskedAt;
+        boolean answered = u != null && updateAnswered(u.receivedAt(), remoteUpdateSentAt, connection.getLink().getPing());
         if (!answered && PossiblyFlying.now()) {
             // armed since UPDATE PHONE APP was pressed: the request is not sent (1.0.49) - asked again from the button
             logLine("Phone app update not sent: the drone may be flying.");

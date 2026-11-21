@@ -182,6 +182,7 @@ final class StanagDialog extends JDialog {
         showStreams();
         setSize(new Dimension(720, 700));
         setLocationRelativeTo(owner);
+        ScreenFit.clampToScreen(this); // F-032: 700 high on a 584-high screen put SAVE and CLOSE below its edge; the list gives way
         WindowReveal.onOpen(this);
     }
 

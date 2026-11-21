@@ -679,6 +679,14 @@ final class MapWindow extends JFrame {
     private volatile double[] searchAreaWanted;
     private volatile String searchLoading;
 
+    /**
+     * GCS SEARCH's area is too big when its corners are more than a mast's range (30 km) from its centre: no spot sees
+     * all of it. @param loadRadiusM what {@link RadioHorizon#searchRadiusM} gives: the range plus the centre-to-corner distance
+     */
+    static boolean searchAreaTooBig(double loadRadiusM) {
+        return loadRadiusM > 2 * RadioHorizon.MAX_RANGE_M;
+    }
+
     /** A wanted area drawn: the data round it loads, the heat map is worked out once the terrain is in and again when the forest is. */
     private void searchArea(double[] area) {
         int run = searchRun.incrementAndGet();
@@ -689,9 +697,17 @@ final class MapWindow extends JFrame {
             tools.searchStatus.setText(" ");
             return;
         }
-        tools.searchStatus.setText(status("Loading terrain..."));
         double cLat = (area[0] + area[1]) / 2, cLon = (area[2] + area[3]) / 2;
         double radius = RadioHorizon.searchRadiusM(area[0], area[1], area[2], area[3]);
+        if (searchAreaTooBig(radius)) {
+            // F-022: a box drawn on a zoomed-out map asked for the terrain of half a country and said "Loading terrain..."
+            // for as long as that took - for an area no mast can see all of
+            String line = "Area too big - 60 km across at most";
+            tools.searchStatus.setText(status(line));
+            map.setSearch(null, line);
+            return;
+        }
+        tools.searchStatus.setText(status("Loading terrain..."));
         horizonLoad.execute(() -> {
             if (searchRun.get() != run) return;
             RadioHorizon.load(cache, cLat, cLon, radius, (data, terrainDone, terrainTotal, forestDone, forestTotal) -> {
@@ -814,7 +830,7 @@ final class MapWindow extends JFrame {
         if (showN) line.append(line.length() > 0 ? ", " : "").append("NOTAM ").append(n);
         String note = (showR || showD) ? airspaceNote : null;
         if (note != null) line.append(line.length() > 0 ? "<br>" : "").append(note);
-        tools.airspaceStatus.setText(line.length() == 0 ? " " : "<html>" + line + "</html>");
+        tools.airspaceStatus.setText(line.length() == 0 ? " " : status(line.toString())); // wrapped to the list's width
     }
 
     private static double spread(de.droiddrone.pc.map.Airspace a) {
@@ -879,8 +895,8 @@ final class MapWindow extends JFrame {
             }
             kept.addAll(added);
             int blocks = area.getText().toUpperCase(java.util.Locale.ROOT).split("Q\\)", -1).length - 1;
-            tools.airspaceStatus.setText("<html>" + added.size() + " NOTAM" + (added.size() == 1 ? "" : "s") + " added"
-                    + (blocks > added.size() ? "<br>" + (blocks - added.size()) + " without an area left out" : "") + "</html>");
+            tools.airspaceStatus.setText(status(added.size() + " NOTAM" + (added.size() == 1 ? "" : "s") + " added"
+                    + (blocks > added.size() ? "<br>" + (blocks - added.size()) + " without an area left out" : "")));
             if (!showN && !added.isEmpty()) {
                 setAirspace(showR, showD, true);
             }
@@ -1214,7 +1230,9 @@ final class MapWindow extends JFrame {
     }
 
     private static String status(String text) {
-        return "<html><div style='width:" + (MapToolsPanel.BODY_WIDTH - 60) + "px'>" + text + "</div></html>"; // room for the scrollbar
+        // Swing draws a "px" of its HTML 1.3 wide: 120 are 156 on the list, what a tool's indented fields have beside the
+        // scrollbar (136 were 177: "Loading forest map 400 / 678" was cut at the list's edge instead of wrapped)
+        return "<html><div style='width:" + (MapToolsPanel.BODY_WIDTH - 76) + "px'>" + text + "</div></html>";
     }
 
     // ------------------------------------------------------------------ OVERWATCH (1.0.47)
@@ -1588,13 +1606,14 @@ final class MapWindow extends JFrame {
         box.add(field, BorderLayout.NORTH);
         box.add(hint, BorderLayout.SOUTH);
         Object[] options = {"Go", "Go and pin", "Cancel"};
+        String formats = hint.getText(); // said once in front of them, however often a position can't be read (F-026)
         while (true) {
             int answer = Dialogs.option(this, box, "Go to position", javax.swing.JOptionPane.DEFAULT_OPTION,
                     javax.swing.JOptionPane.PLAIN_MESSAGE, null, options, options[0]);
             if (answer != 0 && answer != 1) return;
             double[] ll = Coordinates.parse(field.getText());
             if (ll == null) {
-                hint.setText("Unreadable position. " + hint.getText());
+                hint.setText("Unreadable position. " + formats);
                 hint.setForeground(Theme.BAD);
                 continue;
             }

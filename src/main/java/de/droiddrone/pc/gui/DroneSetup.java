@@ -234,6 +234,19 @@ final class DroneSetup {
         private javax.swing.JComboBox<String> prearmChoice;
         private final Section failsafeSection = settings.section("FAILSAFE");
         private final Part failsafeRow = failsafeSection.part("Failsafe");
+        /**
+         * ESCS (1.0.71): what each ESC runs and its own beacon - BLHeli_S kinds beep through the motors after 10 min
+         * at rest, whatever Betaflight says - read through the flight controller (battery in), and BEACON OFF.
+         * Not part of CONFIRM: it is the ESCs' own memory, read and written only when the pilot asks.
+         */
+        private final Section escSection = settings.section("ESCS");
+        private final Part escRow = escSection.part("ESC beacon");
+        private javax.swing.JButton readEscs, beaconOff;
+        /** Read ESCs (1) or Beacon off (2) pressed while a round runs: it starts when the round is over. */
+        private int escWanted;
+        /** The ESCs have the USB port: the rounds wait. */
+        private boolean escBusy;
+        private static final String ESC_HINT = "Battery in, props off: <b>Read ESCs</b>.";
         /** The pilot's failsafe choice: GPS rescue by default (Drop without a GPS). */
         private volatile ModeSwitch.Failsafe failsafeChoice = ModeSwitch.Failsafe.KEEP;
         private javax.swing.JComboBox<ModeSwitch.Failsafe> failsafeCombo;
@@ -612,6 +625,17 @@ final class DroneSetup {
                     line(prearmRow, "PREARM", prearmChoices()), rescueFold));
             card.add(javax.swing.Box.createVerticalStrut(8));
             card.add(failsafeSection.build(line(failsafeRow, "SIGNAL LOST", failsafeChoices())));
+            card.add(javax.swing.Box.createVerticalStrut(8));
+            readEscs = Theme.secondaryButton("Read ESCs");
+            readEscs.setToolTipText("Reads each ESC's firmware and beacon through the flight controller. Battery in, props off. No motor turns; the ESCs restart after (their start-up tones)");
+            readEscs.addActionListener(e -> escsNow(false));
+            readEscs.setEnabled(false);
+            beaconOff = Theme.secondaryButton("Beacon off");
+            beaconOff.setToolTipText("Sets each ESC's Beacon Delay to Infinite: no motor beeps at rest. Writes the ESCs (old settings kept in a file)");
+            beaconOff.addActionListener(e -> escsNow(true));
+            beaconOff.setVisible(false);
+            card.add(escSection.build(line(escRow, "ESCS", readEscs, beaconOff)));
+            escRow.set(State.INFO, ESC_HINT);
             card.add(javax.swing.Box.createVerticalStrut(10));
             JPanel bottom = new JPanel(new java.awt.BorderLayout(14, 0));
             bottom.setOpaque(false);
@@ -1198,7 +1222,7 @@ final class DroneSetup {
 
         /** The "By hand" button stands out while something needs doing that way. */
         private void markByHand(boolean needed) {
-            if (byHand != null) byHand.setText(needed ? "By hand (needed)" : "By hand");
+            if (byHand != null) byHand.setText(needed ? "BY HAND (NEEDED)" : "BY HAND"); // F-043: in capitals, as the button was made (Theme.secondaryButton)
         }
 
         private void showManual() {
@@ -1238,9 +1262,10 @@ final class DroneSetup {
         /** DISCONNECT / RECONNECT: the rounds stop, so the USB port is free; a round in progress finishes its read first. */
         private void togglePaused() {
             paused = !paused;
-            disconnect.setText(paused ? "Reconnect" : "Disconnect");
+            disconnect.setText(paused ? "RECONNECT" : "DISCONNECT"); // F-043: capitals, as made
             if (paused) {
                 abandoned = true; // a round still running reads, but writes nothing
+                confirm.letGo(); // 2026-11-20: what is done to the board meanwhile (Configurator) is not written over at RECONNECT
                 found = false;
                 failed = false;
                 done = false;
@@ -1291,9 +1316,13 @@ final class DroneSetup {
                 startSearch();
                 return;
             }
+            if (escWanted != 0 && !busy && !searching && !paused) {
+                startEscs();
+                return;
+            }
             // the motor test or the compass calibration may have the port, however it was opened (Check now or SETTINGS)
             if (paused || MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen()
-                    || OrientationCheckDialog.isOpen() || searching
+                    || OrientationCheckDialog.isOpen() || searching || escBusy
                     || busy || done || System.currentTimeMillis() < nextTry) return;
             busy = true;
             String writeFor = applies < MAX_APPLIES ? confirm.armedFor() : null; // the board CONFIRM was pressed for
@@ -1545,9 +1574,11 @@ final class DroneSetup {
             found = r != null;
             failed = r != null && r.error() != null;
             markByHand(r == null);
-            readAgain.setText(r == null || r.error() != null ? "Retry" : "Read again");
+            readAgain.setText(r == null || r.error() != null ? "RETRY" : "READ AGAIN"); // F-043: capitals, as made
             calibrateCompass.setEnabled(found && !failed);
             findGps.setEnabled(found && !failed && !searching && !searchWanted);
+            readEscs.setEnabled(found && !failed && !escBusy && escWanted == 0);
+            beaconOff.setEnabled(readEscs.isEnabled());
             confirmButton.setEnabled(found && !failed && r.boardId() != null); // CONFIRM is for a board known by its id
             if (r == null) {
                 nextTry = now + 1500;
@@ -1573,6 +1604,10 @@ final class DroneSetup {
             lastFcPort = r.port();
             restartedAt = now; // the CLI was open and is closed now: Betaflight restarts
             if (!r.version().isEmpty()) fcVersion = r.version();
+            if (r.boardId() != null && !r.boardId().equals(lastBoardId) && !escBusy && escWanted == 0) { // another drone: its ESCs are not read yet
+                beaconOff.setVisible(false);
+                escRow.set(State.INFO, ESC_HINT);
+            }
             lastBoardId = r.boardId();
             // CONFIRM, and the green rows, belong to the board they were given for: another one plugged in needs its own
             if (r.boardId() != null && confirm.seen(r.boardId())) main.save(Map.of(CONFIRMED_KEY, confirm.saved()));
@@ -1714,7 +1749,10 @@ final class DroneSetup {
                     cellSpinner.setValue(r.cells());
                     syncingSpinner = false;
                 }
-                battery.set(State.INFO, r.cells() > 0 ? "Betaflight forces <b>" + r.cells() + "S</b> now." : "Betaflight counts the cells itself.");
+                // 2026-11-20 (a reader of this code): CONFIRM forces the count shown - also the spinner's 6 that nobody
+                // chose, while this line said only that Betaflight counts the cells itself. Now it says what it sets
+                battery.set(State.INFO, r.cells() > 0 ? "Betaflight forces <b>" + r.cells() + "S</b> now."
+                        : "Betaflight counts cells itself. <b>Confirm</b> sets <b>" + cells + "S</b>.");
                 return false;
             }
             if (r.cells() == r.cellTarget()) {
@@ -1804,6 +1842,62 @@ final class DroneSetup {
             setGps(false, true, true);
             if (failsafeChoice != ModeSwitch.Failsafe.DROP) failsafeCombo.setSelectedItem(ModeSwitch.Failsafe.DROP);
             gps.set(State.INFO, "No GPS found: set to No. Failsafe: Drop. On another UART? <b>Find GPS</b>.");
+        }
+
+        /** READ ESCS / BEACON OFF: over USB, on the bench; when the round running now is over. */
+        private void escsNow(boolean silence) {
+            if (escBusy || escWanted != 0) return;
+            if (main.isLinkActive()) {
+                escRow.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
+                return;
+            }
+            if (MotorTestDialog.isOpen() || compassCalOpen || CompassCalibrationDialog.isOpen() || OrientationCheckDialog.isOpen() || searching || searchWanted) {
+                escRow.set(State.WARN, "Close the window using USB first.");
+                return;
+            }
+            if (silence && Dialogs.confirm(javax.swing.SwingUtilities.getWindowAncestor(usb),
+                    "Switch the ESCs' own beacon off?\nWrites each ESC's settings (the old ones are kept in a file).\n"
+                            + "Battery in, props off. Don't unplug until it says done.", "ESC beacon",
+                    javax.swing.JOptionPane.OK_CANCEL_OPTION, javax.swing.JOptionPane.WARNING_MESSAGE) != javax.swing.JOptionPane.OK_OPTION) return;
+            escWanted = silence ? 2 : 1;
+            readEscs.setEnabled(false);
+            beaconOff.setEnabled(false);
+            escRow.set(State.PENDING, silence ? "Switching the beacon off... don't unplug." : "Reading the ESCs...");
+            if (!busy) startEscs();
+        }
+
+        private void startEscs() {
+            boolean silence = escWanted == 2;
+            escWanted = 0;
+            escBusy = true;
+            busy = true;
+            String port = lastFcPort;
+            java.nio.file.Path keep = de.droiddrone.pc.AppPaths.dataDir().resolve("esc-backup");
+            background(() -> de.droiddrone.pc.setup.EscCheck.run(() -> openPort(port), silence, keep, main::logLine), this::escsDone);
+        }
+
+        /** The flight controller's USB port as the last round read it (any, when not known). */
+        private static BetaflightUsb openPort(String port) throws IOException {
+            for (BetaflightUsb.Port p : BetaflightUsb.findFlightControllers()) {
+                if (port == null || p.systemName().equals(port)) return BetaflightUsb.open(p);
+            }
+            throw new IOException("The flight controller isn't there" + (port == null ? "" : " (" + port + ")") + ".");
+        }
+
+        private void escsDone(de.droiddrone.pc.setup.EscCheck.Result r) {
+            escBusy = false;
+            busy = false;
+            nextTry = System.currentTimeMillis() + 3000; // the ESCs start again; then the page reads on
+            done = false;
+            readEscs.setEnabled(found && !failed);
+            beaconOff.setEnabled(found && !failed);
+            if (r == null) {
+                beaconOff.setVisible(false);
+                escRow.set(State.BAD, "Reading the ESCs failed (see log).");
+                return;
+            }
+            beaconOff.setVisible(r.canSilence());
+            escRow.set(State.valueOf(r.state()), r.text());
         }
 
         /** FIND GPS: over USB, on the bench; when the round running now is over. */

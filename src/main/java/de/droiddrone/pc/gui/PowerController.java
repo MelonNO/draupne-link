@@ -45,6 +45,34 @@ final class PowerController {
     /** The mode this PC asked for (ControlLink.POWER_*); the phone's PHONE_POWER record says what it is in. */
     volatile int wanted = ControlLink.POWER_NORMAL; // read on the stick thread (sticksPaused)
     long sentAt, askedAt;
+    /** When the mode asked for now was first sent to a phone that was there to hear it; 0: not yet. */
+    long firstSentAt;
+    /** How long a phone may leave a power mode unanswered before its app is taken to be too old for it. */
+    static final long UNANSWERED_MS = 10_000;
+
+    /** A send of the mode asked for, to a phone on the link. */
+    void sent(long now) {
+        sentAt = now;
+        if (firstSentAt == 0) firstSentAt = now;
+    }
+
+    /** Nothing has been sent of the mode asked for (a new ask, a new link). */
+    void notSent() {
+        sentAt = 0;
+        firstSentAt = 0;
+    }
+
+    /**
+     * The phone has had the mode for {@link #UNANSWERED_MS} and said nothing: its app is older than pc.21 ("The phone
+     * doesn't answer the power mode: ... Update it."). Counted from the first send - until 2026-11-20 from when the
+     * pilot asked: waking a sleeping phone, the ask waits a minute or more for its check, so at the link's first
+     * moment, before the phone had said anything of itself, the pilot was told to update an app that was not old
+     * (seen in the bench's logs of three runs).
+     * @param answered the phone has reported its power mode on this link
+     */
+    boolean unanswered(long now, boolean answered) {
+        return !answered && askedAt != 0 && firstSentAt != 0 && now - firstSentAt > UNANSWERED_MS;
+    }
     /** The phone said DEEP SLEEP and the link dropped: it sleeps, and this PC keeps quiet (ControlLink.setDormant). */
     volatile boolean phoneAsleep;
     /** The phone said OVERWATCH and the link dropped: it watches, and this PC keeps quiet as in deep sleep. */
@@ -56,10 +84,11 @@ final class PowerController {
     volatile boolean awaitingWake;
     /** When the phone went to sleep: its listening windows come every check interval from then on. */
     long sleepStartAt;
-    /** CHECK EVERY for DEEP SLEEP (5 min unless chosen). */
+    /**
+     * CHECK EVERY (5 min unless chosen) - F-046, the pilot (2026-11-20): one for DEEP SLEEP and OVERWATCH alike. Up to
+     * then each kept its own and the one box showed one of them: a value just chosen could go to the other mode.
+     */
     int checkIntervalMin = 5;
-    /** CHECK EVERY for OVERWATCH (1.0.56, the pilot: Constant unless chosen - an alert wakes it, PILOT UAV reaches it at once). */
-    int overwatchIntervalMin = defaultInterval(ControlLink.POWER_OVERWATCH);
     /** The interval asked of the phone with the last sleep: CHECK EVERY, or 1 min for "0 min" to an app older than pc.39. */
     int sentIntervalMin = 5;
     /** The last "still here" from the sleeping phone that went to the log (one line per check). */
@@ -717,14 +746,14 @@ final class PowerController {
         return now - first >= SLEEP_ON_AFTER_MS ? Boolean.FALSE : null;
     }
 
-    /** CHECK EVERY when none was chosen: Constant for OVERWATCH, 5 min for the rest. */
+    /** CHECK EVERY when none was chosen: 5 min, whatever the mode (F-046: one interval; up to then OVERWATCH Constant). */
     static int defaultInterval(int mode) {
-        return mode == ControlLink.POWER_OVERWATCH ? SleepCheck.ALWAYS : 5;
+        return 5;
     }
 
-    /** The interval this mode goes with. */
+    /** The interval this mode goes with: the one CHECK EVERY (F-046). */
     int intervalFor(int mode) {
-        return mode == ControlLink.POWER_OVERWATCH ? overwatchIntervalMin : checkIntervalMin;
+        return checkIntervalMin;
     }
 
     // ------------------------------------------------------------------ words for the LINK card

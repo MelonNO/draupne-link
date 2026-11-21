@@ -195,8 +195,10 @@ class MotorTestTest {
 
     @Test
     void dshotCommandsAndProtocol() {
-        // blocking, motor 3 (index 2), two commands: reversed, then save
-        assertArrayEquals(new byte[]{1, 2, 2, 21, 12}, MotorTest.dshotPayload(2, MotorTest.DSHOT_SPIN_REVERSED, MotorTest.DSHOT_SAVE_SETTINGS));
+        // blocking, motor 3 (index 2), two commands: reversed, then save - F-053: the kept directions 7 / 8, not
+        // crash-flip's 20 / 21 (Betaflight's dshot_command.h: SPIN_DIRECTION_1 = 7, _2 = 8, SAVE_SETTINGS = 12)
+        assertArrayEquals(new byte[]{1, 2, 2, 8, 12}, MotorTest.dshotPayload(2, MotorTest.DSHOT_SPIN_REVERSED, MotorTest.DSHOT_SAVE_SETTINGS));
+        assertArrayEquals(new byte[]{1, 0, 2, 7, 12}, MotorTest.dshotPayload(0, MotorTest.DSHOT_SPIN_NORMAL, MotorTest.DSHOT_SAVE_SETTINGS));
         // MSP_ADVANCED_CONFIG's fourth byte is the motor protocol
         assertTrue(MotorTest.isDshot(new byte[]{1, 1, 0, 7}), "DSHOT600");
         assertTrue(MotorTest.isDshot(new byte[]{1, 1, 0, 5}), "DSHOT150");

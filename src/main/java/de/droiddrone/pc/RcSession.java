@@ -133,6 +133,9 @@ public class RcSession {
     private long heardAgainAt;
     /** The sticks were stopped in this watch already (the throttle rule, without an arm switch, stops them once). */
     private boolean lossStopped;
+    /** The arm switch at the last tick, and when it last went on with the link heard (0: not yet). */
+    private boolean armWasOn;
+    private long armedOnHeardLinkAt;
     /** Since when the flight controller has read DISARMED without a break (0: it doesn't). */
     private long disarmedSince;
 
@@ -453,6 +456,9 @@ public class RcSession {
         wasUnheard = unheard;
         if (!fcDisarmed) disarmedSince = 0;
         else if (disarmedSince == 0) disarmedSince = now;
+        boolean armOn = armSwitch != null && channels != null && armSwitch.on(channels);
+        if (armOn && !armWasOn && !unheard) armedOnHeardLinkAt = now;
+        armWasOn = armOn;
         if (!lossWatch || channels == null) return;
         // no arm switch known: the throttle alone, as at the start - and once a watch (a throttle resting at the limit
         // would stop and start them tick by tick)
@@ -461,6 +467,10 @@ public class RcSession {
         if (fcDisarmed && rcEnabled && couldArm) {
             if (now - lossWatchSince < FC_ARMED_FRESH_MS) return; // may be the last status before the loss: wait
             if (now - disarmedSince < DISARMED_CONFIRM_MS) return; // one status alone stops nothing: the next one too
+            // 1.0.71 (a reader of the link code, 2026-11-20): the pilot put ARM on with the link heard - arming on
+            // purpose, which Betaflight judges itself. Statuses queued on the phone's way up from before it may come
+            // in late for seconds and say DISARMED of a drone just armed: they stop nothing for LOSS_SETTLE_MS
+            if (!unheard && armedOnHeardLinkAt != 0 && now - armedOnHeardLinkAt < LOSS_SETTLE_MS) return;
             // the watch stays open: still unheard, the arm switch off and on again is stopped again at once
             rcEnabled = false;
             lostAt = 0;

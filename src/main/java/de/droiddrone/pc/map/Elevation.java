@@ -187,9 +187,9 @@ public final class Elevation {
 
     private Double fetch(String url) {
         try {
-            HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(8))
+            HttpRequest request = HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url(url))).timeout(Duration.ofSeconds(8))
                     .header("User-Agent", userAgent).header("Accept", "application/json").GET().build();
-            HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> response = de.droiddrone.pc.Net.send(http, request, HttpResponse.BodyHandlers.ofString(), 14_000); // all of it: a stalled answer held this thread for good
             return response.statusCode() == 200 ? parse(response.body()) : null;
         } catch (Exception e) {
             return null;

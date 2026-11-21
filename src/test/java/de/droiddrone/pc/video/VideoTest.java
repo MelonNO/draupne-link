@@ -583,6 +583,37 @@ class VideoTest {
         assertTrue(restart.streamStart(), "from 500 to 1: a restart");
     }
 
+    /**
+     * A real restart of the stream while the counter stood high (32100): its key frame 1 is a restart, not the counter
+     * wrapping - the phone cannot have numbered 669 frames in 0.4 s. Until 2026-11-20 it was taken for a wrap and
+     * dropped as "far ahead"; the picture stood for three seconds and more. A wrap with times still is one.
+     */
+    @Test
+    void aRestartWhileTheCounterStandsHighIsARestart() {
+        FrameAssembler a = new FrameAssembler();
+        long t = 1_000_000;
+        for (int n = 32090; n <= 32100; n++, t += 33) assertNotNull(a.put(n == 32090, (short) n, 0, 10, bytes(n, 10), 0, 10, t));
+        t += 400;
+        byte[] one = bytes(7, FrameAssembler.FIRST_SEGMENT + FrameAssembler.SEGMENT + 100); // three packets
+        FrameAssembler.Frame f = null;
+        int seg2 = FrameAssembler.FIRST_SEGMENT + FrameAssembler.SEGMENT;
+        assertNull(a.put(true, (short) 1, 0, one.length, one, 0, FrameAssembler.FIRST_SEGMENT, t));
+        assertNull(a.put(true, (short) 1, FrameAssembler.FIRST_SEGMENT, one.length, one, FrameAssembler.FIRST_SEGMENT, FrameAssembler.SEGMENT, t + 1));
+        f = a.put(true, (short) 1, seg2, one.length, one, seg2, one.length - seg2, t + 2);
+        assertNotNull(f, "key frame 1 of the new stream comes out");
+        assertTrue(f.streamStart(), "as a restart");
+        assertArrayEquals(one, f.data());
+        assertNotNull(a.put(false, (short) 2, 0, 10, bytes(2, 10), 0, 10, t + 35), "and the new stream goes on");
+
+        FrameAssembler w = new FrameAssembler();
+        long u = 1_000_000;
+        assertNotNull(w.put(true, (short) 32766, 0, 10, bytes(0, 10), 0, 10, u));
+        assertNotNull(w.put(false, (short) 32767, 0, 10, bytes(0, 10), 0, 10, u + 33));
+        FrameAssembler.Frame wrapped = w.put(true, (short) 1, 0, 10, bytes(0, 10), 0, 10, u + 66);
+        assertNotNull(wrapped);
+        assertFalse(wrapped.streamStart(), "a wrap 33 ms after 32767 (an app before pc.26) is a wrap");
+    }
+
     @Test
     void theParityRebuildsAnyOneLostPacket() {
         byte[] frame = bytes(0, FrameAssembler.FIRST_SEGMENT + 2 * FrameAssembler.SEGMENT + 300); // 4 packets

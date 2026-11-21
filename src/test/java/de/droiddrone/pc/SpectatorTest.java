@@ -267,6 +267,49 @@ class SpectatorTest {
         assertFalse(pilot.isSpectator());
     }
 
+    /**
+     * 1.0.71 (a reader of the link code, 2026-11-20): without Tailscale this PC's address can change under a session,
+     * and the phone then names the old one - not an address of this PC's any more. It became a spectator of itself
+     * for good. Right after a loss of its own session it keeps asking; the phone lets it in (pc.55, by its ids).
+     */
+    @Test
+    void aPilotNamedAtAnOldAddressRightAfterALossIsAskedAgain() throws Exception {
+        phone = new ControlLinkTest.FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        List<String> events = new CopyOnWriteArrayList<>();
+        pilot = link(pilotPort, true, 600);
+        pilot.setEvents(events::add);
+        pilot.start();
+        waitFor(() -> pilot.getState() == ControlLink.State.READY, 5000, "pilot READY");
+        phone.silent = true; // this PC's old address is gone: the phone hears it no more
+        Thread.sleep(2500); // the link counted lost
+        phone.endSession(); // and the phone's session over
+        phone.staleSession = new Spectate.Address(InetAddress.getByName("192.0.2.1"), 40_123); // its old address, as the phone saw it
+        phone.silent = false;
+        waitFor(() -> phone.spectatorAnswers.get() >= 3, 3000, "the phone names the old address");
+        assertFalse(pilot.isSpectator(), "no spectator of its own old session");
+        Thread.sleep(1000);
+        assertFalse(pilot.isSpectator());
+        phone.staleSession = null; // the phone lets the moved PC in
+        waitFor(() -> pilot.getState() == ControlLink.State.READY, 5000, "connected again, nobody's hand on it");
+        assertFalse(pilot.isSpectator());
+    }
+
+    /** The same answer long after the loss: another PC flies - watched, as before 1.0.71. */
+    @Test
+    void anotherPilotNamedLongAfterTheLossIsWatched() throws Exception {
+        phone = new ControlLinkTest.FakeFlightPhone(phonePort, "DD", SettingsCommon.versionCompatibleCode);
+        pilot = link(pilotPort, true, 600);
+        pilot.start();
+        waitFor(() -> pilot.getState() == ControlLink.State.READY, 5000, "pilot READY");
+        phone.silent = true;
+        Thread.sleep(2500); // the link counted lost
+        phone.endSession(); // and the phone's session over
+        phone.staleSession = new Spectate.Address(InetAddress.getByName("192.0.2.1"), 40_123);
+        phone.silent = false;
+        long lostBy = 500; // the link counted lost 2 s into the 2.5 s of silence
+        waitFor(pilot::isSpectator, ControlLink.RECENT_SESSION_MS - lostBy + 3000, "a spectator once RECENT_SESSION_MS has passed");
+    }
+
     /** The same by address: this PC's own addresses at this link's port or a session's that just closed. */
     @Test
     void thisPcIsKnownByItsAddressesAndRecentPorts() throws Exception {

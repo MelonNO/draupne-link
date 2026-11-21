@@ -332,10 +332,19 @@ public class InternalCamera implements Camera{
             }
             camera = cameraDevice;
             isOpened = true;
-            isOpening = false;
             trouble = 0;
             log("Camera device opened.");
-            startPreview();
+            // pc.55 (a reader of this code, 2026-11-20): on the camera's own thread, beside the video starter's thread,
+            // which is free again the moment the open returns and may stop or restart the encoder under this start.
+            // Nothing here may end the app; and "opening" lasts until the start has been asked for, so the waits on
+            // the other thread (a size change, a StartVideo) wait for this part too - they began theirs under it
+            try {
+                startPreview();
+            } catch (RuntimeException e) {
+                log("Camera: the start after the open failed: " + e);
+            } finally {
+                isOpening = false;
+            }
         }
 
         // DRAUPNE Link: a camera taken away (another app, a system error) is marked closed, so the next StartVideo
@@ -530,6 +539,8 @@ public class InternalCamera implements Camera{
                     mCameraCaptureSession.setRepeatingRequest(mCaptureRequest.build(), captureCallback, new Handler(handlerThread.getLooper()));
                 }catch (CameraAccessException e){
                     log("addRecorderSurface CameraAccessException: "+ e);
+                }catch (RuntimeException e){ // pc.55: a session closed or not there yet (a size change meanwhile)
+                    log("addRecorderSurface: " + e);
                 }
             }
         }
@@ -596,6 +607,13 @@ public class InternalCamera implements Camera{
                 captureRequest = cameraCaptureSession.getDevice().createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             }catch (CameraAccessException e){
                 log("createCaptureRequest CameraAccessException: "+ e);
+                return;
+            }catch (RuntimeException e){
+                // pc.55 (the bench's night of 2026-11-20): the camera was closed while this session was being set up -
+                // a change of the picture's size on a failing link, then a cut. "CameraDevice was already closed" is
+                // an IllegalStateException, on the camera's own thread: it ended the whole app. A session of a camera
+                // that is gone has nothing to start; whoever closed the camera opens it again when it is wanted
+                log("createCaptureRequest: the camera was closed meanwhile: "+ e);
                 return;
             }
             synchronized (requestLock) {

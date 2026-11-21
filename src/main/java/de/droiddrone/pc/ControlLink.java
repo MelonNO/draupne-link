@@ -556,7 +556,9 @@ public class ControlLink {
                     onPhoneSpectateAnswer(d, packet.getLength());
                     continue;
                 }
+                int unanswered = receiverBuffer.getUnansweredStarts();
                 receiverBuffer.addPacket(packet);
+                if (receiverBuffer.getUnansweredStarts() != unanswered) onSessionWithoutAnswer();
             } catch (Exception e) {
                 if (running) log("Receiver error: " + e);
             }
@@ -665,7 +667,7 @@ public class ControlLink {
         }
         Spectate.Address pilot = Spectate.readPilotAt(d, len);
         if (pilot == null) return;
-        if (isThisPc(pilot)) {
+        if (isThisPc(pilot) || mayBeThisPcMoved(MonoClock.ms())) {
             // the phone still holds this PC's previous session (seen 2026-11-02 after a link loss: it named this
             // very PC as the pilot, and this PC sat as a spectator of itself, never asking to connect again). Not
             // a pilot to watch: keep asking, a little faster, until the phone lets go
@@ -688,6 +690,19 @@ public class ControlLink {
         }
         events.accept("Another PC (" + pilot.ip().getHostAddress() + ") flies: spectating, "
                 + spectatorDelayMs + " ms behind. No sticks sent.");
+    }
+
+    /**
+     * 1.0.71 (a reader of the link code, 2026-11-20): this link flew the phone and lost it moments ago - the pilot the
+     * phone names may be this very PC at its old address. Without Tailscale this PC's address can change under a
+     * session (another network, a router's new mapping), and the phone then names the old one, which this PC can't
+     * know as its own: it turned spectator of itself for good, the drone without sticks. For RECENT_SESSION_MS after
+     * the loss it keeps asking; the phone lets it in by its session ids once the old address is silent (pc.55,
+     * SessionGate.pilotMoved). Another PC that really flies is watched once that time is up.
+     */
+    private boolean mayBeThisPcMoved(long now) {
+        long lost = lostAt;
+        return everReady && lost > 0 && now - lost <= RECENT_SESSION_MS;
     }
 
     /** A session of this PC closed this recently may still be the phone's idea of the pilot. */
@@ -872,6 +887,8 @@ public class ControlLink {
         long lastConfig = 0;
         while (running) {
             try {
+                Runnable hook = sessionTurnHook; // tests only: a failure at every turn (F-025)
+                if (hook != null) hook.run();
                 if (spectator != null) { // watching: the spectator thread does the talking, never a Connect again
                     Thread.sleep(250);
                     continue;
@@ -927,7 +944,10 @@ public class ControlLink {
                     long every = phoneHoldsOldSession ? OWN_SESSION_RETRY_MS
                             : lostAt > 0 && now - lostAt < RECONNECT_FAST_MS ? CONNECT_FAST_MS : CONNECT_MS;
                     long sinceRound = connectRoundAt == 0 ? Long.MAX_VALUE : now - connectRoundAt;
-                    if (now - lastConnect >= every && !connectHeld(sinceRound, connectRoundLen)) {
+                    // F-001: the phone heard again after a try's id was kept for not being heard - the new id at once,
+                    // not at the next turn of the pace
+                    boolean heardAgain = trying && lastReceivedAt > lastConnect && sessionIds.renewDue(now, lastReceivedAt);
+                    if ((now - lastConnect >= every || heardAgain) && !connectHeld(sinceRound, connectRoundLen)) {
                         if (sinceRound >= connectRoundLen) { // a new round begins (see SLOW_PATH_PING_MS)
                             long pong = lastPingTimestamp;
                             connectRoundAt = now;
@@ -1005,10 +1025,28 @@ public class ControlLink {
             } catch (InterruptedException e) {
                 return;
             } catch (Exception e) {
-                log("Session thread error: " + e);
+                // F-025: an error that comes back at every turn (a setting that was no number threw before the turn's
+                // own wait) is said once in 5 s, and the turn waits as any other does - it filled the log at 6 MB a second
+                String what = String.valueOf(e);
+                long at = MonoClock.ms();
+                if (!what.equals(sessionErrorSaid) || at - sessionErrorSaidAt >= 5000) {
+                    sessionErrorSaid = what;
+                    sessionErrorSaidAt = at;
+                    log("Session thread error: " + e);
+                }
+                try {
+                    Thread.sleep(SESSION_TICK_MS);
+                } catch (InterruptedException interrupted) {
+                    return;
+                }
             }
         }
     }
+
+    private String sessionErrorSaid;
+    private long sessionErrorSaidAt;
+    /** Tests only (never set by the app): run at the start of every turn of the session thread. */
+    volatile Runnable sessionTurnHook;
 
     /**
      * 1.0.64: Connects on a slow path. The phone takes the Connects of one second as one session
@@ -1047,7 +1085,23 @@ public class ControlLink {
 
     /** The Connect, sent on this thread (upstream's sendConnect starts a thread per call). */
     private void sendConnect() throws IOException {
-        udpSender.sendPacket(buildConnectPacket(MonoClock.ms(), connectRoundLen));
+        byte[] connect = buildConnectPacket(MonoClock.ms(), connectRoundLen);
+        ReceiverBuffer rb = receiverBuffer;
+        if (rb != null) rb.awaitAnswer(); // F-057: the phone's new session may come without its answer
+        udpSender.sendPacket(connect);
+    }
+
+    /**
+     * F-057 (receive thread): the receive buffer took the phone's new session from its first packets - the session
+     * this side's Connect began, its answer lost on the way back (a one-way cut of 2 - 4 s). Counted as the answer
+     * to the try in hand: a late copy of the real answer then starts nothing ({@link #answerOfAnOlderTry}).
+     */
+    private void onSessionWithoutAnswer() {
+        olderAnswers = 0;
+        answeredId = sessionIds.current();
+        connectAnsweredAt = lastReceivedAt;
+        sessionStarts.incrementAndGet();
+        log("Connect: the phone's new session came without its answer - taken as the answer.");
     }
 
     /**
@@ -1070,7 +1124,7 @@ public class ControlLink {
         packetData.daos.writeByte(1);
         packetData.daos.writeUTF(key);
         packetData.daos.writeShort(SettingsCommon.versionCompatibleCode);
-        packetData.daos.writeInt((int) sessionIds.next(now, roundMs));
+        packetData.daos.writeInt((int) sessionIds.next(now, roundMs, lastReceivedAt)); // F-001: a new id a second only if the phone is heard
         packetData.daos.writeByte(0);
         return packetData.getData();
     }
@@ -1872,6 +1926,7 @@ public class ControlLink {
 
     private void sendConfig() throws IOException {
         udpSender.sendPacket(buildConfigPacket());
+        for (String note : config.takeNotes()) events.accept(note); // a setting that was no number: said in the window's log
     }
 
     /**

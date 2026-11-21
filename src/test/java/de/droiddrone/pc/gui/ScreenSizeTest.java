@@ -58,10 +58,46 @@ class ScreenSizeTest {
         assertTrue(m.y + m.height <= 560 - LinkCardLayout.Column.LOG_MIN, "the MAP card above the log: " + m);
         assertTrue(b.height > 0 && b.y + b.height <= m.height, "POP OUT MAP inside its card: " + b);
         assertTrue(link.getHeight() < 700 && link.getY() == 0, "the rows scroll from the top: " + link.getBounds());
-        assertTrue(mini.getHeight() >= LinkCardLayout.MINI_MIN, "the minimap keeps some room: " + mini.getBounds());
+        // F-010 / F-043, the pilot (2026-11-20): too low for a minimap of use - none at all, the rows get its room
+        assertFalse(mini.isVisible(), "no squashed minimap: " + mini.getBounds());
+        assertEquals(0, mini.getHeight());
+        assertTrue(m.height < pop.getHeight() + 40, "the MAP card is POP OUT MAP alone: " + m);
+        assertTrue(link.getHeight() > 360, "the LINK card's rows get the room: " + link.getBounds());
         map.setVisible(false); // the map popped out: the whole card goes, the LINK card and the log take its room
         column.doLayout();
         assertTrue(link.getHeight() > 300 && log.getY() > link.getHeight() && log.getY() + log.getHeight() == 560);
+    }
+
+    @Test
+    void theMinimapShowsWhereThereIsRoomForIt() {
+        JPanel rows = new LinkCardLayout.Rows(null);
+        rows.setPreferredSize(new Dimension(300, 380)); // the LINK card connected, no warning
+        JPanel link = new JPanel(new java.awt.BorderLayout());
+        link.add(new JScrollPane(rows));
+        JPanel mini = new JPanel();
+        JButton pop = new JButton("Pop out map");
+        JPanel map = new JPanel(new LinkCardLayout(mini, pop));
+        map.add(mini);
+        map.add(pop);
+        JPanel log = new JPanel();
+        JPanel column = new JPanel(new LinkCardLayout.Column(link, map, log));
+        column.add(link);
+        column.add(map);
+        column.add(log);
+        column.setSize(340, 1000); // a 1080-high screen
+        column.doLayout();
+        map.doLayout();
+        assertTrue(mini.isVisible() && mini.getHeight() >= LinkCardLayout.MINI_SHOWN_MIN, "the minimap, whole: " + mini.getBounds());
+        assertTrue(link.getHeight() >= 380, "the LINK card as tall as its rows: " + link.getBounds());
+        column.setSize(340, 560); // the window made low: it goes, and comes back when there is room again
+        column.doLayout();
+        map.doLayout();
+        assertFalse(mini.isVisible());
+        assertTrue(link.getHeight() >= 380, "PILOT UAV and the rows whole, not scrolled for a strip of map: " + link.getBounds());
+        column.setSize(340, 1000);
+        column.doLayout();
+        map.doLayout();
+        assertTrue(mini.isVisible() && mini.getHeight() >= LinkCardLayout.MINI_SHOWN_MIN);
     }
 
     @Test

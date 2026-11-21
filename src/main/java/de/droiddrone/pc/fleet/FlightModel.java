@@ -51,13 +51,20 @@ public final class FlightModel {
     public static final String[] BOX_NAMES = {"ARM", "ANGLE", "HORIZON", "HEADFREE", "FAILSAFE", "BEEPER", "OSD DISABLE",
             "BLACKBOX", "AIR MODE", "GPS RESCUE", "FLIP OVER AFTER CRASH"};
     public static final int[] BOX_IDS = {0, 1, 2, 6, 27, 13, 19, 26, 28, 46, 35};
-    static final int BOX_ARM = 0, BOX_ANGLE = 1, BOX_FAILSAFE = 4, BOX_BEEPER = 5;
+    static final int BOX_ARM = 0, BOX_ANGLE = 1, BOX_FAILSAFE = 4, BOX_BEEPER = 5, BOX_GPS_RESCUE = 9;
     /** Permanent mode ids in MSP_MODE_RANGES. */
     static final int MODE_ARM = 0, MODE_ANGLE = 1, MODE_BEEPER = 13;
 
-    public enum Failsafe { NONE, HOLD, STAGE1, DROPPED, LANDING }
+    public enum Failsafe { NONE, HOLD, STAGE1, DROPPED, LANDING, RESCUE }
 
-    public enum Procedure { DROP, LAND }
+    public enum Procedure { DROP, LAND, GPS_RESCUE }
+
+    /** GPS rescue as modelled: up to this height, home at this speed, down at the end; the last metres to home count as there. */
+    static final double RESCUE_ALT_M = 30, RESCUE_SPEED = 8, RESCUE_CLIMB = 3, RESCUE_DESCEND = 1.5, RESCUE_HOME_M = 3;
+    /** Sticks back for this long before Betaflight believes them again (failsafe_recovery_delay). */
+    public static final long RX_RECOVERY_MS = 500;
+    /** A stick this far from its centre (of 500) gives the pilot the drone back from a rescue (failsafe_stick_threshold 30). */
+    static final int RESCUE_STICK_BREAK = 170;
 
     /** Where the switches sit (AUX index: 0 = AUX1) and their ranges in us, start inclusive, end exclusive. */
     public static final class Setup {
@@ -153,7 +160,14 @@ public final class FlightModel {
                 else armSwitchBlocked = true;
             }
             if (!armSwitch) armSwitchBlocked = false;
-        } else if (!armSwitch && failsafe == Failsafe.NONE) {
+        } else if (!armSwitch && (failsafe == Failsafe.NONE || failsafe == Failsafe.RESCUE && rxValidated(nowMs))) {
+            // Betaflight (rc_controls.c): in a failsafe the ARM switch disarms only once the receiver's data is
+            // believed again - so ARM off as the link returns DOES disarm a drone flying home, in the air
+            if (failsafe == Failsafe.RESCUE) {
+                failsafe = Failsafe.DROPPED;
+                failsafeSince = nowMs;
+                armSwitchBlocked = false;
+            }
             disarm("the arm switch", nowMs);
         }
         armSwitchWas = armSwitch;
@@ -164,6 +178,8 @@ public final class FlightModel {
     private void stepFailsafe(long nowMs, boolean rxOk) {
         if (rxOk) {
             if (failsafe == Failsafe.HOLD || failsafe == Failsafe.STAGE1) failsafe = Failsafe.NONE;
+            // a rescue flies on with the sticks back, until the pilot moves one: then the drone is the pilot's again
+            if (failsafe == Failsafe.RESCUE && rxValidated(nowMs) && sticksMoved()) failsafe = Failsafe.NONE;
             if (failsafe == Failsafe.DROPPED && !armed) failsafe = Failsafe.NONE; // recovered: the switch rule blocks re-arming
             return;
         }
@@ -188,6 +204,8 @@ public final class FlightModel {
                     failsafeSince = nowMs;
                     if (setup.procedure == Procedure.LAND && alt > 0.05) {
                         failsafe = Failsafe.LANDING;
+                    } else if (setup.procedure == Procedure.GPS_RESCUE && alt > 0.05 && homeSet) {
+                        failsafe = Failsafe.RESCUE; // stays ARMED and flies home by itself
                     } else {
                         failsafe = Failsafe.DROPPED;
                         disarm("failsafe (drop)", nowMs);
@@ -227,7 +245,57 @@ public final class FlightModel {
         return rc[i];
     }
 
+    /** The receiver's data is believed again: sticks without a gap for RX_RECOVERY_MS. */
+    private boolean rxValidated(long nowMs) {
+        return nowMs - lastRxAt <= RX_LOSS_MS && rxCleanSince >= 0 && nowMs - rxCleanSince >= RX_RECOVERY_MS;
+    }
+
+    private boolean sticksMoved() {
+        return Math.abs(rc[0] - 1500) > RESCUE_STICK_BREAK || Math.abs(rc[1] - 1500) > RESCUE_STICK_BREAK || Math.abs(rc[2] - 1500) > RESCUE_STICK_BREAK;
+    }
+
+    /**
+     * GPS rescue, as much of it as the bench needs: up to RESCUE_ALT_M, home in a straight line, down there, disarmed
+     * on the ground. No physics: where the real thing would be, about.
+     */
+    private void stepRescue(long nowMs, double dt) {
+        double dn = homeNorth - north, de = homeEast - east, far = Math.hypot(dn, de);
+        double oldN = north, oldE = east;
+        roll = 0;
+        pitch = far > RESCUE_HOME_M ? -15 : 0;
+        vn = ve = 0;
+        if (far > RESCUE_HOME_M && alt < RESCUE_ALT_M - 0.5) { // up first
+            vz = RESCUE_CLIMB;
+        } else if (far > RESCUE_HOME_M) { // home
+            vz = 0;
+            heading = norm(Math.toDegrees(Math.atan2(de, dn)));
+            double step = Math.min(far, RESCUE_SPEED * dt);
+            vn = dn / far * RESCUE_SPEED;
+            ve = de / far * RESCUE_SPEED;
+            north += dn / far * step;
+            east += de / far * step;
+        } else { // down
+            vz = -RESCUE_DESCEND;
+        }
+        alt += vz * dt;
+        throttleOut = vz > 0 ? 0.55 : vz < 0 ? 0.3 : 0.42;
+        if (alt <= 0) {
+            alt = 0;
+            vz = 0;
+            failsafe = Failsafe.DROPPED;
+            failsafeSince = nowMs;
+            disarm("failsafe (GPS rescue landed)", nowMs);
+            armSwitchBlocked = true;
+        }
+        travelled += Math.hypot(north - oldN, east - oldE);
+        maxAlt = Math.max(maxAlt, alt);
+    }
+
     private void stepAir(long nowMs, double dt) {
+        if (armed && failsafe == Failsafe.RESCUE) {
+            stepRescue(nowMs, dt);
+            return;
+        }
         double t = armed ? Math.max(0.05, (stick(3) - 1000) / 1000.0) : 0; // motors idle while armed (air mode off)
         throttleOut = t;
         double rStick = (stick(0) - 1500) / 500.0, pStick = (stick(1) - 1500) / 500.0, yStick = (stick(2) - 1500) / 500.0;
@@ -314,6 +382,7 @@ public final class FlightModel {
     public String beeping(long nowMs) {
         if (beeperMode() && nowMs - lastRxAt <= RX_LOSS_MS) return "BEEPER";
         if (failsafe == Failsafe.LANDING) return "RX_LOST_LANDING";
+        if (failsafe == Failsafe.RESCUE && nowMs - lastRxAt > RX_LOSS_MS) return "RX_LOST";
         if (hadRx && nowMs - lastRxAt > 1000) return "RX_LOST";
         return null;
     }
@@ -369,6 +438,7 @@ public final class FlightModel {
             m |= 1 << BOX_FAILSAFE;
         }
         if (beeperMode()) m |= 1 << BOX_BEEPER;
+        if (failsafe == Failsafe.RESCUE) m |= 1 << BOX_FAILSAFE | 1 << BOX_GPS_RESCUE;
         return m;
     }
 

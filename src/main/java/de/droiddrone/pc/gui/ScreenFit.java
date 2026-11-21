@@ -19,6 +19,12 @@ final class ScreenFit {
     private ScreenFit() {
     }
 
+    /**
+     * The test bench only (never set by the app): a smaller screen than the real one, at its top-left corner - what a
+     * 1366 x 768 laptop gives a window, tried on a bigger screen.
+     */
+    static volatile Dimension pretend;
+
     /** The screen's room above the taskbar, in the program's (scaled) pixels; null off-screen (headless). */
     static Rectangle usable(Window w) {
         if (GraphicsEnvironment.isHeadless()) return null;
@@ -26,7 +32,9 @@ final class ScreenFit {
                 : GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice().getDefaultConfiguration();
         Rectangle r = gc.getBounds();
         Insets in = Toolkit.getDefaultToolkit().getScreenInsets(gc);
-        return new Rectangle(r.x + in.left, r.y + in.top, r.width - in.left - in.right, r.height - in.top - in.bottom);
+        Rectangle real = new Rectangle(r.x + in.left, r.y + in.top, r.width - in.left - in.right, r.height - in.top - in.bottom);
+        Dimension p = pretend;
+        return p == null ? real : new Rectangle(real.x, real.y, Math.min(p.width, real.width), Math.min(p.height, real.height));
     }
 
     /** The least size: the wish, but never more than the screen has. */

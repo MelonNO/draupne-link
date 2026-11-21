@@ -115,6 +115,9 @@ public final class SelfUpdate {
         return app != null && programFiles != null && Path.of(app).toAbsolutePath().startsWith(Path.of(programFiles));
     }
 
+    /** How long the download may stand still before it is given up (tests make it short). */
+    static long stallMs = 60_000;
+
     /** Into %TEMP%\DraupneLink-update; progress is reported about once per percent. */
     public static Path download(UpdateCheck.Release r, Progress progress) throws IOException, InterruptedException {
         if (!r.canInstall()) throw new IOException("the release has no installer to update with");
@@ -123,8 +126,8 @@ public final class SelfUpdate {
         Path file = dir.resolve(r.installerUrl().substring(r.installerUrl().lastIndexOf('/') + 1));
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15))
                 .followRedirects(HttpClient.Redirect.NORMAL).build();
-        HttpResponse<InputStream> resp = client.send(HttpRequest.newBuilder(URI.create(r.installerUrl()))
-                .timeout(Duration.ofMinutes(10)).build(), HttpResponse.BodyHandlers.ofInputStream());
+        HttpResponse<InputStream> resp = client.send(HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url(r.installerUrl())))
+                .timeout(Duration.ofSeconds(60)).build(), HttpResponse.BodyHandlers.ofInputStream()); // the head: it was 10 min of "Downloading" with nothing coming
         if (resp.statusCode() != 200) {
             resp.body().close();
             throw new IOException("GitHub answered HTTP " + resp.statusCode());
@@ -132,7 +135,7 @@ public final class SelfUpdate {
         MessageDigest sha = sha256();
         long done = 0, total = r.installerSize();
         long lastPercent = -1;
-        try (InputStream in = resp.body(); OutputStream out = Files.newOutputStream(file)) {
+        try (InputStream in = de.droiddrone.pc.Net.noStall(resp.body(), stallMs); OutputStream out = Files.newOutputStream(file)) { // may take long, may not stand still
             byte[] buf = new byte[64 * 1024];
             for (int n; (n = in.read(buf)) > 0; ) {
                 out.write(buf, 0, n);
@@ -194,11 +197,10 @@ public final class SelfUpdate {
         Files.deleteIfExists(helperLog());
         String script = script(installer, ProcessHandle.current().pid(), app, sha256);
         String encoded = Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
-        new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        de.droiddrone.pc.Outside.start(new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                 "-WindowStyle", "Hidden", "-EncodedCommand", encoded)
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start();
+                .redirectError(ProcessBuilder.Redirect.DISCARD));
     }
 
     /**

@@ -32,7 +32,7 @@ class DebriefStripTest {
         try (DebriefFlight flights = new DebriefFlight(dir)) {
             PreviousFlightsDialog d = flights.open();
             SwingUtilities.invokeAndWait(() -> {
-                assertEquals("Play", d.play.getText(), "nothing plays");
+                assertEquals("PLAY", d.play.getText(), "nothing plays");
                 List<FlightSummary.Figure> figures = FlightSummary.of(d.data).figures();
                 assertEquals(figures.stream().map(FlightSummary.Figure::label).toList(), texts(d.summaryStrip.labels));
                 assertEquals(figures.stream().map(FlightSummary.Figure::value).toList(), texts(d.summaryStrip.values));

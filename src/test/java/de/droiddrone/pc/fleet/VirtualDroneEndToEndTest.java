@@ -106,6 +106,14 @@ class VirtualDroneEndToEndTest {
         waitFor(() -> drone.fc.hadSticks(), 2000, "the sticks reach the virtual FC", log);
         Thread.sleep(Math.max(0, FlightModel.BOOT_GRACE_MS + 700 - (System.currentTimeMillis() - startedAt())));
         armValue = 1900;
+        // A pause of this PC in the moment the switch goes on (a full test run's load) leaves a gap in the sticks, and
+        // Betaflight then wants the switch off and on again (ARMSWITCH, the test bench's F-002) - once, as a pilot would.
+        if (!de.droiddrone.testing.Waits.until(() -> t.isArmedNow(de.droiddrone.pc.MonoClock.ms(), 1000), 3000)) {
+            log.add("TEST: not armed at the switch's first try; off and on again");
+            armValue = 1000;
+            Thread.sleep(700);
+            armValue = 1900;
+        }
         waitFor(() -> t.isArmedNow(de.droiddrone.pc.MonoClock.ms(), 1000), 3000, "armed, as the PC's telemetry says", log);
         assertTrue(drone.fc.isArmed());
 

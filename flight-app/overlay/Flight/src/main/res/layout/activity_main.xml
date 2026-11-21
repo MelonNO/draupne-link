@@ -216,6 +216,18 @@
                 android:textSize="14sp"
                 android:visibility="gone" />
 
+            <!-- F-058: UPDATE PHONE APP from the PC needs "Install unknown apps" for this app, allowed once by hand -->
+            <TextView
+                android:id="@+id/tvInstalls"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:background="?android:attr/selectableItemBackground"
+                android:text="@string/dd_installs_line"
+                android:textColor="@color/dd_warn"
+                android:textSize="14sp"
+                android:visibility="gone" />
+
             <!-- pc.28: the phone checks what the setup guide used to list - Data Saver, and before flying the radios -->
             <TextView
                 android:id="@+id/tvDataSaver"

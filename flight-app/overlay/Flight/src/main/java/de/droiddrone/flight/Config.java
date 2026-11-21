@@ -58,7 +58,7 @@ public class Config {
     private String mavlinkUdpBridgeIp;
     private int mavlinkUdpBridgePort;
     private boolean connectOnStartup;
-    private boolean cameraConfigChanged;
+    private volatile boolean cameraConfigChanged; // pc.55: set on the packets' thread, cleared on the video starter's
     private boolean recorderConfigChanged;
     private boolean audioStreamConfigChanged;
     private boolean fcConfigChanged;
@@ -261,8 +261,9 @@ public class Config {
         return recordedAudioBitrate;
     }
 
+    /** At least 1: the flight controller's poll divides by it (a 0 from a PC made that thread spin and was kept). */
     public int getTelemetryRefreshRate() {
-        return telemetryRefreshRate;
+        return Math.max(1, telemetryRefreshRate);
     }
 
     public int getRcRefreshRate() {

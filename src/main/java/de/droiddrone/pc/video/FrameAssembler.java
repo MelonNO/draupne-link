@@ -478,8 +478,15 @@ public class FrameAssembler {
      * pc.26 wrap to 1; pc.26 wraps to 2).
      */
     private boolean isStreamStart(boolean keyFrame, short frameNum) {
-        return keyFrame && frameNum == 1 && !pending.containsKey(frameNum)
-                && (lastReleased == null || !isOlder(lastReleased, (short) 1));
+        if (!keyFrame || frameNum != 1 || pending.containsKey(frameNum)) return false;
+        if (lastReleased == null || !isOlder(lastReleased, (short) 1)) return true;
+        // The last frame released lies in the window under the top of the counter. A wrap only when the phone can
+        // have numbered that far since (MAX_FPS): until 2026-11-20 any key frame 1 after a frame from 31770 up was
+        // taken for the counter wrapping - a real restart there (1 in 30 or so) had its key frame dropped as "far
+        // ahead" and the picture stood for three seconds and more (a reader of this code). Without times: as before
+        if (now <= 0 || lastReleasedAt <= 0) return false;
+        int ahead = (1 - lastReleased + 32768) % 32768;
+        return ahead > 2 + Math.max(0, now - lastReleasedAt) * MAX_FPS / 1000;
     }
 
     /**

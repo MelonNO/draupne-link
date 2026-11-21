@@ -41,6 +41,56 @@ class PinsTest {
         assertFalse(Files.exists(dir.resolve("out").resolve("pins.gpx.part")));
     }
 
+    /** A disk that is full, a folder that refuses: the pins dropped all flight were gone at the next start, without a word. */
+    @Test
+    void pinsThatCannotBeSavedAreSaidOnceAndSoIsTheirBeingSavedAgain(@TempDir Path dir) throws Exception {
+        Path inTheWay = Files.writeString(dir.resolve("DRAUPNE Link"), "a file where the folder should be");
+        Path file = inTheWay.resolve("pins.txt");
+        Pins pins = new Pins(file);
+        java.util.List<String> said = new java.util.ArrayList<>();
+        pins.onProblem(said::add);
+        pins.add("Car", 59.9139, 10.7522);
+        assertEquals(1, said.size(), said.toString());
+        assertTrue(said.get(0).startsWith("PINS NOT SAVED: "), said.get(0));
+        pins.add("Roof", 59.9140, 10.7523);
+        assertEquals(1, said.size(), "said once, not at every pin: " + said);
+        assertEquals(2, pins.list().size(), "they stay on the map for this session");
+
+        Files.delete(inTheWay); // the disk has room again
+        pins.add("Gate", 59.9141, 10.7524);
+        assertEquals(java.util.List.of("Pins saved again."), said.subList(1, said.size()));
+        assertEquals(3, new Pins(file).list().size(), "and all three are in the file");
+    }
+
+    /**
+     * pins.txt held by another program for the moment the app starts. Until 2026-11-20 that was "a broken file": it
+     * was renamed pins.txt.broken-... and the app started without the pilot's pins.
+     */
+    @Test
+    void aPinsFileThatCannotBeReadJustNowIsLeftWhereItIsAndNeverWrittenOver(@TempDir Path dir) throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(System.getProperty("os.name", "").toLowerCase().contains("win"), "a lock that stops a read is Windows' way");
+        Path file = dir.resolve("pins.txt");
+        Pins before = new Pins(file);
+        before.add("Car", 59.9139, 10.7522);
+        before.add("Roof", 59.9140, 10.7523);
+        String onDisk = Files.readString(file);
+        Pins held;
+        try (java.nio.channels.FileChannel other = java.nio.channels.FileChannel.open(file, java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE);
+             java.nio.channels.FileLock lock = other.lock()) {
+            held = new Pins(file);
+            assertNotNull(held.notRead(), "the app knows it did not read them");
+            assertNull(held.brokenMovedTo(), "not a broken file: not moved aside");
+            assertTrue(held.list().isEmpty());
+        }
+        assertTrue(Files.exists(file), "pins.txt is where it was");
+        held.add("New", 60, 10);
+        assertEquals(onDisk, Files.readString(file), "and what it holds is not written over by a session that never read it");
+        assertEquals(2, new Pins(file).list().size(), "at the next start they are all there");
+        try (java.util.stream.Stream<Path> all = Files.list(dir)) {
+            assertEquals(1, all.count(), "nothing beside it");
+        }
+    }
+
     @Test
     void renameRemoveNearestAndKeptOnDisk(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("pins.txt");

@@ -162,8 +162,13 @@ public final class ClipPlayer implements AutoCloseable {
         return av_rescale_q(ts, timeBase, av_make_q(1, 1000));
     }
 
+    private boolean closed;
+
+    /** Safe to call twice (2026-11-20; see VideoDecoder.close). */
     @Override
     public void close() {
+        if (closed) return;
+        closed = true;
         if (decoder != null) decoder.close();
         av_packet_free(pkt);
         AVFormatContext f = fmt;

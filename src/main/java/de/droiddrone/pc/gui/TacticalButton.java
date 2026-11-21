@@ -36,6 +36,15 @@ class TacticalButton extends JButton {
     /** Slow, so a locked button costs next to nothing while flying (it is locked while connected). */
     private final Timer lockedTimer = new Timer(66, e -> lockedTick());
 
+    /**
+     * In capitals, as Theme makes every one of these buttons - also a text set later (F-043: Drone setup's "By hand
+     * (needed)" and "Retry" beside DISCONNECT). HTML is left as it is.
+     */
+    @Override
+    public void setText(String text) {
+        super.setText(text == null || text.regionMatches(true, 0, "<html>", 0, 6) ? text : text.toUpperCase(java.util.Locale.ROOT));
+    }
+
     TacticalButton(String text, boolean primary) {
         super(text);
         this.primary = primary;

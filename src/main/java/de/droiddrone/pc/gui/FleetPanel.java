@@ -100,9 +100,9 @@ public final class FleetPanel {
         arm.setToolTipText("ARM switch (1700-2100 us) for drones added next");
         arm.setSelectedIndex(fleet.setup().armAux);
         arm.addActionListener(e -> fleet.setup().armAux = arm.getSelectedIndex());
-        JComboBox<String> fs = new JComboBox<>(new String[]{"Failsafe: DROP", "Failsafe: LAND"});
+        JComboBox<String> fs = new JComboBox<>(new String[]{"Failsafe: DROP", "Failsafe: LAND", "Failsafe: GPS RESCUE"});
         fs.setToolTipText("Failsafe stage 2 for drones added next");
-        fs.addActionListener(e -> fleet.setup().procedure = fs.getSelectedIndex() == 0 ? FlightModel.Procedure.DROP : FlightModel.Procedure.LAND);
+        fs.addActionListener(e -> fleet.setup().procedure = FlightModel.Procedure.values()[Math.max(0, fs.getSelectedIndex())]);
         topButtons.add(arm);
         topButtons.add(fs);
         topButtons.add(place);

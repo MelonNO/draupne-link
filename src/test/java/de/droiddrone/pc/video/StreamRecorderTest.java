@@ -75,6 +75,33 @@ class StreamRecorderTest {
         pipeline.close();
     }
 
+    /**
+     * A write that fails in the middle of a flight (a disk full for a moment, a file held by a virus scanner - here the
+     * file listener says so at the first file): the recording goes on in a new file from the next key frame. Until
+     * 2026-11-20 it ended for the rest of the connection.
+     */
+    @Test
+    void aFailedWriteBeginsANewFileAtTheNextKeyFrame(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 30, 10); // key frames at 0, 10, 20
+        VideoPipeline pipeline = new VideoPipeline(new NoScreen(), () -> 40);
+        java.util.List<Path> files = new java.util.concurrent.CopyOnWriteArrayList<>();
+        pipeline.setRecordingFileListener(f -> {
+            files.add(f);
+            if (files.size() == 1) throw new java.io.UncheckedIOException(new java.io.IOException("the disk refused"));
+        });
+        pipeline.startRecording(dir);
+        pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
+        feed(pipeline, s, 0, 30, 1);
+        long end = System.currentTimeMillis() + 3000;
+        while (files.size() < 2 && System.currentTimeMillis() < end) Thread.sleep(10);
+        assertTrue(pipeline.isRecording(), "still recording after the failed write");
+        assertEquals(2, files.size(), "a second file, begun at the next key frame: " + files);
+        pipeline.stopRecording();
+        pipeline.close();
+        assertEquals(20, framesAndWidth(files.get(1))[0], "the second file has the frames from the next key frame on");
+        Files.delete(files.get(0)); // the first was closed (an open file can't be deleted on Windows)
+    }
+
     /** A screen the pictures go to, so frames are presented (each one writes a row of the OSD sidecar). */
     private static final class SmallScreen implements VideoPipeline.FrameSink {
         final java.util.concurrent.atomic.AtomicInteger presented = new java.util.concurrent.atomic.AtomicInteger();
@@ -239,6 +266,69 @@ class StreamRecorderTest {
         assertEquals(2, files.size(), "two files, not one over the other: " + files);
         assertEquals(10, framesAndWidth(files.get(0))[0], "the first recording's frames, all of them, only them");
         assertEquals(10, framesAndWidth(files.get(1))[0], "the second's from its key frame");
+    }
+
+    /** The frames in a file as it stands now, not closed (as an app that was killed leaves it): -1 when it does not open. */
+    private static int framesAsKilled(Path file, Path copy) throws java.io.IOException {
+        Files.copy(file, copy, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        AVFormatContext in = new AVFormatContext(null);
+        if (avformat_open_input(in, copy.toString(), null, (AVDictionary) null) != 0) return -1;
+        AVPacket pkt = av_packet_alloc();
+        int n = 0;
+        while (av_read_frame(in, pkt) >= 0) {
+            n++;
+            av_packet_unref(pkt);
+        }
+        av_packet_free(pkt);
+        avformat_close_input(in);
+        return n;
+    }
+
+    /**
+     * The app killed, or the laptop's battery gone, in flight: what the file holds then. Three seconds of picture
+     * after one key frame - the usual stretch between key frames is 2 to 10 s - written, then the file copied as it
+     * stands. Until 2026-11-20 the once-a-second flush left the cluster in hand in memory: none of it was in the file.
+     */
+    @Test
+    void whatIsRecordedIsInTheFileAtTheNextFlushNotWhenItsClusterEnds(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 90, 300);
+        Path file = dir.resolve("flight.mkv");
+        try (StreamRecorder r = new StreamRecorder(file, false, 320, 240, s.codecConfig())) {
+            long t = 1000;
+            for (TestStreams.Packet p : s.packets()) r.write(p.data(), p.keyFrame(), t += 33);
+            int before = framesAsKilled(file, dir.resolve("killed-before.mkv"));
+            r.flush();
+            int after = framesAsKilled(file, dir.resolve("killed-after.mkv"));
+            assertEquals(s.packets().size(), after, "every frame written is in the file after the flush (before it: " + before + ")");
+            assertTrue(before < after, "(without the flush the file had " + before + " of " + after + ": the cluster in hand was in memory)");
+            // and the recording goes on into the same file, whole when closed
+            for (TestStreams.Packet p : s.packets().subList(1, 31)) r.write(p.data(), false, t += 33);
+        }
+        assertEquals(s.packets().size() + 30, framesAndWidth(file)[0], "the file closed after a flush plays to its end");
+    }
+
+    /** The link lost: no frame comes any more, the recording stays open. What came before is in the file a second later. */
+    @Test
+    void whenThePictureStopsComingWhatWasRecordedGoesToTheDisk(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 45, 300);
+        VideoPipeline pipeline = new VideoPipeline(new NoScreen(), () -> 40);
+        pipeline.startRecording(dir);
+        pipeline.onVideoConfig(320, 240, false, false, s.codecConfig());
+        feed(pipeline, s, 0, s.packets().size(), 1);
+        Path file = fileOf(pipeline);
+        assertNotNull(file);
+        try {
+            long end = System.currentTimeMillis() + 4000;
+            int inFile = -1;
+            while (System.currentTimeMillis() < end && inFile < s.packets().size()) {
+                Thread.sleep(200);
+                inFile = framesAsKilled(file, dir.resolve("killed.mkv"));
+            }
+            assertEquals(s.packets().size(), inFile, "all " + s.packets().size() + " frames are in the file within a few seconds of the last one, the recording still open");
+        } finally {
+            pipeline.stopRecording();
+            pipeline.close();
+        }
     }
 
     @Test

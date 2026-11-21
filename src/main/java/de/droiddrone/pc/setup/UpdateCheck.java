@@ -42,8 +42,8 @@ public final class UpdateCheck {
     public static Release latest() throws IOException, InterruptedException {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
                 .followRedirects(HttpClient.Redirect.NORMAL).build();
-        HttpResponse<String> r = client.send(HttpRequest.newBuilder(URI.create(LATEST_API)).timeout(Duration.ofSeconds(15))
-                .header("Accept", "application/vnd.github+json").build(), HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> r = de.droiddrone.pc.Net.send(client, HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url(LATEST_API))).timeout(Duration.ofSeconds(15))
+                .header("Accept", "application/vnd.github+json").build(), HttpResponse.BodyHandlers.ofString(), 25_000);
         if (r.statusCode() != 200) throw new IOException("GitHub answered HTTP " + r.statusCode());
         return parse(r.body());
     }

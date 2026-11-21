@@ -30,12 +30,13 @@ class OsdDataBuilderTest {
         boolean awaitingWake;
         long wakeInMs = -1;
         ControlLink.Tier tier = ControlLink.Tier.NORMAL;
+        boolean neverUp;
 
         OsdRenderer.Data build() {
             return OsdDataBuilder.build(new OsdDataBuilder.In(spectator, watchOnly, ready, hasStream, sincePicture, sinceStreamStart,
                     status, phoneState, session, rcEnabled, msSinceInput, resume, frozenStopped, armUnknown, rcWaiting, channels,
                     standby, lagMs, hint, pilotView, pilotLeft, 45, false, null, null, false, false, false, false, false, NOW,
-                    awaitingWake, wakeInMs, tier));
+                    awaitingWake, wakeInMs, tier, neverUp));
         }
     }
 
@@ -157,6 +158,44 @@ class OsdDataBuilderTest {
         assertFalse(redFrame(b.build()), "WAKING: none");
     }
 
+    /**
+     * F-019, the pilot's rule (2026-11-20): right after PILOT UAV, before the link was ever up, the OSD blinked a red
+     * LINK LOST for as long as the phone took to answer. Now CONNECTING, steady, its reason under it; LINK LOST only
+     * once a link of this connection was up.
+     */
+    @Test
+    void beforeTheFirstLinkItIsConnectingNotLinkLost() {
+        B b = new B();
+        b.ready = false;
+        b.hasStream = false;
+        b.hint = "WAITING FOR THE PHONE - ON TAILSCALE?";
+        b.neverUp = true;
+        OsdRenderer.Data d = b.build();
+        assertEquals("CONNECTING", d.waking());
+        assertTrue(d.connectingNow());
+        assertTrue(d.wakingNow(), "drawn where LINK LOST would blink, steady and white");
+        assertEquals("WAITING FOR THE PHONE - ON TAILSCALE?", d.linkHint(), "its reason stays under it");
+        assertFalse(redFrame(d), "no red frame round the picture");
+
+        b.neverUp = false; // a link was up: now it is lost
+        OsdRenderer.Data lost = b.build();
+        assertNull(lost.waking());
+        assertFalse(lost.connectingNow());
+        assertTrue(redFrame(lost), "LINK LOST and its red frame");
+
+        b.neverUp = true;
+        b.ready = true; // up: nothing to say
+        assertNull(b.build().waking());
+        b.ready = false;
+        b.awaitingWake = true; // waking a sleeper comes first: WAKING with its time
+        b.wakeInMs = 30_000;
+        assertEquals("WAKING - 0:30", b.build().waking());
+        b.awaitingWake = false;
+        b.spectator = true; // watching: the pilot's warnings, never this
+        b.session = false;
+        assertNull(b.build().waking());
+    }
+
     private static boolean redFrame(OsdRenderer.Data d) {
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(1280, 720, java.awt.image.BufferedImage.TYPE_INT_RGB);
         java.awt.Graphics2D g = img.createGraphics();
@@ -203,6 +242,54 @@ class OsdDataBuilderTest {
         return new OsdRenderer.Data(true, true, 42, true, false, s.telemetry(), s.video(), false, null, s.channels(), true, false, false, false,
                 null, false, null, false, -1, false, null, false, false, false, null, null, tier);
     }
+
+    /**
+     * F-043: the warnings lay on the pitch ladder's 10 rung, and the ladder moves with the pitch. Each warning line now
+     * has a dark ground: on a white picture the whole of the warnings' area is dark, not only the letters.
+     */
+    @Test
+    void theWarningsStandOnADarkGround() {
+        B b = new B();
+        b.ready = false;
+        b.hasStream = false;
+        b.neverUp = true; // CONNECTING and its reason: both steady (a blinking line is not drawn every frame)
+        b.hint = "WAITING FOR THE PHONE";
+        OsdRenderer.Data d = b.build();
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(1280, 720, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setColor(java.awt.Color.WHITE);
+        g.fillRect(0, 0, 1280, 720);
+        java.util.Map<OsdElement, java.awt.geom.Rectangle2D> bounds = new java.util.EnumMap<>(OsdElement.class);
+        new OsdRenderer().paint(g, 0, 0, 1280, 720, d, OsdLayout.defaults(), bounds);
+        g.dispose();
+        java.awt.Rectangle r = bounds.get(OsdElement.WARNINGS).getBounds().intersection(new java.awt.Rectangle(0, 0, 1280, 720));
+        assertTrue(r.width > 100 && r.height > 30, "the warnings are drawn: " + r);
+        // each row that has text in it: from its first dark pixel to its last, the white picture must not show through
+        // between the letters (bare text on white leaves most of that light: the gaps between letters and words)
+        int rows = 0, ground = 0, span = 0;
+        for (int y = r.y; y < r.y + r.height; y++) {
+            int first = -1, last = -1;
+            for (int x = r.x; x < r.x + r.width; x++) if (lum(img, x, y) < 60) { // a letter's black outline
+                if (first < 0) first = x;
+                last = x;
+            }
+            if (first < 0 || last - first < 40) continue;
+            rows++;
+            for (int x = first; x <= last; x++) {
+                span++;
+                int l = lum(img, x, y);
+                if (l >= 100 && l <= 160) ground++; // the white picture darkened: neither letter, outline nor picture
+            }
+        }
+        assertTrue(rows > 10, "rows of text found: " + rows);
+        assertTrue(ground > span * 0.2, "between the letters the dark ground, not the picture: " + ground + " of " + span + " pixels");
+    }
+
+    private static int lum(java.awt.image.BufferedImage img, int x, int y) {
+        int rgb = img.getRGB(x, y);
+        return ((rgb >> 16 & 255) * 3 + (rgb >> 8 & 255) * 6 + (rgb & 255)) / 10;
+    }
+
 
     private static java.util.Map<OsdElement, java.awt.geom.Rectangle2D> bounds(OsdRenderer.Data d) {
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(1280, 720, java.awt.image.BufferedImage.TYPE_INT_RGB);

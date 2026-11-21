@@ -42,7 +42,7 @@ public final class Pins {
         if (file != null && Files.isRegularFile(file)) {
             boolean broken = false;
             try {
-                for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                for (String line : readLines(file)) {
                     if (line.isBlank()) continue;
                     String[] p = line.split("\t");
                     try {
@@ -53,8 +53,15 @@ public final class Pins {
                         broken = true; // a line that isn't a pin: kept below, not lost at the next save
                     }
                 }
-            } catch (IOException e) {
+            } catch (java.nio.charset.CharacterCodingException e) {
                 broken = true; // not text this app wrote (not UTF-8): nothing read
+            } catch (IOException e) {
+                // There, but not to be read just now (another program holds it, the folder does not answer): that
+                // is not a broken file. Until 2026-11-20 it was moved aside as one and the app started without the
+                // pilot's pins; now it is left where it is, never written over, and the pilot is told
+                pins.clear();
+                notRead = de.droiddrone.pc.DiskSpace.why(e);
+                keepOff = true;
             }
             if (broken) {
                 // 1.0.49 (M12): the file is moved aside whole before the next save writes over it; the pins read stay
@@ -75,6 +82,40 @@ public final class Pins {
 
     private Path brokenMovedTo;
     private boolean keepOff;
+    private String notRead;
+    private volatile java.util.function.Consumer<String> onProblem;
+    private boolean saveFailing;
+
+    /** Why the file, though there, could not be read at the start (no pin is shown, nothing is written over it); null when it was. */
+    public String notRead() {
+        return notRead;
+    }
+
+    /** Told (on the caller's thread) when the pins stop being saved, once, and when they are saved again. */
+    public void onProblem(java.util.function.Consumer<String> listener) {
+        onProblem = listener;
+    }
+
+    /** The file's lines; a read that fails for another reason than its text is tried three times, a moment apart. */
+    private static List<String> readLines(Path file) throws IOException {
+        IOException last = null;
+        for (int i = 0; i < 3; i++) {
+            try {
+                return Files.readAllLines(file, StandardCharsets.UTF_8);
+            } catch (java.nio.charset.CharacterCodingException e) {
+                throw e;
+            } catch (IOException e) {
+                last = e;
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException x) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        throw last;
+    }
 
     /** Where a file with lines that couldn't be read was moved at start (pins.txt.broken-...), or null. */
     public Path brokenMovedTo() {
@@ -217,8 +258,26 @@ public final class Pins {
             Path tmp = file.resolveSibling(file.getFileName() + ".part");
             Files.writeString(tmp, sb.toString(), StandardCharsets.UTF_8);
             Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (IOException ignored) {
-            // the pins stay in memory for this session
+            if (saveFailing) {
+                saveFailing = false;
+                tell("Pins saved again.");
+            }
+        } catch (IOException e) {
+            // the pins stay in memory for this session - and the pilot is told, once: they were gone at the next
+            // start without a word
+            if (!saveFailing) {
+                saveFailing = true;
+                tell("PINS NOT SAVED: " + de.droiddrone.pc.DiskSpace.why(e));
+            }
+        }
+    }
+
+    private void tell(String text) {
+        java.util.function.Consumer<String> to = onProblem;
+        if (to == null) return;
+        try {
+            to.accept(text);
+        } catch (RuntimeException ignored) {
         }
     }
 }

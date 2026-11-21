@@ -218,7 +218,12 @@ final class VideoRecording {
      * of it. Before, the new stream's key frame went into the old file (another config) and the new file waited for
      * the next key frame, 2-10 s.
      */
+    /** Writes that may fail in a row, none a minute after the last, before a recording is given up (2026-11-20). */
+    static final int MAX_WRITE_FAILURES = 5;
+
     private void recordLoop(Recording r) {
+        int failures = 0;
+        long failedAt = 0;
         StreamRecorder recorder = null;
         VideoPipeline.Config fileConfig = null; // the config the next file is of: the last RecNewFile's (null: the one in hand)
         boolean configCame = false; // a RecNewFile came since the file in hand started (or the recording did)
@@ -229,7 +234,14 @@ final class VideoRecording {
             r.before = null;
             if (before != null) before.join(); // the last recording finishes its file first; this queue holds ~3 s
             while (true) {
-                Object item = r.queue.take();
+              try {
+                Object item = r.queue.poll(1, java.util.concurrent.TimeUnit.SECONDS);
+                if (item == null) {
+                    // nothing came for a second: the link is lost or the picture stands. What was recorded up to
+                    // here goes to the disk now - it is the picture of where the drone went (StreamRecorder.flush)
+                    if (recorder != null) recorder.flush();
+                    continue;
+                }
                 if (item == REC_STOP) break;
                 if (item instanceof RecNewFile n) {
                     if (recorder != null) recorder.close();
@@ -287,10 +299,34 @@ final class VideoRecording {
                     configCame = false;
                     askedForKey = false;
                 }
+                if (failures > 0 && System.nanoTime() - failedAt > 60_000_000_000L) failures = 0; // a minute written well
+              } catch (IOException | java.io.UncheckedIOException e) {
+                // 2026-11-20 (a reader of this code): one write that failed ended the recording for the rest of the
+                // connection - a file held a moment by a virus scanner, a disk that was full for a while - and nobody
+                // started it again. Now the file in hand is closed whole and the next key frame begins a new one;
+                // only a disk that keeps refusing (five times, none a minute apart) ends it, as before
+                failures++;
+                failedAt = System.nanoTime();
+                if (recorder != null) {
+                    try {
+                        recorder.close();
+                    } catch (RuntimeException closing) {
+                        log("Recording: closing the file: " + closing);
+                    }
+                    recorder = null;
+                    tapEnded(r);
+                    file = null;
+                }
+                held = null;
+                askedForKey = false;
+                configCame = false;
+                if (failures >= MAX_WRITE_FAILURES) throw e;
+                log("RECORDING INTERRUPTED: " + e.getMessage() + " - a new file at the next key frame.");
+              }
             }
         } catch (InterruptedException ignored) {
-        } catch (IOException | RuntimeException e) {
-            log("Recording stopped: " + e.getMessage());
+        } catch (IOException | RuntimeException | Error e) { // an Error too: it left "recording" set, and nothing more was recorded in that connection
+            log("RECORDING STOPPED: " + e.getMessage());
             synchronized (this) {
                 if (recording == r) recording = null;
             }

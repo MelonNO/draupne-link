@@ -62,18 +62,29 @@ final class MapGraphicsLayer {
                 g.fillOval((int) p.getX() - 3, (int) p.getY() - 3, 6, 6);
             }
             double[] legs = it.legsM();
+            String total = (live ? "" : "TOTAL ") + MapView.distanceText(it.lengthM()) + (around ? "   AREA " + MapGraphics.areaText(it.areaM2()) : "");
+            Point2D end = around ? centre(sp) : sp[sp.length - 1];
+            int totalX = (int) end.getX(), totalY = (int) end.getY() + (around ? 24 : 18); // under the centre: clear of a leg's label
+            // F-028: on legs of a hundred pixels the labels lay on each other and under the total ("362.93 KM 333\u00b0 KM
+            // 211\u00b0"). A leg's label that would lie on the total or on one already drawn is left out, as one of a leg
+            // too short is: zoomed in, each has its room again
+            java.util.List<java.awt.Rectangle> taken = new java.util.ArrayList<>();
+            taken.add(labelBox(g.getFontMetrics(Theme.headingFont(12f)), total, totalX, totalY));
             g.setFont(Theme.headingFont(10.5f));
             for (int i = 0; i < legs.length; i++) {
                 MapGraphics.LatLon a = pts.get(i), b = pts.get((i + 1) % pts.size());
                 Point2D sa = sp[i], sb = sp[(i + 1) % sp.length];
                 if (sa.distance(sb) < 40) continue; // too short for a label of its own
                 String text = MapView.distanceText(legs[i]) + "  " + Mercator.bearingDeg(a.lat(), a.lon(), b.lat(), b.lon()) + "\u00b0";
-                label(g, text, (int) ((sa.getX() + sb.getX()) / 2), (int) ((sa.getY() + sb.getY()) / 2) - 9, Theme.TEXT);
+                int lx = (int) ((sa.getX() + sb.getX()) / 2), ly = (int) ((sa.getY() + sb.getY()) / 2) - 9;
+                java.awt.Rectangle box = labelBox(g.getFontMetrics(), text, lx, ly);
+                if (taken.stream().anyMatch(box::intersects)) continue;
+                taken.add(box);
+                label(g, text, lx, ly, Theme.TEXT);
             }
-            String total = (live ? "" : "TOTAL ") + MapView.distanceText(it.lengthM()) + (around ? "   AREA " + MapGraphics.areaText(it.areaM2()) : "");
-            Point2D end = around ? centre(sp) : sp[sp.length - 1];
+            lastLabels = java.util.List.copyOf(taken);
             g.setFont(Theme.headingFont(12f));
-            label(g, total, (int) end.getX(), (int) end.getY() + (around ? 24 : 18), Theme.WARN); // under the centre: clear of a leg's label
+            label(g, total, totalX, totalY, Theme.WARN);
             if (!live && !it.name().isEmpty() && !it.name().equals("Measurement")) {
                 g.setFont(Theme.headingFont(10.5f));
                 label(g, it.name().toUpperCase(Locale.ROOT), (int) sp[0].getX(), (int) sp[0].getY() - 14, Theme.MUTED);
@@ -107,6 +118,15 @@ final class MapGraphicsLayer {
         g.draw(head);
         g.setColor(colour);
         g.fill(head);
+    }
+
+    /** The boxes of the last measurement painted: its total first, then each leg's figure that was drawn (tests). */
+    static volatile java.util.List<java.awt.Rectangle> lastLabels = java.util.List.of();
+
+    /** The box {@link #label} draws for this text. */
+    static java.awt.Rectangle labelBox(FontMetrics fm, String text, int x, int y) {
+        int tw = fm.stringWidth(text) + 10;
+        return new java.awt.Rectangle(x - tw / 2, y - fm.getAscent() - 2, tw, fm.getHeight() + 4);
     }
 
     /** A short text in a dark box, centred on x, with its baseline at y. */

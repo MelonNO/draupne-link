@@ -62,11 +62,18 @@ public final class FlightTrack {
     private long lastDronePointAt, lastPhonePointAt;
     private Path file;
     private boolean closed;
+    /**
+     * The drone was armed in this track. last-position.txt is one file for every drone and connection: written by a
+     * connection that never armed (the next drone tried on the bench), it put that one's place over the lost drone's
+     * (a reader of this code, 2026-11-20). Now only a track that flew writes it.
+     */
+    private boolean armedSeen;
     private final long startedAt = System.currentTimeMillis();
     /** The files, in order, off the caller's thread; null for a track kept in memory only. */
     private final ExecutorService writer;
     // ---- touched on the writer thread only
     private BufferedWriter out;
+    private boolean begun;
     private long lastPositionWrittenAt;
 
     /** @param dir where the files go; null keeps the track in memory only */
@@ -91,6 +98,29 @@ public final class FlightTrack {
     /** Told the track's file when it is created (at the first position; on the caller's thread). */
     public void setFileListener(java.util.function.Consumer<Path> listener) {
         onFile = listener;
+    }
+
+    private volatile java.util.function.Consumer<String> onProblem;
+    // ---- touched on the writer thread only
+    private int notWritten;
+
+    /**
+     * Told (on the writer's thread) when the track stops being saved - once, at the first point that could not be
+     * written - and when it is saved again, with how many points are missing from the file. Until 2026-11-20 a full
+     * disk or a folder that refused ended the track's file without a word: the map in the window still had the
+     * track, and after the flight it was cut short or not there.
+     */
+    public void setProblemListener(java.util.function.Consumer<String> listener) {
+        onProblem = listener;
+    }
+
+    private void tell(String text) {
+        java.util.function.Consumer<String> to = onProblem;
+        if (to == null) return;
+        try {
+            to.accept(text);
+        } catch (RuntimeException ignored) {
+        }
     }
 
     /** Documents\DRAUPNE Link\Tracks. */
@@ -127,8 +157,15 @@ public final class FlightTrack {
             else if (phoneFix && now - lastDronePointAt > FALLBACK_MS) p = phonePoint(phone, armed);
         }
         if (p == null) return;
+        // 2026-11-20 (a reader of this code): never a point older than the last one. The phone's fix filled in once the
+        // drone's GPS had said nothing for 5 s - a fix up to 30 s old, or one from the mobile network a kilometre
+        // off - and became the "last" position: FIND DRONE, the copied MGRS and last-position.txt sent the pilot to
+        // where the drone was half a minute before it came down
+        Point lastNow = points.isEmpty() ? null : points.get(points.size() - 1);
+        if (lastNow != null && p.timeMs() < lastNow.timeMs()) return;
         if (p.phone()) lastPhonePointAt = now; else lastDronePointAt = now;
         points.add(p);
+        if (armed) armedSeen = true;
         if (home == null && armed && (p.phone() || gps.fix() >= 2)) home = p;
         if (armed && !p.phone()) homeFromFc(gps, p);
         if (writer != null) {
@@ -139,15 +176,33 @@ public final class FlightTrack {
             }
             Point h = home, pt = p;
             Path f = file;
+            boolean flew = armedSeen;
             writer.execute(() -> {
                 try {
                     write(f, pt);
-                    if (pt.timeMs() - lastPositionWrittenAt >= LAST_POSITION_EVERY_MS) {
+                    if (notWritten > 0) {
+                        tell("Track saved again (" + notWritten + (notWritten == 1 ? " point" : " points") + " missing).");
+                        notWritten = 0;
+                    }
+                } catch (IOException e) {
+                    // the map in the window still has the track; its file does not - said once
+                    if (notWritten++ == 0) tell("TRACK NOT SAVED: " + de.droiddrone.pc.DiskSpace.why(e));
+                    if (out != null) {
+                        try {
+                            out.close();
+                        } catch (IOException ignored) {
+                        }
+                        out = null; // the next point opens the file anew (it is added to, not begun again)
+                    }
+                    return;
+                }
+                try {
+                    if (flew && pt.timeMs() - lastPositionWrittenAt >= LAST_POSITION_EVERY_MS) {
                         lastPositionWrittenAt = pt.timeMs();
                         writeLastPosition(pt, h, f);
                     }
                 } catch (IOException e) {
-                    // the files are a convenience; the map in the window still has the track
+                    // last-position.txt is a convenience beside the track
                 }
             });
         }
@@ -253,12 +308,13 @@ public final class FlightTrack {
         Point last = points.isEmpty() ? null : points.get(points.size() - 1);
         Point h = home;
         Path f = file;
+        boolean flewAtClose = armedSeen;
         writer.execute(() -> {
             if (out == null) return;
             try {
                 out.write("  </trkseg>\n </trk>\n</gpx>\n");
                 out.close();
-                if (last != null) writeLastPosition(last, h, f);
+                if (last != null && flewAtClose) writeLastPosition(last, h, f);
                 if (!pins.isEmpty() && f != null) {
                     StringBuilder wpts = new StringBuilder();
                     for (Pins.Pin p : pins) {
@@ -289,9 +345,14 @@ public final class FlightTrack {
     }
 
     private void write(Path f, Point p) throws IOException {
+        if (out == null && begun) {
+            // after a write that failed: carried on where it stopped, its head is there already
+            out = Files.newBufferedWriter(f, StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+        }
         if (out == null) {
             Files.createDirectories(dir);
             out = Files.newBufferedWriter(f, StandardCharsets.UTF_8);
+            begun = true;
             out.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                     + "<gpx version=\"1.1\" creator=\"DRAUPNE Link " + de.droiddrone.pc.AppInfo.version() + "\""
                     + " xmlns=\"http://www.topografix.com/GPX/1/1\" xmlns:dl=\"https://github.com/MelonNO/draupne-link/gpx\">\n"

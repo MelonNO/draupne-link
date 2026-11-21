@@ -86,7 +86,7 @@ final class MapToolsPanel extends JPanel {
     final JButton notams = Theme.secondaryButton("NOTAMs");
     final JButton airspaceKey = Theme.secondaryButton("Key...");
     final JButton notamPaste = Theme.secondaryButton("Paste...");
-    final JLabel airspaceStatus = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.TEXT);
+    final JLabel airspaceStatus = growingLabel();
     final JButton line = Theme.secondaryButton("Line");
     final JButton rectangle = Theme.secondaryButton("Rectangle");
     final JButton arrow = Theme.secondaryButton("Arrow");
@@ -389,7 +389,7 @@ final class MapToolsPanel extends JPanel {
 
     /** 4G COVERAGE's fields: network and height side by side, the key and the import, the status line. */
     private JPanel coverageFields() {
-        for (de.droiddrone.pc.map.OpenCellId.Operator o : de.droiddrone.pc.map.OpenCellId.Operator.values()) coverageOperator.addItem(o.title);
+        for (de.droiddrone.pc.map.OpenCellId.Operator o : de.droiddrone.pc.map.OpenCellId.Operator.values()) coverageOperator.addItem(o == de.droiddrone.pc.map.OpenCellId.Operator.ALL ? "All" : o.title); // "All networks" read "All ne..." (F-023)
         for (int m : de.droiddrone.pc.map.CellCoverage.HEIGHTS_M) coverageHeight.addItem(m + " m");
         TacticalCombo.install(coverageOperator);
         TacticalCombo.install(coverageHeight);
@@ -464,6 +464,22 @@ final class MapToolsPanel extends JPanel {
     /** The space a section heading leaves, without the heading: for a tool whose button already names it. */
     private static void gap(JPanel body) {
         if (body.getComponentCount() > 0) body.add(Box.createVerticalStrut(10));
+    }
+
+    /**
+     * A status line that stands in the list itself, as high as its words are now. row() fixes a row's height when the
+     * list is built, with one line in it: the second line ("no openAIP key") was cut in half (F-021).
+     */
+    private static JLabel growingLabel() {
+        JLabel label = new JLabel(" ") {
+            @Override
+            public Dimension getMaximumSize() {
+                return new Dimension(BODY_WIDTH - 20, getPreferredSize().height);
+            }
+        };
+        label.setFont(Theme.font(Font.PLAIN, 13f));
+        label.setForeground(Theme.TEXT);
+        return label;
     }
 
     private static void row(JPanel body, JComponent c) {

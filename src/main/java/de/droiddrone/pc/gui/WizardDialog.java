@@ -305,7 +305,10 @@ class WizardDialog extends JDialog {
     }
 
     private void jobDone() {
-        if (jobsPending > 0 && --jobsPending == 0 && !countShown) showCount();
+        if (jobsPending > 0 && --jobsPending == 0) {
+            if (!countShown) showCount();
+            else if (index >= 0) showStep(pages.get(index)); // the last check came after the second: now its OF
+        }
     }
 
     private void showCount() {
@@ -314,11 +317,19 @@ class WizardDialog extends JDialog {
         if (index >= 0) showStep(pages.get(index));
     }
 
+    /**
+     * "STEP 2 OF 8" - and only "STEP 2" while a check that decides which steps are skipped is still out (F-043: a
+     * check longer than the second's wait made "STEP 1 OF 9", then "STEP 2 OF 8").
+     */
+    static String counterText(int shownIndex, int shownTotal, boolean totalKnown, String section) {
+        return "STEP " + (shownIndex + 1) + (totalKnown ? " OF " + shownTotal : "") + (section.isEmpty() ? "" : "   ·   " + section);
+    }
+
     private void showStep(Page page) {
         int shownTotal = (int) pages.stream().filter(Page::isApplicable).count();
         int shownIndex = (int) pages.subList(0, index).stream().filter(Page::isApplicable).count();
         progress.setProgress(shownIndex, shownTotal);
-        stepCounter.setText("STEP " + (shownIndex + 1) + " OF " + shownTotal + (page.section.isEmpty() ? "" : "   ·   " + page.section));
+        stepCounter.setText(counterText(shownIndex, shownTotal, jobsPending == 0, page.section));
     }
 
     /** Re-evaluates navigation now (pages call this after their state changes). */

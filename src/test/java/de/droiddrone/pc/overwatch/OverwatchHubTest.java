@@ -565,6 +565,43 @@ class OverwatchHubTest {
         assertEquals(STARTED, OverwatchProtocol.readCommand(sent.get(0), sent.get(0).length).clipStartedAt);
     }
 
+    /**
+     * The PC app ended after the clip's last chunk was written and before it was checked: at the next start the
+     * phone announces it again, its .part is whole - there is nothing to ask for and no chunk comes. Until 2026-11-20
+     * nothing finished it then: "Clip coming" for good, and the phone kept its copy.
+     */
+    @Test
+    void aClipWhosePartFileIsAlreadyWholeIsCheckedAndFinished() throws Exception {
+        byte[] clip = new byte[OverwatchProtocol.FRAGMENT * 4 + 9];
+        new Random(11).nextBytes(clip);
+        byte[] sha = MessageDigest.getInstance("SHA-256").digest(clip);
+        OverwatchProtocol.ClipInfo info = new OverwatchProtocol.ClipInfo(TOKEN, 6, clip.length, sha, 5000, STARTED, false, 640, 360);
+        OverwatchHub first = hub();
+        first.nowOverride = 1000;
+        receive(first, alert(TOKEN, 6, 0));
+        receive(first, info(info));
+        first.close(); // the app ended: its .part is there, empty
+        Path part;
+        try (java.util.stream.Stream<Path> all = Files.walk(dir)) {
+            part = all.filter(p -> p.toString().endsWith(".part")).findFirst().orElseThrow();
+        }
+        Files.write(part, clip); // every chunk came before the end
+
+        sent.clear();
+        OverwatchHub again = hub();
+        again.nowOverride = 60_000;
+        receive(again, alert(TOKEN, 6, 0));
+        receive(again, info(info));
+        for (long t = 61_000; t < 64_000 && !commandsSent().contains(OverwatchProtocol.CMD_CLIP_DONE); t += 100) again.tickNow(t);
+        assertTrue(commandsSent().stream().noneMatch(c -> c == OverwatchProtocol.CMD_CLIP_GET), "nothing is asked for: it is all here");
+        assertTrue(commandsSent().contains(OverwatchProtocol.CMD_CLIP_DONE), "checked and finished within seconds; the phone may delete its copy: " + logs);
+        ClipIndex.Clip c = again.index().clips("MobileAlpha").get(0);
+        assertNotNull(c.fullClip());
+        assertArrayEquals(clip, Files.readAllBytes(c.fullClip()));
+        assertFalse(Files.exists(part));
+        again.close();
+    }
+
     /** H4 (1.0.49): while a drone here may fly, the card asks for no preview - the uplink is the sticks'. */
     @Test
     void noPreviewIsAskedWhileADroneHereMayFly() throws Exception {

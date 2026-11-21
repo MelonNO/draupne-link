@@ -544,12 +544,21 @@ final class StanagFeed implements VideoPipeline.FrameTap, AutoCloseable {
         newPicture = false;
     }
 
-    /** Ends the stream; waits for its thread (up to 2 s) so the encoder and the socket are closed. */
-    @Override
-    public void close() {
+    /**
+     * Ends the stream without waiting (1.0.71): nothing more is taken or sent, the thread ends when it can. {@link
+     * #close} after it does the waiting - on another thread than the window's (the test bench's F-003: switching the
+     * streams off waited on the Swing thread for each stream's thread, and the window froze for 1.3 to 2.6 s).
+     */
+    public void stop() {
         closed = true;
         queue.clear();
         queue.offer(STOP);
+    }
+
+    /** Ends the stream; waits for its thread (up to 2 s) so the encoder and the socket are closed. */
+    @Override
+    public void close() {
+        stop();
         try {
             thread.join(2000);
         } catch (InterruptedException e) {

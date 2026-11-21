@@ -86,6 +86,27 @@ class PowerControllerTest {
         return new byte[]{0x6F, (byte) battery, 0, (byte) nextCheckMin, 0x0F, 0x3C, (byte) owFlags, (byte) floor};
     }
 
+    /**
+     * PILOT UAV on a sleeping phone: the ask waits for the phone's check - a minute here - and only then is there a
+     * phone to send it to. "The phone doesn't answer: its app is older than pc.21" was counted from the ask, so it
+     * was said at the link's first moment.
+     */
+    @Test
+    void aPhoneIsNotCalledTooOldBeforeItHasHadTheModeForTenSeconds() {
+        long asked = 1_000_000;
+        power.askedAt = asked;
+        power.notSent();
+        assertFalse(power.unanswered(asked + 60_000, false), "a minute after the ask, nothing sent yet (the phone sleeps): not unanswered");
+        power.sent(asked + 60_000); // its check: the link is up, the mode goes out
+        assertFalse(power.unanswered(asked + 60_100, false), "the link's first moment: not unanswered");
+        power.sent(asked + 60_300); // sent again every 200 ms
+        assertFalse(power.unanswered(asked + 69_900, false));
+        assertTrue(power.unanswered(asked + 70_100, false), "ten seconds with the mode and not a word: an app from before pc.21");
+        assertFalse(power.unanswered(asked + 70_100, true), "a phone that has reported its mode is never that");
+        power.notSent(); // a new ask
+        assertFalse(power.unanswered(asked + 80_000, false));
+    }
+
     @Test
     void theSavedListReadsBackAndSkipsBrokenEntries() {
         List<PowerController.Asleep> read = PowerController.parseAsleep("MobileAlpha|100.64.0.5|1000|5;broken;MobileBravo|100.64.0.6|x|5;"

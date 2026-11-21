@@ -50,12 +50,28 @@ public final class TileCache {
     /** The asker of a get without a callback: never stale. */
     private static final Runnable NO_ONE = () -> { };
 
+    /**
+     * A tile that could not be fetched for a reason that passes - no answer, half an answer, a hang-up, 503, a
+     * sign-in page instead of a picture - is asked for again after this long, twice as long after each further miss,
+     * a minute at most; and the maps that show it are called then, so they ask without being touched (1.0.71).
+     */
+    static final long RETRY_FIRST_MS = 2000;
+    /** Misses in a row after which the connections are thrown away and made anew (one may be dead and used again). */
+    static final int RENEW_AFTER = 3;
+    /** How long after the last miss the map still says it shows saved tiles only, when nothing has been reached since. */
+    static final long OFFLINE_KEEP_MS = 150_000;
+
     private final Path dir;
-    private final HttpClient http;
+    private volatile HttpClient http;
     private final String userAgent;
     /** True while a drone on this PC may fly (PossiblyFlying, 1.0.49): nothing is fetched, the disk still serves. */
     private final java.util.function.BooleanSupplier held;
     java.util.function.LongSupplier clock = System::currentTimeMillis; // tests set their own
+    /**
+     * How long a server may take to begin its answer; how long an answer once begun may stand still; and the longest
+     * any answer may take in all (tests make them short).
+     */
+    long headMs = 12_000, stallMs = 15_000, wholeMs = 120_000;
     private final ExecutorService prefetcher;
     /** The tiles waiting to load, the newest asked for last (taken first); and those loading now. */
     private final LinkedHashMap<String, Request> queued = new LinkedHashMap<>();
@@ -69,7 +85,18 @@ public final class TileCache {
         }
     };
     private final Map<String, Long> failedUntil = new HashMap<>();
-    private volatile boolean offline; // the last fetch didn't reach the server
+    /** The tiles whose miss passes (see RETRY_FIRST_MS), and how often in a row each has missed. */
+    private final Map<String, Integer> tileMisses = new HashMap<>();
+    /** Fetches in a row that reached no server, when the first of them was, and when a server was last reached / missed. */
+    private int missesInARow;
+    private long firstMissAt;
+    private volatile long reachedAt, missedAt;
+    private volatile boolean triedWithoutNetwork; // disk only (tests): a fetch was wanted
+    private boolean saidMissed;
+    /** How often the connections were made anew (tests). */
+    volatile int renewals;
+    /** A line for the app's log when the map's servers stop answering and when they answer again; tests listen. */
+    java.util.function.Consumer<String> say = de.droiddrone.pc.AppLog::line;
     private final boolean network; // false in tests: disk only
     private final AtomicInteger prefetchGeneration = new AtomicInteger();
     private final AtomicInteger prefetchLeft = new AtomicInteger();
@@ -92,9 +119,35 @@ public final class TileCache {
         this.userAgent = userAgent;
         this.network = network;
         this.held = held;
-        http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(8)).followRedirects(HttpClient.Redirect.NORMAL).build();
+        http = newClient();
         prefetcher = Executors.newSingleThreadExecutor(r -> thread(r, "mapPrefetch"));
         if (loaders) for (int i = 0; i < LOADERS; i++) thread(this::loaderRun, "mapTiles").start();
+    }
+
+    /**
+     * HTTP/1.1 on purpose (1.0.71): one connection a request, and one that got no answer in time is closed. Over
+     * HTTP/2 every tile shares one connection, and one gone dead without a word - the PC moved from Wi-Fi to 4G, woke
+     * from sleep, the VPN came up - went on being used: every tile timed out on it while the internet was fine.
+     */
+    private static HttpClient newClient() {
+        return HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(8))
+                .followRedirects(HttpClient.Redirect.NORMAL).build();
+    }
+
+    /** Tests only: nothing more is asked for, loaded or called (the app keeps its one cache for as long as it runs). */
+    void end() {
+        ended = true;
+        synchronized (this) {
+            queued.clear();
+            wakeAt.clear();
+        }
+    }
+
+    private volatile boolean ended;
+
+    /** Disk only, its loaders running, and held back while the supplier says so - as while a drone may fly (other packages' tests). */
+    public static TileCache heldWhile(Path dir, java.util.function.BooleanSupplier held) {
+        return new TileCache(dir, "test", false, true, held);
     }
 
     /** Disk only, and nothing ever loads: what is asked stays on its way (other packages' tests). */
@@ -113,6 +166,8 @@ public final class TileCache {
         final TileSource source;
         final int z, x, y;
         final Map<Runnable, Long> askers = new HashMap<>();
+        /** Asked for by the cache itself while tiles miss ({@link #probeDue}); fetched: it came from the server, not the disk. */
+        boolean probe, fetched;
 
         Request(String key, TileSource source, int z, int x, int y) {
             this.key = key;
@@ -135,9 +190,15 @@ public final class TileCache {
         return de.droiddrone.pc.AppPaths.dataDir().resolve("tiles");
     }
 
-    /** True once a fetch failed to reach any server (the map then says it shows saved tiles only). */
+    /**
+     * True while the last fetch reached no server (the map then says it shows saved tiles only) - for
+     * {@link #OFFLINE_KEEP_MS} after it at most: a miss with nothing asked for since (all that is shown is on disk)
+     * left the map saying so for the rest of the session.
+     */
     public boolean isOffline() {
-        return offline;
+        if (!network) return triedWithoutNetwork;
+        long missed = missedAt;
+        return missed > reachedAt && clock.getAsLong() - missed < OFFLINE_KEEP_MS;
     }
 
     /**
@@ -164,7 +225,7 @@ public final class TileCache {
      */
     public BufferedImage get(TileSource source, int z, int x, int y, Runnable onReady) {
         int n = 1 << z;
-        if (y < 0 || y >= n || z < 0 || z > source.maxZoom) return null;
+        if (y < 0 || y >= n || z < 0 || z > source.maxZoom || ended) return null;
         x = Math.floorMod(x, n);
         String key = source.id + "/" + z + "/" + x + "/" + y;
         Runnable asker = onReady == null ? NO_ONE : onReady;
@@ -174,7 +235,12 @@ public final class TileCache {
             BufferedImage img = memory.get(key);
             if (img != null) return img;
             Long until = failedUntil.get(key);
-            if (until != null && until > now) return null;
+            if (until != null && until > now) {
+                // it missed for a reason that passes: this map is called when it is asked for again - a map paints
+                // only when called, and one that showed a missed tile kept its blank square until the pilot moved it
+                if (tileMisses.containsKey(key) && asker != NO_ONE) wakeAt(asker, until);
+                return null;
+            }
             Request loadingNow = active.get(key);
             if (loadingNow != null) {
                 loadingNow.askers.put(asker, now);
@@ -233,8 +299,14 @@ public final class TileCache {
             }
             try {
                 load(r);
-            } catch (RuntimeException ignored) {
-                // load handles its own; never lose the thread
+            } catch (Throwable t) {
+                // load handles its own; never lose the thread - with both gone no tile loads until the app is started
+                // again. An Error too (a picture too big for the memory left): said, and on
+                try {
+                    say.accept("Map: a tile failed to load (" + t + ").");
+                } catch (Throwable saying) {
+                    // not even that: the thread stays all the same
+                }
             }
         }
     }
@@ -262,14 +334,31 @@ public final class TileCache {
             if (img == null) {
                 byte[] data = fetch(url);
                 if (data != null) {
-                    img = ImageIO.read(new java.io.ByteArrayInputStream(data));
-                    if (img != null) write(file, data);
+                    img = decode(data);
+                    if (img != null) keep(file, data);
                 }
             }
         } catch (IOException | RuntimeException e) {
             return null;
         }
         return img;
+    }
+
+    /** The picture in what a server sent; null when it is none (a sign-in page, an error page, half a file). */
+    private static BufferedImage decode(byte[] data) {
+        try {
+            return ImageIO.read(new java.io.ByteArrayInputStream(data));
+        } catch (IOException | RuntimeException e) {
+            return null;
+        }
+    }
+
+    /** A fetched tile to the disk; when the disk won't take it (full, read-only) the tile is still shown this time. */
+    private static void keep(Path file, byte[] data) {
+        try {
+            write(file, data);
+        } catch (IOException | RuntimeException ignored) {
+        }
     }
 
     public BufferedImage fetchNow(TileSource source, int z, int x, int y) {
@@ -279,40 +368,240 @@ public final class TileCache {
     /** A taken tile: from disk, else (unless held) from its server; then everyone who asked for it is called. */
     void load(Request r) {
         BufferedImage img = null;
-        boolean wasHeld = false;
+        boolean wasHeld = false, passes = true; // passes: the miss is one that passes - asked for again soon, by itself
         try {
             Path file = file(r.source, r.z, r.x, r.y);
             if (Files.isRegularFile(file)) img = read(file);
             if (img == null && held.getAsBoolean()) {
                 wasHeld = true; // a drone here may fly: not fetched now
             } else if (img == null) {
-                byte[] data = fetch(r.source.url(r.z, r.x, r.y));
-                if (data != null) {
-                    img = ImageIO.read(new java.io.ByteArrayInputStream(data));
-                    if (img != null) write(file, data);
+                Answer a = answer(r.source.url(r.z, r.x, r.y));
+                if (a.body() != null) {
+                    img = decode(a.body());
+                    if (img != null) {
+                        keep(file, a.body());
+                        r.fetched = true;
+                    }
+                } else if (a.status() != 0 && !busy(a.status())) {
+                    passes = false; // the server said no (404 outside its map, 403): as before, a minute, and not by itself
                 }
             }
         } catch (IOException | RuntimeException e) {
-            // no tile this time; tried again after RETRY_MS
+            // no tile this time
+        } finally {
+            // whatever happened above, an Error too: the tile leaves "loading" - one left there was never asked for
+            // again, and the map said LOADING MAP for the rest of the session
+            settle(r, img, wasHeld, passes);
         }
+    }
+
+    /** 408, 425, 429 and the 500s: the server is there and can't just now. */
+    private static boolean busy(int status) {
+        return status == 408 || status == 425 || status == 429 || status >= 500;
+    }
+
+    /** How long a tile waits after its n-th miss in a row. */
+    static long retryAfter(int n) {
+        return Math.min(RETRY_MS, RETRY_FIRST_MS << Math.min(10, Math.max(0, n - 1)));
+    }
+
+    private void settle(Request r, BufferedImage img, boolean wasHeld, boolean passes) {
         List<Runnable> call;
+        long again = 0;
         synchronized (this) {
             active.remove(r.key);
             call = new ArrayList<>(r.askers.keySet());
             if (img != null) {
                 memory.put(r.key, img);
                 failedUntil.remove(r.key);
+                tileMisses.remove(r.key);
+                if (r.fetched) {
+                    long now = clock.getAsLong();
+                    fetchedAt = now;
+                    probesInARow = 0;
+                    long wait = forwardWaitMs == 0 ? probeMs : forwardWaitMs;
+                    if (tileMisses.isEmpty()) {
+                        forwardWaitMs = 0; // all there: the next trouble starts afresh
+                    } else if (forwardedAt == 0 || now - forwardedAt >= wait) {
+                        // the server gives tiles: the ones waiting out a miss now, not after their waits. Twice as
+                        // long before the next time - a server that gives one tile and refuses the rest is not
+                        // asked for the whole screen every time one comes
+                        forwardedAt = now;
+                        forwardWaitMs = Math.min(RETRY_MS, wait * 2);
+                        bringForward();
+                    }
+                }
             } else {
                 long now = clock.getAsLong();
                 failedUntil.values().removeIf(until -> until <= now); // a long offline session would otherwise keep every miss
-                failedUntil.put(r.key, now + (wasHeld ? HELD_RETRY_MS : RETRY_MS));
+                if (tileMisses.size() > 4000) {
+                    // and every count of them - with their waits: a wait without its count woke no map, and the
+                    // tile stayed blank until the map was touched
+                    bringForward();
+                    tileMisses.clear();
+                }
+                if (wasHeld) {
+                    failedUntil.put(r.key, now + HELD_RETRY_MS);
+                } else if (passes) {
+                    again = now + retryAfter(tileMisses.merge(r.key, 1, Integer::sum));
+                    failedUntil.put(r.key, again);
+                    probeIdle = 0;
+                    setProbe(r);
+                } else {
+                    tileMisses.remove(r.key);
+                    failedUntil.put(r.key, now + RETRY_MS);
+                }
             }
         }
         if (img != null) {
-            for (Runnable c : call) if (c != NO_ONE) c.run();
+            for (Runnable c : call) if (c != NO_ONE) callSafely(c);
         } else if (wasHeld) {
             wakeLater(call);
+        } else if (again > 0) {
+            for (Runnable c : call) if (c != NO_ONE) wakeAt(c, again);
         }
+    }
+
+    /** A map's own failure when called is its own: the others that asked are still called, the loader goes on. */
+    private static void callSafely(Runnable asker) {
+        try {
+            asker.run();
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    // ---- maps called again when a tile they show can be asked for again (a miss that passes)
+
+    private final Map<Runnable, Long> wakeAt = new HashMap<>();
+    /** When the next wake is set for (clock ms); 0: none is. */
+    private long wakeSetFor;
+
+    private void wakeAt(Runnable asker, long at) {
+        synchronized (this) {
+            wakeAt.merge(asker, at, Math::min);
+            setWake();
+        }
+    }
+
+    /** One timer for the soonest of them; when it rings, the next. Called with the lock held. */
+    private void setWake() {
+        if (wakeAt.isEmpty()) return;
+        long soonest = Long.MAX_VALUE;
+        for (long at : wakeAt.values()) soonest = Math.min(soonest, at);
+        if (wakeSetFor != 0 && wakeSetFor <= soonest) return;
+        // one timer at a time: a timer left pending when a sooner one was set rang later with nothing due and set
+        // yet another - with two maps waiting through an outage their number only grew
+        if (wakeTimer != null) wakeTimer.cancel(false);
+        wakeSetFor = soonest;
+        wakeTimer = WAKER.schedule(this::wakeDue, Math.max(0, soonest - clock.getAsLong()) + 30, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    private java.util.concurrent.ScheduledFuture<?> wakeTimer;
+
+    /** How many times the wake timer rang (tests). */
+    volatile int wakeRuns;
+
+    private void wakeDue() {
+        wakeRuns++;
+        List<Runnable> due = new ArrayList<>();
+        synchronized (this) {
+            if (ended) return;
+            long now = clock.getAsLong();
+            wakeSetFor = 0;
+            for (java.util.Iterator<Map.Entry<Runnable, Long>> it = wakeAt.entrySet().iterator(); it.hasNext(); ) {
+                Map.Entry<Runnable, Long> e = it.next();
+                if (e.getValue() <= now) {
+                    due.add(e.getKey());
+                    it.remove();
+                }
+            }
+            setWake();
+        }
+        for (Runnable asker : due) callSafely(asker);
+    }
+
+    // ---- one tile asked for now and then while tiles miss (1.0.71, the bench's night: MapNightScenario)
+
+    /**
+     * While tiles wait out their misses and a map shows them, one of them is asked for this often whatever the tiles'
+     * own waits have grown to. Each tile's wait doubles up to a minute, so after a minute of a server in trouble every
+     * tile was 32 to 60 s from its next try: the internet came back and the map stayed empty for most of a minute
+     * more (measured: 59 s after 62 s of 503s, 32 s after half a minute). When that one tile comes, the others are
+     * asked for at once ({@link #bringForward}; their miss counts stay, so tiles that fail again wait longer, not
+     * shorter). Only while nothing at all has come from the server since the last such try: with tiles loading, what
+     * still misses is those tiles' own matter and their own waits do. One small request every few seconds is less
+     * than the tiles' own tries cost a server in trouble.
+     */
+    long probeMs = 8000;
+    /** The tile that last missed for a reason that passes: the one asked for again as the probe. */
+    private Request probe;
+    private boolean probeSet;
+    private int probeIdle;
+    /** When a tile last came from the server, and when the probe last looked (clock ms). */
+    private long fetchedAt, probedAt;
+
+    /** Called with the lock held, after a miss that passes. */
+    private void setProbe(Request missed) {
+        probe = missed;
+        if (probeSet || ended) return;
+        probeSet = true;
+        probedAt = clock.getAsLong(); // what comes from the server from now on says it gives tiles
+        // every probeMs for the first PROBES_QUICK tries without a tile (five minutes), then a quarter as often: an
+        // outage ends within minutes or lasts, and a tile that never comes is not asked for every 8 s all day
+        long wait = probesInARow < PROBES_QUICK ? probeMs : probeMs * 4;
+        WAKER.schedule(this::probeDue, wait, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    static final int PROBES_QUICK = 40;
+    /** Probes asked since a tile last came from the server. */
+    private int probesInARow;
+    /** When the waiting tiles were last brought forward because a tile came, and how long until the next time (0: probeMs). */
+    private long forwardedAt, forwardWaitMs;
+
+    /** Some tile has missed twice in a row or more: the server gives no tiles just now (the map says so). */
+    public synchronized boolean inTrouble() {
+        for (int misses : tileMisses.values()) if (misses >= 2) return true;
+        return false;
+    }
+
+    private void probeDue() {
+        synchronized (this) {
+            probeSet = false;
+            Request p = probe;
+            if (ended || p == null || tileMisses.isEmpty()) return; // no tile waits out a miss any more
+            if (wakeAt.isEmpty()) {
+                // no map waits for a tile: closed or moved to tiles it has - or just called and about to ask again
+                // (a window paints a moment after it is called). Looked at three more times, then left alone
+                if (++probeIdle <= 3) setProbe(p);
+                return;
+            }
+            probeIdle = 0;
+            long now = clock.getAsLong();
+            boolean tilesCome = fetchedAt != 0 && fetchedAt >= probedAt;
+            if (tilesCome || held.getAsBoolean() || active.containsKey(p.key) || queued.containsKey(p.key)) {
+                setProbe(p); // the server gives tiles, nothing may be fetched just now, or it is on its way as it is
+                return;
+            }
+            failedUntil.remove(p.key);
+            Request r = new Request(p.key, p.source, p.z, p.x, p.y);
+            r.probe = true;
+            probesInARow++;
+            r.askers.put(NO_ONE, now);
+            queued.putLast(p.key, r); // the newest asked: the next a loader takes
+            notifyAll();
+        }
+    }
+
+    /**
+     * A tile came from the server: every tile waiting out a miss is asked for now, by the maps that show it. The
+     * miss counts stay - a tile that fails again waits longer, not from the start. Called with the lock held.
+     */
+    private void bringForward() {
+        long now = clock.getAsLong();
+        for (String key : tileMisses.keySet()) failedUntil.remove(key);
+        for (Map.Entry<Runnable, Long> e : wakeAt.entrySet()) e.setValue(now);
+        wakeSetFor = 0;
+        setWake();
     }
 
     /**
@@ -400,7 +689,7 @@ public final class TileCache {
                     try {
                         byte[] data = fetch(source.url(t.z(), t.x(), t.y()));
                         if (data != null && ImageIO.read(new java.io.ByteArrayInputStream(data)) != null) write(file, data);
-                        else if (offline) return; // no point going on without a network
+                        else if (isOffline()) return; // no point going on without a network
                     } catch (IOException | RuntimeException e) {
                         // this one another time
                     }
@@ -649,7 +938,7 @@ public final class TileCache {
                         } else {
                             d.failed.incrementAndGet();
                             if (answered) refusals.incrementAndGet();
-                            else if (offline) misses.incrementAndGet();
+                            else misses.incrementAndGet(); // not answered: no server reached
                         }
                         if (gapMs > 0) {
                             try {
@@ -680,30 +969,164 @@ public final class TileCache {
         return answer(url).body();
     }
 
+    /**
+     * One request, with a time limit for the whole of it. 1.0.71 (the pilot: "the map is stuck loading even though
+     * the computer has internet"): the request's own timeout ends when the answer's head is in, so a transfer that
+     * stalled after it - half a tile, then nothing, as a weak or changing link does - held its loader thread for
+     * ever; two of those and no tile loaded again until the app was restarted, LOADING MAP turning all the while.
+     * Now the head has {@link #headMs}, and an answer that has begun is given up when nothing more of it came for
+     * {@link #stallMs}; that counts as a server not reached (status 0), like no connection, no name, a hang-up or
+     * half an answer.
+     * <p>
+     * Until 2026-11-20 the limit was 20 s for the whole answer, however well it was coming: on an internet that
+     * gives a kilobyte or two a second - one bar, or the downlink shared with a drone's video - no tile was ever
+     * whole in time, each was thrown away and begun again from nothing, and the map stayed empty for as long as the
+     * link stayed slow. Now a slow tile that keeps coming is taken; {@link #wholeMs} is only the end of patience
+     * with an answer that trickles without end.
+     */
     private Answer answer(String url) throws IOException {
         if (!network) {
-            offline = true;
+            triedWithoutNetwork = true;
             return new Answer(0, null);
         }
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(12))
+        HttpRequest request = HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url(url))).timeout(Duration.ofMillis(headMs))
                 .header("User-Agent", userAgent).header("Accept", "image/png,image/*").GET().build();
+        HttpClient client = http;
+        // when the answer last moved (its head in, or more of its body), by System.nanoTime; NOT_BEGUN before the head
+        java.util.concurrent.atomic.AtomicLong movedAt = new java.util.concurrent.atomic.AtomicLong(NOT_BEGUN);
+        java.util.concurrent.CompletableFuture<HttpResponse<byte[]>> asked = client.sendAsync(request, info -> moving(movedAt));
+        long begun = System.nanoTime();
         try {
-            HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
-            offline = false;
+            HttpResponse<byte[]> response;
+            while (true) {
+                long now = System.nanoTime(), moved = movedAt.get();
+                long wholeLeft = wholeMs - (now - begun) / 1_000_000;
+                long stallLeft = moved == NOT_BEGUN ? Long.MAX_VALUE : stallMs - (now - moved) / 1_000_000;
+                if (wholeLeft <= 0 || stallLeft <= 0) {
+                    asked.cancel(true); // lets go of the connection
+                    missed(client, stallLeft <= 0 ? "its answer stood still for " + stallMs / 1000 + " s" : "no whole answer in " + wholeMs / 1000 + " s");
+                    return new Answer(0, null);
+                }
+                try {
+                    // in short waits: the head may come in the middle of one, and the standing still counts from then
+                    response = asked.get(Math.min(200, Math.min(wholeLeft, stallLeft)), java.util.concurrent.TimeUnit.MILLISECONDS);
+                    break;
+                } catch (java.util.concurrent.TimeoutException e) {
+                    // not yet: looked at again
+                }
+            }
+            reached();
             return new Answer(response.statusCode(), response.statusCode() == 200 ? response.body() : null);
-        } catch (java.net.ConnectException | java.net.UnknownHostException | java.net.http.HttpTimeoutException e) {
-            offline = true;
+        } catch (java.util.concurrent.ExecutionException e) {
+            Throwable why = e.getCause() == null ? e : e.getCause();
+            missed(client, why.getClass().getSimpleName() + (why.getMessage() == null ? "" : ": " + why.getMessage()));
             return new Answer(0, null);
         } catch (InterruptedException e) {
+            asked.cancel(true);
             Thread.currentThread().interrupt();
             return new Answer(0, null);
         }
     }
 
+    private static final long NOT_BEGUN = Long.MIN_VALUE;
+
+    /** An answer's body as bytes, with every piece of it that comes written down as "it moved" (see {@link #answer}). */
+    private static HttpResponse.BodySubscriber<byte[]> moving(java.util.concurrent.atomic.AtomicLong movedAt) {
+        HttpResponse.BodySubscriber<byte[]> to = HttpResponse.BodySubscribers.ofByteArray();
+        movedAt.set(System.nanoTime()); // the head is in
+        return new HttpResponse.BodySubscriber<>() {
+            @Override
+            public java.util.concurrent.CompletionStage<byte[]> getBody() {
+                return to.getBody();
+            }
+
+            @Override
+            public void onSubscribe(java.util.concurrent.Flow.Subscription subscription) {
+                to.onSubscribe(subscription);
+            }
+
+            @Override
+            public void onNext(List<java.nio.ByteBuffer> piece) {
+                movedAt.set(System.nanoTime());
+                to.onNext(piece);
+            }
+
+            @Override
+            public void onError(Throwable why) {
+                to.onError(why);
+            }
+
+            @Override
+            public void onComplete() {
+                to.onComplete();
+            }
+        };
+    }
+
+    /** A server answered (whatever it said). After fetches that reached none: said in the log. */
+    private void reached() {
+        long now = clock.getAsLong();
+        boolean back, said;
+        long since;
+        synchronized (this) {
+            back = missesInARow > 0;
+            said = saidMissed;
+            since = firstMissAt;
+            missesInARow = 0;
+            saidMissed = false;
+            reachedAt = now;
+        }
+        if (!back) return;
+        if (said) say.accept("Map: its server answers again, " + Math.max(1, (now - since) / 1000) + " s after the first miss.");
+        // The waiting tiles are not called in from here: any answer of any server counted - a 503, the terrain's
+        // server while the map's own hung up - and each one threw every tile's wait away, so a server in trouble
+        // was asked without a pause (a review of 2026-11-19). A tile that comes does that (settle).
+    }
+
+    /**
+     * A fetch reached no server. The first of a row is said in the log; after every {@link #RENEW_AFTER} in a row
+     * the connections are made anew - a kept connection that has gone dead is not found out by using it again.
+     */
+    private void missed(HttpClient used, String why) {
+        boolean first, renew;
+        synchronized (this) {
+            long now = clock.getAsLong();
+            first = missesInARow == 0;
+            if (first) firstMissAt = now;
+            missesInARow++;
+            missedAt = now;
+            renew = missesInARow % RENEW_AFTER == 0 && http == used;
+            if (first) saidMissed = true;
+        }
+        if (first) say.accept("Map: its server was not reached (" + why + "). Asked again by itself.");
+        if (renew) {
+            HttpClient fresh = newClient(); // not under the lock: the window's thread asks for tiles under it
+            boolean swapped;
+            synchronized (this) {
+                swapped = http == used;
+                if (swapped) {
+                    http = fresh;
+                    renewals++;
+                }
+            }
+            try {
+                // The old one takes nothing new and ends when what it carries has ended (each within its own time
+                // limit). Not shutdownNow: that broke off everybody else's request on it - the other loader's, an
+                // area download's, the terrain a radio horizon was reading, which is not asked for again
+                (swapped ? used : fresh).shutdown();
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    /**
+     * The tile in a file; null when it holds none - empty, cut short, or broken in a way that makes the reader throw
+     * rather than say so (1.0.71: that one was never fetched again, its square blank for good). The caller fetches it anew.
+     */
     private static BufferedImage read(Path file) {
         try {
             return ImageIO.read(file.toFile());
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
             return null;
         }
     }

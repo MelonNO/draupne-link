@@ -91,10 +91,10 @@ final class PreviousFlightsDialog extends JDialog {
     final MapView map;
     final Timeline timeline = new Timeline();
     final JLabel[] figures = new JLabel[5];
-    final JButton play = Theme.primaryButton("Play");
+    final JButton play = Theme.primaryButton("PLAY");
     private final JButton onMapButton = Theme.secondaryButton("On map");
     private final JButton export = Theme.secondaryButton("Export");
-    private final JButton delete = Theme.secondaryButton("Delete");
+    final JButton delete = Theme.secondaryButton("Delete");
     final JButton report = Theme.secondaryButton("Report");
     final JButton bookmark = Theme.secondaryButton("Bookmark");
     final JButton speedButton = Theme.secondaryButton(speedText(1));
@@ -325,7 +325,7 @@ final class PreviousFlightsDialog extends JDialog {
         folder.setToolTipText("Open the tracks folder");
         folder.addActionListener(e -> {
             try {
-                if (this.tracksDir != null) java.awt.Desktop.getDesktop().open(this.tracksDir.toFile());
+                if (this.tracksDir != null) de.droiddrone.pc.Outside.open(this.tracksDir.toFile());
             } catch (Exception ex) {
                 Dialogs.message(this, "Can't open the folder: " + ex.getMessage(), "Previous flights", JOptionPane.WARNING_MESSAGE);
             }
@@ -644,7 +644,11 @@ final class PreviousFlightsDialog extends JDialog {
         bookmark.setEnabled(have && notes != null);
         report.setEnabled(have && !reporting);
         export.setEnabled(have);
-        delete.setEnabled(have);
+        // not the flight being flown now (it is the newest, so the one chosen when the window opens): its track,
+        // record and link log went while they were being written, and the rest of the flight was saved nowhere
+        boolean flownNow = have && !FlightData.deletable(data.flight);
+        delete.setEnabled(have && !flownNow);
+        delete.setToolTipText(flownNow ? "Flying now" : null);
         onMapButton.setEnabled(have && data.flight.track() != null && onMap != null);
     }
 
@@ -815,7 +819,7 @@ final class PreviousFlightsDialog extends JDialog {
             playing = true;
             startAudio(position);
         }
-        play.setText(playing ? "Pause" : "Play");
+        play.setText(playing ? "PAUSE" : "PLAY");
     }
 
     void seek(long t) {
@@ -851,7 +855,7 @@ final class PreviousFlightsDialog extends JDialog {
 
     private void stopAll() {
         playing = false;
-        play.setText("Play");
+        play.setText("PLAY");
         if (audio != null) audio.close();
         audio = null;
         Player old = player;
@@ -879,7 +883,7 @@ final class PreviousFlightsDialog extends JDialog {
             playing = false;
             position = d.endMs();
             t = position;
-            play.setText("Play");
+            play.setText("PLAY");
             if (audio != null) audio.stop();
         }
         FlightData.Sample s = d.at(t);
@@ -901,7 +905,7 @@ final class PreviousFlightsDialog extends JDialog {
         if (data == null) return;
         keepNote(); // the notes' file goes along: with the note as it stands
         FlightLibrary.Flight f = data.flight;
-        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports").toFile());
+        javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(de.droiddrone.pc.AppPaths.exportsDir().toFile());
         chooser.setDialogTitle("Export to folder");
         chooser.setFileSelectionMode(javax.swing.JFileChooser.DIRECTORIES_ONLY);
         if (chooser.showSaveDialog(this) != javax.swing.JFileChooser.APPROVE_OPTION) return;
@@ -923,7 +927,7 @@ final class PreviousFlightsDialog extends JDialog {
     }
 
     private void deleteFlight() {
-        if (data == null) return;
+        if (data == null || !FlightData.deletable(data.flight)) return;
         FlightLibrary.Flight f = data.flight;
         if (Dialogs.confirm(this, "Delete " + f.title() + "? Track, video and log go. Can't be undone.", "Delete flight",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) return;
@@ -950,7 +954,7 @@ final class PreviousFlightsDialog extends JDialog {
     /** REPORT: asks for a file (Documents' Exports, as EXPORT; the flight's date in its name), writes it, offers its folder. */
     private void reportFlight() {
         if (data == null) return;
-        Path dir = Path.of(System.getProperty("user.home"), "Documents", "DRAUPNE Link", "Exports");
+        Path dir = de.droiddrone.pc.AppPaths.exportsDir();
         javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(dir.toFile());
         chooser.setDialogTitle("Save report");
         chooser.setSelectedFile(dir.resolve(FlightReport.fileName(data.flight)).toFile());
@@ -966,10 +970,10 @@ final class PreviousFlightsDialog extends JDialog {
                 return;
             }
             Object[] options = {"Open folder", "OK"};
-            if (Dialogs.option(this, "<html>Report saved:<br>" + target + "</html>", "Report", JOptionPane.DEFAULT_OPTION,
+            if (Dialogs.option(this, "<html>Report saved:<br>" + target.getFileName() + "<br>in " + target.toAbsolutePath().getParent() + "</html>", "Report", JOptionPane.DEFAULT_OPTION,
                     JOptionPane.INFORMATION_MESSAGE, null, options, options[1]) != 0) return;
             try {
-                java.awt.Desktop.getDesktop().open(target.toAbsolutePath().getParent().toFile());
+                de.droiddrone.pc.Outside.open(target.toAbsolutePath().getParent().toFile());
             } catch (Exception ex) {
                 Dialogs.message(this, "Can't open the folder: " + ex.getMessage(), "Report", JOptionPane.WARNING_MESSAGE);
             }
@@ -1196,6 +1200,14 @@ final class PreviousFlightsDialog extends JDialog {
                         }
                     }
                 }
+            } catch (RuntimeException e) {
+                // a picture that can't be converted (an unknown pixel format, a decoder that gave none): said, and this
+                // part is let be - the thread ended quietly before, the picture standing while sound and clock went on
+                // (a reader of this code, 2026-11-20)
+                de.droiddrone.pc.AppLog.line("Previous flights: the video can't be played on: " + e);
+                video.clearLater("Can't play the video");
+                p.close();
+                return waitForAnother(index);
             } finally {
                 p.close();
             }

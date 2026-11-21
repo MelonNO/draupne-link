@@ -3,8 +3,12 @@ plugins {
     id 'org.gradle.test-retry' version '1.6.2' // quarantineTest's second and third try (off for the other test tasks)
 }
 
+// A second build folder (-PaltBuild=<folder>): for work beside a long bench run, whose app loads its classes from
+// build/ as it goes - building there meanwhile would change the code under it.
+if (project.hasProperty('altBuild')) layout.buildDirectory = file(project.property('altBuild'))
+
 group = 'de.droiddrone.pc'
-version = '1.0.69'
+version = '1.0.71'
 
 repositories {
     mavenCentral()
@@ -92,8 +96,11 @@ tasks.withType(Test).configureEach {
     }
 }
 
+// The test bench's tags (docs/TESTING.md): run by the bench tasks further down, never by `test`.
+def benchTags = ['benchself', 'explore', 'ui', 'badlink', 'edge', 'soak', 'night', 'emulator', 'sitl', 'finding']
+
 test {
-    useJUnitPlatform { excludeTags 'perf', 'quarantine' }
+    useJUnitPlatform { excludeTags(*(['perf', 'quarantine'] + benchTags)) }
     // half the cores, 4 at most: the link and video tests each keep several threads busy and count real time
     maxParallelForks = Math.max(1, Math.min(4, Runtime.runtime.availableProcessors().intdiv(2)))
 }
@@ -117,6 +124,102 @@ tasks.register('quarantineTest', Test) {
     maxParallelForks = 1
     retry { maxRetries = 2 } // org.gradle.test-retry: a test that fails is run again, twice at most
     mustRunAfter test
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The test bench (docs/TESTING.md; started by bench.ps1): the whole app run sealed off from this PC's real settings,
+// flights, phones and internet, its buttons pressed, pictures taken.
+//   gradlew benchSelf      -> @Tag("benchself"): the bench's own parts (the fence, the sandbox, the stand-ins)
+//   gradlew benchUi        -> @Tag("ui"): the Windows app's scenarios, buttons pressed, every step photographed
+//   gradlew benchLink      -> @Tag("badlink"): the bad-link table        gradlew benchEdge -> @Tag("edge"): edge cases
+//   gradlew benchSoak      -> @Tag("soak"): long runs (BENCH_HOURS)      gradlew benchEmulator / benchSitl: see the doc
+//   gradlew benchFindings  -> @Tag("finding"): the tests of bugs found and not fixed yet (they fail until fixed)
+// One test class per JVM (the app's statics), one at a time. BENCH_ROOT = the run's folder (bench.ps1 sets it; kept).
+def benchRootDir = file(System.getenv('BENCH_ROOT')
+        ?: "${System.getenv('LOCALAPPDATA') ?: layout.buildDirectory.get().asFile}/DraupneBench/runs/dev")
+def benchTask = { String taskName, String tagExpression, String what ->
+    tasks.register(taskName, Test) {
+        group = 'bench'
+        description = what
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
+        useJUnitPlatform { includeTags tagExpression }
+        // only the bench's own classes are handed out: with a JVM per class, every other test class would cost a JVM
+        // start just to find that none of its tests carries the tag
+        include '**/bench/**/*Scenario.class', '**/bench/**/*SelfTest.class'
+        maxParallelForks = 1
+        forkEvery = 1
+        ignoreFailures = true // the run goes on: the report says what failed
+        outputs.upToDateWhen { false }
+        workingDir = new File(benchRootDir, 'work')
+        doFirst {
+            ['work', 'tmp', 'sealed/appdata', 'sealed/localappdata', 'sealed/home'].each { new File(benchRootDir, it).mkdirs() }
+        }
+        // the JVM starts sealed: no bench class has run yet, and the app's folders already point away from the pilot's;
+        // each scenario then gets a user of its own under the run's folder (bench/Sandbox)
+        environment 'APPDATA', new File(benchRootDir, 'sealed/appdata').path
+        environment 'LOCALAPPDATA', new File(benchRootDir, 'sealed/localappdata').path
+        systemProperty 'user.home', new File(benchRootDir, 'sealed/home').path
+        systemProperty 'java.io.tmpdir', new File(benchRootDir, 'tmp').path
+        environment 'TEMP', new File(benchRootDir, 'tmp').path // the JDK's own temporary files (its selectors' pipes) ask Windows, not Java
+        environment 'TMP', new File(benchRootDir, 'tmp').path
+        systemProperty 'bench.root', benchRootDir.path
+        systemProperty 'bench.project', projectDir.path
+        systemProperty 'bench.build', layout.buildDirectory.get().asFile.path
+        systemProperty 'bench.realAppData', System.getenv('APPDATA') ?: ''        // read only: the armed guard
+        systemProperty 'bench.realLocalAppData', System.getenv('LOCALAPPDATA') ?: '' // the Android SDK, the emulator
+        systemProperty 'bench.mode', System.getenv('BENCH_MODE') ?: 'auto'        // desktop | quiet | auto
+        systemProperty 'bench.hours', System.getenv('BENCH_HOURS') ?: '0.1'
+        systemProperty 'bench.quick', System.getenv('BENCH_QUICK') ?: 'false'
+        if (System.getenv('BENCH_SEED')) systemProperty 'bench.seed', System.getenv('BENCH_SEED')
+        systemProperty 'java.security.manager', 'allow'                           // bench/Fence
+        systemProperty 'bench.silentSound', 'true'                                // bench/SilentSound
+        systemProperty 'javax.sound.sampled.SourceDataLine', 'de.droiddrone.bench.SilentSound'
+        systemProperty 'org.bytedeco.javacpp.cachedir', "${System.getProperty('user.home')}/.javacpp/cache"
+        systemProperty 'junit.jupiter.execution.timeout.default', System.getenv('BENCH_TIMEOUT') ?: '30 m'
+        if (System.getenv('BENCH_SCALE')) systemProperty 'sun.java2d.uiScale', System.getenv('BENCH_SCALE')
+        if (System.getenv('BENCH_SIZE')) systemProperty 'bench.size', System.getenv('BENCH_SIZE')
+        maxHeapSize = '2g'
+        reports.junitXml.outputLocation = new File(benchRootDir, "results/${taskName}")
+        reports.html.outputLocation = new File(benchRootDir, "results/${taskName}-html")
+        testLogging { events 'passed', 'failed', 'skipped' }
+        mustRunAfter test
+    }
+}
+benchTask('benchSelf', 'benchself', "The bench's own parts: the fence, the sandbox, the stand-ins")
+benchTask('benchUi', 'ui & !finding', "The Windows app's scenarios: buttons pressed, every step photographed")
+benchTask('benchLink', 'badlink & !finding', 'The bad-link table: each kind of bad network against each thing the pilot does')
+benchTask('benchEdge', 'edge & !finding', 'Edge cases: kills, broken files, odd names, clocks, many phones')
+benchTask('benchSoak', 'soak & !finding', 'Long runs (BENCH_HOURS): a fleet flying on bad links, watched for growth and loss')
+benchTask('benchNight', 'night & !finding', 'The night: scenarios that take hours each (BENCH_HOURS) - one long flight, sleep and wake, the phone app left running')
+benchTask('benchEmulator', 'emulator & !finding', 'The real phone app in the Android emulator against the Windows app')
+benchTask('benchSitl', 'sitl & !finding', 'Real Betaflight firmware (SITL) answering the app')
+benchTask('benchFindings', 'finding', 'The tests of bugs found and not fixed yet: each fails until its bug is fixed')
+benchTask('benchExplore', 'explore', "For the bench's author: the app started and looked at, nothing checked")
+
+tasks.register('benchReport', JavaExec) {
+    group = 'bench'
+    description = "Writes the report of the run in BENCH_ROOT: report/index.html"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'de.droiddrone.bench.BenchReport'
+    args benchRootDir.path
+}
+
+// By hand, on the real internet: one tile from each of the map's servers, asked the way the app asks (docs/TESTING.md).
+tasks.register('mapProbe', JavaExec) {
+    group = 'verification'
+    description = "Asks each map server for one tile as the app does and says what came"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'de.droiddrone.pc.map.MapServersProbe'
+}
+
+// By hand on a real drone, battery on, props off: the ESCs' firmware and beacon (-Pesc=silence switches the beacons off).
+tasks.register('escProbe', JavaExec) {
+    group = 'verification'
+    description = "Reads the ESCs of the flight controller on USB (-Pesc=silence: beacon off; -Pport=COM9)"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'de.droiddrone.pc.setup.EscProbe'
+    args((project.findProperty('esc') ?: 'read').toString(), (project.findProperty('port') ?: '').toString())
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

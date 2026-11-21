@@ -51,8 +51,8 @@ public final class NetInfo {
     /** Asks api.ipify.org which address this connection has on the internet. Only called when the user asks. */
     public static String publicIp() throws IOException, InterruptedException {
         HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
-        HttpResponse<String> response = client.send(HttpRequest.newBuilder(URI.create("https://api.ipify.org"))
-                .timeout(Duration.ofSeconds(10)).build(), HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = de.droiddrone.pc.Net.send(client, HttpRequest.newBuilder(URI.create(de.droiddrone.pc.Outside.url("https://api.ipify.org")))
+                .timeout(Duration.ofSeconds(10)).build(), HttpResponse.BodyHandlers.ofString(), 15_000);
         if (response.statusCode() != 200) throw new IOException("HTTP " + response.statusCode());
         return response.body().trim();
     }

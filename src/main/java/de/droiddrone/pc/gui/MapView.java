@@ -1680,8 +1680,12 @@ class MapView extends JComponent {
 
             paintAirspaceTop(g, proj);
             paintScale(g, h);
-            paintAttribution(g, src, w, h);
-            if (!forPicture && tilesMissing && cache.loading()) paintLoading(g, w);
+            paintAttribution(g, src, w, h, !forPicture);
+            // No server before LOADING: while fetches fail slowly (Wi-Fi up, no internet behind it) one is always on its
+            // way, and the map said LOADING MAP for as long as that lasted - the pilot's "stuck loading" to the letter
+            if (!forPicture && tilesMissing && cache.isHeld()) paintChip(g, w, HELD_TEXT, false);
+            else if (!forPicture && tilesMissing && (cache.isOffline() || cache.inTrouble())) paintChip(g, w, NOT_REACHED_TEXT, false);
+            else if (!forPicture && tilesMissing && cache.loading()) paintLoading(g, w);
             if (!forPicture) paintZoomButtons(g, w);
             if (selectStart != null) paintSelection(g);
             g.setColor(Theme.LINE);
@@ -1740,6 +1744,7 @@ class MapView extends JComponent {
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         tilesMissing = false;
         loadingChip = null;
+        chipText = null;
         int n = 1 << proj.zi();
         int tx0 = (int) Math.floor((proj.wcx() - proj.w() / 2.0 / proj.scale()) / Mercator.TILE), tx1 = (int) Math.floor((proj.wcx() + proj.w() / 2.0 / proj.scale()) / Mercator.TILE);
         int ty0 = (int) Math.floor((proj.wcy() - proj.h() / 2.0 / proj.scale()) / Mercator.TILE), ty1 = (int) Math.floor((proj.wcy() + proj.h() / 2.0 / proj.scale()) / Mercator.TILE);
@@ -2319,6 +2324,7 @@ class MapView extends JComponent {
         FontMetrics fm = g.getFontMetrics();
         int x = 12, y = h - 14;
         int bw = Math.max(px, fm.stringWidth(label)) + 16, bh = fm.getHeight() + 14;
+        scaleRight = x - 8 + bw;
         g.setColor(BOX);
         g.fillRect(x - 8, y - bh + 6, bw, bh);
         g.setColor(Color.WHITE);
@@ -2334,9 +2340,27 @@ class MapView extends JComponent {
      * a turning dot in it, while tiles on the screen are still coming; gone with the last of them.
      */
     private void paintLoading(Graphics2D g0, int w) {
+        paintChip(g0, w, LOADING_TEXT, true);
+    }
+
+    /**
+     * 1.0.71 (the pilot: "the map is stuck loading even though the computer has internet"): tiles on the screen are
+     * missing and the map's server was not reached. Said where LOADING MAP stands, without the turning dot: the map
+     * asks again by itself (2 s, 4 s ... a minute apart), and LOADING MAP is back while it does.
+     */
+    static final String NOT_REACHED_TEXT = "NO MAP SERVER - RETRYING";
+
+    /**
+     * 1.0.71: tiles on the screen are missing and nothing is fetched on purpose - a drone on this PC is flying, or was
+     * lost armed in the last ten minutes (PossiblyFlying). The reason stood only in the small line at the map's lower
+     * edge; a pilot saw a dark map for ten minutes on a PC with internet. Said where LOADING MAP stands; the LINK card
+     * has IT'S DOWN - RESUME.
+     */
+    static final String HELD_TEXT = "MAP WAITS - A DRONE MAY BE FLYING";
+
+    private void paintChip(Graphics2D g0, int w, String text, boolean turning) {
         Graphics2D g = (Graphics2D) g0.create();
         try {
-            String text = LOADING_TEXT;
             g.setFont(Theme.headingFont(11f));
             FontMetrics fm = g.getFontMetrics();
             int dot = 12, pad = 8, tw = fm.stringWidth(text);
@@ -2350,44 +2374,84 @@ class MapView extends JComponent {
             g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             g.setColor(Theme.MUTED);
             g.drawOval(cx - dot / 2, cy - dot / 2, dot, dot);
-            double phase = (System.currentTimeMillis() % 1000) / 1000.0 * Math.PI * 2;
-            g.setColor(Theme.ACCENT);
-            g.drawArc(cx - dot / 2, cy - dot / 2, dot, dot, (int) Math.toDegrees(-phase), 100);
-            g.setColor(Theme.TEXT);
+            if (turning) {
+                double phase = (System.currentTimeMillis() % 1000) / 1000.0 * Math.PI * 2;
+                g.setColor(Theme.ACCENT);
+                g.drawArc(cx - dot / 2, cy - dot / 2, dot, dot, (int) Math.toDegrees(-phase), 100);
+            }
+            g.setColor(turning ? Theme.TEXT : Theme.WARN);
             g.drawString(text, x + pad + dot + 6, cy - fm.getHeight() / 2 + fm.getAscent());
             loadingChip = new Rectangle(x, y, bw, bh);
+            chipText = text;
         } finally {
             g.dispose();
         }
         Rectangle r = loadingChip;
-        repaint(100, r.x, r.y, r.width, r.height); // turns; a tile coming in repaints the whole map (and ends it)
+        // turns; a tile coming in repaints the whole map (and ends it). The still one waits for the cache's own call
+        if (turning) repaint(100, r.x, r.y, r.width, r.height);
     }
+
+    /** What the chip last said (tests); null with none. */
+    String chipText;
 
     /** Where LOADING MAP was last painted (tests). */
     Rectangle loadingChip;
 
     static final String LOADING_TEXT = "LOADING MAP";
 
-    private void paintAttribution(Graphics2D g, TileSource src, int w, int h) {
-        String text = src.attribution + (cache.isOffline() ? "   SAVED TILES ONLY" : "");
+    /** Where the scale bar's box ends (its right edge): the attribution keeps clear of it. */
+    private int scaleRight = 120;
+    /** The attribution line as last painted (tests). */
+    String attributionShown = "";
+
+    /**
+     * The line at the bottom right, as much of it as fits beside the scale bar (1.0.71, the test bench's F-005: on the
+     * mini-map the long one - "SAVED TILES ONLY - MobileX-ray is armed: a drone here is flying" - began outside the
+     * card and lay over the scale bar): all of it, or without the reason, or the map's attribution alone, which is
+     * always shown.
+     */
+    static String attributionThatFits(String attribution, String note, String why, java.util.function.ToIntFunction<String> width, int room) {
+        String full = attribution + (note == null ? "" : "   " + note + (why == null ? "" : " - " + why));
+        if (width.applyAsInt(full) <= room || note == null) return full;
+        String shorter = attribution + "   " + note;
+        return width.applyAsInt(shorter) <= room ? shorter : attribution;
+    }
+
+    /** The zoom buttons' size, the gap between them and their distance from the map's edge. */
+    private static final int ZOOM_SIZE = 30, ZOOM_GAP = 4, ZOOM_EDGE = 10;
+
+    /**
+     * Where the line at the bottom right ends: at the map's edge - or left of the zoom buttons, on a map so low that
+     * they reach down to it (the mini-map in a small window: "SAVED TILES ONLY" ran under the minus button).
+     */
+    static int attributionRight(int w, int h, int lineHeight, boolean zoomButtons) {
+        boolean under = zoomButtons && h - lineHeight - 10 < ZOOM_EDGE + 2 * ZOOM_SIZE + ZOOM_GAP + 2;
+        return under ? w - ZOOM_EDGE - ZOOM_SIZE - 6 : w - 8;
+    }
+
+    private void paintAttribution(Graphics2D g, TileSource src, int w, int h, boolean zoomButtons) {
+        String note = cache.isOffline() || cache.isHeld() ? "SAVED TILES ONLY" : null, why = null;
         if (cache.isHeld()) { // 1.0.50: say why nothing new loads (PossiblyFlying)
-            String why = de.droiddrone.pc.PossiblyFlying.reasonNow();
-            text = src.attribution + "   SAVED TILES ONLY - " + (why == null ? "drone may be flying" : why);
+            why = de.droiddrone.pc.PossiblyFlying.reasonNow();
+            if (why == null) why = "drone may be flying";
         }
         g.setFont(Theme.font(Font.PLAIN, 10f));
         FontMetrics fm = g.getFontMetrics();
+        int right = attributionRight(w, h, fm.getHeight(), zoomButtons);
+        String text = attributionThatFits(src.attribution, note, why, fm::stringWidth, right - scaleRight - 6 - 10);
+        attributionShown = text;
         int tw = fm.stringWidth(text) + 10;
         g.setColor(BOX);
-        g.fillRect(w - tw - 8, h - fm.getHeight() - 10, tw, fm.getHeight() + 2);
+        g.fillRect(right - tw, h - fm.getHeight() - 10, tw, fm.getHeight() + 2);
         g.setColor(new Color(255, 255, 255, 210));
-        g.drawString(text, w - tw - 3, h - 10 - fm.getDescent() + 1);
+        g.drawString(text, right - tw + 5, h - 10 - fm.getDescent() + 1);
     }
 
     /** + and - at the top right, for zooming without a wheel: the program's square boxes with bracket corners. */
     private void paintZoomButtons(Graphics2D g, int w) {
-        int size = 30, gap = 4, x = w - 10 - size;
-        zoomInButton = new Rectangle(x, 10, size, size);
-        zoomOutButton = new Rectangle(x, 10 + size + gap, size, size);
+        int size = ZOOM_SIZE, gap = ZOOM_GAP, x = w - ZOOM_EDGE - size;
+        zoomInButton = new Rectangle(x, ZOOM_EDGE, size, size);
+        zoomOutButton = new Rectangle(x, ZOOM_EDGE + size + gap, size, size);
         for (Rectangle r : new Rectangle[]{zoomInButton, zoomOutButton}) {
             g.setColor(BOX);
             g.fillRect(r.x, r.y, r.width, r.height);

@@ -684,6 +684,53 @@ class RcSessionTest {
         assertEquals(100, ticks(s, rec, ARM_ON, 1000), "heard again: arm off, then on, arms");
     }
 
+    /**
+     * 1.0.71 (a reader of the link code, 2026-11-20): on the ground after a loss, the pilot arms the moment the link is
+     * back; the phone's way up had queued statuses from before, and they trickle in for two seconds saying DISARMED of
+     * the drone that has just armed. Before, they stopped its sticks ("ARM off to fly again") - now an ARM put on with
+     * the link heard is arming on purpose: late statuses stop nothing for LOSS_SETTLE_MS. A drone that stays DISARMED
+     * after that is stopped as before.
+     */
+    @Test
+    void lateDisarmedStatusesStopNothingRightAfterThePilotArmsOnAHeardLink() throws java.io.IOException {
+        RcRecorder rec = new RcRecorder();
+        RcSession s = lossSession(rec, ARM_AUX1, 0);
+        fcDisarmed[0] = true;
+        s.onInput(AT_REST);
+        assertTrue(s.isRcEnabled());
+        int said = events.size();
+        unheard[0] = true;
+        fcDisarmed[0] = false; // nothing fresh during the loss
+        ticks(s, rec, AT_REST, 3000);
+        unheard[0] = false;
+        assertEquals(10, ticks(s, rec, ARM_ON, 100), "back: the pilot arms at once");
+        fcDisarmed[0] = true; // the queued statuses from before the arming, late
+        assertEquals(200, ticks(s, rec, ARM_ON, 2000), "late DISARMED statuses: not a frame withheld");
+        fcDisarmed[0] = false;
+        fcArmed[0] = true; // the newest status: armed
+        assertEquals(100, ticks(s, rec, FLYING, 1000));
+        assertTrue(s.isRcEnabled());
+        assertEquals(said, events.size(), "nothing said, nothing stopped");
+
+        // the same, but the drone never arms (an arming block): DISARMED goes on past LOSS_SETTLE_MS - stopped as before
+        RcRecorder rec2 = new RcRecorder();
+        RcSession s2 = lossSession(rec2, ARM_AUX1, 0);
+        fcArmed[0] = false;
+        fcDisarmed[0] = true;
+        s2.onInput(AT_REST);
+        unheard[0] = true;
+        fcDisarmed[0] = false;
+        ticks(s2, rec2, AT_REST, 3000);
+        unheard[0] = false;
+        ticks(s2, rec2, ARM_ON, 100);
+        fcDisarmed[0] = true;
+        int sent = ticks(s2, rec2, FLYING, 6000);
+        assertFalse(s2.isRcEnabled(), "still DISARMED with ARM on and the throttle up: stopped");
+        assertTrue(sent >= RcSession.LOSS_SETTLE_MS / 10 - 20 && sent <= RcSession.LOSS_SETTLE_MS / 10 + 10,
+                "stopped once LOSS_SETTLE_MS had passed since the pilot armed: " + sent + " frames");
+        assertEquals("Link back - FC disarmed - ARM off to fly again.", events.get(events.size() - 1));
+    }
+
     /** 1.0.64: the last status before the loss says DISARMED while the pilot is arming: not taken for the loss's outcome. */
     @Test
     void aStatusFromBeforeTheLossStopsNothing() throws java.io.IOException {

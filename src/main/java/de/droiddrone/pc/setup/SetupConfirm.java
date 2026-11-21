@@ -63,9 +63,21 @@ public final class SetupConfirm {
         return changed;
     }
 
-    /** Everything on the page is in this board. */
+    /**
+     * Everything on the page is in this board - and the CONFIRM that wrote it is spent (2026-11-20, a reader of this
+     * code). It held for the rest of the page's life: the pilot pressed DISCONNECT, changed something in Betaflight
+     * Configurator (ARM onto another switch, say), pressed RECONNECT - and the next round wrote the page's choices
+     * back over it, ARM onto the old switch, without a word and without a new CONFIRM. Now a board that changed after
+     * its CONFIRM shows what differs, and is written to only at the next CONFIRM.
+     */
     public void done(String boardId) {
         confirmedFor = boardId;
+        armedFor = null;
+    }
+
+    /** DISCONNECT: the port is let go of, the board may be changed by hand meanwhile - CONFIRM again to write. */
+    public void letGo() {
+        armedFor = null;
     }
 
     public boolean confirmed() {

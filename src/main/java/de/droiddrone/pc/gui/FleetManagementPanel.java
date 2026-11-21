@@ -91,9 +91,8 @@ final class FleetManagementPanel extends JPanel {
     private final JScrollPane scroll;
     private final JComponent empty;
     private final Map<String, RowView> views = new LinkedHashMap<>();
-    /** CHECK EVERY per phone, chosen or as it slept: DEEP SLEEP's and OVERWATCH's apart (1.0.56: their defaults differ). */
+    /** CHECK EVERY per phone, chosen or as it slept: one for DEEP SLEEP and OVERWATCH (F-046, the pilot, 2026-11-20). */
     private final Map<String, Integer> intervals = new HashMap<>();
-    private final Map<String, Integer> overwatchIntervals = new HashMap<>();
     private final Detail detail = new Detail();
     private final JButton fly = button("PILOTED", "Connect and fly it (a sleeping one at its next check)");
     private final JButton standby = button("STANDBY", "Camera off, back in about 2 s at PILOT UAV");
@@ -306,8 +305,8 @@ final class FleetManagementPanel extends JPanel {
             }
             v.card = c;
             // as it sleeps now (an awake phone's own number is only its last one: the mode's default goes instead)
-            Map<String, Integer> asItSleeps = "OVERWATCH".equals(c.badge()) && c.queued() == null ? overwatchIntervals
-                    : "ASLEEP".equals(c.badge()) && c.queued() == null ? intervals : null;
+            Map<String, Integer> asItSleeps = ("OVERWATCH".equals(c.badge()) || "ASLEEP".equals(c.badge())) && c.queued() == null
+                    ? intervals : null;
             if (asItSleeps != null && !asItSleeps.containsKey(c.name()) && c.intervalMin() > 0) {
                 for (int i : INTERVALS) if (i == c.intervalMin()) asItSleeps.put(c.name(), i);
             }
@@ -358,9 +357,8 @@ final class FleetManagementPanel extends JPanel {
 
     /** The selected phone's CHECK EVERY for this mode: chosen, as it sleeps, else the mode's default. */
     private int interval(int mode) {
-        boolean ow = mode == ControlLink.POWER_OVERWATCH;
         int def = PowerController.defaultInterval(mode);
-        return selected == null ? def : (ow ? overwatchIntervals : intervals).getOrDefault(selected, def);
+        return selected == null ? def : intervals.getOrDefault(selected, def);
     }
 
     /** The mode EVERY shows and sets: OVERWATCH while the phone overwatches (or is queued to), else DEEP SLEEP. */
@@ -422,7 +420,7 @@ final class FleetManagementPanel extends JPanel {
         int mode = everyMode();
         int next = INTERVALS[index];
         if (next == interval(mode)) return;
-        (mode == ControlLink.POWER_OVERWATCH ? overwatchIntervals : intervals).put(selected, next);
+        intervals.put(selected, next);
         refreshStrip();
         FleetCards.Card c = selectedCard();
         // a sleeping phone gets the new interval at its next check-in; an awake one keeps it for the next press
@@ -437,17 +435,24 @@ final class FleetManagementPanel extends JPanel {
      */
     private void refreshStrip() {
         FleetCards.Card c = selectedCard();
+        // F-043: an OUT OF ACTION drone checks in every 30 min, whatever was chosen - EVERY says so, and is not to be
+        // changed (it showed the pilot's own 5 min beside it)
+        boolean outOfAction = c != null && c.kind() == MapView.Kind.OUT_OF_ACTION;
         int at = 0, now = interval(everyMode());
         while (at < INTERVALS.length - 1 && INTERVALS[at] != now) at++;
-        if (every.getSelectedIndex() != at) {
-            fillingEvery = true;
-            try {
-                every.setSelectedIndex(at);
-            } finally {
-                fillingEvery = false;
-            }
+        if (outOfAction) at = INTERVALS.length;
+        fillingEvery = true;
+        try {
+            boolean extra = every.getItemCount() > INTERVALS.length;
+            if (outOfAction && !extra) every.addItem(everyText(de.droiddrone.common.FleetProtocol.OUT_OF_ACTION_CHECK_MIN));
+            if (!outOfAction && extra) every.removeItemAt(INTERVALS.length);
+            if (every.getSelectedIndex() != at) every.setSelectedIndex(at);
+        } finally {
+            fillingEvery = false;
         }
-        every.setEnabled(c != null && c.note() == null);
+        every.setEnabled(!outOfAction && c != null && c.note() == null);
+        every.setToolTipText(outOfAction ? "OUT OF ACTION: checks in every " + de.droiddrone.common.FleetProtocol.OUT_OF_ACTION_CHECK_MIN + " min"
+                : "How often it checks in. Changes a sleeping phone at its next check-in");
         mark(fly, c, -1);
         mark(standby, c, ControlLink.POWER_STANDBY);
         mark(watch, c, ControlLink.POWER_OVERWATCH);
@@ -634,10 +639,20 @@ final class FleetManagementPanel extends JPanel {
         if (c.blind()) MapView.paintBlind(g, 0, 0); // 1.0.64: overwatching, seeing nothing - the eye crossed out
         g.setTransform(saved);
         // the name; VIRTUAL as a small yellow V
-        g.setFont(Theme.headingFont(h < 26 ? 11f : 12f));
+        // 1.0.71 (the test bench's F-014: "MobileYankee" stood there as "MobileYank."): the name has the queued sign's
+        // room while nothing is queued, and is set a little smaller before it is cut
+        MapView.Kind q = c.queuedKind();
+        float size = h < 26 ? 11f : 12f;
+        g.setFont(Theme.headingFont(size));
         FontMetrics fm = g.getFontMetrics();
         int base = cy + fm.getAscent() / 2 - 2;
-        String name = fit(c.name(), fm, QUEUED_X - NAME_X - (c.virtual() ? 12 : 2));
+        int room = nameRoom(q != null, c.virtual());
+        while (size > 9.5f && fm.stringWidth(c.name()) > room) {
+            size -= 0.5f;
+            g.setFont(Theme.headingFont(size));
+            fm = g.getFontMetrics();
+        }
+        String name = fit(c.name(), fm, room);
         g.setColor(Theme.TEXT);
         g.drawString(name, NAME_X, base);
         if (c.virtual()) {
@@ -646,7 +661,6 @@ final class FleetManagementPanel extends JPanel {
             g.drawString("V", NAME_X + fm.stringWidth(name) + 3, base);
         }
         // the queued mode: a yellow arrow to its sign, and how long ago it was queued (2026-11-10, the pilot)
-        MapView.Kind q = c.queuedKind();
         if (q != null) {
             g.setColor(Theme.WARN);
             java.awt.geom.Path2D arrow = new java.awt.geom.Path2D.Double();
@@ -677,6 +691,11 @@ final class FleetManagementPanel extends JPanel {
         g.setColor(Theme.MUTED);
         g.drawString(heard(c.heardAgoMs()), HEARD_X, cy + g.getFontMetrics().getAscent() / 2 - 1);
         ring(g, NEXT_CX, cy, Math.max(8, Math.min(11, h / 2 - 2)), c);
+    }
+
+    /** The width a row's name may take: up to the queued mode's sign, or - nothing queued - up to the DRONE figure. */
+    static int nameRoom(boolean queued, boolean virtual) {
+        return (queued ? QUEUED_X : DRONE_X - 6) - NAME_X - (virtual ? 12 : 2);
     }
 
     /** A text cut to its room, with "." when cut. */

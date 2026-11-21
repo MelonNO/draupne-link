@@ -245,8 +245,27 @@ public final class SessionGate {
      */
     public Verdict fromOther(byte[] d, int len, boolean sameAddress, boolean disarmed, long now, long sessionId) {
         Verdict v = fromOther(d, len, sameAddress, disarmed, now);
+        if (v == Verdict.REFUSED && pilotMoved(sessionId, now)) {
+            sessionStartedMs = now;
+            v = Verdict.NEW_SESSION;
+        }
         if (v == Verdict.NEW_SESSION) liveIdIs(sessionId);
         return v;
+    }
+
+    /**
+     * 1.0.71 / pc.55 (a reader of the link code, 2026-11-20): the pilot PC's own address changed - without Tailscale,
+     * a PC moved from one network to another, or its router's mapping renewed. Its Connects come from another address
+     * and the takeover rule refused them while the drone may fly (another PC only once the pilot was silent 10 s with
+     * the drone DISARMED): the pilot became a spectator of its own old session, the drone without sticks for good. It
+     * is the same PC when its Connect carries the next ids of its own count ({@link Ids}: one up a try since the live
+     * session's) and its old address has been silent {@link Takeover#SAME_IP_SILENT_MS} - the rule for its own address
+     * on a new port. Another PC counts from a seed of its own: 32 in 2^32 that it lands here, and it needs the key.
+     */
+    boolean pilotMoved(long sessionId, long now) {
+        if (sessionId == NO_ID || liveId == NO_ID || !liveIdKnown()) return false;
+        long ahead = (sessionId - liveId) & 0xFFFFFFFFL;
+        return ahead >= 1 && ahead <= OLDER_TRIES && silentMs(now) >= Takeover.SAME_IP_SILENT_MS;
     }
 
     /**
@@ -255,7 +274,8 @@ public final class SessionGate {
      */
     public Verdict noSession(byte[] d, int len, boolean pilotKnown, boolean samePc, boolean sameAddress,
                              BooleanSupplier disarmed, long now, long sessionId) {
-        Verdict v = noSession(d, len, pilotKnown, samePc, sameAddress, disarmed, now);
+        boolean moved = pilotKnown && !samePc && d[0] == UdpCommon.Connect && keyMatches(d, len, 4) && pilotMoved(sessionId, now);
+        Verdict v = noSession(d, len, pilotKnown, samePc || moved, sameAddress, disarmed, now);
         if (v == Verdict.NEW_SESSION) liveIdIs(sessionId);
         return v;
     }
@@ -281,6 +301,8 @@ public final class SessionGate {
     public static final class Ids {
         /** The most an id is kept for a slow way's sake ({@link #olderAnswer}). */
         static final long SLOW_KEEP_MAX_MS = 5000;
+        /** How long an id is kept unanswered while nothing at all is heard from the phone (F-001). */
+        public static final long UNHEARD_KEEP_MS = 4000;
         /** The ids remembered with their first send. */
         private static final int PAST = 8;
         private int id;
@@ -305,7 +327,30 @@ public final class SessionGate {
          *                connectRoundLen; 0 on a path not known slow)
          */
         public synchronized long next(long now, long roundMs) {
-            if (spent || now - since >= keepMs) {
+            return next(now, roundMs, now);
+        }
+
+        /**
+         * As {@link #next(long, long)}, knowing when the phone was last heard (F-001, the pilot's rule of
+         * 2026-11-20): an id unanswered past its time is given up at once only when the phone has been heard since it
+         * first went out - its answer may be what was lost. A phone heard not at all may hear the Connects and answer
+         * into a way that is gone (a link dead one way): each new id would be a session more on it, one a second; the
+         * id is kept {@link #UNHEARD_KEEP_MS} then - one session when the link goes, about one when it is back.
+         * @param heardAt when anything last came from the phone (the same clock as now; older than any send: never)
+         */
+        /**
+         * F-001: the next Connect would take a new id - for the PC to send it at once when the phone is heard again
+         * (an id kept 4 s while it was not heard is given up the moment it is: its answer is what was lost).
+         */
+        public synchronized boolean renewDue(long now, long heardAt) {
+            if (spent) return false; // a session's: nothing being tried
+            long keep = heardAt >= since ? keepMs : Math.max(keepMs, UNHEARD_KEEP_MS);
+            return now - since >= keep;
+        }
+
+        public synchronized long next(long now, long roundMs, long heardAt) {
+            long keep = heardAt >= since ? keepMs : Math.max(keepMs, UNHEARD_KEEP_MS);
+            if (spent || now - since >= keep) {
                 id++;
                 since = now;
                 keepMs = Math.max(Math.max(SAME_SESSION_MS, roundMs), slowKeepMs);

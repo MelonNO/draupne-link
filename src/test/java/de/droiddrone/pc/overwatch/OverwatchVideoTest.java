@@ -67,6 +67,31 @@ class OverwatchVideoTest {
         }
     }
 
+    /**
+     * A clip player (and its decoder) closed twice: the second close does nothing. It freed the colour converter and
+     * the picture buffer again - the whole app ended (2026-11-20: an overwatch clip's next part that failed to open).
+     */
+    @Test
+    void aPlayerClosedTwiceFreesNothingTwice(@TempDir Path dir) throws Exception {
+        TestStreams.Stream s = TestStreams.h264(320, 240, 10, 10);
+        Path mkv = dir.resolve("twice.mkv");
+        try (StreamRecorder r = new StreamRecorder(mkv, false, 320, 240, s.codecConfig())) {
+            long t = 0;
+            for (TestStreams.Packet p : s.packets()) r.write(p.data(), p.keyFrame(), t += 40);
+        }
+        ClipPlayer player = new ClipPlayer(mkv);
+        int[] px = new int[160 * 120];
+        assertTrue(player.next(px, 160, 120) >= 0, "a picture: the converter and its buffer are made");
+        player.close();
+        player.close();
+        // and a new player plays as ever afterwards: nothing of the first one's memory was freed twice
+        try (ClipPlayer again = new ClipPlayer(mkv)) {
+            int frames = 0;
+            while (again.next(px, 160, 120) >= 0) frames++;
+            assertEquals(s.packets().size(), frames);
+        }
+    }
+
     @Test
     void anMp4WithAvccFramesPlaysToo(@TempDir Path dir) throws Exception {
         // the recorder writes Annex B into MKV; the phone's MediaMuxer writes length-prefixed frames into MP4 - both must play

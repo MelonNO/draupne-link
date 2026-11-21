@@ -25,6 +25,7 @@ import android.os.SystemClock;
 
 import de.droiddrone.common.PacketIds;
 import de.droiddrone.common.SleepCheck;
+import de.droiddrone.common.SleepSends;
 
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -114,6 +115,13 @@ final class PowerMode {
         t.setDaemon(true);
         return t;
     });
+    /**
+     * F-056: the sleep notice and the check-in hello leave from a thread of their own - a send standing in a full
+     * socket held this one, and the phone stayed awake with its camera on while the PC showed it asleep.
+     */
+    private final SleepSends sends = new SleepSends("sleepNotice");
+    /** How long the sleep waits at most for a last notice when none left in the countdown, ms. */
+    static final long LAST_NOTICE_MS = 1500;
     private volatile int mode = NORMAL;
     private volatile int checkIntervalMin = DEFAULT_CHECK_MIN;
     /**
@@ -188,6 +196,7 @@ final class PowerMode {
         checking = false;
         sleepAt = 0;
         worker.shutdownNow();
+        sends.shutdown();
     }
 
     static int mode() {
@@ -358,7 +367,9 @@ final class PowerMode {
     static void alarmFired(Context context) {
         PowerMode p = current;
         if (p == null) {
-            log("Sleep check alarm: the service isn't running, nothing to wake");
+            // pc.55: a service that was stopped takes its alarm with it - one that rings with no service belongs to
+            // an app that was ended while asleep (it only said "nothing to wake", and the phone never checked in again)
+            CrashGuard.goneAtTheAlarm(context);
             return;
         }
         if (p.alarmHellos() && p.checking) { // pc.50: listening in deep sleep - the minute's hello
@@ -380,7 +391,8 @@ final class PowerMode {
         if (helloPending != null) helloPending.cancel(false);
         helloPending = null;
         lastHelloAt = SystemClock.elapsedRealtime();
-        service.powerHello(checkIntervalMin);
+        final int helloMin = checkIntervalMin;
+        sends.offer(() -> service.powerHello(helloMin)); // F-056: never on this thread
     }
 
     /** Whether a record of the burst after a mode change is due now (the stats sender asks every 0.1 s). */
@@ -447,6 +459,13 @@ final class PowerMode {
                 scheduleNotices(SLEEP_COUNTDOWN_MS);
                 break;
             case DEEP_SLEEP:
+                // F-051 (the pilot, 2026-11-20): OUT OF ACTION for a drone already asleep - its beeper was switched off
+                // when it fell asleep, and the deep sleep asked for is the one it is in: nothing was done, and the
+                // drone to be found stayed quiet. Now awake for its beeper, then back to sleep with it left on.
+                if (de.droiddrone.common.BeeperRule.wakeForBeeper(outOfAction, sleeping() && (asleep || checking), service.beeperQuieted())) {
+                    beeperBackThenSleep(from);
+                    break;
+                }
                 if (mode == DEEP_SLEEP) return;
                 if (mode == OVERWATCH && (asleep || checking)) { // pc.36: from overwatch, nothing to count down
                     overwatchToDeepSleep();
@@ -478,6 +497,33 @@ final class PowerMode {
         }
     }
 
+    /** F-051: how long the drone stays awake at most for its beeper to be put back, ms (no flight controller read: never). */
+    static final long BEEPER_BACK_MAX_MS = 20_000;
+
+    /**
+     * F-051: awake (the flight controller's port opens, its beeper settings are read and the kept ones written back -
+     * DDService.beeperConfigRead), then deep sleep again as OUT OF ACTION, which leaves the beeper on.
+     */
+    private void beeperBackThenSleep(String from) {
+        event("Out of action while asleep: awake for the drone's beeper, then deep sleep again (" + from + ")");
+        wake("out of action");
+        outOfAction = true; // the wake clears it: this is still the OUT OF ACTION drone's sleep
+        long until = SystemClock.elapsedRealtime() + BEEPER_BACK_MAX_MS;
+        pending = worker.schedule(guarded("the beeper back", () -> sleepWhenBeeperBack(until)), 1000, TimeUnit.MILLISECONDS);
+    }
+
+    private void sleepWhenBeeperBack(long until) {
+        if (mode != NORMAL || !outOfAction) return; // asked for something else since
+        // the beeper written back, and the flight controller read as disarmed (unknown counts as armed: the deep
+        // sleep would be refused) - or the time is up
+        if (!de.droiddrone.common.BeeperRule.backToSleep(service.beeperQuieted(), service.isFcArmed(), SystemClock.elapsedRealtime() >= until)) {
+            pending = worker.schedule(guarded("the beeper back", () -> sleepWhenBeeperBack(until)), 1000, TimeUnit.MILLISECONDS);
+            return;
+        }
+        if (service.beeperQuieted()) log("Out of action: the drone's beeper could not be put back - its flight controller was not read");
+        apply(DEEP_SLEEP, 0, "out of action");
+    }
+
     private static long countdown(String from) {
         return from != null && from.startsWith("PC fleet") ? FLEET_COUNTDOWN_MS : SLEEP_COUNTDOWN_MS;
     }
@@ -490,6 +536,7 @@ final class PowerMode {
     private void scheduleNotices(long countdownMs) {
         PhoneHeading.keepFor(countdownMs + 500);
         PhoneHeading.start(service);
+        sends.begin();
         final int target = mode;
         for (int i = 1; i <= 3; i++) {
             final boolean last = i == 3;
@@ -502,8 +549,12 @@ final class PowerMode {
         long now = SystemClock.elapsedRealtime();
         int nextInS = target == STANDBY || always() ? 0
                 : (int) ((Math.max(0, sleepAt - now) + checkIntervalMin * 60_000L) / 1000);
-        service.powerNotice(target, target == STANDBY ? 0 : checkIntervalMin, nextInS);
-        if (last && target == STANDBY) service.headingAfterNotice();
+        final int intervalMin = target == STANDBY ? 0 : checkIntervalMin;
+        sends.offer(() -> { // F-056: never on this thread - a full socket would hold the countdown
+            boolean out = service.powerNotice(target, intervalMin, nextInS);
+            if (last && target == STANDBY) service.headingAfterNotice();
+            return out;
+        });
     }
 
     private String checksText() {
@@ -547,6 +598,12 @@ final class PowerMode {
             event("Deep sleep refused: FC " + FcArmedState.name(armed));
             wake("FC " + FcArmedState.name(armed)); // mode 0 goes back to the PC, as a refusal does
             return;
+        }
+        // F-056: no notice left in the countdown (a send stood in a full socket, or they went into one being opened
+        // anew) - the socket anew and one more, or the PC says DEEP SLEEP wasn't taken and the sleep goes unseen
+        final int noticeMode = mode, noticeMin = checkIntervalMin, noticeInS = always() ? 0 : checkIntervalMin * 60;
+        if (!sends.lastChance(service.linkSocket(), () -> service.powerNotice(noticeMode, noticeMin, noticeInS), LAST_NOTICE_MS)) {
+            log("Sleep notice: none left the phone - the PC was not told");
         }
         FcArmedState.closedDisarmed(); // pc.50: read disarmed just now; its port closes next
         sleepAt = 0;
@@ -645,7 +702,8 @@ final class PowerMode {
         if (!SleepCheck.helloDue(always(), byAlarm, now - windowOpenedAt, lastHelloAt == 0 ? Long.MAX_VALUE : now - lastHelloAt)) return;
         if (always() && !byAlarm) acquireWindowLock(service, SleepCheck.ALWAYS_HELLO_MS + WINDOW_LOCK_SPARE_MS);
         lastHelloAt = now;
-        service.powerHello(checkIntervalMin);
+        final int helloMin = checkIntervalMin;
+        sends.offer(() -> service.powerHello(helloMin)); // F-056: never on this thread
     }
 
     /** The PC answered the hello: sleep on (the window closes now) or wake. */
