@@ -52,6 +52,7 @@ The fast tests (`gradlew test`): **1,845 of 1,845** on 2026-11-21 16:04 with the
 | The picture tours at other text scalings | a run of its own per scaling | `.\bench.ps1 ui -Tests *Looks* -Scale 1.25` (and `1.5`, `2`) |
 | A long run of a full 8 hours in one piece | the first stopped at 2 h 46 min, the second filled the rest (seeds 20261119 and 7) | `$env:BENCH_SEED = '8'; .\bench.ps1 soak -Hours 8` |
 | Real Betaflight firmware (4.3, 4.4, 4.5, 2025.12) | Windows' Linux part: an administrator and a restart (`wsl --install -d Ubuntu`); then the suite is still to be written | `.\bench.ps1 sitl` |
+| The hardware rig's first scenario: the sealed app finds one real phone, links to it, shows its picture, ends hands off (built 2026-11-21; its parts proved in `self`, itself never run) | this PC's `hardware.properties`, the phone awake with DRAUPNE Flight open, no DRAUPNE Link running, props off (TESTING.md, "Real hardware") | `.\bench.ps1 hw` |
 
 ## Not built yet
 

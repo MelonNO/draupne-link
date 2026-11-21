@@ -98,6 +98,9 @@ tasks.withType(Test).configureEach {
 
 // The test bench's tags (docs/TESTING.md): run by the bench tasks further down, never by `test`.
 def benchTags = ['benchself', 'explore', 'ui', 'badlink', 'edge', 'soak', 'night', 'emulator', 'sitl', 'finding']
+// >>> R4, the hardware rig: its two tags are the bench's too - never run by `test`, perfTest, quarantineTest or CI
+benchTags += ['hw', 'hwphone']
+// <<< R4
 
 test {
     useJUnitPlatform { excludeTags(*(['perf', 'quarantine'] + benchTags)) }
@@ -196,6 +199,22 @@ benchTask('benchEmulator', 'emulator & !finding', 'The real phone app in the And
 benchTask('benchSitl', 'sitl & !finding', 'Real Betaflight firmware (SITL) answering the app')
 benchTask('benchFindings', 'finding', 'The tests of bugs found and not fixed yet: each fails until its bug is fixed')
 benchTask('benchExplore', 'explore', "For the bench's author: the app started and looked at, nothing checked")
+
+// >>> R4, the hardware rig (docs/TESTING.md, "Real hardware") ---------------------------------------------------------
+//   gradlew benchHw        -> @Tag("hw"): the Windows app, sealed off as ever, against this bench's one real phone
+//   gradlew benchHwPhone   -> @Tag("hwphone"): the real phone itself
+// As the bench tasks above (one test class per JVM, one at a time) with one thing more: -Dbench.hardware=true, without
+// which the fence lets nothing out of this PC (bench/Fence.Reach). These two tasks set it and no other task may.
+// Never lowered in priority: delay figures are measured in these runs. The scenarios skip themselves on a PC without
+// %LOCALAPPDATA%\DraupneBench\hardware.properties (docs/hardware.example.properties).
+def hardwareTask = { String taskName, String tagExpression, String what ->
+    benchTask(taskName, tagExpression, what).configure {
+        systemProperty 'bench.hardware', 'true'
+    }
+}
+hardwareTask('benchHw', 'hw & !finding', 'Real hardware: the Windows app, sealed off, against the one real phone and its flight controller')
+hardwareTask('benchHwPhone', 'hwphone & !finding', 'Real hardware: the real phone itself')
+// <<< R4 --------------------------------------------------------------------------------------------------------------
 
 tasks.register('benchReport', JavaExec) {
     group = 'bench'

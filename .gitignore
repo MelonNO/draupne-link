@@ -5,3 +5,5 @@ out/
 .idea/
 draupne-link.properties
 config.cfg
+# the test bench's real hardware: this PC's own, kept in %LOCALAPPDATA%\DraupneBench - never in the repo
+hardware.properties

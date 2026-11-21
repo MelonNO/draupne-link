@@ -120,6 +120,21 @@ public final class AppRig implements AutoCloseable {
         }
 
         private Prepare prepare;
+        private Hardware hardware;
+
+        /**
+         * A hardware run (gradlew benchHw, docs/TESTING.md): the app sealed off as ever - its own user, the fence up,
+         * a made-up radio - but its link goes to this bench's one real phone, the only thing outside this PC the
+         * fence then lets through ({@link Hardware#reach}), and the phone is in its PHONE list as a real phone is.
+         * The radio has a throttle ceiling ({@link Hardware#THROTTLE_CEILING}) and starts with its hands off: nothing
+         * arms until a scenario says {@link FakeRadio#handsOn()}. Before anything is started the rig makes sure no
+         * other DRAUPNE Link runs on this PC and none has a link open ({@link HardwareRun}); it ends hands off.
+         */
+        public Plan hardware(Hardware bench) {
+            if (bench == null) throw new IllegalArgumentException("No hardware: Hardware.load() reads this bench's");
+            hardware = bench;
+            return this;
+        }
 
         public AppRig start() throws Exception {
             return new AppRig(this);
@@ -161,6 +176,8 @@ public final class AppRig implements AutoCloseable {
     public final PcConfig config;
     public final Fleet fleet;
     public final List<String> fleetLog = new CopyOnWriteArrayList<>();
+    /** This bench's real phone and board in a hardware run ({@link Plan#hardware}); null in every other. */
+    public final Hardware hardware;
     private final String name;
     private final JoystickService service;
     private final Thread radioThread;
@@ -171,6 +188,8 @@ public final class AppRig implements AutoCloseable {
 
     private AppRig(Plan plan) throws Exception {
         name = plan.name;
+        hardware = plan.hardware;
+        if (hardware != null) hardwareMayStart(plan); // before anything is made, sealed or started
         System.setProperty("draupne.bench.madeUpSaves", Boolean.toString(!plan.madeUpSaveNothing));
         if (plan.reopen != null) {
             sandbox = Sandbox.reopen(plan.reopen.root(), plan.name);
@@ -181,12 +200,22 @@ public final class AppRig implements AutoCloseable {
         if (System.getProperty("bench.build") != null) writable.add(Path.of(System.getProperty("bench.build")));
         String javacpp = System.getProperty("org.bytedeco.javacpp.cachedir");
         if (javacpp != null) writable.add(Path.of(javacpp));
-        Fence.up(writable, Set.of("java.exe", "adb.exe", "emulator.exe", "wsl.exe"));
+        if (hardware == null) {
+            Fence.up(writable, Set.of("java.exe", "adb.exe", "emulator.exe", "wsl.exe"));
+        } else { // the same fence with one way through it: the real phone's address at its link port
+            Fence.up(writable, Set.of("java.exe", "adb.exe", "emulator.exe", "wsl.exe"), hardware.reach());
+        }
         film = new Film(sandbox.film(), plan.name);
 
         // the stand-ins, before a line of the app runs
         web = new FakeWeb();
         doors = new BenchDoors(web);
+        if (hardware != null) {
+            // the app finds phones by asking Tailscale who is on its network: the bench's door answers with the real phone
+            doors.tailscaleStatus(hardware.tailscaleStatus());
+            // the made-up radio's hard limits, before the app can read it once: nothing arms until a scenario says handsOn()
+            radio.armSwitch(hardware.armAux()).ceiling(Hardware.THROTTLE_CEILING).handsOff();
+        }
         Outside.use(doors);
         Joystick.use(radio);
         BetaflightUsb.use(usb);
@@ -196,7 +225,9 @@ public final class AppRig implements AutoCloseable {
         if (plan.start == Start.PILOT && plan.reopen == null) {
             Map<String, String> s = new LinkedHashMap<>();
             s.put("pcName", "BENCH");
-            s.put("port", Integer.toString(Ports.free())); // never the real link port: the pilot's own app may hold it
+            // never the real link port: the pilot's own app may hold it - but a hardware run's phone listens on it, and
+            // the app uses the one number for both ends (no other DRAUPNE Link runs then: HardwareRun)
+            s.put("port", Integer.toString(hardware == null ? Ports.free() : hardware.phonePort()));
             s.put("setup.offered", "true");
             s.put("setup.done", "true");
             s.put("setup.pcDone", "true");
@@ -208,6 +239,10 @@ public final class AppRig implements AutoCloseable {
                 s.put("axis" + axis + ".min", "-1.0");
                 s.put("axis" + axis + ".center", axis == FakeRadio.THROTTLE || axis >= FakeRadio.AUX1 ? "0.0" : "0.0");
                 s.put("axis" + axis + ".max", "1.0");
+            }
+            if (hardware != null) {
+                s.put("ip", hardware.phoneIp());
+                if (!hardware.phoneKey().isEmpty()) s.put("key", hardware.phoneKey());
             }
             s.putAll(plan.settings);
             StringBuilder text = new StringBuilder();
@@ -282,6 +317,18 @@ public final class AppRig implements AutoCloseable {
         ui.settle();
         watch.windowIsUp();
         film.remark("Mode: " + ui.mode().name().toLowerCase() + ". Real app: " + ArmedGuard.now() + ". User: " + sandbox.root());
+        if (hardware != null) {
+            film.remark("HARDWARE RUN: " + hardware + ". The fence lets this app reach " + Fence.reach() + " and nothing else outside this PC. The radio: "
+                    + radio.limits() + ".");
+        }
+    }
+
+    /** A hardware run's preconditions ({@link HardwareRun}): everything in the way is said at once, and nothing is started. */
+    private static void hardwareMayStart(Plan plan) {
+        List<String> no = new ArrayList<>();
+        HardwareRun.plan(no, plan.drones, plan.start == Start.FIRST_START, plan.prepare != null, plan.reopen != null, plan.settings.keySet());
+        HardwareRun.thisPc(no, plan.hardware);
+        if (!no.isEmpty()) throw new IllegalStateException("The hardware run \"" + plan.name + "\" does not start:\n - " + String.join("\n - ", no));
     }
 
     private JFrame findMain() {
@@ -437,6 +484,7 @@ public final class AppRig implements AutoCloseable {
     private List<String> end() {
         if (closed) return List.of();
         closed = true;
+        if (hardware != null) handsOffAtTheEnd(); // first of all, however the scenario ended
         try {
             ui.shot("the end");
         } catch (RuntimeException ignored) {
@@ -449,6 +497,7 @@ public final class AppRig implements AutoCloseable {
         }
         List<String> problems = new ArrayList<>(problems());
         if (!wentAway) problems.add("the app did not close within 30 s of its window's X");
+        if (hardware != null) hardwareVerdict(problems);
         for (String k : knownSeen) film.remark("KNOWN FINDING met again - " + k);
         film.remark("The window's slowest answer: " + watch.maxLagMs() + " ms. Threads " + watch.threadsAtStart() + " -> " + watch.threads()
                 + ". Controls seen " + census.seenCount() + ", used " + census.usedCount() + ".");
@@ -472,6 +521,34 @@ public final class AppRig implements AutoCloseable {
         BenchAccess.pretendScreen(0, 0);
         Fence.down();
         return problems;
+    }
+
+    /**
+     * A hardware run's last move, before the app is closed (it is still sending the sticks): the radio's hands off for
+     * good - ARM off, throttle down - and a second for the frames that say so to reach the flight controller.
+     */
+    private void handsOffAtTheEnd() {
+        radio.handsOffForGood("the scenario has ended");
+        Ui.pause(1000);
+        // >>> R5 (the keeper / dead man's switch) attaches here: the board made safe through the keeper, and its own
+        // word that it is disarmed, before the app and its link are closed. Nothing of it is built yet.
+    }
+
+    /** What a hardware run adds to the verdict once the app is closed: the radio's limits, and the throttle the app really sent. */
+    private void hardwareVerdict(List<String> problems) {
+        String sent;
+        try {
+            int most = HardwareRun.mostThrottleSent(sandbox.logsDir());
+            sent = most < 0 ? "no sticks were sent" : "the most throttle the app sent was " + most;
+            if (most > radio.ceiling()) {
+                problems.add("the app sent a throttle of " + most + ", above the radio's ceiling of " + radio.ceiling()
+                        + ": the stick settings are no longer the rig's (a calibration, a channel map?)");
+            }
+        } catch (IOException e) {
+            sent = "the throttle the app sent is not known";
+            problems.add("the link log could not be read for the throttle sent: " + e.getMessage());
+        }
+        film.remark("The radio at the end: " + radio.limits() + ". By the link log " + sent + ".");
     }
 
     /**

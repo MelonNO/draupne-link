@@ -28,6 +28,12 @@ public final class BenchDoors implements Outside.Doors {
     private final FakeWeb web;
     /** What a command the app waits for answers; null = "ran fine, said nothing". */
     private volatile Function<List<String>, Shell.Result> commands = c -> null;
+    /**
+     * What "tailscale status --json" says: a PC with Tailscale installed and signed in, with no other device - the
+     * made-up drones are found by their announcement file, not through Tailscale.
+     */
+    private volatile String tailscaleStatus = "{\"BackendState\":\"Running\",\"Self\":{\"HostName\":\"bench-pc\",\"DNSName\":\"bench-pc.bench.ts.net.\","
+            + "\"TailscaleIPs\":[\"127.0.0.1\"],\"Online\":true},\"Peer\":{}}";
 
     public BenchDoors(FakeWeb web) {
         this.web = web;
@@ -50,6 +56,14 @@ public final class BenchDoors implements Outside.Doors {
         commands = answers;
     }
 
+    /**
+     * Another answer to "tailscale status --json" (a hardware run's: its one real phone as a device on the network,
+     * {@link Hardware#tailscaleStatus}). It stays under a test's own {@link #commands}, which may still answer first.
+     */
+    public void tailscaleStatus(String json) {
+        tailscaleStatus = json;
+    }
+
     @Override
     public String url(String url) {
         String to = web == null ? url : web.standInFor(url);
@@ -66,12 +80,7 @@ public final class BenchDoors implements Outside.Doors {
         if (r != null) return r;
         String program = command.isEmpty() ? "" : new File(command.get(0)).getName().toLowerCase(Locale.ROOT);
         if (program.startsWith("tailscale")) {
-            // a PC with Tailscale installed and signed in, with no other device: the made-up drones are found by
-            // their announcement file, not through Tailscale
-            if (command.contains("status")) {
-                return new Shell.Result(0, "{\"BackendState\":\"Running\",\"Self\":{\"HostName\":\"bench-pc\",\"DNSName\":\"bench-pc.bench.ts.net.\","
-                        + "\"TailscaleIPs\":[\"127.0.0.1\"],\"Online\":true},\"Peer\":{}}");
-            }
+            if (command.contains("status")) return new Shell.Result(0, tailscaleStatus);
             if (command.contains("ip")) return new Shell.Result(0, "127.0.0.1\n");
         }
         return new Shell.Result(0, "");

@@ -19,6 +19,8 @@ are not part of it.
 .\bench.ps1 ui -Tests *Looks* -Scale 1.5    the picture tours at another Windows text scaling
 .\bench.ps1 ui -Screen 1093x584    every scenario on a screen that small (a 1366 x 768 laptop at Windows' 125 %)
 .\bench.ps1 report -Root <folder>  a run's report written again
+.\bench.ps1 hw                     REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
+.\bench.ps1 phone                  REAL HARDWARE: the real phone itself
 ```
 
 Each run gets a folder under `%LOCALAPPDATA%\DraupneBench\runs\` and ends by printing its report's address:
@@ -34,7 +36,8 @@ somebody removes their folders.
   to an address that is not this PC's loopback, every program that is not on a short list, and every write or
   delete outside the bench's folders - and writes each attempt into the report. Radio, USB, internet and
   loudspeaker are stand-ins. So a bench app cannot reach a real phone, a flight controller on USB, the internet,
-  or the pilot's flights, logs and settings.
+  or the pilot's flights, logs and settings. The two hardware runs (`hw`, `phone`) are the one exception, and only
+  for one address: see "Real hardware" below.
 - **The real mouse and screen are used only while no real drone is armed.** The bench reads (never writes) the
   newest `link-*.csv` of the DRAUPNE Link the pilot flies with; armed there means: let go of the mouse, park the
   bench's windows off the screen, press through the app's own event queue instead ("quiet"), until disarmed.
@@ -57,6 +60,8 @@ somebody removes their folders.
 | The phone app | `emulator` | The built APK in the Android emulator: first start and its questions, the PC's real link to it, the emulated camera's picture, a weak link, a cut, STANDBY; a link dead one way (F-001's measure); the phone's sending standing still until its socket is opened anew (F-039); the app ended by an error while flown, killed asleep, and ended again and again - back by itself each time but the last (F-047, `*PhoneCrash*`, 13 min); the picture's size changed and the camera stopped in the same moment, twenty times (`*PhoneCameraRace*`). |
 | Betaflight | `sitl` | Not built: needs the administrator step below. |
 | Findings | `findings` | One test per listed bug; fails until fixed. |
+| Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. So far one scenario: the phone found, the link, the picture, STANDBY - nothing armed. See "Real hardware". |
+| Real hardware: the phone | `phone` | Never part of `quick` or `full`. The real phone itself. No scenario yet. |
 
 Beside what a scenario checks, every scenario fails on: an error nobody caught, the window not answering for more
 than half a second, anything the fence refused.
@@ -105,6 +110,41 @@ A map that loads nothing *on purpose* says so in its corner: "SAVED TILES ONLY -
 this PC may be flying - also for ten minutes after a link was lost armed, until IT'S DOWN - RESUME - nothing is
 fetched, so the sticks and the picture have the link to themselves.
 
+## Real hardware
+
+`.\bench.ps1 hw` and `.\bench.ps1 phone` (`gradlew benchHw`, `benchHwPhone`; tags `hw`, `hwphone`) are the runs that
+reach real things: one phone on one drone, battery in, **propellers off**. Built 2026-11-21, not yet run on a phone.
+
+- **The hardware file.** `%LOCALAPPDATA%\DraupneBench\hardware.properties`, this PC's own, outside the repo and never
+  committed: the phone's address and link port, its adb serial, the board's port, the pack's cells and the volts per
+  cell under which a run ends, the keeper's port. Start from [hardware.example.properties](hardware.example.properties)
+  (made-up values). Without the file every hardware scenario skips itself and `bench.ps1` says what is missing.
+- **Still sealed off.** The app has its made-up user, radio, USB, internet and loudspeaker as in every run. The fence
+  lets it reach exactly one thing outside this PC: the phone's address at its link port (`Fence.Reach`: addresses
+  written out, no names, no ranges, no multicast). Another port of the phone, another address, a name looked up are
+  refused and reported as ever. A way through can only be made in a JVM started with `-Dbench.hardware=true`, which
+  the two hardware tasks set and no other: in any other run the attempt itself fails.
+- **Before the app starts** (`HardwareRun`): no DRAUPNE Link running on this PC, none with a drone's link open (the
+  armed guard), this PC's port of the phone's number free, Tailscale installed. Anything in the way is said and
+  nothing is started. A hardware scenario has no made-up drones and cannot set where the link goes or how the radio's
+  axes become sticks.
+- **The made-up radio's hard limits** (`FakeRadio`): a throttle ceiling of 1100 that no request gets over (each one cut
+  is counted and said in the film), and hands off - ARM off, throttle down, in one move from any thread, held until
+  `handsOn()`. A hardware run starts hands off and ends hands off for good; a scenario that arms says `handsOn()`
+  first. At the end the throttle the app really sent is read from its link log: over the ceiling fails the scenario.
+- **How the phone gets into the PHONE list.** The app finds phones only by asking Tailscale who is on its network, so
+  the bench's door answers for it: this PC and one other device, the phone, online at the file's address - whether
+  that is a Tailscale address or not. The real Tailscale is never asked. `phone.path=relay` in the file tells the app
+  the way is relayed (it then holds bad coverage mode, as on a real relayed link); left out, direct.
+- **Not lowered in priority.** Delay figures are measured in these runs, and theirs is the real link.
+- **To know:** UPDATE PHONE APP cannot work in a hardware run (the phone would fetch from this PC, and the fence takes
+  nothing from the phone but its link port). A phone that has no DRAUPNE name yet would be given one by the app under
+  test, which knows no other phone: name it with the real app first (the scenario checks). The run's folder then
+  holds the phone's address, its key in the made-up settings file, and where the drone is: it stays on this PC.
+- **The board made safe** is `bench.ps1 hw`'s last step, however the run went - a call to `gradlew boardSafe`, which
+  does not exist yet and is skipped until it does. The keeper that owns the flight controller's port, the watch on
+  the battery and the dead man's switch are not built yet either.
+
 ## Betaflight firmware (waits for an administrator)
 
 Real firmware as a program (SITL) needs Windows' Linux part. Once, as administrator: `wsl --install -d Ubuntu`,
@@ -114,7 +154,11 @@ says so until then.
 ## For whoever adds a scenario
 
 - Classes live under `src/test/java/de/droiddrone/bench/**`, are named `...Scenario` and carry a tag: `ui`,
-  `badlink`, `edge`, `soak`, `emulator`, `sitl`, `finding`. One JVM per class.
+  `badlink`, `edge`, `soak`, `emulator`, `sitl`, `finding` - or `hw`, `hwphone` for real hardware. One JVM per class.
+- A hardware scenario: `Assumptions.assumeTrue(Hardware.present(), ...)` first, then
+  `AppRig.scenario("name").hardware(Hardware.load()).run(rig -> { ... })`; `rig.hardware` has the bench's facts.
+  `rig.radio.handsOff()` is the hard stop (ARM off, throttle down, held); a made-up drone's scenario lets go of the
+  sticks with `rig.radio.sticksAtRest()` (the switches stay), which is what `handsOff()` meant until 2026-11-21.
 - `AppRig.scenario("name").drones(2).run(rig -> { ... })` starts the app; `rig.ui` presses (`click("WORDS")`,
   `clickAt`, `rightClickAt`, `choose`, `key`, `fill`), waits (`until`, `waitForControl`) and photographs (`shot`);
   `new Pilot(rig)` flies; `rig.radio` is the radio, `rig.drone(name)` a made-up drone, `rig.web` the internet,

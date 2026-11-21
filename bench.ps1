@@ -9,14 +9,19 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 ui -Tests *Fly*       one suite (self ui link edge emulator sitl findings), or some of its scenarios
   .\bench.ps1 ui -Screen 1093x584   the app on a screen that small (a 1366 x 768 laptop at 125 %)
   .\bench.ps1 report -Root <folder> the report of a run's folder written again
+  .\bench.ps1 hw                    REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
+  .\bench.ps1 phone                 REAL HARDWARE: the real phone itself
 
 The app under test runs sealed off: its own settings and folders, made-up drones, no real phone, board or internet.
 The real mouse and screen are used while no real drone is armed (-Mode quiet: never; -Mode desktop: always).
 Every run keeps its folder under %LOCALAPPDATA%\DraupneBench\runs - nothing is deleted by the bench.
+
+hw and phone are the two runs that reach real hardware (docs/TESTING.md, "Real hardware"): the app is sealed off all
+the same, but its fence lets it reach the one phone of %LOCALAPPDATA%\DraupneBench\hardware.properties. Props off.
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('quick', 'full', 'soak', 'night', 'self', 'ui', 'link', 'edge', 'emulator', 'sitl', 'findings', 'report')]
+    [ValidateSet('quick', 'full', 'soak', 'night', 'self', 'ui', 'link', 'edge', 'emulator', 'sitl', 'findings', 'report', 'hw', 'phone')]
     [string]$Run = 'quick',
     [double]$Hours = 0,
     [string]$Until = '',
@@ -55,7 +60,9 @@ if ($Run -eq 'quick') { $env:BENCH_QUICK = 'true' } else { $env:BENCH_QUICK = 'f
 if ($Scale) { $env:BENCH_SCALE = $Scale }   # Windows' text scaling for the app under test: 1, 1.25, 1.5, 2
 if ($Screen) { $env:BENCH_SIZE = $Screen }   # the app on a screen this small, e.g. 1093x584 (a 1366 x 768 laptop at 125 %): every scenario
 # everything started from here inherits it: a real drone's link on this PC goes first
-(Get-Process -Id $PID).PriorityClass = 'BelowNormal'
+# (R4, the hardware rig: not in the two hardware runs - delay figures are measured there, and theirs is the real link)
+$hardwareRun = $Run -in @('hw', 'phone')
+if (-not $hardwareRun) { (Get-Process -Id $PID).PriorityClass = 'BelowNormal' }
 if ($Hours -gt 0) { $deadline = $started.AddHours($Hours) } else { $deadline = $null }
 
 $gradle = Join-Path $repo 'gradlew.bat'
@@ -213,6 +220,32 @@ $suites = @{
     soak     = @('benchSoak', 'The long run')
 }
 
+# >>> R4, the hardware rig (docs/TESTING.md, "Real hardware") ---------------------------------------------------------
+$suites['hw'] = @('benchHw', 'REAL HARDWARE: the Windows app, sealed off, against the one real phone')
+$suites['phone'] = @('benchHwPhone', 'REAL HARDWARE: the real phone itself')
+
+# This PC's own hardware file: outside the repo, never committed (docs\hardware.example.properties is the one to copy).
+function Test-Hardware {
+    Test-Path (Join-Path $base 'hardware.properties')
+}
+
+# The last step of the hw run, whatever way it went (also after an error or Ctrl+C): the board made safe.
+function Invoke-BoardSafe {
+    # TODO (R5, the keeper / dead man's switch): `gradlew boardSafe` is not built yet.
+    # Skipped while build.gradle registers no task of that name; from then on it runs here.
+    if (-not (Select-String -Path (Join-Path $repo 'build.gradle') -Pattern 'register\(\s*[''"]boardSafe[''"]' -Quiet)) {
+        Write-Host '          boardSafe: no such task yet (TODO R5) - skipped'
+        return
+    }
+    Write-Host ("{0:HH:mm:ss}  The board made safe ..." -f (Get-Date))
+    $t0 = Get-Date
+    $code = Invoke-Gradle @('--offline', '--console=plain', 'boardSafe') (Join-Path $runRoot 'logs\boardSafe.log')
+    $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
+    [void]$results.Add("boardSafe`t$mins min`t`t`texit $code")
+    if ($code -ne 0) { Write-Host "          boardSafe ended with exit code $code - LOOK AT THE BOARD (logs\boardSafe.log)" }
+}
+# <<< R4 --------------------------------------------------------------------------------------------------------------
+
 if ($Run -ne 'report') {
     switch ($Run) {
         'quick' { $order = @('self', 'ui', 'link') }
@@ -251,6 +284,20 @@ if ($Run -ne 'report') {
             if ($Run -eq 'soak' -and $Hours -gt 0) { $deadline = $null; $env:BENCH_HOURS = [string]$Hours }
             $env:BENCH_TIMEOUT = ([string][math]::Ceiling([double]$env:BENCH_HOURS * 60 + 30)) + ' m'
         }
+        # >>> R4, the hardware rig: only with this PC's hardware file; hw ends with the board made safe, however it went
+        if ($s -in @('hw', 'phone')) {
+            if (-not (Test-Hardware)) {
+                [void]$pending.Add("Real hardware - no hardware.properties in $base yet (copy docs\hardware.example.properties there, with this bench's own phone and board).   .\bench.ps1 $s")
+                continue
+            }
+            try {
+                Invoke-Suite $suites[$s][0] $suites[$s][1]
+            } finally {
+                if ($s -eq 'hw') { Invoke-BoardSafe }
+            }
+            continue
+        }
+        # <<< R4
         Invoke-Suite $suites[$s][0] $suites[$s][1]
     }
     $commit = (& git -C $repo rev-parse --short HEAD 2>$null)
