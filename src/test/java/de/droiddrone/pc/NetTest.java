@@ -91,10 +91,10 @@ class NetTest {
     /** A slow link that works: the file comes in pieces and takes far longer than a download may stand still. */
     @Test
     void aSlowDownloadThatKeepsComingGetsThroughHoweverLongItTakes() throws Exception {
-        server.pieces = 12;
-        server.pieceEveryMs = 150; // 1.8 s for the whole of it, never 500 ms without a piece
+        server.pieces = 20;
+        server.pieceEveryMs = 150; // 3 s for the whole of it, twice the patience for a standstill, never 1.5 s without a piece (500 ms was red once on the CI runner, 2026-11-21)
         server.always(Mode.SLOW);
-        HttpResponse<byte[]> r = Net.sendMoving(client, request(), HttpResponse.BodyHandlers.ofByteArray(), 500, 30_000);
+        HttpResponse<byte[]> r = Net.sendMoving(client, request(), HttpResponse.BodyHandlers.ofByteArray(), 1500, 30_000);
         assertEquals(200, r.statusCode());
         assertArrayEquals(body, r.body());
     }

@@ -285,7 +285,7 @@ class SessionIdEndToEndTest {
         Thread.sleep(Math.max(0, FlightModel.BOOT_GRACE_MS + 700 - (System.currentTimeMillis() - droneStartedAt)));
         armValue = 1900;
         waitFor(() -> drone.fc.isArmed(), 4000, "armed", log);
-        int sessions = 1;
+        int sessions = 1, pcStarts = (int) link.getSessionStarts();
         for (long cutMs : new long[]{3000, 6000}) {
             if (!drone.fc.isArmed()) { // the second round: the switch off and on, as the pilot must
                 armValue = 1000;
@@ -304,10 +304,18 @@ class SessionIdEndToEndTest {
             waitFor(() -> wire.toPhone(UdpCommon.RcFrame) > framesAt + 50, 4000, "stick frames at the phone again, the arm switch still on", log);
             Thread.sleep(1500);
             assertFalse(drone.fc.isArmed(), "not armed by the reconnect after " + cutMs + " ms\n" + String.join("\n", log));
-            int before = sessions;
+            int before = sessions, pcBefore = pcStarts;
             sessions = drone.sessions();
-            assertTrue(cutMs < 4000 ? sessions <= before + 1 : sessions == before + 1, "one session for the reconnect, at most: " + before + " -> " + sessions);
-            assertEquals(sessions, link.getSessionStarts(), "and the PC's side with it");
+            pcStarts = (int) link.getSessionStarts();
+            // F-001, the pilot's rule (2026-11-20): one session when the link goes, one when it is back - two at most.
+            // Two when the cut ends just as the PC renews its try's id (heard again; or its 4 s unheard: a 6 s cut ends
+            // at 2 + 4 s): a Connect of the old id gets through, then one of the new (red 1 in 8 here, once on the CI
+            // runner, 2026-11-21, while this asked for one at most). The PC takes the newest try's answer only.
+            assertTrue(cutMs < 4000 ? sessions <= before + 2 : sessions >= before + 1 && sessions <= before + 2,
+                    "a session when the link goes and one when it is back, at most: " + before + " -> " + sessions);
+            assertTrue(cutMs < 4000 ? pcStarts <= pcBefore + 1 : pcStarts == pcBefore + 1,
+                    "the PC started once for the reconnect at most (3 s: the old session may go on): " + pcBefore + " -> " + pcStarts);
+            assertTrue(pcStarts - pcBefore <= sessions - before, "never a start on the PC without one on the phone");
             assertTrue(link.getTelemetry().getStatus() != null && MonoClock.ms() - link.getTelemetry().getStatus().receivedAt() < 1000
                     && !link.getTelemetry().getStatus().armed(), "and the PC reads it disarmed");
         }

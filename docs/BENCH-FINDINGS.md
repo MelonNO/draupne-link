@@ -726,6 +726,17 @@ keeps asking for 10 s after losing its own session instead of turning spectator 
 **`RsParityEndToEndTest.aLossWithinTheParityIsMendedBeyondItAsksForAKeyFrame` - quarantined**: red under load twice,
 green alone 3 of 3.
 
+**GitHub's Build run of the release commit** was red on two tests the same commit passed on `beta` and here:
+`NetTest.aSlowDownloadThatKeepsComingGetsThroughHoweverLongItTakes` (a 500 ms standstill limit against pieces every
+150 ms: too tight for a loaded runner - 1.5 s now, the download 3 s long) and
+`SessionIdEndToEndTest.aLinkCutWithTheDroneArmedNeverArmsItAgainByItself` (red 1 in 8 here too). The latter asked for
+one new session at most after a 3 s and a 6 s cut, as before F-001; with F-001's rule a cut that ends just as the PC
+renews its try's id (heard again, or 4 s unheard: a 6 s cut ends at 2 + 4 s) lets a Connect of the old id through and
+then one of the new - two sessions, which is the pilot's rule ("one when it goes, one when it is back"). Its failing
+run's log shows F-057's new rule never came into it. The test now holds the rule (two at most on the phone, the PC's
+one start); its safety checks (never armed again by the reconnect, the sticks back, the PC reads disarmed) are as
+they were.
+
 **The release workflow** read the phone app's pin with a pattern the bench's switch (`ApkShare.bench`) no longer
 matched: the release would have stopped at "VERSION / APK_SHA256 not found". The pattern takes both forms now.
 
