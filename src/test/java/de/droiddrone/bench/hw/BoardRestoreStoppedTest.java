@@ -28,8 +28,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class BoardRestoreStoppedTest {
     private static final BoardPort.Timing T = FakeFlightBoard.NO_WAITING;
-    /** The CLI lines of the read a restore starts with: diff all, dump all, exit. */
-    private static final int READ_LINES = 3;
+    /** The CLI lines of the read a restore starts with: diff all and dump all, each twice, and exit. */
+    private static final int READ_LINES = 5;
     @TempDir
     Path dir;
     private final FakeFlightBoard board = FakeFlightBoard.flown();

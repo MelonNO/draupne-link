@@ -34,7 +34,8 @@ import java.util.function.Consumer;
  * </pre>
  * <b>What is read.</b> Over MSP: the board's id (MSP_UID), API / variant / version / build, the feature mask, mixer
  * and props direction, motor output order, beeper config, rx map, mode ranges. Then ONE visit to the CLI - "diff all"
- * and "dump all" - because leaving the CLI restarts Betaflight every time. With {@code -Pescs=true} also each ESC's
+ * and "dump all", each asked twice and taken only when both answers are the same - because leaving the CLI restarts
+ * Betaflight every time. With {@code -Pescs=true} also each ESC's
  * firmware and the raw page of its settings, through the ESC passthrough: that needs the battery in (props off), and
  * the ESCs play their start-up tones once when it ends. No motor turns.
  * <p>
@@ -163,13 +164,22 @@ public final class BoardSnapshot {
             }
             log.accept("Reading the CLI (diff all, dump all); leaving it restarts Betaflight.");
             fc.enterCli();
-            diff = fc.command("diff all", 20_000);
-            dump = fc.command("dump all", 30_000);
+            diff = readTwice(fc, "diff all", 20_000);
+            dump = readTwice(fc, "dump all", 30_000);
         } // closed with the CLI open: "exit" is said, nothing was changed
-        if (!CliWrite.usableBackup(diff)) throw new IOException("Betaflight's \"diff all\" didn't come back whole: " + CliWrite.brief(diff));
-        if (!CliWrite.usableBackup(dump)) throw new IOException("Betaflight's \"dump all\" didn't come back whole: " + CliWrite.brief(dump));
         return new BoardSnapshot(LocalDateTime.now(), o.label() == null ? "" : o.label(), port.systemName(), boardId(msp),
                 BetaflightPlan.version(diff), battery, unixLines(diff), unixLines(dump), msp, escs);
+    }
+
+    /**
+     * A long CLI answer, asked for twice in the same visit: the two must be the same. A listing is full of lines that
+     * begin like the prompt ("# master"), and one cut short at such a line would pass for whole - but not twice alike.
+     */
+    private static String readTwice(BetaflightUsb fc, String command, long timeoutMs) throws IOException {
+        String first = fc.command(command, timeoutMs);
+        if (!CliWrite.usableBackup(first)) throw new IOException("Betaflight's \"" + command + "\" didn't come back whole: " + CliWrite.brief(first));
+        if (!first.equals(fc.command(command, timeoutMs))) throw new IOException("Betaflight's \"" + command + "\" read differently twice: no snapshot.");
+        return first;
     }
 
     /** The facts MSP gives, by name, as hex; "! why" for one this Betaflight refuses or does not know (said, not guessed). */

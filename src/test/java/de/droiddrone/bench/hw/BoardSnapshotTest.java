@@ -52,7 +52,8 @@ class BoardSnapshotTest {
     void oneVisitToTheCliReadsItAllAndChangesNothing() throws IOException {
         String before = board.saved();
         BoardSnapshot s = take(false);
-        assertEquals(List.of("diff all", "dump all", "exit"), board.cli(), "the CLI entered once: leaving it restarts Betaflight");
+        assertEquals(List.of("diff all", "diff all", "dump all", "dump all", "exit"), board.cli(),
+                "the CLI entered once (leaving it restarts Betaflight), each listing asked twice");
         assertEquals(1, board.restarts);
         assertEquals(0, board.saves);
         assertEquals(before, board.saved());
@@ -187,6 +188,16 @@ class BoardSnapshotTest {
         assertEquals(4, unread.size());
         assertTrue(unread.get(3).startsWith("ESC 4: not read now (no battery"), unread.get(3));
         assertEquals(List.of(), without.escDifferences(with), "a snapshot without their pages has nothing to compare");
+    }
+
+    @Test
+    void aListingCutShortIsNoSnapshot() {
+        // "# master" taken for the prompt: the listing ends there and still looks like one
+        board.cutShortListings = 1;
+        IOException e = assertThrows(IOException.class, () -> take(false));
+        assertTrue(e.getMessage().contains("\"diff all\" read differently twice"), e.getMessage());
+        assertEquals(List.of("diff all", "diff all", "exit"), board.cli(), "left at once, by exit");
+        assertEquals(0, board.saves);
     }
 
     @Test

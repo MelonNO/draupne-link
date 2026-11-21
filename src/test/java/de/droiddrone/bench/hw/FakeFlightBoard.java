@@ -53,7 +53,7 @@ import java.util.TreeSet;
  * <p>
  * <b>For a test:</b> {@link #setUp} and {@link #flown} (the board as someone left it), {@link #features}, {@link #arm},
  * {@link #battery}, {@link #fitEscs}, {@link #uid}, {@link #version}, {@link #cutWire} and the cut counters,
- * {@link #refuseCli}, {@link #unplug}, {@link #fly}; and what happened: {@link #cli()}, {@link #mspRequests()},
+ * {@link #refuseCli}, {@link #cutShortListings}, {@link #unplug}, {@link #fly}; and what happened: {@link #cli()}, {@link #mspRequests()},
  * {@link #dshotCommands()}, {@link #saves}, {@link #restarts}, {@link #saved()}, {@link #inMemory()}, {@link #motors()}.
  * Thread-safe: one lock for the board.
  */
@@ -259,6 +259,8 @@ public final class FakeFlightBoard {
      * battery keeps it running as it was - still in the CLI, if it was there, with what was changed but not saved.
      */
     public volatile boolean cutTakesPower = true;
+    /** That many "diff" / "dump" listings come back cut short at a heading, as if its "# " had been the prompt. */
+    public volatile int cutShortListings;
     private final List<String> refused = new ArrayList<>();
 
     // ------------------------------------------------------------------ what happened
@@ -1017,7 +1019,13 @@ public final class FakeFlightBoard {
             case "diff":
             case "dump":
                 if (!args.isEmpty() && !args.equalsIgnoreCase("all")) return error(word, "INVALID ARGUMENT: " + args);
-                return print(ram, word.equals("diff"), args.equalsIgnoreCase("all"));
+                String listing = print(ram, word.equals("diff"), args.equalsIgnoreCase("all"));
+                if (cutShortListings > 0) { // as a reader sees it that took a heading's "# " for the prompt
+                    cutShortListings--;
+                    int heading = listing.lastIndexOf("\r\n# ");
+                    return listing.substring(0, heading > 0 ? heading : listing.length() / 2);
+                }
+                return listing;
             default:
                 return error(word, "UNKNOWN COMMAND, TRY 'HELP'");
         }

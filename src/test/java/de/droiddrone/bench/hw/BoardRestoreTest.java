@@ -60,7 +60,8 @@ class BoardRestoreTest {
         assertEquals(List.of(), r.before());
         assertEquals(0, r.exitCode());
         assertEquals(0, board.saves);
-        assertEquals(List.of("diff all", "dump all", "exit"), board.cli().subList(cliLines, board.cli().size()), "read, not written");
+        assertEquals(List.of("diff all", "diff all", "dump all", "dump all", "exit"), board.cli().subList(cliLines, board.cli().size()),
+                "read, not written");
         assertEquals(before, board.saved());
         // replayed all the same, its own diff makes the same board again
         board.fly();
