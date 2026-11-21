@@ -150,6 +150,23 @@ public final class VirtualDrone {
     private volatile int lastRcSeqReported = -1;
     private volatile short[] idleSticks;
     private volatile boolean idleFeeding;
+    /**
+     * The phone's idle guard (pc.50, F-066), the same class: no idle sticks after the PC's sticks stopped on an armed
+     * drone or with ARM on, and - fed before any stick frame, as an app just started feeds - a stick frame that could
+     * arm held back until the pilot's own ARM off. As old as the app: a new one with every {@link #restartApp}.
+     */
+    private volatile de.droiddrone.common.RcPath.IdleGuard idleGuard = new de.droiddrone.common.RcPath.IdleGuard();
+    /**
+     * The phone's own idle sticks (pc.54: everything low and centred, fed while no PC has sent any). Off unless a
+     * test turns them on: a virtual drone has had none so far, and with them every drone of the fleet has "had sticks"
+     * from its start (its Betaflight then beeps for a lost receiver whenever they stop - a replayed track, say).
+     */
+    private volatile boolean ownIdleSticks;
+
+    /** As the phone app since pc.54: with no idle sticks from a PC, it feeds its own (tests; see the field). */
+    void setOwnIdleSticks(boolean on) {
+        ownIdleSticks = on;
+    }
     private int rcLagMinNow = -1, rcLagMinBefore = -1;
     private long rcLagBucketAt;
     private volatile int rcLagMs = -1, rcLagMaxMs = -1, rcLagDropped;
@@ -324,6 +341,11 @@ public final class VirtualDrone {
                 lastPcPort = 0;
                 gate = new SessionGate(key); // the app's own: what session it held is gone with it
                 idleSticks = null;
+                synchronized (rcLock) { // F-066: and what it knew of the PC's sticks - the idle guard, when the last frame came
+                    idleGuard = new de.droiddrone.common.RcPath.IdleGuard();
+                    lastRcTakenMs = 0;
+                    armHeldSaid = false;
+                }
                 pcAudio.forget();
                 synchronized (observers) {
                     observers.clear();
@@ -620,12 +642,33 @@ public final class VirtualDrone {
         if (lastRcTakenMs != 0) maxRcInGapMs = Math.max(maxRcInGapMs, now - lastRcTakenMs);
         synchronized (rcLock) {
             lastRcTakenMs = now;
-            if (!fcLost) {
+            // F-066, as the phone's handleRcFrame: idle sticks fed before any stick frame (the app started anew) -
+            // a frame that could arm is not written until the pilot's own ARM off; never held while the FC reads ARMED
+            de.droiddrone.common.RcPath.IdleGuard guard = idleGuard;
+            boolean held = guard.armOffOwed() && guard.holds(fc.frameMayArm(frame, count), !fcLost && fc.isArmed());
+            if (!fcLost && !held) {
                 fc.sticks(frame, count, now);
                 lastRcWriteMs = now;
                 lastRcSeqReported = lastRcSeq;
             }
+            guard.frame(frame, count, fcDisarmed());
+            rcFramesTaken++;
+            if (held != armHeldSaid) {
+                armHeldSaid = held;
+                log.accept(held ? "stick frames with ARM on held back: idle sticks were fed before any stick frame - not to the FC before the pilot's ARM off"
+                        : "stick frames to the FC again");
+            }
         }
+    }
+
+    /** F-066: the last stick frame was held back (under rcLock). */
+    private boolean armHeldSaid;
+    /** Written under rcLock: the PC's stick frames taken so far, held back or not. */
+    private volatile int rcFramesTaken;
+
+    /** How many of the PC's stick frames it has taken since it was made (tests: the sticks are at the phone again). */
+    int rcFramesTaken() {
+        return rcFramesTaken;
     }
 
     private boolean takeSeq16(int seq, long now) {
@@ -673,13 +716,19 @@ public final class VirtualDrone {
         idleSticks = frame;
     }
 
-    /** The idle sticks to the FC (the phone's idleSticksRun): disarmed, no stick frame for 300 ms, its ARM ranges can't arm. */
+    /**
+     * The idle sticks to the FC (the phone's idleSticksRun): disarmed, no stick frame for 300 ms, its ARM ranges can't
+     * arm, and the phone's idle guard (pc.50, F-066) lets them. The PC's, or - turned on - the phone's own (pc.54).
+     */
     private void feedIdleSticks(long now) {
         boolean feed;
         synchronized (rcLock) {
             short[] idle = idleSticks;
-            feed = idle != null && !fcLost && mode != DEEP_SLEEP && mode != OVERWATCH && now - lastRcTakenMs >= IDLE_AFTER_MS
-                    && !fc.isArmed() && !fc.frameMayArm(idle, idle.length);
+            if (idle == null && ownIdleSticks && !fcLost) idle = de.droiddrone.common.BeeperRule.ownIdle(f -> fc.frameMayArm(f, f.length));
+            feed = idle != null && !restarting && mode != DEEP_SLEEP && mode != OVERWATCH && now - lastRcTakenMs >= IDLE_AFTER_MS
+                    && fcDisarmed() && !fc.frameMayArm(idle, idle.length);
+            // the last question, as on the phone: on FEED the frame is written
+            if (feed) feed = idleGuard.check(f -> fc.frameMayArm(f, f.length)) == de.droiddrone.common.RcPath.IdleGuard.FEED;
             if (feed) {
                 fc.sticks(idle, idle.length, now);
                 lastRcWriteMs = now;

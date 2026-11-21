@@ -173,6 +173,9 @@ public class Udp {
      * stopped on an armed drone, nor after a frame with ARM on - "arm switch off" from here ended Betaflight's lockout
      * after a failsafe, and the pilot's frames (ARM still on) armed the drone on the ground when the link came back.
      * Static with the idle sticks: it outlives a session and a restarted link.
+     * F-066: not the app's process - one started anew (after an error, ended by Android) knows nothing of a failsafe
+     * before it and feeds; from then the guard itself holds a stick frame that could arm back from the FC until the
+     * pilot's own ARM off has come (handleRcFrame).
      */
     private static final RcPath.IdleGuard idleGuard = new RcPath.IdleGuard();
     /**
@@ -763,16 +766,31 @@ public class Udp {
         PcLinkStats.rcIn();
         // pc.38: the frame's time and its write in one step with the idle sticks' check-and-write (rcWriteLock): an
         // idle frame decided on just before can't land in the writer's one slot after this frame and replace it
+        boolean held;
         synchronized (rcWriteLock) {
             rcPath.taken(now);
             boolean fc = msp.isInitialized();
-            if (fc) msp.setRawRc(rcFrame, count);
+            // F-066: this app fed idle sticks (ARM off) before any stick frame of a PC's - it started anew - and so
+            // ended Betaflight's "switch must be seen off": a frame that could arm is not written until the pilot's
+            // own ARM off has come. One volatile read a frame while nothing is owed; never held while the FC reads
+            // ARMED (a drone that flies has its pilot's sticks)
+            held = idleGuard.armOffOwed()
+                    && idleGuard.holds(msp.frameMayArm(rcFrame, count), fc && msp.armedState(now) == FcArmedState.ARMED);
+            if (fc && !held) msp.setRawRc(rcFrame, count);
             // pc.50: after the write (nothing ahead of the frame) - what the FC read as this frame came, and the
             // frame's channels, for the idle sticks' guard: only a fresh DISARMED counts
             idleGuard.frame(rcFrame, count, fc && msp.armedState(now) == FcArmedState.DISARMED);
         }
+        if (held != armHeldSaid) { // said once each way, never per frame
+            armHeldSaid = held;
+            log(held ? "Stick frames with ARM on held back: this app fed idle sticks (ARM off) before any stick frame came"
+                    + " - not to the FC before the pilot's own ARM off" : "Stick frames to the FC again");
+        }
         if (mavlink.isInitialized()) mavlink.setRcChannelsOverride(java.util.Arrays.copyOf(rcFrame, count));
     }
+
+    /** F-066: the last stick frame was held back (RcPath.IdleGuard.holds); the receive thread's own. */
+    private boolean armHeldSaid;
 
     /** pc.38: a PC frame's write and an idle frame's check-and-write never interleave (both only build and hand over). */
     private final Object rcWriteLock = new Object();

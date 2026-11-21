@@ -108,6 +108,37 @@ class FlightModelTest {
         assertTrue(m.isArmed(), "off and on again: armed");
     }
 
+    /**
+     * What F-066 turns on, in this Betaflight as in the real one: after a failsafe the switch must be seen off before
+     * it arms again - and "off" from anyone will do. The link back with the switch still on: not armed. Idle sticks
+     * (ARM off, as the phone feeds a drone that rests) for a second: the lockout is gone, nothing else stands in the
+     * way, and the same frames as before, ARM still on, arm it.
+     */
+    @Test
+    void armOffFromAnyoneEndsTheSwitchLockoutAfterAFailsafe() {
+        FlightModel m = model(FlightModel.Procedure.DROP);
+        long t = fly(m, T0, T0 + 4000, 1000, 1000);
+        t = fly(m, t, t + 500, 1000, 1900);
+        assertTrue(m.isArmed());
+        t = silent(m, t, t + 2500);
+        assertEquals("failsafe (drop)", m.lastDisarm());
+        t = fly(m, t, t + 2000, 1000, 1900);
+        assertFalse(m.isArmed(), "the lockout: the switch never went off");
+        assertNotEquals(0, m.blockers(t) & FlightModel.FLAG_ARMSWITCH);
+        t = silent(m, t, t + 1000);
+        short[] idle = de.droiddrone.common.BeeperRule.ownIdle(f -> m.frameMayArm(f, f.length));
+        assertNotNull(idle, "the phone's own idle sticks: they cannot arm by this Betaflight's ranges");
+        for (long end = t + 1000; t < end; t += 20) {
+            m.sticks(idle, idle.length, t);
+            m.step(t, 0.02);
+        }
+        assertFalse(m.isArmed());
+        assertEquals(0, m.blockers(t), "the lockout is gone with them, and nothing else of Betaflight's stands in the way");
+        fly(m, t, t + 200, 1000, 1900);
+        assertTrue(m.isArmed(), "armed by a switch nobody touched");
+        assertEquals(2, m.arms());
+    }
+
     @Test
     void sticksBackDuringStageOneEndTheFailsafe() {
         FlightModel m = model(FlightModel.Procedure.DROP);

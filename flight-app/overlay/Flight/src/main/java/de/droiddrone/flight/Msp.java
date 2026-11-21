@@ -204,6 +204,15 @@ public class Msp {
     }
 
     /**
+     * F-066: whether a PC's stick frame (its first count channels) could turn the flight controller's ARM mode on by
+     * its own ranges - also while those aren't read. Asked on the receive thread only while the pilot's ARM off is
+     * owed (RcPath.IdleGuard.holds); nothing allocated.
+     */
+    boolean frameMayArm(short[] frame, int count){
+        return ArmRanges.mayArm(frame, count, armSlots);
+    }
+
+    /**
      * DRAUPNE Link: once a second (standby) or at the usual rate. In standby the status (the ARM flag, which ends
      * standby) still comes every second, the rest every other (mspRun's cadences).
      */

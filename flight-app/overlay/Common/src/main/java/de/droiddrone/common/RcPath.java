@@ -258,6 +258,16 @@ public final class RcPath {
      * or unknown: no) and could not turn ARM on by the FC's own ranges (after the failsafe the link may come and go
      * with the switch still on: each of those frames comes at a disarmed FC). No frame yet: fed, as before (a PC
      * without a radio). Pure; the caller's write lock orders {@link #frame} against {@link #check}.
+     * <p>
+     * F-066: "no frame yet" is also an app that has just started anew - after an error, or ended by Android - while
+     * the link is out, the drone down and disarmed by its failsafe and the pilot's switch still on. This guard is as
+     * old as the app's process: it knows none of that, feeds, and the lockout is gone as above. The idle sticks cannot
+     * wait for the pilot there (a drone that rests after the app started would beep for its lost receiver until a
+     * pilot with a radio came: what they are for, pc.33 and pc.54). So the phone that says "ARM off" on its own
+     * account keeps what that ended: from the first idle frame fed before any stick frame of a PC's, a stick frame
+     * that could arm is not written ({@link #holds}) until one has come that cannot - the pilot's own ARM off, in
+     * this process. Betaflight's own rule, kept by the phone for as long as the phone has undone it; a flight
+     * controller that reads ARMED gets the pilot's sticks whatever is owed.
      */
     public static final class IdleGuard {
         /** Fed; held back: the FC armed (or not known disarmed) at the PC's last frame; that frame's own ARM on. */
@@ -265,6 +275,11 @@ public final class RcPath {
         /** The PC's last stick frame (a copy, its own length); null: none yet. */
         private short[] last;
         private boolean fcDisarmed;
+        /**
+         * F-066: idle sticks were fed before any stick frame of a PC's, and no frame that cannot arm has come since.
+         * Volatile: the stick path reads it for every frame, without a lock; written under the caller's write lock.
+         */
+        private volatile boolean armOffOwed;
 
         /** A PC stick frame was taken, with the FC reading DISARMED in a fresh status then - or not. */
         public synchronized void frame(short[] channels, int count, boolean fcDisarmed) {
@@ -275,13 +290,44 @@ public final class RcPath {
         }
 
         /**
+         * The caller's last question before it feeds: on FEED the idle frame is written. F-066: fed before any stick
+         * frame of a PC's, the pilot's own ARM off is owed from here ({@link #holds}).
          * @param mayArm whether a frame could turn the FC's ARM mode on ({@link ArmRanges#mayArm}; ranges unread: yes)
          * @return FEED, or why the idle sticks are held back
          */
         public synchronized int check(java.util.function.Predicate<short[]> mayArm) {
-            if (last == null) return FEED;
+            if (last == null) {
+                armOffOwed = true;
+                return FEED;
+            }
             if (!fcDisarmed) return HELD_FC_ARMED;
             return mayArm.test(last) ? HELD_ARM_ON : FEED;
+        }
+
+        /**
+         * F-066: whether the pilot's own ARM off is owed - all the stick path reads while it is not (one volatile
+         * read a frame); only then does it ask {@link #holds}.
+         */
+        public boolean armOffOwed() {
+            return armOffOwed;
+        }
+
+        /**
+         * F-066, for a PC's stick frame before it is written, while {@link #armOffOwed}: whether it is held back -
+         * not written to the flight controller. The caller goes on as with any frame taken ({@link #frame}: it is the
+         * pilot's last word, so the idle sticks stop too, and Betaflight is left with its lost receiver and its own
+         * rule again). No lock, nothing allocated; under the caller's write lock, as {@link #check}.
+         * @param mayArm  this frame could turn the FC's ARM mode on ({@link ArmRanges#mayArm}; ranges unread: yes)
+         * @param fcArmed the FC reads ARMED in a fresh status now: never held - a drone that flies has its pilot's
+         *                sticks, whatever this guard thinks it is owed
+         */
+        public boolean holds(boolean mayArm, boolean fcArmed) {
+            if (!armOffOwed) return false;
+            if (!mayArm) {
+                armOffOwed = false; // the pilot's own ARM off: from here the switch is the pilot's again
+                return false;
+            }
+            return !fcArmed;
         }
     }
 }

@@ -285,6 +285,76 @@ class RcPathTest {
         assertEquals(RcPath.IdleGuard.HELD_ARM_ON, check(g, armOnAux9), "judged by the channels sent: AUX9 wasn't");
     }
 
+    // ---- F-066: an app that started anew feeds before any stick frame - and then keeps the switch rule itself
+
+    /** A PC's stick frame as the phone's stick path asks: held back from the flight controller? */
+    private static boolean held(RcPath.IdleGuard g, short[] frame, boolean fcArmed) {
+        return g.armOffOwed() && g.holds(ArmRanges.mayArm(frame, frame.length, ARM_AUX1), fcArmed);
+    }
+
+    @Test
+    void fedBeforeAnyStickFrameArmOnIsHeldBackUntilThePilotsOwnArmOff() {
+        // armed, the link lost, the failsafe disarmed the drone, the switch still on - and the app started anew:
+        // this guard is as old as the app's process and knows none of it
+        RcPath.IdleGuard g = new RcPath.IdleGuard();
+        assertFalse(g.armOffOwed(), "nothing fed yet: nothing owed");
+        assertFalse(held(g, ARM_ON, false));
+        assertEquals(RcPath.IdleGuard.FEED, check(g, ARM_AUX1), "fed all the same: a resting drone must not beep for its receiver");
+        assertTrue(g.armOffOwed(), "the phone said ARM off for a pilot it has not heard: Betaflight's lockout is gone with it");
+        // the link back, the pilot's frames as they are: ARM on, throttle low
+        assertTrue(held(g, ARM_ON, false), "not to the flight controller: it would arm on the ground");
+        assertTrue(held(g, ARM_ON, false), "nor the next one");
+        assertFalse(held(g, ARM_OFF, false), "the pilot's own ARM off: written");
+        assertFalse(g.armOffOwed());
+        assertFalse(held(g, ARM_ON, false), "off and on again: the pilot arms, as Betaflight asks after a failsafe");
+    }
+
+    @Test
+    void aFlightControllerThatReadsArmedIsNeverHeldBackFrom() {
+        RcPath.IdleGuard g = new RcPath.IdleGuard();
+        check(g, ARM_AUX1);
+        assertTrue(g.armOffOwed());
+        assertFalse(held(g, ARM_ON, true), "armed: a drone that flies has its pilot's sticks, whatever is owed");
+        assertTrue(held(g, ARM_ON, false), "read disarmed again, the switch never seen off: held as before");
+    }
+
+    @Test
+    void nothingIsOwedWhenAStickFrameCameBeforeTheIdleSticks() {
+        // the app started anew in the air: the pilot's frames come at an armed flight controller, at once
+        RcPath.IdleGuard g = new RcPath.IdleGuard();
+        assertFalse(held(g, ARM_ON, true));
+        g.frame(ARM_ON, ARM_ON.length, false);
+        assertEquals(RcPath.IdleGuard.HELD_FC_ARMED, check(g, ARM_AUX1), "and no idle sticks after them (pc.50)");
+        assertFalse(g.armOffOwed(), "nothing fed, nothing owed");
+        assertFalse(held(g, ARM_ON, false));
+        // a pilot who connects to a resting drone: ARM off first, the idle sticks after it say what the pilot said
+        RcPath.IdleGuard h = new RcPath.IdleGuard();
+        h.frame(ARM_OFF, ARM_OFF.length, true);
+        assertEquals(RcPath.IdleGuard.FEED, check(h, ARM_AUX1));
+        assertFalse(h.armOffOwed());
+        assertFalse(held(h, ARM_ON, false), "the pilot arms: Betaflight's own to judge");
+    }
+
+    @Test
+    void aFrameHeldBackIsThePilotsLastWordSoTheIdleSticksStopToo() {
+        RcPath.IdleGuard g = new RcPath.IdleGuard();
+        check(g, ARM_AUX1);
+        assertTrue(held(g, ARM_ON, false));
+        g.frame(ARM_ON, ARM_ON.length, true); // the phone goes on as with any frame taken
+        assertEquals(RcPath.IdleGuard.HELD_ARM_ON, check(g, ARM_AUX1), "no more ARM off from the phone: Betaflight has its lost receiver, and its own rule, again");
+        assertTrue(held(g, ARM_ON, false), "and still nothing that could arm");
+    }
+
+    @Test
+    void withTheArmRangesUnreadEveryFrameCouldArm() {
+        RcPath.IdleGuard g = new RcPath.IdleGuard();
+        check(g, ARM_AUX1);
+        assertTrue(g.holds(ArmRanges.mayArm(ARM_OFF, ARM_OFF.length, null), false), "ranges unread (the FC's port just reopened): held");
+        assertTrue(g.armOffOwed(), "and not taken for the pilot's ARM off");
+        short[] noArmChannel = {1500, 1500, 1500, 1000};
+        assertTrue(g.holds(ArmRanges.mayArm(noArmChannel, noArmChannel.length, ARM_AUX1), false), "ARM's channel not sent: Betaflight holds what nobody knows");
+    }
+
     @Test
     void anOlderFrameIsNoLongerFlaggedAsFromALagPc() {
         RcPath p = new RcPath();

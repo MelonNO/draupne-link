@@ -7,6 +7,7 @@ import de.droiddrone.pc.ControlLink;
 import de.droiddrone.pc.FcTelemetry;
 import de.droiddrone.pc.PcConfig;
 import de.droiddrone.pc.video.VideoPipeline;
+import de.droiddrone.testing.Wire;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -32,7 +33,10 @@ class VirtualDroneEndToEndTest {
     private ControlLink link;
     private volatile boolean sending;
     private volatile int armValue = 1000;
+    /** The roll stick and the throttle of the PC's frames (F-066's tests fly). */
+    private volatile int rollValue = 1500, throttleValue = 1000;
     private Thread sticks;
+    private Wire wire;
 
     @AfterEach
     void tearDown() {
@@ -40,12 +44,17 @@ class VirtualDroneEndToEndTest {
         if (sticks != null) sticks.interrupt();
         if (link != null) link.close();
         if (drone != null) drone.stop();
+        if (wire != null) wire.close();
     }
 
     private void startDrone(PcConfig config) throws Exception {
+        startDrone(config, new FlightModel.Setup());
+    }
+
+    private void startDrone(PcConfig config, FlightModel.Setup setup) throws Exception {
         droneStartedAt = System.currentTimeMillis();
         drone = new VirtualDrone(0, "MobileZulu", config.getKey(), InetAddress.getLoopbackAddress(), Fleet.DEFAULT_LAT, Fleet.DEFAULT_LON, 0,
-                new FlightModel.Setup(), log::add);
+                setup, log::add);
         drone.start(0);
     }
 
@@ -55,12 +64,12 @@ class VirtualDroneEndToEndTest {
         link.start();
     }
 
-    /** The PC's stick frames, 50 a second: throttle low, AUX1 at armValue. */
+    /** The PC's stick frames, 50 a second: throttle low, AUX1 at armValue (roll and throttle as F-066's tests set them). */
     private void startSticks() {
         sending = true;
         sticks = new Thread(() -> {
             while (sending) {
-                link.sendRc(new short[]{1500, 1500, 1500, 1000, (short) armValue, 1500, 1000, 1000});
+                link.sendRc(new short[]{(short) rollValue, 1500, 1500, (short) throttleValue, (short) armValue, 1500, 1000, 1000});
                 try {
                     Thread.sleep(20);
                 } catch (InterruptedException e) {
@@ -446,6 +455,138 @@ class VirtualDroneEndToEndTest {
             observer.send(new DatagramPacket(Observe.encodeStop(config.getKey()), Observe.encodeStop(config.getKey()).length,
                     InetAddress.getLoopbackAddress(), drone.port()));
         }
+    }
+
+    // ---- F-066: the phone app started anew while the link is out
+
+    private boolean said(String part) {
+        return log.stream().anyMatch(l -> l.contains(part));
+    }
+
+    private long saidTimes(String part) {
+        return log.stream().filter(l -> l.contains(part)).count();
+    }
+
+    /** The PC's settings with a small picture: the made-up drone's encoder leaves this PC's cores to the sticks' beat. */
+    private static PcConfig smallPicture() throws Exception {
+        PcConfig config = PcConfig.defaults();
+        config.set("cameraWidth", "320");
+        config.set("cameraHeight", "180");
+        config.set(ControlLink.VIDEO_MODE_KEY, "NORMAL");
+        return config;
+    }
+
+    /** Sticks from the PC, the boot grace over, the switch on: armed. */
+    private void armByTheSwitch() throws Exception {
+        startSticks();
+        int framesAt = drone.rcFramesTaken();
+        waitFor(() -> drone.rcFramesTaken() > framesAt + 10, 3000, "the PC's sticks at the phone, the switch off", log);
+        Thread.sleep(Math.max(0, FlightModel.BOOT_GRACE_MS + 700 - (System.currentTimeMillis() - startedAt())));
+        armValue = 1900;
+        if (!de.droiddrone.testing.Waits.until(() -> drone.fc.isArmed(), 2000)) armOffAndOn("armed");
+    }
+
+    /**
+     * The switch off and on, as a pilot does it - and again when a pause of this PC left a gap in the sticks just then:
+     * Betaflight wants the switch off once more after that (ARMSWITCH, the test bench's F-002).
+     */
+    private void armOffAndOn(String what) throws Exception {
+        for (int tries = 0; tries < 4; tries++) {
+            armValue = 1000;
+            Thread.sleep(700);
+            armValue = 1900;
+            if (de.droiddrone.testing.Waits.until(() -> drone.fc.isArmed(), 2000)) return;
+            log.add("TEST: not armed at the switch (a gap in the sticks just then); off and on again");
+        }
+        waitFor(() -> drone.fc.isArmed(), 1000, what, log);
+    }
+
+    /**
+     * F-066. Armed on the bench; the link is cut and Betaflight's failsafe disarms the drone, the pilot's switch still
+     * on: Betaflight wants the switch off before it arms again. In the outage the phone app starts anew (an error and
+     * its own reopening, Android ending it): what it knew of the PC's sticks is gone, it reads a disarmed flight
+     * controller and feeds its own idle sticks - ARM off, and Betaflight's lockout is ended by them. The link comes
+     * back with the pilot's frames as they are, ARM on and throttle low: they must not arm the drone on the ground.
+     * Off and on again, as Betaflight asks after a failsafe: armed.
+     */
+    @Test
+    void anAppStartedAnewInAnOutageDoesNotLetTheSwitchLeftOnArmTheDrone() throws Exception {
+        PcConfig config = smallPicture();
+        startDrone(config);
+        drone.link().setBaseMs(0); // its own network delay off: the wire is the network here
+        drone.setOwnIdleSticks(true); // as the phone app since pc.54
+        wire = new Wire(InetAddress.getLoopbackAddress(), drone.port());
+        link = new ControlLink(config, InetAddress.getLoopbackAddress(), wire.port(), 0);
+        link.start();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY", log);
+        armByTheSwitch();
+
+        wire.rule((toPhone, d, len) -> Wire.Rule.LOST);
+        waitFor(() -> !drone.fc.isArmed() && drone.fc.failsafe() == FlightModel.Failsafe.DROPPED, 3500, "failsafe, dropped", log);
+        assertTrue((drone.fc.blockers(System.currentTimeMillis()) & FlightModel.FLAG_ARMSWITCH) != 0, "Betaflight's own lockout: the switch must go off first");
+
+        drone.restartApp();
+        waitFor(() -> said("phone app back"), 6000, "the phone app back", log);
+        waitFor(() -> (drone.fc.blockers(System.currentTimeMillis()) & FlightModel.FLAG_ARMSWITCH) == 0, 4000,
+                "the new app's own idle sticks at the flight controller: ARM off, and Betaflight's lockout is gone", log);
+        // the outage goes on: by the time the link returns Betaflight has had a receiver again for a while - nothing
+        // of its own stands in the way of arming any more (clean sticks for half a second, the failsafe over)
+        Thread.sleep(1000);
+        // (on a PC too busy to keep the made-up drone's beat its Betaflight never has half a second of sticks without
+        // a gap, and refuses to arm for that alone: said in the log - what follows holds there too)
+        if (!de.droiddrone.testing.Waits.until(() -> drone.fc.blockers(System.currentTimeMillis()) == 0, 5000)) {
+            log.add("TEST: the made-up Betaflight still would not arm at the switch (its flags: " + drone.fc.blockers(System.currentTimeMillis()) + ")");
+        }
+        assertFalse(drone.fc.isArmed());
+
+        int framesAt = drone.rcFramesTaken();
+        wire.clear();
+        waitFor(() -> link.getState() == ControlLink.State.READY, 8000, "the link back", log);
+        waitFor(() -> drone.rcFramesTaken() > framesAt + 50, 4000, "the pilot's stick frames at the phone again, ARM still on", log);
+        Thread.sleep(1500);
+        assertFalse(drone.fc.isArmed(), "not armed by the switch left on\n" + String.join("\n", log));
+        assertEquals(1, drone.fc.arms());
+        assertTrue(said("held back"), "the phone held the frames that could arm back");
+
+        armOffAndOn("armed by the pilot's own switch, off and on");
+        assertEquals(2, drone.fc.arms());
+    }
+
+    /**
+     * F-066's other side: the app started anew while the drone flies. Its failsafe is GPS rescue, so it is still
+     * armed and in the air when the app is back (a restart is seconds without sticks). Nothing is owed there: no idle
+     * sticks to an armed flight controller, and the pilot's frames - ARM on - reach it as they come. A stick moved
+     * ends the rescue: the drone is the pilot's, armed all along.
+     */
+    @Test
+    void anAppStartedAnewInTheAirPassesThePilotsSticksAtOnce() throws Exception {
+        PcConfig config = smallPicture();
+        FlightModel.Setup setup = new FlightModel.Setup();
+        setup.procedure = FlightModel.Procedure.GPS_RESCUE;
+        startDrone(config, setup);
+        drone.link().setBaseMs(0); // its own network delay off: the sticks are what is timed here
+        drone.setOwnIdleSticks(true);
+        startLink(config, null);
+        waitFor(() -> link.getState() == ControlLink.State.READY, 5000, "the link READY", log);
+        armByTheSwitch();
+        throttleValue = 1700;
+        waitFor(() -> drone.fc.altitudeM() > 10, 8000, "in the air", log);
+        throttleValue = 1450;
+        long idleBefore = saidTimes("idle sticks to the FC");
+
+        drone.restartApp();
+        rollValue = 1900; // the pilot's stick, held over through the outage
+        waitFor(() -> drone.fc.failsafe() == FlightModel.Failsafe.RESCUE, 4000, "no sticks: Betaflight's failsafe flies the rescue", log);
+        waitFor(() -> said("phone app back"), 6000, "the phone app back", log);
+        assertTrue(drone.fc.isArmed(), "armed and in the air as the app comes back");
+        int framesAt = drone.rcFramesTaken();
+        waitFor(() -> drone.rcFramesTaken() > framesAt, 8000, "the PC connected again, its first stick frame taken", log);
+        waitFor(() -> drone.fc.channels()[0] == 1900 && drone.fc.channels()[4] == 1900, 300, "the pilot's sticks at the flight controller as they come", log);
+        waitFor(() -> drone.fc.failsafe() == FlightModel.Failsafe.NONE, 3000, "the rescue ends at the pilot's stick", log);
+        assertTrue(drone.fc.isArmed());
+        assertEquals(1, drone.fc.arms(), "armed all along, not again");
+        assertEquals(idleBefore, saidTimes("idle sticks to the FC"), "never ARM off from the phone to a drone in the air");
+        assertFalse(said("held back"), "and none of the pilot's frames held back");
     }
 
     /** What the PC's video pipeline would put on screen. */
