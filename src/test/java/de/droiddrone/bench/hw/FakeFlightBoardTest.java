@@ -94,6 +94,56 @@ class FakeFlightBoardTest {
     }
 
     @Test
+    void aDumpWritesEveryValueOutAndADiffHangsOnTheDefaultsOfThisStart() throws IOException {
+        FakeFlightBoard flown = FakeFlightBoard.flown();
+        String dump = flown.saved(), diff = flown.savedDiff();
+        // the real dump's shape: its head, every feature off and then on again, a "# " line under each timer pin, save last
+        assertTrue(dump.startsWith("# version\n# Betaflight / STM32F405 (S405) 4.4.1 Apr 11 2023 / 01:20:48 (madeup000) MSP API: 1.45\n"
+                + "# config: YES\n\n# start the command batch\nbatch start\n\nboard_name MADEUPF405\nmanufacturer_id MDUP\nmcu_id "), dump);
+        assertFalse(dump.contains("defaults nosave"), "only a diff all has that line");
+        assertTrue(dump.contains("# timer\ntimer B00 AF2\n# pin B00: TIM2 CH1 (AF2)\ntimer B01 AF2\n"), dump);
+        assertTrue(dump.contains("\nfeature -GPS\n") && dump.contains("\nfeature GPS\n") && dump.contains("\nfeature -RX_MSP\n"), dump);
+        assertFalse(dump.contains("\nfeature RX_MSP\n"));
+        assertTrue(dump.contains("set min_throttle = 1070") && dump.contains("set use_unsynced_pwm = OFF") && dump.endsWith("# save configuration\nsave"), dump);
+        assertFalse(diff.contains("min_throttle") || diff.contains("use_unsynced_pwm") || diff.contains("timer"), diff);
+        // its own lines, put on a board that is at its defaults, make the same board
+        List<String> lines = new ArrayList<>();
+        for (String line : dump.split("\n")) if (!line.isBlank() && !line.startsWith("#") && !line.equals("save")) lines.add(line);
+        assertEquals(dump, new FakeFlightBoard().setUp(lines.toArray(new String[0])).saved());
+        // a timer taken off a pin: the diff says so, the dump just has no line for the pin
+        flown.setUp("timer A02 NONE");
+        assertTrue(flown.savedDiff().contains("# timer\ntimer A02 NONE\n"), flown.savedDiff());
+        assertFalse(flown.saved().contains("A02"));
+        // a start that takes the ESCs for brushed ones: what is saved stays, what counts as a default does not
+        dump = flown.saved();
+        diff = flown.savedDiff();
+        flown.flipDefaultsAtNextStart = true;
+        flown.unplug();
+        flown.plugIn();
+        assertEquals(dump, flown.saved());
+        assertEquals(diff.replace("set serial_update_rate_hz = 1000\n", "set serial_update_rate_hz = 1000\nset min_throttle = 1070\nset use_unsynced_pwm = OFF\n"),
+                flown.savedDiff(), "two lines more, as on the real board");
+        BetaflightUsb.use(flown.usb());
+        try (BetaflightUsb fc = BoardPort.open(flown.port(), T, log::add)) {
+            fc.enterCli();
+            fc.command("defaults nosave");
+            assertTrue(fc.command("get min_throttle").contains("min_throttle = 1000"), "this start's default");
+            assertTrue(fc.command("get use_unsynced_pwm").contains("use_unsynced_pwm = ON"));
+            // a feature this build was made without: named in the dump, "Unavailable" to switch on or off
+            flown.featuresNotBuilt.add("RANGEFINDER");
+            assertEquals("Unavailable", fc.command("feature -RANGEFINDER"));
+            assertTrue(BetaflightPlan.refused(fc.command("feature RANGEFINDER")));
+            assertTrue(flown.inMemory().contains("\nfeature -RANGEFINDER\n") && !flown.inMemory().contains("\nfeature RANGEFINDER\n"));
+        }
+        assertEquals(dump, flown.saved(), "left by exit: nothing of it saved");
+        // and the usual defaults again at a next such start
+        flown.flipDefaultsAtNextStart = true;
+        flown.unplug();
+        flown.plugIn();
+        assertEquals(diff, flown.savedDiff());
+    }
+
+    @Test
     void theMotorTestSpinsReordersAndTurnsThePropsDirection() throws IOException {
         board.battery(16.4, 4);
         try (MotorTest test = MotorTest.open(board.port())) {

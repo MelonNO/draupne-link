@@ -247,7 +247,8 @@ tasks.register('escProbe', JavaExec) {
 //   gradlew boardSnapshot [-Pescs=true]                     reads everything, changes nothing; Betaflight restarts once
 //                                                           (the CLI visit). Files it under %LOCALAPPDATA%\DraupneBench\board.
 //   gradlew boardRestore -Psnapshot=<folder> [-Pescs=true]  puts a snapshot's settings back, all or nothing, and compares;
-//                                                           -Preplay=always writes even when nothing differs.
+//                                                           -Preplay=always writes even when nothing differs;
+//                                                           -Pcompare=only reads and compares and NEVER writes.
 //   gradlew boardSafe                                       STOP to every motor, read back; fails unless disarmed and at rest.
 // -Pescs=true also reads the ESCs' settings (battery in, props off): their start-up tones sound once, no motor turns.
 def boardTool = { String taskName, String tool, String what, List<String> properties ->
@@ -260,7 +261,7 @@ def boardTool = { String taskName, String tool, String what, List<String> proper
     }
 }
 boardTool('boardSnapshot', 'BoardSnapshot', "Reads and files the settings of the flight controller on USB (-Pport=COM9, -Pescs=true)", ['port', 'escs'])
-boardTool('boardRestore', 'BoardRestore', "Puts a snapshot's settings back on the flight controller on USB (-Psnapshot=<folder>, -Pport=COM9, -Pescs=true)", ['port', 'snapshot', 'escs', 'replay'])
+boardTool('boardRestore', 'BoardRestore', "Puts a snapshot's settings back on the flight controller on USB (-Psnapshot=<folder>, -Pport=COM9, -Pescs=true, -Pcompare=only)", ['port', 'snapshot', 'escs', 'replay', 'compare'])
 boardTool('boardSafe', 'BoardSafe', "Stops every motor of the flight controller on USB and says whether it is disarmed and at rest (-Pport=COM9)", ['port'])
 // ---- R1 END ------------------------------------------------------------------------------------------------------------------
 

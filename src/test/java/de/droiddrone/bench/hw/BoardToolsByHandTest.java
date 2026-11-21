@@ -70,6 +70,21 @@ class BoardToolsByHandTest {
                 && text.contains("spin direction") && text.contains("firmware"), text);
         assertTrue(text.contains("Betaflight is back after its restart: disarmed."), text);
         assertEquals(0, board.saves);
+        // compare only, after a start with other defaults: the same settings, the other diff said in one line, exit code 0
+        board.flipDefaultsAtNextStart = true;
+        board.unplug();
+        board.plugIn();
+        assertEquals(0, BoardRestore.byHand(new String[]{"", snapshot.toString(), "", "", "only"}, out, root, T));
+        text = said();
+        assertTrue(text.contains("Compare only (nothing is written) of the flight controller on"), text);
+        assertTrue(text.contains("COMPARED ONLY, nothing written: dump all and the MSP facts are the snapshot's."), text);
+        assertTrue(text.contains("Note: Betaflight's own defaults differed at this start: 2 lines of diff all, the settings themselves are equal."), text);
+        assertTrue(!text.contains("What a restore never puts back") && text.contains("Betaflight is back after its restart: disarmed."), text);
+        assertEquals(0, board.saves);
+        // a word after -Pcompare= that is not "only" is not taken for "go on and write"
+        assertEquals(2, BoardRestore.byHand(new String[]{"", snapshot.toString(), "", "", "yes"}, out, root, T));
+        assertTrue(said().contains("-Pcompare=yes is not known"));
+        assertEquals(0, board.saves);
         // armed: the restore refuses, and the board is not safe
         board.arm();
         assertEquals(2, BoardRestore.byHand(new String[]{"", snapshot.toString()}, out, root, T));

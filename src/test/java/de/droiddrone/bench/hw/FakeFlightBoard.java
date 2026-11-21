@@ -34,10 +34,17 @@ import java.util.TreeSet;
  * it and an 'R' sends the board into its bootloader ({@link #inBootloader}): CLI text must only go to an open CLI.
  * <p>
  * <b>The CLI</b> (Betaflight 4.4's words and formats): version, board_name, manufacturer_id, mcu_id, signature, get,
- * set, aux, feature, serial, beeper, beacon, map, mixer, profile, rateprofile, batch, defaults [nosave], diff [all],
- * dump [all], save, exit. Anything else: ###ERROR. The settings are a made-up table of two dozen with Betaflight's
- * names ({@link #SETTINGS}), two PID profiles and two rate profiles (the real one has four each: fewer here keeps a
- * replay short).
+ * set, aux, feature, serial, timer, beeper, beacon, map, mixer, profile, rateprofile, batch, defaults [nosave],
+ * diff [all], dump [all], save, exit. Anything else: ###ERROR. The settings are a made-up table of two dozen with
+ * Betaflight's names ({@link #SETTINGS}), two PID profiles and two rate profiles (the real one has four each: fewer
+ * here keeps a replay short).
+ * <p>
+ * <b>Dump and diff</b> have the real ones' shape where a replay meets it: "# version", the version, "# config: YES",
+ * "batch start", ("defaults nosave" in "diff all" only,) board_name, manufacturer_id, mcu_id, signature, the parts
+ * each under its "# heading", "save" last. A dump writes every value out - every feature switched off and then those
+ * that are on switched on again - but of the timers only the pins that have one, each with a "# pin ..." line under
+ * it that is no command. A diff has what differs from Betaflight's own defaults <i>at this start</i>, and those are
+ * not the same at every start ({@link #flipDefaultsAtNextStart}).
  * <p>
  * <b>MSP:</b> API / variant / version / build / board info, UID, status (armed flag, sensors), feature mask get/set,
  * mixer get/set (props direction), rx map, mode ranges, box ids, advanced config (motor protocol), motor config,
@@ -48,12 +55,13 @@ import java.util.TreeSet;
  * range (and PREARM's, if set) holds in the last MSP_SET_RAW_RC, the receiver is MSP and the throttle was low when
  * it went on; no timing, no RX loss, no other arming blocks. Armed motors read one fixed value. A DShot "spin
  * direction + save" changes the direction byte of a BLHeli_S-kind ESC's settings and nothing else. The sensors, the
- * battery and the mixer's motor count (always 4) are what the test sets. Dumps are short: no resources, timers,
- * OSD, VTX.
+ * battery and the mixer's motor count (always 4) are what the test sets. Dumps are short: four timer pins stand for
+ * all of resources, timers and dma; no LEDs, OSD, VTX.
  * <p>
  * <b>For a test:</b> {@link #setUp} and {@link #flown} (the board as someone left it), {@link #features}, {@link #arm},
  * {@link #battery}, {@link #fitEscs}, {@link #uid}, {@link #version}, {@link #cutWire} and the cut counters,
- * {@link #refuseCli}, {@link #cutShortListings}, {@link #unplug}, {@link #fly}; and what happened: {@link #cli()}, {@link #mspRequests()},
+ * {@link #refuseCli}, {@link #cutShortListings}, {@link #flipDefaultsAtNextStart}, {@link #featuresNotBuilt},
+ * {@link #unplug}, {@link #fly}; and what happened: {@link #cli()}, {@link #mspRequests()},
  * {@link #dshotCommands()}, {@link #saves}, {@link #restarts}, {@link #saved()}, {@link #inMemory()}, {@link #motors()}.
  * Thread-safe: one lock for the board.
  */
@@ -88,18 +96,31 @@ public final class FakeFlightBoard {
 
     private enum Section { MASTER, PROFILE, RATE }
 
-    /** One CLI setting: where it lives, what it takes, what it is on a fresh board. */
-    private record Setting(String name, Section section, Kind kind, String fresh, List<String> choices, int min, int max, int count) {
+    /**
+     * One CLI setting: where it lives, what it takes, what it is on a fresh board - and, for the few Betaflight gives
+     * other defaults when it takes the ESCs for brushed ones at a start, what it is on a fresh board then.
+     */
+    private record Setting(String name, Section section, Kind kind, String fresh, String brushedFresh, List<String> choices, int min, int max,
+                           int count) {
         static Setting number(String name, Section section, int fresh, int min, int max) {
-            return new Setting(name, section, Kind.NUMBER, Integer.toString(fresh), List.of(), min, max, 0);
+            return new Setting(name, section, Kind.NUMBER, Integer.toString(fresh), null, List.of(), min, max, 0);
         }
 
         static Setting choice(String name, String fresh, String... choices) {
-            return new Setting(name, Section.MASTER, Kind.CHOICE, fresh, List.of(choices), 0, 0, 0);
+            return new Setting(name, Section.MASTER, Kind.CHOICE, fresh, null, List.of(choices), 0, 0, 0);
         }
 
         static Setting array(String name, String fresh, int count, int min, int max) {
-            return new Setting(name, Section.MASTER, Kind.ARRAY, fresh, List.of(), min, max, count);
+            return new Setting(name, Section.MASTER, Kind.ARRAY, fresh, null, List.of(), min, max, count);
+        }
+
+        /** The same setting, with this as its default at a start that took the ESCs for brushed ones. */
+        Setting brushed(String otherFresh) {
+            return new Setting(name, section, kind, fresh, otherFresh, choices, min, max, count);
+        }
+
+        String fresh(boolean brushed) {
+            return brushed && brushedFresh != null ? brushedFresh : fresh;
         }
 
         /** The value as Betaflight keeps and prints it, or null when it does not take it. */
@@ -152,6 +173,8 @@ public final class FakeFlightBoard {
             Setting.choice("mag_hardware", "AUTO", "AUTO", "NONE", "HMC5883", "AK8975", "AK8963", "QMC5883", "LIS3MDL", "IST8310"),
             Setting.number("min_check", Section.MASTER, 1050, 750, 1250),
             Setting.number("serial_update_rate_hz", Section.MASTER, 100, 100, 2000),
+            Setting.number("min_throttle", Section.MASTER, 1070, 1000, 2000).brushed("1000"),
+            Setting.choice("use_unsynced_pwm", "OFF", "OFF", "ON").brushed("ON"),
             Setting.choice("motor_pwm_protocol", "DSHOT600", PROTOCOLS),
             Setting.array("motor_output_reordering", "0,1,2,3,4,5,6,7", 8, 0, 7),
             Setting.choice("failsafe_procedure", "DROP", "AUTO-LANDING", "DROP", "GPS-RESCUE"),
@@ -163,7 +186,7 @@ public final class FakeFlightBoard {
             Setting.number("small_angle", Section.MASTER, 25, 0, 180),
             Setting.choice("gps_auto_baud", "OFF", "OFF", "ON"),
             Setting.choice("gps_rescue_allow_arming_without_fix", "OFF", "OFF", "ON"),
-            new Setting("craft_name", Section.MASTER, Kind.TEXT, "", List.of(), 0, 16, 0),
+            new Setting("craft_name", Section.MASTER, Kind.TEXT, "", null, List.of(), 0, 16, 0),
             Setting.number("stats_total_flights", Section.MASTER, 0, 0, Integer.MAX_VALUE),
             Setting.number("stats_total_time_s", Section.MASTER, 0, 0, Integer.MAX_VALUE),
             Setting.number("p_roll", Section.PROFILE, 45, 0, 250),
@@ -180,25 +203,33 @@ public final class FakeFlightBoard {
         final int[][] aux = new int[AUX_SLOTS][];
         /** Port id (Betaflight 4.4's numbers: UART1 = 0, USB VCP = 20) to "functions msp gps telemetry blackbox". */
         final Map<Integer, String> serial = new LinkedHashMap<>();
+        /**
+         * Pin to its timer ("B00" to "AF2"). A dump lists the pins that have one and says nothing of a pin that has
+         * none - so a default taken off a pin is in a "diff" ("timer A02 NONE") and missing from a "dump".
+         */
+        final Map<String, String> timers = new LinkedHashMap<>();
 
-        Config() {
+        /** A fresh board's settings: Betaflight's defaults as they are at a start that took the ESCs for brushed ones, or not. */
+        Config(boolean brushed) {
             for (int i = 0; i < PROFILES; i++) profiles.add(new LinkedHashMap<>());
             for (int i = 0; i < RATE_PROFILES; i++) rates.add(new LinkedHashMap<>());
             for (Setting s : SETTINGS) {
                 switch (s.section()) {
-                    case MASTER -> master.put(s.name(), s.fresh());
-                    case PROFILE -> profiles.forEach(p -> p.put(s.name(), s.fresh()));
-                    default -> rates.forEach(r -> r.put(s.name(), s.fresh()));
+                    case MASTER -> master.put(s.name(), s.fresh(brushed));
+                    case PROFILE -> profiles.forEach(p -> p.put(s.name(), s.fresh(brushed)));
+                    default -> rates.forEach(r -> r.put(s.name(), s.fresh(brushed)));
                 }
             }
             for (int i = 0; i < AUX_SLOTS; i++) aux[i] = FREE_SLOT.clone();
             serial.put(20, "1 115200 57600 0 115200"); // USB: MSP
             serial.put(0, "64 115200 57600 0 115200"); // UART1: the serial receiver
             for (int id : new int[]{1, 2, 5}) serial.put(id, "0 115200 57600 0 115200");
+            for (String pin : List.of("B00", "B01")) timers.put(pin, "AF2"); // the four motor pins
+            for (String pin : List.of("A03", "A02")) timers.put(pin, "AF3");
         }
 
         Config copy() {
-            Config c = new Config();
+            Config c = new Config(false);
             c.master.putAll(master);
             for (int i = 0; i < PROFILES; i++) c.profiles.get(i).putAll(profiles.get(i));
             for (int i = 0; i < RATE_PROFILES; i++) c.rates.get(i).putAll(rates.get(i));
@@ -212,6 +243,8 @@ public final class FakeFlightBoard {
             for (int i = 0; i < AUX_SLOTS; i++) c.aux[i] = aux[i].clone();
             c.serial.clear();
             c.serial.putAll(serial);
+            c.timers.clear();
+            c.timers.putAll(timers);
             return c;
         }
 
@@ -224,8 +257,6 @@ public final class FakeFlightBoard {
             };
         }
     }
-
-    private static final Config FRESH = new Config();
 
     // ------------------------------------------------------------------ what the board is (a test may change it)
 
@@ -243,10 +274,22 @@ public final class FakeFlightBoard {
     public final Set<Integer> offeredModes = new TreeSet<>(Set.of(0, 1, 2, 13, 26, 27, 28, 35, 36, 46));
     /** False: the CLI has no name for RX_MSP, as Betaflight 2025.12 - the bit is there over MSP only. */
     public volatile boolean cliNamesRxMsp = true;
+    /**
+     * Features this build was made without ("GPS", "RANGEFINDER"): the CLI knows their names, a dump lists them
+     * switched off, and "feature X" or "feature -X" is answered "Unavailable" (as BetaflightPlan.refused knows it).
+     */
+    public final Set<String> featuresNotBuilt = new TreeSet<>();
     /** MSP_STATUS' sensors: a GPS that talks, a compass. */
     public volatile boolean gps, mag;
     /** A restart takes the port away: that many looks for it (the port list, an open) find none. */
     public volatile int restartLooks = 2;
+    /**
+     * The next start (a restart, or the power back) takes the ESCs for the other kind - brushed, then brushless
+     * again - as Betaflight 4.4.1 was seen to do on a real board from one start to the next: its own defaults for
+     * min_throttle (1070 / 1000) and use_unsynced_pwm (OFF / ON) are the other pair from then on. What is saved does
+     * not change, so "dump" prints the same and "diff" does not.
+     */
+    public volatile boolean flipDefaultsAtNextStart;
 
     // ------------------------------------------------------------------ faults a test asks for
 
@@ -273,7 +316,10 @@ public final class FakeFlightBoard {
     // ------------------------------------------------------------------ the board's state
 
     private final BetaflightUsb.Port port;
-    private Config saved = new Config(), ram = new Config();
+    private Config saved = new Config(false), ram = new Config(false);
+    /** Betaflight's own defaults at this start: what "diff" compares with and "defaults" goes back to. */
+    private Config fresh = new Config(false);
+    private boolean brushed;
     private final int[] motors = new int[MOTORS];
     private int[] rc;
     private boolean cli, batch, batchError, forcedArmed, stickArmed, unplugged, bootloader;
@@ -526,6 +572,11 @@ public final class FakeFlightBoard {
     // ------------------------------------------------------------------ restarts
 
     private void powerCycle() {
+        if (flipDefaultsAtNextStart) { // what is saved stays: only what counts as a default is other
+            flipDefaultsAtNextStart = false;
+            brushed = !brushed;
+            fresh = new Config(brushed);
+        }
         ram = saved.copy();
         cli = batch = batchError = bootloader = false;
         cliLine.setLength(0);
@@ -762,7 +813,7 @@ public final class FakeFlightBoard {
             case Msp.REBOOT:
                 return new byte[]{0};
             case Msp.ADVANCED_CONFIG:
-                return new Le().u8(1).u8(2).u8(0).u8(Arrays.asList(PROTOCOLS).indexOf(ram.master.get("motor_pwm_protocol")))
+                return new Le().u8(1).u8(2).u8(on(ram, "use_unsynced_pwm") ? 1 : 0).u8(Arrays.asList(PROTOCOLS).indexOf(ram.master.get("motor_pwm_protocol")))
                         .u16(480).u16(550).u8(0).u8(0).u8(0).u8(0).u8(48).u16(125).u16(0).u8(2).u8(0).u8(0).bytes();
             case Msp.STATUS:
                 return new Le().u16(125).u16(0).u16(1 | (mag ? 1 << 2 : 0) | (gps ? 1 << 3 : 0)).u32(armed() ? 1 : 0)
@@ -784,7 +835,7 @@ public final class FakeFlightBoard {
                 return new Le().u8(cells).u16(0).u8((int) Math.min(255, Math.round(volts * 10))).u16(0).u16(0).u8(0)
                         .u16((int) Math.round(volts * 100)).bytes();
             case Msp.MOTOR_CONFIG:
-                return new Le().u16(1070).u16(2000).u16(1000).u8(MOTORS).u8(14).u8(0).u8(0).bytes();
+                return new Le().u16(Integer.parseInt(ram.master.get("min_throttle"))).u16(2000).u16(1000).u8(MOTORS).u8(14).u8(0).u8(0).bytes();
             case Msp.UID:
                 return uid.clone();
             case Msp.BEEPER_CONFIG:
@@ -930,7 +981,7 @@ public final class FakeFlightBoard {
                 batch = batchError = false;
                 return "###ERROR IN " + word + ": ERRORS WERE DETECTED - PLEASE FIX ERRORS THEN 'SAVE'###";
             }
-            if (word.equals("defaults")) ram = new Config();
+            if (word.equals("defaults")) ram = new Config(brushed);
             saved = ram.copy();
             saves++;
             link.send("# saving\r\n\r\nRebooting\r\n");
@@ -970,6 +1021,8 @@ public final class FakeFlightBoard {
                 return feature(args);
             case "serial":
                 return serial(args);
+            case "timer":
+                return timer(args);
             case "beeper":
                 return beeper(word, args, ALL_BEEPERS, true);
             case "beacon":
@@ -1013,7 +1066,7 @@ public final class FakeFlightBoard {
                 return error(word, "INVALID OPTION");
             case "defaults":
                 if (!args.equalsIgnoreCase("nosave")) return ""; // alone it saves and restarts: wireCommand
-                ram = new Config();
+                ram = new Config(brushed);
                 batchError = false; // as Betaflight: the batch goes on, its errors so far forgotten
                 return "# resetting to defaults";
             case "diff":
@@ -1170,9 +1223,29 @@ public final class FakeFlightBoard {
         String name = off ? args.substring(1) : args;
         int bit = name.isEmpty() ? -1 : featureBit(name);
         if (bit < 0) return error("feature", "INVALID NAME: " + name);
+        if (featuresNotBuilt.contains(FEATURES[bit])) return "Unavailable"; // on or off alike; no error of the batch's
         if (off) ram.features &= ~(1 << bit);
         else ram.features |= 1 << bit;
         return (off ? "Disabled " : "Enabled ") + FEATURES[bit];
+    }
+
+    /** "timer": the pins with a timer; "timer B00 AF2" gives a pin one, "timer B00 NONE" takes it off. */
+    private String timer(String args) {
+        if (args.isEmpty()) {
+            List<String> out = new ArrayList<>();
+            ram.timers.forEach((pin, af) -> out.addAll(timerLines(pin, af)));
+            return String.join("\r\n", out);
+        }
+        String[] p = args.toUpperCase(Locale.ROOT).split("\\s+");
+        if (p.length != 2 || !p[0].matches("[A-H]\\d\\d") || !p[1].matches("AF\\d+|NONE")) return error("timer", "PARSING FAILED");
+        if (p[1].equals("NONE")) ram.timers.remove(p[0]);
+        else ram.timers.put(p[0], p[1]);
+        return String.join("\r\n", timerLines(p[0], p[1]));
+    }
+
+    /** A pin's line as Betaflight prints it, with the line under it that says which timer that is: no command, a "# " line. */
+    private static List<String> timerLines(String pin, String af) {
+        return af.equals("NONE") ? List.of("timer " + pin + " NONE") : List.of("timer " + pin + " " + af, "# pin " + pin + ": TIM" + af.substring(2) + " CH1 (" + af + ")");
     }
 
     private String serial(String args) {
@@ -1222,6 +1295,7 @@ public final class FakeFlightBoard {
         List<String> o = new ArrayList<>();
         o.add("# version");
         o.add("# " + versionLine());
+        o.add("# config: YES");
         o.add("");
         o.add("# start the command batch");
         o.add("batch start");
@@ -1236,38 +1310,53 @@ public final class FakeFlightBoard {
         o.add("mcu_id " + mcuId());
         o.add("signature ");
         List<String> lines = new ArrayList<>();
-        if (!diff || c.mixer != FRESH.mixer) lines.add("mixer " + MIXERS[c.mixer]);
+        c.timers.forEach((pin, af) -> {
+            if (!diff || !af.equals(fresh.timers.get(pin))) lines.addAll(timerLines(pin, af));
+        });
+        if (diff) for (String pin : fresh.timers.keySet()) if (!c.timers.containsKey(pin)) lines.addAll(timerLines(pin, "NONE"));
+        section(o, "timer", lines);
+        if (!diff || c.mixer != fresh.mixer) lines.add("mixer " + MIXERS[c.mixer]);
         section(o, "mixer", lines);
-        for (int i = 0; i < FEATURES.length; i++) {
-            boolean is = (c.features & 1 << i) != 0, was = (FRESH.features & 1 << i) != 0;
-            if (featureBit(FEATURES[i].isEmpty() ? "?" : FEATURES[i]) == i && (!diff || is != was)) lines.add("feature " + (is ? "" : "-") + FEATURES[i]);
+        // a dump switches every feature off first, then those that are on on again; a diff has what differs
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < FEATURES.length; i++) {
+                if (featureBit(FEATURES[i].isEmpty() ? "?" : FEATURES[i]) != i) continue;
+                boolean is = (c.features & 1 << i) != 0, was = (fresh.features & 1 << i) != 0;
+                if (diff) {
+                    if (pass == 0 && is != was) lines.add("feature " + (is ? "" : "-") + FEATURES[i]);
+                } else if (pass == 0) {
+                    lines.add("feature -" + FEATURES[i]);
+                } else if (is) {
+                    lines.add("feature " + FEATURES[i]);
+                }
+            }
         }
         section(o, "feature", lines);
         for (int i = 0; i < BEEPERS.length - 1; i++) {
             boolean off = (c.beeperOff & 1 << i) != 0;
-            if (!diff || off != ((FRESH.beeperOff & 1 << i) != 0)) lines.add("beeper " + (off ? "-" : "") + BEEPERS[i]);
+            if (!diff || off != ((fresh.beeperOff & 1 << i) != 0)) lines.add("beeper " + (off ? "-" : "") + BEEPERS[i]);
         }
         section(o, "beeper", lines);
         for (int i = 0; i < BEEPERS.length - 1; i++) {
             boolean off = (c.beaconOff & 1 << i) != 0;
-            if ((BEACONS & 1 << i) != 0 && (!diff || off != ((FRESH.beaconOff & 1 << i) != 0))) lines.add("beacon " + (off ? "-" : "") + BEEPERS[i]);
+            if ((BEACONS & 1 << i) != 0 && (!diff || off != ((fresh.beaconOff & 1 << i) != 0))) lines.add("beacon " + (off ? "-" : "") + BEEPERS[i]);
         }
         section(o, "beacon", lines);
-        if (!diff || !c.map.equals(FRESH.map)) lines.add("map " + c.map);
+        if (!diff || !c.map.equals(fresh.map)) lines.add("map " + c.map);
         section(o, "map", lines);
         c.serial.forEach((id, rest) -> {
-            if (!diff || !rest.equals(FRESH.serial.get(id))) lines.add("serial " + id + " " + rest);
+            if (!diff || !rest.equals(fresh.serial.get(id))) lines.add("serial " + id + " " + rest);
         });
         section(o, "serial", lines);
         for (int i = 0; i < AUX_SLOTS; i++) if (!diff || !Arrays.equals(c.aux[i], FREE_SLOT)) lines.add(auxLine(c, i));
         section(o, "aux", lines);
-        settings(lines, c.master, Section.MASTER, diff);
+        settings(lines, c.master, fresh.master, Section.MASTER, diff);
         section(o, "master", lines);
         for (int i = 0; i < PROFILES; i++) {
             if (!all && i != c.profile) continue;
             o.add("");
             o.add("profile " + i);
-            settings(lines, c.profiles.get(i), Section.PROFILE, diff);
+            settings(lines, c.profiles.get(i), fresh.profiles.get(i), Section.PROFILE, diff);
             section(o, "profile " + i, lines);
         }
         if (all) {
@@ -1279,7 +1368,7 @@ public final class FakeFlightBoard {
             if (!all && i != c.rate) continue;
             o.add("");
             o.add("rateprofile " + i);
-            settings(lines, c.rates.get(i), Section.RATE, diff);
+            settings(lines, c.rates.get(i), fresh.rates.get(i), Section.RATE, diff);
             section(o, "rateprofile " + i, lines);
         }
         o.add("");
@@ -1296,11 +1385,11 @@ public final class FakeFlightBoard {
         return String.join("\r\n", o);
     }
 
-    private static void settings(List<String> lines, Map<String, String> values, Section section, boolean diff) {
+    private static void settings(List<String> lines, Map<String, String> values, Map<String, String> defaults, Section section, boolean diff) {
         for (Setting s : SETTINGS) {
             if (s.section() != section) continue;
             String value = values.get(s.name());
-            if (!diff || !value.equals(s.fresh())) lines.add("set " + s.name() + " = " + shown(value));
+            if (!diff || !value.equals(defaults.get(s.name()))) lines.add("set " + s.name() + " = " + shown(value));
         }
     }
 

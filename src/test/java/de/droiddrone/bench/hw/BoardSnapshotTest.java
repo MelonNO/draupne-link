@@ -94,8 +94,11 @@ class BoardSnapshotTest {
         }
         assertEquals(1, copies.size());
         assertTrue(copies.get(0).getFileName().toString().matches("betaflight-\\d{4}-\\d\\d-\\d\\d_\\d\\d-\\d\\d-\\d\\d\\.txt"), copies.toString());
+        // the copy for a paste by hand is what a restore would send: defaults, then every line of the dump, then save
         String copy = Files.readString(copies.get(0));
-        assertTrue(copy.startsWith("# " + s.version() + "\n") && copy.contains(s.diffAll()), copy);
+        assertTrue(copy.startsWith("# " + s.version() + "\n"), copy);
+        assertTrue(copy.contains("\n\nbatch start\ndefaults nosave\nboard_name MADEUPF405\n"), copy);
+        assertTrue(copy.contains("\nset min_throttle = 1070\n") && copy.contains("\nset small_angle = 40\n") && copy.endsWith("\nrateprofile 0\nsave\n"), copy);
         // read back: the same snapshot
         BoardSnapshot back = BoardSnapshot.load(folder);
         assertEquals(List.of(), s.differences(back));
@@ -126,26 +129,48 @@ class BoardSnapshotTest {
         board.fly();
         assertTrue(board.saved().contains("set stats_total_flights = 1"));
         assertEquals(List.of(), was.differences(take(false)), "Betaflight's flight statistics count by themselves");
-        board.setUp("profile 1", "set p_roll = 70", "profile 0", "aux 3 13 13 1700 2100 0 0", "feature -GPS", "set small_angle = 25");
-        List<String> d = was.differences(take(false));
+        board.setUp("profile 1", "set p_roll = 70", "profile 0", "aux 3 13 13 1700 2100 0 0", "feature -GPS", "set small_angle = 25",
+                "timer B01 AF1");
+        BoardSnapshot now = take(false);
+        List<String> d = was.differences(now);
         for (String expected : List.of(
-                "diff all: only in the snapshot: [profile 1] set p_roll = 60",
-                "diff all: only on the board now: [profile 1] set p_roll = 70",
                 "dump all: only in the snapshot: [profile 1] set p_roll = 60",
-                "diff all: only on the board now: [aux] aux 3 13 13 1700 2100 0 0",
+                "dump all: only on the board now: [profile 1] set p_roll = 70",
                 "dump all: only in the snapshot: [aux] aux 3 0 0 900 900 0 0",
-                "diff all: only in the snapshot: [feature] feature GPS",
-                "dump all: only on the board now: [feature] feature -GPS",
-                "diff all: only in the snapshot: [master] set small_angle = 40",
-                "dump all: only on the board now: [master] set small_angle = 25")) {
+                "dump all: only on the board now: [aux] aux 3 13 13 1700 2100 0 0",
+                "dump all: only in the snapshot: [feature] feature GPS",
+                "dump all: only in the snapshot: [master] set small_angle = 40",
+                "dump all: only on the board now: [master] set small_angle = 25",
+                "dump all: only in the snapshot: [timer] timer B01 AF2",
+                "dump all: only on the board now: [timer] timer B01 AF1",
+                "dump all: only in the snapshot: [timer] # pin B01: TIM2 CH1 (AF2)",
+                "dump all: only on the board now: [timer] # pin B01: TIM1 CH1 (AF1)")) {
             assertTrue(d.contains(expected), expected + " in " + d);
         }
         assertTrue(d.stream().anyMatch(l -> l.startsWith("MSP features: ")), d.toString());
         assertTrue(d.stream().anyMatch(l -> l.startsWith("MSP mode_ranges: ")), d.toString());
         assertFalse(d.stream().anyMatch(l -> l.contains("stats_")), d.toString());
-        // the diff: four lines gone or new, p_roll both, and the feature part's heading gone with its only line
-        assertTrue(d.contains("diff all: only in the snapshot: # feature"), d.toString());
-        assertEquals(6 + 8 + 2, d.size(), "nothing else: " + d);
+        assertFalse(d.stream().anyMatch(l -> l.startsWith("diff all")), "the settings are the dump and the MSP facts: " + d);
+        assertEquals(11 + 2, d.size(), "nothing else: " + d);
+        assertNull(was.defaultsNote(now), "the settings differ: the diff has nothing more to say");
+        assertEquals(List.of("dump all: only in the snapshot: [master] set small_angle = 40"),
+                was.dumpDifferences(was.dumpAll().replace("set small_angle = 40\n", "")), "a dump as the CLI prints it, against the snapshot's");
+    }
+
+    @Test
+    void acrossAStartWithOtherDefaultsTheSettingsAreTheSameAndTheOtherDiffIsSaidInOneLine() throws IOException {
+        board.flipDefaultsAtNextStart = true; // at the restart that ends the first read, as seen on a real board
+        BoardSnapshot first = take(false), second = take(false);
+        assertEquals(first.dumpAll(), second.dumpAll());
+        assertEquals(first.msp(), second.msp());
+        assertFalse(first.diffAll().contains("min_throttle") || first.diffAll().contains("use_unsynced_pwm"), first.diffAll());
+        assertTrue(second.diffAll().contains("set min_throttle = 1070") && second.diffAll().contains("set use_unsynced_pwm = OFF"), second.diffAll());
+        assertEquals(List.of(), first.differences(second), "the same board, setting for setting");
+        String note = "Betaflight's own defaults differed at this start: 2 lines of diff all, the settings themselves are equal.";
+        assertEquals(note, first.defaultsNote(second));
+        assertEquals(note, second.defaultsNote(first));
+        assertNull(first.defaultsNote(first));
+        assertEquals(0, board.saves);
     }
 
     @Test

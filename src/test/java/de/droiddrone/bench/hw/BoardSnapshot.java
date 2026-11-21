@@ -41,8 +41,15 @@ import java.util.function.Consumer;
  * <p>
  * <b>Where it goes.</b> {@code %LOCALAPPDATA%\DraupneBench\board\<uid>\<stamp>\}: diff-all.txt, dump-all.txt, msp.txt,
  * with -Pescs escs.txt and esc&lt;n&gt;-settings.bin, and snapshot.txt with each file's SHA-256 (a file changed
- * afterwards is not loaded). The diff also goes into DRAUPNE Link's "Betaflight backups" folder, to paste into
- * Betaflight Configurator's CLI by hand if all else fails.
+ * afterwards is not loaded). The lines a restore sends - "defaults nosave", then the whole dump - also go into DRAUPNE
+ * Link's "Betaflight backups" folder, to paste into Betaflight Configurator's CLI by hand if all else fails.
+ * <p>
+ * <b>What a board's settings are</b> is "dump all" and the MSP facts: every value written out. "diff all" is kept
+ * and looked at, but nothing hangs on it: it says what differs from Betaflight's own defaults, and those were seen to
+ * be others from one start to the next on a real board (4.4.1: min_throttle and use_unsynced_pwm - the ESCs taken
+ * for brushed ones at one start and not at the next), with the same settings saved. Two reads whose dumps and MSP
+ * facts are the same are the same board ({@link #differences}); a diff that differs then is said in one line
+ * ({@link #defaultsNote}).
  * <p>
  * An armed board is left alone: Betaflight opens no CLI while armed, and leaving the CLI restarts the board.
  */
@@ -293,9 +300,16 @@ public final class BoardSnapshot {
         Files.write(dir.resolve(INDEX), bytes(index.toString()));
         if (backupsDir != null) {
             Files.createDirectories(backupsDir);
+            String lines;
+            try {
+                lines = String.join("\n", BoardRestore.replay(dumpAll)) + "\nsave";
+            } catch (IOException notReplayed) { // a dump with a line no restore sends: as Betaflight printed it, then
+                lines = dumpAll;
+            }
             Files.write(fresh(backupsDir, "betaflight-" + stamp, ".txt"), bytes("# " + version + "\n# saved by DRAUPNE Link's test bench before tests "
                     + "that write to this flight controller (" + dir + ").\n# To go back by hand: paste this into Betaflight Configurator's CLI "
-                    + "tab and press Enter - its last line is save.\n\n" + diffAll + "\n"));
+                    + "tab and press Enter - its last line is save.\n# It is \"dump all\" after \"defaults nosave\", every setting written out, "
+                    + "not \"diff all\": Betaflight's own\n# defaults were seen to differ from one start to the next.\n\n" + lines + "\n"));
         }
         folder = dir;
         return dir;
@@ -400,14 +414,22 @@ public final class BoardSnapshot {
     }
 
     /**
-     * Every difference between this snapshot and the board as read now: "diff all" and "dump all" line by line
-     * (blank lines and the lines that change by themselves left out), and each MSP fact. Empty: the same. The ESCs
+     * Every difference between this snapshot's settings and a "dump all" as Betaflight prints it now, line by line
+     * (blank lines and the lines that change by themselves left out). Empty: every setting is the same.
+     */
+    public List<String> dumpDifferences(String dumpNow) {
+        List<String> out = new ArrayList<>();
+        compareText(out, "dump all", dumpAll, unixLines(dumpNow));
+        return out;
+    }
+
+    /**
+     * Every difference between this snapshot and the board as read now: "dump all" line by line and each MSP fact.
+     * Empty: the same board, setting for setting. "diff all" is no part of it ({@link #defaultsNote}), and the ESCs
      * are compared apart ({@link #escDifferences}).
      */
     public List<String> differences(BoardSnapshot now) {
-        List<String> out = new ArrayList<>();
-        compareText(out, "diff all", diffAll, now.diffAll);
-        compareText(out, "dump all", dumpAll, now.dumpAll);
+        List<String> out = dumpDifferences(now.dumpAll);
         Set<String> names = new LinkedHashSet<>(msp.keySet());
         names.addAll(now.msp.keySet());
         for (String name : names) {
@@ -416,6 +438,19 @@ public final class BoardSnapshot {
             }
         }
         return out;
+    }
+
+    /**
+     * One line for a board whose settings are this snapshot's while its "diff all" is not: Betaflight's own defaults
+     * were others at one of the two starts. No failure - said, so nobody takes the other diff for a changed board.
+     * Null when the two diffs are the same, or the settings differ (then the dump says what).
+     */
+    public String defaultsNote(BoardSnapshot now) {
+        List<String> lines = new ArrayList<>();
+        compareText(lines, "diff all", diffAll, now.diffAll);
+        if (lines.isEmpty() || !dumpDifferences(now.dumpAll).isEmpty()) return null;
+        return "Betaflight's own defaults differed at this start: " + lines.size() + " line" + (lines.size() == 1 ? "" : "s")
+                + " of diff all, the settings themselves are equal.";
     }
 
     /** What differs between this snapshot's firmware and the other's (the MSP facts that name it, the CLI's line). */
@@ -474,14 +509,25 @@ public final class BoardSnapshot {
         }
     }
 
-    /** The lines that count, each with the heading it stands under ("# master", "# profile 1"). */
+    /**
+     * The lines that count, each with the heading it stands under ("# master", "# profile 1"). A part begins after a
+     * blank line, with its heading if it has one; a "#" line further down ("# pin B00: TIM3 CH3 (AF2)" under its
+     * timer line) is a line of that part.
+     */
     private static List<Line> lines(String text) {
         List<Line> out = new ArrayList<>();
         String section = "";
+        boolean afterBlank = true;
         for (String raw : text.split("\\R")) {
             String t = raw.strip();
-            if (t.isEmpty() || changesByItself(t)) continue;
-            boolean heading = t.startsWith("#");
+            if (t.isEmpty()) {
+                afterBlank = true;
+                section = "";
+                continue;
+            }
+            boolean heading = t.startsWith("#") && afterBlank;
+            afterBlank = false;
+            if (changesByItself(t)) continue;
             if (heading) section = t.substring(1).strip();
             out.add(new Line(heading ? "" : section, t));
         }
