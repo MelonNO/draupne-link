@@ -172,6 +172,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         CrashGuard.install(this); // pc.55: an error that ends the app opens it again
         AppReplacedReceiver.opened(this);
+        AppUpdater.withdrawLeftOver(getApplicationContext()); // F-070b: an update's install an earlier run left waiting
         String ended = CrashGuard.last(this);
         if (!ended.isEmpty()) log("The app was last ended by: " + ended);
 

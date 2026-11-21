@@ -19,6 +19,7 @@ import java.io.IOException;
 
 import de.droiddrone.common.GuardedCopy;
 import de.droiddrone.common.PacketIds;
+import de.droiddrone.common.UpdateWithdraw;
 
 import static de.droiddrone.common.Logcat.log;
 
@@ -42,7 +43,8 @@ final class RemoteUpdate {
     /**
      * pc.38 (H9): INSTALLING and TAP_NEEDED are reported as long as they last (the PC refuses to arm meanwhile: the
      * install ends this app and the sticks with it), but no longer than this - an installer that never answers mustn't
-     * keep the drone on the ground for good.
+     * keep the drone on the ground for good. F-070b: when it is no longer reported the install is taken back
+     * ({@link #watch}) - the PC may arm from then on, and the prompt must not still be there to be tapped.
      */
     private static final long INSTALL_REPORT_MS = 5 * 60_000;
     static final String PREFS = "dd_remote_update", PENDING_KEY = "pending";
@@ -131,6 +133,52 @@ final class RemoteUpdate {
         long age = System.currentTimeMillis() - changedAt;
         boolean installing = state == INSTALLING || state == TAP_NEEDED;
         return state != IDLE && (busy || age < REPORT_MS || installing && age < INSTALL_REPORT_MS);
+    }
+
+    /**
+     * F-070b, the service's timer once a second: an install that waits - for Android, or for the tap on its "update
+     * this app?" - is taken back (AppUpdater.withdraw abandons its session; the rule is UpdateWithdraw) the moment the
+     * flight controller is not known disarmed, and a remote one when this phone no longer tells the PC that it waits
+     * ({@link #reportDue}: the PC may arm from then on). It waited for good: armed and flying, one tap on the prompt
+     * installed the update and ended the app, and the sticks with it. Costs one read of a flag while nothing waits.
+     */
+    static void watch(Context c, boolean fcKnownDisarmed) {
+        if (!AppUpdater.sessionWaits()) return;
+        boolean remote = AppUpdater.sessionIsRemote();
+        boolean waiting = state == INSTALLING || state == TAP_NEEDED;
+        boolean reported = waiting && reportDue();
+        switch (UpdateWithdraw.now(fcKnownDisarmed, remote, reported)) {
+            case UpdateWithdraw.NOT_DISARMED:
+                tookBackState = REFUSED_ARMED;
+                tookBackText = remote && waiting ? "FC not known disarmed: update taken back" : null;
+                AppUpdater.withdraw(c, "FC not known disarmed");
+                break;
+            case UpdateWithdraw.NO_LONGER_REPORTED:
+                tookBackState = FAILED;
+                // waiting for the tap, or for an installer that never answered (no prompt then: nothing to tap)
+                tookBackText = !waiting ? null : (state == TAP_NEEDED ? "no tap on the phone in " : "not installed in ")
+                        + INSTALL_REPORT_MS / 60_000 + " min: taken back";
+                AppUpdater.withdraw(c, "the PC is no longer told that it waits");
+                break;
+            default:
+                break;
+        }
+    }
+
+    /** What the PC is told once Android says the install that was taken back is gone ({@link #tookBack}); null: nothing. */
+    private static volatile int tookBackState;
+    private static volatile String tookBackText;
+
+    /**
+     * Android answered "aborted" for the install this app took back (AppUpdateReceiver): only now is the PC told - an
+     * install Android had already begun cannot be taken back, goes on, and is "installing" to the PC until it is done.
+     */
+    static void tookBack(Context c) {
+        String t = tookBackText;
+        tookBackText = null;
+        if (t != null) set(tookBackState, 0, t);
+        // not when it only made way for a newer update's install, which is to open the app again when it is done
+        if (!AppUpdater.sessionUnderWay()) pending(c, false);
     }
 
     /** The PHONE_UPDATE record, last in its packet. */

@@ -28,6 +28,7 @@ public class AppUpdateReceiver extends BroadcastReceiver {
         if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
             Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
             if (confirm == null) return;
+            if (AppUpdater.tookBack(intent)) return; // F-070b: taken back in the moment it was committed - no prompt for it
             if (remote) RemoteUpdate.set(RemoteUpdate.TAP_NEEDED, 100, "tap Update on the phone");
             if (DDService.isRunning && !remote) { // the PC asked, disarmed: the prompt goes up while connected
                 // connected since the tap: an update now would end the app and the sticks with it
@@ -44,10 +45,15 @@ public class AppUpdateReceiver extends BroadcastReceiver {
             return;
         }
         AppUpdater.cleanUp(context);
+        // F-070b: Android's last word on the session - it waits no more. Taken back by the app itself (RemoteUpdate.watch),
+        // the PC is told why, not "cancelled on the phone"
+        boolean tookBack = AppUpdater.sessionEnded(context, intent);
         if (status != PackageInstaller.STATUS_SUCCESS) {
             String why = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
             log("Update not installed: " + status + " " + why);
-            if (remote) {
+            if (remote && tookBack) {
+                RemoteUpdate.tookBack(context);
+            } else if (remote) {
                 RemoteUpdate.set(RemoteUpdate.FAILED, 0, status == PackageInstaller.STATUS_FAILURE_ABORTED ? "cancelled on the phone"
                         : why == null ? "installer refused (" + status + ")" : why);
                 RemoteUpdate.pending(context, false);

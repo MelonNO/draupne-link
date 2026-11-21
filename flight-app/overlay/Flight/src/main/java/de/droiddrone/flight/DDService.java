@@ -805,6 +805,8 @@ public class DDService extends Service {
                 int armed = fcArmedState(); // pc.31: every tick - FcArmedState remembers an FC seen armed
                 if (armed == FcArmedState.ARMED) PowerMode.fcArmed(); // standby (or a deep sleep countdown) ends by itself
                 if (armed == FcArmedState.DISARMED) udp.applyDeferredFcConfig(); // pc.31: held back while not disarmed
+                // F-070b: an update's install that waits for a tap is taken back when the FC is not known disarmed
+                RemoteUpdate.watch(getApplicationContext(), armed == FcArmedState.DISARMED);
                 if (isConnected){
                     if (MainActivity.config.getMavlinkUdpBridge() != SettingsCommon.MavlinkUdpBridge.disabled
                             && MainActivity.config.getMavlinkUdpBridge() != SettingsCommon.MavlinkUdpBridge.redirectFromControlDevice) {

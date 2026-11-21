@@ -29,6 +29,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 import de.droiddrone.common.GuardedCopy;
+import de.droiddrone.common.UpdateWithdraw;
 
 import static de.droiddrone.common.Logcat.log;
 
@@ -150,6 +151,7 @@ final class AppUpdater {
         // Android 12 on: no "update this app?" when this app installed its own last update (else Android asks anyway)
         if (Build.VERSION.SDK_INT >= 31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
         int id = installer.createSession(params);
+        sessionCreated(c, id, remote); // F-070b: its id is kept - it is what is abandoned, should the install have to be taken back
         try (PackageInstaller.Session session = installer.openSession(id)) {
             try (InputStream in = new FileInputStream(apk); OutputStream out = session.openWrite("update.apk", 0, apk.length())) {
                 byte[] buf = new byte[64 * 1024];
@@ -160,12 +162,115 @@ final class AppUpdater {
             // pc.55: asked once more right before the commit - copying the APK into the session takes seconds, and an
             // arm in that time had the install end the app (and the sticks) on an armed drone
             if (!disarmed.getAsBoolean()) throw new GuardedCopy.Stopped("FC not known disarmed: not installed");
-            Intent status = new Intent(ACTION_STATUS).setClass(c, AppUpdateReceiver.class).putExtra(EXTRA_REMOTE, remote);
+            Intent status = new Intent(ACTION_STATUS).setClass(c, AppUpdateReceiver.class).putExtra(EXTRA_REMOTE, remote)
+                    .putExtra(EXTRA_SESSION, id);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
+            committed = true; // F-070b: from here it waits - for Android, or for the tap on its prompt (RemoteUpdate.watch)
             session.commit(PendingIntent.getBroadcast(c, id, status, flags).getIntentSender());
         } catch (IOException | RuntimeException e) {
-            installer.abandonSession(id);
+            forget(c, id);
+            try {
+                installer.abandonSession(id);
+            } catch (RuntimeException gone) {
+                // F-070b: taken back in the moment of its commit (withdraw): there is no such session any more
+            }
             throw e;
+        }
+    }
+
+    // ---- F-070b: the install session that waits, and taking it back (the rule: UpdateWithdraw)
+
+    /** Extra on the installer's answer: the session it is about. */
+    static final String EXTRA_SESSION = "de.droiddrone.flight.pc.SESSION";
+    private static final int NO_SESSION = -1;
+    /** Where the session's id is kept for the app's next start (RemoteUpdate's own store). */
+    private static final String SESSION_KEY = "session";
+    /** The session this run of the app created and has not heard the end of. */
+    private static volatile int sessionId = NO_SESSION;
+    /** ... and it was committed: Android has it, and may be asking for the tap. */
+    private static volatile boolean committed;
+    private static volatile boolean sessionRemote;
+    /** The session this app took back itself: Android's "aborted" for it is not a tap on Cancel. */
+    private static volatile int withdrawnId = NO_SESSION;
+
+    /** An install of this app's waits - for Android, or for the tap on "update this app?". */
+    static boolean sessionWaits() {
+        return committed && sessionId != NO_SESSION;
+    }
+
+    /** This run of the app has an install of its own under way: being copied, or waiting. */
+    static boolean sessionUnderWay() {
+        return sessionId != NO_SESSION;
+    }
+
+    /** The one that waits was asked for by the PC. */
+    static boolean sessionIsRemote() {
+        return sessionRemote;
+    }
+
+    private static synchronized void sessionCreated(Context c, int id, boolean remote) {
+        if (sessionId != NO_SESSION && sessionId != id) withdraw(c, "another update's install begins");
+        sessionId = id;
+        committed = false;
+        sessionRemote = remote;
+        c.getSharedPreferences(RemoteUpdate.PREFS, Context.MODE_PRIVATE).edit().putInt(SESSION_KEY, id).commit();
+    }
+
+    private static synchronized void forget(Context c, int id) {
+        if (sessionId == id) {
+            sessionId = NO_SESSION;
+            committed = false;
+        }
+        android.content.SharedPreferences p = c.getSharedPreferences(RemoteUpdate.PREFS, Context.MODE_PRIVATE);
+        if (p.getInt(SESSION_KEY, NO_SESSION) == id) p.edit().remove(SESSION_KEY).commit();
+    }
+
+    /**
+     * The install that waits is taken back: exactly the session this app created is abandoned - Android's prompt for
+     * it is then void, a tap on it installs nothing. False when none waits.
+     */
+    static synchronized boolean withdraw(Context c, String why) {
+        int id = sessionId;
+        if (id == NO_SESSION) return false;
+        withdrawnId = id; // before Android is asked: its answer may come at once
+        forget(c, id); // asked once: an install Android has already begun cannot be taken back, and goes on
+        try {
+            c.getPackageManager().getPackageInstaller().abandonSession(id);
+            log("Update taken back (" + why + "): its install session was abandoned");
+        } catch (RuntimeException e) { // no such session any more: it was installed, or cancelled on the phone
+            log("Update taken back (" + why + "): its install had ended already (" + e + ")");
+        }
+        return true;
+    }
+
+    /** The session Android answers about is one this app took back itself. */
+    static boolean tookBack(Intent answer) {
+        int id = answer.getIntExtra(EXTRA_SESSION, answer.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, NO_SESSION));
+        return id != NO_SESSION && id == withdrawnId;
+    }
+
+    /** Android's last word on a session came (AppUpdateReceiver): it waits no more. True when this app took it back itself. */
+    static synchronized boolean sessionEnded(Context c, Intent answer) {
+        int id = answer.getIntExtra(EXTRA_SESSION, answer.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, NO_SESSION));
+        if (id == NO_SESSION) return false;
+        forget(c, id);
+        return id == withdrawnId;
+    }
+
+    /**
+     * At the app's start: an install an earlier run of the app left waiting is taken back - its prompt could still be
+     * on the screen, or come up, with nobody watching for the arm any more.
+     */
+    static void withdrawLeftOver(Context c) {
+        try {
+            android.content.SharedPreferences p = c.getSharedPreferences(RemoteUpdate.PREFS, Context.MODE_PRIVATE);
+            int kept = p.getInt(SESSION_KEY, NO_SESSION);
+            if (!UpdateWithdraw.leftOver(kept, sessionId, NO_SESSION)) return;
+            p.edit().remove(SESSION_KEY).commit();
+            c.getPackageManager().getPackageInstaller().abandonSession(kept);
+            log("An update's install left waiting by the app's last run was taken back");
+        } catch (RuntimeException e) {
+            // no such session any more (it was installed, or cancelled): nothing waits
         }
     }
 
