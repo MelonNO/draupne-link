@@ -52,7 +52,37 @@ final class DroneSetup {
      */
     static List<Page> pages(MainWindow main) {
         BetaflightPage betaflight = new BetaflightPage(main);
-        return List.of(betaflight, new MotorsPage(main, () -> betaflight.chosenPort));
+        return List.of(betaflight, new MotorsPage(host(main), () -> betaflight.chosenPort));
+    }
+
+    /** The main window as the Motors and orientation step's host. */
+    private static MotorsPage.Host host(MainWindow main) {
+        return new MotorsPage.Host() {
+            @Override
+            public boolean isLinkActive() {
+                return main.isLinkActive();
+            }
+
+            @Override
+            public String setting(String key) {
+                return main.config().getString(key);
+            }
+
+            @Override
+            public void save(Map<String, String> settings) {
+                main.save(settings);
+            }
+
+            @Override
+            public void motorTest(java.awt.Window owner, Runnable onClosed) {
+                MotorTestDialog.open(owner, main, onClosed);
+            }
+
+            @Override
+            public void orientationCheck(java.awt.Window owner, String port, Runnable onPassed, Runnable onClosed) {
+                OrientationCheckDialog.open(owner, main, port, onPassed, onClosed);
+            }
+        };
     }
 
     /** SETUP &rarr; Drone setup. */
@@ -2121,7 +2151,24 @@ final class DroneSetup {
      * check that sets the board alignment and the compass itself.
      */
     static final class MotorsPage extends Page {
-        private final MainWindow main;
+        /** What this step asks of the app: the main window in the app; a stand-in in tests, which have none. */
+        interface Host {
+            /** The drone link is open: what runs over USB waits for STANDBY MODE. */
+            boolean isLinkActive();
+
+            /** A saved setting, or null. */
+            String setting(String key);
+
+            void save(Map<String, String> settings);
+
+            /** Opens the motor test; onClosed once its window is closed. */
+            void motorTest(java.awt.Window owner, Runnable onClosed);
+
+            /** Opens the guided orientation check on this USB port (null: the first that answers as Betaflight). */
+            void orientationCheck(java.awt.Window owner, String port, Runnable onPassed, Runnable onClosed);
+        }
+
+        private final Host main;
         private final java.util.function.Supplier<String> port;
         private final CheckRow level = new CheckRow("Accelerometer");
         private final CheckRow motors = new CheckRow("Motors and props");
@@ -2138,13 +2185,20 @@ final class DroneSetup {
         };
         /** The page's other rows and gaps above and below the model (measured at 100 %, scaled with the font). */
         private static final int OTHER_ROWS_PX = Math.round(250 * Theme.font(Font.PLAIN, 13f).getSize2D() / 13f);
-        /** Set on the Swing thread, done by the live thread (it owns the port): MSP_ACC_CALIBRATION. */
-        private volatile boolean levelWanted;
+        /** The flight controller the live thread has open now, or null: the only one CALIBRATE can be for. */
+        private volatile BetaflightUsb liveFc;
+        /**
+         * CALIBRATE pressed, for this connection: set on the Swing thread, done by the live thread (it owns the port:
+         * MSP_ACC_CALIBRATION). Never kept for a board that comes later (F-063: pressed with no board it waited
+         * without limit and was done on the next one plugged in - perhaps held in a hand, and saved as "flat").
+         */
+        private volatile BetaflightUsb levelFor;
+        private static final String LEVEL_LOST = "Flight controller lost: not calibrated. <b>Calibrate</b> again.";
         private final javax.swing.JLabel reading = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.MUTED);
         private volatile boolean shown;
         private Thread live;
 
-        MotorsPage(MainWindow main, java.util.function.Supplier<String> port) {
+        MotorsPage(Host main, java.util.function.Supplier<String> port) {
             this.main = main;
             this.port = port;
         }
@@ -2180,7 +2234,7 @@ final class DroneSetup {
             view.add(reading, java.awt.BorderLayout.SOUTH);
             orientation.addBelow(view);
             WizardDialog.addRow(col, orientation);
-            boolean checkedBefore = "true".equalsIgnoreCase(main.config().getString(BetaflightPage.MOTORS_CHECKED_KEY));
+            boolean checkedBefore = "true".equalsIgnoreCase(main.setting(BetaflightPage.MOTORS_CHECKED_KEY));
             motors.set(checkedBefore ? State.OK : State.INFO, checkedBefore ? "Checked." : "Not sure? <b>Check now</b>.");
             orientation.set(State.INFO, "Moves differently? <b>Check it</b>.");
             // the window resized: the model takes the new room
@@ -2213,6 +2267,7 @@ final class DroneSetup {
             BetaflightUsb fc = null;
             int startHeading = -1;
             boolean opened = false; // the guide was on screen: once it isn't any more, this thread ends
+            boolean calibrating = false; // between MSP_ACC_CALIBRATION and the reading after it
             try {
                 while (true) {
                     boolean displayable = wizard != null && wizard.isDisplayable();
@@ -2225,12 +2280,15 @@ final class DroneSetup {
                             if (fc != null) {
                                 fc.close();
                                 fc = null;
+                                liveFc = null;
                                 javax.swing.SwingUtilities.invokeLater(model::clear);
                             }
+                            levelNotDone();
                             Thread.sleep(300);
                             continue;
                         }
                         if (fc == null) {
+                            levelNotDone(); // asked of a board that is gone: never done on the one that opens next
                             fc = OrientationCheckDialog.openBetaflight(port.get(), (s, text) -> javax.swing.SwingUtilities.invokeLater(() -> {
                                 reading.setText(text.replaceAll("<[^>]+>", ""));
                                 model.clear();
@@ -2240,10 +2298,16 @@ final class DroneSetup {
                                 continue;
                             }
                             startHeading = -1;
+                            liveFc = fc;
                         }
-                        if (levelWanted) {
-                            levelWanted = false;
+                        BetaflightUsb wish = levelFor;
+                        if (wish != null && wish != fc) {
+                            levelNotDone();
+                        } else if (wish != null) {
+                            levelFor = null;
+                            calibrating = true;
                             calibrate(fc);
+                            calibrating = false;
                         }
                         de.droiddrone.pc.setup.Orientation.Attitude a = de.droiddrone.pc.setup.Orientation.parse(
                                 fc.msp(de.droiddrone.pc.setup.Orientation.MSP_ATTITUDE, null));
@@ -2259,6 +2323,12 @@ final class DroneSetup {
                     } catch (IOException | RuntimeException e) {
                         if (fc != null) fc.close();
                         fc = null;
+                        liveFc = null;
+                        levelNotDone();
+                        if (calibrating) { // lost in the middle of it: the row must not go on saying "Calibrating"
+                            calibrating = false;
+                            javax.swing.SwingUtilities.invokeLater(() -> level.set(State.WARN, LEVEL_LOST));
+                        }
                         Thread.sleep(1500);
                     }
                 }
@@ -2266,24 +2336,36 @@ final class DroneSetup {
                 // closing
             } finally {
                 if (fc != null) fc.close();
+                liveFc = null;
                 live = null;
             }
         }
 
-        /** CALIBRATE: done by the live thread, which has the port open. */
+        /** The live thread: a calibration asked of a flight controller that is no longer the one open is dropped, and said. */
+        private void levelNotDone() {
+            if (levelFor == null) return;
+            levelFor = null;
+            javax.swing.SwingUtilities.invokeLater(() -> level.set(State.WARN, LEVEL_LOST));
+        }
+
+        /**
+         * CALIBRATE: done by the live thread, which has the port open - on the flight controller that is open at the
+         * press, and no other. With none open nothing is kept to be done later: the row says so at once.
+         */
         private void calibrateLevel() {
             if (main.isLinkActive()) {
                 level.set(State.WARN, "STANDBY MODE first: runs over USB, on the bench.");
                 return;
             }
-            levelWanted = true;
+            BetaflightUsb open = liveFc;
+            if (open == null) {
+                boolean otherCheck = MotorTestDialog.isOpen() || OrientationCheckDialog.isOpen() || CompassCalibrationDialog.isOpen();
+                level.set(State.WARN, otherCheck ? "Close the other check first, then <b>Calibrate</b>."
+                        : "No flight controller: not calibrated. USB to this PC, then <b>Calibrate</b>.");
+                return;
+            }
+            levelFor = open;
             level.set(State.PENDING, "Calibrating. Keep it still...");
-            // no flight controller yet: say so (the live thread takes the wish once one answers)
-            javax.swing.Timer t = new javax.swing.Timer(2500, e -> {
-                if (levelWanted) level.set(State.WARN, "Waiting for the flight controller. Battery in, USB to this PC.");
-            });
-            t.setRepeats(false);
-            t.start();
         }
 
         /** MSP_ACC_CALIBRATION, Betaflight's ~2 s of samples, then flat must read flat (within 3 degrees). */
@@ -2315,7 +2397,7 @@ final class DroneSetup {
                 return;
             }
             motors.set(State.PENDING, "Motor test open.");
-            MotorTestDialog.open(javax.swing.SwingUtilities.getWindowAncestor(motors), main, () -> {
+            main.motorTest(javax.swing.SwingUtilities.getWindowAncestor(motors), () -> {
                 main.save(Map.of(BetaflightPage.MOTORS_CHECKED_KEY, "true"));
                 motors.set(State.OK, "Checked.");
             });
@@ -2329,7 +2411,7 @@ final class DroneSetup {
             }
             orientation.set(State.PENDING, "Check open.");
             boolean[] passed = {false};
-            OrientationCheckDialog.open(javax.swing.SwingUtilities.getWindowAncestor(orientation), main, port.get(), () -> {
+            main.orientationCheck(javax.swing.SwingUtilities.getWindowAncestor(orientation), port.get(), () -> {
                 passed[0] = true;
                 orientation.set(State.OK, "Checked: correct.");
             }, () -> {
