@@ -42,6 +42,8 @@ public final class Wire implements AutoCloseable {
 
     private final DatagramSocket pcSide, phoneSide;
     private final SocketAddress phone;
+    /** A phone off this PC: its address, the only one heard on the phone's side. Null on loopback (every test but the bench's real phone). */
+    private final InetAddress onlyFrom;
     private volatile SocketAddress pc;
     private volatile Rule rule = (toPhone, d, len) -> 0;
     private volatile boolean running = true, keeping;
@@ -54,11 +56,16 @@ public final class Wire implements AutoCloseable {
         return t;
     });
 
-    /** A wire to the phone at that address and port. */
+    /**
+     * A wire to the phone at that address and port. A phone that is not on this PC (the test bench's one real phone)
+     * is spoken to from a socket on every address of this PC - one bound to loopback reaches nothing outside it - and
+     * then only what comes from that phone's own address is taken for the phone's.
+     */
     public Wire(InetAddress phoneAddress, int phonePort) throws IOException {
         phone = new InetSocketAddress(phoneAddress, phonePort);
+        onlyFrom = phoneAddress.isLoopbackAddress() ? null : phoneAddress;
         pcSide = new DatagramSocket(0, InetAddress.getLoopbackAddress());
-        phoneSide = new DatagramSocket(0, InetAddress.getLoopbackAddress());
+        phoneSide = onlyFrom == null ? new DatagramSocket(0, InetAddress.getLoopbackAddress()) : new DatagramSocket(0);
         for (DatagramSocket s : new DatagramSocket[]{pcSide, phoneSide}) {
             s.setReceiveBufferSize(1 << 20);
             s.setSendBufferSize(1 << 20);
@@ -106,6 +113,7 @@ public final class Wire implements AutoCloseable {
             try {
                 p.setLength(buf.length);
                 in.receive(p);
+                if (!toPhone && onlyFrom != null && !onlyFrom.equals(p.getAddress())) continue; // somebody else on the network
                 if (toPhone) pc = p.getSocketAddress();
                 SocketAddress to = toPhone ? phone : pc;
                 if (to == null) continue; // the phone spoke before any PC did
