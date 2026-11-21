@@ -61,7 +61,7 @@ somebody removes their folders.
 | Betaflight | `sitl` | Not built: needs the administrator step below. |
 | Findings | `findings` | One test per listed bug; fails until fixed. |
 | Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. So far one scenario: the phone found, the link, the picture, STANDBY - nothing armed. See "Real hardware". |
-| Real hardware: the phone | `phone` | Never part of `quick` or `full`. The real phone itself. No scenario yet. |
+| Real hardware: the phone | `phone` | Never part of `quick` or `full`. The emulator's phone scenarios against this bench's one real phone on adb, with the bench build of the app: first start, the PC's link and the camera's picture through the bench's wire, a weak link, a cut, a link dead one way, the camera closed under a size change (a real camera here), the app ended by an error and killed asleep - asleep "on battery" though it is on a cable - and, with `-Tests *PhoneNight* -Hours 8`, the app left running for hours. Ends with `gradlew phoneReset`. See "Real hardware", "The phone run". |
 
 Beside what a scenario checks, every scenario fails on: an error nobody caught, the window not answering for more
 than half a second, anything the fence refused.
@@ -145,6 +145,62 @@ reach real things: one phone on one drone, battery in, **propellers off**. Built
   does not exist yet and is skipped until it does. The keeper that owns the flight controller's port, the watch on
   the battery and the dead man's switch are not built yet either.
 
+### The phone run (`.\bench.ps1 phone`)
+
+The emulator's phone scenarios against the one real phone - USB debugging on, no root, the model that flies - through
+the same `PhoneRig`, which is told which phone by a `PhoneRig.Target`: the emulator's in every run but a hardware
+run, this bench's phone in `benchHwPhone`. Built 2026-11-21 against a recorder that stands where adb is (`gradlew test
+--tests *PhoneRig*`); not yet run on a phone. The emulator runs (`emulator`, the night) send what they always sent.
+
+```
+.\bench.ps1 phone                                    every phone scenario once, then gradlew phoneReset
+.\bench.ps1 phone -Tests *PhoneCrash*                one of them
+.\bench.ps1 phone -Tests *PhoneNight* -Hours 8       the app left running for hours
+gradlew phoneReset [-Pserial=<adb serial>]           by hand, after a run that was killed outright
+```
+
+- **Which phone, which app.** From the hardware file: `phone.adb` (its serial), `phone.ip` and `phone.port` (where
+  this PC reaches its link port: adb's cable carries no UDP, so the link goes over Wi-Fi or Tailscale, the bench's
+  wire between as with the emulator), and `phone.package` - left out, the bench build
+  (`de.droiddrone.flight.pc.bench`, `flight-app\build.ps1 -Bench`, put on the phone once by hand with `adb install
+  -t -r`). These four a run may also say itself, and its word goes before the environment's and that before the
+  file's: `gradlew benchHwPhone -Pphone.adb=...`, or `$env:BENCH_PHONE_ADB` (`..._IP`, `..._PORT`, `..._PACKAGE`)
+  for `bench.ps1`. The app on the phone is left as it is unless the run names an APK (`-Pphone.apk=`,
+  `BENCH_PHONE_APK`). No serial, no run: a phone is never picked by itself.
+- **What may be sent to it** is a list (`PhoneGuard`): what is not on it is refused, the scenario stops and its film
+  says why. The released app (`de.droiddrone.flight.pc`) is not cleared, stopped, granted, installed over or
+  uninstalled unless the run was started with the word for it (`-PreleasedAppMayBeChanged=true`,
+  `$env:BENCH_PHONE_RELEASED_APP_MAY_BE_CHANGED = '1'` - never from the file); never: `adb root` / `su`,
+  `locksettings`, `install -d`, a file written on the phone; airplane mode and Wi-Fi / mobile data off only while
+  adb comes over the cable.
+- **The fence.** A scenario with the Windows app puts the fence up with the phone's one pair
+  (`AppRig.scenario(..).reach(target.reach())`, the same `Fence.Reach` and the same rule: only in a hardware run's
+  JVM). The app itself still speaks to the bench's wire on loopback; it is the wire that speaks to the phone. Nothing
+  else of a `hw` run is set up - no Tailscale answer, the radio as in every scenario - and the PHONE list has the
+  phone as it has the emulator's, VIRTUAL. `PhoneScenario` starts no Windows app and has no fence up; its wire is
+  held to the same rule all the same.
+- **Instead of root** the bench build's `BenchControlReceiver` forgets the crash guard's count, ends the app's
+  process and throws an error on purpose (`BenchControl` has the names; `PhoneRigBenchControlTest` holds them to the
+  build's sources). What waits in the phone's sockets cannot be read without root: a round that went wrong files the
+  build's own figures instead.
+- **Sleep on a cable.** Android does not doze while it charges. The scenarios that put the phone to sleep pretend it
+  off the cable and force deep doze (`PhoneRig.onBattery`: `dumpsys battery unplug`, `dumpsys deviceidle
+  force-idle`; off with `-Pphone.onBattery=false`). That proves the app's sleep check against doze - not real
+  suspend with USB attached, not exact-alarm timing after suspend, not the modem or the network's NAT going idle,
+  not the phone maker's own app killers: those need one attended night off the cable. It is taken back when the
+  scenario ends, whatever happened, and once more by `gradlew phoneReset`, `bench.ps1 phone`'s last step however
+  the run went (it changes nothing else: airplane mode, or a port led back to this PC, are only said).
+- **The phone's own good.** Its log is followed into the scenario's film folder from the start
+  (`phone-logcat.txt`: the app's lines and Android's word on what ended it). Its battery is read once a minute:
+  hotter than 42 degrees the scenario waits until it is 40 (half an hour at most), below 15 % it stops.
+- **Which scenarios** (tag `hwphone` beside `emulator`): `PhoneScenario`, `PhoneAndWindowsScenario`,
+  `PhoneCameraRaceScenario`, `PhoneCrashScenario`, `PhoneNightScenario`. `PhoneUpdateScenario` skips itself: the
+  bench build is test-only, and Android lets a test-only app be installed by adb alone, not by the app's own updater
+  (its class comment says what it would take). Not `PhoneSocketScenario`: an artefact of the emulator's Wi-Fi, read
+  with root.
+- **Before the phone:** `-Pphone.adb=emulator-5584` holds the emulator (running already, the app to fly on it) to a
+  real phone's rules - the guard, no root, no console but the forwarded port.
+
 ## Betaflight firmware (waits for an administrator)
 
 Real firmware as a program (SITL) needs Windows' Linux part. Once, as administrator: `wsl --install -d Ubuntu`,
@@ -159,6 +215,11 @@ says so until then.
   `AppRig.scenario("name").hardware(Hardware.load()).run(rig -> { ... })`; `rig.hardware` has the bench's facts.
   `rig.radio.handsOff()` is the hard stop (ARM off, throttle down, held); a made-up drone's scenario lets go of the
   sticks with `rig.radio.sticksAtRest()` (the switches stay), which is what `handsOff()` meant until 2026-11-21.
+- A phone scenario (tags `emulator` and, where it makes sense on a real phone, `hwphone`): `PhoneRig.Target target =
+  PhoneRig.Target.ofRun();` first, then `AppRig.scenario("name").drones(0).reach(target.reach()).run(rig -> { ... })`
+  with `new PhoneRig(rig.film, target)` and a `Wire` to `phone.linkAddress()`. What a real phone cannot do
+  (`phone.can(..)`: root, a made-up GPS or battery) is refused there by name; a command for it that is not on
+  `PhoneGuard`'s list goes onto the list first, with its kind.
 - `AppRig.scenario("name").drones(2).run(rig -> { ... })` starts the app; `rig.ui` presses (`click("WORDS")`,
   `clickAt`, `rightClickAt`, `choose`, `key`, `fill`), waits (`until`, `waitForControl`) and photographs (`shot`);
   `new Pilot(rig)` flies; `rig.radio` is the radio, `rig.drone(name)` a made-up drone, `rig.web` the internet,

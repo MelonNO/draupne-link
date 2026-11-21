@@ -10,7 +10,7 @@ The test bench: the whole of DRAUPNE Link (and DRAUPNE Flight) tested on this PC
   .\bench.ps1 ui -Screen 1093x584   the app on a screen that small (a 1366 x 768 laptop at 125 %)
   .\bench.ps1 report -Root <folder> the report of a run's folder written again
   .\bench.ps1 hw                    REAL HARDWARE: the Windows app, sealed off, against this bench's one real phone
-  .\bench.ps1 phone                 REAL HARDWARE: the real phone itself
+  .\bench.ps1 phone                 REAL HARDWARE: the real phone itself, on adb (-Tests *PhoneCrash*; -Tests *PhoneNight* -Hours 8)
 
 The app under test runs sealed off: its own settings and folders, made-up drones, no real phone, board or internet.
 The real mouse and screen are used while no real drone is armed (-Mode quiet: never; -Mode desktop: always).
@@ -246,6 +246,23 @@ function Invoke-BoardSafe {
 }
 # <<< R4 --------------------------------------------------------------------------------------------------------------
 
+# >>> R5, the real phone's rig (bench\PhoneRig; docs/TESTING.md, "Real hardware") --------------------------------------
+# The last step of the phone run, whatever way it went (also after an error, a scenario ended at its time, or Ctrl+C):
+# what the bench pretends about the phone's battery to make it doze on its cable is taken back - a scenario that was
+# killed never reached its own putting back. gradlew phoneReset takes the phone of the hardware file (phone.adb, or
+# BENCH_PHONE_ADB), sends two orders that do nothing on a phone that needs none, and says how it found the phone.
+function Invoke-PhoneReset {
+    Write-Host ("{0:HH:mm:ss}  The phone: what the bench pretended taken back ..." -f (Get-Date))
+    $t0 = Get-Date
+    $log = Join-Path $runRoot 'logs\phoneReset.log'
+    $code = Invoke-Gradle @('--offline', '--console=plain', '-q', 'phoneReset') $log
+    $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
+    [void]$results.Add("phoneReset`t$mins min`t`t`texit $code")
+    if (Test-Path $log) { Get-Content $log | Where-Object { $_ -match '^(done|FAILED|battery|airplane|deep doze|ports led|STILL|Nothing done|What the bench|NOT everything)' } | ForEach-Object { Write-Host "          $_" } }
+    if ($code -ne 0) { Write-Host "          phoneReset ended with exit code $code - LOOK AT THE PHONE (logs\phoneReset.log); with it back on adb: .\gradlew phoneReset" }
+}
+# <<< R5 --------------------------------------------------------------------------------------------------------------
+
 if ($Run -ne 'report') {
     switch ($Run) {
         'quick' { $order = @('self', 'ui', 'link') }
@@ -290,10 +307,18 @@ if ($Run -ne 'report') {
                 [void]$pending.Add("Real hardware - no hardware.properties in $base yet (copy docs\hardware.example.properties there, with this bench's own phone and board).   .\bench.ps1 $s")
                 continue
             }
+            # >>> R5: the phone's long scenario for hours - .\bench.ps1 phone -Tests *PhoneNight* -Hours 8 (without -Hours: its few minutes)
+            if ($s -eq 'phone' -and $Hours -gt 0) {
+                $deadline = $null
+                $env:BENCH_HOURS = [string]$Hours
+                $env:BENCH_TIMEOUT = ([string][math]::Ceiling($Hours * 60 + 40)) + ' m'
+            }
+            # <<< R5
             try {
                 Invoke-Suite $suites[$s][0] $suites[$s][1]
             } finally {
                 if ($s -eq 'hw') { Invoke-BoardSafe }
+                if ($s -eq 'phone') { Invoke-PhoneReset }   # R5: the phone run ends with the phone's battery and doze as they really are
             }
             continue
         }

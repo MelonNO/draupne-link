@@ -647,6 +647,48 @@ class BenchSelfTest {
     }
 
     /**
+     * R5, the real phone's rig: it opens nothing in the fence itself. There is one way through, the fence's own
+     * ({@link Fence.Reach}, handed to a scenario's plan), and the rig asks whether the fence that is up has it for its
+     * phone - before a first packet would be refused, with what to do. No phone is touched: the fence is only asked.
+     */
+    @Test
+    void thePhoneRigGoesThroughTheFenceTheFencesWayAndOpensNothingItself() throws Exception {
+        Sandbox s = Sandbox.fresh("self-phone-reach");
+        List<Path> roots = List.of(Sandbox.runRoot(), Path.of(System.getProperty("bench.build")));
+        Path own = s.root().resolve(Hardware.FILE);
+        Files.writeString(own, "phone.adb=BENCHPHONE0001\nphone.ip=" + PHONE + "\n");
+        PhoneRig.Target target = PhoneRig.Target.device(Hardware.read(own), key -> null, key -> null, null);
+        RecordingAdb adb = new RecordingAdb();
+        PhoneRig rig = new PhoneRig(null, target, adb, ms -> { }, System::currentTimeMillis, null);
+        int link = de.droiddrone.common.UdpCommon.defaultPort;
+
+        // a scenario that put its fence up without the phone's reach: said at once, not found out from a refusal
+        Fence.up(roots, Set.of("java.exe", "adb.exe"));
+        IllegalStateException forgotten = assertThrows(IllegalStateException.class, rig::linkAddress);
+        assertTrue(forgotten.getMessage().contains("reach(target.reach())"), forgotten.getMessage());
+        Fence.down();
+        // no hardware run: the phone's reach cannot even be made, so no plan can carry it
+        assertThrows(IllegalStateException.class, target::reach);
+        assertThrows(IllegalArgumentException.class, () -> AppRig.scenario("self-phone-none").reach(null));
+
+        try (AutoCloseable back = asAHardwareRun()) {
+            assertEquals(List.of(PHONE + ":" + link), target.reach().pairs());
+            Fence.up(roots, Set.of("java.exe", "adb.exe"), target.reach()); // as AppRig does with a plan's reach
+            assertEquals(target.link(), rig.linkAddress());
+            Fence.down();
+            Fence.up(roots, Set.of("java.exe", "adb.exe"), Fence.Reach.of("192.0.2.11:" + link)); // another phone's fence is not this one's
+            assertThrows(IllegalStateException.class, rig::linkAddress);
+            Fence.down();
+            Fence.up(roots, Set.of("java.exe", "adb.exe"), Fence.Reach.of(PHONE + ":" + (link + 1))); // nor another port's
+            assertThrows(IllegalStateException.class, rig::linkAddress);
+            Fence.down();
+        }
+        assertEquals(List.of(), Fence.refusals(), "asked, never tried: nothing was refused and nothing sent");
+        assertEquals(List.of(), adb.sent, "and nothing went to adb for it");
+        assertTrue(PhoneRig.Target.emulator().reach().isEmpty(), "the emulator's reach is none: its scenarios' fence is what it always was");
+    }
+
+    /**
      * The driver sees what a pilot can: a button inside a part of a card folded to nothing (the app's Fold: height 0,
      * the button itself still visible to Swing) is not there - the update scenario took a folded-away UPDATE PHONE
      * APP as still offered (2026-11-21). Unfolded, it is.

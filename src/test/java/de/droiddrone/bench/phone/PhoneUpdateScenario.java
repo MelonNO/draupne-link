@@ -33,10 +33,21 @@ import java.util.List;
  * test build has no place on GitHub); sender.apk, the same labelled 2.3.0-pc.55-test. The PC is told of the sender by
  * the bench's switch for it (ApkShare, {@code draupne.bench.phoneApp}); the file is served on this PC's loopback,
  * which the emulator reaches as 10.0.2.2.
+ * <p>
+ * On a real phone (the task benchHwPhone) the file would be fetched through adb's cable instead: {@code adb reverse}
+ * leads the phone's own 127.0.0.1 to this PC's server (through adb, on this PC's loopback: the fence needs no way
+ * through for it). It runs there only when two builds made for it lie in build/update-test-hw (receiver.apk,
+ * sender.apk, versions.txt) - both of the package the run flies, signed alike, plain http allowed to 127.0.0.1, the
+ * sender one version up - and is skipped without them: the emulator's two builds allow 10.0.2.2 only. NOT WITH THE
+ * BENCH BUILD: that one is test-only (flight-app/bench-overlay), and Android lets nobody but {@code adb install -t}
+ * install a test-only app - not the app's own updater either. So on a real phone this is a scenario for the released
+ * app's package alone, and so for a run with the word "the released app may be changed". Nothing is installed a
+ * version down there ("install -d" is never sent): the phone keeps the sender's version at the end, and the receiver
+ * must be at least as new as what is on the phone.
  */
 @Tag("emulator")
+@Tag("hwphone")
 class PhoneUpdateScenario {
-    private static final String APP = "de.droiddrone.flight.pc";
 
     private static String sha256(Path p) throws Exception {
         byte[] d = MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(p));
@@ -57,9 +68,12 @@ class PhoneUpdateScenario {
 
     @Test
     void thePhoneAppUpdatesFromThePcWithoutAQuestionOnThePhone() throws Exception {
-        Assumptions.assumeTrue(PhoneRig.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
-        // the build folder, not %LOCALAPPDATA%: inside the bench's sandbox that is another folder
-        Path dir = Path.of(System.getProperty("bench.build", "build")).resolve("update-test");
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        final String APP = target.app();
+        // the build folder, not %LOCALAPPDATA%: inside the bench's sandbox that is another folder. (A real phone's two
+        // builds are other ones: see the class comment)
+        Path dir = Path.of(System.getProperty("bench.build", "build")).resolve(target.kind() == PhoneRig.Kind.DEVICE ? "update-test-hw" : "update-test");
         Path receiver = dir.resolve("receiver.apk"), sender = dir.resolve("sender.apk");
         Assumptions.assumeTrue(Files.isRegularFile(receiver) && Files.isRegularFile(sender), "no test builds in " + dir + " (build-update-test.ps1)");
         // the two builds' names, written by build-update-test.ps1: the tree's, and one up
@@ -79,19 +93,22 @@ class PhoneUpdateScenario {
             }
         });
         web.start();
-        String url = "http://10.0.2.2:" + web.getAddress().getPort() + "/DRAUPNE-Flight-" + newVersion + ".apk";
+        // the emulator reaches this PC's loopback as 10.0.2.2; a real phone as its own 127.0.0.1, through adb reverse
+        String url = target.thisPc(web.getAddress().getPort()) + "/DRAUPNE-Flight-" + newVersion + ".apk";
         // before the app's classes load (ApkShare reads it once)
         System.setProperty("draupne.bench.phoneApp", newVersion + "|" + sha256(sender) + "|" + url);
         try {
-            AppRig.scenario("phone-remote-update").drones(0).run(rig -> {
+            AppRig.scenario("phone-remote-update").drones(0).reach(target.reach()).run(rig -> {
                 Ui ui = rig.ui;
                 ui.autoShot(false);
                 Pilot pilot = new Pilot(rig);
-                PhoneRig phone = new PhoneRig(rig.film);
+                PhoneRig phone = new PhoneRig(rig.film, target);
                 phone.ensureRunning();
+                phone.reachesThisPc(web.getAddress().getPort()); // a real phone: adb reverse; the emulator needs nothing
                 // over whatever is there: "-d" takes a lower version code (an earlier run's pc.55-test). The app can't be
-                // uninstalled from the shell - it is the phone's device admin (screen lock), and only test admins go
-                phone.adbBytes(180, "install", "-r", "-d", receiver.toString());
+                // uninstalled from the shell - it is the phone's device admin (screen lock), and only test admins go.
+                // (A real phone is never taken down a version: there the receiver goes on only over an older or equal one.)
+                phone.installAnyVersion(receiver);
                 rig.check(phone.version().equals(treeVersion), "the phone runs " + treeVersion + ": " + phone.version());
                 // "Install unknown apps" off before the app opens: Android ends an app whose switch is turned off (the
                 // 2026-11-21 09:38 run did it while connected: the link was lost, the PC's question went nowhere)
@@ -99,8 +116,8 @@ class PhoneUpdateScenario {
                 phone.grantPermissions();
                 phone.launch();
                 if (phone.texts().contains("START")) phone.tap("START");
-                int hostPort = phone.forwardUdp(PhoneRig.linkOnThePhone());
-                try (Wire wire = new Wire(InetAddress.getLoopbackAddress(), hostPort)) {
+                java.net.InetSocketAddress at = phone.linkAddress();
+                try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
                     wire.rule(BadLink.clean(54));
                     rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
                     rig.fleet.startHeartbeat();
@@ -143,6 +160,7 @@ class PhoneUpdateScenario {
 
                     // ---- B. allowed once by hand, as on a drone's phone that is set up: the update goes through
                     phone.shell("appops set " + APP + " REQUEST_INSTALL_PACKAGES allow");
+                    if (phone.device()) phone.reverseAgain(); // adb's way back to this PC's server, should the cable have been out
                     long t0 = System.currentTimeMillis();
                     ui.click("UPDATE PHONE APP");
                     ui.until("the PC asks first", 10_000, () -> ui.sees(newVersion));
@@ -191,15 +209,25 @@ class PhoneUpdateScenario {
                     rig.check(!log.contains("FATAL EXCEPTION"), "no crash in the phone app's log");
                     if (pilot.linkUp()) pilot.standby();
                 } finally {
-                    // as found for the next scenarios: the normal pc.54 build (a lower version code: "-d")
-                    try {
-                        String said = new String(phone.adbBytes(180, "install", "-r", "-d", PhoneRig.builtApk().toString()), StandardCharsets.UTF_8);
-                        if (!said.contains("Success")) throw new IllegalStateException(said);
-                        rig.check(phone.version().equals(treeVersion), "the normal phone app is back for the next scenarios: " + phone.version());
-                        phone.grantPermissions();
-                        phone.launch();
-                    } catch (RuntimeException e) {
-                        rig.film.remark("The normal phone app not put back: " + e.getMessage());
+                    if (phone.device()) {
+                        // a real phone is never taken down a version: it keeps what the update left
+                        try {
+                            rig.film.remark("The phone keeps " + phone.version() + " of " + APP + " (a real phone is never installed a version down): "
+                                    + "the app it had before is put back by hand when wanted - uninstalled, then installed anew.");
+                        } catch (RuntimeException | Error e) {
+                            rig.film.remark("The phone's version at the end could not be read: " + e.getMessage());
+                        }
+                    } else {
+                        // as found for the next scenarios: the normal pc.54 build (a lower version code: "-d")
+                        try {
+                            String said = phone.installAnyVersion(PhoneRig.builtApk());
+                            if (!said.contains("Success")) throw new IllegalStateException(said);
+                            rig.check(phone.version().equals(treeVersion), "the normal phone app is back for the next scenarios: " + phone.version());
+                            phone.grantPermissions();
+                            phone.launch();
+                        } catch (RuntimeException e) {
+                            rig.film.remark("The normal phone app not put back: " + e.getMessage());
+                        }
                     }
                     phone.close();
                 }

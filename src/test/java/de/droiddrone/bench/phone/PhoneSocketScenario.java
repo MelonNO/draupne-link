@@ -31,6 +31,11 @@ import java.util.regex.Pattern;
  * says so.
  * <p>
  * {@code BENCH_KEEP_APP=1} leaves the app on the phone as it is (to see what another build does).
+ * <p>
+ * The emulator's only - not for a real phone (no tag hwphone): what fills the socket is the emulator's made-up Wi-Fi,
+ * which a real phone does not have; the waiting bytes are read with {@code ss}, which needs root; and the scans that
+ * hurry it along ({@code cmd wifi start-scan}) are not on the list of what the bench sends to a real phone. Whether a
+ * real modem ever holds the app's sending like that is a question for the field's link logs, not for this scenario.
  */
 @Tag("emulator")
 class PhoneSocketScenario {

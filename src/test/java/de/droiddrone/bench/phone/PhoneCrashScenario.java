@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.JComboBox;
-import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
@@ -29,17 +28,18 @@ import java.nio.file.Files;
  * ten minutes it stays down.
  * <p>
  * {@code BENCH_KEEP_APP=1} leaves the app on the phone as it is.
+ * <p>
+ * On a real phone too (the task benchHwPhone), with the bench build: there is no root there, so the bench build's own
+ * receiver throws the error, ends the process and forgets the crash guard's count ({@code BenchControl}). And a phone
+ * on adb's cable charges, which keeps Android from dozing: while it sleeps here it is pretended off the cable and
+ * forced into deep doze ({@code PhoneRig.onBattery} - what that does not prove is written there), taken back when it
+ * has been woken.
  */
 @Tag("emulator")
+@Tag("hwphone")
 class PhoneCrashScenario {
-    private static final String APP = "de.droiddrone.flight.pc";
-
     private static String pid(PhoneRig phone) {
-        try {
-            return phone.shell("pidof " + APP).trim();
-        } catch (RuntimeException e) {
-            return "";
-        }
+        return phone.pid();
     }
 
     /** What the app (whichever of its processes) and Android's crash handler said since the stamp. */
@@ -64,25 +64,23 @@ class PhoneCrashScenario {
 
     @Test
     void anAppEndedByAnErrorOrKilledAsleepIsBackByItself() throws Exception {
-        Assumptions.assumeTrue(PhoneRig.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
         boolean keepApp = System.getenv("BENCH_KEEP_APP") != null;
-        AppRig.scenario("phone-crash-comes-back").drones(0).run(rig -> {
+        AppRig.scenario("phone-crash-comes-back").drones(0).reach(target.reach()).run(rig -> {
             Ui ui = rig.ui;
             ui.autoShot(false);
             Pilot pilot = new Pilot(rig);
-            PhoneRig phone = new PhoneRig(rig.film);
+            PhoneRig phone = new PhoneRig(rig.film, target);
             phone.ensureRunning();
-            phone.adb("root"); // to end a process outright, and to forget earlier restarts
-            Ui.pause(3000);
-            if (!keepApp) phone.install(PhoneRig.builtApk());
+            phone.root(); // the emulator: to end a process outright, and to forget earlier restarts (adb root, then 3 s); a real phone has none
+            if (!keepApp) phone.installApp();
             phone.grantPermissions();
-            phone.forceStop();
-            phone.shell("rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml"); // no restart of an earlier run counts
+            phone.stopForgettingRestarts(); // no restart of an earlier run counts
             phone.launch();
             if (phone.texts().contains("START")) phone.tap("START");
-            int phonePort = PhoneRig.linkOnThePhone();
-            int hostPort = phone.forwardUdp(phonePort);
-            try (Wire wire = new Wire(InetAddress.getLoopbackAddress(), hostPort)) {
+            java.net.InetSocketAddress at = phone.linkAddress();
+            try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
                 wire.rule(BadLink.clean(47));
                 rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
                 rig.fleet.startHeartbeat();
@@ -119,7 +117,7 @@ class PhoneCrashScenario {
                 // (a recording begins with the first picture of a link: "Recording to ...flight-...mkv")
                 int recordingsBefore = (int) rig.log().stream().filter(l -> l.contains("Recording to") && l.contains(".mkv")).count();
                 long t0 = System.currentTimeMillis();
-                phone.shell("am crash " + APP);
+                phone.crash(); // am crash; the bench build on a real phone throws the error itself
                 String pid1 = newProcess(phone, pid0, 30_000);
                 long openedMs = System.currentTimeMillis() - t0;
                 rig.check(!pid1.isEmpty(), "ended by an error while flown, the app is a new process by itself" + (pid1.isEmpty() ? " - none within 30 s" : " after " + openedMs / 1000.0 + " s"));
@@ -160,10 +158,11 @@ class PhoneCrashScenario {
                     }
                     ui.until("the link ended, the phone asleep", 120_000, () -> ui.has("PILOT UAV"));
                     Ui.pause(8000); // its first alarm is set
+                    if (phone.sleepsOnBattery()) phone.onBattery(); // a real phone on its cable would not doze: pretended off it
                     String asleepFrom = phone.now();
                     String pid2 = pid(phone);
                     long killedAt = System.currentTimeMillis();
-                    phone.shell("kill -9 " + pid2);
+                    phone.endProcess(pid2); // kill -9 as root; without root the bench build ends its own process
                     Ui.pause(1500);
                     rig.check(pid(phone).isEmpty(), "asleep, the app's process is killed outright (as a battery saver does): gone");
                     // (Android may start a process of its own for the service it lost - that one finds no settings and
@@ -190,6 +189,7 @@ class PhoneCrashScenario {
                         rig.film.remark("After the kill: " + t.getMessage());
                     }
                     rig.check(reached, "and PILOT UAV reaches it");
+                    if (phone.sleepsOnBattery()) phone.plugged();
                     ui.shot("after the app was killed asleep");
                     if (pilot.linkUp()) pilot.standby();
                 }
@@ -201,8 +201,7 @@ class PhoneCrashScenario {
                 // what ends them
                 String loopFrom = phone.now();
                 // counted from nothing: the app closed, what it kept of the restarts above gone, opened again
-                phone.forceStop();
-                phone.shell("rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml");
+                phone.stopForgettingRestarts();
                 phone.launch();
                 Ui.pause(4000);
                 int opened = 0;
@@ -217,7 +216,7 @@ class PhoneCrashScenario {
                     }
                     String before = pid(phone);
                     String stamp = phone.now();
-                    phone.shell("am crash " + APP);
+                    phone.crash();
                     boolean again = false;
                     long until = System.currentTimeMillis() + 30_000;
                     while (!again && System.currentTimeMillis() < until) {
@@ -239,8 +238,7 @@ class PhoneCrashScenario {
                 Files.writeString(rig.film.dir().resolve("phone-log.txt"), said(phone, from), StandardCharsets.UTF_8);
                 rig.check(!said(phone, from).contains("CameraDevice was already closed"), "no camera error among what ended it");
                 // as found: the app open, nothing kept of this run's restarts
-                phone.forceStop();
-                phone.shell("rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml");
+                phone.stopForgettingRestarts();
                 phone.launch();
             } finally {
                 phone.close();

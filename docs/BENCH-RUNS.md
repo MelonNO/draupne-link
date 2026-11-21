@@ -53,6 +53,7 @@ The fast tests (`gradlew test`): **1,845 of 1,845** on 2026-11-21 16:04 with the
 | A long run of a full 8 hours in one piece | the first stopped at 2 h 46 min, the second filled the rest (seeds 20261119 and 7) | `$env:BENCH_SEED = '8'; .\bench.ps1 soak -Hours 8` |
 | Real Betaflight firmware (4.3, 4.4, 4.5, 2025.12) | Windows' Linux part: an administrator and a restart (`wsl --install -d Ubuntu`); then the suite is still to be written | `.\bench.ps1 sitl` |
 | The hardware rig's first scenario: the sealed app finds one real phone, links to it, shows its picture, ends hands off (built 2026-11-21; its parts proved in `self`, itself never run) | this PC's `hardware.properties`, the phone awake with DRAUPNE Flight open, no DRAUPNE Link running, props off (TESTING.md, "Real hardware") | `.\bench.ps1 hw` |
+| The phone scenarios on the one real phone: first start, the link through the bench's wire, the camera race, the app ended by an error and killed asleep, the hours-long run (built 2026-11-21 against a recorder where adb is and a stand-in adb.exe; never run on a phone) | `hardware.properties` with `phone.adb` and `phone.ip`, the phone on adb with the bench build on it (`flight-app\build.ps1 -Bench`, `adb install -t -r`) and no secure lock screen (TESTING.md, "The phone run") | `.\bench.ps1 phone`, then `.\bench.ps1 phone -Tests *PhoneNight* -Hours 8` |
 
 ## Not built yet
 

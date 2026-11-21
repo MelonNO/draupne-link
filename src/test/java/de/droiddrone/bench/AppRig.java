@@ -136,6 +136,20 @@ public final class AppRig implements AutoCloseable {
             return this;
         }
 
+        private Fence.Reach reach = Fence.Reach.none();
+
+        /**
+         * A phone scenario's way through the fence (R5; gradlew benchHwPhone): the real phone's link port, to which
+         * the bench's wire speaks - the app itself still speaks to the wire on loopback, and nothing else of a
+         * hardware run is set up ({@link PhoneRig.Target#reach}). The emulator's reach is none, and then this plan is
+         * what it always was. A plan that is a hardware run ({@link #hardware}) has that run's reach and takes no other.
+         */
+        public Plan reach(Fence.Reach phone) {
+            if (phone == null) throw new IllegalArgumentException("No reach: Fence.Reach.none() is the one that lets nothing out");
+            reach = phone;
+            return this;
+        }
+
         public AppRig start() throws Exception {
             return new AppRig(this);
         }
@@ -190,6 +204,9 @@ public final class AppRig implements AutoCloseable {
         name = plan.name;
         hardware = plan.hardware;
         if (hardware != null) hardwareMayStart(plan); // before anything is made, sealed or started
+        if (hardware != null && !plan.reach.isEmpty()) { // one way through the fence a run: never two put together
+            throw new IllegalStateException("The hardware run \"" + plan.name + "\" was handed a phone scenario's reach as well: it has its own (Hardware.reach)");
+        }
         System.setProperty("draupne.bench.madeUpSaves", Boolean.toString(!plan.madeUpSaveNothing));
         if (plan.reopen != null) {
             sandbox = Sandbox.reopen(plan.reopen.root(), plan.name);
@@ -200,8 +217,8 @@ public final class AppRig implements AutoCloseable {
         if (System.getProperty("bench.build") != null) writable.add(Path.of(System.getProperty("bench.build")));
         String javacpp = System.getProperty("org.bytedeco.javacpp.cachedir");
         if (javacpp != null) writable.add(Path.of(javacpp));
-        if (hardware == null) {
-            Fence.up(writable, Set.of("java.exe", "adb.exe", "emulator.exe", "wsl.exe"));
+        if (hardware == null) { // nothing outside this PC - but for a phone scenario's own reach (Plan.reach: none unless it says one)
+            Fence.up(writable, Set.of("java.exe", "adb.exe", "emulator.exe", "wsl.exe"), plan.reach);
         } else { // the same fence with one way through it: the real phone's address at its link port
             Fence.up(writable, Set.of("java.exe", "adb.exe", "emulator.exe", "wsl.exe"), hardware.reach());
         }
@@ -320,6 +337,9 @@ public final class AppRig implements AutoCloseable {
         if (hardware != null) {
             film.remark("HARDWARE RUN: " + hardware + ". The fence lets this app reach " + Fence.reach() + " and nothing else outside this PC. The radio: "
                     + radio.limits() + ".");
+        } else if (!Fence.reach().isEmpty()) {
+            film.remark("A PHONE RUN: the fence lets the bench's wire reach " + Fence.reach() + " and nothing else outside this PC. The app itself speaks "
+                    + "to the wire on this PC's loopback, as with the emulator.");
         }
     }
 

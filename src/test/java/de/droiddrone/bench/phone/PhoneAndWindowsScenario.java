@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.JComboBox;
-import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
@@ -20,25 +19,31 @@ import java.nio.file.Files;
  * with the bench's wire between them. The phone is found and named by the PC, PILOT UAV is pressed with the mouse,
  * the phone's camera picture shows in the PC's window, the network goes bad and comes back, STANDBY MODE ends it.
  * The film has both: the PC's window and the phone's screen. (No flight controller: the emulator has no USB.)
+ * <p>
+ * On a real phone too (the task benchHwPhone), as it is: the app that is on the phone, the link to the phone's real
+ * address with the bench's wire still between - so the bad link here comes on top of whatever the real network does.
  */
 @Tag("emulator")
+@Tag("hwphone")
 class PhoneAndWindowsScenario {
     @Test
     void thePcFindsThePhoneConnectsAndShowsItsCamera() throws Exception {
-        AppRig.scenario("phone-and-windows").drones(0).run(rig -> {
+        PhoneRig.Target target = PhoneRig.Target.ofRun(); // the emulator; in a hardware run this bench's real phone
+        // (the fence: nothing outside this PC for the emulator; for a real phone its link port, which the wire speaks to)
+        AppRig.scenario("phone-and-windows").drones(0).reach(target.reach()).run(rig -> {
             Ui ui = rig.ui;
             Pilot pilot = new Pilot(rig);
-            PhoneRig phone = new PhoneRig(rig.film);
+            PhoneRig phone = new PhoneRig(rig.film, target);
             phone.ensureRunning();
-            phone.install(PhoneRig.builtApk());
+            phone.installApp(); // the emulator: the newest build; a real phone keeps the app it has
             phone.grantPermissions();
             phone.forceStop();
             phone.launch();
             if (phone.texts().contains("START")) phone.tap("START");
             phone.shot("phone: waiting for a PC");
-            int hostPort = phone.forwardUdp(PhoneRig.linkOnThePhone());
+            java.net.InetSocketAddress at = phone.linkAddress(); // the emulator: a forwarded port on loopback; a real phone: its address
             BadLink net = BadLink.clean(11);
-            try (Wire wire = new Wire(InetAddress.getLoopbackAddress(), hostPort)) {
+            try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
                 wire.rule(net);
                 // announced as the virtual fleet announces its phones: an address on this PC and its own port
                 rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
@@ -97,19 +102,20 @@ class PhoneAndWindowsScenario {
      */
     @Test
     void aLinkDeadFromThePhoneToThePcOnlyMeasuredOnTheRealPhoneApp() throws Exception {
-        AppRig.scenario("phone-one-way-cut").drones(0).run(rig -> {
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        AppRig.scenario("phone-one-way-cut").drones(0).reach(target.reach()).run(rig -> {
             Ui ui = rig.ui;
             Pilot pilot = new Pilot(rig);
-            PhoneRig phone = new PhoneRig(rig.film);
+            PhoneRig phone = new PhoneRig(rig.film, target);
             phone.ensureRunning();
-            phone.install(PhoneRig.builtApk());
+            phone.installApp(); // the emulator: the newest build; a real phone keeps the app it has
             phone.grantPermissions();
             phone.forceStop();
             phone.launch();
             if (phone.texts().contains("START")) phone.tap("START");
-            int hostPort = phone.forwardUdp(PhoneRig.linkOnThePhone());
+            java.net.InetSocketAddress at = phone.linkAddress();
             BadLink net = BadLink.clean(12);
-            try (Wire wire = new Wire(InetAddress.getLoopbackAddress(), hostPort)) {
+            try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
                 wire.rule(net);
                 rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
                 rig.fleet.startHeartbeat();

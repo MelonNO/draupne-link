@@ -5,9 +5,11 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.UnaryOperator;
 
 /**
  * The facts of one bench's real hardware - the phone on the drone, the flight controller, its battery - for the runs
@@ -15,6 +17,11 @@ import java.util.TreeSet;
  * {@code %LOCALAPPDATA%\DraupneBench\hardware.properties}; a copy with made-up values to start from is
  * docs/hardware.example.properties. No such file: no hardware run - a scenario skips itself ({@link #present()}),
  * and {@link #load()} says what is missing and where it belongs.
+ * <p>
+ * Four things of the phone a run may also say itself, and then its word goes before the file's ({@link #RUNS_OWN}):
+ * the run's own word first ({@code -Dbench.phone.adb=...}; gradlew benchHwPhone -Pphone.adb=...), then the
+ * environment's (BENCH_PHONE_ADB), then the file's. What was taken from outside the file is said wherever this is
+ * printed.
  */
 public final class Hardware {
     public static final String FILE = "hardware.properties";
@@ -23,17 +30,26 @@ public final class Hardware {
     /** The most throttle a hardware run's radio ever gives (a channel value): the motors turn, no more. */
     public static final int THROTTLE_CEILING = 1100;
 
-    private static final Set<String> KEYS = Set.of("phone.ip", "phone.port", "phone.key", "phone.adb", "phone.path",
+    private static final Set<String> KEYS = Set.of("phone.ip", "phone.port", "phone.key", "phone.adb", "phone.path", "phone.package",
             "board.port", "board.armAux", "battery.cells", "battery.cellFloor", "keeper.port");
+    /**
+     * What a run may say itself, or the environment for it, before the file (R5, the phone's rig): which phone on adb,
+     * where it is reached, and which of DRAUPNE Flight's two packages is flown. As a system property "bench." + the
+     * key; in the environment "BENCH_" + the key in capitals, with _ for the dot.
+     */
+    static final Set<String> RUNS_OWN = Set.of("phone.adb", "phone.ip", "phone.port", "phone.package");
 
     private final Path file;
-    private final String phoneIp, phoneKey, phoneAdb, boardPort;
+    /** The keys whose values did not come from the file. */
+    private final Set<String> outside;
+    private final String phoneIp, phoneKey, phoneAdb, phonePackage, boardPort;
     private final int phonePort, armAux, cells, keeperPort;
     private final boolean relayed;
     private final double cellFloor;
 
-    private Hardware(Path file, Properties p) {
+    private Hardware(Path file, Properties p, Set<String> outside) {
         this.file = file;
+        this.outside = outside;
         Set<String> unknown = new TreeSet<>(p.stringPropertyNames());
         unknown.removeAll(KEYS);
         if (!unknown.isEmpty()) throw wrong("has " + unknown + ", which this bench does not know (a slip of the hand?). It knows " + new TreeSet<>(KEYS));
@@ -52,6 +68,12 @@ public final class Hardware {
         if (phoneKey.length() > 16) throw wrong("phone.key is longer than the 16 characters a link key has");
         phoneAdb = text(p, "phone.adb");
         if (phoneAdb.chars().anyMatch(Character::isWhitespace)) throw wrong("phone.adb is no adb serial: \"" + phoneAdb + "\"");
+        String app = text(p, "phone.package");
+        if (!app.isEmpty() && !app.equals(BenchControl.PACKAGE) && !app.equals(PhoneRig.APP)) {
+            throw wrong("phone.package is one of DRAUPNE Flight's two - the bench build (" + BenchControl.PACKAGE + ") or the released app (" + PhoneRig.APP
+                    + ") - not \"" + app + "\"");
+        }
+        phonePackage = app.isEmpty() ? BenchControl.PACKAGE : app;
         String path = text(p, "phone.path");
         if (!path.isEmpty() && !path.equals("direct") && !path.equals("relay")) throw wrong("phone.path is direct or relay, not \"" + path + "\"");
         relayed = path.equals("relay");
@@ -88,12 +110,21 @@ public final class Hardware {
         }
     }
 
-    /** This bench's hardware. An IllegalStateException says what is missing or wrong, and where. */
+    /**
+     * This bench's hardware for this run: the file's, with the run's own word and the environment's before it where
+     * a run has one ({@link #RUNS_OWN}). An IllegalStateException says what is missing or wrong, and where.
+     */
     public static Hardware load() {
-        return read(file());
+        return read(file(), System::getProperty, System::getenv);
     }
 
+    /** The file alone. */
     public static Hardware read(Path file) {
+        return read(file, key -> null, key -> null);
+    }
+
+    /** The file, and before it what the run's system properties, and then the environment, say of {@link #RUNS_OWN}. */
+    static Hardware read(Path file, UnaryOperator<String> property, UnaryOperator<String> environment) {
         if (!Files.isRegularFile(file)) {
             throw new IllegalStateException("No hardware file: " + file + " is not there. Copy " + EXAMPLE + " of the repo to that place and put in "
                     + "this bench's own phone and board. It stays on this PC - never into the repo.");
@@ -104,11 +135,20 @@ public final class Hardware {
         } catch (IOException | IllegalArgumentException e) {
             throw new IllegalStateException("The hardware file " + file + " cannot be read: " + e.getMessage(), e);
         }
-        return new Hardware(file, p);
+        Set<String> outside = new TreeSet<>();
+        for (String key : RUNS_OWN) {
+            String said = property.apply("bench." + key);
+            if (said == null || said.isBlank()) said = environment.apply("BENCH_" + key.toUpperCase(Locale.ROOT).replace('.', '_'));
+            if (said == null || said.isBlank()) continue;
+            p.setProperty(key, said.trim());
+            outside.add(key);
+        }
+        return new Hardware(file, p, outside);
     }
 
     private IllegalStateException wrong(String what) {
-        return new IllegalStateException("The hardware file " + file + " " + what + ". See " + EXAMPLE + ".");
+        return new IllegalStateException("The hardware file " + file + (outside.isEmpty() ? "" : " (with " + outside + " as the run or the environment says)")
+                + " " + what + ". See " + EXAMPLE + ".");
     }
 
     private static String text(Properties p, String key) {
@@ -152,6 +192,19 @@ public final class Hardware {
     public String phoneAdb() {
         if (phoneAdb.isEmpty()) throw missing("phone.adb", "the phone's serial as adb devices lists it");
         return phoneAdb;
+    }
+
+    /**
+     * Which DRAUPNE Flight a phone run flies - and may clear, stop and install over (R5, {@link PhoneGuard}): the bench
+     * build ({@link BenchControl#PACKAGE}) unless the file, or the run, names the released app ({@link PhoneRig#APP}).
+     */
+    public String phonePackage() {
+        return phonePackage;
+    }
+
+    /** What of this was not read from the file but said by the run or the environment ({@link #RUNS_OWN}); as a rule nothing. */
+    public Set<String> saidOutsideTheFile() {
+        return outside;
     }
 
     /** The way to the phone is one of Tailscale's relays (the file's phone.path=relay): the app is told so, as its own Tailscale would tell it. */
@@ -218,6 +271,7 @@ public final class Hardware {
     @Override
     public String toString() {
         return "phone " + phoneIp + ":" + phonePort + (relayed ? " (relayed)" : "") + (boardPort.isEmpty() ? "" : ", board " + boardPort)
-                + (cells == 0 ? "" : ", " + cells + " cells") + (cellFloor == 0 ? "" : ", floor " + cellFloor + " V a cell");
+                + (cells == 0 ? "" : ", " + cells + " cells") + (cellFloor == 0 ? "" : ", floor " + cellFloor + " V a cell")
+                + (outside.isEmpty() ? "" : " - " + outside + " not from the hardware file: the run's own word, or the environment's");
     }
 }

@@ -28,8 +28,17 @@ import static org.junit.jupiter.api.Assertions.fail;
  * to it through a network the bench can spoil: first start and its permission questions, the service listening, the
  * PC connecting, the emulated camera's picture arriving as real H.264 or H.265 from Android's own encoder, a weak
  * link, a cut and the way back, standby. No flight controller: the emulator has no USB (docs/TESTING.md).
+ * <p>
+ * On a real phone too (the task benchHwPhone): the app that is on the phone is taken back to its first start (only the
+ * bench build, or the released app with the run's word for it - {@code PhoneGuard}); what a pilot grants by tapping is
+ * granted by adb, because a phone maker's questions are worded their own way and are not tapped through - so "the first
+ * start asks" is the emulator's check only; the link goes to the phone's real address, the bench's wire still between.
+ * This scenario starts no Windows app and so has no fence up: nothing is sealed here but the PC's link itself, which
+ * speaks to the wire on loopback. The wire's way to a real phone is open only in a hardware run's JVM all the same
+ * ({@code PhoneRig.linkAddress} asks the fence's own rule).
  */
 @Tag("emulator")
+@Tag("hwphone")
 class PhoneScenario {
     private final List<String> wrong = new ArrayList<>();
     private Film film;
@@ -50,21 +59,27 @@ class PhoneScenario {
 
     @Test
     void theRealPhoneAppFirstStartThenThePcsLinkAndItsCamerasPicture() throws Exception {
+        PhoneRig.Target target = PhoneRig.Target.ofRun(); // the emulator; in a hardware run this bench's real phone (skipped without its hardware file)
         film = new Film(Sandbox.runRoot().resolve("film").resolve("phone-app-" + ProcessHandle.current().pid()), "phone-app");
         List<String> pcLog = new CopyOnWriteArrayList<>();
-        PhoneRig phone = new PhoneRig(film);
+        PhoneRig phone = new PhoneRig(film, target);
         Wire wire = null;
         ControlLink link = null;
         try {
             phone.ensureRunning();
-            Path apk = PhoneRig.builtApk();
-            phone.install(apk);
-            film.remark("Installed " + apk.getFileName() + "; the phone says version " + phone.version());
-            check(apk.getFileName().toString().contains(phone.version()), "the installed app is the built one: " + phone.version());
+            if (phone.device()) {
+                phone.installApp(); // the app that is there, unless the run names an APK
+            } else {
+                Path apk = PhoneRig.builtApk();
+                phone.install(apk);
+                film.remark("Installed " + apk.getFileName() + "; the phone says version " + phone.version());
+                check(apk.getFileName().toString().contains(phone.version()), "the installed app is the built one: " + phone.version());
+            }
 
             // ---- the very first start: the app asks for what it needs, a pilot says yes
             phone.forceStop();
             phone.clearData();
+            if (phone.device()) phone.grantPermissions(); // a real phone's questions are its maker's: granted as adb grants, not tapped
             phone.launch();
             phone.shot("phone: the very first start");
             List<String> asked = new ArrayList<>();
@@ -76,18 +91,20 @@ class PhoneScenario {
                 phone.tap(yes);
             }
             film.remark("The app asked: " + asked);
-            check(!asked.isEmpty(), "the first start asks for the camera (and what else it needs)");
+            if (!phone.device()) check(!asked.isEmpty(), "the first start asks for the camera (and what else it needs)");
             phone.untilSees("for DRAUPNE Link", 15_000);
             if (phone.texts().contains("START")) phone.tap("START");
             Ui.pause(2000);
             phone.shot("phone: its screen after the first start");
-            check(phone.sees("No flight controller on USB"), "it says there is no flight controller on USB");
+            // (a real phone's USB is adb's cable - but over the network it may have a flight controller: said, not checked)
+            if (phone.device()) film.remark("About its flight controller the phone says: " + phone.texts().stream().filter(t -> t.toLowerCase().contains("flight controller")).toList());
+            else check(phone.sees("No flight controller on USB"), "it says there is no flight controller on USB");
             check(phone.serviceRunning(), "its service runs (it listens for a PC)");
             Files.writeString(film.dir().resolve("phone-screen-first-start.txt"), String.join("\n", phone.texts()), StandardCharsets.UTF_8);
 
             // ---- the PC's link, through a wire the bench holds
-            int hostPort = phone.forwardUdp(PhoneRig.linkOnThePhone());
-            wire = new Wire(InetAddress.getLoopbackAddress(), hostPort);
+            java.net.InetSocketAddress at = phone.linkAddress(); // the emulator: a forwarded port on loopback; a real phone: its address
+            wire = new Wire(at.getAddress(), at.getPort());
             BadLink net = BadLink.clean(7);
             wire.rule(net);
             PcConfig config = PcConfig.defaults();

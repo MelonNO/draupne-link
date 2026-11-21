@@ -216,6 +216,35 @@ hardwareTask('benchHw', 'hw & !finding', 'Real hardware: the Windows app, sealed
 hardwareTask('benchHwPhone', 'hwphone & !finding', 'Real hardware: the real phone itself')
 // <<< R4 --------------------------------------------------------------------------------------------------------------
 
+// >>> R5, the real phone's rig (bench/PhoneRig, PhoneGuard; docs/TESTING.md, "Real hardware") ---------------------------
+// A phone run's own words for R4's task benchHwPhone, each also taken from the environment (BENCH_PHONE_ADB ...):
+//   -Pphone.adb= -Pphone.ip= -Pphone.port= -Pphone.package=   go before the hardware file's value of the same name
+//   -PreleasedAppMayBeChanged=true   the released app on the phone may be cleared, stopped, installed over (never from the file)
+//   -Pphone.apk=<an APK to install first>   -Pphone.onBattery=false   -Pandroid.sdk=<the Android SDK with adb in it>
+//   gradlew phoneReset [-Pserial=<adb serial>]   after a phone run that was killed: what the bench pretended about the
+//                                                phone's battery is taken back (bench.ps1 phone ends with it)
+tasks.named('benchHwPhone') {
+    ['phone.adb'              : 'bench.phone.adb',
+     'phone.ip'               : 'bench.phone.ip',
+     'phone.port'             : 'bench.phone.port',
+     'phone.package'          : 'bench.phone.package',
+     'phone.apk'              : 'bench.phone.apk',
+     'phone.onBattery'        : 'bench.phone.onBattery',
+     'releasedAppMayBeChanged': 'bench.phone.releasedAppMayBeChanged',
+     'android.sdk'            : 'bench.android.sdk'].each { given, key ->
+        if (project.hasProperty(given)) systemProperty key, project.property(given).toString()
+    }
+}
+tasks.register('phoneReset', JavaExec) {
+    group = 'bench'
+    description = "After a killed phone run: battery and doze pretences taken back on the real phone (-Pserial=...; else the hardware file's phone.adb)"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'de.droiddrone.bench.PhoneReset'
+    args((project.findProperty('serial') ?: project.findProperty('phone.adb') ?: '').toString())
+    if (project.hasProperty('android.sdk')) systemProperty 'bench.android.sdk', project.property('android.sdk').toString()
+}
+// <<< R5 --------------------------------------------------------------------------------------------------------------
+
 tasks.register('benchReport', JavaExec) {
     group = 'bench'
     description = "Writes the report of the run in BENCH_ROOT: report/index.html"

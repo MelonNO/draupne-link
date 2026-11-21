@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import javax.swing.JComboBox;
-import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Random;
@@ -30,8 +29,15 @@ import java.util.regex.Pattern;
  * What must hold: the link comes back after every cut; the phone sleeps when told, wakes by its own alarm to check,
  * and PILOT UAV has it back within its check interval and a little; the app never crashes; and its memory does not
  * climb over the hours. One row a round goes to soak/phone-night.tsv. (No flight controller: the emulator has no USB.)
+ * <p>
+ * On a real phone too (the task benchHwPhone, {@code --tests *PhoneNight*} with BENCH_HOURS): the app that is on the
+ * phone, the link to its real address. A phone on adb's cable charges and so never dozes: each round's sleep is
+ * therefore spent pretended off the cable and forced into deep doze ({@code PhoneRig.onBattery} - what that does not
+ * prove is written there), taken back once PILOT UAV has it again. Its battery is looked at before every round: hotter
+ * than the bench's limit the scenario waits there, with the camera off; too low it stops.
  */
 @Tag("night")
+@Tag("hwphone")
 class PhoneNightScenario {
     private static final Pattern PSS = Pattern.compile("TOTAL(?: PSS)?:?\\s+([\\d,]+)");
 
@@ -44,7 +50,7 @@ class PhoneNightScenario {
     /** The phone app's memory as Android counts it (PSS), in MB; -1 when it can't be read. */
     private static long phoneMb(PhoneRig phone) {
         try {
-            Matcher m = PSS.matcher(phone.shell("dumpsys meminfo " + PhoneRig.APP));
+            Matcher m = PSS.matcher(phone.shell("dumpsys meminfo " + phone.app()));
             return m.find() ? Long.parseLong(m.group(1).replace(",", "")) / 1024 : -1;
         } catch (RuntimeException e) {
             return -1;
@@ -64,26 +70,27 @@ class PhoneNightScenario {
 
     @Test
     void theRealPhoneAppForHours() throws Exception {
-        Assumptions.assumeTrue(PhoneRig.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
         long endAt = System.currentTimeMillis() + Math.max(8 * 60_000L, Night.runMs() - 5 * 60_000L);
-        AppRig.scenario("night-phone").drones(0).run(rig -> {
+        AppRig.scenario("night-phone").drones(0).reach(target.reach()).run(rig -> {
             Ui ui = rig.ui;
             ui.autoShot(false);
             Pilot pilot = new Pilot(rig);
             Random random = new Random(Long.getLong("bench.seed", 20261119L));
-            PhoneRig phone = new PhoneRig(rig.film);
+            PhoneRig phone = new PhoneRig(rig.film, target);
             phone.ensureRunning();
-            phone.install(PhoneRig.builtApk());
+            phone.installApp(); // the emulator: the newest build; a real phone keeps the app it has
             phone.grantPermissions();
             phone.forceStop();
             phone.launch();
             if (phone.texts().contains("START")) phone.tap("START");
             phone.shell("logcat -G 16M"); // the night's lines are read round by round, by time; the buffer holds hours all the same
-            int hostPort = phone.forwardUdp(PhoneRig.linkOnThePhone());
+            java.net.InetSocketAddress link = phone.linkAddress(); // the emulator: a forwarded port on loopback; a real phone: its address
             BadLink clean = BadLink.clean(21);
             Night.Table table = new Night.Table("phone-night", "minutes", "round", "phone app MB", "PC heap MB", "PC threads", "woke after s",
                     "phone's own checks", "new sessions on the phone", "socket opened anew");
-            try (Wire wire = new Wire(InetAddress.getLoopbackAddress(), hostPort)) {
+            try (Wire wire = new Wire(link.getAddress(), link.getPort())) {
                 wire.rule(clean);
                 rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
                 rig.fleet.startHeartbeat();
@@ -96,6 +103,7 @@ class PhoneNightScenario {
                 long firstMb = -1, lastMb = -1, slowestWake = 0;
                 while ((System.currentTimeMillis() < endAt || round < 1) && failures < 5) {
                     long wokeS = -1;
+                    phone.checkBattery(); // a real phone: too hot, the wait is here, between rounds, with its camera off; too low, the night ends
                     String roundFrom = phone.now();
                     boolean roundFailed = false;
                     try {
@@ -154,6 +162,7 @@ class PhoneNightScenario {
                         }
                         if (presses > 1) rig.film.remark("Round " + at + ": DEEP SLEEP was taken at the " + presses + ". press; before that the app said: " + refused);
                         ui.until("round " + at + ": the link ended, the phone asleep", 120_000, () -> ui.has("PILOT UAV"));
+                        if (phone.sleepsOnBattery()) phone.onBattery(); // a real phone on its cable would not doze: pretended off it
                         Ui.pause(100_000 + random.nextInt(40_000));
                         long alarms = count(phone.logSince(roundFrom), "Sleep check alarm fired");
                         rig.check(alarms >= 1, "round " + at + ": asleep for two minutes the phone woke itself to check at least once (" + alarms + " time(s))");
@@ -163,6 +172,7 @@ class PhoneNightScenario {
                         wokeS = (System.currentTimeMillis() - pressed) / 1000;
                         slowestWake = Math.max(slowestWake, wokeS);
                         rig.check(wokeS <= 95, "round " + at + ": PILOT UAV had the sleeping phone back after " + wokeS + " s (it checks every minute)");
+                        if (phone.sleepsOnBattery()) phone.plugged();
                         Ui.pause(5000);
                         pilot.standby();
                         Ui.pause(5000);
@@ -180,11 +190,11 @@ class PhoneNightScenario {
                                 toPhone += wire.toPhone(type);
                                 fromPc += wire.fromPc(type);
                             }
-                            String pid = phone.shell("pidof " + PhoneRig.APP).trim();
+                            String pid = phone.shell("pidof " + phone.app()).trim();
                             String nl = System.lineSeparator();
                             Files.writeString(rig.film.dir().resolve("round-" + (round + 1) + "-wrong.txt"), "Round " + (round + 1) + ": " + why + nl + nl
                                     + "The wire so far: from the PC " + fromPc + ", on to the phone " + toPhone + "; from the phone " + fromPhone + ", on to the PC " + toPc + nl + nl
-                                    + "The phone's UDP sockets (Send-Q: what waits to leave):" + nl + phone.shell("ss -u -a -m 2>&1") + nl + nl
+                                    + "The phone's UDP sockets (Send-Q: what waits to leave):" + nl + phone.socketStats() + nl + nl // ss as root; else the bench build's own word
                                     + "The phone app's threads:" + nl + phone.shell("ps -T -p " + pid + " -o TID,S,NAME 2>&1") + nl + nl
                                     + "Its log since the round began:" + nl + phone.logSince(roundFrom), StandardCharsets.UTF_8);
                             ui.shot("round " + (round + 1) + " went wrong");
@@ -192,6 +202,7 @@ class PhoneNightScenario {
                         } catch (Throwable ignored) {
                         }
                         wire.rule(clean);
+                        if (phone.sleepsOnBattery()) phone.plugged(); // a round that went wrong asleep must not leave the next one dozing
                         long until = System.currentTimeMillis() + 6 * 60_000L;
                         while (!ui.has("PILOT UAV") && System.currentTimeMillis() < until) {
                             if (ui.has("STANDBY MODE")) ui.click("STANDBY MODE");

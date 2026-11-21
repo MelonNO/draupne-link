@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import javax.swing.JComboBox;
 import java.awt.Component;
 import java.awt.Point;
-import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
@@ -34,10 +33,13 @@ import java.nio.file.Files;
  * leaves the app on the phone as it is) did not end that app once. So this scenario does not prove the fix - the
  * night's stack trace is what the fix rests on; what it does is fly the phone through the size change and the stop
  * together, which nothing else in the bench did.
+ * <p>
+ * On a real phone too (the task benchHwPhone) - and there it is a real camera that is closed under the change, not the
+ * emulator's made-up one. Without root the crash guard's count is forgotten by the bench build's receiver.
  */
 @Tag("emulator")
+@Tag("hwphone")
 class PhoneCameraRaceScenario {
-    private static final String APP = "de.droiddrone.flight.pc";
     private static final String[] VIDEO = {"AUTO", "SHARP", "NORMAL", "ROBUST", "SURVIVAL"};
 
     private static String said(PhoneRig phone, String stamp) {
@@ -74,25 +76,23 @@ class PhoneCameraRaceScenario {
 
     @Test
     void theCameraClosedWhileThePicturesSizeChangesDoesNotEndTheApp() throws Exception {
-        Assumptions.assumeTrue(PhoneRig.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
+        PhoneRig.Target target = PhoneRig.Target.ofRun();
+        Assumptions.assumeTrue(target.setUp(), "no Android emulator set up on this PC (docs/TESTING.md)");
         boolean keepApp = System.getenv("BENCH_KEEP_APP") != null;
-        AppRig.scenario("phone-camera-closed-under-a-size-change").drones(0).run(rig -> {
+        AppRig.scenario("phone-camera-closed-under-a-size-change").drones(0).reach(target.reach()).run(rig -> {
             Ui ui = rig.ui;
             ui.autoShot(false);
             Pilot pilot = new Pilot(rig);
-            PhoneRig phone = new PhoneRig(rig.film);
+            PhoneRig phone = new PhoneRig(rig.film, target);
             phone.ensureRunning();
-            phone.adb("root");
-            Ui.pause(3000);
-            if (!keepApp) phone.install(PhoneRig.builtApk());
+            phone.root(); // the emulator: adb root, then 3 s; a real phone has none
+            if (!keepApp) phone.installApp();
             phone.grantPermissions();
-            phone.forceStop();
-            phone.shell("rm -f /data/data/" + APP + "/shared_prefs/crashGuard.xml");
+            phone.stopForgettingRestarts(); // closed, the crash guard's file gone (a real phone: the bench receiver forgets it)
             phone.launch();
             if (phone.texts().contains("START")) phone.tap("START");
-            int phonePort = PhoneRig.linkOnThePhone();
-            int hostPort = phone.forwardUdp(phonePort);
-            try (Wire wire = new Wire(InetAddress.getLoopbackAddress(), hostPort)) {
+            java.net.InetSocketAddress at = phone.linkAddress();
+            try (Wire wire = new Wire(at.getAddress(), at.getPort())) {
                 wire.rule(BadLink.clean(53));
                 rig.fleet.announceExtra(new VirtualFleet.Drone("127.0.0.1", wire.port()));
                 rig.fleet.startHeartbeat();
