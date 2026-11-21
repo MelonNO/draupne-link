@@ -197,7 +197,8 @@ public final class LinkLog implements AutoCloseable {
         row(link.getState().name(), ping, rc - lastRcFrames, link.takeMaxRcGapMs(), telemetry - lastTelemetry,
                 link.takeMaxTelemetryGapMs(), fcAge == Long.MAX_VALUE ? -1 : fcAge,
                 fresh ? flag(blockers.contains("RXLOSS")) : "", fresh ? flag(blockers.contains("FAILSAFE")) : "",
-                fresh ? flag(s.armed()) : "", blockers, flag(radio), flag(rcOutput), videoFps,
+                // F-062: blank while armed isn't known (a status read before the mode names came said 0 for a drone in the air)
+                fresh && s.armedKnown() ? flag(s.armed()) : "", blockers, flag(radio), flag(rcOutput), videoFps,
                 // only sticks that went out: gated off (no throttle-low yet, link down) they weren't sent
                 !rcOutput || channels == null || channels.length <= PcConfig.THROTTLE_INDEX ? "" : channels[PcConfig.THROTTLE_INDEX],
                 !rcOutput || channels == null ? "" : java.util.Arrays.toString(channels).replace(",", "").replace("[", "").replace("]", ""),

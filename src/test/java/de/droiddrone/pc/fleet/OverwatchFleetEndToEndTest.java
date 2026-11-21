@@ -206,7 +206,9 @@ class OverwatchFleetEndToEndTest {
         // CONNECT to MobileZulu again: it says DISARMED (the failsafe dropped it) - the window ends at once
         ControlLink again = link(config, zulu);
         flag.attach(again, "MobileZulu", () -> PossiblyFlying.of(again.getTelemetry().getStatus()));
-        waitFor(() -> again.getTelemetry().getStatus() != null && !again.getTelemetry().getStatus().armed(), 3000, "a fresh DISARMED", log);
+        // F-062: DISARMED as the flight controller says it - the link's first statuses, read before the mode names have
+        // come, read "not armed" of any drone and end nothing (this waited for the first of those)
+        waitFor(() -> again.getTelemetry().isDisarmedNow(MonoClock.ms(), 1000), 3000, "a fresh DISARMED", log);
         assertFalse(flag.holds(), "reconnected and disarmed: nothing holds this PC back");
         waitFor(() -> view("MobileX-ray").held() == null, 2000, "the card no longer paused", log);
         waitFor(() -> view("MobileX-ray").live(), 8000, "the live preview comes", log);

@@ -24,9 +24,19 @@ public class FcTelemetry {
     /**
      * The FC's own view: armed or not, which modes its switches turned on, why arming is blocked, and the MCU's core
      * temperature (0 = not reported: Betaflight before 4.4 has no such field, and the Flight app sends 0 then).
+     * <p>
+     * armedKnown (F-062): this status was read with Betaflight's mode names known. Without them ARM can't be found
+     * among the mode bits and armed is false whatever the drone does - on every new connection, and after a loss long
+     * enough for the names to be forgotten, until they have come again. "Not armed" then says nothing: what must not
+     * happen to an armed drone asks armedKnown first ({@link ArmedCheck}).
      */
     public record Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent,
-                         int coreTempC, long receivedAt) {
+                         int coreTempC, long receivedAt, boolean armedKnown) {
+        /** A status whose armed flag is the flight controller's own word (read with the mode names). */
+        public Status(boolean armed, List<String> activeModes, List<Blocker> blockers, int cpuLoadPercent, int coreTempC, long receivedAt) {
+            this(armed, activeModes, blockers, cpuLoadPercent, coreTempC, receivedAt, true);
+        }
+
         public boolean coreTempKnown() {
             return coreTempC != 0;
         }
@@ -640,7 +650,7 @@ public class FcTelemetry {
         if (!names.isEmpty()) trackArmed(armed, now); // without the names, ARM can't be found among the bits
         armedStreak = armed ? Math.min(armedStreak + 1, 1000) : 0;
         statusHadNames = !names.isEmpty();
-        status = new Status(armed, List.copyOf(modes), List.copyOf(blockers), load, coreTemp, now);
+        status = new Status(armed, List.copyOf(modes), List.copyOf(blockers), load, coreTemp, now, !names.isEmpty());
     }
 
     synchronized void trackArmed(boolean armed, long now) {

@@ -313,9 +313,11 @@ final class FleetController {
                 || reason != null && reason.toLowerCase(Locale.ROOT).contains(phone.toLowerCase(Locale.ROOT)));
         // 1.0.64: not for a drone another PC flies - the phone refuses the mode while that pilot's link holds, and took
         // it the moment the link dropped
-        boolean flownElsewhere = !connectedTo(phone) && fleet.flown(phone, System.currentTimeMillis());
-        String no = FleetManager.refusal(phone, pos == null ? null : pos.position().armed(), flyingHere, connectedTo(phone), flownElsewhere,
-                fleet.pcBuild(phone));
+        long now = System.currentTimeMillis();
+        boolean flownElsewhere = !connectedTo(phone) && fleet.flown(phone, now);
+        // F-062: with the phone's own fresh "armed: not known" refused too
+        String no = FleetManager.refusal(phone, pos == null ? null : pos.position(), pos == null ? -1 : now - pos.at(), flyingHere,
+                connectedTo(phone), flownElsewhere, fleet.pcBuild(phone));
         if (no != null) {
             new LockedNotice(near, near, "NOT NOW", no).pop();
             return;
@@ -360,8 +362,8 @@ final class FleetController {
         NameService.DronePosition pos = positionOf(phone);
         long now = System.currentTimeMillis();
         boolean here = connectedTo(phone);
-        String no = FleetManager.refusal(phone, pos == null ? null : pos.position().armed(), here && PossiblyFlying.now(), here,
-                !here && fleet.flown(phone, now), fleet.pcBuild(phone));
+        String no = FleetManager.refusal(phone, pos == null ? null : pos.position(), pos == null ? -1 : now - pos.at(),
+                here && PossiblyFlying.now(), here, !here && fleet.flown(phone, now), fleet.pcBuild(phone));
         if (no != null) return no;
         fleet.queue(phone, mode, 0, 0, 0, 0, now);
         nameService.scanSoon(); // an awake phone (standby is awake) gets it now

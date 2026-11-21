@@ -12,6 +12,7 @@ import de.droiddrone.pc.AppInfo;
 import de.droiddrone.pc.AppLog;
 import de.droiddrone.pc.AppPaths;
 import de.droiddrone.pc.ArmSwitch;
+import de.droiddrone.pc.ArmedCheck;
 import de.droiddrone.pc.CameraView;
 import de.droiddrone.pc.Connection;
 import de.droiddrone.pc.ControlLink;
@@ -2469,7 +2470,7 @@ public class MainWindow extends JFrame {
             ControlLink l = c.getLink();
             FcTelemetry.Status st = l.getTelemetry().getStatus();
             long age = st == null ? -1 : MonoClock.ms() - st.receivedAt();
-            if (linkBack(l.getState(), l.isLinkStalled(), l.isFcLost(), age)) {
+            if (linkBack(l.getState(), l.isLinkStalled(), l.isFcLost(), age) || linkUpUnread(l.getState(), l.isLinkStalled(), l.isFcLost(), age)) {
                 String[] options = {"Keep flying", "End link - lost"};
                 int choice = Dialogs.option(this, "Link is back. End it and mark the drone lost?", "Lost drone",
                         JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
@@ -2627,7 +2628,10 @@ public class MainWindow extends JFrame {
         PossiblyFlying flag = PossiblyFlying.pc();
         String why = flag.reason();
         if (!flag.resumable()) {
-            if (why != null) Dialogs.message(parent, why + ".\nA link here says armed: waits until DISARMED.", "It's down - resume", JOptionPane.INFORMATION_MESSAGE);
+            PossiblyFlying.Hold hold = flag.why();
+            boolean notKnown = hold != null && hold.notKnown(); // F-062: a link that hasn't read it yet doesn't "say armed"
+            if (why != null) Dialogs.message(parent, why + (notKnown ? ".\nA link here doesn't know yet: waits until DISARMED."
+                    : ".\nA link here says armed: waits until DISARMED."), "It's down - resume", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
         String[] options = {"It's down - resume", "Cancel"};
@@ -2727,6 +2731,15 @@ public class MainWindow extends JFrame {
      */
     static boolean linkBack(ControlLink.State state, boolean stalled, boolean fcLost, long statusAgeMs) {
         return state == ControlLink.State.READY && !stalled && !fcLost && statusAgeMs >= 0 && statusAgeMs < 2000;
+    }
+
+    /**
+     * F-062: the link is up again and the phone heard, but the flight controller's first status since isn't here yet
+     * (the one of before the loss is old): the moments right after a reconnect. LOST DRONE asks then too - it ended
+     * such a link at once, as if it were still down.
+     */
+    static boolean linkUpUnread(ControlLink.State state, boolean stalled, boolean fcLost, long statusAgeMs) {
+        return state == ControlLink.State.READY && !stalled && !fcLost && !(statusAgeMs >= 0 && statusAgeMs < 2000);
     }
 
     /**
@@ -3628,7 +3641,8 @@ public class MainWindow extends JFrame {
         FcTelemetry.Status fc = connection == null ? null : connection.getLink().getTelemetry().getStatus();
         if (connection != null && connection.getLink().isFcLost()) {
             setLabel(fcStateLabel, "FC: NOT ON THE PHONE - CHECK THE USB DATA CABLE", Theme.BAD);
-        } else if (fc == null || MonoClock.ms() - fc.receivedAt() > 3000) {
+        } else if (fc == null || MonoClock.ms() - fc.receivedAt() > 3000 || !fc.armedKnown()) {
+            // F-062: nor a status read before the mode names came - it said DISARMED - READY TO ARM of a drone in the air
             setLabel(fcStateLabel, connection == null ? " " : "FC: NO STATUS YET", Theme.MUTED);
         } else if (fc.armed()) {
             setLabel(fcStateLabel, "FC: ARMED" + (fc.activeModes().size() > 1 ? "  ·  " + String.join(" ", fc.activeModes()) : ""), Theme.BAD);
@@ -4044,27 +4058,27 @@ public class MainWindow extends JFrame {
     /**
      * Ending the link stops the sticks, and an armed drone then fails safe: while the FC says armed (or the link is
      * down right after it did - the drone may still be in the air), ask first, with "keep flying" as the default.
+     * F-062: and while it isn't known whether the drone is armed - a link's first seconds, before Betaflight's mode
+     * names have come, read as DISARMED until then ({@link ArmedCheck}); the question then says so.
      * @return true to go on
      */
     private boolean confirmEndWhileArmed(String action) {
-        if (connection == null || connection.getLink().isSpectator()) return true;
-        boolean armed = fcArmedNow();
-        // no fresh word from the FC (link down), and it was armed within the lost-drone window: it may still fly
-        FcTelemetry.Status st = connection.getLink().getTelemetry().getStatus();
-        long now = MonoClock.ms();
-        boolean fresh = st != null && now - st.receivedAt() < 2000;
-        boolean maybeFlying = !fresh && lastArmedAt != 0 && now - lastArmedAt < LOST_DRONE_WINDOW_MS;
-        if (!armed && !maybeFlying) return true;
+        ArmedCheck check = armedCheck();
+        if (!check.asks()) return true;
         String[] options = {"Keep flying", action};
-        int choice = Dialogs.option(this,
-                (armed ? "The drone is ARMED." : "The drone was armed moments ago and may still be flying.")
-                        + "\n" + action + " stops the sticks: Betaflight failsafe takes over (GPS rescue, land or drop, as set).",
-                action + " while armed?", JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options, options[0]);
+        int choice = Dialogs.option(this, check.question(action), check.title(action), JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE, null, options, options[0]);
         if (choice == 1) {
-            logLine(action + " while " + (armed ? "armed" : "possibly flying") + ": confirmed.");
+            logLine(action + " " + check.confirmedIn() + ": confirmed.");
             return true;
         }
         return false;
+    }
+
+    /** F-062: what the guards go by for this PC's own link: armed, perhaps still flying, not known - or nothing to protect. */
+    private ArmedCheck armedCheck() {
+        Connection c = connection;
+        return c == null ? ArmedCheck.CLEAR : ArmedCheck.of(c.getLink(), lastArmedAt, MonoClock.ms());
     }
 
     /** The FC reported armed within the last two seconds. */
@@ -4452,8 +4466,9 @@ public class MainWindow extends JFrame {
         Connection c = connection;
         String flown = config.getString(Names.PHONE_NAME_KEY);
         boolean same = c != null && !c.getLink().isSpectator() && drone.equalsIgnoreCase(flown);
-        if (!same && c != null && PossiblyFlying.now()) {
+        if (!same && c != null && (PossiblyFlying.now() || armedCheck().asks())) {
             // armed now or within the lost-drone window: never a click away from cutting this PC's own sticks
+            // (F-062: nor while its link hasn't read yet whether its drone is armed)
             Dialogs.message(this, "This PC flies another drone (or did moments ago: it may still be flying).\n"
                     + "Land it, press STANDBY MODE, then PILOT UAV on " + drone + ".", "Overwatch", JOptionPane.INFORMATION_MESSAGE);
             return;
@@ -5975,9 +5990,10 @@ public class MainWindow extends JFrame {
         FcTelemetry t = connection.getLink().getTelemetry();
         String version = t.getPhoneAppVersion();
         String newest = ApkShare.VERSION;
-        if (PossiblyFlying.now()) { // armed, or armed moments before the telemetry went quiet (1.0.49)
+        PossiblyFlying.Hold hold = PossiblyFlying.pc().why();
+        if (hold != null) { // armed, or armed moments before the telemetry went quiet (1.0.49); F-062: or not known yet
             String why = PossiblyFlying.reasonNow();
-            new LockedNotice(updatePhoneButton, videoView, "ARMED", "No update while the drone may be flying: it restarts the phone app and the sticks."
+            new LockedNotice(updatePhoneButton, videoView, hold.notKnown() ? "WAIT" : "ARMED", "No update while the drone may be flying: it restarts the phone app and the sticks."
                     + (why == null ? "" : " (" + why + ".)")).pop();
             return;
         }

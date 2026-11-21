@@ -42,9 +42,10 @@ public final class PossiblyFlying {
 
     /**
      * What holds the flag: the drone (its name; "A drone" when the link had none), whether its link is open now, when
-     * its armed word was heard and when the window ends (MonoClock ms).
+     * its armed word was heard and when the window ends (MonoClock ms). notKnown (F-062): that word was "not known",
+     * not ARMED - a link's first statuses, read before Betaflight's mode names have come.
      */
-    public record Hold(String drone, boolean live, long heardAt, long until) {}
+    public record Hold(String drone, boolean live, long heardAt, long until, boolean notKnown) {}
 
     private record Live(Object key, String drone, Supplier<Word> word) {}
 
@@ -124,7 +125,9 @@ public final class PossiblyFlying {
             Word w = read(l.word());
             Ended e = ended.get(l.key());
             if (freshDisarmed(w, e)) ended.remove(l.key(), e); // connected again and it says DISARMED: it is down
-            if (live == null && counts(w, now) && !markedDown(l.key(), w)) live = new Hold(nameOf(l.drone()), true, w.at(), w.at() + LOST_DRONE_WINDOW_MS);
+            if (live == null && counts(w, now) && !markedDown(l.key(), w)) {
+                live = new Hold(nameOf(l.drone()), true, w.at(), w.at() + LOST_DRONE_WINDOW_MS, w.armed() == null);
+            }
         }
         if (live != null) return live;
         Hold best = null;
@@ -135,7 +138,7 @@ public final class PossiblyFlying {
                 continue;
             }
             long until = w.at() + LOST_DRONE_WINDOW_MS;
-            if (best == null || until > best.until()) best = new Hold(nameOf(e.getValue().drone()), false, w.at(), until);
+            if (best == null || until > best.until()) best = new Hold(nameOf(e.getValue().drone()), false, w.at(), until, w.armed() == null);
         }
         return best;
     }
@@ -191,10 +194,14 @@ public final class PossiblyFlying {
 
     static String describe(Hold h, long nowMono, long nowWall) {
         long ago = Math.max(0, nowMono - h.heardAt());
-        if (h.live() && ago < 2000) return h.drone() + " is armed: a drone here is flying";
+        if (h.live() && ago < 2000) {
+            return h.drone() + (h.notKnown() ? " may be armed (not known yet): a drone here may be flying" : " is armed: a drone here is flying");
+        }
         String until = CLOCK.format(Instant.ofEpochMilli(nowWall + (h.until() - nowMono)).atZone(ZoneId.systemDefault()));
         String when = ago < 60_000 ? (ago / 1000) + " s ago" : (ago / 60_000) + " min ago";
-        return h.drone() + (h.live() ? " went quiet armed " : " was lost armed ") + when + "; a drone here may be flying (until " + until + ")";
+        // F-062: a word that was "not known" is not called armed
+        String how = (h.live() ? " went quiet " : " was lost ") + (h.notKnown() ? "(armed: not known) " : "armed ");
+        return h.drone() + how + when + "; a drone here may be flying (until " + until + ")";
     }
 
     /** Armed (or unknown) and heard within the window: fresh means flying, quiet means it may still be. */
@@ -224,8 +231,14 @@ public final class PossiblyFlying {
         }
     }
 
-    /** The flight controller's word from a link's telemetry (FcTelemetry.Status: armed, when received). */
+    /**
+     * The flight controller's word from a link's telemetry (FcTelemetry.Status: armed, when received). F-062: a status
+     * read before Betaflight's mode names have come says "not armed" whatever the drone does - that word is "not
+     * known" (null), which counts as armed. It was taken as DISARMED: a new link to a drone lost armed ended its
+     * window with its first status, in the air or not.
+     */
     public static Word of(FcTelemetry.Status st) {
-        return st == null ? Word.NOTHING : new Word(st.armed(), st.receivedAt());
+        if (st == null) return Word.NOTHING;
+        return new Word(st.armedKnown() ? Boolean.valueOf(st.armed()) : null, st.receivedAt());
     }
 }

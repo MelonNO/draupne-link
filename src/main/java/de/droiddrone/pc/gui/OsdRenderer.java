@@ -264,7 +264,8 @@ final class OsdRenderer {
                 put(d.banner(), ex, ey, GREEN, a);
             });
             element(OsdElement.ARMED, (ex, ey, a) -> {
-                if (s == null) return;
+                // F-062: not before the mode names are known - until then every status read DISARMED, in the air too
+                if (s == null || !s.armedKnown()) return;
                 g.setFont(Theme.headingFont(28 * unit));
                 put(s.armed() ? "ARMED" : "DISARMED", ex, ey, s.armed() ? GREEN : YELLOW, a);
             });

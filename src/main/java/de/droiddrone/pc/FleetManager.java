@@ -138,6 +138,24 @@ public final class FleetManager {
         return null;
     }
 
+    /**
+     * F-062: as above, from the phone's own word on its drone (its name reply; null: none) and how long ago it came.
+     * A phone that says it doesn't know whether its drone is armed - in a word no older than {@link #FLOWN_FRESH_MS} -
+     * is refused as an armed one is (it was queued: unknown counted as disarmed here, and only the phone's own gate
+     * held the mode back). Without a word, or with an old one, the mode is queued as before: the phone decides when it
+     * next listens.
+     */
+    public static String refusal(String phone, Names.Position said, long saidAgoMs, boolean flyingHere, boolean connectedHere,
+                                 boolean flownElsewhere, int pcBuild) {
+        String no = refusal(phone, said == null ? null : said.armed(), flyingHere, connectedHere, flownElsewhere, pcBuild);
+        boolean notKnown = said != null && said.armed() == null && saidAgoMs >= 0 && saidAgoMs <= FLOWN_FRESH_MS;
+        if (notKnown && !flyingHere && !(flownElsewhere && !connectedHere)) return NOT_KNOWN;
+        return no;
+    }
+
+    /** The refusal for a phone whose fresh word is that it doesn't know whether its drone is armed. */
+    public static final String NOT_KNOWN = "Not known if armed: try again.";
+
     /** 1.0.64: the phone said lately that a pilot PC flies it (its name reply, with or without a position). */
     public boolean flown(String phone, long now) {
         Long at = phone == null ? null : flownAt.get(id(phone));
