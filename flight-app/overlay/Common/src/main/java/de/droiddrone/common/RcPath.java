@@ -26,8 +26,9 @@ package de.droiddrone.common;
  * <li>The sequence: a frame older than (or the same as) the last one taken - a late packet after a newer one - is
  * dropped. 8 bits: anything goes after {@link #SEQ_RESET_MS} without a frame (a frame 128 or more behind looked
  * newer, and the fresh frames after it were dropped until the count passed it). 16 bits: a newer frame is always
- * newer, so only a newer one is taken until {@link #SEQ16_FORGET_MS} without one (the PC may have started counting
- * again); no frame waits for this, it only refuses.</li>
+ * newer, so only a newer one is taken ({@link Seq16}, F-067: for as long as older and newer can be told apart - a
+ * lone old frame no longer passes for fresh after a second without one); no frame waits for this, it only
+ * refuses.</li>
  * <li>The lag (pc.31): the phone's clock minus sentMs is the one-way time plus a fixed offset; the smallest over the
  * last two buckets of {@link #LAG_BUCKET_MS} is the best the link did, and a frame later than that by more than the
  * limit (0 = never drop) is dropped - sticks seconds old (a 4G queue flushed) end in Betaflight's failsafe instead of
@@ -43,8 +44,18 @@ package de.droiddrone.common;
 public final class RcPath {
     /** 8-bit sequence: no frame taken for this long, the next one is taken whatever its sequence. */
     public static final long SEQ_RESET_MS = 300;
-    /** 16-bit sequence: no frame taken for this long, anything is taken. */
+    /**
+     * 16-bit sequence: frames that are not newer than the last one taken, coming as a steady stream for this long, are
+     * the PC counting anew ({@link Seq16}). Before F-067: no frame taken for this long, anything was taken.
+     */
     public static final long SEQ16_FORGET_MS = 1000;
+    /**
+     * F-067, 16-bit sequence: a frame that is not newer than the last one taken stays old for this long after it. The
+     * PC sends 250 frames a second at its fastest (ControlLink.MAX_RC_RATE): 30 000 in this time, short of the 32 768
+     * from where "older" and "newer" can no longer be told apart; the rest, 11 s of frames, is room for a last frame
+     * that was itself late. With no frame taken for longer, anything is taken, as it was after a second.
+     */
+    public static final long SEQ16_OLD_MS = 120_000;
     public static final long LAG_BUCKET_MS = 10_000;
     /** pc.50: a best transit last measured against longer ago than this isn't kept (the two clocks drift apart). */
     public static final long LAG_KEEP_MS = 120_000;
@@ -59,6 +70,7 @@ public final class RcPath {
     private final short[] frame = new short[FcCommon.MAX_SUPPORTED_RC_CHANNEL_COUNT];
     private volatile int lastSeq = -1; // volatile: the stats thread reports it
     private boolean seqValid;
+    private final Seq16 seq16 = new Seq16();
     /** When the last frame was taken; volatile: the idle sticks' thread reads it. */
     private volatile long lastTakenMs;
     private int lagMinNow = -1, lagMinBefore = -1;
@@ -199,10 +211,65 @@ public final class RcPath {
         return frame;
     }
 
-    /** The 16-bit sequence rule: newer than the last frame taken, or anything after SEQ16_FORGET_MS without one. */
+    /** The 16-bit sequence rule ({@link Seq16}): newer than the last frame taken - or nothing to compare it with. */
     private boolean takeSeq16(int seq, long now) {
-        if (seqValid && now - lastTakenMs > SEQ16_FORGET_MS) seqValid = false;
-        return !seqValid || (short) (seq - lastSeq) > 0;
+        return seq16.takes(seqValid, lastSeq, lastTakenMs, seq, now);
+    }
+
+    /**
+     * F-067: which frame with a 16-bit sequence is taken - the phone's rule, and the PC's made-up phone's.
+     * <p>
+     * Before, a second without a frame taken made the next one welcome whatever its number ("the PC may have started
+     * counting again", pc.31). With a session up, the drone disarmed and the pilot's frames stopped - standby, the
+     * radio at rest - one frame that came late or twice was then taken and written: ARM on and the throttle low, from
+     * before the landing, and the drone armed where it stood. Nothing in DRAUPNE Link starts the count anew inside a
+     * session: the count is the link's own from its first frame to its last, a new link sends a Connect before its
+     * first frame, and the session that Connect starts on the phone forgets the sequence ({@link #restart}). The
+     * second was there for a phone on upstream's relay, which sees no Connect when the PC behind it starts again (no
+     * phone app since pc.28 can be set to that), and so that no slip could ever lock the sticks out.
+     * <p>
+     * Now a frame that is not newer than the last one taken is old for {@link #SEQ16_OLD_MS} after that one - as long
+     * as the two can be told apart. What the second was for is kept without it: frames that are not newer but come as
+     * a stream - each newer than the one before, none more than {@link #SEQ_RESET_MS} after it, for
+     * {@link #SEQ16_FORGET_MS} with no newer frame between - are a PC that counts from elsewhere, and the stream is
+     * taken from there. So whatever sends a live stream has its sticks at the flight controller within about a second,
+     * as before; a late frame, a doubled one, a bunch a queue let go (over in milliseconds) and a trickle with gaps
+     * are not a stream.
+     * <p>
+     * Receive thread only. For a frame that is newer - every frame of a link that flies - it costs what it cost (two
+     * comparisons) and one store; nothing is allocated.
+     */
+    public static final class Seq16 {
+        /** A stream of frames that are not newer is being followed: since when, and its newest frame and when it came. */
+        private boolean stream;
+        private long streamSince, streamAt;
+        private int streamSeq;
+
+        /**
+         * @param valid       a frame with a sequence has been taken in this session
+         * @param last        the last one's sequence
+         * @param lastTakenMs when the last frame was taken
+         * @return whether the frame with this sequence, here at now, is taken
+         */
+        public boolean takes(boolean valid, int last, long lastTakenMs, int seq, long now) {
+            if (!valid || (short) (seq - last) > 0 || now - lastTakenMs > SEQ16_OLD_MS) {
+                stream = false;
+                return true;
+            }
+            if (stream && now - streamAt > SEQ_RESET_MS) stream = false; // it broke off: what comes now begins another
+            if (!stream) {
+                stream = true;
+                streamSince = streamAt = now;
+                streamSeq = seq;
+                return false;
+            }
+            if ((short) (seq - streamSeq) <= 0) return false; // a copy, or one overtaken within the stream: says nothing
+            streamSeq = seq;
+            streamAt = now;
+            if (now - streamSince < SEQ16_FORGET_MS) return false;
+            stream = false;
+            return true;
+        }
     }
 
     /**

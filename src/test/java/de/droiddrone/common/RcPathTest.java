@@ -58,7 +58,7 @@ class RcPathTest {
     }
 
     @Test
-    void aSixteenBitSequenceTakesOnlyNewerFramesUntilASecondWithout() {
+    void aSixteenBitSequenceTakesOnlyNewerFramesAlsoAfterASecondWithoutOne() {
         RcPath p = new RcPath();
         assertTrue(take(p, seq16(100), 0) > 0);
         assertEquals(-1, take(p, seq16(100), 10), "the same");
@@ -66,7 +66,9 @@ class RcPathTest {
         assertTrue(take(p, seq16(101), 30) > 0);
         assertEquals(101, p.lastSeq());
         assertEquals(-1, take(p, seq16(50), 30 + RcPath.SEQ_RESET_MS + 1), "300 ms is no reason for 16 bits");
-        assertTrue(take(p, seq16(50), 30 + RcPath.SEQ16_FORGET_MS + 1) > 0, "a second without one: anything");
+        assertEquals(-1, take(p, seq16(50), 30 + RcPath.SEQ16_FORGET_MS + 1), "nor is a second (F-067; before: anything)");
+        assertEquals(101, p.lastSeq());
+        assertTrue(take(p, seq16(102), 5000) > 0, "the PC's next frame after a pause of any length: taken as it comes");
     }
 
     @Test
@@ -75,6 +77,134 @@ class RcPathTest {
         assertTrue(take(p, seq16(65535), 0) > 0);
         assertTrue(take(p, seq16(0), 10) > 0, "0 follows 65535");
         assertEquals(-1, take(p, seq16(65535), 20));
+    }
+
+    // ---- F-067: one old frame stays old
+
+    /** The pilot's frames, AUX1 the arm switch: at rest, and armed with the throttle low. */
+    private static final short[] RESTING = {1500, 1500, 1500, 1000, 1000, 1500, 1000, 1000};
+    private static final short[] ARM_SWITCH_ON = {1500, 1500, 1500, 1000, 2000, 1500, 1000, 1000};
+
+    private static byte[] seq16(short[] ch, int seq) {
+        return frame(ch, seq >> 8, seq);
+    }
+
+    /**
+     * A session up; flown, landed and disarmed: frames up to 20 199, the last hundred with ARM off, the last one taken
+     * at 796 ms; then the pilot's frames stop (standby, the radio put down).
+     */
+    private static RcPath flownAndAtRest() {
+        RcPath p = new RcPath();
+        p.restart(0);
+        int seq = 20_000;
+        long t = 0;
+        for (; seq < 20_100; seq++, t += 4) assertTrue(take(p, seq16(ARM_SWITCH_ON, seq), t) > 0);
+        for (; seq < 20_200; seq++, t += 4) assertTrue(take(p, seq16(RESTING, seq), t) > 0);
+        assertEquals(796, p.lastTakenMs());
+        return p;
+    }
+
+    @Test
+    void oneOldFrameDoesNotArmADroneThatRests() {
+        RcPath p = flownAndAtRest();
+        // 1.5 s on, one frame from before the landing - ARM on, the throttle low - comes late (or a second time)
+        assertEquals(-1, take(p, seq16(ARM_SWITCH_ON, 20_050), 796 + 1500), "before: taken and written - the drone armed where it stood");
+        assertEquals(1000, p.frame()[4], "nothing of it reached the frame the phone writes");
+        assertEquals(-1, take(p, seq16(RESTING, 20_199), 796 + 1600), "nor the last frame a second time");
+        assertEquals(-1, take(p, seq16(ARM_SWITCH_ON, 20_099), 796 + 30_000), "half a minute on");
+        assertEquals(-1, take(p, seq16(ARM_SWITCH_ON, 20_001), 796 + RcPath.SEQ16_OLD_MS), "two minutes on");
+        assertEquals(796, p.lastTakenMs(), "none of them counts as a frame taken (the idle sticks go on)");
+        assertEquals(20_199, p.lastSeq());
+        // the pilot is back: the PC's count went on from where it stopped
+        assertTrue(take(p, seq16(RESTING, 20_200), 796 + RcPath.SEQ16_OLD_MS + 5000) > 0);
+    }
+
+    @Test
+    void aBunchOfOldFramesAndATrickleOfThemAreNoStream() {
+        RcPath p = flownAndAtRest();
+        // a queue let go: a hundred old frames in order within 50 ms - and another bunch two seconds later
+        for (int i = 0; i < 100; i++) assertEquals(-1, take(p, seq16(ARM_SWITCH_ON, 20_000 + i), 796 + 3000 + i / 2), "a bunch: " + i);
+        for (int i = 0; i < 100; i++) assertEquals(-1, take(p, seq16(ARM_SWITCH_ON, 20_000 + i), 796 + 5000 + i), "the second bunch: " + i);
+        // one now and then, each newer than the one before, for seconds - but never within 300 ms of each other
+        long t = 796 + 10_000;
+        for (int seq = 20_000; seq < 20_020; seq++, t += RcPath.SEQ_RESET_MS + 1) {
+            assertEquals(-1, take(p, seq16(ARM_SWITCH_ON, seq), t), "a trickle: " + seq);
+        }
+        // the same frame again and again, for seconds
+        for (int i = 0; i < 400; i++, t += 10) assertEquals(-1, take(p, seq16(ARM_SWITCH_ON, 20_050), t), "one frame over and over");
+        assertEquals(20_199, p.lastSeq());
+    }
+
+    @Test
+    void aStreamThatCountsAnewIsTakenUpAfterASecond() {
+        // nothing in DRAUPNE Link does it inside a session - a new count comes with a new Connect, and the session
+        // that starts forgets the sequence - but should a PC ever: its sticks are back as they were before F-067
+        RcPath p = flownAndAtRest();
+        long start = 796 + 400, t = start;
+        int seq = 0, refused = 0;
+        for (; take(p, seq16(RESTING, seq), t) < 0; seq++, t += 4) refused++;
+        assertEquals(RcPath.SEQ16_FORGET_MS, t - start, "a second of a steady stream of frames that are not newer");
+        assertEquals(250, refused);
+        assertEquals(250, p.lastSeq(), "the count goes on from the stream's");
+        assertTrue(take(p, seq16(RESTING, 251), t + 4) > 0);
+        assertEquals(-1, take(p, seq16(RESTING, 249), t + 8), "and an old frame of it is old");
+    }
+
+    @Test
+    void aStreamIsFollowedThroughFramesOvertakenOnTheWayAndStartsOverAfterAGap() {
+        RcPath p = flownAndAtRest();
+        long start = 796 + 400, t = start;
+        // two frames in three overtaken: 2, 1, 0, 5, 4, 3, ... - the newest so far carries the stream on
+        int taken = -1;
+        for (int base = 0; taken < 0 && base < 3000; base += 3) {
+            for (int seq : new int[]{base + 2, base + 1, base}) {
+                if (take(p, seq16(RESTING, seq), t) > 0 && taken < 0) taken = seq;
+                t += 4;
+            }
+        }
+        assertTrue(taken > 0 && t - start <= RcPath.SEQ16_FORGET_MS + 20, "taken up a second in, out of order or not: at " + (t - start) + " ms");
+        // a stream that breaks off for longer than Betaflight itself holds the sticks begins its second again
+        RcPath q = flownAndAtRest();
+        t = start;
+        int seq = 0;
+        for (; t < start + 600; seq++, t += 4) assertEquals(-1, take(q, seq16(RESTING, seq), t));
+        t += RcPath.SEQ_RESET_MS + 1;
+        long again = t;
+        for (; t < again + RcPath.SEQ16_FORGET_MS; seq++, t += 4) assertEquals(-1, take(q, seq16(RESTING, seq), t), "its second again, from the gap: " + (t - again));
+        assertTrue(take(q, seq16(RESTING, seq), t) > 0);
+    }
+
+    @Test
+    void anOldFrameBreaksNoStreamOfNewOnes() {
+        // in flight: frames in order, now and then one late - refused as ever, and the next newer one is taken as ever
+        RcPath p = new RcPath();
+        p.restart(0);
+        long t = 0;
+        for (int seq = 0; seq < 2000; seq++, t += 4) {
+            assertTrue(take(p, seq16(RESTING, seq), t) > 0, "frame " + seq);
+            if (seq % 7 == 3) assertEquals(-1, take(p, seq16(RESTING, seq - 2), t + 1), "late: " + (seq - 2));
+        }
+        assertEquals(1999, p.lastSeq());
+    }
+
+    @Test
+    void whereOlderAndNewerCanNoLongerBeToldApartAnythingIsTaken() {
+        assertTrue(RcPath.SEQ16_OLD_MS / 1000 * de.droiddrone.pc.ControlLink.MAX_RC_RATE < 32_768,
+                "at the PC's fastest the count has not gone half round in that time: older is older");
+        RcPath p = flownAndAtRest();
+        assertEquals(-1, take(p, seq16(RESTING, 20_100), 796 + RcPath.SEQ16_OLD_MS));
+        assertTrue(take(p, seq16(RESTING, 20_100), 796 + RcPath.SEQ16_OLD_MS + 1) > 0,
+                "over two minutes without a frame taken: the PC may have sent 32 768 and more unseen - as after a second, before");
+    }
+
+    @Test
+    void aFrameWithItsSendTimeIsOldByItsSequenceToo() {
+        RcPath p = new RcPath();
+        p.restart(0);
+        assertTrue(take(p, lagged(500, 0, 0), 100) > 0);
+        assertEquals(-1, take(p, lagged(400, 3000, 0), 100 + 3000), "the pc.31 frame: its number is what says old (no lateness limit set)");
+        assertEquals(0, p.lagDropped(), "not counted as too late: it was never looked at for that");
+        assertTrue(take(p, lagged(501, 3100, 0), 100 + 3100) > 0);
     }
 
     @Test

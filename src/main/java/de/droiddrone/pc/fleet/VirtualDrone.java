@@ -75,7 +75,7 @@ public final class VirtualDrone {
     static final short PHONE_UPDATE = 0x40F7;
     public static final int NORMAL = 0, STANDBY = 1, DEEP_SLEEP = 2, OVERWATCH = 3;
     /** The phone's own times (overlay Udp, PowerMode). */
-    static final long RC_SEQ16_FORGET_MS = 1000, IDLE_AFTER_MS = 300, IDLE_EVERY_MS = 50,
+    static final long IDLE_AFTER_MS = 300, IDLE_EVERY_MS = 50,
             SLEEP_COUNTDOWN_MS = 1000, CHECK_WINDOW_MS = 20_000, HELLO_FIRST_MS = 200, HELLO_GAP_MS = 1500, DETECTION_KEEP_MS = 5000,
             RESTART_MS = 3000;
 
@@ -146,6 +146,8 @@ public final class VirtualDrone {
     // the sticks (the receive thread)
     private int lastRcSeq = -1;
     private boolean rcSeqValid;
+    /** The phone's rule for a 16-bit sequence (F-067), the same class: one old frame stays old. */
+    private final de.droiddrone.common.RcPath.Seq16 rcSeq16 = new de.droiddrone.common.RcPath.Seq16();
     private volatile long lastRcTakenMs, lastRcWriteMs;
     private volatile int lastRcSeqReported = -1;
     private volatile short[] idleSticks;
@@ -673,8 +675,7 @@ public final class VirtualDrone {
     }
 
     private boolean takeSeq16(int seq, long now) {
-        if (rcSeqValid && now - lastRcTakenMs > RC_SEQ16_FORGET_MS) rcSeqValid = false;
-        return !rcSeqValid || (short) (seq - lastRcSeq) > 0;
+        return rcSeq16.takes(rcSeqValid, lastRcSeq, lastRcTakenMs, seq, now);
     }
 
     /** The stick lag (the phone's pc.31 rule): the frame's transit over the best of the last two 10 s buckets. */
