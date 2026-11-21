@@ -60,7 +60,7 @@ somebody removes their folders.
 | The phone app | `emulator` | The built APK in the Android emulator: first start and its questions, the PC's real link to it, the emulated camera's picture, a weak link, a cut, STANDBY; a link dead one way (F-001's measure); the phone's sending standing still until its socket is opened anew (F-039); the app ended by an error while flown, killed asleep, and ended again and again - back by itself each time but the last (F-047, `*PhoneCrash*`, 13 min); the picture's size changed and the camera stopped in the same moment, twenty times (`*PhoneCameraRace*`). |
 | Betaflight | `sitl` | Not built: needs the administrator step below. |
 | Findings | `findings` | One test per listed bug; fails until fixed. |
-| Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. So far one scenario: the phone found, the link, the picture, STANDBY - nothing armed. See "Real hardware". |
+| Real hardware: the PC app | `hw` | Never part of `quick` or `full`. The same sealed app against this bench's one real phone and, through it, its flight controller: battery in, **no propellers**. Two scenarios: the phone found, the link, the picture, STANDBY - nothing armed; and the whole chain to the board through the keeper, the sticks at rest counted at the board (an arm window only when the hardware file says `board.mayArm=true`). See "Real hardware", "The keeper". |
 | Real hardware: the phone | `phone` | Never part of `quick` or `full`. The emulator's phone scenarios against this bench's one real phone on adb, with the bench build of the app: first start, the PC's link and the camera's picture through the bench's wire, a weak link, a cut, a link dead one way, the camera closed under a size change (a real camera here), the app ended by an error and killed asleep - asleep "on battery" though it is on a cable - and, with `-Tests *PhoneNight* -Hours 8`, the app left running for hours. Ends with `gradlew phoneReset`. See "Real hardware", "The phone run". |
 
 Beside what a scenario checks, every scenario fails on: an error nobody caught, the window not answering for more
@@ -141,9 +141,73 @@ reach real things: one phone on one drone, battery in, **propellers off**. Built
   nothing from the phone but its link port). A phone that has no DRAUPNE name yet would be given one by the app under
   test, which knows no other phone: name it with the real app first (the scenario checks). The run's folder then
   holds the phone's address, its key in the made-up settings file, and where the drone is: it stays on this PC.
-- **The board made safe** is `bench.ps1 hw`'s last step, however the run went - a call to `gradlew boardSafe`, which
-  does not exist yet and is skipped until it does. The keeper that owns the flight controller's port, the watch on
-  the battery and the dead man's switch are not built yet either.
+- **The board made safe** is `bench.ps1 hw`'s last step, however the run went: the keeper told "make safe and end"
+  (`gradlew fcKeeperEnd`), then `gradlew boardSafe` with the port free again. Both set Betaflight's arming lock and
+  STOP every motor; see "The keeper" below.
+
+### The keeper (`gradlew fcKeeper`)
+
+Built 2026-11-22 against a made-up board (`gradlew test --tests *FcKeeper* --tests *MspTap* --tests *HwGuard*`,
+`benchSelf --tests *FcKeeperProcess*`); **not yet run on a real board.** The flight controller is on this PC's USB,
+not on the phone's: the phone app's bench build reaches it over TCP down the USB cable (`adb reverse`), and the
+program at this PC's end of that is the keeper (`bench/hw/FcKeeper`). It is a process of its own, the only one that
+has the board's port while it runs, and the place where the rig's safety is kept - so it holds when the test's JVM
+dies. `bench.ps1 hw` starts it before the suite (when the hardware file has `keeper.port`) and ends it after.
+
+```
+gradlew fcKeeper [-Pfolder=...]    the keeper, until it is told to end (its files: %LOCALAPPDATA%\DraupneBench\keeper)
+gradlew fcKeeperState              its state in one line
+gradlew fcKeeperEnd                make safe and end; fails unless the board was left locked, disarmed, at rest
+gradlew boardSafe [-Pport=COM9]    the same lock and STOP with no keeper running (after one was killed outright)
+```
+
+`boardSafe` without a port does it to every flight controller on this PC's USB, and the lock stays on a board until
+that board is restarted: name the port when another one is plugged in (`bench.ps1 hw` names the hardware file's).
+
+- **Who talks to the board through it**, on this PC's loopback, never two at once: the *phone's lease* (keeper.port
+  + 1; whole MSP frames only, and in strict mode - always on a real board - only the requests the phone app really
+  sends: no byte of text ever, a `#` would open Betaflight's CLI and an `R` restart it into its bootloader); *Drone
+  setup's lease* (keeper.port + 2; `KeeperWire` is the app's own door to a flight controller, `rig.usb.plug(...)`
+  in the bench): given only while the board is disarmed and no arm window is open, and while it is held the phone's
+  side is cut as one USB socket would be; when it ends the keeper takes the board anew (locked, stopped, its
+  channel map and switches read again). And the rig's *control channel* (keeper.port; `KeeperClient` lists its
+  commands).
+- **The arm lock.** Betaflight's arming block "MSP" (MSP_ARMING_DISABLE; the app shows it as the blocker MSP) is set
+  the moment the board is taken and stays set, except inside a window the rig opens: `OPEN n`, 60 s at most, never
+  made longer without being closed first. Where the block shows in the board's status is measured on each board; a
+  board on which it does not show gets no window. The lock is in the board's memory only: a restart clears it, and
+  the keeper sets it again before anybody gets a lease.
+- **What ends a window** (closed, locked, STOP, said loudly; no window after it until `CLEAR`): a stick frame with
+  more throttle than 1100 (not passed on); the battery under `battery.cellFloor` for 2 s (and no window opens under
+  it; a line a minute, always); the window's own time with the board still armed; the hour's armed seconds used up
+  (`keeper.motorSeconds`, 600; kept across starts); no heartbeat from the rig for 2 s; the board gone. Armed outside
+  a window, however it came about, is locked and stopped at once.
+- **The end** - `END`, the process told to go, an error of its own: lock, STOP to every motor, the motors read back
+  at rest, the port let go. Exit code 0 only when the board was left locked, disarmed and at rest (3: not known
+  safe; 2: it did not start - "in use" when another keeper runs; 5: ended by an error of its own, board safe).
+  **A keeper that is killed outright runs none of this:** then Betaflight's own failsafe (its sticks stop; it disarms
+  after 1.5 s when its failsafe is DROP - the keeper says which it is when it takes the board) and `gradlew boardSafe`
+  are what is left; `bench.ps1 hw` ends with both whatever happened.
+- **The guard in the test's JVM** (`bench/HwGuard`, `rig.guard`): it is the heartbeat, twenty times a second, and
+  stops the run's flying - the radio's hands off for good, the keeper told, `hardware-stop.txt` in the run's folder,
+  no hardware scenario after it until the file is deleted - when the keeper is silent or has tripped, when the app's
+  word on "armed" (its link log) and the board's differ for 5 s, on an error in the app, on a stick request the radio
+  had to cut. A scenario arms only through it: `rig.guard.openWindow(10)` asks the keeper and then puts the radio's
+  hands on; `rig.guard.closeWindow()`. Every hardware scenario ends with the keeper's own word that the board is
+  locked, disarmed and at rest, or fails.
+- **What it measures** (`MspTap`): `keeper\board-*.csv`, a row a second - the stick frames that reached the board,
+  the largest and the 99th-percentile gap between two of them at the board, what the keeper itself added, armed,
+  locked, volts per cell - with the clock of the app's `link-*.csv` in its first column, so the two join by time;
+  and `frames-<scenario>.log`, every frame with the time it came and went.
+- **Faults a scenario can ask for** (`FAULT ...`): `cut` (the phone's connection closed and refused: a pulled
+  cable), `starve` (its frames taken, none passed on), `stall` (not read), `delay ms`, `garbage phone n`; garbage to
+  the board only when the board is the made-up one or Betaflight as a program.
+- **Arming** is a word the hardware file has to say: `board.mayArm=true`, for a session with the battery in. Without
+  it `BoardChainScenario` - the first run on the whole chain: the phone app told to use the keeper, PILOT UAV, the
+  flight controller shown, 20 s of sticks at rest counted at the board - asks for no window.
+- **On the phone:** `adb shell setprop debug.draupne.fc tcp:<keeper.port + 1>` is set by the scenario (the one
+  property the bench sets; `PhoneGuard`) and left there - gone with the phone's next restart, `... usb` puts USB
+  back. The reverse port is the keeper's and is not removed.
 
 ### The phone run (`.\bench.ps1 phone`)
 
@@ -215,6 +279,8 @@ says so until then.
   `AppRig.scenario("name").hardware(Hardware.load()).run(rig -> { ... })`; `rig.hardware` has the bench's facts.
   `rig.radio.handsOff()` is the hard stop (ARM off, throttle down, held); a made-up drone's scenario lets go of the
   sticks with `rig.radio.sticksAtRest()` (the switches stay), which is what `handsOff()` meant until 2026-11-21.
+  Nothing is armed except between `rig.guard.openWindow(seconds)` and `rig.guard.closeWindow()`, and only when
+  `rig.hardware.mayArm()`; `rig.guard.keeper()` is the keeper's control channel (FAULT, MARK, FIGURES, SCENARIO).
 - A phone scenario (tags `emulator` and, where it makes sense on a real phone, `hwphone`): `PhoneRig.Target target =
   PhoneRig.Target.ofRun();` first, then `AppRig.scenario("name").drones(0).reach(target.reach()).run(rig -> { ... })`
   with `new PhoneRig(rig.film, target)` and a `Wire` to `phone.linkAddress()`. What a real phone cannot do

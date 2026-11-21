@@ -192,6 +192,15 @@ public final class AppRig implements AutoCloseable {
     public final List<String> fleetLog = new CopyOnWriteArrayList<>();
     /** This bench's real phone and board in a hardware run ({@link Plan#hardware}); null in every other. */
     public final Hardware hardware;
+    // >>> R3, the flight controller keeper
+    /**
+     * A hardware run's guard on a bench that has a keeper ({@link HwGuard}): it beats to the keeper, and stops the run's
+     * flying when keeper and app disagree or either fails. Arm windows are opened and closed through it. Null in every
+     * other run, and on a bench without a keeper - there the radio's hands are off for good from the start.
+     */
+    public HwGuard guard;
+    private String keeperWord;
+    // <<< R3
     private final String name;
     private final JoystickService service;
     private final Thread radioThread;
@@ -337,6 +346,31 @@ public final class AppRig implements AutoCloseable {
         if (hardware != null) {
             film.remark("HARDWARE RUN: " + hardware + ". The fence lets this app reach " + Fence.reach() + " and nothing else outside this PC. The radio: "
                     + radio.limits() + ".");
+            // >>> R3, the flight controller keeper: where a hardware rig starts, its guard starts
+            if (hardware.hasKeeper()) {
+                guard = new HwGuard(hardware.keeperPort(), radio, new HwGuard.Eyes() {
+                    @Override
+                    public Boolean appArmed() {
+                        return HwGuard.linkWord(sandbox.logsDir(), java.time.LocalTime.now());
+                    }
+
+                    @Override
+                    public String appError() {
+                        for (Watch.Problem p : watch.problems()) if (p.kind().startsWith("uncaught error")) return p.toString();
+                        return null;
+                    }
+
+                    @Override
+                    public int clamped() {
+                        return radio.clamped();
+                    }
+                }, Sandbox.runRoot().resolve(HwGuard.STOP_FILE), film::remark).start();
+                film.remark("The hardware guard is up: it beats to the keeper on 127.0.0.1:" + hardware.keeperPort() + " twenty times a second.");
+            } else {
+                radio.handsOffForGood("this bench has no keeper (no keeper.port in the hardware file): nothing is armed in its runs");
+                film.remark("No keeper on this bench (no keeper.port in the hardware file): the radio's hands are off for good.");
+            }
+            // <<< R3
         } else if (!Fence.reach().isEmpty()) {
             film.remark("A PHONE RUN: the fence lets the bench's wire reach " + Fence.reach() + " and nothing else outside this PC. The app itself speaks "
                     + "to the wire on this PC's loopback, as with the emulator.");
@@ -348,6 +382,13 @@ public final class AppRig implements AutoCloseable {
         List<String> no = new ArrayList<>();
         HardwareRun.plan(no, plan.drones, plan.start == Start.FIRST_START, plan.prepare != null, plan.reopen != null, plan.settings.keySet());
         HardwareRun.thisPc(no, plan.hardware);
+        // >>> R3: a hardware suite the guard has stopped stays stopped until somebody has looked
+        String stopped = HwGuard.stopped(Sandbox.runRoot());
+        if (stopped != null) {
+            no.add("the hardware guard stopped this run's suite (" + stopped + "): look at the board and the keeper's log, then delete "
+                    + Sandbox.runRoot().resolve(HwGuard.STOP_FILE));
+        }
+        // <<< R3
         if (!no.isEmpty()) throw new IllegalStateException("The hardware run \"" + plan.name + "\" does not start:\n - " + String.join("\n - ", no));
     }
 
@@ -550,8 +591,13 @@ public final class AppRig implements AutoCloseable {
     private void handsOffAtTheEnd() {
         radio.handsOffForGood("the scenario has ended");
         Ui.pause(1000);
-        // >>> R5 (the keeper / dead man's switch) attaches here: the board made safe through the keeper, and its own
-        // word that it is disarmed, before the app and its link are closed. Nothing of it is built yet.
+        // >>> R3, the flight controller keeper: the board made safe through the keeper - window closed, locked, STOP, the
+        // motors read back - and its own word on it, before the app and its link are closed
+        if (guard != null) {
+            keeperWord = guard.finish();
+            film.remark("The keeper's word at the end: " + keeperWord);
+        }
+        // <<< R3
     }
 
     /** What a hardware run adds to the verdict once the app is closed: the radio's limits, and the throttle the app really sent. */
@@ -569,6 +615,14 @@ public final class AppRig implements AutoCloseable {
             problems.add("the link log could not be read for the throttle sent: " + e.getMessage());
         }
         film.remark("The radio at the end: " + radio.limits() + ". By the link log " + sent + ".");
+        // >>> R3, the flight controller keeper
+        if (guard != null) {
+            if (guard.tripped() != null) problems.add("the hardware guard stopped the run's flying: " + guard.tripped());
+            if (keeperWord == null || !keeperWord.startsWith("OK")) {
+                problems.add("the keeper did not say the board was left safe (locked, disarmed, every motor at rest): " + keeperWord);
+            }
+        }
+        // <<< R3
     }
 
     /**

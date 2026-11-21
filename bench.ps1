@@ -235,12 +235,73 @@ function Invoke-BoardSafe {
     # It fails when no flight controller is on USB too: a hw run without one says so here, which is right.
     Write-Host ("{0:HH:mm:ss}  The board made safe ..." -f (Get-Date))
     $t0 = Get-Date
-    $code = Invoke-Gradle @('--offline', '--console=plain', 'boardSafe') (Join-Path $runRoot 'logs\boardSafe.log')
+    $safeArgs = @('--offline', '--console=plain', 'boardSafe')
+    # >>> R3: boardSafe now sets the keeper's arming lock too, which stays on a board until it is restarted - so it is
+    # told this bench's own board (board.port) and touches no other flight controller that may be on this PC's USB
+    $boardPort = Select-String -Path (Join-Path $base 'hardware.properties') -Pattern '^\s*board\.port\s*=\s*(\S+)' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($boardPort) { $safeArgs += ('-Pport=' + $boardPort.Matches[0].Groups[1].Value) }
+    # <<< R3
+    $code = Invoke-Gradle $safeArgs (Join-Path $runRoot 'logs\boardSafe.log')
     $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
     [void]$results.Add("boardSafe`t$mins min`t`t`texit $code")
     if ($code -ne 0) { Write-Host "          boardSafe ended with exit code $code - LOOK AT THE BOARD (logs\boardSafe.log)" }
 }
 # <<< R4 --------------------------------------------------------------------------------------------------------------
+
+# >>> R3, the flight controller keeper (bench\hw\FcKeeper; docs/TESTING.md, "Real hardware", "The keeper") --------------
+# The keeper is the one program that has the board's port during a hw run, and where the run's safety is kept: started
+# before the suite, told "make safe and end" after it - however the run went, also after an error or Ctrl+C - and only
+# then gradlew boardSafe, which finds the port free and sets the same lock once more. A hardware file that names no
+# keeper (keeper.port) is a bench with no board on this PC: nothing is started, and nothing of its runs is armed.
+function Test-Keeper {
+    $file = Join-Path $base 'hardware.properties'
+    return ((Test-Path $file) -and [bool](Select-String -Path $file -Pattern '^\s*keeper\.port\s*=\s*\d' -Quiet))
+}
+
+# Where this run's keeper keeps its files; also what tells its java from any other on this PC.
+$keeperFolder = (Join-Path $runRoot 'keeper').Replace('\', '/')
+
+function Start-Keeper {
+    # gradlew fcKeeper in a Gradle of its own beside the suite's (nothing is compiled twice: it is up before the suite starts)
+    $log = Join-Path $runRoot 'logs\fcKeeper.log'
+    Write-Host ("{0:HH:mm:ss}  The flight controller keeper ..." -f (Get-Date))
+    $p = Start-Process -FilePath $gradle -ArgumentList @('--offline', '--console=plain', 'fcKeeper', ('-Pfolder=' + $keeperFolder)) -WorkingDirectory $repo `
+        -NoNewWindow -PassThru -RedirectStandardOutput $log -RedirectStandardError ($log + '.err')
+    $h = $p.Handle   # kept, or the exit code is lost once it has ended
+    $until = (Get-Date).AddMinutes(4)
+    while ((Get-Date) -lt $until -and -not $p.HasExited -and
+        -not (Select-String -Path $log -Pattern 'THE KEEPER IS UP' -Quiet -ErrorAction SilentlyContinue)) { Start-Sleep -Milliseconds 500 }
+    if ($p.HasExited) {
+        Write-Host "          the keeper did not start (exit $($p.ExitCode)) - logs\fcKeeper.log says why; the scenarios that need it say so and fail"
+    } elseif (-not (Select-String -Path $log -Pattern 'THE KEEPER IS UP' -Quiet -ErrorAction SilentlyContinue)) {
+        Write-Host '          the keeper is not up after 4 min (logs\fcKeeper.log); the scenarios that need it say so and fail'
+    } else {
+        Get-Content $log | Where-Object { $_ -match 'THE KEEPER IS UP|The board is taken|No board' } | Select-Object -First 3 | ForEach-Object { Write-Host "          $_" }
+    }
+    return $p
+}
+
+function Stop-Keeper($keeper) {
+    # "make safe and end": lock, STOP to every motor, the motors read back, the port let go. Its exit code is its word on the board.
+    Write-Host ("{0:HH:mm:ss}  The keeper: make safe and end ..." -f (Get-Date))
+    $log = Join-Path $runRoot 'logs\fcKeeperEnd.log'
+    $t0 = Get-Date
+    $code = Invoke-Gradle @('--offline', '--console=plain', '-q', 'fcKeeperEnd') $log
+    $mins = [math]::Round(((Get-Date) - $t0).TotalMinutes, 1)
+    [void]$results.Add("fcKeeperEnd`t$mins min`t`t`texit $code")
+    if (Test-Path $log) { Get-Content $log | Where-Object { $_ -match '^(OK |NO )' } | ForEach-Object { Write-Host "          $_" } }
+    if ($keeper -and -not $keeper.HasExited -and -not $keeper.WaitForExit(90000)) {
+        # it did not go by itself: its java is ended - found by this run's keeper folder on its command line, never anything else
+        Write-Host '          the keeper did not end by itself: ended by the bench'
+        Get-CimInstance Win32_Process -Filter "Name = 'java.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('folder=' + $keeperFolder) } |
+            ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        if (-not $keeper.WaitForExit(60000)) { Stop-Process -Id $keeper.Id -Force -ErrorAction SilentlyContinue }
+    }
+    if ($code -ne 0) { Write-Host "          the keeper did NOT say the board was left safe (exit $code, logs\fcKeeperEnd.log) - boardSafe follows: LOOK AT THE BOARD" }
+    $stop = Join-Path $runRoot 'hardware-stop.txt'
+    if (Test-Path $stop) { Write-Host ("          THE HARDWARE GUARD STOPPED THE SUITE: " + (Get-Content $stop -TotalCount 1)) }
+}
+# <<< R3 --------------------------------------------------------------------------------------------------------------
 
 # >>> R5, the real phone's rig (bench\PhoneRig; docs/TESTING.md, "Real hardware") --------------------------------------
 # The last step of the phone run, whatever way it went (also after an error, a scenario ended at its time, or Ctrl+C):
@@ -310,9 +371,12 @@ if ($Run -ne 'report') {
                 $env:BENCH_TIMEOUT = ([string][math]::Ceiling($Hours * 60 + 40)) + ' m'
             }
             # <<< R5
+            $keeper = $null
             try {
+                if ($s -eq 'hw' -and (Test-Keeper)) { $keeper = Start-Keeper }   # R3: the keeper has the board before the suite starts
                 Invoke-Suite $suites[$s][0] $suites[$s][1]
             } finally {
+                if ($s -eq 'hw' -and (Test-Keeper)) { Stop-Keeper $keeper }      # R3: ended first - boardSafe then finds the port free
                 if ($s -eq 'hw') { Invoke-BoardSafe }
                 if ($s -eq 'phone') { Invoke-PhoneReset }   # R5: the phone run ends with the phone's battery and doze as they really are
             }

@@ -22,7 +22,8 @@ import java.util.function.Function;
  * ({@link BenchControl#PACKAGE}); on the released app ({@link PhoneRig#APP}) only when the run was started with
  * "the released app may be changed"; on any other app never.</li>
  * <li><b>Changes to the phone</b>, each put back when the rig closes: dumpsys battery unplug / reset, dumpsys
- * deviceidle force-idle / unforce, adb reverse, logcat -G; and the network switched off (airplane mode on, svc wifi
+ * deviceidle force-idle / unforce, adb reverse, logcat -G, setprop debug.draupne.fc tcp:&lt;port&gt; | usb (the bench
+ * build's way to its flight controller; gone with the phone's next restart); and the network switched off (airplane mode on, svc wifi
  * disable, svc data disable) - that only while adb comes over the cable: over the network it would cut the bench's
  * own way to the phone, with nobody there to switch it on again.</li>
  * <li><b>Never</b>: adb root / su, locksettings, install -d (a version down), kill and rm (root's; the bench receiver
@@ -67,7 +68,10 @@ final class PhoneGuard {
     static final Set<String> DUMPS = Set.of("package", "activity", "meminfo", "window", "power", "alarm", "connectivity", "input", "display",
             "thermalservice", "device_policy", "usb", "cpuinfo", "telephony.registry", "wifi", "netstats");
 
-    private static final String ROOTS = "that is root's work, and a real phone has no root: PhoneRig.stopForgettingRestarts / endProcess / socketStats go through the bench build's receiver";
+    /** R3: the bench build's own property (BenchFc.PROPERTY) - how its flight controller is reached. */
+    static final String FC_PROPERTY = "debug.draupne.fc";
+
+    private static final String ROOTS ="that is root's work, and a real phone has no root: PhoneRig.stopForgettingRestarts / endProcess / socketStats go through the bench build's receiver";
 
     /**
      * @param args      what follows {@code adb -s <serial>}
@@ -259,6 +263,13 @@ final class PhoneGuard {
                 return Verdict.no("locksettings changes the phone's own lock screen: never on a real phone");
             case "getprop":
                 return a.size() <= 1 ? Verdict.ok(Kind.READ) : unknown(w);
+            // >>> R3, the flight controller keeper: the one property the bench sets - which way the bench build reaches its
+            // flight controller (flight-app/bench-overlay: tcp:<port> down the cable to the keeper, or usb). It is gone
+            // with the phone's next restart, and the released app never reads it.
+            case "setprop":
+                if (a.size() == 2 && a.get(0).equals(FC_PROPERTY) && (a.get(1).equals("usb") || tcp(a.get(1)))) return Verdict.ok(Kind.PHONE);
+                return Verdict.no("setprop " + String.join(" ", a) + ": the bench sets one property on a real phone, " + FC_PROPERTY + " to tcp:<port> or usb");
+            // <<< R3
             case "pidof", "ps", "ss", "grep", "head", "tail", "wc", "sort", "uniq", "uptime", "id", "echo", "true":
                 return Verdict.ok(Kind.READ);
             case "cat":

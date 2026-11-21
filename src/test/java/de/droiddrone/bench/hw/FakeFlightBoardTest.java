@@ -268,6 +268,79 @@ class FakeFlightBoardTest {
         assertFalse(serial.armed());
     }
 
+    // >>> R3, the flight controller keeper's arming lock
+    @Test
+    void theArmingLockBlocksArmingDisarmsShowsInTheStatusAndGoesWithARestart() throws IOException {
+        board.setUp("aux 0 0 0 1700 2100 0 0").features(BetaflightPlan.mspReceiverMask(FakeFlightBoard.DEFAULT_FEATURES));
+        int msp = 1 << Msp.ARMING_DISABLED_MSP_BIT, armSwitch = 1 << Msp.ARMING_DISABLED_ARM_SWITCH_BIT;
+        byte[] on = {1}, off = {0}, armOff = rc(1500, 1500, 1000, 1500, 1000), armOn = rc(1500, 1500, 1000, 1500, 2000);
+        try (BetaflightUsb fc = open()) {
+            assertEquals(0, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)));
+            fc.msp(Msp.ARMING_DISABLE, on);
+            assertTrue(board.armingLocked());
+            assertEquals(msp, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)), "the block MSP, flag 16");
+            assertEquals("MSP", Msp.armingBlocks(msp));
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertFalse(board.armed(), "locked: nothing arms");
+            assertEquals(msp | armSwitch, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)), "the ARM switch, on under a block, is a block itself");
+            assertEquals("MSP+ARMSWITCH", Msp.armingBlocks(msp | armSwitch));
+            fc.msp(Msp.ARMING_DISABLE, off);
+            assertFalse(board.armingLocked());
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertFalse(board.armed(), "the lock off does not arm a board whose switch was held on: it has to go off once");
+            assertEquals(armSwitch, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)));
+            fc.msp(Msp.SET_RAW_RC, armOff);
+            assertEquals(0, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)));
+            assertEquals("none", Msp.armingBlocks(0));
+            fc.msp(Msp.SET_RAW_RC, armOn);
+            assertTrue(board.armed());
+            // sent while armed it disarms - by sticks, and however else the board came to be armed
+            fc.msp(Msp.ARMING_DISABLE, on);
+            assertFalse(board.armed());
+            assertFalse(Msp.armed(fc.msp(Msp.STATUS, null)));
+            assertArrayEquals(new int[]{1000, 1000, 1000, 1000}, board.motors());
+            board.arm();
+            fc.msp(Msp.ARMING_DISABLE, on);
+            assertFalse(board.armed());
+            // asked in a v2 frame, as the phone app asks everything: v1's command, answered in a v2 frame
+            assertEquals(msp | armSwitch, Msp.armingDisableFlags(fc.msp2(Msp.STATUS, null)));
+            fc.msp2(Msp.SET_RAW_RC, armOff);
+            assertEquals(msp, Msp.armingDisableFlags(fc.msp2(Msp.STATUS, null)));
+            assertThrows(IOException.class, () -> fc.msp2(Msp.SET_PASSTHROUGH, null), "the ESCs' door is v1's alone here");
+            assertEquals(1, fc.msp(Msp.FAILSAFE_CONFIG, null)[7], "what it does when its sticks stop: DROP");
+        }
+        board.unplug();
+        board.plugIn();
+        assertFalse(board.armingLocked(), "in memory only: a restart clears it");
+        // a firmware on which the lock is answered and does nothing
+        board.ignoreArmingDisable = true;
+        try (BetaflightUsb fc = open()) {
+            fc.msp(Msp.ARMING_DISABLE, on);
+            assertFalse(board.armingLocked());
+            assertEquals(0, Msp.armingDisableFlags(fc.msp(Msp.STATUS, null)));
+        }
+    }
+
+    @Test
+    void aMotorValueSentWhileArmedIsDroppedOrKeptForAfterTheDisarm() throws IOException {
+        try (BetaflightUsb fc = open()) {
+            board.arm();
+            fc.msp(Msp.SET_MOTOR, Msp.allMotors(1090));
+            board.disarm();
+            assertArrayEquals(new int[]{1000, 1000, 1000, 1000}, board.motors(), "as R1 made this board: dropped");
+            board.keepsMotorValuesWhileArmed = true; // as Betaflight's own code reads: kept, and out when it is disarmed
+            board.arm();
+            fc.msp(Msp.SET_MOTOR, Msp.allMotors(1090));
+            assertArrayEquals(new int[]{FakeFlightBoard.RUNNING, FakeFlightBoard.RUNNING, FakeFlightBoard.RUNNING, FakeFlightBoard.RUNNING}, board.motors());
+            fc.msp(Msp.ARMING_DISABLE, new byte[]{1});
+            assertArrayEquals(new int[]{1090, 1090, 1090, 1090}, board.motors(), "disarmed by the lock: the kept value comes out");
+            fc.msp(Msp.SET_MOTOR, Msp.allMotors(MotorTest.STOP));
+            assertArrayEquals(new int[]{1000, 1000, 1000, 1000}, board.motors());
+        }
+    }
+    // <<< R3
+
     private static byte[] rc(int... channels) {
         byte[] p = new byte[channels.length * 2];
         for (int i = 0; i < channels.length; i++) Msp.putU16(p, 2 * i, channels[i]);

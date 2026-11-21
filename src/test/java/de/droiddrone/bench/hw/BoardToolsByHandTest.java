@@ -89,12 +89,20 @@ class BoardToolsByHandTest {
         board.arm();
         assertEquals(2, BoardRestore.byHand(new String[]{"", snapshot.toString()}, out, root, T));
         assertTrue(said().contains("REFUSED, nothing written: The board is armed. Disarm it first."));
+        // R3: boardSafe sets the keeper's arming lock - which disarms an armed board; on a board where the lock does not
+        // show it is not called safe
+        board.ignoreArmingDisable = true;
         assertEquals(1, BoardSafe.byHand(new String[]{""}, out, T));
         text = said();
-        assertTrue(text.contains("NOT SAFE: motors read") && text.contains("ARMED"), text);
-        board.disarm();
+        assertTrue(text.contains("NOT SAFE: " + board.port().systemName() + ": the arming lock (MSP_ARMING_DISABLE) was sent and does not show in the board's status"), text);
+        assertTrue(board.armed());
+        board.ignoreArmingDisable = false;
+        assertEquals(0, BoardSafe.byHand(new String[]{""}, out, T));
+        text = said();
+        assertTrue(text.contains("SAFE: motors read [1000, 1000, 1000, 1000] (at rest), disarmed, arming locked - it was ARMED: the lock disarmed it."), text);
+        assertTrue(!board.armed() && board.armingLocked());
         assertEquals(0, BoardSafe.byHand(new String[]{port}, out, T));
-        assertTrue(said().contains("SAFE: motors read [1000, 1000, 1000, 1000] (at rest), disarmed."));
+        assertTrue(said().contains("SAFE: motors read [1000, 1000, 1000, 1000] (at rest), disarmed, arming locked."));
         // no snapshot named, and a port with no board on it
         assertEquals(2, BoardRestore.byHand(new String[]{"", ""}, out, root, T));
         assertTrue(said().contains("Which snapshot?"));

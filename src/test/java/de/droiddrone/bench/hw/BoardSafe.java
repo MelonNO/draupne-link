@@ -20,9 +20,17 @@ import java.util.function.Consumer;
  * is written to the board's settings and nothing restarts, with one exception: a board found in the CLI (a tool died
  * in there; it answers nothing else) is told "exit" first - Betaflight then restarts, which stops its motors too.
  * <p>
- * What it cannot do: disarm. An armed board ignores motor values from USB; it reads ARMED here and the exit code says
- * not safe - disarm at the radio or take the battery out. And a board that answers nothing at all (a tool died while
- * the port was with the ESCs) is not safe to this tool either: unplug its USB and battery.
+ * Last it sets the flight controller keeper's arming lock ({@link #ARMING_LOCK}, R3): Betaflight's arming block "MSP",
+ * which also disarms a board that is armed - then STOP once more and the look again. The lock is in the board's
+ * memory only: nothing arms it until it is restarted, power-cycled, or a keeper opens an arm window on it. So the
+ * tool can be run after a keeper that was killed outright, with the port free again: it leaves the board as the
+ * keeper would have. A board on which the lock does not show in its status is not called safe. Without a port named
+ * it does this to every flight controller it finds on this PC's USB - also one that is not the bench's: name the port
+ * (-Pport=COM9; bench.ps1 hw names the hardware file's) when another is plugged in.
+ * <p>
+ * What it cannot do: a board that answers nothing at all (a tool died while the port was with the ESCs) is not safe
+ * to this tool - unplug its USB and battery. And while a keeper runs it has the port: this tool gets "in use"
+ * (gradlew fcKeeperEnd makes the board safe through the keeper, and ends it).
  */
 public final class BoardSafe {
     /** Looks at the motors after STOP: the flight controller takes a moment to pass a new value on. */
@@ -36,6 +44,31 @@ public final class BoardSafe {
     public interface Lock {
         String engage(BetaflightUsb fc) throws IOException;
     }
+
+    // >>> R3, the flight controller keeper's arming lock
+    /**
+     * The keeper's arming lock, set by this tool: MSP_ARMING_DISABLE (99) with a 1 - Betaflight's arming block "MSP",
+     * which disarms a board that is armed - and then the board's own word that it holds: the block among MSP_STATUS'
+     * arming-disable flags (flag 16 on Betaflight 4.4; the keeper measures where it shows, this tool - which never
+     * takes a lock off, not even to measure - knows that one place). An IOException when it does not show.
+     */
+    public static final Lock ARMING_LOCK = fc -> {
+        byte[] on = {1};
+        fc.msp(Msp.ARMING_DISABLE, on);
+        byte[] status = fc.msp(Msp.STATUS, null);
+        for (int look = 0; look < 10 && Msp.armed(status); look++) { // Betaflight disarms on the lock: a moment for it to say so
+            BoardPort.pause(100);
+            fc.msp(Msp.ARMING_DISABLE, on);
+            status = fc.msp(Msp.STATUS, null);
+        }
+        int flags = Msp.armingDisableFlags(status);
+        if (flags == -1 || (flags >> Msp.ARMING_DISABLED_MSP_BIT & 1) == 0) {
+            throw new IOException("the arming lock (MSP_ARMING_DISABLE) was sent and does not show in the board's status (arming-disable flags "
+                    + (flags == -1 ? "not readable" : "0x" + Integer.toHexString(flags)) + "): the board is not known to be locked");
+        }
+        return "arming locked";
+    };
+    // <<< R3
 
     /**
      * @param motors  each motor output as read back (those the mixer has), or null when the board did not answer
@@ -88,6 +121,27 @@ public final class BoardSafe {
             boolean armed = Msp.armed(fc.msp(Msp.STATUS, null));
             // ---- the arming lock goes here (the flight controller keeper): after the stop, before the port is let go ----
             String locked = lock == null ? null : lock.engage(fc);
+            // >>> R3: the lock disarms an armed board - and Betaflight then puts out what it was last told over USB, so
+            // STOP once more and the look again
+            if (lock != null && (armed || !atRest)) {
+                boolean wasArmed = armed;
+                for (int i = 0; i < 3; i++) {
+                    try {
+                        fc.msp(Msp.SET_MOTOR, Msp.allMotors(stop));
+                    } catch (IOException e) {
+                        log.accept("STOP after the lock was not taken (" + e.getMessage() + ").");
+                    }
+                }
+                atRest = false;
+                for (int look = 0; look < LOOKS && !atRest; look++) {
+                    if (look > 0) BoardPort.pause(timing.stepMs());
+                    motors = there(Msp.motors(fc.msp(Msp.MOTOR, null)));
+                    atRest = atRest(motors, stop);
+                }
+                armed = Msp.armed(fc.msp(Msp.STATUS, null));
+                if (wasArmed && !armed) locked = (locked == null ? "" : locked) + " - it was ARMED: the lock disarmed it";
+            }
+            // <<< R3
             return new Result(motors, atRest, armed, locked, null);
         } catch (IOException | RuntimeException e) {
             String why = String.valueOf(e.getMessage());
@@ -129,7 +183,7 @@ public final class BoardSafe {
         boolean safe = true;
         for (BetaflightUsb.Port port : ports) {
             out.println(port + ":");
-            Result r = run(port, timing, null, s -> out.println("  " + s));
+            Result r = run(port, timing, ARMING_LOCK, s -> out.println("  " + s)); // R3: the keeper's lock, also with no keeper running
             out.println("  " + r.text());
             safe &= r.safe();
         }

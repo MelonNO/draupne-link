@@ -539,6 +539,10 @@ class BenchSelfTest {
         assertEquals(4, hw.cells());
         assertEquals(14.0, hw.packFloor(), 1e-9);
         assertTrue(hw.keeperPort() > 1024);
+        // R3, the flight controller keeper: the example names a keeper, arms nothing, and has the usual hour's budget
+        assertTrue(hw.hasKeeper());
+        assertFalse(hw.mayArm(), "arming is a session's own word: the example does not say it");
+        assertEquals(600, hw.motorSecondsPerHour());
         assertFalse(hw.relayed());
         assertThrows(IllegalStateException.class, hw::reach, "no reach from it in a JVM that is no hardware run");
         try (AutoCloseable back = asAHardwareRun()) {
@@ -584,7 +588,9 @@ class BenchSelfTest {
         for (String wrong : List.of("phone.port=6286\n", "phone.ip=bench-phone.example\n", "phone.ip=192.0.2.0/24\n", "phone.ip=224.0.0.251\n",
                 "phone.ip=192.0.2.10\nphone.prot=7000\n", "phone.ip=192.0.2.10\nphone.port=0\n", "phone.ip=192.0.2.10\nbattery.cells=40\n",
                 "phone.ip=192.0.2.10\nbattery.cellFloor=35\n", "phone.ip=192.0.2.10\nphone.path=fast\n", "phone.ip=192.0.2.10\nboard.armAux=9\n",
-                "phone.ip=192.0.2.10\nphone.key=more-than-sixteen-characters\n", "phone.ip=192.0.2.10\nkeeper.port=80\n")) {
+                "phone.ip=192.0.2.10\nphone.key=more-than-sixteen-characters\n", "phone.ip=192.0.2.10\nkeeper.port=80\n",
+                // R3: the keeper's two other ports follow its control port; arming is true or false; the budget is seconds of an hour
+                "phone.ip=192.0.2.10\nkeeper.port=65535\n", "phone.ip=192.0.2.10\nboard.mayArm=yes\n", "phone.ip=192.0.2.10\nkeeper.motorSeconds=4000\n")) {
             Files.writeString(own, wrong);
             IllegalStateException said = assertThrows(IllegalStateException.class, () -> Hardware.read(own), wrong);
             assertTrue(said.getMessage().contains(own.toString()), said.getMessage());

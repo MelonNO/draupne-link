@@ -279,6 +279,8 @@ tasks.register('escProbe', JavaExec) {
 //                                                           -Preplay=always writes even when nothing differs;
 //                                                           -Pcompare=only reads and compares and NEVER writes.
 //   gradlew boardSafe                                       STOP to every motor, read back; fails unless disarmed and at rest.
+//                                                           (R3: it also sets the keeper's arming lock, which disarms an armed board
+//                                                           and stays until that board is restarted: -Pport= when another one is on USB.)
 // -Pescs=true also reads the ESCs' settings (battery in, props off): their start-up tones sound once, no motor turns.
 def boardTool = { String taskName, String tool, String what, List<String> properties ->
     tasks.register(taskName, JavaExec) {
@@ -293,6 +295,30 @@ boardTool('boardSnapshot', 'BoardSnapshot', "Reads and files the settings of the
 boardTool('boardRestore', 'BoardRestore', "Puts a snapshot's settings back on the flight controller on USB (-Psnapshot=<folder>, -Pport=COM9, -Pescs=true, -Pcompare=only)", ['port', 'snapshot', 'escs', 'replay', 'compare'])
 boardTool('boardSafe', 'BoardSafe', "Stops every motor of the flight controller on USB and says whether it is disarmed and at rest (-Pport=COM9)", ['port'])
 // ---- R1 END ------------------------------------------------------------------------------------------------------------------
+
+// >>> R3, the flight controller keeper (src/test/java/de/droiddrone/bench/hw/FcKeeper; docs/TESTING.md, "Real hardware") -------
+// By hand and from bench.ps1 hw, on the ONE real flight controller of this bench's hardware file - never in a test, a bench
+// suite or CI: fcKeeper opens a real COM port. Its own tests use a made-up board (gradlew test --tests *FcKeeper*).
+//   gradlew fcKeeper [-Pfolder=<where its files go>] [-Pbudget=<armed seconds an hour>]
+//                          the keeper: the one program that has the board's port, until it is told to end. It holds
+//                          Betaflight's arming lock except in a window the rig opens, and is the rig's dead man's switch.
+//   gradlew fcKeeperEnd    "make safe and end" said to the running keeper: lock, STOP, motors read back, the port let go.
+//                          Fails unless the keeper left the board locked, disarmed and at rest.
+//   gradlew fcKeeperState  the running keeper's state in one line.
+def keeperTask = { String taskName, List<String> words, String what ->
+    tasks.register(taskName, JavaExec) {
+        group = 'bench'
+        description = what
+        classpath = sourceSets.test.runtimeClasspath
+        mainClass = 'de.droiddrone.bench.hw.FcKeeper'
+        args(words + ['folder', 'budget'].findAll { project.hasProperty(it) }.collect { "${it}=${project.property(it)}".toString() })
+        if (project.hasProperty('android.sdk')) systemProperty 'bench.android.sdk', project.property('android.sdk').toString()
+    }
+}
+keeperTask('fcKeeper', [], "REAL HARDWARE: the flight controller keeper for this bench's board (the hardware file), until gradlew fcKeeperEnd (-Pfolder=, -Pbudget=)")
+keeperTask('fcKeeperEnd', ['end'], 'Tells the running flight controller keeper to make the board safe and end; fails unless it left the board safe')
+keeperTask('fcKeeperState', ['state'], "The running flight controller keeper's state, one line")
+// <<< R3 --------------------------------------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Release packaging (Windows):

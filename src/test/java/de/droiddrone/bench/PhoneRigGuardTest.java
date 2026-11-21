@@ -88,6 +88,11 @@ class PhoneRigGuardTest {
             new String[]{"shell", "wm density 320"},
             new String[]{"shell", "settings put global airplane_mode_on 1"},
             new String[]{"shell", "setprop persist.sys.usb.config none"},
+            // R3: one property is the bench's to set (the bench build's way to its flight controller) - that one, to those values
+            new String[]{"shell", "setprop debug.draupne.fc file:/sdcard/x"},
+            new String[]{"shell", "setprop debug.draupne.fc tcp:47801 extra"},
+            new String[]{"shell", "setprop debug.draupne.other tcp:47801"},
+            new String[]{"shell", "setprop debug.draupne.fc tcp:47801; reboot"},
             new String[]{"shell", "reboot"},
             new String[]{"reboot"},
             new String[]{"shell", "svc power shutdown"},
@@ -358,7 +363,11 @@ class PhoneRigGuardTest {
                 new String[]{"shell", "svc wifi enable"},
                 new String[]{"reverse", "tcp:8123", "tcp:8123"},
                 new String[]{"reverse", "--remove", "tcp:8123"},
-                new String[]{"reverse", "--list"}));
+                new String[]{"reverse", "--list"},
+                // R3, the flight controller keeper: the bench build told how to reach its flight controller, and asked
+                new String[]{"shell", "setprop debug.draupne.fc tcp:47801"},
+                new String[]{"shell", "setprop debug.draupne.fc usb"},
+                new String[]{"shell", "getprop debug.draupne.fc"}));
         for (String action : BenchControl.ACTIONS) {
             commands.add(new String[]{"shell", "am broadcast -n " + BenchControl.component(app) + " -a " + action});
         }

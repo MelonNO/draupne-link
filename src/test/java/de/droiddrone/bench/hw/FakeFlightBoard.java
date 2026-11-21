@@ -51,9 +51,18 @@ import java.util.TreeSet;
  * MSP_MOTOR / MSP_SET_MOTOR, analog, battery state, beeper config get/set, MSP_SET_RAW_RC, passthrough, EEPROM
  * write, reboot; v2: motor output order get/set, DShot commands. Anything else gets Betaflight's error answer.
  * <p>
+ * <b>The arming lock</b> (the flight controller keeper's, R3): MSP_ARMING_DISABLE (99) with a byte that is not 0 sets
+ * the arming block "MSP" - no arming while it holds, an armed board is disarmed at once - and with 0 takes it off;
+ * MSP_STATUS shows it among the arming-disable flags (bit 16), with "ARM switch" (bit 25) beside it for as long as the
+ * ARM switch that was on under the block has not gone off once: taking the block off does not arm a board whose
+ * switch was held on. It is in memory only: every restart clears it. A request framed as MSP v2 whose number is one
+ * of v1's is answered as v1's, in a v2 frame - the phone app asks everything so.
+ * <p>
  * <b>Faked loosely</b> (enough for the tools, not Betaflight's own rules): arming by sticks - armed while the ARM
  * range (and PREARM's, if set) holds in the last MSP_SET_RAW_RC, the receiver is MSP and the throttle was low when
- * it went on; no timing, no RX loss, no other arming blocks. Armed motors read one fixed value. A DShot "spin
+ * it went on; no timing and <b>no RX loss: sticks that stop change nothing</b> - an armed made-up board stays armed
+ * for good, where Betaflight's failsafe would disarm or land it after 1.5 s - and no other arming blocks (a throttle
+ * that was up when the switch went on does not ask for the switch again). Armed motors read one fixed value. A DShot "spin
  * direction + save" changes the direction byte of a BLHeli_S-kind ESC's settings and nothing else. The sensors, the
  * battery and the mixer's motor count (always 4) are what the test sets. Dumps are short: four timer pins stand for
  * all of resources, timers and dma; no LEDs, OSD, VTX.
@@ -61,7 +70,8 @@ import java.util.TreeSet;
  * <b>For a test:</b> {@link #setUp} and {@link #flown} (the board as someone left it), {@link #features}, {@link #arm},
  * {@link #battery}, {@link #fitEscs}, {@link #uid}, {@link #version}, {@link #cutWire} and the cut counters,
  * {@link #refuseCli}, {@link #cutShortListings}, {@link #flipDefaultsAtNextStart}, {@link #featuresNotBuilt},
- * {@link #unplug}, {@link #fly}; and what happened: {@link #cli()}, {@link #mspRequests()},
+ * {@link #unplug}, {@link #fly}, {@link #ignoreArmingDisable}, {@link #keepsMotorValuesWhileArmed},
+ * {@link #armingLocked}; and what happened: {@link #cli()}, {@link #mspRequests()},
  * {@link #dshotCommands()}, {@link #saves}, {@link #restarts}, {@link #saved()}, {@link #inMemory()}, {@link #motors()}.
  * Thread-safe: one lock for the board.
  */
@@ -304,6 +314,17 @@ public final class FakeFlightBoard {
     public volatile boolean cutTakesPower = true;
     /** That many "diff" / "dump" listings come back cut short at a heading, as if its "# " had been the prompt. */
     public volatile int cutShortListings;
+    /**
+     * MSP_ARMING_DISABLE is answered and does nothing: a firmware on which the keeper's lock is not what it is taken
+     * for. The keeper has to notice (the block never shows in MSP_STATUS) and open no window.
+     */
+    public volatile boolean ignoreArmingDisable;
+    /**
+     * MSP_SET_MOTOR on an armed board is kept and comes out the moment the board is disarmed - what Betaflight's own
+     * code does with it (motor_disarmed), as far as it was read; false (as R1 made this board): an armed board drops
+     * such a value and is at rest once disarmed. A tool that makes a board safe has to hold in both.
+     */
+    public volatile boolean keepsMotorValuesWhileArmed;
     private final List<String> refused = new ArrayList<>();
 
     // ------------------------------------------------------------------ what happened
@@ -323,6 +344,10 @@ public final class FakeFlightBoard {
     private final int[] motors = new int[MOTORS];
     private int[] rc;
     private boolean cli, batch, batchError, forcedArmed, stickArmed, unplugged, bootloader;
+    /** The arming block "MSP" (MSP_ARMING_DISABLE), and "ARM switch": the switch was on under a block and has not been off since. */
+    private boolean armingDisabledMsp, armSwitchHeld;
+    /** With {@link #keepsMotorValuesWhileArmed}: what MSP_SET_MOTOR said while armed. */
+    private int[] heldMotors;
     private final StringBuilder cliLine = new StringBuilder();
     private double volts = 0.3;
     private int cells, away;
@@ -440,7 +465,19 @@ public final class FakeFlightBoard {
     public synchronized void disarm() {
         forcedArmed = stickArmed = false;
         rc = null;
+        atDisarm();
+    }
+
+    /** Disarmed just now: the motors at rest - or at what MSP_SET_MOTOR said meanwhile ({@link #keepsMotorValuesWhileArmed}). */
+    private void atDisarm() {
         Arrays.fill(motors, MotorTest.STOP);
+        if (heldMotors != null) System.arraycopy(heldMotors, 0, motors, 0, MOTORS);
+        heldMotors = null;
+    }
+
+    /** The arming block "MSP" holds (the keeper's lock, MSP_ARMING_DISABLE). */
+    public synchronized boolean armingLocked() {
+        return armingDisabledMsp;
     }
 
     public synchronized boolean armed() {
@@ -581,6 +618,8 @@ public final class FakeFlightBoard {
         cli = batch = batchError = bootloader = false;
         cliLine.setLength(0);
         forcedArmed = stickArmed = false;
+        armingDisabledMsp = armSwitchHeld = false; // the arming lock is in memory only
+        heldMotors = null;
         rc = null;
         Arrays.fill(motors, MotorTest.STOP);
         Arrays.fill(escDirection, 0);
@@ -733,14 +772,15 @@ public final class FakeFlightBoard {
         }
         byte[] reply;
         try {
-            reply = v2 ? msp2(code, payload) : msp(code, payload);
+            // v2 is a frame, not another set of commands: a number of v1's in it is v1's command (the phone app asks everything so)
+            reply = v2 && code > 255 ? msp2(code, payload) : msp(code, payload == null ? DONE : payload);
         } catch (RuntimeException tooShort) {
             reply = null;
         }
         byte[] answer = v2 ? MspFrames.v2Request(code, reply) : MspFrames.v1Request(code, reply);
         answer[2] = reply == null ? MspFrames.ERROR : MspFrames.RESPONSE;
         link.send(answer, answer.length);
-        if (reply != null && !v2 && code == Msp.REBOOT) restart();
+        if (reply != null && code == Msp.REBOOT) restart();
     }
 
     /** Little-endian, as MSP has its numbers. */
@@ -817,7 +857,21 @@ public final class FakeFlightBoard {
                         .u16(480).u16(550).u8(0).u8(0).u8(0).u8(0).u8(48).u16(125).u16(0).u8(2).u8(0).u8(0).bytes();
             case Msp.STATUS:
                 return new Le().u16(125).u16(0).u16(1 | (mag ? 1 << 2 : 0) | (gps ? 1 << 3 : 0)).u32(armed() ? 1 : 0)
-                        .u8(ram.profile).u16(5).u16(125).u8(0).u8(26).u32(0).u8(0).bytes();
+                        .u8(ram.profile).u16(5).u16(125).u8(0).u8(26).u32(armingDisableFlags()).u8(0).bytes();
+            case Msp.ARMING_DISABLE: // the keeper's lock: not 0 blocks arming and disarms, 0 takes the block off
+                if (ignoreArmingDisable) return DONE;
+                armingDisabledMsp = p[0] != 0;
+                if (armingDisabledMsp) {
+                    boolean was = armed();
+                    forcedArmed = stickArmed = false;
+                    if (was) atDisarm();
+                    if (modeOn(0)) armSwitchHeld = true; // the switch is on under the block: off once before it counts again
+                }
+                return DONE;
+            case Msp.FAILSAFE_CONFIG: { // delay, off delay (0.1 s), throttle, switch mode, throttle-low delay, procedure
+                int procedure = List.of("AUTO-LANDING", "DROP", "GPS-RESCUE").indexOf(ram.master.get("failsafe_procedure"));
+                return new Le().u8(4).u8(10).u16(1000).u8(0).u16(100).u8(procedure).bytes();
+            }
             case Msp.MOTOR: {
                 Le le = new Le();
                 int[] now = motors();
@@ -850,11 +904,16 @@ public final class FakeFlightBoard {
                 for (int i = 0; i < rc.length; i++) rc[i] = Msp.u16(p, 2 * i);
                 sticks();
                 return DONE;
-            case Msp.SET_MOTOR: // Betaflight keeps what it is sent, and uses it only while disarmed
-                if (!armed()) {
-                    for (int i = 0; i < MOTORS && 2 * i + 1 < p.length; i++) motors[i] = Math.max(1000, Math.min(2000, Msp.u16(p, 2 * i)));
+            case Msp.SET_MOTOR: { // Betaflight keeps what it is sent, and uses it only while disarmed
+                int[] into = motors;
+                if (armed()) {
+                    if (!keepsMotorValuesWhileArmed) return DONE;
+                    if (heldMotors == null) heldMotors = motors.clone();
+                    into = heldMotors; // kept, and out the moment it is disarmed
                 }
+                for (int i = 0; i < MOTORS && 2 * i + 1 < p.length; i++) into[i] = Math.max(1000, Math.min(2000, Msp.u16(p, 2 * i)));
                 return DONE;
+            }
             case Msp.EEPROM_WRITE:
                 if (armed()) return null;
                 saved = ram.copy();
@@ -912,14 +971,22 @@ public final class FakeFlightBoard {
         boolean was = armed();
         if (!modeOn(0)) {
             stickArmed = false;
-        } else if (!stickArmed) {
+            armSwitchHeld = false; // off once: it counts again
+        } else if (armingDisabledMsp) {
+            armSwitchHeld = true; // on under the arming lock: nothing arms, and the switch has to go off first
+        } else if (!stickArmed && !armSwitchHeld) {
             int throttle = ram.map.indexOf('T');
             boolean prearmSet = false;
             for (int[] s : ram.aux) prearmSet |= s[0] == 36 && s[2] < s[3];
             stickArmed = !cli && !escs.inPassthrough() && BetaflightPlan.isMspReceiver(ram.features) && rc.length > throttle
                     && rc[throttle] <= Integer.parseInt(ram.master.get("min_check")) && (!prearmSet || modeOn(36));
         }
-        if (was && !armed()) Arrays.fill(motors, MotorTest.STOP);
+        if (was && !armed()) atDisarm();
+    }
+
+    /** MSP_STATUS' arming-disable flags, the two this board knows: "MSP" (the keeper's lock) and "ARM switch". */
+    private int armingDisableFlags() {
+        return (armingDisabledMsp ? 1 << Msp.ARMING_DISABLED_MSP_BIT : 0) | (armSwitchHeld ? 1 << Msp.ARMING_DISABLED_ARM_SWITCH_BIT : 0);
     }
 
     /** A mode's range holds in the last sticks. */

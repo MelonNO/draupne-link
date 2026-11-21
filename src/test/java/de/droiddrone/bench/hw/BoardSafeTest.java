@@ -138,4 +138,33 @@ class BoardSafeTest {
         }, log::add);
         assertFalse(failed.safe(), "a lock that fails is no safe board");
     }
+
+    // >>> R3, the flight controller keeper's arming lock, as gradlew boardSafe sets it
+    @Test
+    void theKeepersLockDisarmsAnArmedBoardWhichIsThenStoppedAndSafe() throws IOException {
+        board.keepsMotorValuesWhileArmed = true; // what was sent while it was armed comes out when the lock disarms it
+        board.arm();
+        try (BetaflightUsb fc = BetaflightUsb.open(board.port())) {
+            leaveOn(fc, 1090, 1000, 1070, 1000);
+        }
+        BoardSafe.Result r = BoardSafe.run(board.port(), T, BoardSafe.ARMING_LOCK, log::add);
+        assertTrue(r.safe(), r.text());
+        assertEquals("SAFE: motors read [1000, 1000, 1000, 1000] (at rest), disarmed, arming locked - it was ARMED: the lock disarmed it.", r.text());
+        assertFalse(board.armed());
+        assertTrue(board.armingLocked());
+        assertArrayEquals(AT_REST, board.motors());
+        // and on a board that is locked and at rest already: said so, nothing else
+        assertEquals("SAFE: motors read [1000, 1000, 1000, 1000] (at rest), disarmed, arming locked.", BoardSafe.run(board.port(), T, BoardSafe.ARMING_LOCK, log::add).text());
+        assertEquals(0, board.saves + board.restarts, "the lock is in the board's memory: nothing saved, nothing restarted");
+    }
+
+    @Test
+    void aBoardOnWhichTheLockDoesNotShowIsNotCalledSafe() {
+        board.ignoreArmingDisable = true;
+        BoardSafe.Result r = BoardSafe.run(board.port(), T, BoardSafe.ARMING_LOCK, log::add);
+        assertFalse(r.safe());
+        assertTrue(r.text().contains("the arming lock (MSP_ARMING_DISABLE) was sent and does not show in the board's status (arming-disable flags 0x0)"), r.text());
+        assertArrayEquals(AT_REST, board.motors(), "stopped all the same");
+    }
+    // <<< R3
 }

@@ -31,7 +31,10 @@ public final class Hardware {
     public static final int THROTTLE_CEILING = 1100;
 
     private static final Set<String> KEYS = Set.of("phone.ip", "phone.port", "phone.key", "phone.adb", "phone.path", "phone.package",
-            "board.port", "board.armAux", "battery.cells", "battery.cellFloor", "keeper.port");
+            "board.port", "board.armAux", "battery.cells", "battery.cellFloor", "keeper.port",
+            // >>> R3, the flight controller keeper
+            "board.mayArm", "keeper.motorSeconds");
+    // <<< R3
     /**
      * What a run may say itself, or the environment for it, before the file (R5, the phone's rig): which phone on adb,
      * where it is reached, and which of DRAUPNE Flight's two packages is flown. As a system property "bench." + the
@@ -43,8 +46,8 @@ public final class Hardware {
     /** The keys whose values did not come from the file. */
     private final Set<String> outside;
     private final String phoneIp, phoneKey, phoneAdb, phonePackage, boardPort;
-    private final int phonePort, armAux, cells, keeperPort;
-    private final boolean relayed;
+    private final int phonePort, armAux, cells, keeperPort, motorSeconds;
+    private final boolean relayed, mayArm;
     private final double cellFloor;
 
     private Hardware(Path file, Properties p, Set<String> outside) {
@@ -88,7 +91,13 @@ public final class Hardware {
             throw wrong("battery.cellFloor is no number: \"" + floor + "\"");
         }
         if (!floor.isEmpty() && !(cellFloor >= 2.5 && cellFloor <= 4.2)) throw wrong("battery.cellFloor is volts per cell, 2.5 .. 4.2: " + floor);
-        keeperPort = number(p, "keeper.port", 0, 1024, 65535);
+        // >>> R3, the flight controller keeper: its control port, with the phone's and Drone setup's ports the two after it
+        keeperPort = number(p, "keeper.port", 0, 1024, 65533);
+        motorSeconds = number(p, "keeper.motorSeconds", 600, 0, 3600);
+        String arm = text(p, "board.mayArm");
+        if (!arm.isEmpty() && !arm.equals("true") && !arm.equals("false")) throw wrong("board.mayArm is true or false, not \"" + arm + "\"");
+        mayArm = arm.equals("true");
+        // <<< R3
     }
 
     // ------------------------------------------------------------------ where it is
@@ -266,6 +275,27 @@ public final class Hardware {
         if (keeperPort == 0) throw missing("keeper.port", "the keeper's control port on this PC");
         return keeperPort;
     }
+
+    // >>> R3, the flight controller keeper (bench/hw/FcKeeper)
+
+    /** The file names a keeper (keeper.port): a bench with a flight controller on this PC's USB. Without one nothing of a run is ever armed. */
+    public boolean hasKeeper() {
+        return keeperPort != 0;
+    }
+
+    /**
+     * This session may arm the board (board.mayArm=true): the battery is in, the propellers are off, somebody decided
+     * it. Left out or false - as the file is on every other day - no scenario asks the keeper for an arm window.
+     */
+    public boolean mayArm() {
+        return mayArm;
+    }
+
+    /** How many seconds the board may be armed in any one hour (keeper.motorSeconds; 600 unless the file says another). */
+    public int motorSecondsPerHour() {
+        return motorSeconds;
+    }
+    // <<< R3
 
     /** Without the key: this goes into films and logs. */
     @Override
