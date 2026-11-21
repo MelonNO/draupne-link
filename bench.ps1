@@ -231,12 +231,8 @@ function Test-Hardware {
 
 # The last step of the hw run, whatever way it went (also after an error or Ctrl+C): the board made safe.
 function Invoke-BoardSafe {
-    # TODO (R5, the keeper / dead man's switch): `gradlew boardSafe` is not built yet.
-    # Skipped while build.gradle registers no task of that name; from then on it runs here.
-    if (-not (Select-String -Path (Join-Path $repo 'build.gradle') -Pattern 'register\(\s*[''"]boardSafe[''"]' -Quiet)) {
-        Write-Host '          boardSafe: no such task yet (TODO R5) - skipped'
-        return
-    }
+    # `gradlew boardSafe` (bench\hw\BoardSafe): STOP to every motor, read back, and whether the board is disarmed.
+    # It fails when no flight controller is on USB too: a hw run without one says so here, which is right.
     Write-Host ("{0:HH:mm:ss}  The board made safe ..." -f (Get-Date))
     $t0 = Get-Date
     $code = Invoke-Gradle @('--offline', '--console=plain', 'boardSafe') (Join-Path $runRoot 'logs\boardSafe.log')
