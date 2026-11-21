@@ -22,6 +22,7 @@
  *  generation, so two inits can't open the port at once and close each other's; requests time out after 20 ms (100
  *  before; sticks wait behind one in flight); the status request has a slot of its own that the slow-link backoff
  *  never skips.
+ *  F-070c: a run of failed writes is a lost device as a failed read is (WriteRun); they were only logged.
  *  The test rig: where the port is opened, written, closed and asked whether it is still there, BenchFc.BUILT_IN is
  *  asked first. It is the constant false in every released app (BenchFc), so the compiler leaves those steps out;
  *  only a build made for the rig, from sources that are not in this folder, has another way to a flight controller.
@@ -56,6 +57,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import com.hoho.android.usbserial.driver.SerialTimeoutException;
 
 import android_serialport_api.SerialPortFinder;
+import de.droiddrone.common.WriteRun;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.FcCommon;
 import de.droiddrone.common.FcPortLatch;
@@ -648,21 +650,22 @@ public class Serial {
      * the USB link is slow those are skipped (the app asks for them again).
      */
     private void writerLoop(final int id) {
+        final WriteRun run = new WriteRun(); // F-070c: this writer's own - one of a port closed since has its own
         while (id == threadsId) {
             try {
                 byte[] rc = pendingRc.getAndSet(null);
                 if (rc != null) {
-                    write(rc, rcWriteTimeoutMs, true);
+                    write(rc, rcWriteTimeoutMs, true, run, id);
                     continue;
                 }
                 byte[] urgent = pendingUrgent.getAndSet(null);
                 if (urgent != null) {
-                    write(urgent, requestWriteTimeoutMs, false);
+                    write(urgent, requestWriteTimeoutMs, false, run, id);
                     continue;
                 }
                 byte[] statusRequest = pendingStatus.getAndSet(null);
                 if (statusRequest != null) {
-                    write(statusRequest, requestWriteTimeoutMs, false);
+                    write(statusRequest, requestWriteTimeoutMs, false, run, id);
                     continue;
                 }
                 byte[] other = pendingMsp.poll();
@@ -670,7 +673,7 @@ public class Serial {
                     if (android.os.SystemClock.elapsedRealtime() < slowUntil) {
                         PcLinkStats.skipped();
                     } else {
-                        write(other, requestWriteTimeoutMs, false);
+                        write(other, requestWriteTimeoutMs, false, run, id);
                     }
                     continue;
                 }
@@ -686,9 +689,13 @@ public class Serial {
         }
     }
 
-    private void write(byte[] data, int timeoutMs, boolean isRc){
+    /** F-070c: asked by the writer when its writes fail in a row (WriteRun) - on its own thread, never for a write that went out. */
+    private final java.util.function.BooleanSupplier attachedNow = this::deviceAttached;
+
+    private void write(byte[] data, int timeoutMs, boolean isRc, WriteRun run, int id){
         long start = System.nanoTime();
         boolean timedOut = false;
+        boolean failed = false;
         boolean written = false; // DRAUPNE Link: only a write that went out counts as sticks delivered
         try {
             if (BenchFc.BUILT_IN && BenchFc.active()) { // the test rig's build only
@@ -707,13 +714,20 @@ public class Serial {
             }
         } catch (SerialTimeoutException e) {
             timedOut = true;
+            failed = true;
         } catch (IOException e) {
             log("Serial writeDataMsp error: " + e);
+            failed = true;
         }
         long ms = (System.nanoTime() - start) / 1_000_000;
         PcLinkStats.write(ms, timedOut);
         if (ms > slowWriteMs) slowUntil = android.os.SystemClock.elapsedRealtime() + slowBackoffMs;
         if (isRc && written) PcLinkStats.rcOut();
+        // F-070c: failed writes were only logged, and only a failed read opened the port anew. A run of them with
+        // not one write out in between (WriteRun: the device gone from USB, or four over 300 ms) is a lost device,
+        // exactly as a failed read is. A write that went out costs one store here; the rest is asked after a failure
+        if (written) run.wentOut();
+        else if (failed && run.failed(System.nanoTime() / 1_000_000, attachedNow)) lostDevice(id, "its writes keep failing");
     }
 
     public void writeDataMavlink(byte[] data){
