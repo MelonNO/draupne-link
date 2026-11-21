@@ -25,6 +25,9 @@
  *  The test rig: where the port is opened, written, closed and asked whether it is still there, BenchFc.BUILT_IN is
  *  asked first. It is the constant false in every released app (BenchFc), so the compiler leaves those steps out;
  *  only a build made for the rig, from sources that are not in this folder, has another way to a flight controller.
+ *  F-070a: the port's settings (native or USB, the native port, the baud rate, the USB port's index, the protocol)
+ *  are asked of FcPortLatch, not of Config: what the PC's Config packet changes takes effect at restart(), which
+ *  waits for the disarm - it stopped the sticks at once, the writer asking Config at every write.
  */
 
 package de.droiddrone.flight;
@@ -55,6 +58,7 @@ import com.hoho.android.usbserial.driver.SerialTimeoutException;
 import android_serialport_api.SerialPortFinder;
 import de.droiddrone.common.FcInfo;
 import de.droiddrone.common.FcCommon;
+import de.droiddrone.common.FcPortLatch;
 import tp.xmaihh.serialport.SerialHelper;
 import tp.xmaihh.serialport.bean.ComBean;
 
@@ -144,10 +148,24 @@ public class Serial {
     private volatile long fastRetryUntil;
     private static final int FAST_RETRY_MS = 150;
     private static final long FAST_RETRY_FOR_MS = 5000;
+    /**
+     * F-070a: the port's settings in use. Config's own change the moment the PC's Config packet comes, also in flight;
+     * these change only where the port is about to be opened after restart() was asked (Udp asks it with the flight
+     * controller known to be disarmed). The writer, and a port looked for again after it was lost, go by these.
+     */
+    private final FcPortLatch fcPort;
+    private final java.util.function.Supplier<FcPortLatch.Settings> fromConfig = this::settingsNow;
+
+    /** The port's settings as Config has them now: read here and nowhere else in this class. */
+    private FcPortLatch.Settings settingsNow() {
+        return new FcPortLatch.Settings(config.isUseNativeSerialPort(), config.getNativeSerialPort(), config.getSerialBaudRate(),
+                config.getUsbSerialPortIndex(), config.getFcProtocol());
+    }
 
     public Serial(Context context, Config config){
         this.context = context;
         this.config = config;
+        fcPort = new FcPortLatch(settingsNow());
         threadsId = 0;
         msp = null;
         mavlink = null;
@@ -245,12 +263,13 @@ public class Serial {
         while (id == threadsId) {
             try {
                 restart = false;
+                fcPort.forOpen(fromConfig); // F-070a: Config's settings only after restart() was asked, else as it was
                 if (BenchFc.BUILT_IN && BenchFc.wanted()) { // the test rig's build only: not in a released app
                     if (openBenchFc(id)) {
                         log("Bench FC port is opened");
                         return;
                     }
-                } else if (config.isUseNativeSerialPort()){
+                } else if (fcPort.inUse().nativePort){
                     if (openNativeSerialPort(id)) {
                         log("Native serial port is opened");
                         return;
@@ -311,7 +330,7 @@ public class Serial {
     }
 
     private void setFcProtocol(String usbDeviceManufacturerName, String usbDeviceProductName){
-        switch (config.getFcProtocol()){
+        switch (fcPort.inUse().fcProtocol){
             case FcCommon.FC_PROTOCOL_AUTO:
             default:
                 isMavlink = FcInfo.ARDUPILOT_ID.equals(usbDeviceManufacturerName)
@@ -328,6 +347,7 @@ public class Serial {
     }
 
     public void restart(){
+        fcPort.restartAsked(); // F-070a: before the status says so - the opening that follows takes Config's settings
         status = STATUS_SERIAL_PORT_ERROR;
         restart = true;
     }
@@ -374,7 +394,7 @@ public class Serial {
                     log("Native serial port found: " + port);
                 }
             }
-            serialHelper = new SerialHelper(config.getNativeSerialPort(), config.getSerialBaudRate()) {
+            serialHelper = new SerialHelper(fcPort.inUse().nativePath, fcPort.inUse().baudRate) {
                 @Override
                 protected void onDataReceived(ComBean comBean) {
                     try {
@@ -437,10 +457,10 @@ public class Serial {
             status = STATUS_USB_PERMISSION_DENIED;
             return false;
         }
-        port = driver.getPorts().get(config.getUsbSerialPortIndex());
+        port = driver.getPorts().get(fcPort.inUse().usbPortIndex);
         try {
             port.open(connection);
-            port.setParameters(config.getSerialBaudRate(), serialDataBits, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
+            port.setParameters(fcPort.inUse().baudRate, serialDataBits, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE);
         } catch (IOException | RuntimeException e) {
             status = STATUS_SERIAL_PORT_ERROR;
             log("USB Serial error: " + e);
@@ -552,7 +572,7 @@ public class Serial {
     private boolean deviceAttached() {
         if (BenchFc.BUILT_IN && BenchFc.active()) return BenchFc.attached(); // the test rig's build only
         UsbSerialDriver d = driver;
-        if (d == null || config.isUseNativeSerialPort()) return true;
+        if (d == null || fcPort.inUse().nativePort) return true;
         return manager.getDeviceList().containsValue(d.getDevice());
     }
 
@@ -673,7 +693,7 @@ public class Serial {
         try {
             if (BenchFc.BUILT_IN && BenchFc.active()) { // the test rig's build only
                 written = BenchFc.write(data);
-            } else if (config.isUseNativeSerialPort()){
+            } else if (fcPort.inUse().nativePort){ // F-070a: the port that is open, not what Config says now
                 if (serialHelper != null && serialHelper.isOpen()) {
                     serialHelper.send(data);
                     written = true;
@@ -701,7 +721,7 @@ public class Serial {
         try {
             if (BenchFc.BUILT_IN && BenchFc.active()) { // the test rig's build only
                 BenchFc.write(data);
-            } else if (config.isUseNativeSerialPort()){
+            } else if (fcPort.inUse().nativePort){
                 if (serialHelper != null && serialHelper.isOpen()) serialHelper.send(data);
             }else{
                 if (port != null && port.isOpen()) port.write(data, serialPortReadWriteTimeoutMs);
