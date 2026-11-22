@@ -72,7 +72,7 @@ class KillScenario {
             Window flights = openPreviousFlights(ui);
             ui.shot("PREVIOUS FLIGHTS after the kill");
             rig.dump("previous-flights-after-kill");
-            rig.check(!ui.sees("No flights yet."), "PREVIOUS FLIGHTS lists the flight");
+            rig.check(!ui.sees("No armed flights yet."), "PREVIOUS FLIGHTS lists the flight");
             List<String> rows = new ArrayList<>();
             for (javax.swing.JList<?> list : ui.all(javax.swing.JList.class)) {
                 Ui.edt(() -> {
@@ -105,7 +105,7 @@ class KillScenario {
             rig.check(videos.stream().noneMatch(f -> f.endsWith(".mkv")), "no recording left of a connection never armed: " + videos);
             openPreviousFlights(ui);
             ui.shot("PREVIOUS FLIGHTS after the kill of a connection never armed");
-            rig.check(ui.sees("No flights yet."), "PREVIOUS FLIGHTS says: No flights yet.");
+            rig.check(ui.sees("No armed flights yet."), "PREVIOUS FLIGHTS says: No armed flights yet.");
         });
     }
 }

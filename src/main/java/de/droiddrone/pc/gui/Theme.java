@@ -163,6 +163,24 @@ final class Theme {
         return button;
     }
 
+    /**
+     * I-006: secondary buttons that look off while they are - a grey frame and grey words (off, they kept their red
+     * frame and red words: PREVIOUS FLIGHTS with no flight looked ready to PLAY, REPORT, EXPORT and DELETE).
+     */
+    static void greyWhenOff(JButton... buttons) {
+        for (JButton b : buttons) {
+            Color on = b.getForeground();
+            java.beans.PropertyChangeListener look = e -> {
+                boolean enabled = b.isEnabled();
+                b.setBorder(BorderFactory.createCompoundBorder(BorderFactory.createLineBorder(enabled ? ACCENT : LINE, 1),
+                        BorderFactory.createEmptyBorder(7, 16, 7, 16)));
+                b.setForeground(enabled ? on : MUTED);
+            };
+            b.addPropertyChangeListener("enabled", look);
+            look.propertyChange(null);
+        }
+    }
+
     static void transparent(JComponent... components) {
         for (JComponent c : components) c.setOpaque(false);
     }

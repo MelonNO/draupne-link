@@ -412,6 +412,7 @@ final class PreviousFlightsDialog extends JDialog {
         root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(javax.swing.KeyStroke.getKeyStroke("B"), "bookmark");
         root.getActionMap().put("bookmark", new WindowKey(this::bookmarkNow));
         showDebrief();
+        Theme.greyWhenOff(onMapButton, report, export, delete); // I-006: no flight chosen, they look off (PLAY greys by itself)
         setButtons();
         pack();
         ScreenFit.apply(this, 900, 600, 1280, 760);
@@ -560,6 +561,9 @@ final class PreviousFlightsDialog extends JDialog {
         } while (reading != t);
     }
 
+    /** I-006: the list's note with no flight kept - only armed flights are kept (1.0.71), so "No flights yet." misled. */
+    static final String NO_FLIGHTS = "No armed flights yet.";
+
     void showFlights(List<FlightLibrary.Flight> read, FlightLibrary.Flight keep) {
         allFlights = read;
         List<FlightLibrary.Flight> flights = new java.util.ArrayList<>();
@@ -571,7 +575,7 @@ final class PreviousFlightsDialog extends JDialog {
         }
         model.clear();
         for (FlightLibrary.Flight f : flights) model.addElement(f);
-        listNote.setText(read.isEmpty() ? "No flights yet." : "No flight found.");
+        listNote.setText(read.isEmpty() ? NO_FLIGHTS : "No flight found.");
         listNote.setVisible(flights.isEmpty());
         if (flights.isEmpty()) {
             choose(null);

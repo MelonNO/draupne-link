@@ -64,7 +64,7 @@ class FlightsScenario {
             Window flights = openPreviousFlights(rig);
             rig.dump("previous-flights");
             ui.shot("PREVIOUS FLIGHTS with one flight");
-            rig.check(!ui.sees("No flights yet."), "the list is not empty");
+            rig.check(!ui.sees("No armed flights yet."), "the list is not empty");
             rig.check(texts(ui).stream().anyMatch(t -> t.contains(name)), "the flight shows its drone's name " + name + ": " + texts(ui));
             ui.closeWindow(flights);
             ui.until("the Previous flights window gone", 5000, () -> ui.window("Previous flights") == null);
@@ -85,7 +85,7 @@ class FlightsScenario {
             rig.check(videos.stream().noneMatch(f -> f.endsWith(".mkv")), "no recording of a flight never armed: " + videos);
             openPreviousFlights(rig);
             ui.shot("PREVIOUS FLIGHTS after a connection without arming");
-            rig.check(ui.sees("No flights yet."), "PREVIOUS FLIGHTS says: No flights yet.");
+            rig.check(ui.sees("No armed flights yet."), "PREVIOUS FLIGHTS says: No armed flights yet.");
         });
     }
 
@@ -105,7 +105,7 @@ class FlightsScenario {
                     || !java.nio.file.Files.readString(rig.sandbox.dataDir().resolve("last-known.txt")).contains("Mobile"), "no last known place of a made-up drone on disk");
             openPreviousFlights(rig);
             ui.shot("PREVIOUS FLIGHTS after a made-up drone's armed flight");
-            rig.check(ui.sees("No flights yet."), "PREVIOUS FLIGHTS says: No flights yet.");
+            rig.check(ui.sees("No armed flights yet."), "PREVIOUS FLIGHTS says: No armed flights yet.");
         });
     }
 

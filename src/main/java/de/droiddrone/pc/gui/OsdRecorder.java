@@ -258,7 +258,7 @@ final class OsdRecorder implements VideoPipeline.RecordingTap {
     private void closeWriter() {
         if (writer != null) {
             writer.close();
-            log.accept("OSD recording: " + file.getFileName() + " closed, " + written + " pictures"
+            log.accept("OSD recording: " + file.getFileName() + " closed, " + written + " frames" // I-006: a video's word
                     + (left > 0 ? " (" + left + " dropped)" : "") + ".");
             writer = null;
         }

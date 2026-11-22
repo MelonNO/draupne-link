@@ -2177,10 +2177,11 @@ public class MainWindow extends JFrame {
         if (record == null) return;
         String how = endedByLostDrone ? de.droiddrone.pc.flights.FlightRecord.LOST_DRONE
                 : lostWhileArmed ? de.droiddrone.pc.flights.FlightRecord.LINK_LOST : de.droiddrone.pc.flights.FlightRecord.DISCONNECT;
-        record.end(how, System.currentTimeMillis());
+        long endedAt = System.currentTimeMillis();
+        record.end(how, endedAt);
         de.droiddrone.pc.flights.FlightRecord.live(null);
         if (record.wasArmed()) {
-            if (!de.droiddrone.pc.flights.FlightRecord.DISCONNECT.equals(how)) logLine("Flight kept: ended by " + how + ".");
+            logLine(keptLine(endedAt - record.startMs(), how)); // I-006: every kept flight, one line
             return;
         }
         FlightTrack flown = liveTrack;
@@ -2200,6 +2201,16 @@ public class MainWindow extends JFrame {
         t.setDaemon(true);
         t.setPriority(Thread.MIN_PRIORITY);
         t.start();
+    }
+
+    /**
+     * I-006: the log's one line for a flight kept - its length as PREVIOUS FLIGHTS counts it (the connection's), how it
+     * ended when not as usual, and where to find it. Up to 1.0.71 a flight ended as usual was kept without a word.
+     */
+    static String keptLine(long lengthMs, String how) {
+        return "Flight kept, " + de.droiddrone.pc.flights.FlightLibrary.durationText(lengthMs)
+                + (de.droiddrone.pc.flights.FlightRecord.DISCONNECT.equals(how) ? "" : ", ended by " + how)
+                + " - MAP TOOLS > DATA > PREVIOUS FLIGHTS";
     }
 
     private void sampleLinkLog() {
