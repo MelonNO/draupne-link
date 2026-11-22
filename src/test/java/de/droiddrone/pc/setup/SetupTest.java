@@ -176,13 +176,45 @@ class SetupTest {
         for (String n : names) assertTrue(n.matches("[A-Za-z0-9-]+"), n);
     }
     @Test
-    void windowsToolsRunByFullPath() {
+    void windowsToolsRunByFullPath() throws Exception {
         assumeTrue(System.getProperty("os.name", "").startsWith("Windows"));
         assertTrue(Shell.withFullPath(List.of("netsh", "advfirewall")).get(0).toLowerCase().endsWith("\\system32\\netsh.exe"));
         assertTrue(Shell.withFullPath(List.of("powershell.exe")).get(0).toLowerCase().endsWith("\\windowspowershell\\v1.0\\powershell.exe"));
         assertEquals(List.of("C:\\x\\tool.exe", "a"), Shell.withFullPath(List.of("C:\\x\\tool.exe", "a")), "a full path is kept");
-        assertEquals(List.of("no-such-tool"), Shell.withFullPath(List.of("no-such-tool")), "unknown names are left to the PATH");
+        // an unknown name is no longer left to the PATH: ProgramsByFullPathTest
         assertEquals("advfirewall", Shell.withFullPath(List.of("netsh", "advfirewall")).get(1));
+    }
+
+    /**
+     * The elevated script's launcher starts PowerShell by its full path. Run here as it is but for the "as
+     * administrator" (no Windows prompt in a test): the script it carries runs and leaves its file.
+     */
+    @Test
+    void theElevatedLauncherStartsWindowsOwnPowerShell() throws Exception {
+        assumeTrue(System.getProperty("os.name", "").startsWith("Windows"));
+        Path mark = dir.resolve("ran.txt");
+        String launcher = Shell.elevatedLauncher("Set-Content -LiteralPath " + Shell.psQuote(mark.toString()) + " -Value 'ran'");
+        assertTrue(launcher.startsWith("Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe') -Verb RunAs "), launcher);
+        Shell.Result r = Shell.powershell(Duration.ofSeconds(60), launcher.replace(" -Verb RunAs ", " "));
+        assertTrue(r.ok(), r.output());
+        assertEquals("ran", Files.readString(mark).strip());
+    }
+
+    /**
+     * The firewall scripts run Windows' own netsh by its full path: every netsh line is "& $netsh ...", and $netsh, set
+     * as the scripts set it, runs - asked here for something that changes nothing (the firewall's state).
+     */
+    @Test
+    void theFirewallScriptsRunWindowsOwnNetsh() {
+        for (String script : new String[]{WindowsSetup.firewallScript(6286, 8765), WindowsSetup.removeFirewallScript()}) {
+            String[] lines = script.split("\n");
+            assertEquals("$netsh = Join-Path $env:SystemRoot 'System32\\netsh.exe'", lines[0]);
+            for (int i = 1; i < lines.length; i++) assertTrue(lines[i].startsWith("& $netsh advfirewall firewall "), lines[i]);
+        }
+        assumeTrue(System.getProperty("os.name", "").startsWith("Windows"));
+        Shell.Result r = Shell.powershell(Duration.ofSeconds(30), Shell.NETSH_IN_SCRIPT
+                + "\n& $netsh advfirewall show currentprofile state | Out-Null\n\"$(Test-Path -LiteralPath $netsh) $LASTEXITCODE\"");
+        assertEquals("True 0", r.output().strip(), r.output());
     }
 
     @Test

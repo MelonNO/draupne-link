@@ -54,26 +54,33 @@ public final class WindowsSetup {
 
     /** Removes both rules, as administrator, when DRAUPNE Link is uninstalled. */
     public static Shell.Result removeFirewallRulesAsAdmin() {
-        return Shell.powershell(Duration.ofMinutes(1), String.join("\n",
-                deleteOldRules(),
-                "netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
-                "netsh advfirewall firewall delete rule name=" + APK_RULE + " | Out-Null"));
+        return Shell.powershell(Duration.ofMinutes(1), removeFirewallScript());
     }
 
+    static String removeFirewallScript() {
+        return String.join("\n",
+                Shell.NETSH_IN_SCRIPT,
+                deleteOldRules(),
+                "& $netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
+                "& $netsh advfirewall firewall delete rule name=" + APK_RULE + " | Out-Null");
+    }
+
+    /** Windows' own netsh by its full path in these scripts too ($netsh, {@link Shell#NETSH_IN_SCRIPT}). */
     private static String deleteOldRules() {
         StringBuilder s = new StringBuilder();
-        for (String rule : OLD_RULES) s.append("netsh advfirewall firewall delete rule name=").append(rule).append(" | Out-Null\n");
+        for (String rule : OLD_RULES) s.append("& $netsh advfirewall firewall delete rule name=").append(rule).append(" | Out-Null\n");
         return s.toString().strip();
     }
 
-    private static String firewallScript(int linkPort, int apkPort) {
+    static String firewallScript(int linkPort, int apkPort) {
         return String.join("\n",
+                Shell.NETSH_IN_SCRIPT,
                 deleteOldRules(),
-                "netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
-                "netsh advfirewall firewall add rule name=" + LINK_RULE
+                "& $netsh advfirewall firewall delete rule name=" + LINK_RULE + " | Out-Null",
+                "& $netsh advfirewall firewall add rule name=" + LINK_RULE
                         + " dir=in action=allow protocol=UDP localport=" + linkPort + " profile=any",
-                "netsh advfirewall firewall delete rule name=" + APK_RULE + " | Out-Null",
-                "netsh advfirewall firewall add rule name=" + APK_RULE
+                "& $netsh advfirewall firewall delete rule name=" + APK_RULE + " | Out-Null",
+                "& $netsh advfirewall firewall add rule name=" + APK_RULE
                         + " dir=in action=allow protocol=TCP localport=" + apkPort
                         + " remoteip=LocalSubnet,100.64.0.0/10 profile=any");
     }

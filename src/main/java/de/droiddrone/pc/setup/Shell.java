@@ -72,22 +72,46 @@ public final class Shell {
     }
 
     /**
-     * Windows' own tools (netsh, powercfg, powershell, schtasks, ...) by their full path in System32, so they run
-     * even when the app was started with an unusual PATH, e.g. by an installer or a scheduled task.
+     * Windows' own tools (netsh, powercfg, powershell, explorer, ...) by their full path - System32, PowerShell's
+     * folder in it, the Windows folder - so they run even when the app was started with an unusual PATH, e.g. by an
+     * installer or a scheduled task, and the program that runs is Windows' own, whatever lies beside the app or in
+     * the folder it was started from. A command that begins with a full path is kept as it is. Nothing is started by
+     * a bare name: a name in none of Windows' folders, or a path that is not a full one, is no command.
+     * @throws IOException for a program that is neither a full path nor one of Windows' own
      */
-    static List<String> withFullPath(List<String> command) {
+    public static List<String> withFullPath(List<String> command) throws IOException {
         String name = command.get(0);
-        if (name.contains("\\") || name.contains("/")) return command;
+        if (isFullPath(name)) return command;
+        Path tool = windowsTool(name);
+        if (tool == null) throw new IOException(name + ": not a full path and not one of Windows' own programs - not started");
+        List<String> full = new ArrayList<>(command);
+        full.set(0, tool.toString());
+        return full;
+    }
+
+    /** C:\..., \\server\..., and outside Windows /... */
+    private static boolean isFullPath(String name) {
+        return name.matches("[A-Za-z]:[\\\\/].*") || name.startsWith("\\\\")
+                || name.startsWith("/") && !System.getProperty("os.name", "").startsWith("Windows");
+    }
+
+    /** One of Windows' own programs by its name ("netsh", "explorer.exe"): its full path, or null when Windows' folders have none. */
+    static Path windowsTool(String name) {
+        if (name == null || name.isBlank() || name.contains("\\") || name.contains("/") || name.contains(":")) return null;
         String exe = name.toLowerCase(Locale.ROOT).endsWith(".exe") ? name : name + ".exe";
-        Path system32 = Path.of(System.getenv().getOrDefault("SystemRoot", "C:\\Windows"), "System32");
-        for (Path candidate : List.of(system32.resolve(exe), system32.resolve("WindowsPowerShell").resolve("v1.0").resolve(exe))) {
-            if (Files.isRegularFile(candidate)) {
-                List<String> full = new ArrayList<>(command);
-                full.set(0, candidate.toString());
-                return full;
+        Path windows;
+        try {
+            windows = Path.of(System.getenv().getOrDefault("SystemRoot", "C:\\Windows"));
+            if (!windows.isAbsolute()) windows = Path.of("C:\\Windows");
+            Path system32 = windows.resolve("System32");
+            for (Path candidate : List.of(system32.resolve(exe), system32.resolve("WindowsPowerShell").resolve("v1.0").resolve(exe),
+                    windows.resolve(exe))) {
+                if (Files.isRegularFile(candidate)) return candidate;
             }
+        } catch (java.nio.file.InvalidPathException e) {
+            // a name no file can have
         }
-        return command;
+        return null;
     }
 
     private static String read(InputStream in) {
@@ -114,10 +138,19 @@ public final class Shell {
      * not available, so callers re-check the state afterwards. Exit code != 0 here usually means the prompt was declined.
      */
     public static Result powershellElevated(Duration timeout, String script) {
-        String launcher = "Start-Process powershell.exe -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "
-                + "'-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','" + encode(script) + "'";
-        return powershell(timeout, launcher);
+        return powershell(timeout, elevatedLauncher(script));
     }
+
+    /** The script that starts the elevated one: PowerShell by its full path there too (Windows' own, {@link #POWERSHELL_IN_SCRIPT}). */
+    static String elevatedLauncher(String script) {
+        return "Start-Process -FilePath " + POWERSHELL_IN_SCRIPT + " -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList "
+                + "'-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','" + encode(script) + "'";
+    }
+
+    /** In a PowerShell script: Windows' own PowerShell by its full path. */
+    static final String POWERSHELL_IN_SCRIPT = "(Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe')";
+    /** In a PowerShell script: a line that sets $netsh to Windows' own netsh by its full path; then "& $netsh ...". */
+    static final String NETSH_IN_SCRIPT = "$netsh = Join-Path $env:SystemRoot 'System32\\netsh.exe'";
 
     static String encode(String script) {
         return Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));

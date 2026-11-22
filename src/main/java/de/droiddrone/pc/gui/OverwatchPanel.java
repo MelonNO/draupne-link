@@ -821,13 +821,16 @@ final class OverwatchPanel extends JPanel {
         ClipIndex.Clip c = selectedClip();
         try {
             Path target = c == null ? null : c.video() != null ? c.video() : c.thumbnail();
+            // Windows' own Explorer, by its full path
             if (target != null) {
-                de.droiddrone.pc.Outside.start(new ProcessBuilder("explorer.exe", "/select," + target.toAbsolutePath()));
+                de.droiddrone.pc.Outside.start(new ProcessBuilder(de.droiddrone.pc.setup.Shell.withFullPath(
+                        java.util.List.of("explorer.exe", "/select," + target.toAbsolutePath()))));
             } else {
                 Object d = droneCombo.getSelectedItem();
                 Path dir = d == null ? index.root() : index.folder(d.toString());
                 Files.createDirectories(dir);
-                de.droiddrone.pc.Outside.start(new ProcessBuilder("explorer.exe", dir.toAbsolutePath().toString()));
+                de.droiddrone.pc.Outside.start(new ProcessBuilder(de.droiddrone.pc.setup.Shell.withFullPath(
+                        java.util.List.of("explorer.exe", dir.toAbsolutePath().toString()))));
             }
         } catch (IOException e) {
             folderSize.setText("Explorer didn't open: " + e.getMessage());

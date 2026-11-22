@@ -197,8 +197,10 @@ public final class SelfUpdate {
         Files.deleteIfExists(helperLog());
         String script = script(installer, ProcessHandle.current().pid(), app, sha256);
         String encoded = Base64.getEncoder().encodeToString(script.getBytes(StandardCharsets.UTF_16LE));
-        de.droiddrone.pc.Outside.start(new ProcessBuilder("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-                "-WindowStyle", "Hidden", "-EncodedCommand", encoded)
+        // Windows' own PowerShell by its full path, as Shell runs it
+        java.util.List<String> helper = Shell.withFullPath(java.util.List.of("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                "-WindowStyle", "Hidden", "-EncodedCommand", encoded));
+        de.droiddrone.pc.Outside.start(new ProcessBuilder(helper)
                 .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                 .redirectError(ProcessBuilder.Redirect.DISCARD));
     }
