@@ -121,6 +121,8 @@ class MotorTestBoardTest {
         MotorTestRig.onSwing(() -> rig.window.dispose());
         Waits.await(() -> !turned.isEmpty(), 5000, "the window to say it is closed");
         assertEquals(List.of(true), turned);
-        assertTrue(MotorTestRig.allStopped(board), "and closing stopped it");
+        // the STOP is the motor thread's, sent as it ends after the window has gone - not in the same instant as the
+        // window's closed word (red once on GitHub's runner, 2026-11-22: checked at once, the STOP still on its way)
+        Waits.await(() -> MotorTestRig.allStopped(board), 3000, "closing to stop motor 1");
     }
 }
