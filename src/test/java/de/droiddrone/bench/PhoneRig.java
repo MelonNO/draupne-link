@@ -64,6 +64,9 @@ import java.util.stream.Stream;
  * never passed over and never counted as passed. When the app itself comes in front of the lock screen (woken by a PC, opened again after an error) the
  * screen is the app's again and is read as ever. A phone found unlocked is kept awake on its cable for the run
  * ({@code svc power stayon usb}), its own setting put back exactly when the rig closes or by {@link PhoneReset}.
+ * <b>A screen that cannot be read</b> ({@link #reading}, since the Android 11 emulator, 2026-11-22): uiautomator's
+ * own words go into the film; on the emulator what can be had another way is taken so, as behind a lock screen (the
+ * bench build's word, the app's process and window), and the film says which way.
  * <b>Sleep on a cable</b> ({@link #onBattery}, {@link #plugged}). Android does not doze while it charges, and a
  * phone on adb's cable charges. {@code dumpsys battery unplug} makes Android believe the cable is gone (the app sees
  * "not charging"; the level and temperature Android reports stand still from then on) and
@@ -445,9 +448,15 @@ public final class PhoneRig implements AutoCloseable {
     private final List<Integer> reversed = new ArrayList<>();
     private final Set<PhoneGuard.Undo> switchedOff = EnumSet.noneOf(PhoneGuard.Undo.class);
     private final List<String> refusals = new ArrayList<>();
-    /** Checks that need the screen and were not made behind a lock screen; facts taken another way than the screen there. */
+    /**
+     * Checks that need the screen and were not made behind a lock screen; facts taken another way than the screen there
+     * - or on the emulator, when its screen could not be read ({@link #unread}).
+     */
     private final List<String> skipped = new ArrayList<>(), otherWays = new ArrayList<>();
     private boolean pretending, standingStillSaid, linkSaid, closedOnce;
+    /** What uiautomator said at the last read of the screen that failed, while reads go on failing (null once one is read); how many failed in a row. */
+    private String screenError;
+    private int screenFailures;
     /** A real phone's lock screen as last looked at; the kind of lock it has (asked once: the bench never changes it). */
     private Keyguard keyguard;
     private String lockSettings;
@@ -860,12 +869,29 @@ public final class PhoneRig implements AutoCloseable {
 
     /**
      * The app's main screen is up ({@link PhoneWords#SCREEN_TITLE} on it) - or, behind a real phone's lock screen,
-     * the app runs: its process is there.
+     * the app runs: its process is there. On the emulator, when its screen cannot be read (Android 11's, 2026-11-22):
+     * the app's process is there and its window is the one in front, and the film says so.
      */
     public void untilAppIsUp(long ms) {
         if (!device()) {
-            untilSees(PhoneWords.SCREEN_TITLE, ms);
-            return;
+            long end = clock.getAsLong() + ms;
+            while (true) {
+                Reading r = reading();
+                if (r.says(PhoneWords.SCREEN_TITLE)) return;
+                if (!r.read() && !pid().isEmpty()) {
+                    String front = windowInFront();
+                    if (front.startsWith(target.app() + "/")) {
+                        unread(r, "the app is up", "its process in Android's list and its window in front (" + front + ")");
+                        return;
+                    }
+                }
+                if (clock.getAsLong() > end) {
+                    shot("phone: TIMED OUT after " + ms + " ms waiting for \"" + PhoneWords.SCREEN_TITLE + "\"");
+                    throw new AssertionError("Timed out after " + ms + " ms waiting for the phone to say \"" + PhoneWords.SCREEN_TITLE + "\". On it: " + r.texts()
+                            + (r.read() ? "" : r.why() + "; nor were the app's process and its window in front both there"));
+                }
+                pause.accept(500);
+            }
         }
         long end = clock.getAsLong() + ms;
         while (true) {
@@ -888,11 +914,21 @@ public final class PhoneRig implements AutoCloseable {
      * START pressed if the app shows it (a start without everything allowed waits for it). Behind a real phone's lock
      * screen nobody can look for the button or press it: there the service has to have started by itself, as it does
      * on a phone that is set up - known by Android's word that it lives and by the app's own log; if it has not, the
-     * scenario stops here and says why.
+     * scenario stops here and says why. The same on the emulator when its screen cannot be read (Android 11's), by
+     * Android's word alone.
      */
     public void startIfAsked() {
         if (!device()) {
-            if (texts().contains(PhoneWords.SCREEN_START)) tap(PhoneWords.SCREEN_START);
+            Reading r = reading();
+            if (r.read()) {
+                if (r.texts().contains(PhoneWords.SCREEN_START)) tap(PhoneWords.SCREEN_START);
+                return;
+            }
+            if (!serviceRunsWithin(20_000)) {
+                throw new AssertionError("The phone's screen could not be read (uiautomator says \"" + r.error() + "\"): START cannot be looked for or pressed, and "
+                        + "the app's service has not started by itself within 20 s (it does when the camera is allowed and the app was started once before).");
+            }
+            unread(r, "the service runs and listens for a PC (no START to press)", "Android's list of living services");
             return;
         }
         List<Node> nodes = screen();
@@ -905,12 +941,7 @@ public final class PhoneRig implements AutoCloseable {
             }
             return;
         }
-        long end = clock.getAsLong() + 20_000;
-        boolean runs = serviceRunning();
-        while (!runs && clock.getAsLong() < end) {
-            pause.accept(1000);
-            runs = serviceRunning();
-        }
+        boolean runs = serviceRunsWithin(20_000);
         String log = appSaidSinceLaunch();
         if (log.contains(PhoneWords.LINK_PORT_TAKEN)) {
             throw new AssertionError("The phone app could not have its link port (its log: \"" + PhoneWords.LINK_PORT_TAKEN + "\"): is the other DRAUPNE Flight "
@@ -931,14 +962,35 @@ public final class PhoneRig implements AutoCloseable {
                 + (log.contains(PhoneWords.RECEIVER_STARTED) ? " and the app's log: \"" + PhoneWords.RECEIVER_STARTED + "\"" : ""));
     }
 
+    /** The app's service runs now, or does within so long: asked once a second. */
+    private boolean serviceRunsWithin(long ms) {
+        long end = clock.getAsLong() + ms;
+        boolean runs = serviceRunning();
+        while (!runs && clock.getAsLong() < end) {
+            pause.accept(1000);
+            runs = serviceRunning();
+        }
+        return runs;
+    }
+
     /**
      * The phone says a PC is connected: on its screen ({@link PhoneWords#SCREEN_CONNECTED}); behind a real phone's
      * lock screen by the bench build's own word ({@link PhoneWords#STATS_PC_CONNECTED}). With neither to be had (the
-     * released app behind a lock screen) the check is skipped by name.
+     * released app behind a lock screen) the check is skipped by name. On the emulator, when its screen cannot be read
+     * (Android 11's), by the bench build's word too; the released app there has none: the check fails, saying why.
      */
     public void checkConnectedToPc(Checks checks, String what) {
         if (!device()) {
-            checks.check(sees(PhoneWords.SCREEN_CONNECTED), what);
+            Reading r = reading();
+            if (r.read()) {
+                checks.check(r.says(PhoneWords.SCREEN_CONNECTED), what);
+            } else if (target.benchBuild()) {
+                String stats = benchControl(BenchControl.STATS);
+                unread(r, "a PC is connected", "the bench build's own word (" + PhoneWords.STATS_PC_CONNECTED + ")");
+                checks.check(stats.contains(PhoneWords.STATS_PC_CONNECTED), what + " - the screen could not be read, by the bench build's own word");
+            } else {
+                checks.check(false, what + r.why() + ", and the released app has no bench receiver to ask instead");
+            }
             return;
         }
         List<Node> nodes = screen();
@@ -955,18 +1007,42 @@ public final class PhoneRig implements AutoCloseable {
         }
     }
 
-    /** What the phone says of its flight controller, for the film: its screen's line; behind a lock screen the bench build's serial status. */
+    /**
+     * What the phone says of its flight controller, for the film: its screen's line; behind a lock screen (or on an
+     * emulator whose screen cannot be read) the bench build's serial status.
+     */
     public String flightControllerWord() {
-        List<Node> nodes = screen();
-        if (!lockedAway(nodes)) {
+        Reading r = reading();
+        boolean unreadable = !device() && !r.read();
+        if (!unreadable && !lockedAway(r.nodes())) {
             List<String> lines = new ArrayList<>();
-            for (Node n : nodes) if (n.text().toLowerCase().contains("flight controller")) lines.add(n.text());
+            for (Node n : r.nodes()) if (n.text().toLowerCase().contains("flight controller")) lines.add(n.text());
             return lines.toString();
         }
-        if (!target.benchBuild()) return "(not known: behind the lock screen, and the released app has no bench receiver)";
+        String where = unreadable ? "the screen could not be read" : "behind the lock screen";
+        if (!target.benchBuild()) return "(not known: " + where + ", and the released app has no bench receiver)";
         Matcher m = Pattern.compile(PhoneWords.STATS_SERIAL + "(\\S+)").matcher(benchControl(BenchControl.STATS));
-        return m.find() ? "(behind the lock screen, the bench build's serial status) " + m.group(1) + (m.group(1).equals("1") ? " = no flight controller" : "")
-                : "(behind the lock screen: the bench build did not say)";
+        return m.find() ? "(" + where + ", the bench build's serial status) " + m.group(1) + (m.group(1).equals("1") ? " = no flight controller" : "")
+                : "(" + where + ": the bench build did not say)";
+    }
+
+    /**
+     * The emulator's phone says there is no flight controller on its USB (the emulator has no USB): on its screen
+     * ({@link PhoneWords#SCREEN_NO_FC}); when the screen cannot be read (Android 11's), by the bench build's serial
+     * status - 0 or 1, the two for which the app writes those words. (A real phone may have one: the scenarios only
+     * say there what it says, {@link #flightControllerWord}.)
+     */
+    public void checkNoFlightController(Checks checks, String what) {
+        Reading r = reading();
+        if (r.read() || !target.benchBuild()) {
+            checks.check(r.says(PhoneWords.SCREEN_NO_FC), what + r.why());
+            return;
+        }
+        Matcher m = Pattern.compile(PhoneWords.STATS_SERIAL + "(\\d+)").matcher(benchControl(BenchControl.STATS));
+        boolean none = m.find() && (m.group(1).equals("0") || m.group(1).equals("1"));
+        unread(r, "no flight controller on USB", "the bench build's serial status (" + PhoneWords.STATS_SERIAL + "0 or 1, for which the app says \""
+                + PhoneWords.SCREEN_NO_FC + "\")");
+        checks.check(none, what + " - the screen could not be read, by the bench build's serial status");
     }
 
     /**
@@ -1240,13 +1316,70 @@ public final class PhoneRig implements AutoCloseable {
         return m.find() ? m.group(1).replace("&amp;", "&").replace("&quot;", "\"").replace("&#10;", " ").replace("&lt;", "<").replace("&gt;", ">") : "";
     }
 
-    /** Everything on the phone's screen now, as Android describes it. */
+    /**
+     * One look at the phone's screen: what is on it - or, when uiautomator could not describe it, nothing, and
+     * uiautomator's own words why.
+     *
+     * @param error what uiautomator said instead of the screen, word for word; null when the screen was read
+     */
+    public record Reading(List<Node> nodes, String error) {
+        public boolean read() {
+            return error == null;
+        }
+
+        /** The words on it. */
+        public List<String> texts() {
+            List<String> out = new ArrayList<>();
+            for (Node n : nodes) if (!n.text().isBlank()) out.add(n.text());
+            return out;
+        }
+
+        /** Something on it says this (any case). */
+        public boolean says(String part) {
+            String p = part.toLowerCase();
+            for (String t : texts()) if (t.toLowerCase().contains(p)) return true;
+            return false;
+        }
+
+        /** For a message: nothing when the screen was read, else why not. */
+        String why() {
+            return read() ? "" : " (the phone's screen could not be read: uiautomator says \"" + error + "\")";
+        }
+    }
+
+    /** Everything on the phone's screen now, as Android describes it (nothing when it could not be read: {@link #reading}). */
     public List<Node> screen() {
+        return reading().nodes();
+    }
+
+    /**
+     * The phone's screen now, as Android describes it ({@code uiautomator dump}, three tries) - or what uiautomator
+     * said instead, word for word, and the film told (once while the same words come back, and when the screen can be
+     * read again). Until 2026-11-22 a screen that could not be read was an empty one, said nowhere: on the Android 11
+     * emulator (draupne-a30) every read of the app's own screen failed, ~36 s each, with "ERROR: could not get idle
+     * state." - uiautomator first waits for one second in which nothing on the screen changes, 10 s at most, and the
+     * app's status lines change every second. That wait is uiautomator's own (Android 11's DumpCommand:
+     * waitForIdle(1000, 10000), with --compressed as without: that changes only what is dumped) - no option shortens
+     * it. Where a scenario's check can be had another way, the emulator then takes it so ({@link #unread}).
+     */
+    public Reading reading() {
         String xml = "";
         for (int attempt = 0; attempt < 3; attempt++) { // "could not get idle state" while something animates (the STANDBY screen does, all the time)
             xml = new String(adbBytes(40, "exec-out", "uiautomator", "dump", "/dev/tty"), StandardCharsets.UTF_8);
             if (xml.contains("<hierarchy")) break;
             pause.accept(700);
+        }
+        if (!xml.contains("<hierarchy")) {
+            String said = uiautomatorSaid(xml);
+            screenFailures++;
+            if (!said.equals(screenError)) say("The phone's screen could not be read (3 tries): uiautomator says \"" + said + "\".");
+            screenError = said;
+            return new Reading(List.of(), said);
+        }
+        if (screenError != null) {
+            say("The phone's screen could be read again, after " + screenFailures + " read(s) that failed (uiautomator: \"" + screenError + "\").");
+            screenError = null;
+            screenFailures = 0;
         }
         List<Node> nodes = new ArrayList<>();
         Matcher m = NODE.matcher(xml);
@@ -1259,7 +1392,28 @@ public final class PhoneRig implements AutoCloseable {
                     new Rectangle(x1, y1, Integer.parseInt(b.group(3)) - x1, Integer.parseInt(b.group(4)) - y1),
                     attr(n, "clickable").equals("true"), attr(n, "enabled").equals("true"), attr(n, "package")));
         }
-        return nodes;
+        return new Reading(nodes, null);
+    }
+
+    /** uiautomator's own words in what a dump printed that had no screen in it: on one line, 300 characters at most. */
+    static String uiautomatorSaid(String output) {
+        String s = output == null ? "" : output.trim().replaceAll("\\s+", " ");
+        if (s.isEmpty()) return "(nothing)";
+        return s.length() > 300 ? s.substring(0, 300) + "..." : s;
+    }
+
+    /**
+     * A fact the emulator's rig took another way because the phone's screen could not be read: said in the film with
+     * the way and uiautomator's words, and listed with the others when the rig closes.
+     */
+    private void unread(Reading r, String fact, String how) {
+        otherWays.add(fact + " [" + how + "]");
+        say("The phone's screen could not be read (uiautomator says \"" + r.error() + "\"): " + fact + " - known by " + how + ", not by the screen's words.");
+    }
+
+    /** The window that has the keys now, as Android names it ("package/activity"); "" when it does not say. */
+    private String windowInFront() {
+        return Keyguard.read(shell("dumpsys window"), "").focus();
     }
 
     /**
@@ -1286,15 +1440,11 @@ public final class PhoneRig implements AutoCloseable {
 
     /** The words on the screen. */
     public List<String> texts() {
-        List<String> out = new ArrayList<>();
-        for (Node n : screen()) if (!n.text().isBlank()) out.add(n.text());
-        return out;
+        return reading().texts();
     }
 
     public boolean sees(String part) {
-        String p = part.toLowerCase();
-        for (String t : texts()) if (t.toLowerCase().contains(p)) return true;
-        return false;
+        return reading().says(part);
     }
 
     public Node find(String words) {
@@ -1379,7 +1529,8 @@ public final class PhoneRig implements AutoCloseable {
         while (!sees(part)) {
             if (clock.getAsLong() > end) {
                 shot("phone: TIMED OUT after " + ms + " ms waiting for \"" + part + "\"");
-                throw new AssertionError("Timed out after " + ms + " ms waiting for the phone to say \"" + part + "\". On it: " + texts());
+                Reading last = reading();
+                throw new AssertionError("Timed out after " + ms + " ms waiting for the phone to say \"" + part + "\". On it: " + last.texts() + last.why());
             }
             pause.accept(500);
         }
@@ -1660,6 +1811,12 @@ public final class PhoneRig implements AutoCloseable {
             }
             if (!skipped.isEmpty()) {
                 say("ON THE REAL PHONE " + skipped.size() + " CHECK(S) WERE SKIPPED in this run - not made, and not counted as passed: " + String.join("; ", skipped) + ".");
+            }
+        } else if (!device() && !closedOnce) {
+            closedOnce = true;
+            if (!otherWays.isEmpty()) {
+                say("THE PHONE'S SCREEN COULD NOT BE READ: " + otherWays.size() + " fact(s) were taken another way than from the screen's words: "
+                        + String.join("; ", otherWays) + ".");
             }
         }
         for (int host : forwarded) {

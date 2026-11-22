@@ -114,7 +114,7 @@ class PhoneScenario {
             phone.shot("phone: its screen after the first start");
             // (a real phone's USB is adb's cable - but over the network it may have a flight controller: said, not checked)
             if (phone.device()) film.remark("About its flight controller the phone says: " + phone.flightControllerWord());
-            else check(phone.sees(PhoneWords.SCREEN_NO_FC), "it says there is no flight controller on USB");
+            else phone.checkNoFlightController(this::check, "it says there is no flight controller on USB"); // its screen; unreadable (Android 11): the bench build's word
             check(phone.serviceRunning(), "its service runs (it listens for a PC)");
             Files.writeString(film.dir().resolve("phone-screen-first-start.txt"), String.join("\n", phone.texts()), StandardCharsets.UTF_8);
 
