@@ -273,6 +273,48 @@ class PhoneRigLockTest {
         assertEquals(List.of(), still.skipped());
     }
 
+    // ------------------------------------------------------------------ the kind of lock, said at the start (F-083)
+
+    /**
+     * F-083: the app opening itself was tried on a phone with screen lock None (the evening of 2026-11-22) and failed;
+     * with a PIN (the morning) it had worked. The film said "unlocked" both times - the kind of lock was asked of the
+     * phone but not said. Now it is, at the start, whatever the screen shows.
+     */
+    @Test
+    void theKindOfScreenLockIsSaidAtTheStartEvenWhenThePhoneIsFoundUnlocked(@TempDir Path dir) throws Exception {
+        // a PIN, found unlocked: asked once, and said
+        RecordingAdb pin = RecordingAdb.aPhone();
+        Film film = new Film(dir.resolve("pin"), "pin");
+        PhoneRig rig = rig(PhoneRigGuardTest.phone(CABLE, BENCH, false), pin, film);
+        rig.ensureRunning();
+        assertEquals(PhoneRig.Lock.UNLOCKED, rig.lock());
+        assertEquals("PIN", rig.screenLock());
+        assertTrue(remarks(film).contains("The phone's screen lock: PIN"), remarks(film));
+        assertFalse(remarks(film).contains("NOT LIKE A DRONE'S PHONE"), remarks(film));
+        assertEquals(1, pin.sent.stream().filter("shell dumpsys lock_settings"::equals).count(), "asked once");
+        assertFalse(remarks(film).contains("SP Handle") || remarks(film).contains("4f1a2b3c"), "only the word for the kind is in the film");
+        rig.close();
+
+        // nothing to enter (None or a swipe), found unlocked: said, and that a drone's phone is not like it
+        RecordingAdb none = RecordingAdb.aPhone().says("shell dumpsys lock_settings", RecordingAdb.LOCK_SETTINGS_NONE);
+        film = new Film(dir.resolve("none"), "none");
+        rig = rig(PhoneRigGuardTest.phone(CABLE, BENCH, false), none, film);
+        rig.ensureRunning();
+        assertEquals(PhoneRig.Lock.UNLOCKED, rig.lock());
+        assertEquals("NONE", rig.screenLock());
+        assertTrue(remarks(film).contains("The phone's screen lock: NONE") && remarks(film).contains("NOT LIKE A DRONE'S PHONE"), remarks(film));
+        rig.close();
+
+        // the phone does not say: said so, nothing guessed
+        RecordingAdb odd = RecordingAdb.aPhone().says("shell dumpsys lock_settings", "Can't find service: lock_settings");
+        film = new Film(dir.resolve("odd"), "odd");
+        rig = rig(PhoneRigGuardTest.phone(CABLE, BENCH, false), odd, film);
+        rig.ensureRunning();
+        assertEquals("", rig.screenLock());
+        assertTrue(remarks(film).contains("The phone's screen lock: not known"), remarks(film));
+        rig.close();
+    }
+
     // ------------------------------------------------------------------ a phone found unlocked is kept awake
 
     private static final String NOTE = "shell settings get global draupne_bench_stay_on_was", OWN = "shell settings get global stay_on_while_plugged_in";

@@ -98,8 +98,12 @@ public final class PhoneRig implements AutoCloseable {
     /** The screen the scenarios' fixed places were written on (the bench emulator's): a real phone's are scaled from it. */
     public static final int REF_WIDTH = 1080, REF_HEIGHT = 2400;
     private static final long BATTERY_EVERY_MS = 60_000, COOL_DOWN_MAX_MS = 30 * 60_000L;
-    /** What the tap follows: the app's own lines, Android's word on what ended it. */
-    static final List<String> TAP = List.of("logcat", "-v", "threadtime", "-s", "DDLog:I", "DD:I", "AndroidRuntime:E", "ActivityManager:I");
+    /**
+     * What the tap follows: the app's own lines, Android's word on what ended it - and (F-083) on what it started
+     * (ActivityTaskManager: the app's screen opened, or held back) and on the app's notices (NotificationService).
+     */
+    static final List<String> TAP = List.of("logcat", "-v", "threadtime", "-s", "DDLog:I", "DD:I", "AndroidRuntime:E", "ActivityManager:I",
+            "ActivityTaskManager:I", "NotificationService:I");
 
     /** The link port inside the phone (the phone app's default). On the emulator it is never opened on this PC - a free port of this PC is forwarded to it. */
     public static int linkOnThePhone() {
@@ -603,6 +607,7 @@ public final class PhoneRig implements AutoCloseable {
             say("The phone's screen as the run finds it: " + found + "." + (found.lock() == Lock.SECURE
                     ? " The run goes on behind the lock screen: what its screen would show is taken from the app's log, Android and the bench build where they "
                     + "know it, and what only the screen could show is skipped and listed at the end." : ""));
+            say(screenLockSaid(screenLock()));
             if (found.lock() == Lock.UNLOCKED) keepAwake();
             return;
         }
@@ -801,6 +806,34 @@ public final class PhoneRig implements AutoCloseable {
             lockSettings = kind.find() ? kind.group() : "";
         }
         return Keyguard.read(window, lockSettings);
+    }
+
+    /**
+     * F-083: the phone's kind of screen lock as {@code dumpsys lock_settings} names it ("PIN", "PATTERN", "PASSWORD",
+     * "NONE" ...) - asked at the start whatever the screen shows ({@link #ensureRunning}). "" before that, on the
+     * emulator, or when the phone did not say.
+     */
+    public String screenLock() {
+        return credential(lockSettings);
+    }
+
+    static String credential(String lockSettings) {
+        Matcher c = Pattern.compile("(?i)CredentialType:\\s*(\\w+)").matcher(lockSettings == null ? "" : lockSettings);
+        return c.find() ? c.group(1).toUpperCase(Locale.ROOT) : "";
+    }
+
+    /**
+     * The film's line for the kind of lock. A phone with nothing to enter is not like a drone's phone, which has a PIN:
+     * there the app that opens itself (after an error, a kill asleep, a PC's wake) meets no secure lock screen - and
+     * with None no lock screen at all, where Android's full-screen notice is held to other rules (F-083).
+     */
+    static String screenLockSaid(String kind) {
+        if (kind.isEmpty()) return "The phone's screen lock: not known (dumpsys lock_settings did not say).";
+        if (kind.equals("NONE")) {
+            return "The phone's screen lock: NONE - nothing to enter (None or Swipe). NOT LIKE A DRONE'S PHONE (a PIN): the app opening itself "
+                    + "meets no secure lock screen here, and with None no lock screen at all (F-083).";
+        }
+        return "The phone's screen lock: " + kind + ", as on a drone's phone.";
     }
 
     /** The lock screen as last looked at ({@link #launch}, {@link #lookAtTheLock}); unlocked on the emulator and before any look. */

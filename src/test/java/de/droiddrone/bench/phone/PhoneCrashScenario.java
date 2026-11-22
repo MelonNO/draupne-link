@@ -46,6 +46,22 @@ import java.nio.file.Files;
 @Tag("emulator")
 @Tag("hwphone")
 class PhoneCrashScenario {
+    /**
+     * Each error of the last part comes this long after the one before it. Android has a limit of its own, sooner than
+     * the app's: an app that an error ends twice within two minutes is "a bad process", and nothing of it is started
+     * any more, its alarm included, until a hand opens it (this scenario's first run, 2026-11-20).
+     */
+    static final long ERROR_SPACING_MS = 135_000;
+
+    /**
+     * How long to wait before the next error, the last one at {@code lastErrorAt}: counted from the LAST error. The
+     * loop counted from the first error of the run, and once the parts before it had taken long its errors came close
+     * together (the real phone's run of 2026-11-22 evening: the loop's first two 51 s apart).
+     */
+    static long waitBeforeError(long lastErrorAt, long now) {
+        return Math.max(0, lastErrorAt + ERROR_SPACING_MS - now);
+    }
+
     private static String pid(PhoneRig phone) {
         return phone.pid();
     }
@@ -206,10 +222,8 @@ class PhoneCrashScenario {
                 }
 
                 // ---- 3. not for ever: the app's own limit is CrashRestarts.MAX times in ten minutes. Android has one
-                // of its own, sooner: an app that an error ends twice within two minutes is "a bad process" - nothing
-                // of it is started any more, its alarm included, until a hand opens it (seen in this scenario's first
-                // run, 2026-11-20). So the errors here come more than two minutes apart, and the app's own limit is
-                // what ends them
+                // of its own, sooner (ERROR_SPACING_MS): so the errors here come more than two minutes apart - each
+                // after the last one, not after the first - and the app's own limit is what ends them
                 String loopFrom = phone.now();
                 // counted from nothing: the app closed, what it kept of the restarts above gone, opened again
                 phone.stopForgettingRestarts();
@@ -217,8 +231,9 @@ class PhoneCrashScenario {
                 Ui.pause(4000);
                 int opened = 0;
                 String down = "";
+                long lastError = t0;
                 for (int n = 1; n <= CrashRestarts.MAX + 1; n++) {
-                    long wait = t0 + n * 135_000L - System.currentTimeMillis();
+                    long wait = waitBeforeError(lastError, System.currentTimeMillis());
                     if (wait > 0) Ui.pause(wait);
                     if (!phone.serviceRunning()) { // only a phone at work opens itself again
                         phone.unlock();
@@ -227,6 +242,8 @@ class PhoneCrashScenario {
                     }
                     String before = pid(phone);
                     String stamp = phone.now();
+                    long sinceLast = System.currentTimeMillis() - lastError;
+                    lastError = System.currentTimeMillis();
                     phone.crash();
                     boolean again = false;
                     long until = System.currentTimeMillis() + 30_000;
@@ -235,7 +252,8 @@ class PhoneCrashScenario {
                         again = said(phone, stamp).contains(PhoneWords.OPENED_OVER_LOCK);
                     }
                     if (n <= CrashRestarts.MAX) {
-                        rig.check(again, "ended by an error the " + n + ". time (" + (System.currentTimeMillis() - t0) / 1000 + " s after the first), it opens itself again");
+                        rig.check(again, "ended by an error the " + n + ". time (" + (lastError - t0) / 1000 + " s after the first, " + sinceLast / 1000
+                                + " s after the last), it opens itself again");
                         if (again) opened++;
                     } else {
                         down = pid(phone);

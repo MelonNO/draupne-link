@@ -417,7 +417,8 @@ class PhoneRigDeviceTest {
                 "shell input keyevent KEYCODE_WAKEUP", "shell dumpsys window", "shell dumpsys lock_settings"), sent(), "found, its battery read, its lock screen looked at");
         assertEquals(PhoneRig.Lock.SECURE, rig.lock());
         assertEquals(List.of(), adb.emulatorStarts, "no emulator is started for a real phone");
-        assertEquals(List.of("logcat -v threadtime -s DDLog:I DD:I AndroidRuntime:E ActivityManager:I"), adb.followed);
+        // F-083: Android's word on what started (ActivityTaskManager) and on the app's notices (NotificationService) too
+        assertEquals(List.of("logcat -v threadtime -s DDLog:I DD:I AndroidRuntime:E ActivityManager:I ActivityTaskManager:I NotificationService:I"), adb.followed);
         assertEquals(List.of(run.resolve("phone-logcat.txt")), adb.followedInto, "into the run's folder");
         assertTrue(Files.readString(run.resolve("phone-logcat.txt")).contains("the phone's log"), "its first line says what it is");
         rig.ensureRunning();

@@ -334,7 +334,8 @@ class PhoneRigGuardTest {
         List<String[]> commands = new ArrayList<>(List.of(
                 new String[]{"get-state"},
                 new String[]{"shell", "getprop sys.boot_completed"},
-                new String[]{"logcat", "-v", "threadtime", "-s", "DDLog:I", "DD:I", "AndroidRuntime:E", "ActivityManager:I"},
+                new String[]{"logcat", "-v", "threadtime", "-s", "DDLog:I", "DD:I", "AndroidRuntime:E", "ActivityManager:I", "ActivityTaskManager:I", "NotificationService:I"},
+                PhoneRig.TAP.toArray(new String[0]),
                 new String[]{"shell", "dumpsys battery"},
                 new String[]{"shell", "cat /sys/class/power_supply/battery/capacity /sys/class/power_supply/battery/temp 2>/dev/null"},
                 new String[]{"shell", "pm path " + app},
