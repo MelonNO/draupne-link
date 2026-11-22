@@ -104,6 +104,24 @@ class ControllerRenderTest {
         assertTrue(dark > red, "on black");
     }
 
+    /**
+     * I-009 (the bench's calibration, 1.0.71): the radio's screen said ARMED in a red block all through the calibration
+     * - where no drone flies by these sticks (CALIBRATE is locked while a link is up). No ARMED block now.
+     */
+    @Test
+    void theRadiosScreenSaysNothingIsArmed() {
+        BufferedImage screen = ControllerRender.screenPicture();
+        int red = 0, all = 0;
+        for (int y = 196; y < 226; y++) {
+            for (int x = 300; x < 450; x++) { // where the ARMED block stood
+                int c = screen.getRGB(x, y), r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+                all++;
+                if (r > 180 && g < 80 && b < 80) red++;
+            }
+        }
+        assertTrue(red < all / 10, "no red ARMED block: " + red + " of " + all + " red");
+    }
+
     @Test
     @Tag("perf")
     void aFrameIsQuickEnoughToAnimate() {

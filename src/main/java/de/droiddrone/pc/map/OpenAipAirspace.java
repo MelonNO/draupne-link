@@ -90,7 +90,7 @@ public final class OpenAipAirspace {
     }
 
     private String why(String key, boolean mayFetch) {
-        if (key == null || key.isBlank()) return "no openAIP key (Key...)";
+        if (key == null || key.isBlank()) return "no openAIP key (Airspace key...)";
         if (!mayFetch) return "zoom in to fetch areas";
         if (held.getAsBoolean()) return "saved areas only: a drone may be flying";
         if (!network) return "offline: saved areas only";
@@ -120,7 +120,7 @@ public final class OpenAipAirspace {
     private void failed(int status, String key, long now) {
         failKey = key.trim();
         if (status == 401 || status == 403) {
-            failWord = "openAIP refuses the key (Key...)";
+            failWord = "openAIP refuses the key (Airspace key...)";
             failUntil = Long.MAX_VALUE; // until another key is given
         } else if (status == 429) {
             failWord = "openAIP: too many requests - in 5 min again";

@@ -54,7 +54,7 @@ class AirspaceTest {
         assertNull(a.note(), "all there");
         a = data.areas(new double[]{59.5, 60.5, 10.2, 10.9}, "key");
         assertEquals("saved areas only: a drone may be flying", a.note(), "60_10 missing and nothing fetched while held");
-        assertEquals("no openAIP key (Key...)", data.areas(new double[]{58.5, 58.6, 10.2, 10.3}, "").note());
+        assertEquals("no openAIP key (Airspace key...)", data.areas(new double[]{58.5, 58.6, 10.2, 10.3}, "").note());
         assertEquals("zoom in to fetch areas", new OpenAipAirspace(dir, "test", true, () -> false)
                 .areas(new double[]{50, 60, 0, 20}, "key").note());
     }
@@ -78,7 +78,7 @@ class AirspaceTest {
         data.areas(view, "key");
         assertEquals(1, asked[0], "nor at the next view rest");
         status[0] = 401;
-        assertEquals("openAIP refuses the key (Key...)", data.areas(view, "other").note(), "another key is tried");
+        assertEquals("openAIP refuses the key (Airspace key...)", data.areas(view, "other").note(), "another key is tried");
         assertEquals(2, asked[0]);
         data.areas(view, "other");
         assertEquals(2, asked[0], "a refused key is not tried again");

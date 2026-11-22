@@ -74,7 +74,7 @@ final class MapToolsPanel extends JPanel {
     final JButton coverage = Theme.secondaryButton("Coverage");
     final JComboBox<String> coverageOperator = new JComboBox<>();
     final JComboBox<String> coverageHeight = new JComboBox<>();
-    final JButton coverageKey = Theme.secondaryButton("Key...");
+    final JButton coverageKey = Theme.secondaryButton("Cell key..."); // I-009: which key, at a glance (two said KEY...)
     final JButton coverageImport = Theme.secondaryButton("Import...");
     final JLabel coverageStatus = Theme.label(" ", Theme.font(Font.PLAIN, 13f), Theme.TEXT);
     /**
@@ -84,7 +84,7 @@ final class MapToolsPanel extends JPanel {
     final JButton rAreas = Theme.secondaryButton("R-areas");
     final JButton dAreas = Theme.secondaryButton("D-areas");
     final JButton notams = Theme.secondaryButton("NOTAMs");
-    final JButton airspaceKey = Theme.secondaryButton("Key...");
+    final JButton airspaceKey = Theme.secondaryButton("Airspace key...");
     final JButton notamPaste = Theme.secondaryButton("Paste...");
     final JLabel airspaceStatus = growingLabel();
     final JButton line = Theme.secondaryButton("Line");
@@ -336,7 +336,7 @@ final class MapToolsPanel extends JPanel {
         row(body, rAreas);
         row(body, dAreas);
         row(body, notams);
-        JPanel airspaceRow = new JPanel(new GridLayout(1, 2, 6, 0));
+        JPanel airspaceRow = new JPanel(new GridLayout(2, 1, 0, 4)); // I-009: AIRSPACE KEY... needs the row's width
         airspaceRow.setOpaque(false);
         airspaceRow.add(small(airspaceKey));
         airspaceRow.add(small(notamPaste));
@@ -397,21 +397,26 @@ final class MapToolsPanel extends JPanel {
         coverageHeight.setToolTipText("Drone height above ground. 2 m: on the ground. 10 m: low, among trees. 50 m up: clear of them");
         coverageKey.setToolTipText("OpenCelliD access token (free at opencellid.org)");
         coverageImport.setToolTipText("OpenCelliD country file (242.csv.gz = Norway): all cells, no requests");
-        JPanel grid = new JPanel(new GridLayout(3, 2, 6, 4));
+        JPanel grid = new JPanel(new GridLayout(2, 2, 6, 4));
         grid.setOpaque(false);
         grid.add(Theme.label("Network", Theme.headingFont(11f), Theme.MUTED));
         grid.add(coverageOperator);
         grid.add(Theme.label("Drone", Theme.headingFont(11f), Theme.MUTED));
         grid.add(coverageHeight);
-        grid.add(small(coverageKey));
-        grid.add(small(coverageImport));
+        JPanel keys = new JPanel(new GridLayout(2, 1, 0, 4)); // I-009: CELL KEY... needs the row's width
+        keys.setOpaque(false);
+        keys.add(small(coverageKey));
+        keys.add(small(coverageImport));
         JPanel box = new JPanel();
         box.setLayout(new BoxLayout(box, BoxLayout.Y_AXIS));
         box.setOpaque(false);
         box.setBorder(BorderFactory.createEmptyBorder(2, 8, 4, 0)); // indented under its button
         grid.setAlignmentX(LEFT_ALIGNMENT);
+        keys.setAlignmentX(LEFT_ALIGNMENT);
         coverageStatus.setAlignmentX(LEFT_ALIGNMENT);
         box.add(grid);
+        box.add(Box.createVerticalStrut(4));
+        box.add(keys);
         box.add(Box.createVerticalStrut(6));
         box.add(coverageStatus);
         return box;

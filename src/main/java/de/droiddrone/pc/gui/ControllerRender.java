@@ -849,11 +849,9 @@ final class ControllerRender extends JComponent {
             g.setColor(Color.WHITE);
             g.drawString(rows[i][1], 370, 64 + i * 26);
         }
-        g.setColor(red);
-        g.fillRect(300, 196, 150, 30);
-        g.setColor(Color.BLACK);
-        g.setFont(Theme.headingFont(18f));
-        g.drawString("ARMED", 345, 218);
+        // I-009: no ARMED block. On a radio's screen it says the drone is armed - never so where this radio is drawn:
+        // CALIBRATE runs only while no link is up (locked while connected), so no drone flies by these sticks then. The
+        // figures above are a picture's, not a flight's.
     }
 
     /** A 2 x 2 twill carbon weave, 0..1: bright where a tow faces the light along its run. */

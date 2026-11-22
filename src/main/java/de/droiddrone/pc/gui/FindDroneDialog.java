@@ -98,6 +98,7 @@ final class FindDroneDialog extends JDialog {
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         buttons.setOpaque(false);
+        Theme.greyWhenOff(copy, copyMgrs, google, osm); // I-009: with no position to show they look off, grey
         copy.addActionListener(e -> {
             if (last == null) return;
             clip(String.format(Locale.ROOT, "%.6f, %.6f", last.lat(), last.lon()));

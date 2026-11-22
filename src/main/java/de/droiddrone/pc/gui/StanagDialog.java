@@ -122,8 +122,8 @@ final class StanagDialog extends JDialog {
         head.add(Theme.label("STANAG 4609 STREAMS", Theme.headingFont(14f), Theme.ACCENT), BorderLayout.NORTH);
         head.add(new WrappingText("One stream per drone, made on this PC: MPEG-TS with MISB ST 0601 metadata over UDP, each drone on "
                 + "its own port. Video with OSD while piloted or observed here; an overwatch alert's picture and clip; else the "
-                + "drone's mode. Plays in ATAK / WinTAK, QGIS, VLC (udp://@:PORT). Multicast (239.x.x.x) is local only. "
-                + "Video uses this PC's upload: on a weak link it can delay the sticks.",
+                + "drone's mode. Plays in ATAK / WinTAK, QGIS, VLC (udp://@:PORT). Multicast (239.x.x.x) is local only.",
+                // I-009: the weak link's warning stands by the switch that turns the streams on (LINK > STANAG 4609 STREAMS)
                 Theme.font(Font.PLAIN, 13f), Theme.MUTED), BorderLayout.CENTER);
         root.add(head, BorderLayout.NORTH);
 

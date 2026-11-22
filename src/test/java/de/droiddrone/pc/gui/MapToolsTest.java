@@ -408,6 +408,23 @@ class MapToolsTest {
         assertNull(told.get(told.size() - 1), "the window is told it went");
     }
 
+    /**
+     * I-009 (the bench's maptools-lines, 1.0.71): two buttons said KEY... - which key was which only the tooltip told.
+     * AIRSPACE KEY... and CELL KEY..., each on a row of its own, as wide as its words need.
+     */
+    @Test
+    void theTwoKeysSayWhoseKeyAndFitTheirRows(@TempDir Path dir) {
+        Theme.install();
+        MapToolsPanel tools = new MapToolsPanel(map(dir, new MapGraphics(null)));
+        assertEquals("AIRSPACE KEY...", tools.airspaceKey.getText());
+        assertEquals("CELL KEY...", tools.coverageKey.getText());
+        assertTrue(tools.airspaceKey.getPreferredSize().width <= MapToolsPanel.BODY_WIDTH - 20, "the airspace row's width: " + tools.airspaceKey.getPreferredSize());
+        assertTrue(tools.coverageKey.getPreferredSize().width <= MapToolsPanel.BODY_WIDTH - 20 - 8, "the coverage fields' width: " + tools.coverageKey.getPreferredSize());
+        assertEquals(tools.airspaceKey.getParent(), tools.notamPaste.getParent());
+        assertTrue(tools.notamPaste.getParent().getLayout() instanceof java.awt.GridLayout l && l.getColumns() == 1, "a row each");
+        assertTrue(tools.coverageKey.getParent().getLayout() instanceof java.awt.GridLayout k && k.getColumns() == 1, "a row each");
+    }
+
     @Test
     void theFieldsSlideOutUnderTheButtonPressed(@TempDir Path dir) {
         MapView map = map(dir, new MapGraphics(null));

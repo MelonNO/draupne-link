@@ -45,7 +45,15 @@ final class NameMapDialog extends JDialog {
             return false;
         }
     };
-    private final JTable table = new JTable(model);
+    private final JTable table = new JTable(model) {
+        @Override
+        protected void paintComponent(java.awt.Graphics g) {
+            super.paintComponent(g);
+            if (getRowCount() == 0) emptyNote(this, g); // I-009: an empty list says why
+        }
+    };
+    /** I-009: what the empty list says (it stood empty). */
+    static final String EMPTY = "No phones yet - open DRAUPNE Flight";
     private final JComboBox<String> ownName = new JComboBox<>();
     private final JTextField portField = new JTextField(6);
     private final JTextField keyField = new JTextField(10);
@@ -83,6 +91,7 @@ final class NameMapDialog extends JDialog {
         table.getTableHeader().setFont(Theme.headingFont(11f));
         table.getTableHeader().setBackground(Theme.PANEL);
         table.getTableHeader().setForeground(Theme.MUTED);
+        table.setFillsViewportHeight(true); // I-009: the empty list's note has the list's room
         JScrollPane scroll = new JScrollPane(table);
         scroll.setBorder(BorderFactory.createLineBorder(Theme.LINE));
         scroll.getViewport().setBackground(Theme.PANEL_2);
@@ -139,7 +148,7 @@ final class NameMapDialog extends JDialog {
             onChanged.run();
         });
         buttons.add(remove);
-        JButton rescan = Theme.secondaryButton("Ask again");
+        JButton rescan = Theme.secondaryButton("Scan again"); // I-009 (it said ASK AGAIN)
         rescan.setToolTipText("Ask every device now");
         rescan.addActionListener(e -> service.scanSoon());
         buttons.add(rescan);
@@ -218,6 +227,19 @@ final class NameMapDialog extends JDialog {
         }
         saver.accept(Map.of("port", Integer.toString(port), "key", key));
         service.scanSoon();
+    }
+
+    /** I-009: EMPTY in the middle of the empty list, in the muted grey. */
+    static void emptyNote(JTable t, java.awt.Graphics g) {
+        java.awt.Graphics2D g2 = Theme.smooth((java.awt.Graphics2D) g.create());
+        try {
+            g2.setFont(Theme.font(Font.PLAIN, 13f));
+            g2.setColor(Theme.MUTED);
+            java.awt.FontMetrics fm = g2.getFontMetrics();
+            g2.drawString(EMPTY, (t.getWidth() - fm.stringWidth(EMPTY)) / 2, Math.max(fm.getAscent() + 8, t.getHeight() / 2));
+        } finally {
+            g2.dispose();
+        }
     }
 
     private void fill() {

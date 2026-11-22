@@ -916,14 +916,20 @@ final class PreviousFlightsDialog extends JDialog {
         Path parent = chooser.getSelectedFile().toPath();
         Thread t = new Thread(() -> { // the disk (videos can be big), off the Swing thread
             String said;
+            Path to = null;
             try {
                 awaitSaved();
-                said = "Exported to " + FlightData.export(f, parent) + ".";
+                to = FlightData.export(f, parent);
+                said = "Exported to " + to + ".";
             } catch (java.io.IOException e) {
                 said = "Export failed: " + e.getMessage();
             }
             String msg = said;
-            SwingUtilities.invokeLater(() -> Dialogs.message(this, msg, "Export", JOptionPane.INFORMATION_MESSAGE));
+            Path folder = to;
+            SwingUtilities.invokeLater(() -> {
+                if (folder == null) Dialogs.message(this, msg, "Export", JOptionPane.INFORMATION_MESSAGE);
+                else Dialogs.saved(this, msg, "Export", folder); // I-009: OPEN FOLDER, as REPORT has it
+            });
         }, "flightExport");
         t.setDaemon(true);
         t.setPriority(Thread.MIN_PRIORITY);
@@ -973,14 +979,8 @@ final class PreviousFlightsDialog extends JDialog {
                 Dialogs.message(this, "Report failed: " + failed.getMessage(), "Report", JOptionPane.WARNING_MESSAGE);
                 return;
             }
-            Object[] options = {"Open folder", "OK"};
-            if (Dialogs.option(this, "<html>Report saved:<br>" + target.getFileName() + "<br>in " + target.toAbsolutePath().getParent() + "</html>", "Report", JOptionPane.DEFAULT_OPTION,
-                    JOptionPane.INFORMATION_MESSAGE, null, options, options[1]) != 0) return;
-            try {
-                de.droiddrone.pc.Outside.open(target.toAbsolutePath().getParent().toFile());
-            } catch (Exception ex) {
-                Dialogs.message(this, "Can't open the folder: " + ex.getMessage(), "Report", JOptionPane.WARNING_MESSAGE);
-            }
+            Dialogs.saved(this, "<html>Report saved:<br>" + target.getFileName() + "<br>in " + target.toAbsolutePath().getParent() + "</html>",
+                    "Report", target.toAbsolutePath().getParent()); // I-009: the one choice EXPORT and the map's EXPORT end with too
         });
     }
 

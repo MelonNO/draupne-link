@@ -83,6 +83,20 @@ final class Dialogs {
         show(parent, new JOptionPane(message, messageType, JOptionPane.DEFAULT_OPTION, icon), title);
     }
 
+    /** I-009: the choice every saved file ends with (REPORT, a flight's EXPORT, the map's EXPORT); OK the default. */
+    static final Object[] SAVED_OPTIONS = {"Open folder", "OK"};
+
+    /** What was saved and where, with SAVED_OPTIONS: "Open folder" opens the folder. */
+    static void saved(Component parent, Object message, String title, java.nio.file.Path folder) {
+        if (option(parent, message, title, JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE, null,
+                SAVED_OPTIONS, SAVED_OPTIONS[1]) != 0) return;
+        try {
+            de.droiddrone.pc.Outside.open(folder.toFile());
+        } catch (Exception ex) {
+            message(parent, "Can't open the folder: " + ex.getMessage(), title, JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
     // ------------------------------------------------------------------ as JOptionPane.showConfirmDialog
 
     static int confirm(Component parent, Object message) {

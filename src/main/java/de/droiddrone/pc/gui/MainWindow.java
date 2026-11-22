@@ -962,7 +962,7 @@ public class MainWindow extends JFrame {
                 this::openNameMap));
         if (!advanced) return menu; // STANAG 4609: TOOLS > Advanced
         menu.addSeparator();
-        menu.add(new MenuRows.SwitchRow("STANAG 4609 streams", "One per drone, for ATAK, QGIS, VLC",
+        menu.add(new MenuRows.SwitchRow("STANAG 4609 streams", "One per drone, for ATAK, QGIS, VLC. On a weak link it can delay the sticks",
                 stanagEnabled(), on -> {
                     save(Map.of(StanagDialog.ENABLED_KEY, Boolean.toString(on)));
                     setStanag(on);

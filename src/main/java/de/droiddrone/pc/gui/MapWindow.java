@@ -598,7 +598,7 @@ final class MapWindow extends JFrame {
             shot.centreOn((south + north) / 2, (west + east) / 2, zoom);
             javax.imageio.ImageIO.write(shot.picture(Math.max(64, w), Math.max(64, h)), "png", png.toFile());
             String line = "Exported " + items.size() + " drawings and " + inBox.size() + " pins: " + kml + " and " + png.getFileName();
-            Dialogs.message(this, "<html>Saved:<br>" + kml + "<br>" + png + "</html>", "Export", javax.swing.JOptionPane.INFORMATION_MESSAGE);
+            Dialogs.saved(this, "<html>Saved:<br>" + kml + "<br>" + png + "</html>", "Export", kml.toAbsolutePath().getParent()); // I-009: OPEN FOLDER, as REPORT
             System.out.println(line);
         } catch (java.io.IOException | RuntimeException e) {
             Dialogs.message(this, "Export failed: " + e.getMessage(), "Export", javax.swing.JOptionPane.WARNING_MESSAGE);
@@ -1168,7 +1168,7 @@ final class MapWindow extends JFrame {
         }
         int left = missing.size() - fetched;
         if (problem == null && left > 0) {
-            problem = noKey ? "no OpenCelliD key (MAP TOOLS > TOOLS > Key...)" : tooWide ? "zoom in to fetch cells"
+            problem = noKey ? "no OpenCelliD key (MAP TOOLS > TOOLS > Cell key...)" : tooWide ? "zoom in to fetch cells"
                     : cellData.creditsLeft() < 2 ? "key's daily requests used up" : boxesLeftText(left);
         }
         // done for this area whatever is missing: what stopped it (no key, the day's requests, a drone flying) is the
