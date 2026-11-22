@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- DRAUPNE Link: nothing of the app's goes to a cloud backup or to a new phone (Android 12 on; android:allowBackup is
      false for the versions before it). The settings hold the link key, the PC's address and the phone's name. -->
-<data-extraction-rules>
+<!-- tools:ignore: this Android Gradle plugin's lint does not know the device_* domains (Android 12 has them) and
+     stopped every phone build on them; they stay, so device-protected storage is excluded too. -->
+<data-extraction-rules xmlns:tools="http://schemas.android.com/tools" tools:ignore="FullBackupContent">
     <cloud-backup>
         <exclude domain="root" path="." />
         <exclude domain="file" path="." />
